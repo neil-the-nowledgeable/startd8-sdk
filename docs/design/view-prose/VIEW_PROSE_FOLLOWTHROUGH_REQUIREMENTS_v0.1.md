@@ -213,7 +213,15 @@ pass below.
   **shipped renderer already rejects** archetype-invalid combinations (`renderers.py:1862-1881`:
   `empty`→detail-compose-model, `success`/`error`/`controls`→import-flow). *Verify:* `empty` authored on a
   computed-panel fails the round-trip at ingestion (reusing the renderer's loud-fail).
-- **FR-VCE-4 — Manifest-extraction parity (`display.yaml` sibling) — GATED on a feasibility table (R1-F7/S6).**
+- **FR-VCE-4 — Manifest-extraction parity (`display.yaml` sibling) — ✅ GATE CLOSED → SPLIT (2026-06-13).**
+  The field-derivability table is written (`docs/design/view-prose/DISPLAY_DERIVABILITY_TABLE.md`). Outcome:
+  the derivable subset is **identity-only** (entity/view names) — **every value-carrying `display.yaml` field
+  is hashed structure that needs authoring the reqs grammar doesn't carry**, and the only "derivable"
+  candidates (`label_field`, `root_label_field`, relation labels) are *heuristic guesses* that are unsafe to
+  bake into a **hashed** manifest. So extraction emits **no `display.yaml`** (an identity-only file is
+  byte-identical to none), and FR-VCE-4 **splits to its own increment as OQ-7** (a dedicated display
+  authoring surface). No code change to the extractor; `generate schema --with-manifests` unchanged. Original spec:
+  GATED on a feasibility table (R1-F7/S6).
   The same gap exists for the structure layer (derivation doesn't emit `display.yaml`). **But `display.yaml`
   is structure/bindings (column order, FK label resolution, `format`), not flat words** — it may need richer
   authoring than the `### View:` grammar carries, so it is **not** symmetric effort with view_prose and must
@@ -376,6 +384,12 @@ pass below.
   round-trip — which needs the **views** already extracted (to know the view names). Confirm the
   `extract.py` candidate ordering makes views available before view_prose. *(Verify-at-home; likely just
   ordering within `extract.py:145-158`.)*
+- **OQ-7 (NEW — from the FR-VCE-4 gate, 2026-06-13) — A dedicated `display.yaml` authoring surface?** The
+  field-derivability gate (`DISPLAY_DERIVABILITY_TABLE.md`) found `display.yaml` is hashed *structure* with
+  no authoring in today's `### Entity` / `### View:` grammar — so extraction emits none. A future increment
+  could add explicit display keys (e.g. `Label by:`, `Columns:` order, `Sections:`, per-relation `show … as
+  …`) + an `extract_display()`. Richer than view-copy, hashed, **lowest urgency** — deferred until a project
+  needs authored display structure the generator defaults don't cover.
 
 ---
 
