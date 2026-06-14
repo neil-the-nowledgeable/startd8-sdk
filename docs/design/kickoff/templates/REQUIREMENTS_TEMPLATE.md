@@ -11,6 +11,17 @@
 **Format:** requirements-and-plan-format v0.1 / authoring-contract grammar v0.1
 **Pairs with:** `<PLAN file>`
 
+▷ §0 is the reflective-loop lineage record (human convention; extraction ignores it). Leave the
+▷ scaffold empty at v0.1 and fill it once a planning pass has falsified an assumption. Convention
+▷ detail: REQUIREMENTS_AND_PLAN_FORMAT.md Part D.
+## 0. Planning Insights (Self-Reflective Update)
+
+> <one-paragraph "what changed in v0.X and why" callout — added when the doc is first revised.>
+
+| v(n-1) Assumption | Planning Discovery | Impact |
+|-------------------|--------------------|--------|
+| <what was assumed> | <what planning revealed> | <how the requirement changed> |
+
 ## Overview
 
 <2–5 sentences, plain prose: what the application is, for whom, and what's deliberately later.>
@@ -144,3 +155,22 @@ Only humans enter: <Entity.field, Entity.field>
 ▷ What is explicitly NOT being built — this guards against invention as strongly as the
 ▷ requirements guard for delivery.
 - <out of scope item>
+
+---
+
+▷ Appendices below are the Convergent-Review log (human convention; extraction ignores them).
+▷ They are cross-model memory — a later reviewer reads all three before proposing, so settled and
+▷ rejected items don't resurface. Keep them; never strip them. Convention: REQUIREMENTS_AND_PLAN_FORMAT.md Part D.
+
+## Appendix A — Accepted (with where merged)
+
+<!-- F-<n> / S-<n> — <suggestion> → ACCEPTED; merged into <section>. -->
+
+## Appendix B — Rejected (with rationale)
+
+<!-- F-<n> / S-<n> — <suggestion> → REJECTED; <why>. -->
+
+## Appendix C — Incoming review rounds
+
+<!-- #### Review Round R{n} — <model-id> — <UTC date> -->
+

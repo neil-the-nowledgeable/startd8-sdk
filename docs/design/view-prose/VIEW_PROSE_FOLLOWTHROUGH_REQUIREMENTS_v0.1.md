@@ -246,7 +246,16 @@ pass below.
 
 ### C. Requirements format & template updates
 
-- **FR-FMT-1 — The template's "View copy" keys (the *authoring surface* for Group G).** Add the per-view
+> **✅ Group C DONE (2026-06-13, `feat/view-prose-group-c`).** FR-FMT-1 (format-doc half — the View
+> copy keys' grammar + `[consumed by: extraction → view_prose.yaml]` annotation; the template half
+> shipped earlier with Group G), FR-FMT-2 (new **Part D — Document lifecycle conventions**: §0 Planning
+> Insights / version lineage / "what changed in vX" / Implementation Reflections / Appendix A/B/C CRP
+> scaffold — pure human convention, zero parser risk; **REQUIREMENTS_TEMPLATE.md** ships the empty §0 +
+> Appendix scaffolds), FR-FMT-3 (**Words vs Structure** classification rule citing display.yaml=structure /
+> view_prose.yaml=words + the SOTTO link — this also closes **FR-DP-1's deferred Words/Structure
+> backlink**), FR-FMT-4 (**$0-codegen acceptance-criteria checklist**, referenced from the Views copy keys).
+
+- **FR-FMT-1 — The template's "View copy" keys (the *authoring surface* for Group G). ✅ DONE.** Add the per-view
   copy keys to the `### View:` block in `REQUIREMENTS_TEMPLATE.md` (title/intro/empty/success/error/controls,
   parallel to the existing `Empty state:` line) + a `[consumed by: extraction → view_prose.yaml]` annotation
   in `REQUIREMENTS_AND_PLAN_FORMAT.md`. **Pairs with FR-VCE-1** (the extractor that consumes them) — together
@@ -313,8 +322,8 @@ pass below.
   as `docs/design-princples/SOTTO_DESIGN_PRINCIPLE.md` ("Sotto" そっと = *gently, without disturbing*;
   tagline "Don't disturb what exists"; diagnostic "when the content is absent, is the output byte-identical?").
   Covers the two generate-time fragment instances (pages, view-prose) + the ai-layer runtime variant, records
-  the OQ-4 / FR-DP-2 drop rationale, and is indexed in CLAUDE.md's principle list. **Pending tail:** the
-  Words/Structure backlink lands with FR-FMT-3 (Group C, not yet implemented). Original spec:
+  the OQ-4 / FR-DP-2 drop rationale, and is indexed in CLAUDE.md's principle list. **Backlink closed
+  (2026-06-13):** FR-FMT-3's "Words vs Structure" rule now links SOTTO from the format doc. Original spec:
   Add a cross-cutting principle
   doc (`docs/design-princples/`, beside MOTTAINAI/KAIZEN/WARM_UP/HAYAI) capturing the proven rule:
   *hash-exempt authored content lives in a standalone file rendered to an untracked (header-less) fragment;

@@ -61,6 +61,11 @@ vocabulary) + controlled relationship sentences>
 ## Views
 <one constrained block per view, contract §2.3, archetype from the published five>
 [consumed by: extraction → views.yaml → generate views]
+<optional per-view COPY keys — Title/Intro (any view), Empty state (Scope: model detail-compose),
+Success/Error/Controls (import-flow) — authored inline in the `### View:` block; off-archetype keys
+are ignored without error>
+[consumed by: extraction → view_prose.yaml → generate views --view-prose; the WORDS layer,
+hash-exempt — see "Words vs Structure" below]
 
 ## Completeness
 <controlled sentences, contract §2.4: "at least N Entity (weight W)" + don't-count line>
@@ -171,6 +176,74 @@ From this sample alone, deterministic extraction yields: the `ProofPoint` model 
 from the **links** sentence), the owned-field policy line, two pages with derived routes
 `/` and `/how-it-works`, an FR-7 feature with its entity linkage and a verifiable test seed —
 zero LLM calls.
+
+## Part D — Document lifecycle conventions (human-only; ignored by extraction)
+
+These conventions structure how a requirements/plan doc **evolves** across the reflective-requirements
+loop. They are **pure human convention** — extraction ignores any non-anchored section, so adding them
+carries **zero parser risk**. Use them so a reader (human or a later agent) can see *what changed and
+why*, not just the final state. The template ships the empty scaffolds; fill them as the doc matures.
+
+1. **Version/date lineage header.** The doc header carries a `**Version:**` + `**Date:**` + `**Status:**`
+   line that advances with each pass (`0.1 Draft → 0.2 Post-planning → 0.3 Post-CRP → …`). The version is
+   a *lineage*, not a label: every bump corresponds to a recorded reason below.
+
+2. **§0 Planning Insights table.** The first section (before the problem statement) records what the
+   planning pass falsified, keyed v(n-1)→v(n):
+
+   ```markdown
+   ## 0. Planning Insights (Self-Reflective Update)
+   | v(n-1) Assumption | Planning Discovery | Impact |
+   |-------------------|--------------------|--------|
+   | <what was assumed> | <what planning revealed> | <how the requirement changed> |
+   ```
+
+3. **"What changed in vX" callout.** A one-paragraph blockquote at the top of a revised section noting
+   the delta, so a reader scanning the doc sees the change without diffing.
+
+4. **Implementation Reflections.** Phase-6 findings (discovered *during* implementation) are fed back
+   into the doc — not just fixed in code — as a dated note on the affected FR. (This doc's own
+   v0.7→v0.9 history is the worked example.)
+
+5. **Appendix A/B/C — the CRP review-log scaffold.** Convergent-review dispositions are cross-model
+   memory; keep them, never strip them:
+
+   ```markdown
+   ## Appendix A — Accepted (with where merged)
+   ## Appendix B — Rejected (with rationale)
+   ## Appendix C — Incoming review rounds (#### Review Round R{n} — <model-id> — <UTC date>)
+   ```
+
+   Appendix A/B are populated by triage; Appendix C accrues raw rounds. A later reviewer reads all
+   three before proposing, so settled/rejected items don't resurface.
+
+## Words vs Structure — classifying a new file-shaped input
+
+When a feature adds a **new file-shaped input**, classify it before wiring, and route accordingly:
+
+- **Hashed structure** — a `views.yaml` section *or* a standalone **hashed** manifest. It participates
+  in the drift hash; a change is a deliberate structural edit a regen reflects. *Shipped example:*
+  `display.yaml` (presentation structure — list columns, sections, label fields).
+- **Hash-exempt prose (words)** — a standalone file **rendered to an untracked fragment**, referenced
+  by the owned template **only when present**, so absent ⇒ byte-identical output. *Shipped example:*
+  `view_prose.yaml` (the view words — title/intro/empty/success/error/controls), beside `app/pages/*.md`.
+
+The split is the [SOTTO design principle](../../../design-princples/SOTTO_DESIGN_PRINCIPLE.md) — *"don't
+disturb what exists."* Inlining words into a hashed file (or hashing a words file) is the classic
+violation: editing copy then trips `--check` and propagates downstream drift.
+
+## Acceptance criteria for a new $0-codegen manifest feature
+
+The recurring ACs proven by the deterministic cascade — a reusable checklist for any new
+deterministic-manifest feature (the words-layer entries are referenced from the **Views** copy keys above):
+
+- [ ] **Byte-identical-when-absent** — shipping the capability changes nothing for a no-content build.
+- [ ] **Fail-closed on a malformed manifest** — a broken manifest is a loud error, never a silent skip.
+- [ ] **Drift-stability** — editing hash-exempt content never trips `generate … --check`.
+- [ ] **Strict, loud-fail parse** — unknown keys / dangling targets are compile-time errors keyed to a
+      known structural element.
+- [ ] **Prose-gated opt-in** — the owned-template reference is emitted only when content is present, so
+      there is no downstream drift.
 
 ## Open questions
 
