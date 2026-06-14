@@ -10,11 +10,16 @@ file, inside the FR-44 sandbox) and folds it into a composite:
   - compile gate PASSES → quality = structural score (+ optional lint adjustment).
   - toolchain ABSENT    → degraded coverage (FR-32): fall back to structural, do NOT penalize
     the model for a missing runner toolchain; record the gap.
-  - missing DEPENDENCY  → degraded coverage (FR-J2): a single-file compile (Java `javac`, …)
-    that fails only because legitimately-absent libraries (gRPC/protobuf stubs) can't be
-    resolved in the no-network sandbox is NOT a model fault — degrade, don't floor. A *genuine*
-    syntax/type error in the file still floors. Tier-2 (vendored deps) lifts these to real
+  - missing DEPENDENCY  → degraded coverage (FR-J2/FR-C3): a single-file compile (Java `javac`,
+    C# Roslyn `csc`) that fails only because legitimately-absent libraries (gRPC/protobuf stubs)
+    can't be resolved in the no-network sandbox is NOT a model fault — degrade, don't floor. A
+    *genuine* syntax error in the file still floors. Tier-2 (vendored deps) lifts these to real
     compiles; until then this distinction is what keeps Tier-1 honest.
+
+Gates by language: Python `py_compile`, Go `gofmt -e`, Node `node --check` (.js), Java single-file
+`javac`, C# offline Roslyn `csc` driven against the SDK's framework ref assemblies (no project /
+no NuGet restore — `dotnet build` needs both and fails in the no-network sandbox, so we invoke csc
+directly). Java/C# are Tier-1 (syntax + missing-dep classification); Tier-2 vendored deps deferred.
 
 Test execution is intentionally NOT a primary term here (OQ-11: model-written tests are
 self-grading; a fixed per-service suite is deferred past Round 1). Lint is optional enrichment.
@@ -50,33 +55,97 @@ _FALLBACK_SYNTAX_COMMANDS = {
     },
 }
 
-# javac (and similar single-file compiles) report a legitimately-absent library the same way
-# every time. In Tier-1 (no vendored deps) these are NOT model faults — classify them so the
+# javac / csc (and similar single-file compiles) report a legitimately-absent library the same
+# way every time. In Tier-1 (no vendored deps) these are NOT model faults — classify them so the
 # scorer degrades instead of flooring. Keyed by language_id -> failure-marker substrings.
-# NOTE the Tier-1 trade-off (OQ-J3): "cannot find symbol" can also be a real error, but without
-# the deps present we cannot tell them apart, so we conservatively degrade rather than unfairly
-# floor a model for the absent gRPC stubs. Tier-2's real classpath removes the ambiguity.
+# NOTE the Tier-1 trade-off (OQ-J3/OQ-C4): "cannot find symbol" / CS0246 can also be a real error,
+# but without the deps present we cannot tell them apart, so we conservatively degrade rather than
+# unfairly floor a model for absent gRPC stubs. Tier-2's real classpath removes the ambiguity.
 _MISSING_DEP_MARKERS = {
     "java": ("does not exist", "cannot find symbol", "cannot access"),
+    # C# (FR-C3): missing type/namespace/name resolution from absent assemblies.
+    # CS0246 type-or-namespace-not-found, CS0234 namespace-missing-in-namespace, CS0103 name-not-found.
+    "csharp": ("cs0246", "cs0234", "cs0103"),
+}
+
+# Genuine in-file syntax errors. When present, the failure is the model's fault even if a
+# missing-dep marker also appears — so we floor, never degrade. C# separates these cleanly:
+# CS1xxx are parser/syntax diagnostics, CS0xxx are semantic/binding (incl. missing deps).
+_SYNTAX_ERROR_MARKERS = {
+    "csharp": ("error cs1",),
 }
 
 
 def fallback_syntax_command(profile, file_path) -> Optional[List[str]]:
-    """A sandbox-safe single-file syntax command when the profile has none (e.g. Node .js)."""
+    """A sandbox-safe single-file syntax command when the profile has none (e.g. Node .js,
+    Java javac, or C# Roslyn csc). Returns None when no offline single-file check applies or
+    its toolchain can't be located (caller then degrades, FR-32)."""
     lang = getattr(profile, "language_id", "") or ""
     ext = Path(file_path).suffix.lower()
+    if lang == "csharp" and ext == ".cs":
+        return _csharp_csc_command()
     return _FALLBACK_SYNTAX_COMMANDS.get(lang, {}).get(ext)
 
 
 def classify_compile_failure(language_id: Optional[str], output: str) -> Optional[str]:
-    """Classify a *failed* single-file compile (FR-J2). Returns ``"missing_deps"`` when the
+    """Classify a *failed* single-file compile (FR-J2/FR-C3). Returns ``"missing_deps"`` when the
     failure is attributable to absent dependencies (so the caller degrades instead of flooring),
-    else ``None`` (treat as a genuine compile failure)."""
-    markers = _MISSING_DEP_MARKERS.get(language_id or "")
+    else ``None`` (treat as a genuine compile failure). A genuine in-file syntax error always wins
+    (returns None) even if a missing-dep marker is also present."""
+    lang = language_id or ""
+    low = (output or "").lower()
+    syntax_markers = _SYNTAX_ERROR_MARKERS.get(lang, ())
+    if any(m in low for m in syntax_markers):
+        return None  # real syntax error in the file — floor, don't degrade
+    markers = _MISSING_DEP_MARKERS.get(lang)
     if not markers:
         return None
-    low = (output or "").lower()
     return "missing_deps" if any(m in low for m in markers) else None
+
+
+def _csharp_csc_command() -> Optional[List[str]]:
+    """Build an offline single-file Roslyn (csc) syntax/type check (FR-C1), driving the csc.dll +
+    framework reference assemblies that ship inside an installed .NET SDK — no project, no NuGet
+    restore, no network (unlike `dotnet build`, which needs a .csproj + restore and fails in the
+    no-network sandbox). gRPC/protobuf `using`s resolve to CS0246 (→ missing-deps degrade);
+    in-file syntax errors are CS1xxx (→ floor). Returns None if no SDK is found (→ degraded, FR-C8).
+    """
+    found = _discover_dotnet_csc()
+    if found is None:
+        return None
+    csc, refs = found
+    return [
+        "dotnet", csc, "-nologo", "-nostdlib", "-t:library", "-out:/dev/null",
+        *(f"-r:{r}" for r in refs), "{file}",
+    ]
+
+
+def _discover_dotnet_csc():
+    """Locate (csc.dll, [framework ref-assembly dlls]) from an installed .NET SDK, for an offline
+    single-file check. Searches DOTNET_ROOT, the resolved `dotnet` location, and common install
+    dirs. Returns None when no SDK + ref pack pair is found."""
+    import glob
+    import os
+    import shutil
+
+    roots: List[str] = []
+    if os.environ.get("DOTNET_ROOT"):
+        roots.append(os.environ["DOTNET_ROOT"])
+    dn = shutil.which("dotnet")
+    if dn:
+        roots.append(os.path.dirname(os.path.realpath(dn)))
+    roots += ["/usr/local/share/dotnet", "/usr/share/dotnet",
+              os.path.expanduser("~/.dotnet")]
+
+    for root in roots:
+        cscs = sorted(glob.glob(os.path.join(root, "sdk", "*", "Roslyn", "bincore", "csc.dll")))
+        ref_dirs = sorted(glob.glob(
+            os.path.join(root, "packs", "Microsoft.NETCore.App.Ref", "*", "ref", "net*")))
+        if cscs and ref_dirs:
+            refs = sorted(glob.glob(os.path.join(ref_dirs[-1], "*.dll")))
+            if refs:
+                return cscs[-1], refs
+    return None
 
 
 @dataclass
