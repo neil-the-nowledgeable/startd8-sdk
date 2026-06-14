@@ -1,0 +1,66 @@
+# Build-time agent insights for the Summer 2026 Model Benchmark (T3 / FR-12/13/14).
+# Feeds startd8.integrations.insight_emission.emit_insight_spec → AgentInsightBridge (ContextCore
+# AI Agent Observability). Captures the architectural-review (CRP) decisions, the CRITICAL risks,
+# and the run lessons so they are queryable as insights, not buried in markdown.
+project:
+  id: startd8-benchmark
+  agent_id: claude-opus-4-8
+
+decisions:
+  - summary: "Temporal/workflow-engine = NO-GO for the benchmark control plane"
+    confidence: 0.9
+    rationale: "Adds operational weight a single-host, hundreds-of-cells run does not need; revisit trigger is concrete (>2k cells / distributed runners / continuous scheduling)."
+    evidence:
+      - {type: adr, ref: "ADR-001-no-workflow-engine.md"}
+    audience: both
+  - summary: "Cursor cut from Round 1 (no public model-inference API)"
+    confidence: 0.95
+    rationale: "Only Admin + Background-Agents APIs exist; revisit when Cursor ships public inference."
+    evidence:
+      - {type: doc, ref: "INVESTIGATION_CURSOR_AGENT_ERROR.md"}
+  - summary: "Budget guardrail is fail-closed: a run refuses to start without a ceiling"
+    confidence: 0.9
+    rationale: "Untrusted-cost surface (services × models × N) demands a hard ceiling; OQ-8 resolved fail-closed."
+    evidence:
+      - {type: doc, ref: "SUMMER_2026_BENCHMARK_REQUIREMENTS_v0.2.md#FR-33"}
+  - summary: "Run deterministic assembly OFF + micro-prime OFF (measure model skill, not SDK leverage)"
+    confidence: 0.95
+    rationale: "Inverts the SDK's normal $0 thesis on purpose so the LLM does the work being measured."
+    evidence:
+      - {type: doc, ref: "SUMMER_2026_BENCHMARK_REQUIREMENTS_v0.2.md#FR-1"}
+  - summary: "Dedicated ContextCore project_id=startd8-benchmark / sprint=summer-2026 for tracking"
+    confidence: 0.9
+    rationale: "Isolates the benchmark burndown from general SDK work; clean per-round sprint axis for the recurring series."
+    evidence:
+      - {type: doc, ref: "REQUIREMENTS.md#FR-26"}
+  - summary: "Benchmark ABILITY stays in the SDK; only round-specific code is external (Summer2026 repo)"
+    confidence: 0.85
+    rationale: "startd8.benchmark_matrix is reusable engine; the round roster/run-config is the consumer."
+    evidence:
+      - {type: doc, ref: "ADR-001-no-workflow-engine.md"}
+
+risks:
+  - summary: "CRITICAL: benchmark executes untrusted model-generated code — needs a hardened sandbox"
+    confidence: 1.0
+    rationale: "FR-44: non-root, read-only inputs, no creds/egress, resource-limited; kernel isolation for prod."
+    evidence:
+      - {type: doc, ref: "SUMMER_2026_BENCHMARK_REQUIREMENTS_v0.2.md#FR-44"}
+  - summary: "CRITICAL: secrets/telemetry must be redacted before any HF/blog release"
+    confidence: 1.0
+    rationale: "FR-45: scan provenance, Loki labels, raw artifacts for keys/headers/paths/account-ids."
+    evidence:
+      - {type: doc, ref: "SUMMER_2026_BENCHMARK_REQUIREMENTS_v0.2.md#FR-45"}
+
+lessons:
+  - summary: "Route all Phase-0 deterministic shortcuts through one gated chokepoint, not line-pinned early-returns"
+    category: architecture
+    applies_to: ["src/startd8/contractors/prime_contractor.py"]
+  - summary: "Distinguish infra failure (429/401/404 → exclude) from genuine model failure, or a key outage unfairly tanks a model"
+    category: methodology
+    applies_to: ["src/startd8/benchmark_matrix/runner.py"]
+  - summary: "Metric saturates: composite ~1.00 across scored models — cost is the real differentiator (83× spread)"
+    category: methodology
+    evidence:
+      - {type: doc, ref: "results/run-20260614T0505"}
+  - summary: "In a heavily-concurrent repo, work in a dedicated worktree and commit early; forced checkouts discard uncommitted tracked edits"
+    category: workflow
