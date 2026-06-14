@@ -101,11 +101,32 @@ implement the proto contract and *behave* correctly. Today nothing checks behavi
 | **FT-4** | 1 | Provenance + honest degrade + leaderboard "functional" column. | — |
 | **FT-5** | 2 | *Deferred.* Sandbox execution escalation (FR-F5) + startup contract + run hook + paymentservice pilot + re-run. | **decision: re-run + budget** |
 
+## 4a. Validation Finding (falsifies Track 1 — $0 spike on the existing run)
+
+> A $0 spike on `run-20260614T0505` (6 models that ran) tested Track 1's premise **before**
+> building it. Result: **Track 1 as specified does not discriminate.**
+
+- **RPC-presence coverage saturates:** all 6 models implement **100% of every service's proto
+  RPCs** (cart 3/3, catalog 3/3, shipping 2/2, currency 2/2, payment 1/1 — every model). A
+  coverage term adds another column of 1.000.
+- **Finer static signals vary but are untrustworthy:** payment validation richness differs (luhn
+  mentions 0–5, brand 0–5, LOC 128–244), **but the correctness *direction* is unknowable
+  statically** — the reference OB payment is a thin mock, so "more validation" may be gold-plating.
+  A richness-count metric rewards verbosity and is gameable.
+
+**Conclusion:** static analysis cannot trustworthily separate frontier models on this task; the
+variance has no reliable correctness direction without **behavioral ground truth**. **⇒ Do NOT
+build Track 1.** Same lesson as compile-gate Tier-2 (P4): at the frontier, buildability/completeness
+saturate; only *correctness* discriminates, and correctness is behavioral.
+
 ## 5. Open Decisions (user)
-- **D1.** Track-1 composite weight (FR-F7) — how much should functional-coverage move the score
-  relative to structural? (Proposal: enough to break ties the others can't.)
-- **D2.** Track-2 commitment — only if Track-1 coverage proves insufficient discrimination *and* a
-  re-run + sandbox-execution investment is approved.
+- **D0 (supersedes D1).** Track 1 is falsified. Real fork: **(a)** Track 2 behavioral execution
+  (sandbox extension + startup contract + re-run — the only trustworthy discriminator); **(b)**
+  a **harder task** so non-behavioral signals re-discriminate (cheaper — new seeds + re-run);
+  **(c)** accept frontier-quality saturation and publish Round 1 on **cost / coverage /
+  catastrophic-rate** (the axes that vary), quality disclosed as a frontier tie. Also evaluate
+  **reference-similarity metrics (CodeBLEU)** — see the open question below.
+- **D2.** Track-2 commitment — only if behavioral discrimination is worth the re-run + sandbox cost.
 
 ---
 
