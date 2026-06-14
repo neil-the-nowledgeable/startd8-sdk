@@ -1,0 +1,104 @@
+# Delivery-tracking source of truth for the Inaugural Summer 2026 SDK Model Benchmark (FR-3).
+# Feeds startd8.integrations.milestone_tracking → ContextCore SpanState artifacts (epic→story→task).
+# Statuses/dates reflect the build reality as of 2026-06-14; update as milestones advance and re-emit
+# (the emitter is idempotent). Completed milestones carry their real merge dates for an honest burndown.
+project:
+  id: startd8-benchmark
+  name: Inaugural Summer 2026 SDK Model Benchmark
+  sprint: summer-2026
+  created: "2026-06-08T00:00:00+00:00"
+  goals:
+    - Evaluate Anthropic/OpenAI/Google flagship + tier-2/tier-3 models building Online Boutique on quality/cost/speed
+    - Measure model skill, not SDK leverage (deterministic assembly OFF + micro-prime OFF)
+    - Publish a credible, reproducible, recurring benchmark (Fable 5 launch hook)
+
+milestones:
+  - id: M0
+    name: "Fable + roster readiness"
+    status: done
+    created: "2026-06-08T00:00:00+00:00"
+    completed: "2026-06-13T00:00:00+00:00"
+    depends_on: []
+    work_items:
+      - {id: M0-roster, title: "Fable 5 in model_catalog + pricing + provider whitelist; tiered roster", status: done, completed: "2026-06-13T00:00:00+00:00"}
+
+  - id: M1
+    name: "Benchmark execution mode (LLM-maximize)"
+    status: done
+    created: "2026-06-09T00:00:00+00:00"
+    completed: "2026-06-13T00:00:00+00:00"
+    depends_on: [M0]
+    work_items:
+      - {id: M1-offswitch, title: "--benchmark-mode + STARTD8_LLM_MAXIMIZE off-switch + provenance", status: done, completed: "2026-06-13T00:00:00+00:00"}
+
+  - id: M2
+    name: "Online Boutique corpus as seeds"
+    status: done
+    created: "2026-06-09T00:00:00+00:00"
+    completed: "2026-06-13T00:00:00+00:00"
+    depends_on: [M1]
+    work_items:
+      - {id: M2-seeds, title: "9 per-service prime-context-seeds + deterministic generator", status: done, completed: "2026-06-13T00:00:00+00:00"}
+
+  - id: M2.5
+    name: "Cost control (budget guardrails)"
+    status: done
+    created: "2026-06-10T00:00:00+00:00"
+    completed: "2026-06-13T00:00:00+00:00"
+    depends_on: [M2]
+    work_items:
+      - {id: M2.5-budget, title: "BudgetGuard fail-closed preflight + per-cell cap + cumulative abort", status: done, completed: "2026-06-13T00:00:00+00:00"}
+
+  - id: M3
+    name: "Service × model × rep matrix"
+    status: done
+    created: "2026-06-11T00:00:00+00:00"
+    completed: "2026-06-14T00:00:00+00:00"
+    depends_on: [M2.5]
+    work_items:
+      - {id: M3-matrix, title: "run_matrix orchestration + median/IQR/pass-rate aggregate + leaderboard", status: done, completed: "2026-06-13T00:00:00+00:00"}
+      - {id: M3-infra-class, title: "infra-vs-model failure reclassification (429/401/404 excluded)", status: done, completed: "2026-06-14T00:00:00+00:00"}
+
+  - id: M4
+    name: "Quality scoring (compile gate + sandbox)"
+    status: done
+    created: "2026-06-12T00:00:00+00:00"
+    completed: "2026-06-14T00:00:00+00:00"
+    depends_on: [M3]
+    work_items:
+      - {id: M4-sandbox, title: "FR-44 untrusted-code sandbox (scrub_env, rlimits, network-deny)", status: done, completed: "2026-06-13T00:00:00+00:00"}
+      - {id: M4-compile, title: "compile gate Python+Go+Node (sandbox node --check fallback)", status: done, completed: "2026-06-14T00:00:00+00:00"}
+      - {id: M4-langgate, title: "Java + C# compile-gate (Tier-1/Tier-2 reqs drafted)", status: in_progress, created: "2026-06-14T00:00:00+00:00"}
+
+  - id: M3.5
+    name: "Full-app macro run (4 flagships)"
+    status: in_progress
+    created: "2026-06-14T00:00:00+00:00"
+    depends_on: [M3]
+    work_items:
+      - {id: M3.5-partial, title: "Round-1 real run (6 models scored; OpenAI quota-blocked, Fable access-gated)", status: in_progress}
+
+  - id: M5
+    name: "Observability of results (Loki stream + dashboard)"
+    status: todo
+    depends_on: [M4]
+    work_items:
+      - {id: M5-loki, title: "Dedicated job=startd8-benchmark Loki stream + Grafana leaderboard dashboard", status: todo}
+
+  - id: M6
+    name: "Credibility + content (pre-registration, COI, artifacts, blog)"
+    status: todo
+    depends_on: [M5]
+    work_items:
+      - {id: M6-credibility, title: "Pre-registration manifest + COI disclosure + raw per-cell release", status: todo}
+      - {id: M6-content, title: "HF dataset (CC-BY-4.0) + blog + LinkedIn", status: todo}
+
+  - id: M7
+    name: "Execution integrity, safety & legal"
+    status: in_progress
+    created: "2026-06-12T00:00:00+00:00"
+    depends_on: [M3]
+    work_items:
+      - {id: M7-sandbox, title: "FR-44 untrusted-code sandbox (delivered in M4)", status: done, completed: "2026-06-13T00:00:00+00:00"}
+      - {id: M7-redaction, title: "FR-45 secret/telemetry redaction before any release", status: todo}
+      - {id: M7-contamination, title: "FR-47 contamination/memorization probe (port edge-brains)", status: todo}

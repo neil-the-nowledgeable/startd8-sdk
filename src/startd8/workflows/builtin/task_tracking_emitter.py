@@ -287,7 +287,7 @@ def emit_task_tracking_artifacts(
             priority="high",
             story_points=0,
             prompt=feat.description or feat.name,
-            depends_on=[],
+            depends_on=list(feat.dependencies),  # T1.3 (FR-5): milestone deps → task.depends_on
             labels=list(feat.labels),
             feature_id=feat.feature_id,
             target_files=list(feat.target_files),
