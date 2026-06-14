@@ -60,6 +60,17 @@ def _new_span_id() -> str:
     return os.urandom(8).hex()
 
 
+# Terminal task statuses → a completed span (top-level status "OK", end_time set, percent 100).
+_TERMINAL_STATUSES = frozenset({"done", "cancelled"})
+
+
+def _top_level_status(task_status: str) -> str:
+    """Map a ContextCore ``task.status`` to a SpanState v2 top-level ``status`` (OK/ERROR/UNSET)."""
+    if task_status in _TERMINAL_STATUSES:
+        return "OK"
+    return "UNSET"
+
+
 def _build_state_file(
     *,
     task_id: str,
@@ -80,16 +91,51 @@ def _build_state_file(
     span_id: str,
     parent_span_id: Optional[str],
     timestamp: str,
+    completion_timestamp: Optional[str] = None,
+    creation_timestamp: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build a single ContextCore state file dict."""
+    """Build a single ContextCore state file dict.
+
+    For a terminal ``status`` (done/cancelled), set the SpanState v2 top-level ``status`` to ``OK``,
+    set ``end_time``, and append a completion event after the zero-point ``task.created`` event —
+    this gives an honest burndown (CRP R1-F7) while preserving the zero-point invariant
+    (``task.created`` stays at ``percent_complete: 0``).
+
+    For a backfilled terminal task the ``task.created`` event MUST predate its completion
+    (CRP R1-F7). ``creation_timestamp`` supplies the real start (e.g. a milestone-start or
+    merge-parent date). When absent for a backfilled terminal task, ``created`` falls back to the
+    completion time (so it is never *after* completion); otherwise ``created`` is the generation
+    time.
+    """
+    is_terminal = status in _TERMINAL_STATUSES
+    end_time = (completion_timestamp or timestamp) if is_terminal else None
+    # Created must never post-date completion (honest burndown). Prefer an explicit creation
+    # timestamp; for a backfilled terminal task fall back to its completion time; else "now".
+    created_time = creation_timestamp or (end_time if is_terminal else None) or timestamp
+    events: List[Dict[str, Any]] = [
+        {
+            "name": "task.created",
+            "timestamp": created_time,
+            "attributes": {"percent_complete": 0},
+        }
+    ]
+    if is_terminal:
+        events.append(
+            {
+                "name": "task.completed" if status == "done" else "task.cancelled",
+                "timestamp": end_time,
+                "attributes": {"percent_complete": 100 if status == "done" else 0},
+            }
+        )
     return {
         "task_id": task_id,
         "span_name": f"{task_type}:{task_id}",
         "trace_id": trace_id,
         "span_id": span_id,
         "parent_span_id": parent_span_id,
-        "start_time": timestamp,
-        "end_time": None,
+        "start_time": created_time,
+        "end_time": end_time,
+        "status": _top_level_status(status),
         "attributes": {
             "task.id": task_id,
             "task.title": title,
@@ -106,13 +152,7 @@ def _build_state_file(
             "project.id": project_id,
             "sprint.id": sprint_id,
         },
-        "events": [
-            {
-                "name": "task.created",
-                "timestamp": timestamp,
-                "attributes": {"percent_complete": 0},
-            }
-        ],
+        "events": events,
         "schema_version": _SCHEMA_VERSION,
         "project_id": project_id,
     }
@@ -152,6 +192,9 @@ def emit_task_tracking_artifacts(
     tasks: List[Dict[str, Any]],
     config: TaskTrackingConfig,
     output_dir: Path,
+    initial_statuses: Optional[Dict[str, str]] = None,
+    completion_timestamps: Optional[Dict[str, str]] = None,
+    creation_timestamps: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Generate ContextCore-compatible task tracking artifacts.
@@ -165,10 +208,19 @@ def emit_task_tracking_artifacts(
         tasks: Derived task dicts (from ``_derive_tasks_from_features``).
         config: Tracking configuration.
         output_dir: Base output directory; artifacts go into ``contextcore-tasks/`` subdir.
+        initial_statuses: Optional ``{task_id: task.status}`` overrides (FR-3). Keyed by the
+            emitted entity id (``{project_id}-epic``, ``{feature_id}-story``, or a task id).
+            Unlisted entities default to ``"todo"`` (prior behavior, byte-for-byte).
+        completion_timestamps: Optional ``{task_id: ISO-8601}`` completion times for terminal
+            (done/cancelled) entities — used for an honest backfilled burndown (CRP R1-F7).
+            Falls back to the generation timestamp when absent.
 
     Returns:
         Summary dict with project_id, trace_id, counts, and output paths.
     """
+    initial_statuses = initial_statuses or {}
+    completion_timestamps = completion_timestamps or {}
+    creation_timestamps = creation_timestamps or {}
     timestamp = _now_iso()
     trace_id = uuid.uuid4().hex
     project_id = config.project_id or _slugify(parsed_plan.title)
@@ -189,7 +241,7 @@ def emit_task_tracking_artifacts(
         task_id=epic_id,
         title=project_name,
         task_type="epic",
-        status="todo",
+        status=initial_statuses.get(epic_id, "todo"),
         priority="high",
         story_points=0,
         prompt=f"Epic: {project_name}. Goals: {'; '.join(parsed_plan.goals)}",
@@ -204,6 +256,8 @@ def emit_task_tracking_artifacts(
         span_id=epic_span_id,
         parent_span_id=None,
         timestamp=timestamp,
+        completion_timestamp=completion_timestamps.get(epic_id),
+        creation_timestamp=creation_timestamps.get(epic_id),
     )
     state_files.append(epic_state)
     ndjson_events.append(_build_ndjson_event(
@@ -229,7 +283,7 @@ def emit_task_tracking_artifacts(
             task_id=story_id,
             title=feat.name,
             task_type="story",
-            status="todo",
+            status=initial_statuses.get(story_id, "todo"),
             priority="high",
             story_points=0,
             prompt=feat.description or feat.name,
@@ -244,6 +298,8 @@ def emit_task_tracking_artifacts(
             span_id=story_span_id,
             parent_span_id=epic_span_id,
             timestamp=timestamp,
+            completion_timestamp=completion_timestamps.get(story_id),
+            creation_timestamp=creation_timestamps.get(story_id),
         )
         state_files.append(story_state)
         ndjson_events.append(_build_ndjson_event(
@@ -280,7 +336,7 @@ def emit_task_tracking_artifacts(
             task_id=tid,
             title=t.get("title", tid),
             task_type="task",
-            status="todo",
+            status=initial_statuses.get(tid, "todo"),
             priority=t.get("priority", "medium"),
             story_points=t.get("story_points", 1),
             prompt=cfg.get("task_description", t.get("title", "")),
@@ -295,6 +351,8 @@ def emit_task_tracking_artifacts(
             span_id=task_span_id,
             parent_span_id=parent_story_span,
             timestamp=timestamp,
+            completion_timestamp=completion_timestamps.get(tid),
+            creation_timestamp=creation_timestamps.get(tid),
         )
         state_files.append(task_state)
         ndjson_events.append(_build_ndjson_event(

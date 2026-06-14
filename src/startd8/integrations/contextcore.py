@@ -76,8 +76,12 @@ import logging
 from ..workflows.base import WorkflowBase, ProgressCallback
 from ..workflows.models import WorkflowResult, ProjectContext
 from ..logging_config import get_logger
+from .tracking_redaction import redact_text, redact_evidence
 
 logger = get_logger(__name__)
+
+# Evidence dataclass fields ContextCore accepts; filter caller dicts to these (T0.3).
+_EVIDENCE_FIELDS = {"type", "ref", "description", "query", "timestamp"}
 
 
 # ============================================================================
@@ -1268,6 +1272,74 @@ class AgentInsightBridge:
         """Check if insight bridge is enabled."""
         return self._enabled
 
+    def _emit(
+        self,
+        insight_type: str,
+        summary: str,
+        confidence: float,
+        *,
+        audience: Optional[str] = None,
+        rationale: Optional[str] = None,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        supersedes: Optional[str] = None,
+        applies_to: Optional[List[str]] = None,
+        category: Optional[str] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+    ) -> bool:
+        """Single emission chokepoint → ``InsightEmitter.emit()`` (FR-27, CRP R1-F6/F9).
+
+        Every public ``emit_*`` method routes through here, so there is exactly one code path to
+        ContextCore. That is what makes the legacy ``emit_question`` bug (it called a non-existent
+        ``InsightEmitter.emit_question``) evaporate. All free text, rationale, and evidence refs are
+        redacted (FR-19) before they leave the process.
+        """
+        if not self._enabled or not self._emitter:
+            logger.info(f"[mock] Emit {insight_type}: {summary} (confidence: {confidence})")
+            return False
+
+        try:
+            try:
+                from contextcore.agent import InsightType, InsightAudience, Evidence
+            except ImportError:  # pragma: no cover - exercised only without contextcore.agent re-exports
+                from contextcore.agent.insights import InsightType, InsightAudience, Evidence
+
+            itype = InsightType(insight_type)
+            aud = InsightAudience(audience) if audience else InsightAudience.BOTH
+
+            kwargs: Dict[str, Any] = {"audience": aud}
+            red_rationale = redact_text(rationale)
+            if red_rationale:
+                kwargs["rationale"] = red_rationale
+            ev = redact_evidence(evidence)
+            if ev:
+                kwargs["evidence"] = [
+                    Evidence(**{k: v for k, v in e.items() if k in _EVIDENCE_FIELDS}) for e in ev
+                ]
+            if supersedes:
+                kwargs["supersedes"] = supersedes
+            if applies_to:
+                kwargs["applies_to"] = applies_to
+            if category:
+                kwargs["category"] = category
+            if input_tokens is not None:
+                kwargs["input_tokens"] = input_tokens
+            if output_tokens is not None:
+                kwargs["output_tokens"] = output_tokens
+            if model:
+                kwargs["model"] = model
+            if provider:
+                kwargs["provider"] = provider
+
+            self._emitter.emit(itype, redact_text(summary), confidence, **kwargs)
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to emit {insight_type} insight: {e}")
+            return False
+
     def emit_decision(
         self,
         summary: str,
@@ -1276,53 +1348,36 @@ class AgentInsightBridge:
         alternatives_considered: Optional[List[str]] = None,
         task_id: Optional[str] = None,
         rationale: Optional[str] = None,
+        *,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        audience: Optional[str] = None,
+        supersedes: Optional[str] = None,
     ) -> bool:
-        """
-        Emit an agent decision as an insight.
+        """Emit an agent decision as an insight (``insight.type=decision``).
 
-        Args:
+        Args (legacy signature preserved; ``evidence``/``audience``/``supersedes`` added per
+        FR-27b/FR-15/FR-16):
             summary: Brief description of the decision made
             confidence: Confidence score (0.0-1.0)
-            context: Additional context dictionary
-            alternatives_considered: List of alternatives that were evaluated
+            context: Additional context dictionary (folded into rationale)
+            alternatives_considered: Alternatives that were evaluated
             task_id: Optional task ID to link this decision to
-            rationale: Optional explanation of why this decision was made
-
-        Returns:
-            True if successfully emitted, False otherwise
+            rationale: Explanation of why this decision was made
+            evidence: List of ``{type, ref, description?}`` supporting refs
+            audience: ``"agent"`` | ``"human"`` | ``"both"``
+            supersedes: ID of an insight this decision overrides
         """
-        if not self._enabled or not self._emitter:
-            logger.info(f"[mock] Emit decision: {summary} (confidence: {confidence})")
-            return False
-
-        try:
-            full_context = {
-                "session_id": self.session_id,
-                "agent_id": self.agent_id,
-                **(context or {})
-            }
-
-            if alternatives_considered:
-                full_context["alternatives_considered"] = alternatives_considered
-
-            if task_id:
-                full_context["task_id"] = task_id
-
-            # Build rationale string if context provided
-            if not rationale and full_context:
-                rationale = ", ".join(f"{k}={v}" for k, v in full_context.items()
-                                      if k not in ("session_id", "agent_id"))
-
-            self._emitter.emit_decision(
-                summary=summary,
-                confidence=confidence,
-                rationale=rationale,
-            )
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to emit decision: {e}")
-            return False
+        full_context = dict(context or {})
+        if alternatives_considered:
+            full_context["alternatives_considered"] = alternatives_considered
+        if task_id:
+            full_context["task_id"] = task_id
+        if not rationale and full_context:
+            rationale = ", ".join(f"{k}={v}" for k, v in full_context.items())
+        return self._emit(
+            "decision", summary, confidence,
+            rationale=rationale, evidence=evidence, audience=audience, supersedes=supersedes,
+        )
 
     def emit_lesson(
         self,
@@ -1330,39 +1385,18 @@ class AgentInsightBridge:
         category: str = "general",
         applies_to: Optional[List[str]] = None,
         task_id: Optional[str] = None,
+        *,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        audience: Optional[str] = None,
+        supersedes: Optional[str] = None,
     ) -> bool:
-        """
-        Emit a lesson learned as an insight.
-
-        Args:
-            summary: What was learned
-            category: Category (e.g., "testing", "architecture", "performance")
-            applies_to: List of files or components this lesson applies to
-            task_id: Optional task ID to link this lesson to
-
-        Returns:
-            True if successfully emitted, False otherwise
-        """
-        if not self._enabled or not self._emitter:
-            logger.info(f"[mock] Emit lesson: {summary} (category: {category})")
-            return False
-
-        try:
-            self._emitter.emit_lesson(
-                summary=summary,
-                category=category,
-                applies_to=applies_to or [],
-                context={
-                    "session_id": self.session_id,
-                    "agent_id": self.agent_id,
-                    "task_id": task_id,
-                }
-            )
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to emit lesson: {e}")
-            return False
+        """Emit a lesson learned (``insight.type=lesson``)."""
+        rationale = f"task_id={task_id}" if task_id else None
+        return self._emit(
+            "lesson", summary, 0.9,
+            category=category, applies_to=applies_to, rationale=rationale,
+            evidence=evidence, audience=audience, supersedes=supersedes,
+        )
 
     def emit_question(
         self,
@@ -1371,41 +1405,113 @@ class AgentInsightBridge:
         blocking: bool = False,
         task_id: Optional[str] = None,
         options: Optional[List[str]] = None,
+        *,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        supersedes: Optional[str] = None,
     ) -> bool:
+        """Emit a question needing human input (``insight.type=question``).
+
+        Fixed (FR-28): previously called a non-existent ``InsightEmitter.emit_question``; now routes
+        through the generic ``_emit`` chokepoint. Questions target the human audience.
         """
-        Emit a question that needs human input.
+        parts: List[str] = []
+        if blocking:
+            parts.append("blocking=True")
+        if task_id:
+            parts.append(f"task_id={task_id}")
+        if options:
+            parts.append(f"options={options}")
+        if context:
+            parts.append(", ".join(f"{k}={v}" for k, v in context.items()))
+        rationale = "; ".join(parts) or None
+        return self._emit(
+            "question", question, 1.0,
+            audience="human", rationale=rationale, evidence=evidence, supersedes=supersedes,
+        )
 
-        Args:
-            question: The question being asked
-            context: Additional context
-            blocking: Whether this question blocks further progress
-            task_id: Optional task ID this question relates to
-            options: Optional list of suggested answers
+    def emit_risk(
+        self,
+        summary: str,
+        confidence: float = 0.8,
+        task_id: Optional[str] = None,
+        *,
+        rationale: Optional[str] = None,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        audience: Optional[str] = None,
+        supersedes: Optional[str] = None,
+    ) -> bool:
+        """Emit a risk (``insight.type=risk``) — e.g. the FR-44/45 CRITICAL items."""
+        if task_id and not rationale:
+            rationale = f"task_id={task_id}"
+        return self._emit(
+            "risk", summary, confidence,
+            rationale=rationale, evidence=evidence, audience=audience, supersedes=supersedes,
+        )
 
-        Returns:
-            True if successfully emitted, False otherwise
-        """
-        if not self._enabled or not self._emitter:
-            logger.info(f"[mock] Emit question: {question} (blocking: {blocking})")
-            return False
+    def emit_blocker(
+        self,
+        summary: str,
+        confidence: float = 1.0,
+        task_id: Optional[str] = None,
+        *,
+        rationale: Optional[str] = None,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        audience: Optional[str] = None,
+        supersedes: Optional[str] = None,
+    ) -> bool:
+        """Emit a blocker (``insight.type=blocker``) — e.g. a per-cell terminal failure."""
+        if task_id and not rationale:
+            rationale = f"task_id={task_id}"
+        return self._emit(
+            "blocker", summary, confidence,
+            rationale=rationale, evidence=evidence, audience=audience, supersedes=supersedes,
+        )
 
-        try:
-            self._emitter.emit_question(
-                question=question,
-                context={
-                    "session_id": self.session_id,
-                    "agent_id": self.agent_id,
-                    "blocking": blocking,
-                    "task_id": task_id,
-                    "options": options,
-                    **(context or {})
-                }
-            )
-            return True
+    def emit_progress(
+        self,
+        summary: str,
+        confidence: float = 1.0,
+        task_id: Optional[str] = None,
+        *,
+        rationale: Optional[str] = None,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        audience: Optional[str] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+    ) -> bool:
+        """Emit a progress insight (``insight.type=progress``); carries token/cost for FR-18."""
+        if task_id and not rationale:
+            rationale = f"task_id={task_id}"
+        return self._emit(
+            "progress", summary, confidence,
+            rationale=rationale, evidence=evidence, audience=audience,
+            input_tokens=input_tokens, output_tokens=output_tokens, model=model, provider=provider,
+        )
 
-        except Exception as e:
-            logger.error(f"Failed to emit question: {e}")
-            return False
+    def emit_discovery(
+        self,
+        summary: str,
+        confidence: float = 0.8,
+        task_id: Optional[str] = None,
+        *,
+        rationale: Optional[str] = None,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        audience: Optional[str] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+    ) -> bool:
+        """Emit a discovery insight (``insight.type=discovery``); carries token/cost for FR-18."""
+        if task_id and not rationale:
+            rationale = f"task_id={task_id}"
+        return self._emit(
+            "discovery", summary, confidence,
+            rationale=rationale, evidence=evidence, audience=audience,
+            input_tokens=input_tokens, output_tokens=output_tokens, model=model, provider=provider,
+        )
 
     def query_decisions(
         self,
