@@ -10,6 +10,11 @@ file, inside the FR-44 sandbox) and folds it into a composite:
   - compile gate PASSES → quality = structural score (+ optional lint adjustment).
   - toolchain ABSENT    → degraded coverage (FR-32): fall back to structural, do NOT penalize
     the model for a missing runner toolchain; record the gap.
+  - missing DEPENDENCY  → degraded coverage (FR-J2): a single-file compile (Java `javac`, …)
+    that fails only because legitimately-absent libraries (gRPC/protobuf stubs) can't be
+    resolved in the no-network sandbox is NOT a model fault — degrade, don't floor. A *genuine*
+    syntax/type error in the file still floors. Tier-2 (vendored deps) lifts these to real
+    compiles; until then this distinction is what keeps Tier-1 honest.
 
 Test execution is intentionally NOT a primary term here (OQ-11: model-written tests are
 self-grading; a fixed per-service suite is deferred past Round 1). Lint is optional enrichment.
@@ -36,6 +41,23 @@ _FALLBACK_SYNTAX_COMMANDS = {
         ".cjs": ["node", "--check", "{file}"],
         ".mjs": ["node", "--check", "{file}"],
     },
+    # Java Tier-1 (FR-J1): single-file `javac` syntax/type check. `-proc:none` avoids needing
+    # annotation processors on the classpath; output goes to the disposable sandbox workspace.
+    # No classpath ⇒ gRPC/protobuf imports fail as "missing deps" and are *degraded* (FR-J2),
+    # not floored — see classify_compile_failure(). Tier-2 adds `-cp <vendored bundle>`.
+    "java": {
+        ".java": ["javac", "-proc:none", "-d", ".", "{file}"],
+    },
+}
+
+# javac (and similar single-file compiles) report a legitimately-absent library the same way
+# every time. In Tier-1 (no vendored deps) these are NOT model faults — classify them so the
+# scorer degrades instead of flooring. Keyed by language_id -> failure-marker substrings.
+# NOTE the Tier-1 trade-off (OQ-J3): "cannot find symbol" can also be a real error, but without
+# the deps present we cannot tell them apart, so we conservatively degrade rather than unfairly
+# floor a model for the absent gRPC stubs. Tier-2's real classpath removes the ambiguity.
+_MISSING_DEP_MARKERS = {
+    "java": ("does not exist", "cannot find symbol", "cannot access"),
 }
 
 
@@ -44,6 +66,17 @@ def fallback_syntax_command(profile, file_path) -> Optional[List[str]]:
     lang = getattr(profile, "language_id", "") or ""
     ext = Path(file_path).suffix.lower()
     return _FALLBACK_SYNTAX_COMMANDS.get(lang, {}).get(ext)
+
+
+def classify_compile_failure(language_id: Optional[str], output: str) -> Optional[str]:
+    """Classify a *failed* single-file compile (FR-J2). Returns ``"missing_deps"`` when the
+    failure is attributable to absent dependencies (so the caller degrades instead of flooring),
+    else ``None`` (treat as a genuine compile failure)."""
+    markers = _MISSING_DEP_MARKERS.get(language_id or "")
+    if not markers:
+        return None
+    low = (output or "").lower()
+    return "missing_deps" if any(m in low for m in markers) else None
 
 
 @dataclass
@@ -125,8 +158,9 @@ def compute_composite(structural: Optional[float], compile_gate: GateResult,
         compile_ok = True
     else:
         missing.append("compile")
-        compile_ok = None  # FR-32: degraded — don't penalize for missing toolchain
+        compile_ok = None  # FR-32/FR-J2: degraded — don't penalize for missing toolchain/deps
 
+    compile_missing_reason = "" if compile_gate.available else (compile_gate.detail or "")
     value = s  # compile passed (or degraded): structural is the base
     note = ""
     if lint_gate is not None:
@@ -141,6 +175,8 @@ def compute_composite(structural: Optional[float], compile_gate: GateResult,
     degraded = bool(missing)
     if degraded and not note:
         note = f"degraded coverage — missing: {', '.join(missing)} (FR-32, not penalized)"
+        if compile_missing_reason:
+            note = f"{note}; {compile_missing_reason[:120]}"
     return CompositeScore(value=round(value, 4), structural=structural, compile_ok=compile_ok,
                           degraded=degraded, terms_available=available, terms_missing=missing,
                           note=note)
@@ -163,5 +199,15 @@ def score_file(file_path: Path, profile, *, cfg: Optional[SandboxConfig] = None,
         compile_cmd = fallback_syntax_command(profile, fp)
     lint_cmd = getattr(profile, "lint_command", None) if run_lint else None
     gate = run_gate("compile", compile_cmd, fp, cfg)
+    # FR-J2: a compile that failed only on absent dependencies (no classpath in Tier-1) is not a
+    # model fault — re-flavor it as degraded (compile_ok=None) so compute_composite won't floor it.
+    if gate.available and gate.passed is False and not gate.sandbox_violation:
+        lang = getattr(profile, "language_id", "") or ""
+        if classify_compile_failure(lang, gate.detail) == "missing_deps":
+            gate = GateResult(
+                name=gate.name, available=False, passed=None,
+                detail=f"missing deps — Tier-1 degraded (FR-J2): {gate.detail[:160]}",
+                isolation_level=gate.isolation_level,
+            )
     lint = run_gate("lint", lint_cmd, fp, cfg) if lint_cmd else None
     return compute_composite(structural, gate, lint)
