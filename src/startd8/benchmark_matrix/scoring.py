@@ -25,6 +25,27 @@ from .sandbox import SandboxConfig, run_sandboxed
 COMPILE_FLOOR = 0.15  # quality cap for code that fails the compile gate (CRP R1-F2)
 
 
+# Sandbox-safe single-file syntax fallbacks for languages whose LanguageProfile leaves
+# syntax_check_command = None but where a safe, dependency-free, parse-only check exists.
+# Node: `node --check` parses (does NOT execute or resolve requires) — scoped to plain JS
+# extensions only, since the nodejs profile intentionally returns None to avoid `node --check`
+# breaking on .ts/.tsx (REQ-NODE-MP-305). Keyed by language_id -> {ext: command}.
+_FALLBACK_SYNTAX_COMMANDS = {
+    "nodejs": {
+        ".js": ["node", "--check", "{file}"],
+        ".cjs": ["node", "--check", "{file}"],
+        ".mjs": ["node", "--check", "{file}"],
+    },
+}
+
+
+def fallback_syntax_command(profile, file_path) -> Optional[List[str]]:
+    """A sandbox-safe single-file syntax command when the profile has none (e.g. Node .js)."""
+    lang = getattr(profile, "language_id", "") or ""
+    ext = Path(file_path).suffix.lower()
+    return _FALLBACK_SYNTAX_COMMANDS.get(lang, {}).get(ext)
+
+
 @dataclass
 class GateResult:
     name: str                       # "compile" / "lint"
@@ -134,6 +155,12 @@ def score_file(file_path: Path, profile, *, cfg: Optional[SandboxConfig] = None,
                               compile_ok=False, degraded=False, terms_available=["compile"],
                               note="generated file not found → floored")
     compile_cmd = getattr(profile, "syntax_check_command", None)
+    if not compile_cmd:
+        # Profile exposes no syntax command (e.g. nodejs) — use a sandbox-safe single-file
+        # fallback where one exists (Node `node --check` for .js). Keeps the check INSIDE the
+        # FR-44 sandbox and degrades (not pass) when the toolchain is absent — unlike the
+        # profile's own validate_syntax(), which runs unsandboxed and treats absent as pass.
+        compile_cmd = fallback_syntax_command(profile, fp)
     lint_cmd = getattr(profile, "lint_command", None) if run_lint else None
     gate = run_gate("compile", compile_cmd, fp, cfg)
     lint = run_gate("lint", lint_cmd, fp, cfg) if lint_cmd else None

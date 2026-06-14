@@ -73,3 +73,41 @@ def test_score_file_broken_python_is_floored(tmp_path, py_profile):
 def test_score_file_missing_file_floored(tmp_path, py_profile):
     cs = score_file(tmp_path / "nope.py", py_profile, structural=1.0)
     assert cs.value <= COMPILE_FLOOR
+
+
+# --- Node sandbox-safe syntax fallback (node --check for .js) ----------------
+
+@pytest.fixture()
+def js_profile():
+    from startd8.languages import LanguageRegistry, resolve_language
+    LanguageRegistry.discover()
+    return resolve_language(["server.js"])
+
+
+def test_fallback_syntax_command_scoped_to_node_js():
+    from startd8.benchmark_matrix.scoring import fallback_syntax_command
+    from startd8.languages import LanguageRegistry, resolve_language
+    LanguageRegistry.discover()
+    js = resolve_language(["a.js"])
+    assert fallback_syntax_command(js, "a.js") == ["node", "--check", "{file}"]
+    # .tsx is intentionally NOT covered (node --check breaks on it, REQ-NODE-MP-305)
+    assert fallback_syntax_command(js, "a.tsx") is None
+    py = resolve_language(["a.py"])
+    assert fallback_syntax_command(py, "a.py") is None  # python has its own syntax_check_command
+
+
+def test_node_js_valid_compiles_via_fallback(tmp_path, js_profile):
+    f = tmp_path / "server.js"
+    f.write_text("const grpc = require('@grpc/grpc-js');\nfunction charge(req) { return { id: 1 }; }\n")
+    cs = score_file(f, js_profile, structural=0.9, run_lint=False)
+    assert cs.compile_ok is True            # node --check passes (require not resolved — syntax only)
+    assert cs.degraded is False
+    assert cs.value == pytest.approx(0.9)
+
+
+def test_node_js_broken_is_floored_via_fallback(tmp_path, js_profile):
+    f = tmp_path / "bad.js"
+    f.write_text("const x = ;\nfunction (\n")   # SyntaxError
+    cs = score_file(f, js_profile, structural=1.0, run_lint=False)
+    assert cs.compile_ok is False
+    assert cs.value == COMPILE_FLOOR
