@@ -177,3 +177,73 @@ def test_java_missing_deps_degraded_not_floored(tmp_path, java_profile):
     assert cs.degraded is True
     assert cs.value == pytest.approx(1.0)  # falls back to structural, no penalty
     assert "FR-J2" in cs.note
+
+
+# --- C# Tier-1 offline Roslyn (csc) gate + FR-C3 classification ---------------
+
+def test_classify_compile_failure_csharp():
+    """C# classifier: missing type/namespace codes → missing_deps; CS1xxx syntax → None;
+    a syntax error wins even when a missing-dep code is also present."""
+    from startd8.benchmark_matrix.scoring import classify_compile_failure
+    assert classify_compile_failure("csharp", "Foo.cs(1,7): error CS0246: type not found") == "missing_deps"
+    assert classify_compile_failure("csharp", "Foo.cs(2,1): error CS0234: namespace missing") == "missing_deps"
+    assert classify_compile_failure("csharp", "Foo.cs(1,5): error CS1002: ; expected") is None
+    # syntax error wins over a co-occurring missing-dep code (floor, don't degrade)
+    assert classify_compile_failure(
+        "csharp", "error CS1513: } expected\nerror CS0246: type not found") is None
+
+
+requires_dotnet = pytest.mark.skipif(
+    __import__("startd8.benchmark_matrix.scoring", fromlist=["_discover_dotnet_csc"])
+    ._discover_dotnet_csc() is None,
+    reason=".NET SDK (csc.dll + ref pack) not found")
+
+
+@pytest.fixture()
+def cs_profile():
+    from startd8.languages import LanguageRegistry, resolve_language
+    LanguageRegistry.discover()
+    return resolve_language(["A.cs"])
+
+
+def test_csharp_command_is_csc_or_none():
+    """fallback_syntax_command routes .cs through the csc builder (a list when an SDK is present,
+    None when absent — either way never the static dict)."""
+    from startd8.benchmark_matrix.scoring import fallback_syntax_command, _discover_dotnet_csc
+    from startd8.languages import LanguageRegistry, resolve_language
+    LanguageRegistry.discover()
+    cmd = fallback_syntax_command(resolve_language(["A.cs"]), "A.cs")
+    if _discover_dotnet_csc() is None:
+        assert cmd is None
+    else:
+        assert cmd and cmd[0] == "dotnet" and cmd[1].endswith("csc.dll") and "{file}" in cmd
+
+
+@requires_dotnet
+def test_csharp_valid_compiles(tmp_path, cs_profile):
+    f = tmp_path / "Good.cs"
+    f.write_text("public class Good { public static void M(){ var s = new System.Text.StringBuilder(); s.Append(1);} }\n")
+    cs = score_file(f, cs_profile, structural=1.0, run_lint=False)
+    assert cs.compile_ok is True          # offline csc compile against framework refs
+    assert cs.degraded is False
+    assert cs.value == pytest.approx(1.0)
+
+
+@requires_dotnet
+def test_csharp_syntax_error_is_floored(tmp_path, cs_profile):
+    f = tmp_path / "Bad.cs"
+    f.write_text("public class Bad { void M( { }\n")   # CS1xxx syntax error
+    cs = score_file(f, cs_profile, structural=1.0, run_lint=False)
+    assert cs.compile_ok is False
+    assert cs.value == COMPILE_FLOOR
+
+
+@requires_dotnet
+def test_csharp_missing_deps_degraded_not_floored(tmp_path, cs_profile):
+    """FR-C3: absent gRPC `using` → CS0246 → degraded (missing-deps), never floored."""
+    f = tmp_path / "Svc.cs"
+    f.write_text("using Grpc.Core;\npublic class Svc { Server s; }\n")
+    cs = score_file(f, cs_profile, structural=1.0, run_lint=False)
+    assert cs.compile_ok is None          # degraded, NOT compile_ok=False
+    assert cs.degraded is True
+    assert cs.value == pytest.approx(1.0)
