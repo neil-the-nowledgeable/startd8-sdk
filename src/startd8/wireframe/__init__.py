@@ -15,6 +15,8 @@ from .inputs import (
     load_assembly_inputs,
 )
 from .plan import (
+    ContentCoverageStats,
+    CoverageStat,
     Status,
     WireframeItem,
     WireframePlan,
@@ -27,6 +29,8 @@ __all__ = [
     "AssemblyInputs",
     "AssemblyInputsError",
     "CATALOG_KEYS",
+    "ContentCoverageStats",
+    "CoverageStat",
     "Status",
     "WireframeItem",
     "WireframePlan",

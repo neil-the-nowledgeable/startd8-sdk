@@ -288,11 +288,15 @@ pass below.
   match `_views_section`'s view idents, else FR-WCI-2's rollup denominator is wrong. *Verify:* `startd8
   wireframe` lists each view's copy status keyed by its view; a view with no `view_prose.yaml` entry reads
   `not_defined`/raw.
-- **FR-WCI-2 — A unified "content/words completeness" rollup (MEDIUM — split from WCI-1).** Planning found
-  the wireframe has per-surface status but **no aggregation**; a rollup needs a new `ContentCoverageStats`
-  (pages + view copy + AI prompts) in `build_wireframe_plan()` + a `--json` `content_completeness` block
-  (schema-version bump). *Verify:* the `--json` output carries the rollup; a separate, lower-urgency
-  increment from WCI-1.
+- **FR-WCI-2 — A unified "content/words completeness" rollup (MEDIUM — split from WCI-1). ✅ DONE
+  (2026-06-13, `feat/view-prose-wci2`).** Shipped `CoverageStat` + `ContentCoverageStats` (page_bodies /
+  view_copy / ai_prompts + derived `overall`, each `{authored, total, ratio}`) on `WireframePlan`,
+  computed by `_content_coverage()` as a **pure rollup over the already-built `content` section + the
+  parsed view/view_prose states** (no extra I/O; view copy keyed by VIEW name per R1-S8). The `--json`
+  body gains a `content_completeness` block; **`SCHEMA_VERSION` bumped 1→2** (an always-present
+  canonical field, not a conditional add — so it bumps per the render.py stability policy). `0/0 ⇒
+  ratio 1.0` (vacuously complete, never a ZeroDivisionError). 7 new tests + 106 wireframe green;
+  CLI `wireframe --json` verified end-to-end. Tree/human readout left unchanged (FR scope = `--json`).
 - **FR-WCI-3 — Capability-index entry for composite views + view copy.** Register
   `startd8.codegen.composite_views` (the view_codegen generator) and `startd8.codegen.view_prose` (the
   view-chrome capability) in `docs/capability-index/startd8.sdk.capabilities.yaml`, with evidence pointers

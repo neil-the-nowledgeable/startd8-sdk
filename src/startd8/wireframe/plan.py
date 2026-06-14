@@ -123,6 +123,48 @@ class WireframeSection:
 
 
 @dataclass(frozen=True)
+class CoverageStat:
+    """Authored-vs-total for one words/content surface (FR-WCI-2). ``total == 0`` ⇒ the surface has
+    no items to author (``ratio`` is 1.0 — vacuously complete, never a divide-by-zero)."""
+
+    authored: int = 0
+    total: int = 0
+
+    @property
+    def ratio(self) -> float:
+        return 1.0 if self.total == 0 else self.authored / self.total
+
+    def as_dict(self) -> Dict[str, object]:
+        return {"authored": self.authored, "total": self.total, "ratio": round(self.ratio, 4)}
+
+
+@dataclass(frozen=True)
+class ContentCoverageStats:
+    """FR-WCI-2: a unified rollup of words/content coverage across the three author→approve surfaces
+    the wireframe already tracks per-item — **page bodies**, **view copy**, and **AI prompts**.
+    Visibility only (bucket 2/4), never a gate; placeholder/missing content is honestly *un*-authored."""
+
+    page_bodies: CoverageStat = field(default_factory=CoverageStat)
+    view_copy: CoverageStat = field(default_factory=CoverageStat)
+    ai_prompts: CoverageStat = field(default_factory=CoverageStat)
+
+    @property
+    def overall(self) -> CoverageStat:
+        return CoverageStat(
+            self.page_bodies.authored + self.view_copy.authored + self.ai_prompts.authored,
+            self.page_bodies.total + self.view_copy.total + self.ai_prompts.total,
+        )
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "page_bodies": self.page_bodies.as_dict(),
+            "view_copy": self.view_copy.as_dict(),
+            "ai_prompts": self.ai_prompts.as_dict(),
+            "overall": self.overall.as_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class WireframePlan:
     project_root: str
     sections: Tuple[WireframeSection, ...]
@@ -131,6 +173,7 @@ class WireframePlan:
     shape: Dict[str, int]           # entities / crud_routes / pages / views / ai_passes
     readiness: Dict[str, str]       # generator → "ready" | "blocked(<reason>)"
     status_counts: Dict[str, int] = field(default_factory=dict)
+    content_coverage: ContentCoverageStats = field(default_factory=ContentCoverageStats)  # FR-WCI-2
 
     def section(self, key: str) -> WireframeSection:
         for s in self.sections:
@@ -716,6 +759,45 @@ def _content_section(
     )
 
 
+def _content_coverage(
+    content_section: WireframeSection,
+    views_state: _ManifestState,
+    view_prose_state: Optional[_ManifestState],
+) -> ContentCoverageStats:
+    """FR-WCI-2: aggregate the per-item words/content coverage the wireframe already surfaces.
+
+    Page bodies + AI prompts come from the built ``content`` section's items (``PLANNED`` ⇒ authored;
+    ``PLACEHOLDER``/``NOT_DEFINED`` ⇒ not authored). View copy is recomputed from the parsed states
+    (no extra I/O), keyed by VIEW name to match ``_views_section`` (FR-WCI-1 / R1-S8). Reading the
+    already-built section keeps this a pure rollup — one source of truth per surface."""
+    pb_total = pb_auth = pr_total = pr_auth = 0
+    for it in content_section.items:
+        if it.label.startswith("page body:"):
+            pb_total += 1
+            pb_auth += it.status == Status.PLANNED
+        elif it.label.startswith("prompt"):   # "prompt: <path>" or "prompt (inline): <name>"
+            pr_total += 1
+            pr_auth += it.status == Status.PLANNED
+
+    specs: Tuple[ViewSpec, ...] = (
+        views_state.parsed
+        if views_state.status in (Status.PLANNED, Status.PLACEHOLDER) and views_state.parsed
+        else ()
+    )
+    chromed = (
+        set(view_prose_state.parsed)
+        if view_prose_state is not None and view_prose_state.parsed else set()
+    )
+    vc_total = len(specs)
+    vc_auth = sum(1 for v in specs if v.name in chromed)
+
+    return ContentCoverageStats(
+        page_bodies=CoverageStat(pb_auth, pb_total),
+        view_copy=CoverageStat(vc_auth, vc_total),
+        ai_prompts=CoverageStat(pr_auth, pr_total),
+    )
+
+
 def _completeness_section(
     state: _ManifestState, schema_state: _ManifestState
 ) -> WireframeSection:
@@ -834,6 +916,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
             warnings.append(conflict)
     schema_state = states["schema"]
 
+    content_section = _content_section(inputs, states["pages"], states["ai_passes"])
     sections = (
         _scaffold_section(states["app"]),
         _services_section(schema_state, states["ai_passes"]),
@@ -841,9 +924,11 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         _pages_section(states["pages"], authoring=authoring),
         _forms_section(schema_state, states["human_inputs"], texts["views"][0]),
         _views_section(schema_state, states["views"], states["view_prose"]),
-        _content_section(inputs, states["pages"], states["ai_passes"]),
+        content_section,
         _completeness_section(states["completeness"], schema_state),
     )
+    # FR-WCI-2: a unified words/content coverage rollup over the three author→approve surfaces.
+    content_coverage = _content_coverage(content_section, states["views"], states["view_prose"])
 
     # Shape summary (R3-F3) — magnitude, not provisioning.
     n_entities = (
@@ -899,4 +984,5 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         shape=shape,
         readiness=_readiness(states),
         status_counts=counts,
+        content_coverage=content_coverage,
     )

@@ -7,6 +7,9 @@ lives in ``_meta`` and is excluded from the canonical body, the determinism test
 
 Stability policy (R1-F2): renaming/removing any non-``_meta`` field, or changing its type,
 bumps ``SCHEMA_VERSION``; additive optional fields do not.
+
+History: v2 adds the always-present ``content_completeness`` rollup (FR-WCI-2) — a new top-level
+canonical field that every consumer now sees, so it bumps the version (not a conditional/optional add).
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from .plan import Status, WireframePlan, WireframeSection
 
 logger = get_logger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _STATUS_STYLE = {
     Status.PLANNED: "green",
@@ -80,6 +83,7 @@ def plan_body(plan: WireframePlan) -> dict:
         "shape": plan.shape,
         "readiness": plan.readiness,
         "status_counts": plan.status_counts,
+        "content_completeness": plan.content_coverage.as_dict(),   # FR-WCI-2
         "claimed_paths": list(plan.claimed_paths),
         "inputs_fingerprint": _inputs_fingerprint(plan),
         "delivery_inventory": delivery_inventory(plan),
