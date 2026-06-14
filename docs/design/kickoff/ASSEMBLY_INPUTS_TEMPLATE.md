@@ -23,6 +23,7 @@ cascade" reference for <project>.
 | `prisma/pages.yaml` | `generate backend` | content pages + nav | <2> | <authored> |
 | `prisma/completeness.yaml` | `generate backend` | completeness signal set + score formula (absent ⇒ presence rule) | <2> | <absent> |
 | `prisma/views.yaml` | `generate views` | composite views — <list views/archetypes> | <2> | <absent> |
+| `prisma/view_prose.yaml` | `generate views --view-prose` | **view copy (words layer)** — per-view title/intro/empty/success/error/controls; **hash-exempt**, rendered to untracked fragments (outside the drift hash — editing copy never flags drift, per [`SOTTO`](../../design-princples/SOTTO_DESIGN_PRINCIPLE.md)) | <2> | <absent> |
 
 `*` = the contract itself (Prisma IDL, not YAML) — the front human design bookend
 (`DATA_MODEL_AND_RETROSPECTIVE`): design it before the first cascade run; feed RETROSPECTIVE
@@ -77,6 +78,7 @@ inputs:
   pages: {path: prisma/pages.yaml}
   completeness: {path: prisma/completeness.yaml, status: absent}   # declared ahead of authoring
   views: {path: prisma/views.yaml, status: absent}
+  view_prose: {path: prisma/view_prose.yaml, status: absent}       # words layer — hash-exempt, optional
 ```
 
 With no `--inputs` at all, `startd8 wireframe` falls back to exactly the conventional paths

@@ -76,6 +76,18 @@ cost), the **assembly manifests**, and **content prose** (placeholder by design;
 user-facing words are LLM-drafted strictly for acceptance sessions and become real only on human
 approval).
 
+**The Words/Structure split.** File-shaped inputs fall into two lifecycles:
+
+- **Structure** (hashed) — the contract + the assembly manifests (`app.yaml`, `prisma/*.yaml`
+  including `views.yaml` and the optional `display.yaml`). These participate in the drift hash;
+  changing them is a deliberate structural edit that a regen reflects.
+- **Words** (hash-exempt, author→approve) — the **content prose**: page bodies (`app/pages/*.md`)
+  and **view copy** (`prisma/view_prose.yaml` — per-view title/intro/empty/success/error/controls).
+  These render to **untracked fragments outside the drift hash**, so editing copy never forces a
+  regen and never propagates downstream drift (the [SOTTO](../../../design-princples/SOTTO_DESIGN_PRINCIPLE.md)
+  principle — "don't disturb what exists"). They are placeholder by design and become real only on
+  human approval.
+
 ---
 
 | Domain | File | Normally from | This project's posture |

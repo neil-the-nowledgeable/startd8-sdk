@@ -224,7 +224,13 @@ pass below.
 
 ### B. Kickoff inputs & assembly-inputs consistency
 
-- **FR-KIN-1 — Correct the `ASSEMBLY_INPUTS.md` view_prose entry.** The strtd8 inventory still describes
+> **✅ Group B DONE (2026-06-13).** SDK-home docs committed on `feat/view-prose-group-b`: FR-KIN-2
+> (`KICKOFF_INPUTS_EXPLAINED_TEMPLATE.md` gained an explicit **Words/Structure split** naming
+> `view_prose.yaml` under Words) + FR-KIN-3 (`ASSEMBLY_INPUTS_TEMPLATE.md` gained a `view_prose.yaml`
+> row + machine-readable YAML entry). FR-KIN-1 (the strtd8 instance `docs/v2/ASSEMBLY_INPUTS.md`)
+> corrected in the **strtd8 repo** — left for the user to commit there (separate repo).
+
+- **FR-KIN-1 — Correct the `ASSEMBLY_INPUTS.md` view_prose entry. ✅ DONE (strtd8-side).** The strtd8 inventory still describes
   the *overruled* design ("→ `views.yaml` `prose:` … parked until strict-parse supports the `prose:` key").
   Replace it with the shipped reality: a **standalone `prisma/view_prose.yaml`** consumed by
   `generate views --view-prose`, hash-exempt (rendered to untracked fragments), full key-set
