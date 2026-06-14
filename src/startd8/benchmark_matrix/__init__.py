@@ -26,9 +26,12 @@ from .runner import (
     cell_id,
     is_infra_error,
     reclassify_infra_failures,
+    resolve_generated_file,
     run_matrix,
+    sandbox_dir_name,
 )
 from .aggregate import aggregate_cells, build_matrix_markdown, rank_models_by_quality
+from .rescore import CellRescore, RescoreReport, rescore_run
 
 __all__ = [
     "BenchmarkRunSpec",
@@ -44,8 +47,13 @@ __all__ = [
     "cell_id",
     "is_infra_error",
     "reclassify_infra_failures",
+    "resolve_generated_file",
     "run_matrix",
+    "sandbox_dir_name",
     "aggregate_cells",
     "build_matrix_markdown",
     "rank_models_by_quality",
+    "CellRescore",
+    "RescoreReport",
+    "rescore_run",
 ]
