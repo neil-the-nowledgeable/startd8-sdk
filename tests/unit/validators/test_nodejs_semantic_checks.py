@@ -216,3 +216,63 @@ class TestRunNodejsSemanticChecks:
         )
         issues = run_nodejs_semantic_checks(source, file_path="app.js")
         assert len(issues) == 0
+
+
+# ── FR-N4: detector breadth parity (duplicate def, empty catch, sql injection) ──
+
+from startd8.validators.nodejs_semantic_checks import (  # noqa: E402
+    _check_duplicate_definitions,
+    _check_empty_catch_blocks,
+    _check_sql_injection_risk,
+)
+
+
+class TestDuplicateDefinitions:
+    def test_duplicate_function_flagged(self):
+        src = "function handler() {}\nfunction handler() {}\n"
+        issues = _check_duplicate_definitions(src)
+        assert any(i.check == "duplicate_definition" and "handler" in i.message for i in issues)
+
+    def test_duplicate_const_flagged(self):
+        src = "const grpc = require('x')\nconst grpc = require('x')\n"
+        issues = _check_duplicate_definitions(src)
+        assert len(issues) == 1
+
+    def test_distinct_names_clean(self):
+        src = "function a() {}\nclass B {}\nconst c = 1\n"
+        assert _check_duplicate_definitions(src) == []
+
+
+class TestEmptyCatch:
+    def test_empty_catch_flagged(self):
+        issues = _check_empty_catch_blocks("try { risky() } catch (e) {}\n")
+        assert len(issues) == 1 and issues[0].check == "empty_catch_block"
+
+    def test_nonempty_catch_clean(self):
+        assert _check_empty_catch_blocks("try { x() } catch (e) { log(e) }\n") == []
+
+
+class TestSqlInjection:
+    def test_concat_sql_flagged(self):
+        src = 'const q = "SELECT * FROM users WHERE id=" + userId\n'
+        issues = _check_sql_injection_risk(src)
+        assert len(issues) == 1 and issues[0].severity == "error"
+
+    def test_template_sql_flagged(self):
+        src = 'const q = `SELECT * FROM t WHERE id=${userId}`\n'
+        assert len(_check_sql_injection_risk(src)) == 1
+
+    def test_parameterized_clean(self):
+        src = 'const q = "SELECT * FROM users WHERE id = ?"\ndb.query(q, [userId])\n'
+        assert _check_sql_injection_risk(src) == []
+
+
+class TestRunIncludesNewChecks:
+    def test_run_emits_new_categories(self):
+        src = (
+            "function f() {}\nfunction f() {}\n"
+            "try { x() } catch (e) {}\n"
+            'const q = "DELETE FROM t WHERE id=" + id\n'
+        )
+        cats = {i.check for i in run_nodejs_semantic_checks(src, "svc.js")}
+        assert {"duplicate_definition", "empty_catch_block", "sql_injection_risk"} <= cats
