@@ -119,3 +119,38 @@ class TestVueCompileGate:
         sc = score_file(vue, self._vue_profile(), structural=0.9, run_lint=False)
         assert sc.compile_ok is None      # no <script> → degraded, not floored
         assert sc.value == pytest.approx(0.9)
+
+
+# ── FR-N5: structural duplicate_definitions count (parity with Python AST path) ──
+
+def test_fr_n5_js_duplicate_definitions_counted(tmp_path):
+    from startd8.forward_manifest_validator import validate_disk_compliance
+    js = tmp_path / "svc.js"
+    js.write_text("function handler() {}\nfunction handler() {}\nclass A {}\nconst f = () => 1\n")
+    r = validate_disk_compliance(str(js), str(tmp_path))
+    assert r.duplicate_definitions >= 1  # handler declared twice
+
+
+def test_fr_n5_js_distinct_definitions_zero(tmp_path):
+    from startd8.forward_manifest_validator import validate_disk_compliance
+    js = tmp_path / "ok.js"
+    js.write_text("function a() {}\nclass B {}\nconst c = () => 1\n")
+    r = validate_disk_compliance(str(js), str(tmp_path))
+    assert r.duplicate_definitions == 0
+
+
+def test_fr_n5_methods_not_counted_as_dups(tmp_path):
+    # Same method name across two classes is legal — must NOT count as a duplicate.
+    from startd8.forward_manifest_validator import validate_disk_compliance
+    js = tmp_path / "two.js"
+    js.write_text("class A { run() {} }\nclass B { run() {} }\n")
+    r = validate_disk_compliance(str(js), str(tmp_path))
+    assert r.duplicate_definitions == 0
+
+
+def test_fr_n5_vue_inherits_dup_count(tmp_path):
+    from startd8.forward_manifest_validator import validate_disk_compliance
+    vue = tmp_path / "Dup.vue"
+    vue.write_text("<template><div/></template>\n<script>\nfunction g() {}\nfunction g() {}\n</script>\n")
+    r = validate_disk_compliance(str(vue), str(tmp_path))
+    assert r.duplicate_definitions >= 1

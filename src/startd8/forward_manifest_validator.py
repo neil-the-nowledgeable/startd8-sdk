@@ -1609,8 +1609,25 @@ def _validate_js_file(
     except ImportError:
         pass
 
-    # Stub counting (Criterion 4 — postmortem scoring parity)
+    # Stub counting (Criterion 4 — postmortem scoring parity). Text-based: the JS parser
+    # carries no body content, so structural empty-body detection isn't available (FR-N5
+    # NP3a scope note); the text heuristic is the pragmatic stub signal and feeds stub_penalty.
     result.stubs_remaining = _count_stubs_text(content, ".js")
+
+    # FR-N5: structural duplicate-definition count (parity with the Python AST path's
+    # _count_duplicate_definitions). Counts top-level value definitions (function / arrow /
+    # class) whose name appears more than once; methods (parent_class set) and type-level
+    # interface/type_alias (declaration merging is legal) are excluded.
+    try:
+        from collections import Counter
+        from startd8.languages.nodejs_parser import parse_nodejs_source
+        names = [
+            e.name for e in parse_nodejs_source(content)
+            if e.parent_class is None and e.kind in ("function", "const_function", "class")
+        ]
+        result.duplicate_definitions = sum(c - 1 for c in Counter(names).values() if c > 1)
+    except Exception:
+        pass
 
     return result
 
