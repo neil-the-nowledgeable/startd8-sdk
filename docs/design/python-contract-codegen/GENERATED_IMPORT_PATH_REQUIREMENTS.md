@@ -1,13 +1,13 @@
 # Generated Import Path & Import Templates — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
-**Date:** 2026-06-07
-**Status:** ⏸ **DEFERRED NORTH-STAR — not an active build commitment.** The active artifact is
-`SOURCE_BOUND_EXTRACTION_SPIKE_CHARTER.md`, which validates this doc's mechanical core (FR-IMP-2/4/5)
-in isolation. The generalization below (FR-IMP-1/3/6 — `from_json` owned-kind, `imports.yaml`
-grammar, import surface) is **held for a second consumer** per the rule-of-three; it is the *target*
-the spike feeds into, not work scheduled now. Build nothing from this doc directly until the spike
-converges and a narrow requirements doc is promoted from it.
+**Version:** 0.3 (Refresh — un-deferred 2026-06-15; consolidation-aware)
+**Date:** 2026-06-07 (v0.2) · 2026-06-15 (v0.3 refresh)
+**Status:** ▶ **ACTIVE — scheduled for build.** FR-IMP-4/5 + the source-scope member of FR-IMP-2
+already SHIPPED (source-bound extraction, on `origin/main`). The remaining generalization (FR-IMP-1
+`from_json` owned-kind, FR-IMP-2 **identity-key consolidation**, FR-IMP-3 `imports.yaml` grammar,
+FR-IMP-6 import surface) is un-deferred — real consumer need confirmed (2026-06-15) and the
+rule-of-three cost concern collapsed (the FR-PE Prisma emitter paved the grammar→manifest→generate→
+gate→promote road). Plan: `GENERATED_IMPORT_PATH_PLAN.md`. See §0b for the refresh insights.
 **Format:** SDK-internal requirements (REQ/FR), grounded against shipped `backend_codegen/`
 **Companion:** `PYTHON_CONTRACT_CODEGEN_REQUIREMENTS.md` (the path this extends),
 `../kickoff/KICKOFF_AUTHORING_CONTRACT.md` (the manifest grammar an import template joins),
@@ -58,6 +58,30 @@ converges and a narrow requirements doc is promoted from it.
 - **OQ-IMP-C → still open (correctly deferred):** whether `from_json` import should *replace* an
   app's bespoke FR-10-style restore or *complement* it. No SDK code bearing; consumer choice.
 
+## 0b. Refresh Planning Insights (v0.3 — 2026-06-15, the un-deferral pass)
+
+> Between v0.2 (deferred north-star) and v0.3, the world moved: the FR-PE Prisma emitter shipped a
+> full grammar→generate→gate→promote loop, a second dedup mechanism (`dedup_by`/F-11) landed next to
+> `source_binding`, and real consumer need was confirmed. Six refresh corrections:
+
+| v0.2 Assumption | v0.3 Discovery (current `origin/main`) | Impact |
+|-----------------|----------------------------------------|--------|
+| FR-IMP-2 is greenfield — replace `_persist`'s name-dedup with one declared key. | **Two** dedup keys now coexist on `AiPass` (`ai_layer.py`): `source_binding` (source-scope, mine) **and** `dedup_by` (single-field, the parallel team's F-11), plus an unrelated `trigger`. | **FR-IMP-2 is a CONSOLIDATION/refactor, not greenfield** — unify both under one declared identity key, **back-compat preserved**, and **coordinate with the AI-layer owner** (the highest-collision surface). |
+| FR-IMP-3 (the grammar) is the risky, expensive part. | The Prisma emitter shipped the entire **authoring-contract §-section → `extract_*` extractor → `parse_*` round-trip gate → generate owned-kind → FR-PE-6/7 gate+promote** pattern, plus a generalized `build_entity_graph` and the fail-loud gate discipline (errors/unrenderable/round-trip oracle, `--allow-lossy`). | **FR-IMP-3 cost collapsed — it's a paved road.** `imports.yaml` is a 7th manifest cloning `extract_views`/`parse_views`; the keystone is now the *cheapest* phase, not the riskiest. |
+| `from_json` is the easy de-serializer; just write it. | The emitter proved a **safety-gate discipline** is essential for a write path: a round-trip import that drops rows or violates the declared identity should **fail loud**, not silently. | **FR-IMP-1 gains a gate** (idempotency + completeness oracle) mirroring FR-PE-6; symmetric to export is necessary but a *gated* importer is the bar. |
+| The identity key is an AI-pass concern (`_persist`). | `from_json` restore (FR-IMP-1) writes **user** rows; the AI pass writes **ai** rows — both need the **same** declared identity key, at **two** call sites. | **FR-IMP-2's identity key is the shared seam** between the AI `_persist*` path and the new `from_json` path — define it once, consume it in both (under-specified in v0.2). |
+| Rule-of-three: hold for a 2nd consumer. | Real need confirmed 2026-06-15 (consumer to be named — strtd8 content-import FR-13/15, navig8, or startd8-generator). | **Un-deferred.** Consumer identity is now the load-bearing open question (it fixes formats/entities) → **OQ-IMP-D**. |
+| Build it on a branch like any feature. | The repo runs many concurrent worktrees + a parallel team **actively in `ai_layer.py`/`generate contract`** (see memory `reference_multiworktree_env`). | **Coordination is a first-class plan step.** `git fetch` + check `origin/main` before each phase; the FR-IMP-2 phase opens with a heads-up to the AI-layer owner, not a surprise PR. |
+
+**Refresh open-question updates:**
+- **OQ-IMP-A → revised.** Module split stands (`import_codegen.py`), but the **identity-key logic** is
+  shared with `ai_layer.py` — extract it to a small `identity.py` (or `ai_layer` helper) consumed by
+  both, so there is one source of truth (resolves the FR-IMP-2 two-call-site seam).
+- **OQ-IMP-D → NEW (load-bearing):** **name the first un-deferred consumer.** strtd8 content-import
+  (FR-13/15) drives `{json, text}` + a snippet library; navig8/the generator may need different
+  formats/entities. The grammar (FR-IMP-3) is consumer-agnostic, but the *acceptance* (FR-IMP-6
+  surface, FR-IMP-1 round-trip target) needs a named consumer. Resolve before Phase 3.
+
 ---
 
 ## 1. Problem Statement
@@ -96,20 +120,31 @@ identity and declared provenance, generated for $0 from the same contract the en
   owned-kind (`app/import.py`, kind `python-import`, drift-tracked, $0) projected from the contract:
   a `from_json(text) -> payload` / loader that ingests the app's own `to_json` export format into
   entity rows, the structural inverse of `render_export`. It honours the entity's declared identity
-  key (FR-IMP-2). Touches: `import_codegen.render_import`, `app/import.py`. Verify: for any contract,
-  `from_json(to_json(payload))` reconstructs every entity row with field fidelity (sorted-key
-  stable); re-running the load is idempotent under the declared identity key (no duplicate rows);
-  the emitted file carries the standard provenance header and passes `--check` drift.
+  key (FR-IMP-2). Touches: `import_codegen.render_import`, `app/import.py`. **It is GATED** (v0.3,
+  mirroring the FR-PE-6 emitter discipline): the importer reports a structured result and **fails
+  loud** rather than silently — a row that violates the declared identity, a field the contract can't
+  accept, or a count that doesn't reconcile is surfaced (not dropped); a `--strict`/`--allow-lossy`
+  switch governs partial imports. Verify: for any contract, `from_json(to_json(payload))` reconstructs
+  every entity row with field fidelity (sorted-key stable); re-running the load is idempotent under
+  the declared identity key (no duplicate rows); a row referencing an undeclared field is reported,
+  not silently dropped; the emitted file carries the standard provenance header and passes `--check`
+  drift.
 
-- **FR-IMP-2 — Declarable identity / idempotency key (generalize `_persist` dedup).** Replace the
-  hardwired dedup-by-`name`-only with a **declared identity key** consulted by both the generated
-  import (FR-IMP-1) and the AI `_persist` helper. Vocabulary: `id` (upsert / restore), a single
-  named field, a composite of named fields, a **source scope** (an FR-IMP-5 provenance field), or
-  `none` (append-only). Absent declaration, today's name-dedup is preserved (back-compat).
-  Touches: `import_codegen`, `ai_layer._persist`, `imports.yaml`. Verify: an entity declared
-  `identity: id` upserts on re-import (count stable, fields updated); `identity: [sourceDocumentId]`
-  replaces only that source's unconfirmed rows; `identity: none` appends; an entity with no
-  `imports.yaml` entry still dedups by `name` exactly as before.
+- **FR-IMP-2 — Unify the dedup mechanisms into ONE declared identity key (CONSOLIDATION).** *(v0.3:
+  no longer greenfield.)* `AiPass` carries **two** overlapping dedup keys today — `source_binding`
+  (source-scope) and `dedup_by` (single field, F-11). Consolidate them into **one** declared identity
+  key with the full vocabulary: `id` (upsert / restore), a single named field, a composite of named
+  fields, a **source scope** (an FR-IMP-5 provenance field), or `none` (append-only). The key is the
+  **shared seam** between the AI persist path *and* the FR-IMP-1 `from_json` path — defined once
+  (a small `identity` helper), consumed at both call sites. **Back-compat is mandatory:** existing
+  `source_binding`/`dedup_by` manifests keep working (mapped onto the unified key), and an entity
+  with no declaration still dedups by `name` exactly as before. Touches: `ai_layer` (the persist
+  helpers + `AiPass`), `import_codegen`, `imports.yaml`. **Coordination (the highest-collision
+  surface):** this lands via a proposal to the AI-layer owner, not a surprise branch (see §0b).
+  Verify: `source_binding`/`dedup_by` manifests emit byte-identical generated code post-unification;
+  `identity: id` upserts on re-import; `identity: [a, b]` composites; `identity: source:<field>`
+  replaces only that source's unconfirmed rows; `identity: none` appends; no-declaration still
+  name-dedups.
 
 - **FR-IMP-3 — Import templates declared in the authoring-contract grammar → `imports.yaml`.** A new
   authoring-contract section (`## Imports`, §5) and a `manifest_extraction` extractor emit
@@ -117,11 +152,14 @@ identity and declared provenance, generated for $0 from the same contract the en
   manifest (`extract.py:105–132`), with per-value extraction-report rows (`extracted(source:…)` /
   `not_extracted(reason)` / `defaulted(source)`). An import template binds: target entity, source
   format, identity key (FR-IMP-2), provenance source value, and an optional source/extractor binding
-  (FR-IMP-4). Touches: `KICKOFF_AUTHORING_CONTRACT §2.8`, `manifest_extraction/extractors.py`,
-  `import_codegen.parse_imports`. Verify: a conforming `## Imports` block extracts to an
-  `imports.yaml` that round-trips through `parse_imports`; an unknown target entity / field
-  reference fails **loudly** (never a silent flag); a non-conforming row emits exactly one
-  `not_extracted(reason)` report row.
+  (FR-IMP-4). **(v0.3 — paved road):** this clones the exact pattern the FR-PE Prisma emitter shipped
+  — a `## Imports` extractor modeled on `extract_views` (`extractors.py`), a `parse_imports` strict
+  parser, and wiring into the `extract_manifests` round-trip gate (`extract.py`) — so it is the
+  **cheapest, lowest-risk phase**, not the riskiest. Touches: `KICKOFF_AUTHORING_CONTRACT §2.8`,
+  `manifest_extraction/extractors.py` + `extract.py`, `import_codegen.parse_imports`. Verify: a
+  conforming `## Imports` block extracts to an `imports.yaml` that round-trips through `parse_imports`;
+  an unknown target entity / field reference fails **loudly** (never a silent flag); a non-conforming
+  row emits exactly one `not_extracted(reason)` report row.
 
 - **FR-IMP-4 — Source-bound AI pass (context binding) — generalize the text-mode harness.** Extend
   `ai_passes.yaml` + the text-mode harness (`ai_layer._render_pass_text`) so a pass may be **bound
@@ -258,28 +296,29 @@ generation**, build first (delivers strtd8 FR-13 + FR-15 + the idempotency the c
 FR-IMP-4/5 = **one source-bound reuse of an existing AI pass**, build second (delivers strtd8 FR-14).
 Exactly the consumer's own Stage-1/Stage-2 sequencing, generalized into SDK capability.
 
-## 7. Implementation sequence *(planning-confirmed)*
+## 7. Implementation sequence *(v0.3 — see `GENERATED_IMPORT_PATH_PLAN.md` for the detailed plan)*
 
-**Stage 1 — $0 owned generation (FR-IMP-1/2/3/6):**
-1. `import_codegen.py` (new module, symmetric to `ai_layer.py`): `render_import` (`from_json`
-   inverse), `parse_imports`, identity-key resolver.
-2. `ai_layer._persist` — consult the declared identity key instead of name-only (back-compat default).
-3. `manifest_extraction/extractors.py` + `KICKOFF_AUTHORING_CONTRACT §2.8` — `## Imports` →
-   `imports.yaml`, wired into `extract.py`'s round-trip gate.
-4. `htmx_generator` — import surface (paste + text-file upload) when declared.
-5. Drift `--check` + boot-smoke; the standard owned-kind provenance-header + contract tests.
+**Already shipped (`origin/main`):** FR-IMP-4 (source-bound pass) + FR-IMP-5 (server-stamp) + the
+source-scope member of FR-IMP-2 — the source-bound-extraction work.
 
-**Stage 2 — source-bound extraction (FR-IMP-4/5; reuse, not reinvent):**
-6. `ai_layer._render_pass_text` — emit the `source_id=…` signature + stamp step when a binding is
-   declared; `_persist` stamps the provenance field and scopes dedup to `source`.
-7. Generated edge-privacy + provenance tests extended to assert omit-and-stamp.
+**Remaining, phased (foundational first):**
+- **Phase 0 — Coordinate** (the AI-layer surface is hot): `git fetch`, confirm `origin/main`, post
+  the FR-IMP-2 unification proposal to the AI-layer owner. Name the consumer (OQ-IMP-D).
+- **Phase 1 — FR-IMP-2 identity-key consolidation** (foundational): unify `source_binding` + `dedup_by`
+  into one declared key in a shared `identity` helper; back-compat byte-identical. Blocks FR-IMP-1.
+- **Phase 2 — FR-IMP-3 `imports.yaml` grammar** (paved road, parallelizable with Phase 1): `## Imports`
+  extractor + `parse_imports` + round-trip gate, cloning `extract_views`.
+- **Phase 3 — FR-IMP-1 `from_json` owned-kind** (gated importer): consumes the Phase-1 key + Phase-2
+  manifest; the FR-PE-6-style import gate.
+- **Phase 4 — FR-IMP-6 import surface**: `htmx_generator` paste/upload screen when `imports.yaml`
+  declares one.
+- **Phase 5 — End-to-end** on the named consumer + drift `--check` + boot-smoke.
 
 ---
 
-*v0.2 — Post-planning self-reflective update. The naive "import mirrors export" framing was split
-into an easy de-serializer (FR-IMP-1) and the real write-policy work (FR-IMP-2/4/5); provenance was
-shown to need omission **and** stamping (two requirements, not one); import templates were folded
-into the existing manifest-extraction grammar rather than a new config subsystem; formats were
-bounded to `{json, text}` for v1 with binary deferred at stated dependency cost. Build split into a
-$0 owned stage (FR-IMP-1/2/3/6) and a reuse-an-existing-pass stage (FR-IMP-4/5). Ready for Phase-5
-convergent review, then graduation alongside `PYTHON_CONTRACT_CODEGEN_REQUIREMENTS.md`.*
+*v0.3 — Refresh / un-deferral (2026-06-15). Un-deferred on confirmed consumer need; the rule-of-three
+cost concern collapsed because the FR-PE Prisma emitter paved the grammar→generate→gate→promote road
+(FR-IMP-3 is now the cheapest phase). FR-IMP-2 reframed from greenfield to a **consolidation** of two
+shipped dedup keys (`source_binding` + `dedup_by`) into one identity key shared by the AI-persist and
+`from_json` paths — back-compat mandatory, coordinated with the AI-layer owner. FR-IMP-1 gained a
+fail-loud import gate (FR-PE-6 model). New OQ-IMP-D (name the consumer). See §0b + the plan doc.*
