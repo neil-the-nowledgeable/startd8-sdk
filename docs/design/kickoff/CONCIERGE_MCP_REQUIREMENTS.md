@@ -221,11 +221,14 @@ deliverable here.
   SDK code path. **Registration target (resolved):** add the `@mcp.tool()` to the root monolith
   **`startd8_mcp.py`** — it is the documented "Primary Server," the module all 14 test files
   import, the CLAUDE.md launch target (`python3 startd8_mcp.py`), and the public entrypoint the
-  `startd8_mcp_server/` package itself defers to "for backward compatibility." Caveat for the
-  implementer: the 20 existing tools are **duplicated** in `startd8_mcp_server/server.py` (a
-  parked monolith→package refactor with the identical tool surface); a tool added to the monolith
-  must be mirrored there too, or the refactor's go-forward status confirmed first — pre-existing
-  drift, flagged not inherited.
+  `startd8_mcp_server/` package itself defers to "for backward compatibility." **Mirror resolved
+  (2026-06-15):** `startd8_concierge` is registered in **both** `startd8_mcp.py` (the live
+  entrypoint `run_mcp.sh` execs) **and** `startd8_mcp_server/server.py` (the package the
+  `improvement_plan` IMP-002 intends to promote to primary) — tool surfaces verified identical
+  (21 tools each), and the package entrypoint lists `startd8_concierge`. Mirroring follows the
+  subproject's existing convention (all prior tools are duplicated in parallel) and avoids a
+  latent regression if/when IMP-002 flips the entrypoint. The real de-duplication (one file
+  importing the other) is IMP-002's job, out of scope here.
 - **FR-C15 — Idempotency & drift for `instantiate-kickoff` (R1-F6/R1-S6).** Per-file skip-existing
   is the right default but must not silently certify a half-instantiated package as done. The
   action emits a **package-level verdict** (`complete` / `partial` / `drifted`) and supports a
