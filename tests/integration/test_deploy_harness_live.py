@@ -132,3 +132,44 @@ def test_live_smoke_fk_only_is_skipped_not_failed(tmp_path: Path) -> None:
     res = deploy_app_local(tmp_path, install_timeout_s=400, boot_timeout_s=60)
     assert res.stages["smoke"].status.value == "skipped"
     assert res.stages["smoke"].reason == "skipped:all-resources-fk-coupled"
+
+
+# --------------------------------------------------------------------------- batch (M3)
+
+
+def test_live_batch_deploys_models_and_joins(tmp_path: Path) -> None:
+    """Two per-model CRUD apps under a batch root → both smoke=pass, joined by verbatim model id."""
+    import json
+
+    from startd8.deploy_harness import deploy_batch
+
+    for slug_name, model in (
+        ("anthropic-opus", "anthropic:opus"),
+        ("openai-gpt", "openai:gpt"),
+    ):
+        workdir = tmp_path / slug_name / "workdir"
+        workdir.mkdir(parents=True)
+        _write_raw_app(workdir, _CRUD_APP)
+        (tmp_path / slug_name / ".model").write_text(model, encoding="utf-8")
+    (tmp_path / "comparison-report.json").write_text(
+        json.dumps(
+            {
+                "ranked": [
+                    {"model": "anthropic:opus", "metrics": {"disk_quality": 0.92}},
+                    {"model": "openai:gpt", "metrics": {"disk_quality": 0.80}},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = deploy_batch(tmp_path, install_timeout_s=400, boot_timeout_s=60)
+
+    assert report["app_count"] == 2
+    assert report["rollup"]["passed"]["smoke"] == 2
+    assert report["joined_to_comparison"] is True
+    by_model = {r["model"]: r for r in report["apps"]}
+    assert by_model["anthropic:opus"]["join_basis"] == "exact"
+    assert by_model["anthropic:opus"]["comparison"]["disk_quality"] == 0.92
+    assert not report["warnings"]  # all sidecar-resolved, no reverse-slug
+    assert (tmp_path / "deploy-report.md").is_file()

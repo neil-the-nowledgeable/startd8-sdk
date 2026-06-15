@@ -15,6 +15,7 @@ M0 (shipped): tolerant discovery + the result data model. M1+ adds the live stag
 
 from __future__ import annotations
 
+from .batch import AppRoot, deploy_batch, discover_app_roots
 from .deploy import deploy_app_local
 from .discovery import (
     DEP_FLOOR,
@@ -45,8 +46,11 @@ from .ladder import (
 )
 
 __all__ = [
-    # orchestration (FR-11)
+    # orchestration (FR-11/12)
     "deploy_app_local",
+    "deploy_batch",
+    "discover_app_roots",
+    "AppRoot",
     # discovery (FR-1/2/3)
     "detect_entrypoint",
     "detect_deps",

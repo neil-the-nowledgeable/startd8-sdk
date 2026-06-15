@@ -10,6 +10,7 @@ and the `scripts/run_prime_model_comparison.py` standalone wrapper.
 Design: docs/design/PRIME_MODEL_COMPARISON_REQUIREMENTS.md (v0.2) +
         docs/design/PRIME_MODEL_COMPARISON_PLAN.md (v1.0).
 """
+
 from __future__ import annotations
 
 import json
@@ -29,13 +30,27 @@ PRIME_WORKFLOW_SCRIPT = SDK_ROOT / "scripts" / "run_prime_workflow.py"
 # Paths never copied into a per-model sandbox: heavy dirs, plus run-specific state that would
 # otherwise make a fresh run resume/skip (e.g. .prime_contractor_state.json marks features done).
 SANDBOX_IGNORE = shutil.ignore_patterns(
-    ".git", ".venv", "venv", ".startd8", "node_modules", "__pycache__",
-    ".pytest_cache", ".mypy_cache", "build", "dist", "*.egg-info", ".tox",
-    ".prime_contractor_state.json", ".next", "test-results", ".DS_Store",
+    ".git",
+    ".venv",
+    "venv",
+    ".startd8",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".tox",
+    ".prime_contractor_state.json",
+    ".next",
+    "test-results",
+    ".DS_Store",
 )
 
 
 # --------------------------------------------------------------------------- helpers
+
 
 def slug(model_spec: str) -> str:
     """`anthropic:claude-opus-4-8` -> `anthropic-claude-opus-4-8` (filesystem-safe)."""
@@ -73,6 +88,7 @@ def _fmt(value: Optional[float], places: int = 4) -> str:
 
 # --------------------------------------------------------------------------- sandbox (S2)
 
+
 def _ignore_factory(source_root: Path, batch_root: Optional[Path]):
     """copytree ignore that also excludes the batch output dir when it lives inside the
     source tree (H1) — otherwise each sandbox would recursively copy prior runs' outputs.
@@ -105,30 +121,49 @@ def materialize_sandbox(
     workdir.parent.mkdir(parents=True, exist_ok=True)
     if isolation == "worktree":
         subprocess.run(
-            ["git", "-C", str(source_root), "worktree", "add", "--detach", str(workdir)],
-            check=True, capture_output=True, text=True,
+            [
+                "git",
+                "-C",
+                str(source_root),
+                "worktree",
+                "add",
+                "--detach",
+                str(workdir),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         )
     else:  # copy
         shutil.copytree(
-            source_root, workdir,
-            ignore=_ignore_factory(source_root, batch_root), dirs_exist_ok=False,
+            source_root,
+            workdir,
+            ignore=_ignore_factory(source_root, batch_root),
+            dirs_exist_ok=False,
         )
 
 
 # --------------------------------------------------------------------------- invocation (S3)
+
 
 def build_command(
     seed: Path, workdir: Path, output: Path, model: str, cost_budget: Optional[float]
 ) -> list[str]:
     """Per-model prime workflow command with the model pinned (FR-5/6/7/8)."""
     cmd = [
-        "python3", str(PRIME_WORKFLOW_SCRIPT),
-        "--seed", str(seed),                  # FR-5: same seed, never mutated
-        "--project-root", str(workdir),       # FR-1: isolated copy
-        "--output-dir", str(output),
-        "--lead-agent", model,                # FR-7: pin both generation paths
-        "--drafter-agent", model,
-        "--force-regenerate",                 # FR-8: no Mottainai reuse
+        "python3",
+        str(PRIME_WORKFLOW_SCRIPT),
+        "--seed",
+        str(seed),  # FR-5: same seed, never mutated
+        "--project-root",
+        str(workdir),  # FR-1: isolated copy
+        "--output-dir",
+        str(output),
+        "--lead-agent",
+        model,  # FR-7: pin both generation paths
+        "--drafter-agent",
+        model,
+        "--force-regenerate",  # FR-8: no Mottainai reuse
     ]
     # Intentionally NOT passing --complexity-routing / --micro-prime (off by default).
     if cost_budget is not None:
@@ -136,19 +171,33 @@ def build_command(
     return cmd
 
 
-def run_command(cmd: list[str], cwd: Path, timeout: Optional[float] = None) -> dict[str, Any]:
+def run_command(
+    cmd: list[str], cwd: Path, timeout: Optional[float] = None
+) -> dict[str, Any]:
     """Run one model's workflow. A timeout marks the run failed but never wedges the batch (M1)."""
     started = time.monotonic()
     start_ts = datetime.now(timezone.utc)
     try:
         proc = subprocess.run(
-            cmd, cwd=str(cwd), capture_output=True, text=True, check=False, timeout=timeout
+            cmd,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
         )
-        returncode, stdout, stderr, timed_out = proc.returncode, proc.stdout, proc.stderr, False
+        returncode, stdout, stderr, timed_out = (
+            proc.returncode,
+            proc.stdout,
+            proc.stderr,
+            False,
+        )
     except subprocess.TimeoutExpired as e:
         returncode, timed_out = 124, True
         stdout = e.stdout or "" if isinstance(e.stdout, str) else ""
-        stderr = (e.stderr or "" if isinstance(e.stderr, str) else "") + f"\n[timed out after {timeout}s]"
+        stderr = (
+            e.stderr or "" if isinstance(e.stderr, str) else ""
+        ) + f"\n[timed out after {timeout}s]"
     return {
         "command": cmd,
         "returncode": returncode,
@@ -162,6 +211,7 @@ def run_command(cmd: list[str], cwd: Path, timeout: Optional[float] = None) -> d
 
 
 # --------------------------------------------------------------------------- extraction (S4)
+
 
 def extract_metrics(output_dir: Path) -> dict[str, Any]:
     """Capability metrics from existing artifacts (FR-9/10). Missing fields -> None."""
@@ -215,6 +265,7 @@ def cost_from_db(start_ts: datetime, end_ts: datetime) -> Optional[float]:
     """Fallback cost attribution: time-window query of the shared cost DB (FR-12/S5)."""
     try:
         from startd8.costs.store import CostStore
+
         store = CostStore(Path("~/.startd8/costs.db"))
         records = store.query(start=start_ts, end=end_ts)
         return sum(r.total_cost for r in records) if records else None
@@ -224,10 +275,12 @@ def cost_from_db(start_ts: datetime, end_ts: datetime) -> Optional[float]:
 
 # --------------------------------------------------------------------------- ranking + report (S6)
 
+
 def rank_models(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rank by capability then cost. Quality = mean disk_quality_score when the postmortem ran,
     else the cross-file gate outcome (fewer failures, higher gate score). Tie-break: cheaper.
     """
+
     def key(r: dict[str, Any]):
         m = r["metrics"]
         disk = m.get("mean_disk_quality_score")
@@ -244,6 +297,7 @@ def rank_models(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             # Quaternary: cheaper per succeeded feature.
             cpsf if cpsf is not None else float("inf"),
         )
+
     return sorted(results, key=key)
 
 
@@ -297,8 +351,11 @@ def build_markdown(payload: dict[str, Any]) -> str:
     winner = ranked[0]
     wm = winner["metrics"]
     gate = wm.get("gate_verdict")
-    gate_str = (f"gate {gate} ({wm.get('gate_failures')} failure(s), score {_fmt(wm.get('gate_score'))})"
-                if gate is not None else f"disk quality {_fmt(wm.get('mean_disk_quality_score'))}")
+    gate_str = (
+        f"gate {gate} ({wm.get('gate_failures')} failure(s), score {_fmt(wm.get('gate_score'))})"
+        if gate is not None
+        else f"disk quality {_fmt(wm.get('mean_disk_quality_score'))}"
+    )
     lines.append(
         f"**Recommended: `{winner['model']}`** — "
         f"{wm.get('succeeded')}/{wm.get('processed')} features, {gate_str}, "
@@ -307,14 +364,22 @@ def build_markdown(payload: dict[str, Any]) -> str:
     )
     incomplete = [r["model"] for r in ranked if not r["metrics"].get("artifacts_found")]
     if incomplete:
-        lines += ["", f"> ⚠️ Incomplete (no artifacts / crashed): {', '.join(incomplete)}"]
+        lines += [
+            "",
+            f"> ⚠️ Incomplete (no artifacts / crashed): {', '.join(incomplete)}",
+        ]
     return "\n".join(lines) + "\n"
 
 
 # --------------------------------------------------------------------------- validation + orchestration
 
+
 def validate_inputs(
-    models: list[str], seed: Path, source_root: Path, batch_root: Optional[Path], dry_run: bool
+    models: list[str],
+    seed: Path,
+    source_root: Path,
+    batch_root: Optional[Path],
+    dry_run: bool,
 ) -> Optional[str]:
     """Return an error message if inputs are invalid, else None."""
     if len(models) < 2:
@@ -346,11 +411,15 @@ def run_comparison(
     models = list(dict.fromkeys(models))  # de-dupe, preserve order
     seed = seed.resolve()
     source_root = source_root.resolve()
-    batch_id = f"model-comparison-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    batch_root = (batch_root.resolve() if batch_root else (Path.cwd() / "out" / batch_id))
+    batch_id = (
+        f"model-comparison-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    )
+    batch_root = batch_root.resolve() if batch_root else (Path.cwd() / "out" / batch_id)
 
-    log(f"Batch: {batch_id}\nSeed: {seed}\nModels ({len(models)}): {', '.join(models)}\n"
-        f"Isolation: {isolation} | Batch root: {batch_root}\n")
+    log(
+        f"Batch: {batch_id}\nSeed: {seed}\nModels ({len(models)}): {', '.join(models)}\n"
+        f"Isolation: {isolation} | Batch root: {batch_root}\n"
+    )
 
     if dry_run:
         for model in models:
@@ -359,7 +428,10 @@ def run_comparison(
             log(f"--- {model} ---")
             log(f"  sandbox: {wd}  (copy of {source_root})")
             log(f"  output : {out}")
-            log("  cmd    : " + " ".join(build_command(seed, wd, out, model, cost_budget)))
+            log(
+                "  cmd    : "
+                + " ".join(build_command(seed, wd, out, model, cost_budget))
+            )
         return None
 
     results: list[dict[str, Any]] = []
@@ -371,25 +443,38 @@ def run_comparison(
         if workdir.exists() and any(workdir.iterdir()):
             msg = f"sandbox already exists and is non-empty: {workdir} (use a fresh batch root)"
             log(f"  {msg}")
-            results.append({"model": model, "metrics": extract_metrics(output), "error": msg})
+            results.append(
+                {"model": model, "metrics": extract_metrics(output), "error": msg}
+            )
             continue
         output.mkdir(parents=True, exist_ok=True)
+        # Drop a verbatim-model sidecar so the deploy harness joins by the true model id, not the
+        # lossy directory slug (deploy_harness FR-12 / CRP R1-F6).
+        (batch_root / slug(model) / ".model").write_text(model, encoding="utf-8")
         log(f"=== [{model}] materializing sandbox ({isolation}) ===")
         try:
             materialize_sandbox(source_root, workdir, isolation, batch_root=batch_root)
-        except Exception as e:  # noqa: BLE001 — one bad sandbox must not kill the batch (FR-3)
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 — one bad sandbox must not kill the batch (FR-3)
             log(f"  sandbox failed: {e}")
-            results.append({"model": model, "metrics": extract_metrics(output), "error": str(e)})
+            results.append(
+                {"model": model, "metrics": extract_metrics(output), "error": str(e)}
+            )
             continue
 
         log(f"=== [{model}] running prime contractor ===")
         rec = run_command(
-            build_command(seed, workdir, output, model, cost_budget), SDK_ROOT, timeout=per_run_timeout
+            build_command(seed, workdir, output, model, cost_budget),
+            SDK_ROOT,
+            timeout=per_run_timeout,
         )
         rec["model"] = model
         run_logs.append(rec)
-        log(f"  exit={rec['returncode']}  {rec['duration_seconds']:.1f}s"
-            + ("  [TIMED OUT]" if rec["timed_out"] else ""))
+        log(
+            f"  exit={rec['returncode']}  {rec['duration_seconds']:.1f}s"
+            + ("  [TIMED OUT]" if rec["timed_out"] else "")
+        )
 
         metrics = extract_metrics(output)
         if metrics["total_cost"] is None:  # S5 fallback
@@ -397,8 +482,12 @@ def run_comparison(
             if db_cost is not None:
                 metrics["total_cost"] = db_cost
                 metrics["cost_source"] = "cost_db_window"
-                metrics["cost_per_succeeded_feature"] = _safe_div(db_cost, metrics["succeeded"])
-        results.append({"model": model, "metrics": metrics, "returncode": rec["returncode"]})
+                metrics["cost_per_succeeded_feature"] = _safe_div(
+                    db_cost, metrics["succeeded"]
+                )
+        results.append(
+            {"model": model, "metrics": metrics, "returncode": rec["returncode"]}
+        )
 
     ranked = rank_models(results)
     payload = {
@@ -408,12 +497,18 @@ def run_comparison(
         "source_root": str(source_root),
         "isolation": isolation,
         "ranked": ranked,
-        "run_logs": [{k: (v.isoformat() if isinstance(v, datetime) else v)
-                      for k, v in rec.items()} for rec in run_logs],
+        "run_logs": [
+            {
+                k: (v.isoformat() if isinstance(v, datetime) else v)
+                for k, v in rec.items()
+            }
+            for rec in run_logs
+        ],
     }
     batch_root.mkdir(parents=True, exist_ok=True)
     (batch_root / "comparison-report.json").write_text(
-        json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        json.dumps(payload, indent=2, default=str), encoding="utf-8"
+    )
     md = build_markdown(payload)
     (batch_root / "comparison-report.md").write_text(md, encoding="utf-8")
     log("\n" + md)

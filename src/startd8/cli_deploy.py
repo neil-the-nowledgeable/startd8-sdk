@@ -92,3 +92,53 @@ def local(
     if health and health.status.value == "pass":
         raise typer.Exit(0)
     raise typer.Exit(1)
+
+
+@deploy_app.command("batch")
+def batch(
+    batch_root: Path = typer.Argument(
+        ...,
+        help="Model-comparison batch root (contains per-model */workdir app roots).",
+    ),
+    install_timeout: float = typer.Option(
+        600.0, "--install-timeout", help="pip install timeout (s)."
+    ),
+    boot_timeout: float = typer.Option(
+        60.0, "--boot-timeout", help="Server boot timeout (s)."
+    ),
+    no_smoke: bool = typer.Option(
+        False, "--no-smoke", help="Stop each app after the health rung."
+    ),
+    no_join: bool = typer.Option(
+        False, "--no-join", help="Don't join to comparison-report.json."
+    ),
+    keep: bool = typer.Option(
+        False, "--keep", help="Keep throwaway venv/work dirs for debugging."
+    ),
+) -> None:
+    """Deploy every per-model app under a batch root and write deploy-report.{json,md}."""
+    from .deploy_harness import deploy_batch
+
+    if not batch_root.is_dir():
+        console.print(f"[red]not a directory:[/red] {batch_root}")
+        raise typer.Exit(2)
+
+    report = deploy_batch(
+        batch_root,
+        install_timeout_s=install_timeout,
+        boot_timeout_s=boot_timeout,
+        do_smoke=not no_smoke,
+        join=not no_join,
+        keep=keep,
+    )
+
+    ru = report["rollup"]
+    console.print(f"[bold]{report['app_count']} app(s)[/bold] under {batch_root}")
+    for rung in ("install", "boot", "health", "smoke"):
+        console.print(
+            f"  [{_STAGE_STYLE['pass']}]{rung:9}[/{_STAGE_STYLE['pass']}] "
+            f"{ru['passed'].get(rung, 0)} passed / {ru['reached'].get(rung, 0)} reached"
+        )
+    for w in report["warnings"]:
+        console.print(f"  [yellow]warn:[/yellow] {w}")
+    console.print(f"  report → {batch_root / 'deploy-report.md'}")

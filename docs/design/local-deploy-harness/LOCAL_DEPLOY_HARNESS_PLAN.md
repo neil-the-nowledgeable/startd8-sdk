@@ -135,9 +135,12 @@ process*, distinct from `validators/`'s in-process gates. Keeps the untrusted-co
   (`--no-smoke` to disable). 18 network-free synth/selection unit tests + 2 live CRUD integration
   tests (round-trip pass; FK-only → `skipped:all-resources-fk-coupled`). Verified end-to-end:
   `discover→install→boot→health→smoke` all pass on a real in-memory CRUD app.
-- **M3** — `batch.py` + aggregate report + join to `comparison-report.json`; **writer-side
-  coordination [R1-S3]**: have `model_comparison.py` drop the `deploy-manifest.json`/`.model` sidecar
-  carrying the verbatim model id. Wire optional post-run call (behind a flag, non-breaking).
+- **M3** ✅ SHIPPED — `batch.py`: glob `batch_root/*/workdir`, deploy each serially, aggregate
+  `deploy-report.{json,md}` (per-model rows + reached/passed rung roll-up) + `startd8 deploy batch`.
+  **Join key = verbatim model id** from a `.model`/`deploy-manifest.json` sidecar; reverse-slug is a
+  warned fallback, join basis recorded (`exact`/`reverse-slug`/`ambiguous`/`no-match`). **Writer-side
+  [R1-S3]**: `model_comparison.py` drops the `.model` sidecar next to each model dir. 7 network-free
+  unit tests + 1 live batch integration (2 real CRUD apps → both smoke=pass, exact join).
 
 ## 4. Risks
 
