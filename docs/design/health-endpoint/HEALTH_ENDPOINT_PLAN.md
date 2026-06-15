@@ -69,16 +69,18 @@ updated in the same change. This is the accepted cost of default-on (OQ-2). Alte
 gate behind an `app.yaml` flag to avoid forcing drift — rejected as over-engineering for a $0 applicational-
 completion artifact; one regen is cheap and `/health` should be universal.
 
-## 4. Sequencing
+## 4. Sequencing — ALL SHIPPED (branch `feat/health-endpoint-impl`)
 
-- **M0** — `health_renderer.py` + `CANONICAL_LAYOUT` + `assembler` emit + `drift._renderers()` entry; unit
-  test the rendered bytes + drift in-sync. (No main.py change yet → no golden churn; health.py present but
-  unmounted — still importable.)
-- **M1** — wire the `render_main` mount; update `fastapi-main` goldens + `test_runtime_smoke` + main-drift
-  tests; assert `GET /health` 200 and `/health/live` 200 live (TestClient).
-- **M2** — `render_health_tests` generated test + its kind; fail-closed (503) test with an unreachable DB.
-- **M3** — regenerate StartDate (`startd8 generate backend`) to acquire `/health`; re-run the deploy harness
-  on it → confirm `health=pass:app-health` (the end-to-end proof tying back to the motivating finding).
+- **M0** ✅ `health_renderer.py` + `CANONICAL_LAYOUT` + `assembler` emit + `drift._renderers()` entry;
+  9 unit tests (skip-hook in_sync from schema alone, bare-/health, 503, liveness, compiles).
+- **M1** ✅ `render_main` additively mounts `health_router`. **No `fastapi-main` golden churn materialized**
+  (no checked-in exact-bytes main golden); runtime test asserts `GET /health` 200 + `/health/live` 200.
+- **M2** ✅ `render_health_tests` → `tests/test_health.py` (`python-tests-health`), registered in assembler
+  + drift; fail-closed 503 via a `get_session` dependency override; ai-tests count 19→21.
+- **M3** ✅ **End-to-end proof:** regenerated an app from the wireframe schema → deploy harness graded
+  `discover→install→boot→health→smoke` all PASS with **`health` reason `None` = `pass:app-health`** (not
+  `liveness-only`). Finding (b) closed. 341 backend_codegen tests green; ruff+black clean. (StartDate
+  itself acquires `/health` by regenerating — FR-10 — but the wireframe app is the verified proof.)
 
 ## 5. Risks
 
