@@ -1,10 +1,32 @@
 # C# Compile-Gate Capability — Requirements
 
-**Version:** 0.1 (Draft — pre-planning)
+**Version:** 0.2 (Post-planning — self-reflective update; Tier-1 SHIPPED)
 **Date:** 2026-06-14
-**Status:** Draft
+**Status:** Tier-1 implemented & merged to main; Tier-2 planned (deferred)
 **Owner SDK area:** `startd8.languages` (C# `LanguageProfile`) + `startd8.benchmark_matrix.scoring`
 **Consumers:** Summer 2026 benchmark (and any model-codegen quality gate)
+
+---
+
+## 0. Planning Insights (Self-Reflective Update)
+
+> Changes between v0.1 (pre-planning) and v0.2. **Tier-1 is now shipped**; Tier-2 was planned
+> in `TIER2_VENDORED_DEPS_PLAN_v0.1.md` (shared with Java) and the planning pass re-scoped it.
+
+| v0.1 assumption | Planning/impl discovery | Impact |
+|---|---|---|
+| OQ-C1: cleanest offline single-file Roslyn check is open (`dotnet script` / analyzer exe / skip) | **Spiked decisively:** `dotnet build` single-file is **infeasible in the sandbox** (redirected HOME + no network → first-run/workload, bails). Driving **`csc.dll` + the SDK framework ref assemblies** directly is clean and offline. | **OQ-C1 resolved: csc, not dotnet build.** Tier-1 **SHIPPED** (`_discover_dotnet_csc` + `_csharp_csc_command`). |
+| Tier-2 = **`dotnet build --no-restore`** (FR-C5) | Same sandbox hostility applies to `dotnet build` at gate time. | **FR-C5 reframed:** Tier-2 = **`csc -r:<vendored gRPC/protobuf DLLs>`** (extend Tier-1 csc with vendored refs) — NOT `dotnet build`. |
+| classification lumps everything | CS-code separation is clean: **CS1xxx = syntax** (floor), **CS0246/0234/0103 = missing-deps** (degrade); syntax wins when both co-occur. | FR-C3 classifier **SHIPPED**. |
+| Tier-2 is the immediate next step | Lifts **only cartservice** (1 of 9); under saturation likely no leaderboard change. | **OQ-C4 resolved: ship Round 1 C# disclosed-degraded; Tier-2 fast-follow.** |
+
+**Resolved open questions:** OQ-C1 → csc + framework refs (shipped). OQ-C2 → pinned network-once
+generator via **Grpc.Tools** (protoc + `grpc_csharp_plugin`) + provenance manifest. OQ-C3 →
+SDK-resident bundle (`benchmark_matrix/vendored/csharp/`), commit/lfs = open §5 decision in the
+plan. OQ-C4 → **degraded for Round 1**, Tier-2 deferred.
+
+*Tier-1 (FR-C1/C2/C3/C7/C8/C9) is implemented in `benchmark_matrix/scoring.py` and merged.
+Tier-2 (FR-C4/C5/C6) is specified below and planned in `TIER2_VENDORED_DEPS_PLAN_v0.1.md`.*
 
 ---
 
