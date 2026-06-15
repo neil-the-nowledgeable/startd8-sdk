@@ -16,6 +16,7 @@ from startd8.cli_generate import generate_app
 from startd8.scaffold_codegen import (
     parse_app_manifest,
     render_dockerfile,
+    render_env_example,
     render_run_script,
     render_scaffold,
     scaffold_in_sync,
@@ -77,6 +78,29 @@ def test_r1_s5_mode_is_in_the_scaffold_hash_and_artifacts_differ():
     i_files, d_files = dict(render_scaffold(INSTALLED_YAML)), dict(render_scaffold(DEPLOYED_PG))
     assert embedded_manifest_sha(i_files["Dockerfile"]) != embedded_manifest_sha(d_files["Dockerfile"])
     assert i_files["run.sh"] != d_files["run.sh"]
+
+
+# --- A5: .env.example secrets/observability defaults are mode-derived (FR-SEC-1/FR-OBS-1) ----------
+
+def test_env_installed_defaults():
+    env = render_env_example(INSTALLED_YAML)
+    assert "ENV=development" in env  # OTel deployment.environment aligned with mode
+    assert "DATABASE_URL=sqlite:///" in env  # local-first default
+    assert "STARTD8_SECRETS_BACKEND" not in env  # local backend is the default; no entry needed
+
+
+def test_env_deployed_defaults():
+    env = render_env_example(DEPLOYED_PG)
+    assert "ENV=production" in env
+    assert "DATABASE_URL=postgresql://db/app" in env  # full DSN honored, not sqlite:///-prefixed
+    assert "STARTD8_SECRETS_BACKEND=doppler" in env  # external secrets manager expected
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT=" in env  # centralized OTel export expected
+
+
+def test_env_is_owned_and_drift_checks():
+    env = render_env_example(DEPLOYED_PG)
+    assert scaffold_in_sync(DEPLOYED_PG, env) is True
+    assert scaffold_in_sync(DEPLOYED_PG, env.replace("doppler", "vault")) is False
 
 
 # --- A7: the FR-CFG-5 coherence matrix -----------------------------------------------------------

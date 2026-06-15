@@ -248,15 +248,32 @@ def render_owned_requirements(manifest_text: str) -> str:
 
 
 def render_env_example(manifest_text: str) -> str:
-    """``.env.example`` — the local-config template (API key, DB url, cost budget). Bucket-1 plumbing."""
+    """``.env.example`` — the config template; mode sets the secrets/observability DEFAULTS (A5).
+
+    FR-SEC-1: installed defaults to the local secrets backend; deployed expects an external secrets
+    manager (Doppler) — mode sets the default, an explicit operator value always wins. FR-OBS-1: the
+    OTel ``deployment.environment`` (``ENV``) is aligned with mode (development vs production), and
+    deployed templates the centralized OTLP export. The DB url honors a full DSN (deployed Postgres)
+    instead of blindly ``sqlite:///``-prefixing it."""
     m = parse_app_manifest(manifest_text)
     sha = schema_sha256(manifest_text)
-    body = (
-        "ANTHROPIC_API_KEY=\n"
-        f"DATABASE_URL=sqlite:///{m.db_path}\n"
-        "COST_BUDGET_USD=10\n"
-    )
-    return _header("scaffold-env", sha) + "\n\n" + body
+    deployed = m.deployment_mode == "deployed"
+    db_url = m.db_path if "://" in m.db_path else f"sqlite:///{m.db_path}"
+    lines = [
+        "ANTHROPIC_API_KEY=",
+        f"DATABASE_URL={db_url}",
+        "COST_BUDGET_USD=10",
+        f"ENV={'production' if deployed else 'development'}",  # FR-OBS-1: OTel deployment.environment
+    ]
+    if deployed:
+        # FR-SEC-1 / FR-OBS-1: deployed posture — external secrets manager + centralized OTel export
+        # expected. These are DEFAULTS the operator fills/overrides; never forced over an explicit choice.
+        lines += [
+            "STARTD8_SECRETS_BACKEND=doppler",
+            "DOPPLER_TOKEN=",
+            "OTEL_EXPORTER_OTLP_ENDPOINT=",
+        ]
+    return _header("scaffold-env", sha) + "\n\n" + "\n".join(lines) + "\n"
 
 
 def render_scaffold(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
