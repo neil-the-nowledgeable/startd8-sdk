@@ -25,6 +25,15 @@ def test_secure_env_scrubs_secrets_and_isolates_caches(tmp_path, monkeypatch):
     assert env["GOMODCACHE"].startswith(str(tmp_path)) and env["PIP_CACHE_DIR"].startswith(str(tmp_path))  # SEC-5
 
 
+def test_secure_env_cache_paths_are_absolute(tmp_path, monkeypatch):
+    # Go requires GOMODCACHE absolute; a relative workdir (e.g. the rescore's batch-relative path)
+    # must still produce absolute cache paths.
+    from pathlib import Path
+    monkeypatch.chdir(tmp_path)
+    env = secure_env(Path("relcell"))
+    assert Path(env["GOMODCACHE"]).is_absolute() and Path(env["GOCACHE"]).is_absolute()
+
+
 def test_provision_ok_and_failure(tmp_path):
     seen = {}
 

@@ -52,8 +52,9 @@ class ProvisionResult:
 
 def secure_env(workdir: Path) -> Dict[str, str]:
     """Scrubbed env (no secrets, HOME→workdir) + per-cell package caches (FR-P1-SEC-2/5)."""
-    env = scrub_env(Path(workdir))
-    cache = Path(workdir) / ".cache"
+    workdir = Path(workdir).resolve()  # Go requires GOMODCACHE absolute; callers may pass relative
+    env = scrub_env(workdir)
+    cache = workdir / ".cache"
     env["GOMODCACHE"] = str(cache / "go-mod")
     env["GOCACHE"] = str(cache / "go-build")
     env["GOFLAGS"] = "-mod=mod"          # derive deps from imports; write go.sum (integrity)
