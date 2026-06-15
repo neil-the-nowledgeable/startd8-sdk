@@ -366,7 +366,15 @@ def _parse_relationships(
                 source=src, reason=f"sentence outside the closed verb grammar: {sentence[:80]!r}",
             ))
             continue
-        subj = graph.resolve_entity(m.group("subj")) or m.group("subj")
+        # L1: a subject that doesn't resolve to a declared entity is a typo, not a phantom entity —
+        # flag it (the old `or m.group("subj")` fallback silently dropped the relationship).
+        subj = graph.resolve_entity(m.group("subj"))
+        if subj is None:
+            records.append(ExtractionRecord(
+                "schema.prisma", f"/relationships/{block_subject}", Status.NOT_EXTRACTED,
+                source=src, reason=f"unresolvable relationship subject: {m.group('subj')!r}",
+            ))
+            continue
         verb = m.group("verb").lower()
         # Articles appear in object position too ("belongs to a Profile") — strip before resolving.
         rest = re.sub(r"^(?:a|an|the)\s+", "", m.group("rest").strip(), flags=re.IGNORECASE)
@@ -391,10 +399,13 @@ def _parse_relationships(
                 continue
             _add_join(graph, x, y, src, records)
         elif verb == "links to many":
+            rest, rev_name = _split_as_clause(rest)   # L2: `as <name>` works on joins too, not just FK
             obj = _resolve_object(graph, rest, records, subj, src, "object entity")
             if not obj:
                 continue
             _add_join(graph, subj, obj, src, records)  # symmetric restatements dedup inside
+            if rev_name:                               # name subj's reverse-list to obj (via the join)
+                graph.reverse_names[(subj, obj)] = rev_name
         elif verb in ("has many", "has one"):
             rest, rev_name = _split_as_clause(rest)   # FR-PE-13: optional `as <name>`
             obj = _resolve_object(graph, rest, records, subj, src, "object entity")

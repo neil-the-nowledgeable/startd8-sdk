@@ -502,3 +502,39 @@ def test_h3_valid_index_column_emits():
     g.indexes["M"] = [("title",)]
     res = render_prisma_schema(g)
     assert not res.errors and "@@index([title])" in res.text
+
+
+# --------------------------------------------------------------------------- #
+# Low (L1 phantom subject / L2 `as` on joins / L3 enum reorder parity)
+# --------------------------------------------------------------------------- #
+
+def test_l1_unresolvable_relationship_subject_is_flagged():
+    from startd8.manifest_extraction.entities import extract_entities
+    doc = (
+        "## Entities\n\n### Profile\n| Field | Type | Required | Notes |\n"
+        "|--|--|--|--|\n| name | text | yes | |\n\n"
+        "Relationships: a Proflie **belongs to** a Profile.\n"   # typo'd subject
+    )
+    secs = parse_sections(doc)
+    root = find_section(secs, "Entities")
+    blocks = [s for s in secs if s.level == root.level + 1
+              and len(s.heading_path) >= 2 and s.heading_path[-2] == root.title]
+    recs = []
+    extract_entities("D", blocks, recs)
+    assert any("unresolvable relationship subject" in (r.reason or "") for r in recs)
+
+
+def test_l2_as_name_overrides_join_reverse_list():
+    g = EntityGraph()
+    g.entities["A"] = DocEntity("A", (_f("x", "String"),), ("Entities", "A"))
+    g.entities["B"] = DocEntity("B", (_f("y", "String"),), ("Entities", "B"))
+    g.joins.append(JoinModel("AB", "A", "B"))
+    g.reverse_names[("A", "B")] = "customBs"          # `A links to many B as customBs`
+    text = render_prisma_schema(g).text
+    assert "customBs AB[]" in text                    # A's reverse-list uses the override (L2)
+
+
+def test_l3_enum_value_reorder_is_not_parity_drift():
+    a = _schema("enum Color {\n  RED\n  BLUE\n}", "model M {\n  id String @id\n  c Color\n}")
+    b = _schema("enum Color {\n  BLUE\n  RED\n}", "model M {\n  id String @id\n  c Color\n}")
+    assert not any("enum Color" in d for d in semantic_diff(a, b))   # reorder ≠ drift (L3)

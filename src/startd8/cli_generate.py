@@ -590,7 +590,8 @@ def contract(
     try:
         graph = build_entity_graph(docs)
     except Exception as exc:  # malformed entity blocks — fail loud, never an empty graph
-        console.print(f"[red]error:[/red] could not parse entities from requirements: {exc}")
+        console.print(f"[red]error:[/red] could not parse entities from requirements: "
+                      f"{type(exc).__name__}: {exc}")  # L4: surface the error class, don't mask it
         raise typer.Exit(_EXIT_ERROR)
 
     run_dir = Path(tempfile.mkdtemp(prefix="startd8-emit-")) if (check or out is None) else out
@@ -614,7 +615,8 @@ def contract(
                 (run_dir / fname).write_text(text, encoding="utf-8")
             console.print(f"[green]derived[/green] {len(manifest_texts)} manifest(s) into {run_dir}")
         except Exception as exc:
-            console.print(f"[red]error:[/red] manifest derivation failed: {exc}")
+            console.print(f"[red]error:[/red] manifest derivation failed: "
+                          f"{type(exc).__name__}: {exc}")  # L4: surface the error class
             raise typer.Exit(_EXIT_ERROR)
 
     # 7. --promote: explicit, human-triggered flip (FR-PE-7/FR-EMIT-3). The blocking gate is

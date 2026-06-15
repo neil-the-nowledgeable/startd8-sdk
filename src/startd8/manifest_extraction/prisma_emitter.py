@@ -287,10 +287,13 @@ def render_prisma_schema(
             rev_name = graph.reverse_names.get((parent, child), _plural(child))
             rev_lists.setdefault(parent, []).append((rev_name, f"{child}[]"))
 
-    # M2M join: each side gets a reverse list typed by the join model.
+    # M2M join: each side gets a reverse list typed by the join model. L2: an `as <name>` override
+    # (graph.reverse_names) wins over the plural convention on either side, like the FK case.
     for j in graph.joins:
-        rev_lists.setdefault(j.left, []).append((_plural(j.right), f"{j.name}[]"))
-        rev_lists.setdefault(j.right, []).append((_plural(j.left), f"{j.name}[]"))
+        left_name = graph.reverse_names.get((j.left, j.right), _plural(j.right))
+        right_name = graph.reverse_names.get((j.right, j.left), _plural(j.left))
+        rev_lists.setdefault(j.left, []).append((left_name, f"{j.name}[]"))
+        rev_lists.setdefault(j.right, []).append((right_name, f"{j.name}[]"))
 
     # --- enum blocks (FR-PE-10): named + per-field inline, before the models -------------------
     blocks, enum_names = _collect_enum_blocks(graph, unrenderable)
@@ -377,10 +380,12 @@ def semantic_diff(emitted_text: str, live_text: str) -> List[str]:
     for extra in sorted(set(right.enums) - set(left.enums)):
         out.append(f"enum {extra}: in live, not emitted")
     for name in sorted(set(left.enums) & set(right.enums)):
-        if left.enums[name] != right.enums[name]:
+        # L3: compare the value *set* — a reorder of the same values is not a semantic change and
+        # must not flag false parity drift (which would needlessly block a flip).
+        if set(left.enums[name]) != set(right.enums[name]):
             out.append(
-                f"enum {name}: values {list(left.enums[name])} (emitted) "
-                f"vs {list(right.enums[name])} (live)"
+                f"enum {name}: values {sorted(left.enums[name])} (emitted) "
+                f"vs {sorted(right.enums[name])} (live)"
             )
 
     for name in sorted(set(left.models) & set(right.models)):
