@@ -275,6 +275,37 @@ def extract_metrics(output_dir: Path) -> dict[str, Any]:
     }
 
 
+def check_spine_in_sync(
+    workdir: Path, log: Callable[[str], None] = print
+) -> Optional[dict[str, Any]]:
+    """Determinism-boundary signal: after a model's run, re-run the $0 deterministic backend
+    generator in ``--check`` mode to confirm the model did NOT edit an OWNED (spine) file.
+
+    ``startd8 generate backend --check`` exits 0=in_sync, 1=drift, 2=error. A model that drifts
+    the deterministically-generated spine is a capability red flag (it should only add integration
+    glue, never rewrite the generated skeleton). Returns ``None`` for non-backend-codegen targets
+    (no ``prisma/schema.prisma``), so it is a no-op when the comparison isn't building such an app.
+
+    Salvaged from the (otherwise superseded) e2e-model-comparison-harness; main's ``extract_metrics``
+    carries no determinism signal.
+    """
+    schema = workdir / "prisma" / "schema.prisma"
+    if not schema.is_file():
+        return None
+    rec = run_command(
+        ["startd8", "generate", "backend", "--schema", str(schema), "--out", str(workdir), "--check"],
+        workdir,
+        timeout=300,
+    )
+    status = {0: "in_sync", 1: "drift", 2: "error"}.get(rec["returncode"], "unknown")
+    log(f"  [spine] generate backend --check → {status}")
+    return {
+        "spine_in_sync": rec["returncode"] == 0,
+        "spine_check_status": status,
+        "spine_check_detail": ((rec.get("stdout_tail") or "") + (rec.get("stderr_tail") or ""))[-300:],
+    }
+
+
 def cost_from_db(start_ts: datetime, end_ts: datetime) -> Optional[float]:
     """Fallback cost attribution: time-window query of the shared cost DB (FR-12/S5)."""
     try:
@@ -326,6 +357,7 @@ _METRIC_ROWS = [
     ("Gate failures", "gate_failures", 0),
     ("Mean disk quality", "mean_disk_quality_score", 4),
     ("Semantic errors", "semantic_error_count", 0),
+    ("Spine in-sync (determinism)", "spine_check_status", None),
     ("Input tokens", "input_tokens", 0),
     ("Output tokens", "output_tokens", 0),
     ("Total cost ($)", "total_cost", 6),
@@ -505,6 +537,9 @@ def run_comparison(
                 metrics["cost_per_succeeded_feature"] = _safe_div(
                     db_cost, metrics["succeeded"]
                 )
+        # Determinism-boundary signal: did the model drift the $0-generated spine? (no-op
+        # for non-backend-codegen targets — returns None when there's no prisma/schema.prisma)
+        metrics.update(check_spine_in_sync(workdir, log) or {})
         results.append(
             {"model": model, "metrics": metrics, "returncode": rec["returncode"]}
         )
