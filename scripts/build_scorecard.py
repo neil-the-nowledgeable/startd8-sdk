@@ -18,19 +18,26 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from startd8.benchmark_matrix.scorecard import (
+from startd8.benchmark_matrix.scorecard import (  # noqa: E402
     build_scorecard,
     write_scorecard,
-)  # noqa: E402
+    write_scorecard_html,
+)
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("run_dir", type=Path, help="Benchmark run dir.")
     ap.add_argument(
+        "--format",
+        choices=["both", "md", "html"],
+        default="both",
+        help="Which artifact(s) to write (default: both SCORECARD.md + SCORECARD.html).",
+    )
+    ap.add_argument(
         "--stdout",
         action="store_true",
-        help="Print the scorecard instead of writing it.",
+        help="Print the markdown scorecard instead of writing.",
     )
     args = ap.parse_args(argv)
     if not args.run_dir.is_dir():
@@ -38,9 +45,11 @@ def main(argv=None) -> int:
         return 2
     if args.stdout:
         print(build_scorecard(args.run_dir))
-    else:
-        out = write_scorecard(args.run_dir)
-        print(f"✔ wrote {out}")
+        return 0
+    if args.format in ("both", "md"):
+        print(f"✔ wrote {write_scorecard(args.run_dir)}")
+    if args.format in ("both", "html"):
+        print(f"✔ wrote {write_scorecard_html(args.run_dir)}")
     return 0
 
 

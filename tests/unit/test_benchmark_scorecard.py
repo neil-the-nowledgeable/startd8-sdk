@@ -162,3 +162,77 @@ def test_write_scorecard_writes_file(tmp_path):
     assert out.name == "SCORECARD.md" and out.read_text().startswith(
         "# Benchmark Scorecard"
     )
+
+
+# --------------------------------------------------------------------------- HTML renderer
+
+from startd8.benchmark_matrix.scorecard import (
+    build_scorecard_html,
+    write_scorecard_html,
+)  # noqa: E402
+
+
+def test_html_is_self_contained_with_all_sections(tmp_path):
+    _write_spec(tmp_path)
+    html = build_scorecard_html(tmp_path, now=_NOW)
+    assert html.startswith("<!doctype html>") and html.rstrip().endswith("</html>")
+    # self-contained: embedded CSS, no external LOADS (the SVG xmlns URI is not a network request)
+    assert "<style>" in html
+    assert "<link" not in html and 'src="http' not in html and 'href="http' not in html
+    assert "cdn" not in html.lower()
+    for t in [
+        "Quality leaderboard",
+        "Consistency",
+        "Credibility",
+        "Behavioral",
+        "Determinism",
+        "By language",
+    ]:
+        assert t in html
+    assert "not computed for this run" in html  # degrade-honest empty states
+
+
+def test_html_credibility_pills_and_meter(tmp_path):
+    _write_spec(tmp_path)
+    _write_contam(
+        tmp_path,
+        [
+            {
+                "service": "s1",
+                "model": "clean:m",
+                "language": "python",
+                "codebleu": 0.20,
+                "available": True,
+            },
+            {
+                "service": "s1",
+                "model": "hot:m",
+                "language": "go",
+                "codebleu": 0.75,
+                "available": True,
+            },
+        ],
+    )
+    html = build_scorecard_html(tmp_path, now=_NOW)
+    assert 'class="pill pill-ok"' in html and 'class="pill pill-bad"' in html
+    assert 'class="meter"' in html  # inline CodeBLEU meter bars
+    assert "⚠ Review." in html  # elevated verdict (a cell >= 0.50)
+
+
+def test_html_quality_top_row_highlight_and_escaping(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(
+        tmp_path,
+        [_cell("anthropic:opus", quality=0.95), _cell("openai:gpt", quality=0.80)],
+    )
+    html = build_scorecard_html(tmp_path, now=_NOW)
+    assert 'class="top"' in html  # rank-1 highlight
+    assert "anthropic:opus" in html  # model id rendered
+
+
+def test_write_html_file(tmp_path):
+    _write_spec(tmp_path)
+    out = write_scorecard_html(tmp_path, now=_NOW)
+    assert out.name == "SCORECARD.html" and out.read_text().startswith(
+        "<!doctype html>"
+    )
