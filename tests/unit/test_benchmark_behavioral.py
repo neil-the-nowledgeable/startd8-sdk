@@ -145,3 +145,15 @@ def test_run_behavioral_cell_no_launcher_degrades(tmp_path):
                               "paymentservice", ["main.rs"], cfg=_NO_NET)
     assert res.has_suite and res.degraded and res.functional is None
 
+
+@pytest.mark.skipif(not (_BEH_DIR / "node_runtime" / "node_modules").is_dir()
+                    or shutil.which("node") is None,
+                    reason="node + vendored runtime required")
+def test_run_behavioral_cell_names_missing_module_on_degrade(tmp_path):
+    # FR-T2-DEPS2: a server that dies on an unprovisioned module degrades with the module NAMED in
+    # provenance (diagnosable harness gap), never scored 0.
+    seed = {"startup": {"cmd": ["node", "-e", "require('totally-not-installed-zzz')"], "port_env": "PORT"}}
+    res = run_behavioral_cell(seed, tmp_path, "paymentservice", ["server.js"], cfg=_NO_NET)
+    assert res.degraded and res.functional is None
+    assert res.provenance.get("missing_module") == "totally-not-installed-zzz"
+

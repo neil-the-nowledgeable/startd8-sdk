@@ -30,7 +30,6 @@ from startd8.benchmark_matrix import (  # noqa: E402
     build_matrix_markdown,
     estimate_run_cost,
     format_estimate,
-    rank_models_by_quality,
     run_matrix,
 )
 
@@ -90,17 +89,37 @@ def main(argv=None) -> int:
         print("\nERROR: Node runtime not vendored; run node_runtime/vendor.sh first.", file=sys.stderr)
         return 2
 
+    import json
+    from datetime import datetime
+
     from startd8.benchmark_matrix.runner import SubprocessCellExecutor
 
-    executor = SubprocessCellExecutor(SEEDS_DIR, behavioral=True, workdir_root=args.workdir_root)
+    # FR-T2-PERSIST: durable, inspectable batch root (NOT $TMPDIR, which the OS reaps). Per-cell
+    # workdirs land here; cells.json + report.md are written here for re-scoring / audit.
+    batch_root = (Path(args.workdir_root) if args.workdir_root
+                  else REPO / "out" / "behavioral-pilot" / f"run-{datetime.now():%Y%m%dT%H%M%S}")
+    batch_root.mkdir(parents=True, exist_ok=True)
+    print(f"batch root (persistent): {batch_root}")
+
+    executor = SubprocessCellExecutor(SEEDS_DIR, behavioral=True, workdir_root=str(batch_root))
     result = run_matrix(spec, executor, languages={PILOT_SERVICE: "nodejs"})
     agg = aggregate_cells(result.cells)
-    print("\n" + build_matrix_markdown(spec.name, spec.spec_hash(), agg))
-    print("=== functional coverage per cell (OQ-T2-2: does behavior discriminate?) ===")
+
+    # Functional-coverage section (OQ-T2-2) — written into the report too, not just printed.
+    lines = ["", "## Functional coverage per cell (OQ-T2-2: does behavior discriminate?)", ""]
     for c in result.cells:
         fc = "N/A" if c.functional_coverage is None else f"{c.functional_coverage:.3f}"
-        print(f"  {c.model:<32} rep{c.repetition}  functional={fc}  status={c.status}")
-    print("\nRanking (quality):", rank_models_by_quality(agg))
+        why = ""
+        if c.functional_coverage is None and c.behavioral:
+            why = f"  ({c.behavioral.get('missing_module') or c.behavioral.get('attempted_proto_path') or c.behavioral.get('reason') or c.status})"
+        lines.append(f"- `{c.model}` rep{c.repetition}: functional={fc} status={c.status}{why}")
+    report = build_matrix_markdown(spec.name, spec.spec_hash(), agg) + "\n".join(lines) + "\n"
+
+    (batch_root / "cells.json").write_text(
+        json.dumps([c.to_dict() for c in result.cells], indent=2, default=str), encoding="utf-8")
+    (batch_root / "report.md").write_text(report, encoding="utf-8")
+    print("\n" + report)
+    print(f"\nartifacts: {batch_root}/report.md  +  cells.json")
     return 0
 
 

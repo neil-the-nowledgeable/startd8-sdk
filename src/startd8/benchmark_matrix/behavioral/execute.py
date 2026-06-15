@@ -10,6 +10,7 @@ Default-off in the runner — turning it on is the paymentservice pilot (M-T2.4,
 """
 from __future__ import annotations
 
+import re
 import shutil
 import socket
 from dataclasses import dataclass, field
@@ -26,13 +27,19 @@ _SUITES: Dict[str, Callable[[int], object]] = {"paymentservice": run_charge_suit
 _NODE_RUNTIME = Path(__file__).parent / "node_runtime"
 _PROTO = Path(__file__).parent / "demo.proto"
 
+# FR-T2-PROTO: conventional locations a generated server loads its proto from. The pilot saw models
+# use root, protos/, proto/, and pb/ — provision the proto at all of them so the model's choice
+# doesn't decide whether the cell runs. (Path-pinning via the startup contract is OQ-T2-6.)
+_PROTO_DEST_SUBDIRS = ("", "protos", "proto", "pb", "lib/proto")
+
 
 def prepare_node_workdir(workdir: Path) -> bool:
-    """Materialize the vendored offline gRPC runtime + proto into a Node cell workdir (FR-T2-DEPS).
+    """Materialize the vendored offline runtime closure + proto into a Node cell workdir (FR-T2-DEPS).
 
-    Copies ``node_runtime/node_modules`` and ``demo.proto`` (at root and ``protos/`` — the two common
-    conventions) so a model-generated Node server can start with no network. Returns False when the
-    runtime hasn't been vendored yet (run ``node_runtime/vendor.sh`` first) → caller degrades."""
+    Copies ``node_runtime/node_modules`` (the full closure: gRPC + pino + uuid — FR-T2-DEPS) and
+    ``demo.proto`` at every conventional location (FR-T2-PROTO) so a model-generated Node server can
+    start with no network regardless of where it loads the proto. Returns False when the runtime
+    hasn't been vendored yet (run ``node_runtime/vendor.sh`` first) → caller degrades (FR-T2-DEPS2)."""
     src_nm = _NODE_RUNTIME / "node_modules"
     if not src_nm.is_dir():
         return False
@@ -41,9 +48,10 @@ def prepare_node_workdir(workdir: Path) -> bool:
     if not dst_nm.exists():
         shutil.copytree(src_nm, dst_nm)
     if _PROTO.exists():
-        shutil.copy(_PROTO, workdir / "demo.proto")
-        (workdir / "protos").mkdir(exist_ok=True)
-        shutil.copy(_PROTO, workdir / "protos" / "demo.proto")
+        for sub in _PROTO_DEST_SUBDIRS:
+            dest = workdir / sub if sub else workdir
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy(_PROTO, dest / "demo.proto")
     return True
 
 
@@ -99,6 +107,15 @@ def run_behavioral_cell(
                   "network_isolated": sr.network_isolated, "violation": sr.violation,
                   "server_stderr_tail": (sr.server_stderr or "")[-400:]}
     if not sr.ready or sr.violation is not None:
+        # FR-T2-DEPS2 / FR-T2-PROV: name WHY it couldn't start so a provisioning gap is diagnosable
+        # (a missing module / proto path) rather than an opaque "never ready".
+        stderr = sr.server_stderr or ""
+        mod = re.search(r"Cannot find module '([^']+)'", stderr)
+        if mod:
+            prov["missing_module"] = mod.group(1)
+        proto = re.search(r"([\w./-]*demo\.proto)", stderr)
+        if proto:
+            prov["attempted_proto_path"] = proto.group(1)
         return BehavioralResult(has_suite=True, degraded=True, provenance=prov)
 
     suite_res = sr.client_outcome
