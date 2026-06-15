@@ -19,7 +19,7 @@ Model defaults are centralized in ``startd8.model_catalog`` — edit there, not 
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 import uuid
 import re
 
@@ -125,19 +125,35 @@ _SPEC_COMPLETENESS_WARNING_FALLBACK: str = (
 # Backward-compatible re-exports for existing tests and downstream callers:
 _PLAN_CONTEXT_MAX_CHARS = _ie_budget.PLAN_CONTEXT_MAX_CHARS
 _ARCH_CONTEXT_MAX_CHARS = _ie_budget.ARCH_CONTEXT_MAX_CHARS
-_SPEC_CONTEXT_BUDGET_CHARS = _ie_budget.SPEC_CONTEXT_BUDGET_CHARS
 _EXISTING_FILES_BUDGET_BYTES = _ie_budget.EXISTING_FILES_BUDGET_BYTES
 _TRUNCATION_MARKER = _ie_budget.TRUNCATION_MARKER
-_SEARCH_REPLACE_LINE_THRESHOLD = _ie_budget.SEARCH_REPLACE_LINE_THRESHOLD
 _get_drafter_system_prompt = _ie_drafter.get_drafter_system_prompt
 _build_existing_files_section = _ie_drafter.build_existing_files_section
 _build_output_format = _ie_drafter.build_output_format
-_truncate_with_marker = _ie_budget.truncate_with_marker
-_truncate_arch_context = _ie_budget.truncate_arch_context
 # Fallback strings re-exported for test assertions
 _PLAN_CONTEXT_EDIT_FRAMING_FALLBACK = _ie_spec_builder._PLAN_CONTEXT_EDIT_FRAMING_FALLBACK
 _PLAN_CONTEXT_CREATE_FRAMING_FALLBACK = _ie_spec_builder._PLAN_CONTEXT_CREATE_FRAMING_FALLBACK
 _ARCH_CONTEXT_EDIT_FRAMING_FALLBACK = _ie_spec_builder._ARCH_CONTEXT_EDIT_FRAMING_FALLBACK
+
+
+class _PrimaryRunConfig(NamedTuple):
+    """Parsed run config shared by the sync (``_execute``) and async (``_aexecute``) paths (FR-10).
+
+    Behavior-identical to the previously-duplicated inline ``config.get(...)`` blocks.
+    """
+
+    task_description: Any
+    context: Dict[str, Any]
+    lead_spec: Any
+    drafter_spec: Any
+    max_iterations: int
+    pass_threshold: int
+    output_format: Optional[str]
+    integration_instructions: str
+    check_truncation: bool
+    strict_truncation: bool
+    fail_on_api_truncation: bool
+    fail_on_heuristic_truncation: bool
 
 
 class PrimaryContractorWorkflow(WorkflowBase):
@@ -337,29 +353,14 @@ class PrimaryContractorWorkflow(WorkflowBase):
             return ValidationResult.failure(errors)
         return ValidationResult.success()
 
-    def _execute(
-        self,
-        config: Dict[str, Any],
-        agents: Optional[List[BaseAgent]],
-        on_progress: Optional[ProgressCallback],
-    ) -> WorkflowResult:
-        """Execute the Primary Contractor workflow synchronously."""
-        started_at = datetime.now(timezone.utc)
-        workflow_id = f"lc-{uuid.uuid4().hex[:12]}"
+    @staticmethod
+    def _parse_primary_config(config: Dict[str, Any]) -> "_PrimaryRunConfig":
+        """Parse the run config shared by the sync and async execute paths (FR-10).
 
-        # Parse configuration
-        task_description = config["task_description"]
-        context = dict(config.get("context", {}))
-        lead_spec = config.get("lead_agent", Models.PRIMARY_CONTRACTOR_LEAD)
-        drafter_spec = config.get("drafter_agent", Models.PRIMARY_CONTRACTOR_DRAFTER)
-        max_iterations = config.get("max_iterations", 3)
-        pass_threshold = config.get("pass_threshold", 80)
-        output_format = config.get("output_format")
-        integration_instructions = config.get("integration_instructions", "")
-        # Truncation protection defaults - safe by default
-        check_truncation = config.get("check_truncation", True)
-        strict_truncation = config.get("strict_truncation", False)
-
+        Behavior-identical to the inline blocks it replaced: same defaults, and the
+        same legacy ``fail_on_truncation`` precedence (granular flags override; else
+        api=True / heuristic=False).
+        """
         # Granular truncation failure control
         # Legacy flag for backward compatibility
         legacy_fail_on_truncation = config.get("fail_on_truncation")
@@ -371,6 +372,47 @@ class PrimaryContractorWorkflow(WorkflowBase):
             # New mode: separate control (safe defaults)
             fail_on_api_truncation = config.get("fail_on_api_truncation", True)
             fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", False)
+        return _PrimaryRunConfig(
+            task_description=config["task_description"],
+            context=dict(config.get("context", {})),
+            lead_spec=config.get("lead_agent", Models.PRIMARY_CONTRACTOR_LEAD),
+            drafter_spec=config.get("drafter_agent", Models.PRIMARY_CONTRACTOR_DRAFTER),
+            max_iterations=config.get("max_iterations", 3),
+            pass_threshold=config.get("pass_threshold", 80),
+            output_format=config.get("output_format"),
+            integration_instructions=config.get("integration_instructions", ""),
+            # Truncation protection defaults - safe by default
+            check_truncation=config.get("check_truncation", True),
+            strict_truncation=config.get("strict_truncation", False),
+            fail_on_api_truncation=fail_on_api_truncation,
+            fail_on_heuristic_truncation=fail_on_heuristic_truncation,
+        )
+
+    def _execute(
+        self,
+        config: Dict[str, Any],
+        agents: Optional[List[BaseAgent]],
+        on_progress: Optional[ProgressCallback],
+    ) -> WorkflowResult:
+        """Execute the Primary Contractor workflow synchronously."""
+        started_at = datetime.now(timezone.utc)
+        workflow_id = f"lc-{uuid.uuid4().hex[:12]}"
+
+        # Parse configuration (shared parser — FR-10; behavior-identical to the
+        # previously-duplicated inline block, also used by _aexecute)
+        _cfg = self._parse_primary_config(config)
+        task_description = _cfg.task_description
+        context = _cfg.context
+        lead_spec = _cfg.lead_spec
+        drafter_spec = _cfg.drafter_spec
+        max_iterations = _cfg.max_iterations
+        pass_threshold = _cfg.pass_threshold
+        output_format = _cfg.output_format
+        integration_instructions = _cfg.integration_instructions
+        check_truncation = _cfg.check_truncation
+        strict_truncation = _cfg.strict_truncation
+        fail_on_api_truncation = _cfg.fail_on_api_truncation
+        fail_on_heuristic_truncation = _cfg.fail_on_heuristic_truncation
 
         # Extract ContextCore project context
         project_context = self._extract_project_context(config)
@@ -1025,26 +1067,20 @@ class PrimaryContractorWorkflow(WorkflowBase):
         started_at = datetime.now(timezone.utc)
         workflow_id = f"lc-{uuid.uuid4().hex[:12]}"
 
-        task_description = config["task_description"]
-        context = dict(config.get("context", {}))
-        lead_spec = config.get("lead_agent", Models.PRIMARY_CONTRACTOR_LEAD)
-        drafter_spec = config.get("drafter_agent", Models.PRIMARY_CONTRACTOR_DRAFTER)
-        max_iterations = config.get("max_iterations", 3)
-        pass_threshold = config.get("pass_threshold", 80)
-        output_format = config.get("output_format")
-        integration_instructions = config.get("integration_instructions", "")
-        # Truncation protection defaults - safe by default
-        check_truncation = config.get("check_truncation", True)
-        strict_truncation = config.get("strict_truncation", False)
-
-        # Granular truncation failure control
-        legacy_fail_on_truncation = config.get("fail_on_truncation")
-        if legacy_fail_on_truncation is not None:
-            fail_on_api_truncation = config.get("fail_on_api_truncation", legacy_fail_on_truncation)
-            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", legacy_fail_on_truncation)
-        else:
-            fail_on_api_truncation = config.get("fail_on_api_truncation", True)
-            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", False)
+        # Parse configuration (shared parser — FR-10; identical to _execute's parse)
+        _cfg = self._parse_primary_config(config)
+        task_description = _cfg.task_description
+        context = _cfg.context
+        lead_spec = _cfg.lead_spec
+        drafter_spec = _cfg.drafter_spec
+        max_iterations = _cfg.max_iterations
+        pass_threshold = _cfg.pass_threshold
+        output_format = _cfg.output_format
+        integration_instructions = _cfg.integration_instructions
+        check_truncation = _cfg.check_truncation
+        strict_truncation = _cfg.strict_truncation
+        fail_on_api_truncation = _cfg.fail_on_api_truncation
+        fail_on_heuristic_truncation = _cfg.fail_on_heuristic_truncation
 
         project_context = self._extract_project_context(config)
 
