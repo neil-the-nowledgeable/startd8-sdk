@@ -66,6 +66,11 @@ class BusinessContext:
     # Precedence env > manifest > default/omit; the env tier is read at the call sites.
     prometheus_datasource: Optional[str] = None  # spec.observability.prometheusDatasource
     runbook_base: Optional[str] = None  # spec.observability.runbookBase (HTTPS prefix)
+    # Declarative policy maps resolved from spec.observability (None → consumers use hardcoded
+    # defaults). Populated by load_business_context via obs_config; same precedence as personas.
+    severity_map: Optional[Dict[str, str]] = None        # criticality → alert severity
+    default_thresholds: Optional[Dict[str, str]] = None  # SLO default thresholds
+    quality_thresholds: Optional[Dict[str, float]] = None  # portal quality-gauge bands
 
     def routing_channels(self) -> List[str]:
         """Channel identifiers for alert routing, with the Phase-0 fallback chain:

@@ -117,7 +117,7 @@ def _resolve_threshold(
         )
         return biz_value, "manifest"
 
-    default = _DEFAULT_THRESHOLDS.get(field_name)
+    default = (business.default_thresholds or _DEFAULT_THRESHOLDS).get(field_name)
     if default is not None:
         derivations.append(
             DerivationTrace(
@@ -134,7 +134,7 @@ def _resolve_threshold(
 
 def _severity_for(business: BusinessContext, derivations: List[DerivationTrace]) -> str:
     """Derive alert severity from criticality."""
-    severity = _CRITICALITY_TO_SEVERITY.get(business.criticality, "warning")
+    severity = (business.severity_map or _CRITICALITY_TO_SEVERITY).get(business.criticality, "warning")
     derivations.append(
         DerivationTrace(
             field="alert_severity",

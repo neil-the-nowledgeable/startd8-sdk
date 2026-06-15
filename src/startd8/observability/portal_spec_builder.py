@@ -125,7 +125,7 @@ def build_portal_spec(
         panels.extend(_build_communication_graph_panels(metadata))
 
     if "quality" in sections:
-        panels.extend(_build_quality_panels(report, metadata))
+        panels.extend(_build_quality_panels(report, metadata, business))
 
     if "security" in sections:
         panels.extend(_build_security_panels(metadata))
@@ -421,9 +421,13 @@ def _build_communication_graph_panels(
 
 
 def _build_quality_panels(
-    report: Any, metadata: Dict[str, Any],
+    report: Any, metadata: Dict[str, Any], business: Any = None,
 ) -> List[Dict[str, Any]]:
-    """REQ-OBP-104: Quality metrics from observability-manifest quality_summary."""
+    """REQ-OBP-104: Quality metrics from observability-manifest quality_summary.
+
+    ``business.quality_thresholds`` (declarative) overrides the gauge bands; defaults to 0.6/0.8.
+    """
+    _qt = (getattr(business, "quality_thresholds", None) or {"warning": 0.6, "healthy": 0.8})
     # Try quality from report artifacts first
     scored = [a for a in report.artifacts if a.quality]
     if not scored:
@@ -464,8 +468,8 @@ def _build_quality_panels(
             "unit": "percentunit",
             "thresholds": [
                 {"value": None, "color": "red"},
-                {"value": 0.6, "color": "yellow"},
-                {"value": 0.8, "color": "green"},
+                {"value": _qt["warning"], "color": "yellow"},
+                {"value": _qt["healthy"], "color": "green"},
             ],
             "group": "Quality",
         },

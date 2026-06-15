@@ -385,4 +385,11 @@ def load_business_context(
     if not ctx.latency_p99:
         logger.info("No latencyP99 in manifest; will use default (500ms)")
 
+    # Resolve the declarative policy maps (manifest spec.observability over hardcoded defaults).
+    from .obs_config import load_default_thresholds, load_quality_thresholds, load_severity_map
+
+    ctx.severity_map = load_severity_map(manifest)
+    ctx.default_thresholds = load_default_thresholds(manifest)
+    ctx.quality_thresholds = load_quality_thresholds(manifest)
+
     return ctx
