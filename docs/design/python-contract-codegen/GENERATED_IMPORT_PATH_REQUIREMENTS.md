@@ -325,6 +325,81 @@ fail-loud import gate (FR-PE-6 model). New OQ-IMP-D (name the consumer). See §0
 
 ---
 
+## 8. Post-Review Amendments (CRP R1–R4 triaged 2026-06-15)
+
+> Accepted suggestions from the convergent review (Appendix C R1–R4), folded into the requirements.
+> Dispositions in Appendix A/B. These are **normative** amendments to §2's FRs.
+
+**FR-IMP-1 (`from_json`) — import is not a string echo:**
+- **Reuse the export contract, not an independent schema walk** (R2-F1): load entities in
+  `ENTITY_ORDER` and validate fields against `FIELDS` from the generated `app/export.py`.
+- **Type re-coercion** (R4-F2 — code-grounded): `to_json` serializes `default=str` (`derived.py:60`),
+  so datetimes/Decimals/ints/FKs land as strings. `from_json` MUST coerce each field back to its
+  declared schema type — fidelity is **type-faithful, not string-faithful** (a bare echo corrupts
+  typed columns while passing a textual round-trip).
+- **Confirmed-row non-clobber** (R1-F2): never overwrite/delete a `confirmed:true` row under the
+  identity key — collision ⇒ `ImportResult` error (mirrors the AI path's confirmed-aware supersede).
+- **Restore provenance stamping** (R3-F1): round-trip restore **preserves** `source`/`confirmed` from
+  the payload; text/surface import defaults to `source="human", confirmed=false` — **never** the AI
+  `source="ai"` default.
+- **`identity: id` upsert** (R3-F2): explicit `id` + `identity: id` ⇒ upsert that PK; absent ⇒ insert.
+- **FK load ordering** (R1-F3): multi-entity payloads load parent-before-child per schema FKs, or fail
+  loud — not left to SQLAlchemy insert order.
+- **Partial-import atomicity** (R4-F6): `--allow-lossy` uses a per-row/per-entity savepoint (reuse
+  `session.begin_nested()`); `--strict` rolls the whole file back. The commit boundary is defined.
+- **Text-path acceptance** (R2-F5): importing a pasted/stored *text* doc (not only a `to_json`
+  payload) creates/updates the target row per identity (strtd8 FR-13 byte-for-byte).
+
+**FR-IMP-2 (identity consolidation) — the seam is subtler than v0.3 stated:**
+- **The back-compat map is THREE-valued, not two** (R4-F1 — code-grounded): `effective_source_binding`
+  (`ai_layer.py:312-339`) resolves a binding *explicit* / *schema-derived (zero authored config)* /
+  `none` (disable). A pass with **no** `source_binding` key can still be source-bound; mapping
+  "neither key ⇒ `name`" silently breaks it. The derived case maps to `source:<derived-field>`, and
+  the byte-identity gate MUST exercise it (declared-key manifests alone won't).
+- **Source-scope idempotency is HARNESS-level, not persist-level** (R4-F3): it is a pre-insert
+  *clear-prior-unconfirmed* step in the harness body (`_render_pass_text_bound`), separate from per-row
+  `_persist`. The seam is two-layered — `resolve_identity()` (pure) + per-kind **apply** where
+  `source` stays a harness pre-clear. One `_persist(..., identity)` signature **cannot** express it.
+- **Five persist branches, not four** (R4-F4): `_PERSIST_SCOPED_HELPER` (FR-SRP, `is_scoped`,
+  `fk_values: dict`) is a fifth; FR-IMP-2 must include it in scope or **explicitly fence** it.
+- **Dual-key precedence** (R1-F1): a manifest setting both keys ⇒ defined outcome (lean: `source`
+  wins, `dedup_by` ignored with an extraction warning; or fail-loud at parse) — never implementation-defined.
+- **Composite comparison** (R2-F6 + R4-F7): verbatim (no trim/case-fold, v1) **and** on the **coerced
+  typed value**, not the JSON string repr — shared by the import and AI paths.
+- **Behavioral parity, not just byte-identity** (R3-S4): the regression gate also emits a behavioral
+  test (confirmed-non-touch, unconfirmed supersede, source-scope count stability).
+
+**FR-IMP-3 (`imports.yaml` grammar):**
+- **Cross-ref validation, candidate-ordered** (R1-F4 + R4-F5): `parse_imports` validates `extract_via`
+  → an `ai_passes.yaml` pass and `provenance` → a `human_inputs.yaml` owned field, sourcing the
+  sibling names from the **already-extracted candidate manifests** (like `view_prose`'s `known_views`)
+  — so `imports.yaml` round-trips **after** `ai_passes`/`human_inputs` in the gate. Unknown ⇒ loud.
+- **OQ-IMP-5 normative** (R2-F2): `identity: source:<field>` **requires** a non-blank `Provenance` ⇒
+  loud at extraction, not runtime.
+- **Duplicate-entity policy** (R2-F4): multiple `## Imports` rows for one Entity ⇒ defined (fail-loud
+  or ordered precedence) — never silent last-wins.
+- **Surface column** (R1-F6): add `Surface` to the §5 authoring table (so `surface: true` is authorable).
+- **Prune orphaned templates** (R3-S6): an Entity dropped from the schema prunes its `imports.yaml`
+  row at re-extract (like `view_prose`).
+
+**FR-IMP-6 (import surface):**
+- **Upload safety** (R2-F3): UTF-8 only (reject binary), a documented max size (lean 1 MiB,
+  configurable), `.txt`/`.md` extensions for file upload (paste unchanged).
+- **CSRF** (R3-F3): inherits the generated form layer's CSRF/session posture — same as entity forms
+  (no import-specific scheme beyond what those forms have).
+- **Import ≠ extract** (R3-F5): a successful import POST **never** invokes `extract_via`; extraction is
+  a separate user action (FR-IMP-4).
+- **Discoverability + error display** (R2-S6 + R3-S5): `surface: true` adds an import link to the nav;
+  a bad paste renders `ImportResult.errors` in the HTMX response, not a silent 302.
+
+**§3 Non-Requirements (new fences):** import is **opt-in** — no `imports.yaml` ⇒ no `app/import.py`
+emitted, no drift expected (R2-F7); generated `from_json` **complements** any bespoke restore (e.g.
+strtd8 FR-10), never auto-replaces it (R3-F6, OQ-IMP-C).
+
+**§4 Open Questions:** **OQ-IMP-D (NEW, load-bearing)** — name the first consumer before Phase 5;
+provisional default **strtd8** (§6) with `{json, text}` + a pinned acceptance fixture. Unresolved by
+the decision date blocks e2e acceptance only, not the P2 grammar (R1-F5).
+
 ## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
 
 This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
@@ -339,14 +414,195 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 ### Appendix A: Applied Suggestions
 
-| ID | Suggestion | Source | Implementation / Validation Notes | Date |
-|----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+> Triaged 2026-06-15 (claude-opus-4-8). All R1–R4 requirements suggestions ACCEPTED — well-anchored,
+> code-grounded, no conflicts. Folded into **§8 Post-Review Amendments**; merge target noted.
+
+| ID | Merged into (§8) | Date |
+|----|------------------|------|
+| R1-F1 | FR-IMP-2 · dual-key precedence | 2026-06-15 |
+| R1-F2 | FR-IMP-1 · confirmed-row non-clobber | 2026-06-15 |
+| R1-F3 | FR-IMP-1 · FK load ordering | 2026-06-15 |
+| R1-F4 | FR-IMP-3 · cross-ref validation | 2026-06-15 |
+| R1-F5 | §4 · OQ-IMP-D (new) | 2026-06-15 |
+| R1-F6 | FR-IMP-3 · Surface column | 2026-06-15 |
+| R2-F1 | FR-IMP-1 · export-contract reuse (ENTITY_ORDER/FIELDS) | 2026-06-15 |
+| R2-F2 | FR-IMP-3 · OQ-IMP-5 normative | 2026-06-15 |
+| R2-F3 | FR-IMP-6 · upload safety (UTF-8/size/ext) | 2026-06-15 |
+| R2-F4 | FR-IMP-3 · duplicate-entity policy | 2026-06-15 |
+| R2-F5 | FR-IMP-1 · text-path acceptance | 2026-06-15 |
+| R2-F6 | FR-IMP-2 · composite verbatim | 2026-06-15 |
+| R2-F7 | §3 · conditional ownership (opt-in) | 2026-06-15 |
+| R3-F1 | FR-IMP-1 · restore source/confirmed stamping | 2026-06-15 |
+| R3-F2 | FR-IMP-1 · identity:id upsert | 2026-06-15 |
+| R3-F3 | FR-IMP-6 · CSRF (inherit form-layer posture) | 2026-06-15 |
+| R3-F4 | FR-IMP-3 · assembly-inputs catalog (+ plan R3-S3) | 2026-06-15 |
+| R3-F5 | FR-IMP-6 · import ≠ extract | 2026-06-15 |
+| R3-F6 | §3 · OQ-IMP-C coexistence | 2026-06-15 |
+| R4-F1 | FR-IMP-2 · three-valued (derived-source) map | 2026-06-15 |
+| R4-F2 | FR-IMP-1 · type re-coercion (to_json default=str) | 2026-06-15 |
+| R4-F3 | FR-IMP-2 · two-layer seam (harness vs persist) | 2026-06-15 |
+| R4-F4 | FR-IMP-2 · five persist branches (scoped) | 2026-06-15 |
+| R4-F5 | FR-IMP-3 · candidate-ordered cross-ref | 2026-06-15 |
+| R4-F6 | FR-IMP-1 · partial-import atomicity | 2026-06-15 |
+| R4-F7 | FR-IMP-2 · composite coerced-value compare | 2026-06-15 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
-| ID | Suggestion | Source | Rejection Rationale | Date |
-|----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| ID | Source | Rationale | Date |
+|----|--------|-----------|------|
+| R2 (2nd block) | composer-2.5 | **Duplicate** — the requirements doc carries two identical R2 blocks (a transcription artifact); triaged once via the IDs above, the second block is not re-dispositioned. | 2026-06-15 |
+
+*(No substantive rejects — R3-F3 CSRF accepted in the softened "inherit form-layer posture" form; all
+others applied verbatim-in-intent.)*
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — composer-2.5 — 2026-06-15
+
+- **Reviewer**: composer-2.5
+- **Date**: 2026-06-15 21:00:00 UTC
+- **Scope**: Requirements-side gaps for consolidation, from_json gate, grammar cross-refs, OQ-IMP-D, confirmed-row policy.
+
+### Sponsor focus — answers (requirements lens)
+
+See plan Appendix C R1 for full ask-by-ask answers; requirements-specific deltas below.
+
+**Ask 1 (FR-IMP-2):** Add explicit **dual-key conflict rule** and **four-helper consolidation scope** to FR-IMP-2 Verify block.
+
+**Ask 3 (FR-IMP-1):** Extend Verify with **confirmed-row non-clobber** and **FK ordering** — import failures unique vs emit.
+
+**Ask 4 (FR-IMP-3):** Align §5 authoring table with **Surface** column; require **cross-ref validation** at parse time.
+
+**Ask 5 (OQ-IMP-D):** Add to §4 Open Questions with strtd8 default + decision deadline.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Architecture | high | **FR-IMP-2 dual-key rule:** When a pass or import row could specify both `source_binding`/`source:` identity **and** `dedup_by`/field identity, FR-IMP-2 MUST state **precedence** (lean: `source` scope wins; `dedup_by` ignored with extraction warning) or **fail loud** at parse — not implementation-defined. | FR-IMP-2 lists vocabulary but not interaction of the two **shipped** keys (`ai_layer.py:95-99`). Consolidation without a rule lets one abstraction leak. | FR-IMP-2, new bullet after vocabulary list | Parse test: manifest with both keys ⇒ defined outcome (error or mapped `IdentityKey` + warning row) |
+| R1-F2 | Validation | high | **FR-IMP-1 confirmed-row policy:** Extend FR-IMP-1 Verify: `from_json` MUST NOT overwrite or delete rows with `confirmed:true` for the declared identity key; collision ⇒ `ImportResult` error (same semantics as FR-8 re-synthesis in `_PERSIST_DEDUP_HELPER`). | FR-IMP-1 covers idempotency and field fidelity but not **confirmed** rows — AI path already never clobbers confirmed (`ai_layer.py:611-612`). Import restore without this rule can destroy user-confirmed data. | FR-IMP-1 Verify paragraph | Test: confirmed row exists ⇒ re-import reports collision, row unchanged |
+| R1-F3 | Validation | high | **FR-IMP-1 FK ordering:** FR-IMP-1 MUST define load order for multi-entity `to_json` payloads (parent before child per schema FKs) or fail loud when order cannot be satisfied — not leave to SQLAlchemy insert order. | FR-IMP-1: "`from_json` ingests the app's own `to_json` export format" — exports can include dependent entities. Emit gate (FR-PE-6) has no DB FK concept; this is import-unique. | FR-IMP-1, new sentence in body | Fixture with parent/child entities: child-first payload ⇒ error or reorder; parent-first succeeds |
+| R1-F4 | Interfaces | medium | **FR-IMP-3 cross-ref validation:** `parse_imports` MUST validate `extract_via` against `ai_passes.yaml` pass names and `provenance` against `human_inputs.yaml` owned fields — unknown entity is already loud; **unknown pass/field cross-ref must be equally loud**. | §5: "`extract_via` — the `ai_passes.yaml` pass name" and provenance cross-ref to `human_inputs.yaml` — no Verify line for referential integrity at parse time. | FR-IMP-3 Verify + §5 bullet list | `extract_via: no-such-pass` ⇒ parse error; provenance not in owned fields ⇒ parse error |
+| R1-F5 | Ops | medium | **OQ-IMP-D — name the consumer:** Add §4 open question: first consumer must be named before Phase 5; **provisional default strtd8** (§6) with formats `{json, text}` and acceptance entities pinned in a fixture path. Unresolved by decision date blocks e2e acceptance only, not P2 grammar. | Plan Phase 0.2 names OQ-IMP-D; requirements §4 lacks it while §6 already maps strtd8. Unnamed consumer poisons F-304/P5 acceptance per sponsor ask 5. | §4 Open Questions (new OQ-IMP-D) | Decision record exists; F-304 tests reference pinned fixture |
+
+### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F6 | Interfaces | low | **§5 grammar table — Surface column:** Add **Surface** to the `## Imports` authoring table (plan F-204 already includes it) so FR-IMP-6 `surface: true` is authorable from the contract table, not only emitted YAML. | §5 markdown table columns: `Entity \| Format \| Identity \| Provenance \| Extract via` — emitted example shows `surface: true` with no authoring-column home. | §5 Authoring grammar table + bullet list | Round-trip: `## Imports` row with Surface=yes ⇒ `imports.yaml` `surface: true` |
+
+**Endorsements:** none — first round.
+
+**Disagreements:** none.
+
+#### Review Round R2 — composer-2.5 — 2026-06-15
+
+- **Reviewer**: composer-2.5
+- **Date**: 2026-06-15 22:30:00 UTC
+- **Scope**: Requirements precision — export contract reuse, OQ-IMP-5 extraction rule, surface upload safety, duplicate-template policy, conditional ownership, text-format acceptance.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F1 | Interfaces | high | **FR-IMP-1 export contract reuse:** FR-IMP-1 MUST state that `from_json` loads entities in **`ENTITY_ORDER`** and validates fields against **`FIELDS`** from the generated `app/export.py` — not an independent schema walk. The round-trip oracle is export→import, not schema→import. | FR-IMP-1: "`from_json` ingests the app's own `to_json` export format" — `render_export` defines order + allowed fields (`derived.py:55-56`). Independent derivation is an untested second contract. | FR-IMP-1 body, after "`to_json` export format" | Test: export payload with entities in `ENTITY_ORDER` succeeds; field not in `FIELDS[entity]` ⇒ `ImportResult` error |
+| R2-F2 | Validation | medium | **OQ-IMP-5 → normative:** Promote OQ-IMP-5 from open question to FR-IMP-3 Verify rule: `identity: source:<field>` **requires** a non-blank **Provenance** naming the same field (or a documented superset); violation ⇒ loud at **`## Imports` extraction**, not runtime. | §4 OQ-IMP-5 leans fail-loud at extraction; FR-IMP-3 Verify lists unknown entity/field only. Authoring table row 3 (`ProofPoint`) pairs both — rule must be explicit for partial rows. | FR-IMP-3 Verify + §5 Provenance bullet | Row with `source:` identity + blank Provenance ⇒ `not_extracted`, no YAML entry |
+| R2-F3 | Security | medium | **FR-IMP-6 upload safety:** Extend FR-IMP-6 Verify: text upload MUST accept **UTF-8** (reject binary/non-UTF-8 with user-visible error), enforce a **documented max size** (lean: 1 MiB, configurable constant in generated code), and accept only `.txt`/`.md` extensions for file upload (paste path unchanged). | §3 Non-Requirements bounds formats to text but not upload attack surface. Unbounded binary upload to a paste route is an end-user footgun and DoS vector. | FR-IMP-6 Verify paragraph | Test: upload `application/pdf` ⇒ 400; 2 MiB paste ⇒ 413/validation error; valid `.md` succeeds |
+| R2-F4 | Data | medium | **Duplicate entity rows:** FR-IMP-3 MUST state whether multiple `## Imports` rows for the **same Entity** are allowed (e.g. `json` + `text` templates) or **fail loud** at extraction. If allowed, `parse_imports` must define merge precedence; if forbidden, one row per entity. | §5 table has one row per entity in examples; no rule for two rows same Entity different Format. Silent last-wins in YAML list is implementation-defined. | FR-IMP-3 body or §5 bullet list | Two rows `ImportedDocument` ⇒ defined outcome (error or ordered list with stable precedence) |
+| R2-F5 | Validation | medium | **Text-format acceptance:** Extend FR-IMP-1 Verify with a **text-path** case: importing a pasted/stored text document (not only `to_json` payload) creates/updates the target row per declared identity — mirrors strtd8 FR-13 byte-for-byte storage. F-304 plan cites JSON round-trip only. | FR-IMP-1 Verify focuses on `from_json(to_json(x))`; strtd8 §6 maps FR-13 round-trip to FR-IMP-1 but format is `text`, not JSON. | FR-IMP-1 Verify paragraph | Fixture: paste text via surface or `from_text` helper ⇒ row stored byte-identically |
+
+### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F6 | Data | low | **OQ-IMP-1 closure for Phase 3:** FR-IMP-2 Verify should cross-reference OQ-IMP-1: composite identity `[a,b]` comparisons are **verbatim** (no trim/case-fold) in v1; document in FR-IMP-2 Verify so import and AI paths share one comparand rule. | §4 OQ-IMP-1 leans verbatim; FR-IMP-2 Verify lists composite behavior but not normalization policy — import `from_json` and `_persist` could diverge on whitespace. | FR-IMP-2 Verify, composite bullet | `" foo "` vs `"foo"` under `identity: [a]` ⇒ no match (distinct rows or reported collision per policy) |
+| R2-F7 | Ops | low | **Conditional ownership fence:** Add to §3 Non-Requirements (or FR-IMP-1): when no `imports.yaml` exists, the SDK **does not emit** `app/import.py` and drift does not expect it — import is opt-in via manifest, unlike always-on `app/export.py`. | Export is universal (`render_derived` unconditional); import is manifest-declared. Requirements never state opt-in emission; risks spurious drift on every generated app. | §3 Non-Requirements, new bullet | App without `## Imports` ⇒ no `app/import.py` in layout; `--check` passes |
+
+**Endorsements** (untriaged R1):
+
+- R1-F1 (dual-key precedence), R1-F2 (confirmed-row), R1-F3 (FK ordering), R1-F4 (cross-ref validation), R1-F5 (OQ-IMP-D in §4), R1-F6 (Surface column).
+
+**Disagreements:** none.
+
+#### Review Round R2 — composer-2.5 — 2026-06-15
+
+- **Reviewer**: composer-2.5
+- **Date**: 2026-06-15 22:30:00 UTC
+- **Scope**: Requirements precision — export contract reuse, OQ-IMP-5 extraction rule, surface upload safety, duplicate-template policy, conditional ownership, text-format acceptance.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F1 | Interfaces | high | **FR-IMP-1 export contract reuse:** FR-IMP-1 MUST state that `from_json` loads entities in **`ENTITY_ORDER`** and validates fields against **`FIELDS`** from the generated `app/export.py` — not an independent schema walk. The round-trip oracle is export→import, not schema→import. | FR-IMP-1: "`from_json` ingests the app's own `to_json` export format" — `render_export` defines order + allowed fields (`derived.py:55-56`). Independent derivation is an untested second contract. | FR-IMP-1 body, after "`to_json` export format" | Test: export payload with entities in `ENTITY_ORDER` succeeds; field not in `FIELDS[entity]` ⇒ `ImportResult` error |
+| R2-F2 | Validation | medium | **OQ-IMP-5 → normative:** Promote OQ-IMP-5 from open question to FR-IMP-3 Verify rule: `identity: source:<field>` **requires** a non-blank **Provenance** naming the same field (or a documented superset); violation ⇒ loud at **`## Imports` extraction**, not runtime. | §4 OQ-IMP-5 leans fail-loud at extraction; FR-IMP-3 Verify lists unknown entity/field only. Authoring table row 3 (`ProofPoint`) pairs both — rule must be explicit for partial rows. | FR-IMP-3 Verify + §5 Provenance bullet | Row with `source:` identity + blank Provenance ⇒ `not_extracted`, no YAML entry |
+| R2-F3 | Security | medium | **FR-IMP-6 upload safety:** Extend FR-IMP-6 Verify: text upload MUST accept **UTF-8** (reject binary/non-UTF-8 with user-visible error), enforce a **documented max size** (lean: 1 MiB, configurable constant in generated code), and accept only `.txt`/`.md` extensions for file upload (paste path unchanged). | §3 Non-Requirements bounds formats to text but not upload attack surface. Unbounded binary upload to a paste route is an end-user footgun and DoS vector. | FR-IMP-6 Verify paragraph | Test: upload `application/pdf` ⇒ 400; 2 MiB paste ⇒ 413/validation error; valid `.md` succeeds |
+| R2-F4 | Data | medium | **Duplicate entity rows:** FR-IMP-3 MUST state whether multiple `## Imports` rows for the **same Entity** are allowed (e.g. `json` + `text` templates) or **fail loud** at extraction. If allowed, `parse_imports` must define merge precedence; if forbidden, one row per entity. | §5 table has one row per entity in examples; no rule for two rows same Entity different Format. Silent last-wins in YAML list is implementation-defined. | FR-IMP-3 body or §5 bullet list | Two rows `ImportedDocument` ⇒ defined outcome (error or ordered list with stable precedence) |
+| R2-F5 | Validation | medium | **Text-format acceptance:** Extend FR-IMP-1 Verify with a **text-path** case: importing a pasted/stored text document (not only `to_json` payload) creates/updates the target row per declared identity — mirrors strtd8 FR-13 byte-for-byte storage. F-304 plan cites JSON round-trip only. | FR-IMP-1 Verify focuses on `from_json(to_json(x))`; strtd8 §6 maps FR-13 round-trip to FR-IMP-1 but format is `text`, not JSON. | FR-IMP-1 Verify paragraph | Fixture: paste text via surface or `from_text` helper ⇒ row stored byte-identically |
+
+### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F6 | Data | low | **OQ-IMP-1 closure for Phase 3:** FR-IMP-2 Verify should cross-reference OQ-IMP-1: composite identity `[a,b]` comparisons are **verbatim** (no trim/case-fold) in v1; document in FR-IMP-2 Verify so import and AI paths share one comparand rule. | §4 OQ-IMP-1 leans verbatim; FR-IMP-2 Verify lists composite behavior but not normalization policy — import `from_json` and `_persist` could diverge on whitespace. | FR-IMP-2 Verify, composite bullet | `" foo "` vs `"foo"` under `identity: [a]` ⇒ no match (distinct rows or reported collision per policy) |
+| R2-F7 | Ops | low | **Conditional ownership fence:** Add to §3 Non-Requirements (or FR-IMP-1): when no `imports.yaml` exists, the SDK **does not emit** `app/import.py` and drift does not expect it — import is opt-in via manifest, unlike always-on `app/export.py`. | Export is universal (`render_derived` unconditional); import is manifest-declared. Requirements never state opt-in emission; risks spurious drift on every generated app. | §3 Non-Requirements, new bullet | App without `## Imports` ⇒ no `app/import.py` in layout; `--check` passes |
+
+**Endorsements** (untriaged R1):
+
+- R1-F1 (dual-key precedence), R1-F2 (confirmed-row), R1-F3 (FK ordering), R1-F4 (cross-ref validation), R1-F5 (OQ-IMP-D in §4), R1-F6 (Surface column).
+
+**Disagreements:** none.
+
+#### Review Round R3 — composer-2.5 — 2026-06-15
+
+- **Reviewer**: composer-2.5
+- **Date**: 2026-06-15 23:45:00 UTC
+- **Scope**: Restore semantics, upsert policy, CSRF on import POST, assembly-inputs catalog, Phase 5 loop ordering, OQ-IMP-C coexistence.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R3-F1 | Data | high | **FR-IMP-1 restore stamping:** FR-IMP-1 MUST define row provenance on import: rows restored via `from_json(to_json(x))` **preserve** `source` and `confirmed` from the export payload field-for-field; rows created via text/surface import default to `source="human"` (or project convention) and `confirmed=false` unless the template declares restore semantics. Not AI `source="ai"` defaults. | FR-IMP-1 covers field fidelity but not **provenance columns** — `_persist` always sets `source="ai", confirmed=false` (`ai_layer.py:577-580`). Import restore copying export could silently flip confirmed state or apply AI defaults. | FR-IMP-1 body + Verify | Round-trip export with `confirmed:true` row ⇒ re-import preserves `confirmed:true`; surface paste ⇒ `confirmed:false` |
+| R3-F2 | Data | high | **FR-IMP-1 `identity: id` upsert:** When export payload includes explicit `id` and template declares `identity: id`, `from_json` MUST **upsert** that primary key (update in place if unconfirmed policy allows, or report collision if confirmed — per R1-F2); without `id`, allocate a new row. Restore fidelity depends on this. | FR-IMP-2 Verify mentions `identity: id` upserts but FR-IMP-1 never ties upsert to export payload shape; `to_json` includes `id` when present in rows. | FR-IMP-1 Verify, idempotency bullets | Export row with known `id` ⇒ re-import updates same row; new id absent ⇒ insert |
+| R3-F3 | Security | medium | **FR-IMP-6 CSRF:** Import surface POST MUST use the same CSRF/session token pattern as generated HTMX entity forms (hidden field or header check). Paste/upload is a state-changing POST — out of scope for generic CRUD create only when form CSRF exists. | FR-IMP-6 Verify covers byte-round-trip only; unauthenticated POST import is a classic CSRF vector on multi-user deployments. | FR-IMP-6 Verify paragraph | POST without valid CSRF token ⇒ 403; with token ⇒ 200/redirect |
+| R3-F4 | Ops | medium | **Assembly-inputs catalog:** Add `imports` key to kickoff `ASSEMBLY_INPUTS_TEMPLATE.md` manifest inventory (`prisma/imports.yaml`) — eighth manifest alongside `views`, `ai_passes`, etc. Pairs with wireframe `CONVENTION_PATHS` (R3-S3). | §5 positions `imports.yaml` as 7th manifest; assembly-inputs template and wireframe still enumerate seven paths (`wireframe/inputs.py:30-38`). Authors won't discover the path. | §5 "Three accompanying manifest cross-edits" → four; kickoff template cross-ref | `ASSEMBLY_INPUTS_TEMPLATE` lists `imports`; wireframe resolves path |
+| R3-F5 | Validation | medium | **Import ≠ extract (normative):** FR-IMP-6 MUST explicitly restate: successful import POST **never** invokes `extract_via` — extraction is a separate user action (FR-IMP-4). Plan Phase 5.2 boot-smoke should list three **sequential** user steps, not one combined POST. | FR-IMP-6 says "nothing extracted by the act of importing" but Phase 5.2 prose bundles "import via surface … extract" without ordering guard — implementers might wire auto-extract on upload. | FR-IMP-6 body + Phase 5.2 plan cross-ref | POST import ⇒ row stored, zero AI-pass invocations; extract only on explicit `/run-extract` |
+
+### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R3-F6 | Ops | low | **OQ-IMP-C coexistence note:** Add §3 Non-Requirements bullet: when a consumer already has bespoke restore (strtd8 FR-10), generated `from_json` **complements** it — the SDK does not remove or auto-replace app-authored restore; authors choose one entrypoint. Prevents double-write if both coexist. | §4 OQ-IMP-3 open; §6 maps strtd8 FR-13 to FR-IMP-1 but FR-10 bespoke restore may still exist. No fence against two restore paths writing the same entity. | §3 Non-Requirements | Doc + test fixture: both paths documented; no generated code deletes bespoke restore module |
+
+**Endorsements** (untriaged R2):
+
+- R2-F1 (export contract reuse), R2-F2 (OQ-IMP-5 normative), R2-F3 (upload safety), R2-F4 (duplicate entity rows), R2-F5 (text-format acceptance), R2-F7 (conditional ownership).
+
+**Disagreements:** none.
+
+#### Review Round R4 — claude-opus-4-8 — 2026-06-15
+
+- **Reviewer**: claude-opus-4-8
+- **Date**: 2026-06-15 12:31:00 UTC
+- **Scope**: Deeper code-grounded pass over the consolidation seam, the `to_json` type-coercion round-trip gap, and the derived-vs-declared `source_binding` back-compat blind spot. Read `ai_layer.py` (`effective_source_binding`, the 4+1 persist branches), `derived.render_export` (`default=str`), `manifest_extraction/extract.py` (round-trip gate) on `feat/import-path` (= `origin/main` target). Prior reviewer (composer-2.5, R1–R3) covered breadth thoroughly; this round goes deeper on three things the prose-level review could not see in the code.
+
+### Sponsor focus — answers (requirements lens; full ask-by-ask in plan R4)
+
+**Ask 1 (FR-IMP-2 vocabulary completeness):** Vocabulary is **incomplete** — it omits the **derived** `source_binding` state. `effective_source_binding` (`ai_layer.py:312-339`) resolves a source binding three ways: explicit, **schema-derived (zero authored config)**, and `none` (explicit DISABLE sentinel). A manifest with NO `source_binding` key can still emit a source-bound harness. The `IdentityKey` vocabulary (`id|field|composite|source|name|none`) and the back-compat map (F-102: "`source_binding` → `source:<field>`; neither → `name`") both assume binding is declared-or-absent; the derived case is a third path that maps to `source` with **no manifest key present**. Byte-identity over *declared-key* manifests will not exercise it. See R4-F1.
+
+**Ask 3 (FR-IMP-1 round-trip fidelity):** `to_json` serializes with `default=str` (`derived.py:60`) — datetimes, Decimals, booleans-as-? and FK ints all land as **strings** in the JSON. `from_json` round-trip fidelity is therefore **lossy unless it re-coerces** each field to its schema type. "field fidelity (sorted-key stable)" in FR-IMP-1 Verify is satisfiable by a string-only echo that silently corrupts typed columns. See R4-F2.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R4-F1 | Architecture | high | **FR-IMP-2 must cover the DERIVED source-binding state, not just declared/absent.** Add to FR-IMP-2: the unified identity key has a **derived-`source`** case — a pass with no `source_binding` key but exactly one schema-derived loose-ref provenance field (`effective_source_binding` derivation) maps to `identity: source:<derived-field>`, NOT to `name`. The back-compat map is three-valued (explicit `source:` / derived `source:` / `none`→ no-bind), not two. | FR-IMP-2 says "an entity with no declaration still dedups by `name`" — but `effective_source_binding` (`ai_layer.py:328-336`) derives a `source` binding from schema+human_inputs with zero authored config; such a pass does NOT name-dedup today. Mapping it to `name` is a silent behavior change the byte-identity gate (declared-key manifests only) won't catch. | FR-IMP-2 vocabulary + back-compat paragraph | Fixture: pass with a single server-managed optional-String loose-ref field, **no** `source_binding` key ⇒ post-consolidation `IdentityKey.kind == source` (byte-identical harness), not `name` |
+| R4-F2 | Data | high | **FR-IMP-1 must specify type re-coercion on import.** Add to FR-IMP-1 Verify: `from_json` MUST coerce each field back to its **declared schema type** (datetime/Decimal/int/bool/FK), because `to_json` emits `default=str` (every non-JSON-native value becomes a string). A bare `from_json` that writes the string back round-trips *textually* but corrupts typed columns. Round-trip fidelity is type-faithful, not string-faithful. | `render_export` (`derived.py:60`): `json.dumps(..., default=str)`. The export is lossy-to-string for typed fields; import must invert it using `FIELDS`+schema types or the "field fidelity" claim is false for any datetime/Decimal/int column. | FR-IMP-1 Verify paragraph | Fixture: entity with a `DateTime`/`Int` column ⇒ `from_json(to_json(rows))` yields rows whose typed columns equal the originals by **value and type**, not string repr |
+| R4-F3 | Architecture | high | **FR-IMP-2 seam: source-scope idempotency is HARNESS-level, not persist-level — say so.** Clarify FR-IMP-2: the "shared `identity` helper consumed at both call sites" resolves the key, but **applying** a `source` key is a pre-insert *clear-prior-unconfirmed* step in the harness body (`_render_pass_text_bound`, `ai_layer.py:706-716`: `select(...).where(prov==source_id, confirmed.is_(False))` + delete), separate from the per-row `_persist*`. A unified `_persist(session, model, edge, *, identity)` that dispatches only inside the persist call **cannot** express source-scope idempotency. The seam is two-layered (resolve key + apply policy), not one helper. | The focus ask 1 "one abstraction will leak" is real: `id`/`field`/`composite`/`name` are per-row persist concerns; `source` is a per-run harness concern. Collapsing all five into one `_persist` signature loses where source-scope lives. | FR-IMP-2 "shared seam" sentence | Code review gate: the consolidation keeps the per-run source-clear in the harness; a generated source-bound harness still emits the pre-clear loop (byte-identical) |
+| R4-F4 | Risks | medium | **FR-IMP-2 must include the SCOPED (FR-SRP relational child) pass in consolidation scope, or explicitly exclude it.** `_PERSIST_SCOPED_HELPER` (`ai_layer.py:732`) is a **fifth** persist branch (`is_scoped` dispatch, `ai_layer.py:646-648`) taking `fk_values: dict` to set real FK relations — not just a provenance string. FR-IMP-2 names `ai_layer` persist helpers generically; state whether `is_scoped` passes are in the identity-key unification or fenced out (they have a distinct CHILD-FK shape). | Plan F-103 proposes one `_persist(..., identity)` dispatching on `IdentityKey.kind`; the scoped helper's extra `prov_field` + `fk_values` params don't fit that signature. Silent exclusion or a leaky merge are both regressions. | FR-IMP-2 Touches/scope sentence | Matrix test includes an `is_scoped` pass: post-consolidation it either keeps its own emit path (byte-identical) or maps cleanly to a documented `IdentityKey` variant |
+| R4-F5 | Interfaces | medium | **FR-IMP-3 cross-ref validation must be ordering-explicit in the round-trip gate.** Strengthen FR-IMP-3 Verify (beyond R1-F4): `parse_imports`'s cross-manifest checks (`extract_via`→`ai_passes.yaml`, `provenance`→`human_inputs.yaml`) must source the sibling names from the **already-extracted candidate manifests**, exactly as `view_prose.yaml` sources `known_views` from the `views.yaml` candidate (`extract.py:191-196`). Specify that `imports.yaml` round-trips **after** `ai_passes.yaml`/`human_inputs.yaml` in the gate so the sibling candidates exist. | The round-trip gate iterates `candidates.items()` with no dependency ordering (`extract.py:200-214`); cross-ref validation that reads a sibling candidate before it is populated would false-pass or KeyError. The established pattern (view_prose) reads from the candidate dict, not from disk. | FR-IMP-3 Verify + §5 cross-ref bullet | Fixture: `imports.yaml` extracted before `ai_passes.yaml` is built ⇒ gate still validates `extract_via` (candidate ordering enforced); unknown pass ⇒ loud |
+
+### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R4-F6 | Validation | medium | **FR-IMP-1 `--allow-lossy` partial-import atomicity.** Specify the transaction boundary `--allow-lossy` implies: does a reported-but-skipped row commit the rows around it (per-row/per-entity savepoint) or roll back the file? FR-IMP-1 says rows are "reported, not dropped" but never says whether a partial import leaves the DB half-loaded. The shipped bound harness already uses `session.begin_nested()` per row (`ai_layer.py:721`) — reuse that pattern and name it. | FR-IMP-1 Verify covers idempotency + reporting but not durability of a partial run; `--strict` (abort) vs `--allow-lossy` (continue) differ precisely on commit boundary, which is undefined. | FR-IMP-1 Verify paragraph | Fixture: 3-row payload, row 2 invalid ⇒ `--allow-lossy` commits rows 1,3 + reports 2; `--strict` commits nothing |
+| R4-F7 | Data | low | **OQ-IMP-1 + R4-F2 interaction: composite key compares post-coercion, not on string repr.** When OQ-IMP-1 is resolved verbatim (R2-F6), state the comparand is the **coerced typed value**, not the JSON string, so a composite `[createdAt, name]` doesn't false-dedup on string-formatted timestamps differing only in representation. | R2-F6 fixes verbatim-vs-normalized; R4-F2 adds type coercion. Their interaction is unspecified: comparing string reprs of typed fields under a composite key is a distinct correctness trap. | FR-IMP-2 Verify, composite bullet (cross-ref OQ-IMP-1, R4-F2) | Two rows whose `DateTime` serializes identically but differs in tz ⇒ defined (coerced) comparison outcome |
+
+**Endorsements** (untriaged R1–R3):
+
+- R1-F1 (dual-key precedence — but note R4-F1: precedence must also cover the *derived* binding, not only the two declared keys).
+- R1-F2 (confirmed-row non-clobber), R1-F3 (FK ordering), R2-F1 (export contract reuse — R4-F2 extends it to type coercion, not only `ENTITY_ORDER`/`FIELDS`), R2-F2 (OQ-IMP-5 normative), R2-F3 (upload safety), R3-F1 (restore `source`/`confirmed` stamping), R3-F2 (`identity: id` upsert).
+
+**Disagreements:** none — composer-2.5's R1–R3 are sound; R4 deepens R1-F1/R2-F1 rather than disputing them.
