@@ -33,6 +33,10 @@ from typing import Dict, List, Optional
 from .sandbox import SandboxConfig, run_sandboxed
 
 COMPILE_FLOOR = 0.15  # quality cap for code that fails the compile gate (CRP R1-F2)
+# FT-3 weight decision: when a behavioral (functional) term is available, weight it equally with
+# the structural base — structural saturates among frontier models, so functional must carry real
+# signal to discriminate. Revisit after the paymentservice pilot (OQ-T2-2 / FR-T2-COMPOSITE).
+FUNCTIONAL_WEIGHT = 0.5
 
 
 # Sandbox-safe single-file syntax fallbacks for languages whose LanguageProfile leaves
@@ -219,8 +223,17 @@ def run_gate(name: str, command: Optional[List[str]], file_path: Path,
 
 
 def compute_composite(structural: Optional[float], compile_gate: GateResult,
-                      lint_gate: Optional[GateResult] = None) -> CompositeScore:
-    """Combine the structural score with the compile gate (+ optional lint) per FR-11."""
+                      lint_gate: Optional[GateResult] = None, *,
+                      functional: Optional[float] = None,
+                      functional_degraded: bool = False) -> CompositeScore:
+    """Combine the structural score with the compile gate (+ optional lint) per FR-11.
+
+    ``functional`` (FR-T2-COMPOSITE): behavioral coverage ∈ [0,1] from executing the service. When
+    present it is folded in as an added weighted term (``FUNCTIONAL_WEIGHT``); the compile gate still
+    floors first (we never reward behavior on non-compiling code). ``functional_degraded`` marks a
+    service that HAS a behavioral suite which could not be run (server never ready / sandbox
+    violation) → the term is recorded missing/degraded (FR-32), never scored 0. Both default off,
+    so callers that pass neither get byte-identical behavior to before."""
     s = structural if structural is not None else 0.0
     available, missing = [], []
 
@@ -249,6 +262,16 @@ def compute_composite(structural: Optional[float], compile_gate: GateResult,
         else:
             missing.append("lint")
 
+    # Behavioral (functional) term — FR-T2-COMPOSITE. Only when a suite actually produced coverage;
+    # "no suite for this service" is neither available nor missing (existing terms stand, unchanged).
+    if functional is not None:
+        available.append("functional")
+        value = FUNCTIONAL_WEIGHT * functional + (1.0 - FUNCTIONAL_WEIGHT) * value
+        fnote = f"functional {functional:.2f} (w={FUNCTIONAL_WEIGHT})"
+        note = f"{note}; {fnote}" if note else fnote
+    elif functional_degraded:
+        missing.append("functional")  # suite exists but couldn't run → degrade, don't penalize
+
     degraded = bool(missing)
     if degraded and not note:
         note = f"degraded coverage — missing: {', '.join(missing)} (FR-32, not penalized)"
@@ -260,8 +283,14 @@ def compute_composite(structural: Optional[float], compile_gate: GateResult,
 
 
 def score_file(file_path: Path, profile, *, cfg: Optional[SandboxConfig] = None,
-               structural: Optional[float] = None, run_lint: bool = True) -> CompositeScore:
-    """Convenience: compile-gate (+ optional lint) a generated file via its LanguageProfile."""
+               structural: Optional[float] = None, run_lint: bool = True,
+               functional: Optional[float] = None,
+               functional_degraded: bool = False) -> CompositeScore:
+    """Convenience: compile-gate (+ optional lint) a generated file via its LanguageProfile.
+
+    ``functional`` / ``functional_degraded`` (FR-T2-COMPOSITE) are passed straight through to
+    :func:`compute_composite` — the behavioral coverage is computed by the caller (the runner, via
+    ``behavioral.run_behavioral_cell``) since it requires executing the service, not just the file."""
     fp = Path(file_path)
     if not fp.exists():
         return CompositeScore(value=min(structural or 0.0, COMPILE_FLOOR), structural=structural,
@@ -315,7 +344,8 @@ def score_file(file_path: Path, profile, *, cfg: Optional[SandboxConfig] = None,
                     isolation_level=gate.isolation_level,
                 )
         lint = run_gate("lint", lint_cmd, gate_fp, cfg) if lint_cmd else None
-        return compute_composite(structural, gate, lint)
+        return compute_composite(structural, gate, lint,
+                                 functional=functional, functional_degraded=functional_degraded)
     finally:
         if _vue_tmp is not None:
             try:

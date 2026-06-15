@@ -20,6 +20,7 @@ pytest.importorskip("grpc")
 from startd8.benchmark_matrix.behavioral import (  # noqa: E402
     StartupContract,
     resolve_serve_command,
+    run_behavioral_cell,
     run_charge_suite,
 )
 import startd8.benchmark_matrix.behavioral as beh  # noqa: E402
@@ -106,3 +107,41 @@ def test_suite_fails_known_broken_server(tmp_path):
     assert by_name["charge_invalid_card_rejected"] is False  # ...but it accepts invalid cards
     assert by_name["charge_expired_card_rejected"] is False  # ...and expired cards
     assert suite.coverage == pytest.approx(1 / 3)            # the suite discriminates
+
+
+# --- M-T2.4 ($0 wiring) — run_behavioral_cell orchestration ------------------
+
+def _workspace_with(tmp_path: Path, server_fixture: str) -> Path:
+    ws = tmp_path / "cell"
+    ws.mkdir(parents=True)
+    for f in ("demo_pb2.py", "demo_pb2_grpc.py"):
+        shutil.copy(_BEH_DIR / f, ws / f)
+    shutil.copy(_FIXTURES / server_fixture, ws / server_fixture)
+    return ws
+
+
+def test_run_behavioral_cell_scores_good_and_broken(tmp_path):
+    # Launch the reference server via a startup contract (Python here; Node at the real pilot).
+    good = _workspace_with(tmp_path / "g", "good_payment_server.py")
+    seed_g = {"startup": {"cmd": [sys.executable, "good_payment_server.py"], "port_env": "PORT"}}
+    rg = run_behavioral_cell(seed_g, good, "paymentservice", ["good_payment_server.py"], cfg=_NO_NET)
+    assert rg.has_suite and not rg.degraded and rg.functional == 1.0
+    assert rg.provenance["suite"]["coverage"] == 1.0
+
+    broken = _workspace_with(tmp_path / "b", "broken_payment_server.py")
+    seed_b = {"startup": {"cmd": [sys.executable, "broken_payment_server.py"], "port_env": "PORT"}}
+    rb = run_behavioral_cell(seed_b, broken, "paymentservice", ["broken_payment_server.py"], cfg=_NO_NET)
+    assert rb.functional == pytest.approx(1 / 3)
+
+
+def test_run_behavioral_cell_no_suite_for_service(tmp_path):
+    res = run_behavioral_cell({}, tmp_path, "adservice", ["X.java"], cfg=_NO_NET)
+    assert res.has_suite is False and res.functional is None and not res.degraded
+
+
+def test_run_behavioral_cell_no_launcher_degrades(tmp_path):
+    # paymentservice HAS a suite, but no startup contract + unknown language → degrade, don't 0.
+    res = run_behavioral_cell({"service_metadata": {"language": "rust"}}, tmp_path,
+                              "paymentservice", ["main.rs"], cfg=_NO_NET)
+    assert res.has_suite and res.degraded and res.functional is None
+

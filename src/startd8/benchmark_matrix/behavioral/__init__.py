@@ -9,6 +9,7 @@ The sandbox primitive that hosts a service (``run_service_sandboxed``) lives in 
 """
 from .contract import StartupContract, resolve_serve_command
 from .charge_suite import RpcResult, SuiteResult, run_charge_suite, SUITE_VERSION
+from .execute import BehavioralResult, run_behavioral_cell
 
 __all__ = [
     "StartupContract",
@@ -17,4 +18,6 @@ __all__ = [
     "SuiteResult",
     "run_charge_suite",
     "SUITE_VERSION",
+    "BehavioralResult",
+    "run_behavioral_cell",
 ]
