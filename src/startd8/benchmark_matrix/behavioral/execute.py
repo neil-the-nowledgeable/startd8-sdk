@@ -111,6 +111,7 @@ def run_behavioral_cell(
         return BehavioralResult(has_suite=True, degraded=True,
                                 provenance={"reason": "no serve command (no contract / unknown language)"})
     argv, extra_env = serve
+    lang = ((seed or {}).get("service_metadata", {}).get("language") or (seed or {}).get("language"))
 
     # Provision the cell's deps at PREPARE time (before the egress-denied run), per language (P1).
     # Node uses the offline vendored closure (safest); others install securely (FR-P1-SEC-1..5).
@@ -120,15 +121,17 @@ def run_behavioral_cell(
                                     provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
     else:
         from .provision import provision_workdir
-        lang = ((seed or {}).get("service_metadata", {}).get("language")
-                or (seed or {}).get("language"))
         pr = provision_workdir(Path(workdir), lang, target_files)
         if not pr.ok:
             return BehavioralResult(has_suite=True, degraded=True,
                                     provenance={"reason": pr.degraded_reason,
                                                 "provision_language": pr.language})
 
-    sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env)
+    # Go serves a pre-built binary (compiled at provision time) → starts fast, no compile under the
+    # sandbox; a slightly longer readiness window covers binary startup (OQ-7).
+    readiness = 30.0 if lang == "go" else 15.0
+    sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env,
+                               readiness_timeout_s=readiness)
     prov: Dict = {"ready": sr.ready, "isolation_level": sr.isolation_level,
                   "network_isolated": sr.network_isolated, "violation": sr.violation,
                   "server_stderr_tail": (sr.server_stderr or "")[-400:]}

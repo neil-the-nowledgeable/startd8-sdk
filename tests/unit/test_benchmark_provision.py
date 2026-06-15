@@ -11,7 +11,7 @@ from startd8.benchmark_matrix.behavioral.provision import (
 
 def test_install_plan_is_scripts_disabled_and_unsupported_degrades(tmp_path):
     go = install_plan("go", tmp_path, ["src/shippingservice/main.go"])
-    assert go[0] == ["go", "mod", "tidy"] and go[1].name == "shippingservice"
+    assert "go mod tidy" in go[0][2] and "go build -o .bin/server" in go[0][2] and go[1].name == "shippingservice"
     argv, _ = install_plan("python", tmp_path, ["src/emailservice/email_server.py"])
     assert "--only-binary=:all:" in argv and "grpcio" in argv and "--target" in argv  # SEC-1 + common set
     assert install_plan("java", tmp_path, ["X.java"]) is None  # secure path not built → degrade
@@ -35,18 +35,34 @@ def test_secure_env_cache_paths_are_absolute(tmp_path, monkeypatch):
 
 
 def test_provision_ok_and_failure(tmp_path):
+    # Use python (no go-stub step) to isolate the runner/env contract.
     seen = {}
 
     def ok(argv, cwd, env, timeout):
         seen["env"] = env
         return 0, ""
 
-    r = provision_workdir(tmp_path, "go", ["src/shippingservice/main.go"], runner=ok)
+    r = provision_workdir(tmp_path, "python", ["src/emailservice/x.py"], runner=ok)
     assert r.ok and "scripts-disabled" in r.controls and "scrubbed-env" in r.controls
     assert "ANTHROPIC_API_KEY" not in seen["env"]  # the installer never sees secrets
 
-    r2 = provision_workdir(tmp_path, "go", ["src/shippingservice/main.go"], runner=lambda *a: (1, "boom"))
+    r2 = provision_workdir(tmp_path, "python", ["src/emailservice/x.py"], runner=lambda *a: (1, "boom"))
     assert not r2.ok and "provision failed" in r2.degraded_reason
+
+
+def test_setup_go_stubs_vendors_and_replaces(tmp_path):
+    # FR-P1-GO-STUBS: a model-invented proto module gets vendored stubs + a replace → local.
+    from startd8.benchmark_matrix.behavioral.provision import setup_go_stubs
+    svc = tmp_path / "src" / "shippingservice"
+    svc.mkdir(parents=True)
+    module = "github.com/GoogleCloudPlatform/microservices-demo/src/shippingservice"
+    (svc / "go.mod").write_text(f"module shippingservice\n\ngo 1.21\n\nrequire {module} v0.0.0-x\n")
+    (svc / "main.go").write_text(f'package main\nimport pb "{module}/genproto"\nvar _ = pb.GetQuoteRequest{{}}\n')
+    err = setup_go_stubs(tmp_path, svc)
+    assert err is None
+    assert (tmp_path / ".gostubs" / "genproto" / "demo.pb.go").is_file()        # stubs at the import subpath
+    assert (tmp_path / ".gostubs" / "go.mod").read_text().startswith(f"module {module}")
+    assert f"replace {module} =>" in (svc / "go.mod").read_text()                # replace added
 
 
 def test_provision_offline_fails_closed(tmp_path):

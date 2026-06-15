@@ -64,7 +64,8 @@ def _go_default(target_files: List[str], port: int) -> Optional[Tuple[List[str],
     if not entry:
         return None
     svc_dir = str(Path(entry).parent)
-    return (["sh", "-c", f"cd {shlex.quote(svc_dir)} && exec go run ."], {"PORT": str(port)})
+    # Serve the binary provisioning pre-built (./.bin/server) — no `go run` compile under the sandbox.
+    return (["sh", "-c", f"cd {shlex.quote(svc_dir)} && exec ./.bin/server"], {"PORT": str(port)})
 
 
 # Per-language fallback launchers (additive; the seed `startup` contract is authoritative).

@@ -67,7 +67,7 @@ def test_resolve_serve_command_go_default():
     # tidy provisioning); exec under setsid so killpg reaps the compiled child.
     seed = {"service_metadata": {"language": "go"}}
     argv, env = resolve_serve_command(seed, ["src/shippingservice/main.go"], 7100)
-    assert argv[0] == "sh" and "cd src/shippingservice" in argv[2] and "exec go run ." in argv[2]
+    assert argv[0] == "sh" and "cd src/shippingservice" in argv[2] and "exec ./.bin/server" in argv[2]
     assert env == {"PORT": "7100"}
 
 
