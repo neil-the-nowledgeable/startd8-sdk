@@ -1,8 +1,10 @@
 # View Prose Follow-Through — Ecosystem Consistency, Drift-Recognition Completeness & Unlocked Enhancements — Requirements
 
-**Version:** 0.4 (Phase-6 implementation reflection — Group A mostly pre-empted by the editors merge; FR-DRC-4/5 shipped)
-**Date:** 2026-06-12 (v0.4, v0.3, v0.2, v0.1)
-**Status:** Group A ✅ (FR-DRC-2/3 pre-shipped; FR-DRC-1 superseded; FR-DRC-4/5 done on `feat/drift-recognition-group-a`). Groups B-G open.
+**Version:** 0.5 (COMPLETE — all groups A–G delivered to `main`)
+**Date:** 2026-06-14 (v0.5, v0.4, v0.3, v0.2, v0.1)
+**Status:** ✅ **ALL COMPLETE.** Groups A, B, C, D, E, F all delivered + merged to `main`; Group G
+delivered (FR-VCE-1/2/3 shipped, FR-VCE-4 gate closed → split to OQ-7). Only deferred item: **OQ-7**
+(a dedicated `display.yaml` authoring surface — lowest urgency, not scheduled). See §0.1 below.
 **Owner:** `startd8-sdk` (SDK-internal + kickoff templates) · touches consumer `strtd8` docs
 **Pairs with:** `docs/design/view-prose/VIEW_PROSE_FOLLOWTHROUGH_PLAN_v0.1.md` (the planning pass whose
 code-grounded findings drove this v0.2).
@@ -16,6 +18,32 @@ deterministic skip-hook silently drops manifest inputs.
 `strtd8/docs/v2/ASSEMBLY_INPUTS.md`, the **editors-archetype** planning (which independently surfaced
 drift bugs A-2/A-3 below; this doc consolidates them).
 **SDK citations are `verify-at-home`** (drawn from a read of `main` at `0e8d08fb`).
+
+---
+
+## 0.1 Completion Summary (2026-06-14) — ALL GROUPS DELIVERED
+
+> Every functional requirement in this doc is **done and merged to `main`**. The per-group banners and
+> per-FR `✅` markers below carry the detail; this table is the authoritative roll-up.
+
+| Group | Scope | Status | Landed |
+|-------|-------|--------|--------|
+| **A** | Drift-recognition completeness (FR-DRC-1..5) | ✅ **DONE** | FR-DRC-2/3 pre-shipped (editors merge); FR-DRC-1 superseded by the pass-all-manifests design; FR-DRC-4/5 on `feat/drift-recognition-group-a` |
+| **B** | Kickoff inputs & assembly-inputs consistency (FR-KIN-1..3) | ✅ **DONE** | `feat/view-prose-group-b` (FR-KIN-1 = strtd8-side edit, user-committed) |
+| **C** | Requirements format & template (FR-FMT-1..4) | ✅ **DONE** | `feat/view-prose-group-c` |
+| **D** | Wireframe + capability-index (FR-WCI-1..3) | ✅ **DONE** | FR-WCI-1/3 on `feat/group-d-f`; FR-WCI-2 on `feat/view-prose-wci2` |
+| **E** | Functional quick wins (FR-QW-1..3) | ✅ **DONE** | `empty`-on-index/list + `complete` key (`feat/view-prose-group-e`); `empty_body` key (`feat/view-prose-empty-body`). FR-QW-3 validate-success **DECLINED** (behavioral, not SOTTO-additive); index-prompt + export-help were already covered |
+| **F** | Design-principle elevation (FR-DP-1) | ✅ **DONE** | SOTTO principle doc; FR-DP-2 dropped (OQ-4) |
+| **G** | View-copy extraction (FR-VCE-1..4) | ✅ **DONE** | FR-VCE-1/2/3 shipped (`feat/view-copy-extraction` + vocabulary expansion); FR-VCE-4 gate closed → **split to OQ-7** |
+
+**Single deferred item — OQ-7:** a dedicated `display.yaml` authoring surface in the reqs grammar. The
+FR-VCE-4 derivability gate (`DISPLAY_DERIVABILITY_TABLE.md`) proved `display.yaml` is hashed *structure*
+with no guess-free authoring path today, so it is intentionally **not scheduled** — revisit only when a
+project needs authored display structure the generator defaults don't cover.
+
+Other open questions resolved or dispositioned: OQ-1 (Group A carved to its own PR — done), OQ-2
+(✅ no new plumbing), OQ-3 (kickoff manifest scaffolder — separate, deferred), OQ-4 (✅ FR-DP-2 dropped),
+OQ-5 (rollup scope — kept to the three surfaces), OQ-6 (✅ ingestion ordering verified in Group G).
 
 ---
 
@@ -177,12 +205,18 @@ pass below.
 
 ### G. View-copy extraction — author copy in the reqs doc → derive `view_prose.yaml` ($0) *(NEW; the planning unlock)*
 
+> **✅ Group G DONE.** FR-VCE-1 (`extract_view_prose()` wired into the candidate set + round-trip with
+> `parse_view_prose(known_views=…)` sourced from the views candidate), FR-VCE-2 (the `Empty state:`
+> dead-end closed, with the Phase-6 `Scope:` prerequisite fix), and FR-VCE-3 (per-archetype validity
+> end-to-end, no new validator) all shipped on `feat/view-copy-extraction` + the vocabulary-expansion
+> follow-up. FR-VCE-4 (`display.yaml` parity) = **gate closed → split to OQ-7** (see below).
+
 > The reqs doc is a deterministic ($0, no-LLM) manifest compiler (`manifest_extraction/`) that emits 6 of
 > the 8 cascade manifests; `view_prose.yaml` is one of the two it doesn't. The *consumer*
 > (`parse_view_prose`) is shipped — only the *producer* (extractor) is missing. This group closes the loop
 > and lights up an already-authored, currently-dead field.
 
-- **FR-VCE-1 — `extract_view_prose()` in `manifest_extraction`.** Add an extractor that parses per-view
+- **FR-VCE-1 — `extract_view_prose()` in `manifest_extraction`. ✅ DONE.** Add an extractor that parses per-view
   copy keys from each `### View:` block (the block already uses the `- Key: value` grammar), wired into the
   candidate set (`extract.py:145-158`) and the round-trip table (`extract.py:162-175`) calling the
   **existing** `parse_view_prose(text, known_views=…)` so a bad copy block fails **at ingestion** (loud,
@@ -209,7 +243,7 @@ pass below.
   > prerequisite the `empty` route delivers zero value; the celebrated quick win required unblocking it first.
   *Verify:* a board view with `Empty state:` extracts with **no** `empty:` and **no** error; a `Scope: model`
   detail-compose with `Empty state:` produces `empty:`. (Both pinned in `test_view_prose_extraction.py`.)
-- **FR-VCE-3 — Per-archetype validity is end-to-end (no new validator).** The extractor emits the keys; the
+- **FR-VCE-3 — Per-archetype validity is end-to-end (no new validator). ✅ DONE.** The extractor emits the keys; the
   **shipped renderer already rejects** archetype-invalid combinations (`renderers.py:1862-1881`:
   `empty`→detail-compose-model, `success`/`error`/`controls`→import-flow). *Verify:* `empty` authored on a
   computed-panel fails the round-trip at ingestion (reusing the renderer's loud-fail).
@@ -244,11 +278,11 @@ pass below.
   `generate views --view-prose`, hash-exempt (rendered to untracked fragments), full key-set
   title/intro/empty/success/error/controls. *Verify:* the entry's "Drives" column reads
   `generate views --view-prose` and the lifecycle column reads "outside the drift hash".
-- **FR-KIN-2 — Kickoff inputs taxonomy classifies view_prose explicitly.** Confirm/keep the
+- **FR-KIN-2 — Kickoff inputs taxonomy classifies view_prose explicitly. ✅ DONE.** Confirm/keep the
   `KICKOFF_INPUTS_EXPLAINED.md` taxonomy places `view_prose.yaml` on the **content-prose / hash-exempt /
   author→approve** side (not the structural/hashed side), beside `app/pages/*.md`. *Verify:* the taxonomy's
   Words/Structure split names `view_prose.yaml` under Words.
-- **FR-KIN-3 — The `ASSEMBLY_INPUTS_TEMPLATE.md` carries a view_prose row.** The reusable inventory
+- **FR-KIN-3 — The `ASSEMBLY_INPUTS_TEMPLATE.md` carries a view_prose row. ✅ DONE.** The reusable inventory
   template (SDK kickoff) gains a placeholder row for `prisma/view_prose.yaml` so every new project's
   inventory includes it. *Verify:* the template lists view_prose with `<status>` placeholder.
 
@@ -269,18 +303,18 @@ pass below.
   in `REQUIREMENTS_AND_PLAN_FORMAT.md`. **Pairs with FR-VCE-1** (the extractor that consumes them) — together
   they make view copy authorable-then-derivable. *Verify:* the format doc lists the keys' exact grammar under
   the View block; FR-VCE-1's extractor reads them.
-- **FR-FMT-2 — Codify the reflective-loop lifecycle conventions (PURE doc — no parser, planning-confirmed).**
+- **FR-FMT-2 — Codify the reflective-loop lifecycle conventions (PURE doc — no parser, planning-confirmed). ✅ DONE.**
   The lifecycle is **human convention only** (the extractor ignores any non-anchored section), so this is a
   format-doc + scaffold edit with zero parser risk. Make first-class in `REQUIREMENTS_AND_PLAN_FORMAT.md`:
   a `§0 Planning Insights` table (v(n-1)→v(n) discoveries), the `Appendix A/B/C` CRP review-log scaffold,
   the "What changed in vX" callout convention, the version/date *lineage* header, and an
   **"Implementation Reflections"** convention (Phase-6 findings fed back, as v0.7→v0.9 did). *Verify:* the
   format doc names each convention with an example; the template ships the empty scaffolds.
-- **FR-FMT-3 — Add the Words/Structure classification rule.** The format gains a one-paragraph rule: any
+- **FR-FMT-3 — Add the Words/Structure classification rule. ✅ DONE.** The format gains a one-paragraph rule: any
   *new file-shaped input* is classified **hashed-structure** (a `views.yaml` section / standalone hashed
   manifest) **or** **hash-exempt-prose** (a standalone file rendered to an untracked fragment), and routed
   accordingly. *Verify:* the rule cites the shipped split (display.yaml=structure, view_prose.yaml=words).
-- **FR-FMT-4 — Add the `$0`-codegen acceptance-criteria checklist.** Capture the recurring ACs proven by
+- **FR-FMT-4 — Add the `$0`-codegen acceptance-criteria checklist. ✅ DONE.** Capture the recurring ACs proven by
   View Prose as a reusable checklist for any deterministic-manifest feature: **byte-identical-when-absent**,
   **fail-closed on a malformed manifest**, **drift-stability** (editing hash-exempt content never trips
   `--check`), **strict loud-fail parse**, **prose-gated opt-in** (no downstream drift). *Verify:* the
@@ -288,7 +322,12 @@ pass below.
 
 ### D. Wireframe & capability-index integration
 
-- **FR-WCI-1 — Wireframe reports view-copy coverage (QUICK — catalog + Status model exist).** Add
+> **✅ Group D DONE.** FR-WCI-1 (wireframe per-view copy coverage, keyed by VIEW ident) + FR-WCI-3
+> (capability-index entries `startd8.codegen.composite_views` + `startd8.codegen.view_prose`) on
+> `feat/group-d-f`; FR-WCI-2 (the unified content/words completeness rollup in `--json`, schema_version
+> 2) on `feat/view-prose-wci2`.
+
+- **FR-WCI-1 — Wireframe reports view-copy coverage (QUICK — catalog + Status model exist). ✅ DONE.** Add
   `"view_prose": "prisma/view_prose.yaml"` to `wireframe/inputs.py:30-38` CONVENTION_PATHS; a
   `_view_prose_state()` parallel to `_yaml_state()`; extend `_views_section()` (`plan.py:586-636`) to emit
   per-view chrome status using the existing `Status` model (`plan.py:45-50`). **Key by VIEW ident, not model
@@ -305,7 +344,7 @@ pass below.
   canonical field, not a conditional add — so it bumps per the render.py stability policy). `0/0 ⇒
   ratio 1.0` (vacuously complete, never a ZeroDivisionError). 7 new tests + 106 wireframe green;
   CLI `wireframe --json` verified end-to-end. Tree/human readout left unchanged (FR scope = `--json`).
-- **FR-WCI-3 — Capability-index entry for composite views + view copy.** Register
+- **FR-WCI-3 — Capability-index entry for composite views + view copy. ✅ DONE.** Register
   `startd8.codegen.composite_views` (the view_codegen generator) and `startd8.codegen.view_prose` (the
   view-chrome capability) in `docs/capability-index/startd8.sdk.capabilities.yaml`, with evidence pointers
   and the multi-audience description. *Verify:* `/capability-index` validation passes with the two new
@@ -346,12 +385,12 @@ pass below.
   (`renderers.py:967`) and the `rendered-content` list empty (`:1026`), with the per-archetype guard. *Verify:*
   `empty` on those archetypes renders via a fragment and stays byte-identical when absent; on an archetype
   with no no-rows surface it still loud-fails.
-- **FR-QW-2 — Route remaining hardcoded user-facing literals through prose (opt-in).** The
+- **FR-QW-2 — Route remaining hardcoded user-facing literals through prose (opt-in). ✅ DONE (via the `empty_body` + `complete` keys; the "remaining literals" were the index prompt — already covered by FR-QW-1 — and the rendered-content detail no-body — `empty_body`).** The
   `computed-panel` "All signals met." complete-state (`:1074`), the rendered-content "Nothing to read yet."
   (`:1021`), and the index prompt are authored copy baked in the renderers. Make each prose-overridable via
   an existing or minimal key, **defaulting to today's literal** (zero behavior change absent prose). *Verify:*
   each literal is overridable; absent prose ⇒ byte-identical.
-- **FR-QW-3 — Finish the control follow-ups' tail.** Surface the deferred bits now that the mechanism is
+- **FR-QW-3 — Finish the control follow-ups' tail. ⚠️ FR-QW-3 DISPOSITION: validate-success DECLINED (behavioral); index-prompt + export-help were already shipped — nothing to do.** Surface the deferred bits now that the mechanism is
   proven: a validate-success result line (today validate stays JSON) and per-control help on the export
   links — both prose-gated. *Verify:* authoring them renders; absent ⇒ byte-identical. *(Lower priority;
   may stay deferred.)*
@@ -408,18 +447,26 @@ pass below.
 
 ---
 
-## 5. Priority / sequencing (updated after planning)
+## 5. Priority / sequencing (updated after planning) — ✅ ALL DELIVERED
 
-1. **A (drift-recognition completeness)** — highest value; fixes silent $0→LLM fallthrough + 3 verified
-   bugs; small thread-through (helpers already exist). Its own PR (OQ-1). *FR-DRC-1 first (unblocks 3+5).*
-2. **G (view-copy extraction)** — highest *value* unlock; **FR-VCE-2 (close `Empty state:`) is the cheapest
-   first slice** and proves the path; pairs with FR-FMT-1.
-3. **D (FR-WCI-1 wireframe + FR-WCI-3 cap index)** — quick wins.
-4. **C / B / F-doc** — cheap docs: FR-FMT-2/3/4 (no parser), FR-KIN-*, FR-DP-1.
-5. **FR-WCI-2 (rollup)** + **FR-VCE-4 (display extraction parity)** — medium follow-ups.
-6. **E (quick wins)** — opportunistic; lowest urgency.
+> The original sequencing below was followed essentially as planned; every line is now **done**
+> (see §0.1). Kept for the historical record.
+
+1. **A (drift-recognition completeness)** — ✅ done (FR-DRC-2/3 pre-shipped; 1 superseded; 4/5 shipped).
+2. **G (view-copy extraction)** — ✅ done (FR-VCE-1/2/3; FR-VCE-4 gate → OQ-7).
+3. **D (FR-WCI-1 wireframe + FR-WCI-3 cap index)** — ✅ done.
+4. **C / B / F-doc** — ✅ done (FR-FMT-2/3/4, FR-KIN-*, FR-DP-1).
+5. **FR-WCI-2 (rollup)** — ✅ done. **FR-VCE-4 (display extraction parity)** — ✅ gate closed → split to OQ-7.
+6. **E (quick wins)** — ✅ done (FR-QW-1, FR-QW-2 incl. `empty_body`/`complete`); FR-QW-3 validate-success declined.
 
 ---
+
+*v0.5 — Completion (2026-06-14). All groups A–G delivered + merged to `main` across the increments
+named in §0.1. Only OQ-7 (a dedicated `display.yaml` authoring surface) is deferred — intentionally
+not scheduled (the FR-VCE-4 gate proved no guess-free authoring path exists today). FR-QW-3
+validate-success was **declined** as a standing decision (behavioral change to a load-bearing JSON
+contract, not a SOTTO-additive prose-gate). This doc is now a closed/historical record; new display
+authoring work, if ever prioritized, starts a fresh requirements doc against OQ-7.*
 
 *v0.4 — Phase-6 implementation reflection (Group A). Implementing against current main (`02920600`)
 revealed the **editors-archetype merge had already shipped FR-DRC-2 + FR-DRC-3** (FR-ED-15/16) via a
