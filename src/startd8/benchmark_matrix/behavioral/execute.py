@@ -112,10 +112,21 @@ def run_behavioral_cell(
                                 provenance={"reason": "no serve command (no contract / unknown language)"})
     argv, extra_env = serve
 
-    # Node services need the vendored offline gRPC runtime in their workdir (FR-T2-DEPS).
-    if argv and argv[0] == "node" and not prepare_node_workdir(Path(workdir), target_files):
-        return BehavioralResult(has_suite=True, degraded=True,
-                                provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
+    # Provision the cell's deps at PREPARE time (before the egress-denied run), per language (P1).
+    # Node uses the offline vendored closure (safest); others install securely (FR-P1-SEC-1..5).
+    if argv and argv[0] == "node":
+        if not prepare_node_workdir(Path(workdir), target_files):
+            return BehavioralResult(has_suite=True, degraded=True,
+                                    provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
+    else:
+        from .provision import provision_workdir
+        lang = ((seed or {}).get("service_metadata", {}).get("language")
+                or (seed or {}).get("language"))
+        pr = provision_workdir(Path(workdir), lang, target_files)
+        if not pr.ok:
+            return BehavioralResult(has_suite=True, degraded=True,
+                                    provenance={"reason": pr.degraded_reason,
+                                                "provision_language": pr.language})
 
     sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env)
     prov: Dict = {"ready": sr.ready, "isolation_level": sr.isolation_level,
