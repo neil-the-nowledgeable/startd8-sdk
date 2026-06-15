@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Env var name markers whose values must never reach untrusted code.
 _SECRET_MARKERS = ("API_KEY", "_TOKEN", "TOKEN_", "_SECRET", "SECRET_", "PASSWORD",
@@ -173,4 +175,172 @@ def run_sandboxed(cmd: List[str], workspace: Path, cfg: Optional[SandboxConfig] 
         isolation_level=isolation_level,
         violation=violation,
         network_isolated=net_isolated,
+    )
+
+
+# --------------------------------------------------------------------------- behavioral (Track 2 / M-T2.1)
+#
+# The one-shot run_sandboxed above can't execute a *service*: behavioral scoring (FR-T2-1) needs a
+# long-lived server, a readiness wait, a loopback client window, and a GUARANTEED teardown. This
+# section adds that primitive. Two grounded constraints from the Track 2 plan:
+#   - G2/FR-T2-SEC: loopback must be ALLOWED while external egress stays denied — the one-shot
+#     `(deny network*)` profile blocks loopback too, so a server+client over 127.0.0.1 can't run.
+#   - FR-T2-2: an environment failure (never-ready / launch error / client raised) sets ``violation``
+#     so the caller DEGRADES the cell — it must never be scored as model quality.
+
+
+@dataclass
+class ServiceResult:
+    ready: bool                          # server accepted a loopback connection within the window
+    client_outcome: Any = None           # whatever client(port) returned; None if never ready
+    server_returncode: Optional[int] = None
+    server_stdout: str = ""
+    server_stderr: str = ""
+    duration_s: float = 0.0
+    isolation_level: str = "none(best-effort)"
+    violation: Optional[str] = None      # env outcome (degrade, FR-T2-2) — NOT model quality
+    network_isolated: bool = False       # external egress denied (loopback still allowed)
+
+
+def _port_ready(port: int, host: str = "127.0.0.1") -> bool:
+    """True if something accepts a TCP connection on host:port right now."""
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _wait_ready(port: int, timeout_s: float, proc: "subprocess.Popen",
+                poll_s: float = 0.1) -> Optional[str]:
+    """Poll until the server accepts loopback connections. Returns None when ready, else a
+    violation string (server exited early, or readiness timed out)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return f"server exited before readiness (rc={proc.returncode})"
+        if _port_ready(port):
+            return None
+        time.sleep(poll_s)
+    return f"server never became ready on 127.0.0.1:{port} within {timeout_s}s"
+
+
+def _wrap_loopback_only(cmd: List[str], caps: Dict[str, bool]) -> tuple[List[str], bool, str]:
+    """Allow loopback bind/connect, deny external egress (FR-T2-SEC). Returns (cmd, egress_denied, label).
+
+    Unlike ``_wrap_no_network`` (which denies ALL network), this permits 127.0.0.1 so a behavioral
+    server+client can talk, while still blocking egress to remote hosts (and build-time dep fetches).
+    """
+    if caps["sandbox_exec"]:
+        # Seatbelt evaluates top→bottom, last match wins: deny all network, then re-allow localhost.
+        profile = (
+            "(version 1)(allow default)(deny network*)"
+            '(allow network* (remote ip "localhost:*"))'
+            '(allow network-bind (local ip "localhost:*"))'
+        )
+        return (["sandbox-exec", "-p", profile, *cmd], True, "seatbelt-loopback")
+    if caps["unshare"]:
+        # A fresh net namespace has only loopback → egress is impossible. (If `lo` is down, the
+        # readiness probe will fail and the cell degrades honestly rather than scoring wrong.)
+        return (["unshare", "-rn", *cmd], True, "netns-loopback")
+    return (cmd, False, "none(best-effort)")
+
+
+def _terminate_group(proc: "subprocess.Popen") -> None:
+    """Guaranteed teardown: SIGTERM the whole process group, brief grace, then SIGKILL; reap.
+
+    The server runs as its own session/group leader (setsid via _rlimit_preexec or
+    start_new_session), so killing the group reaps double-forked children too — no orphans."""
+    if proc.poll() is not None:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:                       # group gone/unavailable → fall back to the lone process
+                proc.send_signal(sig)
+            except (ProcessLookupError, OSError):
+                return
+        try:
+            proc.wait(timeout=3.0)
+            return
+        except subprocess.TimeoutExpired:
+            continue  # escalate to SIGKILL
+
+
+def run_service_sandboxed(
+    server_cmd: List[str],
+    workspace: Path,
+    port: int,
+    client: Callable[[int], Any],
+    cfg: Optional[SandboxConfig] = None,
+    *,
+    readiness_timeout_s: float = 15.0,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> ServiceResult:
+    """Run an untrusted long-lived server, drive it with a loopback client, ALWAYS tear it down.
+
+    Starts ``server_cmd`` under the sandbox controls (scrubbed env, rlimits, loopback-only network),
+    waits until ``port`` accepts loopback connections, calls ``client(port)`` against the live
+    server, then unconditionally kills the whole process group and captures bounded server output.
+    Any environment failure (never-ready, launch error, client raised) sets ``violation`` so the
+    caller degrades the cell (FR-T2-2) instead of scoring it as model quality.
+    """
+    cfg = cfg or SandboxConfig()
+    caps = sandbox_caps()
+    workspace = Path(workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    run_cmd, egress_denied, net_label = (
+        _wrap_loopback_only(server_cmd, caps) if cfg.no_network else (server_cmd, False, "none(disabled)")
+    )
+    levels = (["rlimits"] if caps["rlimits"] else []) + ([net_label] if egress_denied else [])
+    isolation_level = "+".join(levels) if levels else "none(best-effort)"
+
+    env = scrub_env(workspace)
+    if extra_env:  # injected AFTER scrub so the startup contract's PORT survives (secrets stay stripped)
+        env.update(extra_env)
+    # _rlimit_preexec already calls os.setsid(); only ask Popen to start a new session when it won't,
+    # otherwise the double setsid() raises EPERM in the child and exec fails.
+    preexec = _rlimit_preexec(cfg) if caps["rlimits"] else None
+    started = time.monotonic()
+    proc: Optional[subprocess.Popen] = None
+    ready = False
+    client_outcome: Any = None
+    violation: Optional[str] = None
+    out, err = "", ""
+    try:
+        proc = subprocess.Popen(
+            run_cmd, cwd=str(workspace), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            preexec_fn=preexec,
+            start_new_session=(preexec is None),
+        )
+        violation = _wait_ready(port, readiness_timeout_s, proc)
+        ready = violation is None
+        if ready:
+            try:
+                client_outcome = client(port)
+            except Exception as e:  # noqa: BLE001 — client failure is an env outcome, not model quality
+                violation = f"client error: {type(e).__name__}: {e}"
+    except Exception as e:  # noqa: BLE001 — the sandbox must never crash the harness
+        violation = f"sandbox launch error: {type(e).__name__}: {e}"
+    finally:
+        if proc is not None:
+            _terminate_group(proc)
+            try:
+                out, err = proc.communicate(timeout=3.0)
+            except Exception:  # noqa: BLE001 — output capture is best-effort after teardown
+                out, err = out or "", err or ""
+
+    return ServiceResult(
+        ready=ready,
+        client_outcome=client_outcome,
+        server_returncode=proc.returncode if proc is not None else None,
+        server_stdout=(out or "")[-cfg.max_output_bytes:],
+        server_stderr=(err or "")[-cfg.max_output_bytes:],
+        duration_s=time.monotonic() - started,
+        isolation_level=isolation_level,
+        violation=violation,
+        network_isolated=egress_denied,
     )

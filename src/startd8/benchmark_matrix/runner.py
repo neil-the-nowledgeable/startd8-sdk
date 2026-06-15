@@ -77,6 +77,8 @@ class CellResult:
     error: Optional[str] = None
     defect_total: Optional[int] = None       # FR-B3: defects from the expose ledger (None = not run)
     defects_by_category: Optional[Dict[str, int]] = None  # FR-B3: per-category contribution
+    functional_coverage: Optional[float] = None  # FR-T2-COMPOSITE: behavioral coverage (None = not run)
+    behavioral: Optional[Dict] = None         # FR-T2-PROV: suite results + isolation provenance
 
     @property
     def tokens_per_sec(self) -> Optional[float]:
@@ -175,12 +177,17 @@ class SubprocessCellExecutor:
 
     def __init__(self, seeds_dir: Path, *, per_run_timeout_s: Optional[float] = 1800.0,
                  workdir_root: Optional[Path] = None,
-                 repair_mode: str = "apply", expose_defects: bool = False):
+                 repair_mode: str = "apply", expose_defects: bool = False,
+                 behavioral: bool = False):
         self.seeds_dir = Path(seeds_dir)
         self.per_run_timeout_s = per_run_timeout_s
         self.workdir_root = workdir_root
         self.repair_mode = repair_mode          # FR-B5: "apply" | "shadow" | "off"
         self.expose_defects = expose_defects     # FR-B5: persist defect ledger + de-saturate score
+        # FR-T2-COMPOSITE: run the behavioral suite (execute the service) and fold in a functional
+        # term. Default OFF — turning it on is the paymentservice pilot (spends LLM only via the
+        # generation step; the suite itself is $0). Off ⇒ scoring path is byte-identical to today.
+        self.behavioral = behavioral
 
     def __call__(self, cell: MatrixCell, spec: BenchmarkRunSpec, language: str) -> CellResult:
         from ..model_comparison import build_command, extract_metrics, run_command, SDK_ROOT
@@ -248,6 +255,9 @@ class SubprocessCellExecutor:
         sandbox_violation = None
         defect_total = None
         defects_by_category = None
+        functional_coverage = None
+        functional_degraded = False
+        behavioral_prov = None
 
         # M4 compile gate (FR-11/FR-29/FR-44): only for cells that actually generated.
         # Run the language's syntax/compile check on the generated file inside the sandbox;
@@ -261,7 +271,23 @@ class SubprocessCellExecutor:
                     from .scoring import apply_defect_penalty, score_file
                     LanguageRegistry.discover()
                     profile = resolve_language([str(gen_file)])
-                    composite = score_file(gen_file, profile, structural=structural)
+                    # FR-T2-COMPOSITE: behavioral term (default-off). Execute the service via its
+                    # startup contract + run the suite; fold coverage into the composite (the
+                    # compile gate inside score_file still floors non-compiling code first).
+                    if self.behavioral:
+                        from ..model_comparison import _load_json
+                        from .behavioral.execute import run_behavioral_cell
+                        seed_data = _load_json(seed) or {}
+                        tfs = ((seed_data.get("tasks") or [{}])[0].get("config", {})
+                               .get("context", {}).get("target_files")) or []
+                        bres = run_behavioral_cell(seed_data, workdir, cell.service, tfs)
+                        if bres.has_suite:
+                            functional_coverage = bres.functional
+                            functional_degraded = bres.degraded
+                            behavioral_prov = bres.provenance
+                    composite = score_file(gen_file, profile, structural=structural,
+                                           functional=functional_coverage,
+                                           functional_degraded=functional_degraded)
                     # FR-B3: in expose mode, fold the defect ledger into the score so a
                     # parses-but-defective file is pulled off the compile-gate ceiling.
                     if self.expose_defects:
@@ -289,6 +315,7 @@ class SubprocessCellExecutor:
             sandbox_violation=sandbox_violation,
             error=None if status == STATUS_OK else (err_text or status),
             defect_total=defect_total, defects_by_category=defects_by_category,
+            functional_coverage=functional_coverage, behavioral=behavioral_prov,
         )
 
     @staticmethod

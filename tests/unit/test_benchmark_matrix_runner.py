@@ -14,11 +14,13 @@ from startd8.benchmark_matrix import (
     aggregate_cells,
     build_matrix_markdown,
     cell_id,
+    rank_models_by_consistency,
     rank_models_by_quality,
     run_matrix,
 )
 from startd8.benchmark_matrix.runner import (
     STATUS_BUDGET_SKIP,
+    STATUS_INFRA_FAIL,
     STATUS_INTEGRITY_FAIL,
     STATUS_OK,
 )
@@ -112,6 +114,42 @@ def test_iqr_and_ranking():
     assert ranking[0][0] == "m1"  # higher median quality wins despite higher cost
     md = build_matrix_markdown("t", "deadbeefcafe", agg)
     assert "Leaderboard" in md and "m1" in md
+
+
+# --- FR-K1 consistency view (peak vs reliability) ----------------------------
+
+def test_consistency_rank_inverts_quality_rank():
+    # "peak": high median but one bad rep -> erratic. "steady": lower median, never fails.
+    cells = [
+        CellResult(f"peak-{i}", "s", "peak", "go", i, STATUS_OK, quality=q, cost_usd=0.1)
+        for i, q in enumerate([0.95, 0.95, 0.2])
+    ] + [
+        CellResult(f"steady-{i}", "s", "steady", "go", i, STATUS_OK, quality=q, cost_usd=0.1)
+        for i, q in enumerate([0.7, 0.7, 0.7])
+    ]
+    agg = aggregate_cells(cells)
+    # Peak wins on median quality...
+    assert rank_models_by_quality(agg)[0][0] == "peak"
+    # ...but steady wins on consistency (higher pass-rate, tighter spread).
+    consistency = rank_models_by_consistency(agg)
+    assert consistency[0][0] == "steady"
+    # Both views are rendered in the report.
+    md = build_matrix_markdown("t", "deadbeefcafe", agg)
+    assert "Leaderboard" in md and "Consistency" in md
+
+
+def test_consistency_flags_reduced_effective_n():
+    # One repetition is infra-excluded -> n_scored < n, surfaced with a ⚠️ in the report.
+    cells = [
+        CellResult("a", "s", "m", "go", 0, STATUS_OK, quality=0.8, cost_usd=0.1),
+        CellResult("b", "s", "m", "go", 1, STATUS_OK, quality=0.8, cost_usd=0.1),
+        CellResult("c", "s", "m", "go", 2, STATUS_INFRA_FAIL, error="401 invalid x-api-key"),
+    ]
+    agg = aggregate_cells(cells)
+    s = agg["by_model"]["m"]
+    assert s["n"] == 3 and s["n_scored"] == 2  # infra cell not scored
+    md = build_matrix_markdown("t", "deadbeefcafe", agg)
+    assert "2/3" in md and "⚠️" in md
 
 
 def test_budget_skip_excluded_from_passrate_denominator():

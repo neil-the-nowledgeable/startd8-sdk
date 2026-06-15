@@ -105,6 +105,27 @@ def rank_models_by_quality(agg: Dict) -> List[tuple]:
     return rows
 
 
+def rank_models_by_consistency(agg: Dict) -> List[tuple]:
+    """(model, pass_rate, quality_iqr, n_scored, n) sorted most-consistent first (FR-K1-2).
+
+    Consistency ranks *reliability over peak*: highest pass-rate first, then tightest spread
+    (lowest quality-IQR). A model that passes reliably with low variance outranks a
+    higher-median-but-erratic model — the dimension near-equal flagships actually differ on.
+    Complements ``rank_models_by_quality`` (peak); both are views over the SAME per-model
+    aggregates (no new per-cell data). Missing values sort last.
+    """
+    rows = []
+    for model, s in agg["by_model"].items():
+        rows.append((model, s["pass_rate"], s["quality_iqr"], s["n_scored"], s["n"]))
+    rows.sort(
+        key=lambda r: (
+            -(r[1] if r[1] is not None else -1.0),       # higher pass-rate first
+            (r[2] if r[2] is not None else float("inf")),  # tighter IQR first
+        )
+    )
+    return rows
+
+
 def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
     """Leaderboard markdown (FR-15): per-model quality/pass-rate/cost, ranked best-first."""
     lines = [
@@ -126,6 +147,21 @@ def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
         lines.append(
             f"| {i} | `{model}` | {f(s['quality_median'])} | {f(s['quality_iqr'])} | "
             f"{f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {f(s['cost_total_usd'],4)} |"
+        )
+    lines += ["", "## Consistency (most reliable first)", "",
+              "> Reliability over peak: ranked by pass-rate, then tightest spread (quality IQR). "
+              "`scored/n` below 1 (⚠️) means some repetitions were excluded (infra/budget) — a "
+              "smaller effective sample, so read its spread with caution (FR-K1-3).", "",
+              "| Rank | Model | pass-rate | quality IQR | scored/n | catastrophic |",
+              "|---:|---|---:|---:|---:|---:|"]
+    for i, (model, _pr, _iqr, _ns, _n) in enumerate(rank_models_by_consistency(agg), 1):
+        s = agg["by_model"][model]
+        def f(x, p=3):
+            return f"{x:.{p}f}" if isinstance(x, (int, float)) else "N/A"
+        flag = " ⚠️" if s["n_scored"] < s["n"] else ""
+        lines.append(
+            f"| {i} | `{model}` | {f(s['pass_rate'])} | {f(s['quality_iqr'])} | "
+            f"{s['n_scored']}/{s['n']}{flag} | {s['catastrophic_count']}/{s['n']} |"
         )
     lines += ["", "## By language (polyglot view)", "",
               "| Language | quality (median) | pass-rate | cost $ |", "|---|---:|---:|---:|"]
