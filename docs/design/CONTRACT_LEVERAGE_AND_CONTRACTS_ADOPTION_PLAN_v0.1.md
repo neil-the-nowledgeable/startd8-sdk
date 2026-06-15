@@ -153,8 +153,13 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
   `_format_forward_element_specs` renders variables/constants too — so removing the prose block loses
   nothing (OQ-5's gap is SCR-filtering-only, not generation). Kept the structured `ctx["api_signatures"]`
   population. Updated both density measures to count the structured field. 4 affected enrichment/density
-  tests updated; 0 new failures vs main baseline. **Real-run golden-prompt validation (token saving, no
-  quality regression) needs a keyed pipeline run — required before merging to main.**
+  tests updated; 0 new failures vs main baseline.
+- **GOLDEN-PROMPT VALIDATION: DONE** (`test_e3_golden_prompt.py`, deterministic). Drives api_signatures
+  through the real prompt path (extractor → manifest → structured sections → `build_spec_prompt`) and
+  asserts: both P0 sections present, every symbol (incl. variables/constants) carried, **no**
+  `## API Signatures` prose block. ~42 tokens/task/prompt saved, lossless. The substantive
+  no-regression guarantee (LLM gets every symbol in a richer P0 form) is pinned; a keyed real A/B is
+  optional extra assurance, not a blocker.
 
 ### WI-6 — FR-CL-3c: anti-regression guard
 - **Add:** a test that greps `src/` for `api_signatures` regex parsing and asserts the only matches are
