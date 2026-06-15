@@ -30,7 +30,12 @@ from .runner import (
     run_matrix,
     sandbox_dir_name,
 )
-from .aggregate import aggregate_cells, build_matrix_markdown, rank_models_by_quality
+from .aggregate import (
+    aggregate_cells,
+    build_matrix_markdown,
+    rank_models_by_consistency,
+    rank_models_by_quality,
+)
 from .rescore import CellRescore, RescoreReport, rescore_run
 
 __all__ = [
@@ -52,6 +57,7 @@ __all__ = [
     "sandbox_dir_name",
     "aggregate_cells",
     "build_matrix_markdown",
+    "rank_models_by_consistency",
     "rank_models_by_quality",
     "CellRescore",
     "RescoreReport",
