@@ -276,6 +276,7 @@ def run_service_sandboxed(
     cfg: Optional[SandboxConfig] = None,
     *,
     readiness_timeout_s: float = 15.0,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> ServiceResult:
     """Run an untrusted long-lived server, drive it with a loopback client, ALWAYS tear it down.
 
@@ -297,6 +298,8 @@ def run_service_sandboxed(
     isolation_level = "+".join(levels) if levels else "none(best-effort)"
 
     env = scrub_env(workspace)
+    if extra_env:  # injected AFTER scrub so the startup contract's PORT survives (secrets stay stripped)
+        env.update(extra_env)
     # _rlimit_preexec already calls os.setsid(); only ask Popen to start a new session when it won't,
     # otherwise the double setsid() raises EPERM in the child and exec fails.
     preexec = _rlimit_preexec(cfg) if caps["rlimits"] else None

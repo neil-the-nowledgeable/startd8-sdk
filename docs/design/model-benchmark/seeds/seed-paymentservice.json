@@ -14,6 +14,14 @@
     ],
     "service": "paymentservice"
   },
+  "startup": {
+    "cmd": [
+      "node",
+      "src/paymentservice/server.js"
+    ],
+    "port_env": "PORT",
+    "readiness": "tcp"
+  },
   "tasks": [
     {
       "config": {

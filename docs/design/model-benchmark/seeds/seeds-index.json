@@ -28,7 +28,7 @@
     {
       "language": "nodejs",
       "seed_file": "seed-paymentservice.json",
-      "seed_sha256": "452a79180a6349bbee2a85466f603cdbf7f0b68d796cf441478c494873685d1c",
+      "seed_sha256": "4f674c5d15635afa56caff15319cd5a42121b7570a37f05d27eccf002eaf5031",
       "service": "paymentservice",
       "target_file": "src/paymentservice/server.js"
     },

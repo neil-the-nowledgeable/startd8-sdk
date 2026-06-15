@@ -64,6 +64,13 @@ SERVICES = [
         "deps": [],
         "estimated_loc": 140,
         "description": "Charges the given (mock) credit card for an amount and returns a transaction ID.",
+        # Track 2 behavioral execution (FR-T2-CONTRACT): fixed launch contract so every model
+        # builds a launchable service. Harness injects PORT; readiness = TCP listen on 127.0.0.1.
+        "startup": {
+            "cmd": ["node", "src/paymentservice/server.js"],
+            "port_env": "PORT",
+            "readiness": "tcp",
+        },
     },
     {
         "key": "shippingservice", "proto_service": "ShippingService", "language": "go",
@@ -138,7 +145,7 @@ def _requirements_text(svc: dict, proto_text: str) -> str:
 
 def build_seed(svc: dict, proto_text: str, proto_sha: str) -> dict:
     task_id = f"OB-{svc['key'].upper()}"
-    return {
+    seed = {
         "version": "0.1",
         "schema_version": SCHEMA_VERSION,
         "generator": GENERATOR,
@@ -175,6 +182,10 @@ def build_seed(svc: dict, proto_text: str, proto_sha: str) -> dict:
             }
         ],
     }
+    # Track 2 behavioral execution: services with a fixed launch contract carry it (FR-T2-CONTRACT).
+    if svc.get("startup"):
+        seed["startup"] = svc["startup"]
+    return seed
 
 
 def _serialize(seed: dict) -> str:
