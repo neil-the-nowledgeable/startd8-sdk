@@ -56,8 +56,11 @@ def build_spec(models, repetitions: int, budget: float, per_cell_cap: float | No
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--run", action="store_true",
-                    help="Actually generate + behaviorally score (LLM SPEND). Default: dry-run only.")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--run", action="store_true",
+                      help="Actually generate + behaviorally score (LLM SPEND).")
+    mode.add_argument("--dry-run", action="store_true",
+                      help="Print the plan + cost estimate and exit (default; spends nothing).")
     ap.add_argument("--model", action="append", dest="models", default=[],
                     help="Override roster (repeatable). Default: the 3 flagships.")
     ap.add_argument("--repetitions", type=int, default=3)
