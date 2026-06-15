@@ -12,6 +12,7 @@ Usage:
         --model anthropic:claude-opus-4-8 --model openai:gpt-5.5 \\
         --batch-root out/model-comparison --cost-budget 15.00
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,26 +25,66 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 # Re-export the core API (used directly by tests and by the CLI command).
 from startd8.model_comparison import (  # noqa: E402,F401
-    SANDBOX_IGNORE, slug, _ignore_factory, materialize_sandbox, build_command,
-    run_command, extract_metrics, cost_from_db, rank_models, build_markdown,
-    validate_inputs, run_comparison,
+    SANDBOX_IGNORE,
+    slug,
+    _ignore_factory,
+    materialize_sandbox,
+    build_command,
+    run_command,
+    extract_metrics,
+    cost_from_db,
+    rank_models,
+    build_markdown,
+    validate_inputs,
+    run_comparison,
 )
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Prime Contractor multi-model comparison (serial).")
-    parser.add_argument("--seed", required=True, help="Shared prime-context-seed.json (same for all models).")
-    parser.add_argument("--source-root", default=".", help="Target project root to copy per model.")
-    parser.add_argument("--model", action="append", dest="models", default=[],
-                        help="Model spec provider:model (repeatable, >=2 required).")
+    parser = argparse.ArgumentParser(
+        description="Prime Contractor multi-model comparison (serial)."
+    )
+    parser.add_argument(
+        "--seed",
+        required=True,
+        help="Shared prime-context-seed.json (same for all models).",
+    )
+    parser.add_argument(
+        "--source-root", default=".", help="Target project root to copy per model."
+    )
+    parser.add_argument(
+        "--model",
+        action="append",
+        dest="models",
+        default=[],
+        help="Model spec provider:model (repeatable, >=2 required).",
+    )
     parser.add_argument("--batch-root", default=None, help="Output root for the batch.")
-    parser.add_argument("--cost-budget", type=float, default=None, help="Per-run cost budget (USD).")
-    parser.add_argument("--per-run-timeout", type=float, default=None,
-                        help="Max seconds per model run; on timeout the run is marked failed and "
-                             "the batch continues (default: no timeout).")
-    parser.add_argument("--isolation", choices=["copy", "worktree"], default="copy",
-                        help="copy = full tree incl. dirty files; worktree = git HEAD only.")
-    parser.add_argument("--dry-run", action="store_true", help="Print plan; do not copy or execute.")
+    parser.add_argument(
+        "--cost-budget", type=float, default=None, help="Per-run cost budget (USD)."
+    )
+    parser.add_argument(
+        "--per-run-timeout",
+        type=float,
+        default=None,
+        help="Max seconds per model run; on timeout the run is marked failed and "
+        "the batch continues (default: no timeout).",
+    )
+    parser.add_argument(
+        "--isolation",
+        choices=["copy", "worktree"],
+        default="copy",
+        help="copy = full tree incl. dirty files; worktree = git HEAD only.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print plan; do not copy or execute."
+    )
+    parser.add_argument(
+        "--deploy-after",
+        action="store_true",
+        help="After ranking, run the deploy harness over the batch (boots UNTRUSTED "
+        "generated code in throwaway venvs); writes deploy-report.{json,md}.",
+    )
     args = parser.parse_args(argv)
 
     models = list(dict.fromkeys(args.models))
@@ -57,9 +98,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
 
     run_comparison(
-        seed=seed, source_root=source_root, models=models, batch_root=batch_root,
-        cost_budget=args.cost_budget, per_run_timeout=args.per_run_timeout,
-        isolation=args.isolation, dry_run=args.dry_run,
+        seed=seed,
+        source_root=source_root,
+        models=models,
+        batch_root=batch_root,
+        cost_budget=args.cost_budget,
+        per_run_timeout=args.per_run_timeout,
+        isolation=args.isolation,
+        dry_run=args.dry_run,
+        deploy_after=args.deploy_after,
     )
     return 0
 

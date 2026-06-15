@@ -147,13 +147,19 @@ def materialize_sandbox(
 
 
 def build_command(
-    seed: Path, workdir: Path, output: Path, model: str, cost_budget: Optional[float],
-    repair_mode: str = "apply", expose_defects: bool = False,
+    seed: Path,
+    workdir: Path,
+    output: Path,
+    model: str,
+    cost_budget: Optional[float],
+    repair_mode: str = "apply",
+    expose_defects: bool = False,
 ) -> list[str]:
     """Per-model prime workflow command with the model pinned (FR-5/6/7/8).
 
     ``repair_mode`` / ``expose_defects`` (FR-B5) thread the quality-observability flags into the
-    cell so a matrix run can drive shadow + expose; both default-off (identical to today)."""
+    cell so a matrix run can drive shadow + expose; both default-off (identical to today).
+    """
     cmd = [
         "python3",
         str(PRIME_WORKFLOW_SCRIPT),
@@ -173,9 +179,9 @@ def build_command(
     if cost_budget is not None:
         cmd += ["--cost-budget", str(cost_budget)]
     if repair_mode and repair_mode != "apply":
-        cmd += ["--repair-mode", repair_mode]   # FR-B5: shadow observer
+        cmd += ["--repair-mode", repair_mode]  # FR-B5: shadow observer
     if expose_defects:
-        cmd += ["--expose-defects"]             # FR-B5: defect ledger + no advisory downgrade
+        cmd += ["--expose-defects"]  # FR-B5: defect ledger + no advisory downgrade
     return cmd
 
 
@@ -409,12 +415,18 @@ def run_comparison(
     per_run_timeout: Optional[float] = None,
     isolation: str = "copy",
     dry_run: bool = False,
+    deploy_after: bool = False,
     log: Callable[[str], None] = print,
 ) -> Optional[dict[str, Any]]:
     """Run the serial multi-model comparison. Returns the report payload (None for dry-run).
 
     Inputs are assumed validated (see ``validate_inputs``). Writes comparison-report.{md,json}
     to ``batch_root`` on a real run.
+
+    ``deploy_after`` (default ``False`` — opt-in only): after the comparison report is written,
+    run the deploy harness over the same batch root (``startd8 deploy batch``), producing
+    ``deploy-report.{json,md}`` joined to the comparison by verbatim model id. Off by default
+    because it creates throwaway venvs, pip-installs each app, and boots untrusted generated code.
     """
     models = list(dict.fromkeys(models))  # de-dupe, preserve order
     seed = seed.resolve()
@@ -521,4 +533,27 @@ def run_comparison(
     (batch_root / "comparison-report.md").write_text(md, encoding="utf-8")
     log("\n" + md)
     log(f"Report: {batch_root / 'comparison-report.md'}")
+
+    if deploy_after:
+        _deploy_after(batch_root, log)
     return payload
+
+
+def _deploy_after(batch_root: Path, log: Callable[[str], None]) -> None:
+    """Opt-in: run the deploy harness over the just-written batch (UNTRUSTED code — see flag doc)."""
+    log("\n=== deploy harness (deploy_after=True) ===")
+    try:
+        from startd8.deploy_harness import deploy_batch
+
+        report = deploy_batch(batch_root, join=True)
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 — never let deploy failure mask the comparison result
+        log(f"  deploy harness failed (non-fatal): {exc}")
+        return
+    ru = report.get("rollup", {}).get("passed", {})
+    log(
+        f"  deployed {report.get('app_count', 0)} app(s) — "
+        f"boot:{ru.get('boot', 0)} health:{ru.get('health', 0)} smoke:{ru.get('smoke', 0)} passed"
+    )
+    log(f"  Deploy report: {batch_root / 'deploy-report.md'}")

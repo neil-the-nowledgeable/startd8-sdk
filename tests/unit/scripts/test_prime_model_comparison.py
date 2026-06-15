@@ -4,6 +4,7 @@ Covers: slug derivation, command construction (model pinning, no routing flags),
 metric extraction over fixture artifacts, ranking, and a mock end-to-end batch.
 Plan: docs/design/PRIME_MODEL_COMPARISON_PLAN.md (S1-S7).
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -16,7 +17,11 @@ import pytest
 @pytest.fixture()
 def harness():
     """Import run_prime_model_comparison.py as a module."""
-    script = Path(__file__).resolve().parents[3] / "scripts" / "run_prime_model_comparison.py"
+    script = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "run_prime_model_comparison.py"
+    )
     assert script.is_file(), f"Script not found: {script}"
     spec = importlib.util.spec_from_file_location("run_prime_model_comparison", script)
     mod = importlib.util.module_from_spec(spec)
@@ -26,17 +31,22 @@ def harness():
 
 # --------------------------------------------------------------------------- slug (S1)
 
-@pytest.mark.parametrize("spec,expected", [
-    ("anthropic:claude-opus-4-8", "anthropic-claude-opus-4-8"),
-    ("openai:gpt-5.5", "openai-gpt-5.5"),
-    ("gemini:gemini-2.5-pro", "gemini-gemini-2.5-pro"),
-    ("mock:mock-model", "mock-mock-model"),
-])
+
+@pytest.mark.parametrize(
+    "spec,expected",
+    [
+        ("anthropic:claude-opus-4-8", "anthropic-claude-opus-4-8"),
+        ("openai:gpt-5.5", "openai-gpt-5.5"),
+        ("gemini:gemini-2.5-pro", "gemini-gemini-2.5-pro"),
+        ("mock:mock-model", "mock-mock-model"),
+    ],
+)
 def test_slug(harness, spec, expected):
     assert harness.slug(spec) == expected
 
 
 # --------------------------------------------------------------------------- command (S3, FR-7/8)
+
 
 def test_build_command_pins_model_and_omits_routing(harness, tmp_path):
     cmd = harness.build_command(
@@ -60,33 +70,69 @@ def test_build_command_pins_model_and_omits_routing(harness, tmp_path):
 
 
 def test_build_command_omits_budget_when_none(harness, tmp_path):
-    cmd = harness.build_command(tmp_path / "s", tmp_path / "w", tmp_path / "o", "mock:m", None)
+    cmd = harness.build_command(
+        tmp_path / "s", tmp_path / "w", tmp_path / "o", "mock:m", None
+    )
     assert "--cost-budget" not in cmd
 
 
 # --------------------------------------------------------------------------- extraction (S4, FR-9/10)
 
-def _write_artifacts(output_dir: Path, *, processed, succeeded, failed, success,
-                     disk_scores, semantic_counts, total_usd, avg_assembly_delta=0.1,
-                     aggregate_score=0.8):
+
+def _write_artifacts(
+    output_dir: Path,
+    *,
+    processed,
+    succeeded,
+    failed,
+    success,
+    disk_scores,
+    semantic_counts,
+    total_usd,
+    avg_assembly_delta=0.1,
+    aggregate_score=0.8,
+):
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "prime-result.json").write_text(json.dumps({
-        "processed": processed, "succeeded": succeeded, "failed": failed, "success": success,
-    }))
+    (output_dir / "prime-result.json").write_text(
+        json.dumps(
+            {
+                "processed": processed,
+                "succeeded": succeeded,
+                "failed": failed,
+                "success": success,
+            }
+        )
+    )
     features = [
         {"disk_quality_score": d, "semantic_error_count": s, "success": True}
         for d, s in zip(disk_scores, semantic_counts)
     ]
-    (output_dir / "prime-postmortem-report.json").write_text(json.dumps({
-        "total_features": processed, "successful_features": succeeded, "failed_features": failed,
-        "aggregate_score": aggregate_score, "avg_assembly_delta": avg_assembly_delta,
-        "features": features, "cost_summary": {"total_usd": total_usd},
-    }))
+    (output_dir / "prime-postmortem-report.json").write_text(
+        json.dumps(
+            {
+                "total_features": processed,
+                "successful_features": succeeded,
+                "failed_features": failed,
+                "aggregate_score": aggregate_score,
+                "avg_assembly_delta": avg_assembly_delta,
+                "features": features,
+                "cost_summary": {"total_usd": total_usd},
+            }
+        )
+    )
 
 
 def test_extract_metrics_full(harness, tmp_path):
-    _write_artifacts(tmp_path, processed=4, succeeded=3, failed=1, success=True,
-                     disk_scores=[1.0, 0.8, 0.6], semantic_counts=[0, 1, 2], total_usd=0.12)
+    _write_artifacts(
+        tmp_path,
+        processed=4,
+        succeeded=3,
+        failed=1,
+        success=True,
+        disk_scores=[1.0, 0.8, 0.6],
+        semantic_counts=[0, 1, 2],
+        total_usd=0.12,
+    )
     m = harness.extract_metrics(tmp_path)
     assert m["processed"] == 4 and m["succeeded"] == 3 and m["failed"] == 1
     assert m["completion_rate"] == pytest.approx(0.75)
@@ -100,12 +146,24 @@ def test_extract_metrics_full(harness, tmp_path):
 
 def test_extract_metrics_reads_prime_result_cost_and_gate(harness, tmp_path):
     """Cost + cross-file gate come from prime-result.json, not the (often absent) postmortem."""
-    tmp_path.joinpath("prime-result.json").write_text(json.dumps({
-        "processed": 5, "succeeded": 5, "failed": 0, "success": True,
-        "total_cost_usd": 0.37, "total_input_tokens": 142918, "total_output_tokens": 38143,
-        "cross_file_gate": {"verdict": "FAIL", "score": 0.396,
-                            "cross_file_failures": [{"feature_id": "PI-004"}]},
-    }))
+    tmp_path.joinpath("prime-result.json").write_text(
+        json.dumps(
+            {
+                "processed": 5,
+                "succeeded": 5,
+                "failed": 0,
+                "success": True,
+                "total_cost_usd": 0.37,
+                "total_input_tokens": 142918,
+                "total_output_tokens": 38143,
+                "cross_file_gate": {
+                    "verdict": "FAIL",
+                    "score": 0.396,
+                    "cross_file_failures": [{"feature_id": "PI-004"}],
+                },
+            }
+        )
+    )
     m = harness.extract_metrics(tmp_path)
     assert m["total_cost"] == pytest.approx(0.37)
     assert m["cost_source"] == "prime_result"
@@ -118,10 +176,24 @@ def test_extract_metrics_reads_prime_result_cost_and_gate(harness, tmp_path):
 def test_rank_prefers_fewer_gate_failures_when_no_disk_score(harness):
     """With no postmortem disk score, fewer cross-file gate failures wins."""
     results = [
-        {"model": "more_fails", "metrics": {"mean_disk_quality_score": None, "gate_score": 0.40,
-                                            "gate_failures": 2, "cost_per_succeeded_feature": 0.27}},
-        {"model": "fewer_fails", "metrics": {"mean_disk_quality_score": None, "gate_score": 0.396,
-                                             "gate_failures": 1, "cost_per_succeeded_feature": 0.07}},
+        {
+            "model": "more_fails",
+            "metrics": {
+                "mean_disk_quality_score": None,
+                "gate_score": 0.40,
+                "gate_failures": 2,
+                "cost_per_succeeded_feature": 0.27,
+            },
+        },
+        {
+            "model": "fewer_fails",
+            "metrics": {
+                "mean_disk_quality_score": None,
+                "gate_score": 0.396,
+                "gate_failures": 1,
+                "cost_per_succeeded_feature": 0.07,
+            },
+        },
     ]
     assert [r["model"] for r in harness.rank_models(results)][0] == "fewer_fails"
 
@@ -138,11 +210,30 @@ def test_extract_metrics_missing_artifacts(harness, tmp_path):
 
 # --------------------------------------------------------------------------- ranking (S6, FR-11)
 
+
 def test_rank_by_disk_quality_then_cost(harness):
     results = [
-        {"model": "low", "metrics": {"mean_disk_quality_score": 0.5, "cost_per_succeeded_feature": 0.01}},
-        {"model": "high", "metrics": {"mean_disk_quality_score": 0.9, "cost_per_succeeded_feature": 0.05}},
-        {"model": "mid", "metrics": {"mean_disk_quality_score": 0.7, "cost_per_succeeded_feature": 0.02}},
+        {
+            "model": "low",
+            "metrics": {
+                "mean_disk_quality_score": 0.5,
+                "cost_per_succeeded_feature": 0.01,
+            },
+        },
+        {
+            "model": "high",
+            "metrics": {
+                "mean_disk_quality_score": 0.9,
+                "cost_per_succeeded_feature": 0.05,
+            },
+        },
+        {
+            "model": "mid",
+            "metrics": {
+                "mean_disk_quality_score": 0.7,
+                "cost_per_succeeded_feature": 0.02,
+            },
+        },
     ]
     ranked = harness.rank_models(results)
     assert [r["model"] for r in ranked] == ["high", "mid", "low"]
@@ -150,38 +241,87 @@ def test_rank_by_disk_quality_then_cost(harness):
 
 def test_rank_tiebreak_on_cost(harness):
     results = [
-        {"model": "pricey", "metrics": {"mean_disk_quality_score": 0.8, "cost_per_succeeded_feature": 0.10}},
-        {"model": "cheap", "metrics": {"mean_disk_quality_score": 0.8, "cost_per_succeeded_feature": 0.02}},
+        {
+            "model": "pricey",
+            "metrics": {
+                "mean_disk_quality_score": 0.8,
+                "cost_per_succeeded_feature": 0.10,
+            },
+        },
+        {
+            "model": "cheap",
+            "metrics": {
+                "mean_disk_quality_score": 0.8,
+                "cost_per_succeeded_feature": 0.02,
+            },
+        },
     ]
     assert [r["model"] for r in harness.rank_models(results)][0] == "cheap"
 
 
 def test_rank_none_disk_sorts_last(harness):
     results = [
-        {"model": "noartifacts", "metrics": {"mean_disk_quality_score": None, "cost_per_succeeded_feature": None}},
-        {"model": "real", "metrics": {"mean_disk_quality_score": 0.3, "cost_per_succeeded_feature": 0.5}},
+        {
+            "model": "noartifacts",
+            "metrics": {
+                "mean_disk_quality_score": None,
+                "cost_per_succeeded_feature": None,
+            },
+        },
+        {
+            "model": "real",
+            "metrics": {
+                "mean_disk_quality_score": 0.3,
+                "cost_per_succeeded_feature": 0.5,
+            },
+        },
     ]
     assert [r["model"] for r in harness.rank_models(results)][0] == "real"
 
 
 # --------------------------------------------------------------------------- report (S6)
 
+
 def test_build_markdown_has_columns_and_winner(harness):
     payload = {
-        "batch_id": "b1", "generated_at": "2026-06-01T00:00:00Z", "seed": "/s.json",
+        "batch_id": "b1",
+        "generated_at": "2026-06-01T00:00:00Z",
+        "seed": "/s.json",
         "ranked": [
-            {"model": "anthropic:claude-opus-4-8",
-             "metrics": {"status": "success", "processed": 3, "succeeded": 3, "failed": 0,
-                         "completion_rate": 1.0, "mean_disk_quality_score": 0.95,
-                         "aggregate_score": 0.9, "avg_assembly_delta": 0.0,
-                         "semantic_error_count": 0, "total_cost": 0.2,
-                         "cost_per_succeeded_feature": 0.066, "artifacts_found": True}},
-            {"model": "openai:gpt-5.5",
-             "metrics": {"status": "success", "processed": 3, "succeeded": 2, "failed": 1,
-                         "completion_rate": 0.66, "mean_disk_quality_score": 0.7,
-                         "aggregate_score": 0.6, "avg_assembly_delta": 0.1,
-                         "semantic_error_count": 2, "total_cost": 0.1,
-                         "cost_per_succeeded_feature": 0.05, "artifacts_found": True}},
+            {
+                "model": "anthropic:claude-opus-4-8",
+                "metrics": {
+                    "status": "success",
+                    "processed": 3,
+                    "succeeded": 3,
+                    "failed": 0,
+                    "completion_rate": 1.0,
+                    "mean_disk_quality_score": 0.95,
+                    "aggregate_score": 0.9,
+                    "avg_assembly_delta": 0.0,
+                    "semantic_error_count": 0,
+                    "total_cost": 0.2,
+                    "cost_per_succeeded_feature": 0.066,
+                    "artifacts_found": True,
+                },
+            },
+            {
+                "model": "openai:gpt-5.5",
+                "metrics": {
+                    "status": "success",
+                    "processed": 3,
+                    "succeeded": 2,
+                    "failed": 1,
+                    "completion_rate": 0.66,
+                    "mean_disk_quality_score": 0.7,
+                    "aggregate_score": 0.6,
+                    "avg_assembly_delta": 0.1,
+                    "semantic_error_count": 2,
+                    "total_cost": 0.1,
+                    "cost_per_succeeded_feature": 0.05,
+                    "artifacts_found": True,
+                },
+            },
         ],
     }
     md = harness.build_markdown(payload)
@@ -193,14 +333,25 @@ def test_build_markdown_has_columns_and_winner(harness):
 
 # --------------------------------------------------------------------------- mock end-to-end (S2/S3 wiring)
 
+
 def test_main_dry_run_prints_plan(harness, tmp_path, capsys):
     seed = tmp_path / "seed.json"
     seed.write_text("{}")
-    rc = harness.main([
-        "--seed", str(seed), "--source-root", str(tmp_path),
-        "--model", "mock:a", "--model", "mock:b",
-        "--batch-root", str(tmp_path / "batch"), "--dry-run",
-    ])
+    rc = harness.main(
+        [
+            "--seed",
+            str(seed),
+            "--source-root",
+            str(tmp_path),
+            "--model",
+            "mock:a",
+            "--model",
+            "mock:b",
+            "--batch-root",
+            str(tmp_path / "batch"),
+            "--dry-run",
+        ]
+    )
     assert rc == 0
     out = capsys.readouterr().out
     assert "mock:a" in out and "mock:b" in out
@@ -217,14 +368,25 @@ def test_main_requires_two_models(harness, tmp_path):
 def test_main_rejects_batch_root_equal_source(harness, tmp_path):
     seed = tmp_path / "seed.json"
     seed.write_text("{}")
-    rc = harness.main([
-        "--seed", str(seed), "--source-root", str(tmp_path),
-        "--model", "mock:a", "--model", "mock:b", "--batch-root", str(tmp_path),
-    ])
+    rc = harness.main(
+        [
+            "--seed",
+            str(seed),
+            "--source-root",
+            str(tmp_path),
+            "--model",
+            "mock:a",
+            "--model",
+            "mock:b",
+            "--batch-root",
+            str(tmp_path),
+        ]
+    )
     assert rc == 2
 
 
 # --------------------------------------------------------------------------- H1: nested batch exclusion
+
 
 def test_ignore_factory_excludes_nested_batch_root(harness, tmp_path):
     source = tmp_path / "proj"
@@ -278,8 +440,87 @@ def test_materialize_copy_excludes_stale_run_state(harness, tmp_path):
 
 # --------------------------------------------------------------------------- M1: timeout
 
+
 def test_run_command_timeout_marks_failed(harness, tmp_path):
     # A command that sleeps longer than the timeout.
-    result = harness.run_command(["python3", "-c", "import time; time.sleep(5)"], tmp_path, timeout=0.5)
+    result = harness.run_command(
+        ["python3", "-c", "import time; time.sleep(5)"], tmp_path, timeout=0.5
+    )
     assert result["timed_out"] is True
     assert result["returncode"] == 124
+
+
+# --------------------------------------------------------------------------- deploy_after (opt-in)
+
+
+def test_deploy_after_calls_batch_and_logs(monkeypatch, tmp_path):
+    import startd8.model_comparison as mc
+
+    calls = {}
+
+    def fake_deploy_batch(root, *, join):
+        calls["root"], calls["join"] = root, join
+        return {
+            "app_count": 2,
+            "rollup": {"passed": {"boot": 2, "health": 1, "smoke": 0}},
+        }
+
+    monkeypatch.setattr("startd8.deploy_harness.deploy_batch", fake_deploy_batch)
+    logs = []
+    mc._deploy_after(tmp_path, logs.append)
+    assert calls == {"root": tmp_path, "join": True}
+    assert any("deployed 2 app" in line for line in logs)
+
+
+def test_deploy_after_swallows_errors_non_fatal(monkeypatch, tmp_path):
+    def boom(*a, **k):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr("startd8.deploy_harness.deploy_batch", boom)
+    logs = []
+    mc_mod = __import__("startd8.model_comparison", fromlist=["_deploy_after"])
+    mc_mod._deploy_after(tmp_path, logs.append)  # must not raise
+    assert any("non-fatal" in line for line in logs)
+
+
+def test_script_threads_deploy_after_flag(harness, monkeypatch, tmp_path):
+    seed = tmp_path / "seed.json"
+    seed.write_text("{}", encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(harness, "validate_inputs", lambda *a, **k: None)
+    monkeypatch.setattr(harness, "run_comparison", lambda **k: captured.update(k))
+    rc = harness.main(
+        [
+            "--seed",
+            str(seed),
+            "--source-root",
+            str(tmp_path),
+            "--model",
+            "mock:a",
+            "--model",
+            "mock:b",
+            "--deploy-after",
+        ]
+    )
+    assert rc == 0 and captured["deploy_after"] is True
+
+
+def test_script_deploy_after_defaults_false(harness, monkeypatch, tmp_path):
+    seed = tmp_path / "seed.json"
+    seed.write_text("{}", encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(harness, "validate_inputs", lambda *a, **k: None)
+    monkeypatch.setattr(harness, "run_comparison", lambda **k: captured.update(k))
+    rc = harness.main(
+        [
+            "--seed",
+            str(seed),
+            "--source-root",
+            str(tmp_path),
+            "--model",
+            "mock:a",
+            "--model",
+            "mock:b",
+        ]
+    )
+    assert rc == 0 and captured["deploy_after"] is False
