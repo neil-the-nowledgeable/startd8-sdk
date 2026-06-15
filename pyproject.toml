@@ -55,6 +55,22 @@ validation = ["jsonschema>=4.0.0"]
 # Lower bound must be >= the vendored scip_pb2 gencode version (6.33.5) — an older
 # runtime raises VersionError("Runtime version cannot be older than the linked gencode").
 code-observability = ["protobuf>=6.33.5"]
+# Benchmark CodeBLEU contamination/memorization probe (FR-47, benchmark_matrix.contamination).
+# Optional + heavy; the probe degrades gracefully (FR-32) when absent. Pinned to the 0.23.x
+# tree-sitter line, which works for python/go/java/javascript. CAVEATS: (1) codebleu 0.7.0
+# nominally pins tree-sitter<0.23 — 0.23.x runs in practice but pip will warn; (2) on Python
+# 3.14 C# can't be satisfied (its 0.23.x grammar ABI needs a newer core than codebleu allows,
+# and the older packs don't build for 3.14) so C# degrades — a clean 5/5 needs Python <=3.11;
+# (3) do NOT co-install with the `csharp` extra (it pins tree-sitter>=0.24.0, which conflicts).
+contamination = [
+    "codebleu==0.7.0",
+    "tree-sitter>=0.23,<0.24",
+    "tree-sitter-python>=0.23,<0.24",
+    "tree-sitter-go>=0.23,<0.24",
+    "tree-sitter-java>=0.23,<0.24",
+    "tree-sitter-javascript>=0.23,<0.24",
+    "tree-sitter-c-sharp>=0.23,<0.24",
+]
 otel = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
