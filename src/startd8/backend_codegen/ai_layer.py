@@ -28,6 +28,7 @@ import yaml
 from ..frontend_codegen.schema_renderer import schema_sha256
 from ..languages.prisma_parser import parse_prisma_schema
 from ._headers import header_ai_layer
+from .identity import IdentityKey, resolve_identity
 
 # Prisma scalar -> a *builtin* Python type for the edge schema (AI tool input). Non-builtins and
 # unknowns collapse to ``str`` so generated edge schemas stay dependency-free (just pydantic).
@@ -856,18 +857,44 @@ def _render_pass_scoped(ps: AiPass, schema, source_binding: Optional[str]) -> st
     return "\n".join(lines)
 
 
+def _row_identity(ps: "AiPass") -> IdentityKey:
+    """The per-row dedup identity for a (text/read) pass — the ONE decision point (FR-IMP-2).
+
+    Routes the legacy ``dedup_by`` key through :func:`resolve_identity` so a single place maps a
+    pass to its row-dedup shape. Source-scope is *not* decided here — it is wired separately in
+    :func:`render_ai_pass` via ``source_binding``/``effective_source_binding`` (the source-bound
+    harness), and scoped passes use their own renderer. Today only ``name`` (default) and ``field``
+    (``dedup_by``) reach this tier, so the emitted strings are unchanged (byte-identity gate).
+    """
+    return resolve_identity(dedup_by=ps.dedup_by, where=f"ai_passes.yaml pass {ps.name!r}")
+
+
+def _row_persist_parts(key: IdentityKey) -> Tuple[List[str], str, Optional[str]]:
+    """``(dedup_const_lines, persist_helper_source, dedup_field)`` for a row-dedup key.
+
+    A ``field`` key emits the ``_DEDUP_FIELD`` constant + the confirmed-aware dedup helper; every
+    other row kind (``name`` default) emits the name-based helper unchanged. Byte-identical to the
+    pre-consolidation ``_PERSIST_DEDUP_HELPER if ps.dedup_by else _PERSIST_HELPER`` selection.
+    """
+    field = key.dedup_field if key.kind == "field" else None
+    if field:
+        return (
+            [f"_DEDUP_FIELD = {field!r}  # F-11: re-generation dedup key (FR-8)", ""],
+            _PERSIST_DEDUP_HELPER,
+            field,
+        )
+    return ([], _PERSIST_HELPER, None)
+
+
 def _render_pass_text(ps: AiPass, source_binding: Optional[str] = None) -> str:
     if source_binding:  # SPIKE (FR-IMP-4/5): source-bound variant (derived or explicit)
         return _render_pass_text_bound(ps, source_binding)
     out = ps.output_entities[0]
-    # F-11: a `dedup_by` pass emits a `_DEDUP_FIELD` constant + the confirmed-aware persist helper;
-    # without it the name-based helper is emitted unchanged (byte-identical for existing passes).
-    dedup_const = [f"_DEDUP_FIELD = {ps.dedup_by!r}  # F-11: re-generation dedup key (FR-8)", ""] \
-        if ps.dedup_by else []
-    persist_helper = _PERSIST_DEDUP_HELPER if ps.dedup_by else _PERSIST_HELPER
+    # FR-IMP-2: the per-row identity drives the emitted persist shape (one decision point).
+    dedup_const, persist_helper, dedup_field = _row_persist_parts(_row_identity(ps))
     docstring = (
-        f'    """Free-text → a {out} (source=ai, confirmed=false), deduped by {ps.dedup_by!r}."""'
-        if ps.dedup_by
+        f'    """Free-text → a {out} (source=ai, confirmed=false), deduped by {dedup_field!r}."""'
+        if dedup_field
         else f'    """Free-text → a {out} (source=ai, confirmed=false), name-deduped."""'
     )
     lines = [
@@ -926,10 +953,10 @@ def _render_pass_read(ps: AiPass) -> str:
     result_fields = [
         f"    {_plural_field(e)}: list[{e}Edge] = Field(default_factory=list)" for e in outputs
     ]
-    # F-11: a `dedup_by` pass emits a `_DEDUP_FIELD` constant + the confirmed-aware persist helper
-    # (applied to every output entity that carries the field). Absent → name-based, byte-identical.
-    dedup_const = [f"_DEDUP_FIELD = {ps.dedup_by!r}  # F-11: re-generation dedup key (FR-8)", ""] \
-        if ps.dedup_by else []
+    # FR-IMP-2: the per-row identity drives the emitted persist shape (one decision point). A
+    # `field` key emits `_DEDUP_FIELD` + the confirmed-aware helper (applied to every output entity
+    # carrying the field); otherwise the name-based helper, byte-identical for existing passes.
+    dedup_const, read_persist_helper, _ = _row_persist_parts(_row_identity(ps))
     lines = [
         "from __future__ import annotations",
         "",
@@ -989,7 +1016,7 @@ def _render_pass_read(ps: AiPass) -> str:
         "",
         _SUMMARY_HELPER,
         "",
-        _PERSIST_DEDUP_HELPER if ps.dedup_by else _PERSIST_HELPER,
+        read_persist_helper,
         "",
         f"__all__ = [{ps.module!r}]",
         "",
