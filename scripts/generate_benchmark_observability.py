@@ -30,6 +30,7 @@ from startd8.benchmark_matrix.observability import (  # noqa: E402
     write_harness_runbook,
 )
 from startd8.benchmark_matrix.onboarding import generate_onboarding_portal  # noqa: E402
+from startd8.benchmark_matrix.metrics_export import write_run_metrics  # noqa: E402
 
 _DEFAULT_MANIFEST = (
     Path(__file__).resolve().parent.parent
@@ -50,6 +51,9 @@ def main() -> int:
     if args.run_dir:
         d = generate_run_dashboard(args.run_dir, args.out, provision=args.provision)
         print(f"[SRE] run dashboard: {d['uid']} ({d['mode']}, {d['panel_count']} panels)")
+        mx = write_run_metrics(args.run_dir, args.out)
+        print(f"[Data] {mx['series']} metric series → {mx['path']} "
+              f"(Prometheus textfile; point a scraper at it to render the dashboard)")
     else:
         print("[SRE] run dashboard: skipped (no --run-dir)")
 
