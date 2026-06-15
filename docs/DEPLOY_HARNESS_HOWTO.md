@@ -171,6 +171,23 @@ $ startd8 deploy batch ./batch-root
   report → ./batch-root/deploy-report.md
 ```
 
+### Auto-run from a model comparison
+
+`startd8 compare-models` can run the deploy harness automatically as a final step, so a single
+command produces both the code-quality ranking *and* the deploy outcomes (joined by model id):
+
+```bash
+startd8 compare-models --seed seed.json -m anthropic:opus -m openai:gpt --batch-root ./out --deploy-after
+```
+
+`--deploy-after` is **off by default** (it boots untrusted generated code in throwaway venvs). When
+set, after `comparison-report.{json,md}` is written it runs `deploy_batch` over the same batch root
+and writes `deploy-report.{json,md}` alongside it. The deploy step is fail-safe — a failure there is
+logged but never changes the comparison result. The same flag exists on
+`scripts/run_prime_model_comparison.py` and as `run_comparison(..., deploy_after=True)`.
+
+You can also run it after the fact on a finished batch: `startd8 deploy batch ./out`.
+
 ---
 
 ## Library API
