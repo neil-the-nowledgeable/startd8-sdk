@@ -20,20 +20,33 @@ parallel team, so Phase 0 front-loads coordination and every phase re-checks `or
 |------|--------|
 | 0.1 | `git fetch origin main`; branch `feat/import-path` off **current** `origin/main` in a fresh worktree (pin `PYTHONPATH=<wt>/src` for tests — `reference_multiworktree_env`). |
 | 0.2 | **OQ-IMP-D RESOLVED (2026-06-15): first consumer = strtd8** (content-import FR-13/15, formats `{json, text}`). Produce `OQ-IMP-D-decision.md` pinning the strtd8 acceptance fixture (§6 map); navig8/generator are later consumers, not blockers. |
-| 0.3 | Post the **FR-IMP-2 unification proposal** (Phase 1 design below) to the AI-layer owner; agree the seam before touching `ai_layer.py`. |
+| 0.3 | **Seam DECIDED 2026-06-15 (see Phase 1):** "one declaration, mode-specific application." Proceed — land via a coordinated PR onto current `origin/main` and fix follow-on collisions, rather than block on prior sign-off. Notify the AI-layer owner with the PR, not before it. |
 
 ## Phase 1 — FR-IMP-2: unify the dedup keys into ONE identity key *(foundational; coordinated)*
 
-> Today `AiPass` has `source_binding` (source-scope) **and** `dedup_by` (single-field), each with its
-> own persist helper. Collapse to one declared **identity key**, defined once, consumed by the AI
-> persist path *and* (Phase 3) the `from_json` path. **Back-compat is the hard constraint.**
+> Today `AiPass` emits **four** persist shapes at **two layers**: per-row `_PERSIST_HELPER` (name) +
+> `_PERSIST_DEDUP_HELPER` (`dedup_by`); harness-level `_PERSIST_SOURCE_HELPER` (`source_binding`, a
+> once-per-run source-scope pre-clear); and the `is_scoped` child-FK `_render_pass_scoped`.
 
-| Feature | Target files | Est. LOC | Notes |
-|---------|-------------|----------|-------|
-| F-101 `IdentityKey` model + resolver | **new** `manifest_extraction/identity.py` (or `backend_codegen/identity.py`) | ~90 | `IdentityKey(kind: id\|field\|composite\|source\|name\|none, fields: tuple, provenance: str\|None)`; `resolve_identity(...)` from manifest + schema. One source of truth. |
-| F-102 map `source_binding`/`dedup_by` → `IdentityKey` (back-compat) | `ai_layer.py` (`AiPass`, `parse_ai_passes`) | ~40 | `source_binding` → `source:<field>`; `dedup_by` → `field:<name>`; neither → `name` (today's default). Keys stay accepted; deprecation note only. |
-| F-103 single parameterized persist helper | `ai_layer.py` (replace `_persist`/`_persist_source`/`_persist_dedup` shared strings) | ~80 | One emitted `_persist(session, model, edge, *, identity)` dispatching on `IdentityKey.kind`. **Verify byte-identity** of generated harnesses for existing `source_binding`/`dedup_by` passes (the regression gate). |
-| F-104 (optional) `identity:` first-class manifest key | `ai_passes.yaml` parse + `imports.yaml` (Phase 2) | ~30 | Lets a pass/import declare `identity:` directly; the legacy keys map onto it. |
+> **SEAM DECISION (2026-06-15): "one declaration, mode-specific application."** A single
+> `_persist(..., identity)` cannot swallow all four — `source` dedups at the whole-source layer and
+> `scoped` is a child-FK shape, neither per-row. So:
+> - **Layer 1 (unified):** one `IdentityKey` declaration + `resolve_identity()` in a new `identity.py`,
+>   pure, **no `ai_layer.py` edit**, consumed by the AI persist path *and* the `from_json` path (P3).
+> - **Layer 2 (mode-specific):** consolidate ONLY the same-shape per-row helpers (name + `dedup_by`)
+>   into one row-level `_persist` dispatching on `kind ∈ {name, field, composite}`.
+>   `_PERSIST_SOURCE_HELPER` and `_render_pass_scoped` stay their own emission paths but **read** the
+>   same `IdentityKey` — so those harnesses remain **byte-identical** (untouched code).
+> - **Back-compat is the hard constraint.** Only the `dedup_by` path is re-expressed through the unified
+>   row helper, and its generated output must diff byte-identical too.
+
+| Feature | Sub-phase | Target files | Est. LOC | Notes |
+|---------|-----------|-------------|----------|-------|
+| F-101 `IdentityKey` model + resolver | **P1a** | **new** `backend_codegen/identity.py` | ~90 | `IdentityKey(kind: id\|field\|composite\|source\|name\|none, fields: tuple, provenance: str\|None)`; `resolve_identity(manifest_entry, schema)`. Pure, unit-tested standalone, **no ai_layer edit** → Phase 3 depends on P1a only. |
+| F-102 map `source_binding`/`dedup_by` → `IdentityKey` (back-compat, **3 source states**) | **P1b** | `ai_layer.py` (`AiPass`, `parse_ai_passes`) | ~40 | `dedup_by` → `field:<name>`; **explicit** `source_binding` → `source:<field>`; **schema-derived** binding (`effective_source_binding`, no key) → `source:<derived>`; `source_binding: none` → disabled; only a truly bindingless pass → `name`. Legacy keys stay accepted; deprecation note only. |
+| F-103 consolidate the **per-row** helpers only | **P1b** | `ai_layer.py` (merge `_PERSIST_HELPER` + `_PERSIST_DEDUP_HELPER`) | ~60 | One row-level `_persist` dispatching on `kind ∈ {name, field, composite}`. **Leave `_PERSIST_SOURCE_HELPER` + `_render_pass_scoped` untouched.** Byte-identity diff on every existing manifest is the regression gate. |
+| F-105 behavioral-parity gate | **P1b** | `tests/test_import_identity.py` (emitted) | ~50 | Exercise confirmed-non-touch / unconfirmed-supersede / source-scope count-stability — byte-identity alone is insufficient (R3-S4). |
+| F-104 (optional) `identity:` first-class manifest key | **P1b** | `ai_passes.yaml` parse + `imports.yaml` (Phase 2) | ~30 | Lets a pass/import declare `identity:` directly; legacy keys map onto it. |
 
 **Verify:** existing `source_binding`/`dedup_by` manifests emit **byte-identical** generated code
 (diff vs pre-change); new `identity: id|[a,b]|source:f|none` each behave per FR-IMP-2; the
