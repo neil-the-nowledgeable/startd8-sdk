@@ -490,6 +490,38 @@ def views(
     console.print(f"[green]wrote[/green] {written} view file(s) under {out}")
 
 
+def _report_contract_gate(res, *, live_text, json_out: bool) -> None:
+    """Print the ``generate contract`` gate result — human-readable or ``--json`` (M4 extraction)."""
+    if json_out:
+        import json as _json
+        console.print_json(_json.dumps({
+            "ok": res.ok, "round_trips": res.round_trips, "models": res.models,
+            "parity_drift": list(res.parity_drift),
+            "errors": list(res.errors),            # H1/H3 structural (block)
+            "warnings": list(res.warnings),        # H4 advisory
+            "unrenderable": [f"{u.entity}.{u.field}: {u.reason}" for u in res.unrenderable],
+            "draft_path": res.draft_path,
+        }))
+        return
+    console.print(f"models rendered: {res.models}")
+    console.print(f"round-trips: {'[green]yes[/green]' if res.round_trips else '[red]no[/red]'}")
+    if live_text is not None:
+        if res.parity_drift:
+            console.print(f"[yellow]parity drift ({len(res.parity_drift)}):[/yellow]")
+            for d in res.parity_drift:
+                console.print(f"  - {d}")
+        else:
+            console.print("parity: [green]clean[/green] (matches the live contract)")
+    for e in res.errors:        # H1/H3: structural — these block the gate
+        console.print(f"[red]structural error[/red]: {e}")
+    for u in res.unrenderable:  # FR-EMIT-7: never silently drop
+        console.print(f"[yellow]unrenderable[/yellow]: {u.entity}.{u.field} — {u.reason}")
+    for w in res.warnings:      # H4: advisory — surfaced, not lost
+        console.print(f"[yellow]warning[/yellow]: {w}")
+    if res.draft_path:
+        console.print(f"draft: {res.draft_path}")
+
+
 @generate_app.command("contract")
 def contract(
     requirements: List[Path] = typer.Option(
@@ -516,6 +548,10 @@ def contract(
     check: bool = typer.Option(
         False, "--check",
         help="Gate only; write nothing to the project. Exit 0=ok / 1=drift|round-trip-fail / 2=error."),
+    allow_lossy: bool = typer.Option(
+        False, "--allow-lossy",
+        help="Permit --promote even when the doc declares field(s) the contract can't express "
+             "(unrenderable). Default: refuse, so a flip never silently drops an authored field."),
     json_out: bool = typer.Option(False, "--json", help="Emit the gate result as JSON."),
 ):
     """Emit `prisma/schema.prisma` from the requirements doc (FR-PE / FR-EMIT) — $0, no LLM.
@@ -525,7 +561,6 @@ def contract(
     runs round-trip (FR-PE-6) + parity vs the live contract. `--promote` performs the explicit,
     human-triggered flip to --contract-path (FR-PE-7), only when the gate passes.
     """
-    import json as _json
     import tempfile
 
     from .manifest_extraction.extract import build_entity_graph, extract_manifests
@@ -555,35 +590,16 @@ def contract(
     try:
         graph = build_entity_graph(docs)
     except Exception as exc:  # malformed entity blocks — fail loud, never an empty graph
-        console.print(f"[red]error:[/red] could not parse entities from requirements: {exc}")
+        console.print(f"[red]error:[/red] could not parse entities from requirements: "
+                      f"{type(exc).__name__}: {exc}")  # L4: surface the error class, don't mask it
         raise typer.Exit(_EXIT_ERROR)
 
     run_dir = Path(tempfile.mkdtemp(prefix="startd8-emit-")) if (check or out is None) else out
     source_file = str(requirements[0])  # provenance header names the (primary) requirements doc
     res = emit_schema_draft(graph, str(run_dir), live_text=live_text, source_file=source_file)
 
-    # 4. report the gate (FR-EMIT-2/7)
-    if json_out:
-        console.print_json(_json.dumps({
-            "ok": res.ok, "round_trips": res.round_trips, "models": res.models,
-            "parity_drift": list(res.parity_drift),
-            "unrenderable": [f"{u.entity}.{u.field}: {u.reason}" for u in res.unrenderable],
-            "draft_path": res.draft_path,
-        }))
-    else:
-        console.print(f"models rendered: {res.models}")
-        console.print(f"round-trips: {'[green]yes[/green]' if res.round_trips else '[red]no[/red]'}")
-        if live_text is not None:
-            if res.parity_drift:
-                console.print(f"[yellow]parity drift ({len(res.parity_drift)}):[/yellow]")
-                for d in res.parity_drift:
-                    console.print(f"  - {d}")
-            else:
-                console.print("parity: [green]clean[/green] (matches the live contract)")
-        for u in res.unrenderable:  # FR-EMIT-7: never silently drop
-            console.print(f"[yellow]unrenderable[/yellow]: {u.entity}.{u.field} — {u.reason}")
-        if res.draft_path:
-            console.print(f"draft: {res.draft_path}")
+    # 4. report the gate (FR-EMIT-2/7) — M4: extracted into _report_contract_gate
+    _report_contract_gate(res, live_text=live_text, json_out=json_out)
 
     # 5. --check: gate only, nothing written to the project (FR-EMIT-4)
     if check:
@@ -599,7 +615,8 @@ def contract(
                 (run_dir / fname).write_text(text, encoding="utf-8")
             console.print(f"[green]derived[/green] {len(manifest_texts)} manifest(s) into {run_dir}")
         except Exception as exc:
-            console.print(f"[red]error:[/red] manifest derivation failed: {exc}")
+            console.print(f"[red]error:[/red] manifest derivation failed: "
+                          f"{type(exc).__name__}: {exc}")  # L4: surface the error class
             raise typer.Exit(_EXIT_ERROR)
 
     # 7. --promote: explicit, human-triggered flip (FR-PE-7/FR-EMIT-3). The blocking gate is
@@ -610,6 +627,19 @@ def contract(
             console.print("[red]refusing to promote[/red]: the emitted schema did not round-trip "
                           f"to a non-empty model set (models={res.models}) — fix the requirements "
                           "doc (no parseable entities?) before flipping the contract.")
+            raise typer.Exit(1)
+        if res.errors:  # C1/H1/H3: structural problems are never promotable
+            console.print(f"[red]refusing to promote[/red]: {len(res.errors)} structural error(s) — "
+                          "fix the requirements doc:")
+            for e in res.errors:
+                console.print(f"  - {e}")
+            raise typer.Exit(1)
+        if res.unrenderable and not allow_lossy:  # C1: a flip must not silently drop authored fields
+            console.print(f"[red]refusing to promote[/red]: {len(res.unrenderable)} field(s) the "
+                          "contract can't express would be DROPPED — fix the field type(s), or pass "
+                          "--allow-lossy to flip anyway:")
+            for u in res.unrenderable:
+                console.print(f"  - {u.entity}.{u.field}: {u.reason}")
             raise typer.Exit(1)
         if live_text is not None and res.parity_drift:
             console.print(f"[cyan]applying {len(res.parity_drift)} change(s)[/cyan] vs the live contract.")
