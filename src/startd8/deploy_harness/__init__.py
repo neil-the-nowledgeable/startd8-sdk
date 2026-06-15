@@ -24,6 +24,12 @@ from .discovery import (
     detect_mode,
 )
 from .server import BootOutcome, LiveServer, free_port
+from .smoke import (
+    SmokeOutcome,
+    run_smoke,
+    select_crud_resource,
+    synthesize_body,
+)
 from .venv_runner import InstallOutcome, ResourceLimits, Venv, create_venv, install_deps
 from .ladder import (
     Deviation,
@@ -56,6 +62,11 @@ __all__ = [
     "LiveServer",
     "BootOutcome",
     "free_port",
+    # smoke (FR-9/10)
+    "run_smoke",
+    "select_crud_resource",
+    "synthesize_body",
+    "SmokeOutcome",
     # result model (FR-11)
     "LadderResult",
     "Stage",

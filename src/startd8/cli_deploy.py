@@ -48,6 +48,9 @@ def local(
     keep: bool = typer.Option(
         False, "--keep", help="Keep the throwaway venv/work dir for debugging."
     ),
+    no_smoke: bool = typer.Option(
+        False, "--no-smoke", help="Stop after the health rung; skip smoke-CRUD."
+    ),
     json_out: bool = typer.Option(
         False, "--json", help="Emit the LadderResult as JSON (for CI)."
     ),
@@ -65,6 +68,7 @@ def local(
         install_timeout_s=install_timeout,
         boot_timeout_s=boot_timeout,
         keep=keep,
+        do_smoke=not no_smoke,
     )
 
     if json_out:

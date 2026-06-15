@@ -1,8 +1,8 @@
-"""Ladder orchestration: walk one generated app through discover→install→boot→health (FR-11).
+"""Ladder orchestration: walk one generated app discover→install→boot→health→smoke (FR-11).
 
-This is the M1 public entry point, :func:`deploy_app_local`. Smoke-CRUD (FR-9/10) is the M2 rung and
-is recorded as ``skipped:smoke-deferred-m2`` until then. Everything is graded — a non-canonical app,
-a failed install, or a dead boot all produce a populated :class:`LadderResult`, never an exception.
+The public entry point, :func:`deploy_app_local`. Everything is graded — a non-canonical app, a
+failed install, a dead boot, or a failed smoke-CRUD all produce a populated :class:`LadderResult`,
+never an exception. Smoke (FR-9/10) is best-effort; pass ``do_smoke=False`` to stop after health.
 """
 
 from __future__ import annotations
@@ -24,9 +24,17 @@ from .ladder import (
     StageStatus,
 )
 from .server import LiveServer
+from .smoke import run_smoke
 from .venv_runner import ResourceLimits, Venv, create_venv, install_deps
 
 logger = get_logger("startd8.deploy_harness.deploy")
+
+# Map a SmokeOutcome.status string onto the ladder StageStatus.
+_SMOKE_STATUS = {
+    "pass": StageStatus.PASS,
+    "fail": StageStatus.FAIL,
+    "skipped": StageStatus.SKIPPED,
+}
 
 
 def deploy_app_local(
@@ -36,6 +44,7 @@ def deploy_app_local(
     install_timeout_s: float = 600.0,
     boot_timeout_s: float = 60.0,
     keep: bool = False,
+    do_smoke: bool = True,
     limits: Optional[ResourceLimits] = None,
     runner_python: Optional[str] = None,
     work_parent: Optional[Path] = None,
@@ -154,10 +163,20 @@ def deploy_app_local(
                 result.record(Stage.HEALTH, StageStatus.FAIL, reason=boot.health_reason)
                 return result
 
-            # ---- smoke (FR-9/10) — deferred to M2 ----
-            result.record(
-                Stage.SMOKE, StageStatus.SKIPPED, reason="skipped:smoke-deferred-m2"
-            )
+            # ---- smoke (FR-9/10) ----
+            if not do_smoke:
+                result.record(
+                    Stage.SMOKE, StageStatus.SKIPPED, reason="skipped:smoke-disabled"
+                )
+            else:
+                t0 = time.monotonic()
+                sm = run_smoke(f"http://127.0.0.1:{boot.port}")
+                result.record(
+                    Stage.SMOKE,
+                    _SMOKE_STATUS[sm.status],
+                    reason=sm.reason,
+                    ms=(time.monotonic() - t0) * 1000,
+                )
         return result
     finally:
         if cleanup:

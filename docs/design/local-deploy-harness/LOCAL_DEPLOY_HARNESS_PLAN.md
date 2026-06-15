@@ -129,8 +129,12 @@ process*, distinct from `validators/`'s in-process gates. Keeps the untrusted-co
   tests (real venv+pip+uvicorn boot, incl. liveness-only + broken-boot). Live path verified
   end-to-end (`discover→install→boot→health` all pass on a real installed-mode app). **[R1-S7]** the
   live installed-app fixture is the reusable golden fixture for M2 synth regression.
-- **M2** — `smoke.py` (OpenAPI body synth, enumerated feature set) + smoke rung. Reuses the M1 golden
-  fixture; adds a deliberately-broken-schema fixture for the `skipped:*`/`fail` synth paths.
+- **M2** ✅ SHIPPED — `smoke.py`: `synthesize_body` (enumerated feature set: `$ref`/`allOf`/`required`
+  vs `nullable`/`enum`/`format`/nested/`oneOf`/`anyOf`) + `select_crud_resource` (FK-free preference,
+  3 distinct skip reasons) + live create→list round-trip, wired as the smoke rung in `deploy.py`
+  (`--no-smoke` to disable). 18 network-free synth/selection unit tests + 2 live CRUD integration
+  tests (round-trip pass; FK-only → `skipped:all-resources-fk-coupled`). Verified end-to-end:
+  `discover→install→boot→health→smoke` all pass on a real in-memory CRUD app.
 - **M3** — `batch.py` + aggregate report + join to `comparison-report.json`; **writer-side
   coordination [R1-S3]**: have `model_comparison.py` drop the `deploy-manifest.json`/`.model` sidecar
   carrying the verbatim model id. Wire optional post-run call (behind a flag, non-breaking).
