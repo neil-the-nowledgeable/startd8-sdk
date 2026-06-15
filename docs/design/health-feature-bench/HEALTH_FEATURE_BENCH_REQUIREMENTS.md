@@ -1,27 +1,36 @@
 # Health-Endpoint Feature Benchmark (Informal) — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post-planning + capability re-investigation)
 **Date:** 2026-06-15
-**Status:** Reshaped by planning; ready for CRP / M0 (grader, no spend)
+**Status:** Corrected; ready for CRP / M0 (grader, no spend)
 **Owner:** SDK / Summer 2026 Benchmark (informal addendum)
 **Relation:** Meta-experiment over `docs/design/health-endpoint/` (Requirements v0.2 + Plan v1.0).
-**Paired plan:** `HEALTH_FEATURE_BENCH_PLAN.md` v1.0.
+**Paired plan:** `HEALTH_FEATURE_BENCH_PLAN.md` v1.1.
 
 ---
 
 ## 0. Planning Insights (Self-Reflective Update)
 
-> Planning against the real PrimeContractor + grader code reshaped this experiment. The headline: the
-> v0.1 framing was **infeasible** — it would have failed for every model for a reason unrelated to model
-> skill. Catching that at doc cost (not after a paid run) is the loop working.
+> **⚠️ v0.2 correction (v0.3):** v0.2 claimed PrimeContractor *cannot* edit existing files in
+> benchmark-mode and therefore reframed the whole experiment to single-new-file cells. **That was
+> wrong** — it rested on a sub-agent summary, not the code. Re-reading the bytes: PC has a **first-class
+> edit mode** (`context_seed/core.py:1506` `_classify_edit_mode`; `integration_engine.py:3125-3143`
+> edit-mode whole-file copy with merge *deliberately* skipped — comment: *"edit-mode tasks where the
+> staging file IS the complete file"*; plus the `_merge_subset_into_target` difflib splice at `2511`).
+> Existing-file edits are **auto-classified** from on-disk existence (`scaffold.existing_target_files`,
+> `existing_content_hash`) — no special seed annotation needed. The size-regression guard
+> (`2979-3014`) is a *truncation* safety net (fires only when the new file is <60% of the original),
+> overridable (`allow_size_regression` / per-file `size_regression_override`) with the splice as repair
+> fallback — **not** a hard block. Round3's one-file-per-cell is a *benchmark design choice* (implement
+> one service), not a capability limit.
 
-| v0.1 assumption | Planning discovery (evidence) | Impact |
+| v0.1/v0.2 assumption | Re-investigation (evidence) | Impact |
 |-----------------|-------------------------------|--------|
-| Models implement the real backend_codegen change (edit 4 files + create 1) | **PC in benchmark-mode is a whole-file generator with NO surgical edit** — a feature on an existing file is whole-overwritten, then the size-regression guard blocks it → skipped/FAILED (`integration_engine.py:2965-3180`; micro-prime forced OFF `run_prime_workflow.py:385-386`). Round3 cells target exactly **one** new file (`seed-cartservice.json:33-35`). | **GO/NO-GO resolved: GO only via reframe.** Each cell = ONE new file; the model never edits existing files |
-| The model wires the feature in (registration + mount) | Those are mechanical 1-liners → the **harness applies them deterministically**; the model writes only the substantive file | Isolates model *design* skill from plumbing; sidesteps the edit-incapability entirely |
-| One experiment shape | Two natural single-file shapes: **Tier A** = `app/health.py` (the endpoint), **Tier B** = `health_renderer.py` (the SDK renderer) | Tier A is cheap/direct (run all 9); Tier B is the richer SDK-feature version (cost-gated) |
-| Closed-loop deploy needs `--editable` (OQ-7) | A fresh minimal generated app has **no `startd8` runtime dep** → no `--editable`; only Tier B's *generate* step needs the model's SDK, via `PYTHONPATH=<sandbox>/src python -m startd8` | OQ-7 mostly mooted |
-| Grader is new infra | Grade = `deploy_app_local()` → `stages['health'].reason` (`pass:app-health`/`pass:liveness-only`), already the exact signal; cost/quality free from `extract_metrics`; compile-gate = `python_toolchain.run_project_check` | Grader is a **thin script** |
+| (v0.2) PC can't edit existing files → must reframe to single-new-file | **FALSE.** PC edit-mode classifies existing targets as `edit` and copies the model's complete file (merge skipped); a difflib subset-splice handles additive partials; size guard is an overridable truncation net (`core.py:1506`, `integration_engine.py:2511,3125-3143,2979-3014`) | **The realistic multi-file-edit SDK-feature task is FEASIBLE** — restored as the PRIMARY experiment |
+| (v0.1) Models implement the real backend_codegen change (edit 4 files + create 1) | Feasible. The model must return each edited file **complete** (its existing lines + the additions); editing a ~300-line file like `crud_generator.py` is a real *model-skill* challenge (truncation/content-drop, caught by the size guard) — a **measurable signal**, not an architectural block | Primary task = the real feature; the edit-skill itself becomes a discriminator |
+| Single-file reframe is required | It is **optional**, not required — a cheaper/cleaner *variant* that isolates design skill from edit mechanics | Tiers retained as optional cost/signal-isolation variants, not a forced workaround |
+| Closed-loop deploy needs `--editable` (OQ-7) | A fresh minimal generated app has **no `startd8` runtime dep** → no `--editable`; the *generate* step uses the model's SDK via `PYTHONPATH=<sandbox>/src python -m startd8` | OQ-7 mostly mooted |
+| Grader is new infra | Grade = `deploy_app_local()` → `stages['health'].reason`; cost/quality free from `extract_metrics`; compile-gate = `python_toolchain.run_project_check` | Grader is a **thin script** |
 | Need to build a test schema | `tests/fixtures/wireframe/prisma/schema.prisma` (3 models, relation, enum, list+create) exists | Reuse it |
 
 **Quick wins / functional low-hanging fruit surfaced by planning:**
@@ -32,14 +41,20 @@
   200-with-error-body (we nearly did) → a one-probe discriminator.
 - **Validate the grader for free** with non-LLM **control + negative** cells before any model spend.
 - **Cost/quality is free** from `compare-models` (`extract_metrics`); the grader only adds the runtime grade.
-- **The grader is generic** — "generate one file → place → runtime-probe → grade" — reusable for any
-  future informal single-feature benchmark, not health-specific.
+- **The grader is generic** — "generate file(s) → apply/verify → runtime-probe → grade" — reusable for any
+  future informal feature benchmark, not health-specific.
+- **Edit-fidelity is itself a discriminator** (v0.3): the primary task requires editing a ~300-line file
+  (`crud_generator.py`) while preserving its content. The size-regression guard + a diff of the model's
+  edited file vs the original = a free measure of *content-preservation* (did the model drop existing
+  code?). A sharp, realistic signal weak models fail.
 
 **Resolved open questions:**
-- **OQ-1 → Reframe to single-new-file cells.** PC cannot edit existing files in benchmark-mode; the
-  harness does the deterministic wiring. (This is the go/no-go: GO, only reframed.)
-- **OQ-2 → Source root by tier.** Tier A = a small pre-generated wireframe app (fast sandbox); Tier B =
-  a clean pre-health SDK checkout. NOT a full SDK the model edits.
+- **OQ-1 → GO, no reframe needed.** PC **can** edit existing files (edit-mode auto-classified from
+  on-disk existence). The **primary** experiment is the realistic multi-file-edit SDK feature; the
+  single-file tiers are an *optional* cheaper variant. (v0.2's "reframe required" was wrong — see ⚠️.)
+- **OQ-2 → Source root.** Primary (multi-file edit) = a clean **SDK checkout at a pinned pre-health SHA**
+  (the model edits the real `backend_codegen` files; edit-mode auto-classifies them). Optional Tier-A
+  variant = a small pre-generated wireframe app.
 - **OQ-3 → Thin grader** reusing `deploy_app_local` + `extract_metrics` + `run_project_check`; mirrors
   `deploy_harness/batch.py`.
 - **OQ-4 → `tests/fixtures/wireframe/prisma/schema.prisma`** (has list+create → smoke-exercisable).
@@ -89,43 +104,51 @@ microservices matrix, indicative not statistical.
 
 ## 3. Requirements
 
-### Cell shape (the reframe)
-- **FR-1** Each benchmark **cell is a single-new-file task** (parity with round3's one-`target_files`
-  design). The model **never edits an existing file**; the harness applies all mechanical wiring
-  deterministically. Two tiers:
-  - **FR-1a (Tier A — endpoint):** the model generates **`app/health.py`** — a FastAPI `health_router`
-    with `GET /health` (readiness: `SELECT 1` via the app's `get_session`; `200 {"status":"ok"}` /
-    `503 {"status":"degraded","checks":{"db":"down"}}`) and `GET /health/live` (`200 {"status":"alive"}`).
-  - **FR-1b (Tier B — SDK renderer):** the model generates **`backend_codegen/health_renderer.py`** with a
-    **pinned signature** `render_health(schema_text, source_file) -> str` returning deterministic
-    `app/health.py` source (self-embedded header `# startd8-artifact: fastapi-health` + `schema-sha256`).
-- **FR-2** **Source root by tier:** Tier A = a small pre-generated wireframe app *without* health (so
-  `app/db.py` exists for the import surface); Tier B = a **clean SDK checkout at a pinned pre-health SHA**.
-  Record the SHA / fixture hash. (NOT a full SDK the model edits — that's infeasible, see §0.)
+### Cell shape (PC edits existing files — see §0)
+- **FR-1 (PRIMARY — the real SDK feature):** Feed the **full health spec** (health plan v1.0 §1) as the
+  task: the model implements the feature by **creating `backend_codegen/health_renderer.py` AND editing
+  the existing files** (`crud_generator.py` `CANONICAL_LAYOUT` + `render_main` mount, `assembler.py`
+  emit, `drift.py` `_renderers`, `test_emitter.py`). PC **auto-classifies** the existing targets as
+  `edit` from on-disk existence; each must be returned **complete** (existing content + additions). This
+  is the experiment the user asked for and it tests both *design* (the renderer) and *edit-fidelity*
+  (preserving a ~300-line file) — the latter a sharp discriminator.
+  - **Edit-mechanics knob:** decide per run whether to set `allow_size_regression` (lets a correct-but-
+    partial edit through / triggers the splice) or leave it OFF to measure **raw full-file fidelity**.
+    Default OFF (stricter, more discriminating); record the choice.
+- **FR-1-ALT (OPTIONAL single-file variants — cheaper, cleaner signal):** if the primary task proves too
+  noisy or costly, fall back to single-new-file cells where the harness applies the mechanical wiring:
+  *Variant A* = model writes only `app/health.py` (the endpoint); *Variant B* = model writes only
+  `health_renderer.py` (pinned signature `render_health(schema_text, source_file) -> str`). These isolate
+  design skill from edit mechanics. **Not required** — a deliberate simplification, not a workaround.
+- **FR-2** **Source root:** primary = a **clean SDK checkout at a pinned pre-health SHA** (so the produced
+  diff *is* the feature and edit-mode auto-classifies the real files); record the SHA. Optional Variant A
+  uses a small pre-generated wireframe app.
 - **FR-3** Build the **seed** from health req v0.2 + plan v1.0: `task_description` + `requirements_text`
-  carrying the normative 200/503 contract, the **bare-`/health` constraint**, the readiness=`SELECT 1`
-  rule, and (Tier B) the pinned `render_health` signature + owned-artifact header conventions.
-  `language: python`, one `target_files` entry. Pin + hash like round3 seeds.
+  carrying the normative 200/503 contract, the **bare-`/health` constraint**, readiness=`SELECT 1`, the
+  files-touched list + pinned `render_health` signature + owned-artifact header conventions. `language:
+  python`. Pin + hash like round3 seeds. (Multi-`target_files` for the primary task; one for a variant.)
 
 ### Orchestration
 - **FR-4** Run via **`compare-models` / `model_comparison.py`**: serial, isolated sandboxes, model
   pinned (lead+drafter), `--force-regenerate`, `--benchmark-mode` (micro-prime OFF), round3 parity.
-- **FR-5** **Models & cost:** **Tier A** is trivially cheap (one small file) → run **all 9** models, 3
-  reps for the 3 flagships. **Tier B** → **3 flagship first** (`anthropic:claude-opus-4-8`,
-  `openai:gpt-5.5`, `gemini:gemini-2.5-pro`) at a **$3/cell cap**; after observing cost, **gate the
-  other 6** on a recorded decision.
+- **FR-5** **Models & cost:** **3 flagship first** (`anthropic:claude-opus-4-8`, `openai:gpt-5.5`,
+  `gemini:gemini-2.5-pro`) at a **$3/cell cap**; after observing cost, **gate the other 6** on a recorded
+  decision (per the user's framing). (If a cheap single-file *variant* is run, it can include all 9.)
 
 ### Grader (thin, generic, validated-first)
 - **FR-6** The grader is a **thin script reusing existing pieces** — `deploy_app_local()` (health grade),
   `extract_metrics()` (free cost/quality), `run_project_check()` (compile-gate) — NOT `deploy_batch`.
-  It is **generic**: "place one generated file → apply deterministic wiring → runtime-probe → grade",
+  It is **generic**: "take the model's modified SDK → run `generate backend` → runtime-probe → grade",
   reusable for future single-feature informal benchmarks.
-- **FR-7** Per cell the grader runs: (a) **compile-gate**; (b) **deterministic wiring** — Tier A: append
-  the mount to `app/main.py`; Tier B: apply the 4 registration 1-liners + run `generate backend` via
-  `PYTHONPATH=<sandbox>/src` against the wireframe schema; (c) **(Tier B) drift** — `generate backend
-  --check` → expect **in_sync** (correct header/sha/determinism = an SDK-convention discriminator);
-  (d) **deploy** `deploy_app_local(app_root)` (no `--editable`; the app is standalone); (e) **grade** the
-  health rung: `pass:app-health` vs `pass:liveness-only` vs `fail`.
+- **FR-7** Per cell the grader runs against the model's sandbox SDK: (a) **compile-gate** the modified
+  SDK (`run_project_check`); (b) **edit-fidelity** — diff each edited file vs the pre-health original;
+  record content-preservation (did the model drop existing code? size-regression flagged?); (c)
+  **`generate backend --check`** → expect **in_sync** (correct header/sha/determinism — an SDK-convention
+  discriminator); (d) **`generate backend`** on the wireframe schema via `PYTHONPATH=<sandbox>/src python
+  -m startd8` → emits `app/health.py` + the mount; (e) **deploy** `deploy_app_local(app_root)` (no
+  `--editable`; the generated app is standalone); (f) **grade** the health rung: `pass:app-health` vs
+  `pass:liveness-only` vs `fail`. *(For an optional single-file variant, the harness applies the
+  mechanical wiring in place of the model's edits at step (b)/(d).)*
 - **FR-8** **Two discriminator probes** (the sharp, free signals): (1) the harness's existing
   `app-health` vs `liveness-only` distinction catches the **bare-`/health` vs prefix-router** trap;
   (2) a **DB-down probe** — re-request `GET /health` with `DATABASE_URL` unreachable — expects **503**,
@@ -135,10 +158,10 @@ microservices matrix, indicative not statistical.
   `liveness-only`; 200-on-failure → expect the 503 probe to fail). Keep them as regression fixtures.
 
 ### Reporting, cost governance, reproducibility
-- **FR-10** Emit a per-model **graded ladder** + headline table: `generated → compiles →
-  [Tier B: drift-recognized →] health-grade → 503-correct`, joined with the free cost/quality, **clearly
-  labeled INFORMAL / indicative-not-statistical**, on a **separate batch root** from round3. The
-  **control cell is the ceiling** for interpretation.
+- **FR-10** Emit a per-model **graded ladder** + headline table: `generated → compiles → edit-fidelity
+  (content preserved) → drift-recognized → health-grade → 503-correct`, joined with the free
+  cost/quality, **clearly labeled INFORMAL / indicative-not-statistical**, on a **separate batch root**
+  from round3. The **control cell is the ceiling** for interpretation.
 - **FR-11** Enforce a per-cell cap + total ceiling; record the Tier-A→Tier-B and flagship→other-6
   go/no-go decisions with the observed cost.
 - **FR-12** Pin the source-root SHA/fixture hash, the test schema, and the seed hash; record
@@ -150,26 +173,26 @@ microservices matrix, indicative not statistical.
 
 - Not formal-benchmark; not added to round3's matrix or scoring formula.
 - Not statistical; reps kept low (cost).
-- **Does NOT ask models to edit existing files** — infeasible in PC benchmark-mode (§0); single-new-file only.
-- No auto-adoption of any model's file into the SDK; the human reviews the winner.
+- No auto-adoption of any model's diff into the SDK; the human reviews the winner.
 - No new orchestration engine — extends `model_comparison.py` + reuses the deploy harness only.
-- Tier B does NOT require the model to author the registration wiring (the harness does it deterministically).
+- Does NOT require a single-file reframe — PC edits existing files (§0); the multi-file feature is the
+  primary task, single-file variants are optional.
 
 ---
 
 ## 5. Open Questions
 
-All seven v0.1 open questions were resolved by the planning pass — see §0 (Resolved open questions).
-None block **M0** (build + validate the grader on the control/negative cells — *no model spend*).
-Decisions settled: single-new-file cells, two tiers (A endpoint / B renderer), deterministic harness
-wiring, thin validated grader, wireframe test schema, two free discriminators (bare-`/health`, 503),
-Tier-A-all-9 then Tier-B-flagship-gated.
+All seven v0.1 open questions are resolved (see §0). None block **M0** (build + validate the grader on
+the control/negative cells — *no model spend*). The one residual *design choice* (not a blocker): the
+edit-mechanics knob (`allow_size_regression` ON vs OFF) — default OFF to measure raw full-file fidelity;
+revisit if too many cells fail on benign partial edits.
 
 ---
 
-*v0.2 — Post-planning self-reflective update. The experiment was **reshaped, not tweaked**: the v0.1
-core (models implement the SDK change by editing files) was infeasible in PC benchmark-mode and would
-have failed for every model. Reframed to single-new-file cells + deterministic harness wiring + a thin
-validated grader; added a two-tier design, two free discriminators, and a grader-validation gate. 3
-requirements corrected (FR-1/2/3), 9 added/added-detail (FR-4..12), 7 open questions resolved. Paired
-with HEALTH_FEATURE_BENCH_PLAN.md v1.0.*
+*v0.3 — Corrected v0.2's central error. v0.2 wrongly concluded (from a sub-agent summary, not the code)
+that PC cannot edit existing files, and over-reframed to single-file-only. Re-reading the bytes
+(`context_seed/core.py:1506`, `integration_engine.py:2511,3125-3143,2979-3014`) shows PC has a
+first-class **edit mode** auto-classified from on-disk existence. The realistic multi-file-edit SDK
+feature is **restored as the primary experiment**; single-file cells demoted to optional cheaper
+variants. Added edit-fidelity as a discriminator + the size-regression knob. Lesson: read the code,
+not the summary, before declaring something infeasible. Paired with HEALTH_FEATURE_BENCH_PLAN.md v1.1.*
