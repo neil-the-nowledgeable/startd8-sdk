@@ -1,10 +1,13 @@
-"""Unified benchmark scorecard renderer (docs/design/benchmark-scorecard/SCORECARD_FORMAT.md v1.0).
+"""Unified benchmark scorecard renderer (docs/design/benchmark-scorecard/SCORECARD_FORMAT.md v2.0).
 
-`build_scorecard(run_dir)` composes one markdown doc per run from whatever artifacts the run
-persisted — `cells.json` (quality/consistency/behavioral/cost/by-language), `contamination-probe.json`
-(credibility), `comparison-report.json` (determinism boundary). Each dimension is **degrade-honest**:
-a section is always present, marked `_Not computed for this run_` when its source is absent — never
-silently dropped (FR-32). Supersedes `aggregate.build_matrix_markdown` (which omitted the newer signals).
+`build_scorecard(run_dir)` (markdown) / `build_scorecard_html(run_dir)` (self-contained HTML) compose
+one scorecard per run from whatever it persisted — `cells.json` (quality), `contamination-probe.json`
+(credibility), `comparison-report.json` (determinism). **Inverted-pyramid (v2.0):** scores first — a
+headline verdict, then the **Scoreboard** of five composite-quality leaderboards (flagship → providers
+→ all, each best→worst), then the supporting dimensions (consistency, credibility, behavioral,
+determinism, by-language). Every dimension is **degrade-honest**: always present, marked `not computed`
+when its source is absent (FR-32). Credibility (CodeBLEU) is a leaderboard-integrity control, not folded
+into quality.
 """
 
 from __future__ import annotations
@@ -29,6 +32,51 @@ COMPARISON_FILE = "comparison-report.json"
 SCORECARD_FILE = "SCORECARD.md"
 
 _NOT_COMPUTED = "_Not computed for this run — {why}._"
+
+# The cross-provider headline set (SCORECARD_FORMAT v2.0). Overridable; a run that lacks one of these
+# ids simply shows the flagships it has.
+FLAGSHIP_MODELS = frozenset(
+    {
+        "anthropic:claude-opus-4-8",
+        "openai:gpt-5.5",
+        "gemini:gemini-2.5-pro",
+    }
+)
+_PROVIDER_LABEL = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "gemini": "Google",
+    "google": "Google",
+}
+
+
+def _provider(model: str) -> str:
+    return _PROVIDER_LABEL.get(
+        model.split(":", 1)[0].lower(), model.split(":", 1)[0].title()
+    )
+
+
+def _ranked_models(agg: Dict) -> List[str]:
+    """Models best→worst by composite quality (quality desc, cost asc) — reuses rank_models_by_quality."""
+    return [m for (m, *_r) in rank_models_by_quality(agg)]
+
+
+# (group key, table title). Order is the inverted-pyramid Scoreboard order.
+_SCOREBOARD_GROUPS = [
+    ("flagship", "Flagship comparison"),
+    ("Anthropic", "Anthropic models"),
+    ("Google", "Google models"),
+    ("OpenAI", "OpenAI models"),
+    ("all", "All models"),
+]
+
+
+def _group_models(ordered: List[str], key: str) -> List[str]:
+    if key == "all":
+        return ordered
+    if key == "flagship":
+        return [m for m in ordered if m in FLAGSHIP_MODELS]
+    return [m for m in ordered if _provider(m) == key]  # key is a provider label
 
 
 def _load_json(path: Path) -> Optional[dict]:
@@ -82,38 +130,80 @@ def _header(
         matrix += f" · contamination scored **{contam.get('n_scored')}/{contam.get('n_cells')}** cells"
     return (
         f"# Benchmark Scorecard — {name}\n{line2}\n{matrix}\n\n"
-        "> Per docs/design/benchmark-scorecard/SCORECARD_FORMAT.md v1.0. Every dimension is shown; a\n"
-        "> source the run didn't persist is marked `not computed for this run`, never silently dropped."
+        f"**Headline:** {_headline(agg_or_none(cells), contam)}\n\n"
+        "> Per docs/design/benchmark-scorecard/SCORECARD_FORMAT.md v2.0 (inverted-pyramid: scores first).\n"
+        "> Every dimension is shown; a source the run didn't persist is marked `not computed`."
     )
 
 
-def _quality_section(agg: Optional[Dict]) -> str:
-    head = "## 1. Quality leaderboard (by median composite, then cost)"
-    if not agg:
-        return f"{head}\n\n" + _NOT_COMPUTED.format(
-            why="no `cells.json` (matrix aggregate) persisted"
-        )
+def agg_or_none(cells: List[CellResult]) -> Optional[Dict]:
+    return aggregate_cells(cells) if cells else None
+
+
+def _headline(agg: Optional[Dict], contam: Optional[dict]) -> str:
+    if agg:
+        ordered = _ranked_models(agg)
+        flag = [m for m in ordered if m in FLAGSHIP_MODELS]
+        lead = flag[0] if flag else (ordered[0] if ordered else None)
+        if lead:
+            q = agg["by_model"][lead]["quality_median"]
+            scope = "flagship" if lead in FLAGSHIP_MODELS else "overall"
+            return (
+                f"`{lead}` leads the {scope} scoreboard on composite quality ({_f(q)})."
+            )
+    if contam and contam.get("cells"):
+        by = {}
+        for c in contam["cells"]:
+            if c.get("available") and c.get("codebleu") is not None:
+                by.setdefault(c["model"], []).append(c["codebleu"])
+        if by:
+            clean = min(by, key=lambda m: _st.mean(by[m]))
+            return (
+                "quality not computed for this run — see Credibility below; cleanest contamination "
+                f"signal: `{clean}`."
+            )
+    return "no scores computed for this run."
+
+
+def _qtable(agg: Dict, models: List[str]) -> str:
+    """A quality-leaderboard markdown table for an ordered model subset (or a no-models marker)."""
+    if not models:
+        return "_(no models in this group for this run)_"
     rows = [
-        "> Quality = median composite (structural + compile-gate + behavioral fold + defect penalty);",
-        "> catastrophic = $0/failed/timeout/integrity-fail, reported separately (FR-17).",
-        "",
         "| Rank | Model | quality (median) | IQR | pass-rate | catastrophic | cost $ |",
         "|---:|---|---:|---:|---:|---:|---:|",
     ]
-    for i, (model, *_r) in enumerate(rank_models_by_quality(agg), 1):
+    for i, model in enumerate(models, 1):
         s = agg["by_model"][model]
         rows.append(
             f"| {i} | `{model}` | {_f(s['quality_median'])} | {_f(s['quality_iqr'])} | "
             f"{_f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {_f(s['cost_total_usd'], 4)} |"
         )
-    return f"{head}\n\n" + "\n".join(rows)
+    return "\n".join(rows)
+
+
+def _scoreboard_section(agg: Optional[Dict]) -> str:
+    head = "## Scoreboard — composite quality (best → worst)"
+    if not agg:
+        return f"{head}\n\n" + _NOT_COMPUTED.format(
+            why="no `cells.json` aggregate persisted (the whole Scoreboard degrades together)"
+        )
+    cap = (
+        "> Quality = median composite (structural × compile-gate × behavioral fold × defect penalty);\n"
+        "> catastrophic = $0/failed/timeout/integrity-fail (FR-17). Each table ranked best→worst."
+    )
+    ordered = _ranked_models(agg)
+    blocks = [head, cap]
+    for key, title in _SCOREBOARD_GROUPS:
+        blocks.append(f"### {title}\n\n" + _qtable(agg, _group_models(ordered, key)))
+    return "\n\n".join(blocks)
 
 
 def _consistency_section(agg: Optional[Dict]) -> str:
-    head = "## 2. Consistency (most reliable first)"
+    head = "## Consistency (most reliable first)"
     if not agg:
         return f"{head}\n\n" + _NOT_COMPUTED.format(
-            why="depends on §1's `cells.json` aggregate"
+            why="depends on the `cells.json` aggregate (see Scoreboard)"
         )
     rows = [
         "> Reliability over peak: pass-rate then tightest spread (quality IQR) — the axis near-equal",
@@ -133,7 +223,7 @@ def _consistency_section(agg: Optional[Dict]) -> str:
 
 
 def _credibility_section(contam: Optional[dict]) -> str:
-    head = "## 3. Credibility — contamination / memorization (lower = more credible)"
+    head = "## Credibility — contamination / memorization (lower = more credible)"
     if not contam or not contam.get("cells"):
         return f"{head}\n\n" + _NOT_COMPUTED.format(why="no `contamination-probe.json`")
     by_model: Dict[str, List[float]] = {}
@@ -177,7 +267,7 @@ def _credibility_section(contam: Optional[dict]) -> str:
 
 
 def _behavioral_section(cells: List[CellResult]) -> str:
-    head = "## 4. Behavioral (functional coverage)"
+    head = "## Behavioral (functional coverage)"
     ran = [c for c in cells if c.functional_coverage is not None]
     if not ran:
         return f"{head}\n\n" + _NOT_COMPUTED.format(
@@ -200,7 +290,7 @@ def _behavioral_section(cells: List[CellResult]) -> str:
 
 
 def _determinism_section(comparison: Optional[dict]) -> str:
-    head = "## 5. Determinism boundary (spine in-sync)"
+    head = "## Determinism boundary (spine in-sync)"
     ranked = (comparison or {}).get("ranked")
     if not ranked:
         return (
@@ -220,7 +310,7 @@ def _determinism_section(comparison: Optional[dict]) -> str:
 
 
 def _by_language_section(agg: Optional[Dict], contam: Optional[dict]) -> str:
-    head = "## 6. By language (polyglot view)"
+    head = "## By language (polyglot view)"
     contam_lang: Dict[str, List[float]] = {}
     if contam:
         for c in contam.get("cells", []):
@@ -275,7 +365,7 @@ def build_scorecard(run_dir, *, now: Optional[datetime] = None) -> str:
 
     sections = [
         _header(spec, cells, contam, now),
-        _quality_section(agg),
+        _scoreboard_section(agg),  # A — scores first (inverted pyramid)
         _consistency_section(agg),
         _credibility_section(contam),
         _behavioral_section(cells),
@@ -363,6 +453,13 @@ tbody tr.top{background:linear-gradient(90deg,rgba(216,166,87,.09),transparent 7
   background:var(--panel2);font-size:13px;color:var(--dim)}
 .verdict.good{border-color:rgba(111,207,151,.3)}
 .verdict.bad{border-color:rgba(239,111,100,.35)}
+.headline{font-size:14.5px;color:var(--ink);margin:16px 0 0;padding:13px 16px;border-radius:8px;
+  border:1px solid var(--line);border-left:3px solid var(--brass);background:var(--panel)}
+.headline code{color:var(--brass)}
+.grp{font-size:11.5px;text-transform:uppercase;letter-spacing:.18em;color:var(--brass2);margin:20px 0 9px}
+.grp:first-of-type{margin-top:2px}
+.grp::before{content:"▸ ";color:var(--brass)}
+.sb-empty{color:var(--muted);font-size:12px;padding:7px 2px 4px}
 .empty{border:1px dashed var(--line);border-radius:10px;padding:22px;color:var(--muted);
   font-size:13px;text-align:center;background:repeating-linear-gradient(135deg,transparent,transparent 9px,rgba(255,255,255,.012) 9px,rgba(255,255,255,.012) 18px)}
 .empty b{color:var(--dim);font-weight:600}
@@ -407,11 +504,20 @@ def _h_table(headers: List[str], rows: List[str]) -> str:
     return f'<div class="panel"><table><thead><tr>{ths}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
 
 
-def _h_quality(agg: Optional[Dict]) -> str:
-    if not agg:
-        return _empty("no cells.json (matrix aggregate) persisted")
+_QCOLS = [
+    "Rank",
+    "Model",
+    "Quality (median)",
+    "IQR",
+    "Pass-rate",
+    "Catastrophic",
+    "Cost $",
+]
+
+
+def _h_qrows(agg: Dict, models: List[str]) -> List[str]:
     rows = []
-    for i, (model, *_r) in enumerate(rank_models_by_quality(agg), 1):
+    for i, model in enumerate(models, 1):
         s = agg["by_model"][model]
         cls = ' class="top"' if i == 1 else ""
         rows.append(
@@ -420,23 +526,30 @@ def _h_quality(agg: Optional[Dict]) -> str:
             f"<td>{_hf(s['pass_rate'])}</td><td class=dimv>{s['catastrophic_count']}/{s['n']}</td>"
             f"<td>{_hf(s['cost_total_usd'], 4)}</td></tr>"
         )
-    return _h_table(
-        [
-            "Rank",
-            "Model",
-            "Quality (median)",
-            "IQR",
-            "Pass-rate",
-            "Catastrophic",
-            "Cost $",
-        ],
-        rows,
-    )
+    return rows
+
+
+def _h_scoreboard(agg: Optional[Dict]) -> str:
+    if not agg:
+        return _empty(
+            "no cells.json aggregate persisted (the whole Scoreboard degrades together)"
+        )
+    ordered = _ranked_models(agg)
+    parts = []
+    for key, title in _SCOREBOARD_GROUPS:
+        models = _group_models(ordered, key)
+        parts.append(f'<h3 class="grp">{_esc(title)}</h3>')
+        parts.append(
+            _h_table(_QCOLS, _h_qrows(agg, models))
+            if models
+            else '<div class="sb-empty">— no models in this group for this run —</div>'
+        )
+    return "".join(parts)
 
 
 def _h_consistency(agg: Optional[Dict]) -> str:
     if not agg:
-        return _empty("depends on §1's cells.json aggregate")
+        return _empty("depends on the cells.json aggregate (see Scoreboard)")
     rows = []
     for i, (model, *_r) in enumerate(rank_models_by_consistency(agg), 1):
         s = agg["by_model"][model]
@@ -552,8 +665,20 @@ def _h_bylang(agg: Optional[Dict], contam: Optional[dict]) -> str:
     )
 
 
+def _h_headline(agg: Optional[Dict], contam: Optional[dict]) -> str:
+    """Headline verdict as HTML — escape, then promote `model` backtick spans to <code>."""
+    import re
+
+    txt = re.sub(r"`([^`]+)`", r"<code>\1</code>", _esc(_headline(agg, contam)))
+    return f'<p class="headline"><b style="color:var(--brass)">Headline ·</b> {txt}</p>'
+
+
 def _h_header(
-    spec: Dict, cells: List[CellResult], contam: Optional[dict], now: datetime
+    spec: Dict,
+    cells: List[CellResult],
+    contam: Optional[dict],
+    now: datetime,
+    agg: Optional[Dict],
 ) -> str:
     name = spec.get("name") or "benchmark run"
     sh = (spec.get("spec_hash") or "")[:12] or "—"
@@ -580,40 +705,43 @@ def _h_header(
         '<p class="kicker">Summer 2026 · Online Boutique Model Benchmark</p>'
         f'<h1>Scorecard <span class="accent">—</span> {_esc(name)}</h1>'
         f'<div class="rule"></div><div class="prov">{"".join(chips)}</div>'
-        '<p class="note">Every dimension is shown; a source the run did not persist is marked '
-        "<b>not computed</b>, never silently dropped. Credibility (CodeBLEU) is a leaderboard-integrity "
+        + _h_headline(agg, contam)
+        + '<p class="note">Inverted-pyramid: scores first. Every dimension is shown; a source the run '
+        "did not persist is marked <b>not computed</b>. Credibility (CodeBLEU) is a leaderboard-integrity "
         "control, not a quality term.</p>"
     )
 
 
+# Scoreboard caption (dim A — rendered separately, first).
+_SB_CAP = (
+    "Composite quality (median) — structural × compile-gate × behavioral fold × defect penalty. "
+    "Five leaderboards (flagship → providers → all), each ranked best→worst."
+)
+
+# Supporting dimensions (B–F), shown below the Scoreboard.
 _DIMS: List[Tuple[str, str, str]] = [
     (
-        "1",
-        "Quality leaderboard",
-        "Median composite — structural × compile-gate × behavioral fold × defect penalty. Ranked best-first; catastrophic ($0/fail/timeout/integrity) counted separately.",
-    ),
-    (
-        "2",
+        "B",
         "Consistency",
         "Reliability over peak — pass-rate then tightest spread (quality IQR), the axis near-equal flagships differ on (FR-K1).",
     ),
     (
-        "3",
+        "C",
         "Credibility — contamination",
         "CodeBLEU similarity to the <b>public</b> Online Boutique upstream. Ranked ascending (least memorized first). A credibility control, not quality (FR-47).",
     ),
     (
-        "4",
+        "D",
         "Behavioral coverage",
         "Fraction of behavioral RPC contracts the live service satisfied. Folded into composite at 50% (FR-T2).",
     ),
     (
-        "5",
+        "E",
         "Determinism boundary",
         "Did the model drift an owned ($0-generated) skeleton file instead of only adding glue (generate backend --check).",
     ),
     (
-        "6",
+        "F",
         "By language",
         "Polyglot view — quality, pass-rate, contamination, cost per language.",
     ),
@@ -630,22 +758,24 @@ def build_scorecard_html(run_dir, *, now: Optional[datetime] = None) -> str:
     contam = _load_json(run_dir / CONTAMINATION_FILE)
     comparison = _load_json(run_dir / COMPARISON_FILE)
 
+    scoreboard = _h_dim(
+        "A", "Scoreboard", _SB_CAP, _h_scoreboard(agg), 0.05
+    )  # scores first
     bodies = [
-        _h_quality(agg),
         _h_consistency(agg),
         _h_credibility(contam),
         _h_behavioral(cells),
         _h_determinism(comparison),
         _h_bylang(agg, contam),
     ]
-    secs = "".join(
-        _h_dim(d[0], d[1], d[2], body, 0.05 + i * 0.07)
+    supporting = "".join(
+        _h_dim(d[0], d[1], d[2], body, 0.12 + i * 0.07)
         for i, (d, body) in enumerate(zip(_DIMS, bodies))
     )
     ref = (contam or {}).get("reference_root", "")
     foot = (
         "<footer>Generated by <code>build_scorecard_html</code> · "
-        "docs/design/benchmark-scorecard/SCORECARD_FORMAT.md v1.0"
+        "docs/design/benchmark-scorecard/SCORECARD_FORMAT.md v2.0"
         + (f"<br>Contamination reference: <code>{_esc(ref)}</code>" if ref else "")
         + "</footer>"
     )
@@ -657,8 +787,9 @@ def build_scorecard_html(run_dir, *, now: Optional[datetime] = None) -> str:
         + _HTML_CSS
         + "</style></head><body>"
         '<div class="wrap">'
-        + _h_header(spec, cells, contam, now)
-        + secs
+        + _h_header(spec, cells, contam, now, agg)
+        + scoreboard
+        + supporting
         + foot
         + "</div></body></html>"
     )
