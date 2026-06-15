@@ -1,10 +1,10 @@
 # Track 2 P1+P2 — Generalized Dep Provisioning + Polyglot Stateless Breadth (Requirements)
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post-CRP-R1 — provisioning security controls added)
 **Date:** 2026-06-15
 **Status:** Draft
 **Scope:** the curated P1+P2 slice of `TRACK2_M5_EXPANSION_SCOPING.md`. Builds on the merged pilot.
-**Paired plan:** `TRACK2_P1P2_PLAN.md`.
+**Paired plan:** `TRACK2_P1P2_PLAN.md`. CRP prompt: `CRP_PROMPT_P1P2_R1.md`.
 
 ---
 
@@ -75,6 +75,26 @@ stateless, plausibly-discriminating RPCs** — without committing to all 9 servi
 - **FR-P1-6** Provisioning is **idempotent/cacheable**: a $0 re-score must not re-install when deps are
   already present; provisioning cost is paid once per cell workdir.
 
+#### P1 — Security controls (CRP R1 — provisioning is the untrusted-code surface)
+> The run-time sandbox is egress-denied, but **provisioning runs installers on untrusted model
+> manifests** (`npm install`/`go mod`/`pip`/`dotnet restore`) — re-opening arbitrary-code-execution
+> (FR-44). These controls are **blockers for building S1**.
+- **FR-P1-SEC-1** *(blocker)* **No untrusted lifecycle scripts:** install with scripts disabled where the
+  manager supports it — `npm install --ignore-scripts`, pip `--only-binary=:all:` (no `setup.py` build),
+  and equivalents — so a malicious `postinstall`/`setup.py` cannot execute during provisioning.
+- **FR-P1-SEC-2** *(blocker)* **Provisioning runs under host controls too:** scrubbed env (no API
+  keys/tokens — FR-45, so a malicious dep can't exfiltrate secrets), rlimits, and a filesystem confined
+  to the cell workdir. Network is restricted to **package registries only** (allowlist; full egress
+  proxy is v2) — not open egress.
+- **FR-P1-SEC-3** **Vendored/offline-first + fail-closed offline:** the curated common set is offline
+  (no network); declared-dep network install is opt-in. An **offline/airgapped mode degrades the cell
+  honestly (FR-T2-2), never silently opening the network.**
+- **FR-P1-SEC-4** **Pin + integrity-verify:** installs use lockfiles + integrity hashes (npm
+  `package-lock`, pip hashes, `go.sum`) so cells are reproducible (FR-19) and tamper-evident; an
+  unpinned/unverifiable install is a degrade-worthy non-determinism, not a silent pass.
+- **FR-P1-SEC-5** **Per-cell cache isolation:** no shared *writable* module cache one cell can poison
+  for a later one; shared caches are mounted read-only with a per-cell writable overlay.
+
 ### P2 — Polyglot stateless breadth
 - **FR-P2-1** Add **additive** per-language serve resolvers for **Go** and **Java** (Node exists) — NOT
   on the `LanguageProfile` Protocol (it's `@runtime_checkable` + isinstance-gated). Each returns a launch
@@ -124,3 +144,32 @@ stateless, plausibly-discriminating RPCs** — without committing to all 9 servi
 not declared-install), P2 reframed (invariant-based suites, not pinned-data exact values), 6 OQs
 resolved, 3 new ones opened. The two flips were each a single load-bearing assumption per phase — caught
 at document cost.*
+
+---
+
+## Appendix — CRP R1 Triage
+
+> CRP R1 reviewed P1's provisioning security boundary (the run-time sandbox is egress-denied, but
+> provisioning executes untrusted installers). The independent-reviewer run was rate-limited, so the
+> review was performed inline; suggestions triaged below. **Verdict: P1 was NOT safe to build as v0.2
+> specified — provisioning re-opened ACE against untrusted output. Now gated by FR-P1-SEC-1..5.**
+
+### Appendix A — Accepted (applied)
+| # | Suggestion | Severity | Applied as |
+|---|-----------|----------|-----------|
+| F-1 | Install with lifecycle scripts disabled (`--ignore-scripts`, pip `--only-binary`) | blocker | **FR-P1-SEC-1** |
+| F-2 | Provision under host controls (scrubbed env, rlimits, fs-confined) + registry-only network | blocker | **FR-P1-SEC-2** |
+| F-3 | Vendored/offline-first; offline mode fails closed (degrade), never silent network | major | **FR-P1-SEC-3** |
+| F-4 | Pin + integrity-verify installs (lockfiles/hashes/go.sum) for FR-19 reproducibility | major | **FR-P1-SEC-4** |
+| F-5 | Per-cell cache isolation (no shared writable module cache → no cross-cell poisoning) | major | **FR-P1-SEC-5** |
+| S-1 | Plan S1: run provisioning in-sandbox, read-only shared caches, Go/Java timeout bump | major | plan S1 (updated) |
+
+### Appendix B — Rejected / Deferred (with rationale)
+| # | Suggestion | Disposition | Rationale |
+|---|-----------|-------------|-----------|
+| F-6 | Full egress **proxy** for provisioning | **Defer → v2** | A registry **allowlist** + `--ignore-scripts` + secret-scrub (FR-P1-SEC-1/2) covers the ACE/exfil threat for v1; a transparent proxy is heavy infra. Revisit if the allowlist proves insufficient. |
+| F-7 | Pin cross-language **toolchain versions** (go/node/python/java) | **Defer** | Host toolchains are fixed for the pilot; relevant for portable/multi-host runs — tracked as a portability OQ, not a v1 blocker. |
+| F-8 | Drop the `ad` suite preemptively (likely saturates) | **Reject** | Don't pre-judge — **FR-P2-4 pilot-each-once** decides empirically. Keeping it costs nothing ($0 re-score) and the data settles it. |
+
+*v0.3 — CRP R1: 6 suggestions accepted (5 new security FRs + 1 plan update), 3 deferred/rejected with
+rationale. P1 promoted from "unsafe as written" to "gated by explicit provisioning-security controls."*

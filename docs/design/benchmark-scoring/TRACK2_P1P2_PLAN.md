@@ -24,8 +24,15 @@ language, target_files)` that runs at prepare time (network allowed; the *scored
 - **Python** — `pip install` the curated set (grpcio, protobuf) into a venv/target + `requirements.txt` if present.
 - **Java** — gradle build (resolves `build.gradle`); curated fallback = grpc-java.
 Toolchain absent (`shutil.which`) → return degrade reason (FR-P1-5). Idempotent: skip if already provisioned.
+- **Security (CRP R1 — FR-P1-SEC-1..5, blockers):** every install runs **scripts-disabled**
+  (`npm install --ignore-scripts`, pip `--only-binary=:all:`, etc.), under a **scrubbed env** (reuse
+  `sandbox.scrub_env` — no secrets), **fs-confined to the cell workdir**, with network restricted to
+  package registries (allowlist). Use **lockfiles + integrity** (npm ci/`package-lock`, pip hashes,
+  `go.sum`). Shared module caches mounted **read-only** with a **per-cell writable overlay** (no
+  cross-cell poisoning). An offline run **fails closed → degrade** (never silently opens the network).
 - *Files:* `behavioral/provision.py` (new) + `execute.run_behavioral_cell` calls it by `seed` language;
-  `prepare_node_workdir` becomes the Node branch.
+  `prepare_node_workdir` becomes the Node branch. Reuse `sandbox.scrub_env`; raise the per-cell timeout
+  for Go/Java build (S-1 / OQ-7).
 
 ### S2 — P2 serve hooks (FR-P2-1)
 Extend `behavioral/contract.py:_DEFAULTS` + `resolve_serve_command` (additive, NOT the Protocol) with:
