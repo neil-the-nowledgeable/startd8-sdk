@@ -17,13 +17,13 @@ muddies the memorization signal. The clean signal comes from a repair-OFF run.
 Dependencies (`codebleu` + per-language tree-sitter parsers) are optional; absence degrades
 honestly (FR-32) rather than raising.
 
-Environment caveat (verified 2026-06-14): `codebleu==0.7.0` pins `tree-sitter<0.23`, but on
-**Python 3.14** the only installable `tree-sitter-c-sharp` wheels are 0.23.x+ (grammar ABI 15),
-which a <0.23 core rejects — so **C# degrades on 3.14** while python/go/java/javascript score
-(8/9 OB services). The clean 5/5 stack (codebleu 0.7.0 + tree-sitter 0.22 + tree-sitter-* 0.21)
-only resolves on **Python ≤3.11** (edge-brains ran 3.11). Options to lift C#: a dedicated ≤3.11
-scorer subprocess, or a newer codebleu that accepts tree-sitter 0.25. Until then C# is degraded,
-not failed (FR-32).
+Environment note (corrected 2026-06-15): all 5 languages score on **Python 3.14** with the 0.23.x
+tree-sitter line. The earlier "C# can't be satisfied on 3.14" framing was wrong — the real cause is
+narrow: `tree-sitter-c-sharp` bumped its grammar ABI from ≤14 to **15 at version 0.23.1**, and the
+codebleu-compatible `tree-sitter 0.23.2` core only accepts ABI 13-14 (so 0.23.1+ raises
+"Incompatible Language version 15"). The fix is to pin the C# parser **==0.23.0** (the last ABI-≤14
+build); the other parsers are still ABI ≤14. See the `[contamination]` extra in pyproject.toml. The
+probe still degrades honestly (FR-32) if a parser is missing/mismatched — it never raises.
 """
 from __future__ import annotations
 

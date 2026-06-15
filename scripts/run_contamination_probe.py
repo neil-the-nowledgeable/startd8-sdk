@@ -9,8 +9,8 @@ credibility control, NOT a quality term).
   python3 scripts/run_contamination_probe.py <run_dir> --reference <ref> --out probe.json
 
 NOTE: if the run was produced with the SDK's repair capability active, the scored artifacts are
-repair-polished — the clean memorization signal comes from a repair-OFF run. On Python 3.14 C#
-degrades (tree-sitter ABI vs codebleu pin); 8/9 OB services score.
+repair-polished — the clean memorization signal comes from a repair-OFF run. All 5 languages score
+on Python 3.14 with the `[contamination]` extra (C# parser pinned ==0.23.0; see pyproject.toml).
 """
 from __future__ import annotations
 

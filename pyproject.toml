@@ -57,11 +57,12 @@ validation = ["jsonschema>=4.0.0"]
 code-observability = ["protobuf>=6.33.5"]
 # Benchmark CodeBLEU contamination/memorization probe (FR-47, benchmark_matrix.contamination).
 # Optional + heavy; the probe degrades gracefully (FR-32) when absent. Pinned to the 0.23.x
-# tree-sitter line, which works for python/go/java/javascript. CAVEATS: (1) codebleu 0.7.0
-# nominally pins tree-sitter<0.23 — 0.23.x runs in practice but pip will warn; (2) on Python
-# 3.14 C# can't be satisfied (its 0.23.x grammar ABI needs a newer core than codebleu allows,
-# and the older packs don't build for 3.14) so C# degrades — a clean 5/5 needs Python <=3.11;
-# (3) do NOT co-install with the `csharp` extra (it pins tree-sitter>=0.24.0, which conflicts).
+# tree-sitter line, which works for ALL 5 languages on Python 3.14 (verified). CAVEATS:
+# (1) codebleu 0.7.0 nominally pins tree-sitter<0.23 — 0.23.x runs in practice but pip will warn;
+# (2) `tree-sitter-c-sharp` bumped its grammar ABI from <=14 to 15 at version 0.23.1; the
+# codebleu-compatible tree-sitter 0.23.2 core only accepts ABI 13-14, so the C# parser MUST stay
+# at 0.23.0 (==, not >=) — 0.23.1+ raises "Incompatible Language version 15"; the other parsers
+# are still ABI <=14. (3) do NOT co-install with the `csharp` extra (it pins tree-sitter>=0.24.0).
 contamination = [
     "codebleu==0.7.0",
     "tree-sitter>=0.23,<0.24",
@@ -69,7 +70,7 @@ contamination = [
     "tree-sitter-go>=0.23,<0.24",
     "tree-sitter-java>=0.23,<0.24",
     "tree-sitter-javascript>=0.23,<0.24",
-    "tree-sitter-c-sharp>=0.23,<0.24",
+    "tree-sitter-c-sharp==0.23.0",  # 0.23.1+ = grammar ABI 15, rejected by the 0.23.2 core (max 14)
 ]
 otel = [
     "opentelemetry-api>=1.20.0",
