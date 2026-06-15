@@ -38,6 +38,11 @@ _INFRA_ERROR_MARKERS = (
     "rate_limit", "rate limit", "429", "overloaded_error", "overloaded",
     "apiconnectionerror", "connection error", "timed out connecting",
     "insufficient_quota", "quota",
+    # Missing/unconfigured credentials — a setup failure ($0, no LLM call), never the model's
+    # fault. The provider raises "<Provider> API key required..." wrapped in "Failed to resolve
+    # agents: ...". Classify as infra so it's excluded, exactly like a dead-key 401.
+    "api key required", "api key is required", "no api key", "missing api key",
+    "failed to resolve agents",
 )
 
 
