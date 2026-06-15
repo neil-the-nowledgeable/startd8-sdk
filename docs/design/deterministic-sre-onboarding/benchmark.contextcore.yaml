@@ -1,0 +1,86 @@
+# =============================================================================
+# Summer 2026 SDK Model Benchmark — Context Manifest (P0 / FR-1/2)
+# =============================================================================
+# The single declarative source the deterministic generators read
+# (load_business_context() consumes spec.project / spec.business / spec.requirements /
+# spec.observability / spec.risks / metadata.owners). Drives the SRE dashboards (P1),
+# the harness runbook (P2), and the onboarding portal (P3).
+#
+# Two project_ids the tracking layer (T0–T5) emits:
+#   - startd8-benchmark              → DELIVERY (M0–M7 burndown); use ContextCore's shipped
+#                                      project-progress/sprint/agent-insights dashboards.
+#   - startd8-benchmark-run-<hash>   → per EXECUTION run; gets the generated run dashboard (P1).
+apiVersion: contextcore.io/v1alpha2
+kind: ContextManifest
+
+metadata:
+  name: startd8-benchmark
+  owners:
+    - team: platform-engineering
+      slack: "#startd8-dev"
+  links:
+    repository: https://github.com/neil-the-nowledgeable/startd8-sdk
+    docs: https://github.com/neil-the-nowledgeable/startd8-sdk/tree/main/docs/design/benchmark-observability-tracking
+  lastUpdated: "2026-06-14T00:00:00Z"
+
+spec:
+  project:
+    id: startd8-benchmark
+    name: Inaugural Summer 2026 SDK Model Benchmark
+    description: >
+      Multi-vendor LLM benchmark: Anthropic/OpenAI/Google flagship + tier-2/3 models build
+      Online Boutique services, scored on quality/cost/speed. Runs deterministic assembly OFF +
+      micro-prime OFF to measure model skill. Executes untrusted model-generated code in a sandbox.
+  business:
+    criticality: high          # executes untrusted code + spends real money; publication-facing
+    owner: platform-engineering
+    value: differentiator       # the recurring benchmark + Fable 5 launch hook
+    costCenter: platform-engineering
+  # Pseudo-"requirements" repurposed as benchmark operating bounds (drive alert thresholds, FR-6).
+  requirements:
+    availability: "99"          # harness run-completion target (non-infra failures)
+    latencyP99: "300s"          # per-cell wall-clock ceiling (generation is slow)
+    errorBudget: "0.05"         # tolerated genuine model-failure fraction before flagging
+  targets:
+    - kind: Service
+      name: benchmark-harness
+      namespace: benchmarks
+  risks:
+    - type: security
+      description: "Benchmark executes untrusted model-generated code (FR-44 CRITICAL)"
+      priority: P1
+      mitigation: "Hardened sandbox: non-root, no egress, rlimits, read-only inputs; kernel isolation for prod"
+    - type: data-integrity
+      description: "Secret/telemetry leakage before HF/blog release (FR-45 CRITICAL)"
+      priority: P1
+      mitigation: "Redact provenance/Loki labels/raw artifacts for keys/headers/paths/account-ids before any release"
+    - type: financial
+      description: "Cost overrun across services x models x N reps"
+      priority: P2
+      mitigation: "Fail-closed budget: per-cell cap + cumulative abort; refuse to start without a ceiling"
+    - type: availability
+      description: "Vendor key/quota outage tanks a model's score (dead key / 429 insufficient_quota)"
+      priority: P2
+      mitigation: "Classify infra-fail (401/403/404/429) and EXCLUDE from model pass/fail (exclusion_reason label)"
+    - type: data-integrity
+      description: "Metric saturation: composite quality ~1.00 across models; cost is the real differentiator"
+      priority: P3
+      mitigation: "Report cost-per-quality; compile gate (Python+Go+Node) to break structural saturation"
+  observability:
+    dashboardPlacement: overview
+    prometheusDatasource: prometheus
+    metricsInterval: "30s"
+    alertChannels: ["#startd8-dev"]
+    runbookBase: "https://github.com/neil-the-nowledgeable/startd8-sdk/tree/main/docs/design/deterministic-sre-onboarding"
+
+# Personas the onboarding portal (P3) serves — mapped to portal_spec_builder's built-in personas
+# (the role_views fidelity of sre/compliance-officer/eng-director is a deferred gap, FR-12).
+personas:
+  - id: operator        # SRE: incident-triage, run health, budget/quota alerts
+    portal_persona: operator
+  - id: project_manager # progress/cost/quality
+    portal_persona: manager
+  - id: engineering_leader  # portfolio/quality trends
+    portal_persona: executive
+  - id: compliance      # provenance, legal-gate (FR-49), security risks
+    portal_persona: manager   # nearest built-in until role_views renderer exists (FR-12)
