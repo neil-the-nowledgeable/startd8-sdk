@@ -1,0 +1,3 @@
+# Vendored at setup time via vendor.sh (FR-T2-DEPS) — reproducible from the committed
+# package.json + package-lock.json; never committed.
+node_modules/

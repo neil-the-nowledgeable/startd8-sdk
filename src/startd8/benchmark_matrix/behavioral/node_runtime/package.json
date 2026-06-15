@@ -1,0 +1,10 @@
+{
+  "name": "ob-behavioral-node-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vendored offline gRPC runtime for running model-generated Node Online Boutique services under the Track 2 behavioral harness (FR-T2-DEPS). Copied into each cell workdir so the generated server can require gRPC without any network fetch (dependency quarantine).",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.10.0",
+    "@grpc/proto-loader": "^0.7.10"
+  }
+}

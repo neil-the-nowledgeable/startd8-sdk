@@ -10,6 +10,7 @@ Default-off in the runner — turning it on is the paymentservice pilot (M-T2.4,
 """
 from __future__ import annotations
 
+import shutil
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,29 @@ from .contract import resolve_serve_command
 
 # service name -> behavioral suite (the SDK-authored client). Only the paymentservice pilot today.
 _SUITES: Dict[str, Callable[[int], object]] = {"paymentservice": run_charge_suite}
+
+_NODE_RUNTIME = Path(__file__).parent / "node_runtime"
+_PROTO = Path(__file__).parent / "demo.proto"
+
+
+def prepare_node_workdir(workdir: Path) -> bool:
+    """Materialize the vendored offline gRPC runtime + proto into a Node cell workdir (FR-T2-DEPS).
+
+    Copies ``node_runtime/node_modules`` and ``demo.proto`` (at root and ``protos/`` — the two common
+    conventions) so a model-generated Node server can start with no network. Returns False when the
+    runtime hasn't been vendored yet (run ``node_runtime/vendor.sh`` first) → caller degrades."""
+    src_nm = _NODE_RUNTIME / "node_modules"
+    if not src_nm.is_dir():
+        return False
+    workdir = Path(workdir)
+    dst_nm = workdir / "node_modules"
+    if not dst_nm.exists():
+        shutil.copytree(src_nm, dst_nm)
+    if _PROTO.exists():
+        shutil.copy(_PROTO, workdir / "demo.proto")
+        (workdir / "protos").mkdir(exist_ok=True)
+        shutil.copy(_PROTO, workdir / "protos" / "demo.proto")
+    return True
 
 
 @dataclass
@@ -64,6 +88,11 @@ def run_behavioral_cell(
         return BehavioralResult(has_suite=True, degraded=True,
                                 provenance={"reason": "no serve command (no contract / unknown language)"})
     argv, extra_env = serve
+
+    # Node services need the vendored offline gRPC runtime in their workdir (FR-T2-DEPS).
+    if argv and argv[0] == "node" and not prepare_node_workdir(Path(workdir)):
+        return BehavioralResult(has_suite=True, degraded=True,
+                                provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
 
     sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env)
     prov: Dict = {"ready": sr.ready, "isolation_level": sr.isolation_level,
