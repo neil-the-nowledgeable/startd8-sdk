@@ -9,7 +9,9 @@ returns ``None`` → the behavioral cell degrades (FR-32), it never crashes.
 """
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 PORT_TOKEN = "$PORT"
@@ -53,8 +55,21 @@ def _node_default(target_files: List[str], port: int) -> Optional[Tuple[List[str
     return (["node", entry], {"PORT": str(port)})
 
 
-# Per-language fallback launchers. Node only for the pilot; others absent → degrade (FR-32).
-_DEFAULTS = {"nodejs": _node_default}
+def _go_default(target_files: List[str], port: int) -> Optional[Tuple[List[str], Dict[str, str]]]:
+    """Default Go launch (P2): run the service's module from its dir (`go.mod` lives there after
+    `go mod tidy` provisioning). ``exec`` under the sandbox's setsid means killpg reaps the compiled
+    child too — no orphan. PORT injected via env."""
+    entry = next((f for f in target_files if f.endswith(".go")),
+                 target_files[0] if target_files else None)
+    if not entry:
+        return None
+    svc_dir = str(Path(entry).parent)
+    return (["sh", "-c", f"cd {shlex.quote(svc_dir)} && exec go run ."], {"PORT": str(port)})
+
+
+# Per-language fallback launchers (additive; the seed `startup` contract is authoritative).
+# Java/C# need a secured launcher (javac/vendored jars, not gradle/msbuild) → absent ⇒ degrade.
+_DEFAULTS = {"nodejs": _node_default, "go": _go_default}
 
 
 def resolve_serve_command(
