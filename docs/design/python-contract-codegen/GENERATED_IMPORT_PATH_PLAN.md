@@ -19,7 +19,7 @@ parallel team, so Phase 0 front-loads coordination and every phase re-checks `or
 | Step | Action |
 |------|--------|
 | 0.1 | `git fetch origin main`; branch `feat/import-path` off **current** `origin/main` in a fresh worktree (pin `PYTHONPATH=<wt>/src` for tests — `reference_multiworktree_env`). |
-| 0.2 | **Resolve OQ-IMP-D — name the first consumer** (strtd8 content-import FR-13/15 / navig8 / startd8-generator). Fixes the formats + acceptance entities. |
+| 0.2 | **OQ-IMP-D RESOLVED (2026-06-15): first consumer = strtd8** (content-import FR-13/15, formats `{json, text}`). Produce `OQ-IMP-D-decision.md` pinning the strtd8 acceptance fixture (§6 map); navig8/generator are later consumers, not blockers. |
 | 0.3 | Post the **FR-IMP-2 unification proposal** (Phase 1 design below) to the AI-layer owner; agree the seam before touching `ai_layer.py`. |
 
 ## Phase 1 — FR-IMP-2: unify the dedup keys into ONE identity key *(foundational; coordinated)*

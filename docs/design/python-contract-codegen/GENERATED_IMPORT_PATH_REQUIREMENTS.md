@@ -77,10 +77,11 @@ gate→promote road). Plan: `GENERATED_IMPORT_PATH_PLAN.md`. See §0b for the re
 - **OQ-IMP-A → revised.** Module split stands (`import_codegen.py`), but the **identity-key logic** is
   shared with `ai_layer.py` — extract it to a small `identity.py` (or `ai_layer` helper) consumed by
   both, so there is one source of truth (resolves the FR-IMP-2 two-call-site seam).
-- **OQ-IMP-D → NEW (load-bearing):** **name the first un-deferred consumer.** strtd8 content-import
-  (FR-13/15) drives `{json, text}` + a snippet library; navig8/the generator may need different
-  formats/entities. The grammar (FR-IMP-3) is consumer-agnostic, but the *acceptance* (FR-IMP-6
-  surface, FR-IMP-1 round-trip target) needs a named consumer. Resolve before Phase 3.
+- **OQ-IMP-D → RESOLVED 2026-06-15: the first consumer is strtd8.** strtd8 content-import
+  (FR-13/15) drives `{json, text}` + a snippet library and fixes the acceptance entities/formats
+  (FR-IMP-6 surface, FR-IMP-1 round-trip target). The grammar (FR-IMP-3) stays consumer-agnostic;
+  navig8/the generator are later consumers, not blockers. Phase 0 step 0.2 (`OQ-IMP-D-decision.md`)
+  records strtd8 with its acceptance fixture pinned from §6.
 
 ---
 
