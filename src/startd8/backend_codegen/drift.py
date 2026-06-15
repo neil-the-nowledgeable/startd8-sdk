@@ -97,6 +97,7 @@ def _renderers(
     what disambiguate them. ``entity`` is ``None`` for app-wide artifacts.
     """
     from .crud_generator import render_db, render_main, render_routers
+    from .health_renderer import render_health
     from .derived import (
         render_ai_schemas,
         _load_completeness_manifest,
@@ -152,6 +153,7 @@ def _renderers(
         "fastapi-routers": lambda s, sf, e: render_routers(s, sf),
         "fastapi-db": lambda s, sf, e: render_db(s, sf),
         "fastapi-main": lambda s, sf, e: render_main(s, sf),
+        "fastapi-health": lambda s, sf, e: render_health(s, sf),
         "fastapi-web": lambda s, sf, e: render_web(s, sf),
         "htmx-base": lambda s, sf, e: render_base_template(s, sf),
         "htmx-field-error": lambda s, sf, e: render_field_error_template(s, sf),

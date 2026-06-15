@@ -18,6 +18,7 @@ from .crud_generator import (
     render_routers,
 )
 from .derived import _load_completeness_manifest, render_derived, render_requirements
+from .health_renderer import render_health
 from .editor_generator import render_editors
 from .flow_generator import render_flows
 from .htmx_generator import render_ui
@@ -74,6 +75,7 @@ def render_backend(
         (CANONICAL_LAYOUT["fastapi-routers"], render_routers(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-db"], render_db(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-main"], render_main(schema_text, source_file)),
+        (CANONICAL_LAYOUT["fastapi-health"], render_health(schema_text, source_file)),
     ]
     # app/web.py + templates (+ nav, + per-entity post-create behavior from views.yaml `forms:`)
     out.extend(render_ui(schema_text, source_file, pages_text, views_text, display_text))
