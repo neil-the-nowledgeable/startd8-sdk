@@ -33,12 +33,14 @@ _PROTO = Path(__file__).parent / "demo.proto"
 _PROTO_DEST_SUBDIRS = ("", "protos", "proto", "pb", "lib/proto")
 
 
-def prepare_node_workdir(workdir: Path) -> bool:
+def prepare_node_workdir(workdir: Path, target_files: Optional[List[str]] = None) -> bool:
     """Materialize the vendored offline runtime closure + proto into a Node cell workdir (FR-T2-DEPS).
 
     Copies ``node_runtime/node_modules`` (the full closure: gRPC + pino + uuid — FR-T2-DEPS) and
     ``demo.proto`` at every conventional location (FR-T2-PROTO) so a model-generated Node server can
-    start with no network regardless of where it loads the proto. Returns False when the runtime
+    start with no network regardless of where it loads the proto. ``target_files`` adds the
+    **service-relative** locations (next to the generated server + its ``proto/`` subdir) — the pilot
+    showed models also load it from ``src/<service>/demo.proto``. Returns False when the runtime
     hasn't been vendored yet (run ``node_runtime/vendor.sh`` first) → caller degrades (FR-T2-DEPS2)."""
     src_nm = _NODE_RUNTIME / "node_modules"
     if not src_nm.is_dir():
@@ -48,7 +50,12 @@ def prepare_node_workdir(workdir: Path) -> bool:
     if not dst_nm.exists():
         shutil.copytree(src_nm, dst_nm)
     if _PROTO.exists():
-        for sub in _PROTO_DEST_SUBDIRS:
+        subdirs = list(_PROTO_DEST_SUBDIRS)
+        for tf in target_files or []:           # service-relative: src/<service>/ and src/<service>/proto/
+            parent = Path(tf).parent
+            if str(parent) not in (".", ""):
+                subdirs += [str(parent), str(parent / "proto")]
+        for sub in dict.fromkeys(subdirs):       # de-dupe, preserve order
             dest = workdir / sub if sub else workdir
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy(_PROTO, dest / "demo.proto")
@@ -98,7 +105,7 @@ def run_behavioral_cell(
     argv, extra_env = serve
 
     # Node services need the vendored offline gRPC runtime in their workdir (FR-T2-DEPS).
-    if argv and argv[0] == "node" and not prepare_node_workdir(Path(workdir)):
+    if argv and argv[0] == "node" and not prepare_node_workdir(Path(workdir), target_files):
         return BehavioralResult(has_suite=True, degraded=True,
                                 provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
 

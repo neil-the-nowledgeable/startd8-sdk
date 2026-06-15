@@ -51,3 +51,13 @@ def test_prepare_node_workdir_materializes_closure_and_proto_at_all_paths(tmp_pa
     for sub in ("", "protos", "proto", "pb", "lib/proto"):
         loc = (tmp_path / sub / "demo.proto") if sub else (tmp_path / "demo.proto")
         assert loc.is_file(), sub
+
+
+@pytest.mark.skipif(not (_NODE_RUNTIME / "node_modules").is_dir(),
+                    reason="node runtime not vendored (run node_runtime/vendor.sh)")
+def test_prepare_node_workdir_drops_proto_service_relative(tmp_path):
+    # FR-T2-PROTO: service-relative paths (next to the server + its proto/ subdir). The pilot saw
+    # Opus load from src/<service>/demo.proto, which the fixed-list multiplex alone misses.
+    assert prepare_node_workdir(tmp_path, ["src/paymentservice/server.js"]) is True
+    assert (tmp_path / "src" / "paymentservice" / "demo.proto").is_file()
+    assert (tmp_path / "src" / "paymentservice" / "proto" / "demo.proto").is_file()
