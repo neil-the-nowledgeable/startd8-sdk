@@ -1085,6 +1085,25 @@ def _view_complete_block(v: ViewSpec, default_html: str, has_complete: bool) -> 
     return default_html
 
 
+def render_view_empty_body_fragment(prose) -> str:
+    """The untracked rendered-content no-*body* fragment (``app/templates/views/_<name>.empty_body.html``).
+
+    No header ⇒ not drift-tracked. The AR-6 detail view's "this artifact has no rendered prose yet" state
+    (the ``{% else %}`` arm of ``{% if data.html %}``) — distinct from ``empty`` (the no-*rows* list state).
+    Editing the words rewrites only this fragment ⇒ ``--check`` stays green. Mirrors the other fragments."""
+    import html
+
+    return f'<p class="empty">{html.escape(prose.empty_body)}</p>\n'
+
+
+def _view_empty_body_block(v: ViewSpec, default_html: str, has_empty_body: bool) -> str:
+    """The rendered-content detail no-body line: include the untracked empty_body fragment when authored,
+    else today's literal (byte-identical when absent). The ``{% if data.html %}`` guard stays owned."""
+    if has_empty_body:
+        return '{% include "views/_' + v.module + '.empty_body.html" %}\n'
+    return default_html
+
+
 def render_export_landing_template(
     v: ViewSpec, schema_sha: str, views_sha: str, has_chrome: bool = True,
     control_ids: "frozenset[str]" = frozenset(), help_ids: "frozenset[str]" = frozenset(),
@@ -1266,6 +1285,7 @@ def render_view_index_template(
 def render_view_template(
     v: ViewSpec, schema_sha: str, views_sha: str, schema=None, view_display=None,
     has_prose: bool = False, has_empty: bool = False, has_complete: bool = False,
+    has_empty_body: bool = False,
     control_ids: "frozenset[str]" = frozenset(), help_ids: "frozenset[str]" = frozenset(),
 ) -> str:
     head = (
@@ -1307,8 +1327,8 @@ def render_view_template(
             'data-copy="{{ data.body }}" onclick="navigator.clipboard.writeText('
             "this.getAttribute('data-copy'))\">Copy</button>\n"
             "{% else %}\n"
-            '<p class="empty">Nothing to read yet.</p>\n'
-            "{% endif %}\n"
+            + _view_empty_body_block(v, '<p class="empty">Nothing to read yet.</p>\n', has_empty_body)
+            + "{% endif %}\n"
             "</article>\n"
             "{% else %}\n"
             + _view_title_block(v, has_prose)
@@ -1909,6 +1929,11 @@ def render_views(
                 f"view_prose.yaml: view {v.module!r} uses `complete`, but only a computed-panel "
                 "has an all-signals-met surface"
             )
+        if p.empty_body and v.kind != "rendered-content":
+            raise ValueError(
+                f"view_prose.yaml: view {v.module!r} uses `empty_body`, but only a rendered-content "
+                "view has a detail no-body surface"
+            )
         if (p.success or p.error) and v.kind != "import-flow":
             raise ValueError(
                 f"view_prose.yaml: view {v.module!r} uses `success`/`error`, but only an import-flow "
@@ -1947,6 +1972,7 @@ def render_views(
         has_chrome = bool(prose and (prose.title or prose.intro))
         has_empty = bool(prose and prose.empty)
         has_complete = bool(prose and prose.complete)
+        has_empty_body = bool(prose and prose.empty_body)
         control_ids = frozenset(prose.controls) if (prose and prose.controls) else frozenset()
         help_ids = (
             frozenset(cid for cid, c in prose.controls.items() if c.get("help"))
@@ -1970,7 +1996,7 @@ def render_views(
         out.append((f"app/templates/views/{v.module}.html",
                     render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd,
                                          has_prose=has_chrome, has_empty=has_empty,
-                                         has_complete=has_complete,
+                                         has_complete=has_complete, has_empty_body=has_empty_body,
                                          control_ids=control_ids, help_ids=help_ids)))
         # Untracked fragments (no header ⇒ not owned files ⇒ skipped by drift/--check).
         if has_chrome:
@@ -1982,6 +2008,9 @@ def render_views(
         if has_complete:
             out.append((f"app/templates/views/_{v.module}.complete.html",
                         render_view_complete_fragment(prose)))
+        if has_empty_body:
+            out.append((f"app/templates/views/_{v.module}.empty_body.html",
+                        render_view_empty_body_fragment(prose)))
         if control_ids:
             out.extend(_control_fragments(v, prose))
         # Import-flow restore outcome copy: an untracked fragment (substituted at request time) + an

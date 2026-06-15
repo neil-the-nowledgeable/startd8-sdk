@@ -325,6 +325,21 @@ pass below.
 > read yet.", a different semantic) stays literal and is **deferred** to a future `empty_body`-style key.
 > **Deferred (chosen scope):** the index-prompt literal (FR-QW-2 tail) and all of FR-QW-3
 > (validate-success is behavioral, not cosmetic; export per-control `help` slot exists but unwired).
+>
+> **✅ Group E increment 2 DONE (2026-06-14, `feat/view-prose-empty-body`).** The `empty_body` key from
+> the refinement above now ships — overrides the rendered-content **detail no-body** state ("Nothing to
+> read yet.", `{% else %}` arm of `{% if data.html %}`) via `render_view_empty_body_fragment` +
+> `_view_empty_body_block` + a rendered-content-only guard; independent of `empty` (both can co-author the
+> two distinct surfaces). 6 new tests; 88 view_codegen + 187 view/skip-hook/manifest green.
+> **Talk-through corrections (2026-06-14):** two "deferred" items were already done — the **index-prompt
+> literal** is covered by FR-QW-1's `empty`-on-index (guard `not roots`), and **export per-control `help`
+> is fully wired** (`_control_help`/`_control_fragments` render `.control.<id>.help.html`). So the *only*
+> genuinely-remaining Group E item is **FR-QW-3 validate-success** — and it is **declined as a standing
+> decision** (not merely deferred): rendering an HTML success line from `/validate` would rewrite that
+> route's response from its typed JSON envelope `{valid, errors, counts}` (the AR-4 non-mutating,
+> machine-readable dry-run) to a `TemplateResponse` — a behavioral change to a load-bearing API contract,
+> duplicating the outcome copy that already renders on `/restore`. Not a SOTTO-compatible additive
+> prose-gate; revisit only if a project explicitly needs it.
 
 - **FR-QW-1 — Extend `empty` to the other no-rows surfaces. ✅ DONE.** The untracked empty-fragment mechanism now
   exists; extend `empty` from model-compose to the `detail-compose` index "pick-an-item" page

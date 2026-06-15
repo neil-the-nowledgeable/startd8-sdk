@@ -39,9 +39,10 @@ import yaml
 # String-valued authorable keys. Each renders into an untracked fragment; archetype/placeholder validity
 # is enforced in render_views (the parser is archetype-blind — it only knows view names). ``title``/
 # ``intro`` → heading fragment; ``empty`` → no-rows fragment (model-compose / detail-compose index /
-# rendered-content list); ``complete`` → computed-panel all-signals-met fragment; ``success``/``error``
-# → import-flow restore-outcome fragments. ``controls`` is a mapping (handled separately below).
-_PROSE_KEYS = {"title", "intro", "empty", "complete", "success", "error"}
+# rendered-content list); ``empty_body`` → rendered-content detail no-*body* fragment; ``complete`` →
+# computed-panel all-signals-met fragment; ``success``/``error`` → import-flow restore-outcome fragments.
+# ``controls`` is a mapping (handled separately below).
+_PROSE_KEYS = {"title", "intro", "empty", "empty_body", "complete", "success", "error"}
 _ALLOWED_KEYS = _PROSE_KEYS | {"controls"}
 
 
@@ -52,6 +53,7 @@ class ViewProse:
     title: Optional[str] = None
     intro: Optional[str] = None
     empty: Optional[str] = None
+    empty_body: Optional[str] = None  # rendered-content detail no-body state (FR-QW-2); archetype validity in render_views
     complete: Optional[str] = None  # computed-panel all-signals-met state (FR-QW-2); archetype validity in render_views
     success: Optional[str] = None
     error: Optional[str] = None

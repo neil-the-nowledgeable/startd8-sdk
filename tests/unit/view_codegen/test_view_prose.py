@@ -603,3 +603,55 @@ def test_empty_still_loud_fails_on_a_no_surface_archetype():
     # computed-panel has no no-rows surface (it carries `complete` instead) → `empty` loud-fails.
     with pytest.raises(ValueError, match="no-rows surface"):
         render_views(_E_SCHEMA, _E_VIEWS, None, "completeness_panel:\n  empty: x\n")
+
+
+# --------------------------------------------------------------------------- #
+# FR-QW-2 tail — `empty_body`: the rendered-content DETAIL no-*body* state
+# ("Nothing to read yet."), distinct from `empty` (the no-*rows* list state).
+# Its own untracked fragment; byte-identical when absent; off-archetype loud-fails.
+# --------------------------------------------------------------------------- #
+
+_EB_FRAG = "app/templates/views/_artifact_reader.empty_body.html"
+
+
+def test_empty_body_parses_as_a_view_prose_field():
+    out = parse_view_prose("artifact_reader:\n  empty_body: No body yet.\n")
+    assert out["artifact_reader"] == ViewProse(empty_body="No body yet.")
+
+
+def test_empty_body_wires_detail_include_and_emits_fragment():
+    out = dict(render_views(_E_SCHEMA, _E_VIEWS, None, "artifact_reader:\n  empty_body: Draft not written.\n"))
+    assert out[_EB_FRAG] == '<p class="empty">Draft not written.</p>\n'
+    assert '{% include "views/_artifact_reader.empty_body.html" %}' in out[_RC]
+    assert "Nothing to read yet." not in out[_RC]     # the detail no-body literal is overridden
+    assert "Nothing here yet." in out[_RC]            # the LIST no-rows literal is untouched (distinct surface)
+
+
+def test_empty_and_empty_body_are_independent_surfaces():
+    p = "artifact_reader:\n  empty: No artifacts yet.\n  empty_body: Draft not written.\n"
+    out = dict(render_views(_E_SCHEMA, _E_VIEWS, None, p))
+    # both fragments emitted, both includes wired, neither literal remains
+    assert out["app/templates/views/_artifact_reader.empty.html"] == '<p class="empty">No artifacts yet.</p>\n'
+    assert out[_EB_FRAG] == '<p class="empty">Draft not written.</p>\n'
+    assert '{% if not rows %}{% include "views/_artifact_reader.empty.html" %}{% endif %}' in out[_RC]
+    assert '{% include "views/_artifact_reader.empty_body.html" %}' in out[_RC]
+    assert "Nothing here yet." not in out[_RC] and "Nothing to read yet." not in out[_RC]
+
+
+def test_empty_body_fragment_escapes_and_is_unowned():
+    out = dict(render_views(_E_SCHEMA, _E_VIEWS, None, 'artifact_reader:\n  empty_body: "A & B <x>"\n'))
+    assert out[_EB_FRAG] == '<p class="empty">A &amp; B &lt;x&gt;</p>\n'
+    assert "startd8-artifact" not in out[_EB_FRAG]     # no provenance header ⇒ untracked
+
+
+def test_editing_empty_body_does_not_trip_check():
+    p = "artifact_reader:\n  empty_body: Draft not written.\n"
+    owned = dict(render_views(_E_SCHEMA, _E_VIEWS, None, p))[_RC]
+    edited = p.replace("Draft not written.", "A completely different message")
+    assert dict(render_views(_E_SCHEMA, _E_VIEWS, None, edited))[_RC] == owned
+    assert views_in_sync(_E_SCHEMA, _E_VIEWS, "proj/" + _RC, owned, None, edited) is True
+
+
+def test_empty_body_on_non_rendered_content_loud_fails():
+    with pytest.raises(ValueError, match="detail no-body surface"):
+        render_views(_E_SCHEMA, _E_VIEWS, None, "pick_one:\n  empty_body: x\n")
