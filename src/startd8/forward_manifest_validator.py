@@ -1629,7 +1629,49 @@ def _validate_js_file(
     except Exception:
         pass
 
+    # FR-N5-imports (NP3b): import_completeness = resolvable RELATIVE imports / total relative
+    # imports — catches hallucinated local modules (the 0.2-weight disk_quality term, inert at
+    # 1.0 for JS until now). Bare/external specifiers (e.g. '@grpc/grpc-js') are assumed available
+    # (cannot verify offline) and excluded; 1.0 when there are no relative imports.
+    if file_path:
+        ic = _js_import_completeness(content, file_path)
+        if ic is not None:
+            result.import_completeness = ic
+
     return result
+
+
+_JS_IMPORT_SPEC_RE = re.compile(
+    r"""require\s*\(\s*['"]([^'"]+)['"]\s*\)"""              # require('x')
+    r"""|(?:import|export)\b[^'"\n]*?from\s*['"]([^'"]+)['"]"""  # import/export ... from 'x'
+    r"""|import\s*['"]([^'"]+)['"]""",                       # bare import 'x'
+)
+_JS_RESOLVE_EXTS = (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".json", "")
+
+
+def _js_import_completeness(content: str, file_path: str) -> Optional[float]:
+    """Fraction of relative import/require specifiers that resolve to an existing file.
+
+    Returns None when file_path has no usable parent; 1.0 when there are no relative imports."""
+    try:
+        base = Path(file_path).parent
+    except (OSError, ValueError):
+        return None
+    relative: List[str] = []
+    for m in _JS_IMPORT_SPEC_RE.finditer(content):
+        spec = m.group(1) or m.group(2) or m.group(3)
+        if spec and (spec.startswith("./") or spec.startswith("../")):
+            relative.append(spec)
+    if not relative:
+        return 1.0
+    resolved = 0
+    for spec in relative:
+        target = base / spec
+        candidates = [target.with_name(target.name + ext) for ext in _JS_RESOLVE_EXTS]
+        candidates += [target / f"index{ext}" for ext in _JS_RESOLVE_EXTS if ext]
+        if any(c.exists() for c in candidates):
+            resolved += 1
+    return round(resolved / len(relative), 4)
 
 
 def _validate_package_json(

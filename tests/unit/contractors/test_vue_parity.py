@@ -154,3 +154,31 @@ def test_fr_n5_vue_inherits_dup_count(tmp_path):
     vue.write_text("<template><div/></template>\n<script>\nfunction g() {}\nfunction g() {}\n</script>\n")
     r = validate_disk_compliance(str(vue), str(tmp_path))
     assert r.duplicate_definitions >= 1
+
+
+# ── NP3b / FR-N5-imports: import_completeness from relative-import resolution ──
+
+def test_np3b_missing_relative_import_lowers_completeness(tmp_path):
+    from startd8.forward_manifest_validator import validate_disk_compliance
+    (tmp_path / "helper.js").write_text("module.exports = {}\n")
+    js = tmp_path / "svc.js"
+    js.write_text("const a = require('./helper')\nconst b = require('./missing')\n")
+    r = validate_disk_compliance(str(js), str(tmp_path))
+    assert r.import_completeness == 0.5  # 1 of 2 relative imports resolve
+
+
+def test_np3b_all_resolving_is_one(tmp_path):
+    from startd8.forward_manifest_validator import validate_disk_compliance
+    (tmp_path / "a.js").write_text("module.exports = {}\n")
+    js = tmp_path / "svc.js"
+    js.write_text("import x from './a'\nimport grpc from '@grpc/grpc-js'\n")  # bare excluded
+    r = validate_disk_compliance(str(js), str(tmp_path))
+    assert r.import_completeness == 1.0
+
+
+def test_np3b_no_relative_imports_is_one(tmp_path):
+    from startd8.forward_manifest_validator import validate_disk_compliance
+    js = tmp_path / "svc.js"
+    js.write_text("const x = 1\nexport default x\n")
+    r = validate_disk_compliance(str(js), str(tmp_path))
+    assert r.import_completeness == 1.0
