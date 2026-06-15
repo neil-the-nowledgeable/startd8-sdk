@@ -38,6 +38,7 @@ from .cli_polish import polish_app
 from .cli_fde import fde_app
 from .cli_sapper import sapper_app
 from .cli_secrets import secrets_app
+from .cli_kickoff import kickoff_app
 from .cli_deploy import deploy_app
 from .cli_wireframe import wireframe as _wireframe_command
 
@@ -957,6 +958,7 @@ app.add_typer(fde_app, name="fde")
 app.add_typer(sapper_app, name="sapper")
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(deploy_app, name="deploy")
+app.add_typer(kickoff_app, name="kickoff")
 
 
 # =============================================================================
