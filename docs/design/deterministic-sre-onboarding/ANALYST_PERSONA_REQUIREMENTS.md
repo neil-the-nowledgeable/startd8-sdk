@@ -1,6 +1,6 @@
 # Benchmark Analyst Onboarding Persona — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post architecture-discovery — declarative-loader pivot)
 **Date:** 2026-06-14
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -31,6 +31,23 @@ the benchmark scoring data (`aggregate.json`/`cells.json`), parent benchmark req
 - **OQ-6 → The generate call takes manifest + run dir** (like P1+P3); confirmed.
 
 *Still open: OQ-7 (added) — whether to also fix the P3 objectives keys now (FR-16) or separately.*
+
+---
+
+## 0.1 Architecture Discovery (v0.3 — flips FR-9/FR-10 back to declarative)
+
+> A hardcoding-elimination pass (inventory of `portal_spec_builder` + the polish pattern + the kickoff/
+> declarative inputs) found the non-hardcoded **home already largely exists** — so the declarative
+> persona loader v0.2 deferred is actually the *cheaper, correct* path AND the user's explicit goal.
+
+| v0.2 Conclusion | Architecture Discovery | v0.3 Impact |
+|-----------------|------------------------|-------------|
+| FR-9 narrowed to **hard-code `analyst`**; declarative deferred (FR-10) | (a) The persona hardcoding = just **two dicts** (`_PERSONA_SECTIONS` :29-51, `_PERSONA_VALUE` :169-226). (b) The section→builder binding is **already a convention-registry** (`if "X" in sections` → `_build_X_panels`) — moving personas to data **auto-unlocks all sections**. (c) The home **exists**: `.contextcore.yaml personas[]` (we added it) + the `benefits.yaml` schema (pain_point/value_received already declarative) + the retail-demo `onboarding-index` section_sets pattern. (d) The **polish** pattern to copy = registry + DEFAULT + drift-check, but polish's *gap* is exactly ours (themes are code) — the fix is the **YAML loading polish lacks**. | **FR-9/FR-10 FLIP:** build a thin **persona-config loader** (manifest `personas[]` → hardcoded-dict fallback, the polish `DEFAULT_THEME` precedence). Then `analyst` (and the existing 4 personas) become **DATA**, not code. Net-new code = the loader + the unavoidable analytical section builders. |
+
+**Correction to a framing assumption:** the polish capability is **selection-driven, not objective-driven**
+(it applies a chosen `--theme`; it does not read objectives/requirements). So there is no "polish reads
+objectives" pattern to copy — objectives live in the ContextManifest (`strategy.objectives`) / portal
+`metadata["objectives"]`. What we copy from polish is the **registry + default-fallback + drift idiom**.
 
 ---
 
@@ -103,14 +120,18 @@ who supervises **scoring** and does **deeper analysis** — needs (a) a **new pe
 
 ### Section C — Persona mechanism (the FR-9 decision)
 
-- **FR-9.** *(v0.2 narrowed to Option A.)* Add `analyst` as a **hard-coded persona**: an entry in
-  `_PERSONA_SECTIONS` (its section set, FR-2) and `_PERSONA_VALUE` (its value prop), plus the
-  matching section gates in `build_portal_spec`. *(The new section builders are code regardless; a
-  declarative manifest-sourced persona loader is a separate enhancement — see FR-10.)*
-- **FR-10.** *(v0.2 reframed.)* **Declarative persona authoring** (read `personas[]` from the benchmark
-  `.contextcore.yaml` so a persona is data, not code) remains the **deferred FR-9 capability** — a
-  clean, separable next step once the analyst persona proves the section set. Not required to ship
-  `analyst`. The 4 built-ins + `analyst` are all additive; no regression.
+- **FR-9.** *(v0.3 — declarative loader, A1.)* Build a thin **persona-config loader**
+  (`observability/persona_config.py`): `load_personas(manifest_dict | None) -> {persona_id:
+  PersonaProfile}` where `PersonaProfile = {sections: list[str], value: {title, pain, headline,
+  content}}`. **Precedence (the polish `DEFAULT_THEME` idiom):** a persona declared in the manifest's
+  `personas[]` overrides; otherwise fall back to the hardcoded `_PERSONA_SECTIONS`/`_PERSONA_VALUE`
+  (which become the built-in default). Wire `build_portal_spec` / `build_all_portal_specs` to read
+  through the loader instead of the dicts directly. **No regression** when the manifest declares no
+  personas (pure fallback). This de-hardcodes the existing 4 personas too.
+- **FR-10.** *(v0.3 — declare `analyst` as DATA, A2.)* Add `analyst` to the benchmark
+  `.contextcore.yaml` `personas[]` with its `value` (title/pain/headline/content) + `sections` (FR-2).
+  No persona code — the loader (FR-9) renders it. The hardcoded value-prop dollar figures
+  (`$247K/yr`…, wayfinder-demo content) are NOT inherited; the benchmark declares its own.
 
 ### Section D — Data path (the recurring FR-18 question, scoped for onboarding)
 

@@ -63,8 +63,13 @@ def build_portal_spec(
     metadata: Dict[str, Any],
     *,
     persona: str = "operator",
+    profile: Any = None,
 ) -> Dict[str, Any]:
     """Build a DashboardSpec dict for the onboarding portal.
+
+    ``profile`` (optional ``PersonaProfile``): when given, its ``sections``/``value`` drive the portal
+    (declarative path, A1); when ``None``, falls back to the hardcoded ``_PERSONA_SECTIONS``/
+    ``_PERSONA_VALUE`` for ``persona`` (no regression for existing callers).
 
     Args:
         business: BusinessContext from artifact_generator.
@@ -76,7 +81,9 @@ def build_portal_spec(
     Returns:
         Dict consumable by DashboardCreatorWorkflow (DashboardSpec shape).
     """
-    sections = _PERSONA_SECTIONS.get(persona, _PERSONA_SECTIONS["operator"])
+    sections = profile.sections if profile is not None else _PERSONA_SECTIONS.get(
+        persona, _PERSONA_SECTIONS["operator"]
+    )
     project_id = business.project_id or "unknown"
     uid_suffix = f"-{persona}" if persona != "operator" else ""
     # UID follows cc-{pack}-{slug} convention for DashboardCreatorWorkflow compatibility
@@ -86,7 +93,21 @@ def build_portal_spec(
 
     if "overview" in sections:
         panels.extend(_build_project_overview_panels(business, report))
-        panels.extend(_build_persona_value_panel(persona))
+        panels.extend(_build_persona_value_panel(persona, profile.value if profile is not None else None))
+
+    # --- Benchmark Analyst analytical sections (A3); static markdown tables from metadata["aggregate"] ---
+    if "scoring-methodology" in sections:
+        panels.extend(_build_scoring_methodology_panels(metadata))
+    if "leaderboard" in sections:
+        panels.extend(_build_leaderboard_panels(metadata))
+    if "quality-distribution" in sections:
+        panels.extend(_build_quality_distribution_panels(metadata))
+    if "exclusions" in sections:
+        panels.extend(_build_exclusions_panels(metadata))
+    if "service-discrimination" in sections:
+        panels.extend(_build_service_discrimination_panels(metadata))
+    if "deeper-analysis" in sections:
+        panels.extend(_build_deeper_analysis_panels(metadata))
 
     if "services" in sections:
         panels.extend(_build_service_inventory_panels(services, report))
@@ -152,10 +173,13 @@ def build_all_portal_specs(
     report: Any,
     metadata: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """Build portal specs for all personas."""
+    """Build portal specs for all resolved personas (hardcoded defaults + manifest ``personas[]``, A1)."""
+    from .persona_config import load_personas
+
+    profiles = load_personas(metadata.get("personas"))
     return [
-        build_portal_spec(business, services, report, metadata, persona=p)
-        for p in _PERSONA_SECTIONS
+        build_portal_spec(business, services, report, metadata, persona=pid, profile=prof)
+        for pid, prof in profiles.items()
     ]
 
 
@@ -226,9 +250,9 @@ _PERSONA_VALUE: Dict[str, Dict[str, str]] = {
 }
 
 
-def _build_persona_value_panel(persona: str) -> List[Dict[str, Any]]:
-    """Build persona-specific value proposition panel."""
-    info = _PERSONA_VALUE.get(persona)
+def _build_persona_value_panel(persona: str, info: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """Build persona-specific value proposition panel (``info`` overrides the hardcoded default)."""
+    info = info or _PERSONA_VALUE.get(persona)
     if not info:
         return []
 
@@ -252,8 +276,8 @@ def _build_project_overview_panels(
     lines = [
         f"# {project_name or project_id}",
         "",
-        f"| Field | Value |",
-        f"|-------|-------|",
+        "| Field | Value |",
+        "|-------|-------|",
         f"| **Project ID** | `{project_id}` |",
         f"| **Criticality** | {_badge(criticality)} |",
         f"| **Owner** | {owner} |",
@@ -657,3 +681,121 @@ def _extract_alert_rules(content: str) -> List[Dict[str, Any]]:
                 })
 
     return rules
+
+
+# ---------------------------------------------------------------------------
+# Benchmark Analyst analytical sections (A3) — static markdown tables from a run's aggregate.json.
+# Threaded in via metadata["aggregate"] (aggregate.json) and metadata["scoring"] (run-spec.json).
+# ---------------------------------------------------------------------------
+
+def _q(v: Any) -> str:
+    return "—" if v is None else f"{float(v):.3f}"
+
+
+def _usd(v: Any) -> str:
+    return "—" if v is None else f"${float(v):.4f}"
+
+
+def _agg(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    return metadata.get("aggregate") or {}
+
+
+def _build_scoring_methodology_panels(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    scoring = metadata.get("scoring") or {}
+    formula = scoring.get("scoring_formula", "compile_gate + compute_disk_quality_score(0.4/0.2/0.2/0.2)")
+    pass_thr = _agg(metadata).get("pass_threshold", 0.5)
+    content = (
+        "**Composite quality** = compile gate (PASS/FAIL) gating a structural score, where structural = "
+        "contract 0.4 + imports 0.2 + stubs 0.2 + semantic 0.2.\n\n"
+        f"- **Formula (this run):** `{formula}`\n"
+        f"- **Pass threshold:** {pass_thr}\n"
+        "- **Composite vs structural:** composite is gated (compile-fail → floor); structural is the raw "
+        "disk-quality score. Read both — high structural with a compile-fail is not a pass.\n"
+        "- **Exclusions:** infra/integrity cells are NOT model failures (see Exclusions)."
+    )
+    return [_text_panel("Scoring Methodology", content, "Scoring Methodology")]
+
+
+def _build_leaderboard_panels(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    by_model = _agg(metadata).get("by_model") or {}
+    if not by_model:
+        return [_text_panel("Leaderboard", "_No run data — generate against a finished run dir._", "Leaderboard")]
+    rows = []
+    for model, m in by_model.items():
+        q, iqr, cost = m.get("quality_median"), m.get("quality_iqr"), m.get("cost_total_usd")
+        cpq = (cost / q) if (cost and q) else None
+        rows.append((q or 0, cost or 0, model, q, iqr, m.get("pass_rate"), cost, cpq))
+    rows.sort(key=lambda r: (-r[0], r[1]))  # quality desc, then cost asc
+    header = "| Model | Quality (median ± IQR) | Pass rate | Cost (USD) | Cost / quality |"
+    sep = "|-------|------------------------|-----------|------------|----------------|"
+    body = [
+        f"| `{model}` | {_q(q)} ± {_q(iqr)} | {_q(pr)} | {_usd(cost)} | {_usd(cpq)} |"
+        for _, _, model, q, iqr, pr, cost, cpq in rows
+    ]
+    note = "\n\n_Composite quality saturates (~1.0) → **cost-per-quality** is the differentiator._"
+    return [_text_panel("Leaderboard", "\n".join([header, sep] + body) + note, "Leaderboard")]
+
+
+def _build_quality_distribution_panels(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    agg = _agg(metadata)
+    overall, by_model = agg.get("overall") or {}, agg.get("by_model") or {}
+    if not overall:
+        return [_text_panel("Quality Distribution", "_No run data._", "Quality Distribution")]
+    lines = [
+        f"**Overall:** median {_q(overall.get('quality_median'))} ± IQR {_q(overall.get('quality_iqr'))} · "
+        f"pass-rate {_q(overall.get('pass_rate'))} · catastrophic {overall.get('catastrophic_count', 0)} · "
+        f"N={overall.get('n_scored', 0)}/{overall.get('n', 0)}",
+        "",
+        "| Model | Median | IQR (reliability) | N scored |",
+        "|-------|--------|-------------------|----------|",
+    ]
+    for model, m in sorted(by_model.items(), key=lambda kv: -(kv[1].get("quality_iqr") or 0)):
+        flag = " ⚠️ high variance" if (m.get("quality_iqr") or 0) > 0.1 else ""
+        lines.append(f"| `{model}` | {_q(m.get('quality_median'))} | {_q(m.get('quality_iqr'))}{flag} | {m.get('n_scored', 0)} |")
+    lines.append("\n_High IQR = low reliability; low N = low confidence._")
+    return [_text_panel("Quality Distribution", "\n".join(lines), "Quality Distribution")]
+
+
+def _build_exclusions_panels(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    agg = _agg(metadata)
+    overall, by_model = agg.get("overall") or {}, agg.get("by_model") or {}
+    lines = [
+        f"**{overall.get('infra_fail_count', 0)} cells excluded as infra/integrity** (NOT model failures). "
+        "A dead key / 429 quota / sandbox void must not tank a model's score.\n",
+        "| Model | infra_fail (excluded) | catastrophic |",
+        "|-------|-----------------------|--------------|",
+    ]
+    for model, m in by_model.items():
+        if (m.get("infra_fail_count") or 0) or (m.get("catastrophic_count") or 0):
+            lines.append(f"| `{model}` | {m.get('infra_fail_count', 0)} | {m.get('catastrophic_count', 0)} |")
+    if len(lines) == 3:
+        lines.append("| _(none this run)_ | 0 | 0 |")
+    return [_text_panel("Exclusions", "\n".join(lines), "Exclusions")]
+
+
+def _build_service_discrimination_panels(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    by_service = _agg(metadata).get("by_service") or {}
+    if not by_service:
+        return [_text_panel("Service Discrimination", "_No run data._", "Service Discrimination")]
+    rows = sorted(by_service.items(), key=lambda kv: (kv[1].get("quality_median") or 1.0))
+    lines = [
+        "Services that **separate** the models surface first (lowest median / highest IQR).\n",
+        "| Service | Median quality | IQR |",
+        "|---------|----------------|-----|",
+    ]
+    for svc, s in rows:
+        lines.append(f"| `{svc}` | {_q(s.get('quality_median'))} | {_q(s.get('quality_iqr'))} |")
+    lines.append("\n_The lowest-quality / highest-IQR service is the discriminator (often checkoutservice)._")
+    return [_text_panel("Service Discrimination", "\n".join(lines), "Service Discrimination")]
+
+
+def _build_deeper_analysis_panels(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    content = (
+        "Levers for going deeper than the leaderboard:\n"
+        "- **Re-score replay** — re-run scoring from saved artifacts without re-spending (parent FR-37).\n"
+        "- **Weight sensitivity** — perturb the 0.4/0.2/0.2/0.2 weights ±0.1; does the top-3 order hold? (FR-11)\n"
+        "- **Blind human-validation** — score↔human correlation on a small blind sample (FR-52).\n"
+        "- **Contamination probe** — rename-perturbation + verbatim tells; memorization vs capability (FR-47).\n"
+        "- **Raw data** — `cells.json` (per-cell quality/compile/cost/sandbox), the tracking spans, the join contract."
+    )
+    return [_text_panel("Deeper Analysis", content, "Deeper Analysis")]

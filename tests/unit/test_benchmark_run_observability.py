@@ -98,7 +98,9 @@ def test_onboarding_portal_personas(tmp_path):
     from startd8.benchmark_matrix.onboarding import generate_onboarding_portal
 
     results = generate_onboarding_portal(_MANIFEST, tmp_path / "portal")
-    assert len(results) == 4  # operator/engineer/manager/executive
+    # 4 built-in personas + the manifest-declared `analyst` (A1/A2 declarative loader)
+    assert len(results) == 5
+    assert any(r["uid"].endswith("-analyst") for r in results)
     for r in results:
         assert r["mode"] in {"compiled", "spec_only"}
         assert r["uid"].startswith("cc-portal-startd8-benchmark")

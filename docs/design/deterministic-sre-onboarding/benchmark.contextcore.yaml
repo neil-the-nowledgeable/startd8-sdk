@@ -84,3 +84,29 @@ personas:
     portal_persona: executive
   - id: compliance      # provenance, legal-gate (FR-49), security risks
     portal_persona: manager   # nearest built-in until role_views renderer exists (FR-12)
+  # Benchmark Analyst — a NET-NEW persona declared as DATA (A2), rendered by the persona-config
+  # loader (A1) + the new analytical section builders (A3). No persona code.
+  - id: analyst
+    portal_persona: analyst
+    value:
+      title: "Benchmark Analyst"
+      pain: "scoring you can't see is scoring you can't trust"
+      headline: "Supervise the scoring — know where it saturates, what's excluded, and where to dig"
+      content: |
+        **The job:** supervise the analysis & scoring of each benchmark run and provide deeper analysis.
+        **What this portal gives you:**
+        - the scoring methodology (compile gate + structural 0.4/0.2/0.2/0.2; composite vs structural; pass_threshold 0.5)
+        - the per-model leaderboard with quality (median + IQR) and cost-per-quality — cost is the real differentiator
+        - the quality distribution (IQR = reliability) and where N is low
+        - the exclusions (infra/integrity are NOT model failures — don't mis-score a key/quota outage)
+        - which services discriminate the models (checkoutservice)
+        - the deeper-analysis levers: re-score replay, weight-sensitivity ±0.1, blind human-validation, contamination probe
+    sections:
+      - overview
+      - scoring-methodology
+      - leaderboard
+      - quality-distribution
+      - exclusions
+      - service-discrimination
+      - deeper-analysis
+      - provenance
