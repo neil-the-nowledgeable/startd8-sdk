@@ -1,6 +1,6 @@
 # Track 2 P1+P2 — Generalized Dep Provisioning + Polyglot Stateless Breadth (Requirements)
 
-**Version:** 0.3 (Post-CRP-R1 — provisioning security controls added)
+**Version:** 0.4 (Post-pilot-each-once — currency→P3, Go-stub provisioning added)
 **Date:** 2026-06-15
 **Status:** Draft
 **Scope:** the curated P1+P2 slice of `TRACK2_M5_EXPANSION_SCOPING.md`. Builds on the merged pilot.
@@ -32,6 +32,27 @@
 - **OQ-5 → `node_runtime/` stays** as the Node common-set offline cache; declared-install layers on top.
 
 ---
+
+## 0c. Pilot-Each-Once Insights (v0.3 → v0.4)
+
+> The currency+shipping pilot-each-once (FR-P2-4) ran end-to-end and **neither service started** — the
+> gate did its job: it falsified the "curated **stateless**" framing. Every P2 pick has a provisioning
+> dependency the suites can't paper over. OQ-T2-2 for currency/shipping is **unanswered (blocked, not
+> measured)**.
+
+| Discovery | Impact |
+|-----------|--------|
+| **currency is not stateless** — it loads a rates **data file** (`data/currency_conversion.json`); the seed even says `deps=["ECB currency rates (data file)"]` | **Reclassify currency → P3 (data-file provisioning).** Remove from the P2 curated set. |
+| **shipping (Go) imports protoc-generated stubs** (`pb "…/src/shippingservice/genproto"`) via a model-invented pseudo-versioned module `go mod tidy` can't fetch; **protoc + protoc-gen-go are ABSENT on the host** | New **FR-P1-GO-STUBS**: vendor pre-generated Go stubs + `replace` the model's stub-import path → local module. Needs protoc once (vendor, like the Python `demo_pb2`). |
+| **payment was unusually self-contained** (validation-only, no data file, no stubs-as-module) | The truly-self-contained set is essentially **just payment**; behavioral expansion = **per-service data/stub provisioning**, not "pick stateless RPCs." This reshapes M-T2.5 cost. |
+| `GOMODCACHE` rejected a relative path | **Fixed** (`secure_env` resolves the workdir absolute). |
+| `scrub_env` `HOME=workdir` → Go scatters telemetry/cache dirs into the cell | Minor; set `GOTELEMETRY=off` / contain Go's HOME writes (FR-P1-GO-STUBS plan). |
+
+**Resolved/Reframed:**
+- **Currency → P3** (out of P1+P2). **P2 curated set is now: shipping (Go) + ad (Java).** (ad still
+  needs a secure Java launcher.)
+- **OQ-9 (do invariants discriminate?) is still open** — the suites are unit-proven to discriminate
+  (good=1.0/broken<1.0), but no real service has started yet to measure flagship spread.
 
 ## 1. Problem Statement
 
@@ -94,20 +115,31 @@ stateless, plausibly-discriminating RPCs** — without committing to all 9 servi
   unpinned/unverifiable install is a degrade-worthy non-determinism, not a silent pass.
 - **FR-P1-SEC-5** **Per-cell cache isolation:** no shared *writable* module cache one cell can poison
   for a later one; shared caches are mounted read-only with a per-cell writable overlay.
+- **FR-P1-GO-STUBS** *(new — pilot)* **Provide the protoc-generated Go stubs as a local module.** A
+  generated Go service imports the proto types from a `genproto`/`hipstershop` package via a module
+  path it invents (and pseudo-versions) — `go mod tidy` can't fetch it. The harness **vendors
+  pre-generated Go stubs** (generated once from `demo.proto`, like the Python `demo_pb2`) and, at
+  provision time, **detects the model's stub-import module path** (from `main.go`/`go.mod`) and adds a
+  `replace <that-module> => <local vendored stubs>` to the cell's `go.mod` before `go mod tidy`. The
+  vendored stubs carry the standard hipstershop symbols, so the model's code compiles against them
+  regardless of the import path it chose. Stub generation needs `protoc` + `protoc-gen-go(-grpc)`
+  **at vendoring time** (absent on the current host → a one-time vendoring prerequisite, not a per-cell
+  dependency). Absent stubs → degrade honestly (FR-T2-2).
 
 ### P2 — Polyglot stateless breadth
 - **FR-P2-1** Add **additive** per-language serve resolvers for **Go** and **Java** (Node exists) — NOT
   on the `LanguageProfile` Protocol (it's `@runtime_checkable` + isinstance-gated). Each returns a launch
   command with PORT injection + TCP readiness.
-- **FR-P2-2** *(revised — D4)* SDK-authored behavioral suites assert **invariants checkable without
-  service-specific ground-truth data** (the proto pins neither rates nor formulas). Curated RPCs:
-  - `currencyservice.Convert` (Node) — **identity** (USD→USD returns the same amount, rate-independent),
-    **unknown currency code → error**, **negative/zero handling**, **determinism** (same input → same out).
-  - `shippingservice.GetQuote` (Go) — **non-negative** quote, **valid currency code**, **determinism**,
-    quote present for a valid cart.
-  - `adservice.GetAds` (Java) — **returns ≥1 ad**, ads **non-empty**, **respects any requested count**.
-  These mirror how Charge worked (validation invariants, not exact transaction values), so they
-  discriminate a correct impl from a careless one **without** needing pinned data.
+- **FR-P2-2** *(revised — D4; currency→P3 per pilot)* SDK-authored behavioral suites assert
+  **invariants checkable without service-specific ground-truth data** (the proto pins neither rates nor
+  formulas). **All three suites are built and unit-proven to discriminate** (good=1.0/broken<1.0); the
+  curated P2 *services* are now **shipping + ad** (currency moved to **P3** — it loads a rates data file):
+  - `shippingservice.GetQuote` (Go) — **non-negative** quote, **valid currency code**, **determinism**.
+    *Blocked on FR-P1-GO-STUBS + Go provisioning until the service can start.*
+  - `adservice.GetAds` (Java) — **returns ≥1 well-formed ad**. *Blocked on a secure Java launcher.*
+  - `currencyservice.Convert` suite **kept** (identity / unknown-code rejection / determinism /
+    supported-non-empty) but the **service runs in P3** (needs the rates data file provisioned).
+  These mirror how Charge worked (validation invariants, not exact transaction values).
 - **FR-P2-3** Add **startup contracts** to the shipping/ad/currency seeds (via the generator; byte-stable).
 - **FR-P2-4** **Pilot-each-once:** before funding N reps × roster, run each new RPC **once** across the
   roster to confirm it actually discriminates (curated path); only then scale.
@@ -173,3 +205,9 @@ at document cost.*
 
 *v0.3 — CRP R1: 6 suggestions accepted (5 new security FRs + 1 plan update), 3 deferred/rejected with
 rationale. P1 promoted from "unsafe as written" to "gated by explicit provisioning-security controls."*
+
+*v0.4 — Pilot-each-once retrospective: the gate falsified "curated stateless." Currency reclassified to
+P3 (data file), FR-P1-GO-STUBS added (vendor protoc stubs + replace the model's import path),
+GOMODCACHE-absolute fixed. Net P2 services = shipping (Go, blocked on stubs) + ad (Java, blocked on
+secure launcher); all three suites built + unit-proven. The deeper finding: payment was unusually
+self-contained — behavioral expansion is per-service data/stub provisioning, which reshapes M-T2.5.*
