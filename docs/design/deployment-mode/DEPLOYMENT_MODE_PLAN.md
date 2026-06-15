@@ -70,11 +70,22 @@ Guiding principle from D1/D2: **bake only what security requires; bind everythin
 >   **Discovery D13:** db.py changes once vs today (gains the tolerant settings hook) but stays
 >   mode-invariant; R4's "==today" is now "== the committed installed golden" (the delta vs pre-capability
 >   being the behavior-preserving hook), exactly as FR-CFG-7b's forward note predicted.
-> - **Remaining (M1 rest / M2 / M3):** A4 (bind/Dockerfile + R1-S5 hash test), A5 (secrets/OTel defaults),
->   A7 (coherence matrix + auth-without-tenant WARN), A8 (wireframe surfacing); M2 = A6 auth seam; M3 = Tier B.
->   **Note:** a deployed **boot** smoke needs Postgres (FR-CFG-5 makes `deployed`+SQLite an ERROR, and the
->   pool args don't apply to SQLite) → it is a PG integration test, deferred; M1-A proves the pieces via
->   exec'd-settings behavior + the contract gate + CLI tests + the installed boot smoke.
+> - **M1-B DONE (2026-06-15) — A4+A7+A8 (operational guardrails + visibility):** **A4** new owned
+>   `run.sh` scaffold artifact with mode-derived bind (installed `127.0.0.1` / deployed `0.0.0.0`,
+>   FR-NET-1/2); Dockerfile keeps `0.0.0.0` (container reachability) but its body+hash vary by mode
+>   (**R1-S5**: `deployment_mode` is in the scaffold `manifest-sha256` → drift sees a mode flip).
+>   **A7** `scaffold_codegen/coherence.py` — the FR-CFG-5 normative ERROR/WARN/OK matrix
+>   (deployed+SQLite-file=ERROR, deployed+`migrations:false`=ERROR, installed+shared-DSN=ERROR,
+>   deployed+`:memory:`=WARN, deployed+auth-no-tenant=WARN dormant until A6) wired into
+>   `generate backend` (ERROR fails the build even on `--check`; WARN proceeds loudly). **A8**
+>   `wireframe` "Deployment mode" section (mode + per-dimension posture + coherence advisories;
+>   iteration ①). +21 tests; 467 backend/scaffold/wireframe green, ruff clean. **Design note:** the
+>   Dockerfile stays `0.0.0.0` because a loopback container is unreachable and installed is the
+>   default — the mode-derived loopback bind lives in `run.sh` (installed's primary run path).
+> - **Remaining (M2 / M3):** A5 (secrets/OTel defaults by mode); M2 = A6 auth seam (R1-F4 marker +
+>   the now-dormant `deployed-auth-no-tenant` WARN goes live); M3 = Tier B tenancy. **Note:** a
+>   deployed **boot** smoke needs Postgres (FR-CFG-5 makes `deployed`+SQLite an ERROR; pool args N/A
+>   to SQLite) → deferred to a PG integration test.
 
 ## 3. Work Breakdown — Tier A (v1 pilot)
 

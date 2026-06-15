@@ -159,7 +159,11 @@ def test_cli_default_mode_installed_no_settings(tmp_path):
 def test_cli_app_manifest_drives_mode(tmp_path):
     schema = _write_schema(tmp_path)
     manifest = tmp_path / "app.yaml"
-    manifest.write_text("deployment:\n  mode: deployed\n", encoding="utf-8")
+    # A coherent deployed manifest (shared DSN) — the FR-CFG-5 guard rejects deployed+SQLite.
+    manifest.write_text(
+        "deployment:\n  mode: deployed\npersistence:\n  path: postgresql://db/app\n",
+        encoding="utf-8",
+    )
     res = runner.invoke(
         generate_app,
         ["backend", "--schema", str(schema), "--out", str(tmp_path),

@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256  # generic sha256-over-text hasher
-from .manifest import AppManifest, parse_app_manifest
+from .manifest import parse_app_manifest
 
 # The generated app's runtime + dev deps (fixed by the FastAPI+SQLModel+HTMX stack, not manifest-derived).
 _RUNTIME_DEPS: Tuple[str, ...] = (
@@ -98,10 +98,16 @@ def render_logging(manifest_text: str) -> str:
 
 
 def render_dockerfile(manifest_text: str) -> str:
-    """``Dockerfile`` — a minimal container for the generated app (build input only)."""
+    """``Dockerfile`` — a minimal container for the generated app (build input only).
+
+    The container always binds ``0.0.0.0`` (a loopback container is unreachable). The mode-derived
+    *local* bind (installed → loopback) lives in ``run.sh`` (FR-NET-1/2); installed mode's primary run
+    is that local script, not this public-server container."""
     m = parse_app_manifest(manifest_text)
     sha = schema_sha256(manifest_text)
     body = (
+        f"# deployment mode: {m.deployment_mode} — the container binds 0.0.0.0 for reachability; "
+        "installed mode's primary run is the local run.sh (loopback).\n"
         f"FROM python:{m.python_version}-slim\n\n"
         "WORKDIR /app\n"
         "COPY pyproject.toml .\n"
@@ -111,6 +117,23 @@ def render_dockerfile(manifest_text: str) -> str:
         f'CMD ["uvicorn", "{m.package}.main:app", "--host", "0.0.0.0", "--port", "8000"]\n'
     )
     return _header("scaffold-dockerfile", sha) + "\n\n" + body
+
+
+def render_run_script(manifest_text: str) -> str:
+    """``run.sh`` — the local run script; bind host is mode-derived (FR-NET-1/2).
+
+    installed → loopback (``127.0.0.1``, single-user local — the PRIMARY installed run path); deployed
+    → all interfaces (``0.0.0.0``). ``PORT`` env overrides the port. The shebang stays line 1; the
+    GENERATED header follows as bash comments so drift/ownership still recognize it."""
+    m = parse_app_manifest(manifest_text)
+    sha = schema_sha256(manifest_text)
+    bind = "127.0.0.1" if m.deployment_mode == "installed" else "0.0.0.0"
+    body = (
+        "set -euo pipefail\n\n"
+        f"# deployment mode: {m.deployment_mode} — bind {bind} (FR-NET-1).\n"
+        f'exec uvicorn {m.package}.main:app --host {bind} --port "${{PORT:-8000}}"\n'
+    )
+    return "#!/usr/bin/env bash\n" + _header("scaffold-run-script", sha) + "\n\n" + body
 
 
 def render_alembic_ini(manifest_text: str) -> str:
@@ -243,6 +266,7 @@ def render_scaffold(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
         ("pyproject.toml", render_pyproject(manifest_text)),
         (f"{m.package}/logging_config.py", render_logging(manifest_text)),
         (".env.example", render_env_example(manifest_text)),
+        ("run.sh", render_run_script(manifest_text)),  # local run; bind mode-derived (FR-NET-1/2)
     ]
     if m.extra_dependencies:  # G4: only when the app declares owned-glue deps
         out.append(("requirements-owned.txt", render_owned_requirements(manifest_text)))
@@ -267,4 +291,5 @@ SCAFFOLD_RENDERERS = {
     "scaffold-alembic-mako": render_alembic_mako,
     "scaffold-owned-requirements": render_owned_requirements,
     "scaffold-env": render_env_example,
+    "scaffold-run-script": render_run_script,
 }

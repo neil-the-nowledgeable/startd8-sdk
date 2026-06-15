@@ -21,6 +21,7 @@ from .renderers import (
     render_owned_requirements,
     render_logging,
     render_pyproject,
+    render_run_script,
     render_scaffold,
 )
 
@@ -36,6 +37,7 @@ __all__ = [
     "render_alembic_mako",
     "render_env_example",
     "render_owned_requirements",
+    "render_run_script",
     "SCAFFOLD_RENDERERS",
     "scaffold_in_sync",
     "is_owned_scaffold_file",

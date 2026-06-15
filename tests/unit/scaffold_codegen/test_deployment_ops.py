@@ -1,0 +1,144 @@
+"""Deployment-mode M1 ops — A4 (run.sh / container bind by mode) + A7 (coherence guard).
+
+A4 (FR-NET-1/2): the local run.sh binds loopback (installed) / all-interfaces (deployed); the
+Dockerfile always binds 0.0.0.0 but its body + hash vary by mode (R1-S5). A7 (FR-CFG-5): the
+normative ERROR/WARN/OK coherence matrix, enforced by `generate backend` when an app.yaml is given.
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+from typer.testing import CliRunner
+
+from startd8.cli_generate import generate_app
+from startd8.scaffold_codegen import (
+    parse_app_manifest,
+    render_dockerfile,
+    render_run_script,
+    render_scaffold,
+    scaffold_in_sync,
+)
+from startd8.scaffold_codegen.coherence import (
+    ERROR,
+    WARN,
+    evaluate_coherence,
+    has_errors,
+)
+from startd8.scaffold_codegen.drift import embedded_manifest_sha
+
+pytestmark = pytest.mark.unit
+
+runner = CliRunner()
+
+INSTALLED_YAML = "app:\n  name: demo\n  package: app\n"  # no deployment block -> installed default
+DEPLOYED_PG = (
+    "app:\n  name: demo\n  package: app\n"
+    "deployment:\n  mode: deployed\n"
+    "persistence:\n  path: postgresql://db/app\n"
+)
+DEPLOYED_DEFAULT = "deployment:\n  mode: deployed\n"  # db_path defaults to ./data/app.db (sqlite)
+
+SCHEMA = "model Profile {\n  id   String @id\n  name String\n}\n"
+
+
+# --- A4: run.sh bind is mode-derived; Dockerfile stays 0.0.0.0 but varies by mode ----------------
+
+def test_run_script_bind_is_mode_derived():
+    installed = render_run_script(INSTALLED_YAML)
+    deployed = render_run_script(DEPLOYED_PG)
+    assert installed.startswith("#!/usr/bin/env bash\n")  # shebang line 1 (executable)
+    assert "--host 127.0.0.1" in installed
+    assert "--host 0.0.0.0" in deployed
+    assert "# startd8-artifact: scaffold-run-script" in installed  # owned/drift-tracked
+
+
+def test_dockerfile_always_binds_all_interfaces_but_body_varies_by_mode():
+    installed = render_dockerfile(INSTALLED_YAML)
+    deployed = render_dockerfile(DEPLOYED_PG)
+    assert '"--host", "0.0.0.0"' in installed and '"--host", "0.0.0.0"' in deployed  # container reach
+    assert installed != deployed  # the mode comment differs
+    assert "deployment mode: installed" in installed and "deployment mode: deployed" in deployed
+
+
+def test_run_sh_is_in_scaffold_set_and_drift_checks():
+    files = dict(render_scaffold(INSTALLED_YAML))
+    assert "run.sh" in files
+    run = files["run.sh"]
+    assert scaffold_in_sync(INSTALLED_YAML, run) is True
+    tampered = run.replace("127.0.0.1", "0.0.0.0")  # hand-edit the bind
+    assert scaffold_in_sync(INSTALLED_YAML, tampered) is False
+
+
+def test_r1_s5_mode_is_in_the_scaffold_hash_and_artifacts_differ():
+    # Mode flip changes app.yaml text -> different manifest-sha256 in EVERY scaffold artifact header
+    # (so --check sees the flip, FR-DET-1), and the mode-varying bodies differ too.
+    i_files, d_files = dict(render_scaffold(INSTALLED_YAML)), dict(render_scaffold(DEPLOYED_PG))
+    assert embedded_manifest_sha(i_files["Dockerfile"]) != embedded_manifest_sha(d_files["Dockerfile"])
+    assert i_files["run.sh"] != d_files["run.sh"]
+
+
+# --- A7: the FR-CFG-5 coherence matrix -----------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "yaml_text, kwargs, expect_codes",
+    [
+        (INSTALLED_YAML, {}, []),                                   # installed + sqlite default -> OK
+        (DEPLOYED_PG, {}, []),                                      # deployed + postgres + migrations -> OK
+        (DEPLOYED_DEFAULT, {}, ["deployed-sqlite-file"]),          # deployed + sqlite file -> ERROR
+        ("deployment:\n  mode: deployed\npersistence:\n  path: 'sqlite:///:memory:'\n",
+         {}, ["deployed-sqlite-memory"]),                          # deployed + :memory: -> WARN
+        ("deployment:\n  mode: deployed\npersistence:\n  path: postgresql://db/app\n"
+         "migrations:\n  enabled: false\n", {}, ["deployed-no-migrations"]),  # ERROR
+        ("app:\n  name: d\npersistence:\n  path: postgresql://db/app\n", {},
+         ["installed-shared-dsn"]),                                # installed + shared DSN -> ERROR
+        (DEPLOYED_PG, {"has_auth_seam": True, "has_tenant": False},
+         ["deployed-auth-no-tenant"]),                             # WARN (dormant until A6)
+        (INSTALLED_YAML, {"has_auth_seam": True}, ["installed-auth-requested"]),  # ERROR
+    ],
+)
+def test_coherence_matrix(yaml_text, kwargs, expect_codes):
+    findings = evaluate_coherence(parse_app_manifest(yaml_text), **kwargs)
+    assert sorted(f.code for f in findings) == sorted(expect_codes)
+
+
+def test_has_errors_distinguishes_severity():
+    err = evaluate_coherence(parse_app_manifest(DEPLOYED_DEFAULT))
+    assert has_errors(err) and err[0].severity == ERROR
+    memory = "deployment:\n  mode: deployed\npersistence:\n  path: 'sqlite:///:memory:'\n"
+    warn = evaluate_coherence(parse_app_manifest(memory))
+    assert not has_errors(warn) and warn[0].severity == WARN
+
+
+# --- A7 wired into `generate backend` ------------------------------------------------------------
+
+def _schema(tmp_path):
+    p = tmp_path / "schema.prisma"
+    p.write_text(SCHEMA, encoding="utf-8")
+    return p
+
+
+def test_cli_coherence_error_blocks_the_build(tmp_path):
+    schema = _schema(tmp_path)
+    manifest = tmp_path / "app.yaml"
+    manifest.write_text(DEPLOYED_DEFAULT, encoding="utf-8")  # deployed + sqlite -> ERROR
+    res = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--out", str(tmp_path), "--app-manifest", str(manifest)],
+    )
+    assert res.exit_code != 0
+    assert "deployed-sqlite-file" in res.output
+    assert not (tmp_path / "app" / "settings.py").exists()  # build refused before writing
+
+
+def test_cli_coherent_deployed_builds(tmp_path):
+    schema = _schema(tmp_path)
+    manifest = tmp_path / "app.yaml"
+    manifest.write_text(DEPLOYED_PG, encoding="utf-8")  # deployed + postgres -> OK
+    res = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--out", str(tmp_path), "--app-manifest", str(manifest)],
+    )
+    assert res.exit_code == 0, res.output
+    assert (tmp_path / "app" / "settings.py").exists()

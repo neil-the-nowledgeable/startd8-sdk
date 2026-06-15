@@ -252,19 +252,19 @@ def backend(
     # an explicit --mode wins (ergonomic override). Threaded to BOTH generate and --check so a
     # deployed tree's app/settings.py is emitted and drift-checked consistently.
     deployment_mode = "installed"
+    app_manifest_obj = None
     if app_manifest is not None:
         from .scaffold_codegen import parse_app_manifest
 
         try:
-            deployment_mode = parse_app_manifest(
-                app_manifest.read_text(encoding="utf-8")
-            ).deployment_mode
+            app_manifest_obj = parse_app_manifest(app_manifest.read_text(encoding="utf-8"))
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read app-manifest {app_manifest}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
         except ValueError as exc:  # malformed app.yaml / bad deployment.mode — fail loud
             console.print(f"[red]error:[/red] {exc}")
             raise typer.Exit(_EXIT_ERROR)
+        deployment_mode = app_manifest_obj.deployment_mode
     if mode is not None:
         if mode not in ("installed", "deployed"):
             console.print(
@@ -272,6 +272,22 @@ def backend(
             )
             raise typer.Exit(_EXIT_ERROR)
         deployment_mode = mode
+
+    # FR-CFG-5 coherence guard: with an app.yaml we can evaluate mode × persistence × migrations
+    # against the normative matrix. ERROR combinations fail the build (even on --check); WARN
+    # combinations proceed loudly. (Only evaluable when --app-manifest supplies the persistence/
+    # migrations facts; --mode alone has nothing to check against.)
+    if app_manifest_obj is not None:
+        from dataclasses import replace
+
+        from .scaffold_codegen.coherence import evaluate_coherence, has_errors
+
+        findings = evaluate_coherence(replace(app_manifest_obj, deployment_mode=deployment_mode))
+        for f in findings:
+            color = "red" if f.severity == "ERROR" else "yellow"
+            console.print(f"[{color}]{f.severity.lower()}[/{color}] ({f.code}): {f.message}")
+        if has_errors(findings):
+            raise typer.Exit(_EXIT_ERROR)
 
     if ai_agent_spec and manifest_text is None:
         console.print(
