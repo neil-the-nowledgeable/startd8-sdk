@@ -173,6 +173,36 @@ def test_is_infra_error_detection():
     assert not is_infra_error(None)
 
 
+def test_missing_api_key_is_infra_not_model_failure():
+    # A missing/unconfigured key is a setup failure ($0, no LLM call) — must classify as infra so
+    # it's EXCLUDED, not counted as the model's catastrophic failure (the pilot conflated these).
+    from startd8.benchmark_matrix import is_infra_error
+    for provider in ("Anthropic", "OpenAI", "Google"):
+        msg = (f"Failed to resolve agents: {provider} API key required. "
+               f"Set {provider.upper()}_API_KEY environment variable or pass api_key in config.")
+        assert is_infra_error(msg), provider
+    # A genuine model failure that merely mentions an api_key in generated code is NOT infra.
+    assert not is_infra_error("generated code calls stripe.api_key but has a logic bug")
+
+
+def test_missing_key_reclassified_and_excluded_from_model_score():
+    # A prior run that recorded a missing-key cell as STATUS_FAILED is reclassified to infra and
+    # excluded — so the model is not unfairly scored 0/catastrophic for an unset key.
+    from startd8.benchmark_matrix import reclassify_infra_failures
+    from startd8.benchmark_matrix.runner import STATUS_FAILED, STATUS_INFRA_FAIL
+    cells = [
+        CellResult(f"x{i}", "paymentservice", "anthropic:claude-opus-4-8", "nodejs", i,
+                   STATUS_FAILED,
+                   error="Failed to resolve agents: Anthropic API key required. "
+                         "Set ANTHROPIC_API_KEY environment variable or pass api_key in config.")
+        for i in range(3)
+    ]
+    assert reclassify_infra_failures(cells) == 3
+    assert all(c.status == STATUS_INFRA_FAIL for c in cells)
+    g = aggregate_cells(cells)["by_model"]["anthropic:claude-opus-4-8"]
+    assert g["catastrophic_count"] == 0 and g["pass_rate"] is None and g["infra_fail_count"] == 3
+
+
 def test_infra_fail_excluded_from_model_score():
     from startd8.benchmark_matrix.runner import STATUS_INFRA_FAIL
     # A model whose 9 cells all infra-failed (dead key) must NOT be scored 0/catastrophic.
