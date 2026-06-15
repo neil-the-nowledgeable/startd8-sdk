@@ -7,6 +7,24 @@
 
 ---
 
+## 0a. Spike validation (2026-06-14 — the mechanism is PROVEN)
+
+A proof spike compiled a real **project-metric** DashboardSpec end-to-end:
+`DashboardSpec → DashboardCreatorWorkflow → generate jsonnet → jsonnet binary (Go v0.22.0) + startd8-mixin
+grafonnet → valid Grafana JSON (schemaVersion 39, 5 KB)`. Panels carried `startd8_cost_total{project=~…}`
+(live today) + `task_wip{project_id="startd8-benchmark"}` (ContextCore), auto-grouped into `Cost`/`Delivery`
+rows. **Verdict: the load-bearing direct-DashboardSpec path works for project dashboards.** Three concrete
+gotchas the spike surfaced (now baked into P1):
+- **UID must match `cc-{pack}-{kebab-name}`** (e.g. `cc-benchmark-cost`). Enforced by DC-006.
+- **A `variables` entry is required** (≥ the `prometheusDatasource` datasource var) or JSON validation fails
+  on a missing `templating` section.
+- **The mixin's `vendor/` (grafonnet) must be present** — it's `jb install`-ed in the primary checkout but
+  **not committed**, so a fresh worktree/CI needs `jb install` (or vendored grafonnet) before compile. The
+  toolchain guard (FR-16) must check for `vendor/`, not just the jsonnet binary.
+
+Rendering *data* still needs a live Prometheus/Mimir; the spike proves **generation + valid JSON**, and the
+cost panels would show real numbers against a scrape of the already-emitted `startd8.cost.*`.
+
 ## 0. Design summary (the corrected shape)
 
 Two parallel deterministic outputs from **one** declarative source (`benchmark.contextcore.yaml`):
