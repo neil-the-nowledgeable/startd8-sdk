@@ -64,6 +64,19 @@ class RepairConfig:
     """
 
     repair_enabled: bool = True
+    # Observer/counterfactual mode (benchmark instrumentation):
+    #   "apply"  — normal behaviour: repair runs and is persisted.
+    #   "shadow" — repair runs against a throwaway copy ONLY; the raw model
+    #              output is preserved as the deliverable and a per-unit
+    #              "what repair would have done" report is emitted. Repair has
+    #              ZERO influence on the build (checkpoints/retries see raw).
+    #   "off"    — equivalent to repair_enabled=False (no run, no report).
+    repair_mode: str = "apply"
+    # Quality observability (FR-B1/B4): when True, the integration pipeline persists a
+    # consolidated defect ledger (.startd8/defect-ledger/*.json) of every detected flaw and
+    # skips the advisory downgrade so import/lint failures stay FAILED. Additive, default-off —
+    # nothing changes when unset. Composes with repair_mode="shadow" + --benchmark-mode.
+    expose_defects: bool = False
     repairable_categories: frozenset[str] = frozenset({"syntax", "import", "lint", "semantic", "security", "convention", "content_contract"})
     pre_checkpoint_repair: bool = False
     staging_root: Optional[Path] = None

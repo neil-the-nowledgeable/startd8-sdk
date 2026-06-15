@@ -988,7 +988,7 @@ def _validate_non_python_file(
     # exemption (Path("foo.d.ts").suffix == ".ts", so it would otherwise route
     # through the same path) and scope the check to source-code languages.
     _SOURCE_CODE_SUFFIXES = {
-        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".java", ".cs",
+        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".java", ".cs", ".vue",
     }
     if suffix in _SOURCE_CODE_SUFFIXES and not name.endswith(".d.ts"):
         try:
@@ -1029,6 +1029,8 @@ def _validate_non_python_file(
         result = _validate_yaml_file(content, result)
     elif suffix in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
         result = _validate_js_file(content, result, file_path=str(abs_path))
+    elif suffix == ".vue":
+        result = _validate_vue_file(content, result, file_path=str(abs_path))
     elif suffix == ".go":
         result = _validate_go_file(content, result, file_path=str(abs_path))
     elif suffix == ".json":
@@ -1509,6 +1511,26 @@ _JS_KEYWORD_SET = frozenset({
     "function", "const", "let", "var", "require",
     "import", "export", "class", "module",
 })
+
+
+def _validate_vue_file(
+    content: str,
+    result: DiskComplianceResult,
+    file_path: Optional[str] = None,
+) -> DiskComplianceResult:
+    """Validate a Vue SFC (FR-N3): extract the ``<script>`` block and reuse the JS validator.
+
+    A scriptless SFC (template/style only) is treated as valid — there is no executable
+    code to compile. Parity with the ``.js`` disk-compliance path."""
+    try:
+        from startd8.languages.vue_sfc import extract_vue_script
+        ext = extract_vue_script(content)
+        script = getattr(ext, "script", "") if ext else ""
+    except Exception:
+        script = ""
+    if not script.strip():
+        return result  # no <script> → nothing to compile; leave defaults (valid)
+    return _validate_js_file(script, result, file_path=file_path)
 
 
 def _validate_js_file(

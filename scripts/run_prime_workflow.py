@@ -310,6 +310,25 @@ def main() -> int:
         "--no-repair", action="store_true",
         help="Disable post-generation repair pipeline",
     )
+    parser.add_argument(
+        "--repair-mode", choices=["apply", "shadow", "off"], default="apply",
+        help=(
+            "apply (default) = repair runs and is persisted; "
+            "shadow = repair runs as a non-influencing observer (raw model "
+            "output preserved, '.startd8/repair-shadow/*.json' reports what "
+            "repair WOULD have done — benchmark instrumentation); "
+            "off = disable repair entirely (== --no-repair)"
+        ),
+    )
+    parser.add_argument(
+        "--expose-defects", action="store_true",
+        help=(
+            "Quality-observability mode: persist a consolidated defect ledger "
+            "('.startd8/defect-ledger/*.json') of every detected flaw and skip the "
+            "advisory downgrade so import/lint failures stay FAILED. Additive, "
+            "default-off. Composes with --repair-mode shadow and --benchmark-mode."
+        ),
+    )
     # Kaizen prompt capture (REQ-KZ-200, 201, 204)
     parser.add_argument(
         "--kaizen", action="store_true",

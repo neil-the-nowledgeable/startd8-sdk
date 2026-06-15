@@ -46,6 +46,14 @@ _FALLBACK_SYNTAX_COMMANDS = {
         ".cjs": ["node", "--check", "{file}"],
         ".mjs": ["node", "--check", "{file}"],
     },
+    # Vue (FR-N2): score_file extracts the SFC's <script> to a temp .mjs (node --check can't
+    # parse an SFC; .mjs so ESM `import`/`export default` — the common Vue form — parse cleanly),
+    # so the vue profile resolves this parse-only command on that temp. We deliberately use
+    # node --check here rather than the vue profile's own vue-tsc syntax_check_command, which
+    # needs npx/network and is unavailable in the offline FR-44 sandbox.
+    "vue": {
+        ".mjs": ["node", "--check", "{file}"],
+    },
     # Java Tier-1 (FR-J1): single-file `javac` syntax/type check. `-proc:none` avoids needing
     # annotation processors on the classpath; output goes to the disposable sandbox workspace.
     # No classpath ⇒ gRPC/protobuf imports fail as "missing deps" and are *degraded* (FR-J2),
@@ -259,24 +267,97 @@ def score_file(file_path: Path, profile, *, cfg: Optional[SandboxConfig] = None,
         return CompositeScore(value=min(structural or 0.0, COMPILE_FLOOR), structural=structural,
                               compile_ok=False, degraded=False, terms_available=["compile"],
                               note="generated file not found → floored")
-    compile_cmd = getattr(profile, "syntax_check_command", None)
-    if not compile_cmd:
-        # Profile exposes no syntax command (e.g. nodejs) — use a sandbox-safe single-file
-        # fallback where one exists (Node `node --check` for .js). Keeps the check INSIDE the
-        # FR-44 sandbox and degrades (not pass) when the toolchain is absent — unlike the
-        # profile's own validate_syntax(), which runs unsandboxed and treats absent as pass.
-        compile_cmd = fallback_syntax_command(profile, fp)
-    lint_cmd = getattr(profile, "lint_command", None) if run_lint else None
-    gate = run_gate("compile", compile_cmd, fp, cfg)
-    # FR-J2: a compile that failed only on absent dependencies (no classpath in Tier-1) is not a
-    # model fault — re-flavor it as degraded (compile_ok=None) so compute_composite won't floor it.
-    if gate.available and gate.passed is False and not gate.sandbox_violation:
-        lang = getattr(profile, "language_id", "") or ""
-        if classify_compile_failure(lang, gate.detail) == "missing_deps":
-            gate = GateResult(
-                name=gate.name, available=False, passed=None,
-                detail=f"missing deps — Tier-1 degraded (FR-J2): {gate.detail[:160]}",
-                isolation_level=gate.isolation_level,
+
+    # FR-N2: Vue SFC — node --check can't parse an SFC, so extract the <script> to a temp .js
+    # beside the original (inside the sandbox workspace) and gate THAT. A scriptless SFC has no
+    # executable code to compile → degraded (not floored). Temp removed in finally.
+    gate_fp = fp
+    _vue_tmp: Optional[Path] = None
+    profile_syntax_cmd = getattr(profile, "syntax_check_command", None)
+    if fp.suffix.lower() == ".vue":
+        try:
+            from startd8.languages.vue_sfc import extract_vue_script
+            ext = extract_vue_script(fp.read_text(encoding="utf-8"))
+            script = getattr(ext, "script", "") if ext else ""
+        except Exception:
+            script = ""
+        if not script.strip():
+            return compute_composite(
+                structural,
+                GateResult("compile", available=False, passed=None,
+                           detail="vue: no <script> to compile"),
             )
-    lint = run_gate("lint", lint_cmd, fp, cfg) if lint_cmd else None
-    return compute_composite(structural, gate, lint)
+        _vue_tmp = fp.parent / (fp.stem + ".__vuecheck__.mjs")
+        _vue_tmp.write_text(script, encoding="utf-8")
+        gate_fp = _vue_tmp
+        # Force the parse-only node --check fallback on the extracted script — NOT the vue
+        # profile's vue-tsc command (needs npx/network, fails in the offline sandbox).
+        profile_syntax_cmd = None
+
+    try:
+        compile_cmd = profile_syntax_cmd
+        if not compile_cmd:
+            # Profile exposes no syntax command (e.g. nodejs) — use a sandbox-safe single-file
+            # fallback where one exists (Node `node --check` for .js). Keeps the check INSIDE the
+            # FR-44 sandbox and degrades (not pass) when the toolchain is absent — unlike the
+            # profile's own validate_syntax(), which runs unsandboxed and treats absent as pass.
+            compile_cmd = fallback_syntax_command(profile, gate_fp)
+        lint_cmd = getattr(profile, "lint_command", None) if run_lint else None
+        gate = run_gate("compile", compile_cmd, gate_fp, cfg)
+        # FR-J2: a compile that failed only on absent dependencies (no classpath in Tier-1) is not a
+        # model fault — re-flavor it as degraded (compile_ok=None) so compute_composite won't floor it.
+        if gate.available and gate.passed is False and not gate.sandbox_violation:
+            lang = getattr(profile, "language_id", "") or ""
+            if classify_compile_failure(lang, gate.detail) == "missing_deps":
+                gate = GateResult(
+                    name=gate.name, available=False, passed=None,
+                    detail=f"missing deps — Tier-1 degraded (FR-J2): {gate.detail[:160]}",
+                    isolation_level=gate.isolation_level,
+                )
+        lint = run_gate("lint", lint_cmd, gate_fp, cfg) if lint_cmd else None
+        return compute_composite(structural, gate, lint)
+    finally:
+        if _vue_tmp is not None:
+            try:
+                _vue_tmp.unlink()
+            except OSError:
+                pass
+
+
+# ── Expose-defects scoring (FR-B3) ─────────────────────────────────────────────
+# The compile gate + structural score saturate: "it compiles" + structural→1.000 lets a
+# parses-but-semantically-defective file top the leaderboard (see Summer2026
+# QUALITY_MASKING_REMEDIATION). The expose score folds the defect ledger's findings back in so
+# defects detected on a compiling file pull the score off the ceiling. Weights are provisional
+# (OQ-3 — count-based v0.1; per-LOC density is a refinement).
+DEFECT_ERROR_WEIGHT = 0.15
+DEFECT_WARNING_WEIGHT = 0.03
+
+
+def defect_penalty(by_severity: Dict[str, int]) -> float:
+    """Bounded [0,1] penalty from a ledger's severity histogram (FR-B3)."""
+    errors = int((by_severity or {}).get("error", 0))
+    warnings = int((by_severity or {}).get("warning", 0))
+    return min(1.0, errors * DEFECT_ERROR_WEIGHT + warnings * DEFECT_WARNING_WEIGHT)
+
+
+def apply_defect_penalty(base: CompositeScore, ledger: Optional[Dict]) -> CompositeScore:
+    """Discount a base composite by the defect ledger (FR-B3). Returns ``base`` unchanged when
+    there are no defects, so a genuinely clean file is unaffected (de-saturation, not blanket
+    penalty). ``ledger`` is a :meth:`DefectLedger.to_dict` mapping."""
+    by_sev = (ledger or {}).get("by_severity", {})
+    pen = defect_penalty(by_sev)
+    if pen <= 0.0:
+        return base
+    value = round(max(0.0, base.value * (1.0 - pen)), 4)
+    by_cat = (ledger or {}).get("by_category", {})
+    total = (ledger or {}).get("total", 0)
+    note = (base.note + " · " if base.note else "") + (
+        f"defect penalty -{pen:.2f} ({total} defects {by_cat})"
+    )
+    return CompositeScore(
+        value=value, structural=base.structural, compile_ok=base.compile_ok,
+        degraded=base.degraded,
+        terms_available=list(base.terms_available) + ["defects"],
+        terms_missing=list(base.terms_missing), note=note,
+    )
