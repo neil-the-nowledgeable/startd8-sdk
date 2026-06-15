@@ -233,10 +233,15 @@ def _wrap_loopback_only(cmd: List[str], caps: Dict[str, bool]) -> tuple[List[str
     """
     if caps["sandbox_exec"]:
         # Seatbelt evaluates top→bottom, last match wins: deny all network, then re-allow localhost.
+        # A SERVER must be allowed to BIND, ACCEPT (network-inbound), and the client side to connect
+        # (network-outbound) — all scoped to localhost. The earlier profile omitted network-inbound,
+        # so the server bound nothing and every behavioral cell silently failed readiness
+        # (empirically verified: bind fails without it). Remote egress stays denied by `deny network*`.
         profile = (
             "(version 1)(allow default)(deny network*)"
-            '(allow network* (remote ip "localhost:*"))'
             '(allow network-bind (local ip "localhost:*"))'
+            '(allow network-inbound (local ip "localhost:*"))'
+            '(allow network-outbound (remote ip "localhost:*"))'
         )
         return (["sandbox-exec", "-p", profile, *cmd], True, "seatbelt-loopback")
     if caps["unshare"]:

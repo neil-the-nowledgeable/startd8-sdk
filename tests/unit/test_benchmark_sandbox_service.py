@@ -13,10 +13,13 @@ from __future__ import annotations
 import socket
 import sys
 
+import pytest
+
 from startd8.benchmark_matrix.sandbox import (
     SandboxConfig,
     _port_ready,
     run_service_sandboxed,
+    sandbox_caps,
 )
 
 # A loopback echo server: bind 127.0.0.1:<argv[1]>, reply "hello" to each connection, loop forever
@@ -89,6 +92,21 @@ def test_client_error_sets_violation_and_still_tears_down(tmp_path):
     assert res.ready is True                   # server came up...
     assert res.violation is not None and res.violation.startswith("client error")  # ...but client failed
     assert not _port_ready(port)               # teardown still guaranteed after a client exception
+
+
+@pytest.mark.skipif(not sandbox_caps()["sandbox_exec"], reason="seatbelt (sandbox-exec) not available")
+def test_secure_loopback_sandbox_permits_server_bind_and_client(tmp_path):
+    # FR-T2-SEC regression: the SECURE path (default cfg → no_network=True, seatbelt loopback) must
+    # let a server bind + accept on 127.0.0.1. The old profile omitted network-inbound, so the bind
+    # failed and every behavioral cell silently degraded. Default cfg here exercises the real profile.
+    port = _free_port()
+    res = run_service_sandboxed(
+        [sys.executable, "-c", _SERVER_SRC, str(port)],
+        tmp_path, port, _connect_client, readiness_timeout_s=10.0,
+    )
+    assert res.ready is True and res.violation is None
+    assert res.client_outcome == "hello"
+    assert "seatbelt-loopback" in res.isolation_level and res.network_isolated is True
 
 
 def test_loopback_profile_allows_localhost_denies_egress():
