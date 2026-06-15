@@ -516,6 +516,10 @@ def contract(
     check: bool = typer.Option(
         False, "--check",
         help="Gate only; write nothing to the project. Exit 0=ok / 1=drift|round-trip-fail / 2=error."),
+    allow_lossy: bool = typer.Option(
+        False, "--allow-lossy",
+        help="Permit --promote even when the doc declares field(s) the contract can't express "
+             "(unrenderable). Default: refuse, so a flip never silently drops an authored field."),
     json_out: bool = typer.Option(False, "--json", help="Emit the gate result as JSON."),
 ):
     """Emit `prisma/schema.prisma` from the requirements doc (FR-PE / FR-EMIT) — $0, no LLM.
@@ -610,6 +614,19 @@ def contract(
             console.print("[red]refusing to promote[/red]: the emitted schema did not round-trip "
                           f"to a non-empty model set (models={res.models}) — fix the requirements "
                           "doc (no parseable entities?) before flipping the contract.")
+            raise typer.Exit(1)
+        if res.errors:  # C1/H1/H3: structural problems are never promotable
+            console.print(f"[red]refusing to promote[/red]: {len(res.errors)} structural error(s) — "
+                          "fix the requirements doc:")
+            for e in res.errors:
+                console.print(f"  - {e}")
+            raise typer.Exit(1)
+        if res.unrenderable and not allow_lossy:  # C1: a flip must not silently drop authored fields
+            console.print(f"[red]refusing to promote[/red]: {len(res.unrenderable)} field(s) the "
+                          "contract can't express would be DROPPED — fix the field type(s), or pass "
+                          "--allow-lossy to flip anyway:")
+            for u in res.unrenderable:
+                console.print(f"  - {u.entity}.{u.field}: {u.reason}")
             raise typer.Exit(1)
         if live_text is not None and res.parity_drift:
             console.print(f"[cyan]applying {len(res.parity_drift)} change(s)[/cyan] vs the live contract.")

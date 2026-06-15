@@ -414,3 +414,30 @@ def test_promote_copies_draft_and_archives_handauthored(tmp_path):
 def test_promote_without_gated_draft_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         promote_schema(str(tmp_path / "empty"), str(tmp_path / "prisma" / "schema.prisma"))
+
+
+# --------------------------------------------------------------------------- #
+# Critical (C1/C2): gate considers dropped fields + structural errors; the
+# round-trip oracle is field- and enum-level, not just model names.
+# --------------------------------------------------------------------------- #
+
+def test_c2_render_exposes_field_and_enum_oracle():
+    res = render_prisma_schema(_graph())
+    assert res.field_names["Profile"]                                   # per-model fields recorded
+    assert "name" in res.field_names["Profile"]
+    assert "proofPoints" in res.field_names["Profile"]                  # reverse-list tracked too
+    assert res.errors == ()
+
+
+def test_c1_clean_graph_gate_ok(tmp_path):
+    res = emit_schema_draft(_graph(), str(tmp_path))
+    assert res.ok and res.round_trips and not res.unrenderable and not res.errors
+
+
+def test_c1_gate_refuses_when_a_field_is_dropped(tmp_path):
+    g = _graph()
+    g.entities["Weird"] = DocEntity("Weird", (_f("blob", None),), ("Entities", "Weird"))
+    res = emit_schema_draft(g, str(tmp_path))
+    assert res.round_trips                       # the rest of the schema still round-trips
+    assert res.unrenderable                      # but the author's `blob` field was dropped
+    assert res.ok is False                       # → not safe to promote (C1)

@@ -21,7 +21,7 @@ never emitted wrong (the FR-WPI ``not_extracted`` discipline).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -72,6 +72,42 @@ class PrismaSchemaResult:
     models_rendered: int
     unrenderable: Tuple[UnrenderableField, ...]
     warnings: Tuple[str, ...] = ()    # OQ-PE-7: advisory (e.g. enum default not a member) — never blocks
+    errors: Tuple[str, ...] = ()      # structural fail-loud (duplicate field, bad @@index column) — block
+    field_names: Dict[str, Tuple[str, ...]] = field(default_factory=dict)  # per-model emitted fields
+    enum_names: Tuple[str, ...] = ()  # emitted enum block names (the round-trip oracle, C2)
+
+
+def _emit_field(
+    lines: List[str], seen: List[str], errors: List[str], model: str, name: str, body: str
+) -> None:
+    """Append a field line + record its name (the field-level round-trip oracle, C2).
+
+    A duplicate name is a structural error (a relationship/plural collision) — recorded and the
+    duplicate suppressed, never an invalid duplicate-field schema (H1, populated at the High level).
+    """
+    if name in seen:
+        errors.append(
+            f"{model}.{name}: duplicate field (relationship/pluralization collision); suppressed"
+        )
+        return
+    seen.append(name)
+    lines.append(_field_line(name, body))
+
+
+def _quote_string_default(value: str) -> str:
+    """Quote a ``String`` ``@default`` (Prisma rejects a bare word). Escaping is hardened at M5."""
+    return '"' + value.strip().strip('"').strip("'") + '"'
+
+
+def _emit_block_attrs(
+    model: str, lines: List[str], seen: List[str], errors: List[str], graph: "EntityGraph"
+) -> None:
+    """Emit ``@@unique`` / ``@@index`` for a model. Column-existence validation (H3) is layered in
+    at the High level; here it emits the declared block attributes."""
+    for cols in graph.uniques.get(model, []):        # FR-PE-5(b): explicit compound @@unique
+        lines.append(f"  @@unique([{', '.join(cols)}])")
+    for cols in graph.indexes.get(model, []):        # FR-PE-5(b): explicit @@index
+        lines.append(f"  @@index([{', '.join(cols)}])")
 
 
 def _plural(name: str) -> str:
@@ -98,16 +134,19 @@ def _enum_block(name: str, values: Tuple[str, ...]) -> str:
 
 def _collect_enum_blocks(
     graph: EntityGraph, unrenderable: List[UnrenderableField]
-) -> List[str]:
+) -> Tuple[List[str], Tuple[str, ...]]:
     """FR-PE-10: render every enum block — named enums (``graph.enums``) and per-field inline
     ``choice of:`` enums (``DocField.enum_values``) — before the model blocks, in stable order.
+    Returns ``(blocks, emitted_enum_names)``; the names feed the C2 round-trip oracle.
 
     A synthesized ``<Entity><Field>`` name colliding with a declared ``## Enums`` name is flagged
     (OQ-PE-8), never silently merged.
     """
     blocks: List[str] = []
+    names: List[str] = []
     for name in sorted(graph.enums):                       # named enums: alpha, stable
         blocks.append(_enum_block(name, graph.enums[name]))
+        names.append(name)
     for ent_name, ent in graph.entities.items():           # per-field: entity/field decl order
         for f in ent.fields:
             if f.enum_values is None or f.prisma_type is None:
@@ -119,7 +158,8 @@ def _collect_enum_blocks(
                 ))
                 continue
             blocks.append(_enum_block(f.prisma_type, f.enum_values))
-    return blocks
+            names.append(f.prisma_type)
+    return blocks, tuple(names)
 
 
 def render_prisma_schema(
@@ -128,6 +168,8 @@ def render_prisma_schema(
     """Render ``schema.prisma`` from the doc-derived :class:`EntityGraph` (FR-PE-1/2/3, $0)."""
     unrenderable: List[UnrenderableField] = []
     warnings: List[str] = []
+    errors: List[str] = []
+    field_names: Dict[str, Tuple[str, ...]] = {}
 
     # --- precompute relationship-derived members keyed by entity name (FR-PE-3) -----------------
     rev_lists: Dict[str, List[Tuple[str, str]]] = {n: [] for n in graph.entities}
@@ -149,59 +191,68 @@ def render_prisma_schema(
         rev_lists.setdefault(j.right, []).append((_plural(j.left), f"{j.name}[]"))
 
     # --- enum blocks (FR-PE-10): named + per-field inline, before the models -------------------
-    blocks: List[str] = _collect_enum_blocks(graph, unrenderable)
+    blocks, enum_names = _collect_enum_blocks(graph, unrenderable)
 
     # --- entity models -------------------------------------------------------------------------
     for name, ent in graph.entities.items():
-        lines = [_field_line(fn, body) for fn, body in _BOOKKEEPING]
+        lines: List[str] = []
+        seen: List[str] = []
+        for fn, body in _BOOKKEEPING:
+            _emit_field(lines, seen, errors, name, fn, body)
         lines.append("")  # readability gap between bookkeeping and domain fields
         for f in ent.fields:
             if f.prisma_type is None:
                 unrenderable.append(UnrenderableField(name, f.name, "type outside plain-type vocabulary"))
                 continue
             if f.is_list:              # G3: list-of-scalar → String[] @default([]) (Column(JSON))
-                lines.append(_field_line(f.name, f"{f.prisma_type}[] @default([])"))
+                _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type}[] @default([])")
                 continue
             if f.default is not None:  # FR-PE-5(a): a defaulted scalar is non-optional
                 # G1: a String default must be QUOTED (unquoted is invalid prisma); enum/number/
                 # boolean/DateTime-function defaults stay bare.
                 dv = f.default
                 if f.prisma_type == "String":
-                    dv = '"' + dv.strip().strip('"').strip("'") + '"'
+                    dv = _quote_string_default(dv)
                 # OQ-PE-7: flag (don't block) an enum default that isn't a value of its enum.
-                enum_vals = graph.enums.get(f.prisma_type) or f.enum_values
+                enum_vals = graph.enums.get(f.prisma_type)
+                if enum_vals is None:
+                    enum_vals = f.enum_values
                 if enum_vals is not None and f.default not in enum_vals:
                     warnings.append(
                         f"{name}.{f.name}: default {f.default!r} is not a value of enum "
                         f"{f.prisma_type} {list(enum_vals)}"
                     )
-                lines.append(_field_line(f.name, f"{f.prisma_type} @default({dv})"))
+                _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type} @default({dv})")
             else:
                 opt = "" if f.required else "?"
-                lines.append(_field_line(f.name, f"{f.prisma_type}{opt}"))
+                _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type}{opt}")
         for parent in graph.loose_refs.get(name, []):   # FR-PE-5(c): loose ref — scalar, no @relation
             opt = "?" if (name, parent) in graph.optional_loose_refs else ""  # G2: optional variant
-            lines.append(_field_line(f"{_lower_camel(parent)}Id", f"String{opt}"))
+            _emit_field(lines, seen, errors, name, f"{_lower_camel(parent)}Id", f"String{opt}")
         for fk, body in fk_blocks.get(name, []):
-            lines.append(_field_line(fk, body))
+            _emit_field(lines, seen, errors, name, fk, body)
         for lf, body in rev_lists.get(name, []):
-            lines.append(_field_line(lf, body))
-        for cols in graph.uniques.get(name, []):        # FR-PE-5(b): explicit compound @@unique
-            lines.append(f"  @@unique([{', '.join(cols)}])")
-        for cols in graph.indexes.get(name, []):        # FR-PE-5(b): explicit @@index
-            lines.append(f"  @@index([{', '.join(cols)}])")
+            _emit_field(lines, seen, errors, name, lf, body)
+        _emit_block_attrs(name, lines, seen, errors, graph)   # FR-PE-5(b) + H3 column validation
         blocks.append(_model_block(name, lines))
+        field_names[name] = tuple(seen)
 
     # --- join models (FR-PE-3): bookkeeping + two FK + two relation objects + compound @@unique --
     for j in graph.joins:
-        lines = [_field_line(fn, body) for fn, body in _BOOKKEEPING]
+        lines = []
+        seen = []
+        for fn, body in _BOOKKEEPING:
+            _emit_field(lines, seen, errors, j.name, fn, body)
         lines.append("")
-        lines.append(_field_line(j.fk_left, "String"))
-        lines.append(_field_line(j.fk_right, "String"))
-        lines.append(_field_line(_lower_camel(j.left), f"{j.left} {_relation_attr(j.fk_left)}"))
-        lines.append(_field_line(_lower_camel(j.right), f"{j.right} {_relation_attr(j.fk_right)}"))
+        _emit_field(lines, seen, errors, j.name, j.fk_left, "String")
+        _emit_field(lines, seen, errors, j.name, j.fk_right, "String")
+        _emit_field(lines, seen, errors, j.name, _lower_camel(j.left),
+                    f"{j.left} {_relation_attr(j.fk_left)}")
+        _emit_field(lines, seen, errors, j.name, _lower_camel(j.right),
+                    f"{j.right} {_relation_attr(j.fk_right)}")
         lines.append(f"  @@unique([{j.fk_left}, {j.fk_right}])")
         blocks.append(_model_block(j.name, lines))
+        field_names[j.name] = tuple(seen)
 
     body = _PRISMA_PREAMBLE + "\n\n" + "\n\n".join(blocks) + "\n"
     sha = schema_sha256(body)
@@ -213,6 +264,9 @@ def render_prisma_schema(
         models_rendered=len(graph.entities) + len(graph.joins),
         unrenderable=tuple(unrenderable),
         warnings=tuple(warnings),
+        errors=tuple(errors),
+        field_names=field_names,
+        enum_names=enum_names,
     )
 
 
@@ -307,11 +361,13 @@ class EmitGateResult:
     """Outcome of the emit gate. ``ok`` ⇒ safe to promote."""
 
     ok: bool
-    round_trips: bool                 # FR-PE-6: emitted text parses back to the same model set
+    round_trips: bool                 # FR-PE-6/C2: text parses back to the same models + enums + fields
     parity_drift: Tuple[str, ...]     # FR-PE-4 drift vs live (empty ⇒ parity); () when no live given
     models: int
     unrenderable: Tuple[UnrenderableField, ...]
     draft_path: Optional[str]         # where the draft was written (run dir), or None if gate failed
+    errors: Tuple[str, ...] = ()      # C1/H1/H3: structural fail-loud (block)
+    warnings: Tuple[str, ...] = ()    # H4: advisory (surface, never block)
 
 
 def emit_schema_draft(
@@ -330,20 +386,38 @@ def emit_schema_draft(
     res = render_prisma_schema(graph, source_file)
     parsed = parse_prisma_schema(res.text)
     expected = set(graph.entities) | {j.name for j in graph.joins}
-    round_trips = set(parsed.models) == expected
+    # C2: round-trip is model-set AND enum-set AND per-model field-set — not just model names. A
+    # field/enum the lenient parser silently dropped (a malformed line) now fails the gate.
+    round_trips = (
+        set(parsed.models) == expected
+        and set(res.enum_names) <= set(parsed.enums)
+        and all(
+            parsed.model(m) is not None and set(fns) <= parsed.model(m).field_names
+            for m, fns in res.field_names.items()
+        )
+    )
     drift = tuple(semantic_diff(res.text, live_text)) if live_text is not None else ()
 
     draft_path: Optional[str] = None
-    if round_trips:  # FR-PE-6: do not write a draft that doesn't round-trip
+    # FR-PE-6/C1: never write a draft that doesn't round-trip or carries a structural error.
+    if round_trips and not res.errors:
         draft = Path(run_dir) / "schema.prisma"
         draft.parent.mkdir(parents=True, exist_ok=True)
         draft.write_text(res.text, encoding="utf-8")
         draft_path = str(draft)
 
-    ok = round_trips and (live_text is None or not drift)
+    # C1: `ok` (safe to promote) also requires no structural errors and no DROPPED fields
+    # (unrenderable = the author declared a field the contract can't express → not safe to flip).
+    ok = (
+        round_trips
+        and not res.errors
+        and not res.unrenderable
+        and (live_text is None or not drift)
+    )
     return EmitGateResult(
         ok=ok, round_trips=round_trips, parity_drift=drift, models=res.models_rendered,
         unrenderable=res.unrenderable, draft_path=draft_path,
+        errors=res.errors, warnings=res.warnings,
     )
 
 
