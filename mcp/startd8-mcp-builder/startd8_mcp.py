@@ -1002,6 +1002,25 @@ class StatusInput(BaseModel):
     )
 
 
+class ConciergeAction(str, Enum):
+    """v1 read-only Concierge actions. Write/derive actions are deferred (v0.3)."""
+    SURVEY = "survey"
+    ASSESS = "assess"
+
+
+class ConciergeInput(BaseModel):
+    """Input for the project-side onboarding-assist tool (read-only in v1)."""
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
+
+    action: ConciergeAction = Field(
+        description="survey = brownfield triage of a project; assess = onboarding-readiness report",
+    )
+    project_root: Optional[str] = Field(
+        default=None,
+        description="Path to the project to inspect (default: server PROJECT_ROOT). Read-only.",
+    )
+
+
 class TaskListInput(BaseModel):
     """Input for tasks.list."""
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -2988,6 +3007,56 @@ async def startd8_status(params: StatusInput) -> str:
                 "error": str(e),
             }
         )
+        return _handle_error(e)
+
+
+@mcp.tool(
+    name="startd8_concierge",
+    annotations={
+        "title": "Startd8 Concierge (onboarding assist)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def startd8_concierge(params: ConciergeInput) -> str:
+    """Project-side SDK-onboarding assist (read-only, $0, no LLM).
+
+    Actions:
+      - ``survey``: brownfield triage of a project — requirement/PRD docs (+ extraction-format
+        match), Pydantic model files, test-fixture candidates, personal/PII risk flags.
+      - ``assess``: onboarding-readiness report — kickoff-input provenance per domain + the
+        $0-cascade view (entities/CRUD/readiness), wrapping ``startd8 wireframe``.
+
+    Posture: assists, never operates. It never runs the cascade, records a gate, or writes to
+    disk — writes are the CLI's job (``startd8 concierge … --apply``), run at human privilege.
+    """
+    request_id = _new_request_id()
+    started = time.perf_counter()
+    action = getattr(params.action, "value", str(params.action))
+    project_root = params.project_root or str(DEFAULT_PROJECT_ROOT)
+    _emit_event({
+        "event": "tool.start", "tool": "startd8_concierge", "request_id": request_id,
+        "params": {"action": action, "project_root": project_root},
+    })
+    try:
+        with _redirect_stdout_to_stderr():
+            _ensure_sdk_available()
+            from startd8.concierge import handle_concierge_tool
+            result = handle_concierge_tool(action, project_root)
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_concierge", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "status": "ok", "action": action,
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_concierge", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "status": "error", "error_type": type(e).__name__, "error": str(e),
+        })
         return _handle_error(e)
 
 
