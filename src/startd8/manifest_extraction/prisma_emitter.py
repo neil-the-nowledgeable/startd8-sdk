@@ -1,22 +1,26 @@
 """§2.1 Prisma emitter (DRAFT mode) — render an :class:`EntityGraph` back out as ``schema.prisma``.
 
-The deferred half of FR-WPI-8: the *writer* that makes ``schema.prisma`` a **derived** artifact
-(today the doc-derived graph is only DIFF'd against the live contract — see
-``entities.diff_against_live``). Slice 1 covers **FR-PE-1/2/3**:
+The DRAFT half of FR-WPI-8: the *writer* that makes ``schema.prisma`` a **derived** artifact
+(the DIFF half is ``entities.diff_against_live``). What it emits:
 
-- **FR-PE-1** — one ``model`` block per entity + per join, with the verbatim datasource/generator
-  header, in stable declaration order; round-trips through ``parse_prisma_schema``.
-- **FR-PE-2** — inject the six implicit bookkeeping fields (never authored in the doc tables) with
-  exact attributes, on **every** model (entity *and* join — the live join tables carry them too).
-- **FR-PE-3** — relationships by convention from ``graph.joins`` + ``graph.fk_parents``: join
-  models (FK scalars + ``@relation(... onDelete: Cascade)`` + compound ``@@unique``), the
-  reverse-relation list fields on each side, and ``belongs to`` / ``has`` parent FKs + their
-  reverse lists.
+- **Models** (FR-PE-1/2/3): one ``model`` per entity + per join, the verbatim datasource/generator
+  header, the six bookkeeping fields on every model, and relationships by convention from
+  ``graph.joins`` + ``graph.fk_parents`` (join FK scalars + ``@relation(onDelete: Cascade)`` +
+  compound ``@@unique``; reverse-relation lists; ``belongs to``/``has`` parent FKs; ``as <name>``
+  reverse-name overrides, FR-PE-13).
+- **Grammar gaps** (FR-PE-5): non-bookkeeping ``@default`` (G1, String quoted); explicit ``@@index``
+  / compound ``@@unique`` (column-validated, H3); loose ``references`` scalars (G2 optional variant).
+- **Enums** (FR-PE-8/10/11): ``## Enums`` named enums + inline ``choice of:``, emitted as ``enum``
+  blocks and parity-checked.
+- **Scalar lists** (G3): ``list of text`` → ``String[]`` (a SDK ``Column(JSON)`` convention —
+  surfaced as a warning since it is not valid Prisma on the SQLite datasource).
 
-Out of slice 1 (FR-PE-5, needs the OQ-PE-1/2/3 grammar decisions): non-bookkeeping ``@default``,
-explicit ``@@index`` / compound ``@@unique`` on non-join entities, and the loose-reference (no-FK)
-marker. Fields whose ``prisma_type`` is ``None`` (outside the plain-type vocabulary) are flagged,
-never emitted wrong (the FR-WPI ``not_extracted`` discipline).
+**Gate & fail-loud discipline.** ``render_prisma_schema`` returns ``errors`` (structural: duplicate
+field / pluralization collision / bad ``@@index`` column — these block), ``unrenderable`` (a
+declared field the contract can't express — dropped, blocks ``--promote`` unless ``--allow-lossy``),
+``warnings`` (advisory, never block), and ``field_names``/``enum_names`` (the round-trip oracle —
+``emit_schema_draft`` verifies models AND enums AND fields survive re-parse, not just model names).
+Nothing is ever emitted wrong: the bad construct is suppressed and the gate refuses.
 """
 
 from __future__ import annotations
@@ -95,8 +99,11 @@ def _emit_field(
 
 
 def _quote_string_default(value: str) -> str:
-    """Quote a ``String`` ``@default`` (Prisma rejects a bare word). Escaping is hardened at M5."""
-    return '"' + value.strip().strip('"').strip("'") + '"'
+    """Quote a ``String`` ``@default`` (Prisma rejects a bare word), escaping ``\\`` and ``"`` so a
+    default containing a quote/backslash stays valid (M5)."""
+    inner = value.strip().strip('"').strip("'")
+    inner = inner.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + inner + '"'
 
 
 def _emit_block_attrs(
@@ -185,6 +192,77 @@ def _collect_enum_blocks(
     return blocks, tuple(names)
 
 
+def _emit_bookkeeping(lines: List[str], seen: List[str], errors: List[str], model: str) -> None:
+    """Inject the six bookkeeping fields (FR-PE-2) + the readability gap (M3 — shared by both loops)."""
+    for fn, body in _BOOKKEEPING:
+        _emit_field(lines, seen, errors, model, fn, body)
+    lines.append("")
+
+
+def _render_entity_model(
+    graph: EntityGraph, name: str, ent: DocEntity,
+    fk_blocks: Dict[str, List[Tuple[str, str]]], rev_lists: Dict[str, List[Tuple[str, str]]],
+    *, unrenderable: List[UnrenderableField], warnings: List[str], errors: List[str],
+    list_fields: List[str], field_names: Dict[str, Tuple[str, ...]],
+) -> str:
+    """Render one entity ``model`` block, populating the shared accumulators (M1 decomposition)."""
+    lines: List[str] = []
+    seen: List[str] = []
+    _emit_bookkeeping(lines, seen, errors, name)
+    for f in ent.fields:
+        if f.prisma_type is None:
+            unrenderable.append(UnrenderableField(name, f.name, "type outside plain-type vocabulary"))
+            continue
+        if f.is_list:              # G3: list-of-scalar → String[] @default([]) (Column(JSON))
+            _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type}[] @default([])")
+            list_fields.append(f"{name}.{f.name}")
+            continue
+        if f.default is not None:  # FR-PE-5(a): a defaulted scalar is non-optional
+            dv = _quote_string_default(f.default) if f.prisma_type == "String" else f.default
+            # OQ-PE-7: flag (don't block) an enum default that isn't a value of its enum.
+            enum_vals = graph.enums.get(f.prisma_type)
+            if enum_vals is None:
+                enum_vals = f.enum_values
+            if enum_vals is not None and f.default not in enum_vals:
+                warnings.append(
+                    f"{name}.{f.name}: default {f.default!r} is not a value of enum "
+                    f"{f.prisma_type} {list(enum_vals)}"
+                )
+            _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type} @default({dv})")
+        else:
+            opt = "" if f.required else "?"
+            _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type}{opt}")
+    for parent in graph.loose_refs.get(name, []):   # FR-PE-5(c): loose ref — scalar, no @relation
+        opt = "?" if (name, parent) in graph.optional_loose_refs else ""  # G2: optional variant
+        _emit_field(lines, seen, errors, name, f"{_lower_camel(parent)}Id", f"String{opt}")
+    for fk, body in fk_blocks.get(name, []):
+        _emit_field(lines, seen, errors, name, fk, body)
+    for lf, body in rev_lists.get(name, []):
+        _emit_field(lines, seen, errors, name, lf, body)
+    _emit_block_attrs(name, lines, seen, errors, graph)   # FR-PE-5(b) + H3 column validation
+    field_names[name] = tuple(seen)
+    return _model_block(name, lines)
+
+
+def _render_join_model(
+    j: JoinModel, *, errors: List[str], field_names: Dict[str, Tuple[str, ...]]
+) -> str:
+    """Render one M2M join ``model`` block (FR-PE-3): bookkeeping + 2 FK + 2 relation objects +
+    compound ``@@unique`` (M1 decomposition)."""
+    lines: List[str] = []
+    seen: List[str] = []
+    _emit_bookkeeping(lines, seen, errors, j.name)
+    _emit_field(lines, seen, errors, j.name, j.fk_left, "String")
+    _emit_field(lines, seen, errors, j.name, j.fk_right, "String")
+    _emit_field(lines, seen, errors, j.name, _lower_camel(j.left),
+                f"{j.left} {_relation_attr(j.fk_left)}")
+    _emit_field(lines, seen, errors, j.name, _lower_camel(j.right),
+                f"{j.right} {_relation_attr(j.fk_right)}")
+    lines.append(f"  @@unique([{j.fk_left}, {j.fk_right}])")
+    field_names[j.name] = tuple(seen)
+    return _model_block(j.name, lines)
+
+
 def render_prisma_schema(
     graph: EntityGraph, source_file: str = "prisma/schema.prisma"
 ) -> PrismaSchemaResult:
@@ -217,67 +295,15 @@ def render_prisma_schema(
     # --- enum blocks (FR-PE-10): named + per-field inline, before the models -------------------
     blocks, enum_names = _collect_enum_blocks(graph, unrenderable)
 
-    # --- entity models -------------------------------------------------------------------------
+    # --- models (M1: per-model rendering lives in _render_entity_model / _render_join_model) ----
     for name, ent in graph.entities.items():
-        lines: List[str] = []
-        seen: List[str] = []
-        for fn, body in _BOOKKEEPING:
-            _emit_field(lines, seen, errors, name, fn, body)
-        lines.append("")  # readability gap between bookkeeping and domain fields
-        for f in ent.fields:
-            if f.prisma_type is None:
-                unrenderable.append(UnrenderableField(name, f.name, "type outside plain-type vocabulary"))
-                continue
-            if f.is_list:              # G3: list-of-scalar → String[] @default([]) (Column(JSON))
-                _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type}[] @default([])")
-                list_fields.append(f"{name}.{f.name}")
-                continue
-            if f.default is not None:  # FR-PE-5(a): a defaulted scalar is non-optional
-                # G1: a String default must be QUOTED (unquoted is invalid prisma); enum/number/
-                # boolean/DateTime-function defaults stay bare.
-                dv = f.default
-                if f.prisma_type == "String":
-                    dv = _quote_string_default(dv)
-                # OQ-PE-7: flag (don't block) an enum default that isn't a value of its enum.
-                enum_vals = graph.enums.get(f.prisma_type)
-                if enum_vals is None:
-                    enum_vals = f.enum_values
-                if enum_vals is not None and f.default not in enum_vals:
-                    warnings.append(
-                        f"{name}.{f.name}: default {f.default!r} is not a value of enum "
-                        f"{f.prisma_type} {list(enum_vals)}"
-                    )
-                _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type} @default({dv})")
-            else:
-                opt = "" if f.required else "?"
-                _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type}{opt}")
-        for parent in graph.loose_refs.get(name, []):   # FR-PE-5(c): loose ref — scalar, no @relation
-            opt = "?" if (name, parent) in graph.optional_loose_refs else ""  # G2: optional variant
-            _emit_field(lines, seen, errors, name, f"{_lower_camel(parent)}Id", f"String{opt}")
-        for fk, body in fk_blocks.get(name, []):
-            _emit_field(lines, seen, errors, name, fk, body)
-        for lf, body in rev_lists.get(name, []):
-            _emit_field(lines, seen, errors, name, lf, body)
-        _emit_block_attrs(name, lines, seen, errors, graph)   # FR-PE-5(b) + H3 column validation
-        blocks.append(_model_block(name, lines))
-        field_names[name] = tuple(seen)
-
-    # --- join models (FR-PE-3): bookkeeping + two FK + two relation objects + compound @@unique --
+        blocks.append(_render_entity_model(
+            graph, name, ent, fk_blocks, rev_lists,
+            unrenderable=unrenderable, warnings=warnings, errors=errors,
+            list_fields=list_fields, field_names=field_names,
+        ))
     for j in graph.joins:
-        lines = []
-        seen = []
-        for fn, body in _BOOKKEEPING:
-            _emit_field(lines, seen, errors, j.name, fn, body)
-        lines.append("")
-        _emit_field(lines, seen, errors, j.name, j.fk_left, "String")
-        _emit_field(lines, seen, errors, j.name, j.fk_right, "String")
-        _emit_field(lines, seen, errors, j.name, _lower_camel(j.left),
-                    f"{j.left} {_relation_attr(j.fk_left)}")
-        _emit_field(lines, seen, errors, j.name, _lower_camel(j.right),
-                    f"{j.right} {_relation_attr(j.fk_right)}")
-        lines.append(f"  @@unique([{j.fk_left}, {j.fk_right}])")
-        blocks.append(_model_block(j.name, lines))
-        field_names[j.name] = tuple(seen)
+        blocks.append(_render_join_model(j, errors=errors, field_names=field_names))
 
     # H2: scalar lists are a deliberate SDK convention (String[] → Column(JSON) downstream), but
     # they are NOT valid Prisma on the locked SQLite datasource. The SDK pipeline tolerates it (its

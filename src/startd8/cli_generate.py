@@ -490,6 +490,38 @@ def views(
     console.print(f"[green]wrote[/green] {written} view file(s) under {out}")
 
 
+def _report_contract_gate(res, *, live_text, json_out: bool) -> None:
+    """Print the ``generate contract`` gate result — human-readable or ``--json`` (M4 extraction)."""
+    if json_out:
+        import json as _json
+        console.print_json(_json.dumps({
+            "ok": res.ok, "round_trips": res.round_trips, "models": res.models,
+            "parity_drift": list(res.parity_drift),
+            "errors": list(res.errors),            # H1/H3 structural (block)
+            "warnings": list(res.warnings),        # H4 advisory
+            "unrenderable": [f"{u.entity}.{u.field}: {u.reason}" for u in res.unrenderable],
+            "draft_path": res.draft_path,
+        }))
+        return
+    console.print(f"models rendered: {res.models}")
+    console.print(f"round-trips: {'[green]yes[/green]' if res.round_trips else '[red]no[/red]'}")
+    if live_text is not None:
+        if res.parity_drift:
+            console.print(f"[yellow]parity drift ({len(res.parity_drift)}):[/yellow]")
+            for d in res.parity_drift:
+                console.print(f"  - {d}")
+        else:
+            console.print("parity: [green]clean[/green] (matches the live contract)")
+    for e in res.errors:        # H1/H3: structural — these block the gate
+        console.print(f"[red]structural error[/red]: {e}")
+    for u in res.unrenderable:  # FR-EMIT-7: never silently drop
+        console.print(f"[yellow]unrenderable[/yellow]: {u.entity}.{u.field} — {u.reason}")
+    for w in res.warnings:      # H4: advisory — surfaced, not lost
+        console.print(f"[yellow]warning[/yellow]: {w}")
+    if res.draft_path:
+        console.print(f"draft: {res.draft_path}")
+
+
 @generate_app.command("contract")
 def contract(
     requirements: List[Path] = typer.Option(
@@ -529,7 +561,6 @@ def contract(
     runs round-trip (FR-PE-6) + parity vs the live contract. `--promote` performs the explicit,
     human-triggered flip to --contract-path (FR-PE-7), only when the gate passes.
     """
-    import json as _json
     import tempfile
 
     from .manifest_extraction.extract import build_entity_graph, extract_manifests
@@ -566,34 +597,8 @@ def contract(
     source_file = str(requirements[0])  # provenance header names the (primary) requirements doc
     res = emit_schema_draft(graph, str(run_dir), live_text=live_text, source_file=source_file)
 
-    # 4. report the gate (FR-EMIT-2/7)
-    if json_out:
-        console.print_json(_json.dumps({
-            "ok": res.ok, "round_trips": res.round_trips, "models": res.models,
-            "parity_drift": list(res.parity_drift),
-            "errors": list(res.errors),            # H1/H3 structural
-            "warnings": list(res.warnings),        # H4 advisory
-            "unrenderable": [f"{u.entity}.{u.field}: {u.reason}" for u in res.unrenderable],
-            "draft_path": res.draft_path,
-        }))
-    else:
-        console.print(f"models rendered: {res.models}")
-        console.print(f"round-trips: {'[green]yes[/green]' if res.round_trips else '[red]no[/red]'}")
-        if live_text is not None:
-            if res.parity_drift:
-                console.print(f"[yellow]parity drift ({len(res.parity_drift)}):[/yellow]")
-                for d in res.parity_drift:
-                    console.print(f"  - {d}")
-            else:
-                console.print("parity: [green]clean[/green] (matches the live contract)")
-        for e in res.errors:        # H1/H3: structural — these block the gate
-            console.print(f"[red]structural error[/red]: {e}")
-        for u in res.unrenderable:  # FR-EMIT-7: never silently drop
-            console.print(f"[yellow]unrenderable[/yellow]: {u.entity}.{u.field} — {u.reason}")
-        for w in res.warnings:      # H4: advisory (e.g. enum default not a member) — surfaced, not lost
-            console.print(f"[yellow]warning[/yellow]: {w}")
-        if res.draft_path:
-            console.print(f"draft: {res.draft_path}")
+    # 4. report the gate (FR-EMIT-2/7) — M4: extracted into _report_contract_gate
+    _report_contract_gate(res, live_text=live_text, json_out=json_out)
 
     # 5. --check: gate only, nothing written to the project (FR-EMIT-4)
     if check:
