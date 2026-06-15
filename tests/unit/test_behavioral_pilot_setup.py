@@ -25,7 +25,8 @@ def _load_pilot():
 
 def test_pilot_spec_is_one_service_times_roster_times_reps():
     pilot = _load_pilot()
-    spec = pilot.build_spec(["anthropic:claude-opus-4-8", "openai:gpt-5.5", "gemini:gemini-2.5-pro"],
+    spec = pilot.build_spec(["paymentservice"],
+                            ["anthropic:claude-opus-4-8", "openai:gpt-5.5", "gemini:gemini-2.5-pro"],
                             repetitions=3, budget=10.0, per_cell_cap=None)
     assert spec.services == ("paymentservice",)
     assert spec.total_cells == 1 * 3 * 3
