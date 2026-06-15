@@ -147,9 +147,13 @@ def materialize_sandbox(
 
 
 def build_command(
-    seed: Path, workdir: Path, output: Path, model: str, cost_budget: Optional[float]
+    seed: Path, workdir: Path, output: Path, model: str, cost_budget: Optional[float],
+    repair_mode: str = "apply", expose_defects: bool = False,
 ) -> list[str]:
-    """Per-model prime workflow command with the model pinned (FR-5/6/7/8)."""
+    """Per-model prime workflow command with the model pinned (FR-5/6/7/8).
+
+    ``repair_mode`` / ``expose_defects`` (FR-B5) thread the quality-observability flags into the
+    cell so a matrix run can drive shadow + expose; both default-off (identical to today)."""
     cmd = [
         "python3",
         str(PRIME_WORKFLOW_SCRIPT),
@@ -168,6 +172,10 @@ def build_command(
     # Intentionally NOT passing --complexity-routing / --micro-prime (off by default).
     if cost_budget is not None:
         cmd += ["--cost-budget", str(cost_budget)]
+    if repair_mode and repair_mode != "apply":
+        cmd += ["--repair-mode", repair_mode]   # FR-B5: shadow observer
+    if expose_defects:
+        cmd += ["--expose-defects"]             # FR-B5: defect ledger + no advisory downgrade
     return cmd
 
 

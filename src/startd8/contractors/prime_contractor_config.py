@@ -312,6 +312,20 @@ def apply_cli_overrides(
     # Repair overrides
     if getattr(args, "no_repair", False):
         config.repair_enabled = False
+    _repair_mode = getattr(args, "repair_mode", "apply")
+    if _repair_mode == "off":
+        config.repair_enabled = False
+    elif _repair_mode == "shadow":
+        # Observer mode: repair must RUN (to be measured) but not influence the
+        # build. Keep the pipeline enabled and stamp the mode into the repair
+        # sub-config so RepairConfig(repair_mode="shadow") is constructed.
+        config.repair_enabled = True
+        config.repair["repair_mode"] = "shadow"
+    if getattr(args, "expose_defects", False):
+        # Quality-observability: persist the defect ledger + keep import/lint failures
+        # FAILED. Needs the integration path active, so ensure repair config is built.
+        config.repair_enabled = True
+        config.repair["expose_defects"] = True
 
     # Validation overrides
     if getattr(args, "strict_validation", False):

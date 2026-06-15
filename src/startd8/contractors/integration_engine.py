@@ -10,6 +10,7 @@ and the Artisan INTEGRATE phase (via SeedTaskUnit adapter).
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -811,6 +812,13 @@ class IntegrationEngine:
         ``pre_validate`` after successful repair, or ``None`` if repair
         was not attempted or failed.
         """
+        # Shadow/observer mode: pre-merge repair is skipped so the raw model
+        # output reaches the merge untouched. (Measuring pre-merge repair is a
+        # deferred v0.2 enhancement; the post-merge file-repair pipeline is the
+        # one shadowed today via ``_shadow_repair``.)
+        if self._is_shadow():
+            return None
+
         if not (
             _HAS_REPAIR
             and self._repair_config is not None
@@ -1100,6 +1108,157 @@ class IntegrationEngine:
                 extra={"unit_id": unit.id},
             )
             return None
+
+    def _is_shadow(self) -> bool:
+        """True when repair runs as a non-influencing observer (benchmark mode).
+
+        In shadow mode the repair pipeline is measured against a throwaway copy
+        and the raw model output is preserved as the deliverable — repair must
+        not mutate any real file nor alter checkpoint/retry control flow.
+        """
+        return (
+            self._repair_config is not None
+            and getattr(self._repair_config, "repair_mode", "apply") == "shadow"
+        )
+
+    def _expose_defects(self) -> bool:
+        """True when quality-observability is on: persist the defect ledger and skip the
+        advisory downgrade so import/lint failures stay FAILED (FR-B1)."""
+        return (
+            self._repair_config is not None
+            and getattr(self._repair_config, "expose_defects", False)
+        )
+
+    def _write_shadow_report(
+        self, unit: IntegrationUnit, attempt: int, report: Dict[str, Any],
+    ) -> None:
+        """Persist a per-unit 'what repair would have done' report ($0, additive)."""
+        try:
+            out_dir = self.project_root / ".startd8" / "repair-shadow"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / f"{unit.name}__attempt{attempt}.json").write_text(
+                json.dumps(report, indent=2, default=str), encoding="utf-8",
+            )
+        except Exception:
+            logger.warning("Failed to write shadow repair report", exc_info=True)
+
+    def _shadow_repair(
+        self,
+        results: List[Any],
+        integrated_files: List[Path],
+        unit: IntegrationUnit,
+        attempt: int,
+        result_obj_metadata: Dict[str, Any],
+    ) -> None:
+        """Observer counterpart of ``_attempt_repair``: run the post-merge
+        file-repair pipeline on a throwaway staging copy, record exactly what it
+        WOULD have done, and never touch the originals or the ``results`` list.
+
+        This quantifies the value of the file-repair capability on RAW model
+        output (the deliverable stays raw). The pre-merge / ruff / cleanup /
+        contract / semantic-repair mutators are skipped entirely in shadow mode
+        (see step 6), so raw output is guaranteed; measuring those is deferred.
+        """
+        lang = (
+            self._language_profile.language_id
+            if self._language_profile is not None else "unknown"
+        )
+        report: Dict[str, Any] = {
+            "unit": unit.name, "attempt": attempt, "language": lang,
+            "triggered": False, "reason": "", "files": [],
+        }
+        if not (_HAS_REPAIR and self._repair_config is not None):
+            report["reason"] = "repair_unavailable"
+            self._write_shadow_report(unit, attempt, report)
+            return
+        if self._language_profile is not None and not self._language_profile.repair_enabled:
+            report["reason"] = "language_repair_disabled"
+            self._write_shadow_report(unit, attempt, report)
+            return
+
+        failed_checks = [r for r in results if r.status == CheckpointStatus.FAILED]
+        categories = {classify_checkpoint_category(r) for r in failed_checks}
+        repairable = categories & set(self._repair_config.repairable_categories)
+        report["raw_failed_checks"] = [getattr(r, "name", "?") for r in failed_checks]
+        if not (repairable and failed_checks):
+            report["reason"] = "no_repairable_failed_checks"
+            self._write_shadow_report(unit, attempt, report)
+            return
+
+        try:
+            diagnostics = parse_checkpoint_diagnostics(failed_checks)
+            files_to_repair: Dict[Path, str] = {
+                f: f.read_text(encoding="utf-8")
+                for f in integrated_files
+                if f.suffix in (".py", ".java", ".go", ".cs", ".js") and f.exists()
+            }
+            if not files_to_repair:
+                report["reason"] = "no_target_files"
+                self._write_shadow_report(unit, attempt, report)
+                return
+
+            staging_root = (
+                self._repair_config.staging_root
+                or self.project_root / ".startd8" / "repair"
+            )
+            recheckpoint_would_pass: Optional[bool] = None
+            with create_staging(
+                files_to_repair, staging_root, unit.name, attempt,
+                project_root=self.project_root,
+            ) as staged:
+                outcome = run_file_repair(
+                    staged.files, diagnostics, self._repair_config,
+                    self.project_root, session=self._repair_session,
+                )
+                report["triggered"] = True
+                report["any_modified"] = outcome.any_modified
+                report["steps_applied"] = list(outcome.steps_applied)
+                if outcome.route is not None:
+                    report["route"] = {
+                        "matched_patterns": list(outcome.route.matched_patterns),
+                        "steps": list(outcome.route.steps),
+                        "confidence": outcome.route.confidence,
+                    }
+                report["unrepaired_diagnostics"] = [
+                    repr(d) for d in outcome.unrepaired_diagnostics
+                ]
+                # Recheckpoint the repaired code on the STAGED copies only
+                # (never apply_atomic → originals untouched).
+                if outcome.any_modified:
+                    staged.write_repaired(outcome.repaired_files)
+                    recheck = self.checkpoint.run_all_checkpoints(
+                        staged.paths, unit.name,
+                    )
+                    recheckpoint_would_pass = bool(
+                        self.checkpoint.summarize_results(recheck)
+                    )
+                report["recheckpoint_would_pass"] = recheckpoint_would_pass
+                for fr in outcome.file_results:
+                    report["files"].append({
+                        "file": str(fr.file_path),
+                        "before_valid": fr.before_valid,
+                        "after_valid": fr.after_valid,
+                        "success": fr.success,
+                        "steps_applied": list(fr.steps_applied),
+                        "steps": [
+                            {
+                                "name": sr.step_name,
+                                "modified": sr.modified,
+                                "metrics": sr.metrics,
+                            }
+                            for sr in fr.step_results
+                        ],
+                    })
+            result_obj_metadata["repair_shadow"] = {
+                "triggered": True,
+                "any_modified": report.get("any_modified", False),
+                "steps_applied": report.get("steps_applied", []),
+                "recheckpoint_would_pass": recheckpoint_would_pass,
+            }
+        except Exception:
+            logger.warning("Shadow repair pass failed", exc_info=True)
+            report["reason"] = "shadow_pass_error"
+        self._write_shadow_report(unit, attempt, report)
 
     def _attempt_repair(
         self,
@@ -2044,6 +2203,24 @@ class IntegrationEngine:
                     fpath, unit, compliance_results,
                     run_nodejs_semantic_checks, "Node.js",
                 )
+            elif fpath.suffix == ".vue":
+                # FR-N1: Vue SFC parity — run the Node.js semantic checks on the
+                # extracted <script> block (not the raw SFC, which would false-fire
+                # on <template>/<style>). Reuses the same nodejs detector + collector.
+                from startd8.validators.nodejs_semantic_checks import (
+                    run_nodejs_semantic_checks,
+                )
+                from startd8.languages.vue_sfc import extract_vue_script
+                try:
+                    ext = extract_vue_script(fpath.read_text(encoding="utf-8"))
+                    script = getattr(ext, "script", "") if ext else ""
+                except Exception:
+                    script = ""
+                if script:
+                    self._collect_language_semantic_checks(
+                        fpath, unit, compliance_results,
+                        run_nodejs_semantic_checks, "Vue", source_override=script,
+                    )
 
         return compliance_results
 
@@ -2054,14 +2231,17 @@ class IntegrationEngine:
         compliance_results: Dict[str, Any],
         check_fn: Any,
         language_label: str,
+        source_override: Optional[str] = None,
     ) -> None:
         """Run language-specific semantic checks and collect into compliance_results.
 
         Shared helper that eliminates per-language boilerplate (REQ-KZ-001).
         Each language branch imports its check function, then delegates here.
+        ``source_override`` lets callers pass pre-extracted source (e.g. a Vue
+        SFC's ``<script>`` block) instead of the raw file contents (FR-N1).
         """
         try:
-            source = fpath.read_text(encoding="utf-8")
+            source = source_override if source_override is not None else fpath.read_text(encoding="utf-8")
             issues = check_fn(source, file_path=str(fpath))
             for issue in issues:
                 logger.warning(
@@ -3021,8 +3201,19 @@ class IntegrationEngine:
 
         # 6. Post-merge: language-aware cleanup + auto-fix lint + run checkpoints
         if not self.dry_run and self.checkpoint is not None:
+            # Shadow/observer mode: snapshot the raw merged bytes so we can prove
+            # (and enforce) that NO repair capability mutated the deliverable.
+            _shadow_snapshot: Dict[Path, bytes] = {}
+            if self._is_shadow():
+                for ifile in integrated_files:
+                    try:
+                        _shadow_snapshot[ifile] = ifile.read_bytes()
+                    except OSError:
+                        pass
+
             # P2: Run language-specific post-merge cleanup (goimports, etc.)
-            if self._language_profile is not None:
+            # Skipped in shadow mode — it mutates files in place (raw must survive).
+            if self._language_profile is not None and not self._is_shadow():
                 try:
                     post_merge_warnings = self._language_profile.post_generation_cleanup(
                         integrated_files, self.project_root,
@@ -3038,7 +3229,8 @@ class IntegrationEngine:
                 self._language_profile is None
                 or self._language_profile.language_id == "python"
             )
-            if _is_python:
+            # Skipped in shadow mode — ruff --fix mutates in place (raw must survive).
+            if _is_python and not self._is_shadow():
                 for ifile in integrated_files:
                     if ifile.suffix == ".py":
                         try:
@@ -3061,27 +3253,59 @@ class IntegrationEngine:
             )
 
             # ── Repair pipeline hook (REQ-RPL-200, R6-S1, R6-S2) ──
-            results, repair_success = self._attempt_repair(
-                results, integrated_files, unit, attempt, result_obj_metadata,
-            )
+            # Shadow mode never repairs the real build, so repair_success stays
+            # False (downstream advisory downgrade at "if not repair_success"
+            # must still see a defined value — observer has no influence).
+            repair_success = False
+            if self._is_shadow():
+                # Observer: measure what the file-repair pipeline WOULD do on the
+                # RAW output; never apply, never alter results (raw build proceeds).
+                self._shadow_repair(
+                    results, integrated_files, unit, attempt, result_obj_metadata,
+                )
+            else:
+                results, repair_success = self._attempt_repair(
+                    results, integrated_files, unit, attempt, result_obj_metadata,
+                )
 
             # ── Contract violation repair (Fix-2) ──
-            self._attempt_contract_violation_repair(
-                integrated_files, unit, result_obj_metadata,
-            )
+            # Skipped in shadow mode (in-place mutation; raw must survive).
+            if not self._is_shadow():
+                self._attempt_contract_violation_repair(
+                    integrated_files, unit, result_obj_metadata,
+                )
 
             # ── Semantic checks (Phase D — Kaizen Quality) ──
+            # Detect-only — kept in shadow mode: yields RAW disk-compliance signal.
             compliance_results = self._run_semantic_checks(integrated_files, unit)
 
             # ── Semantic repair (Phase D+ — REQ-SR-100–400) ──
-            sem_repair = self._attempt_semantic_repair(integrated_files, unit)
-            if sem_repair is not None:
-                result_obj_metadata["semantic_repair"] = sem_repair
-                # Re-capture compliance after repair to reflect final state
-                if sem_repair.get("issues_repaired", 0) > 0:
-                    compliance_results = self._run_semantic_checks(
-                        integrated_files, unit,
+            # Skipped in shadow mode (in-place mutation; raw must survive).
+            if not self._is_shadow():
+                sem_repair = self._attempt_semantic_repair(integrated_files, unit)
+                if sem_repair is not None:
+                    result_obj_metadata["semantic_repair"] = sem_repair
+                    # Re-capture compliance after repair to reflect final state
+                    if sem_repair.get("issues_repaired", 0) > 0:
+                        compliance_results = self._run_semantic_checks(
+                            integrated_files, unit,
+                        )
+
+            # Shadow integrity: prove no repair capability mutated the deliverable.
+            if self._is_shadow() and _shadow_snapshot:
+                _violations = []
+                for ifile, raw_bytes in _shadow_snapshot.items():
+                    try:
+                        if ifile.read_bytes() != raw_bytes:
+                            _violations.append(str(ifile))
+                    except OSError:
+                        _violations.append(str(ifile))
+                if _violations:
+                    logger.warning(
+                        "Shadow integrity violation — repair mutated raw output: %s",
+                        _violations,
                     )
+                    result_obj_metadata["shadow_integrity_violation"] = _violations
 
             # REQ-RFL-100: Persist disk compliance for downstream consumers
             if compliance_results:
@@ -3108,6 +3332,22 @@ class IntegrationEngine:
                         exc_info=True,
                     )
 
+            # ── Defect ledger (FR-A3 / FR-B2) — consolidated, non-collapsed record of
+            # every detected flaw. Built always (read-only, cheap) and surfaced in metadata
+            # so clean-parse semantic defects are first-class; persisted to disk only when
+            # expose_defects (FR-B4 default-off for the artifact).
+            try:
+                from .defect_ledger import collect_defects, write_ledger
+                ledger = collect_defects(
+                    unit.name, results, compliance_results,
+                    failed_status=CheckpointStatus.FAILED,
+                )
+                result_obj_metadata["defect_ledger"] = ledger.to_dict()
+                if self._expose_defects():
+                    write_ledger(ledger, self.project_root)
+            except Exception:
+                logger.warning("Defect ledger collection failed", exc_info=True)
+
             # ── Anzen gate (SP-GT-001–004) — security verification ──
             # Runs AFTER semantic repair (evaluates repaired code) and
             # BEFORE advisory downgrade (security findings are never advisory).
@@ -3115,8 +3355,10 @@ class IntegrationEngine:
 
             # Advisory downgrade (only if repair not attempted or failed)
             # R6-S1: When repair succeeds, skip downgrade — results are
-            # already replaced with passing re-checkpoint results
-            if not repair_success:
+            # already replaced with passing re-checkpoint results.
+            # FR-B1: in expose mode, skip the downgrade entirely so Import/Lint
+            #   failures stay FAILED (the defect ledger already captured them).
+            if not repair_success and not self._expose_defects():
                 for r in results:
                     if (
                         r.name in ("Import Check", "Lint Check")
@@ -3127,6 +3369,9 @@ class IntegrationEngine:
                                 "Advisory %s: %s", r.name.lower(), err,
                                 extra={"unit_id": unit.id},
                             )
+                        # FR-A1: do NOT destroy the error detail — retain it in a
+                        # dedicated field so the downgrade-to-warning is auditable.
+                        r.downgraded_errors = list(r.errors or [])
                         r.status = CheckpointStatus.WARNING
                         r.warnings = (r.warnings or []) + (r.errors or [])
                         r.errors = []

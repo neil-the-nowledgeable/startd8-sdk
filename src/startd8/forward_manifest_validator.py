@@ -988,7 +988,7 @@ def _validate_non_python_file(
     # exemption (Path("foo.d.ts").suffix == ".ts", so it would otherwise route
     # through the same path) and scope the check to source-code languages.
     _SOURCE_CODE_SUFFIXES = {
-        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".java", ".cs",
+        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".java", ".cs", ".vue",
     }
     if suffix in _SOURCE_CODE_SUFFIXES and not name.endswith(".d.ts"):
         try:
@@ -1029,6 +1029,8 @@ def _validate_non_python_file(
         result = _validate_yaml_file(content, result)
     elif suffix in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
         result = _validate_js_file(content, result, file_path=str(abs_path))
+    elif suffix == ".vue":
+        result = _validate_vue_file(content, result, file_path=str(abs_path))
     elif suffix == ".go":
         result = _validate_go_file(content, result, file_path=str(abs_path))
     elif suffix == ".json":
@@ -1511,6 +1513,26 @@ _JS_KEYWORD_SET = frozenset({
 })
 
 
+def _validate_vue_file(
+    content: str,
+    result: DiskComplianceResult,
+    file_path: Optional[str] = None,
+) -> DiskComplianceResult:
+    """Validate a Vue SFC (FR-N3): extract the ``<script>`` block and reuse the JS validator.
+
+    A scriptless SFC (template/style only) is treated as valid — there is no executable
+    code to compile. Parity with the ``.js`` disk-compliance path."""
+    try:
+        from startd8.languages.vue_sfc import extract_vue_script
+        ext = extract_vue_script(content)
+        script = getattr(ext, "script", "") if ext else ""
+    except Exception:
+        script = ""
+    if not script.strip():
+        return result  # no <script> → nothing to compile; leave defaults (valid)
+    return _validate_js_file(script, result, file_path=file_path)
+
+
 def _validate_js_file(
     content: str,
     result: DiskComplianceResult,
@@ -1587,10 +1609,69 @@ def _validate_js_file(
     except ImportError:
         pass
 
-    # Stub counting (Criterion 4 — postmortem scoring parity)
+    # Stub counting (Criterion 4 — postmortem scoring parity). Text-based: the JS parser
+    # carries no body content, so structural empty-body detection isn't available (FR-N5
+    # NP3a scope note); the text heuristic is the pragmatic stub signal and feeds stub_penalty.
     result.stubs_remaining = _count_stubs_text(content, ".js")
 
+    # FR-N5: structural duplicate-definition count (parity with the Python AST path's
+    # _count_duplicate_definitions). Counts top-level value definitions (function / arrow /
+    # class) whose name appears more than once; methods (parent_class set) and type-level
+    # interface/type_alias (declaration merging is legal) are excluded.
+    try:
+        from collections import Counter
+        from startd8.languages.nodejs_parser import parse_nodejs_source
+        names = [
+            e.name for e in parse_nodejs_source(content)
+            if e.parent_class is None and e.kind in ("function", "const_function", "class")
+        ]
+        result.duplicate_definitions = sum(c - 1 for c in Counter(names).values() if c > 1)
+    except Exception:
+        pass
+
+    # FR-N5-imports (NP3b): import_completeness = resolvable RELATIVE imports / total relative
+    # imports — catches hallucinated local modules (the 0.2-weight disk_quality term, inert at
+    # 1.0 for JS until now). Bare/external specifiers (e.g. '@grpc/grpc-js') are assumed available
+    # (cannot verify offline) and excluded; 1.0 when there are no relative imports.
+    if file_path:
+        ic = _js_import_completeness(content, file_path)
+        if ic is not None:
+            result.import_completeness = ic
+
     return result
+
+
+_JS_IMPORT_SPEC_RE = re.compile(
+    r"""require\s*\(\s*['"]([^'"]+)['"]\s*\)"""              # require('x')
+    r"""|(?:import|export)\b[^'"\n]*?from\s*['"]([^'"]+)['"]"""  # import/export ... from 'x'
+    r"""|import\s*['"]([^'"]+)['"]""",                       # bare import 'x'
+)
+_JS_RESOLVE_EXTS = (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".json", "")
+
+
+def _js_import_completeness(content: str, file_path: str) -> Optional[float]:
+    """Fraction of relative import/require specifiers that resolve to an existing file.
+
+    Returns None when file_path has no usable parent; 1.0 when there are no relative imports."""
+    try:
+        base = Path(file_path).parent
+    except (OSError, ValueError):
+        return None
+    relative: List[str] = []
+    for m in _JS_IMPORT_SPEC_RE.finditer(content):
+        spec = m.group(1) or m.group(2) or m.group(3)
+        if spec and (spec.startswith("./") or spec.startswith("../")):
+            relative.append(spec)
+    if not relative:
+        return 1.0
+    resolved = 0
+    for spec in relative:
+        target = base / spec
+        candidates = [target.with_name(target.name + ext) for ext in _JS_RESOLVE_EXTS]
+        candidates += [target / f"index{ext}" for ext in _JS_RESOLVE_EXTS if ext]
+        if any(c.exists() for c in candidates):
+            resolved += 1
+    return round(resolved / len(relative), 4)
 
 
 def _validate_package_json(

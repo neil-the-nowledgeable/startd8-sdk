@@ -36,6 +36,21 @@ _ASYNC_CALL_RE = re.compile(
     r'^\s*\w+\s*\.\s*(?:save|create|update|delete|find|remove|connect|close|send|fetch)\s*\(',
 )
 
+# FR-N4b: duplicate top-level definition (function/class silently shadow last-wins; const/let
+# re-declaration is a hard error). Captures the declared name.
+_DEFINITION_RE = re.compile(
+    r'^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?'
+    r'(?:function\s+(\w+)|class\s+(\w+)|(?:const|let)\s+(\w+)\s*=)',
+)
+
+# FR-N4c: empty/swallowed catch — `catch (e) {}` with nothing in the block.
+_EMPTY_CATCH_RE = re.compile(r'catch\s*\([^)]*\)\s*\{\s*\}')
+
+# FR-N4d: SQL injection via string concatenation / template literals (parity with Java/C#).
+_SQL_KW = r'(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|TRUNCATE)\b'
+_SQL_CONCAT_RE = re.compile(rf'["\'][^"\']*\b{_SQL_KW}[^"\']*["\']\s*\+', re.IGNORECASE)
+_SQL_TEMPLATE_RE = re.compile(rf'`[^`]*\b{_SQL_KW}[^`]*\$\{{', re.IGNORECASE)
+
 
 def _check_console_log_in_service(
     source: str,
@@ -217,6 +232,73 @@ def _check_module_system_consistency(source: str) -> List[SemanticIssue]:
     return []
 
 
+def _check_duplicate_definitions(source: str) -> List[SemanticIssue]:
+    """FR-N4b: flag a function/class/const/let name declared more than once at line start
+    (parity with Go ``duplicate_function`` / Java·C# ``duplicate_method``). Function/class
+    duplicates silently last-win; const/let re-declaration is a hard error."""
+    issues: List[SemanticIssue] = []
+    seen: dict[str, int] = {}
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if _is_comment_line(stripped):
+            continue
+        m = _DEFINITION_RE.match(line)
+        if not m:
+            continue
+        name = m.group(1) or m.group(2) or m.group(3)
+        if not name:
+            continue
+        if name in seen:
+            issues.append(SemanticIssue(
+                check="duplicate_definition",
+                severity="warning",
+                message=f"Duplicate definition of `{name}` (first at line {seen[name]})",
+                line=i,
+            ))
+        else:
+            seen[name] = i
+    return issues
+
+
+def _check_empty_catch_blocks(source: str) -> List[SemanticIssue]:
+    """FR-N4c: flag empty catch blocks that silently swallow errors (parity with Java/C#)."""
+    issues: List[SemanticIssue] = []
+    cleaned = "\n".join(
+        "" if _is_comment_line(ln.strip()) else ln for ln in source.splitlines()
+    )
+    for m in _EMPTY_CATCH_RE.finditer(cleaned):
+        line_num = cleaned[:m.start()].count("\n") + 1
+        if not any(iss.line == line_num for iss in issues):
+            issues.append(SemanticIssue(
+                check="empty_catch_block",
+                severity="warning",
+                message="Empty catch block — errors should be logged or re-thrown",
+                line=line_num,
+            ))
+    return issues
+
+
+def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
+    """FR-N4d: flag SQL built by string concatenation / template interpolation (parity with
+    Java/C# ``sql_injection_risk``). Use parameterized queries instead."""
+    issues: List[SemanticIssue] = []
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if _is_comment_line(stripped):
+            continue
+        if _SQL_CONCAT_RE.search(stripped) or _SQL_TEMPLATE_RE.search(stripped):
+            issues.append(SemanticIssue(
+                check="sql_injection_risk",
+                severity="error",
+                message=(
+                    "SQL injection risk: query built via string concatenation/interpolation "
+                    "— use parameterized queries"
+                ),
+                line=i,
+            ))
+    return issues
+
+
 def run_nodejs_semantic_checks(
     source: str,
     file_path: Optional[str] = None,
@@ -237,6 +319,9 @@ def run_nodejs_semantic_checks(
     issues.extend(_check_duplicate_requires(source))
     issues.extend(_check_unhandled_promises(source))
     issues.extend(_check_module_system_consistency(source))
+    issues.extend(_check_duplicate_definitions(source))  # FR-N4b
+    issues.extend(_check_empty_catch_blocks(source))      # FR-N4c
+    issues.extend(_check_sql_injection_risk(source))      # FR-N4d
 
     # package.json version validation (dispatched by file type)
     if file_path and file_path.endswith("package.json"):

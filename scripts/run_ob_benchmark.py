@@ -85,6 +85,14 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=float, default=1800.0, help="Per-cell timeout seconds.")
     ap.add_argument("--out-dir", type=Path, default=None)
     ap.add_argument("--dry-run", action="store_true", help="Size only; no execution / spend.")
+    ap.add_argument(
+        "--repair-mode", choices=["apply", "shadow", "off"], default="apply",
+        help="Per-cell repair mode (FR-B5). shadow = observe-only (raw output preserved).",
+    )
+    ap.add_argument(
+        "--expose-defects", action="store_true",
+        help="Per-cell defect ledger + de-saturated quality score (FR-B3/B5).",
+    )
     args = ap.parse_args(argv)
 
     if not SEEDS_INDEX.exists():
@@ -113,6 +121,7 @@ def main(argv=None) -> int:
 
     executor = SubprocessCellExecutor(
         SEEDS_DIR, per_run_timeout_s=args.timeout, workdir_root=out_dir / "sandboxes",
+        repair_mode=args.repair_mode, expose_defects=args.expose_defects,
     )
 
     def _progress(cr):

@@ -14,7 +14,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
-from typing import Callable, List, Optional, Protocol
+from typing import Callable, Dict, List, Optional, Protocol
 
 from .budget import BudgetGuard, estimate_run_cost
 from .run_spec import BenchmarkRunSpec, MatrixCell
@@ -75,6 +75,8 @@ class CellResult:
     integrity_ok: bool = True
     sandbox_violation: Optional[str] = None  # FR-44: a guardrail tripped scoring this cell
     error: Optional[str] = None
+    defect_total: Optional[int] = None       # FR-B3: defects from the expose ledger (None = not run)
+    defects_by_category: Optional[Dict[str, int]] = None  # FR-B3: per-category contribution
 
     @property
     def tokens_per_sec(self) -> Optional[float]:
@@ -172,10 +174,13 @@ class SubprocessCellExecutor:
     """
 
     def __init__(self, seeds_dir: Path, *, per_run_timeout_s: Optional[float] = 1800.0,
-                 workdir_root: Optional[Path] = None):
+                 workdir_root: Optional[Path] = None,
+                 repair_mode: str = "apply", expose_defects: bool = False):
         self.seeds_dir = Path(seeds_dir)
         self.per_run_timeout_s = per_run_timeout_s
         self.workdir_root = workdir_root
+        self.repair_mode = repair_mode          # FR-B5: "apply" | "shadow" | "off"
+        self.expose_defects = expose_defects     # FR-B5: persist defect ledger + de-saturate score
 
     def __call__(self, cell: MatrixCell, spec: BenchmarkRunSpec, language: str) -> CellResult:
         from ..model_comparison import build_command, extract_metrics, run_command, SDK_ROOT
@@ -192,7 +197,8 @@ class SubprocessCellExecutor:
         workdir.mkdir(parents=True, exist_ok=True)
         output = workdir / ".startd8" / "benchmark-output"
 
-        cmd = build_command(seed, workdir, output, cell.model, spec.per_cell_cap_usd)
+        cmd = build_command(seed, workdir, output, cell.model, spec.per_cell_cap_usd,
+                            repair_mode=self.repair_mode, expose_defects=self.expose_defects)
         cmd.append("--benchmark-mode")  # FR-1/FR-27: disable deterministic cascade
         run = run_command(cmd, SDK_ROOT, timeout=self.per_run_timeout_s)
         metrics = extract_metrics(output)
@@ -240,6 +246,8 @@ class SubprocessCellExecutor:
         compile_ok = None
         degraded = False
         sandbox_violation = None
+        defect_total = None
+        defects_by_category = None
 
         # M4 compile gate (FR-11/FR-29/FR-44): only for cells that actually generated.
         # Run the language's syntax/compile check on the generated file inside the sandbox;
@@ -250,10 +258,18 @@ class SubprocessCellExecutor:
                 gen_file = self._generated_file(workdir, cell.service)
                 if gen_file is not None:
                     from ..languages import LanguageRegistry, resolve_language
-                    from .scoring import score_file
+                    from .scoring import apply_defect_penalty, score_file
                     LanguageRegistry.discover()
                     profile = resolve_language([str(gen_file)])
                     composite = score_file(gen_file, profile, structural=structural)
+                    # FR-B3: in expose mode, fold the defect ledger into the score so a
+                    # parses-but-defective file is pulled off the compile-gate ceiling.
+                    if self.expose_defects:
+                        ledger = self._aggregate_defect_ledger(workdir)
+                        if ledger is not None:
+                            composite = apply_defect_penalty(composite, ledger)
+                            defect_total = ledger.get("total")
+                            defects_by_category = ledger.get("by_category")
                     quality = composite.value
                     compile_ok = composite.compile_ok
                     degraded = composite.degraded
@@ -272,7 +288,32 @@ class SubprocessCellExecutor:
             deterministic_skips=det_skips, integrity_ok=integrity_ok,
             sandbox_violation=sandbox_violation,
             error=None if status == STATUS_OK else (err_text or status),
+            defect_total=defect_total, defects_by_category=defects_by_category,
         )
+
+    @staticmethod
+    def _aggregate_defect_ledger(workdir: Path) -> Optional[Dict]:
+        """FR-B3: merge all per-unit defect ledgers in a cell workdir into one
+        {total, by_category, by_severity} dict. None when expose wrote no ledger."""
+        import json
+        led_dir = workdir / ".startd8" / "defect-ledger"
+        files = sorted(led_dir.glob("*.json")) if led_dir.is_dir() else []
+        if not files:
+            return None
+        total = 0
+        by_cat: Dict[str, int] = {}
+        by_sev: Dict[str, int] = {}
+        for f in files:
+            try:
+                d = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            total += int(d.get("total", 0) or 0)
+            for k, v in (d.get("by_category") or {}).items():
+                by_cat[k] = by_cat.get(k, 0) + int(v)
+            for k, v in (d.get("by_severity") or {}).items():
+                by_sev[k] = by_sev.get(k, 0) + int(v)
+        return {"total": total, "by_category": by_cat, "by_severity": by_sev}
 
     def _generated_file(self, workdir: Path, service: str) -> Optional[Path]:
         """Resolve the generated service file from the seed's target_files, under workdir."""
