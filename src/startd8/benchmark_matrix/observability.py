@@ -94,34 +94,29 @@ def _mixin_vendor_present() -> bool:
         return False
 
 
-def generate_run_dashboard(
-    run_dir: Path,
-    output_dir: Path,
-    *,
-    datasource: str = _DEFAULT_DATASOURCE,
-    provision: bool = False,
+def compile_or_spec(
+    spec: Dict[str, Any], output_dir: Path, *, provision: bool = False
 ) -> Dict[str, Any]:
-    """Build + compile the run dashboard. Degrades to spec-YAML if the jsonnet toolchain is absent.
+    """Compile a DashboardSpec dict → Grafana JSON, or degrade to spec-YAML when grafonnet is absent.
 
-    Returns a summary dict: ``{run_id, uid, mode: "compiled"|"spec_only", json_path|spec_path, panel_count}``.
+    Shared by the run dashboard (P1) and the onboarding portal (P3). Returns
+    ``{uid, mode: "compiled"|"spec_only", json_path|spec_path, panel_count}``.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    spec = build_run_dashboard_spec(run_dir, datasource=datasource)
-    run_id = spec["uid"].rsplit("-", 1)[-1]
-
+    uid = spec["uid"]
     if not _mixin_vendor_present():
         # FR-16 graceful degradation: emit the spec YAML, don't hard-fail.
         import yaml
 
-        spec_path = output_dir / f"{spec['uid']}-spec.yaml"
+        spec_path = output_dir / f"{uid}-spec.yaml"
         spec_path.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
         logger.warning(
             "startd8-mixin vendor/ absent (run `jb install` in startd8-mixin) — wrote spec only: %s",
             spec_path,
         )
-        return {"run_id": run_id, "uid": spec["uid"], "mode": "spec_only",
-                "spec_path": str(spec_path), "panel_count": len(spec["panels"])}
+        return {"uid": uid, "mode": "spec_only", "spec_path": str(spec_path),
+                "panel_count": len(spec.get("panels", []))}
 
     from ..dashboard_creator.workflow import DashboardCreatorWorkflow
 
@@ -131,7 +126,76 @@ def generate_run_dashboard(
     if not res.success:
         raise RuntimeError(f"dashboard generation failed: {getattr(res, 'error', res.output)}")
     out = res.output or {}
-    logger.info("Generated run dashboard %s → %s", spec["uid"], out.get("json_path"))
-    return {"run_id": run_id, "uid": spec["uid"], "mode": "compiled",
-            "json_path": out.get("json_path"), "dashboard_url": out.get("dashboard_url"),
-            "panel_count": out.get("panel_count", len(spec["panels"]))}
+    logger.info("Compiled dashboard %s → %s", uid, out.get("json_path"))
+    return {"uid": uid, "mode": "compiled", "json_path": out.get("json_path"),
+            "dashboard_url": out.get("dashboard_url"),
+            "panel_count": out.get("panel_count", len(spec.get("panels", [])))}
+
+
+def generate_run_dashboard(
+    run_dir: Path,
+    output_dir: Path,
+    *,
+    datasource: str = _DEFAULT_DATASOURCE,
+    provision: bool = False,
+) -> Dict[str, Any]:
+    """Build + compile the run dashboard (P1). Degrades to spec-YAML if the jsonnet toolchain is absent."""
+    spec = build_run_dashboard_spec(run_dir, datasource=datasource)
+    result = compile_or_spec(spec, output_dir, provision=provision)
+    result["run_id"] = spec["uid"].rsplit("-", 1)[-1]
+    return result
+
+
+# ---------------------------------------------------------------------------
+# P2 — Harness incident runbook (FR-5) from the manifest's declared risks + owners.
+# (The reusable observability/generate_runbook is service-RED-shaped and risk-blind, so the
+#  benchmark's real incident classes come from the manifest risks here.)
+# ---------------------------------------------------------------------------
+
+def build_harness_runbook(manifest_path: Path) -> str:
+    """Render a markdown incident runbook from the benchmark ContextManifest (risks → incident classes)."""
+    import yaml
+
+    manifest = yaml.safe_load(Path(manifest_path).read_text(encoding="utf-8"))
+    spec = manifest.get("spec", {})
+    project = spec.get("project", {})
+    business = spec.get("business", {})
+    owners = manifest.get("metadata", {}).get("owners", [])
+    risks = spec.get("risks", [])
+
+    lines = [
+        f"# Runbook: {project.get('name', project.get('id', 'benchmark'))}",
+        "",
+        "## Summary",
+        f"- **Criticality:** {business.get('criticality', 'medium')}",
+        f"- **Owner:** {business.get('owner', '—')}",
+        f"- **Description:** {project.get('description', '').strip()}",
+        "",
+        "## Incident classes (from declared risks)",
+    ]
+    for r in risks:
+        lines += [
+            f"### [{r.get('priority', 'P?')}] {r.get('type', 'risk')} — {r.get('description', '')}",
+            f"- **Response / mitigation:** {r.get('mitigation', '—')}",
+            "",
+        ]
+    lines += ["## Escalation"]
+    if owners:
+        for o in owners:
+            who = " · ".join(str(o[k]) for k in ("team", "email", "slack") if o.get(k))
+            lines.append(f"- {who}")
+    else:
+        lines.append("- (no owners declared)")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_harness_runbook(manifest_path: Path, output_dir: Path) -> Dict[str, Any]:
+    """Write the harness runbook markdown to ``output_dir/harness-runbook.md``."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    md = build_harness_runbook(manifest_path)
+    path = output_dir / "harness-runbook.md"
+    path.write_text(md, encoding="utf-8")
+    logger.info("Wrote harness runbook → %s", path)
+    return {"path": str(path), "incident_classes": md.count("### ")}

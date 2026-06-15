@@ -73,3 +73,35 @@ def test_benchmark_manifest_loads():
     assert ctx.criticality == "high"
     assert ctx.prometheus_datasource == "prometheus"
     assert ctx.owners  # metadata.owners parsed
+
+
+# --- P2: harness runbook from declared risks ---
+
+def test_harness_runbook_from_manifest_risks(tmp_path):
+    from startd8.benchmark_matrix.observability import build_harness_runbook, write_harness_runbook
+
+    md = build_harness_runbook(_MANIFEST)
+    assert "# Runbook:" in md
+    # the manifest's real incident classes (= declared risks) appear
+    assert "sandbox" in md.lower()        # FR-44
+    assert "redact" in md.lower() or "leakage" in md.lower()  # FR-45
+    assert "budget" in md.lower()         # cost overrun
+    assert "## Escalation" in md and "platform-engineering" in md
+    out = write_harness_runbook(_MANIFEST, tmp_path)
+    assert Path(out["path"]).exists()
+    assert out["incident_classes"] >= 5   # 5 declared risks
+
+
+# --- P3: per-persona onboarding portal ---
+
+def test_onboarding_portal_personas(tmp_path):
+    from startd8.benchmark_matrix.onboarding import generate_onboarding_portal
+
+    results = generate_onboarding_portal(_MANIFEST, tmp_path / "portal")
+    assert len(results) == 4  # operator/engineer/manager/executive
+    for r in results:
+        assert r["mode"] in {"compiled", "spec_only"}
+        assert r["uid"].startswith("cc-portal-startd8-benchmark")
+        if r["mode"] == "compiled":
+            d = json.loads(Path(r["json_path"]).read_text())
+            assert d["templating"]["list"]  # datasource var → valid Grafana JSON
