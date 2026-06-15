@@ -2,8 +2,34 @@
 
 **Version:** 1.1 (CRP R1–R4 triaged — see §Post-Review Amendments)
 **Date:** 2026-06-15
+**Status:** ✅ **IMPLEMENTED 2026-06-15** (all phases; see §Implementation Status)
 **Pairs with:** `GENERATED_IMPORT_PATH_REQUIREMENTS.md` v0.3 (FR-IMP-1/2/3/6 + the §0b refresh)
 **Base:** `origin/main` (FR-IMP-4/5 + source-scope FR-IMP-2 already shipped)
+
+## Implementation Status (2026-06-15)
+
+All phases built on `feat/import-path`, consumer = **strtd8** (OQ-IMP-D). Tests green: 587 unit
+(backend_codegen + manifest_extraction + wireframe) + 13 runtime (real SQLModel/FastAPI, in a
+throwaway venv) + 277 adjacent codegen/provider suites. One pre-existing, unrelated failure
+(`frontend_codegen` TS-convention detector reading an external strtd8 path) confirmed on `origin/main`.
+
+| Phase | What shipped | Key files |
+|-------|--------------|-----------|
+| **P1a** | `IdentityKey` + `resolve_identity()` — pure, no `ai_layer` edit (28 tests) | `backend_codegen/identity.py` |
+| **P1b** | One decision point routes AI-pass persist (`_row_identity`→`_row_persist_parts`); **byte-identical** to the old `dedup_by`/name selection; source/scoped untouched (F-105 parity) | `backend_codegen/ai_layer.py` |
+| **2** | `imports.yaml` grammar (`parse_imports` oracle + `extract_imports`); candidate-ordered cross-refs; OQ-IMP-5; orphan prune (18 tests) | `backend_codegen/imports_manifest.py`, `manifest_extraction/extractors.py`+`extract.py` |
+| **2.5** | `imports_text` threaded through `render_backend`/`check_drift`/`owned_file_in_sync`/provider; conditional emission; `python-import` two-hash drift (`imports-sha256`); `--imports` CLI; wireframe catalog | `assembler.py`, `drift.py`, `_headers.py`, `provider.py`, `cli_generate.py`, `wireframe/{inputs,plan}.py` |
+| **3** | `app/importer.py` `from_json` upsert — export-`ENTITY_ORDER`/`FIELDS` reuse, FK-topological order, type coercion, identity upsert, confirmed/provenance non-clobber, strict-atomic vs allow-lossy (8 runtime + 9 static) | `backend_codegen/import_codegen.py` |
+| **4** | `app/import_surface.py` paste/upload screen — upload safety, renders `ImportResult` (no silent 302), tolerant `main.py` mount, surface drift (5 runtime + 6 static) | `backend_codegen/import_surface.py` |
+
+**Notes on seam decisions made during the build (vs the plan):**
+- The owned-kind file is **`app/importer.py`**, not `app/import.py` — `import` is a Python keyword, so
+  `from app.import import …` is a SyntaxError. The module stays statically importable.
+- The strict-atomicity rollback uses **one outer transaction** (no per-row savepoint) — a *released*
+  SAVEPOINT survives a later `session.rollback()` in SQLAlchemy; lossy mode keeps per-row savepoints.
+- Nav (R2-S6): the surface page carries its own `← Home` link; full nav-bar injection (threading
+  imports into the `pages-base` kind) was judged not worth re-stamping every app's `base.html` and is
+  the one deferred sub-item.
 
 ## Overview
 
