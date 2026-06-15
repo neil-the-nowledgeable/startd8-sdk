@@ -30,9 +30,11 @@ from .htmx_generator import _confirm_field
 CONTRACT_TESTS_PATH = "tests/test_contract.py"
 COMPLETENESS_TESTS_PATH = "tests/test_completeness.py"
 ROUTE_SMOKE_TESTS_PATH = "tests/test_route_smoke.py"
+HEALTH_TESTS_PATH = "tests/test_health.py"
 _KIND = "python-tests-contract"
 _COMPLETENESS_KIND = "python-tests-completeness"
 _ROUTE_SMOKE_KIND = "python-tests-routes"
+_HEALTH_KIND = "python-tests-health"
 
 _SHIM = (
     "import sys\n"
@@ -154,6 +156,49 @@ def render_contract_tests(
     sections = [header + "\n\n" + preamble]
     sections.extend(_entity_block(schema, n) for n in names)
     return "\n\n\n".join(sections) + "\n"
+
+
+_HEALTH_TESTS_BODY = '''\
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import pytest
+
+_testclient = pytest.importorskip("fastapi.testclient")
+pytest.importorskip("sqlmodel")
+pytest.importorskip("httpx")
+
+from app.main import app  # noqa: E402
+
+
+def test_health_ready():
+    """Bare /health is readiness — 200 {"status": "ok"} when the DB answers."""
+    with _testclient.TestClient(app) as client:
+        r = client.get("/health")
+        assert r.status_code == 200
+        assert r.json() == {"status": "ok"}
+
+
+def test_health_live():
+    with _testclient.TestClient(app) as client:
+        r = client.get("/health/live")
+        assert r.status_code == 200
+        assert r.json() == {"status": "alive"}
+'''
+
+
+def render_health_tests(
+    schema_text: str, source_file: str = "prisma/schema.prisma"
+) -> str:
+    """Render ``tests/test_health.py`` — asserts /health readiness 200 + /health/live 200.
+
+    Schema-only + byte-stable: the body is invariant; the header carries the schema-sha for drift.
+    """
+    sha = schema_sha256(schema_text)
+    header = _header(source_file, sha, _HEALTH_KIND)
+    return header + "\n\n" + _HEALTH_TESTS_BODY
 
 
 def render_completeness_tests(

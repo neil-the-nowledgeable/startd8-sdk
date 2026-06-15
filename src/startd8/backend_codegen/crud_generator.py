@@ -242,6 +242,7 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         "except Exception:\n"
         "    pass\n\n"
         "from .db import init_db\n"
+        "from .health import health_router\n"
         "from .routers import all_routers\n"
         "from .web import web_router\n\n\n"
         "@asynccontextmanager\n"
@@ -251,7 +252,8 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         'app = FastAPI(title="StartDate", lifespan=lifespan)\n\n'
         "for _router in all_routers:\n"
         "    app.include_router(_router)\n"
-        "app.include_router(web_router)  # server-rendered HTMX UI at /ui/*\n\n"
+        "app.include_router(web_router)  # server-rendered HTMX UI at /ui/*\n"
+        "app.include_router(health_router)  # /health (readiness) + /health/live (liveness)\n\n"
         "try:  # optional presentation-polish static mount (startd8 polish); no-op until polish runs\n"
         "    from .static_setup import mount_static\n"
         "except ModuleNotFoundError:\n"

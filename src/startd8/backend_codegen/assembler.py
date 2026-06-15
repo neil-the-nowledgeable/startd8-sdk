@@ -27,9 +27,11 @@ from .sqlmodel_renderer import render_sqlmodel_tables
 from .test_emitter import (
     COMPLETENESS_TESTS_PATH,
     CONTRACT_TESTS_PATH,
+    HEALTH_TESTS_PATH,
     ROUTE_SMOKE_TESTS_PATH,
     render_completeness_tests,
     render_contract_tests,
+    render_health_tests,
     render_route_smoke_tests,
 )
 
@@ -93,6 +95,7 @@ def render_backend(
     # Rung-4 semantic tests over the contract (round-trip / field-presence / enum-domain). Owned,
     # $0, drift-checked; they ARE the gate the Python build runs (pytest).
     out.append((CONTRACT_TESTS_PATH, render_contract_tests(schema_text, source_file)))
+    out.append((HEALTH_TESTS_PATH, render_health_tests(schema_text, source_file)))
     out.append((
         COMPLETENESS_TESTS_PATH,
         render_completeness_tests(

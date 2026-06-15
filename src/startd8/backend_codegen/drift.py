@@ -126,6 +126,7 @@ def _renderers(
     from .test_emitter import (
         render_completeness_tests,
         render_contract_tests,
+        render_health_tests,
         render_route_smoke_tests,
     )
     # P0-2/FR-DM: list/row/detail re-render must use the SAME filter (views.yaml) + display
@@ -175,6 +176,7 @@ def _renderers(
         "pages-admin": lambda s, sf, e: render_pages_admin(s, sf),
         "pages-admin-tmpl": lambda s, sf, e: render_pages_admin_template(s, sf),
         "python-tests-contract": lambda s, sf, e: render_contract_tests(s, sf),
+        "python-tests-health": lambda s, sf, e: render_health_tests(s, sf),
         "python-tests-completeness": lambda s, sf, e: render_completeness_tests(s, sf, manifest=_cmpl),
         "python-tests-routes": lambda s, sf, e: render_route_smoke_tests(s, sf),
     }
