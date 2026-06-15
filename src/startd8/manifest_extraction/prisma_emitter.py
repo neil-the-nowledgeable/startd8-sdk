@@ -102,18 +102,41 @@ def _quote_string_default(value: str) -> str:
 def _emit_block_attrs(
     model: str, lines: List[str], seen: List[str], errors: List[str], graph: "EntityGraph"
 ) -> None:
-    """Emit ``@@unique`` / ``@@index`` for a model. Column-existence validation (H3) is layered in
-    at the High level; here it emits the declared block attributes."""
-    for cols in graph.uniques.get(model, []):        # FR-PE-5(b): explicit compound @@unique
-        lines.append(f"  @@unique([{', '.join(cols)}])")
-    for cols in graph.indexes.get(model, []):        # FR-PE-5(b): explicit @@index
-        lines.append(f"  @@index([{', '.join(cols)}])")
+    """Emit ``@@unique`` / ``@@index`` (FR-PE-5b), FAILING LOUDLY (H3) on a column that is not a
+    declared field on the model — a typo would otherwise emit a schema invalid at ``prisma validate``
+    that the lenient round-trip wouldn't catch. The offending constraint is suppressed."""
+    declared = set(seen)
+    for kind, specs in (("@@unique", graph.uniques.get(model, [])),
+                        ("@@index", graph.indexes.get(model, []))):
+        for cols in specs:
+            missing = [c for c in cols if c not in declared]
+            if missing:
+                errors.append(
+                    f"{model}: {kind} references undeclared column(s) {sorted(missing)} "
+                    "(typo?); constraint suppressed"
+                )
+                continue
+            lines.append(f"  {kind}([{', '.join(cols)}])")
+
+
+_SIBILANT_SUFFIXES = ("s", "ss", "x", "z", "ch", "sh")
 
 
 def _plural(name: str) -> str:
-    """A reverse-relation list field name: lowerCamel plural (``Capability`` → ``capabilities``)."""
+    """A reverse-relation list field name: lowerCamel plural with English edge cases (H1).
+
+    sibilant ending (``-s``/``-ss``/``-x``/``-z``/``-ch``/``-sh``) → ``+es``; a **consonant**+``-y``
+    → ``-ies``; a **vowel**+``-y`` → ``+s``; otherwise ``+s``. (``Address`` → ``addresses``,
+    ``Box`` → ``boxes``, ``Match`` → ``matches``, ``Day`` → ``days``, ``Capability`` →
+    ``capabilities``.) A residual same-name collision on one model is caught by ``_emit_field``.
+    """
     base = _lower_camel(name)
-    return base[:-1] + "ies" if base.endswith("y") else base + "s"
+    low = base.lower()
+    if low.endswith(_SIBILANT_SUFFIXES):
+        return base + "es"
+    if low.endswith("y") and len(base) >= 2 and base[-2].lower() not in "aeiou":
+        return base[:-1] + "ies"
+    return base + "s"
 
 
 def _relation_attr(fk: str) -> str:
@@ -170,6 +193,7 @@ def render_prisma_schema(
     warnings: List[str] = []
     errors: List[str] = []
     field_names: Dict[str, Tuple[str, ...]] = {}
+    list_fields: List[str] = []     # H2: scalar-list fields (String[]) — a SQLite-portability caveat
 
     # --- precompute relationship-derived members keyed by entity name (FR-PE-3) -----------------
     rev_lists: Dict[str, List[Tuple[str, str]]] = {n: [] for n in graph.entities}
@@ -206,6 +230,7 @@ def render_prisma_schema(
                 continue
             if f.is_list:              # G3: list-of-scalar → String[] @default([]) (Column(JSON))
                 _emit_field(lines, seen, errors, name, f.name, f"{f.prisma_type}[] @default([])")
+                list_fields.append(f"{name}.{f.name}")
                 continue
             if f.default is not None:  # FR-PE-5(a): a defaulted scalar is non-optional
                 # G1: a String default must be QUOTED (unquoted is invalid prisma); enum/number/
@@ -253,6 +278,16 @@ def render_prisma_schema(
         lines.append(f"  @@unique([{j.fk_left}, {j.fk_right}])")
         blocks.append(_model_block(j.name, lines))
         field_names[j.name] = tuple(seen)
+
+    # H2: scalar lists are a deliberate SDK convention (String[] → Column(JSON) downstream), but
+    # they are NOT valid Prisma on the locked SQLite datasource. The SDK pipeline tolerates it (its
+    # own lenient parser + renderers), yet `prisma validate` (languages/prisma.py) would reject it —
+    # so surface the portability caveat instead of letting it pass silently.
+    if list_fields:
+        warnings.append(
+            f"scalar-list field(s) {list_fields} emit `String[]`, a SDK JSON-column convention that "
+            "is NOT valid Prisma on the SQLite datasource (won't pass `prisma validate`)"
+        )
 
     body = _PRISMA_PREAMBLE + "\n\n" + "\n\n".join(blocks) + "\n"
     sha = schema_sha256(body)

@@ -571,6 +571,8 @@ def contract(
         console.print_json(_json.dumps({
             "ok": res.ok, "round_trips": res.round_trips, "models": res.models,
             "parity_drift": list(res.parity_drift),
+            "errors": list(res.errors),            # H1/H3 structural
+            "warnings": list(res.warnings),        # H4 advisory
             "unrenderable": [f"{u.entity}.{u.field}: {u.reason}" for u in res.unrenderable],
             "draft_path": res.draft_path,
         }))
@@ -584,8 +586,12 @@ def contract(
                     console.print(f"  - {d}")
             else:
                 console.print("parity: [green]clean[/green] (matches the live contract)")
+        for e in res.errors:        # H1/H3: structural — these block the gate
+            console.print(f"[red]structural error[/red]: {e}")
         for u in res.unrenderable:  # FR-EMIT-7: never silently drop
             console.print(f"[yellow]unrenderable[/yellow]: {u.entity}.{u.field} — {u.reason}")
+        for w in res.warnings:      # H4: advisory (e.g. enum default not a member) — surfaced, not lost
+            console.print(f"[yellow]warning[/yellow]: {w}")
         if res.draft_path:
             console.print(f"draft: {res.draft_path}")
 
