@@ -104,11 +104,18 @@ def _get_ts_parser() -> Any:
     except ImportError:
         _ts_parser_cache = None
         return None
-    except (OSError, RuntimeError) as exc:
-        # Unexpected failure (e.g. corrupt shared library, ABI mismatch)
+    except Exception as exc:
+        # Any init failure — corrupt shared library, or (commonly) a tree-sitter ABI/grammar
+        # version mismatch between the installed `tree_sitter` binding and `tree_sitter_c_sharp`
+        # grammar. Observed in the wild as ValueError("Incompatible Language version 15. Must be
+        # between 13 and 14") and TypeError("an integer is required"). These MUST NOT crash the
+        # caller: validate_csharp_syntax / the C# parser fall back to the regex/brace path when
+        # this returns None. (Previously only OSError/RuntimeError were caught, so a version
+        # mismatch escaped and aborted the whole prime/benchmark run.)
         import logging
         logging.getLogger(__name__).warning(
-            "tree-sitter-c-sharp init failed: %s", exc,
+            "tree-sitter-c-sharp init failed (%s: %s) — falling back to regex parser",
+            type(exc).__name__, exc,
         )
         _ts_parser_cache = None
         return None
