@@ -191,6 +191,8 @@ startd8 = [
     "contractors/artisan_phases/prompts/*.yaml",
     "workflows/builtin/prompts/*.yaml",
     "implementation_engine/prompts/*.yaml",
+    "concierge_templates/*.md",
+    "concierge_templates/inputs/*.yaml",
 ]
 
 

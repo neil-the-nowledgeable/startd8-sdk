@@ -1,0 +1,37 @@
+# <Project> — Kickoff inputs: BUSINESS TARGETS                                 [TEMPLATE]
+# What success looks like, in numbers. See ../KICKOFF_INPUTS_EXPLAINED.md §1.
+# Instantiate: adapt metric NAMES to the product (the shape is what's stable); pre-fill every
+# value with an LLM-drafted starter (never blank); provenance flips to `authored` on a real
+# human decision. Dormant entries (e.g. pre-monetization) are fine — declare intent early.
+
+domain: business-targets
+provenance_default: estimate
+
+product_funnel:
+  <core_funnel_rate>:                # e.g. signup→activated, started→completed
+    target: "<NN%>"
+    why: <the product's core funnel KPI — goal line on its panel>
+  <key_artifact_success_rate>:       # "did the user get the thing they came for"
+    target: "<NN%>"
+    why: <maps to the primary user journey>
+  <delivered_value_ratio>:           # value delivered per active user, not activity
+    target: <N>
+    why: <e.g. exports/active user/month>
+
+traction:
+  <active_users_goal>:
+    target: <N>
+    why: <weekly/monthly actives at current stage>
+
+unit_economics:
+  <cost_per_unit_of_value>:
+    target: "<= $<N>"
+    why: <pairs with the LLM monthly ceiling in build-preferences.yaml>
+
+monetization:
+  mode_now: <free-during-demo | live>
+  <conversion_rate>: {target: "<N%>", status: <dormant | active>}
+  <price_point>: {target: "$<N>/month", status: <dormant | active>}
+
+per_role_top_goals:                  # optional portal headers
+  <role>: "<one-line goal a human would recognize>"

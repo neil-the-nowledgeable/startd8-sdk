@@ -72,9 +72,11 @@ def test_handle_unknown_action_raises(project):
 
 
 def test_handle_deferred_action_is_structured_not_crash(project):
-    out = handle_concierge_tool("log-friction", project)
+    # log-friction graduated to implemented in the write-path increment; derive-contract
+    # remains the deferred action.
+    out = handle_concierge_tool("derive-contract", project)
     assert out["status"] == "not_implemented"
-    assert out["action"] == "log-friction"
+    assert out["action"] == "derive-contract"
 
 
 def test_survey_is_pure_no_writes(project):
