@@ -39,6 +39,7 @@ CANONICAL_LAYOUT: Dict[str, str] = {
     "python-import": "app/importer.py",  # FR-IMP-1: from_json upsert importer (opt-in via imports.yaml)
     #   ^ NOT app/import.py — `import` is a Python keyword, so `from app.import import …` is a
     #     SyntaxError; `importer` keeps the module statically importable by main.py + the surface.
+    "python-import-surface": "app/import_surface.py",  # FR-IMP-6: paste/upload screen (surface: true)
     "python-ai-schemas": "app/ai_schemas.py",
     "python-completeness": "app/completeness.py",
     "python-requirements": "requirements.txt",
@@ -302,6 +303,12 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         "    editor_routers = []\n"
         "for _editor_router in editor_routers:\n"
         "    app.include_router(_editor_router)  # GET grouped editor + POST bulk save\n"
+        "try:  # optional bulk-import surface (imports.yaml `surface: true`); GET/POST /import (FR-IMP-6)\n"
+        "    from .import_surface import import_surface_router\n"
+        "except ModuleNotFoundError:\n"
+        "    import_surface_router = None\n"
+        "if import_surface_router is not None:\n"
+        "    app.include_router(import_surface_router)  # paste/upload import screen\n"
     )
     return header + "\n\n" + body
 

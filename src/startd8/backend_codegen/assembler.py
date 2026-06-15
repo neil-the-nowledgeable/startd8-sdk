@@ -93,6 +93,14 @@ def render_backend(
         from .import_codegen import render_import
 
         out.append((CANONICAL_LAYOUT["python-import"], render_import(schema_text, imports_text, source_file)))
+        # FR-IMP-6: the paste/upload surface — emitted only when an import declares `surface: true`.
+        from .import_surface import render_import_surface, surface_enabled
+
+        if surface_enabled(imports_text):
+            out.append((
+                CANONICAL_LAYOUT["python-import-surface"],
+                render_import_surface(schema_text, imports_text, source_file),
+            ))
     out.append((
         "requirements.txt",
         render_requirements(schema_text, source_file, authoring=authoring, ai=bool(manifest_text)),

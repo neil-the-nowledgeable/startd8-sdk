@@ -47,6 +47,7 @@ imports:
   Capability:
     format: json
     identity: id
+    surface: yes
   Outcome:
     format: json
     identity: id
@@ -61,7 +62,11 @@ def _purge_app_modules():
 @pytest.fixture(scope="module")
 def _generated_app(tmp_path_factory):
     """Generate + import the app ONCE (SQLModel registers tables on the global metadata, so a
-    per-test re-import would clash). Each test gets a fresh engine over the same metadata."""
+    per-test re-import would clash). Exposes the modules AND a served TestClient — both over the
+    single registration. Each importer test gets its own fresh in-memory engine over the same
+    metadata; the surface tests use the served client (its own sqlite file)."""
+    import os
+
     root = tmp_path_factory.mktemp("import_app")
     for rel, content in render_backend(SCHEMA, imports_text=IMPORTS):
         target = root / rel
@@ -69,14 +74,20 @@ def _generated_app(tmp_path_factory):
         target.write_text(content, encoding="utf-8")
     sys.path.insert(0, str(root))
     _purge_app_modules()
+    os.environ["DATABASE_URL"] = f"sqlite:///{root/'app.db'}"
     tables = importlib.import_module("app.tables")
     importer = importlib.import_module("app.importer")
     export = importlib.import_module("app.export")
+    main = importlib.import_module("app.main")
+    from fastapi.testclient import TestClient
+
     try:
-        yield tables, importer, export
+        with TestClient(main.app) as client:
+            yield tables, importer, export, client
     finally:
         sys.path.remove(str(root))
         _purge_app_modules()
+        os.environ.pop("DATABASE_URL", None)
 
 
 @pytest.fixture()
@@ -84,7 +95,7 @@ def app_modules(_generated_app):
     """A fresh in-memory DB per test over the once-registered metadata."""
     from sqlmodel import SQLModel, Session, create_engine
 
-    tables, importer, export = _generated_app
+    tables, importer, export, _client = _generated_app
     engine = create_engine("sqlite://")
     SQLModel.metadata.create_all(engine)
     try:
@@ -92,6 +103,11 @@ def app_modules(_generated_app):
     finally:
         SQLModel.metadata.drop_all(engine)
         engine.dispose()
+
+
+@pytest.fixture()
+def served_app(_generated_app):
+    return _generated_app[3]
 
 
 def test_importer_emitted_and_imports(app_modules):
@@ -224,3 +240,42 @@ def test_invalid_json_is_structured_error(app_modules):
     with Session(engine) as s:
         r = importer.from_json("{not json", s)
         assert not r.ok and "invalid JSON" in r.errors[0]
+
+
+# --------------------------------------------------------------------------- #
+# FR-IMP-6 surface — served via the full app (TestClient)
+# --------------------------------------------------------------------------- #
+
+def test_surface_get_renders_form(served_app):
+    r = served_app.get("/import")
+    assert r.status_code == 200
+    assert "Import data" in r.text and "<form" in r.text
+
+
+def test_surface_post_imports_and_renders_result(served_app):
+    import json
+
+    payload = {"Capability": [{"id": "sc1", "name": "Surfaced", "weight": 2}]}
+    r = served_app.post("/import", data={"payload_text": json.dumps(payload), "strict": "1"})
+    assert r.status_code == 200
+    assert "created: 1" in r.text
+    assert "succeeded with no errors" in r.text
+
+
+def test_surface_post_empty_is_400_not_redirect(served_app):
+    r = served_app.post("/import", data={"payload_text": "  "})
+    assert r.status_code == 400  # never a silent 302
+    assert "Nothing to import" in r.text
+
+
+def test_surface_post_bad_json_renders_error_422(served_app):
+    r = served_app.post("/import", data={"payload_text": "{not json", "strict": "1"})
+    assert r.status_code == 422
+    assert "Errors" in r.text and "invalid JSON" in r.text
+
+
+def test_surface_upload_bad_extension_rejected(served_app):
+    files = {"file": ("data.exe", b"{}", "application/octet-stream")}
+    r = served_app.post("/import", files=files)
+    assert r.status_code == 400
+    assert "Unsupported file type" in r.text

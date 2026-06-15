@@ -84,9 +84,10 @@ _FORMS_KINDS: frozenset = frozenset(
 # input at drift time — the schema-only skip-hook can verify it.
 _SETTINGS_KINDS: frozenset = frozenset({"python-settings"})
 
-# The import owned-kind (FR-IMP-1) derives from two inputs (schema + imports.yaml). Kept in sync with
-# ``import_codegen.IMPORT_KINDS`` (literal here to avoid an import cycle at module load).
-_IMPORTS_KINDS: frozenset = frozenset({"python-import"})
+# The import owned-kinds (FR-IMP-1 importer + FR-IMP-6 surface) derive from two inputs (schema +
+# imports.yaml). Kept in sync with ``import_codegen``/``import_surface`` (literal here to avoid a
+# module-load import cycle).
+_IMPORTS_KINDS: frozenset = frozenset({"python-import", "python-import-surface"})
 
 
 def _renderers(
@@ -628,13 +629,12 @@ def imports_stale_reason(
 def _check_imports_drift(
     schema_text, imports_text, ondisk_text, source_file, kind
 ) -> DriftResult:
-    """Drift for ``app/importer.py``: stale if schema or imports.yaml changed; else byte re-render."""
+    """Drift for the import owned-kinds (FR-IMP-1 importer + FR-IMP-6 surface): stale if schema or
+    imports.yaml changed; else byte re-render. Dispatches by kind to the right renderer."""
     if imports_text is None:
         return DriftResult(
             "error", ERROR, "import drift check requires the imports manifest (imports.yaml)"
         )
-    from .import_codegen import render_import
-
     reason = imports_stale_reason(
         ondisk_text,
         schema_sha=schema_sha256(schema_text),
@@ -643,7 +643,14 @@ def _check_imports_drift(
     if reason is not None:
         status = "tampered" if "missing" in reason else "stale"
         return DriftResult(status, DRIFT, reason)
-    rendered = render_import(schema_text, imports_text, source_file)
+    if kind == "python-import-surface":
+        from .import_surface import render_import_surface
+
+        rendered = render_import_surface(schema_text, imports_text, source_file)
+    else:
+        from .import_codegen import render_import
+
+        rendered = render_import(schema_text, imports_text, source_file)
     if rendered != ondisk_text:
         return DriftResult(
             "tampered",
