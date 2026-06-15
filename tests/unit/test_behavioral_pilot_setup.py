@@ -32,10 +32,32 @@ def test_pilot_spec_is_one_service_times_roster_times_reps():
     assert spec.budget_ceiling_usd == 10.0
 
 
+def test_node_runtime_closure_declares_pino_and_uuid():
+    # FR-T2-DEPS: the vendored closure must include the real paymentservice deps the models require
+    # without declaring (pino, uuid) — not just gRPC. Asserted on package.json (no install needed).
+    import json
+    deps = json.loads((_NODE_RUNTIME / "package.json").read_text())["dependencies"]
+    assert {"@grpc/grpc-js", "@grpc/proto-loader", "pino", "uuid"} <= set(deps)
+
+
 @pytest.mark.skipif(not (_NODE_RUNTIME / "node_modules").is_dir(),
                     reason="node runtime not vendored (run node_runtime/vendor.sh)")
-def test_prepare_node_workdir_materializes_runtime_and_proto(tmp_path):
+def test_prepare_node_workdir_materializes_closure_and_proto_at_all_paths(tmp_path):
     assert prepare_node_workdir(tmp_path) is True
-    assert (tmp_path / "node_modules" / "@grpc" / "grpc-js").is_dir()
-    assert (tmp_path / "demo.proto").is_file()
-    assert (tmp_path / "protos" / "demo.proto").is_file()
+    # FR-T2-DEPS: full closure present.
+    for pkg in ("@grpc/grpc-js", "@grpc/proto-loader", "pino", "uuid"):
+        assert (tmp_path / "node_modules" / pkg).exists(), pkg
+    # FR-T2-PROTO: proto provisioned at every conventional location a server might load it from.
+    for sub in ("", "protos", "proto", "pb", "lib/proto"):
+        loc = (tmp_path / sub / "demo.proto") if sub else (tmp_path / "demo.proto")
+        assert loc.is_file(), sub
+
+
+@pytest.mark.skipif(not (_NODE_RUNTIME / "node_modules").is_dir(),
+                    reason="node runtime not vendored (run node_runtime/vendor.sh)")
+def test_prepare_node_workdir_drops_proto_service_relative(tmp_path):
+    # FR-T2-PROTO: service-relative paths (next to the server + its proto/ subdir). The pilot saw
+    # Opus load from src/<service>/demo.proto, which the fixed-list multiplex alone misses.
+    assert prepare_node_workdir(tmp_path, ["src/paymentservice/server.js"]) is True
+    assert (tmp_path / "src" / "paymentservice" / "demo.proto").is_file()
+    assert (tmp_path / "src" / "paymentservice" / "proto" / "demo.proto").is_file()

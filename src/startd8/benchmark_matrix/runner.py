@@ -186,7 +186,9 @@ class SubprocessCellExecutor:
                  behavioral: bool = False):
         self.seeds_dir = Path(seeds_dir)
         self.per_run_timeout_s = per_run_timeout_s
-        self.workdir_root = workdir_root
+        # Coerce to Path: callers (e.g. the pilot's persistent batch root) may pass a str, and the
+        # __call__ body does ``root / sandbox_dir_name(...)`` which requires a Path (FR-T2-PERSIST).
+        self.workdir_root = Path(workdir_root) if workdir_root else None
         self.repair_mode = repair_mode          # FR-B5: "apply" | "shadow" | "off"
         self.expose_defects = expose_defects     # FR-B5: persist defect ledger + de-saturate score
         # FR-T2-COMPOSITE: run the behavioral suite (execute the service) and fold in a functional

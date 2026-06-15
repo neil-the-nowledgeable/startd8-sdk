@@ -203,6 +203,15 @@ def test_missing_key_reclassified_and_excluded_from_model_score():
     assert g["catastrophic_count"] == 0 and g["pass_rate"] is None and g["infra_fail_count"] == 3
 
 
+def test_executor_coerces_str_workdir_root_to_path():
+    # FR-T2-PERSIST: the pilot passes a persistent batch root (possibly a str); the executor body
+    # does ``root / sandbox_dir_name(...)`` which needs a Path, so __init__ must coerce.
+    from pathlib import Path
+    from startd8.benchmark_matrix.runner import SubprocessCellExecutor
+    assert isinstance(SubprocessCellExecutor("/tmp/seeds", workdir_root="/tmp/batch").workdir_root, Path)
+    assert SubprocessCellExecutor("/tmp/seeds").workdir_root is None
+
+
 def test_infra_fail_excluded_from_model_score():
     from startd8.benchmark_matrix.runner import STATUS_INFRA_FAIL
     # A model whose 9 cells all infra-failed (dead key) must NOT be scored 0/catastrophic.

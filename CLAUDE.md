@@ -74,8 +74,13 @@ startd8 --help
 startd8 tui          # Launch interactive TUI
 startd8 init         # Initialize framework in current dir
 startd8 run-benchmark --help
+startd8 compare-models --help   # same seed → N models, isolated, ranked capability+cost report
 startd8 wireframe    # Pre-generation summary of what the $0 cascade will build ($0, read-only,
                      #   advisory; --inputs <assembly-inputs.yaml> repeatable; --json for CI)
+
+# Summer 2026 model benchmark — Track 2 behavioral scoring (measures model skill; deterministic+micro-prime OFF)
+doppler run -p startd8 -c dev -- python3 scripts/run_behavioral_pilot.py   # --dry-run default; --run spends
+python3 scripts/rescore_behavioral.py <batch-root>   # $0 re-score of persisted servers (no regen)
 
 # Deterministic $0 generation cascade (bucket 1 — no LLM)
 startd8 generate frontend   # Render Prisma→Zod schema file deterministically
@@ -110,6 +115,10 @@ src/startd8/
 ├── agents/         # Per-provider agents (claude/openai/gemini/mock) + pool, tracked wrapper; base.py = BaseAgent
 ├── providers/      # Provider abstraction: protocol.py, registry.py (ProviderRegistry), 1 file per provider
 ├── costs/          # Cost tracking: tracker, pricing, budget, analytics, otel_metrics, usage_limits
+├── model_comparison.py     # `startd8 compare-models`: same seed → N models, isolated, ranked (see Architecture)
+├── benchmark_matrix/       # Summer 2026 model benchmark (service×model×repetition): run_spec, budget,
+│                   #   runner, aggregate (median/IQR/pass-rate + consistency), scoring (compile gate +
+│                   #   functional term), sandbox (untrusted exec); behavioral/ = Track 2 executed scoring
 ├── contractors/    # Multi-phase orchestration — see Architecture. Key: prime_contractor.py, integration_engine.py,
 │                   #   context_seed/ (phase handlers + compat wrapper context_seed_handlers.py), prime_postmortem.py,
 │                   #   queue.py (cycle detection), gate_contracts.py, checkpoint.py; artisan_*/ (ON HOLD)
@@ -191,6 +200,30 @@ into an accessible, themed UI — **deterministic, $0**. Drives `startd8 polish 
 by Prime: per-phase checkpoint/crash recovery (`checkpoint.py`), resume caching to `.startd8/state/`
 with 3-layer validation (schema version → source checksum → per-task file hash), contract validation
 (`artisan-pipeline.contract.yaml` + `gate_contracts.py`), and per-task error guards.
+
+### Model Benchmark Matrix + Track 2 Behavioral Scoring
+
+Benchmarks measure *model skill* (deterministic cascade + micro-prime OFF), distinct from the $0 codegen path.
+- `model_comparison.py` — `startd8 compare-models`: one seed → N models, each in an isolated sandbox, ranked
+  (disk-quality, tie-break cost-per-feature). The reusable core the matrix builds on.
+- `benchmark_matrix/` — Summer 2026 grid (service×model×repetition):
+  - `run_spec.py` `BenchmarkRunSpec` (immutable, content-hashed) · `budget.py` fail-closed preflight + cumulative abort.
+  - `runner.py` `SubprocessCellExecutor` (drives `run_prime_workflow.py --benchmark-mode`); **infra-fail classification**
+    excludes env failures (dead/missing key, 401/404/rate-limit) from scores — a **missing key is `infra_fail`, never the
+    model's catastrophic 0** (`is_infra_error`).
+  - `aggregate.py` distribution-appropriate: **median + IQR + pass-rate + catastrophic** (not mean); `rank_models_by_quality`
+    (peak) + `rank_models_by_consistency` (reliability — K1).
+  - `scoring.py` composite = structural gated by a **compile floor** (COMPILE_FLOOR) + optional **behavioral functional term**
+    (`FUNCTIONAL_WEIGHT`); gates floor first; missing terms degrade (FR-32), never 0.
+  - `behavioral/` (**Track 2 executed functional-correctness**): `run_service_sandboxed` (long-lived server + loopback
+    client + guaranteed process-group kill; loopback-allowed/egress-denied), `StartupContract`+`resolve_serve_command`
+    (seed `startup` block + Node serve hook), `node_runtime/` vendored offline closure (grpc-js+proto-loader+**pino+uuid**),
+    `prepare_node_workdir` (proto at all conventional + service-relative paths), `charge_suite.py` SDK-authored
+    `PaymentService.Charge` ground truth. Env failure → degrade with the missing module/proto path named.
+- **Persist-then-rescore (Mottainai):** runs write a durable batch (`cells.json`+`report.md`); `scripts/rescore_behavioral.py`
+  re-scores persisted servers for **$0** as the harness improves (generate once, re-score free). Pilot:
+  `scripts/run_behavioral_pilot.py` (`--dry-run` default, `--run` spends; run under `doppler run -p startd8 -c dev`).
+- Design: `docs/design/benchmark-scoring/` (FUNCTIONAL_CORRECTNESS_* incl. Track 2 v0.2), `docs/design/PRIME_MODEL_COMPARISON_*`.
 
 ### Key Classes
 

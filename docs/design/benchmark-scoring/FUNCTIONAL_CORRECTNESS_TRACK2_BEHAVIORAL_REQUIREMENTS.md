@@ -1,8 +1,8 @@
 # Functional-Correctness Track 2 — Behavioral Execution Scoring (Requirements)
 
-**Version:** 0.1 (Draft — pre-implementation; grounded against real code)
+**Version:** 0.2 (Post-pilot — gaps the first paymentservice run exposed)
 **Date:** 2026-06-15
-**Status:** Draft — user committed to Track 2 (behavioral execution) after Track 1 was falsified
+**Status:** Draft — pilot ran end-to-end; harness provisioning gaps found, reqs updated before re-run
 **Owner SDK area:** `startd8.benchmark_matrix` (sandbox + scoring) + `startd8.languages` (run hook)
 **Parent:** `FUNCTIONAL_CORRECTNESS_SCORING_REQUIREMENTS_v0.1.md` (v0.2) — this promotes its deferred
 Track 2 (FR-F3..F9, FT-5) from sketch to a buildable, milestone-decomposed spec.
@@ -26,6 +26,26 @@ Track 2 (FR-F3..F9, FT-5) from sketch to a buildable, milestone-decomposed spec.
 | G6 | "No startup contract exists (OQ-F3)" | Seeds fix only `target_files` + language; the model chose port/entrypoint freely | A uniform launch is impossible without a **startup contract** in the seeds → models must regenerate → **a benchmark re-run is part of Track 2** (FR-T2-CONTRACT, accepted by the user's choice). |
 
 ---
+
+## 0b. Pilot Insights (v0.1 → v0.2)
+
+> The first paymentservice pilot (3 flagships × 3 reps, real generation under Doppler) ran the
+> whole pipeline end-to-end and proved the premise — **where a server actually started, behavior
+> discriminated**: Opus produced a card-validating service (functional 1.00), gpt-5.5 produced a
+> lenient mock that accepts invalid/expired cards (0.33). But 6 of 9 cells were lost to **harness
+> provisioning gaps, not model quality** — and each gap traces to an incomplete v0.1 requirement,
+> which the implementation then faithfully under-built. This is a reqs-completeness failure first.
+
+| # | Pilot failure | v0.1 reqs state | Class | Fix (this version) |
+|---|---------------|-----------------|-------|--------------------|
+| P1 | Every generated server `require`s `pino`+`uuid` (the real OB paymentservice's deps); runtime only had gRPC → `Cannot find module 'pino'` | **FR-T2-DEPS scoped "gRPC/protobuf runtime" only** — never said "the service's full dependency closure" | reqs gap + impl | **FR-T2-DEPS expanded** (P1) + **FR-T2-DEPS2** (closure provisioning) |
+| P2 | Models load the proto from divergent paths (`proto/`, `pb/`, root, `protos/`); harness provided only 2 → readiness fails | **No FR addresses proto location at all** | reqs gap + impl | **FR-T2-PROTO** (new) |
+| P3 | Workdirs in `$TMPDIR` are OS-reaped; results only printed, never written → post-hoc review lost cells | FR-T2-PROV says provenance is "emitted," never "persisted to a durable location" | reqs gap + impl | **FR-T2-PERSIST** (new) |
+
+**Confirmed working (no change needed):** the sandbox lifecycle (FR-T2-1), loopback/egress profile
+(FR-T2-SEC), degrade-not-zero discipline (FR-T2-2 — every blocked cell degraded honestly, none was
+falsely scored 0), the startup contract + Node serve hook (FR-T2-CONTRACT/HOOK), the Charge suite
+(FR-T2-SUITE), and the composite fold-in (FR-T2-COMPOSITE) all behaved as specified.
 
 ## 1. Problem Statement
 
@@ -80,10 +100,30 @@ gate (behavioral builds on top); expanding to all 9 services before the pilot pr
   asserted outputs. Pilot: `PaymentService.Charge` — Luhn-valid card + valid expiry → a
   `transaction_id`; invalid Luhn / expired card → the contract's error. Per-RPC pass/fail, language-
   agnostic over the wire.
-- **FR-T2-DEPS** *(G5)* Vendor the offline gRPC/protobuf runtime + generated stubs (server-side per
-  language as needed; client-side in the SDK's language). No network fetch at run time (dep quarantine).
+- **FR-T2-DEPS** *(G5; expanded — P1)* Provision the generated service's **full runtime dependency
+  closure** offline before the sandboxed run — **not just gRPC/protobuf**. The pilot showed every
+  model faithfully reproduces the real OB paymentservice's deps (`pino`, `uuid`) without declaring
+  them in `package.json`, so "vendor gRPC" is insufficient. Concretely: vendor the per-service known
+  closure (paymentservice = `@grpc/grpc-js`, `@grpc/proto-loader`, `pino`, `uuid`); the run itself
+  stays offline (dep quarantine — provisioning happens at prepare time, before the no-egress sandbox).
+- **FR-T2-DEPS2** *(new — P1)* Dependency provisioning is **best-effort and self-reporting**: a server
+  that still fails to start on a missing module is recorded **degraded** with the missing module named
+  in provenance (FR-T2-2), never scored 0 and never silently passed. (Generalizing the closure beyond
+  the pilot service — install each cell's declared deps + a curated common set — is tracked in OQ-T2-5.)
+- **FR-T2-PROTO** *(new — P2)* The harness must make the contract proto resolvable **regardless of the
+  path the model chose**. Provision `demo.proto` at every conventional location a generated server
+  loads it from (workdir root, `protos/`, `proto/`, `pb/`, `src/<service>/`, `src/<service>/proto/`).
+  A server that loads it from none of these degrades (FR-T2-2) with the attempted path in provenance.
+  (Forward fix, deferred: pin the proto path in the startup contract so models target a known location
+  — requires a re-gen; OQ-T2-6.)
+- **FR-T2-PERSIST** *(new — P3)* Per-cell workdirs and the run's results must be **durable and
+  inspectable** — written under a caller-provided persistent batch root (NOT an OS-reaped `$TMPDIR`),
+  and the run must write `cells.json` (every CellResult incl. functional coverage + provenance) and a
+  `report.md` (leaderboard + per-cell functional column). Post-hoc re-scoring and audit must not depend
+  on artifacts that the OS may garbage-collect.
 - **FR-T2-PROV** Provenance (FR-F9): suite version, per-RPC results + timings, isolation level applied,
-  available-vs-degraded — emitted on every behavioral cell.
+  available-vs-degraded, **and (P1/P2) the missing module / attempted proto path on degrade** — emitted
+  on every behavioral cell and persisted per FR-T2-PERSIST.
 
 ### Composite + pilot (M-T2.4)
 - **FR-T2-COMPOSITE** Behavioral coverage ∈ [0,1] (fraction of suite RPCs passing) folds into
@@ -109,9 +149,19 @@ gate (behavioral builds on top); expanding to all 9 services before the pilot pr
   flagships (Gemini 2.5 Pro / gpt-5.5 / Opus 4.8) + tier-2/3 as configured.
 - **OQ-T2-4** Re-run cost with the startup contract (full Round-1 ~$150–200 at N=5); pilot is a tiny
   fraction (one service × roster × N).
+- **OQ-T2-5** *(new — P1)* Generalizing dependency provisioning beyond the pilot service: install each
+  cell's declared `package.json` deps + a curated OB common set at prepare time (network OK pre-sandbox),
+  vs. per-service vendored closures. Pilot uses the paymentservice vendored closure; decide before
+  all-service expansion (M-T2.5).
+- **OQ-T2-6** *(new — P2)* Pin the proto path in the startup contract (models target a known location)
+  vs. the harness multiplexing all conventional paths. Contract-pinning is cleaner but needs a re-gen;
+  v0.2 multiplexes (no re-gen). Revisit at M-T2.5.
 
 ---
 
-*v0.1 — grounded pre-implementation draft. Track 2 promoted from a deferred sketch to a 4-milestone
-build (M-T2.1 sandbox → M-T2.2 contract+hook → M-T2.3 suite+deps → M-T2.4 composite+pilot), with the
-loopback-vs-egress sandbox nuance (G2) and the re-run requirement (G6) made explicit up front.*
+*v0.2 — Post-pilot self-reflective update. The first pilot proved the premise (behavior discriminated
+where servers ran: Opus 1.00 vs gpt-5.5 0.33) but exposed three provisioning gaps that were
+**requirements-completeness failures**, not just implementation bugs: dependency closure (FR-T2-DEPS
+expanded + FR-T2-DEPS2), proto-path resolution (FR-T2-PROTO, new), and durable artifacts
+(FR-T2-PERSIST, new). 3 FRs added/expanded, 2 open questions added; the confirmed-working core is
+unchanged.*
