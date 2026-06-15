@@ -62,6 +62,15 @@ def test_resolve_serve_command_prefers_contract_then_node_default_then_none():
     assert resolve_serve_command({"language": "rust"}, ["main.rs"], 7002) is None
 
 
+def test_resolve_serve_command_go_default():
+    # P2 S2: Go services resolve to a from-the-module-dir `go run .` (go.mod lands there via go mod
+    # tidy provisioning); exec under setsid so killpg reaps the compiled child.
+    seed = {"service_metadata": {"language": "go"}}
+    argv, env = resolve_serve_command(seed, ["src/shippingservice/main.go"], 7100)
+    assert argv[0] == "sh" and "cd src/shippingservice" in argv[2] and "exec ./.bin/server" in argv[2]
+    assert env == {"PORT": "7100"}
+
+
 def test_real_paymentservice_seed_has_startup_contract():
     import json
     seed = json.loads((
@@ -135,7 +144,8 @@ def test_run_behavioral_cell_scores_good_and_broken(tmp_path):
 
 
 def test_run_behavioral_cell_no_suite_for_service(tmp_path):
-    res = run_behavioral_cell({}, tmp_path, "adservice", ["X.java"], cfg=_NO_NET)
+    # cartservice is still out of scope (stateful) — no suite registered → leave composite unchanged.
+    res = run_behavioral_cell({}, tmp_path, "cartservice", ["Cart.cs"], cfg=_NO_NET)
     assert res.has_suite is False and res.functional is None and not res.degraded
 
 

@@ -40,13 +40,24 @@ DEFAULT_MODELS = ("anthropic:claude-opus-4-8", "openai:gpt-5.5", "gemini:gemini-
 PILOT_SERVICE = "paymentservice"
 
 
-def build_spec(models, repetitions: int, budget: float, per_cell_cap: float | None) -> BenchmarkRunSpec:
-    """The pilot spec: one service, the flagship roster, N reps. Behavioral scoring is enabled on
-    the executor (not the spec) — the spec just fixes what is generated."""
+def _service_language(service: str) -> str:
+    """Per-service language from the seed (for the run_matrix languages map)."""
+    import json
+    seed = SEEDS_DIR / f"seed-{service}.json"
+    if seed.is_file():
+        return json.loads(seed.read_text()).get("service_metadata", {}).get("language", "unknown")
+    return "unknown"
+
+
+def build_spec(services, models, repetitions: int, budget: float, per_cell_cap: float | None) -> BenchmarkRunSpec:
+    """The pilot spec: the chosen service(s), the flagship roster, N reps. Behavioral scoring is
+    enabled on the executor (not the spec) — the spec just fixes what is generated."""
+    services = tuple(services)
+    name = "behavioral-pilot-" + "-".join(services)
     return BenchmarkRunSpec(
-        name="behavioral-pilot-paymentservice",
+        name=name[:60],
         models=tuple(models),
-        services=(PILOT_SERVICE,),
+        services=services,
         repetitions=repetitions,
         budget_ceiling_usd=budget,
         per_cell_cap_usd=per_cell_cap,
@@ -62,6 +73,9 @@ def main(argv=None) -> int:
                       help="Print the plan + cost estimate and exit (default; spends nothing).")
     ap.add_argument("--model", action="append", dest="models", default=[],
                     help="Override roster (repeatable). Default: the 3 flagships.")
+    ap.add_argument("--services", default=PILOT_SERVICE,
+                    help="Comma-separated services (default: paymentservice). Pilot-each-once uses "
+                         "--repetitions 1 across several services to confirm discrimination.")
     ap.add_argument("--repetitions", type=int, default=3)
     ap.add_argument("--budget", type=float, default=10.0, help="Fail-closed batch budget ceiling (USD).")
     ap.add_argument("--per-cell-cap", type=float, default=None)
@@ -69,11 +83,13 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     models = list(dict.fromkeys(args.models)) or list(DEFAULT_MODELS)
-    spec = build_spec(models, args.repetitions, args.budget, args.per_cell_cap)
+    services = [s.strip() for s in args.services.split(",") if s.strip()]
+    languages = {s: _service_language(s) for s in services}
+    spec = build_spec(services, models, args.repetitions, args.budget, args.per_cell_cap)
     est = estimate_run_cost(spec)
 
     print("=== Behavioral pilot plan ===")
-    print(f"service : {PILOT_SERVICE} (nodejs, single-file gRPC server)")
+    print(f"services: {', '.join(f'{s} ({languages[s]})' for s in services)}")
     print(f"models  : {', '.join(models)}")
     print(f"reps    : {spec.repetitions}   cells: {spec.total_cells}")
     print(format_estimate(spec, est))
@@ -102,7 +118,7 @@ def main(argv=None) -> int:
     print(f"batch root (persistent): {batch_root}")
 
     executor = SubprocessCellExecutor(SEEDS_DIR, behavioral=True, workdir_root=str(batch_root))
-    result = run_matrix(spec, executor, languages={PILOT_SERVICE: "nodejs"})
+    result = run_matrix(spec, executor, languages=languages)
     agg = aggregate_cells(result.cells)
 
     # Functional-coverage section (OQ-T2-2) — written into the report too, not just printed.

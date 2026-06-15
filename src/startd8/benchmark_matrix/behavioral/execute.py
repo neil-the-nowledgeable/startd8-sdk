@@ -18,11 +18,19 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from ..sandbox import SandboxConfig, run_service_sandboxed
+from .ad_suite import run_ad_suite
 from .charge_suite import run_charge_suite
+from .currency_suite import run_currency_suite
 from .contract import resolve_serve_command
+from .shipping_suite import run_shipping_suite
 
-# service name -> behavioral suite (the SDK-authored client). Only the paymentservice pilot today.
-_SUITES: Dict[str, Callable[[int], object]] = {"paymentservice": run_charge_suite}
+# service name -> behavioral suite (the SDK-authored client). P1+P2 curated stateless set.
+_SUITES: Dict[str, Callable[[int], object]] = {
+    "paymentservice": run_charge_suite,
+    "currencyservice": run_currency_suite,
+    "shippingservice": run_shipping_suite,
+    "adservice": run_ad_suite,
+}
 
 _NODE_RUNTIME = Path(__file__).parent / "node_runtime"
 _PROTO = Path(__file__).parent / "demo.proto"
@@ -103,13 +111,27 @@ def run_behavioral_cell(
         return BehavioralResult(has_suite=True, degraded=True,
                                 provenance={"reason": "no serve command (no contract / unknown language)"})
     argv, extra_env = serve
+    lang = ((seed or {}).get("service_metadata", {}).get("language") or (seed or {}).get("language"))
 
-    # Node services need the vendored offline gRPC runtime in their workdir (FR-T2-DEPS).
-    if argv and argv[0] == "node" and not prepare_node_workdir(Path(workdir), target_files):
-        return BehavioralResult(has_suite=True, degraded=True,
-                                provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
+    # Provision the cell's deps at PREPARE time (before the egress-denied run), per language (P1).
+    # Node uses the offline vendored closure (safest); others install securely (FR-P1-SEC-1..5).
+    if argv and argv[0] == "node":
+        if not prepare_node_workdir(Path(workdir), target_files):
+            return BehavioralResult(has_suite=True, degraded=True,
+                                    provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
+    else:
+        from .provision import provision_workdir
+        pr = provision_workdir(Path(workdir), lang, target_files)
+        if not pr.ok:
+            return BehavioralResult(has_suite=True, degraded=True,
+                                    provenance={"reason": pr.degraded_reason,
+                                                "provision_language": pr.language})
 
-    sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env)
+    # Go serves a pre-built binary (compiled at provision time) → starts fast, no compile under the
+    # sandbox; a slightly longer readiness window covers binary startup (OQ-7).
+    readiness = 30.0 if lang == "go" else 15.0
+    sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env,
+                               readiness_timeout_s=readiness)
     prov: Dict = {"ready": sr.ready, "isolation_level": sr.isolation_level,
                   "network_isolated": sr.network_isolated, "violation": sr.violation,
                   "server_stderr_tail": (sr.server_stderr or "")[-400:]}
