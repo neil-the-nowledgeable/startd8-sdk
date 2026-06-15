@@ -1,6 +1,7 @@
 {
   "app/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "app/ai_schemas.py": "22c5ddda2f7f00bdec0844d5e7fd00212a369e525262955d89af277e45b9da3f",
+  "app/auth.py": "5ef74a2c3931e9a307e144787dbbdbd39aa6b0d759472fa0da15d68cc02e8eaf",
   "app/completeness.py": "d4a8bdb0a9a37ed504702630a7fddf247b890886dc8994f9fd9dc54d447ae124",
   "app/db.py": "ea799a480ebee0f0eb1183dcb08615ebd705afe71f3407f6dedbd61f70aa26f0",
   "app/export.py": "81a547fade809a4feb2e9dceda0b5da6bd6d580e30f138b119fd545cd3c0254c",

@@ -282,7 +282,12 @@ def backend(
 
         from .scaffold_codegen.coherence import evaluate_coherence, has_errors
 
-        findings = evaluate_coherence(replace(app_manifest_obj, deployment_mode=deployment_mode))
+        # Deployed mode now emits the auth seam (M2/A6) but no tenant isolation yet → the
+        # FR-IDN-4 authenticated-but-not-isolated WARN goes live (has_auth_seam, no has_tenant).
+        findings = evaluate_coherence(
+            replace(app_manifest_obj, deployment_mode=deployment_mode),
+            has_auth_seam=(deployment_mode == "deployed"),
+        )
         for f in findings:
             color = "red" if f.severity == "ERROR" else "yellow"
             console.print(f"[{color}]{f.severity.lower()}[/{color}] ({f.code}): {f.message}")

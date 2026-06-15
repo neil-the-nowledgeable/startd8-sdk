@@ -909,10 +909,11 @@ def _deployment_section(app_state: "_ManifestState") -> WireframeSection:
         WireframeItem("observability", Status.PLANNED,
                       "centralized OTel expected" if deployed else "local rotating file logs"),
         WireframeItem("identity", Status.PLANNED,
-                      "auth seam deferred to M2; tenancy to Tier B/M3" if deployed
-                      else "single implicit owner (no auth)"),
+                      "reference auth seam (app/auth.py, not production); tenancy deferred Tier B/M3"
+                      if deployed else "single implicit owner (no auth)"),
     ]
-    findings = evaluate_coherence(manifest)
+    # M2/A6: deployed emits the auth seam → the authenticated-but-not-isolated WARN goes live.
+    findings = evaluate_coherence(manifest, has_auth_seam=deployed)
     for f in findings:
         st = Status.INVALID if f.severity == "ERROR" else Status.PLACEHOLDER
         items.append(WireframeItem(f"coherence:{f.code}", st, f"{f.severity}: {f.message}"))

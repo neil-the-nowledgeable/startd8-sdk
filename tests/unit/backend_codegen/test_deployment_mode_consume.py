@@ -217,8 +217,8 @@ def test_golden_tree_byte_identity(mode):
     assert actual == golden, f"{mode} tree drifted: added={added} removed={removed} changed={changed}"
 
 
-def test_golden_deployed_delta_is_exactly_settings():
+def test_golden_deployed_delta_is_settings_and_auth():
     installed = json.loads((_FIXTURES / "installed.sha256.json").read_text())
     deployed = json.loads((_FIXTURES / "deployed.sha256.json").read_text())
-    assert set(deployed) - set(installed) == {SETTINGS_PATH}
+    assert set(deployed) - set(installed) == {SETTINGS_PATH, "app/auth.py"}
     assert [k for k in installed if installed[k] != deployed.get(k)] == []  # shared files identical

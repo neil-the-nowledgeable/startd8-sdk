@@ -40,6 +40,7 @@ CANONICAL_LAYOUT: Dict[str, str] = {
     "python-completeness": "app/completeness.py",
     "python-requirements": "requirements.txt",
     "python-settings": "app/settings.py",  # deployed-only (FR-CFG-7); the single mode-varying file
+    "python-auth-seam": "app/auth.py",      # deployed-only reference auth seam (FR-IDN-2/M2)
 }
 
 

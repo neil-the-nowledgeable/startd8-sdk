@@ -96,6 +96,7 @@ def _renderers(
     renderer — every backend artifact carries the GENERATED marker, so the kind+entity tags are
     what disambiguate them. ``entity`` is ``None`` for app-wide artifacts.
     """
+    from .auth_renderer import render_auth_seam as _render_auth_seam
     from .crud_generator import render_db, render_main, render_routers
     from .derived import (
         render_ai_schemas,
@@ -163,6 +164,7 @@ def _renderers(
         "python-export": lambda s, sf, e: render_export(s, sf),
         "python-ai-schemas": lambda s, sf, e: render_ai_schemas(s, sf),
         "python-completeness": lambda s, sf, e: render_completeness(s, sf, manifest=_cmpl),
+        "python-auth-seam": lambda s, sf, e: _render_auth_seam(s, sf),  # deployed-only (FR-IDN-2/M2)
         "python-requirements": lambda s, sf, e: render_requirements(s, sf),
         "python-requirements-authoring": lambda s, sf, e: render_requirements(s, sf, authoring=True),
         "python-requirements-ai": lambda s, sf, e: render_requirements(s, sf, ai=True),

@@ -82,10 +82,26 @@ Guiding principle from D1/D2: **bake only what security requires; bind everythin
 >   iteration ①). +21 tests; 467 backend/scaffold/wireframe green, ruff clean. **Design note:** the
 >   Dockerfile stays `0.0.0.0` because a loopback container is unreachable and installed is the
 >   default — the mode-derived loopback bind lives in `run.sh` (installed's primary run path).
-> - **Remaining (M2 / M3):** A5 (secrets/OTel defaults by mode); M2 = A6 auth seam (R1-F4 marker +
->   the now-dormant `deployed-auth-no-tenant` WARN goes live); M3 = Tier B tenancy. **Note:** a
->   deployed **boot** smoke needs Postgres (FR-CFG-5 makes `deployed`+SQLite an ERROR; pool args N/A
->   to SQLite) → deferred to a PG integration test.
+> - **A5 DONE (2026-06-15):** `.env.example` secrets/observability defaults are mode-derived —
+>   installed = local backend + `ENV=development`; deployed templates `STARTD8_SECRETS_BACKEND=doppler`
+>   + `DOPPLER_TOKEN` + `OTEL_EXPORTER_OTLP_ENDPOINT` + `ENV=production` (FR-SEC-1/FR-OBS-1; mode sets
+>   the DEFAULT, operator overrides win). Also fixed a latent bug: honors a full DSN instead of always
+>   `sqlite:///`-prefixing. +3 tests.
+> - **M2/A6 DONE (2026-06-15) — the auth seam:** deployed emits owned `app/auth.py` (kind
+>   `python-auth-seam`) — a REFERENCE `get_principal` + `require_principal` mechanism with the
+>   machine-detectable `REFERENCE_AUTH_SEAM` marker (R1-F4, `is_reference_auth_seam`) + the FR-IDN-4
+>   authenticated-but-not-tenant-isolated banner. Schema-only/constant body → standard skip-hook drift
+>   (no self-embedded mode). The dormant `deployed-auth-no-tenant` WARN now **goes live** (CLI +
+>   wireframe pass `has_auth_seam=deployed`). Golden: deployed = installed + `{settings.py, auth.py}`
+>   (22 vs 20 files). +7 tests; 477 backend/scaffold/wireframe green, ruff clean.
+>   **Discovery D14:** FR-IDN-2 proposed mounting auth "via main.py's tolerant import," but `auth.py`
+>   is a *dependency module* (no router to mount) → **main.py stays byte-frozen**; the operator applies
+>   `require_principal` through the `user_routers.py` seam. Cleaner than proposed. (The FR-IDN-4
+>   per-route docstring banner is deferred — touching routers.py per-route is heavier; the auth.py
+>   banner + coherence WARN + wireframe advisory cover the intent.)
+> - **Remaining (M3):** Tier B tenancy (B1 declaration / B2 scoped queries / B3 isolation tests) — the
+>   one increment that retires the `deployed-auth-no-tenant` WARN. **Note:** a deployed **boot** smoke
+>   needs Postgres (FR-CFG-5 makes `deployed`+SQLite an ERROR; pool args N/A to SQLite) → PG integration test.
 
 ## 3. Work Breakdown — Tier A (v1 pilot)
 
