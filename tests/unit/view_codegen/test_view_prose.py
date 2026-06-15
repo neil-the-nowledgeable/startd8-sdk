@@ -545,7 +545,7 @@ _CP = "app/templates/views/completeness_panel.html"
 def test_group_e_no_prose_is_byte_identical_and_no_new_fragments():
     base = dict(render_views(_E_SCHEMA, _E_VIEWS))
     assert dict(render_views(_E_SCHEMA, _E_VIEWS, None, None)) == base
-    assert not any(k.endswith((".empty.html", ".complete.html")) for k in base)
+    assert not any(k.endswith((".empty.html", ".empty_body.html", ".complete.html")) for k in base)
 
 
 def test_empty_on_index_wires_not_roots_include_and_emits_fragment():
