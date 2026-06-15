@@ -1288,12 +1288,22 @@ def render_ai_pass_tests(schema_text, manifest_text, human_text, source_file="pr
         # SPIKE (FR-SBE-6): a source-bound pass's harness owns `_persist_source` (stamps the
         # provenance field), NOT `_persist` — the generated test must call the helper that exists
         # and additionally assert the server-stamp. Unbound/read passes are byte-identical.
+        # FR-SRP: a SCOPED pass's harness instead owns `_persist_scoped(... prov_field, fk_values)`
+        # (the child-with-real-FK variant). The test must mirror the SAME dispatch as the harness
+        # (`render_ai_pass` → `_render_pass_scoped`), or it calls a helper the module never defines.
         binding = effective_source_binding(schema_text, ps, human)
         for out in dict.fromkeys(ps.output_entities):
             cols = {f.name for f in schema.scalar_fields(out)}
             has_prov = "source" in cols and "confirmed" in cols
             kwargs = _edge_required_kwargs(schema, out, human)
-            if binding:  # source-bound: helper takes a source_id and stamps `binding`
+            if ps.is_scoped:  # scoped relational pass → _persist_scoped (6 args, real FK values)
+                fk_values = "{" + ", ".join(f'{fk!r}: "fk-x"' for fk, _t in ps.output_fk) + "}"
+                persist_call = (
+                    f'mod._persist_scoped(s, t.{out}, {out}Edge(**{kwargs}), "doc-x", '
+                    f"mod._PROVENANCE_FIELD, {fk_values})"
+                )
+                name_suffix = "persist_is_ai_owned_and_scoped"
+            elif binding:  # source-bound: helper takes a source_id and stamps `binding`
                 persist_call = f'mod._persist_source(s, t.{out}, {out}Edge(**{kwargs}), "doc-x")'
                 name_suffix = "persist_is_ai_owned_and_stamped"
             else:
