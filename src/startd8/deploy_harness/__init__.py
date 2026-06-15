@@ -15,6 +15,7 @@ M0 (shipped): tolerant discovery + the result data model. M1+ adds the live stag
 
 from __future__ import annotations
 
+from .deploy import deploy_app_local
 from .discovery import (
     DEP_FLOOR,
     DepDetection,
@@ -22,6 +23,8 @@ from .discovery import (
     detect_entrypoint,
     detect_mode,
 )
+from .server import BootOutcome, LiveServer, free_port
+from .venv_runner import InstallOutcome, ResourceLimits, Venv, create_venv, install_deps
 from .ladder import (
     Deviation,
     EntryPoint,
@@ -36,12 +39,23 @@ from .ladder import (
 )
 
 __all__ = [
+    # orchestration (FR-11)
+    "deploy_app_local",
     # discovery (FR-1/2/3)
     "detect_entrypoint",
     "detect_deps",
     "detect_mode",
     "DepDetection",
     "DEP_FLOOR",
+    # live stages (FR-4/5/6/7/8/16)
+    "create_venv",
+    "install_deps",
+    "Venv",
+    "InstallOutcome",
+    "ResourceLimits",
+    "LiveServer",
+    "BootOutcome",
+    "free_port",
     # result model (FR-11)
     "LadderResult",
     "Stage",

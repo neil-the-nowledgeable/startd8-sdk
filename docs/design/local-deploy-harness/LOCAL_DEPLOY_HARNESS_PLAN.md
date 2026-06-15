@@ -122,11 +122,13 @@ process*, distinct from `validators/`'s in-process gates. Keeps the untrusted-co
 
 ## 3. Sequencing
 
-- **M0** — `discovery.py` + `ladder.py` models + unit tests (no live process). Cheapest, unblocks all.
-- **M1** — `venv_runner.py` (rlimits, pip hardening) + `server.py` (process-group, port retry,
-  HOME/TMPDIR); `deploy local` CLI; one slow integration test that generates a backend, deploys it,
-  asserts `health` rung. Proves the live path end-to-end. **[R1-S7]** Name this generated app the
-  **reusable golden fixture** for M2 synth regression (a known-good canonical OpenAPI).
+- **M0** ✅ SHIPPED (`76a56d67`) — `discovery.py` + `ladder.py` models + 21 unit tests (no live process).
+- **M1** ✅ SHIPPED — `venv_runner.py` (rlimits, pip hardening) + `server.py` (process-group teardown,
+  port retry, HOME/TMPDIR) + `deploy.py` orchestration + `cli_deploy.py` (`startd8 deploy local`).
+  12 network-free unit tests (server probe/teardown, orchestration skips) + 3 gated live integration
+  tests (real venv+pip+uvicorn boot, incl. liveness-only + broken-boot). Live path verified
+  end-to-end (`discover→install→boot→health` all pass on a real installed-mode app). **[R1-S7]** the
+  live installed-app fixture is the reusable golden fixture for M2 synth regression.
 - **M2** — `smoke.py` (OpenAPI body synth, enumerated feature set) + smoke rung. Reuses the M1 golden
   fixture; adds a deliberately-broken-schema fixture for the `skipped:*`/`fail` synth paths.
 - **M3** — `batch.py` + aggregate report + join to `comparison-report.json`; **writer-side
