@@ -189,6 +189,19 @@ def backend(
         "--source-label",
         help="Schema path written into the GENERATED headers (must match across runs).",
     ),
+    app_manifest: Optional[Path] = typer.Option(
+        None,
+        "--app-manifest",
+        help="Path to app.yaml. Its `deployment.mode` (installed|deployed) is the source of truth "
+        "for deployment mode (FR-CLI-1). Deployed mode additionally emits app/settings.py (the "
+        "mode-aware DB url/pool/create_all-gate). Absent → installed (today's behavior).",
+    ),
+    mode: Optional[str] = typer.Option(
+        None,
+        "--mode",
+        help="Override the deployment mode (installed|deployed), winning over --app-manifest. "
+        "Ergonomic shortcut; app.yaml remains the drift source of truth.",
+    ),
 ) -> None:
     """Render the full all-Python backend (Pydantic + SQLModel + FastAPI + HTMX + derived).
 
@@ -235,6 +248,31 @@ def backend(
         _reads["display"],
     )
 
+    # FR-CLI-1: resolve the deployment mode. app.yaml's `deployment.mode` is the source of truth;
+    # an explicit --mode wins (ergonomic override). Threaded to BOTH generate and --check so a
+    # deployed tree's app/settings.py is emitted and drift-checked consistently.
+    deployment_mode = "installed"
+    if app_manifest is not None:
+        from .scaffold_codegen import parse_app_manifest
+
+        try:
+            deployment_mode = parse_app_manifest(
+                app_manifest.read_text(encoding="utf-8")
+            ).deployment_mode
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read app-manifest {app_manifest}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        except ValueError as exc:  # malformed app.yaml / bad deployment.mode — fail loud
+            console.print(f"[red]error:[/red] {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+    if mode is not None:
+        if mode not in ("installed", "deployed"):
+            console.print(
+                f"[red]error:[/red] --mode must be 'installed' or 'deployed', got {mode!r}"
+            )
+            raise typer.Exit(_EXIT_ERROR)
+        deployment_mode = mode
+
     if ai_agent_spec and manifest_text is None:
         console.print(
             "[yellow]warning:[/yellow] --ai-agent-spec is ignored without "
@@ -263,6 +301,7 @@ def backend(
             # and never participate in drift); on write we do, reading app/pages/*.md under --out.
             pages_app_dir=None if check else (out / "app"),
             authoring=pages_authoring,
+            deployment_mode=deployment_mode,
         )
     except (
         ValueError

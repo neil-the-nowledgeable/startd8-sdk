@@ -39,7 +39,11 @@ from .pages_generator import (
     render_page_shell,
 )
 from .pages_authoring import render_authoring
-from .gates import verify_pydantic_fidelity, verify_sqlmodel_fidelity
+from .gates import (
+    verify_db_settings_contract,
+    verify_pydantic_fidelity,
+    verify_sqlmodel_fidelity,
+)
 from .provider import PydanticSQLModelProvider
 from .pydantic_renderer import PydanticRenderResult, render_pydantic_models
 from .sqlmodel_renderer import SQLModelRenderResult, render_sqlmodel_tables
@@ -88,4 +92,5 @@ __all__ = [
     "PydanticSQLModelProvider",
     "verify_pydantic_fidelity",
     "verify_sqlmodel_fidelity",
+    "verify_db_settings_contract",
 ]

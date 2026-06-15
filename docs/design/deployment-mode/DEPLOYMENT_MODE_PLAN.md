@@ -55,14 +55,26 @@ Guiding principle from D1/D2: **bake only what security requires; bind everythin
 
 ---
 
-> **Implementation status (2026-06-11):** **A1 DONE** (`AppManifest.deployment_mode` enum + strict
-> parse, 5 tests). **A2 DONE at the library layer** (`settings_renderer.render_settings` + deployed-only
-> emission in `render_backend` + `python-settings` self-embedded-mode drift branch + provider skip-hook
-> + exports). **A9 core DONE** (`tests/unit/backend_codegen/test_deployment_mode.py`, 11 tests incl. the
-> FR-CFG-7a skip-hook-without-`app.yaml` proof; 410 backend/scaffold/wireframe tests green). Discoveries
-> **D11** (settings.py deployed-only) and **D12** (mode-sha256 redundant) folded into Requirements
-> §3.A. **Remaining for M0/M1:** CLI `generate backend` reading `app.yaml`'s `deployment_mode`
-> (+`--mode`); checked-in golden trees (R1-S4); A3–A8.
+> **Implementation status:**
+> - **M0 DONE (2026-06-11, merged f0f9924b):** A1 (`AppManifest.deployment_mode` enum + strict parse),
+>   A2 library (`settings_renderer.render_settings` + deployed-only emission + `python-settings`
+>   self-embedded-mode drift branch + provider skip-hook), A9 core (11 tests incl. the FR-CFG-7a
+>   skip-hook-without-`app.yaml` proof). Discoveries **D11** (settings.py deployed-only) / **D12**
+>   (mode-sha256 redundant) folded into Requirements §3.A.
+> - **M1-A DONE (2026-06-15) — "make deployed real":** CLI `generate backend --app-manifest/--mode`
+>   threads the mode (FR-CLI-1); **A3** `db.py` tolerantly consumes `settings` (pooled engine, `create_all`
+>   gate, `validate_runtime_mode`) — **mode-invariant, byte-identical across modes** (golden proves 0
+>   shared-file diffs; deployed = installed + only `app/settings.py`); **R1-S6** db↔settings contract
+>   gate (`gates.verify_db_settings_contract`, HAYAI); **R1-S4** checked-in golden trees (installed 20 /
+>   deployed 21 files). +15 tests (`test_deployment_mode_consume.py`); 326 backend tests green, ruff clean.
+>   **Discovery D13:** db.py changes once vs today (gains the tolerant settings hook) but stays
+>   mode-invariant; R4's "==today" is now "== the committed installed golden" (the delta vs pre-capability
+>   being the behavior-preserving hook), exactly as FR-CFG-7b's forward note predicted.
+> - **Remaining (M1 rest / M2 / M3):** A4 (bind/Dockerfile + R1-S5 hash test), A5 (secrets/OTel defaults),
+>   A7 (coherence matrix + auth-without-tenant WARN), A8 (wireframe surfacing); M2 = A6 auth seam; M3 = Tier B.
+>   **Note:** a deployed **boot** smoke needs Postgres (FR-CFG-5 makes `deployed`+SQLite an ERROR, and the
+>   pool args don't apply to SQLite) → it is a PG integration test, deferred; M1-A proves the pieces via
+>   exec'd-settings behavior + the contract gate + CLI tests + the installed boot smoke.
 
 ## 3. Work Breakdown — Tier A (v1 pilot)
 

@@ -159,7 +159,11 @@ def render_routers(schema_text: str, source_file: str = "prisma/schema.prisma") 
 
 
 def render_db(schema_text: str, source_file: str = "prisma/schema.prisma") -> str:
-    """Render ``app/db.py`` — SQLite engine, ``get_session`` dependency, ``init_db`` (NFR-1 local)."""
+    """Render ``app/db.py`` — engine + ``get_session`` + ``init_db``.
+
+    Mode-invariant text (schema-only for drift): it tolerantly imports ``app/settings.py`` (emitted
+    only in **deployed** mode, FR-CFG-7b). Present → deployed DB url/pool + the ``create_all`` gate +
+    the FR-CFG-4 runtime check; absent → today's installed-default local-first SQLite (NFR-1)."""
     sha = schema_sha256(schema_text)
     header = _header(source_file, sha, "fastapi-db")
     body = (
@@ -170,9 +174,19 @@ def render_db(schema_text: str, source_file: str = "prisma/schema.prisma") -> st
         "from sqlalchemy import event, inspect as _sa_inspect\n"
         "from sqlmodel import Session, SQLModel, create_engine\n\n"
         "from . import tables  # noqa: F401  (import registers tables on SQLModel.metadata)\n\n"
-        "# Local-first SQLite (NFR-1); override with the DATABASE_URL env var.\n"
-        'DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./app.db")\n'
-        "engine = create_engine(DATABASE_URL, echo=False)\n\n\n"
+        "try:  # deployed mode emits app/settings.py (mode-aware DB url/pool/gate); absent = installed.\n"
+        "    from . import settings as _settings\n"
+        "except ModuleNotFoundError:  # installed: today's local-first SQLite behavior (no settings).\n"
+        "    _settings = None\n\n"
+        "if _settings is not None:\n"
+        "    # Deployed: connection string + pooled engine from the mode-aware settings "
+        "(FR-PER-2/FR-CON-1).\n"
+        "    DATABASE_URL = _settings.database_url()\n"
+        "    engine = create_engine(DATABASE_URL, echo=False, **_settings.engine_options())\n"
+        "else:\n"
+        "    # Installed default (NFR-1): local-first SQLite; override with the DATABASE_URL env var.\n"
+        '    DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./app.db")\n'
+        "    engine = create_engine(DATABASE_URL, echo=False)\n\n\n"
         "if engine.dialect.name == \"sqlite\":\n\n"
         "    @event.listens_for(engine, \"connect\")\n"
         "    def _set_sqlite_pragmas(dbapi_connection, connection_record):  # noqa: ANN001\n"
@@ -182,10 +196,17 @@ def render_db(schema_text: str, source_file: str = "prisma/schema.prisma") -> st
         "        cursor.execute(\"PRAGMA busy_timeout=5000;\")\n"
         "        cursor.close()\n\n\n"
         "def init_db() -> None:\n"
+        "    # FR-CFG-4: in deployed mode, refuse to start if the runtime env claims a mode this app\n"
+        "    # was NOT generated for (directional fail-closed); a no-op in installed mode.\n"
+        "    if _settings is not None:\n"
+        "        _settings.validate_runtime_mode()\n"
         "    # Dev/test bootstrap ONLY: create_all makes MISSING tables but never ALTERS an existing\n"
         "    # one. On a persistent DB a contract field-add silently diverges until a query 500s, so\n"
         "    # after create_all we reflect and warn loudly on drift (the 'migration pending' signal).\n"
-        "    SQLModel.metadata.create_all(engine)\n"
+        "    # FR-PER-3: installed bootstraps via create_all; deployed relies on managed migrations\n"
+        "    # (should_create_all() is False) and never auto-creates against a shared DB.\n"
+        "    if _settings is None or _settings.should_create_all():\n"
+        "        SQLModel.metadata.create_all(engine)\n"
         "    _warn_on_schema_drift()\n\n\n"
         "def _warn_on_schema_drift() -> None:\n"
         "    \"\"\"Loud warning when the live DB is missing contract columns (run `alembic upgrade head`).\"\"\"\n"
