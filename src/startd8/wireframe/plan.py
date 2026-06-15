@@ -20,6 +20,7 @@ from ..backend_codegen.ai_layer import AiPass, parse_ai_passes, parse_human_inpu
 from ..backend_codegen.crud_generator import CANONICAL_LAYOUT
 from ..backend_codegen.derived import load_completeness_manifest
 from ..backend_codegen.forms_manifest import parse_forms
+from ..backend_codegen.imports_manifest import parse_imports
 from ..backend_codegen.crud_generator import _pk_field
 from ..backend_codegen.htmx_generator import _confirm_field, form_fields, writable_fields
 from ..backend_codegen.pages_generator import ContentPage, parse_pages
@@ -74,6 +75,7 @@ _ABSENT_STATUS = {
     "human_inputs": Status.DEFAULTS,
     "completeness": Status.DEFAULTS,
     "view_prose": Status.DEFAULTS,   # absent ⇒ raw machine-name view chrome (today's behavior)
+    "imports": Status.NOT_DEFINED,   # absent ⇒ no import owned-kind (FR-IMP-3, opt-in)
 }
 
 _ABSENT_CONSEQUENCE = {
@@ -84,6 +86,7 @@ _ABSENT_CONSEQUENCE = {
     "ai_passes": "no AI service/passes",
     "human_inputs": "only server-managed omissions apply",
     "completeness": "presence-rule fallback scoring",
+    "imports": "no bulk-import owned-kind (app/importer.py) or paste/upload surface",
 }
 
 
@@ -906,6 +909,11 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     # FR-WCI-1: view copy (the WORDS layer). Keyed by VIEW name (matches `_views_section`'s idents,
     # not model names) so per-view chrome coverage lines up.
     states["view_prose"] = _yaml_state("view_prose", *texts["view_prose"], parse_view_prose)
+    # FR-IMP-3: import declarations. Keyed/validated against the schema entities (degrade, don't
+    # crash, when the schema is unusable — same posture as views).
+    states["imports"] = _yaml_state(
+        "imports", *texts["imports"], lambda t: parse_imports(t, known_entities=known)
+    )
 
     # Status overrides from the assembly-inputs YAML (FR-W6/R2-F1). Conflicts between an
     # override and disk reality join merge_warnings — visible in tree + JSON, never only logged.

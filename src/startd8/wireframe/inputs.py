@@ -36,6 +36,7 @@ CONVENTION_PATHS: Dict[str, str] = {
     "completeness": "prisma/completeness.yaml",
     "views": "prisma/views.yaml",
     "view_prose": "prisma/view_prose.yaml",   # FR-WCI-1: the WORDS layer (view copy) — optional
+    "imports": "prisma/imports.yaml",         # FR-IMP-3: per-entity import declarations — optional
 }
 CATALOG_KEYS: Tuple[str, ...] = tuple(CONVENTION_PATHS)
 

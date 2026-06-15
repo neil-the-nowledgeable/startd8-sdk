@@ -41,6 +41,30 @@ def header_emitted_contract(source_file: str, sha: str) -> str:
     )
 
 
+def header_imports(
+    source_file: str,
+    schema_sha: str,
+    imports_sha: str,
+    kind: str,
+) -> str:
+    """Import owned-kind provenance header — derives from two inputs (schema + imports.yaml), two
+    hashes (FR-IMP-1 / R2-S5).
+
+    Drift on ``app/import.py`` is **stale if either** the schema or ``imports.yaml`` changes (see
+    :func:`startd8.backend_codegen.drift.imports_stale_reason`). The hash covers the whole
+    ``imports.yaml`` text (the forms/pages precedent of hashing the whole manifest), so any import
+    declaration edit conservatively re-stamps the importer — a cheap regenerate, never a miss.
+    """
+    return (
+        f"# GENERATED from {source_file} (+ imports.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# Source of truth: the Prisma schema and the imports manifest.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# imports-sha256: {imports_sha}"
+    )
+
+
 def header_settings(source_file: str, sha: str, mode: str) -> str:
     """Settings provenance header — **self-describes the baked deployment mode** (FR-CFG-7a).
 

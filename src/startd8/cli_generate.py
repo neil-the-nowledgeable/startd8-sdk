@@ -184,6 +184,13 @@ def backend(
         "labels/order, detail sections, row label_field. Absent → today's all-scalars behavior "
         "(opt-in). Threaded to both generate and --check so drift stays consistent.",
     ),
+    imports: Optional[Path] = typer.Option(
+        None,
+        "--imports",
+        help="Path to imports.yaml (FR-IMP-3 per-entity import declarations). When given, "
+        "app/importer.py (from_json upsert) is emitted; absent → no importer (opt-in). Threaded "
+        "to both generate and --check so drift stays consistent.",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
@@ -209,7 +216,7 @@ def backend(
     pages_text: Optional[str] = None
     _reads = {
         "manifest": None, "human": None, "pages": None, "completeness": None, "views": None,
-        "display": None,
+        "display": None, "imports": None,
     }
     for label, path, dest in (
         ("ai_passes", ai_passes, "manifest"),
@@ -218,6 +225,7 @@ def backend(
         ("completeness", completeness, "completeness"),
         ("views", views, "views"),
         ("display", display, "display"),
+        ("imports", imports, "imports"),
     ):
         if path is None:
             continue
@@ -226,13 +234,14 @@ def backend(
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
-    manifest_text, human_text, pages_text, completeness_text, views_text, display_text = (
+    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text = (
         _reads["manifest"],
         _reads["human"],
         _reads["pages"],
         _reads["completeness"],
         _reads["views"],
         _reads["display"],
+        _reads["imports"],
     )
 
     if ai_agent_spec and manifest_text is None:
@@ -259,6 +268,7 @@ def backend(
             completeness_text=completeness_text,
             views_text=views_text,
             display_text=display_text,
+            imports_text=imports_text,
             # On --check we don't render the untracked prose fragments (they need the .md on disk
             # and never participate in drift); on write we do, reading app/pages/*.md under --out.
             pages_app_dir=None if check else (out / "app"),
@@ -287,6 +297,7 @@ def backend(
                 completeness_text=completeness_text,
                 forms_text=views_text,
                 display_text=display_text,
+                imports_text=imports_text,
             )
             if result.status != "in_sync":
                 drifted += 1

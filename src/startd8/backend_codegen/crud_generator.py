@@ -36,6 +36,9 @@ CANONICAL_LAYOUT: Dict[str, str] = {
     "fastapi-main": "app/main.py",
     "fastapi-web": "app/web.py",
     "python-export": "app/export.py",
+    "python-import": "app/importer.py",  # FR-IMP-1: from_json upsert importer (opt-in via imports.yaml)
+    #   ^ NOT app/import.py — `import` is a Python keyword, so `from app.import import …` is a
+    #     SyntaxError; `importer` keeps the module statically importable by main.py + the surface.
     "python-ai-schemas": "app/ai_schemas.py",
     "python-completeness": "app/completeness.py",
     "python-requirements": "requirements.txt",
