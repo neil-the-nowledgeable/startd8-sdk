@@ -78,6 +78,7 @@ def deploy_batch(
     keep: bool = False,
     limits: Any = None,
     runner_python: Optional[str] = None,
+    editable_installs: Optional[List[str]] = None,
     join: bool = True,
 ) -> Dict[str, Any]:
     """Deploy every app root under ``batch_root`` serially and write the aggregate report."""
@@ -111,6 +112,7 @@ def deploy_batch(
             keep=keep,
             limits=limits,
             runner_python=runner_python,
+            editable_installs=editable_installs,
         )
         results.append((ar, res))
 

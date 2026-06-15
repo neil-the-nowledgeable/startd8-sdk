@@ -48,3 +48,57 @@ def test_create_venv_yields_working_interpreter(tmp_path) -> None:
     assert "Python" in (out.stdout or out.stderr)
     # the venv interpreter is NOT the SDK interpreter (FR-4 isolation)
     assert str(v.python) != sys.executable
+
+
+# --------------------------------------------------------------------------- editable install mode
+
+
+def test_build_pip_cmd_plain() -> None:
+    from startd8.deploy_harness.venv_runner import _build_pip_cmd
+
+    cmd = _build_pip_cmd("/v/python", ["fastapi", "startd8"], [], build_isolation=True)
+    assert cmd[:4] == ["/v/python", "-m", "pip", "install"]
+    assert "-e" not in cmd
+    assert "fastapi" in cmd and "uvicorn[standard]" in cmd  # runner dep appended
+
+
+def test_build_pip_cmd_with_editable_precedes_packages() -> None:
+    from startd8.deploy_harness.venv_runner import _build_pip_cmd
+
+    cmd = _build_pip_cmd(
+        "/v/python", ["fastapi", "startd8"], ["/abs/startd8-sdk"], build_isolation=True
+    )
+    # editable appears as `-e <path>` and BEFORE the bare `startd8` requirement
+    assert "-e" in cmd and "/abs/startd8-sdk" in cmd
+    assert cmd.index("/abs/startd8-sdk") < cmd.index("startd8")
+
+
+def test_build_pip_cmd_no_build_isolation_flag() -> None:
+    from startd8.deploy_harness.venv_runner import _build_pip_cmd
+
+    cmd = _build_pip_cmd("/v/python", ["fastapi"], [], build_isolation=False)
+    assert "--no-build-isolation" in cmd
+
+
+def test_pip_run_reason_phase_labels() -> None:
+    from startd8.deploy_harness.venv_runner import _PipRun
+
+    assert (
+        _PipRun(ok=False, returncode=1, duration_s=0).reason("editable")
+        == "editable-pip-exit-1"
+    )
+    assert (
+        _PipRun(ok=False, returncode=1, duration_s=0).reason("install") == "pip-exit-1"
+    )
+    assert (
+        _PipRun(
+            ok=False, returncode=None, duration_s=0, timed_out=True, timeout_s=600
+        ).reason("install")
+        == "install-timeout:600s"
+    )
+
+
+def test_nproc_disabled_by_default() -> None:
+    # RLIMIT_NPROC's per-user-total semantics make a fixed cap unsafe → off by default.
+    assert ResourceLimits().max_processes is None
+    assert ResourceLimits().address_space_bytes is not None  # memory cap stays on

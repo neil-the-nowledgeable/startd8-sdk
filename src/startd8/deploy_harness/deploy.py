@@ -47,6 +47,7 @@ def deploy_app_local(
     do_smoke: bool = True,
     limits: Optional[ResourceLimits] = None,
     runner_python: Optional[str] = None,
+    editable_installs: Optional[list[str]] = None,
     work_parent: Optional[Path] = None,
 ) -> LadderResult:
     """Deploy one generated app locally and return its graded :class:`LadderResult`.
@@ -105,6 +106,7 @@ def deploy_app_local(
                 timeout_s=install_timeout_s,
                 limits=limits,
                 log_path=work / "install.log",
+                editable_installs=editable_installs,
             )
             result.harness_env.installed_deps = outcome.freeze
             result.harness_env.pip_index_url = outcome.index_url

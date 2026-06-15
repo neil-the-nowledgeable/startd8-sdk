@@ -204,7 +204,9 @@ def _parse_requirements(text: str) -> Tuple[List[str], bool]:
     pinned = True
     any_req = False
     for raw in text.splitlines():
-        line = raw.strip()
+        # Strip inline comments (pip rule: a comment is whitespace + '#'; this preserves URL
+        # fragments like '...#egg=name' which have no preceding whitespace).
+        line = re.sub(r"\s+#.*$", "", raw).strip()
         if not line or line.startswith("#") or line.startswith("-"):
             continue  # skip comments, blank, and -r/-e/--flag includes
         any_req = True

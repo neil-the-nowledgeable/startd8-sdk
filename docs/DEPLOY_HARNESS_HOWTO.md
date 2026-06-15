@@ -71,8 +71,24 @@ startd8 deploy local <app-root> [OPTIONS]
 | `--install-timeout FLOAT` | `600` | pip install timeout (seconds) |
 | `--boot-timeout FLOAT` | `60` | Server boot timeout (seconds) |
 | `--no-smoke` | off | Stop after the health rung |
+| `--editable PATH`, `-e` | — | pip-install a local project editable (repeatable). For apps that depend on an unpublished local package — see below |
 | `--keep` | off | Keep the throwaway venv/work dir for debugging |
 | `--json` | off | Emit the full `LadderResult` as JSON (for CI) |
+
+#### Apps that depend on an unpublished local package (`--editable`)
+
+If a generated app's `requirements.txt` lists a package that isn't on PyPI — e.g. **`startd8`** itself
+(the SDK) for an app that uses the AI layer — a clean-room `pip install` will fail at the `install`
+rung (`No matching distribution found`). Point `--editable` at the local checkout:
+
+```bash
+startd8 deploy local ./my-app --editable /path/to/startd8-sdk
+```
+
+The harness installs each editable in a **prior pip pass**, so the bare `startd8` requirement is then
+already-satisfied and pip skips the index lookup. (This is exactly how StartDate — which depends on
+`startd8` — deploys clean-room through the full ladder.) Repeatable for multiple local deps;
+`deploy batch` accepts the same flag (applied to every app's venv).
 
 **Exit code:** `0` if the app reached a clean `health` rung, else `1` (`2` if the path isn't a directory).
 

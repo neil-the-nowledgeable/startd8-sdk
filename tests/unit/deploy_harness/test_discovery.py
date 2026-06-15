@@ -171,3 +171,22 @@ def test_mode_garbled_settings_is_unknown_not_silent_installed(tmp_path: Path) -
     assert mode == MODE_UNKNOWN
     assert deriv == "ambiguous"
     assert any(d.code == "mode-ambiguous" for d in devs)
+
+
+def test_deps_strips_inline_comments(tmp_path: Path) -> None:
+    # pip rejects 'startd8  # comment' as a CLI arg — the inline comment must be stripped.
+    (tmp_path / "requirements.txt").write_text(
+        "fastapi\nstartd8  # AI-layer runtime: install startd8[gemini]\n",
+        encoding="utf-8",
+    )
+    dep, _ = detect_deps(tmp_path)
+    assert dep.packages == ["fastapi", "startd8"]
+
+
+def test_deps_preserves_url_fragment(tmp_path: Path) -> None:
+    # '#egg=' has no preceding whitespace — must NOT be treated as a comment.
+    (tmp_path / "requirements.txt").write_text(
+        "pkg @ git+https://example.com/x.git#egg=pkg\n", encoding="utf-8"
+    )
+    dep, _ = detect_deps(tmp_path)
+    assert dep.packages == ["pkg @ git+https://example.com/x.git#egg=pkg"]

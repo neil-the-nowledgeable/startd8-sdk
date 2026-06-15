@@ -8,6 +8,7 @@ per-model app roots. v1 isolation is throwaway-venv + subprocess + loopback — 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import List, Optional
 
 import typer
 
@@ -51,6 +52,13 @@ def local(
     no_smoke: bool = typer.Option(
         False, "--no-smoke", help="Stop after the health rung; skip smoke-CRUD."
     ),
+    editable: Optional[List[str]] = typer.Option(
+        None,
+        "--editable",
+        "-e",
+        help="Local project path to pip-install editable (repeatable). Use for apps that depend on "
+        "an unpublished local package, e.g. -e /path/to/startd8-sdk.",
+    ),
     json_out: bool = typer.Option(
         False, "--json", help="Emit the LadderResult as JSON (for CI)."
     ),
@@ -69,6 +77,7 @@ def local(
         boot_timeout_s=boot_timeout,
         keep=keep,
         do_smoke=not no_smoke,
+        editable_installs=list(editable) if editable else None,
     )
 
     if json_out:
@@ -115,6 +124,13 @@ def batch(
     keep: bool = typer.Option(
         False, "--keep", help="Keep throwaway venv/work dirs for debugging."
     ),
+    editable: Optional[List[str]] = typer.Option(
+        None,
+        "--editable",
+        "-e",
+        help="Local project path to pip-install editable into every app's venv (repeatable). "
+        "e.g. -e /path/to/startd8-sdk for apps that depend on the unpublished SDK.",
+    ),
 ) -> None:
     """Deploy every per-model app under a batch root and write deploy-report.{json,md}."""
     from .deploy_harness import deploy_batch
@@ -125,6 +141,7 @@ def batch(
 
     report = deploy_batch(
         batch_root,
+        editable_installs=list(editable) if editable else None,
         install_timeout_s=install_timeout,
         boot_timeout_s=boot_timeout,
         do_smoke=not no_smoke,
