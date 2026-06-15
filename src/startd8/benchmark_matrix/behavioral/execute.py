@@ -18,11 +18,19 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from ..sandbox import SandboxConfig, run_service_sandboxed
+from .ad_suite import run_ad_suite
 from .charge_suite import run_charge_suite
+from .currency_suite import run_currency_suite
 from .contract import resolve_serve_command
+from .shipping_suite import run_shipping_suite
 
-# service name -> behavioral suite (the SDK-authored client). Only the paymentservice pilot today.
-_SUITES: Dict[str, Callable[[int], object]] = {"paymentservice": run_charge_suite}
+# service name -> behavioral suite (the SDK-authored client). P1+P2 curated stateless set.
+_SUITES: Dict[str, Callable[[int], object]] = {
+    "paymentservice": run_charge_suite,
+    "currencyservice": run_currency_suite,
+    "shippingservice": run_shipping_suite,
+    "adservice": run_ad_suite,
+}
 
 _NODE_RUNTIME = Path(__file__).parent / "node_runtime"
 _PROTO = Path(__file__).parent / "demo.proto"

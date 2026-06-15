@@ -135,7 +135,8 @@ def test_run_behavioral_cell_scores_good_and_broken(tmp_path):
 
 
 def test_run_behavioral_cell_no_suite_for_service(tmp_path):
-    res = run_behavioral_cell({}, tmp_path, "adservice", ["X.java"], cfg=_NO_NET)
+    # cartservice is still out of scope (stateful) — no suite registered → leave composite unchanged.
+    res = run_behavioral_cell({}, tmp_path, "cartservice", ["Cart.cs"], cfg=_NO_NET)
     assert res.has_suite is False and res.functional is None and not res.degraded
 
 
