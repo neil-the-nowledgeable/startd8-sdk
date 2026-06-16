@@ -39,6 +39,50 @@ def test_run_without_budget_is_blocked_fail_closed():
     assert "fail-closed" in r.stderr
 
 
+# --- K3 S7: role-pairs CLI + cell guard --------------------------------------
+
+def test_role_grid_dry_run_shows_role_factor():
+    r = subprocess.run(
+        [sys.executable, str(CLI), "--flagships-only", "--reps", "1", "--role-pairs", "grid", "--dry-run"],
+        capture_output=True, text=True, cwd=str(REPO),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "16 role-pairs" in r.stdout                 # 4 flagships → 4² (NOT implied by --models)
+    assert "144 cells" in r.stdout
+
+
+def test_default_models_never_imply_grid():
+    # Listing N models stays diagonal-only — the N²-fan footgun (R6-S3) must not trigger.
+    r = subprocess.run(
+        [sys.executable, str(CLI), "--models", "a:1", "b:2", "c:3", "--reps", "1", "--dry-run"],
+        capture_output=True, text=True, cwd=str(REPO),
+    )
+    assert r.returncode == 0, r.stderr
+    assert "3 models" in r.stdout and "role-pairs" not in r.stdout   # diagonal, not 3²
+
+
+def test_cell_guard_refuses_large_grid_before_spend():
+    # grid × 2 reps = 288 cells > 200; no --allow-large, real run -> refuse (return 2), before preflight.
+    r = subprocess.run(
+        [sys.executable, str(CLI), "--flagships-only", "--reps", "2", "--role-pairs", "grid"],
+        capture_output=True, text=True, cwd=str(REPO),
+    )
+    assert r.returncode == 2
+    assert "refusing 288 cells" in r.stderr and "200-cell guard" in r.stderr
+
+
+def test_allow_large_bypasses_guard_then_preflight_blocks():
+    # --allow-large clears the guard; the run then still fail-closes on the missing budget.
+    r = subprocess.run(
+        [sys.executable, str(CLI), "--flagships-only", "--reps", "2", "--role-pairs", "grid",
+         "--allow-large"],
+        capture_output=True, text=True, cwd=str(REPO),
+    )
+    assert r.returncode == 2
+    assert "200-cell guard" not in r.stderr            # guard cleared (its signature absent)
+    assert "preflight BLOCKED" in r.stderr             # blocked later, by budget (no spend)
+
+
 @pytest.mark.skipif(
     os.getenv("STARTD8_BENCH_SMOKE") != "1",
     reason="real LLM smoke — set STARTD8_BENCH_SMOKE=1 to run (spends money, needs API keys)",
