@@ -279,3 +279,23 @@ def test_surface_upload_bad_extension_rejected(served_app):
     r = served_app.post("/import", files=files)
     assert r.status_code == 400
     assert "Unsupported file type" in r.text
+
+
+def test_surface_escapes_filename_no_xss(served_app):
+    # a malicious filename must be HTML-escaped, not reflected as live markup
+    files = {"file": ("<script>alert(1)</script>.exe", b"{}", "application/octet-stream")}
+    r = served_app.post("/import", files=files)
+    assert r.status_code == 400
+    assert "<script>alert(1)</script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+
+
+def test_surface_escapes_error_text_no_xss(served_app):
+    # a row error echoes the offending field VALUE (user-controlled) — it must be escaped.
+    import json
+
+    payload = {"Capability": [{"id": "x", "weight": "<img src=x onerror=alert(1)>"}]}
+    r = served_app.post("/import", data={"payload_text": json.dumps(payload), "strict": "1"})
+    assert r.status_code == 422
+    assert "<img src=x onerror=alert(1)>" not in r.text
+    assert "&lt;img" in r.text

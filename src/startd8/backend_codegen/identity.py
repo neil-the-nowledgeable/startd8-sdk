@@ -21,7 +21,7 @@ This module only *names* the key; it does not emit persist code.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Literal, Optional, Sequence, Tuple, Union
+from typing import Literal, Optional, Sequence, Tuple, Union
 
 IdentityKind = Literal["id", "field", "composite", "source", "name", "none"]
 
@@ -176,7 +176,6 @@ def resolve_identity(
     source_binding: Optional[str] = None,
     dedup_by: Optional[str] = None,
     id_field: Optional[str] = None,
-    has_name_column: bool = True,
     where: str = "identity",
 ) -> IdentityKey:
     """Resolve the one identity key for a pass / import entry, applying declared > legacy > default.
@@ -188,9 +187,8 @@ def resolve_identity(
          ``effective_source_binding(...)`` so the explicit / schema-derived / ``none`` states are
          already collapsed). A non-empty value → ``source`` kind.
       3. ``dedup_by`` — the F-11 single-field key → ``field`` kind.
-      4. default → ``name`` (today's behavior; degrades to insert-always when the model has no
-         ``name`` column, exactly as ``_PERSIST_HELPER`` does — so ``has_name_column`` is advisory,
-         it does not change the *kind*, only documents intent for diagnostics).
+      4. default → ``name`` (today's behavior; the name-based ``_PERSIST_HELPER`` degrades to
+         insert-always when the model has no ``name`` column).
 
     Passing *both* ``source_binding`` and ``dedup_by`` is a manifest conflict (each declares a
     different identity) → ``ValueError``. ``declared`` overrides both without conflict.
@@ -210,10 +208,3 @@ def resolve_identity(
     if db:
         return IdentityKey(kind="field", fields=(db,))
     return NAME_KEY
-
-
-def resolve_many(
-    entries: Iterable["object"],
-) -> None:  # pragma: no cover - reserved hook
-    """Reserved: batch resolution across a manifest (kept thin until Phase 2 needs it)."""
-    raise NotImplementedError

@@ -55,6 +55,7 @@ def render_import_surface(
 
 _BODY = '''from __future__ import annotations
 
+import html
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -113,8 +114,8 @@ async def do_import(
         name = file.filename.lower()
         if not name.endswith(_ALLOWED_EXT):
             return HTMLResponse(
-                _page(_FORM + f"<p style='color:#b00'>Unsupported file type: {{file.filename}} "
-                      f"(allowed: {{', '.join(_ALLOWED_EXT)}})</p>"),
+                _page(_FORM + f"<p style='color:#b00'>Unsupported file type: "
+                      f"{{html.escape(file.filename)}} (allowed: {{', '.join(_ALLOWED_EXT)}})</p>"),
                 status_code=400,
             )
         raw = await file.read(_MAX_UPLOAD_BYTES + 1)
@@ -145,7 +146,9 @@ async def do_import(
         f"<li>skipped: {{result.skipped}}</li>"
     )
     if result.errors:
-        items = "".join(f"<li>{{e}}</li>" for e in result.errors)
+        # Escape every error — they echo payload-derived text (entity names, exception messages),
+        # so an unescaped render would be an HTML/JS injection sink (reflected XSS).
+        items = "".join(f"<li>{{html.escape(str(e))}}</li>" for e in result.errors)
         errors_html = f"<h2 style='color:#b00'>Errors ({{len(result.errors)}})</h2><ul>{{items}}</ul>"
     else:
         errors_html = "<p style='color:#080'>Import succeeded with no errors.</p>"
