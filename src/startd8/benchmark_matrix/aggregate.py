@@ -80,25 +80,49 @@ def summarize_group(cells: List[CellResult], pass_threshold: float = DEFAULT_PAS
     }
 
 
+def _resolved_lead(c: CellResult) -> str:
+    return getattr(c, "lead", None) or c.model
+
+
+def _resolved_drafter(c: CellResult) -> str:
+    return getattr(c, "drafter", None) or c.model
+
+
+def _cell_is_diagonal(c: CellResult) -> bool:
+    """K3: a cell is diagonal (single-model) when lead==drafter. When K3 is inactive every cell is
+    diagonal, so the diagonal-only views below are unchanged from pre-K3."""
+    return _resolved_lead(c) == _resolved_drafter(c)
+
+
 def aggregate_cells(cells: List[CellResult], pass_threshold: float = DEFAULT_PASS_THRESHOLD) -> Dict:
-    """Roll up matrix cells by (service, model), by model, and by language (FR-15)."""
-    def _group(key_fn):
+    """Roll up matrix cells by (service, model), model, language, and — when K3 is active — by lead,
+    drafter, and (lead,drafter) pair (FR-15/FR-K3-4).
+
+    R6-S5: the per-**model** views (`by_model`, `by_model_leverage`, and downstream the consistency
+    rank + K2 leverage delta) are computed over **diagonal cells only**, so an off-diagonal
+    hybrid-team result never pollutes a single model's quality/consistency/delta. Off-diagonal cells
+    live solely in `by_pair` (and contribute to `by_lead`/`by_drafter`)."""
+    def _group(key_fn, source=cells):
         groups: Dict = {}
-        for c in cells:
+        for c in source:
             groups.setdefault(key_fn(c), []).append(c)
         return {k: summarize_group(v, pass_threshold) for k, v in sorted(groups.items(), key=lambda kv: str(kv[0]))}
 
+    diagonal = [c for c in cells if _cell_is_diagonal(c)]
     return {
         "pass_threshold": pass_threshold,
         "overall": summarize_group(cells, pass_threshold),
         "by_service_model": {f"{s}|{m}": v for (s, m), v in
-                             _group(lambda c: (c.service, c.model)).items()},
-        "by_model": _group(lambda c: c.model),
-        # K2 (R3-S5): per-(model, leverage) so consistency (FR-K1-2) can be read per leverage state
-        # — pooling off+on conflates integrity-gated off runs with skip-heavy on runs into one IQR,
-        # misattributing leverage to model reliability.
+                             _group(lambda c: (c.service, c.model), diagonal).items()},
+        "by_model": _group(lambda c: c.model, diagonal),               # R6-S5: diagonal only
+        # K2 (R3-S5): per-(model, leverage) consistency — diagonal only (R6-S5).
         "by_model_leverage": {f"{m}|{lev}": v for (m, lev), v in
-                              _group(lambda c: (c.model, getattr(c, "leverage", "off"))).items()},
+                              _group(lambda c: (c.model, getattr(c, "leverage", "off")), diagonal).items()},
+        # K3 (FR-K3-4): role groupings over ALL cells (the L×D grid includes the diagonal).
+        "by_lead": _group(_resolved_lead),
+        "by_drafter": _group(_resolved_drafter),
+        "by_pair": {f"{lead}|{drafter}": v for (lead, drafter), v in
+                    _group(lambda c: (_resolved_lead(c), _resolved_drafter(c))).items()},
         "by_language": _group(lambda c: c.language),
         "by_service": _group(lambda c: c.service),
     }
@@ -198,6 +222,36 @@ def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
         def f(x, p=3):
             return f"{x:.{p}f}" if isinstance(x, (int, float)) else "N/A"
         lines.append(f"| {lang} | {f(s['quality_median'])} | {f(s['pass_rate'])} | {f(s['cost_total_usd'],4)} |")
+    grid = build_role_grid_markdown(agg)   # K3: appended only when off-diagonal cells ran
+    if grid:
+        lines += ["", grid.rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+def build_role_grid_markdown(agg: Dict) -> str:
+    """K3 (FR-K3-4): the L×D quality grid — rows=lead, cols=drafter, cell=median quality, diagonal
+    marked `*`. Empty string unless an off-diagonal pair ran (so a diagonal-only run is unchanged)."""
+    by_pair = agg.get("by_pair") or {}
+    pairs = [tuple(k.split("|", 1)) for k in by_pair if "|" in k]
+    if not any(lead != drafter for lead, drafter in pairs):
+        return ""
+    leads = sorted({lead for lead, _ in pairs})
+    drafters = sorted({drafter for _, drafter in pairs})
+
+    def short(agent):  # compact column/row label: drop provider prefix
+        return agent.split(":", 1)[-1]
+
+    def q(lead, drafter):
+        s = by_pair.get(f"{lead}|{drafter}")
+        v = s["quality_median"] if s else None
+        cell = f"{v:.3f}" if isinstance(v, (int, float)) else "·"
+        return f"**{cell}\\***" if lead == drafter and s else cell  # mark the diagonal
+
+    lines = ["## Lead × Drafter role grid (K3 — quality median; `*` = diagonal/single-model)",
+             "", "| lead ↓ \\ drafter → | " + " | ".join(short(d) for d in drafters) + " |",
+             "|---|" + "---:|" * len(drafters)]
+    for lead in leads:
+        lines.append(f"| `{short(lead)}` | " + " | ".join(q(lead, d) for d in drafters) + " |")
     return "\n".join(lines) + "\n"
 
 
@@ -235,6 +289,9 @@ def leverage_delta(cells: List[CellResult],
     (R2-S5), a `leverage_regressed` flag (R4-S3), and `branch_divergent_pairs` where the scoring
     branch differed across the pair (R5-S4 — those deltas are scorer-confounded, not pure leverage).
     """
+    # R6-S5: the K2 delta is a per-model question — restrict to diagonal cells so an off-diagonal
+    # hybrid-team cell never contaminates a model's Δ. (No-op when K3 is inactive.)
+    cells = [c for c in cells if _cell_is_diagonal(c)]
     off = {_coord(c): c for c in cells if getattr(c, "leverage", "off") == "off"}
     on = {_coord(c): c for c in cells if getattr(c, "leverage", "off") == "on"}
     per_model: Dict[str, Dict] = {}

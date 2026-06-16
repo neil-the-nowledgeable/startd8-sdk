@@ -72,10 +72,24 @@ def _build_spec(args, index) -> tuple[BenchmarkRunSpec, dict]:
     on = args.leverage_on
     leverage_on_config = {"routing": on in ("routing", "both"),
                           "micro_prime": on in ("micro_prime", "both")}
+    # K3 (R6-S6): role axis. Default None = diagonal (FR-1). `--role-pair LEAD,DRAFTER` (repeatable)
+    # gives an explicit prune; `--role-pairs grid` expands to the full L×D — NEVER implied by --models.
+    role_pairs = None
+    if args.role_pair:
+        pairs = []
+        for rp in args.role_pair:
+            if "," not in rp:
+                raise SystemExit(f"--role-pair must be LEAD,DRAFTER (comma-separated): {rp!r}")
+            lead, drafter = rp.split(",", 1)
+            pairs.append((lead.strip(), drafter.strip()))
+        role_pairs = tuple(pairs)
+    elif args.role_pairs == "grid":
+        role_pairs = BenchmarkRunSpec.grid_pairs(models)
     spec = BenchmarkRunSpec(
         name=args.name, models=tuple(models), services=tuple(services),
         repetitions=args.reps, budget_ceiling_usd=args.budget, per_cell_cap_usd=args.per_cell_cap,
         leverage_states=leverage_states, leverage_on_config=leverage_on_config,
+        role_pairs=role_pairs,
         seed_hashes=seed_hashes, proto_sha256=index.get("proto_sha256"), sdk_version=_sdk_version(),
     )
     return spec, languages
@@ -110,6 +124,20 @@ def main(argv=None) -> int:
         "--leverage-on", choices=["routing", "micro_prime", "both"], default="routing",
         help="What a leverage=on cell engages (R2-S3). Default routing (complexity routing only).",
     )
+    ap.add_argument(
+        "--role-pairs", choices=["none", "grid"], default="none",
+        help="K3 (FR-K3-2): 'none'=diagonal/single-model (default); 'grid'=full L×D over the roster "
+             "(#models², requires --allow-large past the cell guard). NEVER implied by --models.",
+    )
+    ap.add_argument(
+        "--role-pair", action="append", default=None, metavar="LEAD,DRAFTER",
+        help="K3 explicit (lead,drafter) pair, repeatable; each is a provider:model agent spec, "
+             "comma-separated (e.g. --role-pair anthropic:claude-opus-4-8,openai:gpt-5.5).",
+    )
+    ap.add_argument(
+        "--allow-large", action="store_true",
+        help="Permit a run exceeding the 200-cell guard (FR-2/R6-S3) — required for large grids.",
+    )
     args = ap.parse_args(argv)
 
     if not SEEDS_INDEX.exists():
@@ -120,9 +148,21 @@ def main(argv=None) -> int:
     estimate = estimate_run_cost(spec)
 
     print(format_estimate(spec, estimate))
+
+    # Composition guard (FR-2 / R6-S3): refuse > 200 cells without --allow-large so a grid (or any
+    # knob expansion) can't silently fan out and overspend. Shown-then-flagged on a dry-run.
+    CELL_GUARD = 200
+    over_guard = spec.total_cells > CELL_GUARD and not args.allow_large
     if args.dry_run:
+        if over_guard:
+            print(f"\n⚠ {spec.total_cells} cells exceeds the {CELL_GUARD}-cell guard — a real run "
+                  f"would refuse without --allow-large (FR-2).")
         print("\n(dry-run: no cells executed)")
         return 0
+    if over_guard:
+        print(f"\nrefusing {spec.total_cells} cells (> {CELL_GUARD}-cell guard); pass --allow-large "
+              f"to proceed (FR-2/R6-S3).", file=sys.stderr)
+        return 2
 
     # Fail-closed preflight before any spend (FR-33).
     try:

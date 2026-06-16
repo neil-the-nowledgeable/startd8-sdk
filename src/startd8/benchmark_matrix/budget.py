@@ -99,8 +99,11 @@ def format_estimate(spec: BenchmarkRunSpec, estimate: BenchmarkCostEstimate) -> 
     """Human-readable dry-run sizing table (FR-33)."""
     lines = [
         f"Benchmark cost estimate — run '{spec.name}'  (spec {spec.spec_hash()[:12]})",
-        f"  matrix: {len(spec.services)} services x {len(spec.models)} models "
-        f"x {spec.repetitions} reps"
+        f"  matrix: {len(spec.services)} services x "
+        # K3 (R6-S3): show the role-pair factor when off-diagonal — a grid is #models², not #models.
+        + (f"{len(spec.effective_role_pairs)} role-pairs" if spec.role_pairs is not None
+           else f"{len(spec.models)} models")
+        + f" x {spec.repetitions} reps"
         + (f" x {len(spec.leverage_states)} leverage ({','.join(spec.leverage_states)})"
            if len(spec.leverage_states) > 1 else "")
         + f" = {estimate.total_cells} cells",
