@@ -18,6 +18,8 @@ setup(
         "startd8": [
             "prompt_builder/templates/*.yaml",
             "help_content/*.yaml",
+            "concierge_templates/*.md",
+            "concierge_templates/inputs/*.yaml",
         ],
     },
     classifiers=[

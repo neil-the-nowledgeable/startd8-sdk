@@ -25,7 +25,10 @@ SCHEMA_VERSION = 1
 
 # v1 read-only actions (spike). Write/derive actions are declared but not yet handled.
 READ_ACTIONS = ("survey", "assess")
-DEFERRED_ACTIONS = ("instantiate-kickoff", "log-friction", "derive-contract")
+# Write actions return a PREVIEW (WritePlan) from handle_concierge_tool; the CLI is the only path
+# that applies it (OQ-7). handle_concierge_tool never writes — it builds the plan.
+WRITE_ACTIONS = ("instantiate-kickoff", "log-friction")
+DEFERRED_ACTIONS = ("derive-contract",)
 
 # --- survey heuristics (all path/name-based; never reads flagged file contents — OQ-8 lean) ---
 
@@ -221,16 +224,39 @@ def _assess_cascade(root: Path) -> Dict[str, Any]:
     }
 
 
-def handle_concierge_tool(action: str, project_root: str | Path) -> Dict[str, Any]:
+def handle_concierge_tool(action: str, project_root: str | Path, **params: Any) -> Dict[str, Any]:
     """Action dispatch (FR-C1). The single entry the MCP tool and CLI both call.
 
-    Read-only actions only in v1. Deferred actions return a structured ``not_implemented``
-    rather than raising, so a caller discovers scope without a crash.
+    Read actions return their report; **write actions return a PREVIEW WritePlan and never touch
+    disk** (OQ-7 — only the CLI applies, via ``apply_write_plan``). Deferred actions return a
+    structured ``not_implemented`` rather than raising, so a caller discovers scope without a crash.
     """
     if action == "survey":
         return build_survey(project_root)
     if action == "assess":
         return build_assess(project_root)
+    if action == "instantiate-kickoff":
+        from .writes import build_instantiate_plan
+        return build_instantiate_plan(
+            project_root,
+            params.get("posture", "prototype"),
+            with_authoring=bool(params.get("with_authoring", False)),
+        )
+    if action == "log-friction":
+        from .writes import ConciergeWriteError, build_friction_entry
+        try:
+            return build_friction_entry(
+                project_root,
+                friction=params["friction"],
+                what_happened=params["what_happened"],
+                implication=params["implication"],
+                entry_id=params.get("entry_id"),
+                timestamp=params.get("timestamp"),
+            )
+        except KeyError as e:
+            raise ConciergeError(f"log-friction requires field {e}") from None
+        except ConciergeWriteError as e:
+            raise ConciergeError(str(e)) from None
     if action in DEFERRED_ACTIONS:
         return {
             "schema_version": SCHEMA_VERSION,

@@ -1,0 +1,60 @@
+# <Project> — Kickoff inputs: OBSERVABILITY                                    [TEMPLATE]
+# How the running app is watched, and who hears when it isn't healthy.
+# See ../KICKOFF_INPUTS_EXPLAINED.md §2.
+# Instantiate: start from the MATCHING INDUSTRY DATASET (end_user_application is the first —
+# startd8-sdk/docs/design/kickoff/OBSERVABILITY_DEFAULTS_END_USER_APPLICATION.md); values you
+# keep are `config-default`, values you change are `authored`.
+# Defaults must never be sentinels: use reserved TLDs (.test) + env-indirection — an honest
+# default is distinguishable from an unfilled placeholder.
+# >>> The `owners` block has NO LLM starter (real people can't be drafted) and MUST be real
+#     before any non-demo use. <<<
+
+domain: observability
+provenance_default: config-default
+industry_dataset: <end_user_application | …>
+
+owners:                              # REPLACE before non-demo use
+  - team: <team-id>
+    slack: "#<alerts-channel>"
+    email: <ops@project.test>        # .test until real
+    oncall: <rotation-name>
+
+service_levels:
+  availability: "<99.5>"             # pick the downtime budget the business accepts
+  latency_p99: "<500ms>"
+  latency_p50: "<150ms>"
+  traffic_profile: <test|internal|standard|high-traffic>
+  error_budget: "<derived: 1 − availability>"
+  rto: "<1h>"
+  per_service:                       # stricter where user trust is on the line
+    <service>: {availability: "<99.9>", latency_p99: "<300ms>"}
+
+collection:
+  metrics_interval: "30s"
+  log_level: info
+  log_format: json
+  dashboard_placement: "<folder/path>"
+  dashboard_uid_scheme: "cc-obs-{service}"
+  runbook_base_url: "<https://runbooks.project.test>"
+
+alerting:
+  channels: ["#<alerts-channel>"]
+  receivers:
+    - {name: <name>, type: <slack|webhook|pagerduty>, target: "${OBS_DEFAULT_WEBHOOK_URL}", severities: [critical, warning]}
+  metric_thresholds:                 # thresholds here ⇒ LIVE alerts (no commented stubs)
+    startd8_cost_total:        {op: ">", value: <N>, unit: usd_per_day, severity: warning,  for: 15m}
+    startd8_truncation_rate:   {op: ">", value: 0.05, unit: ratio,      severity: warning,  for: 15m}
+    startd8_context_usage:     {op: ">", value: 0.85, unit: ratio,      severity: warning,  for: 10m}
+    app_error_rate:            {op: ">", value: 0.02, unit: ratio,      severity: critical, for: 5m}
+    # + domain metrics specific to <project>
+
+runbook:
+  overview: >
+    <One paragraph: what the app is, what user-facing failure looks like, what backend failure
+    looks like.>
+  risks:
+    - {type: <availability|cost|quality>, description: "<known failure mode>", mitigation: "<guard>", priority: <high|medium|low>}
+  procedures:
+    - "<triage step 1 — start from the dashboard>"
+    - "<failure-mode-specific steps>"
+  escalation: "<oncall> -> <team lead> -> <vendor/provider>"
