@@ -655,3 +655,50 @@ def test_editing_empty_body_does_not_trip_check():
 def test_empty_body_on_non_rendered_content_loud_fails():
     with pytest.raises(ValueError, match="detail no-body surface"):
         render_views(_E_SCHEMA, _E_VIEWS, None, "pick_one:\n  empty_body: x\n")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2c: the /import/restore route↔test contract must stay in sync.
+# When success:/error: prose makes the route return HTML, the GENERATED confirm-gate
+# test must assert the HTML contract (status 200 + text/html), not resp.json()/422.
+# --------------------------------------------------------------------------- #
+
+_IMPORT_PROSE = (
+    'model_import:\n'
+    '  title: "Import your model"\n'
+    '  success: "Restored {total} records."\n'
+    '  error: "Could not import: {errors}."\n'
+)
+
+
+def _confirm_gate(prose):
+    arts = dict(render_views(SCHEMA, VIEWS, None, prose))
+    body = arts["tests/test_views.py"]
+    return body.split("def test_model_import_routes_confirm_gate")[1].split("\ndef ")[0]
+
+
+def test_import_test_follows_html_contract_when_prose_present():
+    gate = _confirm_gate(_IMPORT_PROSE)
+    # restore + invalid both now HTML result pages (status 200) — assert the HTML contract…
+    assert "text/html' in resp.headers['content-type']" in gate
+    # …and NOT the old JSON/422 assertions on the restore routes.
+    assert "resp.json()['total']" not in gate
+    assert "== 422" not in gate
+    # the confirm-refusal guard is a safety gate (always 400), unchanged by prose.
+    assert "== 400" in gate
+
+
+def test_import_test_is_byte_identical_json_contract_without_prose():
+    """Regression: no success/error prose ⇒ today's JSON contract, unchanged."""
+    gate = _confirm_gate(None)
+    assert "resp.json()['total'] == 0" in gate
+    assert "== 422" in gate
+    assert "text/html' in resp.headers['content-type']" not in gate
+
+
+def test_import_test_error_only_prose_branches_independently():
+    """error: without success: → only the invalid path is HTML; the success path stays JSON."""
+    gate = _confirm_gate('model_import:\n  error: "Bad import: {errors}."\n')
+    assert "resp.json()['total'] == 0" in gate          # success path still JSON
+    assert "== 422" not in gate                          # error path is HTML now
+    assert "text/html' in resp.headers['content-type']" in gate

@@ -42,13 +42,13 @@ def test_installed_emits_no_settings_and_equals_default():
     assert installed == default  # byte-identical to today — no regression
 
 
-def test_deployed_adds_exactly_settings():
+def test_deployed_adds_settings_and_auth_seam():
     installed = dict(render_backend(SCHEMA, deployment_mode="installed"))
     deployed = dict(render_backend(SCHEMA, deployment_mode="deployed"))
-    # The ONLY structural delta between the two modes is settings.py (FR-CFG-7, single mode-varying file).
-    assert set(deployed) - set(installed) == {SETTINGS_PATH}
+    # Deployed adds two deployed-only files: settings.py (mode-varying) + auth.py (reference seam, M2).
+    assert set(deployed) - set(installed) == {SETTINGS_PATH, "app/auth.py"}
     assert set(installed) - set(deployed) == set()
-    # Every shared file is byte-identical across modes (mode lives only in settings.py).
+    # Every SHARED file is byte-identical across modes (the mode lives only in settings.py).
     for path in installed:
         assert installed[path] == deployed[path], f"{path} differs by mode but must not"
 

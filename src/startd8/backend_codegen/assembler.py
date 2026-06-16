@@ -138,10 +138,17 @@ def render_backend(
     # settings-absent default and stays byte-identical to today (R4). settings.py — present here,
     # absent in installed — is the single file that differs between the two modes.
     if deployment_mode == "deployed":
+        from .auth_renderer import render_auth_seam
         from .settings_renderer import render_settings
 
         out.append((
             CANONICAL_LAYOUT["python-settings"],
             render_settings(schema_text, source_file, mode=deployment_mode),
+        ))
+        # FR-IDN-2/M2: deployed mode also emits the reference auth seam (app/auth.py). A dependency
+        # module the operator wires via user_routers.py — main.py stays unchanged.
+        out.append((
+            CANONICAL_LAYOUT["python-auth-seam"],
+            render_auth_seam(schema_text, source_file),
         ))
     return tuple(out)

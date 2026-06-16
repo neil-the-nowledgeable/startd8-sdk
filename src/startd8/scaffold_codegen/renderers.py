@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256  # generic sha256-over-text hasher
-from .manifest import AppManifest, parse_app_manifest
+from .manifest import parse_app_manifest
 
 # The generated app's runtime + dev deps (fixed by the FastAPI+SQLModel+HTMX stack, not manifest-derived).
 _RUNTIME_DEPS: Tuple[str, ...] = (
@@ -98,10 +98,16 @@ def render_logging(manifest_text: str) -> str:
 
 
 def render_dockerfile(manifest_text: str) -> str:
-    """``Dockerfile`` — a minimal container for the generated app (build input only)."""
+    """``Dockerfile`` — a minimal container for the generated app (build input only).
+
+    The container always binds ``0.0.0.0`` (a loopback container is unreachable). The mode-derived
+    *local* bind (installed → loopback) lives in ``run.sh`` (FR-NET-1/2); installed mode's primary run
+    is that local script, not this public-server container."""
     m = parse_app_manifest(manifest_text)
     sha = schema_sha256(manifest_text)
     body = (
+        f"# deployment mode: {m.deployment_mode} — the container binds 0.0.0.0 for reachability; "
+        "installed mode's primary run is the local run.sh (loopback).\n"
         f"FROM python:{m.python_version}-slim\n\n"
         "WORKDIR /app\n"
         "COPY pyproject.toml .\n"
@@ -111,6 +117,23 @@ def render_dockerfile(manifest_text: str) -> str:
         f'CMD ["uvicorn", "{m.package}.main:app", "--host", "0.0.0.0", "--port", "8000"]\n'
     )
     return _header("scaffold-dockerfile", sha) + "\n\n" + body
+
+
+def render_run_script(manifest_text: str) -> str:
+    """``run.sh`` — the local run script; bind host is mode-derived (FR-NET-1/2).
+
+    installed → loopback (``127.0.0.1``, single-user local — the PRIMARY installed run path); deployed
+    → all interfaces (``0.0.0.0``). ``PORT`` env overrides the port. The shebang stays line 1; the
+    GENERATED header follows as bash comments so drift/ownership still recognize it."""
+    m = parse_app_manifest(manifest_text)
+    sha = schema_sha256(manifest_text)
+    bind = "127.0.0.1" if m.deployment_mode == "installed" else "0.0.0.0"
+    body = (
+        "set -euo pipefail\n\n"
+        f"# deployment mode: {m.deployment_mode} — bind {bind} (FR-NET-1).\n"
+        f'exec uvicorn {m.package}.main:app --host {bind} --port "${{PORT:-8000}}"\n'
+    )
+    return "#!/usr/bin/env bash\n" + _header("scaffold-run-script", sha) + "\n\n" + body
 
 
 def render_alembic_ini(manifest_text: str) -> str:
@@ -225,15 +248,32 @@ def render_owned_requirements(manifest_text: str) -> str:
 
 
 def render_env_example(manifest_text: str) -> str:
-    """``.env.example`` — the local-config template (API key, DB url, cost budget). Bucket-1 plumbing."""
+    """``.env.example`` — the config template; mode sets the secrets/observability DEFAULTS (A5).
+
+    FR-SEC-1: installed defaults to the local secrets backend; deployed expects an external secrets
+    manager (Doppler) — mode sets the default, an explicit operator value always wins. FR-OBS-1: the
+    OTel ``deployment.environment`` (``ENV``) is aligned with mode (development vs production), and
+    deployed templates the centralized OTLP export. The DB url honors a full DSN (deployed Postgres)
+    instead of blindly ``sqlite:///``-prefixing it."""
     m = parse_app_manifest(manifest_text)
     sha = schema_sha256(manifest_text)
-    body = (
-        "ANTHROPIC_API_KEY=\n"
-        f"DATABASE_URL=sqlite:///{m.db_path}\n"
-        "COST_BUDGET_USD=10\n"
-    )
-    return _header("scaffold-env", sha) + "\n\n" + body
+    deployed = m.deployment_mode == "deployed"
+    db_url = m.db_path if "://" in m.db_path else f"sqlite:///{m.db_path}"
+    lines = [
+        "ANTHROPIC_API_KEY=",
+        f"DATABASE_URL={db_url}",
+        "COST_BUDGET_USD=10",
+        f"ENV={'production' if deployed else 'development'}",  # FR-OBS-1: OTel deployment.environment
+    ]
+    if deployed:
+        # FR-SEC-1 / FR-OBS-1: deployed posture — external secrets manager + centralized OTel export
+        # expected. These are DEFAULTS the operator fills/overrides; never forced over an explicit choice.
+        lines += [
+            "STARTD8_SECRETS_BACKEND=doppler",
+            "DOPPLER_TOKEN=",
+            "OTEL_EXPORTER_OTLP_ENDPOINT=",
+        ]
+    return _header("scaffold-env", sha) + "\n\n" + "\n".join(lines) + "\n"
 
 
 def render_scaffold(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
@@ -243,6 +283,7 @@ def render_scaffold(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
         ("pyproject.toml", render_pyproject(manifest_text)),
         (f"{m.package}/logging_config.py", render_logging(manifest_text)),
         (".env.example", render_env_example(manifest_text)),
+        ("run.sh", render_run_script(manifest_text)),  # local run; bind mode-derived (FR-NET-1/2)
     ]
     if m.extra_dependencies:  # G4: only when the app declares owned-glue deps
         out.append(("requirements-owned.txt", render_owned_requirements(manifest_text)))
@@ -267,4 +308,5 @@ SCAFFOLD_RENDERERS = {
     "scaffold-alembic-mako": render_alembic_mako,
     "scaffold-owned-requirements": render_owned_requirements,
     "scaffold-env": render_env_example,
+    "scaffold-run-script": render_run_script,
 }

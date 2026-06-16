@@ -76,6 +76,28 @@ def verify_sqlmodel_fidelity(schema_text: str, rendered_text: str) -> Tuple[str,
     )
 
 
+_SETTINGS_CALL_RE = re.compile(r"_settings\.(\w+)\(")
+_SETTINGS_DEF_RE = re.compile(r"^def (\w+)\(", re.MULTILINE)
+
+
+def verify_db_settings_contract(db_text: str, settings_text: str) -> Tuple[str, ...]:
+    """Assert ``db.py`` only calls settings symbols that ``settings.py`` actually defines (R1-S6).
+
+    ``db.py`` consumes ``app/settings.py`` at runtime via ``_settings.<name>()`` but stays byte-frozen
+    across modes (FR-CFG-7b); a settings rename would otherwise break the generated app only at boot,
+    not at ``generate``/``--check`` time — violating HAYAI (don't defer enforcement). This gate closes
+    that gap: every ``_settings.<name>(`` call in ``db.py`` must have a matching ``def <name>(`` in
+    ``settings.py``. Returns a tuple of issues (empty = the db.py↔settings.py contract holds).
+    """
+    called = set(_SETTINGS_CALL_RE.findall(db_text))
+    defined = set(_SETTINGS_DEF_RE.findall(settings_text))
+    missing = sorted(called - defined)
+    return tuple(
+        f"db.py calls settings.{name}() but app/settings.py defines no `def {name}`"
+        for name in missing
+    )
+
+
 def _verify(
     schema_text: str,
     rendered_text: str,

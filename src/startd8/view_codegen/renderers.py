@@ -1482,9 +1482,17 @@ def _needs_route_test(v: ViewSpec) -> bool:
     return _is_model_compose(v) or v.kind == "import-flow"
 
 
-def render_view_tests(views: Tuple[ViewSpec, ...], schema, schema_sha: str, views_sha: str) -> str:
-    """Rung-4 view tests — exercise each data function against a fixtured DB (the D1 gate)."""
-    blocks = [_render_view_test(schema, v, views) for v in views]
+def render_view_tests(
+    views: Tuple[ViewSpec, ...], schema, schema_sha: str, views_sha: str,
+    success_views: "frozenset[str]" = frozenset(),
+    error_views: "frozenset[str]" = frozenset(),
+) -> str:
+    """Rung-4 view tests — exercise each data function against a fixtured DB (the D1 gate).
+
+    *success_views*/*error_views* (the same view-prose sets the route renderer uses) let the import-flow
+    confirm-gate test follow the HTML-vs-JSON `/restore` contract.
+    """
+    blocks = [_render_view_test(schema, v, views, success_views, error_views) for v in views]
     preamble = (
         _TEST_SHIM + "\n"
         "import pytest\n\n"
@@ -1498,7 +1506,11 @@ def render_view_tests(views: Tuple[ViewSpec, ...], schema, schema_sha: str, view
     return header + "\n\n" + body + "\n"
 
 
-def _render_view_test(schema, v: ViewSpec, views: Tuple[ViewSpec, ...] = ()) -> str:
+def _render_view_test(
+    schema, v: ViewSpec, views: Tuple[ViewSpec, ...] = (),
+    success_views: "frozenset[str]" = frozenset(),
+    error_views: "frozenset[str]" = frozenset(),
+) -> str:
     if _is_model_export(v):
         return _render_model_export_test(schema, v, _prose_content_specs(views))
     if _is_model_compose(v):
@@ -1506,7 +1518,7 @@ def _render_view_test(schema, v: ViewSpec, views: Tuple[ViewSpec, ...] = ()) -> 
     if v.kind == "computed-panel":
         return _render_computed_panel_test(schema, v)
     if v.kind == "import-flow":
-        return _render_import_flow_test(schema, v)
+        return _render_import_flow_test(schema, v, success_views, error_views)
     if v.kind == "rendered-content":
         return _render_rendered_content_test(schema, v)
     if v.kind == "board" and v.columns_from:
@@ -1750,8 +1762,18 @@ def _render_model_compose_test(schema, v: ViewSpec) -> str:
     return "\n".join(data_lines) + "\n\n\n" + "\n".join(route_lines)
 
 
-def _render_import_flow_test(schema, v: ViewSpec) -> str:
+def _render_import_flow_test(
+    schema, v: ViewSpec,
+    success_views: "frozenset[str]" = frozenset(),
+    error_views: "frozenset[str]" = frozenset(),
+) -> str:
     """Import-flow tests (AR-4): the FR-10 round-trip + the explicit-confirmation gate.
+
+    The `/restore` route's CONTRACT depends on view-prose: with `success:`/`error:` copy authored it
+    returns an HTML result page (status 200), else today's JSON (200) / `HTTPException(422)`. The
+    generated confirm-gate test must follow whichever contract the route emits, or it goes red the
+    moment the prose is enabled (the Phase-2c route↔test desync). See the route renderer's
+    `has_success`/`has_error` branches.
 
     Round-trip acceptance (FR-10: "export-then-import reproduces an identical value model"):
     export JSON from a seeded DB -> validate -> restore into an EMPTY DB -> re-export ->
@@ -1760,6 +1782,8 @@ def _render_import_flow_test(schema, v: ViewSpec) -> str:
     """
     first = next(iter(schema.models))
     base = v.route.rstrip("/")
+    has_success = v.module in success_views   # restore success → HTML result page (else JSON)
+    has_error = v.module in error_views       # invalid restore → HTML error page (else 422)
     round_trip = [
         f"def test_{v.module}_round_trip(tmp_path):",
         "    import json",
@@ -1818,10 +1842,20 @@ def _render_import_flow_test(schema, v: ViewSpec) -> str:
         f"    resp = client.post({(base + '/restore')!r}, files=files)",
         "    assert resp.status_code == 400  # destructive restore REFUSED without explicit confirm",
         f"    resp = client.post({(base + '/restore')!r}, files=files, data={{'confirm': 'restore'}})",
-        "    assert resp.status_code == 200 and resp.json()['total'] == 0",
+        (
+            "    assert resp.status_code == 200 and 'text/html' in resp.headers['content-type']"
+            "  # success: prose → HTML result page"
+            if has_success
+            else "    assert resp.status_code == 200 and resp.json()['total'] == 0"
+        ),
         '    bad = {"file": ("model.json", "not json", "application/json")}',
         f"    resp = client.post({(base + '/restore')!r}, files=bad, data={{'confirm': 'restore'}})",
-        "    assert resp.status_code == 422  # invalid payloads refused, reported, never written",
+        (
+            "    assert resp.status_code == 200 and 'text/html' in resp.headers['content-type']"
+            "  # error: prose → HTML error page (not 422)"
+            if has_error
+            else "    assert resp.status_code == 422  # invalid payloads refused, reported, never written"
+        ),
     ]
     return "\n".join(round_trip) + "\n\n\n" + "\n".join(confirm_gate)
 
@@ -2044,5 +2078,6 @@ def render_views(
     error_views = frozenset(name for name, p in view_prose.items() if p.error)
     out.append(("app/views/routes.py", render_view_router(
         views, s_sha, v_sha, export_landing_views, success_views, error_views)))
-    out.append(("tests/test_views.py", render_view_tests(views, schema, s_sha, v_sha)))
+    out.append(("tests/test_views.py", render_view_tests(
+        views, schema, s_sha, v_sha, success_views, error_views)))
     return tuple(out)

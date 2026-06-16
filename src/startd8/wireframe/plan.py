@@ -33,6 +33,7 @@ from ..frontend_codegen.schema_renderer import composite_type_names
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 from ..logging_config import get_logger
 from ..scaffold_codegen.manifest import AppManifest, parse_app_manifest
+from ..scaffold_codegen.coherence import evaluate_coherence
 from ..view_codegen.manifest import ViewSpec, parse_views
 from ..view_codegen.view_prose import parse_view_prose
 from .inputs import AssemblyInputs
@@ -363,7 +364,15 @@ def _scaffold_section(state: _ManifestState) -> WireframeSection:
             "persistence", state.status,
             detail=f"SQLite {manifest.db_path} (WAL), log {manifest.log_file}",
         ),
+        WireframeItem(
+            "run: local", state.status,
+            detail="run.sh — bind " + (
+                "127.0.0.1 (loopback)" if manifest.deployment_mode == "installed" else "0.0.0.0"
+            ),
+            paths=("run.sh",),
+        ),
     ]
+    paths.append("run.sh")
     if manifest.dockerfile:
         items.append(WireframeItem("container: Dockerfile", state.status, paths=("Dockerfile",)))
         paths.append("Dockerfile")
@@ -882,6 +891,45 @@ def _readiness(states: Dict[str, _ManifestState]) -> Dict[str, str]:
     return out
 
 
+def _deployment_section(app_state: "_ManifestState") -> WireframeSection:
+    """FR-CFG-6 / A8: surface the declared deployment mode, per-dimension posture, and the FR-CFG-5
+    coherence findings (advisory here — `generate backend` is the gate). Read-only, $0."""
+    manifest = app_state.parsed if app_state.parsed else parse_app_manifest(None)
+    deployed = manifest.deployment_mode == "deployed"
+    items = [
+        WireframeItem("mode", Status.PLANNED, manifest.deployment_mode),
+        WireframeItem("persistence", Status.PLANNED,
+                      "pooled shared DB via DATABASE_URL" if deployed
+                      else "local-first SQLite (WAL, single writer)"),
+        WireframeItem("bind", Status.PLANNED,
+                      "0.0.0.0 (all interfaces; container)" if deployed
+                      else "127.0.0.1 (loopback; local run.sh)"),
+        WireframeItem("schema-init", Status.PLANNED,
+                      "managed migrations (alembic upgrade head)" if deployed
+                      else "create_all on startup"),
+        WireframeItem("secrets-default", Status.PLANNED,
+                      "external manager expected (e.g. doppler)" if deployed else "local backend"),
+        WireframeItem("observability", Status.PLANNED,
+                      "centralized OTel expected" if deployed else "local rotating file logs"),
+        WireframeItem("identity", Status.PLANNED,
+                      "reference auth seam (app/auth.py, not production); tenancy deferred Tier B/M3"
+                      if deployed else "single implicit owner (no auth)"),
+    ]
+    # M2/A6: deployed emits the auth seam → the authenticated-but-not-isolated WARN goes live.
+    findings = evaluate_coherence(manifest, has_auth_seam=deployed)
+    for f in findings:
+        st = Status.INVALID if f.severity == "ERROR" else Status.PLACEHOLDER
+        items.append(WireframeItem(f"coherence:{f.code}", st, f"{f.severity}: {f.message}"))
+    sec_status = Status.INVALID if any(f.severity == "ERROR" for f in findings) else Status.PLANNED
+    consequence = "" if sec_status == Status.PLANNED else (
+        "incoherent deployment config — `generate backend` will refuse the build (FR-CFG-5)."
+    )
+    return WireframeSection(
+        key="deployment", title="Deployment mode", status=sec_status,
+        items=tuple(items), consequence=consequence,
+    )
+
+
 def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> WireframePlan:
     """Derive the full :class:`WireframePlan` from resolved inputs (FR-W1..W5, W13, W15)."""
     texts: Dict[str, Tuple[Optional[str], Optional[str]]] = {
@@ -927,6 +975,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     content_section = _content_section(inputs, states["pages"], states["ai_passes"])
     sections = (
         _scaffold_section(states["app"]),
+        _deployment_section(states["app"]),
         _services_section(schema_state, states["ai_passes"]),
         _entities_section(schema_state),
         _pages_section(states["pages"], authoring=authoring),
