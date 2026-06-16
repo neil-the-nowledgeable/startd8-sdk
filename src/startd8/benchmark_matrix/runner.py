@@ -55,8 +55,13 @@ def is_infra_error(msg: Optional[str]) -> bool:
 
 
 def cell_id(spec_hash: str, cell: MatrixCell) -> str:
-    """Stable per-cell identity (FR-38 idempotency-key seed)."""
-    return f"{spec_hash[:12]}:{cell.service}:{cell.model}:r{cell.repetition}"
+    """Stable per-cell identity (FR-38 idempotency-key seed). The leverage segment is **appended**
+    only for non-default leverage (R5-S2/R5-S3): off-cells stay byte-identical to pre-K2 (FR-1), and
+    appending (not prepending) keeps `spec_hash` recoverable via `cell_id.split(":",1)[0]`
+    (`rescore._read_spec_meta`)."""
+    base = f"{spec_hash[:12]}:{cell.service}:{cell.model}:r{cell.repetition}"
+    leverage = getattr(cell, "leverage", "off")
+    return base if leverage == "off" else f"{base}:lev-{leverage}"
 
 
 @dataclass
@@ -76,8 +81,10 @@ class CellResult:
     latency_s: Optional[float] = None
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
-    deterministic_skips: int = 0             # R1-S4: must be 0 for a valid benchmark cell
+    deterministic_skips: int = 0             # K2: leverage-off must be 0 (R1-S4); on-cells record it as data
     integrity_ok: bool = True
+    leverage: str = "off"                    # K2 coordinate (FR-K2-1): "off" | "on"
+    leverage_source: Optional[str] = None    # K2 (R1-S4): on-path mechanism — "routing"|"micro_prime"|"both"
     sandbox_violation: Optional[str] = None  # FR-44: a guardrail tripped scoring this cell
     error: Optional[str] = None
     defect_total: Optional[int] = None       # FR-B3: defects from the expose ledger (None = not run)
@@ -206,14 +213,31 @@ class SubprocessCellExecutor:
                               language=language, repetition=cell.repetition,
                               status=STATUS_FAILED, error=f"seed not found: {seed}")
 
+        leverage = getattr(cell, "leverage", "off")
         root = self.workdir_root or Path(tempfile.mkdtemp(prefix="obbench-"))
-        workdir = root / sandbox_dir_name(cell.service, cell.model, cell.repetition)
+        workdir = root / sandbox_dir_name(cell.service, cell.model, cell.repetition, leverage)
         workdir.mkdir(parents=True, exist_ok=True)
         output = workdir / ".startd8" / "benchmark-output"
 
         cmd = build_command(seed, workdir, output, cell.model, spec.per_cell_cap_usd,
                             repair_mode=self.repair_mode, expose_defects=self.expose_defects)
-        cmd.append("--benchmark-mode")  # FR-1/FR-27: disable deterministic cascade
+        # K2 / S3 (R2-S1): the leverage branch lives HERE (the only place benchmark-mode was appended).
+        # off → LLM-maximal (today): disable the deterministic cascade. on → engage SDK scaffolding:
+        # omit --benchmark-mode, add routing/micro-prime per spec.leverage_on_config (their combo with
+        # benchmark-mode is rejected by run_prime_workflow.py:385 — keeping them apart is the point).
+        leverage_source = None
+        if leverage == "off":
+            cmd.append("--benchmark-mode")  # FR-1/FR-27
+        else:
+            on_cfg = dict(getattr(spec, "leverage_on_config", {}) or {})
+            srcs = []
+            if on_cfg.get("routing"):
+                cmd.append("--complexity-routing")
+                srcs.append("routing")
+            if on_cfg.get("micro_prime"):
+                cmd.append("--micro-prime")
+                srcs.append("micro_prime")
+            leverage_source = "both" if len(srcs) == 2 else (srcs[0] if srcs else None)
         run = run_command(cmd, SDK_ROOT, timeout=self.per_run_timeout_s)
         metrics = extract_metrics(output)
 
@@ -230,10 +254,13 @@ class SubprocessCellExecutor:
             if dq:
                 metrics["mean_disk_quality_score"] = sum(dq) / len(dq)
 
-        # Read benchmark provenance (R1-S4 integrity) from prime-result.json.
+        # Read provenance (integrity). off-path emits `benchmark_provenance` (gated on
+        # --benchmark-mode); on-path omits --benchmark-mode so it emits `leverage_provenance`
+        # instead (R3-S1) — without that fallback an on-cell would default det_skips=0 and the
+        # skip-intensity column + integrity check would have no input data.
         det_skips, integrity_ok = 0, True
         pr = _load_json(_latest_match(output, "prime-result*.json")) or {}
-        prov = pr.get("benchmark_provenance") or {}
+        prov = pr.get("benchmark_provenance") or pr.get("leverage_provenance") or {}
         if prov:
             det_skips = int(prov.get("deterministic_skip_count", 0) or 0)
             integrity_ok = bool(prov.get("integrity_ok", True))
@@ -244,12 +271,22 @@ class SubprocessCellExecutor:
         hist_err = hist[-1].get("error") if hist else None
         err_text = hist_err or run.get("stderr_tail") or ""
 
+        # K2 status resolution (S3). Integrity gate is FAIL-CLOSED: deterministic skips are a
+        # violation for every leverage value EXCEPT the literal "on" (R1-S1 — None/"off"/unknown
+        # stay gated). `integrity_ok=false` is ALWAYS a failure, even on-cells (R2-S2: "run corrupt"
+        # ≠ "leverage used shortcuts"). On the on-path, skips are expected DATA, so a skip-heavy
+        # on-cell that produced a valid artifact must resolve OK rather than fall through to FAILED
+        # (R5-S5 — the on-path may not surface metrics.status=="success" the way the off-path does).
+        skips_are_violation = det_skips > 0 and leverage != "on"
+        produced_artifact = metrics.get("mean_disk_quality_score") is not None
         if run["timed_out"]:
             status = STATUS_TIMEOUT
-        elif not integrity_ok or det_skips > 0:
+        elif not integrity_ok or skips_are_violation:
             status = STATUS_INTEGRITY_FAIL
         elif metrics.get("status") == "success":
             status = STATUS_OK
+        elif leverage == "on" and produced_artifact and not is_infra_error(err_text):
+            status = STATUS_OK  # R5-S5: valid on-cell artifact (+ expected skips) — OK, not FAILED
         elif is_infra_error(err_text):
             status = STATUS_INFRA_FAIL  # auth/access/rate-limit — not the model's fault
         else:
@@ -319,6 +356,7 @@ class SubprocessCellExecutor:
             input_tokens=metrics.get("input_tokens"),
             output_tokens=metrics.get("output_tokens"),
             deterministic_skips=det_skips, integrity_ok=integrity_ok,
+            leverage=leverage, leverage_source=leverage_source,
             sandbox_violation=sandbox_violation,
             error=None if status == STATUS_OK else (err_text or status),
             defect_total=defect_total, defects_by_category=defects_by_category,
@@ -370,11 +408,17 @@ def resolve_generated_file(seeds_dir: Path, workdir: Path, service: str) -> Opti
     return cand if cand.exists() else None
 
 
-def sandbox_dir_name(service: str, model: str, repetition: int) -> str:
+def sandbox_dir_name(service: str, model: str, repetition: int, leverage: str = "off") -> str:
     """The per-cell sandbox directory name used by :class:`SubprocessCellExecutor`
     (``<service>-<model with ':'→'_'>-r<rep>``). Factored out so the re-scorer can
-    locate a cell's generated workdir without re-running it."""
-    return f"{service}-{model.replace(':', '_')}-r{repetition}"
+    locate a cell's generated workdir without re-running it.
+
+    K2 (R5-S2): a non-``"off"`` ``leverage`` appends ``-lev-<state>`` so off/on cells of the
+    same coordinate get **distinct workdirs** (else the on-cell overwrites the off-cell's
+    artifact and Δquality measures filesystem cross-talk). ``leverage="off"`` is unsuffixed —
+    byte-identical to pre-K2 dirs (FR-1), so rescoring existing off-only runs still resolves."""
+    base = f"{service}-{model.replace(':', '_')}-r{repetition}"
+    return base if leverage == "off" else f"{base}-lev-{leverage}"
 
 
 def reclassify_infra_failures(cells: List[CellResult]) -> int:

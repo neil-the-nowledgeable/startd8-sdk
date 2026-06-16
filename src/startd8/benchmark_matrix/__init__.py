@@ -32,7 +32,9 @@ from .runner import (
 )
 from .aggregate import (
     aggregate_cells,
+    build_leverage_delta_markdown,
     build_matrix_markdown,
+    leverage_delta,
     rank_models_by_consistency,
     rank_models_by_quality,
 )
@@ -56,7 +58,9 @@ __all__ = [
     "run_matrix",
     "sandbox_dir_name",
     "aggregate_cells",
+    "build_leverage_delta_markdown",
     "build_matrix_markdown",
+    "leverage_delta",
     "rank_models_by_consistency",
     "rank_models_by_quality",
     "CellRescore",
