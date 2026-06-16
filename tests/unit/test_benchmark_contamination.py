@@ -103,3 +103,39 @@ def test_score_pair_dissimilar_is_lower(tmp_path):
     if not (a.available and b.available):
         pytest.skip("codebleu degraded on this interpreter")
     assert b.codebleu < a.codebleu            # dissimilar scores below identical
+
+
+def test_score_run_resolves_k2_k3_sandboxes_via_cells_json(tmp_path):
+    """Review fix: with cells.json present, score_run resolves K2 (-lev-on) and K3
+    (-lead-…_drafter-…) sandboxes via sandbox_dir_name + the recorded coordinate — not fragile
+    dir-name parsing — and attributes the correct model."""
+    import json as _json
+
+    from startd8.benchmark_matrix.runner import sandbox_dir_name
+
+    run = tmp_path / "run"
+    (run / "sandboxes").mkdir(parents=True)
+    ref_root = tmp_path / "ob"
+    (ref_root / "currencyservice").mkdir(parents=True)
+    (ref_root / "currencyservice" / "server.js").write_text("function convert(){ return 1; }\n")
+
+    model, target = "anthropic:claude-opus-4-8", "src/currencyservice/server.js"
+    meta = []
+
+    def place(leverage, lead, drafter):
+        sb = run / "sandboxes" / sandbox_dir_name(
+            "currencyservice", model, 0, leverage=leverage, lead=lead, drafter=drafter)
+        (sb / target).parent.mkdir(parents=True, exist_ok=True)
+        (sb / target).write_text("function convert(){ return 2; }\n")
+        meta.append({"service": "currencyservice", "model": model, "repetition": 0,
+                     "status": "ok", "leverage": leverage, "lead": lead, "drafter": drafter})
+
+    place("on", None, None)                          # K2 on-cell → ...-lev-on
+    place("off", model, "gemini:gemini-2.5-pro")     # K3 off-diagonal → ...-lead-…_drafter-…
+    (run / "cells.json").write_text(_json.dumps(meta))
+
+    rep = score_run(run, ref_root)
+    assert rep["n_cells"] == 2
+    # both sandboxes resolved (gen+ref found — not "missing"); model attributed from cells.json
+    assert all("missing" not in c["detail"] for c in rep["cells"]), [c["detail"] for c in rep["cells"]]
+    assert all(c["service"] == "currencyservice" and c["model"] == model for c in rep["cells"])
