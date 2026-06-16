@@ -261,6 +261,7 @@ def backend(
     # an explicit --mode wins (ergonomic override). Threaded to BOTH generate and --check so a
     # deployed tree's app/settings.py is emitted and drift-checked consistently.
     deployment_mode = "installed"
+    tenant_owner_field: Optional[str] = None  # Tier B: set when deployed + a valid deployment.tenant
     app_manifest_obj = None
     if app_manifest is not None:
         from .scaffold_codegen import parse_app_manifest
@@ -304,6 +305,7 @@ def backend(
                 console.print(f"[red]error:[/red] {msg}")
             if tenant_issues:
                 raise typer.Exit(_EXIT_ERROR)
+            tenant_owner_field = effective.tenant_owner_field  # validated → drive scoped generation
         # Deployed emits the auth seam (M2); the FR-IDN-4 authenticated-but-not-isolated WARN fires
         # only until tenant isolation is declared (has_tenant), which Tier B (M3) now enables.
         findings = evaluate_coherence(
@@ -347,6 +349,7 @@ def backend(
             pages_app_dir=None if check else (out / "app"),
             authoring=pages_authoring,
             deployment_mode=deployment_mode,
+            tenant_owner_field=tenant_owner_field,
         )
     except (
         ValueError
