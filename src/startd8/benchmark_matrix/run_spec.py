@@ -75,6 +75,13 @@ class BenchmarkRunSpec(BaseModel):
     leverage_on_config: Dict[str, bool] = Field(
         default_factory=lambda: {"routing": True, "micro_prime": False})
 
+    # K3 lead/drafter role matrix (FR-K3-1/2). The (lead, drafter) pairs this run executes.
+    # None = the **diagonal** default: each model paired with itself (lead==drafter), i.e. today's
+    # single-model matrix — byte-identical hash/cells/sandboxes (FR-1). An explicit tuple of
+    # (lead, drafter) pairs runs an off-diagonal / pruned grid; the CLI expands "grid" into the full
+    # L×D list before constructing the spec (R6-S6). Diagonal ⇒ |pairs| = #models (1:1, NOT N², R6-S3).
+    role_pairs: Optional[Tuple[Tuple[str, str], ...]] = None
+
     # Scoring (FR-11): a reference string identifying the composite-quality formula in use.
     scoring_formula: str = "compile_gate+compute_disk_quality_score(0.4/0.2/0.2/0.2)"
 
@@ -145,24 +152,59 @@ class BenchmarkRunSpec(BaseModel):
             raise ValueError(f"leverage_on_config keys must be ⊆ {sorted(allowed)}; got {bad}")
         return v
 
+    @field_validator("role_pairs")
+    @classmethod
+    def _valid_role_pairs(cls, v):
+        if v is None:
+            return v
+        if not v:
+            raise ValueError("role_pairs, when set, must be non-empty (use None for the diagonal)")
+        for p in v:
+            if len(p) != 2 or not all(isinstance(x, str) and x for x in p):
+                raise ValueError(f"each role pair must be a (lead, drafter) of non-empty strings; got {p}")
+        return v
+
+    @staticmethod
+    def grid_pairs(models) -> Tuple[Tuple[str, str], ...]:
+        """The full L×D role grid for a roster (R6-S6: the CLI expands ``grid`` to this — it must
+        NOT be implied by merely listing N models, R6-S3)."""
+        return tuple((lead, drafter) for lead in models for drafter in models)
+
+    @property
+    def effective_role_pairs(self) -> Tuple[Tuple[str, str], ...]:
+        """The (lead, drafter) pairs actually run. ``role_pairs=None`` ⇒ the diagonal
+        (each model with itself) — |pairs| = #models, 1:1 not N² (R6-S3)."""
+        if self.role_pairs is None:
+            return tuple((m, m) for m in self.models)
+        return self.role_pairs
+
     # --- derived ------------------------------------------------------------
 
     @property
     def total_cells(self) -> int:
-        return (len(self.services) * len(self.models) * self.repetitions
+        # K3 (R6-S3): the role factor is |effective_role_pairs| — #models for the diagonal default
+        # (1:1, NOT N²), #models² for a full grid, len(list) for a prune. Replaces the bare #models
+        # so a `grid` run can't silently underprice (the headline K3 cost regression).
+        return (len(self.services) * len(self.effective_role_pairs) * self.repetitions
                 * len(self.leverage_states))
 
     def cells(self) -> Iterator[MatrixCell]:
-        """Deterministic iteration order: service, then model, then repetition, then **leverage
-        innermost** (R5-S1) — for each (service, model, rep) emit the leverage states back-to-back
-        so a coordinate's off/on pair is adjacent (budget-abort leaves paired prefixes, R2-S4).
-        With the default ``leverage_states=("off",)`` this yields exactly today's cells."""
+        """Deterministic iteration order: service → **role pair** (in the old model position) → rep
+        → **leverage innermost** (R5-S1: off/on adjacent per coordinate for budget-abort pairing).
+        For the diagonal default (role_pairs=None ⇒ (m,m) per model, leverage ("off",)) this yields
+        **exactly today's cells in the same order** — byte-identical (FR-1)."""
         for service in self.services:
-            for model in self.models:
+            for lead, drafter in self.effective_role_pairs:
+                is_diag = lead == drafter
                 for rep in range(self.repetitions):
                     for leverage in self.leverage_states:
-                        yield MatrixCell(service=service, model=model, repetition=rep,
-                                         leverage=leverage)
+                        yield MatrixCell(
+                            service=service, model=lead, repetition=rep, leverage=leverage,
+                            # diagonal ⇒ lead/drafter None so the cell is byte-identical to pre-K3;
+                            # off-diagonal carries both (and `model` = lead, R6-S5: off-diagonal lives
+                            # only in by_pair, never polluting the per-model views).
+                            lead=None if is_diag else lead,
+                            drafter=None if is_diag else drafter)
 
     def spec_hash(self) -> str:
         """SHA-256 of the identity-defining fields (excludes sizing-only token estimates
@@ -185,6 +227,11 @@ class BenchmarkRunSpec(BaseModel):
         if tuple(self.leverage_states) != ("off",):
             identity["leverage_states"] = list(self.leverage_states)
             identity["leverage_on_config"] = dict(sorted(self.leverage_on_config.items()))
+        # K3 (R6-S7): add the role axis ONLY when off-diagonal — a diagonal-only spec (role_pairs
+        # None) hashes byte-identically to pre-K3/pre-K2, so archived off-only runs' spec_hash (and
+        # the cell_ids embedding it) keep resolving.
+        if self.role_pairs is not None:
+            identity["role_pairs"] = [list(p) for p in self.role_pairs]
         blob = json.dumps(identity, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 

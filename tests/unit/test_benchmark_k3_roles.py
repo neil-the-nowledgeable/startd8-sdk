@@ -6,6 +6,8 @@ and CellResult role round-trip (R6-S4).
 """
 from __future__ import annotations
 
+import pytest
+
 from startd8.benchmark_matrix import CellResult, MatrixCell, cell_id, sandbox_dir_name
 from startd8.benchmark_matrix.runner import STATUS_OK
 from startd8.model_comparison import build_command
@@ -110,3 +112,104 @@ def test_cellresult_role_roundtrip():
 def test_cellresult_diagonal_defaults_none():
     c = CellResult(cell_id="x", service="cart", model="m", language="go", repetition=0, status=STATUS_OK)
     assert c.lead is None and c.drafter is None               # diagonal default
+
+
+# ============================ S6 — selection + grouping ======================
+
+from startd8.benchmark_matrix import (  # noqa: E402
+    BenchmarkRunSpec, aggregate_cells, build_role_grid_markdown, leverage_delta,
+)
+
+
+def _spec(**kw):
+    base = dict(name="t", models=("anthropic:opus", "gemini:flash"), services=("cart",), repetitions=2)
+    base.update(kw)
+    return BenchmarkRunSpec(**base)
+
+
+def test_diagonal_default_is_backward_compatible():
+    """role_pairs=None ⇒ diagonal (#models, 1:1 NOT N²); total_cells/cells/spec_hash unchanged."""
+    s = _spec()
+    assert s.effective_role_pairs == (("anthropic:opus", "anthropic:opus"),
+                                      ("gemini:flash", "gemini:flash"))
+    assert s.total_cells == 2 * 2 * 1  # 1 svc × 2 models × 2 reps × 1 lev (NOT 2²)
+    cells = list(s.cells())
+    assert len(cells) == 4 and all(c.is_diagonal and c.lead is None for c in cells)
+
+
+def test_grid_pairs_and_total_cells():
+    g = BenchmarkRunSpec.grid_pairs(("a", "b"))
+    assert g == (("a", "a"), ("a", "b"), ("b", "a"), ("b", "b"))
+    s = _spec(role_pairs=BenchmarkRunSpec.grid_pairs(("anthropic:opus", "gemini:flash")))
+    assert s.total_cells == 1 * 4 * 2 * 1   # grid = #models² = 4 role pairs
+
+
+def test_spec_hash_role_conditional():
+    """R6-S7: diagonal-only (None) hashes byte-identically to pre-K3; an off-diagonal pair changes it."""
+    diag = _spec()
+    off = _spec(role_pairs=(("anthropic:opus", "gemini:flash"),))
+    assert off.spec_hash() != diag.spec_hash()
+    # a None role_pairs adds nothing to identity (diagonal hash stable across constructions)
+    assert _spec().spec_hash() == diag.spec_hash()
+
+
+def test_cells_offdiagonal_carry_roles():
+    s = _spec(models=("a", "b"), role_pairs=(("a", "b"), ("a", "a")))
+    cells = list(s.cells())
+    offdiag = [c for c in cells if not c.is_diagonal]
+    assert all(c.lead == "a" and c.drafter == "b" and c.model == "a" for c in offdiag)
+    assert any(c.is_diagonal for c in cells)   # (a,a) diagonal present
+
+
+def test_role_pairs_validation():
+    with pytest.raises(Exception):
+        _spec(role_pairs=(("a",),))            # not a 2-tuple
+    with pytest.raises(Exception):
+        _spec(role_pairs=())                   # empty (use None for diagonal)
+
+
+# --- aggregation: off-diagonal → by_pair only; by_model diagonal-only (R6-S5) ---
+
+def _rc(model, lead=None, drafter=None, q=1.0):
+    return CellResult(cell_id="x", service="cart", model=model, language="csharp", repetition=0,
+                      status=STATUS_OK, quality=q, cost_usd=0.1, lead=lead, drafter=drafter)
+
+
+def test_aggregate_offdiagonal_only_in_by_pair():
+    cells = [
+        _rc("a", q=0.9),                       # a→a diagonal
+        _rc("b", q=0.8),                       # b→b diagonal
+        _rc("a", lead="a", drafter="b", q=0.3),  # a→b off-diagonal (poison if it leaked into by_model)
+    ]
+    agg = aggregate_cells(cells)
+    # by_model has ONLY diagonal cells (a@0.9, b@0.8) — the a→b 0.3 must not drag model 'a'
+    assert agg["by_model"]["a"]["quality_median"] == 0.9
+    assert set(agg["by_model"]) == {"a", "b"}
+    # by_pair carries all three, including the off-diagonal
+    assert "a|b" in agg["by_pair"] and agg["by_pair"]["a|b"]["quality_median"] == 0.3
+    assert "a|a" in agg["by_pair"] and "b|b" in agg["by_pair"]
+    # by_lead/by_drafter exist
+    assert "a" in agg["by_lead"] and "b" in agg["by_drafter"]
+
+
+def test_leverage_delta_ignores_offdiagonal():
+    """R6-S5: an off-diagonal cell must not enter the K2 per-model delta."""
+    cells = [
+        _rc("a", q=0.6), _rc("a", lead="a", drafter="b", q=0.1),  # diagonal off + off-diagonal
+    ]
+    for c in cells:
+        c.leverage = "off"
+    cells.append(CellResult(cell_id="y", service="cart", model="a", language="csharp", repetition=0,
+                            status=STATUS_OK, quality=0.9, cost_usd=0.1, leverage="on"))
+    d = leverage_delta(cells)
+    # only the diagonal a-off↔a-on pair counts (Δ 0.3); the a→b off-diagonal is excluded
+    assert d["n_pairs"] == 1 and d["by_model"]["a"]["delta_quality_median"] == pytest.approx(0.3)
+
+
+def test_role_grid_renders_when_offdiagonal():
+    cells = [_rc("a", q=0.9), _rc("b", q=0.8),
+             _rc("a", lead="a", drafter="b", q=0.3), _rc("b", lead="b", drafter="a", q=0.5)]
+    md = build_role_grid_markdown(aggregate_cells(cells))
+    assert "Lead × Drafter role grid" in md and "drafter" in md
+    # diagonal-only run → empty grid
+    assert build_role_grid_markdown(aggregate_cells([_rc("a"), _rc("b")])) == ""
