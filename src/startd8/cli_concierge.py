@@ -240,7 +240,8 @@ def concierge_log_friction(
             _emit_json(plan)
         else:
             w = plan["writes"][0]
-            console.print(f"[bold]log-friction[/bold] (preview) — would {w['status']=='new' and 'create' or 'append to'} {w['path']}")
+            verb = "create" if w["status"] == "new" else "append to"
+            console.print(f"[bold]log-friction[/bold] (preview) — would {verb} {w['path']}")
             console.print(f"  {w['append_text'].rstrip()}")
             console.print("\n  [dim]preview only — re-run with --apply to write[/dim]")
         return

@@ -74,13 +74,16 @@ def _allowed_roots() -> List[Path]:
 
 
 def _is_within(child: Path, parent: Path) -> bool:
-    """True if *child* (already resolved) is *parent* or lexically beneath it. Case-fold aware."""
-    try:
-        cparts = [p.casefold() for p in child.parts]
-        pparts = [p.casefold() for p in parent.parts]
-    except AttributeError:  # pragma: no cover
-        cparts, pparts = list(child.parts), list(parent.parts)
-    return cparts[: len(pparts)] == pparts
+    """True if *child* (already resolved) is *parent* or lexically beneath it.
+
+    Exact (case-sensitive) part comparison — **fail-closed**. Folding case unconditionally would
+    over-match distinct directories on a case-sensitive FS (e.g. allowlist ``/data/proj`` vs real
+    ``/data/Proj`` on Linux). On a case-insensitive FS a differently-cased allowlist entry simply
+    won't match — the user controls both the env var and the path and can align them. Write-target
+    confinement is unaffected either way: targets are built from *parent*, so they share its exact
+    prefix bytes.
+    """
+    return child.parts[: len(parent.parts)] == parent.parts
 
 
 def resolve_confined_root(project_root) -> Path:
@@ -156,6 +159,13 @@ def _stat_exists(name: str, parent_fd: int) -> bool:
         return False
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    """Write all of *data* — ``os.write`` may return after a short write."""
+    mv = memoryview(data)
+    while mv:
+        mv = mv[os.write(fd, mv):]
+
+
 def _atomic_write(parent_fd: int, parent_path: str, name: str, data: bytes) -> None:
     """Write *data* to *name* via temp+replace. The temp is created through *parent_fd*
     (`O_EXCL|O_NOFOLLOW` — confined, atomic create); the replace uses lexical paths under
@@ -169,7 +179,7 @@ def _atomic_write(parent_fd: int, parent_path: str, name: str, data: bytes) -> N
         pass
     fd = os.open(tmp, flags, 0o644, dir_fd=parent_fd)
     try:
-        os.write(fd, data)
+        _write_all(fd, data)
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -181,7 +191,7 @@ def _append(parent_fd: int, name: str, text: str) -> None:
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | _O_NOFOLLOW | _O_CLOEXEC
     fd = os.open(name, flags, 0o644, dir_fd=parent_fd)
     try:
-        os.write(fd, text.encode("utf-8"))
+        _write_all(fd, text.encode("utf-8"))
         os.fsync(fd)
     finally:
         os.close(fd)
