@@ -860,6 +860,52 @@ def derive_tasks_from_features(
     return tasks
 
 
+def _infer_file_role(file_path: str) -> str:
+    """A FILE ROLE CONSTRAINT string for an auto-split sub-task description, or "".
+
+    When a multi-file task is split into single-file sub-tasks, the parent description can mislead
+    the LLM about a non-source file's content. This appends a role constraint guiding it to the
+    correct content for the target file type (interface-only, Dockerfile, project/build config,
+    proto). (Restored into the seeds split path — it was dropped when split_oversized_tasks was
+    extracted here, orphaning the original helper.)
+    """
+    name = file_path.rsplit("/", 1)[-1]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    if name.endswith(".cs") and stem.startswith("I") and len(stem) > 1 and stem[1].isupper():
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is an INTERFACE file. "
+            f"Generate ONLY the `{stem}` interface definition with method signatures. "
+            f"Do NOT include any implementation classes."
+        )
+    if name.endswith(".java") and stem.endswith("Interface"):
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is an INTERFACE file. "
+            f"Generate ONLY the interface definition with method signatures. "
+            f"Do NOT include any implementation classes."
+        )
+    if stem.lower().startswith("dockerfile") or name.lower() == "dockerfile":
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a Dockerfile. "
+            f"Generate ONLY Docker build instructions."
+        )
+    if name.endswith((".csproj", ".sln")):
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a project configuration file. "
+            f"Generate ONLY the project/solution XML or format — no source code."
+        )
+    if name in ("build.gradle", "build.gradle.kts", "settings.gradle", "pom.xml"):
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a build configuration file. "
+            f"Generate ONLY build configuration — no source code."
+        )
+    if name.endswith(".proto"):
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a Protocol Buffer definition. "
+            f"Generate ONLY protobuf service/message definitions."
+        )
+    return ""
+
+
 def split_oversized_tasks(
     tasks: List[Dict[str, Any]],
     max_files: int = 1,
@@ -934,6 +980,7 @@ def split_oversized_tasks(
                         f"{parent_desc}\n\n"
                         f"[Auto-split from {parent_id}: implement "
                         f"`{target_file}` only.]"
+                        f"{_infer_file_role(target_file)}"
                     ),
                     "requirements_text": task.get("config", {}).get(
                         "requirements_text", ""

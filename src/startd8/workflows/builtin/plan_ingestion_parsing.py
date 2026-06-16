@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from ...logging_config import get_logger
+from ...seeds.derivation import _infer_file_role  # single source (wired into the seeds split path)
 from ...utils.code_extraction import extract_code_from_response
 from .plan_ingestion_models import (
     ComplexityScore,
@@ -647,59 +648,6 @@ def _heuristic_transform_content(parsed_plan: ParsedPlan, route: ContractorRoute
             }
         )
     return yaml.safe_dump({"tasks": tasks}, sort_keys=False)
-
-
-def _infer_file_role(file_path: str) -> str:
-    """Infer a FILE ROLE CONSTRAINT string for auto-split task descriptions.
-
-    When a multi-file task is split into single-file sub-tasks, the parent
-    description may overwhelm the per-file context.  This function returns
-    a role constraint that guides the LLM toward correct content for the
-    target file type (e.g. interface-only for IFoo.cs, Dockerfile for
-    Dockerfile).
-    """
-    name = file_path.rsplit("/", 1)[-1]
-    stem = name.rsplit(".", 1)[0] if "." in name else name
-
-    # C# interface: IFoo.cs
-    if name.endswith(".cs") and stem.startswith("I") and len(stem) > 1 and stem[1].isupper():
-        return (
-            f"\n**FILE ROLE CONSTRAINT**: `{name}` is an INTERFACE file. "
-            f"Generate ONLY the `{stem}` interface definition with method signatures. "
-            f"Do NOT include any implementation classes."
-        )
-    # Java interface: files explicitly named *Interface.java or containing "interface" in path
-    if name.endswith(".java") and stem.endswith("Interface"):
-        return (
-            f"\n**FILE ROLE CONSTRAINT**: `{name}` is an INTERFACE file. "
-            f"Generate ONLY the interface definition with method signatures. "
-            f"Do NOT include any implementation classes."
-        )
-    # Dockerfile
-    if stem.lower().startswith("dockerfile") or name.lower() == "dockerfile":
-        return (
-            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a Dockerfile. "
-            f"Generate ONLY Docker build instructions."
-        )
-    # C# project files
-    if name.endswith((".csproj", ".sln")):
-        return (
-            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a project configuration file. "
-            f"Generate ONLY the project/solution XML or format — no source code."
-        )
-    # Java build files
-    if name in ("build.gradle", "build.gradle.kts", "settings.gradle", "pom.xml"):
-        return (
-            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a build configuration file. "
-            f"Generate ONLY build configuration — no source code."
-        )
-    # Proto files
-    if name.endswith(".proto"):
-        return (
-            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a Protocol Buffer definition. "
-            f"Generate ONLY protobuf service/message definitions."
-        )
-    return ""
 
 
 def _parse_context_files(
