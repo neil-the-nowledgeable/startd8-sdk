@@ -291,11 +291,25 @@ def backend(
 
         from .scaffold_codegen.coherence import evaluate_coherence, has_errors
 
-        # Deployed mode now emits the auth seam (M2/A6) but no tenant isolation yet → the
-        # FR-IDN-4 authenticated-but-not-isolated WARN goes live (has_auth_seam, no has_tenant).
+        effective = replace(app_manifest_obj, deployment_mode=deployment_mode)
+        # B1: a `deployment.tenant` declaration must validate against the schema (model + owner_field
+        # exist, and the owner_field scopes at least one entity) before we generate scoped queries.
+        if effective.deployment_mode == "deployed" and effective.has_tenant:
+            from .backend_codegen.tenancy import validate_tenant
+
+            tenant_issues = validate_tenant(
+                schema_text, effective.tenant_model, effective.tenant_owner_field
+            )
+            for msg in tenant_issues:
+                console.print(f"[red]error:[/red] {msg}")
+            if tenant_issues:
+                raise typer.Exit(_EXIT_ERROR)
+        # Deployed emits the auth seam (M2); the FR-IDN-4 authenticated-but-not-isolated WARN fires
+        # only until tenant isolation is declared (has_tenant), which Tier B (M3) now enables.
         findings = evaluate_coherence(
-            replace(app_manifest_obj, deployment_mode=deployment_mode),
+            effective,
             has_auth_seam=(deployment_mode == "deployed"),
+            has_tenant=effective.has_tenant,
         )
         for f in findings:
             color = "red" if f.severity == "ERROR" else "yellow"

@@ -69,14 +69,46 @@ def test_deployment_mode_invalid_value_fails_loud():
 
 
 def test_deployment_unknown_subkey_fails_loud():
-    # Tier-B `tenant` is intentionally not accepted yet — strict-key discipline holds.
     with pytest.raises(ValueError, match="unknown keys"):
-        parse_app_manifest("deployment:\n  mode: deployed\n  tenant: User\n")
+        parse_app_manifest("deployment:\n  mode: deployed\n  bogus: 1\n")
 
 
 def test_deployment_block_must_be_a_mapping():
     with pytest.raises(ValueError, match="`deployment` must be a mapping"):
         parse_app_manifest("deployment: 5\n")
+
+
+# --- Tier B: deployment.tenant declaration (M3 / FR-TEN-2) ---------------------------------------
+
+def test_tenant_absent_by_default():
+    m = parse_app_manifest("deployment:\n  mode: deployed\n")
+    assert m.tenant_model is None and m.tenant_owner_field is None and m.has_tenant is False
+
+
+def test_tenant_parses():
+    m = parse_app_manifest(
+        "deployment:\n  mode: deployed\n  tenant:\n    model: User\n    owner_field: owner_id\n"
+    )
+    assert m.tenant_model == "User" and m.tenant_owner_field == "owner_id" and m.has_tenant is True
+
+
+def test_tenant_must_be_a_mapping():
+    with pytest.raises(ValueError, match="`deployment.tenant` must be a mapping"):
+        parse_app_manifest("deployment:\n  mode: deployed\n  tenant: User\n")
+
+
+def test_tenant_requires_model_and_owner_field():
+    with pytest.raises(ValueError, match="owner_field"):
+        parse_app_manifest("deployment:\n  mode: deployed\n  tenant:\n    model: User\n")
+    with pytest.raises(ValueError, match="model"):
+        parse_app_manifest("deployment:\n  mode: deployed\n  tenant:\n    owner_field: owner_id\n")
+
+
+def test_tenant_unknown_subkey_fails_loud():
+    with pytest.raises(ValueError, match="unknown keys"):
+        parse_app_manifest(
+            "deployment:\n  mode: deployed\n  tenant:\n    model: User\n    owner_field: o\n    x: 1\n"
+        )
 
 
 def test_render_is_byte_identical_and_full_set():
