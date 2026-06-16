@@ -165,6 +165,41 @@ def build_friction_entry(
     }
 
 
+def compute_drift(plan: Dict[str, Any], project_root) -> Dict[str, Any]:
+    """FR-C15 idempotency/drift verdict. **CLI-only — reads existing files** (never wired to MCP,
+    so the FR-C3a disclosure bound is not crossed: the human-run CLI reads at its own privilege).
+
+    Per template file (``new`` writes): ``matches`` (== template) / ``diverged`` (exists, differs)
+    / ``absent``. Verdict: ``drifted`` if any diverged; ``partial`` if any absent and none
+    diverged; ``complete`` if all match.
+    """
+    root = Path(project_root).expanduser()
+    files: List[Dict[str, str]] = []
+    diverged = absent = 0
+    for w in plan.get("writes", []):
+        if w.get("action") != ACTION_NEW:
+            continue
+        target = root / w["path"]
+        if not target.exists():
+            state = "absent"; absent += 1
+        elif target.read_text(encoding="utf-8") == (w.get("content") or ""):
+            state = "matches"
+        else:
+            state = "diverged"; diverged += 1
+        files.append({"path": w["path"], "state": state})
+    verdict = "drifted" if diverged else ("partial" if absent else "complete")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "action": "instantiate-kickoff",
+        "mode": "check",
+        "project_root": str(root),
+        "verdict": verdict,
+        "diverged": diverged,
+        "absent": absent,
+        "files": files,
+    }
+
+
 def to_planned_writes(plan: Dict[str, Any]) -> List[PlannedWrite]:
     """Convert a WritePlan dict (from a builder) into safe-writer `PlannedWrite`s (CLI uses this)."""
     out: List[PlannedWrite] = []

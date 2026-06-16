@@ -163,3 +163,22 @@ def test_handle_dispatch_logfriction_requires_fields(tmp_path):
 
     with pytest.raises(ConciergeError):
         handle_concierge_tool("log-friction", tmp_path)  # missing required fields
+
+
+def test_mcp_path_writes_nothing_for_any_action(tmp_path):
+    """FR-C12 conformance — the MCP-reachable path (handle_concierge_tool, which the @mcp.tool
+    wrapper only JSON-serializes) performs ZERO writes for every action, proving readOnlyHint."""
+    from startd8.concierge import handle_concierge_tool
+
+    (tmp_path / "docs" / "kickoff").mkdir(parents=True)
+    (tmp_path / "docs" / "kickoff" / "KICKOFF_INTRO.md").write_text("seed", encoding="utf-8")
+
+    def snapshot():
+        return {str(p): p.stat().st_mtime_ns for p in tmp_path.rglob("*") if p.is_file()}
+
+    before = snapshot()
+    handle_concierge_tool("survey", tmp_path)
+    handle_concierge_tool("assess", tmp_path)
+    handle_concierge_tool("instantiate-kickoff", tmp_path, posture="prototype")
+    handle_concierge_tool("log-friction", tmp_path, friction="f", what_happened="w", implication="i")
+    assert snapshot() == before  # no new files, no content/mtime change — the MCP path never writes

@@ -526,22 +526,33 @@ class StatusInput(BaseModel):
 
 
 class ConciergeAction(str, Enum):
-    """v1 read-only Concierge actions. Write/derive actions are deferred (v0.3)."""
+    """Concierge actions. Over MCP all are read/preview-only — the CLI is the only writer (OQ-7)."""
     SURVEY = "survey"
     ASSESS = "assess"
+    INSTANTIATE_KICKOFF = "instantiate-kickoff"
+    LOG_FRICTION = "log-friction"
 
 
 class ConciergeInput(BaseModel):
-    """Input for the project-side onboarding-assist tool (read-only in v1)."""
+    """Input for the project-side onboarding-assist tool. Over MCP every action is preview-only
+    (FR-C3): survey/assess read; instantiate-kickoff/log-friction return a planned-write
+    descriptor and never touch disk (only the CLI applies)."""
     model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     action: ConciergeAction = Field(
-        description="survey = brownfield triage of a project; assess = onboarding-readiness report",
+        description="survey/assess = read reports; instantiate-kickoff/log-friction = preview the planned writes",
     )
     project_root: Optional[str] = Field(
         default=None,
-        description="Path to the project to inspect (default: server PROJECT_ROOT). Read-only.",
+        description="Path to the project to inspect (default: server PROJECT_ROOT). Read-only over MCP.",
     )
+    # instantiate-kickoff
+    posture: Optional[str] = Field(default=None, description="prototype | production (instantiate-kickoff)")
+    with_authoring: bool = Field(default=False, description="Also project the authoring trio (instantiate-kickoff)")
+    # log-friction
+    friction: Optional[str] = Field(default=None, description="The friction encountered (log-friction)")
+    what_happened: Optional[str] = Field(default=None, description="What happened (log-friction)")
+    implication: Optional[str] = Field(default=None, description="Implication for the SDK/role (log-friction)")
 
 
 class TaskListInput(BaseModel):
@@ -2268,11 +2279,16 @@ async def startd8_concierge(params: ConciergeInput) -> str:
         "event": "tool.start", "tool": "startd8_concierge", "request_id": request_id,
         "params": {"action": action, "project_root": project_root},
     })
+    extra = {"with_authoring": params.with_authoring}
+    for _f in ("posture", "friction", "what_happened", "implication"):
+        _v = getattr(params, _f, None)
+        if _v is not None:
+            extra[_f] = _v
     try:
         with _redirect_stdout_to_stderr():
             _ensure_sdk_available()
             from startd8.concierge import handle_concierge_tool
-            result = handle_concierge_tool(action, project_root)
+            result = handle_concierge_tool(action, project_root, **extra)
         _emit_event({
             "event": "tool.end", "tool": "startd8_concierge", "request_id": request_id,
             "duration_ms": int((time.perf_counter() - started) * 1000),
