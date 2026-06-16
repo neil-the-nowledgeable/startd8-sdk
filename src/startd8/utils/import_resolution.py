@@ -105,10 +105,15 @@ def discover_sibling_modules(
     modules: Set[str] = set()
     if not parent.is_dir():
         return modules
-    # Register the parent directory itself as a local package so qualified
-    # intra-service imports (e.g., `from emailservice.logger import X`)
-    # resolve when the file is inside that directory.
-    if parent.name and parent.name != ".":
+    # DET-IR-1: the *self-referential parent-as-package* import — e.g.
+    # `from emailservice.email_server import X` from inside `emailservice/` — only resolves
+    # at runtime when `emailservice/` is a real package (`__init__.py` present). In a flat
+    # layout it does not, and must be flagged so REQ-SR-200 can rewrite it to the flat
+    # sibling form (`from email_server import X`). Scope: ONLY the parent name is gated.
+    # Sibling sub-directories stay unconditional — `import utils` of a sibling dir is a
+    # valid Python-3 namespace-package import and must NOT be flagged. Sibling `.py` file
+    # stems are likewise always valid local modules.
+    if parent.name and parent.name != "." and (parent / "__init__.py").exists():
         modules.add(parent.name)
     for child in parent.iterdir():
         if child.suffix == ".py" and child.name != abs_path.name:
