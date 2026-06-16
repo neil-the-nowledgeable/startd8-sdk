@@ -91,6 +91,11 @@ def aggregate_cells(cells: List[CellResult], pass_threshold: float = DEFAULT_PAS
         "by_service_model": {f"{s}|{m}": v for (s, m), v in
                              _group(lambda c: (c.service, c.model)).items()},
         "by_model": _group(lambda c: c.model),
+        # K2 (R3-S5): per-(model, leverage) so consistency (FR-K1-2) can be read per leverage state
+        # — pooling off+on conflates integrity-gated off runs with skip-heavy on runs into one IQR,
+        # misattributing leverage to model reliability.
+        "by_model_leverage": {f"{m}|{lev}": v for (m, lev), v in
+                              _group(lambda c: (c.model, getattr(c, "leverage", "off"))).items()},
         "by_language": _group(lambda c: c.language),
         "by_service": _group(lambda c: c.service),
     }
@@ -114,9 +119,13 @@ def rank_models_by_consistency(agg: Dict) -> List[tuple]:
     Complements ``rank_models_by_quality`` (peak); both are views over the SAME per-model
     aggregates (no new per-cell data). Missing values sort last.
     """
-    rows = []
-    for model, s in agg["by_model"].items():
-        rows.append((model, s["pass_rate"], s["quality_iqr"], s["n_scored"], s["n"]))
+    return _consistency_rows(agg["by_model"])
+
+
+def _consistency_rows(by_model: Dict) -> List[tuple]:
+    """Rank a model-keyed summary dict by reliability (pass-rate, then tightest IQR)."""
+    rows = [(model, s["pass_rate"], s["quality_iqr"], s["n_scored"], s["n"])
+            for model, s in by_model.items()]
     rows.sort(
         key=lambda r: (
             -(r[1] if r[1] is not None else -1.0),       # higher pass-rate first
@@ -148,21 +157,38 @@ def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
             f"| {i} | `{model}` | {f(s['quality_median'])} | {f(s['quality_iqr'])} | "
             f"{f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {f(s['cost_total_usd'],4)} |"
         )
+    # K2×K1 (R3-S5): when both leverage states ran, pooling off+on per model would conflate the
+    # integrity-gated off arm with the skip-heavy on arm into one IQR. Render consistency **per
+    # leverage state** instead (the off arm is the fair single-state baseline; the on arm follows).
+    bml = agg.get("by_model_leverage") or {}
+    k2_states = sorted({k.split("|", 1)[1] for k in bml if "|" in k})
+    consistency_groups = []
+    if len(k2_states) > 1:
+        for lev in k2_states:
+            sub = {k.split("|", 1)[0]: v for k, v in bml.items() if k.split("|", 1)[1] == lev}
+            consistency_groups.append((f" — leverage={lev}", sub))
+    else:
+        consistency_groups.append(("", agg["by_model"]))
+
     lines += ["", "## Consistency (most reliable first)", "",
               "> Reliability over peak: ranked by pass-rate, then tightest spread (quality IQR). "
               "`scored/n` below 1 (⚠️) means some repetitions were excluded (infra/budget) — a "
-              "smaller effective sample, so read its spread with caution (FR-K1-3).", "",
-              "| Rank | Model | pass-rate | quality IQR | scored/n | catastrophic |",
-              "|---:|---|---:|---:|---:|---:|"]
-    for i, (model, _pr, _iqr, _ns, _n) in enumerate(rank_models_by_consistency(agg), 1):
-        s = agg["by_model"][model]
-        def f(x, p=3):
-            return f"{x:.{p}f}" if isinstance(x, (int, float)) else "N/A"
-        flag = " ⚠️" if s["n_scored"] < s["n"] else ""
-        lines.append(
-            f"| {i} | `{model}` | {f(s['pass_rate'])} | {f(s['quality_iqr'])} | "
-            f"{s['n_scored']}/{s['n']}{flag} | {s['catastrophic_count']}/{s['n']} |"
-        )
+              "smaller effective sample, so read its spread with caution (FR-K1-3)."
+              + (" **K2 active: split per leverage state — pooling would conflate leverage with "
+                 "reliability (R3-S5).**" if len(k2_states) > 1 else "")]
+    for suffix, by_model in consistency_groups:
+        lines += ["", f"### Consistency{suffix}" if suffix else "",
+                  "| Rank | Model | pass-rate | quality IQR | scored/n | catastrophic |",
+                  "|---:|---|---:|---:|---:|---:|"]
+        for i, (model, _pr, _iqr, _ns, _n) in enumerate(_consistency_rows(by_model), 1):
+            s = by_model[model]
+            def f(x, p=3):
+                return f"{x:.{p}f}" if isinstance(x, (int, float)) else "N/A"
+            flag = " ⚠️" if s["n_scored"] < s["n"] else ""
+            lines.append(
+                f"| {i} | `{model}` | {f(s['pass_rate'])} | {f(s['quality_iqr'])} | "
+                f"{s['n_scored']}/{s['n']}{flag} | {s['catastrophic_count']}/{s['n']} |"
+            )
     lines += ["", "## By language (polyglot view)", "",
               "| Language | quality (median) | pass-rate | cost $ |", "|---|---:|---:|---:|"]
     for lang, s in agg["by_language"].items():

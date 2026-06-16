@@ -12,7 +12,7 @@ from startd8.benchmark_matrix import (
     BenchmarkRunSpec,
     CellResult,
     MatrixCell,
-    aggregate_cells,  # noqa: F401  (kept for parity / future use)
+    aggregate_cells,
     build_leverage_delta_markdown,
     cell_id,
     leverage_delta,
@@ -254,3 +254,57 @@ def test_run_matrix_over_leverage_states_feeds_delta():
         assert s["delta_quality_median"] == pytest.approx(0.35)   # 0.95 − 0.60
         assert s["on_skips_median"] == 3
         assert s["leverage_regressed"] is False
+
+
+# ===================== S7 remaining: R1-S5 / R4-S4 / R3-S5 ===================
+
+def test_budget_estimate_leverage_asymmetric():
+    """R1-S5: a K2 run prices off + on×multiplier (not flat); off-only unchanged."""
+    from startd8.benchmark_matrix import estimate_run_cost
+    off = estimate_run_cost(_spec(leverage_states=("off",)))
+    onoff = estimate_run_cost(_spec(leverage_states=("off", "on"), est_on_cost_multiplier=2.0))
+    assert onoff.total_cells == 2 * off.total_cells                      # cells doubled
+    for m, cpc in off.cost_per_cell_usd.items():
+        if cpc > 0:                                                     # only if model is priced
+            # off_n + on_n×2 = coords×(1+2) vs off-only coords ⇒ 3×
+            assert onoff.per_model_usd[m] == pytest.approx(off.per_model_usd[m] * 3)
+
+
+def test_metrics_export_leverage_label_only_when_k2(tmp_path):
+    """R4-S4: cost series gets a `leverage` label when on-cells exist; off-only stays unlabelled."""
+    from startd8.benchmark_matrix.metrics_export import export_run_metrics
+
+    def _write(run_dir, cells):
+        run_dir.mkdir()
+        (run_dir / "run-spec.json").write_text('{"spec_hash": "abcdef012345", "name": "t"}')
+        (run_dir / "cells.json").write_text(__import__("json").dumps(cells))
+        (run_dir / "aggregate.json").write_text(
+            '{"by_model": {"m": {"cost_total_usd": 0.5, "quality_median": 1.0, "pass_rate": 1.0}}}')
+
+    base = dict(service="s", model="m", language="go", status="ok", quality=1.0)
+    off_dir = tmp_path / "off"
+    _write(off_dir, [{**base, "cost_usd": 0.5, "leverage": "off"}])
+    assert "leverage=" not in export_run_metrics(off_dir)               # unchanged for off-only
+
+    k2_dir = tmp_path / "k2"
+    _write(k2_dir, [{**base, "cost_usd": 0.5, "leverage": "off"},
+                    {**base, "cost_usd": 0.3, "leverage": "on"}])
+    out = export_run_metrics(k2_dir)
+    assert 'leverage="off"' in out and 'leverage="on"' in out
+
+
+def test_consistency_split_per_leverage_when_k2():
+    """R3-S5: aggregate exposes by_model_leverage; the leaderboard splits consistency per state."""
+    from startd8.benchmark_matrix import build_matrix_markdown
+    cells = [
+        _cell("cart", "m", 0, "off", 0.6, 1.0), _cell("cart", "m", 1, "off", 0.7, 1.0),
+        _cell("cart", "m", 0, "on", 1.0, 0.3), _cell("cart", "m", 1, "on", 1.0, 0.3),
+    ]
+    agg = aggregate_cells(cells)
+    assert "m|off" in agg["by_model_leverage"] and "m|on" in agg["by_model_leverage"]
+    md = build_matrix_markdown("t", "abcdef012345", agg)
+    assert "leverage=off" in md and "leverage=on" in md   # split, not pooled
+
+    # off-only run: single pooled consistency table (no split)
+    off_only = aggregate_cells([_cell("cart", "m", 0, "off", 0.6, 1.0)])
+    assert "leverage=off" not in build_matrix_markdown("t", "abcdef012345", off_only)
