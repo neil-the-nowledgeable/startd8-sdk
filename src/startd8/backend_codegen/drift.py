@@ -315,12 +315,13 @@ def embedded_tenant_field(ondisk_text: str) -> Optional[str]:
 
 # Artifact kinds whose bytes may be tenant-scoped (Tier B). They self-describe the owner FK in their
 # header; absent → today's unscoped output. Re-rendered with the embedded tenant, schema-only.
-_TENANT_AWARE_KINDS: frozenset = frozenset({"fastapi-routers"})
+# (``fastapi-web-forms`` is NOT here — it routes through _check_forms_drift, which threads the tenant.)
+_TENANT_AWARE_KINDS: frozenset = frozenset({"fastapi-routers", "fastapi-web"})
 
 
 def _check_tenant_aware_drift(schema_text, ondisk_text, source_file, kind) -> DriftResult:
-    """Drift for a possibly tenant-scoped file (routers.py): stale if the schema changed; else byte
-    re-render using the **self-embedded owner FK** from the file's own header — no ``app.yaml``."""
+    """Drift for a possibly tenant-scoped file (routers.py / web.py): stale if the schema changed; else
+    byte re-render using the **self-embedded owner FK** from the file's own header — no ``app.yaml``."""
     current_sha = schema_sha256(schema_text)
     embedded = embedded_schema_sha(ondisk_text)
     if embedded is None:
@@ -332,8 +333,12 @@ def _check_tenant_aware_drift(schema_text, ondisk_text, source_file, kind) -> Dr
         )
     tenant = embedded_tenant_field(ondisk_text)  # None → unscoped (today's output)
     from .crud_generator import render_routers
+    from .htmx_generator import render_web
 
-    builders = {"fastapi-routers": lambda: render_routers(schema_text, source_file, tenant_owner_field=tenant)}
+    builders = {
+        "fastapi-routers": lambda: render_routers(schema_text, source_file, tenant_owner_field=tenant),
+        "fastapi-web": lambda: render_web(schema_text, source_file, None, tenant_owner_field=tenant),
+    }
     rendered = builders[kind]()
     if rendered != ondisk_text:
         return DriftResult(
@@ -597,8 +602,12 @@ def forms_stale_reason(
     return None
 
 
-def _forms_renderers():
-    """Map forms-configured kind → a ``(schema, forms, source_file, entity) -> text`` renderer."""
+def _forms_renderers(tenant: Optional[str] = None):
+    """Map forms-configured kind → a ``(schema, forms, source_file, entity) -> text`` renderer.
+
+    *tenant* (the self-embedded owner FK) threads Tier-B scoping into the forms-configured web.py
+    re-render (``fastapi-web-forms`` queries the DB and must be row-scoped, FR-TEN-2); every other
+    kind is a template/aggregator and is unscoped (server-side enforcement lives in web.py)."""
     from .htmx_generator import render_created_template, render_web
     from .flow_generator import (
         render_flow_aggregator,
@@ -612,7 +621,7 @@ def _forms_renderers():
     )
 
     return {
-        "fastapi-web-forms": lambda s, f, sf, e: render_web(s, sf, f),
+        "fastapi-web-forms": lambda s, f, sf, e: render_web(s, sf, f, tenant_owner_field=tenant),
         "htmx-created": lambda s, f, sf, e: render_created_template(s, sf, e, f),
         # flows (FR-ED-15): `e` is the flow NAME from the startd8-entity slot; aggregator ignores it.
         "fastapi-flow": lambda s, f, sf, e: render_named_flow_router(s, f, e),
@@ -641,7 +650,7 @@ def _check_forms_drift(
     if reason is not None:
         status = "tampered" if "missing" in reason else "stale"
         return DriftResult(status, DRIFT, reason)
-    renderer = _forms_renderers().get(kind)
+    renderer = _forms_renderers(embedded_tenant_field(ondisk_text)).get(kind)
     if renderer is None:
         return DriftResult("tampered", DRIFT, f"unknown forms-configured kind ({kind!r})")
     rendered = renderer(schema_text, forms_text, source_file, embedded_entity(ondisk_text))

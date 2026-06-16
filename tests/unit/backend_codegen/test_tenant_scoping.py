@@ -14,6 +14,7 @@ import pytest
 from startd8.backend_codegen import owned_file_in_sync, render_backend
 from startd8.backend_codegen.crud_generator import render_routers
 from startd8.backend_codegen.drift import check_drift, embedded_tenant_field
+from startd8.backend_codegen.htmx_generator import render_web
 
 pytestmark = pytest.mark.unit
 
@@ -74,8 +75,59 @@ def test_scoped_routers_drift_stale_and_tamper():
     assert check_drift(SCHEMA, tampered).status == "tampered"
 
 
-def test_render_backend_threads_tenant_to_routers():
+def test_render_backend_threads_tenant_to_routers_and_web():
     deployed_plain = dict(render_backend(SCHEMA, deployment_mode="deployed"))
     deployed_tenant = dict(render_backend(SCHEMA, deployment_mode="deployed", tenant_owner_field=OWNER))
-    assert "require_principal" not in deployed_plain["app/routers.py"]
+    for f in ("app/routers.py", "app/web.py"):
+        assert "require_principal" not in deployed_plain[f]
+        assert "principal" in deployed_tenant[f]
     assert "select(Note).where(Note.ownerId == principal.id)" in deployed_tenant["app/routers.py"]
+    assert "select(Note).where(Note.ownerId == principal.id)" in deployed_tenant["app/web.py"]
+
+
+# --- web.py (HTMX UI) scoping --------------------------------------------------------------------
+
+def _entity_block(web: str, name: str) -> str:
+    start = web.index(f"# --- {name} ---")
+    nxt = web.find("# --- ", start + 1)
+    return web[start:nxt] if nxt != -1 else web[start:]
+
+
+def test_unscoped_web_is_byte_identical_to_today():
+    assert render_web(SCHEMA, tenant_owner_field=None) == render_web(SCHEMA)
+    assert "# startd8-tenant:" not in render_web(SCHEMA)
+    assert "require_principal" not in render_web(SCHEMA)
+
+
+def test_web_scopes_owner_entity_every_handler():
+    text = render_web(SCHEMA, tenant_owner_field=OWNER)
+    assert f"# startd8-tenant: {OWNER}" in text
+    assert "from .auth import Principal, require_principal" in text
+    compile(text, "app/web.py", "exec")
+    note = _entity_block(text, "Note")
+    assert "select(Note).where(Note.ownerId == principal.id)" in note  # list
+    assert "obj.ownerId = principal.id" in note  # create server-sets owner
+    assert "if item is None or item.ownerId != principal.id:" in note  # detail/edit 404 guard
+    assert "if obj is None or obj.ownerId != principal.id:" in note  # update 404 guard
+    assert "if obj is not None and obj.ownerId == principal.id:" in note  # delete ownership gate
+
+
+def test_web_safety_net_no_unguarded_query_for_scoped_entity():
+    # The keystone leak-guard: in the SCOPED entity's block, NO bare ownership-free guard or
+    # unscoped select may survive (a single miss would expose another principal's rows via the UI).
+    note = _entity_block(render_web(SCHEMA, tenant_owner_field=OWNER), "Note")
+    assert "    if item is None:\n" not in note
+    assert "    if obj is None:\n" not in note
+    assert "    if obj is not None:\n" not in note
+    assert "select(Note))" not in note  # the unscoped list query must be gone
+    # ...while an UNSCOPED entity keeps the plain guards and is untouched.
+    lookup = _entity_block(render_web(SCHEMA, tenant_owner_field=OWNER), "Lookup")
+    assert "    if item is None:\n" in lookup
+    assert "require_principal" not in lookup
+
+
+def test_web_scoped_skip_hook_and_drift():
+    text = render_web(SCHEMA, tenant_owner_field=OWNER)
+    assert owned_file_in_sync(SCHEMA, text) is True  # fastapi-web: schema-only skip-hook re-derives tenant
+    tampered = text.replace("Note.ownerId == principal.id", "True")
+    assert check_drift(SCHEMA, tampered).status == "tampered"

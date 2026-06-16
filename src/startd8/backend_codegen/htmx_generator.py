@@ -45,6 +45,7 @@ from .crud_generator import _model_names, _pk_field
 from .display_manifest import parse_display
 from .filters_manifest import EntityFilter, parse_filters
 from .forms_manifest import ON_CREATE_DEFAULT, parse_forms
+from .tenancy import scoped_entities as _scoped_entities
 
 # ----------------------------------------------------------------------------- #
 # Headers
@@ -649,9 +650,18 @@ def _create_redirect(e: str, pkname: str, has_pk: bool, on_create: str) -> List[
     return [f"    return RedirectResponse({target}, status_code=303)"]
 
 
-def _list_query_lines(schema: PrismaSchema, name: str, ef: EntityFilter) -> List[str]:
-    """The filter/search query-building lines for a filtered ``list_<e>`` handler (P0-2)."""
-    lines = [f"    stmt = select({name})"]
+def _list_query_lines(
+    schema: PrismaSchema, name: str, ef: EntityFilter, owner_field: Optional[str] = None
+) -> List[str]:
+    """The filter/search query-building lines for a filtered ``list_<e>`` handler (P0-2).
+
+    When *owner_field* is set (Tier B), the base statement is row-scoped to the principal BEFORE any
+    facet/search filter is applied (FR-TEN-2)."""
+    base = (
+        f"    stmt = select({name}).where({name}.{owner_field} == principal.id)"
+        if owner_field else f"    stmt = select({name})"
+    )
+    lines = [base]
     for field in ef.facets:
         f = schema.model(name).field(field)
         lines.append(f'    _v = request.query_params.get("{field}")')
@@ -678,7 +688,7 @@ def _list_query_lines(schema: PrismaSchema, name: str, ef: EntityFilter) -> List
 
 def _entity_routes(
     schema: PrismaSchema, name: str, on_create: str = ON_CREATE_DEFAULT,
-    efilter: Optional[EntityFilter] = None,
+    efilter: Optional[EntityFilter] = None, owner_field: Optional[str] = None,
 ) -> str:
     e = name.lower()
     pk = _pk_field(schema, name)
@@ -692,16 +702,30 @@ def _entity_routes(
     pkkind = "str"
     pkname = pk.name if pk is not None else "id"
 
+    # Tier B (FR-TEN-2): when scoped, every DB-touching handler resolves the principal and the query
+    # is row-scoped — get/detail/edit/update/delete/confirm/created 404 on a non-owned row (never 403:
+    # existence is not leaked), list filters by owner, create server-sets it. owner_field None →
+    # today's unscoped output byte-for-byte.
+    pdep = ", principal: Principal = Depends(require_principal)" if owner_field else ""
+
+    def guard404(var: str) -> List[str]:
+        cond = f"{var} is None or {var}.{owner_field} != principal.id" if owner_field else f"{var} is None"
+        return [f"    if {cond}:", f'        raise HTTPException(status_code=404, detail="{name} not found")']
+
     lines = [
         f"# --- {name} ---",
         f"_{e}_rules = {rules}",
         "",
         "",
         f'@web_router.get("/ui/{e}", response_class=HTMLResponse)',
-        f"def list_{e}(request: Request, session: Session = Depends(get_session)):",
+        f"def list_{e}(request: Request, session: Session = Depends(get_session){pdep}):",
         *(
-            _list_query_lines(schema, name, efilter) if efilter
-            else [f"    items = list(session.exec(select({name})).all())"]
+            _list_query_lines(schema, name, efilter, owner_field) if efilter
+            else [
+                f"    items = list(session.exec(select({name}).where({name}.{owner_field} == principal.id)).all())"
+                if owner_field
+                else f"    items = list(session.exec(select({name})).all())"
+            ]
         ),
         '    ctx = {"items": items, "created": request.query_params.get("created"),',
         '           "filters": dict(request.query_params)}',
@@ -736,11 +760,12 @@ def _entity_routes(
         "",
         "",
         f'@web_router.post("/ui/{e}", response_class=HTMLResponse)',
-        f"async def create_{e}(request: Request, session: Session = Depends(get_session)):",
+        f"async def create_{e}(request: Request, session: Session = Depends(get_session){pdep}):",
         "    form = await request.form()",
         f"    data = {{k: _coerce(_{e}_rules[k][0], form.get(k))",
         f"            for k in _{e}_rules if form.get(k) not in (None, '')}}",
         f"    obj = {name}(**data)",
+        *([f"    obj.{owner_field} = principal.id"] if owner_field else []),
         "    session.add(obj)",
         "    session.commit()",
         "    session.refresh(obj)",  # uniform PK recovery: default_factory AND DB-side autoincrement
@@ -754,10 +779,9 @@ def _entity_routes(
             "",
             f'@web_router.get("/ui/{e}/{pkref}", response_class=HTMLResponse)',
             f"def detail_{e}({pkname}: {pkkind}, request: Request, "
-            f"session: Session = Depends(get_session)):",
+            f"session: Session = Depends(get_session){pdep}):",
             f"    item = session.get({name}, {pkname})",
-            "    if item is None:",
-            f'        raise HTTPException(status_code=404, detail="{name} not found")',
+            *guard404("item"),
             '    ctx = {"item": item, "created": request.query_params.get("created"),',
             '           "updated": request.query_params.get("updated")}',
             "    return templates.TemplateResponse(",
@@ -767,10 +791,9 @@ def _entity_routes(
             "",
             f'@web_router.get("/ui/{e}/{pkref}/edit", response_class=HTMLResponse)',
             f"def edit_{e}({pkname}: {pkkind}, request: Request, "
-            f"session: Session = Depends(get_session)):",
+            f"session: Session = Depends(get_session){pdep}):",
             f"    item = session.get({name}, {pkname})",
-            "    if item is None:",
-            f'        raise HTTPException(status_code=404, detail="{name} not found")',
+            *guard404("item"),
             "    return templates.TemplateResponse(",
             f'        request, "{e}/form.html", {{"item": item}}',
             "    )",
@@ -778,14 +801,14 @@ def _entity_routes(
             "",
             f'@web_router.post("/ui/{e}/{pkref}", response_class=HTMLResponse)',
             f"async def update_{e}({pkname}: {pkkind}, request: Request, "
-            f"session: Session = Depends(get_session)):",
+            f"session: Session = Depends(get_session){pdep}):",
             f"    obj = session.get({name}, {pkname})",
-            "    if obj is None:",
-            f'        raise HTTPException(status_code=404, detail="{name} not found")',
+            *guard404("obj"),
             "    form = await request.form()",
             f"    for k in _{e}_rules:",
             "        if form.get(k) not in (None, ''):",
             f"            setattr(obj, k, _coerce(_{e}_rules[k][0], form.get(k)))",
+            *([f"    obj.{owner_field} = principal.id"] if owner_field else []),  # ownership immutable
             "    session.add(obj)",
             "    session.commit()",
             # PRG on edit too (FR-FS-6): back to the detail page with the updated flash.
@@ -794,9 +817,10 @@ def _entity_routes(
             "",
             f'@web_router.post("/ui/{e}/{pkref}/delete", response_class=HTMLResponse)',
             f"def delete_{e}({pkname}: {pkkind}, "
-            f"session: Session = Depends(get_session)):",
+            f"session: Session = Depends(get_session){pdep}):",
             f"    obj = session.get({name}, {pkname})",
-            "    if obj is not None:",
+            ("    if obj is not None and obj." + owner_field + " == principal.id:"
+             if owner_field else "    if obj is not None:"),
             "        session.delete(obj)",
             "        session.commit()",
             # The hx-swap="outerHTML" replaces the row with this flash row (visible until reload),
@@ -816,10 +840,9 @@ def _entity_routes(
                 "",
                 f'@web_router.post("/ui/{e}/{pkref}/confirm", response_class=HTMLResponse)',
                 f"def confirm_{e}({pkname}: {pkkind}, request: Request, "
-                f"session: Session = Depends(get_session)):",
+                f"session: Session = Depends(get_session){pdep}):",
                 f"    obj = session.get({name}, {pkname})",
-                "    if obj is None:",
-                f'        raise HTTPException(status_code=404, detail="{name} not found")',
+                *guard404("obj"),
                 f"    obj.{cf.name} = not obj.{cf.name}",
                 "    session.add(obj)",
                 "    session.commit()",
@@ -839,10 +862,9 @@ def _entity_routes(
                 "",
                 f'@web_router.get("/ui/{e}/{pkref}/created", response_class=HTMLResponse)',
                 f"def created_{e}({pkname}: {pkkind}, request: Request, "
-                f"session: Session = Depends(get_session)):",
+                f"session: Session = Depends(get_session){pdep}):",
                 f"    item = session.get({name}, {pkname})",
-                "    if item is None:",
-                f'        raise HTTPException(status_code=404, detail="{name} not found")',
+                *guard404("item"),
                 "    return templates.TemplateResponse(",
                 f'        request, "{e}/created.html", {{"item": item}}',
                 "    )",
@@ -866,6 +888,7 @@ def render_web(
     schema_text: str,
     source_file: str = "prisma/schema.prisma",
     forms_text: Optional[str] = None,
+    tenant_owner_field: Optional[str] = None,
 ) -> str:
     """Render ``app/web.py`` — HTML-serving routes + the inline-validation endpoint.
 
@@ -881,6 +904,9 @@ def render_web(
     filters = parse_filters(forms_text, known_entities=frozenset(names))
     _validate_filter_fields(schema, filters)       # P0-2: facet/search fields must be real columns
 
+    scoped = (
+        set(_scoped_entities(schema_text, tenant_owner_field)) if tenant_owner_field else set()
+    )
     if forms_text is not None:
         from ._headers import header_forms
 
@@ -889,6 +915,8 @@ def render_web(
         )
     else:
         header = _py_header(source_file, sha, "fastapi-web")
+    if tenant_owner_field:  # self-described owner FK so the skip-hook re-renders the scoped file
+        header += f"\n# startd8-tenant: {tenant_owner_field}"
     imports = (
         "from __future__ import annotations\n\n"
         "from pathlib import Path\n\n"
@@ -898,13 +926,19 @@ def render_web(
         "from sqlmodel import Session, select\n\n"
         "from .db import get_session\n"
     )
+    if scoped:  # the principal dependency the scoped handlers resolve (auth seam, deployed-only)
+        imports += "from .auth import Principal, require_principal\n"
     if filters:  # P0-2: cast/or_ for facet membership + free-text search query building
         imports += "from sqlalchemy import String as _SAString, cast as _sa_cast, or_ as _or\n"
     if names:
         imports += "from .tables import " + ", ".join(sorted(names)) + "\n"
 
     blocks = [
-        _entity_routes(schema, n, forms.get(n, ON_CREATE_DEFAULT), filters.get(n)) for n in names
+        _entity_routes(
+            schema, n, forms.get(n, ON_CREATE_DEFAULT), filters.get(n),
+            owner_field=(tenant_owner_field if n in scoped else None),
+        )
+        for n in names
     ]
     body = _WEB_HELPERS + ("\n\n" + "\n\n\n".join(blocks) if blocks else "")
     return header + "\n\n" + imports + "\n\n" + body + "\n"
@@ -916,6 +950,7 @@ def render_ui(
     pages_text: Optional[str] = None,
     forms_text: Optional[str] = None,
     display_text: Optional[str] = None,
+    tenant_owner_field: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """All UI artifacts as ``(relative_path, text)`` pairs: web.py + base/error + per-entity templates.
 
@@ -932,7 +967,7 @@ def render_ui(
     displays, _ = parse_display(display_text, schema)
 
     out: List[Tuple[str, str]] = [
-        ("app/web.py", render_web(schema_text, source_file, forms_text)),
+        ("app/web.py", render_web(schema_text, source_file, forms_text, tenant_owner_field)),
         ("app/templates/base.html", render_base_template(schema_text, source_file, pages_text)),
         (
             "app/templates/_field_error.html",

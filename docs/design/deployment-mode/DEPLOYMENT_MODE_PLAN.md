@@ -99,9 +99,21 @@ Guiding principle from D1/D2: **bake only what security requires; bind everythin
 >   `require_principal` through the `user_routers.py` seam. Cleaner than proposed. (The FR-IDN-4
 >   per-route docstring banner is deferred — touching routers.py per-route is heavier; the auth.py
 >   banner + coherence WARN + wireframe advisory cover the intent.)
-> - **Remaining (M3):** Tier B tenancy (B1 declaration / B2 scoped queries / B3 isolation tests) — the
->   one increment that retires the `deployed-auth-no-tenant` WARN. **Note:** a deployed **boot** smoke
->   needs Postgres (FR-CFG-5 makes `deployed`+SQLite an ERROR; pool args N/A to SQLite) → PG integration test.
+> - **M3 / Tier B tenancy — CORE DONE (2026-06-16):** **B1** `deployment.tenant:{model,owner_field}` +
+>   `backend_codegen/tenancy.py` (`scoped_entities` = entities that already carry the owner FK, no
+>   synthesis; `validate_tenant`); CLI validates + threads `has_tenant` so the `deployed-auth-no-tenant`
+>   WARN is RETIRED once tenancy is declared. **B2** principal-scoped CRUD in BOTH `routers.py` (JSON
+>   API) AND `web.py` (HTMX UI): list `.where(owner==principal.id)`, get/detail/edit/update/delete/
+>   confirm/created **404 on a non-owned row** (no existence leak), create server-sets owner, update
+>   re-pins it. Owner FK **self-described** in the header (`# startd8-tenant:`) → `_check_tenant_aware_drift`
+>   for `fastapi-routers`/`fastapi-web` (skip-hook, schema-only) + threaded into `_check_forms_drift` for
+>   `fastapi-web-forms`. Unscoped output byte-identical to today. +20 tests incl. a **safety-net** that
+>   scans the scoped entity's web.py block for any unguarded query site. 545 green, ruff clean. Both
+>   paths scoped ⇒ no "WARN-retired but UI leaks" footgun.
+>   **Remaining (PG-gated follow-ups, NOT isolation holes):** the runtime cross-principal HTTP-denial
+>   proof (B3) and the generated `test_route_smoke.py` adaptation (principal header + owned seed
+>   fixtures) need a deployed Postgres env — same gate as the deployed boot smoke. The route-smoke is a
+>   generated *test*, not an app route, so the isolation itself is complete without it.
 
 ## 3. Work Breakdown — Tier A (v1 pilot)
 
