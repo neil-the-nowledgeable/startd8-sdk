@@ -27,9 +27,11 @@ from startd8.benchmark_matrix import (  # noqa: E402
     BudgetError,
     SubprocessCellExecutor,
     aggregate_cells,
+    build_leverage_delta_markdown,
     build_matrix_markdown,
     estimate_run_cost,
     format_estimate,
+    leverage_delta,
     run_matrix,
 )
 from startd8.benchmark_matrix.budget import BudgetGuard  # noqa: E402
@@ -65,9 +67,15 @@ def _build_spec(args, index) -> tuple[BenchmarkRunSpec, dict]:
     languages = {s["service"]: s["language"] for s in index["services"]}
     seed_hashes = {s["service"]: s["seed_sha256"] for s in index["services"] if s["service"] in services}
     models = args.models or (ROSTER_FLAGSHIPS if args.flagships_only else ROSTER_FULL)
+    # K2 (R4-S1): leverage axis. Default "off" ⇒ today's single-state matrix (FR-1 backward compat).
+    leverage_states = tuple(s.strip() for s in args.leverage_states.split(",") if s.strip())
+    on = args.leverage_on
+    leverage_on_config = {"routing": on in ("routing", "both"),
+                          "micro_prime": on in ("micro_prime", "both")}
     spec = BenchmarkRunSpec(
         name=args.name, models=tuple(models), services=tuple(services),
         repetitions=args.reps, budget_ceiling_usd=args.budget, per_cell_cap_usd=args.per_cell_cap,
+        leverage_states=leverage_states, leverage_on_config=leverage_on_config,
         seed_hashes=seed_hashes, proto_sha256=index.get("proto_sha256"), sdk_version=_sdk_version(),
     )
     return spec, languages
@@ -92,6 +100,15 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--expose-defects", action="store_true",
         help="Per-cell defect ledger + de-saturated quality score (FR-B3/B5).",
+    )
+    ap.add_argument(
+        "--leverage-states", default="off",
+        help="K2 (FR-K2): comma list ⊆ off,on. 'off,on' pairs each coordinate with SDK leverage "
+             "OFF (LLM-maximal) and ON for a Δquality/Δcost report. Default 'off' = today's matrix.",
+    )
+    ap.add_argument(
+        "--leverage-on", choices=["routing", "micro_prime", "both"], default="routing",
+        help="What a leverage=on cell engages (R2-S3). Default routing (complexity routing only).",
     )
     args = ap.parse_args(argv)
 
@@ -135,6 +152,19 @@ def main(argv=None) -> int:
         json.dumps([c.to_dict() for c in res.cells], indent=2), encoding="utf-8")
     (out_dir / "aggregate.json").write_text(json.dumps(agg, indent=2), encoding="utf-8")
     leaderboard = build_matrix_markdown(spec.name, spec.spec_hash(), agg)
+
+    # K2 (FR-K2-3 / R4-S2): when both leverage states ran, emit the paired delta + a
+    # machine-readable pairing audit (matched pairs + dropped coordinates with reason codes).
+    if "on" in spec.leverage_states:
+        delta = leverage_delta(res.cells)
+        (out_dir / "leverage_delta.json").write_text(json.dumps(delta, indent=2), encoding="utf-8")
+        (out_dir / "pairing_audit.json").write_text(json.dumps({
+            "spec_hash": spec.spec_hash(), "n_pairs": delta["n_pairs"],
+            "unpaired_count": delta["unpaired_count"], "unpaired": delta["unpaired"],
+            "by_model": {m: s["pairs"] for m, s in delta["by_model"].items()},
+        }, indent=2), encoding="utf-8")
+        leaderboard += "\n" + build_leverage_delta_markdown(delta)
+
     (out_dir / "leaderboard.md").write_text(leaderboard, encoding="utf-8")
 
     print("\n" + leaderboard)

@@ -92,7 +92,10 @@ def format_estimate(spec: BenchmarkRunSpec, estimate: BenchmarkCostEstimate) -> 
     lines = [
         f"Benchmark cost estimate — run '{spec.name}'  (spec {spec.spec_hash()[:12]})",
         f"  matrix: {len(spec.services)} services x {len(spec.models)} models "
-        f"x {spec.repetitions} reps = {estimate.total_cells} cells",
+        f"x {spec.repetitions} reps"
+        + (f" x {len(spec.leverage_states)} leverage ({','.join(spec.leverage_states)})"
+           if len(spec.leverage_states) > 1 else "")
+        + f" = {estimate.total_cells} cells",
         f"  sizing: ~{spec.est_input_tokens_per_cell} in / "
         f"{spec.est_output_tokens_per_cell} out tokens per cell (estimate, not billing)",
         "  budget ceiling: "

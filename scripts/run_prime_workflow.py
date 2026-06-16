@@ -941,6 +941,27 @@ def main() -> int:
                 "The result is written for debugging but the run is marked failed.",
                 skip_count,
             )
+    elif args.complexity_routing or args.micro_prime:
+        # K2 on-path provenance (R3-S1). benchmark-mode is OFF, so the block above didn't run, but
+        # SDK leverage is engaged. The matrix runner falls back to this block when
+        # `benchmark_provenance` is absent — without it on-cells default to 0 skips and the
+        # skip-intensity column / integrity check have no input data. Deterministic skips are the
+        # *expected* signal here (the leverage being measured), so they do NOT mark the run corrupt
+        # (integrity_ok stays True; the runner treats on-cell skips as data, not a violation — R5-S5).
+        _srcs = []
+        if args.complexity_routing:
+            _srcs.append("routing")
+        if args.micro_prime:
+            _srcs.append("micro_prime")
+        result_data["leverage_provenance"] = {
+            "benchmark_mode": False,
+            "leverage": "on",
+            "leverage_source": "both" if len(_srcs) == 2 else (_srcs[0] if _srcs else None),
+            "deterministic_skip_count": getattr(workflow, "deterministic_skip_count", 0),
+            "integrity_ok": True,
+            "micro_prime_enabled": bool(args.micro_prime),
+            "force_regenerate": bool(workflow.force_regenerate),
+        }
 
     if not args.dry_run:
         result_path.parent.mkdir(parents=True, exist_ok=True)

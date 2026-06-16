@@ -16,10 +16,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class MatrixCell(NamedTuple):
-    """One coordinate in the service x model x repetition matrix."""
+    """One coordinate in the service x model x repetition (x leverage) matrix.
+
+    ``leverage`` (K2) defaults to ``"off"`` so legacy 3-arg construction is unchanged and an
+    off-only run is byte-identical to pre-K2 (FR-1 backward compat).
+    """
     service: str
     model: str            # agent spec, e.g. "anthropic:claude-fable-5"
     repetition: int       # 0-based
+    leverage: str = "off"  # K2: "off" (LLM-maximal, today's default) | "on" (SDK leverage engaged)
 
 
 class BenchmarkRunSpec(BaseModel):
@@ -40,6 +45,17 @@ class BenchmarkRunSpec(BaseModel):
     # LLM-maximize execution mode (FR-1/FR-2/FR-27). Benchmark default: shortcuts off, micro-prime off.
     llm_maximize: bool = True
     micro_prime_enabled: bool = False
+
+    # K2 leverage delta (FR-K2-1). The states this run pairs each coordinate across. Default
+    # ("off",) = today's single-state matrix (FR-1 backward compat: byte-identical hash/cells/
+    # sandboxes). ("off","on") runs each coordinate twice — leverage OFF (LLM-maximal) and ON
+    # (SDK scaffolding engaged) — for a per-model Δquality/Δcost.
+    leverage_states: Tuple[str, ...] = ("off",)
+    # Which on-path mechanisms a ``leverage="on"`` cell engages (R2-S3). Names *what on-cells run*
+    # (``leverage_states`` names *which cells exist*). Validated ⊆ {routing, micro_prime}; the
+    # micro_prime+benchmark-mode combo is rejected downstream (run_prime_workflow.py:385).
+    leverage_on_config: Dict[str, bool] = Field(
+        default_factory=lambda: {"routing": True, "micro_prime": False})
 
     # Scoring (FR-11): a reference string identifying the composite-quality formula in use.
     scoring_formula: str = "compile_gate+compute_disk_quality_score(0.4/0.2/0.2/0.2)"
@@ -84,18 +100,46 @@ class BenchmarkRunSpec(BaseModel):
             raise ValueError("budget values must be > 0 when set")
         return v
 
+    @field_validator("leverage_states")
+    @classmethod
+    def _valid_leverage_states(cls, v: Tuple[str, ...]) -> Tuple[str, ...]:
+        if not v:
+            raise ValueError("leverage_states must be non-empty")
+        allowed = {"off", "on"}
+        bad = [x for x in v if x not in allowed]
+        if bad:
+            raise ValueError(f"leverage_states must be ⊆ {sorted(allowed)}; got {bad}")
+        if len(set(v)) != len(v):
+            raise ValueError(f"duplicate leverage states: {v}")
+        return v
+
+    @field_validator("leverage_on_config")
+    @classmethod
+    def _valid_on_config(cls, v: Dict[str, bool]) -> Dict[str, bool]:
+        allowed = {"routing", "micro_prime"}
+        bad = [k for k in v if k not in allowed]
+        if bad:
+            raise ValueError(f"leverage_on_config keys must be ⊆ {sorted(allowed)}; got {bad}")
+        return v
+
     # --- derived ------------------------------------------------------------
 
     @property
     def total_cells(self) -> int:
-        return len(self.services) * len(self.models) * self.repetitions
+        return (len(self.services) * len(self.models) * self.repetitions
+                * len(self.leverage_states))
 
     def cells(self) -> Iterator[MatrixCell]:
-        """Deterministic iteration order: service, then model, then repetition."""
+        """Deterministic iteration order: service, then model, then repetition, then **leverage
+        innermost** (R5-S1) — for each (service, model, rep) emit the leverage states back-to-back
+        so a coordinate's off/on pair is adjacent (budget-abort leaves paired prefixes, R2-S4).
+        With the default ``leverage_states=("off",)`` this yields exactly today's cells."""
         for service in self.services:
             for model in self.models:
                 for rep in range(self.repetitions):
-                    yield MatrixCell(service=service, model=model, repetition=rep)
+                    for leverage in self.leverage_states:
+                        yield MatrixCell(service=service, model=model, repetition=rep,
+                                         leverage=leverage)
 
     def spec_hash(self) -> str:
         """SHA-256 of the identity-defining fields (excludes sizing-only token estimates
@@ -113,6 +157,11 @@ class BenchmarkRunSpec(BaseModel):
             "seed_hashes": dict(sorted(self.seed_hashes.items())),
             "proto_sha256": self.proto_sha256,
         }
+        # K2 axis is added to the identity ONLY when it differs from the default single state, so a
+        # default off-only spec hashes byte-identically to a pre-K2 spec (FR-1 / R1-F5 backward compat).
+        if tuple(self.leverage_states) != ("off",):
+            identity["leverage_states"] = list(self.leverage_states)
+            identity["leverage_on_config"] = dict(sorted(self.leverage_on_config.items()))
         blob = json.dumps(identity, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
