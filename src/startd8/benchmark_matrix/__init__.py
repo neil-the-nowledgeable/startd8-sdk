@@ -47,6 +47,18 @@ from .combined import (
     RunInfo,
     merge_runs,
 )
+from .combined_align import (
+    AlignedInput,
+    AlignmentAction,
+    AlignmentResult,
+    align_runs,
+)
+from .combined_scorecard import (
+    build_combined_scorecard,
+    build_combined_scorecard_html,
+    write_combined_scorecard,
+    write_combined_scorecard_html,
+)
 
 __all__ = [
     "MethodSignature",
@@ -55,6 +67,14 @@ __all__ = [
     "MergeResult",
     "CellProvenance",
     "RunInfo",
+    "align_runs",
+    "AlignmentResult",
+    "AlignmentAction",
+    "AlignedInput",
+    "build_combined_scorecard",
+    "build_combined_scorecard_html",
+    "write_combined_scorecard",
+    "write_combined_scorecard_html",
     "BenchmarkRunSpec",
     "MatrixCell",
     "BenchmarkCostEstimate",

@@ -106,13 +106,19 @@ def _load_cells(run_dir: Path, *, prefer_bak: bool = False) -> Tuple[List[CellRe
     return out, name
 
 
-def merge_runs(run_dirs, *, prefer_bak: bool = False) -> MergeResult:
+def merge_runs(run_dirs, *, prefer_bak: bool = False, prealigned=None) -> MergeResult:
     """Merge cells across ``run_dirs`` (priority order, anchor first) into one canonical set.
 
     Returns a :class:`MergeResult` with the merged cells, per-cell provenance, per-run inclusion
     decisions, and any warnings. Never raises on a malformed/partial input dir (CS-16).
+
+    ``prealigned`` (optional ``{run_name: List[CellResult]}``) supplies method-aligned cells for a run
+    from the M2 alignment step (CS-15): such a run is included with those cells **regardless of its
+    on-disk signature** (alignment already brought it to the target method), bypassing the parity gate
+    for it only. Runs not in ``prealigned`` follow the normal parity gate below.
     """
     dirs = [Path(d) for d in run_dirs]
+    prealigned = prealigned or {}
     if not dirs:
         return MergeResult([], {}, [], "unknown", ("unknown", None, None), ["no run dirs given"])
 
@@ -129,6 +135,13 @@ def merge_runs(run_dirs, *, prefer_bak: bool = False) -> MergeResult:
     runs: List[RunInfo] = []
     candidates: Dict[CellKey, List[CellCandidate]] = {}
     for prio, (d, sig) in enumerate(zip(dirs, sigs)):
+        if d.name in prealigned:  # CS-15: alignment supplied method-aligned cells → include, bypass gate
+            cells = prealigned[d.name]
+            reason = "anchor (aligned)" if prio == 0 else "aligned"
+            for c in cells:
+                candidates.setdefault(_cell_key(c), []).append(CellCandidate(d.name, prio, c))
+            runs.append(RunInfo(d.name, sig, "<aligned:in-memory>", len(cells), True, reason))
+            continue
         included = sig.parity_key == anchor
         if included:
             cells, cfile = _load_cells(d, prefer_bak=prefer_bak)
