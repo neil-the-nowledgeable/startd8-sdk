@@ -144,6 +144,17 @@ def test_grid_pairs_and_total_cells():
     assert s.total_cells == 1 * 4 * 2 * 1   # grid = #models² = 4 role pairs
 
 
+def test_grid_cost_estimate_scales_with_role_factor():
+    """Review fix: estimate_run_cost must price every role pair — a grid was undercounted as
+    diagonal (~#models× too low), risking a too-small ceiling passing preflight then aborting."""
+    from startd8.benchmark_matrix import estimate_run_cost
+    m = ("anthropic:claude-opus-4-8", "gemini:gemini-2.5-pro")
+    diag = estimate_run_cost(_spec(models=m, repetitions=1))
+    grid = estimate_run_cost(_spec(models=m, repetitions=1, role_pairs=BenchmarkRunSpec.grid_pairs(m)))
+    assert diag.total_cells == 2 and grid.total_cells == 4   # 2 diagonal vs 4 grid pairs (1 svc, 1 rep)
+    assert grid.total_usd > diag.total_usd                   # scales (was equal → undercount bug)
+
+
 def test_spec_hash_role_conditional():
     """R6-S7: diagonal-only (None) hashes byte-identically to pre-K3; an off-diagonal pair changes it."""
     diag = _spec()

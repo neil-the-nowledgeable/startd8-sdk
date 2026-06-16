@@ -155,3 +155,25 @@ def test_cellresult_from_dict_roundtrips():
     c = _cell("currencyservice", "anthropic:claude-opus-4-8")
     again = CellResult.from_dict(c.to_dict())   # drops computed tokens_per_sec
     assert again == c
+
+
+def test_rescore_resolves_k2_on_cell_sandbox(tmp_path):
+    """Review fix: rescore must resolve a cell's FULL-coordinate sandbox (K2 `-lev-on` / K3
+    `-lead-…_drafter-…`). Omitting leverage/lead/drafter would miss the dir and degrade the cell."""
+    run_dir, seeds = tmp_path / "run", tmp_path / "seeds"
+    (run_dir / "sandboxes").mkdir(parents=True)
+    seeds.mkdir()
+    target = "src/currencyservice/server.js"
+    _write_seed(seeds, "currencyservice", target)
+    model = "anthropic:claude-opus-4-8"
+    # generated file lives in the K2 on-cell sandbox (`…-lev-on`)
+    sb = run_dir / "sandboxes" / sandbox_dir_name("currencyservice", model, 0, leverage="on")
+    (sb / target).parent.mkdir(parents=True, exist_ok=True)
+    (sb / target).write_text("function charge(req){ return { id: 1 }; }\n", encoding="utf-8")
+    cell = _cell("currencyservice", model, compile_ok=None, degraded=True)
+    cell.leverage = "on"
+    _write_cells(run_dir, [cell])
+
+    rep = rescore_run(run_dir, seeds, run_lint=False)
+    assert rep.cells_rescored == 1 and rep.cells_no_artifact == 0   # resolved the -lev-on sandbox
+    assert rep.cells[0].compile_ok is True

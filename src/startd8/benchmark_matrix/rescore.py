@@ -143,7 +143,13 @@ def rescore_run(
         if c.status != STATUS_OK:
             not_ok += 1
             continue
-        sandbox = run_dir / SANDBOXES_DIR / sandbox_dir_name(c.service, c.model, c.repetition)
+        # Resolve the cell's workdir with its FULL coordinate — leverage (K2) and lead/drafter (K3)
+        # are part of sandbox_dir_name, so omitting them would miss on-cell / off-diagonal sandboxes
+        # and silently degrade them on re-score (the R3-S4 / R6-S4 round-trip requirement).
+        sandbox = run_dir / SANDBOXES_DIR / sandbox_dir_name(
+            c.service, c.model, c.repetition,
+            leverage=getattr(c, "leverage", "off"),
+            lead=getattr(c, "lead", None), drafter=getattr(c, "drafter", None))
         gen = resolve_generated_file(seeds_dir, sandbox, c.service)
         if gen is None:
             no_artifact += 1
