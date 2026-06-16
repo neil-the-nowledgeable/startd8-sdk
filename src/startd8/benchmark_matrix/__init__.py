@@ -41,10 +41,20 @@ from .aggregate import (
 )
 from .rescore import CellRescore, RescoreReport, rescore_run
 from .method import MethodSignature, method_signature
+from .combined import (
+    CellProvenance,
+    MergeResult,
+    RunInfo,
+    merge_runs,
+)
 
 __all__ = [
     "MethodSignature",
     "method_signature",
+    "merge_runs",
+    "MergeResult",
+    "CellProvenance",
+    "RunInfo",
     "BenchmarkRunSpec",
     "MatrixCell",
     "BenchmarkCostEstimate",
