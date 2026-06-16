@@ -259,7 +259,13 @@ class ProviderRegistry:
             _register_if_missing("mistral", MistralProvider, "Mistral")
         except ImportError:
             pass
-    
+
+        try:
+            from .deepseek import DeepSeekProvider
+            _register_if_missing("deepseek", DeepSeekProvider, "DeepSeek")
+        except ImportError:
+            pass
+
     @classmethod
     def get_provider(cls, name: str) -> Optional[AgentProvider]:
         """

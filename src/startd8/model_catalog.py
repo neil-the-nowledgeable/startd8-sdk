@@ -131,6 +131,16 @@ class Models:
     MISTRAL_SMALL_LATEST = "mistral:mistral-small-latest"
 
     # ==========================================================================
+    # DeepSeek Models
+    # ==========================================================================
+
+    # General chat/code (DeepSeek-V3 class) — strong cost position
+    DEEPSEEK_CHAT = "deepseek:deepseek-chat"
+
+    # Reasoning (DeepSeek-R1 class)
+    DEEPSEEK_REASONER = "deepseek:deepseek-reasoner"
+
+    # ==========================================================================
     # Recommended Defaults by Use Case
     # ==========================================================================
 
@@ -344,6 +354,19 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         tier="fast",
         capabilities={"text", "code"},
     ),
+    # DeepSeek
+    "deepseek-chat": ModelInfo(
+        provider="deepseek",
+        model_id="deepseek-chat",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "deepseek-reasoner": ModelInfo(
+        provider="deepseek",
+        model_id="deepseek-reasoner",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
     # Ollama local models
     "startd8-coder": ModelInfo(
         provider="ollama",
@@ -472,6 +495,13 @@ def get_latest_model(
             "balanced": Models.MISTRAL_MEDIUM_LATEST,
             "fast": Models.MISTRAL_SMALL_LATEST,
             "mini": Models.MISTRAL_SMALL_LATEST,
+        },
+        "deepseek": {
+            "flagship": Models.DEEPSEEK_CHAT,
+            "balanced": Models.DEEPSEEK_CHAT,
+            "fast": Models.DEEPSEEK_CHAT,
+            "mini": Models.DEEPSEEK_CHAT,
+            "reasoning": Models.DEEPSEEK_REASONER,
         },
         "ollama": {
             "flagship": Models.STARTD8_CODER,
