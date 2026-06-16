@@ -162,6 +162,7 @@ def run_matrix(
             result.cells.append(CellResult(
                 cell_id=cid, service=cell.service, model=cell.model, language=lang,
                 repetition=cell.repetition, status=STATUS_BUDGET_SKIP,
+                leverage=getattr(cell, "leverage", "off"),  # K2: keep coord for pairing audit (R2-S4)
                 error="cumulative budget exhausted before this cell ran",
             ))
             result.skipped_cells += 1

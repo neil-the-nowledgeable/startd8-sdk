@@ -225,3 +225,32 @@ def test_regressed_flag_and_branch_divergence():
     assert s["leverage_regressed"] is True
     assert s["branch_divergent_pairs"] == 1            # R5-S4: scorer-confounded pair flagged
     assert "Leverage delta" in build_leverage_delta_markdown(leverage_delta(cells))
+
+
+# ===================== end-to-end: spec.cells → run_matrix → delta ===========
+
+def test_run_matrix_over_leverage_states_feeds_delta():
+    """Full flow: a 2-state spec iterates paired cells through run_matrix; the resulting cells
+    produce a leverage delta. Fake executor (no LLM) — quality is a function of leverage."""
+    from startd8.benchmark_matrix import run_matrix
+
+    spec = _spec(models=("anthropic:opus", "gemini:flash"), services=("cartservice",),
+                 repetitions=2, leverage_states=("off", "on"), budget_ceiling_usd=1000.0)
+
+    def fake_executor(cell, spec, language):
+        q = 0.6 if cell.leverage == "off" else 0.95   # leverage helps in this fixture
+        return CellResult(
+            cell_id=cell_id(spec.spec_hash(), cell), service=cell.service, model=cell.model,
+            language=language, repetition=cell.repetition, status=STATUS_OK, quality=q,
+            cost_usd=(1.0 if cell.leverage == "off" else 0.4), leverage=cell.leverage,
+            deterministic_skips=(3 if cell.leverage == "on" else 0))
+
+    res = run_matrix(spec, fake_executor, languages={"cartservice": "csharp"}, preflight=False)
+    assert len(res.cells) == 8                        # 1 svc × 2 models × 2 reps × 2 states
+    d = leverage_delta(res.cells)
+    assert d["n_pairs"] == 4 and d["unpaired_count"] == 0
+    for m in ("anthropic:opus", "gemini:flash"):
+        s = d["by_model"][m]
+        assert s["delta_quality_median"] == pytest.approx(0.35)   # 0.95 − 0.60
+        assert s["on_skips_median"] == 3
+        assert s["leverage_regressed"] is False
