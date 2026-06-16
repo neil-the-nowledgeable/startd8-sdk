@@ -27,6 +27,8 @@ probe still degrades honestly (FR-32) if a parser is missing/mismatched — it n
 """
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -149,22 +151,45 @@ def score_run(run_dir, reference_root, *, services: Optional[Dict] = None) -> Di
     sandboxes = run_dir / "sandboxes"
     cells: List[ContaminationScore] = []
 
-    # Discover (service, model, rep) from sandbox dir names: "<service>-<model _>-r<rep>".
-    for sb in sorted(p for p in sandboxes.glob("*-r*") if p.is_dir()) if sandboxes.exists() else []:
-        name = sb.name
-        svc = next((s for s in services if name.startswith(s + "-")), None)
-        if svc is None:
-            continue
-        rest = name[len(svc) + 1:]
-        if "-r" not in rest:
-            continue
-        model = rest.rsplit("-r", 1)[0].replace("_", ":", 1)
+    def _score(svc: str, model: Optional[str], sb: Path) -> None:
         lang, ext = services[svc]
         ref = resolve_main_source(reference_root / svc, ext)
         gen = resolve_main_source(sb, ext)
         sc = score_pair(gen, ref, lang)
-        sc.service, sc.model = svc, model
+        sc.service, sc.model = svc, (model or "")
         cells.append(sc)
+
+    cells_json = run_dir / "cells.json"
+    if cells_json.exists():
+        # Authoritative path: read each cell's recorded coordinate and resolve its sandbox via the
+        # SAME sandbox_dir_name that created it — no dir-name parsing, so the K2 (`-lev-`) and K3
+        # (`-lead-…_drafter-…`) suffixes, and a literal '-r' inside an agent slug, are all handled
+        # correctly (the glob+parse below cannot disambiguate those).
+        from .runner import sandbox_dir_name
+        try:
+            recorded = json.loads(cells_json.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            recorded = []
+        for c in recorded:
+            svc = c.get("service")
+            if svc not in services:
+                continue
+            sb = sandboxes / sandbox_dir_name(
+                svc, c.get("model"), int(c.get("repetition", 0) or 0),
+                leverage=c.get("leverage", "off"), lead=c.get("lead"), drafter=c.get("drafter"))
+            _score(svc, c.get("model"), sb)
+    elif sandboxes.exists():
+        # Legacy fallback (no cells.json): discover by globbing + parse. Model = everything up to the
+        # FIRST `-r<digit>` (the rep delimiter); any K2/K3 suffix lands after and is ignored. Requires
+        # a digit after `-r` so a hyphenated model token (e.g. `gpt-4-realtime`) isn't mis-split.
+        for sb in sorted(p for p in sandboxes.glob("*-r*") if p.is_dir()):
+            name = sb.name
+            svc = next((s for s in services if name.startswith(s + "-")), None)
+            if svc is None:
+                continue
+            m = re.match(r"^(?P<model>.+?)-r\d+", name[len(svc) + 1:])
+            if m:
+                _score(svc, m.group("model").replace("_", ":", 1), sb)
 
     by_model: Dict[str, List[float]] = {}
     for c in cells:
