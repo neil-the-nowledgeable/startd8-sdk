@@ -23,8 +23,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
+from startd8.benchmark_matrix.aggregate import aggregate_cells, build_matrix_markdown  # noqa: E402
 from startd8.benchmark_matrix.behavioral.execute import run_behavioral_cell  # noqa: E402
-from startd8.benchmark_matrix.runner import sandbox_dir_name  # noqa: E402
+from startd8.benchmark_matrix.runner import (  # noqa: E402
+    STATUS_FAILED,
+    STATUS_OK,
+    CellResult,
+    sandbox_dir_name,
+)
 from startd8.benchmark_matrix.sandbox import SandboxConfig  # noqa: E402
 
 SEEDS_DIR = REPO / "docs" / "design" / "model-benchmark" / "seeds"
@@ -72,16 +78,26 @@ def rescore(batch: Path, seeds_dir: Path, *, no_network: bool = True) -> dict:
             "cells": rescored, "by_model_reps": by_model}
 
 
+def _k1_matrix_view(payload: dict) -> str:
+    """K1: render the leaderboard + Consistency view over the RESCORED functional scores — the real
+    discriminating signal lives here, not in the pilot's inline report. Quality = behavioral coverage;
+    a cell that didn't score is FAILED (excluded from quality, counted catastrophic-free as non-pass)."""
+    cells = []
+    for c in payload["cells"]:
+        f = c.get("rescored_functional")
+        cells.append(CellResult(
+            cell_id=c.get("cell_id", ""), service=c["service"], model=c["model"],
+            language=c.get("language", "unknown"), repetition=c["repetition"],
+            status=STATUS_OK if f is not None else STATUS_FAILED, quality=f))
+    return build_matrix_markdown(f"{Path(payload['batch']).name} (behavioral re-score)", "", aggregate_cells(cells))
+
+
 def _report_md(payload: dict) -> str:
     lines = [f"# Behavioral re-score — `{Path(payload['batch']).name}`", "",
              f"> $0 re-score (no regeneration). Recovered {payload['recovered_cells']} cell(s) that "
-             "the persisted run had left degraded.", "",
-             "## Per-model functional coverage (OQ-T2-2)", "",
-             "| Model | median | reps |", "|---|---:|---|"]
-    for m, med in sorted(payload["by_model_median"].items()):
-        reps = [round(v, 3) if v is not None else None for v in payload["by_model_reps"][m]]
-        lines.append(f"| `{m}` | {med if med is None else round(med, 3)} | {reps} |")
-    lines += ["", "## Per-cell", ""]
+             "the persisted run had left degraded.", ""]
+    # K1 — leaderboard (peak) + consistency (reliability) over the real rescored scores.
+    lines += [_k1_matrix_view(payload), "", "## Per-cell", ""]
     for c in payload["cells"]:
         fc = c["rescored_functional"]
         fcs = "N/A" if fc is None else f"{fc:.3f}"

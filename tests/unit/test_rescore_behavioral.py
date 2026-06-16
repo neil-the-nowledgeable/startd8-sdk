@@ -31,6 +31,7 @@ def test_rescore_reports_missing_server_without_running(tmp_path):
     assert cell["rescore_note"] == "no persisted server"
     assert payload["recovered_cells"] == 0
     assert payload["by_model_median"]["anthropic:claude-opus-4-8"] is None
-    # report renders without error
+    # report renders without error, and wires in K1 (leaderboard + consistency view)
     md = m._report_md(payload)
     assert "Behavioral re-score" in md and "anthropic:claude-opus-4-8" in md
+    assert "Leaderboard" in md and "Consistency" in md  # K1 over the rescored scores
