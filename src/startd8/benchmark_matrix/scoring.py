@@ -26,6 +26,7 @@ self-grading; a fixed per-service suite is deferred past Round 1). Lint is optio
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -109,6 +110,38 @@ def classify_compile_failure(language_id: Optional[str], output: str) -> Optiona
     if not markers:
         return None
     return "missing_deps" if any(m in low for m in markers) else None
+
+
+# Python (and any) "missing import dependency" failures. Unlike Java/C# — whose single-file compile
+# *degrades* (compile_ok=None) on absent gRPC/protobuf via classify_compile_failure (FR-J2/FR-C3) —
+# Python services fail the prime workflow's IMPORT CHECKPOINT outright ("ModuleNotFoundError: No
+# module named 'demo_pb2'/'grpc_health'"), so the cell never reaches the compile gate and is recorded
+# as a catastrophic FAILED. That unfairly zeroes every model on gRPC services whose proto stubs /
+# grpc runtime aren't vendored in the offline FR-44 sandbox. This classifier lets the runner
+# re-tag such cells as deps-missing (excluded, not catastrophic) — the Tier-1 fairness analog of the
+# Java/C# degrade. Tier-2 (vendored deps) would let them actually run.
+_MISSING_IMPORT_DEPS = frozenset({
+    "grpc", "grpcio", "grpc_health", "grpc_reflection", "grpc_status", "grpc_tools",
+    "google", "protobuf",  # google.protobuf
+})
+_MODULE_NOT_FOUND_RE = re.compile(r"No module named ['\"]([\w\.]+)['\"]")
+
+
+def is_missing_deps_failure(error_text: Optional[str]) -> Optional[str]:
+    """Return the missing module when a cell FAILED because it imports a legitimately-required
+    external dependency absent in the offline sandbox (gRPC / protobuf / generated ``*_pb2`` proto
+    stubs) — NOT the model's fault. Returns None for genuine model errors, including hallucinated /
+    arbitrary missing imports (conservative: only known-external deps + proto-stub naming qualify)."""
+    if not error_text:
+        return None
+    for m in _MODULE_NOT_FOUND_RE.finditer(error_text):
+        mod = m.group(1)
+        top = mod.split(".")[0]
+        if (top in _MISSING_IMPORT_DEPS
+                or top.endswith(("_pb2", "_pb2_grpc"))
+                or mod.endswith(("_pb2", "_pb2_grpc"))):
+            return mod
+    return None
 
 
 def _csharp_csc_command() -> Optional[List[str]]:

@@ -26,6 +26,7 @@ STATUS_TIMEOUT = "timeout"
 STATUS_INTEGRITY_FAIL = "integrity_fail"  # deterministic shortcut fired (R1-S4) — not LLM-maximal
 STATUS_BUDGET_SKIP = "budget_skip"        # cumulative budget exhausted before this cell ran
 STATUS_INFRA_FAIL = "infra_fail"  # auth/access/rate-limit/connection — NOT the model's fault; excluded
+STATUS_DEPS_MISSING = "deps_missing"  # imports a required external dep (gRPC/proto stubs) absent in the offline sandbox — NOT the model's fault; excluded
                                   # from quality/pass-rate/catastrophic (like FR-32 toolchain-absent).
 
 # Substrings that mark an infrastructure/access failure rather than a model failure.
@@ -230,6 +231,8 @@ class SubprocessCellExecutor:
         hist_err = hist[-1].get("error") if hist else None
         err_text = hist_err or run.get("stderr_tail") or ""
 
+        from .scoring import is_missing_deps_failure  # local import (matches the score_file pattern)
+
         if run["timed_out"]:
             status = STATUS_TIMEOUT
         elif not integrity_ok or det_skips > 0:
@@ -238,6 +241,10 @@ class SubprocessCellExecutor:
             status = STATUS_OK
         elif is_infra_error(err_text):
             status = STATUS_INFRA_FAIL  # auth/access/rate-limit — not the model's fault
+        elif is_missing_deps_failure(err_text):
+            # gRPC/protobuf/proto-stub import absent in the offline sandbox — Tier-1 fairness analog
+            # of the Java/C# missing-dep degrade. Excluded from scoring, not catastrophic.
+            status = STATUS_DEPS_MISSING
         else:
             status = STATUS_FAILED
 

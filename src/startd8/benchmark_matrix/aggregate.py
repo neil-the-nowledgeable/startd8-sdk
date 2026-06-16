@@ -11,6 +11,7 @@ import statistics
 from typing import Dict, List, Optional, Sequence
 
 from .runner import (
+    STATUS_DEPS_MISSING,
     STATUS_INFRA_FAIL,
     STATUS_INTEGRITY_FAIL,
     STATUS_OK,
@@ -21,8 +22,10 @@ from .runner import (
 )
 
 # Cells that did not produce a fair model signal — excluded from the model's pass-rate
-# denominator and never counted catastrophic (the model isn't at fault).
-_EXCLUDED_STATUSES = (STATUS_BUDGET_SKIP, STATUS_INFRA_FAIL)
+# denominator and never counted catastrophic (the model isn't at fault). DEPS_MISSING = the
+# generated service imports a required external dep (gRPC/proto stubs) absent in the offline
+# sandbox — same fairness rationale as the Java/C# missing-dep degrade.
+_EXCLUDED_STATUSES = (STATUS_BUDGET_SKIP, STATUS_INFRA_FAIL, STATUS_DEPS_MISSING)
 
 DEFAULT_PASS_THRESHOLD = 0.5  # quality at/above this AND status ok == "pass"
 
