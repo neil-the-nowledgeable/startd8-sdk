@@ -154,12 +154,19 @@ def build_command(
     cost_budget: Optional[float],
     repair_mode: str = "apply",
     expose_defects: bool = False,
+    lead_agent: Optional[str] = None,
+    drafter_agent: Optional[str] = None,
 ) -> list[str]:
     """Per-model prime workflow command with the model pinned (FR-5/6/7/8).
 
     ``repair_mode`` / ``expose_defects`` (FR-B5) thread the quality-observability flags into the
     cell so a matrix run can drive shadow + expose; both default-off (identical to today).
+
+    K3 (FR-K3-1): ``lead_agent``/``drafter_agent`` allow distinct roles. Both default to ``model``
+    when omitted, so the **diagonal** path emits a list **byte-for-byte identical** to today (R6-S2).
     """
+    lead = lead_agent or model
+    drafter = drafter_agent or model
     cmd = [
         "python3",
         str(PRIME_WORKFLOW_SCRIPT),
@@ -170,9 +177,9 @@ def build_command(
         "--output-dir",
         str(output),
         "--lead-agent",
-        model,  # FR-7: pin both generation paths
+        lead,  # FR-7: pin both generation paths (K3: lead may differ from drafter)
         "--drafter-agent",
-        model,
+        drafter,
         "--force-regenerate",  # FR-8: no Mottainai reuse
     ]
     # Intentionally NOT passing --complexity-routing / --micro-prime (off by default).

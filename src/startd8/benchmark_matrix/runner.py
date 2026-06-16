@@ -55,13 +55,22 @@ def is_infra_error(msg: Optional[str]) -> bool:
     return any(marker in low for marker in _INFRA_ERROR_MARKERS)
 
 
+def _role_slug(agent: str) -> str:
+    """Slug an agent spec for a path/id segment — `provider:model` → `provider_model` so no
+    stray top-level `:` leaks into `cell_id` (which `rescore` recovers via `split(":",1)[0]`, R6-S9)."""
+    return agent.replace(":", "_")
+
+
 def cell_id(spec_hash: str, cell: MatrixCell) -> str:
-    """Stable per-cell identity (FR-38 idempotency-key seed). The leverage segment is **appended**
-    only for non-default leverage (R5-S2/R5-S3): off-cells stay byte-identical to pre-K2 (FR-1), and
-    appending (not prepending) keeps `spec_hash` recoverable via `cell_id.split(":",1)[0]`
-    (`rescore._read_spec_meta`)."""
+    """Stable per-cell identity (FR-38 idempotency-key seed). Segments are **appended** in a fixed
+    order — **role first, then leverage** (R6-S1) — and BOTH are omitted for the default (diagonal
+    lead==drafter, leverage off), so a default cell stays byte-identical to pre-K3/pre-K2 (FR-1).
+    Appending (not prepending) + slugging the role agents (R6-S9) keeps `spec_hash` recoverable via
+    `cell_id.split(":",1)[0]` (`rescore._read_spec_meta`)."""
     base = f"{spec_hash[:12]}:{cell.service}:{cell.model}:r{cell.repetition}"
-    leverage = getattr(cell, "leverage", "off")
+    if not getattr(cell, "is_diagonal", True):  # K3 role segment (off-diagonal only)
+        base = f"{base}:lead-{_role_slug(cell.resolved_lead)}_drafter-{_role_slug(cell.resolved_drafter)}"
+    leverage = getattr(cell, "leverage", "off")  # K2 leverage segment (on only), AFTER role
     return base if leverage == "off" else f"{base}:lev-{leverage}"
 
 
@@ -86,6 +95,8 @@ class CellResult:
     integrity_ok: bool = True
     leverage: str = "off"                    # K2 coordinate (FR-K2-1): "off" | "on"
     leverage_source: Optional[str] = None    # K2 (R1-S4): on-path mechanism — "routing"|"micro_prime"|"both"
+    lead: Optional[str] = None               # K3 coordinate (FR-K3-1/R6-S4): None ⇒ model (diagonal)
+    drafter: Optional[str] = None            # K3 coordinate (FR-K3-1/R6-S4): None ⇒ model (diagonal)
     sandbox_violation: Optional[str] = None  # FR-44: a guardrail tripped scoring this cell
     error: Optional[str] = None
     defect_total: Optional[int] = None       # FR-B3: defects from the expose ledger (None = not run)
@@ -217,12 +228,16 @@ class SubprocessCellExecutor:
 
         leverage = getattr(cell, "leverage", "off")
         root = self.workdir_root or Path(tempfile.mkdtemp(prefix="obbench-"))
-        workdir = root / sandbox_dir_name(cell.service, cell.model, cell.repetition, leverage)
+        workdir = root / sandbox_dir_name(cell.service, cell.model, cell.repetition, leverage,
+                                          lead=cell.lead, drafter=cell.drafter)
         workdir.mkdir(parents=True, exist_ok=True)
         output = workdir / ".startd8" / "benchmark-output"
 
+        # K3 (FR-K3-1): distinct lead/drafter for off-diagonal cells; None ⇒ model ⇒ byte-identical
+        # diagonal command (R6-S2).
         cmd = build_command(seed, workdir, output, cell.model, spec.per_cell_cap_usd,
-                            repair_mode=self.repair_mode, expose_defects=self.expose_defects)
+                            repair_mode=self.repair_mode, expose_defects=self.expose_defects,
+                            lead_agent=cell.lead, drafter_agent=cell.drafter)
         # K2 / S3 (R2-S1): the leverage branch lives HERE (the only place benchmark-mode was appended).
         # off → LLM-maximal (today): disable the deterministic cascade. on → engage SDK scaffolding:
         # omit --benchmark-mode, add routing/micro-prime per spec.leverage_on_config (their combo with
@@ -366,6 +381,7 @@ class SubprocessCellExecutor:
             output_tokens=metrics.get("output_tokens"),
             deterministic_skips=det_skips, integrity_ok=integrity_ok,
             leverage=leverage, leverage_source=leverage_source,
+            lead=cell.lead, drafter=cell.drafter,
             sandbox_violation=sandbox_violation,
             error=None if status == STATUS_OK else (err_text or status),
             defect_total=defect_total, defects_by_category=defects_by_category,
@@ -417,16 +433,23 @@ def resolve_generated_file(seeds_dir: Path, workdir: Path, service: str) -> Opti
     return cand if cand.exists() else None
 
 
-def sandbox_dir_name(service: str, model: str, repetition: int, leverage: str = "off") -> str:
+def sandbox_dir_name(service: str, model: str, repetition: int, leverage: str = "off",
+                     lead: Optional[str] = None, drafter: Optional[str] = None) -> str:
     """The per-cell sandbox directory name used by :class:`SubprocessCellExecutor`
     (``<service>-<model with ':'→'_'>-r<rep>``). Factored out so the re-scorer can
     locate a cell's generated workdir without re-running it.
 
-    K2 (R5-S2): a non-``"off"`` ``leverage`` appends ``-lev-<state>`` so off/on cells of the
-    same coordinate get **distinct workdirs** (else the on-cell overwrites the off-cell's
-    artifact and Δquality measures filesystem cross-talk). ``leverage="off"`` is unsuffixed —
-    byte-identical to pre-K2 dirs (FR-1), so rescoring existing off-only runs still resolves."""
+    Segments compose in a fixed order — **role first, then leverage** (R6-S1/S8) — and both are
+    omitted for the default (diagonal lead==drafter, leverage off):
+    - K3 (R6-S1): an off-diagonal cell appends ``-lead-<lead>_drafter-<drafter>`` (slugged) so
+      ``A→B``, ``B→A`` and the ``A``/``B`` diagonals resolve to **distinct workdirs**.
+    - K2 (R5-S2): a non-``"off"`` ``leverage`` appends ``-lev-<state>``.
+    ``leverage="off"`` + diagonal is unsuffixed — byte-identical to pre-K2/pre-K3 dirs (FR-1), so
+    rescoring existing runs still resolves."""
     base = f"{service}-{model.replace(':', '_')}-r{repetition}"
+    rl, rd = lead or model, drafter or model
+    if rl != rd:  # K3 role segment (off-diagonal only), before the leverage segment
+        base = f"{base}-lead-{_role_slug(rl)}_drafter-{_role_slug(rd)}"
     return base if leverage == "off" else f"{base}-lev-{leverage}"
 
 

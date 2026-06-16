@@ -16,15 +16,33 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class MatrixCell(NamedTuple):
-    """One coordinate in the service x model x repetition (x leverage) matrix.
+    """One coordinate in the service x model x repetition (x leverage x role) matrix.
 
-    ``leverage`` (K2) defaults to ``"off"`` so legacy 3-arg construction is unchanged and an
-    off-only run is byte-identical to pre-K2 (FR-1 backward compat).
+    ``leverage`` (K2) and ``lead``/``drafter`` (K3) default so legacy construction is unchanged and
+    a default cell (leverage off, diagonal lead==drafter==model) is byte-identical to pre-K2/pre-K3
+    (FR-1 backward compat). K3: ``lead``/``drafter`` are ``None`` ⇒ both resolve to ``model`` (the
+    diagonal); set them to distinct agent specs for an off-diagonal hybrid-team cell.
     """
     service: str
     model: str            # agent spec, e.g. "anthropic:claude-fable-5"
     repetition: int       # 0-based
     leverage: str = "off"  # K2: "off" (LLM-maximal, today's default) | "on" (SDK leverage engaged)
+    lead: Optional[str] = None     # K3 (FR-K3-1): lead agent; None ⇒ model (diagonal)
+    drafter: Optional[str] = None  # K3 (FR-K3-1): drafter agent; None ⇒ model (diagonal)
+
+    @property
+    def resolved_lead(self) -> str:
+        return self.lead or self.model
+
+    @property
+    def resolved_drafter(self) -> str:
+        return self.drafter or self.model
+
+    @property
+    def is_diagonal(self) -> bool:
+        """True when lead==drafter (the single-model default). The role segment is omitted from
+        cell_id/sandbox_dir_name for diagonal cells so they stay byte-identical to pre-K3."""
+        return self.resolved_lead == self.resolved_drafter
 
 
 class BenchmarkRunSpec(BaseModel):
