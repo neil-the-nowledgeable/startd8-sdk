@@ -16,8 +16,10 @@ $0, deterministic. Markdown + self-contained HTML. ``run_dirs`` are passed most-
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import statistics as _st
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -27,6 +29,8 @@ from .aggregate import aggregate_cells, rank_models_by_consistency
 from .combined import MergeResult, RunInfo, merge_runs
 
 CONTAMINATION_FILE = "contamination-probe.json"
+COMBINED_MANIFEST = "combined-manifest.json"
+MANIFEST_SCHEMA_VERSION = "1.0"
 
 
 def _merge_for(dirs, *, align: bool, seeds_dir) -> MergeResult:
@@ -199,6 +203,88 @@ def write_combined_scorecard(run_dirs, out_dir, *, now: Optional[datetime] = Non
     path = out / COMBINED_MD
     path.write_text(build_combined_scorecard(run_dirs, now=now, align=align, seeds_dir=seeds_dir),
                     encoding="utf-8")
+    return path
+
+
+# --------------------------------------------------------------------------- manifest (M4 / CS-11)
+def _sha256(path: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except Exception:  # noqa: BLE001 - a missing input file is recorded as null, not a crash
+        return None
+
+
+def _cell_key_str(key) -> str:
+    svc, model, rep = key
+    return f"{svc}|{model}|r{rep}"
+
+
+def build_combined_manifest(run_dirs, *, now: Optional[datetime] = None,
+                            align: bool = False, seeds_dir=None) -> dict:
+    """Content-addressed provenance manifest for a consolidated board (CS-11 / FR-40).
+
+    Records every input run's method signature + the SHA-256 of the exact ``cells.json`` consumed, the
+    supersedence winner (and losers) for every cell key, and the coverage summary. Deterministic given
+    the same inputs (+ injected ``now``) — the integrity twin of the board.
+    """
+    now = now or datetime.now(timezone.utc)
+    dirs = [Path(d) for d in run_dirs]
+    dir_by_name = {d.name: d for d in dirs}
+    merged = _merge_for(dirs, align=align, seeds_dir=seeds_dir)
+
+    inputs = []
+    for r in merged.runs:
+        d = dir_by_name.get(r.run)
+        sha = _sha256(d / r.cells_file) if (d is not None and r.cells_file.endswith(".json")) else None
+        inputs.append({
+            "run": r.run,
+            "included": r.included,
+            "reason": r.reason,
+            "scoring_method": r.signature.scoring_method,
+            "signature_source": r.signature.source,
+            "sdk_version": r.signature.sdk_version,
+            "cells_file": r.cells_file,
+            "n_cells": r.n_cells,
+            "cells_sha256": sha,
+        })
+
+    winners = {}
+    for key in sorted(merged.provenance, key=_cell_key_str):
+        p = merged.provenance[key]
+        winners[_cell_key_str(key)] = {
+            "winner_run": p.winner_run,
+            "winner_cell_id": p.winner_cell_id,
+            "status": p.winner_status,
+            "reason": p.reason,
+            "losers": [{"run": rn, "cell_id": cid, "status": st} for rn, cid, st in p.losers],
+        }
+
+    status_mix = Counter(c.status for c in merged.cells)
+    return {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "generated_utc": now.strftime("%Y-%m-%dT%H:%MZ"),
+        "anchor_method": merged.anchor_method,
+        "anchor_parity": list(merged.anchor_parity),
+        "coverage": {
+            "canonical_cells": len(merged.cells),
+            "models": len({k[1] for k in merged.provenance}),
+            "status_breakdown": dict(sorted(status_mix.items())),
+            "included_runs": len(merged.included_runs),
+            "excluded_runs": len(merged.excluded_runs),
+        },
+        "inputs": inputs,
+        "cell_winners": winners,
+        "warnings": list(merged.warnings),
+    }
+
+
+def write_combined_manifest(run_dirs, out_dir, *, now: Optional[datetime] = None,
+                            align: bool = False, seeds_dir=None) -> Path:
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / COMBINED_MANIFEST
+    manifest = build_combined_manifest(run_dirs, now=now, align=align, seeds_dir=seeds_dir)
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
 
 

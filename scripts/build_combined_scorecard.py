@@ -24,6 +24,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from startd8.benchmark_matrix import (  # noqa: E402
+    write_combined_manifest,
     write_combined_scorecard,
     write_combined_scorecard_html,
 )
@@ -51,6 +52,9 @@ def main(argv=None) -> int:
     if args.format in ("both", "html"):
         p = write_combined_scorecard_html(args.run_dirs, args.out, align=args.align, seeds_dir=seeds)
         print(f"wrote {p}")
+    # CS-11: always emit the content-addressed provenance manifest alongside the board.
+    p = write_combined_manifest(args.run_dirs, args.out, align=args.align, seeds_dir=seeds)
+    print(f"wrote {p}")
     return 0
 
 

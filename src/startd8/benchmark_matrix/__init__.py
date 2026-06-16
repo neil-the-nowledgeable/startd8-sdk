@@ -54,8 +54,10 @@ from .combined_align import (
     align_runs,
 )
 from .combined_scorecard import (
+    build_combined_manifest,
     build_combined_scorecard,
     build_combined_scorecard_html,
+    write_combined_manifest,
     write_combined_scorecard,
     write_combined_scorecard_html,
 )
@@ -73,8 +75,10 @@ __all__ = [
     "AlignedInput",
     "build_combined_scorecard",
     "build_combined_scorecard_html",
+    "build_combined_manifest",
     "write_combined_scorecard",
     "write_combined_scorecard_html",
+    "write_combined_manifest",
     "BenchmarkRunSpec",
     "MatrixCell",
     "BenchmarkCostEstimate",
