@@ -124,7 +124,7 @@ def test_delivery_inventory_iterations(tmp_path: Path) -> None:
     it1 = {i["section"] for i in inventory[0]["items"]}
     it2 = {i["section"] for i in inventory[1]["items"]}
     it3_labels = [i["label"] for i in inventory[2]["items"]]
-    assert it1 <= {"scaffold", "services", "entities"}
+    assert it1 <= {"scaffold", "services", "entities", "deployment"}
     assert it2 <= {"forms", "pages", "views", "completeness"}
     assert any(label.startswith("AI pass:") for label in it3_labels)  # AI items → ③
     # And it appears in the JSON contract.

@@ -25,6 +25,7 @@ from .derived import (
 )
 from .drift import check_drift, embedded_mode, is_owned_generated_file, owned_file_in_sync
 from .settings_renderer import render_settings
+from .auth_renderer import is_reference_auth_seam, render_auth_seam
 from .forms_manifest import parse_forms
 from .htmx_generator import (
     render_confirm_template,
@@ -39,7 +40,11 @@ from .pages_generator import (
     render_page_shell,
 )
 from .pages_authoring import render_authoring
-from .gates import verify_pydantic_fidelity, verify_sqlmodel_fidelity
+from .gates import (
+    verify_db_settings_contract,
+    verify_pydantic_fidelity,
+    verify_sqlmodel_fidelity,
+)
 from .provider import PydanticSQLModelProvider
 from .pydantic_renderer import PydanticRenderResult, render_pydantic_models
 from .sqlmodel_renderer import SQLModelRenderResult, render_sqlmodel_tables
@@ -84,8 +89,11 @@ __all__ = [
     "owned_file_in_sync",
     "is_owned_generated_file",
     "render_settings",
+    "render_auth_seam",
+    "is_reference_auth_seam",
     "embedded_mode",
     "PydanticSQLModelProvider",
     "verify_pydantic_fidelity",
     "verify_sqlmodel_fidelity",
+    "verify_db_settings_contract",
 ]

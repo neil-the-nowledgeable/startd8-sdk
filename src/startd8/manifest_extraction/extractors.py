@@ -697,3 +697,84 @@ def extract_app(
                 source=src, reason=f"setting {setting!r} outside the §2.7 vocabulary",
             ))
     return out or None
+
+
+# --------------------------------------------------------------------------- #
+# §2.8 Imports → imports.yaml (FR-IMP-3)
+# --------------------------------------------------------------------------- #
+
+_TRUTHY = {"yes", "y", "true", "1", "✓", "x", "✔"}
+
+
+def extract_imports(
+    doc_label: str,
+    sections: List[Section],
+    graph: EntityGraph,
+    records: List[ExtractionRecord],
+) -> Optional[dict]:
+    """§2.8 ``## Imports`` table → ``imports.yaml`` (FR-IMP-3).
+
+    Columns (closed grammar): **Entity | Format | Identity | Provenance | Extract via | Surface**.
+    The Entity is resolved against the graph; the other cross-refs (Provenance → human_inputs,
+    Extract via → ai_passes) are validated at the round-trip gate where the sibling candidates are
+    known. OQ-IMP-5: a ``source`` identity with a blank Provenance is recorded ``not_extracted`` and
+    dropped here (so the gate never sees an unsatisfiable source import).
+    """
+    sec = find_section(sections, "Imports") or find_section(sections, "Bulk import")
+    if sec is None:
+        return None  # optional section — absent ⇒ no import owned-kind (opt-in, FR-IMP-3)
+    tables = md_tables(sec.body)
+    if not tables or "entity" not in tables[0].headers:
+        return None
+    imports: Dict[str, dict] = {}
+    for i, row in enumerate(tables[0].dicts()):
+        ent_raw = strip_annotations(row.get("entity", ""))
+        if not ent_raw:
+            continue
+        src = SourceRef(doc_label, sec.heading_path, row_index=i)
+        entity = graph.resolve_entity(ent_raw)
+        if not entity:
+            records.append(ExtractionRecord(
+                "imports.yaml", f"/imports/{ent_raw}", Status.NOT_EXTRACTED, source=src,
+                reason=f"Entity column resolves to no declared entity: {ent_raw!r}",
+            ))
+            continue
+        if entity in imports:
+            records.append(ExtractionRecord(
+                "imports.yaml", f"/imports/{entity}", Status.NOT_EXTRACTED, source=src,
+                reason=f"duplicate import row for {entity!r} (first wins)",
+            ))
+            continue
+
+        fmt = strip_annotations(row.get("format", "")).lower() or "json"
+        identity = strip_annotations(row.get("identity", ""))
+        provenance = strip_annotations(row.get("provenance", ""))
+        extract_via = strip_annotations(row.get("extract via", "")) or strip_annotations(
+            row.get("extract_via", "")
+        )
+        surface_cell = strip_annotations(row.get("surface", "")).lower()
+        surface = surface_cell in _TRUTHY
+
+        # OQ-IMP-5: source-scoped identity needs a provenance field — drop loudly if missing.
+        if identity.lower().startswith("source") and not provenance:
+            records.append(ExtractionRecord(
+                "imports.yaml", f"/imports/{entity}", Status.NOT_EXTRACTED, source=src,
+                reason="identity is source-scoped but no Provenance field declared (OQ-IMP-5)",
+            ))
+            continue
+
+        spec: dict = {"format": fmt}
+        if identity:
+            spec["identity"] = identity
+        if provenance:
+            spec["provenance"] = provenance
+        if extract_via:
+            spec["extract_via"] = extract_via
+        if surface:
+            spec["surface"] = True
+        imports[entity] = spec
+        records.append(ExtractionRecord(
+            "imports.yaml", f"/imports/{entity}", Status.EXTRACTED,
+            value=f"{entity} ({fmt})", source=src,
+        ))
+    return {"imports": imports} if imports else None

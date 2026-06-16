@@ -260,3 +260,48 @@ def test_scoped_pass_runtime(tmp_path, monkeypatch):
             sys.path.remove(str(tmp_path))
         _purge()
         _drop()
+
+
+# --------------------------------------------------------------------------- #
+# FRSRP test-gen mismatch — the generated per-pass test must call the helper the
+# SCOPED harness actually defines (`_persist_scoped`), not `_persist_source`.
+# Regression for the red gate the app team filed 2026-06-11.
+# --------------------------------------------------------------------------- #
+
+def test_scoped_generated_test_calls_persist_scoped_not_source():
+    from startd8.backend_codegen.ai_layer import render_ai_pass_tests
+
+    test_src = render_ai_pass_tests(SCHEMA, MANIFEST, HUMAN)
+    harness = render_ai_pass(SCHEMA, MANIFEST, HUMAN, pass_name="draft_interviewer_message")
+    compile(test_src, "<ai_tests>", "exec")
+    # the test calls the scoped helper + provenance symbol, NOT the source-bound helper…
+    assert "_persist_scoped(" in test_src
+    assert "mod._PROVENANCE_FIELD" in test_src
+    assert "_persist_source(" not in test_src
+    # …and the helper/symbol it calls are exactly the ones the harness defines (no mismatch).
+    assert "def _persist_scoped(" in harness and "_PROVENANCE_FIELD =" in harness
+
+
+def test_scoped_generated_test_runs_green_against_harness(tmp_path):
+    """End-to-end: generate the backend for a scoped pass, then run its GENERATED test_ai_passes.py.
+    Pre-fix this failed (NameError: _persist_source) — the red gate. Post-fix it must pass."""
+    import os
+    import subprocess
+    import sys
+
+    pytest.importorskip("fastapi")
+    pytest.importorskip("sqlmodel")
+    from startd8.backend_codegen import render_backend
+
+    for rel, content in render_backend(SCHEMA, manifest_text=MANIFEST, human_inputs_text=HUMAN):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_ai_passes.py",
+         "-q", "-k", "scoped", "-p", "no:cacheprovider"],
+        cwd=str(tmp_path), env=env, capture_output=True, text=True,
+    )
+    assert r.returncode == 0, f"generated scoped test failed:\n{r.stdout}\n{r.stderr}"

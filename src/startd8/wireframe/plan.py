@@ -20,6 +20,7 @@ from ..backend_codegen.ai_layer import AiPass, parse_ai_passes, parse_human_inpu
 from ..backend_codegen.crud_generator import CANONICAL_LAYOUT
 from ..backend_codegen.derived import load_completeness_manifest
 from ..backend_codegen.forms_manifest import parse_forms
+from ..backend_codegen.imports_manifest import parse_imports
 from ..backend_codegen.crud_generator import _pk_field
 from ..backend_codegen.htmx_generator import _confirm_field, form_fields, writable_fields
 from ..backend_codegen.pages_generator import ContentPage, parse_pages
@@ -32,6 +33,7 @@ from ..frontend_codegen.schema_renderer import composite_type_names
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 from ..logging_config import get_logger
 from ..scaffold_codegen.manifest import AppManifest, parse_app_manifest
+from ..scaffold_codegen.coherence import evaluate_coherence
 from ..view_codegen.manifest import ViewSpec, parse_views
 from ..view_codegen.view_prose import parse_view_prose
 from .inputs import AssemblyInputs
@@ -74,6 +76,7 @@ _ABSENT_STATUS = {
     "human_inputs": Status.DEFAULTS,
     "completeness": Status.DEFAULTS,
     "view_prose": Status.DEFAULTS,   # absent ⇒ raw machine-name view chrome (today's behavior)
+    "imports": Status.NOT_DEFINED,   # absent ⇒ no import owned-kind (FR-IMP-3, opt-in)
 }
 
 _ABSENT_CONSEQUENCE = {
@@ -84,6 +87,7 @@ _ABSENT_CONSEQUENCE = {
     "ai_passes": "no AI service/passes",
     "human_inputs": "only server-managed omissions apply",
     "completeness": "presence-rule fallback scoring",
+    "imports": "no bulk-import owned-kind (app/importer.py) or paste/upload surface",
 }
 
 
@@ -360,7 +364,15 @@ def _scaffold_section(state: _ManifestState) -> WireframeSection:
             "persistence", state.status,
             detail=f"SQLite {manifest.db_path} (WAL), log {manifest.log_file}",
         ),
+        WireframeItem(
+            "run: local", state.status,
+            detail="run.sh — bind " + (
+                "127.0.0.1 (loopback)" if manifest.deployment_mode == "installed" else "0.0.0.0"
+            ),
+            paths=("run.sh",),
+        ),
     ]
+    paths.append("run.sh")
     if manifest.dockerfile:
         items.append(WireframeItem("container: Dockerfile", state.status, paths=("Dockerfile",)))
         paths.append("Dockerfile")
@@ -879,6 +891,45 @@ def _readiness(states: Dict[str, _ManifestState]) -> Dict[str, str]:
     return out
 
 
+def _deployment_section(app_state: "_ManifestState") -> WireframeSection:
+    """FR-CFG-6 / A8: surface the declared deployment mode, per-dimension posture, and the FR-CFG-5
+    coherence findings (advisory here — `generate backend` is the gate). Read-only, $0."""
+    manifest = app_state.parsed if app_state.parsed else parse_app_manifest(None)
+    deployed = manifest.deployment_mode == "deployed"
+    items = [
+        WireframeItem("mode", Status.PLANNED, manifest.deployment_mode),
+        WireframeItem("persistence", Status.PLANNED,
+                      "pooled shared DB via DATABASE_URL" if deployed
+                      else "local-first SQLite (WAL, single writer)"),
+        WireframeItem("bind", Status.PLANNED,
+                      "0.0.0.0 (all interfaces; container)" if deployed
+                      else "127.0.0.1 (loopback; local run.sh)"),
+        WireframeItem("schema-init", Status.PLANNED,
+                      "managed migrations (alembic upgrade head)" if deployed
+                      else "create_all on startup"),
+        WireframeItem("secrets-default", Status.PLANNED,
+                      "external manager expected (e.g. doppler)" if deployed else "local backend"),
+        WireframeItem("observability", Status.PLANNED,
+                      "centralized OTel expected" if deployed else "local rotating file logs"),
+        WireframeItem("identity", Status.PLANNED,
+                      "reference auth seam (app/auth.py, not production); tenancy deferred Tier B/M3"
+                      if deployed else "single implicit owner (no auth)"),
+    ]
+    # M2/A6: deployed emits the auth seam → the authenticated-but-not-isolated WARN goes live.
+    findings = evaluate_coherence(manifest, has_auth_seam=deployed)
+    for f in findings:
+        st = Status.INVALID if f.severity == "ERROR" else Status.PLACEHOLDER
+        items.append(WireframeItem(f"coherence:{f.code}", st, f"{f.severity}: {f.message}"))
+    sec_status = Status.INVALID if any(f.severity == "ERROR" for f in findings) else Status.PLANNED
+    consequence = "" if sec_status == Status.PLANNED else (
+        "incoherent deployment config — `generate backend` will refuse the build (FR-CFG-5)."
+    )
+    return WireframeSection(
+        key="deployment", title="Deployment mode", status=sec_status,
+        items=tuple(items), consequence=consequence,
+    )
+
+
 def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> WireframePlan:
     """Derive the full :class:`WireframePlan` from resolved inputs (FR-W1..W5, W13, W15)."""
     texts: Dict[str, Tuple[Optional[str], Optional[str]]] = {
@@ -906,6 +957,11 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     # FR-WCI-1: view copy (the WORDS layer). Keyed by VIEW name (matches `_views_section`'s idents,
     # not model names) so per-view chrome coverage lines up.
     states["view_prose"] = _yaml_state("view_prose", *texts["view_prose"], parse_view_prose)
+    # FR-IMP-3: import declarations. Keyed/validated against the schema entities (degrade, don't
+    # crash, when the schema is unusable — same posture as views).
+    states["imports"] = _yaml_state(
+        "imports", *texts["imports"], lambda t: parse_imports(t, known_entities=known)
+    )
 
     # Status overrides from the assembly-inputs YAML (FR-W6/R2-F1). Conflicts between an
     # override and disk reality join merge_warnings — visible in tree + JSON, never only logged.
@@ -919,6 +975,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     content_section = _content_section(inputs, states["pages"], states["ai_passes"])
     sections = (
         _scaffold_section(states["app"]),
+        _deployment_section(states["app"]),
         _services_section(schema_state, states["ai_passes"]),
         _entities_section(schema_state),
         _pages_section(states["pages"], authoring=authoring),

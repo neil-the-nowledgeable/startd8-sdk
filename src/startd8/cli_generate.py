@@ -184,10 +184,30 @@ def backend(
         "labels/order, detail sections, row label_field. Absent → today's all-scalars behavior "
         "(opt-in). Threaded to both generate and --check so drift stays consistent.",
     ),
+    imports: Optional[Path] = typer.Option(
+        None,
+        "--imports",
+        help="Path to imports.yaml (FR-IMP-3 per-entity import declarations). When given, "
+        "app/importer.py (from_json upsert) is emitted; absent → no importer (opt-in). Threaded "
+        "to both generate and --check so drift stays consistent.",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
         help="Schema path written into the GENERATED headers (must match across runs).",
+    ),
+    app_manifest: Optional[Path] = typer.Option(
+        None,
+        "--app-manifest",
+        help="Path to app.yaml. Its `deployment.mode` (installed|deployed) is the source of truth "
+        "for deployment mode (FR-CLI-1). Deployed mode additionally emits app/settings.py (the "
+        "mode-aware DB url/pool/create_all-gate). Absent → installed (today's behavior).",
+    ),
+    mode: Optional[str] = typer.Option(
+        None,
+        "--mode",
+        help="Override the deployment mode (installed|deployed), winning over --app-manifest. "
+        "Ergonomic shortcut; app.yaml remains the drift source of truth.",
     ),
 ) -> None:
     """Render the full all-Python backend (Pydantic + SQLModel + FastAPI + HTMX + derived).
@@ -209,7 +229,7 @@ def backend(
     pages_text: Optional[str] = None
     _reads = {
         "manifest": None, "human": None, "pages": None, "completeness": None, "views": None,
-        "display": None,
+        "display": None, "imports": None,
     }
     for label, path, dest in (
         ("ai_passes", ai_passes, "manifest"),
@@ -218,6 +238,7 @@ def backend(
         ("completeness", completeness, "completeness"),
         ("views", views, "views"),
         ("display", display, "display"),
+        ("imports", imports, "imports"),
     ):
         if path is None:
             continue
@@ -226,14 +247,61 @@ def backend(
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
-    manifest_text, human_text, pages_text, completeness_text, views_text, display_text = (
+    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text = (
         _reads["manifest"],
         _reads["human"],
         _reads["pages"],
         _reads["completeness"],
         _reads["views"],
         _reads["display"],
+        _reads["imports"],
     )
+
+    # FR-CLI-1: resolve the deployment mode. app.yaml's `deployment.mode` is the source of truth;
+    # an explicit --mode wins (ergonomic override). Threaded to BOTH generate and --check so a
+    # deployed tree's app/settings.py is emitted and drift-checked consistently.
+    deployment_mode = "installed"
+    app_manifest_obj = None
+    if app_manifest is not None:
+        from .scaffold_codegen import parse_app_manifest
+
+        try:
+            app_manifest_obj = parse_app_manifest(app_manifest.read_text(encoding="utf-8"))
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read app-manifest {app_manifest}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        except ValueError as exc:  # malformed app.yaml / bad deployment.mode — fail loud
+            console.print(f"[red]error:[/red] {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        deployment_mode = app_manifest_obj.deployment_mode
+    if mode is not None:
+        if mode not in ("installed", "deployed"):
+            console.print(
+                f"[red]error:[/red] --mode must be 'installed' or 'deployed', got {mode!r}"
+            )
+            raise typer.Exit(_EXIT_ERROR)
+        deployment_mode = mode
+
+    # FR-CFG-5 coherence guard: with an app.yaml we can evaluate mode × persistence × migrations
+    # against the normative matrix. ERROR combinations fail the build (even on --check); WARN
+    # combinations proceed loudly. (Only evaluable when --app-manifest supplies the persistence/
+    # migrations facts; --mode alone has nothing to check against.)
+    if app_manifest_obj is not None:
+        from dataclasses import replace
+
+        from .scaffold_codegen.coherence import evaluate_coherence, has_errors
+
+        # Deployed mode now emits the auth seam (M2/A6) but no tenant isolation yet → the
+        # FR-IDN-4 authenticated-but-not-isolated WARN goes live (has_auth_seam, no has_tenant).
+        findings = evaluate_coherence(
+            replace(app_manifest_obj, deployment_mode=deployment_mode),
+            has_auth_seam=(deployment_mode == "deployed"),
+        )
+        for f in findings:
+            color = "red" if f.severity == "ERROR" else "yellow"
+            console.print(f"[{color}]{f.severity.lower()}[/{color}] ({f.code}): {f.message}")
+        if has_errors(findings):
+            raise typer.Exit(_EXIT_ERROR)
 
     if ai_agent_spec and manifest_text is None:
         console.print(
@@ -259,10 +327,12 @@ def backend(
             completeness_text=completeness_text,
             views_text=views_text,
             display_text=display_text,
+            imports_text=imports_text,
             # On --check we don't render the untracked prose fragments (they need the .md on disk
             # and never participate in drift); on write we do, reading app/pages/*.md under --out.
             pages_app_dir=None if check else (out / "app"),
             authoring=pages_authoring,
+            deployment_mode=deployment_mode,
         )
     except (
         ValueError
@@ -287,6 +357,7 @@ def backend(
                 completeness_text=completeness_text,
                 forms_text=views_text,
                 display_text=display_text,
+                imports_text=imports_text,
             )
             if result.status != "in_sync":
                 drifted += 1
@@ -490,6 +561,38 @@ def views(
     console.print(f"[green]wrote[/green] {written} view file(s) under {out}")
 
 
+def _report_contract_gate(res, *, live_text, json_out: bool) -> None:
+    """Print the ``generate contract`` gate result — human-readable or ``--json`` (M4 extraction)."""
+    if json_out:
+        import json as _json
+        console.print_json(_json.dumps({
+            "ok": res.ok, "round_trips": res.round_trips, "models": res.models,
+            "parity_drift": list(res.parity_drift),
+            "errors": list(res.errors),            # H1/H3 structural (block)
+            "warnings": list(res.warnings),        # H4 advisory
+            "unrenderable": [f"{u.entity}.{u.field}: {u.reason}" for u in res.unrenderable],
+            "draft_path": res.draft_path,
+        }))
+        return
+    console.print(f"models rendered: {res.models}")
+    console.print(f"round-trips: {'[green]yes[/green]' if res.round_trips else '[red]no[/red]'}")
+    if live_text is not None:
+        if res.parity_drift:
+            console.print(f"[yellow]parity drift ({len(res.parity_drift)}):[/yellow]")
+            for d in res.parity_drift:
+                console.print(f"  - {d}")
+        else:
+            console.print("parity: [green]clean[/green] (matches the live contract)")
+    for e in res.errors:        # H1/H3: structural — these block the gate
+        console.print(f"[red]structural error[/red]: {e}")
+    for u in res.unrenderable:  # FR-EMIT-7: never silently drop
+        console.print(f"[yellow]unrenderable[/yellow]: {u.entity}.{u.field} — {u.reason}")
+    for w in res.warnings:      # H4: advisory — surfaced, not lost
+        console.print(f"[yellow]warning[/yellow]: {w}")
+    if res.draft_path:
+        console.print(f"draft: {res.draft_path}")
+
+
 @generate_app.command("contract")
 def contract(
     requirements: List[Path] = typer.Option(
@@ -516,6 +619,10 @@ def contract(
     check: bool = typer.Option(
         False, "--check",
         help="Gate only; write nothing to the project. Exit 0=ok / 1=drift|round-trip-fail / 2=error."),
+    allow_lossy: bool = typer.Option(
+        False, "--allow-lossy",
+        help="Permit --promote even when the doc declares field(s) the contract can't express "
+             "(unrenderable). Default: refuse, so a flip never silently drops an authored field."),
     json_out: bool = typer.Option(False, "--json", help="Emit the gate result as JSON."),
 ):
     """Emit `prisma/schema.prisma` from the requirements doc (FR-PE / FR-EMIT) — $0, no LLM.
@@ -525,7 +632,6 @@ def contract(
     runs round-trip (FR-PE-6) + parity vs the live contract. `--promote` performs the explicit,
     human-triggered flip to --contract-path (FR-PE-7), only when the gate passes.
     """
-    import json as _json
     import tempfile
 
     from .manifest_extraction.extract import build_entity_graph, extract_manifests
@@ -555,35 +661,16 @@ def contract(
     try:
         graph = build_entity_graph(docs)
     except Exception as exc:  # malformed entity blocks — fail loud, never an empty graph
-        console.print(f"[red]error:[/red] could not parse entities from requirements: {exc}")
+        console.print(f"[red]error:[/red] could not parse entities from requirements: "
+                      f"{type(exc).__name__}: {exc}")  # L4: surface the error class, don't mask it
         raise typer.Exit(_EXIT_ERROR)
 
     run_dir = Path(tempfile.mkdtemp(prefix="startd8-emit-")) if (check or out is None) else out
     source_file = str(requirements[0])  # provenance header names the (primary) requirements doc
     res = emit_schema_draft(graph, str(run_dir), live_text=live_text, source_file=source_file)
 
-    # 4. report the gate (FR-EMIT-2/7)
-    if json_out:
-        console.print_json(_json.dumps({
-            "ok": res.ok, "round_trips": res.round_trips, "models": res.models,
-            "parity_drift": list(res.parity_drift),
-            "unrenderable": [f"{u.entity}.{u.field}: {u.reason}" for u in res.unrenderable],
-            "draft_path": res.draft_path,
-        }))
-    else:
-        console.print(f"models rendered: {res.models}")
-        console.print(f"round-trips: {'[green]yes[/green]' if res.round_trips else '[red]no[/red]'}")
-        if live_text is not None:
-            if res.parity_drift:
-                console.print(f"[yellow]parity drift ({len(res.parity_drift)}):[/yellow]")
-                for d in res.parity_drift:
-                    console.print(f"  - {d}")
-            else:
-                console.print("parity: [green]clean[/green] (matches the live contract)")
-        for u in res.unrenderable:  # FR-EMIT-7: never silently drop
-            console.print(f"[yellow]unrenderable[/yellow]: {u.entity}.{u.field} — {u.reason}")
-        if res.draft_path:
-            console.print(f"draft: {res.draft_path}")
+    # 4. report the gate (FR-EMIT-2/7) — M4: extracted into _report_contract_gate
+    _report_contract_gate(res, live_text=live_text, json_out=json_out)
 
     # 5. --check: gate only, nothing written to the project (FR-EMIT-4)
     if check:
@@ -599,7 +686,8 @@ def contract(
                 (run_dir / fname).write_text(text, encoding="utf-8")
             console.print(f"[green]derived[/green] {len(manifest_texts)} manifest(s) into {run_dir}")
         except Exception as exc:
-            console.print(f"[red]error:[/red] manifest derivation failed: {exc}")
+            console.print(f"[red]error:[/red] manifest derivation failed: "
+                          f"{type(exc).__name__}: {exc}")  # L4: surface the error class
             raise typer.Exit(_EXIT_ERROR)
 
     # 7. --promote: explicit, human-triggered flip (FR-PE-7/FR-EMIT-3). The blocking gate is
@@ -610,6 +698,19 @@ def contract(
             console.print("[red]refusing to promote[/red]: the emitted schema did not round-trip "
                           f"to a non-empty model set (models={res.models}) — fix the requirements "
                           "doc (no parseable entities?) before flipping the contract.")
+            raise typer.Exit(1)
+        if res.errors:  # C1/H1/H3: structural problems are never promotable
+            console.print(f"[red]refusing to promote[/red]: {len(res.errors)} structural error(s) — "
+                          "fix the requirements doc:")
+            for e in res.errors:
+                console.print(f"  - {e}")
+            raise typer.Exit(1)
+        if res.unrenderable and not allow_lossy:  # C1: a flip must not silently drop authored fields
+            console.print(f"[red]refusing to promote[/red]: {len(res.unrenderable)} field(s) the "
+                          "contract can't express would be DROPPED — fix the field type(s), or pass "
+                          "--allow-lossy to flip anyway:")
+            for u in res.unrenderable:
+                console.print(f"  - {u.entity}.{u.field}: {u.reason}")
             raise typer.Exit(1)
         if live_text is not None and res.parity_drift:
             console.print(f"[cyan]applying {len(res.parity_drift)} change(s)[/cyan] vs the live contract.")

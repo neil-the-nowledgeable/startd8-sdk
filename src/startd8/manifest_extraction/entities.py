@@ -330,6 +330,21 @@ _VERB_RE = re.compile(
 )
 
 
+def _resolve_object(
+    graph: EntityGraph, rest: str, records: List[ExtractionRecord], subj: str,
+    src: SourceRef, noun: str,
+) -> Optional[str]:
+    """Resolve a relationship sentence's object entity (the first word of *rest*); record a
+    ``not_extracted`` and return ``None`` if it doesn't resolve (M3 — shared by the verb branches)."""
+    obj = graph.resolve_entity(rest.split()[0] if rest else "")
+    if not obj:
+        records.append(ExtractionRecord(
+            "schema.prisma", f"/relationships/{subj}", Status.NOT_EXTRACTED,
+            source=src, reason=f"unresolvable {noun}: {rest[:40]!r}",
+        ))
+    return obj
+
+
 def _parse_relationships(
     doc_label: str,
     block_subject: str,
@@ -351,7 +366,15 @@ def _parse_relationships(
                 source=src, reason=f"sentence outside the closed verb grammar: {sentence[:80]!r}",
             ))
             continue
-        subj = graph.resolve_entity(m.group("subj")) or m.group("subj")
+        # L1: a subject that doesn't resolve to a declared entity is a typo, not a phantom entity —
+        # flag it (the old `or m.group("subj")` fallback silently dropped the relationship).
+        subj = graph.resolve_entity(m.group("subj"))
+        if subj is None:
+            records.append(ExtractionRecord(
+                "schema.prisma", f"/relationships/{block_subject}", Status.NOT_EXTRACTED,
+                source=src, reason=f"unresolvable relationship subject: {m.group('subj')!r}",
+            ))
+            continue
         verb = m.group("verb").lower()
         # Articles appear in object position too ("belongs to a Profile") — strip before resolving.
         rest = re.sub(r"^(?:a|an|the)\s+", "", m.group("rest").strip(), flags=re.IGNORECASE)
@@ -376,22 +399,17 @@ def _parse_relationships(
                 continue
             _add_join(graph, x, y, src, records)
         elif verb == "links to many":
-            obj = graph.resolve_entity(rest.split()[0] if rest else "")
+            rest, rev_name = _split_as_clause(rest)   # L2: `as <name>` works on joins too, not just FK
+            obj = _resolve_object(graph, rest, records, subj, src, "object entity")
             if not obj:
-                records.append(ExtractionRecord(
-                    "schema.prisma", f"/relationships/{subj}", Status.NOT_EXTRACTED,
-                    source=src, reason=f"unresolvable object entity: {rest[:40]!r}",
-                ))
                 continue
             _add_join(graph, subj, obj, src, records)  # symmetric restatements dedup inside
+            if rev_name:                               # name subj's reverse-list to obj (via the join)
+                graph.reverse_names[(subj, obj)] = rev_name
         elif verb in ("has many", "has one"):
             rest, rev_name = _split_as_clause(rest)   # FR-PE-13: optional `as <name>`
-            obj = graph.resolve_entity(rest.split()[0] if rest else "")
+            obj = _resolve_object(graph, rest, records, subj, src, "object entity")
             if not obj:
-                records.append(ExtractionRecord(
-                    "schema.prisma", f"/relationships/{subj}", Status.NOT_EXTRACTED,
-                    source=src, reason=f"unresolvable object entity: {rest[:40]!r}",
-                ))
                 continue
             graph.fk_parents.setdefault(obj, [])
             if subj not in graph.fk_parents[obj]:
@@ -404,12 +422,8 @@ def _parse_relationships(
             ))
         elif verb == "belongs to":
             rest, rev_name = _split_as_clause(rest)   # FR-PE-13: optional `as <name>`
-            obj = graph.resolve_entity(rest.split()[0] if rest else "")
+            obj = _resolve_object(graph, rest, records, subj, src, "parent entity")
             if not obj:
-                records.append(ExtractionRecord(
-                    "schema.prisma", f"/relationships/{subj}", Status.NOT_EXTRACTED,
-                    source=src, reason=f"unresolvable parent entity: {rest[:40]!r}",
-                ))
                 continue
             graph.fk_parents.setdefault(subj, [])
             if obj not in graph.fk_parents[subj]:
@@ -423,12 +437,8 @@ def _parse_relationships(
         elif verb == "references":
             # FR-PE-5(c) / OQ-PE-3: a LOOSE reference — a `<parent>Id` scalar with NO @relation and
             # no reverse list (the polymorphic / cross-aggregate link the live contract uses).
-            obj = graph.resolve_entity(rest.split()[0] if rest else "")
+            obj = _resolve_object(graph, rest, records, subj, src, "referenced entity")
             if not obj:
-                records.append(ExtractionRecord(
-                    "schema.prisma", f"/relationships/{subj}", Status.NOT_EXTRACTED,
-                    source=src, reason=f"unresolvable referenced entity: {rest[:40]!r}",
-                ))
                 continue
             graph.loose_refs.setdefault(subj, [])
             if obj not in graph.loose_refs[subj]:

@@ -414,3 +414,127 @@ def test_promote_copies_draft_and_archives_handauthored(tmp_path):
 def test_promote_without_gated_draft_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         promote_schema(str(tmp_path / "empty"), str(tmp_path / "prisma" / "schema.prisma"))
+
+
+# --------------------------------------------------------------------------- #
+# Critical (C1/C2): gate considers dropped fields + structural errors; the
+# round-trip oracle is field- and enum-level, not just model names.
+# --------------------------------------------------------------------------- #
+
+def test_c2_render_exposes_field_and_enum_oracle():
+    res = render_prisma_schema(_graph())
+    assert res.field_names["Profile"]                                   # per-model fields recorded
+    assert "name" in res.field_names["Profile"]
+    assert "proofPoints" in res.field_names["Profile"]                  # reverse-list tracked too
+    assert res.errors == ()
+
+
+def test_c1_clean_graph_gate_ok(tmp_path):
+    res = emit_schema_draft(_graph(), str(tmp_path))
+    assert res.ok and res.round_trips and not res.unrenderable and not res.errors
+
+
+def test_c1_gate_refuses_when_a_field_is_dropped(tmp_path):
+    g = _graph()
+    g.entities["Weird"] = DocEntity("Weird", (_f("blob", None),), ("Entities", "Weird"))
+    res = emit_schema_draft(g, str(tmp_path))
+    assert res.round_trips                       # the rest of the schema still round-trips
+    assert res.unrenderable                      # but the author's `blob` field was dropped
+    assert res.ok is False                       # → not safe to promote (C1)
+
+
+# --------------------------------------------------------------------------- #
+# High (H1 pluralizer+collision / H2 list caveat / H3 column typo / H4 warnings)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("word,plural", [
+    ("Address", "addresses"), ("Box", "boxes"), ("Match", "matches"),  # sibilant → +es
+    ("Day", "days"),                                                    # vowel+y → +s
+    ("Capability", "capabilities"),                                     # consonant+y → ies
+    ("ProofPoint", "proofPoints"), ("Outcome", "outcomes"),            # default → +s
+])
+def test_h1_pluralizer_edge_cases(word, plural):
+    from startd8.manifest_extraction.prisma_emitter import _plural
+    assert _plural(word) == plural
+
+
+def test_h1_reverse_list_collision_fails_loud(tmp_path):
+    g = EntityGraph()
+    g.entities["Book"] = DocEntity("Book", (_f("title", "String"),), ("Entities", "Book"))
+    g.entities["Note"] = DocEntity("Note", (_f("text", "String"),), ("Entities", "Note"))
+    g.fk_parents["Note"] = ["Book"]                       # → Book.notes Note[]
+    g.joins.append(JoinModel("BookNote", "Book", "Note"))  # → Book.notes BookNote[] (collision)
+    res = render_prisma_schema(g)
+    assert any("Book.notes: duplicate field" in e for e in res.errors)   # loud
+    parse_prisma_schema(res.text)                                        # suppressed → still parses
+    assert not emit_schema_draft(g, str(tmp_path)).ok                    # gate refuses
+
+
+def _list_graph():
+    g = EntityGraph()
+    g.entities["M"] = DocEntity("M", (
+        DocField(name="tags", plain_type="list of text", prisma_type="String",
+                 required=False, notes="", human_only=False, row_index=0, is_list=True),
+    ), ("Entities", "M"))
+    return g
+
+
+def test_h2_list_field_keeps_convention_but_warns_sqlite_caveat(tmp_path):
+    res = render_prisma_schema(_list_graph())
+    assert "tags String[]" in res.text                                   # convention preserved
+    assert any("prisma validate" in w for w in res.warnings)             # caveat surfaced (H2)
+    assert emit_schema_draft(_list_graph(), str(tmp_path)).warnings      # H4: reaches the gate
+
+
+def test_h3_index_typo_fails_loud_and_suppresses(tmp_path):
+    g = EntityGraph()
+    g.entities["M"] = DocEntity("M", (_f("title", "String", required=True),), ("Entities", "M"))
+    g.indexes["M"] = [("titel",)]                                        # typo
+    res = render_prisma_schema(g)
+    assert any("@@index references undeclared column" in e for e in res.errors)
+    assert "@@index" not in res.text                                     # suppressed
+    assert not emit_schema_draft(g, str(tmp_path)).ok
+
+
+def test_h3_valid_index_column_emits():
+    g = EntityGraph()
+    g.entities["M"] = DocEntity("M", (_f("title", "String", required=True),), ("Entities", "M"))
+    g.indexes["M"] = [("title",)]
+    res = render_prisma_schema(g)
+    assert not res.errors and "@@index([title])" in res.text
+
+
+# --------------------------------------------------------------------------- #
+# Low (L1 phantom subject / L2 `as` on joins / L3 enum reorder parity)
+# --------------------------------------------------------------------------- #
+
+def test_l1_unresolvable_relationship_subject_is_flagged():
+    from startd8.manifest_extraction.entities import extract_entities
+    doc = (
+        "## Entities\n\n### Profile\n| Field | Type | Required | Notes |\n"
+        "|--|--|--|--|\n| name | text | yes | |\n\n"
+        "Relationships: a Proflie **belongs to** a Profile.\n"   # typo'd subject
+    )
+    secs = parse_sections(doc)
+    root = find_section(secs, "Entities")
+    blocks = [s for s in secs if s.level == root.level + 1
+              and len(s.heading_path) >= 2 and s.heading_path[-2] == root.title]
+    recs = []
+    extract_entities("D", blocks, recs)
+    assert any("unresolvable relationship subject" in (r.reason or "") for r in recs)
+
+
+def test_l2_as_name_overrides_join_reverse_list():
+    g = EntityGraph()
+    g.entities["A"] = DocEntity("A", (_f("x", "String"),), ("Entities", "A"))
+    g.entities["B"] = DocEntity("B", (_f("y", "String"),), ("Entities", "B"))
+    g.joins.append(JoinModel("AB", "A", "B"))
+    g.reverse_names[("A", "B")] = "customBs"          # `A links to many B as customBs`
+    text = render_prisma_schema(g).text
+    assert "customBs AB[]" in text                    # A's reverse-list uses the override (L2)
+
+
+def test_l3_enum_value_reorder_is_not_parity_drift():
+    a = _schema("enum Color {\n  RED\n  BLUE\n}", "model M {\n  id String @id\n  c Color\n}")
+    b = _schema("enum Color {\n  BLUE\n  RED\n}", "model M {\n  id String @id\n  c Color\n}")
+    assert not any("enum Color" in d for d in semantic_diff(a, b))   # reorder ≠ drift (L3)

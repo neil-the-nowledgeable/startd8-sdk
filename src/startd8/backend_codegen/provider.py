@@ -45,6 +45,7 @@ class PydanticSQLModelProvider:
             human_inputs_text=self._read_human_inputs(context),
             completeness_text=self._read_completeness(context),
             display_text=self._read_display(context),
+            imports_text=self._read_imports(context),
         )
 
     @staticmethod
@@ -139,4 +140,14 @@ class PydanticSQLModelProvider:
         """``display.yaml`` (presentation-structure layer, FR-DM), raw text or ``None`` if absent."""
         return cls._read_anchored(
             context, suffix="display.yaml", conventional_relpath="prisma/display.yaml"
+        )
+
+    @classmethod
+    def _read_imports(cls, context: ProviderContext) -> Optional[str]:
+        """``imports.yaml`` (FR-IMP-3 import declarations), raw text or ``None`` if absent.
+
+        Threaded into the skip-hook so a freshly-generated ``app/importer.py`` is recognized as a
+        ``$0``-owned file (without it the two-hash check ERRORs → falls through to the LLM)."""
+        return cls._read_anchored(
+            context, suffix="imports.yaml", conventional_relpath="prisma/imports.yaml"
         )

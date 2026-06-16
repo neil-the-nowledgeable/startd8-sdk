@@ -87,6 +87,7 @@ def test_render_is_byte_identical_and_full_set():
         "pyproject.toml",
         "app/logging_config.py",
         ".env.example",
+        "run.sh",                          # FR-NET-1/2: local run, bind mode-derived
         "Dockerfile",
         "alembic.ini",
         "alembic/env.py",

@@ -49,6 +49,7 @@ def render_backend(
     completeness_text: Optional[str] = None,
     views_text: Optional[str] = None,
     display_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
     deployment_mode: str = "installed",
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
@@ -88,6 +89,22 @@ def render_backend(
     out.extend(
         render_derived(schema_text, source_file, completeness_text=completeness_text)
     )  # export / ai_schemas / completeness (completeness weighted when a manifest is given)
+    # FR-IMP-1: app/importer.py (from_json upsert), opt-in — emitted ONLY when imports.yaml is
+    # present (R2-S2 conditional emission, the `if manifest_text:` precedent). It imports
+    # ENTITY_ORDER/FIELDS from app/export.py, so it must follow render_derived. Absent manifest ⇒
+    # no importer, byte-identical to today.
+    if imports_text:
+        from .import_codegen import render_import
+
+        out.append((CANONICAL_LAYOUT["python-import"], render_import(schema_text, imports_text, source_file)))
+        # FR-IMP-6: the paste/upload surface — emitted only when an import declares `surface: true`.
+        from .import_surface import render_import_surface, surface_enabled
+
+        if surface_enabled(imports_text):
+            out.append((
+                CANONICAL_LAYOUT["python-import-surface"],
+                render_import_surface(schema_text, imports_text, source_file),
+            ))
     out.append((
         "requirements.txt",
         render_requirements(schema_text, source_file, authoring=authoring, ai=bool(manifest_text)),
@@ -126,10 +143,17 @@ def render_backend(
     # settings-absent default and stays byte-identical to today (R4). settings.py — present here,
     # absent in installed — is the single file that differs between the two modes.
     if deployment_mode == "deployed":
+        from .auth_renderer import render_auth_seam
         from .settings_renderer import render_settings
 
         out.append((
             CANONICAL_LAYOUT["python-settings"],
             render_settings(schema_text, source_file, mode=deployment_mode),
+        ))
+        # FR-IDN-2/M2: deployed mode also emits the reference auth seam (app/auth.py). A dependency
+        # module the operator wires via user_routers.py — main.py stays unchanged.
+        out.append((
+            CANONICAL_LAYOUT["python-auth-seam"],
+            render_auth_seam(schema_text, source_file),
         ))
     return tuple(out)

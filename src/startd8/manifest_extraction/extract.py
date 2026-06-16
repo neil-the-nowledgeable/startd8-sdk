@@ -13,6 +13,7 @@ import yaml
 
 from ..backend_codegen.ai_layer import parse_ai_passes, parse_human_inputs
 from ..backend_codegen.derived import load_completeness_manifest
+from ..backend_codegen.imports_manifest import parse_imports
 from ..backend_codegen.pages_generator import parse_pages
 from ..logging_config import get_logger
 from ..scaffold_codegen.manifest import parse_app_manifest
@@ -25,6 +26,7 @@ from .extractors import (
     extract_app,
     extract_completeness,
     extract_human_inputs,
+    extract_imports,
     extract_pages,
     extract_view_prose,
     extract_views,
@@ -162,6 +164,10 @@ def extract_manifests(
             candidates["view_prose.yaml"] = extract_view_prose(label, sections, records)
         if "completeness.yaml" not in candidates or candidates["completeness.yaml"] is None:
             candidates["completeness.yaml"] = extract_completeness(label, sections, graph, records)
+        # Imports (FR-IMP-3) — runs after the siblings it cross-references (ai_passes, human_inputs)
+        # so the round-trip gate can validate `extract_via`/`provenance` against the live candidates.
+        if "imports.yaml" not in candidates or candidates["imports.yaml"] is None:
+            candidates["imports.yaml"] = extract_imports(label, sections, graph, records)
 
     # Prune view-copy to views that SURVIVED views.yaml extraction (a view dropped for a bad compute
     # binding / unknown kind must not leave its copy dangling in view_prose → the round-trip would
@@ -173,6 +179,14 @@ def extract_manifests(
 
     # FR-WPI-4: round-trip through the generators' OWN parsers before returning.
     known = frozenset(graph.all_model_names())
+    # FR-IMP-3 cross-ref keyspaces, sourced from the already-extracted sibling candidates (R4-S5):
+    # imports.yaml's `extract_via` must name a real AI pass and `provenance` a real human-owned field.
+    _ai = candidates.get("ai_passes.yaml") or {}
+    known_passes = frozenset(p["name"] for p in _ai.get("passes", []))
+    _hi = candidates.get("human_inputs.yaml")
+    known_provenance = (
+        parse_human_inputs(_emit_yaml(_hi)).human_only_fields if _hi else frozenset()
+    )
     round_trips = {
         "pages.yaml": lambda t: parse_pages(t),
         "app.yaml": lambda t: parse_app_manifest(t),
@@ -194,6 +208,14 @@ def extract_manifests(
             known_views=frozenset(
                 v["name"] for v in (candidates.get("views.yaml") or {}).get("views", [])
             ),
+        ),
+        # imports.yaml (FR-IMP-3): validate the closed grammar + cross-refs at ingestion, so a bad
+        # import row fails the gate here, not at `generate backend` time.
+        "imports.yaml": lambda t: parse_imports(
+            t,
+            known_entities=known,
+            known_passes=known_passes,
+            known_provenance=known_provenance,
         ),
     }
     for filename, data in candidates.items():

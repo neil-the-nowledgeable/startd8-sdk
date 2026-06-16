@@ -40,6 +40,8 @@ _HEADER_AI_AGENT_RE = re.compile(r"#\s*ai-agent-spec:\s*(\S+)")
 _HEADER_PAGES_SHA_RE = re.compile(r"#\s*pages-sha256:\s*([0-9a-f]{64})")
 # Form-behavior artifacts derive from one extra input (views.yaml `forms:`) and carry one extra hash.
 _HEADER_FORMS_SHA_RE = re.compile(r"#\s*forms-sha256:\s*([0-9a-f]{64})")
+# The import owned-kind (FR-IMP-1) derives from one extra input (imports.yaml) → one extra hash.
+_HEADER_IMPORTS_SHA_RE = re.compile(r"#\s*imports-sha256:\s*([0-9a-f]{64})")
 _GENERATED_MARKER = "# GENERATED from"
 
 # Artifact kinds whose drift derives from three inputs (schema + ai_passes + human_inputs). Kept in
@@ -82,6 +84,11 @@ _FORMS_KINDS: frozenset = frozenset(
 # input at drift time — the schema-only skip-hook can verify it.
 _SETTINGS_KINDS: frozenset = frozenset({"python-settings"})
 
+# The import owned-kinds (FR-IMP-1 importer + FR-IMP-6 surface) derive from two inputs (schema +
+# imports.yaml). Kept in sync with ``import_codegen``/``import_surface`` (literal here to avoid a
+# module-load import cycle).
+_IMPORTS_KINDS: frozenset = frozenset({"python-import", "python-import-surface"})
+
 
 def _renderers(
     completeness_text: Optional[str] = None,
@@ -96,6 +103,7 @@ def _renderers(
     renderer — every backend artifact carries the GENERATED marker, so the kind+entity tags are
     what disambiguate them. ``entity`` is ``None`` for app-wide artifacts.
     """
+    from .auth_renderer import render_auth_seam as _render_auth_seam
     from .crud_generator import render_db, render_main, render_routers
     from .health_renderer import render_health
     from .derived import (
@@ -166,6 +174,7 @@ def _renderers(
         "python-export": lambda s, sf, e: render_export(s, sf),
         "python-ai-schemas": lambda s, sf, e: render_ai_schemas(s, sf),
         "python-completeness": lambda s, sf, e: render_completeness(s, sf, manifest=_cmpl),
+        "python-auth-seam": lambda s, sf, e: _render_auth_seam(s, sf),  # deployed-only (FR-IDN-2/M2)
         "python-requirements": lambda s, sf, e: render_requirements(s, sf),
         "python-requirements-authoring": lambda s, sf, e: render_requirements(s, sf, authoring=True),
         "python-requirements-ai": lambda s, sf, e: render_requirements(s, sf, ai=True),
@@ -236,6 +245,12 @@ def embedded_pages_sha(ondisk_text: str) -> Optional[str]:
 def embedded_forms_sha(ondisk_text: str) -> Optional[str]:
     """The ``forms-sha256`` recorded in a forms-configured file's header, or ``None``."""
     m = _HEADER_FORMS_SHA_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
+
+
+def embedded_imports_sha(ondisk_text: str) -> Optional[str]:
+    """The ``imports-sha256`` recorded in the import owned-kind's header, or ``None`` (FR-IMP-1)."""
+    m = _HEADER_IMPORTS_SHA_RE.search(ondisk_text or "")
     return m.group(1) if m else None
 
 
@@ -345,6 +360,7 @@ def owned_file_in_sync(
     human_inputs_text: Optional[str] = None,
     completeness_text: Optional[str] = None,
     display_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
 ) -> bool:
     """True iff *ondisk_text* is an owned generated file that is **currently in-sync**.
 
@@ -377,6 +393,7 @@ def owned_file_in_sync(
             completeness_text=completeness_text,
             forms_text=views_text,  # check_drift names the views.yaml input `forms_text`
             display_text=display_text,
+            imports_text=imports_text,
         ).status
         == "in_sync"
     )
@@ -597,6 +614,58 @@ def _check_forms_drift(
     return DriftResult("in_sync", IN_SYNC, "owned forms-configured file matches schema + forms")
 
 
+def imports_stale_reason(
+    ondisk_text: str, *, schema_sha: str, imports_sha: str
+) -> Optional[str]:
+    """For ``app/importer.py``, return why it is **stale**, or ``None`` if both inputs match (FR-IMP-1)."""
+    checks = (
+        ("schema", embedded_schema_sha(ondisk_text), schema_sha),
+        ("imports", embedded_imports_sha(ondisk_text), imports_sha),
+    )
+    for label, embedded, current in checks:
+        if embedded is None:
+            return f"missing {label}-sha256 header"
+        if embedded != current:
+            return (
+                f"{label} changed (header {embedded[:12]}… != current {current[:12]}…) — regenerate"
+            )
+    return None
+
+
+def _check_imports_drift(
+    schema_text, imports_text, ondisk_text, source_file, kind
+) -> DriftResult:
+    """Drift for the import owned-kinds (FR-IMP-1 importer + FR-IMP-6 surface): stale if schema or
+    imports.yaml changed; else byte re-render. Dispatches by kind to the right renderer."""
+    if imports_text is None:
+        return DriftResult(
+            "error", ERROR, "import drift check requires the imports manifest (imports.yaml)"
+        )
+    reason = imports_stale_reason(
+        ondisk_text,
+        schema_sha=schema_sha256(schema_text),
+        imports_sha=schema_sha256(imports_text),
+    )
+    if reason is not None:
+        status = "tampered" if "missing" in reason else "stale"
+        return DriftResult(status, DRIFT, reason)
+    if kind == "python-import-surface":
+        from .import_surface import render_import_surface
+
+        rendered = render_import_surface(schema_text, imports_text, source_file)
+    else:
+        from .import_codegen import render_import
+
+        rendered = render_import(schema_text, imports_text, source_file)
+    if rendered != ondisk_text:
+        return DriftResult(
+            "tampered",
+            DRIFT,
+            "owned import file was hand-edited (differs from a fresh render of the unchanged inputs)",
+        )
+    return DriftResult("in_sync", IN_SYNC, "owned import file matches schema + imports")
+
+
 def check_drift(
     schema_text: str,
     ondisk_text: Optional[str],
@@ -608,6 +677,7 @@ def check_drift(
     completeness_text: Optional[str] = None,
     forms_text: Optional[str] = None,
     display_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
 ) -> DriftResult:
     """Compare an on-disk owned file against its source contract(s). No writes.
 
@@ -632,6 +702,8 @@ def check_drift(
         return _check_pages_drift(schema_text, pages_text, ondisk_text, source_file, kind)
     if kind in _FORMS_KINDS:
         return _check_forms_drift(schema_text, forms_text, ondisk_text, source_file, kind)
+    if kind in _IMPORTS_KINDS:
+        return _check_imports_drift(schema_text, imports_text, ondisk_text, source_file, kind)
     if kind in _SETTINGS_KINDS:
         # The skip-hook path: re-derive the baked mode from the file's own header (FR-CFG-7a) — this
         # is the ONLY mode-varying file, and it needs no app.yaml to verify.
