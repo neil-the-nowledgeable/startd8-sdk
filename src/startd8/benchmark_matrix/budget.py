@@ -54,7 +54,15 @@ def estimate_run_cost(
     ``missing_pricing`` (callers fail-closed on these for a benchmark — see BudgetGuard).
     """
     pricing = pricing or PricingService()
-    cells_per_model = len(spec.services) * spec.repetitions
+    coords_per_model = len(spec.services) * spec.repetitions  # per leverage state
+    cells_per_model = coords_per_model * len(spec.leverage_states)
+    # K2 asymmetry (R1-S5): on-cells run heavier than off-cells. Weight each model's cell budget
+    # by off-count + on-count×multiplier so a tight ceiling can't pass preflight then abort mid-run.
+    states = spec.leverage_states or ("off",)
+    off_n = coords_per_model if "off" in states else 0
+    on_n = coords_per_model if "on" in states else 0
+    on_mult = getattr(spec, "est_on_cost_multiplier", 1.5)
+    weighted_coords = off_n + on_n * on_mult  # == coords_per_model for the default off-only run
     per_model_usd: Dict[str, float] = {}
     cost_per_cell_usd: Dict[str, float] = {}
     missing: List[str] = []
@@ -73,7 +81,7 @@ def estimate_run_cost(
             output_tokens=spec.est_output_tokens_per_cell,
         )
         cost_per_cell_usd[agent_spec] = cell_cost
-        model_total = cell_cost * cells_per_model
+        model_total = cell_cost * weighted_coords
         per_model_usd[agent_spec] = model_total
         total += model_total
 

@@ -53,9 +53,23 @@ def export_run_metrics(run_dir: Path) -> str:
     # --- cost by model (matches startd8_cost_total{project=~...} by (model)) ---
     lines += ["# HELP startd8_cost_total Benchmark LLM cost in USD", "# TYPE startd8_cost_total counter"]
     by_model = (agg.get("by_model") or {})
-    for model, m in by_model.items():
-        lines.append(_metric("startd8_cost_total", {"project": project, "model": model},
-                             round(m.get("cost_total_usd") or 0.0, 6)))
+    # K2 (R4-S4): when both leverage states ran, label cost by `leverage` so dashboards don't blend
+    # the off and on arms into one series. `sum by (model)` still collapses correctly; off-only runs
+    # stay byte-identical (no leverage label added).
+    has_leverage = any(c.get("leverage", "off") != "off" for c in cells)
+    if has_leverage:
+        cost_by_model_lev: Dict[str, float] = {}
+        for c in cells:
+            key = (c.get("model", "?"), c.get("leverage", "off"))
+            cost_by_model_lev[key] = cost_by_model_lev.get(key, 0.0) + (c.get("cost_usd") or 0.0)
+        for (model, lev), cost in sorted(cost_by_model_lev.items()):
+            lines.append(_metric("startd8_cost_total",
+                                 {"project": project, "model": model, "leverage": lev},
+                                 round(cost, 6)))
+    else:
+        for model, m in by_model.items():
+            lines.append(_metric("startd8_cost_total", {"project": project, "model": model},
+                                 round(m.get("cost_total_usd") or 0.0, 6)))
 
     # --- cell counts by mapped task.status (T4 mapping; exclusions stay labelled-and-excluded) ---
     counts: Counter = Counter()

@@ -69,6 +69,11 @@ class BenchmarkRunSpec(BaseModel):
     # counts used only by estimate_run_cost). Real cost is captured per cell at run time.
     est_input_tokens_per_cell: int = 8000
     est_output_tokens_per_cell: int = 6000
+    # K2 (R1-S5): leverage=on cells run heavier commands (routing/micro-prime, no benchmark-mode
+    # shortcut → more LLM calls), so they cost more than off cells. This rough multiplier lets the
+    # preflight model that asymmetry instead of pricing every cell flat (a K2 run could otherwise
+    # pass preflight then abort mid-run). Sizing-only (excluded from spec_hash, like the token estimates).
+    est_on_cost_multiplier: float = 1.5
 
     # Provenance / reproducibility: service -> seed file sha256 (FR-19/FR-28).
     seed_hashes: Dict[str, str] = Field(default_factory=dict)
