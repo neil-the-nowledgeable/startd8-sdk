@@ -54,36 +54,46 @@ def estimate_run_cost(
     ``missing_pricing`` (callers fail-closed on these for a benchmark — see BudgetGuard).
     """
     pricing = pricing or PricingService()
-    coords_per_model = len(spec.services) * spec.repetitions  # per leverage state
+    coords_per_model = len(spec.services) * spec.repetitions  # cells per role-pair, per leverage state
     cells_per_model = coords_per_model * len(spec.leverage_states)
-    # K2 asymmetry (R1-S5): on-cells run heavier than off-cells. Weight each model's cell budget
-    # by off-count + on-count×multiplier so a tight ceiling can't pass preflight then abort mid-run.
+    # K2 asymmetry (R1-S5): on-cells run heavier than off-cells. The state weight folds the leverage
+    # factor in — off=1, on×multiplier — so per_coord × state_weight is the leverage-weighted cell
+    # count for one role pair (== today's weighted_coords for the default off-only run).
     states = spec.leverage_states or ("off",)
-    off_n = coords_per_model if "off" in states else 0
-    on_n = coords_per_model if "on" in states else 0
     on_mult = getattr(spec, "est_on_cost_multiplier", 1.5)
-    weighted_coords = off_n + on_n * on_mult  # == coords_per_model for the default off-only run
+    state_weight = (1.0 if "off" in states else 0.0) + (on_mult if "on" in states else 0.0)
+
     per_model_usd: Dict[str, float] = {}
     cost_per_cell_usd: Dict[str, float] = {}
     missing: List[str] = []
-    total = 0.0
 
-    for agent_spec in spec.models:
+    def _cell_cost(agent_spec: str) -> float:
         model = _model_id(agent_spec)
         if pricing.get_pricing(model) is None:
-            missing.append(agent_spec)
-            cost_per_cell_usd[agent_spec] = 0.0
-            per_model_usd[agent_spec] = 0.0
-            continue
-        cell_cost = pricing.calculate_total_cost(
-            model,
-            input_tokens=spec.est_input_tokens_per_cell,
-            output_tokens=spec.est_output_tokens_per_cell,
-        )
-        cost_per_cell_usd[agent_spec] = cell_cost
-        model_total = cell_cost * weighted_coords
-        per_model_usd[agent_spec] = model_total
-        total += model_total
+            if agent_spec not in missing:
+                missing.append(agent_spec)
+            cost_per_cell_usd.setdefault(agent_spec, 0.0)
+            return 0.0
+        c = pricing.calculate_total_cost(
+            model, input_tokens=spec.est_input_tokens_per_cell,
+            output_tokens=spec.est_output_tokens_per_cell)
+        cost_per_cell_usd[agent_spec] = c
+        return c
+
+    # K3 (R6-S3): cost MUST cover every role pair, not just #models — else a `grid` run (#models²
+    # cells) is priced as if diagonal and a too-small ceiling passes preflight then aborts mid-run.
+    # A mixed pair invokes both agents; price it by the heavier of the two (conservative, no
+    # undercount) and attribute to the lead. For the diagonal (lead==drafter==model) this reduces
+    # to today's per-model estimate exactly.
+    total = 0.0
+    for lead, drafter in spec.effective_role_pairs:
+        pair_cost = max(_cell_cost(lead), _cell_cost(drafter)) * coords_per_model * state_weight
+        per_model_usd[lead] = per_model_usd.get(lead, 0.0) + pair_cost
+        total += pair_cost
+    # Ensure every roster model shows in the table even if it only ever appears as a drafter.
+    for agent_spec in spec.models:
+        _cell_cost(agent_spec)
+        per_model_usd.setdefault(agent_spec, 0.0)
 
     return BenchmarkCostEstimate(
         total_usd=total,
