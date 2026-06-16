@@ -819,10 +819,13 @@ def _entity_routes(
             f"def delete_{e}({pkname}: {pkkind}, "
             f"session: Session = Depends(get_session){pdep}):",
             f"    obj = session.get({name}, {pkname})",
-            ("    if obj is not None and obj." + owner_field + " == principal.id:"
-             if owner_field else "    if obj is not None:"),
-            "        session.delete(obj)",
-            "        session.commit()",
+            # Scoped: 404 on a missing OR non-owned row (consistent with get/update; never a fake
+            # "deleted" flash). Unscoped: today's tolerant delete.
+            *(
+                [*guard404("obj"), "    session.delete(obj)", "    session.commit()"]
+                if owner_field
+                else ["    if obj is not None:", "        session.delete(obj)", "        session.commit()"]
+            ),
             # The hx-swap="outerHTML" replaces the row with this flash row (visible until reload),
             # so deletion gets the same confirmation feedback as create/update (FR-FS-3 family).
             "    return HTMLResponse(",

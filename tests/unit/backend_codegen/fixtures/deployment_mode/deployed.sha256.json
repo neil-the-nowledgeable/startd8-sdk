@@ -5,7 +5,8 @@
   "app/completeness.py": "d4a8bdb0a9a37ed504702630a7fddf247b890886dc8994f9fd9dc54d447ae124",
   "app/db.py": "b0bf4c549aa493efd1b326434ab33a64de83d75bc64b2d462f7a685922cbc24b",
   "app/export.py": "81a547fade809a4feb2e9dceda0b5da6bd6d580e30f138b119fd545cd3c0254c",
-  "app/main.py": "3d1d9bb26c77f4e71f0cfd8d757732d2267f33ad56bdb19db75d031d874c782c",
+  "app/health.py": "c56c074e0b271cae535d469edb6b4e17c3225f0048a7e7207b4e7842731caf1f",
+  "app/main.py": "b7363c56d48b37827527d6774698f3760c36408ca0873f7be0103159c524fe14",
   "app/models.py": "28e5f17004ff6e298d4d329c3579ffbf5c0c352d7bf4b4297e9c07c1fb95aa1f",
   "app/routers.py": "a8ae784ac8e94a853df013f2daacb618addd544dec2afe1899a320ae42f02ae5",
   "app/settings.py": "cf557b1e023586ab271c03a9a20a3ea3825e7d5dc6ee7304881bc76238798f8f",
@@ -20,5 +21,6 @@
   "requirements.txt": "034ddfce118cddded1e604d0675d8d86f73da764510379d4f0c0388c61081cde",
   "tests/test_completeness.py": "2fc46002881bcc10f6958fecdf07c67175ad099104aef21837c09d20d4a24f8a",
   "tests/test_contract.py": "65fed3b62c5b72dcbae075447d683fdaf21c28781d69a6451d6349d7a787b138",
+  "tests/test_health.py": "fd69fe2b6497e7e9f8fe156105099d413319af029166561993de2c1a1691e247",
   "tests/test_route_smoke.py": "f27276f645d753ec68c0bac30e62989d18706c4751a70cb3a3d6579ef0f7f475"
 }

@@ -108,8 +108,9 @@ def test_web_scopes_owner_entity_every_handler():
     assert "select(Note).where(Note.ownerId == principal.id)" in note  # list
     assert "obj.ownerId = principal.id" in note  # create server-sets owner
     assert "if item is None or item.ownerId != principal.id:" in note  # detail/edit 404 guard
-    assert "if obj is None or obj.ownerId != principal.id:" in note  # update 404 guard
-    assert "if obj is not None and obj.ownerId == principal.id:" in note  # delete ownership gate
+    assert "if obj is None or obj.ownerId != principal.id:" in note  # update/delete 404 guard
+    # delete 404s on a non-owned row (no fake-success flash) — never the "is not None and owned" form.
+    assert "if obj is not None and obj.ownerId" not in note
 
 
 def test_web_safety_net_no_unguarded_query_for_scoped_entity():
