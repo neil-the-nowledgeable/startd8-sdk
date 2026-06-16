@@ -91,6 +91,8 @@ def _build_spec(args, index) -> tuple[BenchmarkRunSpec, dict]:
         leverage_states=leverage_states, leverage_on_config=leverage_on_config,
         role_pairs=role_pairs,
         seed_hashes=seed_hashes, proto_sha256=index.get("proto_sha256"), sdk_version=_sdk_version(),
+        # CS-17: stamp the scoring method into the spec so a later combined scoreboard can gate on it.
+        repair_mode=args.repair_mode, expose_defects=args.expose_defects,
     )
     return spec, languages
 

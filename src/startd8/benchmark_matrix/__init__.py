@@ -40,8 +40,11 @@ from .aggregate import (
     rank_models_by_quality,
 )
 from .rescore import CellRescore, RescoreReport, rescore_run
+from .method import MethodSignature, method_signature
 
 __all__ = [
+    "MethodSignature",
+    "method_signature",
     "BenchmarkRunSpec",
     "MatrixCell",
     "BenchmarkCostEstimate",
