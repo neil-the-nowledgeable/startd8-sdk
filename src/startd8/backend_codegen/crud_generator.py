@@ -26,6 +26,7 @@ from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha2
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
 from ._headers import header_standard as _header  # shared provenance header (one source of truth)
 from .pydantic_renderer import _PY_SCALAR
+from .tenancy import scoped_entities as _scoped_entities
 
 # Canonical generated layout: artifact-kind -> path relative to the project root (FR-11).
 CANONICAL_LAYOUT: Dict[str, str] = {
@@ -120,30 +121,125 @@ def delete_{prefix}(item_id: {pktype}, session: Session = Depends(get_session)) 
     return {{"ok": True}}"""
 
 
-def _entity_block(schema: PrismaSchema, name: str) -> str:
+# Tenant-scoped variants (Tier B / FR-TEN-2): every handler resolves the current principal and the
+# query is row-scoped to it — list filters by owner, get/update/delete 404 on a non-owned row (never
+# 403, so existence is not leaked), create server-sets the owner, and update re-pins it (ownership is
+# immutable from the client). Emitted ONLY for entities that declare the owner FK (no synthesis).
+_LIST_CREATE_SCOPED = """\
+{rname} = APIRouter(prefix="/{prefix}", tags=["{prefix}"])
+
+
+@{rname}.get("/")
+def list_{prefix}(
+    session: Session = Depends(get_session),
+    principal: Principal = Depends(require_principal),
+) -> list[{name}Read]:
+    return list(session.exec(select({name}).where({name}.{owner} == principal.id)).all())
+
+
+@{rname}.post("/")
+def create_{prefix}(
+    item: {name}Create,
+    session: Session = Depends(get_session),
+    principal: Principal = Depends(require_principal),
+) -> {name}Read:
+    obj = {name}(**item.model_dump())
+    obj.{owner} = principal.id  # server-set owner: a client cannot create rows for another principal
+    session.add(obj)
+    session.commit()
+    session.refresh(obj)
+    return obj"""
+
+_BY_PK_SCOPED = """
+
+
+@{rname}.get("/{{item_id}}")
+def get_{prefix}(
+    item_id: {pktype},
+    session: Session = Depends(get_session),
+    principal: Principal = Depends(require_principal),
+) -> {name}Read:
+    obj = session.get({name}, item_id)
+    if obj is None or obj.{owner} != principal.id:
+        raise HTTPException(status_code=404, detail="{name} not found")
+    return obj
+
+
+@{rname}.patch("/{{item_id}}")
+def update_{prefix}(
+    item_id: {pktype},
+    data: {name}Update,
+    session: Session = Depends(get_session),
+    principal: Principal = Depends(require_principal),
+) -> {name}Read:
+    obj = session.get({name}, item_id)
+    if obj is None or obj.{owner} != principal.id:
+        raise HTTPException(status_code=404, detail="{name} not found")
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(obj, key, value)
+    obj.{owner} = principal.id  # ownership is immutable from the client
+    session.add(obj)
+    session.commit()
+    session.refresh(obj)
+    return obj
+
+
+@{rname}.delete("/{{item_id}}")
+def delete_{prefix}(
+    item_id: {pktype},
+    session: Session = Depends(get_session),
+    principal: Principal = Depends(require_principal),
+) -> dict:
+    obj = session.get({name}, item_id)
+    if obj is None or obj.{owner} != principal.id:
+        raise HTTPException(status_code=404, detail="{name} not found")
+    session.delete(obj)
+    session.commit()
+    return {{"ok": True}}"""
+
+
+def _entity_block(schema: PrismaSchema, name: str, owner_field: Optional[str] = None) -> str:
     prefix = name.lower()
     rname = f"{prefix}_router"
-    block = _LIST_CREATE.format(rname=rname, prefix=prefix, name=name)
+    lc = _LIST_CREATE_SCOPED if owner_field else _LIST_CREATE
+    block = lc.format(rname=rname, prefix=prefix, name=name, owner=owner_field or "")
     pk = _pk_field(schema, name)
     if pk is not None:
         pktype = _PY_SCALAR.get(pk.type, "str")
-        block += _BY_PK.format(rname=rname, prefix=prefix, name=name, pktype=pktype)
+        by_pk = _BY_PK_SCOPED if owner_field else _BY_PK
+        block += by_pk.format(rname=rname, prefix=prefix, name=name, pktype=pktype, owner=owner_field or "")
     return block
 
 
-def render_routers(schema_text: str, source_file: str = "prisma/schema.prisma") -> str:
-    """Render ``app/routers.py`` — one APIRouter per entity, gathered into ``all_routers``."""
+def render_routers(
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    tenant_owner_field: Optional[str] = None,
+) -> str:
+    """Render ``app/routers.py`` — one APIRouter per entity, gathered into ``all_routers``.
+
+    When *tenant_owner_field* is set (deployed + ``deployment.tenant``), entities that declare that
+    owner FK get row-scoped query handlers (FR-TEN-2). The owner field is **self-described** in the
+    header (``# startd8-tenant:``) so the schema-only skip-hook re-renders the scoped file without
+    ``app.yaml`` (the FR-CFG-7a precedent). *tenant_owner_field* None → today's unscoped output."""
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     names = _model_names(schema, schema_text)
+    scoped = (
+        set(_scoped_entities(schema_text, tenant_owner_field)) if tenant_owner_field else set()
+    )
 
     header = _header(source_file, sha, "fastapi-routers")
+    if tenant_owner_field:
+        header += f"\n# startd8-tenant: {tenant_owner_field}"
     imports = (
         "from __future__ import annotations\n\n"
         "from fastapi import APIRouter, Depends, HTTPException\n"
         "from sqlmodel import Session, select\n\n"
         "from .db import get_session\n"
     )
+    if scoped:  # the principal dependency the scoped handlers resolve (auth seam, deployed-only)
+        imports += "from .auth import Principal, require_principal\n"
     if names:
         imported: List[str] = []
         for n in names:
@@ -152,7 +248,10 @@ def render_routers(schema_text: str, source_file: str = "prisma/schema.prisma") 
                 imported.append(f"{n}Update")  # only by-id PATCH uses the Update DTO
         imports += "from .tables import " + ", ".join(sorted(set(imported))) + "\n"
 
-    blocks = [_entity_block(schema, n) for n in names]
+    blocks = [
+        _entity_block(schema, n, owner_field=(tenant_owner_field if n in scoped else None))
+        for n in names
+    ]
     all_routers = (
         "all_routers = [" + ", ".join(f"{n.lower()}_router" for n in names) + "]"
     )

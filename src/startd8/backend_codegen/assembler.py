@@ -51,6 +51,7 @@ def render_backend(
     display_text: Optional[str] = None,
     imports_text: Optional[str] = None,
     deployment_mode: str = "installed",
+    tenant_owner_field: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
@@ -75,13 +76,19 @@ def render_backend(
             CANONICAL_LAYOUT["sqlmodel-tables"],
             render_sqlmodel_tables(schema_text, source_file=source_file).text,
         ),
-        (CANONICAL_LAYOUT["fastapi-routers"], render_routers(schema_text, source_file)),
+        (
+            CANONICAL_LAYOUT["fastapi-routers"],
+            render_routers(schema_text, source_file, tenant_owner_field=tenant_owner_field),
+        ),
         (CANONICAL_LAYOUT["fastapi-db"], render_db(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-main"], render_main(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-health"], render_health(schema_text, source_file)),
     ]
     # app/web.py + templates (+ nav, + per-entity post-create behavior from views.yaml `forms:`)
-    out.extend(render_ui(schema_text, source_file, pages_text, views_text, display_text))
+    out.extend(render_ui(
+        schema_text, source_file, pages_text, views_text, display_text,
+        tenant_owner_field=tenant_owner_field,
+    ))
     # P0-1: step-state flow routers + shells from views.yaml `flows:` (empty when none declared)
     out.extend(render_flows(schema_text, views_text or ""))
     # FR-ED: bulk child-field editors from views.yaml `editors:` (empty when none declared)

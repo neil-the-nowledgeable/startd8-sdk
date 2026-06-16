@@ -911,12 +911,17 @@ def _deployment_section(app_state: "_ManifestState") -> WireframeSection:
                       "external manager expected (e.g. doppler)" if deployed else "local backend"),
         WireframeItem("observability", Status.PLANNED,
                       "centralized OTel expected" if deployed else "local rotating file logs"),
-        WireframeItem("identity", Status.PLANNED,
-                      "reference auth seam (app/auth.py, not production); tenancy deferred Tier B/M3"
-                      if deployed else "single implicit owner (no auth)"),
+        WireframeItem(
+            "identity", Status.PLANNED,
+            ("reference auth seam + per-principal row scoping "
+             f"(tenant={manifest.tenant_model}.{manifest.tenant_owner_field})"
+             if deployed and manifest.has_tenant
+             else "reference auth seam (app/auth.py, not production); NOT tenant-isolated"
+             if deployed else "single implicit owner (no auth)"),
+        ),
     ]
-    # M2/A6: deployed emits the auth seam → the authenticated-but-not-isolated WARN goes live.
-    findings = evaluate_coherence(manifest, has_auth_seam=deployed)
+    # M2 emits the auth seam; M3 tenancy (has_tenant) retires the authenticated-but-not-isolated WARN.
+    findings = evaluate_coherence(manifest, has_auth_seam=deployed, has_tenant=manifest.has_tenant)
     for f in findings:
         st = Status.INVALID if f.severity == "ERROR" else Status.PLACEHOLDER
         items.append(WireframeItem(f"coherence:{f.code}", st, f"{f.severity}: {f.message}"))

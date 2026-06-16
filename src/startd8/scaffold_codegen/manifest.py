@@ -24,7 +24,12 @@ _TOP_KEYS = {
 # coerced. Tier-B `deployment.tenant` is intentionally NOT accepted yet (added when that increment
 # ships), keeping the strict-key discipline this module already enforces.
 _VALID_DEPLOYMENT_MODES = frozenset({"installed", "deployed"})
-_DEPLOYMENT_KEYS = {"mode"}
+# Tier B (M3): `deployment.tenant: {model, owner_field}` declares per-principal data isolation
+# (FR-TEN-2). Both sub-keys required when the block is present; the SCHEMA-level validation (the
+# model + owner_field actually exist) happens at generation time in backend_codegen, since this
+# plumbing parser is schema-agnostic. **No synthesis** — the owner FK must already be in the schema.
+_DEPLOYMENT_KEYS = {"mode", "tenant"}
+_TENANT_KEYS = {"model", "owner_field"}
 DEFAULT_DEPLOYMENT_MODE = "installed"
 
 
@@ -45,6 +50,16 @@ class AppManifest:
     # FR-CFG-1/2: the single declared source of truth for installed-vs-deployed. Defaults to
     # `installed` so an absent `deployment:` block reproduces today's behavior exactly.
     deployment_mode: str = DEFAULT_DEPLOYMENT_MODE
+    # Tier B / FR-TEN-2: the declared tenant isolation (both None unless `deployment.tenant` is set).
+    # `tenant_model` = the principal/owner model; `tenant_owner_field` = the FK field name on scoped
+    # entities (an entity is row-scoped to the principal iff it has a field of this name).
+    tenant_model: Optional[str] = None
+    tenant_owner_field: Optional[str] = None
+
+    @property
+    def has_tenant(self) -> bool:
+        """True iff a `deployment.tenant` isolation contract is declared (Tier B)."""
+        return self.tenant_model is not None and self.tenant_owner_field is not None
 
 
 def parse_app_manifest(text: Optional[str]) -> AppManifest:
@@ -84,6 +99,24 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
             f"got {deployment_mode!r}"
         )
 
+    # Tier B: `deployment.tenant` (optional). When present, both model + owner_field are required
+    # strings; schema existence is validated downstream (backend_codegen), not here.
+    tenant_model: Optional[str] = None
+    tenant_owner_field: Optional[str] = None
+    tenant = deployment.get("tenant")
+    if tenant is not None:
+        if not isinstance(tenant, dict):
+            raise ValueError("app.yaml: `deployment.tenant` must be a mapping {model, owner_field}")
+        unknown_tenant = set(tenant) - _TENANT_KEYS
+        if unknown_tenant:
+            raise ValueError(f"app.yaml: `deployment.tenant` has unknown keys {sorted(unknown_tenant)}")
+        tenant_model = tenant.get("model")
+        tenant_owner_field = tenant.get("owner_field")
+        if not (isinstance(tenant_model, str) and tenant_model):
+            raise ValueError("app.yaml: `deployment.tenant.model` is required (the principal model)")
+        if not (isinstance(tenant_owner_field, str) and tenant_owner_field):
+            raise ValueError("app.yaml: `deployment.tenant.owner_field` is required (the owner FK field)")
+
     return AppManifest(
         name=str(app.get("name", "app")),
         package=str(app.get("package", "app")),
@@ -94,4 +127,6 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         python_version=str(app.get("python_version", "3.11")),
         extra_dependencies=tuple(extra_deps),
         deployment_mode=deployment_mode,
+        tenant_model=tenant_model,
+        tenant_owner_field=tenant_owner_field,
     )

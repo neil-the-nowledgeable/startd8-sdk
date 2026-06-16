@@ -261,6 +261,7 @@ def backend(
     # an explicit --mode wins (ergonomic override). Threaded to BOTH generate and --check so a
     # deployed tree's app/settings.py is emitted and drift-checked consistently.
     deployment_mode = "installed"
+    tenant_owner_field: Optional[str] = None  # Tier B: set when deployed + a valid deployment.tenant
     app_manifest_obj = None
     if app_manifest is not None:
         from .scaffold_codegen import parse_app_manifest
@@ -291,11 +292,26 @@ def backend(
 
         from .scaffold_codegen.coherence import evaluate_coherence, has_errors
 
-        # Deployed mode now emits the auth seam (M2/A6) but no tenant isolation yet → the
-        # FR-IDN-4 authenticated-but-not-isolated WARN goes live (has_auth_seam, no has_tenant).
+        effective = replace(app_manifest_obj, deployment_mode=deployment_mode)
+        # B1: a `deployment.tenant` declaration must validate against the schema (model + owner_field
+        # exist, and the owner_field scopes at least one entity) before we generate scoped queries.
+        if effective.deployment_mode == "deployed" and effective.has_tenant:
+            from .backend_codegen.tenancy import validate_tenant
+
+            tenant_issues = validate_tenant(
+                schema_text, effective.tenant_model, effective.tenant_owner_field
+            )
+            for msg in tenant_issues:
+                console.print(f"[red]error:[/red] {msg}")
+            if tenant_issues:
+                raise typer.Exit(_EXIT_ERROR)
+            tenant_owner_field = effective.tenant_owner_field  # validated → drive scoped generation
+        # Deployed emits the auth seam (M2); the FR-IDN-4 authenticated-but-not-isolated WARN fires
+        # only until tenant isolation is declared (has_tenant), which Tier B (M3) now enables.
         findings = evaluate_coherence(
-            replace(app_manifest_obj, deployment_mode=deployment_mode),
+            effective,
             has_auth_seam=(deployment_mode == "deployed"),
+            has_tenant=effective.has_tenant,
         )
         for f in findings:
             color = "red" if f.severity == "ERROR" else "yellow"
@@ -333,6 +349,7 @@ def backend(
             pages_app_dir=None if check else (out / "app"),
             authoring=pages_authoring,
             deployment_mode=deployment_mode,
+            tenant_owner_field=tenant_owner_field,
         )
     except (
         ValueError
