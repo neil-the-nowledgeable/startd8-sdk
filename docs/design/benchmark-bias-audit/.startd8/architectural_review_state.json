@@ -1,0 +1,82 @@
+{
+  "document_path": "/Users/neilyashinsky/Documents/dev/startd8-bias-audit/docs/design/benchmark-bias-audit/CROSS_TOOL_BIAS_AUDIT_PLAN.md",
+  "updated_at_utc": "2026-06-17 21:11:29 UTC",
+  "applied_ids": [
+    "R1-S1",
+    "R1-S2",
+    "R1-S3",
+    "R1-S4",
+    "R1-S5",
+    "R1-S6",
+    "R1-S7",
+    "R1-S8",
+    "R1-S9",
+    "R1-S10",
+    "R2-S1",
+    "R2-S2",
+    "R2-S3",
+    "R2-S4"
+  ],
+  "rejected_ids": [
+    "R2-S5"
+  ],
+  "rounds": [
+    {
+      "round": 3,
+      "agent": "gpt5.4-mini",
+      "model": "gpt-5.4-mini",
+      "ids": [
+        "R3-S1",
+        "R3-S2",
+        "R3-S3",
+        "R3-S4",
+        "R3-S5",
+        "R3-S6",
+        "R3-S7",
+        "R3-S8",
+        "R3-S9",
+        "R3-S10"
+      ],
+      "appended_at_utc": "2026-06-17 21:10:51 UTC",
+      "cost": 0.0079088
+    },
+    {
+      "round": 4,
+      "agent": "gemini-2.5",
+      "model": "gemini-2.5-flash",
+      "ids": [
+        "R4-S1",
+        "R4-S2",
+        "R4-S3",
+        "R4-S4",
+        "R4-S5",
+        "R4-S6",
+        "R4-S7",
+        "R4-S8",
+        "R4-S9",
+        "R4-S10"
+      ],
+      "appended_at_utc": "2026-06-17 21:11:29 UTC",
+      "cost": 0.0033485999999999998
+    }
+  ],
+  "cumulative_cost_usd": 0.0112574,
+  "triage": {
+    "enabled": false,
+    "accepted": 0,
+    "rejected": 0,
+    "feature_accepted": 0,
+    "feature_rejected": 0,
+    "untriaged_remaining": [],
+    "substantially_addressed_areas": [],
+    "areas_needing_review": []
+  },
+  "apply": {
+    "enabled": false,
+    "applied_count": 0,
+    "applied_ids": [],
+    "warning_ids": [],
+    "feature_applied_count": 0,
+    "error": null
+  }
+}
