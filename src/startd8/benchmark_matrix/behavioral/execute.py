@@ -94,16 +94,27 @@ def run_behavioral_cell(
     *,
     cfg: Optional[SandboxConfig] = None,
     port: Optional[int] = None,
+    tier: str = "baseline",
 ) -> BehavioralResult:
     """Execute ``service``'s behavioral suite against the generated code in ``workdir``.
 
     Returns a :class:`BehavioralResult`. ``has_suite=False`` → this service has no suite yet (the
     caller leaves the composite unchanged). ``degraded=True`` → a suite exists but the service
     couldn't be launched/reached (degrade the functional term, don't score 0).
+
+    ``tier`` (FR-2/FR-6/FR-26): when a suite accepts a ``tier`` kwarg, it is bound here so a
+    ``"hardened"`` cell runs the suite's hardened **superset** (baseline assertions + the hard ones).
+    Suites that don't accept ``tier`` are unaffected — fully backward-compatible.
     """
     suite_fn = _SUITES.get(service)
     if suite_fn is None:
         return BehavioralResult(has_suite=False, provenance={"reason": "no behavioral suite for service"})
+    # Bind the difficulty tier into the suite only when the suite opts in (accepts a `tier` kwarg).
+    # run_service_sandboxed calls client(port), so tier must be pre-bound here.
+    import functools
+    import inspect
+    if "tier" in inspect.signature(suite_fn).parameters:
+        suite_fn = functools.partial(suite_fn, tier=tier)
 
     port = port or _free_port()
     serve = resolve_serve_command(seed, target_files, port)

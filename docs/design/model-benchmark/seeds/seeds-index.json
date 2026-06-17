@@ -1,5 +1,15 @@
 {
   "generator": "gen_ob_benchmark_seeds.py",
+  "hardened": [
+    {
+      "language": "nodejs",
+      "seed_file": "seed-currencyservice.hardened.json",
+      "seed_sha256": "ce319627140b59c380dc9e019fbb2d1db35c8b0514be3a943d5d094fe40fb10f",
+      "service": "currencyservice",
+      "target_file": "src/currencyservice/server.js",
+      "tier": "hardened"
+    }
+  ],
   "proto": "demo.proto",
   "proto_sha256": "b1f2fa42c0a9305211bf51fba7d8b5832cd3defd7b8855c327ebd5b1f0f86884",
   "schema_version": "1.0",

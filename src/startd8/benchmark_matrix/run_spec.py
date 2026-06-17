@@ -29,6 +29,8 @@ class MatrixCell(NamedTuple):
     leverage: str = "off"  # K2: "off" (LLM-maximal, today's default) | "on" (SDK leverage engaged)
     lead: Optional[str] = None     # K3 (FR-K3-1): lead agent; None ⇒ model (diagonal)
     drafter: Optional[str] = None  # K3 (FR-K3-1): drafter agent; None ⇒ model (diagonal)
+    tier: str = "baseline"  # difficulty tier (FR-2): "baseline" (today) | "hardened" (stricter spec
+                            # + harder behavioral suite). Default ⇒ byte-identical to pre-tier cells.
 
     @property
     def resolved_lead(self) -> str:
@@ -74,6 +76,13 @@ class BenchmarkRunSpec(BaseModel):
     # micro_prime+benchmark-mode combo is rejected downstream (run_prime_workflow.py:385).
     leverage_on_config: Dict[str, bool] = Field(
         default_factory=lambda: {"routing": True, "micro_prime": False})
+
+    # Difficulty tier axis (FR-2). The tiers each coordinate is paired across. Default ("baseline",)
+    # = today's single-tier matrix — byte-identical hash/cells/sandboxes (same backward-compat
+    # precedent as ``leverage_states``). ("baseline","hardened") runs each coordinate at both tiers:
+    # baseline (today's seed/suite) and hardened (stricter requirements_text + a superset behavioral
+    # suite). OPEN string axis (not a baseline/hardened boolean) so future variants reuse the machinery.
+    tier_states: Tuple[str, ...] = ("baseline",)
 
     # K3 lead/drafter role matrix (FR-K3-1/2). The (lead, drafter) pairs this run executes.
     # None = the **diagonal** default: each model paired with itself (lead==drafter), i.e. today's
@@ -152,6 +161,17 @@ class BenchmarkRunSpec(BaseModel):
             raise ValueError(f"duplicate leverage states: {v}")
         return v
 
+    @field_validator("tier_states")
+    @classmethod
+    def _valid_tier_states(cls, v: Tuple[str, ...]) -> Tuple[str, ...]:
+        # OPEN axis (FR-2): non-empty + unique, but the value set is deliberately NOT restricted so
+        # future difficulty variants (e.g. "adversarial") need no validator change.
+        if not v:
+            raise ValueError("tier_states must be non-empty")
+        if len(set(v)) != len(v):
+            raise ValueError(f"duplicate tier states: {v}")
+        return v
+
     @field_validator("leverage_on_config")
     @classmethod
     def _valid_on_config(cls, v: Dict[str, bool]) -> Dict[str, bool]:
@@ -195,7 +215,7 @@ class BenchmarkRunSpec(BaseModel):
         # (1:1, NOT N²), #models² for a full grid, len(list) for a prune. Replaces the bare #models
         # so a `grid` run can't silently underprice (the headline K3 cost regression).
         return (len(self.services) * len(self.effective_role_pairs) * self.repetitions
-                * len(self.leverage_states))
+                * len(self.leverage_states) * len(self.tier_states))
 
     def cells(self) -> Iterator[MatrixCell]:
         """Deterministic iteration order: service → **role pair** (in the old model position) → rep
@@ -207,13 +227,15 @@ class BenchmarkRunSpec(BaseModel):
                 is_diag = lead == drafter
                 for rep in range(self.repetitions):
                     for leverage in self.leverage_states:
-                        yield MatrixCell(
-                            service=service, model=lead, repetition=rep, leverage=leverage,
-                            # diagonal ⇒ lead/drafter None so the cell is byte-identical to pre-K3;
-                            # off-diagonal carries both (and `model` = lead, R6-S5: off-diagonal lives
-                            # only in by_pair, never polluting the per-model views).
-                            lead=None if is_diag else lead,
-                            drafter=None if is_diag else drafter)
+                        for tier in self.tier_states:  # tier innermost; ("baseline",) ⇒ same cells/order
+                            yield MatrixCell(
+                                service=service, model=lead, repetition=rep, leverage=leverage,
+                                # diagonal ⇒ lead/drafter None so the cell is byte-identical to pre-K3;
+                                # off-diagonal carries both (and `model` = lead, R6-S5: off-diagonal lives
+                                # only in by_pair, never polluting the per-model views).
+                                lead=None if is_diag else lead,
+                                drafter=None if is_diag else drafter,
+                                tier=tier)
 
     def spec_hash(self) -> str:
         """SHA-256 of the identity-defining fields (excludes sizing-only token estimates
@@ -241,6 +263,10 @@ class BenchmarkRunSpec(BaseModel):
         # the cell_ids embedding it) keep resolving.
         if self.role_pairs is not None:
             identity["role_pairs"] = [list(p) for p in self.role_pairs]
+        # Difficulty tier axis: same conditional-inclusion precedent — added ONLY when it differs from
+        # the default single tier, so a baseline-only spec hashes byte-identically to pre-tier (FR-2).
+        if tuple(self.tier_states) != ("baseline",):
+            identity["tier_states"] = list(self.tier_states)
         blob = json.dumps(identity, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 

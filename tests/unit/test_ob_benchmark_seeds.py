@@ -32,7 +32,10 @@ EXPECTED = {
 
 
 def _seed_paths():
-    return sorted(SEEDS_DIR.glob("seed-*.json"))
+    # Baseline seeds only — additive hardened-tier variants (seed-<svc>.hardened.json) are validated
+    # separately (gen --check + test_benchmark_difficulty_tier) and must not skew the baseline set.
+    return sorted(p for p in SEEDS_DIR.glob("seed-*.json")
+                  if not p.name.endswith(".hardened.json"))
 
 
 def test_all_nine_seeds_present():

@@ -71,7 +71,10 @@ def cell_id(spec_hash: str, cell: MatrixCell) -> str:
     if not getattr(cell, "is_diagonal", True):  # K3 role segment (off-diagonal only)
         base = f"{base}:lead-{_role_slug(cell.resolved_lead)}_drafter-{_role_slug(cell.resolved_drafter)}"
     leverage = getattr(cell, "leverage", "off")  # K2 leverage segment (on only), AFTER role
-    return base if leverage == "off" else f"{base}:lev-{leverage}"
+    if leverage != "off":
+        base = f"{base}:lev-{leverage}"
+    tier = getattr(cell, "tier", "baseline")  # difficulty-tier segment (hardened only), AFTER leverage
+    return base if tier == "baseline" else f"{base}:tier-{tier}"
 
 
 @dataclass
@@ -220,16 +223,28 @@ class SubprocessCellExecutor:
         from ..model_comparison import build_command, extract_metrics, run_command, SDK_ROOT
 
         cid = cell_id(spec.spec_hash(), cell)
-        seed = self.seeds_dir / f"seed-{cell.service}.json"
+        tier = getattr(cell, "tier", "baseline")
+        # Tier-aware seed selection (FR-2/FR-4). Baseline uses seed-<svc>.json; a non-baseline tier
+        # uses seed-<svc>-<tier>.json and is FAIL-CLOSED: if the hardened seed is absent we mark the
+        # cell INFRA_FAIL rather than silently running the baseline seed under a hardened label (that
+        # would corrupt the baseline-vs-hardened comparison — FR-4). Baseline fallback is NEVER applied
+        # to a non-baseline tier.
+        if tier == "baseline":
+            seed = self.seeds_dir / f"seed-{cell.service}.json"
+        else:
+            seed = self.seeds_dir / f"seed-{cell.service}-{tier}.json"
         if not seed.exists():
+            status = STATUS_INFRA_FAIL if tier != "baseline" else STATUS_FAILED
+            reason = (f"{tier} seed not found: {seed} (fail-closed — not falling back to baseline)"
+                      if tier != "baseline" else f"seed not found: {seed}")
             return CellResult(cell_id=cid, service=cell.service, model=cell.model,
                               language=language, repetition=cell.repetition,
-                              status=STATUS_FAILED, error=f"seed not found: {seed}")
+                              status=status, error=reason)
 
         leverage = getattr(cell, "leverage", "off")
         root = self.workdir_root or Path(tempfile.mkdtemp(prefix="obbench-"))
         workdir = root / sandbox_dir_name(cell.service, cell.model, cell.repetition, leverage,
-                                          lead=cell.lead, drafter=cell.drafter)
+                                          lead=cell.lead, drafter=cell.drafter, tier=tier)
         workdir.mkdir(parents=True, exist_ok=True)
         output = workdir / ".startd8" / "benchmark-output"
 
@@ -348,7 +363,7 @@ class SubprocessCellExecutor:
                         seed_data = _load_json(seed) or {}
                         tfs = ((seed_data.get("tasks") or [{}])[0].get("config", {})
                                .get("context", {}).get("target_files")) or []
-                        bres = run_behavioral_cell(seed_data, workdir, cell.service, tfs)
+                        bres = run_behavioral_cell(seed_data, workdir, cell.service, tfs, tier=tier)
                         if bres.has_suite:
                             functional_coverage = bres.functional
                             functional_degraded = bres.degraded
@@ -434,23 +449,28 @@ def resolve_generated_file(seeds_dir: Path, workdir: Path, service: str) -> Opti
 
 
 def sandbox_dir_name(service: str, model: str, repetition: int, leverage: str = "off",
-                     lead: Optional[str] = None, drafter: Optional[str] = None) -> str:
+                     lead: Optional[str] = None, drafter: Optional[str] = None,
+                     tier: str = "baseline") -> str:
     """The per-cell sandbox directory name used by :class:`SubprocessCellExecutor`
     (``<service>-<model with ':'→'_'>-r<rep>``). Factored out so the re-scorer can
     locate a cell's generated workdir without re-running it.
 
-    Segments compose in a fixed order — **role first, then leverage** (R6-S1/S8) — and both are
-    omitted for the default (diagonal lead==drafter, leverage off):
+    Segments compose in a fixed order — **role, then leverage, then tier** — and all are
+    omitted for the default (diagonal lead==drafter, leverage off, tier baseline):
     - K3 (R6-S1): an off-diagonal cell appends ``-lead-<lead>_drafter-<drafter>`` (slugged) so
       ``A→B``, ``B→A`` and the ``A``/``B`` diagonals resolve to **distinct workdirs**.
     - K2 (R5-S2): a non-``"off"`` ``leverage`` appends ``-lev-<state>``.
-    ``leverage="off"`` + diagonal is unsuffixed — byte-identical to pre-K2/pre-K3 dirs (FR-1), so
+    - Tier (FR-2): a non-``"baseline"`` ``tier`` appends ``-tier-<state>`` so a service's baseline
+      and hardened cells get **distinct workdirs** (and persisted servers don't collide).
+    The all-default cell is unsuffixed — byte-identical to pre-tier/pre-K2/pre-K3 dirs (FR-1), so
     rescoring existing runs still resolves."""
     base = f"{service}-{model.replace(':', '_')}-r{repetition}"
     rl, rd = lead or model, drafter or model
     if rl != rd:  # K3 role segment (off-diagonal only), before the leverage segment
         base = f"{base}-lead-{_role_slug(rl)}_drafter-{_role_slug(rd)}"
-    return base if leverage == "off" else f"{base}-lev-{leverage}"
+    if leverage != "off":
+        base = f"{base}-lev-{leverage}"
+    return base if tier == "baseline" else f"{base}-tier-{tier}"
 
 
 def reclassify_infra_failures(cells: List[CellResult]) -> int:
