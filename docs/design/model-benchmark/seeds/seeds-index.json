@@ -4,9 +4,17 @@
     {
       "language": "nodejs",
       "seed_file": "seed-currencyservice.hardened.json",
-      "seed_sha256": "ce319627140b59c380dc9e019fbb2d1db35c8b0514be3a943d5d094fe40fb10f",
+      "seed_sha256": "b7d8a9ecdf85d5ec20ac195df97259fa67e11d657654b8bf43ce5fc4e48f4911",
       "service": "currencyservice",
       "target_file": "src/currencyservice/server.js",
+      "tier": "hardened"
+    },
+    {
+      "language": "nodejs",
+      "seed_file": "seed-paymentservice.hardened.json",
+      "seed_sha256": "6af702d3b4d9c823393ab90312af34aad01a8ac4cb68fd959a8700378f9f0801",
+      "service": "paymentservice",
+      "target_file": "src/paymentservice/server.js",
       "tier": "hardened"
     }
   ],

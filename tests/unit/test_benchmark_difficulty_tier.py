@@ -88,6 +88,7 @@ try:
     import grpc  # noqa: F401
     import startd8.benchmark_matrix.behavioral as beh
     from startd8.benchmark_matrix.behavioral.currency_suite import run_currency_suite
+    from startd8.benchmark_matrix.behavioral.charge_suite import run_charge_suite
     from startd8.benchmark_matrix.sandbox import SandboxConfig, run_service_sandboxed
     _BEH_DIR = Path(beh.__file__).parent
     _NO_NET = SandboxConfig(no_network=False)  # in-process loopback; matches the stateless-suite tests
@@ -107,7 +108,8 @@ def _free_port() -> int:
     return port
 
 
-def _run(tmp_path: Path, fixture: str, *, tier: str):
+def _run(tmp_path: Path, fixture: str, *, tier: str, suite=None):
+    suite = suite or run_currency_suite
     ws = tmp_path / "svc"
     ws.mkdir(parents=True)
     for f in ("demo_pb2.py", "demo_pb2_grpc.py"):
@@ -116,7 +118,7 @@ def _run(tmp_path: Path, fixture: str, *, tier: str):
     port = _free_port()
     res = run_service_sandboxed(
         [sys.executable, fixture], ws, port,
-        lambda p: run_currency_suite(p, tier=tier),
+        lambda p: suite(p, tier=tier),
         cfg=_NO_NET, readiness_timeout_s=15.0, extra_env={"PORT": str(port)},
     )
     assert res.ready and res.violation is None, res.server_stderr
@@ -144,3 +146,25 @@ def test_hardened_suite_discriminates(tmp_path):
     assert "h_round_trip_identity" in failed
     # and it is a strict superset — the careless impl still passes every baseline invariant
     assert careless.coverage > 0.5
+
+
+@grpc_required
+def test_charge_baseline_does_not_discriminate(tmp_path):
+    """Both the hardened-correct and the constant-id/no-validation impl pass the baseline charge suite."""
+    good = _run(tmp_path / "g", "hardened_good_payment_server.py", tier="baseline", suite=run_charge_suite)
+    careless = _run(tmp_path / "c", "good_payment_server.py", tier="baseline", suite=run_charge_suite)
+    assert good.coverage == 1.0, [r.__dict__ for r in good.results]
+    assert careless.coverage == 1.0, [r.__dict__ for r in careless.results]
+
+
+@grpc_required
+def test_charge_hardened_discriminates(tmp_path):
+    """Hardened charge separates a validating/unique-id impl (1.0) from the constant-id, no-amount-
+    validation impl (<1.0) — which the baseline suite scores identically."""
+    good = _run(tmp_path / "g", "hardened_good_payment_server.py", tier="hardened", suite=run_charge_suite)
+    careless = _run(tmp_path / "c", "good_payment_server.py", tier="hardened", suite=run_charge_suite)
+    assert good.coverage == 1.0, [r.__dict__ for r in good.results]
+    assert careless.coverage < 1.0, [r.__dict__ for r in careless.results]
+    failed = {r.name for r in careless.results if not r.passed}
+    # constant transaction_id and missing amount validation are the discriminators
+    assert {"h_unique_transaction_ids", "h_negative_amount_rejected"} & failed

@@ -64,6 +64,10 @@ SERVICES = [
             "requirements_extra": (
                 "## Hardened correctness requirements (tier: hardened)\n\n"
                 "Implement `Convert` with full Money-type correctness — these are scored behaviorally:\n"
+                "- **Single self-contained file:** put ALL logic in the one target `server.js` and INLINE "
+                "the rate table. Do NOT `require` sibling modules you also write (e.g. `./loaders/...`) or "
+                "read external data files (e.g. `data/*.json`) — the harness runs only this file offline. "
+                "Do Money math with exact integer `units`/`nanos` arithmetic (no decimal/bignum library).\n"
                 "- **Money contract:** `nanos` MUST be in [-999,999,999, +999,999,999], and the sign of "
                 "`nanos` MUST match the sign of `units` (e.g. -$1.75 ⇒ units=-1, nanos=-750000000). "
                 "Normalize any sub-unit remainder into `units`/`nanos`; never leave `nanos` out of range.\n"
@@ -90,6 +94,25 @@ SERVICES = [
             "cmd": ["node", "src/paymentservice/server.js"],
             "port_env": "PORT",
             "readiness": "tcp",
+        },
+        # Hardened tier (FR-1/FR-10): stricter Charge validation + uniqueness, within the SAME proto.
+        # Paired with charge_suite's hardened invariant probes (FR-12).
+        "hardened": {
+            "startup": {"cmd": ["node", "src/paymentservice/server.js"],
+                        "port_env": "PORT", "readiness": "tcp"},
+            "requirements_extra": (
+                "## Hardened correctness requirements (tier: hardened)\n\n"
+                "Implement `Charge` with strict validation — these are scored behaviorally:\n"
+                "- **Single self-contained file:** put ALL logic in the one target `server.js`. Do NOT "
+                "`require` sibling modules you also write (e.g. `./loaders/...`) or read external data "
+                "files — the harness runs only this file with the offline gRPC runtime.\n"
+                "- **Unique transaction id:** every successful `Charge` MUST return a UNIQUE non-empty "
+                "`transaction_id` (e.g. a UUID) — never a constant.\n"
+                "- **Amount validation:** reject a non-positive amount (negative `units`, or units==0 && "
+                "nanos==0) with gRPC `INVALID_ARGUMENT`.\n"
+                "- **Card validation:** reject an empty/blank `credit_card_number`, a Luhn-invalid card, "
+                "and an expired card with gRPC `INVALID_ARGUMENT`.\n"
+            ),
         },
     },
     {

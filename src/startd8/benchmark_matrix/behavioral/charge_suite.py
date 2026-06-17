@@ -69,9 +69,15 @@ def _charge(stub, *, number: str, year: int, timeout: float = 5.0):
     return stub.Charge(req, timeout=timeout)
 
 
-def run_charge_suite(port: int, *, host: str = "127.0.0.1", connect_timeout: float = 5.0) -> SuiteResult:
-    """Connect to a live PaymentService and run the Charge ground-truth checks (the client window)."""
-    suite = SuiteResult(suite_version=SUITE_VERSION)
+def run_charge_suite(port: int, *, host: str = "127.0.0.1", connect_timeout: float = 5.0,
+                     tier: str = "baseline") -> SuiteResult:
+    """Connect to a live PaymentService and run the Charge ground-truth checks (the client window).
+
+    ``tier="hardened"`` runs a SUPERSET (FR-26): the three baseline checks PLUS stricter,
+    externally-observable invariants a careless happy-path stub fails — unique transaction_ids
+    (no constant id), and amount/card validation (non-positive amount and empty card rejected)."""
+    hardened = tier == "hardened"
+    suite = SuiteResult(suite_version=SUITE_VERSION + ("+hardened/1" if hardened else ""))
     try:
         channel = grpc.insecure_channel(f"{host}:{port}")
         grpc.channel_ready_future(channel).result(timeout=connect_timeout)
@@ -103,6 +109,33 @@ def run_charge_suite(port: int, *, host: str = "127.0.0.1", connect_timeout: flo
             suite.results.append(RpcResult("charge_expired_card_rejected", False, "accepted an expired card"))
         except grpc.RpcError:
             suite.results.append(RpcResult("charge_expired_card_rejected", True, "rejected as expected"))
+
+        # ---- Hardened superset (FR-7/FR-26): stricter, externally-observable invariants ----
+        if hardened:
+            # H1) two valid charges → DISTINCT non-empty transaction_ids (no constant-id stub).
+            try:
+                t1 = getattr(_charge(stub, number=_VALID_PAN, year=2030), "transaction_id", "")
+                t2 = getattr(_charge(stub, number=_VALID_PAN, year=2030), "transaction_id", "")
+                ok = bool(t1) and bool(t2) and t1 != t2
+                suite.results.append(RpcResult("h_unique_transaction_ids", ok, f"{t1!r} vs {t2!r}"))
+            except grpc.RpcError as e:
+                suite.results.append(RpcResult("h_unique_transaction_ids", False, f"error: {e.code()}"))
+
+            # H2) non-positive amount (negative) → rejected.
+            try:
+                req = demo_pb2.ChargeRequest(amount=_money(units=-5), credit_card=_card(_VALID_PAN, year=2030))
+                stub.Charge(req, timeout=5.0)
+                suite.results.append(RpcResult("h_negative_amount_rejected", False, "accepted negative amount"))
+            except grpc.RpcError:
+                suite.results.append(RpcResult("h_negative_amount_rejected", True, "rejected as expected"))
+
+            # H3) empty card number → rejected (input validation).
+            try:
+                req = demo_pb2.ChargeRequest(amount=_money(), credit_card=_card("", year=2030))
+                stub.Charge(req, timeout=5.0)
+                suite.results.append(RpcResult("h_empty_card_rejected", False, "accepted empty card number"))
+            except grpc.RpcError:
+                suite.results.append(RpcResult("h_empty_card_rejected", True, "rejected as expected"))
     finally:
         channel.close()
     return suite
