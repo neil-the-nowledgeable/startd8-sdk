@@ -89,10 +89,18 @@ Create `src/startd8/providers/jetson.py` from `deepseek.py`, changing:
     `invalidated`, track=`invalid`), checks the sent prompt byte-equals neutral + carries no banned
     corpus tokens (FR-J6), and checks sampling/quant are recorded (FR-J6b). Returns a `FirewallVerdict`
     with `track` ∈ {general, in-domain, invalid} + `as_provenance()` for cells.json. 16 offline tests.
-  - **Runtime wiring still TODO (operator/cluster-gated):** capture the live response `system_fingerprint`
-    and the actually-sent system prompt at the cell boundary, call `evaluate_jetson_cell(...)`, write
-    `verdict.as_provenance()` into cells.json, and drop `invalidated` cells from scoring. Same
-    edge-brains caveat as FR-J6 (no remote, uncommitted; commit + pin SHA = operator).
+  - **Runtime wiring BUILT 2026-06-17** (`benchmark_matrix/jetson_lane.py` + agent capture):
+    `OpenAICompatibleAgent` now records `last_system_fingerprint` + `last_system_prompt` after each
+    `agenerate`; the **in-process** `run_jetson_cell()` sends the neutral prompt + recorded sampling,
+    reads that capture, calls `evaluate_jetson_cell`, attaches `verdict.as_provenance()` +
+    `cost_lane="on-prem"` + the pinned `server_commit_sha`, and sets `scored=False` for any cell that
+    lands in the `invalid` track (wrong/absent adapter echo OR clean-label vector failure).
+    `partition_by_track` / `scored_cells` split general / in-domain / invalid. 8 offline tests (mock
+    agent). **In-process by design:** the normal benchmark cell runs the agent in a `run_prime_workflow`
+    subprocess (parent can't read agent attrs), so the on-prem lane drives `JetsonProvider` directly —
+    which also makes the firewall fully testable offline.
+  - **Remaining = operator/cluster only:** bring rosie up with the FR-J6/J5a server fix
+    (SHA `27e714fc`), pass that SHA as `server_commit_sha`, run a live cell. No SDK code left.
 
 ### Step 6 — Server-side neutral-prompt gate (FR-J6; R1-S3) — edge-brains + recorded artifact
 - **VERIFIED 2026-06-16 — BUG CONFIRMED + FIXED.** `edge-brains/scripts/fastapi_serve.py::_format_chat`

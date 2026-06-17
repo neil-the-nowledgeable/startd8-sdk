@@ -517,6 +517,12 @@ class OpenAICompatibleAgent(BaseAgent):
         self.api_key_env = api_key_env
         self._cleanup_registered = False
 
+        # Firewall provenance capture (FR-J5a/J6): the most recent response's applied-adapter echo
+        # and the exact system prompt sent. Read by the Jetson on-prem lane runner (same process)
+        # to enforce the contamination firewall. None until the first agenerate() call.
+        self.last_system_fingerprint: Optional[str] = None
+        self.last_system_prompt: Optional[str] = None
+
         # Only register cleanup if we own the clients
         if self._owns_clients:
             self._register_cleanup()
@@ -726,6 +732,10 @@ class OpenAICompatibleAgent(BaseAgent):
 
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
+
+            # FR-J5a/J6 firewall capture: the server's applied-adapter echo + the prompt we sent.
+            self.last_system_fingerprint = getattr(response, "system_fingerprint", None)
+            self.last_system_prompt = effective_system_prompt
 
             response_text = response.choices[0].message.content
 
