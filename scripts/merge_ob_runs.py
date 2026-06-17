@@ -11,14 +11,26 @@ regenerate everything (see docs/HOWTO_RERUN_ROUND3.md). Both inputs must already
 the *current* scoring layer — rescore each in place first (scripts/rescore_ob_benchmark.py
 <dir> --write) so the merged board is methodologically uniform.
 
-**Later inputs win by model:** a model present in a later input supersedes that model's cells in
-earlier inputs. So `merge_ob_runs.py OUT round3 round3-rerun-openai` keeps round3's 6 non-OpenAI
-models and replaces its stale OpenAI cells with the fresh re-run.
+Two union modes:
+
+- **Default — model-supersede** (disjoint-model runs): a model present in a later input supersedes
+  that model's cells in earlier inputs. So `merge_ob_runs.py OUT round3 round3-rerun-openai` keeps
+  round3's 6 non-OpenAI models and replaces its OpenAI cells with the fresh re-run.
+
+- **`--cell-union`** (inputs that SHARE models): key by (service, model, repetition) and keep the
+  best-status cell across all inputs (ok < deps_missing < failed < timeout < infra_fail < skip). Use
+  this to combine two *partial* runs of the same roster — e.g. an OpenAI run that quota-failed on 4
+  services + a re-run of just those 4: the re-run's `ok` cells supersede the earlier `infra_fail`,
+  producing one full roster. (This is how round3-final's combined OpenAI set was built.)
 
 Output is a lightweight board dir (cells.json + aggregate.json + leaderboard.md only — no
 sandboxes), matching round2-complete.
 
-  python3 scripts/merge_ob_runs.py results/round3-final results/round3 results/round3-rerun-openai
+  # disjoint models (round2-complete pattern):
+  python3 scripts/merge_ob_runs.py results/round3-final results/round3 results/round3-openai-combined
+  # combine two partial same-model runs:
+  python3 scripts/merge_ob_runs.py --cell-union results/round3-openai-combined \\
+      results/round3-rerun-openai results/round3-rerun-openai-svc4
 """
 from __future__ import annotations
 
@@ -33,22 +45,40 @@ from startd8.benchmark_matrix import CellResult, aggregate_cells, build_matrix_m
 from startd8.benchmark_matrix.aggregate import DEFAULT_PASS_THRESHOLD  # noqa: E402
 
 
-def merge(out_dir: Path, inputs: list[Path]) -> int:
-    # Models owned by a later input supersede the same model in earlier inputs.
-    later_models = {
-        c["model"] for inp in inputs[1:] for c in json.loads((inp / "cells.json").read_text())
-    }
-    merged: list[dict] = []
-    for i, inp in enumerate(inputs):
-        cells = json.loads((inp / "cells.json").read_text())
-        if i == 0:
-            cells = [c for c in cells if c["model"] not in later_models]
-        merged.extend(cells)
+# Cell status preference for the cell-union mode (best first): a re-run that produced a
+# real result supersedes an env failure. ok < deps_missing < failed < timeout < infra_fail < skip.
+_STATUS_PRIO = {"ok": 0, "deps_missing": 1, "failed": 2, "timeout": 3, "infra_fail": 4, "budget_skip": 5}
+
+
+def merge(out_dir: Path, inputs: list[Path], *, cell_union: bool = False) -> int:
+    if cell_union:
+        # CELL-LEVEL union: inputs may share models (two partial runs of the same roster).
+        # Key by (service, model, repetition) and keep the best-status cell across all inputs —
+        # so a re-run's `ok` cell supersedes an earlier `infra_fail`/`failed` for the same coord.
+        best: dict[tuple, dict] = {}
+        for inp in inputs:
+            for c in json.loads((inp / "cells.json").read_text()):
+                k = (c["service"], c["model"], c["repetition"])
+                if k not in best or _STATUS_PRIO.get(c["status"], 9) < _STATUS_PRIO.get(best[k]["status"], 9):
+                    best[k] = c
+        merged = list(best.values())
+    else:
+        # MODEL-supersede union (default): each input owns disjoint models; a later input's
+        # models replace the same model in earlier inputs (the round2-complete pattern).
+        later_models = {
+            c["model"] for inp in inputs[1:] for c in json.loads((inp / "cells.json").read_text())
+        }
+        merged = []
+        for i, inp in enumerate(inputs):
+            cells = json.loads((inp / "cells.json").read_text())
+            if i == 0:
+                cells = [c for c in cells if c["model"] not in later_models]
+            merged.extend(cells)
 
     seen = {c["cell_id"] for c in merged}
     if len(seen) != len(merged):
-        print(f"error: {len(merged) - len(seen)} duplicate cell_id(s) across inputs — refusing to merge",
-              file=sys.stderr)
+        print(f"error: {len(merged) - len(seen)} duplicate cell_id(s) across inputs — refusing to merge "
+              f"(use --cell-union when inputs share models/coordinates)", file=sys.stderr)
         return 1
 
     cell_objs = [CellResult.from_dict(c) for c in merged]
@@ -74,16 +104,20 @@ def merge(out_dir: Path, inputs: list[Path]) -> int:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    cell_union = "--cell-union" in argv
+    argv = [a for a in argv if a != "--cell-union"]
     if len(argv) < 3:
-        print("usage: merge_ob_runs.py OUT_DIR BASE_RUN OPENAI_RUN [MORE_RUNS...]", file=sys.stderr)
-        print("  (BASE_RUN first; later runs' models supersede the base by model)", file=sys.stderr)
+        print("usage: merge_ob_runs.py [--cell-union] OUT_DIR RUN1 RUN2 [MORE_RUNS...]", file=sys.stderr)
+        print("  default: later runs' models supersede earlier (disjoint-model runs)", file=sys.stderr)
+        print("  --cell-union: best-status per (service,model,rep) across inputs that SHARE models", file=sys.stderr)
+        print("               (e.g. combine two partial OpenAI runs: re-run's ok beats earlier infra_fail)", file=sys.stderr)
         return 2
     out_dir, *inputs = (Path(a) for a in argv)
     for inp in inputs:
         if not (inp / "cells.json").exists():
             print(f"error: no cells.json in {inp}", file=sys.stderr)
             return 1
-    return merge(out_dir, inputs)
+    return merge(out_dir, inputs, cell_union=cell_union)
 
 
 if __name__ == "__main__":
