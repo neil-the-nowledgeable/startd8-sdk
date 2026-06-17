@@ -15,6 +15,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PROTO = ROOT / "src/startd8/benchmark_matrix/behavioral/pricing.proto"
 OUT = ROOT / "docs/design/model-benchmark/seeds/seed-pricingservice.json"
+# Hardened-tier seeds get their OWN registry — NOT seeds-index.json, which is the Online Boutique
+# baseline (single shared demo.proto, consumed by run_ob_benchmark.py). Keeps OB untouched (FR-14).
+INDEX = ROOT / "docs/design/model-benchmark/seeds/hardened-index.json"
 
 SPEC = """## Hardened benchmark — PricingService (nodejs)
 
@@ -141,8 +144,31 @@ def main() -> None:
         ],
         "version": "0.1",
     }
-    OUT.write_text(json.dumps(seed, indent=2, sort_keys=True) + "\n")
+    seed_bytes = json.dumps(seed, indent=2, sort_keys=True) + "\n"
+    OUT.write_text(seed_bytes)
+    seed_sha = hashlib.sha256(seed_bytes.encode()).hexdigest()
     print(f"wrote {OUT} (proto_sha256={proto_sha})")
+
+    # Upsert this seed's entry into the hardened-tier registry (per-seed proto, unlike the OB index).
+    index = {"generator": "scripts/gen_pricing_seed.py", "schema_version": "1.0",
+             "tier": "hardened", "seeds": []}
+    if INDEX.exists():
+        index = json.loads(INDEX.read_text())
+    entry = {
+        "service": "pricingservice",
+        "language": "nodejs",
+        "seed_file": OUT.name,
+        "seed_sha256": seed_sha,
+        "proto": "pricing.proto",
+        "proto_sha256": proto_sha,
+        "target_file": "src/pricingservice/server.js",
+        "axes": ["B", "C", "E"],
+        "derived_from": "Liferay Commerce (docs/design/liferay-pricing-seed/)",
+    }
+    others = [s for s in index.get("seeds", []) if s.get("service") != "pricingservice"]
+    index["seeds"] = sorted(others + [entry], key=lambda s: s["service"])
+    INDEX.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n")
+    print(f"registered in {INDEX} (seed_sha256={seed_sha[:12]})")
 
 
 if __name__ == "__main__":
