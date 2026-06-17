@@ -477,13 +477,14 @@ class OpenAICompatibleAgent(BaseAgent):
         if not actual_api_key and api_key_env:
             actual_api_key = os.getenv(api_key_env)
 
-        # Some APIs (like Ollama) don't need an API key
-        # For localhost URLs, we can use None if the client supports it
+        # Some local APIs (Ollama, llama.cpp, LM Studio) don't require an API key, but the
+        # installed `openai` client REJECTS api_key=None ("api_key must be set"), so a no-key
+        # localhost endpoint must still receive a non-empty SENTINEL the server ignores. (The
+        # old code set None here, which made create_agent raise for the ollama provider /
+        # openai-compatible@localhost — broke the local micro-prime tier + any local-LLM lane.)
         if not actual_api_key and base_url:
-            # Check if this looks like a local URL (Ollama, etc.)
             if 'localhost' in base_url or '127.0.0.1' in base_url:
-                # Use None instead of dummy key - OpenAI client accepts None for local APIs
-                actual_api_key = None
+                actual_api_key = "not-needed"
 
         # Configure timeout
         self.timeout_config = timeout_config or self.DEFAULT_TIMEOUT_CONFIG
