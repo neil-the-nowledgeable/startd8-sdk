@@ -173,8 +173,8 @@ def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
         "",
         "## Leaderboard (by median quality, then cost)",
         "",
-        "| Rank | Model | quality (median) | IQR | pass-rate | catastrophic | cost $ |",
-        "|---:|---|---:|---:|---:|---:|---:|",
+        "| Rank | Model | quality (median) | IQR | pass-rate | catastrophic | cost $ | latency med (s) | tok/s med |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for i, (model, _q, _pr, _ct) in enumerate(rank_models_by_quality(agg), 1):
         s = agg["by_model"][model]
@@ -182,7 +182,8 @@ def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
             return f"{x:.{p}f}" if isinstance(x, (int, float)) else "N/A"
         lines.append(
             f"| {i} | `{model}` | {f(s['quality_median'])} | {f(s['quality_iqr'])} | "
-            f"{f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {f(s['cost_total_usd'],4)} |"
+            f"{f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {f(s['cost_total_usd'],4)} | "
+            f"{f(s.get('latency_median_s'),1)} | {f(s.get('tokens_per_sec_median'),1)} |"
         )
     # K2×K1 (R3-S5): when both leverage states ran, pooling off+on per model would conflate the
     # integrity-gated off arm with the skip-heavy on arm into one IQR. Render consistency **per
