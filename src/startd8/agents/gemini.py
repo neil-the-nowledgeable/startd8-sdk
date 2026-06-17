@@ -504,12 +504,14 @@ class GeminiAgent(BaseAgent):
         response_text = response.text
 
         # New google.genai API provides usage_metadata directly
+        cached_tokens = 0  # Gemini implicit/explicit context cache (subset of prompt_token_count)
         try:
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                 usage = response.usage_metadata
                 input_tokens = getattr(usage, 'prompt_token_count', 0)
                 output_tokens = getattr(usage, 'candidates_token_count', 0)
                 total_tokens = getattr(usage, 'total_token_count', input_tokens + output_tokens)
+                cached_tokens = getattr(usage, 'cached_content_token_count', 0) or 0
             else:
                 # Fallback: estimate tokens if usage_metadata not available
                 input_tokens = max(1, int(len(prompt.split()) / 1.3))
@@ -555,11 +557,12 @@ class GeminiAgent(BaseAgent):
             normalized_finish_reason = "max_tokens"
 
         token_usage = TokenUsage(
-            input=int(input_tokens),
+            input=max(0, int(input_tokens) - int(cached_tokens)),  # non-cached (cached is a subset)
             output=int(output_tokens),
             total=int(total_tokens),
             model_name=self.model,
             finish_reason=normalized_finish_reason,
+            cache_read_input_tokens=int(cached_tokens) or None,
         )
 
         # Log warning if response was truncated
@@ -698,11 +701,13 @@ class GeminiAgent(BaseAgent):
             if usage is not None:
                 _in = getattr(usage, "prompt_token_count", 0) or 0
                 _out = getattr(usage, "candidates_token_count", 0) or 0
+                _cached = getattr(usage, "cached_content_token_count", 0) or 0
                 token_usage = TokenUsage(
-                    input=int(_in),
+                    input=max(0, int(_in) - int(_cached)),  # non-cached (cached is a subset)
                     output=int(_out),
                     total=int(getattr(usage, "total_token_count", _in + _out) or (_in + _out)),
                     model_name=self.model,
+                    cache_read_input_tokens=int(_cached) or None,
                 )
             raw = GenerateResult(value.model_dump_json(), response_time_ms, token_usage)
             return StructuredResult(value, raw)

@@ -20,6 +20,25 @@ from .pool import TimeoutConfig, get_client_pool
 logger = logging.getLogger(__name__)
 
 
+def _cached_input_tokens(usage) -> int:
+    """Cache-read (cached prompt) tokens from an OpenAI-style ``usage`` object, across dialects:
+    OpenAI/most compat servers expose ``usage.prompt_tokens_details.cached_tokens``; DeepSeek exposes
+    ``usage.prompt_cache_hit_tokens``. Returns 0 when absent.
+
+    IMPORTANT: unlike Anthropic (which reports cache tokens SEPARATELY from input), these vendors fold
+    cached tokens INTO ``prompt_tokens``. Callers MUST subtract this from the ``input`` they pass to
+    ``TokenUsage`` so the cost model (which prices ``input`` at full rate and ``cache_read`` at 0.1x)
+    does not double-charge the cached tokens. See costs/pricing.py:543."""
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = getattr(details, "cached_tokens", None) if details is not None else None
+    if cached is None:
+        cached = getattr(usage, "prompt_cache_hit_tokens", None)  # DeepSeek dialect
+    try:
+        return int(cached) if cached else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def _build_chat_kwargs(
     model: str,
     messages: list,
@@ -387,12 +406,14 @@ class GPT4Agent(BaseAgent):
         # OpenAI uses: "stop" (natural), "length" (truncated), "content_filter", "tool_calls"
         finish_reason = getattr(response.choices[0], 'finish_reason', None)
 
+        _cached = _cached_input_tokens(response.usage)
         token_usage = TokenUsage(
-            input=response.usage.prompt_tokens,
+            input=max(0, response.usage.prompt_tokens - _cached),  # non-cached (pricing expects this)
             output=response.usage.completion_tokens,
             total=response.usage.total_tokens,
             model_name=self.model,
             finish_reason=finish_reason,
+            cache_read_input_tokens=_cached or None,
         )
 
         # Log warning if response was truncated
@@ -746,12 +767,15 @@ class OpenAICompatibleAgent(BaseAgent):
 
             # Some APIs may not return usage info
             if hasattr(response, 'usage') and response.usage:
+                _cached = _cached_input_tokens(response.usage)
+                _prompt = response.usage.prompt_tokens or 0
                 token_usage = TokenUsage(
-                    input=response.usage.prompt_tokens or 0,
+                    input=max(0, _prompt - _cached),  # non-cached (DeepSeek/compat fold cache into prompt_tokens)
                     output=response.usage.completion_tokens or 0,
                     total=response.usage.total_tokens or 0,
                     model_name=self.model,
                     finish_reason=finish_reason,
+                    cache_read_input_tokens=_cached or None,
                 )
             else:
                 # Estimate tokens if not provided
