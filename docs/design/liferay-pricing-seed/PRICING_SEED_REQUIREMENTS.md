@@ -92,12 +92,14 @@ implementing ground-truth assertions G1–G7 from the spike. `SuiteResult` contr
 
 **FR-10 — Startup contract.** Seed `startup` block: `cmd`, `port_env`, `readiness: "tcp"`.
 
-**FR-11 — Contamination rename pass (FR-47), reframed as hygiene.** Apply the locked deterministic
-rename map (OQ-5) neutralizing Liferay-verbatim tells (`level1..4 → tierFactor1..4`, `finalPrice →
-netPayable`, `promoPrice → offerUnitPrice`, `discounts_target_net_price → applyAdjustmentsPreTax`,
-`PriceCart → ComputeBasket`) before the seed ships. **Not** a scored contamination metric: the
-`contamination.py` CodeBLEU probe needs a canonical upstream reference, which a synthetic service
-lacks (OQ-6). Baseline contamination is low by construction; the rename is neutralization hygiene.
+**FR-11 — Contamination rename pass (FR-47), reframed as hygiene.** Neutralize Liferay-verbatim
+tells in the shipped contract. **As shipped** (implementation refined the v0.2 map for internal
+consistency — kept the generic "discount" vocabulary rather than introducing "adjustment"):
+`level1..4 → tier_factors`, `finalPrice → net_payable`, `promoPrice → offer_unit_price`,
+`discountsTargetNetPrice → discounts_pre_tax`, `PriceCart → ComputeBasket`. **Not** a scored
+contamination metric: the `contamination.py` CodeBLEU probe needs a canonical upstream reference,
+which a synthetic service lacks (OQ-6). Baseline contamination is low by construction; the rename is
+neutralization hygiene applied inline at proto-authoring time.
 
 **FR-12 — Language pinning.** Pin the first seed to **nodejs** — chosen for the harness's proven
 vendored offline runtime closure (`node_runtime/`, dynamic `@grpc/proto-loader`), not a canonical
