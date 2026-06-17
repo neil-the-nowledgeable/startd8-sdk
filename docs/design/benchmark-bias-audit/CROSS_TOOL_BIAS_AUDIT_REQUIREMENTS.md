@@ -1,6 +1,6 @@
 # Cross-Tool Differential Bias Audit — Requirements
 
-**Version:** 0.4 (Review-integrated, trimmed for pilot density)  
+**Version:** 0.5 (Next-tier review curated: 15 applied, 5 logged)  
 **Date:** 2026-06-17  
 **Status:** Draft (planning-corrected; pre-implementation)  
 **Plan:** `CROSS_TOOL_BIAS_AUDIT_PLAN.md`  
@@ -66,6 +66,9 @@ To avoid conflating authoring systems, evaluated systems, and vendors:
 | **Model-vendor** | The vendor associated with the evaluated model whose benchmark score is measured. |
 | **Vendor-authorship bias signal** | Evidence that artifacts authored by a vendor’s tool systematically favor evaluated models from that same vendor, after accounting for artifact quality and run variance. |
 | **Tool-capability difference** | Divergence caused by a tool failing to follow instructions, compile artifacts, use required formats, or complete the task, rather than by a stable semantic preference attributable to vendor authorship. |
+| **Material** | Meeting a predeclared threshold: an FR-6 own-vendor advantage ≥ 5 pts / ≥ 0.5 pooled SD, or an FR-11 tool-level choice stable at ≥ 80% of accepted samples. "Material divergence / interaction / OPEN item" means it clears these bars; sub-threshold differences are noted, not acted on. |
+| **Spec / Proto / Oracle-harness** | Three distinct artifacts kept separate throughout: the *spec* (prose task description), the *proto* (gRPC contract), and the *oracle/harness* (known-correct reference server + runner). Never abbreviate in a way that blurs them. |
+| **Reviewer sign-off** | A record carrying reviewer ID/role, blinding status, evidence reviewed, decision/label, rationale, and date — the common shape used by FR-4 oracle validation, FR-7 adjudication, FR-9 remediation, and FR-12 mutant review. |
 
 FR-2, FR-6, FR-7, and FR-11 use **author-vendor** for generated artifacts and **model-vendor** for scored models.
 
@@ -79,10 +82,12 @@ seed-contract schema), NOT from Claude's existing artifacts. Tag each requiremen
 (a true contract constraint — single RPC, decimal-string money, gRPC, the seed JSON shape) or
 **OPEN** (a semantic choice under test — rounding default, chain-vs-addition, fixed-amount basis,
 tax/discount ordering, error taxonomy, field naming). The brief must not leak Claude's resolution of
-any OPEN item. Human-reviewed for Claude-idiom leakage (the honesty control).
+any OPEN item. Human-reviewed for **Claude-idiom leakage** — the verbatim field names, default resolutions,
+section ordering, or characteristic phrasing of Claude's existing artifacts (the honesty control).
 
 The brief must include a **source-to-brief traceability matrix** recording, per item: brief ID;
-FIXED/OPEN; the upstream Liferay evidence / seed-schema constraint / human judgment supporting the tag
+FIXED/OPEN; a **decision-owner** (source-evidence | schema-constraint | human-adjudication); the upstream
+Liferay evidence / seed-schema constraint / human judgment supporting the tag
 with exact citation (URL, commit, path, or schema field); why a FIXED item isn't an author choice; why
 an OPEN item isn't pre-resolved by Claude; and any residual ambiguity to route to FR-5/FR-8/FR-9.
 Admissibility: a FIXED item must trace to upstream evidence or a seed-schema constraint; an OPEN item
@@ -125,7 +130,9 @@ Reproducibility baseline (each item is required, detail in the plan): locked run
 pinning; recorded API parameters (temperature, top-p, max tokens, tool-use, retries, seeds where
 available) with explicit nondeterminism handling; rate-limit/retry logs; OS/arch/env/secrets-handling;
 an artifact store holding immutable raw + normalized outputs, repair/compile/run logs, suite + mutant
-results, and analysis scripts; and a machine-readable manifest linking every artifact to its run metadata.
+results, and analysis scripts; and a machine-readable manifest (carrying its own schema version) linking every
+artifact to its run metadata via an immutable provenance chain: source citation → FR-1 matrix row → rendered
+prompt → raw output → normalized artifact → analysis result.
 
 Model/version update policy: prefer version-locked models or dated aliases for the whole pilot; finish an
 active batch on update only if the provider guarantees the same version, else restart it; if locking is
@@ -149,8 +156,9 @@ invalid, non-compiling, non-running, missing required files, or fails a majority
 allow ≤1 automated retry (same prompt/params) for truncation/formatting/file-boundary failures; mechanical
 repair only per FR-3a; no human semantic repair for inclusion in any analysis; log raw output + category
 + retry status + exclusion reason; count catastrophic failures in tool-capability reporting + FR-11
-within-tool variance; exclude them from semantic bias calls unless the failures are themselves consistent,
-vendor-specific, and adjudicated as authorship-relevant.
+within-tool variance; exclude them from semantic bias calls (the single exclusion rule FR-8 and FR-11 reference) unless the failures
+are consistent, vendor-specific, and adjudicated **authorship-relevant** — the same failure mode recurs across
+that vendor's samples but not others' and maps to a task-comprehension gap, not a transient/format error.
 
 **FR-4 — Input-equivalence via mutant battery.** Cross-validate the FR-2a suites against the
 known-correct Node oracle **plus a battery of mutant servers** (FR-12). Two suites are equivalent iff
@@ -216,13 +224,14 @@ variants; any contract-shape sensitivity analysis is separately labeled and neve
 spec-wording interaction; any adapter needed to express a generated spec against the canonical proto is
 logged and adjudicated if it resolves an OPEN item.
 
-**FR-7 — Attribution via unanimity rule.** **Unanimous** agreement across all three independent authors
-→ input deemed neutral (the only strong signal). Any divergence — including a 2-vs-1 split, which is
+**FR-7 — Attribution via unanimity rule.** **Unanimous** agreement across all three author-vendors — over their
+FR-11-*stable* choices (≥ 80% of accepted samples), not single draws — → input deemed neutral (the only strong signal). Any divergence — including a 2-vs-1 split, which is
 ambiguous (Claude-bias vs a shared non-Claude convention) — is a **flag for human adjudication**, not an
 automatic bias verdict. Distinguish vendor-author bias from tool-capability differences.
 
 Adjudication protocol: ≥2 reviewers with benchmark/domain expertise, blinded to author-vendor labels where
-practical, given the FR-1 matrix + upstream evidence + seed constraints + FR-4 vectors + FR-5 entries +
+practical (impractical when an artifact carries self-identifying vendor markers — idiomatic field names, comment
+style — that can't be neutralized; record why), given the FR-1 matrix + upstream evidence + seed constraints + FR-4 vectors + FR-5 entries +
 FR-6 summaries. Each assigns one label: **neutral/unanimous** (all tools converge, no material
 interaction) · **legitimate source-ambiguity** (source supports multiple choices; pin/document one) ·
 **vendor-author bias candidate** (stable author-vendor choice / suite blind spot aligned with a same-vendor
@@ -238,8 +247,8 @@ or varies idiosyncratically; prefer **ambiguous/source-driven** when multiple to
 choice or the source can't choose among plausible behaviors.
 
 **FR-8 — Bias-audit report.** Per seed: equivalence matrix, divergence catalog, score-impact deltas,
-OPEN-item tracebacks, statistical uncertainty, adjudication decisions, and a verdict
-(neutral / biased-and-corrected / ambiguous-flagged).
+OPEN-item tracebacks, statistical uncertainty, adjudication decisions, machine-readable **remediation-candidate
+IDs** (referenced unchanged by FR-9), and a verdict (neutral / biased-and-corrected / ambiguous-flagged).
 
 Verdict criteria. **Neutral** (all required): FR-1 matrix passes; oracle + mutant gates pass; FR-4 vectors
 unanimously equivalent across accepted samples (or differences adjudicated non-semantic/tool-capability);
@@ -247,7 +256,7 @@ no unresolved material FR-5 divergence (or all adjudicated harmless); no FR-6 ow
 threshold; FR-11 cross-tool ≤ within-tool variance for material OPEN items; FR-7 neutral/harmless for all
 flags. **Biased-and-corrected** (all required): ≥1 material divergence/interaction adjudicated as
 vendor-author bias, traced to OPEN item(s)/Claude assumptions, FR-9 pins/neutralizes it, and re-audit meets
-Neutral for the remediated scope (no significant remaining own-vendor advantage). **Ambiguous-flagged:**
+Neutral for the remediated scope (no significant remaining own-vendor advantage). **Ambiguous-flagged** (also the default when signals conflict — no single signal silently overrides another):
 evidence insufficient to classify; unpinned source-ambiguity; FR-4/5/6/11 disagree materially; failures
 prevent comparable evidence; or contract-shape differences unnormalizable without changing semantics. A
 2-vs-1 split is never alone sufficient for a bias verdict — report it as an adjudication flag with evidence.
@@ -264,7 +273,9 @@ artifacts, reviewer label, and concrete patch. By class — source-ambiguity →
 mark the FR-1 matrix human-adjudicated; vendor-author bias → remove/rewrite the biased phrasing/shape + add
 a regression mutant/assertion; tool-capability or harness/proto confound → update prompts/acceptance/
 adapters/exclusions, not benchmark semantics. All remediated artifacts retain provenance linking original
-issue → patch → re-audit result.
+issue → patch → re-audit result. When remediation pins a previously-OPEN item, the re-audit promotes it to an
+**adjudicated-FIXED** matrix entry (with provenance); the original neutral brief is preserved unchanged, so
+pinning is auditable, not retroactive.
 
 Exit criteria: success = re-audit shows no material FR-4 inequivalence, no unresolved FR-5 divergence, and
 no threshold-meeting FR-6 own-vendor advantage for the remediated behavior. Run **at most two remediation
@@ -354,6 +365,12 @@ score-impact, statistical decision rules, mutant adequacy gates, adjudication pr
 remediation exit criteria, pilot go/no-go, model-update handling) over the factored v0.2 design;
 enumerations compressed and verbose prose tightened without dropping any requirement.*
 
+*v0.5 — human-curated the CRP #2 next-tier round (gpt-5.4-mini + gemini-2.5-flash): 15 suggestions folded
+compactly (decision-owner field, "material" + spec/proto/oracle + sign-off terminology, immutable provenance
+chain + manifest schema version, single exclusion rule + authorship-relevant criterion, unanimity scope +
+blinding-impractical clause, conflict-default + remediation-candidate IDs, pinned-OPEN→adjudicated-FIXED on
+re-audit); 5 logged to Appendix B (covered/subsumed/deferred/over-spec). +~12 lines net; trim preserved.*
+
 ## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
 
 This appendix is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
@@ -401,12 +418,31 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 | R2-S6 | Define exit criteria for the remediation loop. | gemini-2.5 (gemini-2.5-pro) | FR-9 needs finite success and escalation conditions so remediation is neither endless nor prematurely stopped after unresolved bias remains. | 2026-06-17 20:28:23 UTC |
 | R2-S7 | Define pilot success criteria and go/no-go conditions for extending beyond the pricing seed. | gemini-2.5 (gemini-2.5-pro) | Because the pilot validates the methodology, pre-agreed feasibility, interpretability, cost, and quality criteria are needed to justify expansion to the full benchmark. | 2026-06-17 20:28:23 UTC |
 | R2-S8 | Establish a policy for generator model updates during the audit. | gemini-2.5 (gemini-2.5-pro) | Model updates can change generation behavior mid-study, so version locking, restart, or update-handling rules are needed to maintain valid comparisons over time. | 2026-06-17 20:28:23 UTC |
+| R3-S1 | Add a decision rule for conflicting FR-4/5/6/7/11 evidence (precedence/ties). | gpt5.4-mini (gpt-5.4-mini) | Applied to FR-8: ambiguous-flagged is now explicitly the default when signals conflict — no signal silently overrides another. | 2026-06-17 (curation) |
+| R3-S2 | Define 'material'/'significant' with explicit cutoffs. | gpt5.4-mini (gpt-5.4-mini) | Applied to §1.1: "Material" defined against the FR-6 (≥5 pts / ≥0.5 SD) and FR-11 (≥80%) thresholds. | 2026-06-17 (curation) |
+| R3-S3 | Specify what 'unanimity' scopes over. | gpt5.4-mini (gpt-5.4-mini) | Applied to FR-7: unanimity = agreement across the three author-vendors' FR-11-stable choices on accepted samples. | 2026-06-17 (curation) |
+| R3-S5 | Make the acceptance/exclusion policy consistent across FR-3a/3b/11/8. | gpt5.4-mini (gpt-5.4-mini) | Applied to FR-3b: single exclusion rule referenced by FR-8 and FR-11. | 2026-06-17 (curation) |
+| R3-S6 | Distinguish 'spec'/'proto'/'oracle-harness' throughout. | gpt5.4-mini (gpt-5.4-mini) | Applied to §1.1: added a Spec/Proto/Oracle-harness terminology row. | 2026-06-17 (curation) |
+| R3-S7 | FR-8 emits a machine-readable remediation-candidate ID for FR-9. | gpt5.4-mini (gpt-5.4-mini) | Applied to FR-8 (emit IDs) + FR-9 (referenced unchanged). | 2026-06-17 (curation) |
+| R3-S8 | Require an immutable provenance chain for every derived artifact. | gpt5.4-mini (gpt-5.4-mini) | Applied to FR-3: manifest specifies source → FR-1 row → prompt → raw → normalized → analysis. | 2026-06-17 (curation) |
+| R3-S9 | Add a 'decision-owner' field to each FR-1 FIXED/OPEN tag. | gpt5.4-mini (gpt-5.4-mini) | Applied to FR-1 matrix (source-evidence / schema-constraint / human-adjudication). | 2026-06-17 (curation) |
+| R3-S10 | Add manifest + artifact schema versions to FR-3. | gpt5.4-mini (gpt-5.4-mini) | Applied to FR-3: manifest carries its own schema version. | 2026-06-17 (curation) |
+| R4-S1 | Define 'material' consistently. | gemini-2.5 (gemini-2.5-flash) | Applied with R3-S2 (§1.1 "Material"). | 2026-06-17 (curation) |
+| R4-S2 | Give criteria/examples for 'Claude-idiom leakage' in FR-1. | gemini-2.5 (gemini-2.5-flash) | Applied to FR-1: idiom = verbatim field names, default resolutions, section ordering, characteristic phrasing. | 2026-06-17 (curation) |
+| R4-S5 | Standardize 'reviewer sign-off' content across FR-4/9/12. | gemini-2.5 (gemini-2.5-flash) | Applied to §1.1: added a "Reviewer sign-off" terminology row. | 2026-06-17 (curation) |
+| R4-S6 | Distinguish the neutral brief (FR-1) from artifacts with pinned OPEN resolutions (FR-9). | gemini-2.5 (gemini-2.5-flash) | Applied to FR-9: re-audit promotes a pinned OPEN to adjudicated-FIXED; original brief preserved. | 2026-06-17 (curation) |
+| R4-S9 | Define when reviewer blinding is 'impractical' in FR-7. | gemini-2.5 (gemini-2.5-flash) | Applied to FR-7: impractical when artifacts carry non-neutralizable vendor markers; record why. | 2026-06-17 (curation) |
+| R4-S10 | Give criteria for 'authorship-relevant' catastrophic failures in FR-3b. | gemini-2.5 (gemini-2.5-flash) | Applied to FR-3b: recurs across a vendor's samples, maps to a task-comprehension gap not a transient error. | 2026-06-17 (curation) |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |
+| R3-S4 | Clarify model-vendor vs author-vendor when the same vendor differs by product line. | gpt5.4-mini (gpt-5.4-mini) | Deferred — §1.1 already separates author-vendor/model-vendor; product-line granularity is captured per-run in FR-3 records, not a doc-level rule the pricing pilot needs. | 2026-06-17 (curation) |
+| R4-S3 | Standardize 'bias' terminology throughout. | gemini-2.5 (gemini-2.5-flash) | Covered — §1.1 already defines vendor-authorship-bias-signal vs tool-capability-difference; no new term required. | 2026-06-17 (curation) |
+| R4-S4 | Require traceability for 'human judgment' supporting FIXED/OPEN tags. | gemini-2.5 (gemini-2.5-flash) | Subsumed by R3-S9 (decision-owner field on the FR-1 matrix). | 2026-06-17 (curation) |
+| R4-S7 | Specify the full content/structure of the FR-7 adjudication evidence log. | gemini-2.5 (gemini-2.5-flash) | Covered — FR-7 already enumerates the log fields and §1.1 "Reviewer sign-off" standardizes the shape. | 2026-06-17 (curation) |
+| R4-S8 | Clarify 'human-adjudicated correction' in FR-5's rubric. | gemini-2.5 (gemini-2.5-flash) | Rejected — FR-5 already defines it ("reviewers pin the behavior"); further detail is over-specification for a one-seed pilot. | 2026-06-17 (curation) |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
