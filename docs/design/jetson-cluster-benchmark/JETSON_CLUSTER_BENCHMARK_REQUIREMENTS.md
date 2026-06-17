@@ -139,6 +139,14 @@ contamination policy for in-domain models.
   - **Cost-axis gating (R1-F8/R1-S7):** because a ≈$0 marginal cost trivially "wins" the cost axis,
     **no Jetson row may appear on a cost ranking until OQ-J3 is resolved**; the chosen representation
     (amortized figure, or a separate "free/on-prem lane" tag in cells.json) is recorded in provenance.
+  - **Residual contamination — what "clean" does NOT mean (scope honesty).** The 4-clause predicate
+    defeats **our three vectors** (fine-tune weights, prompt, inference config). It does **NOT**
+    eliminate **pretraining contamination**: the base model (Mistral-7B-v0.3) may have seen the
+    microservices-demo corpus on public GitHub during its own pretraining — an irreducible vector
+    shared by every frontier model. Therefore "clean" means *clean of our contamination*, a weaker
+    and honest claim than *clean of all corpus exposure*. Any published Jetson result MUST state this
+    caveat, and the perturbation probe ([[reference_edge_brains_contamination_probe]] / benchmark
+    FR-47) is the only partial mitigation (it estimates memorization but cannot prove its absence).
 - **FR-J9 — Optional clean small model.** Qwen2.5-1.5B/3B (untrained) MAY be enrolled as an
   "edge small-model" contestant once a serve setup is validated (OQ-J2).
 - **FR-J9b — Explicit per-alias pricing (MANDATORY, R1-F3/R1-S6).** Each `jetson:*` alias MUST have a
@@ -164,6 +172,7 @@ contamination policy for in-domain models.
 - **NR-J4** — No always-on/CI hosting of the endpoint; opt-in manual/operator-gated runs (FR-J2).
 - **NR-J5** — `iter_003` not enrolled unless specifically studying memorization (NR per cluster report).
 - **NR-J6** — No TLS/mTLS to the LAN endpoint in v1 (FR-J12 mitigates via opt-in + threat model; transport security is future).
+- **NR-J7** — Pretraining contamination of the base model is NOT eliminated (only our 3 vectors are; FR-J8 residual note). The probe estimates it; v1 does not attempt to scrub or certify pretraining-clean weights.
 
 ---
 
@@ -193,7 +202,8 @@ mandatory per-alias pricing — the $3/$15 fallback would mislead, FR-J11 sentin
 adapter — the 200-OK hole infra_fail can't catch), FR-J6 testable acceptance criterion + recorded
 SHA, FR-J12 (LAN security posture + opt-in), FR-J8 checkable "clean" predicate + cost-axis gating,
 FR-J3a alias-drift guard, FR-J9b pricing-key resolved by assertion (release blocker), NR-J6 (no TLS
-v1). OQ-J3 now gates the cost ranking.*
+v1). OQ-J3 now gates the cost ranking. Post-triage addendum: FR-J8 residual-contamination note +
+NR-J7 — "clean" means clean of OUR 3 vectors, not of pretraining exposure (honest-scope guard).*
 
 ---
 
