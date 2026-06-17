@@ -136,6 +136,24 @@ def run_charge_suite(port: int, *, host: str = "127.0.0.1", connect_timeout: flo
                 suite.results.append(RpcResult("h_empty_card_rejected", False, "accepted empty card number"))
             except grpc.RpcError:
                 suite.results.append(RpcResult("h_empty_card_rejected", True, "rejected as expected"))
+
+            # H4) zero amount → rejected (distinct from negative; many naive impls only guard < 0).
+            try:
+                req = demo_pb2.ChargeRequest(amount=_money(units=0, nanos=0),
+                                             credit_card=_card(_VALID_PAN, year=2030))
+                stub.Charge(req, timeout=5.0)
+                suite.results.append(RpcResult("h_zero_amount_rejected", False, "accepted zero amount"))
+            except grpc.RpcError:
+                suite.results.append(RpcResult("h_zero_amount_rejected", True, "rejected as expected"))
+
+            # H5) out-of-range expiry month (13) → rejected (beyond the simple expired-in-past check).
+            try:
+                req = demo_pb2.ChargeRequest(amount=_money(),
+                                             credit_card=_card(_VALID_PAN, year=2030, month=13))
+                stub.Charge(req, timeout=5.0)
+                suite.results.append(RpcResult("h_invalid_expiry_month_rejected", False, "accepted month=13"))
+            except grpc.RpcError:
+                suite.results.append(RpcResult("h_invalid_expiry_month_rejected", True, "rejected as expected"))
     finally:
         channel.close()
     return suite

@@ -12,7 +12,7 @@
     {
       "language": "nodejs",
       "seed_file": "seed-paymentservice.hardened.json",
-      "seed_sha256": "6af702d3b4d9c823393ab90312af34aad01a8ac4cb68fd959a8700378f9f0801",
+      "seed_sha256": "0aa9c4b9d9e9b42612dfd1d269d40c731fbf3557e7d1071c84d183ddf0a911b4",
       "service": "paymentservice",
       "target_file": "src/paymentservice/server.js",
       "tier": "hardened"

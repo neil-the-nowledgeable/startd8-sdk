@@ -38,6 +38,8 @@ class PaymentService(demo_pb2_grpc.PaymentServiceServicer):
         card = request.credit_card
         if not (card.credit_card_number or "").strip():
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "empty card number")
+        if not (1 <= card.credit_card_expiration_month <= 12):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "invalid expiry month")
         if not _luhn_ok(card.credit_card_number):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "invalid credit card")
         today = datetime.date.today()

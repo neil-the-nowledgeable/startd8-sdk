@@ -108,10 +108,10 @@ SERVICES = [
                 "files — the harness runs only this file with the offline gRPC runtime.\n"
                 "- **Unique transaction id:** every successful `Charge` MUST return a UNIQUE non-empty "
                 "`transaction_id` (e.g. a UUID) — never a constant.\n"
-                "- **Amount validation:** reject a non-positive amount (negative `units`, or units==0 && "
-                "nanos==0) with gRPC `INVALID_ARGUMENT`.\n"
+                "- **Amount validation:** reject a non-positive amount — BOTH negative `units` AND a "
+                "zero amount (units==0 && nanos==0) — with gRPC `INVALID_ARGUMENT`.\n"
                 "- **Card validation:** reject an empty/blank `credit_card_number`, a Luhn-invalid card, "
-                "and an expired card with gRPC `INVALID_ARGUMENT`.\n"
+                "an expiry month outside 1–12, and an expired card — all with gRPC `INVALID_ARGUMENT`.\n"
             ),
         },
     },
