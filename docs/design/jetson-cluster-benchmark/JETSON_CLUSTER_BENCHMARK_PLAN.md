@@ -75,8 +75,16 @@ Create `src/startd8/providers/jetson.py` from `deepseek.py`, changing:
   **invalidates the cell** — it is NOT an `infra_fail` and must not be scored.
 
 ### Step 6 — Server-side neutral-prompt gate (FR-J6; R1-S3) — edge-brains + recorded artifact
-- Inspect `edge-brains/scripts/fastapi_serve.py`: confirm a request `messages[0].role=="system"`
-  overrides the env `SYSTEM_PROMPT` (no force-prepend); fix if needed.
+- **VERIFIED 2026-06-16 — BUG CONFIRMED + FIXED.** `edge-brains/scripts/fastapi_serve.py::_format_chat`
+  extracted only the `user` message and **force-prepended the corpus-aware `SYSTEM_PROMPT`**,
+  discarding any request system message — so every served model (incl. a clean baseline) was getting
+  the corpus prompt. The firewall control was broken at the server. Fixed: `_format_chat` now honors a
+  request `role=="system"` message and falls back to `SYSTEM_PROMPT` only when none is supplied
+  (backward-compatible with iter_002 training-time behavior). Compiles (`py_compile`).
+  - **Caveat:** edge-brains has **no git remote** and pre-existing uncommitted edits in the same file
+    (a separate sampling-params change). The FR-J6 fix is applied to the **working tree, uncommitted**,
+    to avoid entangling that in-flight work. **SHA-pin pending:** record the `fastapi_serve.py` commit
+    SHA in provenance once edge-brains is committed (operator).
 - **R1-S3 (fail-closed, recorded):** Step 8 writes the request's actual system content into provenance
   and the smoke ASSERTS it byte-equals the benchmark drafter prompt AND contains no banned corpus
   tokens (FR-J6 acceptance). Pin the verified `fastapi_serve.py` commit SHA in provenance. Not a
