@@ -191,6 +191,11 @@ class Models:
     # Micro Prime: local model for SIMPLE element body generation
     MICRO_PRIME_LOCAL = STARTD8_CODER
 
+    # Local-lane contestants (clean general code models on the localhost Ollama; FR-LO-4)
+    OLLAMA_QWEN_CODER_14B = "ollama:qwen2.5-coder:14b"
+    OLLAMA_QWEN_CODER_7B = "ollama:qwen2.5-coder:7b"
+    OLLAMA_CODELLAMA = "ollama:codellama:latest"
+
 
 # Model registry with full metadata
 _MODEL_REGISTRY: Dict[str, ModelInfo] = {
@@ -395,6 +400,25 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         provider="ollama",
         model_id="startd8-coder",
         tier="mini",
+        capabilities={"text", "code"},
+    ),
+    # Ollama local-lane contestants (clean general code models; FR-LO-4)
+    "qwen2.5-coder:14b": ModelInfo(
+        provider="ollama",
+        model_id="qwen2.5-coder:14b",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "qwen2.5-coder:7b": ModelInfo(
+        provider="ollama",
+        model_id="qwen2.5-coder:7b",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "codellama:latest": ModelInfo(
+        provider="ollama",
+        model_id="codellama:latest",
+        tier="fast",
         capabilities={"text", "code"},
     ),
     # NVIDIA NIM

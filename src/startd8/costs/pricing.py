@@ -397,6 +397,25 @@ class PricingService:
             estimated=True,
             notes="Jetson alias of iter_002; in-domain-finetune (fenced track); OQ-J3 for cost rep.",
         ),
+        # Local Ollama lane (FR-LO-5). localhost marginal ≈$0; NEVER ranked vs cloud on cost
+        # (FR-LO-7, "local" lane). For Ollama the spec id == the served id (no alias translation),
+        # so one entry per model id covers both the pre-run estimate and the runtime tracker. Without
+        # these the flagged $3/$15 fallback fires and a local model looks expensive.
+        "qwen2.5-coder:14b": ModelPricing(
+            model="qwen2.5-coder:14b", provider="ollama",
+            input_cost_per_million=0.0, output_cost_per_million=0.0,
+            estimated=True, notes="Local Ollama; ≈$0 marginal; 'local' lane (not cost-ranked vs cloud).",
+        ),
+        "qwen2.5-coder:7b": ModelPricing(
+            model="qwen2.5-coder:7b", provider="ollama",
+            input_cost_per_million=0.0, output_cost_per_million=0.0,
+            estimated=True, notes="Local Ollama; ≈$0 marginal; 'local' lane (not cost-ranked vs cloud).",
+        ),
+        "codellama:latest": ModelPricing(
+            model="codellama:latest", provider="ollama",
+            input_cost_per_million=0.0, output_cost_per_million=0.0,
+            estimated=True, notes="Local Ollama; ≈$0 marginal; 'local' lane (not cost-ranked vs cloud).",
+        ),
     }
 
     # Provider detection patterns
@@ -407,6 +426,7 @@ class PricingService:
         "nim": ["nemotron", "nvidia"],
         "deepseek": ["deepseek"],
         "jetson": ["jetson"],
+        "ollama": ["qwen", "codellama", "llama", "gemma", "startd8-coder"],
     }
     
     def __init__(self, pricing_file: Optional[Path] = None):
