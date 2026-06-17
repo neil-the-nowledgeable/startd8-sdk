@@ -73,10 +73,38 @@ Create `src/startd8/providers/jetson.py` from `deepseek.py`, changing:
 - **R1-S9/FR-J5a: capture the server-reported applied adapter id** into provenance and assert it
   matches the requested alias; a mismatch (unloaded/base-fallback adapter returning 200-OK)
   **invalidates the cell** — it is NOT an `infra_fail` and must not be scored.
+- **VERIFIED 2026-06-16 — server side done (PARTIAL→closed), SDK side pending.** Findings on
+  `edge-brains/scripts/fastapi_serve.py`:
+  - ✅ unknown/renamed adapter already SAFE — `_set_adapter` raises `HTTPException(404)` → SDK
+    classifies as `infra_fail` (the silent-fallback fear does not apply to *unknown* names).
+  - ❌ was: response echoed `req.model` only (no applied-adapter signal); `state["active"]` went
+    **stale on base requests** (use_base path skipped `_set_adapter`). **Fixed:** response now carries
+    `system_fingerprint="served_adapter=<state.active>"` (server truth, independent of req.model), and
+    the base path sets `state["active"]="__base__"` so the echo is truthful. Compiles.
+  - ⚠️ residual: the sync endpoint mutates shared adapter state in a threadpool — **serial runs only**
+    until a per-request lock or per-adapter model handle exists (note for the operator; benchmark
+    cells are serial today).
+  - **SDK-side verdict logic BUILT 2026-06-16** (`benchmark_matrix/firewall.py`): `evaluate_jetson_cell()`
+    parses the `served_adapter=` echo, asserts it matches the requested alias's served id (mismatch ⇒
+    `invalidated`, track=`invalid`), checks the sent prompt byte-equals neutral + carries no banned
+    corpus tokens (FR-J6), and checks sampling/quant are recorded (FR-J6b). Returns a `FirewallVerdict`
+    with `track` ∈ {general, in-domain, invalid} + `as_provenance()` for cells.json. 16 offline tests.
+  - **Runtime wiring still TODO (operator/cluster-gated):** capture the live response `system_fingerprint`
+    and the actually-sent system prompt at the cell boundary, call `evaluate_jetson_cell(...)`, write
+    `verdict.as_provenance()` into cells.json, and drop `invalidated` cells from scoring. Same
+    edge-brains caveat as FR-J6 (no remote, uncommitted; commit + pin SHA = operator).
 
 ### Step 6 — Server-side neutral-prompt gate (FR-J6; R1-S3) — edge-brains + recorded artifact
-- Inspect `edge-brains/scripts/fastapi_serve.py`: confirm a request `messages[0].role=="system"`
-  overrides the env `SYSTEM_PROMPT` (no force-prepend); fix if needed.
+- **VERIFIED 2026-06-16 — BUG CONFIRMED + FIXED.** `edge-brains/scripts/fastapi_serve.py::_format_chat`
+  extracted only the `user` message and **force-prepended the corpus-aware `SYSTEM_PROMPT`**,
+  discarding any request system message — so every served model (incl. a clean baseline) was getting
+  the corpus prompt. The firewall control was broken at the server. Fixed: `_format_chat` now honors a
+  request `role=="system"` message and falls back to `SYSTEM_PROMPT` only when none is supplied
+  (backward-compatible with iter_002 training-time behavior). Compiles (`py_compile`).
+  - **Caveat:** edge-brains has **no git remote** and pre-existing uncommitted edits in the same file
+    (a separate sampling-params change). The FR-J6 fix is applied to the **working tree, uncommitted**,
+    to avoid entangling that in-flight work. **SHA-pin pending:** record the `fastapi_serve.py` commit
+    SHA in provenance once edge-brains is committed (operator).
 - **R1-S3 (fail-closed, recorded):** Step 8 writes the request's actual system content into provenance
   and the smoke ASSERTS it byte-equals the benchmark drafter prompt AND contains no banned corpus
   tokens (FR-J6 acceptance). Pin the verified `fastapi_serve.py` commit SHA in provenance. Not a

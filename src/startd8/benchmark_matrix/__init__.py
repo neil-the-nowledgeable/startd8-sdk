@@ -40,8 +40,45 @@ from .aggregate import (
     rank_models_by_quality,
 )
 from .rescore import CellRescore, RescoreReport, rescore_run
+from .method import MethodSignature, method_signature
+from .combined import (
+    CellProvenance,
+    MergeResult,
+    RunInfo,
+    merge_runs,
+)
+from .combined_align import (
+    AlignedInput,
+    AlignmentAction,
+    AlignmentResult,
+    align_runs,
+)
+from .combined_scorecard import (
+    build_combined_manifest,
+    build_combined_scorecard,
+    build_combined_scorecard_html,
+    write_combined_manifest,
+    write_combined_scorecard,
+    write_combined_scorecard_html,
+)
 
 __all__ = [
+    "MethodSignature",
+    "method_signature",
+    "merge_runs",
+    "MergeResult",
+    "CellProvenance",
+    "RunInfo",
+    "align_runs",
+    "AlignmentResult",
+    "AlignmentAction",
+    "AlignedInput",
+    "build_combined_scorecard",
+    "build_combined_scorecard_html",
+    "build_combined_manifest",
+    "write_combined_scorecard",
+    "write_combined_scorecard_html",
+    "write_combined_manifest",
     "BenchmarkRunSpec",
     "MatrixCell",
     "BenchmarkCostEstimate",

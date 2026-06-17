@@ -117,6 +117,7 @@ mock = "startd8.providers.mock:MockProvider"
 gemini = "startd8.providers.gemini:GeminiProvider"
 mistral = "startd8.providers.mistral:MistralProvider"
 deepseek = "startd8.providers.deepseek:DeepSeekProvider"
+jetson = "startd8.providers.jetson:JetsonProvider"
 nim = "startd8.providers.openai:NIMProvider"
 openai-compatible = "startd8.providers.openai:OpenAICompatibleProvider"
 

@@ -85,6 +85,15 @@ class BenchmarkRunSpec(BaseModel):
     # Scoring (FR-11): a reference string identifying the composite-quality formula in use.
     scoring_formula: str = "compile_gate+compute_disk_quality_score(0.4/0.2/0.2/0.2)"
 
+    # Scoring METHOD (CS-17 / FR-B5): the repair posture + defect-ledger state this run scored under.
+    # `scoring_formula` alone does NOT distinguish naive (apply, no ledger) from shadow+expose, so the
+    # combined-scoreboard method-parity gate (refusing to merge incompatible scoring methods across
+    # runs) reads these. Persisted via model_dump()/to_json; deliberately EXCLUDED from spec_hash() so
+    # archived spec_hashes (and the cell_ids that embed them) stay byte-stable (same precedent as
+    # sdk_version). Default (apply / False) = the pre-stamp "naive" posture.
+    repair_mode: str = "apply"        # "apply" | "shadow" | "off"
+    expose_defects: bool = False      # defect ledger folded into the composite (de-saturation)
+
     # Budget guardrails (FR-33). budget_ceiling_usd is REQUIRED at run time (fail-closed),
     # but may be None in a spec that is only being sized via --dry-run.
     budget_ceiling_usd: Optional[float] = None

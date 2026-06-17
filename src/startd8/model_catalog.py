@@ -141,6 +141,16 @@ class Models:
     DEEPSEEK_REASONER = "deepseek:deepseek-reasoner"
 
     # ==========================================================================
+    # Jetson Edge Cluster (self-hosted; opt-in, LAN; see docs/design/jetson-cluster-benchmark/)
+    # ==========================================================================
+
+    # Clean general baseline ("$500 edge box" contestant)
+    JETSON_MISTRAL_BASE = "jetson:mistral-7b-base"
+
+    # In-domain fine-tuned adapter — fenced track only, never a general-leaderboard peer
+    JETSON_ITER_002 = "jetson:iter-002"
+
+    # ==========================================================================
     # Recommended Defaults by Use Case
     # ==========================================================================
 
@@ -367,6 +377,19 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         tier="balanced",
         capabilities={"text", "code", "reasoning"},
     ),
+    # Jetson edge cluster (aliases; served on a self-hosted LAN endpoint)
+    "mistral-7b-base": ModelInfo(
+        provider="jetson",
+        model_id="mistral-7b-base",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "iter-002": ModelInfo(
+        provider="jetson",
+        model_id="iter-002",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
     # Ollama local models
     "startd8-coder": ModelInfo(
         provider="ollama",
@@ -502,6 +525,12 @@ def get_latest_model(
             "fast": Models.DEEPSEEK_CHAT,
             "mini": Models.DEEPSEEK_CHAT,
             "reasoning": Models.DEEPSEEK_REASONER,
+        },
+        "jetson": {
+            "flagship": Models.JETSON_MISTRAL_BASE,
+            "balanced": Models.JETSON_MISTRAL_BASE,
+            "fast": Models.JETSON_MISTRAL_BASE,
+            "mini": Models.JETSON_MISTRAL_BASE,
         },
         "ollama": {
             "flagship": Models.STARTD8_CODER,
