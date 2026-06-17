@@ -391,9 +391,9 @@ Design-time contract forwarding for review-time validation:
 
 The SDK uses `pyproject.toml` entry points for plugin discovery:
 ```toml
-# Providers (9 registered)
+# Providers (10 registered)
 [project.entry-points."startd8.providers"]
-anthropic, openai, ollama, gemini, mistral, jetson, nim, openai-compatible, mock
+anthropic, openai, ollama, gemini, mistral, deepseek, jetson, nim, openai-compatible, mock
 
 # Workflows (16 registered)
 [project.entry-points."startd8.workflows"]

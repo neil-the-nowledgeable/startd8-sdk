@@ -261,6 +261,12 @@ class ProviderRegistry:
             pass
 
         try:
+            from .deepseek import DeepSeekProvider
+            _register_if_missing("deepseek", DeepSeekProvider, "DeepSeek")
+        except ImportError:
+            pass
+
+        try:
             from .jetson import JetsonProvider
             _register_if_missing("jetson", JetsonProvider, "Jetson Edge Cluster")
         except ImportError:

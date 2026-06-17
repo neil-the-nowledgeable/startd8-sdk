@@ -131,6 +131,16 @@ class Models:
     MISTRAL_SMALL_LATEST = "mistral:mistral-small-latest"
 
     # ==========================================================================
+    # DeepSeek Models
+    # ==========================================================================
+
+    # General chat/code (DeepSeek-V3 class) — strong cost position
+    DEEPSEEK_CHAT = "deepseek:deepseek-chat"
+
+    # Reasoning (DeepSeek-R1 class)
+    DEEPSEEK_REASONER = "deepseek:deepseek-reasoner"
+
+    # ==========================================================================
     # Jetson Edge Cluster (self-hosted; opt-in, LAN; see docs/design/jetson-cluster-benchmark/)
     # ==========================================================================
 
@@ -354,6 +364,19 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         tier="fast",
         capabilities={"text", "code"},
     ),
+    # DeepSeek
+    "deepseek-chat": ModelInfo(
+        provider="deepseek",
+        model_id="deepseek-chat",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "deepseek-reasoner": ModelInfo(
+        provider="deepseek",
+        model_id="deepseek-reasoner",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
     # Jetson edge cluster (aliases; served on a self-hosted LAN endpoint)
     "mistral-7b-base": ModelInfo(
         provider="jetson",
@@ -495,6 +518,13 @@ def get_latest_model(
             "balanced": Models.MISTRAL_MEDIUM_LATEST,
             "fast": Models.MISTRAL_SMALL_LATEST,
             "mini": Models.MISTRAL_SMALL_LATEST,
+        },
+        "deepseek": {
+            "flagship": Models.DEEPSEEK_CHAT,
+            "balanced": Models.DEEPSEEK_CHAT,
+            "fast": Models.DEEPSEEK_CHAT,
+            "mini": Models.DEEPSEEK_CHAT,
+            "reasoning": Models.DEEPSEEK_REASONER,
         },
         "jetson": {
             "flagship": Models.JETSON_MISTRAL_BASE,
