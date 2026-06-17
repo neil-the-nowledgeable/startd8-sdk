@@ -1,8 +1,11 @@
 # Jetson Cluster as Benchmark Serving Backend — Requirements
 
-**Version:** 0.3 (Post-CRP — R1 triage applied)
+**Version:** 0.3 (Post-CRP — R1 triage applied; OQ-J3 resolved 2026-06-16)
 **Date:** 2026-06-16
-**Status:** Draft (CRP R1 applied; ready for implementation)
+**Status:** Draft. **Scope decision 2026-06-16:** the Jetson cluster is **NOT officially part of the
+benchmark** — it is a **separate on-prem lane**, never ranked against cloud models on cost (OQ-J3).
+SDK-side provider + firewall verdict logic are merged to main; runtime wiring + live run are
+operator/cluster-gated.
 **Owner:** SDK / Summer 2026 Model Benchmark
 **Related:** `docs/design/deepseek-vendor/` (FR-13/FR-15), `docs/design/model-benchmark/`,
 [[project_summer2026_model_benchmark]], [[reference_edge_brains_contamination_probe]],
@@ -136,9 +139,10 @@ contamination policy for in-domain models.
     weights, AND (b) neutral system prompt verified per FR-J6, AND (c) no corpus-fine-tuned adapter
     applied (verified via FR-J5a applied-adapter echo), AND (d) recorded sampling/quant config per
     FR-J6b. A result missing **any** clause is NOT clean and MUST NOT enter the general leaderboard.
-  - **Cost-axis gating (R1-F8/R1-S7):** because a ≈$0 marginal cost trivially "wins" the cost axis,
-    **no Jetson row may appear on a cost ranking until OQ-J3 is resolved**; the chosen representation
-    (amortized figure, or a separate "free/on-prem lane" tag in cells.json) is recorded in provenance.
+  - **Cost-axis gating (R1-F8/R1-S7; OQ-J3 RESOLVED):** Jetson runs in a **separate on-prem lane** and
+    is **never ranked against cloud models on cost** — so the ≈$0 figure cannot mislead. cells.json
+    tags the lane (`cost_lane="on-prem"`); the lane is reported on its own, not in the cloud cost
+    ranking.
   - **Residual contamination — what "clean" does NOT mean (scope honesty).** The 4-clause predicate
     defeats **our three vectors** (fine-tune weights, prompt, inference config). It does **NOT**
     eliminate **pretraining contamination**: the base model (Mistral-7B-v0.3) may have seen the
@@ -183,9 +187,11 @@ contamination policy for in-domain models.
   enhancement (reusable for any vLLM/llama.cpp host), not needed for this single endpoint.
 - **OQ-J2 — Serve Qwen2.5 as a clean small-model contestant now, or defer?** Needs a model pull +
   warmup test on rosie; unknown inference-time OOM behavior.
-- **OQ-J3 — How to represent edge "cost"?** On-prem marginal cost is ~$0; a fair leaderboard needs an
-  amortized hardware+energy figure or a separate "free/on-prem" lane, else it trivially "wins" cost.
-  **Now gated (R1-F8/R1-S7):** must be decided BEFORE any Jetson row enters a cost ranking (FR-J8).
+- **OQ-J3 — RESOLVED 2026-06-16 → separate "on-prem lane."** Decision: the Jetson cluster is **not
+  officially part of the benchmark** for now; it lives in a **separate on-prem lane** and is **never
+  ranked against cloud models on the cost axis**. The ≈$0 marginal figure is reported within that lane
+  only (no amortized-cost modeling needed). This satisfies the FR-J8 cost-axis gate by construction —
+  there is no cross-ranking to mislead.
 - **OQ-J4 — Run the in-domain `iter_002` track at all (FR-J5), or document-only?** Compelling story
   but only meaningful with the probe + airtight labels.
 
