@@ -18,7 +18,9 @@ from pathlib import Path
 import pytest
 
 from startd8.benchmark_matrix.run_spec import BenchmarkRunSpec, MatrixCell
-from startd8.benchmark_matrix.runner import cell_id, sandbox_dir_name
+from startd8.benchmark_matrix.runner import cell_id, sandbox_dir_name, seed_filename
+
+_SEEDS_DIR = Path(__file__).resolve().parents[2] / "docs" / "design" / "model-benchmark" / "seeds"
 
 
 def _spec(**kw):
@@ -64,6 +66,16 @@ def test_tier_validator_rejects_empty_and_duplicates():
         _spec(tier_states=())
     with pytest.raises(Exception):
         _spec(tier_states=("baseline", "baseline"))
+
+
+def test_seed_filename_matches_generated_files_on_disk():
+    """Regression guard (pilot run-20260617T140903): the runner looked for seed-<svc>-hardened.json
+    while the generator wrote seed-<svc>.hardened.json → every hardened cell fail-closed. Lock the
+    runner's seed_filename to the actual on-disk generator output so they can't drift again."""
+    assert seed_filename("currencyservice", "baseline") == "seed-currencyservice.json"
+    assert seed_filename("currencyservice", "hardened") == "seed-currencyservice.hardened.json"
+    # the file the runner will select for a hardened cell must actually exist (generator wrote it)
+    assert (_SEEDS_DIR / seed_filename("currencyservice", "hardened")).exists()
 
 
 # --------------------- discrimination proof (hermetic gRPC, $0) ---------------------

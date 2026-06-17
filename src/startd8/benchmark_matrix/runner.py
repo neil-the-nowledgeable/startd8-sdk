@@ -229,10 +229,7 @@ class SubprocessCellExecutor:
         # cell INFRA_FAIL rather than silently running the baseline seed under a hardened label (that
         # would corrupt the baseline-vs-hardened comparison — FR-4). Baseline fallback is NEVER applied
         # to a non-baseline tier.
-        if tier == "baseline":
-            seed = self.seeds_dir / f"seed-{cell.service}.json"
-        else:
-            seed = self.seeds_dir / f"seed-{cell.service}-{tier}.json"
+        seed = self.seeds_dir / seed_filename(cell.service, tier)
         if not seed.exists():
             status = STATUS_INFRA_FAIL if tier != "baseline" else STATUS_FAILED
             reason = (f"{tier} seed not found: {seed} (fail-closed — not falling back to baseline)"
@@ -446,6 +443,14 @@ def resolve_generated_file(seeds_dir: Path, workdir: Path, service: str) -> Opti
         return None
     cand = Path(workdir) / targets[0]
     return cand if cand.exists() else None
+
+
+def seed_filename(service: str, tier: str = "baseline") -> str:
+    """Seed filename for a (service, tier). MUST stay in lockstep with the filenames
+    ``gen_ob_benchmark_seeds.py`` writes: baseline → ``seed-<svc>.json``; a non-baseline tier →
+    ``seed-<svc>.<tier>.json`` (dot infix, e.g. ``seed-currencyservice.hardened.json``). Centralized
+    so the runner's seed selection and the generator's output can't drift apart (they did once)."""
+    return f"seed-{service}.json" if tier == "baseline" else f"seed-{service}.{tier}.json"
 
 
 def sandbox_dir_name(service: str, model: str, repetition: int, leverage: str = "off",
