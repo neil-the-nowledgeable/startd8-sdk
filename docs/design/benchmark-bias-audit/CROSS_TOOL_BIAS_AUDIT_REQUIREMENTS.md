@@ -1,6 +1,6 @@
 # Cross-Tool Differential Bias Audit — Requirements
 
-**Version:** 0.3 (Review-integrated draft)  
+**Version:** 0.4 (Review-integrated, trimmed for pilot density)  
 **Date:** 2026-06-17  
 **Status:** Draft (planning-corrected; pre-implementation)  
 **Plan:** `CROSS_TOOL_BIAS_AUDIT_PLAN.md`  
@@ -75,39 +75,26 @@ FR-2, FR-6, FR-7, and FR-11 use **author-vendor** for generated artifacts and **
 
 **FR-1 — Neutral task brief (FIXED/OPEN tagged).** Author a vendor-agnostic brief describing the
 reproduction task from the *upstream source* (the Liferay pricing capability + the bare benchmark
-seed-contract schema), NOT from Claude's existing artifacts. Each requirement is tagged **FIXED**
+seed-contract schema), NOT from Claude's existing artifacts. Tag each requirement **FIXED**
 (a true contract constraint — single RPC, decimal-string money, gRPC, the seed JSON shape) or
 **OPEN** (a semantic choice under test — rounding default, chain-vs-addition, fixed-amount basis,
 tax/discount ordering, error taxonomy, field naming). The brief must not leak Claude's resolution of
 any OPEN item. Human-reviewed for Claude-idiom leakage (the honesty control).
 
-The neutral brief must include a **source-to-brief traceability matrix**. For every FIXED and OPEN item,
-the matrix records:
-- the brief requirement ID;
-- whether it is FIXED or OPEN;
-- the upstream Liferay evidence, seed-schema constraint, or explicit human judgment supporting the tag;
-- the exact source citation, URL, commit, file path, or schema field used as evidence;
-- why a FIXED item is not an author-specific choice;
-- why an OPEN item is not pre-resolved by Claude-authored artifacts;
-- any unresolved ambiguity that should later be mapped to FR-5, FR-8, and FR-9.
+The brief must include a **source-to-brief traceability matrix** recording, per item: brief ID;
+FIXED/OPEN; the upstream Liferay evidence / seed-schema constraint / human judgment supporting the tag
+with exact citation (URL, commit, path, or schema field); why a FIXED item isn't an author choice; why
+an OPEN item isn't pre-resolved by Claude; and any residual ambiguity to route to FR-5/FR-8/FR-9.
+Admissibility: a FIXED item must trace to upstream evidence or a seed-schema constraint; an OPEN item
+must be one the source permits multiple plausible implementations for, or an intentional design choice
+under test.
 
-A FIXED item is admissible only if it traces to upstream evidence or an explicit seed-schema constraint.
-An OPEN item is admissible only if the source evidence permits more than one plausible implementation
-or the item is a benchmark-design choice intentionally under test.
-
-**FR-1b — Standardized prompt template.** All authoring tools must receive prompts generated from a
-single controlled template. The template must clearly separate:
-- the neutral brief content from FR-1;
-- experiment-specific instructions for suite authoring or spec authoring;
-- allowed and forbidden dependencies;
-- output file requirements;
-- tool-specific invocation mechanics;
-- parameter settings;
-- any few-shot examples or scaffolding.
-
-Few-shot examples, if used, must be vendor-neutral, must not encode a resolution of an OPEN item, and
-must be identical across tools except for unavoidable API/CLI mechanics. The prompt template, rendered
-prompt, and any tool-specific substitutions must be captured under FR-3.
+**FR-1b — Standardized prompt template.** All authoring tools receive prompts from a single controlled,
+versioned template that cleanly separates: the FR-1 neutral brief; experiment-specific (suite vs spec)
+instructions; allowed/forbidden deps; output-file requirements; tool invocation mechanics; parameters;
+and any few-shot/scaffolding. Few-shot examples (if used) are vendor-neutral, encode no OPEN resolution,
+and are identical across tools except for unavoidable API/CLI mechanics. Template, rendered prompt, and
+per-tool substitutions are captured under FR-3.
 
 **FR-2 — Factored re-authoring (not all-at-once).** Re-authoring decomposes into two isolated
 experiments so spec-bias and suite-bias don't conflate:
@@ -120,109 +107,63 @@ experiments so spec-bias and suite-bias don't conflate:
 Each experiment runs with a Claude control for symmetry. Each authoring run is labeled by author-vendor,
 tool, model/version, sample index, prompt-template version, and timestamp.
 
-For FR-2b, proto variation is handled as follows:
-- The **primary FR-6 score-impact analysis freezes the canonical benchmark proto and harness** so that
-  score changes are attributable to spec wording/semantics rather than contract shape.
-- Vendor-authored proto variants are retained for FR-5 divergence analysis and may be evaluated in a
-  separate, explicitly labeled **contract-shape sensitivity analysis** only if adapters can be built
-  without changing task semantics.
-- Field-name changes, RPC-shape changes, validation-semantics changes, or incompatible message shapes
-  are not silently normalized into the primary score-impact run. They are cataloged as divergences.
-- If a generated spec cannot be expressed against the frozen canonical proto without resolving an OPEN
-  semantic choice, that adaptation decision is logged and routed to FR-7 adjudication before scoring.
+Proto variation in FR-2b: the **primary FR-6 score-impact run freezes the canonical proto and harness**
+so score changes attribute to spec wording, not contract shape. Vendor-authored proto variants are kept
+for FR-5 divergence and may run only in a separately-labeled **contract-shape sensitivity analysis** when
+adapters preserve task semantics. Field-name / RPC-shape / validation-semantics / incompatible-message
+differences are never silently normalized into the primary run — they are cataloged as divergences. If a
+spec can't be expressed against the frozen proto without resolving an OPEN choice, log the adaptation and
+route it to FR-7 adjudication before scoring.
 
 **FR-3 — Automatable, reproducible runs.** Drive Codex and Antigravity via CLI/API. Capture prompt,
-tool+model version, parameters, raw output, and timestamp for each run so the audit is re-runnable.
-Verify each tool's headless path at the start; if Antigravity has no headless mode, fall back to
-documented manual capture and flag the asymmetry.
+tool+model version, parameters, raw output, and timestamp per run so the audit is re-runnable. Verify
+each tool's headless path at the start; if Antigravity has no headless mode, fall back to documented
+manual capture and flag the asymmetry.
 
-The reproducibility baseline must include:
-- container images or locked runtime versions for Python, Node, gRPC/protobuf tooling, package managers,
-  and test runners;
-- dependency lockfiles and checksum/commit pinning for generated-artifact execution;
-- API parameter defaults, including temperature, top-p, max tokens, tool-use settings, retry settings,
-  and random seeds where available;
-- explicit handling for unavailable seeds or nondeterministic hosted models;
-- rate-limit, transient-error, and retry policy logs;
-- OS, architecture, environment variables required for execution, and secrets-handling method;
-- artifact storage layout, including immutable raw outputs, normalized outputs, repair logs,
-  compile/run logs, suite results, mutant results, and analysis notebooks/scripts;
-- a machine-readable manifest linking every artifact to its authoring run metadata.
+Reproducibility baseline (each item is required, detail in the plan): locked runtimes/containers
+(Python/Node/gRPC/protobuf/package managers/test runners); dependency lockfiles + checksum/commit
+pinning; recorded API parameters (temperature, top-p, max tokens, tool-use, retries, seeds where
+available) with explicit nondeterminism handling; rate-limit/retry logs; OS/arch/env/secrets-handling;
+an artifact store holding immutable raw + normalized outputs, repair/compile/run logs, suite + mutant
+results, and analysis scripts; and a machine-readable manifest linking every artifact to its run metadata.
 
-Model/version update policy:
-- Prefer version-locked models or dated aliases for the full pilot.
-- If an authoring model or evaluated model updates during an active batch, finish the current batch only
-  if the provider guarantees the same version; otherwise restart the affected batch.
-- If version locking is impossible, record the provider-reported model identifier and timestamp for every
-  call, analyze pre-update and post-update runs separately, and flag cross-version comparisons as
-  lower-confidence.
-- Do not mix model versions within the same FR-11 sample group or FR-6 interaction cell unless the mix is
-  explicitly modeled and reported.
+Model/version update policy: prefer version-locked models or dated aliases for the whole pilot; finish an
+active batch on update only if the provider guarantees the same version, else restart it; if locking is
+impossible, record provider-reported version+timestamp per call, analyze pre/post-update separately, and
+flag cross-version comparisons as lower-confidence; never mix versions within an FR-11 sample group or
+FR-6 cell unless the mix is explicitly modeled.
 
-**FR-3a — Artifact acceptance criteria.** Generated artifacts must pass consistent intake rules before
-being included in FR-4, FR-5, or FR-6.
+**FR-3a — Artifact acceptance criteria.** Artifacts pass consistent intake rules before entering
+FR-4/5/6. **Specs:** Markdown/text + run-metadata header, sufficient to implement the server against the
+canonical proto, no private-Claude dependency (except where the experiment fixes it), not code-only
+unless the prompt requested it. **Protos:** valid `.proto`, compile under the locked toolchain, define
+the requested service/messages (else cataloged as failure), no nonstandard plugins unless allowed.
+**Suites:** locked-harness-compatible test file, run under the locked runtime against the oracle + mutant
+battery via the standard adapter within timeout, allowed deps only. **Common rules:** normalize only
+mechanical formatting/filenames/imports/adapter-paths via a predeclared script (record all diffs); never
+silently repair semantics/expected-values/rounding/API-behavior; reject artifacts needing unapproved
+deps, network, or manual interpretation; apply identical timeouts/resource limits across tools.
 
-For **specs**:
-- required format: Markdown or plain text, plus a structured metadata header identifying authoring run;
-- must describe the task sufficiently for a model to implement the server against the canonical proto;
-- must not depend on private Claude-authored artifacts except where the experiment explicitly fixes them;
-- must not include executable code as the only specification unless requested by the prompt.
-
-For **protos**:
-- required format: valid `.proto` syntax;
-- must compile with the locked protobuf/gRPC toolchain;
-- must define the requested service and messages, unless the run is explicitly cataloged as a failure;
-- must not require nonstandard protoc plugins unless allowed in the prompt.
-
-For **suites**:
-- required format: Python test file compatible with the locked harness, unless a different format is
-  explicitly specified in the prompt;
-- must run under the locked runtime;
-- must execute against the known-correct oracle and mutant battery through the standard adapter;
-- must complete within the configured timeout;
-- must use only allowed dependencies from the dependency policy.
-
-Common intake rules:
-- normalize only mechanical formatting, filenames, imports, and harness adapter paths according to a
-  predeclared normalization script;
-- never silently repair semantic assertions, expected values, rounding choices, or API behavior;
-- record all normalization diffs;
-- reject artifacts that require unapproved dependencies, network access, or manual interpretation;
-- apply identical compile/run timeouts and resource limits across authoring tools.
-
-**FR-3b — Catastrophic generation failure policy.** A generation is classified as a catastrophic failure
-if it produces syntactically invalid artifacts, non-compiling code, non-running suites, missing required
-files, or content that fails to address a majority of the brief.
-
-Handling policy:
-- allow at most one automated retry using the same prompt template and parameters when failure is due to
-  truncation, formatting, or missing file boundaries;
-- allow mechanical repair only under FR-3a normalization rules;
-- do not allow human semantic repair for inclusion in equivalence, divergence, or score-impact analysis;
-- log the failed raw output, failure category, retry status, and exclusion reason;
-- count catastrophic failures in tool-capability reporting and FR-11 within-tool variance;
-- exclude catastrophic failures from semantic bias calls unless failures are themselves consistent,
-  vendor-specific, and adjudicated as relevant to benchmark-input authorship.
+**FR-3b — Catastrophic generation failure policy.** A generation is catastrophic if it is syntactically
+invalid, non-compiling, non-running, missing required files, or fails a majority of the brief. Policy:
+allow ≤1 automated retry (same prompt/params) for truncation/formatting/file-boundary failures; mechanical
+repair only per FR-3a; no human semantic repair for inclusion in any analysis; log raw output + category
++ retry status + exclusion reason; count catastrophic failures in tool-capability reporting + FR-11
+within-tool variance; exclude them from semantic bias calls unless the failures are themselves consistent,
+vendor-specific, and adjudicated as authorship-relevant.
 
 **FR-4 — Input-equivalence via mutant battery.** Cross-validate the FR-2a suites against the
 known-correct Node oracle **plus a battery of mutant servers** (FR-12). Two suites are equivalent iff
 they produce the same pass/fail vector across the whole battery. A suite that misses a mutant the
 others catch reveals an author blind spot — localize it to the missing assertion.
 
-The known-correct Node oracle must have documented provenance and independent validation before it can
-anchor FR-4:
-- record who authored it, with tool/human provenance, commit history, and whether any portion was derived
-  from Claude-authored artifacts;
-- if any portion is Claude-derived, label it and require independent non-Claude review or reimplementation
-  for the affected behavior before using it as the sole correctness anchor;
-- validate oracle behavior against the FR-1 traceability matrix and upstream Liferay evidence, not against
-  Claude's existing spec alone;
-- maintain an oracle evidence log with expected behavior, source citation, reviewer sign-off, and test
-  cases for each FIXED and adjudicated OPEN behavior;
-- run property/metamorphic checks where applicable, such as decimal precision invariants, monotonicity
-  under quantity increases, cap behavior, and stable rounding;
-- require at least two reviewers, one blinded to the original Claude artifact where practical, to sign off
-  that the oracle does not merely encode Claude's choices.
+The Node oracle must have documented provenance and independent validation before it can anchor FR-4:
+record authorship (tool/human provenance, commits, any Claude-derived portion) and require independent
+non-Claude review/reimplementation for any Claude-derived behavior before it serves as the sole anchor;
+validate against the FR-1 matrix + upstream Liferay evidence (not Claude's spec alone); keep an evidence
+log (expected behavior / citation / reviewer sign-off / tests) per FIXED + adjudicated OPEN behavior; run
+property/metamorphic checks where applicable (decimal precision, monotonicity, caps, stable rounding); and
+require ≥2 reviewers (one blinded where practical) to confirm it doesn't merely encode Claude's choices.
 
 FR-4 results are not trusted until the oracle validation gate and FR-12 mutant adequacy gate both pass.
 
@@ -230,32 +171,20 @@ FR-4 results are not trusted until the oracle validation gate and FR-12 mutant a
 (rounding default, strategy default, fixed-amount basis, tax ordering, error taxonomy, field naming).
 Classify each as legitimate source-ambiguity vs author-specific choice.
 
-The divergence catalog must include:
-- the exact artifact locations and snippets;
-- the affected FIXED or OPEN item from FR-1;
-- the upstream evidence or absence of evidence;
-- whether the divergence affects behavior, wording only, contract shape, validation semantics, or harness
-  compatibility;
-- whether it is eligible for FR-6 primary score-impact analysis under the frozen-proto policy;
-- any mutant(s) in FR-12 that exercise the divergence;
-- whether the divergence appears consistently across FR-11 samples.
+The catalog records per divergence: exact location/snippet; affected FIXED/OPEN item; upstream evidence
+(or its absence); divergence type (behavior / wording-only / contract-shape / validation-semantics /
+harness-compat); FR-6 primary-run eligibility under the frozen-proto policy; any FR-12 mutant that
+exercises it; and FR-11 cross-sample consistency.
 
-Classification rubric:
-- **Legitimate source-ambiguity**: upstream Liferay evidence or seed-schema constraints admit multiple
-  plausible behaviors; the item was tagged OPEN in FR-1; and no artifact relies solely on Claude-derived
-  wording to justify its choice.
-- **Author-specific choice**: the generated artifact resolves an OPEN item in a way not compelled by the
-  source, especially if the same authoring tool does so consistently across samples.
-- **Schema/contract constraint**: the divergence is required by the bare benchmark seed-contract schema
-  and should have been FIXED in FR-1; if omitted, FR-1 must be corrected.
-- **Tool-capability artifact**: the divergence is caused by missing instructions, malformed output,
-  failure to follow format, or incomplete generation rather than a coherent semantic choice.
-- **Human-adjudicated correction**: reviewers determine that the neutral brief or canonical seed should
-  pin the behavior to remove ambiguity.
+Classification rubric: **legitimate source-ambiguity** (source admits multiple behaviors, item was OPEN,
+no sole reliance on Claude wording) · **author-specific choice** (resolves an OPEN item not compelled by
+source, esp. if stable across a tool's samples) · **schema/contract constraint** (required by the seed
+schema, should have been FIXED — correct FR-1) · **tool-capability artifact** (malformed/incomplete output,
+not a coherent choice) · **human-adjudicated correction** (reviewers pin the behavior).
 
-Any significant FR-4 suite divergence or FR-6 score-impact interaction must be traced back to one or
-more OPEN items in FR-1. If no OPEN item explains the signal, the audit must either revise the FR-1
-traceability matrix or classify the signal as a tool/harness artifact rather than semantic bias.
+Any significant FR-4 suite divergence or FR-6 interaction must trace back to ≥1 OPEN item in FR-1. If no
+OPEN item explains the signal, either revise the FR-1 matrix or classify it as a tool/harness artifact,
+not semantic bias.
 
 **FR-6 — Score-impact via model×spec interaction.** Run the same 3-flagship roster against each spec
 variant (Claude/Codex/Antigravity), holding everything else constant. The bias signal is **not** a
@@ -263,137 +192,84 @@ marginal score shift (that is spec *quality*, which moves all models together) b
 a vendor's model scoring *relatively* higher under its own vendor's spec. Report the interaction, not
 just per-spec means.
 
-Primary FR-6 design:
-- **Experimental unit:** one evaluated-model implementation attempt for one spec variant under the frozen
-  canonical proto/harness.
-- **Cells:** evaluated model-vendor × spec author-vendor.
-- **Minimum N:** N ≥ 5 implementation attempts per cell for the pilot score-impact run, unless OQ-4
-  power/cost calibration explicitly approves a different N before running.
-- **Pairing:** where possible, pair attempts by run index across spec variants for the same evaluated
-  model, using identical harness settings, time budget, and scoring procedure.
-- **Outcome:** benchmark score for the attempt, expressed as pass rate or normalized points on the same
-  scoring scale across all specs.
-- **Primary model:** a two-way interaction analysis using either a linear mixed-effects model for
-  approximately continuous scores or a generalized mixed-effects model for binary/test-level pass-fail
-  data. The fixed effects are evaluated model-vendor, spec author-vendor, and their interaction.
-  Random effects include replicate/run index and, when test-level data are modeled, test case.
-- **Non-parametric check:** paired bootstrap or permutation test over run indices to estimate uncertainty
-  in the own-vendor advantage.
-- **Interaction metric:** for vendor `v`, compute an own-vendor advantage:
+Primary FR-6 design. **Unit:** one evaluated-model implementation attempt for one spec variant under the
+frozen canonical proto/harness. **Cells:** evaluated model-vendor × spec author-vendor. **N:** ≥5/cell for
+the pilot unless OQ-4 power/cost calibration approves otherwise before running. **Pairing:** by run index
+across spec variants for the same model, identical harness/budget/scoring. **Outcome:** benchmark score
+(pass rate or normalized points on one scale across specs). **Primary model:** two-way interaction via a
+linear mixed-effects model (continuous scores) or generalized mixed-effects (binary/test-level), fixed
+effects = model-vendor + spec author-vendor + interaction, random effects = run index (+ test case when
+test-level). **Non-parametric check:** paired bootstrap/permutation over run indices. **Interaction
+metric:** for vendor `v`, an own-vendor advantage —
 
   `OVA_v = [S(model_v, spec_v) - mean_a≠v S(model_v, spec_a)] - mean_u≠v [S(model_u, spec_v) - mean_a≠v S(model_u, spec_a)]`
 
-  where `S(model, spec)` is the mean score for that cell. This subtracts the general difficulty/quality
-  effect of `spec_v` from the same-vendor gain.
-- **Uncertainty:** report 95% confidence intervals or Bayesian credible intervals for each `OVA_v`, plus
-  the overall model×spec interaction term.
-- **Bias-signal threshold:** call a candidate vendor-authorship bias signal only if the pre-specified
-  interaction has an interval excluding zero and the absolute `OVA_v` is at least 5 percentage points
-  or at least 0.5 pooled within-cell standard deviations, whichever is larger for the score scale.
-- **Multiplicity:** adjust or explicitly report multiplicity for the three vendor-specific `OVA_v`
-  tests, using Holm correction or an equivalent predeclared method.
-- **Robustness:** report whether conclusions hold under both the mixed-effects model and the
-  paired bootstrap/permutation check.
+  where `S(model, spec)` is the mean cell score; this subtracts `spec_v`'s general difficulty/quality from
+the same-vendor gain. **Uncertainty:** report 95% CIs / credible intervals per `OVA_v` + the overall
+interaction term. **Bias threshold:** a candidate signal only if the interval excludes zero and |`OVA_v`|
+≥ 5 pts or ≥ 0.5 pooled within-cell SD (whichever is larger). **Multiplicity:** Holm (or equivalent
+predeclared) over the three vendor tests. **Robustness:** report whether conclusions hold under both the
+mixed-effects model and the bootstrap/permutation check.
 
-Proto handling for FR-6:
-- The primary analysis uses the frozen canonical proto.
-- Generated proto variants are not used in the primary interaction test.
-- If contract-shape sensitivity analysis is run, it must be separately labeled and must not be combined
-  with the primary spec-wording interaction.
-- Any adapter or normalization needed to express a generated spec against the canonical proto must be
-  logged and adjudicated if it resolves an OPEN item.
+Proto handling: the primary analysis uses the frozen canonical proto and excludes generated proto
+variants; any contract-shape sensitivity analysis is separately labeled and never merged with the primary
+spec-wording interaction; any adapter needed to express a generated spec against the canonical proto is
+logged and adjudicated if it resolves an OPEN item.
 
 **FR-7 — Attribution via unanimity rule.** **Unanimous** agreement across all three independent authors
 → input deemed neutral (the only strong signal). Any divergence — including a 2-vs-1 split, which is
 ambiguous (Claude-bias vs a shared non-Claude convention) — is a **flag for human adjudication**, not an
 automatic bias verdict. Distinguish vendor-author bias from tool-capability differences.
 
-Human adjudication protocol:
-- Use at least two reviewers with relevant benchmark/domain expertise.
-- Where practical, blind reviewers to author-vendor labels and present artifacts as anonymized variants.
-- Provide reviewers with the FR-1 traceability matrix, upstream Liferay evidence, seed-schema
-  constraints, FR-4 vectors, FR-5 divergence catalog entries, and FR-6 interaction summaries.
-- Require reviewers to assign one of the following labels:
-  - **Neutral/unanimous**: all authoring tools converge and no material score-impact interaction exists.
-  - **Legitimate source-ambiguity**: the source supports multiple plausible choices and the benchmark
-    should explicitly pin or document one.
-  - **Vendor-author bias candidate**: a stable author-vendor-specific choice or suite blind spot aligns
-    with a same-vendor score advantage or other directional evidence.
-  - **Tool-capability difference**: the issue is due to invalid output, incomplete generation, inability
-    to follow the format, or unsupported tooling rather than semantic preference.
-  - **Harness/proto confound**: the issue arises from contract-shape or adapter incompatibility, not
-    spec wording or semantic interpretation.
-  - **Insufficient evidence**: the data do not distinguish the alternatives.
-- Resolve reviewer disagreement by discussion; if disagreement persists, add a third reviewer and report
-  all opinions plus the final decision rule used.
-- Preserve an adjudication evidence log with reviewer IDs/roles, blinding status, decision labels,
-  rationale, source citations, and remediation recommendation.
+Adjudication protocol: ≥2 reviewers with benchmark/domain expertise, blinded to author-vendor labels where
+practical, given the FR-1 matrix + upstream evidence + seed constraints + FR-4 vectors + FR-5 entries +
+FR-6 summaries. Each assigns one label: **neutral/unanimous** (all tools converge, no material
+interaction) · **legitimate source-ambiguity** (source supports multiple choices; pin/document one) ·
+**vendor-author bias candidate** (stable author-vendor choice / suite blind spot aligned with a same-vendor
+advantage) · **tool-capability difference** (invalid/incomplete/format-fail/unsupported tooling) ·
+**harness/proto confound** (contract-shape/adapter incompatibility) · **insufficient evidence**. Resolve
+disagreement by discussion, then a third reviewer; keep an adjudication evidence log (reviewer IDs/roles,
+blinding, label, rationale, citations, remediation recommendation).
 
-Rubric for distinguishing vendor-author bias from tool-capability differences:
-- Prefer **vendor-author bias candidate** when the divergence is semantically coherent, maps to an OPEN
-  item, recurs across samples for the same author-vendor, and is separable from compile/run failures.
-- Prefer **tool-capability difference** when the artifact is malformed, incomplete, contradicts explicit
-  FIXED requirements, fails acceptance criteria, or varies idiosyncratically across samples.
-- Prefer **ambiguous/source-driven** when multiple authoring tools converge on a non-Claude choice or the
-  upstream source lacks enough evidence to choose among plausible behaviors.
+Bias-vs-capability rubric: prefer **vendor-author bias candidate** when the divergence is coherent, maps to
+an OPEN item, recurs across a vendor's samples, and is separable from compile/run failure; prefer
+**tool-capability** when output is malformed/incomplete, contradicts FIXED requirements, fails acceptance,
+or varies idiosyncratically; prefer **ambiguous/source-driven** when multiple tools converge on a non-Claude
+choice or the source can't choose among plausible behaviors.
 
 **FR-8 — Bias-audit report.** Per seed: equivalence matrix, divergence catalog, score-impact deltas,
 OPEN-item tracebacks, statistical uncertainty, adjudication decisions, and a verdict
 (neutral / biased-and-corrected / ambiguous-flagged).
 
-Concrete verdict criteria:
-- **Neutral** requires all of the following:
-  - FR-1 traceability matrix passes review;
-  - oracle validation and mutant adequacy gates pass;
-  - FR-4 suite pass/fail vectors are unanimously equivalent across accepted samples or any differences
-    are adjudicated as non-semantic/tool-capability artifacts;
-  - FR-5 finds no unresolved material semantic or contract divergence, or all divergences are unanimously
-    adjudicated as harmless;
-  - FR-6 shows no vendor-specific own-vendor advantage meeting the pre-specified bias-signal threshold;
-  - FR-11 shows cross-tool divergence no greater than within-tool run variance for material OPEN items;
-  - FR-7 adjudication reaches neutral/unanimous or harmless labels for all material flags.
-- **Biased-and-corrected** requires all of the following:
-  - at least one material divergence or score-impact interaction is adjudicated as a vendor-author bias
-    candidate;
-  - the affected behavior is traced to one or more OPEN items or Claude-derived assumptions;
-  - remediation in FR-9 pins or neutralizes the issue;
-  - re-audit satisfies the Neutral criteria for the remediated scope, including no statistically
-    significant remaining own-vendor advantage.
-- **Ambiguous-flagged** applies when:
-  - evidence is insufficient to classify a divergence as neutral or biased;
-  - reviewers classify it as legitimate source-ambiguity but remediation has not yet pinned it;
-  - FR-4/FR-5/FR-6/FR-11 disagree materially;
-  - model/tool failures prevent comparable evidence;
-  - contract-shape differences cannot be normalized without changing semantics.
-- A 2-vs-1 split is never sufficient by itself for a bias verdict. It is reported as an adjudication flag
-  with the supporting evidence and downstream impact.
+Verdict criteria. **Neutral** (all required): FR-1 matrix passes; oracle + mutant gates pass; FR-4 vectors
+unanimously equivalent across accepted samples (or differences adjudicated non-semantic/tool-capability);
+no unresolved material FR-5 divergence (or all adjudicated harmless); no FR-6 own-vendor advantage meeting
+threshold; FR-11 cross-tool ≤ within-tool variance for material OPEN items; FR-7 neutral/harmless for all
+flags. **Biased-and-corrected** (all required): ≥1 material divergence/interaction adjudicated as
+vendor-author bias, traced to OPEN item(s)/Claude assumptions, FR-9 pins/neutralizes it, and re-audit meets
+Neutral for the remediated scope (no significant remaining own-vendor advantage). **Ambiguous-flagged:**
+evidence insufficient to classify; unpinned source-ambiguity; FR-4/5/6/11 disagree materially; failures
+prevent comparable evidence; or contract-shape differences unnormalizable without changing semantics. A
+2-vs-1 split is never alone sufficient for a bias verdict — report it as an adjudication flag with evidence.
 
-The report must include raw artifacts, manifests, prompts, run logs, statistical scripts, confidence or
-credible intervals, mutant kill matrices, and all adjudication logs needed for external scrutiny.
+The report must include raw artifacts, manifests, prompts, run logs, statistical scripts, CIs/credible
+intervals, mutant kill matrices, and all adjudication logs needed for external scrutiny.
 
 **FR-9 — Remediation loop.** When bias is found, the fix (neutralize phrasing, pin an ambiguous
 semantic in the spec, repair the canonical proto/harness boundary, or update mutant coverage) feeds back
 into the seed; re-audit.
 
-Remediation requirements:
-- Each remediation must identify the source issue, affected OPEN/FIXED item, affected artifacts, reviewer
-  decision label, and concrete patch.
-- If the issue is legitimate source-ambiguity, the remediation pins the behavior explicitly in the spec
-  and updates the FR-1 traceability matrix to mark the decision as human-adjudicated.
-- If the issue is vendor-author bias, the remediation removes or rewrites the biased phrasing/shape and
-  adds a regression mutant or suite assertion where applicable.
-- If the issue is a tool-capability or harness/proto confound, the remediation updates prompt templates,
-  acceptance criteria, adapters, or exclusion rules rather than changing benchmark semantics.
+Remediation requirements: each remediation identifies the source issue, affected OPEN/FIXED item, affected
+artifacts, reviewer label, and concrete patch. By class — source-ambiguity → pin behavior in the spec +
+mark the FR-1 matrix human-adjudicated; vendor-author bias → remove/rewrite the biased phrasing/shape + add
+a regression mutant/assertion; tool-capability or harness/proto confound → update prompts/acceptance/
+adapters/exclusions, not benchmark semantics. All remediated artifacts retain provenance linking original
+issue → patch → re-audit result.
 
-Exit criteria:
-- A remediation is successful when the re-audit shows no material FR-4 inequivalence, no unresolved FR-5
-  divergence, and no FR-6 own-vendor advantage meeting the pre-specified bias threshold for the
-  remediated behavior.
-- Run at most two remediation loops per seed before escalation.
-- After two unsuccessful loops, classify the issue as **ambiguous-flagged** or **unresolvable within
-  pilot constraints**, document residual risk, and require explicit approval before publishing or
-  expanding that seed.
-- All remediated artifacts must retain provenance linking original issue → patch → re-audit result.
+Exit criteria: success = re-audit shows no material FR-4 inequivalence, no unresolved FR-5 divergence, and
+no threshold-meeting FR-6 own-vendor advantage for the remediated behavior. Run **at most two remediation
+loops per seed**; after two failures, classify **ambiguous-flagged / unresolvable-within-pilot**, document
+residual risk, and require explicit approval before publishing or expanding that seed.
 
 **FR-10 — Honest provenance.** Record that Codex (OpenAI) and Antigravity (Google) carry their own
 vendor bias; the method is triangulation, not bias-free authorship. Publish methodology + raw artifacts
@@ -403,30 +279,17 @@ for external scrutiny.
 Treat cross-tool divergence statistically: a difference counts as author-bias only if it is consistent
 across a tool's samples and separable from within-tool variance — not a one-off draw.
 
-Statistical decision rules:
-- **Experimental unit:** one accepted generated artifact sample from one authoring run.
-- **Minimum N:** N ≥ 3 per authoring tool per artifact type for pilot feasibility; N ≥ 5 is preferred for
-  any final bias claim if cost and tool access allow.
-- **Suite divergence metric:** pairwise Hamming distance or Jaccard distance between mutant-battery
-  pass/fail vectors, plus per-mutant kill/miss indicators.
-- **Spec/proto divergence metric:** categorical coding of each FR-1 OPEN item and contract-shape
-  dimension, with “missing/invalid” separated from semantic choices.
-- **Within-tool variance:** dispersion of divergence metrics among samples from the same authoring tool.
-- **Between-tool variance:** dispersion between samples from different authoring tools.
-- **Primary test:** permutation test or bootstrap comparing between-tool distances to within-tool
-  distances for each artifact type.
-- **Categorical OPEN-item test:** Fisher exact test or multinomial/hierarchical model over coded OPEN
-  choices, depending on sample size.
-- **Consistency threshold:** a tool-level semantic choice is considered stable only if at least 80% of
-  accepted samples for that tool make the same coded choice, with at least N=5 preferred for final claims.
-- **Bias-candidate threshold:** call a candidate author-vendor divergence only if:
-  - the author-vendor's stable choice differs from at least one other author-vendor's stable choice;
-  - between-tool distance exceeds within-tool distance under the predeclared test with a 95% confidence
-    interval excluding zero or p < 0.05 after multiplicity handling;
-  - the divergence maps to an OPEN item or suite assertion gap;
-  - catastrophic failures and tool-capability artifacts do not explain the pattern.
-- **Reporting:** include confidence intervals, p-values or credible intervals, raw coded choices,
-  invalid-sample counts, and sensitivity to excluding catastrophic failures.
+Statistical decision rules. **Unit:** one accepted artifact sample from one authoring run. **N:** ≥3/tool/
+type for pilot feasibility, ≥5 preferred for any final claim. **Suite metric:** pairwise Hamming/Jaccard
+between mutant-battery pass/fail vectors + per-mutant kill/miss. **Spec/proto metric:** categorical coding
+of each OPEN item + contract-shape dimension, with missing/invalid separated from semantic choices.
+**Primary test:** permutation/bootstrap comparing between-tool vs within-tool distance per artifact type;
+categorical OPEN choices via Fisher exact or multinomial/hierarchical by N. **Consistency:** a tool-level
+choice is stable only at ≥80% of that tool's accepted samples (≥5 preferred for final claims).
+**Bias-candidate threshold** (all): the vendor's stable choice differs from ≥1 other vendor's; between>within
+distance with 95% CI excluding zero or p<0.05 after multiplicity; maps to an OPEN item / assertion gap; and
+isn't explained by catastrophic/tool-capability failures. **Reporting:** CIs, p-values/credible intervals,
+raw coded choices, invalid-sample counts, and catastrophic-exclusion sensitivity.
 
 FR-11 does not by itself prove bias; it determines whether divergence is stable enough to route through
 FR-5/FR-7 and, where applicable, FR-6.
@@ -437,62 +300,37 @@ ignored cap, float arithmetic, promo-min inverted, …). Each mutant targets one
 suite's pass/fail vector reveals which behaviors it actually pins. The battery is the discrimination
 instrument for FR-4.
 
-Mutant battery adequacy criteria:
-- Cover every material OPEN semantic dimension from FR-1 with at least one mutant; use at least two
-  mutants for high-risk dimensions such as rounding, ordering, caps, decimal arithmetic, and error
-  handling when feasible.
-- Include only single-fault mutants unless explicitly marked as interaction mutants.
-- Maintain a mutant manifest listing mutant ID, targeted OPEN item, injected fault, expected behavior,
-  source rationale, implementation diff, and expected kill condition.
-- Validate each mutant against the known-correct oracle and at least one hand-authored smoke suite.
-- Exclude or rewrite **equivalent mutants** that cannot be distinguished from the oracle by any valid
-  test under the chosen input domain.
-- Exclude or rewrite **invalid mutants** that crash, violate the proto/harness contract, fail unrelated
-  FIXED constraints, or cannot serve as runnable benchmark targets.
-- Detect and document redundant mutants whose kill vectors are identical across all suites; redundancy is
-  allowed for robustness but does not count toward semantic coverage.
-- Require an expected kill matrix before running generated suites: for each mutant, identify which
-  behavior a competent suite should catch and why.
-- Require minimum discriminatory power before trusting FR-4:
-  - each material OPEN dimension has at least one valid non-equivalent mutant;
-  - the battery distinguishes at least one intentionally weak calibration suite from the oracle;
-  - the known-correct oracle passes all oracle tests while each mutant differs from the oracle on at least
-    one targeted probe;
-  - no mutant's failure is due solely to harness incompatibility or catastrophic server failure.
-- If the adequacy gate fails, FR-4 conclusions are reported as provisional and the battery is expanded
-  before final verdicts.
+Mutant battery adequacy criteria: cover every material OPEN dimension from FR-1 with ≥1 mutant (≥2 for
+high-risk: rounding, ordering, caps, decimal arithmetic, error handling); single-fault only unless flagged
+as interaction mutants; keep a manifest per mutant (ID, targeted OPEN item, injected fault, expected
+behavior, source rationale, diff, expected kill condition); validate each against the oracle + ≥1
+hand-authored smoke suite; exclude/rewrite **equivalent** mutants (indistinguishable from the oracle) and
+**invalid** mutants (crash / violate the contract / fail unrelated FIXED constraints); document redundant
+mutants (identical kill vectors — allowed for robustness, no coverage credit); and produce an expected-kill
+matrix before running generated suites. **Minimum discriminatory power before trusting FR-4:** each material
+OPEN dimension has ≥1 valid non-equivalent mutant; the battery separates ≥1 intentionally-weak calibration
+suite from the oracle; the oracle passes all tests while each mutant differs from it on ≥1 targeted probe;
+no mutant's kill is due solely to harness incompatibility. If the adequacy gate fails, FR-4 conclusions are
+provisional and the battery is expanded before final verdicts.
 
-Oracle validation from FR-4 applies to the battery baseline. Mutants must be authored and reviewed with
-the same provenance discipline: record authoring method, tool/human involvement, source evidence, and
-review sign-off.
+Oracle validation from FR-4 applies to the battery baseline. Mutants follow the same provenance discipline:
+record authoring method, tool/human involvement, source evidence, and review sign-off.
 
 **FR-13 — Pilot success criteria and go/no-go for expansion.** The pricing-seed pilot determines whether
 to extend the audit to the full Summer-2026 benchmark.
 
-Expansion to additional seeds is allowed only if:
-- FR-1 neutral brief creation and traceability review are feasible without relying on Claude-authored
-  artifacts;
-- FR-3 automation, artifact storage, and reproducibility manifests work for all authoring tools, or any
-  manual Antigravity capture asymmetry is documented and judged acceptable;
-- FR-3a/FR-3b acceptance and failure policies produce comparable artifact sets without excessive manual
-  intervention;
-- FR-4 oracle validation and FR-12 mutant adequacy gates pass;
-- FR-5/FR-7 adjudication produces interpretable decisions with reviewer agreement or documented conflict
-  resolution;
-- FR-6 score-impact runs complete within the approved cost/time budget and yield estimable interaction
-  intervals;
-- FR-11 sampling shows that within-tool variance can be measured and separated from cross-tool
-  divergence for material artifacts;
-- the final FR-8 verdict for the pilot is neutral, biased-and-corrected, or ambiguous-flagged with
-  documented residual risk that is acceptable for expansion.
+Expansion to additional seeds is allowed only if all hold: FR-1 brief + traceability are feasible without
+Claude artifacts; FR-3 automation/storage/manifests work for all tools (or Antigravity manual-capture
+asymmetry is documented + acceptable); FR-3a/3b yield comparable artifact sets without excessive manual
+work; FR-4 oracle + FR-12 mutant gates pass; FR-5/7 adjudication produces interpretable decisions; FR-6
+runs complete within budget with estimable intervals; FR-11 separates within- from cross-tool variance; and
+the pilot reaches a **definitive FR-8 verdict** (neutral / biased-and-corrected / ambiguous-flagged with
+bounded, acceptable residual risk) — process feasibility alone is not sufficient.
 
-No-go or redesign is required if:
-- the neutral brief cannot be traced to upstream evidence;
-- the oracle or mutant battery cannot be independently validated;
-- artifact failure rates prevent comparable analysis;
-- proto/harness incompatibility dominates the findings;
-- FR-6 interaction uncertainty is too large to support interpretation within feasible N/cost;
-- adjudication cannot distinguish source ambiguity, vendor-authorship bias, and tool-capability failure.
+No-go / redesign if: the brief can't be traced to upstream evidence; the oracle/mutants can't be
+independently validated; failure rates prevent comparable analysis; proto/harness incompatibility dominates;
+FR-6 uncertainty is too large to interpret within feasible N/cost; or adjudication can't distinguish
+source-ambiguity / vendor bias / tool-capability.
 
 ## 3. Non-Requirements
 
@@ -510,10 +348,11 @@ No-go or redesign is required if:
 
 ---
 
-*v0.3 — Review-integrated draft. Adds terminology, traceability, prompt control, artifact intake/failure
-policy, oracle validation, proto-freezing for score-impact, statistical decision rules, mutant adequacy
-gates, adjudication protocol, verdict rubric, remediation exit criteria, pilot go/no-go criteria, and
-model-update handling while preserving the factored audit design from v0.2.*
+*v0.4 — review-integrated then trimmed for pilot density. Retains the v0.3 additions (terminology,
+traceability, prompt control, artifact intake/failure policy, oracle validation, proto-freezing for
+score-impact, statistical decision rules, mutant adequacy gates, adjudication protocol, verdict rubric,
+remediation exit criteria, pilot go/no-go, model-update handling) over the factored v0.2 design;
+enumerations compressed and verbose prose tightened without dropping any requirement.*
 
 ## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
 
