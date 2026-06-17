@@ -73,6 +73,20 @@ Create `src/startd8/providers/jetson.py` from `deepseek.py`, changing:
 - **R1-S9/FR-J5a: capture the server-reported applied adapter id** into provenance and assert it
   matches the requested alias; a mismatch (unloaded/base-fallback adapter returning 200-OK)
   **invalidates the cell** — it is NOT an `infra_fail` and must not be scored.
+- **VERIFIED 2026-06-16 — server side done (PARTIAL→closed), SDK side pending.** Findings on
+  `edge-brains/scripts/fastapi_serve.py`:
+  - ✅ unknown/renamed adapter already SAFE — `_set_adapter` raises `HTTPException(404)` → SDK
+    classifies as `infra_fail` (the silent-fallback fear does not apply to *unknown* names).
+  - ❌ was: response echoed `req.model` only (no applied-adapter signal); `state["active"]` went
+    **stale on base requests** (use_base path skipped `_set_adapter`). **Fixed:** response now carries
+    `system_fingerprint="served_adapter=<state.active>"` (server truth, independent of req.model), and
+    the base path sets `state["active"]="__base__"` so the echo is truthful. Compiles.
+  - ⚠️ residual: the sync endpoint mutates shared adapter state in a threadpool — **serial runs only**
+    until a per-request lock or per-adapter model handle exists (note for the operator; benchmark
+    cells are serial today).
+  - **SDK-side TODO (this Step, runtime):** read `system_fingerprint` from the response into provenance
+    and assert `served_adapter` == the requested alias's served id; mismatch invalidates the cell.
+    Same edge-brains caveat as FR-J6 (no remote, uncommitted; commit + pin SHA = operator).
 
 ### Step 6 — Server-side neutral-prompt gate (FR-J6; R1-S3) — edge-brains + recorded artifact
 - **VERIFIED 2026-06-16 — BUG CONFIRMED + FIXED.** `edge-brains/scripts/fastapi_serve.py::_format_chat`
