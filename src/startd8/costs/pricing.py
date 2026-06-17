@@ -340,6 +340,23 @@ class PricingService:
             input_cost_per_million=0.30,
             output_cost_per_million=0.30
         ),
+        # DeepSeek (FR-4: confirm against https://api-docs.deepseek.com/quick_start/pricing)
+        "deepseek-chat": ModelPricing(
+            model="deepseek-chat",
+            provider="deepseek",
+            input_cost_per_million=0.27,
+            output_cost_per_million=1.10,
+            estimated=True,
+            notes="DeepSeek-V3 list price (cache-miss); confirm at api-docs.deepseek.com pricing.",
+        ),
+        "deepseek-reasoner": ModelPricing(
+            model="deepseek-reasoner",
+            provider="deepseek",
+            input_cost_per_million=0.55,
+            output_cost_per_million=2.19,
+            estimated=True,
+            notes="DeepSeek-R1 list price (cache-miss); confirm at api-docs.deepseek.com pricing.",
+        ),
         # Jetson edge cluster (FR-J9b). Two call sites resolve different ids: the pre-run
         # ESTIMATE keys on the public alias (stripped from the `provider:model` spec) while the
         # RUNTIME tracker keys on the SERVED id (the agent's translated model). Both must be present
@@ -388,6 +405,7 @@ class PricingService:
         "openai": ["gpt", "o1", "o3", "o4", "davinci", "curie"],
         "google": ["gemini", "palm"],
         "nim": ["nemotron", "nvidia"],
+        "deepseek": ["deepseek"],
         "jetson": ["jetson"],
     }
     
