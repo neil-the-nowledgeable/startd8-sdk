@@ -1,0 +1,96 @@
+// Pricing calculator — Summer 2026 hardened-tier benchmark seed.
+//
+// Synthetic contract DERIVED (not copied) from Liferay Commerce price calculation
+// (docs/design/liferay-pricing-seed/). The resolution layer (price-list selection,
+// discount eligibility, coupon validation, address->tax-rate) is performed UPSTREAM;
+// this service is a PURE, STATELESS calculator — no DB, no network, no hidden state.
+//
+// FR-47 contamination hygiene: Liferay-verbatim field tells are renamed
+// (level1..4 -> tier_factors, finalPrice -> net_payable, promoPrice -> offer_unit_price,
+//  discountsTargetNetPrice -> discounts_pre_tax, PriceCart -> ComputeBasket).
+//
+// All money/quantities are decimal STRINGS ("29.97"), never floats — exact decimal
+// arithmetic with an explicit rounding mode is the discriminating skill (FR-7).
+
+syntax = "proto3";
+
+package startd8.bench.pricing.v1;
+
+service PricingService {
+  // Price a basket of ALREADY-RESOLVED line items.
+  rpc ComputeBasket(ComputeBasketRequest) returns (ComputeBasketResponse);
+}
+
+enum DiscountStrategy {
+  DISCOUNT_STRATEGY_UNSPECIFIED = 0;
+  CHAIN = 1;     // each tier applies to the running (already-discounted) amount
+  ADDITION = 2;  // tiers summed, applied once to the original amount
+}
+
+enum DiscountKind {
+  DISCOUNT_KIND_UNSPECIFIED = 0;
+  PERCENTAGE = 1;
+  FIXED_AMOUNT = 2;
+}
+
+enum RoundingMode {
+  ROUNDING_MODE_UNSPECIFIED = 0;  // treated as HALF_UP (FR-7 default, OQ-1)
+  HALF_UP = 1;
+  HALF_EVEN = 2;
+}
+
+message Currency {
+  string code = 1;            // ISO 4217; single currency, no conversion
+  uint32 scale = 2;           // fraction digits, e.g. 2
+  RoundingMode rounding = 3;
+}
+
+message Discount {
+  DiscountKind kind = 1;
+  // tier_factors[0..3] = the up-to-four discount tiers. For PERCENTAGE these are
+  // percents ("10" = 10%); for FIXED_AMOUNT only tier_factors[0] participates.
+  repeated string tier_factors = 2;   // 1..4 entries; > 4 => INVALID_ARGUMENT
+  string maximum_amount = 3;          // optional cap on the discount amount; "" = uncapped
+}
+
+message LineItem {
+  string sku = 1;
+  string quantity = 2;                 // decimal
+  string unit_price = 3;               // resolved net unit list price
+  string offer_unit_price = 4;         // resolved promotional unit price; "" = none
+  bool   price_on_application = 5;     // true => no public price (POA)
+  repeated Discount discounts = 6;     // already filtered for eligibility (upstream)
+  string tax_rate = 7;                 // resolved flat rate as percent, e.g. "20"; "" = 0
+}
+
+message ComputeBasketRequest {
+  repeated LineItem items = 1;
+  DiscountStrategy strategy = 2;
+  Currency currency = 3;
+  bool calculate_tax = 4;
+  bool discounts_pre_tax = 5;          // true: discount net then +tax; false: gross then discount
+}
+
+message DiscountValue {
+  string amount = 1;                   // total discount amount (x quantity), at currency scale
+  string percentage = 2;               // effective combined percentage
+  repeated string factor_percentages = 3;  // resolved per-tier percentages
+}
+
+message PricedLineItem {
+  string sku = 1;
+  string unit_price = 2;
+  string offer_unit_price = 3;
+  string net_payable = 4;                   // net, x quantity, after discount
+  DiscountValue discount_value = 5;
+  string tax_value = 6;
+  string net_payable_with_tax = 7;
+  DiscountValue discount_value_with_tax = 8;
+  bool   price_on_application = 9;
+}
+
+message ComputeBasketResponse {
+  repeated PricedLineItem items = 1;
+  string subtotal_net_payable = 2;
+  string subtotal_net_payable_with_tax = 3;
+}

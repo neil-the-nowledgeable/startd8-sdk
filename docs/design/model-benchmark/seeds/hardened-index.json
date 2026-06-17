@@ -1,0 +1,22 @@
+{
+  "generator": "scripts/gen_pricing_seed.py",
+  "schema_version": "1.0",
+  "seeds": [
+    {
+      "axes": [
+        "B",
+        "C",
+        "E"
+      ],
+      "derived_from": "Liferay Commerce (docs/design/liferay-pricing-seed/)",
+      "language": "nodejs",
+      "proto": "pricing.proto",
+      "proto_sha256": "3ee9299a92ffd5e8c11d17e15ae90fa6545f5d708a5c2dfea68173af43b50515",
+      "seed_file": "seed-pricingservice.json",
+      "seed_sha256": "3d09c032d55899d7cd179d2251e1a70f4e28965b56ba3274249190bf1752e046",
+      "service": "pricingservice",
+      "target_file": "src/pricingservice/server.js"
+    }
+  ],
+  "tier": "hardened"
+}
