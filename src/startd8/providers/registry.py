@@ -259,7 +259,13 @@ class ProviderRegistry:
             _register_if_missing("mistral", MistralProvider, "Mistral")
         except ImportError:
             pass
-    
+
+        try:
+            from .jetson import JetsonProvider
+            _register_if_missing("jetson", JetsonProvider, "Jetson Edge Cluster")
+        except ImportError:
+            pass
+
     @classmethod
     def get_provider(cls, name: str) -> Optional[AgentProvider]:
         """

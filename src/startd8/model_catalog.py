@@ -131,6 +131,16 @@ class Models:
     MISTRAL_SMALL_LATEST = "mistral:mistral-small-latest"
 
     # ==========================================================================
+    # Jetson Edge Cluster (self-hosted; opt-in, LAN; see docs/design/jetson-cluster-benchmark/)
+    # ==========================================================================
+
+    # Clean general baseline ("$500 edge box" contestant)
+    JETSON_MISTRAL_BASE = "jetson:mistral-7b-base"
+
+    # In-domain fine-tuned adapter — fenced track only, never a general-leaderboard peer
+    JETSON_ITER_002 = "jetson:iter-002"
+
+    # ==========================================================================
     # Recommended Defaults by Use Case
     # ==========================================================================
 
@@ -344,6 +354,19 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         tier="fast",
         capabilities={"text", "code"},
     ),
+    # Jetson edge cluster (aliases; served on a self-hosted LAN endpoint)
+    "mistral-7b-base": ModelInfo(
+        provider="jetson",
+        model_id="mistral-7b-base",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "iter-002": ModelInfo(
+        provider="jetson",
+        model_id="iter-002",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
     # Ollama local models
     "startd8-coder": ModelInfo(
         provider="ollama",
@@ -472,6 +495,12 @@ def get_latest_model(
             "balanced": Models.MISTRAL_MEDIUM_LATEST,
             "fast": Models.MISTRAL_SMALL_LATEST,
             "mini": Models.MISTRAL_SMALL_LATEST,
+        },
+        "jetson": {
+            "flagship": Models.JETSON_MISTRAL_BASE,
+            "balanced": Models.JETSON_MISTRAL_BASE,
+            "fast": Models.JETSON_MISTRAL_BASE,
+            "mini": Models.JETSON_MISTRAL_BASE,
         },
         "ollama": {
             "flagship": Models.STARTD8_CODER,
