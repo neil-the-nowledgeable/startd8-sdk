@@ -353,6 +353,61 @@ def _coverage_notes(contam: Optional[dict], cells: List[CellResult]) -> Optional
     )
 
 
+PHASE_TRAJECTORY_FILE = "phase-trajectory.json"
+
+
+def _refinement_summary(run_dir: Path, cells: List[CellResult]) -> Optional[dict]:
+    """Aggregate the per-draft compile sidecar (if present). Advisory — never scored."""
+    data = _load_json(run_dir / PHASE_TRAJECTORY_FILE)
+    if not data:
+        return None
+    id2sm = {c.cell_id: (c.service, c.model) for c in cells}
+    feats = fdc = 0
+    tail: List[tuple] = []      # non-compiling first drafts (the discriminating signal)
+    converged = 0               # broke on draft-1, compiled after a later draft
+    for cid, rec in (data.get("cells") or {}).items():
+        if rec.get("status") != "computed":
+            continue
+        svc, model = id2sm.get(cid, ("?", "?"))
+        for f in rec.get("features", []):
+            feats += 1
+            if f.get("first_draft_compiles"):
+                fdc += 1
+            else:
+                tail.append((model, svc))
+                if f.get("final_compiles"):
+                    converged += 1
+    return {"cov": data.get("coverage", {}), "feats": feats, "fdc": fdc,
+            "tail": tail, "converged": converged}
+
+
+def _refinement_trajectory_section(run_dir: Path, cells: List[CellResult]) -> Optional[str]:
+    s = _refinement_summary(run_dir, cells)
+    if s is None:
+        return None  # sidecar absent → omit (optional, advisory)
+    head = "## Refinement trajectory (per-draft compile — advisory, NOT scored)"
+    cov, feats, fdc = s["cov"], s["feats"], s["fdc"]
+    rate = (fdc / feats) if feats else 0.0
+    rows = [
+        "> Does the model's **first draft** compile? Computed $0 from persisted draft artifacts —",
+        "> a diagnostic, NOT a ranking term: it saturates among frontier models, so there is no",
+        "> per-model column (it would read ~100% for everyone). The signal is the tail (FR-10).",
+        "",
+        f"- **First-draft compiles: {fdc}/{feats} features ({_f(rate)})** over "
+        f"{cov.get('computed', '?')}/{cov.get('total', '?')} cells "
+        f"({cov.get('not_computed', '?')} had no draft artifacts).",
+    ]
+    if s["tail"]:
+        rows.append(f"- **Non-compiling first drafts ({len(s['tail'])})** — the discriminating exceptions:")
+        for model, svc in s["tail"][:12]:
+            rows.append(f"    - `{model}` · {svc}")
+        if s["converged"]:
+            rows.append(f"  ({s['converged']} compiled after a later draft — the draft→review loop recovered them)")
+    else:
+        rows.append("- No non-compiling first drafts — every computed first draft passed the compile gate.")
+    return f"{head}\n\n" + "\n".join(rows)
+
+
 def build_scorecard(run_dir, *, now: Optional[datetime] = None) -> str:
     """Render the unified scorecard for ``run_dir`` (degrade-honest per missing artifact)."""
     run_dir = Path(run_dir)
@@ -370,6 +425,7 @@ def build_scorecard(run_dir, *, now: Optional[datetime] = None) -> str:
         _credibility_section(contam),
         _behavioral_section(cells),
         _determinism_section(comparison),
+        _refinement_trajectory_section(run_dir, cells),  # G — advisory, omitted if no sidecar
         _by_language_section(agg, contam),
         _coverage_notes(contam, cells),
     ]
@@ -745,7 +801,30 @@ _DIMS: List[Tuple[str, str, str]] = [
         "By language",
         "Polyglot view — quality, pass-rate, contamination, cost per language.",
     ),
+    (
+        "G",
+        "Refinement trajectory",
+        "Does the first draft compile? Advisory diagnostic ($0 from draft artifacts), NOT scored — saturates among frontier models, so the signal is the non-compiling tail (FR-10).",
+    ),
 ]
+
+
+def _h_refinement(run_dir: Path, cells: List[CellResult]) -> str:
+    s = _refinement_summary(run_dir, cells)
+    if s is None:
+        return _empty("per-draft compile trajectory not computed (no phase-trajectory.json sidecar)")
+    feats, fdc = s["feats"], s["fdc"]
+    rate = (fdc / feats) if feats else 0.0
+    if not s["tail"]:
+        return _empty(f"first-draft compiles {fdc}/{feats} ({_hf(rate)}) — saturated, no exceptions")
+    rows = []
+    for model, svc in s["tail"][:12]:
+        rows.append(f"<tr><td class=model>{_esc(model)}</td><td>{_esc(svc)}</td></tr>")
+    extra = f" · {s['converged']} recovered by a later draft" if s["converged"] else ""
+    rows.append(
+        f"<tr><td colspan=2 class=dimv>first-draft compiles {fdc}/{feats} ({_hf(rate)}){extra}</td></tr>"
+    )
+    return _h_table(["Non-compiling first draft — model", "Service"], rows)
 
 
 def build_scorecard_html(run_dir, *, now: Optional[datetime] = None) -> str:
@@ -767,6 +846,7 @@ def build_scorecard_html(run_dir, *, now: Optional[datetime] = None) -> str:
         _h_behavioral(cells),
         _h_determinism(comparison),
         _h_bylang(agg, contam),
+        _h_refinement(run_dir, cells),
     ]
     supporting = "".join(
         _h_dim(d[0], d[1], d[2], body, 0.12 + i * 0.07)
