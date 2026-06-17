@@ -1,6 +1,6 @@
 {
   "document_path": "/Users/neilyashinsky/Documents/dev/startd8-bias-audit/docs/design/benchmark-bias-audit/CROSS_TOOL_BIAS_AUDIT_PLAN.md",
-  "updated_at_utc": "2026-06-17 20:35:44 UTC",
+  "updated_at_utc": "2026-06-17 21:11:29 UTC",
   "applied_ids": [
     "R1-S1",
     "R1-S2",
@@ -22,187 +22,59 @@
   ],
   "rounds": [
     {
-      "round": 1,
-      "agent": "gpt5.5",
-      "model": "gpt-5.5",
+      "round": 3,
+      "agent": "gpt5.4-mini",
+      "model": "gpt-5.4-mini",
       "ids": [
-        "R1-S1",
-        "R1-S2",
-        "R1-S3",
-        "R1-S4",
-        "R1-S5",
-        "R1-S6",
-        "R1-S7",
-        "R1-S8",
-        "R1-S9",
-        "R1-S10"
+        "R3-S1",
+        "R3-S2",
+        "R3-S3",
+        "R3-S4",
+        "R3-S5",
+        "R3-S6",
+        "R3-S7",
+        "R3-S8",
+        "R3-S9",
+        "R3-S10"
       ],
-      "appended_at_utc": "2026-06-17 20:32:06 UTC",
-      "cost": 0.08407500000000001
+      "appended_at_utc": "2026-06-17 21:10:51 UTC",
+      "cost": 0.0079088
     },
     {
-      "round": 2,
+      "round": 4,
       "agent": "gemini-2.5",
-      "model": "gemini-2.5-pro",
+      "model": "gemini-2.5-flash",
       "ids": [
-        "R2-S1",
-        "R2-S2",
-        "R2-S3",
-        "R2-S4",
-        "R2-S5",
-        "R2-S6"
+        "R4-S1",
+        "R4-S2",
+        "R4-S3",
+        "R4-S4",
+        "R4-S5",
+        "R4-S6",
+        "R4-S7",
+        "R4-S8",
+        "R4-S9",
+        "R4-S10"
       ],
-      "appended_at_utc": "2026-06-17 20:33:10 UTC",
-      "cost": 0.023131250000000003
+      "appended_at_utc": "2026-06-17 21:11:29 UTC",
+      "cost": 0.0033485999999999998
     }
   ],
-  "cumulative_cost_usd": 0.27830125000000006,
+  "cumulative_cost_usd": 0.0112574,
   "triage": {
-    "enabled": true,
-    "accepted": 14,
-    "rejected": 1,
+    "enabled": false,
+    "accepted": 0,
+    "rejected": 0,
     "feature_accepted": 0,
     "feature_rejected": 0,
     "untriaged_remaining": [],
-    "substantially_addressed_areas": [
-      "architecture",
-      "testability",
-      "completeness"
-    ],
-    "areas_needing_review": [
-      "architecture",
-      "clarity",
-      "maintainability",
-      "scalability",
-      "security"
-    ],
-    "decisions": [
-      {
-        "id": "R1-S1",
-        "decision": "ACCEPT",
-        "summary": "Add an explicit workflow architecture with phase gates, deliverables, owners, dependencies, and downstream consumers for S1 through S7.",
-        "rationale": "The plan currently lists activities but not gating criteria, and the requirements demand validated briefs, artifacts, oracles, mutants, and manifests before later analyses consume them.",
-        "area": "architecture"
-      },
-      {
-        "id": "R1-S2",
-        "decision": "ACCEPT",
-        "summary": "Expand S1 with the FR-1 source-to-brief traceability matrix, citation requirements, admissibility rationale, reviewer sign-off, and leakage checklist.",
-        "rationale": "The neutral brief is the root of trust for the audit, and the plan must explicitly cover the traceability and human-review controls required by FR-1.",
-        "area": "testability"
-      },
-      {
-        "id": "R1-S3",
-        "decision": "ACCEPT",
-        "summary": "Add a standardized prompt-template package with versioning, rendered-prompt capture, parameter capture, and few-shot/scaffolding policy.",
-        "rationale": "Equivalent prompting is necessary to avoid prompt drift as a confound, and FR-1b requires prompt-template control and capture across tools.",
-        "area": "testability"
-      },
-      {
-        "id": "R1-S4",
-        "decision": "ACCEPT",
-        "summary": "Define artifact intake, normalization, repair, retry, and rejection policies before generated artifacts enter downstream analyses.",
-        "rationale": "Without consistent intake rules, malformed or manually repaired artifacts could contaminate FR-4, FR-5, and FR-6; this directly implements FR-3a and FR-3b.",
-        "area": "architecture"
-      },
-      {
-        "id": "R1-S5",
-        "decision": "ACCEPT",
-        "summary": "Specify the reproducibility substrate, including locked runtimes, storage layout, manifests, checksum policy, retry logs, and model-version update policy.",
-        "rationale": "The plan\u2019s durable-capture language is insufficient for reproducibility and external scrutiny, while FR-3 requires concrete runtime, dependency, manifest, retry, and model-version controls.",
-        "area": "maintainability"
-      },
-      {
-        "id": "R1-S6",
-        "decision": "ACCEPT",
-        "summary": "Add explicit oracle validation and mutant adequacy gates before FR-4 equivalence results are trusted.",
-        "rationale": "The suite-bias experiment depends on a correct oracle and discriminating mutants, so FR-4 and FR-12 gates must be explicit before any equivalence conclusions are accepted.",
-        "area": "testability"
-      },
-      {
-        "id": "R1-S7",
-        "decision": "ACCEPT",
-        "summary": "Pre-register the statistical analysis plan for FR-4, FR-5, FR-6, and FR-11, including metrics, sample sizes, uncertainty, multiplicity, and bias thresholds.",
-        "rationale": "The plan references statistical concepts but lacks decision rules; pre-registration is required to distinguish bias from run variance and to satisfy FR-6 and FR-11.",
-        "area": "testability"
-      },
-      {
-        "id": "R1-S8",
-        "decision": "ACCEPT",
-        "summary": "Make the frozen canonical proto policy and adapter workflow explicit, separating primary spec-wording score-impact from optional contract-shape sensitivity analysis.",
-        "rationale": "Generated proto differences would confound FR-6 unless the canonical-proto policy, adaptation logging, and contract-shape sensitivity separation are made explicit.",
-        "area": "architecture"
-      },
-      {
-        "id": "R1-S9",
-        "decision": "ACCEPT",
-        "summary": "Define the human adjudication workflow, blinding protocol, reviewer roles, decision labels, verdict criteria, and remediation exit criteria.",
-        "rationale": "The plan mentions attribution and remediation but does not operationalize FR-7, FR-8, or FR-9 decision-making, which is necessary for credible bias classification.",
-        "area": "completeness"
-      },
-      {
-        "id": "R1-S10",
-        "decision": "ACCEPT",
-        "summary": "Add a publication and secrets-safety policy for raw prompts, outputs, transcripts, environment metadata, and source excerpts.",
-        "rationale": "The plan\u2019s raw artifact publication goal creates leakage and licensing risks, so a redaction and scanning policy is needed without weakening reproducibility.",
-        "area": "security"
-      },
-      {
-        "id": "R2-S1",
-        "decision": "ACCEPT",
-        "summary": "Add explicit validation steps for the oracle and mutant battery as a dedicated gate before downstream FR-4 use.",
-        "rationale": "Although the exact placement should follow artifact construction rather than precede it, the core requirement is valid and duplicates the need to budget and gate oracle and mutant validation explicitly.",
-        "area": "testability"
-      },
-      {
-        "id": "R2-S2",
-        "decision": "ACCEPT",
-        "summary": "Add an explicit remediation and re-run decision step to model the FR-9 loop.",
-        "rationale": "S7 currently treats re-audit as a report outcome rather than a workflow branch, while FR-9 requires explicit patching, re-running, exit criteria, and escalation behavior.",
-        "area": "architecture"
-      },
-      {
-        "id": "R2-S3",
-        "decision": "ACCEPT",
-        "summary": "Add a final pilot review and go/no-go decision step for expansion beyond the pricing seed.",
-        "rationale": "FR-13 requires the pilot to conclude with an explicit expansion decision, and the current plan stops at reporting without formal go/no-go criteria.",
-        "area": "completeness"
-      },
-      {
-        "id": "R2-S4",
-        "decision": "ACCEPT",
-        "summary": "Use a structured, queryable result store or equivalent indexed manifest system for raw and processed audit data.",
-        "rationale": "N-sample runs, mutant matrices, remediation loops, and future seed expansion will be difficult to analyze from an ad hoc batch directory alone; the implementation can remain flexible between SQLite, Parquet, or manifest-indexed files.",
-        "area": "scalability"
-      },
-      {
-        "id": "R2-S5",
-        "decision": "REJECT",
-        "summary": "Formalize all audit tooling into a single modular CLI application.",
-        "rationale": "A unified CLI could improve ergonomics later, but it is not required to satisfy the audit requirements and risks over-scoping the pilot compared with modular scripts plus shared libraries and manifests.",
-        "area": "maintainability"
-      }
-    ]
+    "substantially_addressed_areas": [],
+    "areas_needing_review": []
   },
   "apply": {
-    "enabled": true,
-    "applied_count": 14,
-    "applied_ids": [
-      "R1-S1",
-      "R1-S2",
-      "R1-S3",
-      "R1-S4",
-      "R1-S5",
-      "R1-S6",
-      "R1-S7",
-      "R1-S8",
-      "R1-S9",
-      "R1-S10",
-      "R2-S1",
-      "R2-S2",
-      "R2-S3",
-      "R2-S4"
-    ],
+    "enabled": false,
+    "applied_count": 0,
+    "applied_ids": [],
     "warning_ids": [],
     "feature_applied_count": 0,
     "error": null
