@@ -51,6 +51,10 @@ class JetsonProvider:
     # lets tests point at a mock server).
     DEFAULT_BASE_URL = "http://192.168.7.57:8000/v1"
 
+    # The untrained base model's served id. Base requests are served with adapters disabled and
+    # the server reports the applied adapter as "__base__" (FR-J5a echo).
+    BASE_SERVED_ID = "mistralai/Mistral-7B-v0.3"
+
     # FR-J3a: clean slash-free aliases mapped to the server's REAL model id. The served
     # id is what the agent reports to the cost tracker, so pricing is keyed under it.
     ALIASES: Dict[str, str] = {
@@ -89,6 +93,10 @@ class JetsonProvider:
     def contamination_label(self, model: str) -> str:
         """Contamination posture for a model/alias (FR-J5/J7); unknown → ``unknown``."""
         return self.CONTAMINATION.get(model, "unknown")
+
+    def is_base(self, model: str) -> bool:
+        """True if the alias resolves to the untrained base model (FR-J5a/J8)."""
+        return self.served_id(model) == self.BASE_SERVED_ID
 
     def _require_opt_in(self) -> None:
         """FR-J12: refuse to construct/validate a LAN agent without explicit operator opt-in."""
