@@ -340,14 +340,55 @@ class PricingService:
             input_cost_per_million=0.30,
             output_cost_per_million=0.30
         ),
+        # Jetson edge cluster (FR-J9b). Two call sites resolve different ids: the pre-run
+        # ESTIMATE keys on the public alias (stripped from the `provider:model` spec) while the
+        # RUNTIME tracker keys on the SERVED id (the agent's translated model). Both must be present
+        # or the dry-run warns "NO PRICING" / the runtime hits the misleading $3/$15 fallback —
+        # exactly the path the dry-run surfaced. Marginal on-prem cost is ≈$0; the amortized-vs-
+        # free-lane representation is OQ-J3 (report-side, gates the cost ranking per FR-J8).
+        # -- served ids (runtime tracker) --
+        "mistralai/Mistral-7B-v0.3": ModelPricing(
+            model="mistralai/Mistral-7B-v0.3",
+            provider="jetson",
+            input_cost_per_million=0.0,
+            output_cost_per_million=0.0,
+            estimated=True,
+            notes="Jetson served id; on-prem marginal ≈$0; amortized cost is OQ-J3 (cost-lane gate).",
+        ),
+        "iter_002": ModelPricing(
+            model="iter_002",
+            provider="jetson",
+            input_cost_per_million=0.0,
+            output_cost_per_million=0.0,
+            estimated=True,
+            notes="Jetson served id; in-domain-finetune (fenced track). OQ-J3 for cost rep.",
+        ),
+        # -- aliases (pre-run estimate) --
+        "mistral-7b-base": ModelPricing(
+            model="mistral-7b-base",
+            provider="jetson",
+            input_cost_per_million=0.0,
+            output_cost_per_million=0.0,
+            estimated=True,
+            notes="Jetson alias of mistralai/Mistral-7B-v0.3; ≈$0 marginal; OQ-J3 cost-lane gate.",
+        ),
+        "iter-002": ModelPricing(
+            model="iter-002",
+            provider="jetson",
+            input_cost_per_million=0.0,
+            output_cost_per_million=0.0,
+            estimated=True,
+            notes="Jetson alias of iter_002; in-domain-finetune (fenced track); OQ-J3 for cost rep.",
+        ),
     }
-    
+
     # Provider detection patterns
     PROVIDER_PATTERNS = {
         "anthropic": ["claude"],
         "openai": ["gpt", "o1", "o3", "o4", "davinci", "curie"],
         "google": ["gemini", "palm"],
         "nim": ["nemotron", "nvidia"],
+        "jetson": ["jetson"],
     }
     
     def __init__(self, pricing_file: Optional[Path] = None):
