@@ -1,0 +1,101 @@
+{
+  "schema_version": "0.1",
+  "run_id": "s2-codex-suite-clean-20260618T215301Z",
+  "author_vendor": "openai",
+  "authoring_surface": "codex_cli",
+  "model_id": "codex-cli-default",
+  "prompt_template_version": "suite-author.v0.1",
+  "artifact_type": "suite",
+  "files_written": [
+    "suite.py",
+    "suite_manifest.json",
+    "authoring_manifest.json"
+  ],
+  "open_item_decisions": [
+    {
+      "open_id": "OPEN-001",
+      "decision": "Used the canonical contract names ResolvedPriceService.AssessLines, AssessLinesRequest, AssessLinesResponse, ResolvedLine, AssessedLine, Amount, Reduction, and ReductionSummary in suite metadata and RPC-shaped fixtures.",
+      "rationale": "The suite must target the canonical proto and specification exactly."
+    },
+    {
+      "open_id": "OPEN-002",
+      "decision": "Represented monetary amounts as Amount-shaped dictionaries containing decimal strings; quantities and percentages are decimal strings; currency_code is request-level.",
+      "rationale": "This mirrors the canonical primary-pilot contract and preserves exact decimal behavior."
+    },
+    {
+      "open_id": "OPEN-003",
+      "decision": "Authored cases for output-only rounding, default currency_scale 2, explicit scale 0, default HALF_EVEN, explicit HALF_UP, and explicit DOWN.",
+      "rationale": "These are the canonical rounding decisions that behavioral tests must detect."
+    },
+    {
+      "open_id": "OPEN-004",
+      "decision": "Authored percentage-level cases with one to four allowed levels and validation for too many levels; fixed amount reductions are modeled as separate reductions applied after percentage reductions.",
+      "rationale": "The suite follows the canonical reduction structure without adding cap behavior."
+    },
+    {
+      "open_id": "OPEN-005",
+      "decision": "Authored cases for omitted/default CASCADE, explicit SUM, and unknown strategy rejection.",
+      "rationale": "The canonical spec defines these strategy semantics and INVALID_ARGUMENT for unknown values."
+    },
+    {
+      "open_id": "OPEN-006",
+      "decision": "Authored candidate selection cases where a lower positive candidate is selected and zero or equal candidates are ignored.",
+      "rationale": "This directly exercises the canonical promotional candidate rule."
+    },
+    {
+      "open_id": "OPEN-007",
+      "decision": "Tax handling is deferred from the primary pilot and no tax behavior is represented or tested.",
+      "rationale": "The S2 scope decisions and canonical spec make tax a non-goal for this suite."
+    },
+    {
+      "open_id": "OPEN-008",
+      "decision": "Discount cap calculation and validation are deferred; fixed reductions that overrun the remaining line amount are tested only as INVALID_ARGUMENT.",
+      "rationale": "The canonical spec rejects over-large fixed reductions and does not include cap semantics."
+    },
+    {
+      "open_id": "OPEN-009",
+      "decision": "Invalid requests are represented as expected gRPC INVALID_ARGUMENT status without asserting exact error-message text.",
+      "rationale": "The canonical validation behavior fixes status code but not diagnostic wording."
+    },
+    {
+      "open_id": "OPEN-010",
+      "decision": "Authored both single-line and multi-line cases, including totals over numeric lines and price-on-request exclusion.",
+      "rationale": "The canonical pilot covers one or more line items and numeric request totals."
+    },
+    {
+      "open_id": "OPEN-011",
+      "decision": "Expected responses include selected unit amount, optional comparison amount, line base amount, reduction summary, line due amount, price-on-request marker, and numeric totals.",
+      "rationale": "These are the canonical output details in scope for behavioral validation."
+    },
+    {
+      "open_id": "OPEN-012",
+      "decision": "No runtime language, startup command, live gRPC server, or generated stubs are required by the authored suite.",
+      "rationale": "Runtime remains a later packaging decision outside primary suite authoring."
+    }
+  ],
+  "fixed_items_covered": [
+    "FIXED-001",
+    "FIXED-002",
+    "FIXED-003",
+    "FIXED-004",
+    "FIXED-005",
+    "FIXED-006",
+    "FIXED-007",
+    "FIXED-008",
+    "FIXED-010"
+  ],
+  "assumptions": [
+    "The canonical proto and canonical specification embedded in the prompt are authoritative.",
+    "The authored suite is data-first and can be adapted to a later Python gRPC pytest-style harness.",
+    "Proto optional field presence is represented by key presence in request and response dictionaries.",
+    "Expected invalid behavior is asserted by status code only, not by error message.",
+    "No parent directories, external documentation, generated stubs, databases, network services, plugins, skills, MCP tools, memories, or prior non-canonical artifacts were used."
+  ],
+  "known_limitations": [
+    "The suite does not start or call a live gRPC server in this authoring run.",
+    "Tax handling, tax-inclusive mirrors, and discount/tax ordering are intentionally not tested.",
+    "Discount cap behavior is intentionally not tested.",
+    "The suite does not include benchmark seed packaging, runtime dependencies, startup metadata, or target server files.",
+    "The suite includes a local Decimal oracle only to validate embedded expected values; final harness adaptation may replace it with RPC calls against an implementation."
+  ]
+}

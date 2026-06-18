@@ -1,0 +1,236 @@
+{
+  "suite_id": "resolved-price-service-behavioral-suite-v1",
+  "tested_behavior_ids": [
+    "B_CASCADE_PERCENT",
+    "B_CURRENCY_SCALE",
+    "B_DEFAULTS",
+    "B_EXACT_DECIMAL",
+    "B_FIXED_AFTER_PERCENT",
+    "B_FIXED_AMOUNT",
+    "B_MULTI_LINE_ORDER",
+    "B_OUTPUT_ONLY_ROUNDING",
+    "B_OUTPUT_ROUNDING",
+    "B_PRICE_ON_REQUEST",
+    "B_PROMOTION_SELECTION",
+    "B_ROUND_DOWN",
+    "B_ROUND_HALF_EVEN",
+    "B_ROUND_HALF_UP",
+    "B_SUM_PERCENT",
+    "B_TOTALS",
+    "B_VALIDATION_AMOUNT",
+    "B_VALIDATION_CURRENCY",
+    "B_VALIDATION_CURRENCY_SCALE",
+    "B_VALIDATION_DECIMAL",
+    "B_VALIDATION_ENUMS",
+    "B_VALIDATION_FIXED_OVERRUN",
+    "B_VALIDATION_LINE_KEY",
+    "B_VALIDATION_LINES",
+    "B_VALIDATION_NUMERIC_LINE",
+    "B_VALIDATION_PERCENT_LEVELS",
+    "B_VALIDATION_PERCENT_RANGE",
+    "B_VALIDATION_PRICE_ON_REQUEST",
+    "B_VALIDATION_QUANTITY"
+  ],
+  "test_case_names": [
+    "default_cascade_selects_lower_positive_candidate",
+    "sum_strategy_adds_percent_levels_once",
+    "fixed_reductions_apply_after_all_percent_reductions",
+    "exact_intermediate_arithmetic_precedes_output_quantization",
+    "half_even_is_default_rounding_mode",
+    "half_up_rounding_mode_is_honored",
+    "down_rounding_and_zero_scale_are_honored",
+    "price_on_request_lines_are_excluded_from_numeric_totals",
+    "candidate_must_be_positive_and_lower_than_unit",
+    "rejects_empty_lines",
+    "rejects_duplicate_line_key",
+    "rejects_missing_currency_for_numeric_line",
+    "rejects_malformed_decimal",
+    "rejects_nonpositive_quantity",
+    "rejects_negative_amount",
+    "rejects_numeric_line_without_unit_amount",
+    "rejects_price_on_request_with_numeric_inputs",
+    "rejects_too_many_percent_levels",
+    "rejects_percent_level_over_100",
+    "rejects_fixed_reduction_overrun_after_percent",
+    "rejects_unknown_strategy",
+    "rejects_unknown_rounding_mode",
+    "rejects_unknown_reduction_kind",
+    "rejects_negative_currency_scale"
+  ],
+  "expected_oracle_behavior": {
+    "valid_cases": "Each valid case expects OK status and an AssessLinesResponse-shaped dictionary matching the canonical exact-decimal oracle in suite.py.",
+    "invalid_cases": "Each invalid case expects gRPC INVALID_ARGUMENT; exact error-message text is intentionally not specified.",
+    "rounding": "Intermediate arithmetic is exact; monetary values are quantized only at response formatting using the requested or default scale and rounding mode.",
+    "totals": "Totals include only numeric lines and preserve input line response order."
+  },
+  "case_manifest": [
+    {
+      "name": "default_cascade_selects_lower_positive_candidate",
+      "behavior_ids": ["B_PROMOTION_SELECTION", "B_DEFAULTS", "B_CASCADE_PERCENT", "B_TOTALS"],
+      "fixed_or_open_items": ["FIXED-004", "FIXED-006", "FIXED-008", "OPEN-003", "OPEN-005", "OPEN-006", "OPEN-010", "OPEN-011"],
+      "expected_oracle_behavior": "A lower positive candidate unit amount is selected; omitted strategy and rounding use CASCADE and HALF_EVEN; two percent levels cascade; totals equal the rounded numeric line values.",
+      "mutant_behaviors_expected_to_fail": ["ignores candidate_unit_amount", "applies SUM when discount_strategy is unspecified", "rounds between percentage levels"]
+    },
+    {
+      "name": "sum_strategy_adds_percent_levels_once",
+      "behavior_ids": ["B_SUM_PERCENT", "B_OUTPUT_ROUNDING"],
+      "fixed_or_open_items": ["FIXED-003", "FIXED-004", "FIXED-008", "OPEN-003", "OPEN-005", "OPEN-011"],
+      "expected_oracle_behavior": "SUM adds 12.5 and 7.5 into one 20 percent reduction before output rounding.",
+      "mutant_behaviors_expected_to_fail": ["treats SUM as CASCADE", "omits aggregate percent output"]
+    },
+    {
+      "name": "fixed_reductions_apply_after_all_percent_reductions",
+      "behavior_ids": ["B_FIXED_AFTER_PERCENT", "B_FIXED_AMOUNT", "B_TOTALS"],
+      "fixed_or_open_items": ["FIXED-003", "FIXED-008", "OPEN-004", "OPEN-008", "OPEN-010", "OPEN-011"],
+      "expected_oracle_behavior": "All percentage reductions are applied before fixed reductions, even when a fixed reduction appears earlier in the request list.",
+      "mutant_behaviors_expected_to_fail": ["applies reductions strictly in request order", "treats fixed amounts as per-unit discounts"]
+    },
+    {
+      "name": "exact_intermediate_arithmetic_precedes_output_quantization",
+      "behavior_ids": ["B_EXACT_DECIMAL", "B_OUTPUT_ONLY_ROUNDING", "B_FIXED_AMOUNT"],
+      "fixed_or_open_items": ["FIXED-008", "OPEN-002", "OPEN-003", "OPEN-004"],
+      "expected_oracle_behavior": "The service multiplies 0.333 by quantity exactly, subtracts 0.009 exactly, and only then quantizes response amounts.",
+      "mutant_behaviors_expected_to_fail": ["rounds unit amount before multiplying by quantity", "uses binary floating point arithmetic"]
+    },
+    {
+      "name": "half_even_is_default_rounding_mode",
+      "behavior_ids": ["B_DEFAULTS", "B_ROUND_HALF_EVEN"],
+      "fixed_or_open_items": ["FIXED-008", "OPEN-003"],
+      "expected_oracle_behavior": "Omitted rounding_mode uses HALF_EVEN, so 1.005 at scale 2 is formatted as 1.00.",
+      "mutant_behaviors_expected_to_fail": ["defaults to HALF_UP instead of HALF_EVEN"]
+    },
+    {
+      "name": "half_up_rounding_mode_is_honored",
+      "behavior_ids": ["B_ROUND_HALF_UP"],
+      "fixed_or_open_items": ["FIXED-008", "OPEN-003"],
+      "expected_oracle_behavior": "Explicit HALF_UP formats 1.005 at scale 2 as 1.01.",
+      "mutant_behaviors_expected_to_fail": ["ignores explicit rounding_mode"]
+    },
+    {
+      "name": "down_rounding_and_zero_scale_are_honored",
+      "behavior_ids": ["B_ROUND_DOWN", "B_CURRENCY_SCALE"],
+      "fixed_or_open_items": ["FIXED-008", "OPEN-003"],
+      "expected_oracle_behavior": "Explicit DOWN with currency_scale 0 truncates 9.99 to 9 in monetary output fields.",
+      "mutant_behaviors_expected_to_fail": ["always uses two fractional digits", "treats DOWN as HALF_EVEN"]
+    },
+    {
+      "name": "price_on_request_lines_are_excluded_from_numeric_totals",
+      "behavior_ids": ["B_PRICE_ON_REQUEST", "B_TOTALS", "B_MULTI_LINE_ORDER"],
+      "fixed_or_open_items": ["FIXED-002", "FIXED-007", "OPEN-010", "OPEN-011"],
+      "expected_oracle_behavior": "The price-on-request line echoes only key, quantity, and marker; numeric totals include only the numeric line and count one price-on-request line.",
+      "mutant_behaviors_expected_to_fail": ["requires unit_amount on price_on_request lines", "includes price_on_request lines in totals", "reorders response lines"]
+    },
+    {
+      "name": "candidate_must_be_positive_and_lower_than_unit",
+      "behavior_ids": ["B_PROMOTION_SELECTION"],
+      "fixed_or_open_items": ["FIXED-006", "OPEN-006"],
+      "expected_oracle_behavior": "Zero and equal candidate unit amounts are ignored and do not set promotion_applied.",
+      "mutant_behaviors_expected_to_fail": ["accepts zero candidate as a promotion", "accepts equal candidate as a promotion"]
+    },
+    {
+      "name": "rejects_empty_lines",
+      "behavior_ids": ["B_VALIDATION_LINES"],
+      "fixed_or_open_items": ["OPEN-009", "OPEN-010"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["accepts empty requests"]
+    },
+    {
+      "name": "rejects_duplicate_line_key",
+      "behavior_ids": ["B_VALIDATION_LINE_KEY"],
+      "fixed_or_open_items": ["OPEN-009", "OPEN-010"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["does not enforce line_key uniqueness"]
+    },
+    {
+      "name": "rejects_missing_currency_for_numeric_line",
+      "behavior_ids": ["B_VALIDATION_CURRENCY"],
+      "fixed_or_open_items": ["OPEN-002", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["defaults or ignores missing currency_code"]
+    },
+    {
+      "name": "rejects_malformed_decimal",
+      "behavior_ids": ["B_VALIDATION_DECIMAL"],
+      "fixed_or_open_items": ["FIXED-008", "OPEN-002", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["uses permissive decimal parsing"]
+    },
+    {
+      "name": "rejects_nonpositive_quantity",
+      "behavior_ids": ["B_VALIDATION_QUANTITY"],
+      "fixed_or_open_items": ["FIXED-008", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["allows zero quantity"]
+    },
+    {
+      "name": "rejects_negative_amount",
+      "behavior_ids": ["B_VALIDATION_AMOUNT"],
+      "fixed_or_open_items": ["FIXED-008", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["allows negative unit_amount"]
+    },
+    {
+      "name": "rejects_numeric_line_without_unit_amount",
+      "behavior_ids": ["B_VALIDATION_NUMERIC_LINE"],
+      "fixed_or_open_items": ["OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["treats absent unit_amount as zero"]
+    },
+    {
+      "name": "rejects_price_on_request_with_numeric_inputs",
+      "behavior_ids": ["B_VALIDATION_PRICE_ON_REQUEST"],
+      "fixed_or_open_items": ["FIXED-007", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["ignores numeric inputs on price_on_request lines"]
+    },
+    {
+      "name": "rejects_too_many_percent_levels",
+      "behavior_ids": ["B_VALIDATION_PERCENT_LEVELS"],
+      "fixed_or_open_items": ["FIXED-005", "OPEN-004", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["accepts more than four percentage levels"]
+    },
+    {
+      "name": "rejects_percent_level_over_100",
+      "behavior_ids": ["B_VALIDATION_PERCENT_RANGE"],
+      "fixed_or_open_items": ["OPEN-004", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["allows percentage levels greater than 100"]
+    },
+    {
+      "name": "rejects_fixed_reduction_overrun_after_percent",
+      "behavior_ids": ["B_VALIDATION_FIXED_OVERRUN", "B_FIXED_AFTER_PERCENT"],
+      "fixed_or_open_items": ["OPEN-004", "OPEN-008", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT because the fixed reduction is evaluated after percentage reductions and would make the line amount negative.",
+      "mutant_behaviors_expected_to_fail": ["clamps fixed reduction overrun to zero", "applies fixed amount before percentage reductions"]
+    },
+    {
+      "name": "rejects_unknown_strategy",
+      "behavior_ids": ["B_VALIDATION_ENUMS"],
+      "fixed_or_open_items": ["OPEN-005", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["treats unknown discount_strategy as a default"]
+    },
+    {
+      "name": "rejects_unknown_rounding_mode",
+      "behavior_ids": ["B_VALIDATION_ENUMS"],
+      "fixed_or_open_items": ["OPEN-003", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["treats unknown rounding_mode as a default"]
+    },
+    {
+      "name": "rejects_unknown_reduction_kind",
+      "behavior_ids": ["B_VALIDATION_ENUMS"],
+      "fixed_or_open_items": ["OPEN-004", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["ignores unknown reduction kinds"]
+    },
+    {
+      "name": "rejects_negative_currency_scale",
+      "behavior_ids": ["B_VALIDATION_CURRENCY_SCALE"],
+      "fixed_or_open_items": ["OPEN-003", "OPEN-009"],
+      "expected_oracle_behavior": "The request fails with INVALID_ARGUMENT.",
+      "mutant_behaviors_expected_to_fail": ["accepts negative currency_scale"]
+    }
+  ]
+}

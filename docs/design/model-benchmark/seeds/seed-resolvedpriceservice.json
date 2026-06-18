@@ -1,0 +1,155 @@
+{
+  "artifacts": {
+    "behavioral_suite": {
+      "invalid_case_count": 15,
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/runs/s2-codex-suite-clean-20260618T215301Z/suite.py",
+      "role": "validation_oracle_not_model_facing",
+      "sha256": "e4a5eb3dbb1a4d14ec181faf88aa2e5c8f4a67f12d142b0cca26b49f3af94e39",
+      "suite_id": "resolved-price-service-behavioral-suite-v1",
+      "test_case_count": 24,
+      "valid_case_count": 9
+    },
+    "behavioral_suite_manifest": {
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/runs/s2-codex-suite-clean-20260618T215301Z/suite_manifest.json",
+      "role": "suite_trace",
+      "sha256": "35e646d875e2717429915b89e3c50bdd03b576f4f861dbebf175f741ad756f6a"
+    },
+    "behavioral_suite_schema": {
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/runs/s2-codex-suite-clean-20260618T215301Z/self-manifest.schema.json",
+      "role": "suite_manifest_schema",
+      "sha256": "aa0bb9852f7c7f6b11bb4ecd60f4c8cbbb9a2c2f289383a288732be8ef45e4f0"
+    },
+    "canonical_proto": {
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/canonical/pricing.proto",
+      "role": "model_facing_contract",
+      "sha256": "722f66c0e454b7c5c261346536dd8c017fce63c9ca8180941079cae8cae72211"
+    },
+    "canonical_spec": {
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/canonical/spec.md",
+      "role": "model_facing_spec",
+      "sha256": "a40ef403c353a1b80fc731bd0f53d367867f4a054c581c18f66b26c7be1b0d86"
+    },
+    "canonicalization_decisions": {
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/canonical/canonicalization_decisions.md",
+      "role": "audit_trace",
+      "sha256": "4441a3152019aa003e0bd096cd9254e9f12244b49d8b06bff42348726849512f"
+    },
+    "source_brief": {
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/brief/pricing-task-brief.md",
+      "role": "upstream_liferay_evidence_brief",
+      "sha256": "2154147fc5dc0a7a326606962a4f65ebf94a59cf0ed050c0224f78a4f5e9ae4f"
+    },
+    "source_traceability_matrix": {
+      "csv_path": "docs/design/benchmark-bias-audit/bias_audit_openai/brief/source-to-brief-traceability.csv",
+      "csv_sha256": "779beef2df527ba66da291198c9e11c8191caf389d3a73fb08241ee7debab02b",
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/brief/source-to-brief-traceability.md",
+      "role": "upstream_evidence_traceability",
+      "sha256": "2d380c211014eeeb007b474bbffa6d7708c3602b6b50ef8f47bcb9e41855cbaa"
+    }
+  },
+  "benchmark_packaging": {
+    "promotion_gate": "Register in hardened-index.json only after behavioral.execute has a resolvedpriceservice suite/proto adapter.",
+    "status": "seed_envelope_packaged"
+  },
+  "generator": "scripts/gen_resolved_pricing_seed.py",
+  "schema_version": "1.0",
+  "service_metadata": {
+    "behavioral_suite_sha256": "e4a5eb3dbb1a4d14ec181faf88aa2e5c8f4a67f12d142b0cca26b49f3af94e39",
+    "canonical_spec_sha256": "a40ef403c353a1b80fc731bd0f53d367867f4a054c581c18f66b26c7be1b0d86",
+    "dependencies": [
+      "@grpc/grpc-js@^1.10.0",
+      "@grpc/proto-loader@^0.7.10",
+      "decimal.js@^10.4.0"
+    ],
+    "estimated_loc": 240,
+    "language": "nodejs",
+    "language_rationale": "Pinned to nodejs because the benchmark Track 2 behavioral harness has a vendored offline Node runtime closure for grpc-js, proto-loader, and decimal.js. Liferay Java source evidence constrains the pricing semantics, not the benchmark runtime.",
+    "proto_filename": "pricing.proto",
+    "proto_package": "benchmark.pricing.v1",
+    "proto_service": "ResolvedPriceService",
+    "proto_sha256": "722f66c0e454b7c5c261346536dd8c017fce63c9ca8180941079cae8cae72211",
+    "rpc_count": 1,
+    "rpcs": [
+      "AssessLines"
+    ],
+    "service": "resolvedpriceservice"
+  },
+  "startup": {
+    "cmd": [
+      "node",
+      "src/resolvedpriceservice/server.js"
+    ],
+    "port_env": "PORT",
+    "readiness": "tcp"
+  },
+  "tasks": [
+    {
+      "config": {
+        "context": {
+          "api_signatures": [
+            "benchmark.pricing.v1.ResolvedPriceService.AssessLines"
+          ],
+          "artifact_types_addressed": [
+            "grpc_service",
+            "benchmark_seed_envelope"
+          ],
+          "behavioral_suite_manifest_sha256": "35e646d875e2717429915b89e3c50bdd03b576f4f861dbebf175f741ad756f6a",
+          "behavioral_suite_sha256": "e4a5eb3dbb1a4d14ec181faf88aa2e5c8f4a67f12d142b0cca26b49f3af94e39",
+          "design_doc_sections": [
+            "S1 neutral pricing brief",
+            "S2 canonical proto/spec decisions",
+            "S2 canonical behavioral suite manifest"
+          ],
+          "estimated_loc": 240,
+          "feature_id": "LIFERAY-RESOLVEDPRICESERVICE",
+          "language": "nodejs",
+          "language_rationale": "Pinned to nodejs because the benchmark Track 2 behavioral harness has a vendored offline Node runtime closure for grpc-js, proto-loader, and decimal.js. Liferay Java source evidence constrains the pricing semantics, not the benchmark runtime.",
+          "module_system": "commonjs",
+          "negative_scope": [
+            "tax calculation",
+            "discount caps",
+            "price-list lookup",
+            "promotion discovery",
+            "coupon validation or usage tracking",
+            "account/channel rules",
+            "inventory checks",
+            "database access",
+            "network calls",
+            "currency conversion"
+          ],
+          "node_version": "20",
+          "proto_filename": "pricing.proto",
+          "proto_package": "benchmark.pricing.v1",
+          "proto_service": "ResolvedPriceService",
+          "proto_sha256": "722f66c0e454b7c5c261346536dd8c017fce63c9ca8180941079cae8cae72211",
+          "protocol": "grpc",
+          "quality_hints": [
+            "Use exact decimal arithmetic for all numeric operations.",
+            "Round monetary outputs only at response formatting time.",
+            "Preserve input line order in the response.",
+            "Return INVALID_ARGUMENT for invalid request shapes and values."
+          ],
+          "rpcs": [
+            "AssessLines"
+          ],
+          "runtime_dependencies": [
+            "@grpc/grpc-js@^1.10.0",
+            "@grpc/proto-loader@^0.7.10",
+            "decimal.js@^10.4.0"
+          ],
+          "spec_sha256": "a40ef403c353a1b80fc731bd0f53d367867f4a054c581c18f66b26c7be1b0d86",
+          "target_files": [
+            "src/resolvedpriceservice/server.js"
+          ]
+        },
+        "requirements_text": "## ResolvedPriceService (nodejs) -- Liferay-derived resolved-line pricing calculator\n\nImplement ONLY `ResolvedPriceService.AssessLines` from the gRPC contract below. This is a pure, stateless calculator for already-resolved line items: upstream systems have already selected price lists, determined discount eligibility, and decided whether a line is price-on-request. The service must not use a database, network call, clock, hidden state, or any external pricing source.\n\n- RPC to implement: `ResolvedPriceService.AssessLines`\n- Proto package: `benchmark.pricing.v1`\n- Target file: `src/resolvedpriceservice/server.js`\n- Runtime: Node.js gRPC server listening on `PORT`\n- The proto is provided as `pricing.proto` and may be loaded dynamically with `@grpc/proto-loader`.\n- Use exact decimal arithmetic for all parsing, comparison, arithmetic, and formatting. Do not use binary floating point for monetary values, quantities, or percentages.\n- Implement the canonical specification below exactly; do not add tax behavior, discount caps, persistence, lookup, or service-to-service calls.\n- Invalid requests fail the RPC with gRPC `INVALID_ARGUMENT`; tests do not require exact error-message wording.\n\n### Canonical pricing.proto\n\n```proto\nsyntax = \"proto3\";\n\npackage benchmark.pricing.v1;\n\nservice ResolvedPriceService {\n  rpc AssessLines(AssessLinesRequest) returns (AssessLinesResponse);\n}\n\nmessage AssessLinesRequest {\n  string currency_code = 1;\n  optional uint32 currency_scale = 2;\n  RoundingMode rounding_mode = 3;\n  DiscountStrategy discount_strategy = 4;\n  repeated ResolvedLine lines = 5;\n}\n\nmessage ResolvedLine {\n  string line_key = 1;\n  string quantity = 2;\n  optional Amount unit_amount = 3;\n  optional Amount comparison_unit_amount = 4;\n  optional Amount candidate_unit_amount = 5;\n  bool price_on_request = 6;\n  repeated Reduction reductions = 7;\n}\n\nmessage Reduction {\n  ReductionKind kind = 1;\n  repeated string percent_levels = 2;\n  optional Amount amount = 3;\n}\n\nmessage AssessLinesResponse {\n  string currency_code = 1;\n  repeated AssessedLine lines = 2;\n  Totals totals = 3;\n}\n\nmessage AssessedLine {\n  string line_key = 1;\n  string quantity = 2;\n  bool price_on_request = 3;\n  optional Amount comparison_unit_amount = 4;\n  optional Amount selected_unit_amount = 5;\n  bool promotion_applied = 6;\n  optional Amount line_base_amount = 7;\n  ReductionSummary reduction = 8;\n  optional Amount line_due_amount = 9;\n}\n\nmessage ReductionSummary {\n  Amount amount = 1;\n  string percent_total = 2;\n  repeated string percent_levels = 3;\n}\n\nmessage Totals {\n  Amount base_amount = 1;\n  Amount reduction_amount = 2;\n  Amount due_amount = 3;\n  uint32 price_on_request_count = 4;\n}\n\nmessage Amount {\n  string decimal = 1;\n}\n\nenum DiscountStrategy {\n  DISCOUNT_STRATEGY_UNSPECIFIED = 0;\n  DISCOUNT_STRATEGY_CASCADE = 1;\n  DISCOUNT_STRATEGY_SUM = 2;\n}\n\nenum ReductionKind {\n  REDUCTION_KIND_UNSPECIFIED = 0;\n  REDUCTION_KIND_PERCENT_LEVELS = 1;\n  REDUCTION_KIND_FIXED_AMOUNT = 2;\n}\n\nenum RoundingMode {\n  ROUNDING_MODE_UNSPECIFIED = 0;\n  ROUNDING_MODE_HALF_EVEN = 1;\n  ROUNDING_MODE_HALF_UP = 2;\n  ROUNDING_MODE_DOWN = 3;\n}\n```\n\n### Canonical functional specification\n\n# Canonical Resolved Line Price Calculator Specification\n\n## Scope\n\nImplement one stateless gRPC service, `ResolvedPriceService`, with one RPC, `AssessLines`. The service\nprices already-resolved line item inputs. It must not discover price lists, resolve promotions, validate\ncoupon usage, read account or channel state, look up tax rates, use a database, use network calls, rely\non global mutable state, or depend on clock time.\n\nThe primary pilot covers exact decimal line pricing, promotional candidate selection, ordered\npercentage reductions, fixed amount reductions, request-level discount strategy selection,\nprice-on-request line handling, output-only rounding, validation, line results, and numeric request\ntotals.\n\nTax handling and discount cap behavior are non-goals for the primary pilot.\n\n## Service Behavior\n\nThe request contains one or more `ResolvedLine` entries and one request-level `currency_code` for all\nnumeric lines. Currency conversion is out of scope.\n\nFor each non-`price_on_request` line:\n\n1. Parse all decimal strings as exact finite base-10 decimals.\n2. Select the unit amount used for arithmetic:\n   - Start with `unit_amount`.\n   - If `candidate_unit_amount` is present, strictly greater than zero, and strictly less than\n     `unit_amount`, use `candidate_unit_amount`.\n   - Otherwise use `unit_amount`.\n3. Multiply selected unit amount by `quantity` to produce `line_base_amount`.\n4. Apply percentage reductions according to request `discount_strategy`.\n5. Apply fixed amount reductions after percentage reductions, in request order.\n6. Reject the request if a fixed amount reduction would make the remaining line amount negative.\n7. Return line and total monetary outputs rounded only at output formatting time.\n\nFor `price_on_request` lines:\n\n- Do not perform numeric price arithmetic.\n- Do not include numeric price or reduction inputs.\n- Echo the line key, quantity, and `price_on_request` marker.\n- Exclude the line from numeric totals.\n- Increment `totals.price_on_request_count`.\n\n## Input/Output Shape\n\nThe canonical proto is `pricing.proto`.\n\nRequest-level fields:\n\n- `currency_code`: required if any line is numeric. All numeric line amounts use this currency.\n- `currency_scale`: optional non-negative integer. If omitted, use `2`.\n- `rounding_mode`: optional enum. If omitted or unspecified, use `HALF_EVEN`.\n- `discount_strategy`: optional enum. If omitted or unspecified, use `CASCADE`.\n- `lines`: one or more resolved line items.\n\nLine fields:\n\n- `line_key`: required and unique within the request.\n- `quantity`: exact decimal string greater than zero.\n- `unit_amount`: required for numeric lines; absent for price-on-request lines.\n- `comparison_unit_amount`: optional display/list amount for numeric lines.\n- `candidate_unit_amount`: optional promotional candidate for numeric lines.\n- `price_on_request`: marker for lines without numeric pricing.\n- `reductions`: zero or more percentage or fixed amount reductions.\n\nReduction fields:\n\n- `PERCENT_LEVELS`: one to four ordered percentage strings in `percent_levels`; no `amount`.\n- `FIXED_AMOUNT`: one non-negative `amount`; no `percent_levels`.\n\nResponse fields:\n\n- One `AssessedLine` per input line, in input order.\n- Numeric totals over non-price-on-request lines only.\n- `price_on_request_count` for excluded price-on-request lines.\n\n## Calculation Rules\n\nPercentage strings are decimal percent values: `\"12.5\"` means 12.5 percent.\n\nFor `CASCADE`, apply percentage levels sequentially to the remaining line amount. For example, levels\n`10` then `5` leave `0.90 * 0.95` of the amount before fixed reductions.\n\nFor `SUM`, add percentage levels into one aggregate percent and apply once. For example, levels `10`\nthen `5` produce a 15 percent reduction before fixed reductions.\n\nFixed amount reductions subtract from the remaining line amount after percentage reductions. If any\nfixed amount reduction would make the remaining line amount negative, the whole request is invalid with\n`INVALID_ARGUMENT`. Do not clamp to zero.\n\n`ReductionSummary.amount` is the final total reduction amount for the line.\n`ReductionSummary.percent_total` is the effective aggregate percentage represented as a decimal percent.\n`ReductionSummary.percent_levels` echoes the ordered percentage levels used for percentage reductions.\n\n## Rounding\n\nImplementations must not use binary floating point for parsing, arithmetic, comparison, or formatting.\n\nAll intermediate arithmetic remains exact. Monetary outputs are quantized only when written to the\nresponse:\n\n- Default `currency_scale`: `2`.\n- Default `rounding_mode`: `HALF_EVEN`.\n- Supported modes: `HALF_EVEN`, `HALF_UP`, and `DOWN`.\n\nPercent output fields are decimal strings with up to six fractional digits, rounded with the selected\nrounding mode only if representation requires rounding.\n\n## Validation Behavior\n\nInvalid requests fail the RPC with `INVALID_ARGUMENT`. Tests should assert the status code and behavior,\nnot exact error-message wording.\n\nInvalid inputs include:\n\n- Empty `lines`.\n- Missing or duplicate `line_key`.\n- Missing `currency_code` when any numeric line exists.\n- Malformed decimal strings, including `NaN`, infinity, currency symbols, grouping separators, or\n  binary-float literals.\n- Quantity less than or equal to zero.\n- Negative `unit_amount`, `comparison_unit_amount`, `candidate_unit_amount`, or fixed reduction amount.\n- Numeric line without `unit_amount`.\n- `price_on_request` line with `unit_amount`, `comparison_unit_amount`, `candidate_unit_amount`, or\n  reductions.\n- Percentage reduction with fewer than one or more than four levels.\n- Percentage level less than zero or greater than `100`.\n- Fixed amount reduction without `amount`.\n- Percentage reduction with `amount`.\n- Fixed amount reduction with `percent_levels`.\n- Fixed amount reduction that would make the remaining line amount negative.\n- Unknown reduction kind, discount strategy, or rounding mode.\n- Negative `currency_scale`.\n\n## Open Item Decisions\n\n- `OPEN-001`: Canonical names are `ResolvedPriceService.AssessLines`, `AssessLinesRequest`,\n  `AssessLinesResponse`, `ResolvedLine`, `AssessedLine`, `Amount`, `Reduction`, and\n  `ReductionSummary`.\n- `OPEN-002`: Money is `Amount { string decimal }`; quantities and percentages are decimal strings;\n  `currency_code` is request-level.\n- `OPEN-003`: Output-only rounding; default scale `2`; default mode `HALF_EVEN`; supported modes\n  `HALF_EVEN`, `HALF_UP`, and `DOWN`.\n- `OPEN-004`: Percentage reductions use one to four ordered levels; fixed reductions are separate\n  amount reductions applied after percentage reductions.\n- `OPEN-005`: Strategies are `CASCADE` and `SUM`; omitted/unspecified strategy defaults to `CASCADE`;\n  unknown strategies are invalid.\n- `OPEN-006`: Use a promotional candidate only when present, positive, and lower than the resolved unit\n  amount.\n- `OPEN-007`: Tax handling is deferred and not represented in the canonical primary-pilot contract.\n- `OPEN-008`: Discount cap behavior is deferred; over-large fixed reductions are invalid rather than\n  clamped.\n- `OPEN-009`: Invalid inputs use gRPC `INVALID_ARGUMENT`.\n- `OPEN-010`: The primary pilot covers one or more line items and numeric request totals.\n- `OPEN-011`: Outputs include selected unit amount, optional comparison amount, line base amount,\n  reduction summary, line due amount, price-on-request markers, and numeric totals.\n- `OPEN-012`: Runtime language and startup command remain packaging decisions outside this spec.\n\n## Assumptions\n\n- Inputs are resolved before the RPC call.\n- All numeric lines in a request use the request-level currency.\n- Proto field presence is used to distinguish absent optional monetary inputs from present zero values.\n- Later benchmark packaging will choose runtime language, dependencies, startup command, and seed\n  envelope details.\n\n## Non-goals\n\n- Tax calculation, tax-inclusive output mirrors, or discount/tax ordering.\n- Discount caps, maximum-discount scopes, or silent clamping.\n- Price-list lookup, promotion discovery, coupon eligibility, coupon usage tracking, account/channel\n  rules, inventory checks, persistence, or currency conversion.\n- Reference implementation, test suite, runtime packaging, or startup metadata.\n",
+        "task_description": "Implement the ResolvedPriceService gRPC service as a pure, stateless resolved-line pricing calculator in nodejs. AssessLines selects eligible candidate unit prices, applies percentage and fixed reductions with exact decimal arithmetic, handles price-on-request lines, rounds only at output formatting, returns numeric totals, and rejects invalid requests with INVALID_ARGUMENT. Implement exactly the one RPC defined in the embedded pricing.proto and do not implement any other service."
+      },
+      "depends_on": [],
+      "task_id": "LIFERAY-RESOLVEDPRICESERVICE",
+      "task_type": "task",
+      "title": "ResolvedPriceService (nodejs) -- Liferay-derived resolved pricing calculator"
+    }
+  ],
+  "version": "0.1"
+}

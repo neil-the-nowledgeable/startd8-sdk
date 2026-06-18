@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenAI Bias Audit Authoring Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "author_vendor",
+    "authoring_surface",
+    "model_id",
+    "prompt_template_version",
+    "artifact_type",
+    "files_written",
+    "open_item_decisions",
+    "fixed_items_covered",
+    "assumptions",
+    "known_limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "author_vendor": {
+      "type": "string",
+      "enum": ["openai", "anthropic", "google"]
+    },
+    "authoring_surface": {
+      "type": "string",
+      "enum": ["codex_cli", "claude_code", "gemini_cli"]
+    },
+    "model_id": {
+      "type": "string"
+    },
+    "prompt_template_version": {
+      "type": "string"
+    },
+    "artifact_type": {
+      "type": "string",
+      "enum": ["spec", "suite", "proto"]
+    },
+    "files_written": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "open_item_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["open_id", "decision", "rationale"],
+        "properties": {
+          "open_id": {"type": "string"},
+          "decision": {"type": "string"},
+          "rationale": {"type": "string"}
+        }
+      }
+    },
+    "fixed_items_covered": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "known_limitations": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}
+

@@ -1,0 +1,99 @@
+{
+  "schema_version": "0.1",
+  "run_id": "s2-codex-spec-clean-20260618T213255Z",
+  "author_vendor": "openai",
+  "authoring_surface": "codex_cli",
+  "model_id": "codex-cli-default",
+  "prompt_template_version": "spec-author.v0.1",
+  "artifact_type": "spec",
+  "files_written": [
+    "spec.md",
+    "authoring_manifest.json"
+  ],
+  "open_item_decisions": [
+    {
+      "open_id": "OPEN-001",
+      "decision": "Use neutral resolved-line assessment names: ResolvedPriceService, AssessLines, line_key, selected_unit_amount, candidate_unit_amount, comparison_unit_amount, and price_on_request.",
+      "rationale": "The names are descriptive for a pure calculator and avoid the forbidden existing seed names and source-specific names."
+    },
+    {
+      "open_id": "OPEN-002",
+      "decision": "Represent money, quantities, percentages, and fixed discounts as exact decimal strings with request-level currency metadata.",
+      "rationale": "Decimal strings preserve exact arithmetic while staying independent of any runtime language or library."
+    },
+    {
+      "open_id": "OPEN-003",
+      "decision": "Default currency scale to 2, default rounding to HALF_EVEN, retain exact intermediate precision, and quantize only output monetary fields.",
+      "rationale": "This gives deterministic output while avoiding hidden intermediate rounding effects."
+    },
+    {
+      "open_id": "OPEN-004",
+      "decision": "Use per-line discount entries, with percentage discounts carrying one to four ordered repeated levels and fixed discounts represented as separate amount entries applied after percentage discounts.",
+      "rationale": "This preserves the source-grounded four-level concept while keeping fixed amounts unambiguous."
+    },
+    {
+      "open_id": "OPEN-005",
+      "decision": "Support CASCADE and SUM strategies, default omitted strategy to CASCADE, and reject unknown strategies.",
+      "rationale": "The behavior is explicit and deterministic without relying on external configuration."
+    },
+    {
+      "open_id": "OPEN-006",
+      "decision": "Use the promotional candidate only when present, greater than zero, and lower than the resolved unit amount; return whether it was selected.",
+      "rationale": "This captures the source-grounded candidate concept in a compact calculator rule."
+    },
+    {
+      "open_id": "OPEN-007",
+      "decision": "Defer tax handling entirely for the primary pilot; require no tax fields, tax calculation, tax-inclusive mirrors, or tax ordering behavior.",
+      "rationale": "The S2 pilot scope decisions make tax a non-goal."
+    },
+    {
+      "open_id": "OPEN-008",
+      "decision": "Defer discount cap behavior entirely for the primary pilot; fixed discounts that would make a line negative are invalid.",
+      "rationale": "The S2 pilot scope decisions make cap behavior a non-goal, and invalidating negative results avoids implicit cap semantics."
+    },
+    {
+      "open_id": "OPEN-009",
+      "decision": "Use INVALID_ARGUMENT for malformed decimal strings, invalid enum values, missing required inputs, invalid POA/numeric mixing, non-positive quantity, too many levels, and negative final line outcomes.",
+      "rationale": "A single validation status keeps the pilot portable while specifying strict invalid-input behavior."
+    },
+    {
+      "open_id": "OPEN-010",
+      "decision": "Support one or more line items per request and return request totals across numeric lines.",
+      "rationale": "Multiple lines exercise aggregation while keeping the service stateless."
+    },
+    {
+      "open_id": "OPEN-011",
+      "decision": "Return selected unit amounts, optional comparison unit amounts, line base amounts, discount amounts, effective discount percentages, contributing levels, final line amounts, POA markers, and numeric totals.",
+      "rationale": "These outputs preserve in-scope price, promotional, discount, quantity, and aggregation concepts without adding deferred tax fields."
+    },
+    {
+      "open_id": "OPEN-012",
+      "decision": "Leave runtime language and startup command unspecified in the prose implementation specification.",
+      "rationale": "The S2 instructions keep runtime neutral during spec authoring."
+    }
+  ],
+  "fixed_items_covered": [
+    "FIXED-001",
+    "FIXED-002",
+    "FIXED-003",
+    "FIXED-004",
+    "FIXED-005",
+    "FIXED-006",
+    "FIXED-007",
+    "FIXED-008",
+    "FIXED-009",
+    "FIXED-010"
+  ],
+  "assumptions": [
+    "All request inputs are resolved before the RPC call and no external context is available to the service.",
+    "All numeric lines in one request use the request currency; currency conversion is out of scope.",
+    "Protocol Buffers and gRPC are the intended interface style, but this artifact is prose-only and does not define a final proto.",
+    "Runtime language, dependency installation, and startup command are later packaging decisions."
+  ],
+  "known_limitations": [
+    "Tax handling is intentionally deferred from the primary pilot and the spec requires no tax calculation, tax fields, or tax-inclusive mirror outputs.",
+    "Discount cap behavior is intentionally deferred from the primary pilot and the spec requires no cap validation or cap calculation.",
+    "The artifact does not include a test suite, reference implementation, or startup metadata.",
+    "The contract names are authored decisions for this spec and may be translated into an equivalent proto later."
+  ]
+}

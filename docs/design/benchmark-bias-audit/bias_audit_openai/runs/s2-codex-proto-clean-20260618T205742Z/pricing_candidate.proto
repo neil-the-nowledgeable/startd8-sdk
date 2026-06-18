@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package benchmark.pricing.v1;
+
+service QuotationArithmetic {
+  rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
+}
+
+message EvaluateRequest {
+  repeated ItemInput items = 1;
+  DiscountMode discount_mode = 2;
+  RoundingRule rounding = 3;
+}
+
+message ItemInput {
+  string item_ref = 1;
+  string quantity = 2;
+  Amount base_unit_amount = 3;
+  optional Amount candidate_unit_amount = 4;
+  repeated ReductionInput reductions = 5;
+  bool quote_only = 6;
+}
+
+message ReductionInput {
+  ReductionKind kind = 1;
+  repeated string rate_steps = 2;
+  Amount unit_amount = 3;
+}
+
+message EvaluateResponse {
+  repeated ItemResult items = 1;
+  Amount goods_subtotal = 2;
+  Amount reduction_subtotal = 3;
+  Amount payable_subtotal = 4;
+  bool contains_quote_only = 5;
+}
+
+message ItemResult {
+  string item_ref = 1;
+  string quantity = 2;
+  bool quote_only = 3;
+  Amount base_unit_amount = 4;
+  optional Amount candidate_unit_amount = 5;
+  bool candidate_used = 6;
+  Amount chosen_unit_amount = 7;
+  Amount line_before_reductions = 8;
+  ReductionReport reduction = 9;
+  Amount settled_unit_amount = 10;
+  Amount settled_line_amount = 11;
+}
+
+message ReductionReport {
+  Amount amount = 1;
+  string combined_rate = 2;
+  repeated string applied_rates = 3;
+}
+
+message Amount {
+  string decimal = 1;
+  string currency_code = 2;
+}
+
+message RoundingRule {
+  uint32 scale = 1;
+  RoundingMode mode = 2;
+  bool round_after_each_reduction = 3;
+}
+
+enum DiscountMode {
+  DISCOUNT_MODE_UNSPECIFIED = 0;
+  DISCOUNT_MODE_CHAINED = 1;
+  DISCOUNT_MODE_SUMMED = 2;
+}
+
+enum ReductionKind {
+  REDUCTION_KIND_UNSPECIFIED = 0;
+  REDUCTION_KIND_RATE = 1;
+  REDUCTION_KIND_UNIT_AMOUNT = 2;
+}
+
+enum RoundingMode {
+  ROUNDING_MODE_UNSPECIFIED = 0;
+  ROUNDING_MODE_HALF_EVEN = 1;
+  ROUNDING_MODE_HALF_UP = 2;
+  ROUNDING_MODE_DOWN = 3;
+  ROUNDING_MODE_UP = 4;
+}

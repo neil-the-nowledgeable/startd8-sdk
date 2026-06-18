@@ -1,0 +1,100 @@
+{
+  "schema_version": "0.1",
+  "run_id": "s2-codex-proto-clean-20260618T205742Z",
+  "author_vendor": "openai",
+  "authoring_surface": "codex_cli",
+  "model_id": "codex-cli-default",
+  "prompt_template_version": "proto-collection.v0.1",
+  "artifact_type": "proto",
+  "files_written": [
+    "pricing_candidate.proto",
+    "contract_rationale.md",
+    "authoring_manifest.json"
+  ],
+  "open_item_decisions": [
+    {
+      "open_id": "OPEN-001",
+      "decision": "Use neutral names: QuotationArithmetic service, Evaluate RPC, ItemInput, ReductionInput, ItemResult, Amount, RoundingRule, and generic amount field names.",
+      "rationale": "The names describe calculator roles without reusing forbidden prior seed names or source-system field names."
+    },
+    {
+      "open_id": "OPEN-002",
+      "decision": "Represent money as an Amount message with decimal and currency_code strings; represent quantities and percentages as decimal strings.",
+      "rationale": "String decimals preserve exact decimal behavior without imposing binary floating point semantics or a runtime-specific decimal type."
+    },
+    {
+      "open_id": "OPEN-003",
+      "decision": "Expose RoundingRule with scale, mode, and round_after_each_reduction. Default is final-output rounding to scale 2 with HALF_EVEN when unspecified.",
+      "rationale": "This makes rounding policy manifest while giving deterministic behavior for omitted fields."
+    },
+    {
+      "open_id": "OPEN-004",
+      "decision": "Represent ordered percentage levels as ReductionInput.rate_steps with a maximum of four entries. Unit-amount reductions apply after earlier rate reductions in input order.",
+      "rationale": "A repeated field keeps the contract compact while preserving the source-grounded ordered-level concept."
+    },
+    {
+      "open_id": "OPEN-005",
+      "decision": "Provide CHAINED and SUMMED discount modes. Unspecified defaults to chained; unsupported values are invalid.",
+      "rationale": "Both source-grounded behaviors remain selectable at runtime, with deterministic default behavior."
+    },
+    {
+      "open_id": "OPEN-006",
+      "decision": "Use a candidate unit amount only when present, positive, same-currency, and lower than the base unit amount.",
+      "rationale": "This captures the grounded promotional-candidate rule without source-specific naming."
+    },
+    {
+      "open_id": "OPEN-007",
+      "decision": "Defer tax handling entirely for the primary pilot; no tax fields are present.",
+      "rationale": "The S2 primary pilot scope decisions require tax to be treated as a non-goal."
+    },
+    {
+      "open_id": "OPEN-008",
+      "decision": "Defer discount cap behavior entirely for the primary pilot; no cap fields are present.",
+      "rationale": "The S2 primary pilot scope decisions require cap calculation and validation to be treated as non-goals."
+    },
+    {
+      "open_id": "OPEN-009",
+      "decision": "Use gRPC INVALID_ARGUMENT for malformed decimals, invalid quantities, currency mismatch, missing currency, invalid POA/numeric combinations, too many rate steps, bad reduction shape, and unsupported enum values.",
+      "rationale": "A single standard status code is sufficient for a pure calculator contract and avoids inventing a domain-specific error model."
+    },
+    {
+      "open_id": "OPEN-010",
+      "decision": "Support multiple line items and numeric-line subtotals.",
+      "rationale": "Multiple lines exercise aggregation while staying within a single stateless RPC."
+    },
+    {
+      "open_id": "OPEN-011",
+      "decision": "Return item-level unit amounts, line amounts, candidate usage, reduction summary, quantity, quote-only markers, and request-level subtotals.",
+      "rationale": "These outputs cover the in-scope source-grounded concepts without adding tax or cap details."
+    },
+    {
+      "open_id": "OPEN-012",
+      "decision": "Do not choose a runtime language or startup command in S2 proto authoring.",
+      "rationale": "Runtime selection is deferred to later benchmark seed packaging."
+    }
+  ],
+  "fixed_items_covered": [
+    "FIXED-001",
+    "FIXED-002 after S2 tax deferral",
+    "FIXED-003",
+    "FIXED-004",
+    "FIXED-005",
+    "FIXED-006",
+    "FIXED-007",
+    "FIXED-008",
+    "FIXED-009",
+    "FIXED-010"
+  ],
+  "assumptions": [
+    "Percentage strings are expressed as percentage values, so decimal string \"12.5\" means 12.5 percent.",
+    "Response subtotals aggregate numeric lines only when all numeric lines share one currency.",
+    "The benchmark requirements that package this proto will state validation rules that proto3 cannot enforce.",
+    "S2 scope decisions are recorded in open item decisions for OPEN-007, OPEN-008, and OPEN-012."
+  ],
+  "known_limitations": [
+    "Tax calculation and tax-inclusive result fields are omitted as primary pilot non-goals.",
+    "Discount cap behavior is omitted as a primary pilot non-goal.",
+    "The proto does not include implementation code, test cases, startup metadata, or seed envelope content.",
+    "Proto3 alone cannot enforce exact decimal syntax, maximum rate step count, cross-field currency consistency, or quote-only exclusivity."
+  ]
+}
