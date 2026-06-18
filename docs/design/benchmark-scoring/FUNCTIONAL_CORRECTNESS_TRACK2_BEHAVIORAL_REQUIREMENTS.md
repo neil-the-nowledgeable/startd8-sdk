@@ -165,3 +165,90 @@ where servers ran: Opus 1.00 vs gpt-5.5 0.33) but exposed three provisioning gap
 expanded + FR-T2-DEPS2), proto-path resolution (FR-T2-PROTO, new), and durable artifacts
 (FR-T2-PERSIST, new). 3 FRs added/expanded, 2 open questions added; the confirmed-working core is
 unchanged.*
+
+<!-- RECOVERED 2026-06-18 — CRP review log re-attached.
+This 3-round dual-document CRP review (R1 gemini-3.1-pro, R2 composer-2.5, R3 claude-3-5-sonnet;
+2026-06-15) was a pre-existing UNCOMMITTED edit that a parallel merge-cleanup reverted to origin/main;
+recovered from orphaned commit ed478cae and re-attached onto the committed v0.2 core (preserved as-is).
+The committed v0.2 (ea29a7c0 "dep closure, proto paths, persistence") may already APPLY several of
+these suggestions — the rounds are restored UNTRIAGED (Appendix A/B left "(none yet)"); the spec owner
+should record final dispositions in Appendix A/B per the CRP "do not delete A/B" principle. -->
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — gemini-3.1-pro — 2026-06-15
+
+- **Reviewer**: gemini-3.1-pro
+- **Date**: 2026-06-15 21:26:00 UTC
+- **Scope**: First breadth pass — sandbox networking, durability of artifacts, proto pathing, and dependency reporting gaps between requirements and plan.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Architecture | medium | **Clarify localhost vs 127.0.0.1 binding:** FR-T2-SEC states `127.0.0.1` bind/connect. Clarify if IPv6 `::1` and DNS `localhost` are also permitted or strictly excluded. Some language runtimes default to IPv6 `::1` for localhost. | "allow loopback (127.0.0.1)" could break servers binding to `localhost` if the system resolves it to `::1` and IPv6 is blocked. | FR-T2-SEC | Verify `server` binding to `::1` or `localhost` successfully completes readiness probe if permitted. |
+| R1-F2 | Ops | medium | **Partial run durability:** FR-T2-PERSIST should define behavior for partial runs (e.g., the script crashes or is terminated early). Ensure `cells.json` and workdirs are continuously flushed or incrementally saved so that intermediate results are not lost. | If the batch consists of N*models cells and fails midway, losing all progress invalidates the purpose of moving away from `$TMPDIR`. | FR-T2-PERSIST | Interrupt benchmark runner midway; verify existing cells exist in the persistent path. |
+| R1-F3 | Interfaces | low | **Clarify readiness timeout contract:** Clarify if `readiness_timeout_s` is a globally fixed constant or if the startup contract (FR-T2-CONTRACT) allows models/services to declare their expected boot time. | Some languages/services have drastically different cold-start times; a fixed global timeout might unnecessarily degrade slow-booting servers. | FR-T2-1 or FR-T2-CONTRACT | Slower server correctly boots if timeout allows, or fails deterministically. |
+
+**Endorsements:** none
+**Disagreements:** none
+
+#### Review Round R2 — composer-2.5 — 2026-06-15
+
+- **Reviewer**: composer-2.5
+- **Date**: 2026-06-15 21:35:00 UTC
+- **Scope**: Second-order architectural gaps — aggregation completeness, protocol stability, and scoring contradictions.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F1 | Architecture | high | **Correct FR-T2-HOOK protocol coupling:** FR-T2-HOOK MUST state that the serve hook is an internal resolver function (`resolve_serve_command`), NOT a method on `LanguageProfile`. Modifying the Protocol breaks `@runtime_checkable` for existing profiles. | The implementation explicitly avoids modifying `LanguageProfile` for backward compatibility. Requirements should reflect this architectural stability pattern. | FR-T2-HOOK | `LanguageProfile` remains unchanged; `contract.py` resolver correctly falls back to Node defaults. |
+| R2-F2 | Validation | high | **Fix sandbox-violation flooring contradiction:** In FR-T2-COMPOSITE, remove "sandbox-violation floors still apply" and replace with "sandbox-violations degrade the functional term (FR-T2-2)". | FR-T2-COMPOSITE dictates a 0.0 floor for sandbox violations, but FR-T2-2 and the implementation record it as a missing term (`functional_degraded=True`), avoiding the floor. | FR-T2-COMPOSITE | A sandbox timeout results in a missing functional term and retains the structural score base, not a 0.0 floor. |
+| R2-F3 | Ops | medium | **Clarify pilot weighting (OQ-T2-2):** Add a requirement that `FUNCTIONAL_WEIGHT` must run in shadow mode (e.g., recorded but not affecting `CompositeScore`) OR explicitly documented as a provisional 0.5 weight until the pilot proves discrimination. | The code immediately sets `FUNCTIONAL_WEIGHT = 0.5`. If the premise risk (OQ-T2-2) is real, scrambling the leaderboard with an unproven metric is dangerous. | FR-T2-COMPOSITE or OQ-T2-2 | The leaderboard report surfaces the functional score cleanly before fully committing to the 0.5 fold-in for all services. |
+
+**Endorsements**
+- R1-F1: Clarifying IPv6 vs IPv4 bindings avoids false degrades on modern runtimes.
+- R1-F2: Highly relevant for expensive pipeline runs.
+
+**Disagreements**
+- R1-F3: (None).
+
+#### Review Round R3 — claude-3-5-sonnet — 2026-06-15
+
+- **Reviewer**: claude-3-5-sonnet
+- **Date**: 2026-06-15 21:40:00 UTC
+- **Scope**: Third-order pass — scoring inversion risks, sandbox deadlocks, and concurrent persist collisions.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R3-F1 | Ops | high | **Define concurrent artifact isolation:** FR-T2-PERSIST MUST require that `cells.json` and `report.md` support safe concurrent writes (e.g., per-cell isolation merging at the end) or synchronized locking. | The matrix executes cells concurrently. Writing to a shared artifact file without concurrency controls leads to data races and lost cell results. | FR-T2-PERSIST | Parallel execution of N cells produces exactly N valid entries in the durable result set. |
+| R3-F2 | Validation | high | **Mandate client timeouts:** FR-T2-SUITE MUST explicitly state that the SDK-authored suite enforces a strict timeout on every RPC. | A server that accepts a connection but hangs the RPC will deadlock the synchronous sandbox client window, preventing the guaranteed teardown. | FR-T2-SUITE | A server that sleeps infinitely fails the client suite cleanly with a timeout, without hanging the runner. |
+| R3-F3 | Architecture | medium | **Resolve missing dependency score inversion:** FR-T2-DEPS2 MUST distinguish between "infrastructure missing" (e.g., a protocol-required package) and "model hallucination" (e.g., `express`). The latter MUST be floored, not degraded. | Degrading all missing modules grants a 1.0 structural score to models that completely fail the framework contract (hallucinating HTTP instead of gRPC), scoring higher than a valid gRPC service that fails the Luhn logic (0.5). | FR-T2-DEPS2 | A generated service that attempts to `require('express')` gets floored or heavily penalized instead of receiving a degraded 1.0 score. |
+
+**Endorsements**
+- R2-F1: Architectural stability of LanguageProfile is critical.
+- R2-F2: Resolves the contradiction perfectly.
+
+**Disagreements**
+- (None).

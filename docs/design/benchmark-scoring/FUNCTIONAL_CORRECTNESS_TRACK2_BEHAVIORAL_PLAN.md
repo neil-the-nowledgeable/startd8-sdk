@@ -85,3 +85,170 @@ M-T2.4 (composite + scoped paymentservice re-run) → **gate** → M-T2.5 expand
 
 ## Out of scope (this plan)
 All-service expansion + full re-run (M-T2.5); kernel isolation (NR-T2-2); stateful services (NR-T2-3).
+
+<!-- RECOVERED 2026-06-18 — CRP review log re-attached.
+This 3-round dual-document CRP review (R1 gemini-3.1-pro, R2 composer-2.5, R3 claude-3-5-sonnet;
+2026-06-15) was a pre-existing UNCOMMITTED edit that a parallel merge-cleanup reverted to origin/main;
+recovered from orphaned commit ed478cae and re-attached onto the committed v0.2 core (preserved as-is).
+The committed v0.2 (ea29a7c0 "dep closure, proto paths, persistence") may already APPLY several of
+these suggestions — the rounds are restored UNTRIAGED (Appendix A/B left "(none yet)"); the spec owner
+should record final dispositions in Appendix A/B per the CRP "do not delete A/B" principle. -->
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — gemini-3.1-pro — 2026-06-15
+
+- **Reviewer**: gemini-3.1-pro
+- **Date**: 2026-06-15 21:26:00 UTC
+- **Scope**: First breadth pass — sandbox networking, durability of artifacts, proto pathing, and dependency reporting gaps between requirements and plan.
+
+**Executive summary**
+
+- Plan lacks tasks for **FR-T2-PERSIST** (durable artifacts) and **FR-T2-PROTO** (multi-path provisioning).
+- Plan lacks explicit testing of the **FR-T2-SEC** egress denial capability.
+- Requirements could clarify partial-run behavior for durable results and `localhost` vs `127.0.0.1` binding.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-S1 | Architecture | high | **Add FR-T2-PERSIST to Plan M-T2.4:** The plan omits the durable workdir and `cells.json`/`report.md` generation that FR-T2-PERSIST mandates. Extend M-T2.4 with a task to configure a persistent batch root and aggregate the cell outputs into these durable files, moving away from `$TMPDIR`. | Requirements call out the pilot failure (P3) due to `$TMPDIR` reaping, but the plan has no task to implement the durable persist logic. | M-T2.4 task list | Verify `cells.json` and `report.md` are created at the specified path and survive beyond process exit. |
+| R1-S2 | Interfaces | high | **Add FR-T2-PROTO provisioning to Plan M-T2.3:** Expand M-T2.3 to explicitly implement the multi-path provisioning of `demo.proto` (workdir root, `protos/`, `pb/`, etc.) and the fallback degradation logic on missing proto. | Pilot failure P2 (proto path drift) was identified in requirements, but M-T2.3 only states "Vendor offline gRPC/protobuf + generated demo.proto stubs", missing the multi-path payload provisioning. | M-T2.3 task list | Sandbox tests verify `demo.proto` is available at all 5+ conventional paths before process start. |
+| R1-S3 | Validation | medium | **Explicit network egress test:** In M-T2.1 tests, add an explicit test asserting that a sandboxed process attempting to connect to an external IP (e.g., `8.8.8.8`) fails, while loopback (`127.0.0.1`) succeeds. | M-T2.1 tests currently verify readiness, callback, and teardown, but do not explicitly verify that the loopback-allowed/egress-denied profile works or degrades gracefully. | M-T2.1 Tests list | Test process trying to `curl 8.8.8.8` receives immediate network error. |
+| R1-S4 | Ops | medium | **Add FR-T2-DEPS2 error parsing:** Add a task to M-T2.4 (or M-T2.1) to parse stderr/stdout for missing module errors (e.g., `Cannot find module`) and surface them in the provenance record. | FR-T2-DEPS2 requires self-reporting missing dependencies, which means the harness must extract module names from the Node error trace and fold them into the degraded state. | M-T2.4 task list | Sandbox returns `SandboxResult(violation="missing module: pino")` when `require('pino')` fails. |
+
+**Endorsements:** none
+**Disagreements:** none
+
+#### Review Round R2 — composer-2.5 — 2026-06-15
+
+- **Reviewer**: composer-2.5
+- **Date**: 2026-06-15 21:35:00 UTC
+- **Scope**: Second-order architectural gaps — aggregation completeness, protocol stability, and scoring contradictions.
+
+**Executive summary**
+- **FR-T2-HOOK** is implemented as an internal dispatcher to preserve `LanguageProfile` stability, contrary to the requirement.
+- `aggregate.py` drops `functional_coverage`, preventing the "functional leaderboard column" from materializing.
+- FR-T2-COMPOSITE contradicts FR-T2-2 regarding sandbox violation flooring vs degrading.
+- Hardcoded model ports break the `$PORT` injection assumption, leading to false degraded cells.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-S1 | Ops | high | **Add functional aggregation to `aggregate.py`:** M-T2.4 must extend `aggregate.py:summarize_group` to compute `functional_median` and `functional_iqr` from `CellResult.functional_coverage`. | The runner saves the coverage on `CellResult`, but `aggregate.py` currently drops it, blocking the M-T2.4 requirement for a functional leaderboard column. | M-T2.4 task list | `aggregate_cells` outputs include `functional_median` and `functional_iqr` correctly. |
+| R2-S2 | Risks | medium | **Handle hardcoded ports:** Add an inspection or rewrite step in M-T2.2 or M-T2.1 to handle models that hardcode the port (e.g. `8080`) instead of reading `process.env.PORT`. | The startup contract relies on injecting `$PORT`, but if the generated code ignores it, the cell will fail readiness and falsely record a degrade rather than a behavioral score. | M-T2.2 or Risks | Sandboxing a hardcoded-port service correctly identifies the port or overrides it so the client window succeeds. |
+| R2-S3 | Validation | low | **Specify known-broken failure modes:** M-T2.3's known-broken fixture test must explicitly verify that specific RPCs fail for specific reasons (e.g., expiry check missing fails the future expiry test but passes Luhn). | A blanket failure in a broken fixture might just indicate a crash, not a discriminating behavioral suite. True validation requires checking specific suite assertions. | M-T2.3 tests list | Test asserts `Charge` suite fails the exact "invalid expiry" case on the broken fixture, not a generic timeout. |
+
+**Endorsements**
+- R1-S1: Crucial operational requirement for reproducibility.
+- R1-S4: Important for honest degradation and actionable feedback.
+
+**Disagreements**
+- R1-S3: (None — egress test is a strong addition).
+
+#### Review Round R3 — claude-3-5-sonnet — 2026-06-15
+
+- **Reviewer**: claude-3-5-sonnet
+- **Date**: 2026-06-15 21:40:00 UTC
+- **Scope**: Third-order pass — scoring inversion risks, sandbox deadlocks, and concurrent persist collisions.
+
+**Executive summary**
+- **Scoring Inversion:** Models that hallucinate unsupported dependencies (e.g., `express`) fail to launch, degrading gracefully to 1.0. Models that successfully launch but fail behavioral tests get penalized to 0.5.
+- **Client Deadlocks:** The sandbox client window is synchronous; without mandatory RPC timeouts, a hanging server will deadlock the entire harness.
+- **Concurrent Persist:** `cells.json` and `report.md` will suffer data loss if multiple cells write to them concurrently during matrix execution.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R3-S1 | Ops | high | **Handle concurrent persistence in M-T2.4:** Update M-T2.4 to explicitly require per-cell atomic writes (e.g., `cell_<id>.json`) and a final aggregation step for `cells.json` and `report.md`. | The benchmark matrix runs cells concurrently. If all cells write to a shared `cells.json` or `report.md` without locking or separate files, race conditions will cause data loss, undermining FR-T2-PERSIST. | M-T2.4 task list | Matrix run with concurrency > 1 correctly aggregates all cell results into the final report without drops. |
+| R3-S2 | Validation | high | **Mandate client timeouts in M-T2.3:** Add an explicit task to enforce strict client-side timeouts on every gRPC call made by the SDK-authored suite. | `run_service_sandboxed` only waits for TCP readiness, then yields to the synchronous client callback. If the server accepts the gRPC call but hangs, the harness will deadlock because the teardown `finally` block cannot execute until the client returns. | M-T2.3 task list | A generated server fixture that intentionally sleeps on `Charge` fails the suite timeout and allows the sandbox to tear down. |
+| R3-S3 | Architecture | medium | **Distinguish model-caused vs infra-caused degrades:** Introduce logic in M-T2.4 to classify missing dependencies. If the missing dependency is a standard library of the protocol (e.g., `@grpc/grpc-js`), it's an infra failure (degrade). If it's a hallucinated framework (e.g., `express`), it's a model failure and should be floored. | Treating all launch failures as "degraded" creates a perverse incentive: a model that hallucinates `express` retains a 1.0 score, while a model that correctly uses gRPC but fails the Luhn check gets penalized to 0.5. | M-T2.4 task list | A cell requesting `express` receives a 0.0 or heavily penalized score, rather than a degraded 1.0. |
+
+**Endorsements**
+- R2-S1: Crucial for exposing the functional score to the final output.
+- R2-S2: Hardcoded ports are a very common hallucination that needs patching.
+
+**Disagreements**
+- (None).
+
+---
+
+## Requirements Coverage Matrix — R2
+
+Analysis only (not triage). Second pass — aggregation, hook divergence, and flooring contradictions.
+
+| Requirement | Plan Step(s) | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| FR-T2-1 (Sandbox escalation) | M-T2.1 | Partial | R1 gaps remain. Hardcoded port edge case unaddressed (R2-S2). |
+| FR-T2-SEC (Loopback/Egress) | M-T2.1 | Partial | R1 gaps remain. |
+| FR-T2-2 (Degrade honestly) | M-T2.1, M-T2.2, M-T2.4 | Partial | Contradicted by FR-T2-COMPOSITE sandbox flooring (R2-F2). |
+| FR-T2-CONTRACT (Startup) | M-T2.2 | Full | — |
+| FR-T2-HOOK (Language hook) | M-T2.2 | Gap | Implemented via internal map, not `LanguageProfile` protocol (R2-F1). |
+| FR-T2-SUITE (Behavioral suite) | M-T2.3 | Partial | Known-broken fixture validation lacks specificity (R2-S3). |
+| FR-T2-DEPS (Vendored runtime) | M-T2.3 | Full | — |
+| FR-T2-DEPS2 (Self-reporting deps) | M-T2.4 | Partial | R1 gaps remain. |
+| FR-T2-PROTO (Multi-path proto) | M-T2.3 | Partial | R1 gaps remain. |
+| FR-T2-PERSIST (Durable results) | M-T2.4 | Partial | R1 gaps remain. Aggregation logic missing (R2-S1). |
+| FR-T2-PROV (Provenance emission) | M-T2.4 | Full | — |
+| FR-T2-COMPOSITE (Score folding) | M-T2.4 | Partial | Contradicts FR-T2-2 on sandbox violations (R2-F2); weight applied before discrimination proven (R2-F3). |
+| FR-T2-PILOT (Paymentservice pilot) | M-T2.4 | Full | — |
+
+Analysis only (not triage). Maps each requirement to the plan step(s) that implement it.
+
+| Requirement | Plan Step(s) | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| FR-T2-1 (Sandbox escalation) | M-T2.1 | Partial | Readiness timeout contract needs clarification regarding fixed vs dynamic boot times (R1-F3). |
+| FR-T2-SEC (Loopback/Egress isolation) | M-T2.1 | Partial | Egress testing omitted from plan tests (R1-S3); `localhost` vs `127.0.0.1` binding unclarified (R1-F1). |
+| FR-T2-2 (Degrade honestly) | M-T2.1, M-T2.2, M-T2.4 | Full | — |
+| FR-T2-CONTRACT (Startup contract) | M-T2.2 | Full | — |
+| FR-T2-HOOK (Language run hook) | M-T2.2 | Full | — |
+| FR-T2-SUITE (Behavioral suite) | M-T2.3 | Full | — |
+| FR-T2-DEPS (Vendored runtime) | M-T2.3 | Full | — |
+| FR-T2-DEPS2 (Self-reporting missing deps) | M-T2.4 | Partial | No explicit task to parse stdout/stderr for missing modules (R1-S4). |
+| FR-T2-PROTO (Multi-path demo.proto) | M-T2.3 | Partial | Plan M-T2.3 lacks multi-path provisioning task (R1-S2). |
+| FR-T2-PERSIST (Durable workdirs/results) | M-T2.4 | Gap | Not addressed in plan (R1-S1); partial run durability undefined (R1-F2). |
+| FR-T2-PROV (Provenance emission) | M-T2.4 | Full | — |
+| FR-T2-COMPOSITE (Score folding) | M-T2.4 | Full | — |
+| FR-T2-PILOT (Paymentservice pilot) | M-T2.4 | Full | — |
+
+---
+
+## Requirements Coverage Matrix — R3
+
+Analysis only (not triaged). Third pass — concurrency, deadlocks, and scoring inversions.
+
+| Requirement | Plan Step(s) | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| FR-T2-1 (Sandbox escalation) | M-T2.1 | Partial | Client timeouts omitted; synchronous execution risks deadlock (R3-S2, R3-F2). |
+| FR-T2-SEC (Loopback/Egress) | M-T2.1 | Partial | R1-R2 gaps remain. |
+| FR-T2-2 (Degrade honestly) | M-T2.1, M-T2.2, M-T2.4 | Partial | Conflicts with FR-T2-DEPS2 logic on model-caused vs infra-caused degrades (R3-S3). |
+| FR-T2-CONTRACT (Startup) | M-T2.2 | Full | — |
+| FR-T2-HOOK (Language hook) | M-T2.2 | Gap | R2 gaps remain. |
+| FR-T2-SUITE (Behavioral suite) | M-T2.3 | Partial | Explicit timeouts required (R3-F2). |
+| FR-T2-DEPS (Vendored runtime) | M-T2.3 | Full | — |
+| FR-T2-DEPS2 (Self-reporting deps) | M-T2.4 | Partial | Must distinguish hallucinated dependencies from missing infrastructure (R3-F3). |
+| FR-T2-PROTO (Multi-path proto) | M-T2.3 | Partial | R1 gaps remain. |
+| FR-T2-PERSIST (Durable results) | M-T2.4 | Partial | Concurrent execution overwrites shared files without atomic writes/aggregation (R3-S1, R3-F1). |
+| FR-T2-PROV (Provenance emission) | M-T2.4 | Full | — |
+| FR-T2-COMPOSITE (Score folding) | M-T2.4 | Partial | Score inversion due to degraded baseline (R3-S3). |
+| FR-T2-PILOT (Paymentservice pilot) | M-T2.4 | Full | — |
