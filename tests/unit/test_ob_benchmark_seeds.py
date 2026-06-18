@@ -28,11 +28,18 @@ EXPECTED = {
     "checkoutservice": "go",
     "recommendationservice": "python",
     "adservice": "java",
+    # Hardened-tier addition (Liferay-derived pricing-calculator, eb2d1f4f): a hand-authored seed in
+    # the OB seeds dir that the original OB-nine EXPECTED never accounted for — its absence here left
+    # this test red on main. nodejs, single feature, like the OB nodejs services.
+    "pricingservice": "nodejs",
 }
 
 
 def _seed_paths():
-    return sorted(SEEDS_DIR.glob("seed-*.json"))
+    # Baseline seeds only — additive hardened-tier variants (seed-<svc>.hardened.json) are validated
+    # separately (gen --check + test_benchmark_difficulty_tier) and must not skew the baseline set.
+    return sorted(p for p in SEEDS_DIR.glob("seed-*.json")
+                  if not p.name.endswith(".hardened.json"))
 
 
 def test_all_nine_seeds_present():

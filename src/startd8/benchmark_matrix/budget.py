@@ -54,7 +54,11 @@ def estimate_run_cost(
     ``missing_pricing`` (callers fail-closed on these for a benchmark — see BudgetGuard).
     """
     pricing = pricing or PricingService()
-    coords_per_model = len(spec.services) * spec.repetitions  # cells per role-pair, per leverage state
+    # Coordinates per role-pair, per leverage state. The tier axis (FR-2) multiplies every coordinate
+    # at a FLAT cost (a hardened cell generates ~the same token volume as baseline), so it folds into
+    # the coord count rather than the leverage state_weight. Omitting it undercounts spend (and the
+    # fail-closed budget preflight) by len(tier_states).
+    coords_per_model = len(spec.services) * spec.repetitions * len(spec.tier_states)
     cells_per_model = coords_per_model * len(spec.leverage_states)
     # K2 asymmetry (R1-S5): on-cells run heavier than off-cells. The state weight folds the leverage
     # factor in — off=1, on×multiplier — so per_coord × state_weight is the leverage-weighted cell
@@ -116,6 +120,8 @@ def format_estimate(spec: BenchmarkRunSpec, estimate: BenchmarkCostEstimate) -> 
         + f" x {spec.repetitions} reps"
         + (f" x {len(spec.leverage_states)} leverage ({','.join(spec.leverage_states)})"
            if len(spec.leverage_states) > 1 else "")
+        + (f" x {len(spec.tier_states)} tiers ({','.join(spec.tier_states)})"
+           if len(spec.tier_states) > 1 else "")
         + f" = {estimate.total_cells} cells",
         f"  sizing: ~{spec.est_input_tokens_per_cell} in / "
         f"{spec.est_output_tokens_per_cell} out tokens per cell (estimate, not billing)",

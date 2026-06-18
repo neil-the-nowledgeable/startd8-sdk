@@ -49,9 +49,12 @@ def _service_language(service: str) -> str:
     return "unknown"
 
 
-def build_spec(services, models, repetitions: int, budget: float, per_cell_cap: float | None) -> BenchmarkRunSpec:
-    """The pilot spec: the chosen service(s), the flagship roster, N reps. Behavioral scoring is
-    enabled on the executor (not the spec) — the spec just fixes what is generated."""
+def build_spec(services, models, repetitions: int, budget: float, per_cell_cap: float | None,
+               tiers=("baseline",)) -> BenchmarkRunSpec:
+    """The pilot spec: the chosen service(s), the flagship roster, N reps, difficulty tier(s).
+    Behavioral scoring is enabled on the executor (not the spec) — the spec just fixes what is
+    generated. ``tiers=("baseline","hardened")`` pairs each coordinate across both tiers so the
+    baseline-vs-hardened functional-coverage gap is measurable in one run (FR-2/FR-25)."""
     services = tuple(services)
     name = "behavioral-pilot-" + "-".join(services)
     return BenchmarkRunSpec(
@@ -61,6 +64,7 @@ def build_spec(services, models, repetitions: int, budget: float, per_cell_cap: 
         repetitions=repetitions,
         budget_ceiling_usd=budget,
         per_cell_cap_usd=per_cell_cap,
+        tier_states=tuple(tiers),
     )
 
 
@@ -77,6 +81,11 @@ def main(argv=None) -> int:
                     help="Comma-separated services (default: paymentservice). Pilot-each-once uses "
                          "--repetitions 1 across several services to confirm discrimination.")
     ap.add_argument("--repetitions", type=int, default=3)
+    ap.add_argument("--tiers", default="baseline",
+                    help="Comma-separated difficulty tiers (default: baseline). Use "
+                         "'baseline,hardened' to pair each coordinate across both tiers and measure "
+                         "the baseline-vs-hardened gap. A 'hardened' cell requires a "
+                         "seed-<svc>.hardened.json (else it fails closed).")
     ap.add_argument("--budget", type=float, default=10.0, help="Fail-closed batch budget ceiling (USD).")
     ap.add_argument("--per-cell-cap", type=float, default=None)
     ap.add_argument("--workdir-root", default=None)
@@ -84,13 +93,15 @@ def main(argv=None) -> int:
 
     models = list(dict.fromkeys(args.models)) or list(DEFAULT_MODELS)
     services = [s.strip() for s in args.services.split(",") if s.strip()]
+    tiers = [t.strip() for t in args.tiers.split(",") if t.strip()]
     languages = {s: _service_language(s) for s in services}
-    spec = build_spec(services, models, args.repetitions, args.budget, args.per_cell_cap)
+    spec = build_spec(services, models, args.repetitions, args.budget, args.per_cell_cap, tiers)
     est = estimate_run_cost(spec)
 
     print("=== Behavioral pilot plan ===")
     print(f"services: {', '.join(f'{s} ({languages[s]})' for s in services)}")
     print(f"models  : {', '.join(models)}")
+    print(f"tiers   : {', '.join(tiers)}")
     print(f"reps    : {spec.repetitions}   cells: {spec.total_cells}")
     print(format_estimate(spec, est))
     vendored = (NODE_RUNTIME / "node_modules").is_dir()

@@ -56,6 +56,30 @@ SERVICES = [
         "deps": ["ECB currency rates (data file)"],
         "estimated_loc": 160,
         "description": "Converts money between currencies using ECB rates. Highest-QPS service.",
+        # Hardened difficulty tier (FR-1/FR-10): stricter Money-type correctness within the SAME proto
+        # (no new RPCs). Paired with the hardened currency suite's invariant probes (FR-12).
+        "hardened": {
+            "startup": {"cmd": ["node", "src/currencyservice/server.js"],
+                        "port_env": "PORT", "readiness": "tcp"},
+            "requirements_extra": (
+                "## Hardened correctness requirements (tier: hardened)\n\n"
+                "Implement `Convert` with full Money-type correctness — these are scored behaviorally:\n"
+                "- **Single self-contained file:** put ALL logic in the one target `server.js` and INLINE "
+                "the rate table. Do NOT `require` sibling modules you also write (e.g. `./loaders/...`) or "
+                "read external data files (e.g. `data/*.json`) — the harness runs only this file offline. "
+                "Do Money math with exact integer `units`/`nanos` arithmetic (no decimal/bignum library).\n"
+                "- **Money contract:** `nanos` MUST be in [-999,999,999, +999,999,999], and the sign of "
+                "`nanos` MUST match the sign of `units` (e.g. -$1.75 ⇒ units=-1, nanos=-750000000). "
+                "Normalize any sub-unit remainder into `units`/`nanos`; never leave `nanos` out of range.\n"
+                "- **Linear & lossless to nano precision:** converting 0 of any currency returns exactly 0; "
+                "converting an amount and then converting the result back to the original currency MUST "
+                "recover the original amount (within rounding to the nearest nano).\n"
+                "- **Validation:** reject an unknown/unsupported ISO-4217 `to_code` (or unsupported source "
+                "currency) with gRPC status `INVALID_ARGUMENT` — never return a zero or garbage amount.\n"
+                "- `GetSupportedCurrencies` MUST return the exact set of codes that `Convert` accepts.\n"
+                "- `Convert` MUST be deterministic for a given input.\n"
+            ),
+        },
     },
     {
         "key": "paymentservice", "proto_service": "PaymentService", "language": "nodejs",
@@ -70,6 +94,25 @@ SERVICES = [
             "cmd": ["node", "src/paymentservice/server.js"],
             "port_env": "PORT",
             "readiness": "tcp",
+        },
+        # Hardened tier (FR-1/FR-10): stricter Charge validation + uniqueness, within the SAME proto.
+        # Paired with charge_suite's hardened invariant probes (FR-12).
+        "hardened": {
+            "startup": {"cmd": ["node", "src/paymentservice/server.js"],
+                        "port_env": "PORT", "readiness": "tcp"},
+            "requirements_extra": (
+                "## Hardened correctness requirements (tier: hardened)\n\n"
+                "Implement `Charge` with strict validation — these are scored behaviorally:\n"
+                "- **Single self-contained file:** put ALL logic in the one target `server.js`. Do NOT "
+                "`require` sibling modules you also write (e.g. `./loaders/...`) or read external data "
+                "files — the harness runs only this file with the offline gRPC runtime.\n"
+                "- **Unique transaction id:** every successful `Charge` MUST return a UNIQUE non-empty "
+                "`transaction_id` (e.g. a UUID) — never a constant.\n"
+                "- **Amount validation:** reject a non-positive amount — BOTH negative `units` AND a "
+                "zero amount (units==0 && nanos==0) — with gRPC `INVALID_ARGUMENT`.\n"
+                "- **Card validation:** reject an empty/blank `credit_card_number`, a Luhn-invalid card, "
+                "an expiry month outside 1–12, and an expired card — all with gRPC `INVALID_ARGUMENT`.\n"
+            ),
         },
     },
     {
@@ -188,6 +231,20 @@ def build_seed(svc: dict, proto_text: str, proto_sha: str) -> dict:
     return seed
 
 
+def build_hardened_seed(svc: dict, proto_text: str, proto_sha: str) -> dict:
+    """Hardened-tier seed = baseline seed + stricter requirements_text + an explicit startup contract
+    (FR-1/FR-10). Additive; the SAME proto/RPCs — difficulty is correctness stringency, not surface."""
+    h = svc["hardened"]
+    seed = build_seed(svc, proto_text, proto_sha)
+    seed["tier"] = "hardened"
+    task = seed["tasks"][0]
+    task["title"] += " [hardened]"
+    task["config"]["requirements_text"] += "\n" + h["requirements_extra"]
+    if h.get("startup"):
+        seed["startup"] = h["startup"]
+    return seed
+
+
 def _serialize(seed: dict) -> str:
     # sorted keys + trailing newline → byte-stable across runs (R1-S9).
     return json.dumps(seed, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
@@ -208,25 +265,41 @@ def main(argv=None) -> int:
         "proto": "demo.proto",
         "proto_sha256": proto_sha,
         "services": [],
+        "hardened": [],  # additive difficulty-tier seeds (FR-1); baseline `services` unchanged
     }
     drift = False
-    for svc in SERVICES:
-        seed = build_seed(svc, proto_text, proto_sha)
+
+    def _emit(seed: dict, out_name: str) -> str:
+        """Serialize a seed, record/verify on disk, return its sha (shared baseline+hardened path)."""
+        nonlocal drift
         text = _serialize(seed)
-        seed_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        out = SEEDS_DIR / f"seed-{svc['key']}.json"
-        index["services"].append({
-            "service": svc["key"], "language": svc["language"],
-            "seed_file": out.name, "seed_sha256": seed_sha,
-            "target_file": svc["target_file"],
-        })
+        out = SEEDS_DIR / out_name
         if args.check:
             current = out.read_text(encoding="utf-8") if out.exists() else None
             if current != text:
-                print(f"DRIFT: {out.name}")
+                print(f"DRIFT: {out_name}")
                 drift = True
         else:
             out.write_text(text, encoding="utf-8")
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    for svc in SERVICES:
+        seed = build_seed(svc, proto_text, proto_sha)
+        out_name = f"seed-{svc['key']}.json"
+        seed_sha = _emit(seed, out_name)
+        index["services"].append({
+            "service": svc["key"], "language": svc["language"],
+            "seed_file": out_name, "seed_sha256": seed_sha,
+            "target_file": svc["target_file"],
+        })
+        # Additive hardened-tier seed (FR-1) for services that define a hardened overlay.
+        if svc.get("hardened"):
+            h_name = f"seed-{svc['key']}.hardened.json"
+            h_sha = _emit(build_hardened_seed(svc, proto_text, proto_sha), h_name)
+            index["hardened"].append({
+                "service": svc["key"], "language": svc["language"], "tier": "hardened",
+                "seed_file": h_name, "seed_sha256": h_sha, "target_file": svc["target_file"],
+            })
 
     index_text = json.dumps(index, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     index_path = SEEDS_DIR / "seeds-index.json"

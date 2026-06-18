@@ -636,6 +636,13 @@ class PrimeContractorWorkflow:
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        # FR-SPEED-1: pure model API time is accumulated process-wide by the agents; reset it at
+        # run start so the cumulative total read at manifest time reflects THIS run's model calls.
+        try:
+            from startd8.agents.model_timing import reset_model_time_ms
+            reset_model_time_ms()
+        except Exception:  # pragma: no cover — timing is best-effort, never blocks generation
+            pass
         # REQ-CME: store-free OTel cost emitter (no CostStore/SQLite). Instruments
         # init lazily on first record; a no-op when OTel metrics are unconfigured.
         self._cost_metrics = _CostMetrics() if _CostMetrics is not None else None
@@ -2182,6 +2189,17 @@ class PrimeContractorWorkflow:
             },
         )
 
+    @staticmethod
+    def _total_model_time_ms() -> "Optional[float]":
+        """Pure model API time (ms) accumulated across this run's LLM calls (FR-SPEED-1).
+        Best-effort: returns None if the agents timing module is unavailable, so a missing
+        measure degrades (FR-32/FR-SPEED-4) rather than reporting a misleading 0."""
+        try:
+            from startd8.agents.model_timing import get_model_call_count, get_model_time_ms_total
+            return get_model_time_ms_total() if get_model_call_count() > 0 else None
+        except Exception:  # pragma: no cover
+            return None
+
     def _write_generation_manifest(self, result_dict: Dict[str, Any]) -> None:
         """Write generation manifest to disk (pipeline mode only).
 
@@ -2207,6 +2225,7 @@ class PrimeContractorWorkflow:
             "total_cost_usd": self.total_cost_usd,
             "total_input_tokens": self.total_input_tokens,
             "total_output_tokens": self.total_output_tokens,
+            "total_model_time_ms": self._total_model_time_ms(),  # FR-SPEED-1 (pure model API time)
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -5815,7 +5834,7 @@ class PrimeContractorWorkflow:
             result_dict_registry = None
 
         # Phase 4: Write generation manifest (pipeline mode only)
-        result_dict = {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens}
+        result_dict = {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens, 'total_model_time_ms': self._total_model_time_ms()}
         if result_dict_registry is not None:
             result_dict["element_registry"] = result_dict_registry
         # REQ-TCW-303: Include TODO completion status in result

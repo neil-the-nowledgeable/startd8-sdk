@@ -61,6 +61,8 @@ def summarize_group(cells: List[CellResult], pass_threshold: float = DEFAULT_PAS
     costs = [c.cost_usd for c in cells if c.cost_usd is not None]
     latencies = [c.latency_s for c in cells if c.latency_s is not None]
     tps = [c.tokens_per_sec for c in cells if c.tokens_per_sec is not None]
+    model_times = [c.model_time_s for c in cells if c.model_time_s is not None]   # FR-SPEED-3
+    model_tps = [c.model_tokens_per_sec for c in cells if c.model_tokens_per_sec is not None]
     ran = [c for c in cells if c.status not in _EXCLUDED_STATUSES]
     passes = sum(1 for c in cells if _is_pass(c, pass_threshold))
     infra = sum(1 for c in cells if c.status == STATUS_INFRA_FAIL)
@@ -75,8 +77,10 @@ def summarize_group(cells: List[CellResult], pass_threshold: float = DEFAULT_PAS
         "catastrophic_count": sum(1 for c in cells if _is_catastrophic(c)),
         "cost_total_usd": sum(costs) if costs else 0.0,
         "cost_mean_usd": statistics.mean(costs) if costs else None,
-        "latency_median_s": _median(latencies),
-        "tokens_per_sec_median": _median(tps),
+        "latency_median_s": _median(latencies),          # pipeline wall-clock
+        "tokens_per_sec_median": _median(tps),            # pipeline throughput
+        "model_time_median_s": _median(model_times),      # FR-SPEED-3: pure model API time
+        "model_tokens_per_sec_median": _median(model_tps),  # FR-SPEED-3: pure-model throughput
     }
 
 
@@ -173,8 +177,8 @@ def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
         "",
         "## Leaderboard (by median quality, then cost)",
         "",
-        "| Rank | Model | quality (median) | IQR | pass-rate | catastrophic | cost $ |",
-        "|---:|---|---:|---:|---:|---:|---:|",
+        "| Rank | Model | quality (median) | IQR | pass-rate | catastrophic | cost $ | model tok/s med |",
+        "|---:|---|---:|---:|---:|---:|---:|---:|",
     ]
     for i, (model, _q, _pr, _ct) in enumerate(rank_models_by_quality(agg), 1):
         s = agg["by_model"][model]
@@ -182,7 +186,8 @@ def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
             return f"{x:.{p}f}" if isinstance(x, (int, float)) else "N/A"
         lines.append(
             f"| {i} | `{model}` | {f(s['quality_median'])} | {f(s['quality_iqr'])} | "
-            f"{f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {f(s['cost_total_usd'],4)} |"
+            f"{f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {f(s['cost_total_usd'],4)} | "
+            f"{f(s.get('model_tokens_per_sec_median'),1)} |"  # FR-SPEED-2 headline; full breakdown in Speed
         )
     # K2×K1 (R3-S5): when both leverage states ran, pooling off+on per model would conflate the
     # integrity-gated off arm with the skip-heavy on arm into one IQR. Render consistency **per
@@ -216,6 +221,32 @@ def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
                 f"| {i} | `{model}` | {f(s['pass_rate'])} | {f(s['quality_iqr'])} | "
                 f"{s['n_scored']}/{s['n']}{flag} | {s['catastrophic_count']}/{s['n']} |"
             )
+    # Speed section (FR-SPEED-4): two time measures + harness overhead, ranked by pure-model
+    # throughput (fastest model first). Pure-model columns show 'not computed' when timing was absent.
+    lines += ["", "## Speed (generation time — reported, not scored)", "",
+              "> `model` = pure model API time (Σ GenerateResult.time_ms); `pipeline wall` = whole "
+              "subprocess; `harness overhead` = (wall − model)/wall (share outside the model).",
+              "",
+              "| Rank | Model | model time med (s) | model tok/s med | pipeline wall med (s) | "
+              "pipeline tok/s med | harness overhead |",
+              "|---:|---|---:|---:|---:|---:|---:|"]
+
+    def _spd(model):
+        return agg["by_model"][model].get("model_tokens_per_sec_median") or -1.0
+
+    for i, model in enumerate(sorted(agg["by_model"], key=_spd, reverse=True), 1):
+        s = agg["by_model"][model]
+        def f(x, p=1):
+            return f"{x:.{p}f}" if isinstance(x, (int, float)) else "not computed"
+        mt, wall = s.get("model_time_median_s"), s.get("latency_median_s")
+        overhead = (f"{(wall - mt) / wall:.0%}"
+                    if isinstance(mt, (int, float)) and isinstance(wall, (int, float)) and wall > 0
+                    else "N/A")
+        lines.append(
+            f"| {i} | `{model}` | {f(mt)} | {f(s.get('model_tokens_per_sec_median'))} | "
+            f"{f(wall)} | {f(s.get('tokens_per_sec_median'))} | {overhead} |"
+        )
+
     lines += ["", "## By language (polyglot view)", "",
               "| Language | quality (median) | pass-rate | cost $ |", "|---|---:|---:|---:|"]
     for lang, s in agg["by_language"].items():

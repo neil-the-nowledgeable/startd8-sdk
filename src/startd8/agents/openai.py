@@ -13,11 +13,33 @@ import time
 from typing import Any, Optional, Tuple
 
 from ..models import TokenUsage, GenerateResult
+from .model_timing import record_model_time_ms  # FR-SPEED-1: accumulate pure model API time
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent, is_completion_model, requires_max_completion_tokens
 from .pool import TimeoutConfig, get_client_pool
 
 logger = logging.getLogger(__name__)
+
+
+def _cached_input_tokens(usage) -> int:
+    """Cache-read (cached prompt) tokens from an OpenAI-style ``usage`` object, across dialects:
+    OpenAI/most compat servers expose ``usage.prompt_tokens_details.cached_tokens``; DeepSeek exposes
+    ``usage.prompt_cache_hit_tokens``. Returns 0 when absent.
+
+    IMPORTANT: unlike Anthropic (which reports cache tokens SEPARATELY from input), these vendors fold
+    cached tokens INTO ``prompt_tokens``. Callers MUST subtract this from the ``input`` they pass to
+    ``TokenUsage`` so the cost model (which prices ``input`` at full rate and ``cache_read`` at 0.1x)
+    does not double-charge the cached tokens. See costs/pricing.py:543."""
+    def _num(v):
+        # Require a genuine number — guards against MagicMock (whose __int__ returns 1) and other
+        # odd usage objects yielding a phantom cache count.
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = _num(getattr(details, "cached_tokens", None)) if details is not None else None
+    if cached is None:
+        cached = _num(getattr(usage, "prompt_cache_hit_tokens", None))  # DeepSeek dialect
+    return max(0, int(cached)) if cached is not None else 0
 
 
 def _build_chat_kwargs(
@@ -387,12 +409,14 @@ class GPT4Agent(BaseAgent):
         # OpenAI uses: "stop" (natural), "length" (truncated), "content_filter", "tool_calls"
         finish_reason = getattr(response.choices[0], 'finish_reason', None)
 
+        _cached = _cached_input_tokens(response.usage)
         token_usage = TokenUsage(
-            input=response.usage.prompt_tokens,
+            input=max(0, response.usage.prompt_tokens - _cached),  # non-cached (pricing expects this)
             output=response.usage.completion_tokens,
             total=response.usage.total_tokens,
             model_name=self.model,
             finish_reason=finish_reason,
+            cache_read_input_tokens=_cached or None,
         )
 
         # Log warning if response was truncated
@@ -409,6 +433,7 @@ class GPT4Agent(BaseAgent):
                 }
             )
 
+        record_model_time_ms(response_time_ms)
         return GenerateResult(response_text, response_time_ms, token_usage)
 
 
@@ -746,12 +771,15 @@ class OpenAICompatibleAgent(BaseAgent):
 
             # Some APIs may not return usage info
             if hasattr(response, 'usage') and response.usage:
+                _cached = _cached_input_tokens(response.usage)
+                _prompt = response.usage.prompt_tokens or 0
                 token_usage = TokenUsage(
-                    input=response.usage.prompt_tokens or 0,
+                    input=max(0, _prompt - _cached),  # non-cached (DeepSeek/compat fold cache into prompt_tokens)
                     output=response.usage.completion_tokens or 0,
                     total=response.usage.total_tokens or 0,
                     model_name=self.model,
                     finish_reason=finish_reason,
+                    cache_read_input_tokens=_cached or None,
                 )
             else:
                 # Estimate tokens if not provided
@@ -777,6 +805,7 @@ class OpenAICompatibleAgent(BaseAgent):
                     }
                 )
 
+            record_model_time_ms(response_time_ms)
             return GenerateResult(response_text, response_time_ms, token_usage)
 
         except RetryError as e:
