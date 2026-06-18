@@ -23,7 +23,8 @@ class StartupContract:
 
     cmd: Tuple[str, ...]               # argv template; ``$PORT`` tokens substituted with the port
     port_env: Optional[str] = "PORT"   # env var that also carries the port (None = argv-only)
-    readiness: str = "tcp"             # v1: "tcp" = port-listening probe
+    readiness: str = "tcp"             # "tcp" = port-listening probe (gRPC default); "http" = health probe
+    health_path: str = "/health"       # REST lane: path polled for readiness when readiness == "http"
 
     @classmethod
     def from_seed(cls, seed: dict) -> Optional["StartupContract"]:
@@ -34,6 +35,7 @@ class StartupContract:
             cmd=tuple(block["cmd"]),
             port_env=block.get("port_env", "PORT"),
             readiness=block.get("readiness", "tcp"),
+            health_path=block.get("health_path", "/health"),
         )
 
     def resolve(self, port: int) -> Tuple[List[str], Dict[str, str]]:

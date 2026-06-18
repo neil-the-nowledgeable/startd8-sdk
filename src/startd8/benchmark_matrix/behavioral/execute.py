@@ -21,7 +21,7 @@ from ..sandbox import SandboxConfig, run_service_sandboxed
 from .ad_suite import run_ad_suite
 from .charge_suite import run_charge_suite
 from .currency_suite import run_currency_suite
-from .contract import resolve_serve_command
+from .contract import StartupContract, resolve_serve_command
 from .pricing_suite import run_pricing_suite
 from .shipping_suite import run_shipping_suite
 
@@ -164,8 +164,14 @@ def run_behavioral_cell(
     # already needed it for binary startup) to recover slow-binding cells; genuine crashes (rc=1) exit
     # immediately and are unaffected.
     readiness = 30.0
+    # Readiness mode from the seed's startup contract (FR-5/FR-11): "tcp" (gRPC default) or "http"
+    # (REST lane — poll the health path). Absent → "tcp", so existing gRPC cells are byte-identical.
+    contract = StartupContract.from_seed(seed)
+    readiness_mode = contract.readiness if contract else "tcp"
+    health_path = contract.health_path if contract else "/health"
     sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env,
-                               readiness_timeout_s=readiness)
+                               readiness_timeout_s=readiness,
+                               readiness_mode=readiness_mode, health_path=health_path)
     prov: Dict = {"ready": sr.ready, "isolation_level": sr.isolation_level,
                   "network_isolated": sr.network_isolated, "violation": sr.violation,
                   "server_stderr_tail": (sr.server_stderr or "")[-400:]}
