@@ -30,14 +30,16 @@ def _cached_input_tokens(usage) -> int:
     cached tokens INTO ``prompt_tokens``. Callers MUST subtract this from the ``input`` they pass to
     ``TokenUsage`` so the cost model (which prices ``input`` at full rate and ``cache_read`` at 0.1x)
     does not double-charge the cached tokens. See costs/pricing.py:543."""
+    def _num(v):
+        # Require a genuine number — guards against MagicMock (whose __int__ returns 1) and other
+        # odd usage objects yielding a phantom cache count.
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
     details = getattr(usage, "prompt_tokens_details", None)
-    cached = getattr(details, "cached_tokens", None) if details is not None else None
+    cached = _num(getattr(details, "cached_tokens", None)) if details is not None else None
     if cached is None:
-        cached = getattr(usage, "prompt_cache_hit_tokens", None)  # DeepSeek dialect
-    try:
-        return int(cached) if cached else 0
-    except (TypeError, ValueError):
-        return 0
+        cached = _num(getattr(usage, "prompt_cache_hit_tokens", None))  # DeepSeek dialect
+    return max(0, int(cached)) if cached is not None else 0
 
 
 def _build_chat_kwargs(

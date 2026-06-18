@@ -512,7 +512,8 @@ class GeminiAgent(BaseAgent):
                 input_tokens = getattr(usage, 'prompt_token_count', 0)
                 output_tokens = getattr(usage, 'candidates_token_count', 0)
                 total_tokens = getattr(usage, 'total_token_count', input_tokens + output_tokens)
-                cached_tokens = getattr(usage, 'cached_content_token_count', 0) or 0
+                _c = getattr(usage, 'cached_content_token_count', 0)
+                cached_tokens = _c if isinstance(_c, (int, float)) and not isinstance(_c, bool) else 0
             else:
                 # Fallback: estimate tokens if usage_metadata not available
                 input_tokens = max(1, int(len(prompt.split()) / 1.3))
@@ -703,7 +704,8 @@ class GeminiAgent(BaseAgent):
             if usage is not None:
                 _in = getattr(usage, "prompt_token_count", 0) or 0
                 _out = getattr(usage, "candidates_token_count", 0) or 0
-                _cached = getattr(usage, "cached_content_token_count", 0) or 0
+                _cc = getattr(usage, "cached_content_token_count", 0)
+                _cached = _cc if isinstance(_cc, (int, float)) and not isinstance(_cc, bool) else 0
                 token_usage = TokenUsage(
                     input=max(0, int(_in) - int(_cached)),  # non-cached (cached is a subset)
                     output=int(_out),
