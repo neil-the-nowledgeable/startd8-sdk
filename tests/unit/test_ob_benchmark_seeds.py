@@ -28,6 +28,10 @@ EXPECTED = {
     "checkoutservice": "go",
     "recommendationservice": "python",
     "adservice": "java",
+    # Hardened-tier addition (Liferay-derived pricing-calculator, eb2d1f4f): a hand-authored seed in
+    # the OB seeds dir that the original OB-nine EXPECTED never accounted for — its absence here left
+    # this test red on main. nodejs, single feature, like the OB nodejs services.
+    "pricingservice": "nodejs",
 }
 
 
