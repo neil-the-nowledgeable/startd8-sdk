@@ -1,6 +1,6 @@
 # Cross-Tool Differential Bias Audit — Implementation Plan
 
-**Version:** 1.2  
+**Version:** 1.3 (S2 authoring = external CLIs by subprocess, not the SDK)  
 v1.2 — trimmed for one-seed-pilot density; substance from the gpt-5.5/gemini review preserved, enumerations compressed.  
 **Date:** 2026-06-17  
 **Tracks:** `CROSS_TOOL_BIAS_AUDIT_REQUIREMENTS.md` (drove this plan; updated to v0.3 by it)
@@ -34,8 +34,11 @@ the bare seed-contract schema (never from Claude's artifacts); tag each requirem
 - Human review confirms the brief was drafted from source not Claude text, checks for Claude-idiom leakage and OPEN items not implicitly resolved by wording, and is signed off with reviewer ID/role/date.
 - **Gate:** S1 passes only when brief + matrix + bibliography + checklist are complete and signed off; no S2 prompt may render until then.
 
-**S2 — Reproduction harness** (`scripts/run_bias_reproduction.py`). Drive Codex + Antigravity (+ Claude
-control) via CLI/API, N samples each, dry-run-by-default, keys via `doppler run`, immutable raw capture before any normalization, retry logging, and headless-or-documented-manual-capture per tool (flag any asymmetry).
+**S2 — Reproduction harness** (`scripts/run_bias_reproduction.py`). Drive the **external agentic CLIs by
+subprocess** — Claude Code + **Codex CLI** (`codex exec`) + **Gemini CLI** — N samples each, dry-run-by-default,
+keys via `doppler run`, immutable raw capture before any normalization, retry logging. **Not the startd8 SDK**
+(see FR-3 / §3: authoring-through-the-SDK re-injects Claude-*harness* bias; the SDK serves FR-6 scoring only).
+Antigravity is IDE-only → optional manual cross-check, not part of the automated set.
 - **Prompt-template package** (`bias_audit/prompts/`, semantically versioned): each rendered prompt separates neutral-brief content / experiment-specific instructions / allowed deps / output conventions / tool mechanics / parameters; few-shot examples (if any) vendor-neutral, identical across tools, encode no OPEN resolution.
 - **Per-run capture:** prompt-template version, rendered prompt, tool/model/version, sampling parameters + seed, timestamp/sample-index/experiment-ID, invocation metadata.
 - **Reproducibility baseline:** locked runtimes (Python/Node/gRPC/protobuf + lockfiles + container digests), recorded execution environment + secrets-handling (`doppler run`, no persistence) + network policy, dependency/checksum provenance, and a **model-version update policy** (prefer dated/version-locked models; restart a batch on uncontrolled mid-batch updates; never mix versions within an FR-11 sample group or FR-6 cell).

@@ -1,6 +1,6 @@
 # Cross-Tool Differential Bias Audit — Requirements
 
-**Version:** 0.5 (Next-tier review curated: 15 applied, 5 logged)  
+**Version:** 0.6 (Authoring layer resolved: external CLIs, not the SDK)  
 **Date:** 2026-06-17  
 **Status:** Draft (planning-corrected; pre-implementation)  
 **Plan:** `CROSS_TOOL_BIAS_AUDIT_PLAN.md`  
@@ -83,7 +83,10 @@ seed-contract schema), NOT from Claude's existing artifacts. Tag each requiremen
 **OPEN** (a semantic choice under test — rounding default, chain-vs-addition, fixed-amount basis,
 tax/discount ordering, error taxonomy, field naming). The brief must not leak Claude's resolution of
 any OPEN item. Human-reviewed for **Claude-idiom leakage** — the verbatim field names, default resolutions,
-section ordering, or characteristic phrasing of Claude's existing artifacts (the honesty control).
+section ordering, or characteristic phrasing of Claude's existing artifacts (the honesty control). Because a
+Claude self-review can't reliably catch its own idioms, the brief is **also cross-reviewed by the non-Claude
+authoring CLIs (Codex CLI + Gemini CLI)** before it drives any authoring run — the same dogfooding these
+requirements received.
 
 The brief must include a **source-to-brief traceability matrix** recording, per item: brief ID;
 FIXED/OPEN; a **decision-owner** (source-evidence | schema-constraint | human-adjudication); the upstream
@@ -112,6 +115,10 @@ experiments so spec-bias and suite-bias don't conflate:
 Each experiment runs with a Claude control for symmetry. Each authoring run is labeled by author-vendor,
 tool, model/version, sample index, prompt-template version, and timestamp.
 
+Authoring tools (the agentic-CLI layer): **Claude Code, OpenAI Codex CLI (`codex exec`), and Google Gemini
+CLI** — each driven headless via subprocess (FR-3). Antigravity (IDE) is an optional manual cross-check, not
+part of the automated set.
+
 Proto variation in FR-2b: the **primary FR-6 score-impact run freezes the canonical proto and harness**
 so score changes attribute to spec wording, not contract shape. Vendor-authored proto variants are kept
 for FR-5 divergence and may run only in a separately-labeled **contract-shape sensitivity analysis** when
@@ -120,10 +127,16 @@ differences are never silently normalized into the primary run — they are cata
 spec can't be expressed against the frozen proto without resolving an OPEN choice, log the adaptation and
 route it to FR-7 adjudication before scoring.
 
-**FR-3 — Automatable, reproducible runs.** Drive Codex and Antigravity via CLI/API. Capture prompt,
-tool+model version, parameters, raw output, and timestamp per run so the audit is re-runnable. Verify
-each tool's headless path at the start; if Antigravity has no headless mode, fall back to documented
-manual capture and flag the asymmetry.
+**FR-3 — Automatable, reproducible runs.** Authoring runs drive **external agentic CLIs by subprocess** —
+Claude Code, OpenAI **Codex CLI** (`codex exec` non-interactive mode), and Google **Gemini CLI** — capturing
+prompt, tool+model version, parameters, raw output, and timestamp per run so the audit is re-runnable.
+Authoring deliberately does **NOT** go through the startd8 SDK provider layer: the SDK is single-shot
+orchestration over a Claude-authored harness/prompts, so authoring through it would re-inject Anthropic
+*harness* bias even with a foreign model (the SDK is used only for FR-6 *scoring*, where the harness is held
+constant by design). Antigravity is an IDE with no agent-automation headless surface (an IDE-launcher CLI
+only) → it is an optional manual cross-check, not part of the automated set; the automatable Google agentic
+author is the Gemini CLI. Environment status (2026-06-17): Codex CLI `@openai/codex@0.49.0` present (needs a
+binary reinstall to run); Gemini CLI installable via npm; Antigravity IDE installed (IDE launcher only).
 
 Reproducibility baseline (each item is required, detail in the plan): locked runtimes/containers
 (Python/Node/gRPC/protobuf/package managers/test runners); dependency lockfiles + checksum/commit
@@ -346,15 +359,20 @@ source-ambiguity / vendor bias / tool-capability.
 ## 3. Non-Requirements
 
 - **Not** reproducing the SDK code, scoring, or harness — inputs only (per scope decision).
+- **Authoring does NOT run through the startd8 SDK** (FR-3). "Inputs only" is *not* an assumption that the
+  authoring harness is neutral — it isn't; the SDK harness/prompts are Claude-built. Authoring uses
+  independent external agentic CLIs; the SDK serves only the FR-6 *scoring* step. Auditing the SDK harness's
+  own neutrality is explicitly out of scope for this pilot.
 - **Not** a bias-free oracle — triangulation across three biased authors, not purity.
 - **Not** auto-correcting — divergences go to human adjudication.
 - **Not** the OB seeds in the pilot — pricing seed first.
 
 ## 4. Open Questions
 
-- **OQ-1** Exact Codex / Antigravity CLI/API invocation + auth (Doppler-managed keys; verify Antigravity headless path — FR-3).
-- **OQ-2** Calibrating FR-1 brief neutrality: FIXED/OPEN tagging + human review is the mechanism, but how loose is too loose? (Resolved in approach; needs a review pass on the actual brief.)
+- **OQ-2** Calibrating FR-1 brief neutrality: FIXED/OPEN tagging + human + cross-CLI review is the mechanism, but how loose is too loose? Needs a review pass on the actual brief.
 - **OQ-4** Score-impact spend (~3 spec variants × pricing-only × 3 flagships × N=5 ≈ $8) and the interaction-model statistics (FR-6) — calibrate N for power.
+- **OQ-1 → resolved** (empirical, 2026-06-17): authoring tools = Claude Code + Codex CLI (`codex exec`) + Gemini CLI, subprocess-driven; Codex CLI installed (needs a binary reinstall), Gemini CLI installable, **Antigravity IDE-only → descoped to optional manual cross-check** (FR-2/FR-3).
+- **OQ-6 → resolved:** authoring uses external agentic CLIs, NOT the SDK (which would keep the Claude-built harness); the SDK serves FR-6 scoring only (FR-3, §3).
 - **OQ-3 → resolved** (FR-12 mutant battery). **OQ-5 → resolved** (FR-11 sampling).
 
 ---
@@ -370,6 +388,12 @@ compactly (decision-owner field, "material" + spec/proto/oracle + sign-off termi
 chain + manifest schema version, single exclusion rule + authorship-relevant criterion, unanimity scope +
 blinding-impractical clause, conflict-default + remediation-candidate IDs, pinned-OPEN→adjudicated-FIXED on
 re-audit); 5 logged to Appendix B (covered/subsumed/deferred/over-spec). +~12 lines net; trim preserved.*
+
+*v0.6 — empirically resolved the authoring layer (OQ-1/OQ-6): authoring runs the external agentic CLIs
+(Claude Code + Codex CLI + Gemini CLI) by subprocess, NOT the startd8 SDK — whose single-shot, Claude-built
+harness would re-inject Anthropic bias at the harness layer. Antigravity is IDE-only → optional manual
+cross-check; the automatable Google agentic author is the Gemini CLI. SDK providers serve FR-6 scoring only.
+The neutral brief is now also cross-reviewed by the non-Claude CLIs before it drives authoring.*
 
 ## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
 
