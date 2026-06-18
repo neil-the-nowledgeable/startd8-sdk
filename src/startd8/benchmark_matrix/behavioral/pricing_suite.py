@@ -164,6 +164,14 @@ def run_pricing_suite(port: int, *, host: str = "127.0.0.1", connect_timeout: fl
             return (r.items[0].net_payable == "0.12", f"net={r.items[0].net_payable}")
         check("g4_half_even_012", g4_even)
 
+        # G4b — unspecified rounding mode defaults to HALF_UP:
+        def g4_unspecified():
+            r = ok(_req([_item(unit_price="0.25", discounts=[_disc(pb.PERCENTAGE, ["50"])])],
+                        currency=pb.Currency(code="USD", scale=2, rounding=pb.ROUNDING_MODE_UNSPECIFIED)))
+            return (r.items[0].net_payable == "0.13", f"net={r.items[0].net_payable}")
+        check("g4_unspecified_rounding_defaults_to_half_up", g4_unspecified)
+
+
         # G5 — tax/discount ordering, pre-tax (net-target): 100 -15 = 85; +20% tax = 102.
         def g5_pre():
             r = ok(_req([_item(unit_price="100.00", discounts=[_disc(pb.FIXED_AMOUNT, ["15"])],

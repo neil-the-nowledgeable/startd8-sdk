@@ -166,7 +166,8 @@ def test_suite_reaches_full_coverage_against_reference(reference_server):
     assert result.connect_error == "", result.connect_error
     failing = [(r.name, r.detail) for r in result.results if not r.passed]
     assert result.coverage == 1.0, f"failing checks: {failing}"
-    assert len(result.results) == 15  # G1..G7 + rollup
+    assert len(result.results) == 16  # G1..G7 + rollup
+
 
 
 def test_fr14_proto_mapping_keeps_ob_on_demo_proto():
