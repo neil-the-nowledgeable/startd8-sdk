@@ -1,0 +1,51 @@
+{
+  "generator": "scripts/gen_pricing_seed.py",
+  "schema_version": "1.0",
+  "service_metadata": {
+    "dependencies": [],
+    "estimated_loc": 220,
+    "language": "nodejs",
+    "language_rationale": "Synthetic hardened-tier seed (not an Online Boutique service). Pinned to nodejs because the Track 2 behavioral harness has a proven offline runtime closure for it (node_runtime/, dynamic @grpc/proto-loader); there is no canonical upstream language for a derived contract.",
+    "proto_service": "PricingService",
+    "proto_sha256": "3ee9299a92ffd5e8c11d17e15ae90fa6545f5d708a5c2dfea68173af43b50515",
+    "rpc_count": 1,
+    "rpcs": [
+      "ComputeBasket"
+    ],
+    "service": "pricingservice"
+  },
+  "startup": {
+    "cmd": [
+      "node",
+      "src/pricingservice/server.js"
+    ],
+    "port_env": "PORT",
+    "readiness": "tcp"
+  },
+  "tasks": [
+    {
+      "config": {
+        "context": {
+          "artifact_types_addressed": [
+            "grpc_service"
+          ],
+          "estimated_loc": 220,
+          "feature_id": "HARDENED-PRICINGSERVICE",
+          "language": "nodejs",
+          "language_rationale": "Synthetic hardened-tier seed (not an Online Boutique service). Pinned to nodejs because the Track 2 behavioral harness has a proven offline runtime closure for it (node_runtime/, dynamic @grpc/proto-loader); there is no canonical upstream language for a derived contract.",
+          "proto_sha256": "3ee9299a92ffd5e8c11d17e15ae90fa6545f5d708a5c2dfea68173af43b50515",
+          "target_files": [
+            "src/pricingservice/server.js"
+          ]
+        },
+        "requirements_text": "## Hardened benchmark \u2014 PricingService (nodejs)\n\nImplement ONLY `PricingService.ComputeBasket` from the gRPC contract below. This is a **pure,\nstateless price calculator**: every input is already resolved (price-list selection, discount\neligibility, coupon validation, and address\u2192tax-rate resolution are performed upstream and passed\nin). No database, no network, no global state.\n\n- RPC to implement: ComputeBasket\n- Target file: `src/pricingservice/server.js`\n- The proto is provided as `pricing.proto` (and at conventional locations next to your server).\n\n### Money & rounding\n- All monetary amounts and quantities are decimal STRINGS (e.g. \"29.97\"). Use EXACT decimal\n  arithmetic, NOT binary floating point \u2014 a float implementation will fail the rounding cases.\n- `Currency.scale` is the number of fraction digits (e.g. 2). Round monetary OUTPUTS to `scale`\n  using `Currency.rounding`: HALF_UP or HALF_EVEN. ROUNDING_MODE_UNSPECIFIED is treated as HALF_UP.\n- Emit every monetary output as a string with exactly `scale` fraction digits (e.g. \"20.00\").\n\n### Per line item (when price_on_application is false)\n1. Base unit price = `unit_price`, UNLESS `offer_unit_price` is non-empty, > 0, and < `unit_price`,\n   in which case the offer price replaces it (promo-min selection).\n2. Line base = base unit price \u00d7 `quantity` (exact).\n3. Apply each discount in `discounts` order to the running amount:\n   - PERCENTAGE: `tier_factors` are percents (1..4 of them). Combine them by `strategy`:\n     - CHAIN: each tier applies to the running, already-discounted amount \u2014\n       d \u2190 d \u2212 d \u00d7 (tier / 100), for each tier in order.\n     - ADDITION: sum the tiers and apply once \u2014 d \u2190 d \u00d7 (1 \u2212 (\u03a3 tiers) / 100).\n   - FIXED_AMOUNT: a per-line absolute discount = `tier_factors[0]` (any further tiers ignored);\n     never more than the running amount.\n   - If `maximum_amount` is set, cap that discount's amount at it.\n4. Tax \u2014 only if `calculate_tax` is true; `tax_rate` is a percent (\"\" means 0:\n   - `discounts_pre_tax` = true: round the discounted NET amount \u2192 `net_payable`; then\n     `tax_value` = round(net_payable \u00d7 rate / 100); `net_payable_with_tax` = net_payable + tax_value.\n   - `discounts_pre_tax` = false: compute the GROSS base = line base \u00d7 (1 + rate/100), apply the\n     discounts to the gross, round it \u2192 `net_payable_with_tax`; then\n     `net_payable` = round(net_payable_with_tax / (1 + rate/100)); `tax_value` =\n     net_payable_with_tax \u2212 net_payable.\n   - `calculate_tax` = false: `tax_value` = \"0.00\" (at scale); `net_payable_with_tax` = `net_payable`.\n5. Per-item output: `unit_price`, `offer_unit_price` (only when the offer was applied),\n   `net_payable`, `tax_value`, `net_payable_with_tax`, `discount_value.amount`\n   (= rounded (discount base \u2212 discounted amount)), and `price_on_application` = false.\n\n### price_on_application\nIf a line item has `price_on_application` = true, echo it back with `price_on_application` = true and\nleave ALL numeric price fields empty (\"\"). Do not compute a price for it.\n\n### Subtotals\n`subtotal_net_payable` = sum of each item's `net_payable`; `subtotal_net_payable_with_tax` = sum of\neach item's `net_payable_with_tax` (both at currency scale).\n\n### Validation \u2014 reject the whole request with gRPC status INVALID_ARGUMENT when:\n- any `quantity` \u2264 0, or any malformed/negative price or quantity decimal;\n- any discount has 0 tiers or more than 4 `tier_factors`;\n- `strategy` = DISCOUNT_STRATEGY_UNSPECIFIED while any line item carries a discount.\n\n### pricing.proto (DERIVED, not copied, from Liferay Commerce \u2014 package startd8.bench.pricing.v1)\n\n```proto\n// Pricing calculator \u2014 Summer 2026 hardened-tier benchmark seed.\n//\n// Synthetic contract DERIVED (not copied) from Liferay Commerce price calculation\n// (docs/design/liferay-pricing-seed/). The resolution layer (price-list selection,\n// discount eligibility, coupon validation, address->tax-rate) is performed UPSTREAM;\n// this service is a PURE, STATELESS calculator \u2014 no DB, no network, no hidden state.\n//\n// FR-47 contamination hygiene: Liferay-verbatim field tells are renamed\n// (level1..4 -> tier_factors, finalPrice -> net_payable, promoPrice -> offer_unit_price,\n//  discountsTargetNetPrice -> discounts_pre_tax, PriceCart -> ComputeBasket).\n//\n// All money/quantities are decimal STRINGS (\"29.97\"), never floats \u2014 exact decimal\n// arithmetic with an explicit rounding mode is the discriminating skill (FR-7).\n\nsyntax = \"proto3\";\n\npackage startd8.bench.pricing.v1;\n\nservice PricingService {\n  // Price a basket of ALREADY-RESOLVED line items.\n  rpc ComputeBasket(ComputeBasketRequest) returns (ComputeBasketResponse);\n}\n\nenum DiscountStrategy {\n  DISCOUNT_STRATEGY_UNSPECIFIED = 0;\n  CHAIN = 1;     // each tier applies to the running (already-discounted) amount\n  ADDITION = 2;  // tiers summed, applied once to the original amount\n}\n\nenum DiscountKind {\n  DISCOUNT_KIND_UNSPECIFIED = 0;\n  PERCENTAGE = 1;\n  FIXED_AMOUNT = 2;\n}\n\nenum RoundingMode {\n  ROUNDING_MODE_UNSPECIFIED = 0;  // treated as HALF_UP (FR-7 default, OQ-1)\n  HALF_UP = 1;\n  HALF_EVEN = 2;\n}\n\nmessage Currency {\n  string code = 1;            // ISO 4217; single currency, no conversion\n  uint32 scale = 2;           // fraction digits, e.g. 2\n  RoundingMode rounding = 3;\n}\n\nmessage Discount {\n  DiscountKind kind = 1;\n  // tier_factors[0..3] = the up-to-four discount tiers. For PERCENTAGE these are\n  // percents (\"10\" = 10%); for FIXED_AMOUNT only tier_factors[0] participates.\n  repeated string tier_factors = 2;   // 1..4 entries; > 4 => INVALID_ARGUMENT\n  string maximum_amount = 3;          // optional cap on the discount amount; \"\" = uncapped\n}\n\nmessage LineItem {\n  string sku = 1;\n  string quantity = 2;                 // decimal\n  string unit_price = 3;               // resolved net unit list price\n  string offer_unit_price = 4;         // resolved promotional unit price; \"\" = none\n  bool   price_on_application = 5;     // true => no public price (POA)\n  repeated Discount discounts = 6;     // already filtered for eligibility (upstream)\n  string tax_rate = 7;                 // resolved flat rate as percent, e.g. \"20\"; \"\" = 0\n}\n\nmessage ComputeBasketRequest {\n  repeated LineItem items = 1;\n  DiscountStrategy strategy = 2;\n  Currency currency = 3;\n  bool calculate_tax = 4;\n  bool discounts_pre_tax = 5;          // true: discount net then +tax; false: gross then discount\n}\n\nmessage DiscountValue {\n  string amount = 1;                   // total discount amount (x quantity), at currency scale\n  string percentage = 2;               // effective combined percentage\n  repeated string factor_percentages = 3;  // resolved per-tier percentages\n}\n\nmessage PricedLineItem {\n  string sku = 1;\n  string unit_price = 2;\n  string offer_unit_price = 3;\n  string net_payable = 4;                   // net, x quantity, after discount\n  DiscountValue discount_value = 5;\n  string tax_value = 6;\n  string net_payable_with_tax = 7;\n  DiscountValue discount_value_with_tax = 8;\n  bool   price_on_application = 9;\n}\n\nmessage ComputeBasketResponse {\n  repeated PricedLineItem items = 1;\n  string subtotal_net_payable = 2;\n  string subtotal_net_payable_with_tax = 3;\n}\n```\n",
+        "task_description": "Implement the **PricingService** gRPC service as a pure, stateless price calculator in **nodejs**. ComputeBasket prices a basket of already-resolved line items: promo-min unit selection, 1..4-tier discounts combined by a CHAIN or ADDITION strategy, an optional per-discount cap, optional tax applied before or after discounts, exact decimal arithmetic with an explicit rounding mode, price-on-application pass-through, and input validation. Implement exactly the one RPC defined for PricingService in the embedded pricing.proto. Wire up a gRPC server that serves it. Do not implement anything else."
+      },
+      "depends_on": [],
+      "task_id": "HARDENED-PRICINGSERVICE",
+      "task_type": "task",
+      "title": "PricingService (nodejs) \u2014 hardened-tier pricing calculator"
+    }
+  ],
+  "version": "0.1"
+}

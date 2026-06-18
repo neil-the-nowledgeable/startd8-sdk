@@ -22,18 +22,29 @@ from .ad_suite import run_ad_suite
 from .charge_suite import run_charge_suite
 from .currency_suite import run_currency_suite
 from .contract import resolve_serve_command
+from .pricing_suite import run_pricing_suite
 from .shipping_suite import run_shipping_suite
 
-# service name -> behavioral suite (the SDK-authored client). P1+P2 curated stateless set.
+# service name -> behavioral suite (the SDK-authored client). P1+P2 curated stateless set,
+# plus the hardened-tier pricingservice (Liferay-derived; docs/design/liferay-pricing-seed/).
 _SUITES: Dict[str, Callable[[int], object]] = {
     "paymentservice": run_charge_suite,
     "currencyservice": run_currency_suite,
     "shippingservice": run_shipping_suite,
     "adservice": run_ad_suite,
+    "pricingservice": run_pricing_suite,
 }
 
 _NODE_RUNTIME = Path(__file__).parent / "node_runtime"
 _PROTO = Path(__file__).parent / "demo.proto"
+_PRICING_PROTO = Path(__file__).parent / "pricing.proto"
+
+# FR-14: which proto a service's generated server loads, as (source file, on-disk name). Online
+# Boutique services all share demo.proto (the default); the hardened pricingservice ships its own.
+# Keying off the service keeps every OB cell's provisioning byte-identical.
+_PROTO_BY_SERVICE: Dict[str, tuple] = {
+    "pricingservice": (_PRICING_PROTO, "pricing.proto"),
+}
 
 # FR-T2-PROTO: conventional locations a generated server loads its proto from. The pilot saw models
 # use root, protos/, proto/, and pb/ — provision the proto at all of them so the model's choice
@@ -41,15 +52,23 @@ _PROTO = Path(__file__).parent / "demo.proto"
 _PROTO_DEST_SUBDIRS = ("", "protos", "proto", "pb", "lib/proto")
 
 
-def prepare_node_workdir(workdir: Path, target_files: Optional[List[str]] = None) -> bool:
+def prepare_node_workdir(
+    workdir: Path,
+    target_files: Optional[List[str]] = None,
+    *,
+    proto_src: Path = _PROTO,
+    proto_name: str = "demo.proto",
+) -> bool:
     """Materialize the vendored offline runtime closure + proto into a Node cell workdir (FR-T2-DEPS).
 
-    Copies ``node_runtime/node_modules`` (the full closure: gRPC + pino + uuid — FR-T2-DEPS) and
-    ``demo.proto`` at every conventional location (FR-T2-PROTO) so a model-generated Node server can
+    Copies ``node_runtime/node_modules`` (the full closure: gRPC + pino + uuid — FR-T2-DEPS) and the
+    service's proto at every conventional location (FR-T2-PROTO) so a model-generated Node server can
     start with no network regardless of where it loads the proto. ``target_files`` adds the
     **service-relative** locations (next to the generated server + its ``proto/`` subdir) — the pilot
-    showed models also load it from ``src/<service>/demo.proto``. Returns False when the runtime
-    hasn't been vendored yet (run ``node_runtime/vendor.sh`` first) → caller degrades (FR-T2-DEPS2)."""
+    showed models also load it from ``src/<service>/<proto>``. ``proto_src``/``proto_name`` default to
+    Online Boutique's ``demo.proto`` (FR-14); the pricingservice cell passes its own ``pricing.proto``.
+    Returns False when the runtime hasn't been vendored yet (run ``node_runtime/vendor.sh`` first) →
+    caller degrades (FR-T2-DEPS2)."""
     src_nm = _NODE_RUNTIME / "node_modules"
     if not src_nm.is_dir():
         return False
@@ -57,7 +76,7 @@ def prepare_node_workdir(workdir: Path, target_files: Optional[List[str]] = None
     dst_nm = workdir / "node_modules"
     if not dst_nm.exists():
         shutil.copytree(src_nm, dst_nm)
-    if _PROTO.exists():
+    if proto_src.exists():
         subdirs = list(_PROTO_DEST_SUBDIRS)
         for tf in target_files or []:           # service-relative: src/<service>/ and src/<service>/proto/
             parent = Path(tf).parent
@@ -66,7 +85,7 @@ def prepare_node_workdir(workdir: Path, target_files: Optional[List[str]] = None
         for sub in dict.fromkeys(subdirs):       # de-dupe, preserve order
             dest = workdir / sub if sub else workdir
             dest.mkdir(parents=True, exist_ok=True)
-            shutil.copy(_PROTO, dest / "demo.proto")
+            shutil.copy(proto_src, dest / proto_name)
     return True
 
 
@@ -127,7 +146,9 @@ def run_behavioral_cell(
     # Provision the cell's deps at PREPARE time (before the egress-denied run), per language (P1).
     # Node uses the offline vendored closure (safest); others install securely (FR-P1-SEC-1..5).
     if argv and argv[0] == "node":
-        if not prepare_node_workdir(Path(workdir), target_files):
+        proto_src, proto_name = _PROTO_BY_SERVICE.get(service, (_PROTO, "demo.proto"))
+        if not prepare_node_workdir(Path(workdir), target_files,
+                                    proto_src=proto_src, proto_name=proto_name):
             return BehavioralResult(has_suite=True, degraded=True,
                                     provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
     else:
