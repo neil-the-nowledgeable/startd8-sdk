@@ -91,7 +91,8 @@ class CellResult:
     compile_ok: Optional[bool] = None        # FR-29 gate; None = toolchain absent (FR-32 degraded)
     degraded: bool = False                   # a scoring term was unavailable (FR-32)
     cost_usd: Optional[float] = None
-    latency_s: Optional[float] = None
+    latency_s: Optional[float] = None        # pipeline wall-clock: whole run_prime_workflow subprocess
+    model_time_s: Optional[float] = None     # FR-SPEED-2: pure model API time (Σ GenerateResult.time_ms)
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     deterministic_skips: int = 0             # K2: leverage-off must be 0 (R1-S4); on-cells record it as data
@@ -109,13 +110,22 @@ class CellResult:
 
     @property
     def tokens_per_sec(self) -> Optional[float]:
+        """Pipeline throughput — output tokens over the whole-subprocess wall-clock."""
         if self.output_tokens and self.latency_s and self.latency_s > 0:
             return self.output_tokens / self.latency_s
+        return None
+
+    @property
+    def model_tokens_per_sec(self) -> Optional[float]:
+        """Pure-model throughput (FR-SPEED-2) — output tokens over pure model API time only."""
+        if self.output_tokens and self.model_time_s and self.model_time_s > 0:
+            return self.output_tokens / self.model_time_s
         return None
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["tokens_per_sec"] = self.tokens_per_sec
+        d["model_tokens_per_sec"] = self.model_tokens_per_sec  # FR-SPEED-2
         return d
 
     @classmethod
@@ -389,6 +399,7 @@ class SubprocessCellExecutor:
             compile_ok=compile_ok, degraded=degraded,
             cost_usd=metrics.get("total_cost"),
             latency_s=run.get("duration_seconds"),
+            model_time_s=metrics.get("model_time_s"),   # FR-SPEED-2 (pure model API time)
             input_tokens=metrics.get("input_tokens"),
             output_tokens=metrics.get("output_tokens"),
             deterministic_skips=det_skips, integrity_ok=integrity_ok,

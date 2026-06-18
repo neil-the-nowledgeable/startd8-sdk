@@ -275,6 +275,9 @@ def extract_metrics(output_dir: Path) -> dict[str, Any]:
         "semantic_error_count": semantic_errors,
         "input_tokens": prime_result.get("total_input_tokens"),
         "output_tokens": prime_result.get("total_output_tokens"),
+        # FR-SPEED-2: pure model API time (seconds), None when the run didn't capture it (degrade-honest).
+        "model_time_s": (lambda ms: ms / 1000.0 if isinstance(ms, (int, float)) else None)(
+            prime_result.get("total_model_time_ms")),
         "total_cost": total_cost,
         "cost_source": cost_source,
         "cost_per_succeeded_feature": _safe_div(total_cost, succeeded),

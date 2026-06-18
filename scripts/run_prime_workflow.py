@@ -880,6 +880,7 @@ def main() -> int:
         "total_cost_usd": result.get("total_cost_usd", 0),
         "total_input_tokens": result.get("total_input_tokens", 0),
         "total_output_tokens": result.get("total_output_tokens", 0),
+        "total_model_time_ms": result.get("total_model_time_ms"),  # FR-SPEED-1 (pure model API time)
         "success": result.get("succeeded", 0) > 0 and not result.get("aborted"),
         "aborted": result.get("aborted", False),
         "abort_reason": result.get("abort_reason"),

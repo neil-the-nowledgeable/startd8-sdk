@@ -13,6 +13,7 @@ import time
 from typing import Any, Optional, Tuple
 
 from ..models import TokenUsage, GenerateResult
+from .model_timing import record_model_time_ms  # FR-SPEED-1: accumulate pure model API time
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent, is_completion_model, requires_max_completion_tokens
 from .pool import TimeoutConfig, get_client_pool
@@ -430,6 +431,7 @@ class GPT4Agent(BaseAgent):
                 }
             )
 
+        record_model_time_ms(response_time_ms)
         return GenerateResult(response_text, response_time_ms, token_usage)
 
 
@@ -801,6 +803,7 @@ class OpenAICompatibleAgent(BaseAgent):
                     }
                 )
 
+            record_model_time_ms(response_time_ms)
             return GenerateResult(response_text, response_time_ms, token_usage)
 
         except RetryError as e:

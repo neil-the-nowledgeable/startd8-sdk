@@ -9,6 +9,7 @@ import time
 from typing import Any, Optional, Tuple
 
 from ..models import TokenUsage, GenerateResult, StructuredResult
+from .model_timing import record_model_time_ms  # FR-SPEED-1: accumulate pure model API time
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent
 from .pool import TimeoutConfig, get_client_pool
@@ -579,6 +580,7 @@ class GeminiAgent(BaseAgent):
                 }
             )
 
+        record_model_time_ms(response_time_ms)
         return GenerateResult(response_text, response_time_ms, token_usage)
 
     async def _make_structured_api_call(
@@ -709,6 +711,7 @@ class GeminiAgent(BaseAgent):
                     model_name=self.model,
                     cache_read_input_tokens=int(_cached) or None,
                 )
+            record_model_time_ms(response_time_ms)
             raw = GenerateResult(value.model_dump_json(), response_time_ms, token_usage)
             return StructuredResult(value, raw)
 

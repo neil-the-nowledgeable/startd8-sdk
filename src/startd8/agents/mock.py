@@ -6,6 +6,7 @@ import asyncio
 from typing import Optional, Tuple, TYPE_CHECKING
 
 from ..models import TokenUsage, GenerateResult
+from .model_timing import record_model_time_ms  # FR-SPEED-1: accumulate pure model API time
 from .base import BaseAgent
 from .openai import OpenAICompatibleAgent
 
@@ -74,6 +75,7 @@ class MockAgent(BaseAgent):
             model_name=self.model,
         )
 
+        record_model_time_ms(response_time_ms)
         return GenerateResult(response, response_time_ms, token_usage)
 
 
