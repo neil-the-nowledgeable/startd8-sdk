@@ -104,8 +104,11 @@ def setup_go_stubs(workdir: Path, svc_dir: Path) -> Optional[str]:
     return None
 
 
-def install_plan(language: str, workdir: Path, target_files: List[str]) -> Optional[Tuple[List[str], Path]]:
-    """Return a (scripts-disabled) ``(argv, cwd)`` install command, or None if unsupported → degrade."""
+def install_plan(language: str, workdir: Path, target_files: List[str],
+                 *, grpc: bool = True) -> Optional[Tuple[List[str], Path]]:
+    """Return a (scripts-disabled) ``(argv, cwd)`` install command, or None when there is nothing to
+    install / the language is unsupported (→ ``provision_workdir`` skips and proceeds). ``grpc=False``
+    (REST lane) drops the grpc/proto runtime so a stdlib REST cell installs nothing."""
     svc_dir = (Path(workdir) / Path(target_files[0]).parent) if target_files else Path(workdir)
     if language == "go":
         # go mod tidy derives deps from imports (FR-P1-SEC-4 go.sum), THEN compile the binary here at
@@ -114,9 +117,12 @@ def install_plan(language: str, workdir: Path, target_files: List[str]) -> Optio
         return (["sh", "-c", "go mod tidy && go build -o .bin/server ."], svc_dir)
     if language == "python":
         target = Path(workdir) / ".pydeps"
-        # --only-binary: no setup.py build executes (FR-P1-SEC-1). Common set; requirements.txt top-up.
-        cmd = ["pip", "install", "--only-binary=:all:", "--no-input", "--target", str(target), *_COMMON["python"]]
+        pkgs = list(_COMMON["python"]) if grpc else []   # REST lane: no grpc/proto runtime
         req = svc_dir / "requirements.txt"
+        if not pkgs and not req.is_file():
+            return None  # nothing to install (e.g. a stdlib REST server) → caller skips, proceeds ok
+        # --only-binary: no setup.py build executes (FR-P1-SEC-1). Common set; requirements.txt top-up.
+        cmd = ["pip", "install", "--only-binary=:all:", "--no-input", "--target", str(target), *pkgs]
         if req.is_file():
             cmd += ["-r", str(req)]
         return (cmd, svc_dir)
@@ -143,11 +149,13 @@ def provision_workdir(
     offline: bool = False,
     runner: Optional[Runner] = None,
     timeout: float = 600.0,
+    grpc: bool = True,
 ) -> ProvisionResult:
-    """Securely provision a non-Node cell's deps at prepare time. Degrades honestly on any env reason."""
+    """Securely provision a non-Node cell's deps at prepare time. Degrades honestly on any env reason.
+    ``grpc=False`` (REST lane) drops the grpc/proto runtime so a stdlib REST cell installs nothing."""
     runner = runner or _subprocess_runner
     lang = language or "unknown"
-    plan = install_plan(lang, Path(workdir), target_files)
+    plan = install_plan(lang, Path(workdir), target_files, grpc=grpc)
     if plan is None:
         # No provisioning strategy (java/csharp secure path TBD, or unknown lang) → SKIP and proceed,
         # don't fail the cell: the server may ship its own deps, else it degrades on startup with the

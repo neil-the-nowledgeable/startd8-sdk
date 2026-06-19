@@ -16,6 +16,20 @@
       "seed_sha256": "3d09c032d55899d7cd179d2251e1a70f4e28965b56ba3274249190bf1752e046",
       "service": "pricingservice",
       "target_file": "src/pricingservice/server.js"
+    },
+    {
+      "axes": [
+        "B",
+        "C",
+        "E"
+      ],
+      "derived_from": "Liferay Commerce headless-commerce pricing (REST) \u2014 docs/design/benchmark-rest-lane/",
+      "language": "python",
+      "protocol": "rest",
+      "seed_file": "seed-rest-pricingservice.json",
+      "seed_sha256": "ff6bbed18588cebe9c0ea1dceb20d21ab6f9f372a90d661db666b48a3e047828",
+      "service": "rest-pricingservice",
+      "target_file": "src/rest_pricingservice/server.py"
     }
   ],
   "tier": "hardened"

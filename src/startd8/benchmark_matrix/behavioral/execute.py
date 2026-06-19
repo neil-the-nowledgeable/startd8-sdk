@@ -144,6 +144,11 @@ def run_behavioral_cell(
                                 provenance={"reason": "no serve command (no contract / unknown language)"})
     argv, extra_env = serve
     lang = ((seed or {}).get("service_metadata", {}).get("language") or (seed or {}).get("language"))
+    # Readiness mode from the seed's startup contract (FR-5/FR-11): "tcp" (gRPC default) or "http"
+    # (REST lane). Drives both provisioning (REST skips the grpc/proto runtime) and the readiness probe.
+    contract = StartupContract.from_seed(seed)
+    readiness_mode = contract.readiness if contract else "tcp"
+    health_path = contract.health_path if contract else "/health"
 
     # Provision the cell's deps at PREPARE time (before the egress-denied run), per language (P1).
     # Node uses the offline vendored closure (safest); others install securely (FR-P1-SEC-1..5).
@@ -155,7 +160,7 @@ def run_behavioral_cell(
                                     provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
     else:
         from .provision import provision_workdir
-        pr = provision_workdir(Path(workdir), lang, target_files)
+        pr = provision_workdir(Path(workdir), lang, target_files, grpc=(readiness_mode != "http"))
         if not pr.ok:
             return BehavioralResult(has_suite=True, degraded=True,
                                     provenance={"reason": pr.degraded_reason,
@@ -166,11 +171,6 @@ def run_behavioral_cell(
     # already needed it for binary startup) to recover slow-binding cells; genuine crashes (rc=1) exit
     # immediately and are unaffected.
     readiness = 30.0
-    # Readiness mode from the seed's startup contract (FR-5/FR-11): "tcp" (gRPC default) or "http"
-    # (REST lane — poll the health path). Absent → "tcp", so existing gRPC cells are byte-identical.
-    contract = StartupContract.from_seed(seed)
-    readiness_mode = contract.readiness if contract else "tcp"
-    health_path = contract.health_path if contract else "/health"
     sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env,
                                readiness_timeout_s=readiness,
                                readiness_mode=readiness_mode, health_path=health_path)
