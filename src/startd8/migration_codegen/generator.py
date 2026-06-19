@@ -183,6 +183,20 @@ def _decode_snapshot(b64: str) -> str:
     return base64.b64decode(b64.encode("ascii")).decode("utf-8")
 
 
+def _find_revision_path(versions_dir: Path, revision_id: str) -> Optional[Path]:
+    """Locate a revision file by its ``revision = 'NNNN'`` id."""
+    if not versions_dir.is_dir():
+        return None
+    needle = f"revision = {revision_id!r}"
+    for path in sorted(versions_dir.glob("*.py")):
+        try:
+            if needle in path.read_text(encoding="utf-8"):
+                return path
+        except OSError:
+            continue
+    return None
+
+
 def latest_snapshot(versions_dir: Path) -> Tuple[Optional[str], int]:
     """The schema embedded in the highest-numbered revision (the chain's 'previous'), and its seq.
 

@@ -15,7 +15,7 @@ import yaml
 
 _TOP_KEYS = {
     "app", "persistence", "logging", "migrations", "container",
-    "extra_dependencies", "deployment",
+    "extra_dependencies", "deployment", "telemetry",
 }
 
 # Deployment-mode enum (DEPLOYMENT_MODE_REQUIREMENTS.md FR-CFG-1). Exactly two declared modes in v1
@@ -24,6 +24,7 @@ _TOP_KEYS = {
 # coerced. Tier-B `deployment.tenant` is intentionally NOT accepted yet (added when that increment
 # ships), keeping the strict-key discipline this module already enforces.
 _VALID_DEPLOYMENT_MODES = frozenset({"installed", "deployed"})
+_VALID_TELEMETRY_PATTERNS = frozenset({"http", "grpc", "db", "messaging"})
 # Tier B (M3): `deployment.tenant: {model, owner_field}` declares per-principal data isolation
 # (FR-TEN-2). Both sub-keys required when the block is present; the SCHEMA-level validation (the
 # model + owner_field actually exist) happens at generation time in backend_codegen, since this
@@ -55,6 +56,10 @@ class AppManifest:
     # entities (an entity is row-scoped to the principal iff it has a field of this name).
     tenant_model: Optional[str] = None
     tenant_owner_field: Optional[str] = None
+    telemetry_enabled: bool = False
+    telemetry_otlp_endpoint: str = "http://127.0.0.1:4318"
+    telemetry_service_name: Optional[str] = None
+    telemetry_patterns: Tuple[str, ...] = ()
 
     @property
     def has_tenant(self) -> bool:
@@ -117,6 +122,35 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         if not (isinstance(tenant_owner_field, str) and tenant_owner_field):
             raise ValueError("app.yaml: `deployment.tenant.owner_field` is required (the owner FK field)")
 
+    telemetry_enabled = False
+    telemetry_otlp_endpoint = "http://127.0.0.1:4318"
+    telemetry_service_name: Optional[str] = None
+    telemetry_patterns: Tuple[str, ...] = ()
+    telemetry = data.get("telemetry")
+    if telemetry is not None:
+        if not isinstance(telemetry, dict):
+            raise ValueError("app.yaml: `telemetry` must be a mapping")
+        unknown_telemetry = set(telemetry) - {"enabled", "otlp_endpoint", "service_name", "patterns"}
+        if unknown_telemetry:
+            raise ValueError(f"app.yaml: `telemetry` has unknown keys {sorted(unknown_telemetry)}")
+        telemetry_enabled = bool(telemetry.get("enabled", False))
+        telemetry_otlp_endpoint = str(telemetry.get("otlp_endpoint", telemetry_otlp_endpoint))
+        svc = telemetry.get("service_name")
+        if svc is not None:
+            if not isinstance(svc, str) or not svc:
+                raise ValueError("app.yaml: `telemetry.service_name` must be a non-empty string")
+            telemetry_service_name = svc
+        raw_patterns = telemetry.get("patterns") or []
+        if not isinstance(raw_patterns, list) or not all(isinstance(p, str) for p in raw_patterns):
+            raise ValueError("app.yaml: `telemetry.patterns` must be a list of strings")
+        bad = [p for p in raw_patterns if p not in _VALID_TELEMETRY_PATTERNS]
+        if bad:
+            raise ValueError(
+                f"app.yaml: `telemetry.patterns` invalid {bad}; "
+                f"allowed: {sorted(_VALID_TELEMETRY_PATTERNS)}"
+            )
+        telemetry_patterns = tuple(dict.fromkeys(raw_patterns))
+
     return AppManifest(
         name=str(app.get("name", "app")),
         package=str(app.get("package", "app")),
@@ -129,4 +163,8 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         deployment_mode=deployment_mode,
         tenant_model=tenant_model,
         tenant_owner_field=tenant_owner_field,
+        telemetry_enabled=telemetry_enabled,
+        telemetry_otlp_endpoint=telemetry_otlp_endpoint,
+        telemetry_service_name=telemetry_service_name,
+        telemetry_patterns=telemetry_patterns,
     )

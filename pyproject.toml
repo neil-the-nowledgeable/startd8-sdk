@@ -181,6 +181,7 @@ pydantic-sqlmodel = "startd8.backend_codegen.provider:PydanticSQLModelProvider"
 scaffold = "startd8.scaffold_codegen.provider:ScaffoldFileProvider"
 composite-view = "startd8.view_codegen.provider:CompositeViewProvider"
 presentation-polish = "startd8.presentation_polish.provider:PresentationPolishFileProvider"
+migration = "startd8.migration_codegen.provider:MigrationFileProvider"
 
 [project.urls]
 Homepage = "https://github.com/neil-the-nowledgeable/startd8-sdk"

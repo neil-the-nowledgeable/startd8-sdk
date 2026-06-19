@@ -106,6 +106,36 @@ def frontend(
             console.print(f"  [dim]note:[/dim] {note}")
 
 
+def _migration_pending_hint(
+    project_root: Path,
+    contract_path: Path,
+    app_manifest: Optional[Path],
+) -> Optional[str]:
+    """Surface a pending Alembic revision during ``generate backend --check`` (Tier-1 FR-C3)."""
+    migrations_on = True
+    if app_manifest is not None:
+        try:
+            from .scaffold_codegen import parse_app_manifest
+
+            migrations_on = parse_app_manifest(
+                app_manifest.read_text(encoding="utf-8")
+            ).migrations
+        except (OSError, ValueError):
+            return None
+    if not migrations_on:
+        return None
+    versions = project_root / "alembic" / "versions"
+    if not (project_root / "alembic").is_dir() and not versions.is_dir():
+        return None
+    try:
+        schema_text = contract_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    from .migration_codegen import pending_migration_message
+
+    return pending_migration_message(versions, schema_text)
+
+
 @generate_app.command("backend")
 def backend(
     schema: Path = typer.Option(..., "--schema", help="Path to prisma/schema.prisma."),
@@ -392,6 +422,9 @@ def backend(
         if drifted:
             console.print(f"[yellow]{drifted} artifact(s) drifted[/yellow]")
             raise typer.Exit(1)
+        pending = _migration_pending_hint(out, contract_path, app_manifest)
+        if pending:
+            console.print(f"[yellow]{pending}[/yellow]")
         console.print(
             f"[green]in_sync[/green]: all {len(artifacts)} artifact(s) match the schema"
         )
