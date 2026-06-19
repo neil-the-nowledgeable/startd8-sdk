@@ -22,6 +22,7 @@ from .ad_suite import run_ad_suite
 from .charge_suite import run_charge_suite
 from .currency_suite import run_currency_suite
 from .contract import StartupContract, resolve_serve_command
+from .graphql_pricing_suite import run_graphql_pricing_suite
 from .pricing_suite import run_pricing_suite
 from .rest_pricing_suite import run_rest_pricing_suite
 from .shipping_suite import run_shipping_suite
@@ -35,6 +36,7 @@ _SUITES: Dict[str, Callable[[int], object]] = {
     "adservice": run_ad_suite,
     "pricingservice": run_pricing_suite,
     "rest-pricingservice": run_rest_pricing_suite,
+    "graphql-pricingservice": run_graphql_pricing_suite,
 }
 
 _NODE_RUNTIME = Path(__file__).parent / "node_runtime"
