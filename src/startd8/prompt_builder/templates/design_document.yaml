@@ -154,3 +154,4 @@ content: |
   - Include agent/model name in header
   - Target length: 300-500 lines per feature
 
+  {{POLICY_CONSTRAINTS|default=""}}

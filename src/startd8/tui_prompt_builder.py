@@ -62,7 +62,8 @@ class PromptBuilderWizard:
         self,
         template: PromptTemplate,
         project_path: Optional[Path] = None,
-        tui_dir: Optional[Path] = None
+        tui_dir: Optional[Path] = None,
+        policy_override: Optional[str] = None
     ):
         """
         Initialize the wizard.
@@ -71,6 +72,7 @@ class PromptBuilderWizard:
             template: The template to fill
             project_path: Path to project for context detection
             tui_dir: The startd8 data directory (for project templates)
+            policy_override: CLI-provided policy string to override global defaults
         """
         self.template = template
         self.project_path = project_path or Path.cwd()
@@ -82,6 +84,11 @@ class PromptBuilderWizard:
         # Get auto-fill suggestions
         self.project_context = ProjectContext(self.project_path)
         self.suggestions = self.project_context.suggest_values()
+        
+        # Override with explicit CLI policy if provided (Concern 2)
+        if policy_override is not None:
+            self.suggestions["POLICY_CONSTRAINTS"] = policy_override
+
         self.context.auto_filled = self.suggestions.copy()
         
         # Get ordered variables
@@ -523,7 +530,8 @@ class PromptBuilderWizard:
 def run_prompt_builder_wizard(
     template: PromptTemplate,
     project_path: Optional[Path] = None,
-    tui_dir: Optional[Path] = None
+    tui_dir: Optional[Path] = None,
+    policy_override: Optional[str] = None
 ) -> Optional[GeneratedPrompt]:
     """
     Run the prompt builder wizard.
@@ -532,11 +540,12 @@ def run_prompt_builder_wizard(
         template: The template to fill
         project_path: Path to project for context detection
         tui_dir: The startd8 data directory
+        policy_override: Optional policy string override
     
     Returns:
         GeneratedPrompt if successful, None if cancelled
     """
-    wizard = PromptBuilderWizard(template, project_path, tui_dir)
+    wizard = PromptBuilderWizard(template, project_path, tui_dir, policy_override=policy_override)
     return wizard.run()
 
 

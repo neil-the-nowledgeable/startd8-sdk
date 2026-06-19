@@ -49,7 +49,6 @@ class PromptTemplate(BaseModel):
 class TemplateContext(BaseModel):
     """Context for filling a template"""
     project_path: Optional[Path] = Field(default=None)
-    project_structure: Dict[str, Any] = Field(default_factory=dict)
     variable_values: Dict[str, str] = Field(default_factory=dict)
     auto_filled: Dict[str, str] = Field(default_factory=dict, description="Variables auto-filled from context")
     

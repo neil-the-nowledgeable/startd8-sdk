@@ -2,11 +2,14 @@
 Project Context - Detect project structure and suggest variable values
 """
 
+import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import os
 
 from .config import PROMPT_BUILDER_CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectContext:
@@ -157,6 +160,32 @@ class ProjectContext:
         
         # Try to get package/project name from config files
         self._extract_name_from_config(suggestions)
+        
+        # Load global policy if exists (Concern 1 & 3 & 4)
+        policy_path = Path.home() / ".startd8" / "policy.json"
+        policy_str = ""
+        if policy_path.exists():
+            try:
+                content = policy_path.read_text(encoding="utf-8")
+                # Truncate and warn (Concern 3)
+                if len(content) > 1000:
+                    logger.warning(f"Global policy file {policy_path} exceeds 1,000 characters. Truncating.")
+                    content = content[:1000]
+                
+                # Parse format
+                try:
+                    import json
+                    policy_data = json.loads(content)
+                    if isinstance(policy_data, list):
+                        policy_str = "\n".join(f"- {rule}" for rule in policy_data)
+                    else:
+                        policy_str = str(policy_data)
+                except json.JSONDecodeError:
+                    policy_str = content
+            except Exception as e:
+                logger.warning(f"Failed to load global policy: {e}")
+        
+        suggestions["POLICY_CONSTRAINTS"] = policy_str
         
         return suggestions
     

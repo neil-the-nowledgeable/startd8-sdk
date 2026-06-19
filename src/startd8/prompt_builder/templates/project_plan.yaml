@@ -98,3 +98,4 @@ content: |
   - Use tables for timeline visualization
   - Include Mermaid diagrams for dependencies if appropriate
 
+  {{POLICY_CONSTRAINTS|default=""}}

@@ -750,6 +750,9 @@ def build_prompt(
     storage_dir: Optional[Path] = typer.Option(
         None, "--dir", "-d", help="Storage directory"
     ),
+    policy: Optional[Path] = typer.Option(
+        None, "--policy", "-l", help="JSON or text file containing policy constraints"
+    ),
 ):
     """Build a prompt from a template"""
     try:
@@ -780,6 +783,47 @@ def build_prompt(
     project_context = ProjectContext(context_path)
     suggestions = project_context.suggest_values()
 
+    # Load and process explicit CLI policy (Concern 2 & 3 & 4)
+    policy_str = None
+    if policy:
+        if not policy.exists():
+            console.print(f"[red]❌ Policy file '{policy}' not found[/red]")
+            raise typer.Exit(1)
+        try:
+            content = policy.read_text(encoding="utf-8")
+            # Hard budget cap validation (Concern 3)
+            if len(content) > 1000:
+                console.print(f"[red]❌ Policy file '{policy}' exceeds hard budget cap of 1,000 characters (got {len(content)}).[/red]")
+                raise typer.Exit(1)
+            
+            # Parse list format or treat as raw
+            try:
+                import json
+                policy_data = json.loads(content)
+                if isinstance(policy_data, list):
+                    policy_str = "\n".join(f"- {rule}" for rule in policy_data)
+                else:
+                    policy_str = str(policy_data)
+            except json.JSONDecodeError:
+                policy_str = content
+        except Exception as e:
+            console.print(f"[red]❌ Failed to read policy file: {e}[/red]")
+            raise typer.Exit(1)
+
+        # CLI policy overrides any global suggestions (Concern 2)
+        suggestions["POLICY_CONSTRAINTS"] = policy_str
+
+    # Print notice when global policy is applied (Concern 4)
+    elif suggestions.get("POLICY_CONSTRAINTS"):
+        console.print("[dim]Loaded global policy from ~/.startd8/policy.json[/dim]")
+
+    # Check for placeholder mismatches (Concern 5 / Data Injection != Prompt Consumption)
+    if suggestions.get("POLICY_CONSTRAINTS") and "POLICY_CONSTRAINTS" not in template.content:
+        console.print(
+            "[yellow]Warning: Template does not contain {{POLICY_CONSTRAINTS}} placeholder. "
+            "The active policy will not be rendered.[/yellow]"
+        )
+
     if interactive:
         # Launch interactive wizard
         import sys
@@ -790,7 +834,11 @@ def build_prompt(
             )
             interactive = False
         else:
-            result = run_prompt_builder_wizard(template, context_path, storage_dir)
+            # Pass policy override to wizard (Concern 1)
+            result = run_prompt_builder_wizard(
+                template, context_path, storage_dir, 
+                policy_override=policy_str if policy else None
+            )
 
     if not interactive:
         # Use suggestions and defaults non-interactively
