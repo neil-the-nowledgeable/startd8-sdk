@@ -132,4 +132,4 @@ Primary clone options:
 | 2 | done | `email-py`: `generate backend --check --gate` passes (26 artifacts) |
 | 3 | done | Merged coverage **70.6%** (`otel-demo-python+fixtures`) |
 | 4 | done | Dry-run: `payment-py` × 3 models, ~$0.31 est.; added `--seeds-dir` |
-| 5 | pending | Push + PR |
+| 5 | done | PR [#32](https://github.com/neil-the-nowledgeable/startd8-sdk/pull/32); primary clone stays on `feat/otel-python-rebuild-openapi` until worktree removed |
