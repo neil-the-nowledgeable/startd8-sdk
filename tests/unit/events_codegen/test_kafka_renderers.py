@@ -67,7 +67,23 @@ def test_render_producer_and_consumer(artifacts: dict[str, str]):
     assert is_owned_events_file(consumer)
 
 
-def test_kafka_python_backend():
+def test_aiokafka_emits_manual_spans_and_tracecontext(artifacts: dict[str, str]):
+    """aiokafka has no auto-instrumentor → producer/consumer create spans + propagate context."""
+    producer = artifacts["app/events/order_paid_producer.py"]
+    consumer = artifacts["app/events/order_notify_consumer.py"]
+    # Producer: PRODUCER span + tracecontext injected into the CloudEvents envelope.
+    assert "start_as_current_span" in producer
+    assert "SpanKind.PRODUCER" in producer
+    assert "_inject_trace_context" in producer
+    assert "traceparent" in producer
+    # Consumer: CONSUMER span parented on the extracted envelope context.
+    assert "SpanKind.CONSUMER" in consumer
+    assert "_extract_context" in consumer
+    # Import-guarded so a no-OTel app still runs.
+    assert "except ImportError" in producer
+
+
+def test_kafka_python_backend_relies_on_auto_instrumentation():
     artifacts = dict(
         render_events_artifacts(
             EVENTS_MANIFEST,
@@ -76,8 +92,14 @@ def test_kafka_python_backend():
             package="shop",
         )
     )
-    assert "KafkaProducer" in artifacts["shop/events/order_paid_producer.py"]
-    assert "KafkaConsumer" in artifacts["shop/events/order_notify_consumer.py"]
+    producer = artifacts["shop/events/order_paid_producer.py"]
+    consumer = artifacts["shop/events/order_notify_consumer.py"]
+    assert "KafkaProducer" in producer
+    assert "KafkaConsumer" in consumer
+    # kafka-python is auto-instrumented by KafkaInstrumentor: no manual spans in the generated code.
+    assert "start_as_current_span" not in producer
+    assert "_inject_trace_context" not in producer
+    assert "_extract_context" not in consumer
 
 
 def test_producer_compiles(artifacts: dict[str, str]):

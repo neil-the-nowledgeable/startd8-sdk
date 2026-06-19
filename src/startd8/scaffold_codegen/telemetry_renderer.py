@@ -13,12 +13,27 @@ _OTEL_RUNTIME: tuple[str, ...] = (
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp-proto-http",
 )
+# Non-messaging patterns map 1:1 to an auto-instrumentor dep. `messaging` is special: the dep (and
+# whether auto-instrumentation is even possible) depends on the events backend — see
+# `_messaging_deps`. OpenTelemetry contrib ships an instrumentor for `kafka-python` but NOT for
+# `aiokafka`, so the aiokafka path carries no instrumentor dep and relies on the manual spans the
+# events_codegen producers/consumers emit instead.
 _PATTERN_DEPS: dict[str, tuple[str, ...]] = {
     "http": ("opentelemetry-instrumentation-fastapi",),
     "grpc": ("opentelemetry-instrumentation-grpc",),
     "db": ("opentelemetry-instrumentation-sqlalchemy",),
-    "messaging": ("opentelemetry-instrumentation-kafka-python",),
 }
+
+
+def _messaging_deps(messaging_backend: str) -> tuple[str, ...]:
+    """Instrumentor dep for the messaging pattern, selected by the events backend.
+
+    ``kafka-python`` has an official OTel auto-instrumentor; ``aiokafka`` does not, so it returns
+    no dep (the generated producers/consumers create spans manually).
+    """
+    if messaging_backend == "kafka-python":
+        return ("opentelemetry-instrumentation-kafka-python",)
+    return ()
 
 
 def otel_runtime_dependencies(manifest_text: str) -> tuple[str, ...]:
@@ -28,7 +43,10 @@ def otel_runtime_dependencies(manifest_text: str) -> tuple[str, ...]:
         return ()
     deps: List[str] = list(_OTEL_RUNTIME)
     for pattern in m.telemetry_patterns:
-        deps.extend(_PATTERN_DEPS.get(pattern, ()))
+        if pattern == "messaging":
+            deps.extend(_messaging_deps(m.messaging_backend))
+        else:
+            deps.extend(_PATTERN_DEPS.get(pattern, ()))
     return tuple(dict.fromkeys(deps))
 
 
@@ -105,10 +123,19 @@ def render_telemetry(manifest_text: str) -> str:
         ]
 
     if "messaging" in patterns:
-        lines += [
-            "",
-            "    # Messaging hooks: instrument producers/consumers in app/events/ when present.",
-        ]
+        if m.messaging_backend == "kafka-python":
+            lines += [
+                "",
+                "    from opentelemetry.instrumentation.kafka import KafkaInstrumentor",
+                "    KafkaInstrumentor().instrument()",
+            ]
+        else:
+            lines += [
+                "",
+                "    # aiokafka has no OTel auto-instrumentor: the generated producers/consumers in",
+                "    # app/events/ create spans manually and propagate W3C tracecontext via the",
+                "    # CloudEvents envelope (traceparent/tracestate attributes).",
+            ]
 
     lines += [
         "",

@@ -77,3 +77,44 @@ def test_messaging_backend_parses():
 def test_invalid_messaging_backend_fails():
     with pytest.raises(ValueError, match="messaging.backend"):
         parse_app_manifest("messaging:\n  backend: rabbitmq\n")
+
+
+_MESSAGING_KAFKA_PYTHON = """
+app:
+  name: shop
+telemetry:
+  enabled: true
+  patterns:
+    - messaging
+messaging:
+  backend: kafka-python
+""".strip()
+
+_MESSAGING_AIOKAFKA = """
+app:
+  name: shop
+telemetry:
+  enabled: true
+  patterns:
+    - messaging
+messaging:
+  backend: aiokafka
+""".strip()
+
+
+def test_messaging_dep_is_backend_driven():
+    # kafka-python has an official OTel instrumentor → dep is added.
+    kp_deps = otel_runtime_dependencies(_MESSAGING_KAFKA_PYTHON)
+    assert "opentelemetry-instrumentation-kafka-python" in kp_deps
+    # aiokafka has no auto-instrumentor → no instrumentor dep (manual spans instead).
+    ak_deps = otel_runtime_dependencies(_MESSAGING_AIOKAFKA)
+    assert "opentelemetry-instrumentation-kafka-python" not in ak_deps
+    assert not any("kafka" in d for d in ak_deps)
+
+
+def test_messaging_render_is_backend_driven():
+    kp = render_telemetry(_MESSAGING_KAFKA_PYTHON)
+    assert "KafkaInstrumentor().instrument()" in kp
+    ak = render_telemetry(_MESSAGING_AIOKAFKA)
+    assert "KafkaInstrumentor" not in ak
+    assert "aiokafka has no OTel auto-instrumentor" in ak
