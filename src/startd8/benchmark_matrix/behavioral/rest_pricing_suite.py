@@ -100,6 +100,8 @@ def run_rest_pricing_suite(port: int, *, host: str = "127.0.0.1", connect_timeou
                                            "400 as expected" if good else f"wrong status {r.status_code}"))
         except httpx.HTTPError as e:
             suite.results.append(RpcResult(name, False, f"transport error: {e}"))
+        except Exception as e:  # noqa: BLE001 — a non-HTTP failure must score the cell down, not escape
+            suite.results.append(RpcResult(name, False, f"{type(e).__name__}: {e}"))
 
     def ok200(req):
         r = price(req)

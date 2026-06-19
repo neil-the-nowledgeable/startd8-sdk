@@ -148,6 +148,8 @@ def run_graphql_pricing_suite(port: int, *, host: str = "127.0.0.1", connect_tim
                                            "200 + errors[]" if good else f"status={r.status_code} errors={bool(body.get('errors'))}"))
         except httpx.HTTPError as e:
             suite.results.append(RpcResult(name, False, f"transport error: {e}"))
+        except Exception as e:  # noqa: BLE001 — a non-HTTP failure must score the cell down, not escape
+            suite.results.append(RpcResult(name, False, f"{type(e).__name__}: {e}"))
 
     try:
         # ---- L1: cross-protocol core (G1-G7 + rollup over the full selection) ----

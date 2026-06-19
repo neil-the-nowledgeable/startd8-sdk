@@ -10,6 +10,7 @@ Default-off in the runner — turning it on is the paymentservice pilot (M-T2.4,
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import socket
@@ -79,7 +80,14 @@ def prepare_node_workdir(
     workdir = Path(workdir)
     dst_nm = workdir / "node_modules"
     if not dst_nm.exists():
-        shutil.copytree(src_nm, dst_nm)
+        # Hardlink the read-only vendored closure instead of byte-copying it per cell (H3): grpc-js +
+        # proto-loader is tens of MB / thousands of files, copied into every nodejs cell. Hardlinks are
+        # instant and safe (the cell never writes node_modules). Fall back to a real copy cross-device.
+        try:
+            shutil.copytree(src_nm, dst_nm, copy_function=os.link)
+        except OSError:
+            shutil.rmtree(dst_nm, ignore_errors=True)
+            shutil.copytree(src_nm, dst_nm)
     if proto_src.exists():
         subdirs = list(_PROTO_DEST_SUBDIRS)
         for tf in target_files or []:           # service-relative: src/<service>/ and src/<service>/proto/
@@ -193,7 +201,7 @@ def run_behavioral_cell(
         mod = re.search(r"Cannot find module '([^']+)'", stderr)
         if mod:
             prov["missing_module"] = mod.group(1)
-        proto = re.search(r"([\w./-]*demo\.proto)", stderr)
+        proto = re.search(r"([\w./-]*\.proto)", stderr)  # any proto (demo.proto, pricing.proto, …)
         if proto:
             prov["attempted_proto_path"] = proto.group(1)
         return BehavioralResult(has_suite=True, degraded=True, provenance=prov)
