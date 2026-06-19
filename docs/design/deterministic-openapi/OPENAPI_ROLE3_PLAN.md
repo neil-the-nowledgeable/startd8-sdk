@@ -76,6 +76,11 @@
 - Deploy harness `context_smoke` ladder stage; env `STARTD8_CONTEXT_<ID>_BASE_URL`
 - Generated remote smoke tests in `test_cross_context_smoke.py`
 
+### M4 — Two-app seam fixture ✅
+- `docs/design/deterministic-openapi/fixtures/two-app-seam/` (producer export + consumer pin)
+- `tests/unit/backend_codegen/test_openapi_role3_m4_fixture.py` (5 tests)
+- `scripts/openapi_role3_m4_smoke.sh` — one-command smoke
+
 ### Deferred → see `OPENAPI_ROLE3_NEXT_STEPS.md`
 
 M4 two-app fixture, M5 cross-repo contract filter, bucket-3 Prime integration wiring.
@@ -115,7 +120,8 @@ M4 two-app fixture, M5 cross-repo contract filter, bucket-3 Prime integration wi
 | M2 (cross-context smoke) | ✅ |
 | M2c (remote producer smoke) | ✅ |
 | M3 (assembly-inputs docs) | ✅ |
+| M4 (two-app fixture) | ✅ |
 
 ---
 
-*Plan v0.2 — M0–M3 + M2b + M2c shipped on `main`. Next: `OPENAPI_ROLE3_NEXT_STEPS.md`.*
+*Plan v0.2 — M0–M4 shipped on `main`. Next: `OPENAPI_ROLE3_NEXT_STEPS.md` (P2 integration, M5).*

@@ -17,13 +17,19 @@
 | M2b | `clients/_context_otel.py` — CLIENT spans on outbound HTTP (OQ-5) |
 | M2c | Deploy harness `context_smoke` stage + `STARTD8_CONTEXT_<ID>_BASE_URL` |
 | M3 | `ASSEMBLY_INPUTS_TEMPLATE.md` v0.2 + wireframe `contexts` catalog key |
+| **M4** | Two-app fixture + pytest + `scripts/openapi_role3_m4_smoke.sh` |
 
-**Start here on `main`:** branch from `origin/main`; do **not** continue on `feat/openapi-role3-context`
-(the worktree at `startd8-openapi-role1` is merged and may be removed).
+**Start here on `main`:** branch from `origin/main` for **P2** (bucket-3 integration) or **M5** (cross-repo contracts).
 
 ---
 
-## Priority 1 — Prove the seam on a real two-app fixture (M4)
+## Priority 1 — Prove the seam on a real two-app fixture (M4) ✅
+
+**Shipped:** `docs/design/deterministic-openapi/fixtures/two-app-seam/` + `tests/unit/backend_codegen/test_openapi_role3_m4_fixture.py` + `scripts/openapi_role3_m4_smoke.sh`
+
+```bash
+./scripts/openapi_role3_m4_smoke.sh
+```
 
 **Goal:** End-to-end producer → export → consumer pin → smoke, outside unit tests.
 
@@ -98,10 +104,8 @@ with mismatched producer/consumer Prisma models.
 ## Suggested branch strategy
 
 ```bash
-git checkout main && git pull origin main
-git checkout -b feat/openapi-role3-m4-fixture   # Priority 1
-# or
-git checkout -b feat/openapi-role3-integration  # Priority 2
+git checkout -b feat/openapi-role3-integration  # Priority 2 (next)
+# M4 fixture: ./scripts/openapi_role3_m4_smoke.sh
 ```
 
 **Unrelated open threads (do not branch from these for Role 3):**
