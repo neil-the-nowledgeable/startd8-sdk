@@ -4,7 +4,7 @@
 **Date:** 2026-06-19
 **Status:** Planned — ready for cap-dev-pipe / CRP
 **Requirements:** [OTEL_PYTHON_REBUILD_OPENAPI_REQUIREMENTS.md](./OTEL_PYTHON_REBUILD_OPENAPI_REQUIREMENTS.md)
-**Implementation branch:** `feat/otel-python-rebuild-openapi`
+**Implementation branch:** `feat/otel-python-rebuild` (worktree: `../startd8-otel-python-rebuild`)
 **Base branch:** `feat/otel-demo-corpus` (includes OpenAPI Role 1+2 merge `6d9814bd`)
 
 ---

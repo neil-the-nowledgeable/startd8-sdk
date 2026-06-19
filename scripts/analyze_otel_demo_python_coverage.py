@@ -25,10 +25,12 @@ if str(REPO) not in sys.path:
 
 from scripts.python_capability_resolver import (  # noqa: E402
     analyze_corpus,
+    merge_corpus_reports,
     report_to_dict,
 )
 
 DEFAULT_WORKDIR = REPO / ".otel-demo"
+DEFAULT_FIXTURE_ROOT = REPO / "fixtures" / "otel-demo"
 OUT_DIR = REPO / "docs" / "design" / "python-capability-index"
 
 
@@ -120,6 +122,17 @@ def _resolve_workdir(explicit: Path | None) -> Path:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--workdir", type=Path, default=None, help="OTel Demo clone root")
+    ap.add_argument(
+        "--fixture-root",
+        type=Path,
+        default=None,
+        help="SDK fixture tree (default: fixtures/otel-demo when --fixtures-only)",
+    )
+    ap.add_argument(
+        "--fixtures-only",
+        action="store_true",
+        help="Analyze only --fixture-root (skip upstream demo clone)",
+    )
     ap.add_argument("--include-generated", action="store_true", help="Include *_pb2*.py files")
     ap.add_argument(
         "--out",
@@ -129,12 +142,37 @@ def main(argv=None) -> int:
     ap.add_argument("--md-out", type=Path, default=OUT_DIR / "otel-demo-python-coverage.md")
     args = ap.parse_args(argv)
 
-    workdir = _resolve_workdir(args.workdir)
-    report = analyze_corpus(
-        workdir,
-        corpus="otel-demo-python",
-        skip_generated=not args.include_generated,
-    )
+    fixture_root = (args.fixture_root or DEFAULT_FIXTURE_ROOT).resolve()
+    skip_demo = args.fixtures_only
+
+    if skip_demo:
+        if not fixture_root.is_dir():
+            raise SystemExit(f"ERROR: fixture root not found: {fixture_root}")
+        report = analyze_corpus(
+            fixture_root,
+            corpus="otel-demo-python-fixtures",
+            skip_generated=not args.include_generated,
+            python_glob="**/*.py",
+        )
+    else:
+        workdir = _resolve_workdir(args.workdir)
+        report = analyze_corpus(
+            workdir,
+            corpus="otel-demo-python",
+            skip_generated=not args.include_generated,
+        )
+        if fixture_root.is_dir():
+            fx = analyze_corpus(
+                fixture_root,
+                corpus="otel-demo-python-fixtures",
+                skip_generated=not args.include_generated,
+                python_glob="**/*.py",
+            )
+            report = merge_corpus_reports(
+                report,
+                fx,
+                corpus="otel-demo-python+fixtures",
+            )
     doc = report_to_dict(report)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -272,6 +272,50 @@ def _serialize(seed: dict) -> str:
     return json.dumps(seed, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+def _services_for_generation(args: argparse.Namespace) -> list[dict]:
+    """Core SERVICES list (--check always uses unmodified SERVICES)."""
+    return SERVICES
+
+
+def _optional_extra_seeds(args: argparse.Namespace) -> list[dict]:
+    extras: list[dict] = []
+    if args.include_genai_rpc and not args.check:
+        extras.append(
+            {
+                "key": "product-reviews-genai",
+                "proto_service": "ProductReviewService",
+                "language": "python",
+                "target_file": "fixtures/otel-demo/product-reviews-py/product_reviews_server.py",
+                "rpcs": [
+                    "GetProductReviews",
+                    "GetAverageProductReviewScore",
+                    "AskProductAIAssistant",
+                ],
+                "deps": ["PostgreSQL (declared; not required at generation)", "OpenAI (optional)"],
+                "estimated_loc": 240,
+                "description": (
+                    "Product reviews with AskProductAIAssistant GenAI RPC (Step 5 merge)."
+                ),
+            }
+        )
+    if args.emit_payment_python and not args.check:
+        extras.append(_payment_python_service())
+    return extras
+
+
+def _payment_python_service() -> dict:
+    return {
+        "key": "payment-py",
+        "proto_service": "PaymentService",
+        "language": "python",
+        "target_file": "fixtures/otel-demo/payment-py/payment_server.py",
+        "rpcs": ["Charge"],
+        "deps": [],
+        "estimated_loc": 120,
+        "description": "Python port of payment service — leaf Charge RPC (behavioral-eligible, Step 6).",
+    }
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument(
@@ -284,6 +328,16 @@ def main(argv=None) -> int:
         type=Path,
         default=None,
         help="Tier-0 startup-capture.json (optional; FR-2). Ignored by --check unless explicitly set.",
+    )
+    ap.add_argument(
+        "--include-genai-rpc",
+        action="store_true",
+        help="Include AskProductAIAssistant on product-reviews seed (default off, FR-5.2).",
+    )
+    ap.add_argument(
+        "--emit-payment-python",
+        action="store_true",
+        help="Also write seed-payment-py.json targeting fixtures/otel-demo/payment-py (Step 6).",
     )
     args = ap.parse_args(argv)
 
@@ -337,7 +391,7 @@ def main(argv=None) -> int:
             out.write_text(text, encoding="utf-8")
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    for svc in SERVICES:
+    for svc in _services_for_generation(args):
         seed = build_seed(svc, proto_text, proto_sha, startup_capture=startup_capture)
         out_name = f"seed-{svc['key']}.json"
         seed_sha = _emit(seed, out_name)
@@ -352,6 +406,12 @@ def main(argv=None) -> int:
             }
         )
 
+    for svc in _optional_extra_seeds(args):
+        seed = build_seed(svc, proto_text, proto_sha, startup_capture=startup_capture)
+        out_name = f"seed-{svc['key']}.json"
+        _emit(seed, out_name)
+        print(f"NOTE: wrote optional {out_name} (not in seeds-index.json)", file=sys.stderr)
+
     index_text = json.dumps(index, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     index_path = SEEDS_DIR / "seeds-index.json"
     if args.check:
@@ -361,11 +421,11 @@ def main(argv=None) -> int:
         if drift:
             print("Seeds are OUT OF SYNC — run gen_otel_benchmark_seeds.py")
             return 1
-        print(f"OK: {len(SERVICES)} OTel seeds in sync")
+        print(f"OK: {len(index['services'])} OTel seeds in sync")
         return 0
 
     index_path.write_text(index_text, encoding="utf-8")
-    print(f"Wrote {len(SERVICES)} seeds + seeds-index.json to {SEEDS_DIR}")
+    print(f"Wrote {len(index['services'])} seeds + seeds-index.json to {SEEDS_DIR}")
     for s in index["services"]:
         beh = "behavioral" if s["behavioral_eligible"] else "structural"
         print(f"  {s['service']:<18} {s['language']:<8} {beh:<11} {s['seed_file']}  sha={s['seed_sha256'][:12]}")

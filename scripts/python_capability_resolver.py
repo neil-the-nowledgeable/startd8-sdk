@@ -242,6 +242,16 @@ def match_patterns(signals: FileSignals, patterns: list[dict[str, Any]]) -> list
         imp_hits = _match_signature(import_pool, pat.get("import_signatures") or [])
         call_hits = _match_signature(call_pool, pat.get("call_signatures") or [])
         dec_hits = _match_signature(decor_pool, pat.get("decorator_signatures") or [])
+        # HTTP: ignore call-only dict.get / env.get false positives (Wave 0.2).
+        if pat.get("id") == "PY-OTEL-5.1-HTTP":
+            generic_get_only = (
+                bool(call_hits)
+                and not imp_hits
+                and not dec_hits
+                and all(h == ".get(" for h in call_hits)
+            )
+            if generic_get_only:
+                continue
         if imp_hits or call_hits or dec_hits:
             via: list[str] = []
             if imp_hits:
@@ -385,6 +395,73 @@ def analyze_corpus(
         files_skipped_generated=len(skipped),
         files_parse_error=len(parse_errors),
         per_file=reports,
+        dimensions=dims,
+        overall_index_percent=overall,
+        pattern_union=sorted(pattern_union),
+        pattern_missing=[p for p in pattern_catalog if p not in pattern_union],
+    )
+
+
+def merge_corpus_reports(
+    primary: CorpusCoverageReport,
+    extra: CorpusCoverageReport,
+    *,
+    corpus: str | None = None,
+) -> CorpusCoverageReport:
+    """Merge two reports (e.g. upstream demo + SDK fixtures) into one coverage view."""
+    index = load_index()
+    pattern_catalog = [p["id"] for p in index["patterns"]]
+    ast_catalog = {n["name"] for n in index["ast_nodes"]}
+    composite_catalog = [c["id"] for c in index["composites"]]
+    kind_to_id = {k["kind"]: k["id"] for k in index["manifest_kinds"]}
+
+    pattern_union: set[str] = set(primary.pattern_union) | set(extra.pattern_union)
+    all_ast: set[str] = set()
+    all_manifest: set[str] = set()
+    all_composites: set[str] = set()
+
+    for r in primary.per_file + extra.per_file:
+        if r.skipped_generated or r.signals.parse_error:
+            continue
+        all_ast |= r.signals.ast_node_types
+        all_manifest |= r.signals.manifest_kinds
+        for comp in index["composites"]:
+            if _composite_detected(comp, r.signals):
+                all_composites.add(comp["id"])
+
+    ast_used = sorted(all_ast & ast_catalog)
+
+    def _dim(name: str, detected_ids: list[str], catalog: list[str]) -> DimensionCoverage:
+        missing = [x for x in catalog if x not in detected_ids]
+        total = len(catalog)
+        pct = (len(detected_ids) / total * 100.0) if total else 0.0
+        return DimensionCoverage(
+            dimension=name,
+            detected=sorted(detected_ids),
+            total=total,
+            percent=round(pct, 1),
+            missing=missing,
+        )
+
+    dims = [
+        _dim("communication_patterns", sorted(pattern_union), pattern_catalog),
+        _dim("ast_nodes", ast_used, sorted(ast_catalog)),
+        _dim("language_composites", sorted(all_composites), composite_catalog),
+        _dim(
+            "manifest_kinds",
+            sorted(kind_to_id[k] for k in all_manifest if k in kind_to_id),
+            [k["id"] for k in index["manifest_kinds"]],
+        ),
+    ]
+    overall = round(sum(d.percent for d in dims) / len(dims), 1) if dims else 0.0
+
+    return CorpusCoverageReport(
+        corpus=corpus or f"{primary.corpus}+{extra.corpus}",
+        workdir=f"{primary.workdir}+{extra.workdir}",
+        files_analyzed=primary.files_analyzed + extra.files_analyzed,
+        files_skipped_generated=primary.files_skipped_generated + extra.files_skipped_generated,
+        files_parse_error=primary.files_parse_error + extra.files_parse_error,
+        per_file=primary.per_file + extra.per_file,
         dimensions=dims,
         overall_index_percent=overall,
         pattern_union=sorted(pattern_union),
