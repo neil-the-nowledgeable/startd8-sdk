@@ -238,3 +238,72 @@ def test_reclassify_infra_failures_upgrades_failed_cells():
     assert n == 1
     assert cells[0].status == STATUS_INFRA_FAIL
     assert cells[1].status == STATUS_FAILED  # genuine model failure stays
+
+
+# --- R2-S1: functional coverage aggregation + leaderboard column -------------
+
+def test_functional_aggregation_in_summary_and_column():
+    # R2-S1: behavioral coverage rolls up to functional_median/iqr per model, and the leaderboard
+    # gains a functional column when behavioral ran.
+    cells = [
+        CellResult("a", "paymentservice", "m1", "nodejs", 0, STATUS_OK,
+                   quality=1.0, cost_usd=0.1, functional_coverage=1.0),
+        CellResult("b", "paymentservice", "m1", "nodejs", 1, STATUS_OK,
+                   quality=0.5, cost_usd=0.1, functional_coverage=0.0),
+    ]
+    agg = aggregate_cells(cells)
+    s = agg["by_model"]["m1"]
+    assert s["functional_median"] == pytest.approx(0.5)   # median of {1.0, 0.0}
+    assert s["functional_iqr"] == pytest.approx(0.5)       # inclusive quantiles on 2 pts → Q3-Q1=0.5
+    assert s["n_functional"] == 2
+    md = build_matrix_markdown("t", "h" * 12, agg)
+    assert "functional (med)" in md
+
+
+def test_functional_column_absent_without_behavioral():
+    # Non-behavioral runs stay byte-identical: no functional rollup value, no leaderboard column.
+    cells = [CellResult("a", "s", "m1", "go", 0, STATUS_OK, quality=0.8, cost_usd=0.1)]
+    agg = aggregate_cells(cells)
+    assert agg["by_model"]["m1"]["functional_median"] is None
+    assert agg["by_model"]["m1"]["n_functional"] == 0
+    assert "functional (med)" not in build_matrix_markdown("t", "h" * 12, agg)
+
+
+# --- R3-S1 / R1-F2: incremental, atomic, crash-durable per-cell persistence ---
+
+def test_persist_cell_atomic_writes_safe_filename(tmp_path):
+    from startd8.benchmark_matrix.runner import persist_cell_atomic
+    import json
+    cr = CellResult("abc123:paymentservice:anthropic:claude-opus-4-8:r0",
+                    "paymentservice", "anthropic:claude-opus-4-8", "nodejs", 0,
+                    STATUS_OK, quality=1.0, functional_coverage=1.0)
+    cells_dir = tmp_path / "cells"
+    path = persist_cell_atomic(cells_dir, cr)
+    assert path.exists()
+    assert ":" not in path.name           # model/service colons sanitized for the filesystem
+    assert not list(cells_dir.glob("*.tmp"))  # atomic rename leaves no temp turd
+    data = json.loads(path.read_text())
+    assert data["cell_id"] == cr.cell_id and data["functional_coverage"] == 1.0
+
+
+def test_incremental_persist_survives_midrun_crash(tmp_path):
+    # The v0.2 single end-of-run write lost everything on any interruption. With per-cell flushing,
+    # an executor that dies on a later cell still leaves the already-completed cells durably on disk.
+    from startd8.benchmark_matrix.runner import persist_cell_atomic
+    cells_dir = tmp_path / "cells"
+    spec = _spec(services=("cartservice",),
+                 models=("anthropic:claude-opus-4-8", "openai:gpt-5.5"), repetitions=2)  # 4 cells
+    calls = {"n": 0}
+
+    def crashing_ex(cell, spec, language):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("simulated OOM on the 3rd cell")
+        return CellResult(cell_id=cell_id(spec.spec_hash(), cell), service=cell.service,
+                          model=cell.model, language=language, repetition=cell.repetition,
+                          status=STATUS_OK, quality=0.8, cost_usd=0.1)
+
+    with pytest.raises(RuntimeError):
+        run_matrix(spec, crashing_ex, languages=LANGS,
+                   on_cell=lambda cr: persist_cell_atomic(cells_dir, cr))
+    assert len(list(cells_dir.glob("*.json"))) == 2   # the 2 cells finished before the crash survive

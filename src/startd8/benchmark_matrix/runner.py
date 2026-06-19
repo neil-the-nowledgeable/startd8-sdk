@@ -10,6 +10,8 @@ deterministic shortcut cascade OFF, so the LLM does maximal work.
 """
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dataclass_fields
@@ -75,6 +77,27 @@ def cell_id(spec_hash: str, cell: MatrixCell) -> str:
         base = f"{base}:lev-{leverage}"
     tier = getattr(cell, "tier", "baseline")  # difficulty-tier segment (hardened only), AFTER leverage
     return base if tier == "baseline" else f"{base}:tier-{tier}"
+
+
+def _cell_filename(cell_id: str) -> str:
+    """Filesystem-safe filename for a cell id (model/service ids carry ``:`` and ``/``)."""
+    return cell_id.replace(":", "_").replace("/", "_") + ".json"
+
+
+def persist_cell_atomic(cells_dir: Path, cell: "CellResult") -> Path:
+    """Durably flush one finished cell to ``cells_dir/<id>.json`` (R3-S1 / R1-F2 / FR-T2-PERSIST).
+
+    Writes to a sibling ``.tmp`` then ``os.replace`` (atomic rename within the dir), so a reader — or
+    a re-score after a crash — never sees a half-written cell, and an interruption on a *later* cell
+    can't lose cells already written. One file per cell ⇒ no shared-file write race under concurrency.
+    Returns the path written. Used as the ``run_matrix(on_cell=...)`` hook by the behavioral pilot."""
+    cells_dir = Path(cells_dir)
+    cells_dir.mkdir(parents=True, exist_ok=True)
+    path = cells_dir / _cell_filename(cell.cell_id)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(cell.to_dict(), indent=2, default=str), encoding="utf-8")
+    os.replace(tmp, path)
+    return path
 
 
 @dataclass
@@ -347,6 +370,7 @@ class SubprocessCellExecutor:
         defects_by_category = None
         functional_coverage = None
         functional_degraded = False
+        functional_model_fault = False
         behavioral_prov = None
 
         # M4 compile gate (FR-11/FR-29/FR-44): only for cells that actually generated.
@@ -374,10 +398,12 @@ class SubprocessCellExecutor:
                         if bres.has_suite:
                             functional_coverage = bres.functional
                             functional_degraded = bres.degraded
+                            functional_model_fault = getattr(bres, "model_fault", False)
                             behavioral_prov = bres.provenance
                     composite = score_file(gen_file, profile, structural=structural,
                                            functional=functional_coverage,
-                                           functional_degraded=functional_degraded)
+                                           functional_degraded=functional_degraded,
+                                           functional_model_fault=functional_model_fault)
                     # FR-B3: in expose mode, fold the defect ledger into the score so a
                     # parses-but-defective file is pulled off the compile-gate ceiling.
                     if self.expose_defects:
