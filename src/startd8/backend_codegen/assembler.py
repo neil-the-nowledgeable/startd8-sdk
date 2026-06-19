@@ -19,6 +19,7 @@ from .crud_generator import (
 )
 from .derived import _load_completeness_manifest, render_derived, render_requirements
 from .health_renderer import render_health
+from .openapi_contract_renderer import render_openapi_contract
 from .editor_generator import render_editors
 from .flow_generator import render_flows
 from .htmx_generator import render_ui
@@ -28,10 +29,12 @@ from .test_emitter import (
     COMPLETENESS_TESTS_PATH,
     CONTRACT_TESTS_PATH,
     HEALTH_TESTS_PATH,
+    OPENAPI_CONTRACT_TESTS_PATH,
     ROUTE_SMOKE_TESTS_PATH,
     render_completeness_tests,
     render_contract_tests,
     render_health_tests,
+    render_openapi_contract_tests,
     render_route_smoke_tests,
 )
 
@@ -83,6 +86,10 @@ def render_backend(
         (CANONICAL_LAYOUT["fastapi-db"], render_db(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-main"], render_main(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-health"], render_health(schema_text, source_file)),
+        (
+            CANONICAL_LAYOUT["python-openapi-contract"],
+            render_openapi_contract(schema_text, source_file),
+        ),
     ]
     # app/web.py + templates (+ nav, + per-entity post-create behavior from views.yaml `forms:`)
     out.extend(render_ui(
@@ -120,6 +127,10 @@ def render_backend(
     # $0, drift-checked; they ARE the gate the Python build runs (pytest).
     out.append((CONTRACT_TESTS_PATH, render_contract_tests(schema_text, source_file)))
     out.append((HEALTH_TESTS_PATH, render_health_tests(schema_text, source_file)))
+    out.append((
+        OPENAPI_CONTRACT_TESTS_PATH,
+        render_openapi_contract_tests(schema_text, source_file),
+    ))
     out.append((
         COMPLETENESS_TESTS_PATH,
         render_completeness_tests(

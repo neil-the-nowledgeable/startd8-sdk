@@ -31,10 +31,12 @@ CONTRACT_TESTS_PATH = "tests/test_contract.py"
 COMPLETENESS_TESTS_PATH = "tests/test_completeness.py"
 ROUTE_SMOKE_TESTS_PATH = "tests/test_route_smoke.py"
 HEALTH_TESTS_PATH = "tests/test_health.py"
+OPENAPI_CONTRACT_TESTS_PATH = "tests/test_openapi_contract.py"
 _KIND = "python-tests-contract"
 _COMPLETENESS_KIND = "python-tests-completeness"
 _ROUTE_SMOKE_KIND = "python-tests-routes"
 _HEALTH_KIND = "python-tests-health"
+_OPENAPI_CONTRACT_KIND = "python-tests-openapi-contract"
 
 _SHIM = (
     "import sys\n"
@@ -199,6 +201,74 @@ def render_health_tests(
     sha = schema_sha256(schema_text)
     header = _header(source_file, sha, _HEALTH_KIND)
     return header + "\n\n" + _HEALTH_TESTS_BODY
+
+
+def _expected_crud_manifest_entries(schema: PrismaSchema, schema_text: str) -> List[str]:
+    """Python-literal lines for the baked ``_SCHEMA_CRUD`` manifest subset."""
+    from .openapi_contract_renderer import _crud_routes
+
+    return [
+        f'    ("{method}", "{path}"),'
+        for method, path in sorted(_crud_routes(schema, schema_text))
+    ]
+
+
+def render_openapi_contract_tests(
+    schema_text: str, source_file: str = "prisma/schema.prisma"
+) -> str:
+    """Render ``tests/test_openapi_contract.py`` — manifest ↔ app routes + spec paths."""
+    schema = parse_prisma_schema(schema_text)
+    sha = schema_sha256(schema_text)
+    header = _header(source_file, sha, _OPENAPI_CONTRACT_KIND)
+    crud_lines = _expected_crud_manifest_entries(schema, schema_text)
+    crud_block = "\n".join(crud_lines) if crud_lines else ""
+    body = f'''{_SHIM}
+import pytest
+
+_testclient = pytest.importorskip("fastapi.testclient")
+pytest.importorskip("sqlmodel")
+pytest.importorskip("httpx")
+
+from app.main import app  # noqa: E402
+from app.openapi_contract import OPENAPI_SPEC, ROUTE_MANIFEST  # noqa: E402
+from fastapi.routing import APIRoute  # noqa: E402
+
+# Baked schema-derived CRUD subset (health is checked separately below).
+_SCHEMA_CRUD: tuple[tuple[str, str], ...] = (
+{crud_block}
+)
+
+
+def _mounted() -> set[tuple[str, str]]:
+    out: set[tuple[str, str]] = set()
+    for r in app.routes:
+        if isinstance(r, APIRoute):
+            for m in r.methods or ():
+                if m in {{"GET", "POST", "PATCH", "DELETE", "PUT"}}:
+                    out.add((m, r.path))
+    return out
+
+
+def test_openapi_spec_paths_match_manifest():
+    assert set(OPENAPI_SPEC.get("paths", {{}}).keys()) == {{p for _, p in ROUTE_MANIFEST}}
+
+
+def test_schema_crud_routes_in_manifest():
+    missing = [pair for pair in _SCHEMA_CRUD if pair not in ROUTE_MANIFEST]
+    assert not missing, "manifest missing schema-derived CRUD routes: " + repr(missing)
+
+
+def test_manifest_routes_are_mounted():
+    mounted = _mounted()
+    missing = [pair for pair in ROUTE_MANIFEST if pair not in mounted]
+    assert not missing, "mounted app missing manifest routes: " + repr(missing)
+
+
+def test_health_routes_in_manifest():
+    for pair in (("GET", "/health"), ("GET", "/health/live")):
+        assert pair in ROUTE_MANIFEST
+'''
+    return header + "\n\n" + body
 
 
 def render_completeness_tests(

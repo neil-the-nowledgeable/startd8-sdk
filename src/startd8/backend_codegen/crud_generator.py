@@ -36,6 +36,7 @@ CANONICAL_LAYOUT: Dict[str, str] = {
     "fastapi-db": "app/db.py",
     "fastapi-main": "app/main.py",
     "fastapi-health": "app/health.py",
+    "python-openapi-contract": "app/openapi_contract.py",
     "fastapi-web": "app/web.py",
     "python-export": "app/export.py",
     "python-import": "app/importer.py",  # FR-IMP-1: from_json upsert importer (opt-in via imports.yaml)

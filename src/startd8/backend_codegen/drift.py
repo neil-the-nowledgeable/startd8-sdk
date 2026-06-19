@@ -109,6 +109,7 @@ def _renderers(
     from .auth_renderer import render_auth_seam as _render_auth_seam
     from .crud_generator import render_db, render_main, render_routers
     from .health_renderer import render_health
+    from .openapi_contract_renderer import render_openapi_contract
     from .derived import (
         render_ai_schemas,
         _load_completeness_manifest,
@@ -138,6 +139,7 @@ def _renderers(
         render_completeness_tests,
         render_contract_tests,
         render_health_tests,
+        render_openapi_contract_tests,
         render_route_smoke_tests,
     )
     # P0-2/FR-DM: list/row/detail re-render must use the SAME filter (views.yaml) + display
@@ -166,6 +168,7 @@ def _renderers(
         "fastapi-db": lambda s, sf, e: render_db(s, sf),
         "fastapi-main": lambda s, sf, e: render_main(s, sf),
         "fastapi-health": lambda s, sf, e: render_health(s, sf),
+        "python-openapi-contract": lambda s, sf, e: render_openapi_contract(s, sf),
         "fastapi-web": lambda s, sf, e: render_web(s, sf),
         "htmx-base": lambda s, sf, e: render_base_template(s, sf),
         "htmx-field-error": lambda s, sf, e: render_field_error_template(s, sf),
@@ -189,6 +192,7 @@ def _renderers(
         "pages-admin-tmpl": lambda s, sf, e: render_pages_admin_template(s, sf),
         "python-tests-contract": lambda s, sf, e: render_contract_tests(s, sf),
         "python-tests-health": lambda s, sf, e: render_health_tests(s, sf),
+        "python-tests-openapi-contract": lambda s, sf, e: render_openapi_contract_tests(s, sf),
         "python-tests-completeness": lambda s, sf, e: render_completeness_tests(s, sf, manifest=_cmpl),
         "python-tests-routes": lambda s, sf, e: render_route_smoke_tests(s, sf),
     }
