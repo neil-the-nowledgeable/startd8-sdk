@@ -8,6 +8,20 @@
         "C",
         "E"
       ],
+      "derived_from": "Liferay Commerce headless-commerce pricing (GraphQL) \u2014 docs/design/benchmark-graphql-lane/",
+      "language": "python",
+      "protocol": "graphql",
+      "seed_file": "seed-graphql-pricingservice.json",
+      "seed_sha256": "535c9f3e6c7ae00d36af077201126a8f01c0ca2828b88fda93348939f4e7cbcc",
+      "service": "graphql-pricingservice",
+      "target_file": "src/graphql_pricingservice/server.py"
+    },
+    {
+      "axes": [
+        "B",
+        "C",
+        "E"
+      ],
       "derived_from": "Liferay Commerce (docs/design/liferay-pricing-seed/)",
       "language": "nodejs",
       "proto": "pricing.proto",

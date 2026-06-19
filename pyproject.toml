@@ -104,6 +104,9 @@ dev = [
     # goldens run without a separately-installed `jsonnet` binary. Tests that compile
     # skip-with-reason when the toolchain is absent (see tests/.../test_cosmetic_defaults.py).
     "gojsonnet>=0.20.0",
+    # GraphQL behavioral lane: the reference-oracle test builds a schema with graphql-core
+    # (pure-python). The test gates with importorskip("graphql"), so it skips when absent.
+    "graphql-core>=3.2",
 ]
 
 [project.scripts]
