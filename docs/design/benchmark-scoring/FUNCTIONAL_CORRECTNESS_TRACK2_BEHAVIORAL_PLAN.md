@@ -26,9 +26,13 @@
     (tmp+`os.replace`) via `run_matrix(on_cell=)`; a mid-run crash leaves completed cells on disk.
   - **R3-S3 / R3-F3** — `execute._is_off_contract_dep` classifies a missing module vs the wire
     contract; an off-contract framework is a model fault floored to `COMPILE_FLOOR`, not degraded.
-- **Still open (triaged → accepted, not yet built):**
-  - **R2-S2** (partial) — detect/rewrite a model that hardcodes a port and ignores `$PORT`.
-  - **R2-S3** — make the known-broken-fixture test assert per-RPC failure reasons, not a generic failure.
+- **Shipped after the triage (commit `52695f61`, 2026-06-19 — now in Appendix A):**
+  - **R2-S2** — `execute._detect_effective_port` detects a hardcoded listen port and probes it when
+    the model ignores `$PORT`; env-read keeps the injected port (a well-behaved model is never demoted).
+  - **R2-S3** — a known-broken pricing fixture (ignores the discount cap) makes the suite test assert
+    EXACTLY `g6_cap_70` fails for the right reason, proving per-RPC discrimination (not a generic crash).
+- **Open backlog:** empty — every CRP-logged R1/R2/R3 item is applied. Operational follow-up only:
+  re-render an existing behavioral batch to surface the R2-S1 functional column (needs a persisted batch).
 
 ## Approach
 
@@ -140,20 +144,23 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | R2-S1 | Functional aggregation in `aggregate.py:summarize_group` (functional column) | R2 composer-2.5 | Implemented (commit `46134128`): adds `functional_median`/`functional_iqr`/`n_functional`; `build_matrix_markdown` gains a conditional `functional (med)` column (absent on non-behavioral runs). Test `test_functional_aggregation_in_summary_and_column`. | 2026-06-19 |
 | R3-S1 | Per-cell atomic writes + crash-durable aggregation in M-T2.4 | R3 claude-3-5-sonnet | Implemented (commit `46134128`): `runner.persist_cell_atomic` (tmp+`os.replace`, one file per cell) via `run_matrix(on_cell=)`; mid-run crash leaves completed cells on disk. Test `test_incremental_persist_survives_midrun_crash`. | 2026-06-19 |
 | R3-S3 | Distinguish model-caused vs infra-caused degrades (floor hallucinated deps) | R3 claude-3-5-sonnet | Implemented (commit `46134128`): `execute._is_off_contract_dep` → `model_fault` → `scoring.functional_model_fault` floors to `COMPILE_FLOOR`. Off-contract `express` on a gRPC service scores 0.15, not a degraded 1.0. Tests in `test_execute_dep_classification.py` + `test_benchmark_functional_composite.py`. | 2026-06-19 |
+| R2-S2 | Handle a model that hardcodes a port instead of reading `$PORT` | R2 composer-2.5 | Implemented (commit `52695f61`): `execute._detect_effective_port` reads the generated source and probes a hardcoded listen port; env-read keeps the injected port (well-behaved models never demoted). Recorded as `provenance["port_source"]`. Test `test_execute_port_detection.py`. | 2026-06-19 |
+| R2-S3 | Known-broken fixture must fail specific RPCs for specific reasons | R2 composer-2.5 | Implemented (commit `52695f61`): `test_suite_fails_exactly_the_capped_discount_check` — a cap-ignoring server fails EXACTLY `g6_cap_70` (net 50.00, not 70.00) while all other checks pass; proves per-RPC discrimination, not a generic crash. | 2026-06-19 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none) | — | — | Nothing rejected outright. Remaining items (partial R2-S2, R2-S3) stay **open** in Appendix C / the v1.1 backlog rather than rejected. | 2026-06-19 |
+| (none) | — | — | Nothing rejected outright — every R1/R2/R3 item was applied. | 2026-06-19 |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
-> **Triage status (v1.1, updated 2026-06-19):** R1/R2/R3 below were triaged; items dispositioned
-> **Applied** are in Appendix A. **R2-S1, R3-S1, and R3-S3 were implemented after the triage (commit
-> `46134128`)** and are now in Appendix A. Still **open:** **R2-S2** ($PORT injected; hardcoded-port
-> detection unbuilt), **R2-S3** (per-RPC known-broken assertion specificity). The original round blocks
-> + R2/R3 coverage matrices are preserved verbatim below.
+> **Triage status (v1.1, updated 2026-06-19):** All R1/R2/R3 items are now dispositioned **Applied**
+> (Appendix A) — none remain open. Post-triage implementation landed in two commits: `46134128`
+> (R2-S1, R3-S1, R3-S3) and `52695f61` (R2-S2 hardcoded-port detection, R2-S3 known-broken fixture).
+> Only an operational follow-up remains (not a spec gap): re-render an existing behavioral batch to
+> surface the R2-S1 functional column (needs a persisted batch). The original round blocks + R2/R3
+> coverage matrices are preserved verbatim below.
 
 #### Review Round R1 — gemini-3.1-pro — 2026-06-15
 
