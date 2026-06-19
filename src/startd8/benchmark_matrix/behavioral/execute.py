@@ -88,6 +88,49 @@ def _is_off_contract_dep(module: str, readiness_mode: str) -> bool:
     return pkg in _HTTP_SERVER_FRAMEWORKS
 
 
+# R2-S2: the harness injects an ephemeral $PORT, but a model may ignore it and hardcode a listen port
+# — then the readiness probe on the injected port fails and the cell FALSE-degrades instead of being
+# behaviorally scored. We detect this from the generated source and probe the hardcoded port instead.
+# Safe by construction: if the source reads the PORT env at all (incl. `process.env.PORT || 8080`),
+# the env match wins and we keep the injected port — so a well-behaved model is never overridden.
+_PORT_ENV_RE = re.compile(
+    r"""(?:process\.env\.PORT\b
+        | process\.env\[\s*['"]PORT['"]
+        | os\.environ(?:\.get)?\(?\s*\[?\s*['"]PORT['"]
+        | os\.getenv\(\s*['"]PORT['"]
+        | getenv\(\s*['"]PORT['"]
+        | System\.getenv\(\s*['"]PORT['"])""",
+    re.IGNORECASE | re.VERBOSE,
+)
+_BIND_PORT_RES = (
+    re.compile(r"""['"`]\s*(?:0\.0\.0\.0|127\.0\.0\.1|localhost|\[?::1?\]?)?\s*:\s*(\d{2,5})\b"""),  # "host:port"
+    re.compile(r"""\.listen\(\s*(\d{2,5})\b"""),                                                     # .listen(8080)
+    re.compile(r"""\b(?:PORT|port)\s*[:=]\s*(\d{2,5})\b"""),                                          # PORT = 8080
+)
+
+
+def _detect_effective_port(workdir: Path, target_files: List[str], injected_port: int):
+    """R2-S2: return ``(port, source)`` for readiness/client. ``source`` is ``"injected"`` (the model
+    reads ``$PORT``, or no confident literal was found) or ``"hardcoded:<n>"``. Conservative: any
+    ambiguity falls back to the injected port (today's behavior), so this can only rescue cells that
+    would otherwise false-degrade — it never demotes a model that honors the injected port."""
+    text = ""
+    for tf in target_files or []:
+        try:
+            text += (Path(workdir) / tf).read_text(encoding="utf-8", errors="ignore") + "\n"
+        except OSError:
+            continue
+    if not text or _PORT_ENV_RE.search(text):
+        return injected_port, "injected"
+    for rx in _BIND_PORT_RES:
+        m = rx.search(text)
+        if m:
+            cand = int(m.group(1))
+            if 1 <= cand <= 65535 and cand != injected_port:
+                return cand, f"hardcoded:{cand}"
+    return injected_port, "injected"
+
+
 def prepare_node_workdir(
     workdir: Path,
     target_files: Optional[List[str]] = None,
@@ -181,6 +224,9 @@ def run_behavioral_cell(
         suite_fn = functools.partial(suite_fn, tier=tier)
 
     port = port or _free_port()
+    # R2-S2: if the generated server ignores the injected $PORT and hardcodes a listen port, probe
+    # that port instead of false-degrading. Detected from source; injected port wins on any ambiguity.
+    port, port_source = _detect_effective_port(Path(workdir), target_files, port)
     serve = resolve_serve_command(seed, target_files, port)
     if serve is None:
         return BehavioralResult(has_suite=True, degraded=True,
@@ -226,6 +272,7 @@ def run_behavioral_cell(
                                readiness_mode=readiness_mode, health_path=health_path)
     prov: Dict = {"ready": sr.ready, "isolation_level": sr.isolation_level,
                   "network_isolated": sr.network_isolated, "violation": sr.violation,
+                  "port_source": port_source,  # R2-S2: "injected" or "hardcoded:<n>"
                   "server_stderr_tail": (sr.server_stderr or "")[-400:]}
     if not sr.ready or sr.violation is not None:
         # FR-T2-DEPS2 / FR-T2-PROV: name WHY it couldn't start so a provisioning gap is diagnosable
