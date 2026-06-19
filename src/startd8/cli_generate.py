@@ -884,3 +884,60 @@ def migrate(
         console.print(f"[yellow]note:[/yellow] {note}")
     console.print("apply with: [cyan]alembic upgrade head[/cyan]")
     raise typer.Exit(0)
+
+
+@generate_app.command("grpc")
+def grpc(
+    manifest: Path = typer.Option(
+        Path("grpc.yaml"), "--manifest", help="Path to grpc.yaml (service declarations)."
+    ),
+    out: Path = typer.Option(
+        Path("."), "--out", help="Project root containing the .proto files and output paths."
+    ),
+    check: bool = typer.Option(
+        False, "--check", help="Drift-check owned skeleton files instead of writing."
+    ),
+):
+    """Deterministically emit gRPC server skeletons (Python/Go) from grpc.yaml + .proto — $0 LLM."""
+    from .proto_codegen import is_owned_proto_skeleton, proto_skeleton_in_sync, render_grpc_skeletons
+
+    try:
+        manifest_text = manifest.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read manifest {manifest}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    try:
+        artifacts = render_grpc_skeletons(manifest_text, out)
+    except ValueError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    if check:
+        drifted = 0
+        for rel, content in artifacts:
+            target = out / rel
+            ondisk = target.read_text(encoding="utf-8") if target.exists() else None
+            if ondisk is None:
+                drifted += 1
+                console.print(f"[yellow]missing[/yellow]: {rel}")
+            elif not proto_skeleton_in_sync(manifest_text, out, rel, ondisk):
+                drifted += 1
+                console.print(f"[yellow]drift[/yellow]: {rel}")
+        if drifted:
+            console.print(f"[yellow]{drifted} gRPC skeleton(s) drifted[/yellow]")
+            raise typer.Exit(1)
+        console.print(f"[green]in_sync[/green]: all {len(artifacts)} gRPC skeleton(s) match grpc.yaml")
+        raise typer.Exit(0)
+
+    written = 0
+    for rel, content in artifacts:
+        target = out / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            written += 1
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write {target}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+    console.print(f"[green]wrote[/green] {written} gRPC skeleton file(s) under {out}")
