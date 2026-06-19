@@ -17,6 +17,8 @@
   "app/templates/profile/form.html": "679a4695840789f7d6393e073f30125914cd68639f946a0afdc7e95df00b877e",
   "app/templates/profile/list.html": "eecde886d40906d01287d66331a82174f7e99c77959c01a59999c742cf352696",
   "app/web.py": "d2028dc334eb688acae23b01c9ab7931a55a1411e047ac8fa01624d8362be7f9",
+  "clients/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "clients/http_client.py": "bb9ba16db130610f558c01fc1387c3fd0791c061e3a8a22dcbc9d58bb4fa9c32",
   "requirements.txt": "034ddfce118cddded1e604d0675d8d86f73da764510379d4f0c0388c61081cde",
   "tests/test_completeness.py": "2fc46002881bcc10f6958fecdf07c67175ad099104aef21837c09d20d4a24f8a",
   "tests/test_contract.py": "65fed3b62c5b72dcbae075447d683fdaf21c28781d69a6451d6349d7a787b138",

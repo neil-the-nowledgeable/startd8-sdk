@@ -110,6 +110,7 @@ def _renderers(
     from .crud_generator import render_db, render_main, render_routers
     from .health_renderer import render_health
     from .openapi_contract_renderer import render_openapi_contract
+    from .openapi_client_renderer import render_http_client
     from .derived import (
         render_ai_schemas,
         _load_completeness_manifest,
@@ -169,6 +170,7 @@ def _renderers(
         "fastapi-main": lambda s, sf, e: render_main(s, sf),
         "fastapi-health": lambda s, sf, e: render_health(s, sf),
         "python-openapi-contract": lambda s, sf, e: render_openapi_contract(s, sf),
+        "python-openapi-client": lambda s, sf, e: render_http_client(s, sf),
         "fastapi-web": lambda s, sf, e: render_web(s, sf),
         "htmx-base": lambda s, sf, e: render_base_template(s, sf),
         "htmx-field-error": lambda s, sf, e: render_field_error_template(s, sf),
