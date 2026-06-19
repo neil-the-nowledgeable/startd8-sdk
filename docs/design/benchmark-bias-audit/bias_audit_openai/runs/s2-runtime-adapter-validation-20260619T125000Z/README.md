@@ -3,7 +3,7 @@
 **Run ID:** `s2-runtime-adapter-validation-20260619T125000Z`  
 **Date:** 2026-06-19  
 **Scope:** benchmark seed-envelope runtime integration  
-**Status:** local adapter validation complete; paid generated-service cell blocked at credential preflight
+**Status:** local adapter validation and one paid generated-service cell complete
 
 ## Completed Validation
 
@@ -21,28 +21,43 @@ The passing tests cover the `resolvedpriceservice` SDK-authored suite, the canon
 adapter, Node workdir provisioning, canonical proto propagation as `pricing.proto`, and the existing
 pricing suite regression coverage.
 
-## Paid Cell Preflight
+## Paid Cell Result
 
-The intended live cell is a one-repetition, LLM-maximized generation from
-`docs/design/model-benchmark/seeds/seed-resolvedpriceservice.json`, executed through
-`scripts/run_flagship_benchmark.py`, which then invokes the Track 2 behavioral runner.
-
-No `OPENAI_API_KEY` was exported in the execution shell. Doppler is installed and the authenticated
-account exposes a `startd8` project, but non-secret configuration lookup did not complete within the
-bounded diagnostic attempts. No model call was made and no model quality result is recorded.
-
-This is an infrastructure preflight block, not a model failure. The evidence must remain excluded from
-any model comparison until a named Doppler configuration or an exported OpenAI credential is available.
-
-## Remaining Execution Command
-
-Once a credentialed environment is available, execute one isolated cell with an explicit cost ceiling:
+One isolated LLM-maximized cell completed through Doppler `startd8/dev`:
 
 ```bash
 doppler run -p startd8 -c dev -- python3 scripts/run_flagship_benchmark.py \
   --run --budget 5 --reps 1 \
   --models openai:gpt-5.5 \
   --services resolvedpriceservice
+```
+
+| Field | Result |
+|---|---|
+| Run spec | `ada9a30a5c58` |
+| Cell | `resolvedpriceservice` × `openai:gpt-5.5` × N=1 |
+| Status | `ok` |
+| Composite quality | `0.90` |
+| Structural quality | `0.80` |
+| Compile gate | passed |
+| Functional coverage | `1.00` (24/24 behavioral assertions) |
+| Actual cost | `$0.4584` of `$5.00` ceiling |
+| Pipeline / model time | `689.2s` / `673.3s` |
+| Isolation | `rlimits+seatbelt-loopback`; network isolated |
+| Integrity | zero deterministic skips; no sandbox violation; no degradation |
+
+The generated service passed all nine valid pricing cases and all fifteen invalid-request cases. Its
+only server output was a non-fatal Node deprecation warning about calling `start()`.
+
+The durable run artifacts are under:
+
+```text
+.startd8/benchmark-runs/ada9a30a5c58/
+  run-spec.json
+  cells.json
+  aggregate.json
+  leaderboard.md
+  sandboxes/resolvedpriceservice-openai_gpt-5.5-r0/
 ```
 
 `run_flagship_benchmark.py` merges `hardened-index.json` and enables the Track 2 suite by default.
