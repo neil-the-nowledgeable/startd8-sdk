@@ -56,6 +56,37 @@ _PROTO_BY_SERVICE: Dict[str, tuple] = {
 # doesn't decide whether the cell runs. (Path-pinning via the startup contract is OQ-T2-6.)
 _PROTO_DEST_SUBDIRS = ("", "protos", "proto", "pb", "lib/proto")
 
+# R3-F3 / FR-T2-DEPS2: a missing dependency is a HARNESS provisioning gap (degrade, FR-32) UNLESS the
+# module the model reached for is off-contract for the service's wire protocol — e.g. a gRPC-contract
+# service that require()s an HTTP/GraphQL server framework. That is a MODEL fault (the model abandoned
+# the contract it was given), so the cell is scored real zero behavioral coverage and floored — never
+# degraded to a free structural 1.0 that would outrank an honest service which merely failed its RPCs.
+# Protocol-appropriate or unknown missing modules (grpc-js / pino / a vendored dep) stay a degrade.
+_HTTP_SERVER_FRAMEWORKS = frozenset({
+    "express", "fastify", "koa", "@koa/router", "hapi", "@hapi/hapi", "connect", "restify",
+    "body-parser", "apollo-server", "@apollo/server", "apollo-server-express", "graphql-yoga",
+    "@nestjs/core", "next",
+})
+_GRPC_PACKAGES = frozenset({"@grpc/grpc-js", "grpc", "@grpc/proto-loader"})
+
+
+def _package_root(module: str) -> str:
+    """Top-level npm package name for a require() specifier (handles ``@scope/name`` and subpaths)."""
+    if module.startswith("@"):
+        return "/".join(module.split("/")[:2])
+    return module.split("/")[0]
+
+
+def _is_off_contract_dep(module: str, readiness_mode: str) -> bool:
+    """True when ``module`` shows the model built the WRONG wire protocol for the startup contract:
+    an HTTP/GraphQL server framework on a gRPC (``"tcp"``) contract, or a gRPC package on an HTTP
+    contract. Such a service can never satisfy its behavioral suite → model fault (R3-F3): floor it,
+    don't degrade. Anything else (a protocol-appropriate or unrecognized dep) stays a harness gap."""
+    pkg = _package_root(module)
+    if readiness_mode == "http":
+        return pkg in _GRPC_PACKAGES
+    return pkg in _HTTP_SERVER_FRAMEWORKS
+
 
 def prepare_node_workdir(
     workdir: Path,
@@ -106,6 +137,8 @@ class BehavioralResult:
     has_suite: bool                       # a behavioral suite exists for this service at all
     functional: Optional[float] = None    # coverage [0,1] when the suite produced a score; else None
     degraded: bool = False                # suite exists but couldn't run (env outcome, FR-32)
+    model_fault: bool = False             # R3-F3: launch failed because the model went off-contract
+                                          # (wrong wire protocol) → floor, NOT degrade (FR-T2-DEPS2)
     provenance: Dict = field(default_factory=dict)  # FR-T2-PROV
 
 
@@ -200,7 +233,16 @@ def run_behavioral_cell(
         stderr = sr.server_stderr or ""
         mod = re.search(r"Cannot find module '([^']+)'", stderr)
         if mod:
-            prov["missing_module"] = mod.group(1)
+            missing = mod.group(1)
+            prov["missing_module"] = missing
+            # R3-F3: an off-contract dep (e.g. `express` on a gRPC service) is a model fault, not a
+            # harness provisioning gap — score it real zero coverage + floor, never a degraded 1.0.
+            if _is_off_contract_dep(missing, readiness_mode):
+                prov["model_fault"] = (
+                    f"off-contract dependency '{missing}' for a {readiness_mode}-contract service "
+                    "(R3-F3): the model abandoned the wire protocol it was given")
+                return BehavioralResult(has_suite=True, functional=0.0, degraded=False,
+                                        model_fault=True, provenance=prov)
         proto = re.search(r"([\w./-]*\.proto)", stderr)  # any proto (demo.proto, pricing.proto, …)
         if proto:
             prov["attempted_proto_path"] = proto.group(1)

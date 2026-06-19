@@ -19,13 +19,14 @@
   (`FUNCTIONAL_WEIGHT=0.5`) + durable `batch_root` persistence. Pilot gate (OQ-T2-2) **passed** — `Charge`
   discriminated; harness expanded to **7 suites across gRPC/GraphQL/REST** and N=2 repeat-vs-flip runs
   (`compare_runs.py`) are done.
-- **Open backlog (triaged → accepted, not yet built):**
-  - **R2-S1** — extend `aggregate.py:summarize_group` with `functional_median`/`functional_iqr` so the
-    leaderboard gets a real functional column (today only the pilot script prints a per-cell line).
-  - **R3-S1 / R1-F2** — incremental/atomic per-cell persistence (`cell_<id>.json` written as each cell
-    finishes, aggregate at the end) so a mid-run crash doesn't lose the batch.
-  - **R3-S3 / R3-F3** — classify behavioral missing-deps in `execute.py`: floor a hallucinated framework
-    (`express`) vs degrade a protocol dep (`@grpc/grpc-js`); today all missing modules degrade.
+- **Shipped after the triage (commit `46134128`, 2026-06-19 — now in Appendix A):**
+  - **R2-S1** — `aggregate.py:summarize_group` now emits `functional_median`/`functional_iqr`/
+    `n_functional`; the leaderboard gains a conditional `functional (med)` column.
+  - **R3-S1 / R1-F2** — `runner.persist_cell_atomic` flushes each cell to `cells/<id>.json`
+    (tmp+`os.replace`) via `run_matrix(on_cell=)`; a mid-run crash leaves completed cells on disk.
+  - **R3-S3 / R3-F3** — `execute._is_off_contract_dep` classifies a missing module vs the wire
+    contract; an off-contract framework is a model fault floored to `COMPILE_FLOOR`, not degraded.
+- **Still open (triaged → accepted, not yet built):**
   - **R2-S2** (partial) — detect/rewrite a model that hardcodes a port and ignores `$PORT`.
   - **R2-S3** — make the known-broken-fixture test assert per-RPC failure reasons, not a generic failure.
 
@@ -136,21 +137,23 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | R1-S3 | Explicit egress-denial test (external IP fails, loopback succeeds) | R1 gemini-3.1-pro | Implemented: `test_benchmark_sandbox_service.py::test_loopback_profile_allows_localhost_denies_egress`. | 2026-06-19 |
 | R1-S4 | Parse missing-module from stderr into provenance | R1 gemini-3.1-pro | Implemented: `execute.py` extracts `Cannot find module '<x>'` → `provenance["missing_module"]`. | 2026-06-19 |
 | R3-S2 | Mandate strict client-side timeouts on every suite RPC | R3 claude-3-5-sonnet | Implemented: every suite enforces `timeout=` per RPC; a hanging server fails the suite and teardown still runs. | 2026-06-19 |
+| R2-S1 | Functional aggregation in `aggregate.py:summarize_group` (functional column) | R2 composer-2.5 | Implemented (commit `46134128`): adds `functional_median`/`functional_iqr`/`n_functional`; `build_matrix_markdown` gains a conditional `functional (med)` column (absent on non-behavioral runs). Test `test_functional_aggregation_in_summary_and_column`. | 2026-06-19 |
+| R3-S1 | Per-cell atomic writes + crash-durable aggregation in M-T2.4 | R3 claude-3-5-sonnet | Implemented (commit `46134128`): `runner.persist_cell_atomic` (tmp+`os.replace`, one file per cell) via `run_matrix(on_cell=)`; mid-run crash leaves completed cells on disk. Test `test_incremental_persist_survives_midrun_crash`. | 2026-06-19 |
+| R3-S3 | Distinguish model-caused vs infra-caused degrades (floor hallucinated deps) | R3 claude-3-5-sonnet | Implemented (commit `46134128`): `execute._is_off_contract_dep` → `model_fault` → `scoring.functional_model_fault` floors to `COMPILE_FLOOR`. Off-contract `express` on a gRPC service scores 0.15, not a degraded 1.0. Tests in `test_execute_dep_classification.py` + `test_benchmark_functional_composite.py`. | 2026-06-19 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none) | — | — | Nothing rejected outright. Accepted-but-unbuilt items (R2-S1, R3-S1, R3-S3, partial R2-S2, R2-S3) remain **open** in Appendix C / the v1.1 backlog rather than rejected. | 2026-06-19 |
+| (none) | — | — | Nothing rejected outright. Remaining items (partial R2-S2, R2-S3) stay **open** in Appendix C / the v1.1 backlog rather than rejected. | 2026-06-19 |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
-> **Triage status (v1.1):** R1/R2/R3 below were triaged 2026-06-19. Items dispositioned **Applied** are
-> in Appendix A. Still **open** (accepted, not yet built — see the v1.1 backlog): **R2-S1** (functional
-> aggregation in `aggregate.py`), **R3-S1** (incremental/atomic per-cell persistence), **R3-S3** (floor
-> hallucinated vs degrade protocol deps in `execute.py`). **Partial:** **R2-S2** ($PORT injected;
-> hardcoded-port detection unbuilt), **R2-S3** (per-RPC known-broken assertion specificity). The original
-> round blocks + R2/R3 coverage matrices are preserved verbatim below.
+> **Triage status (v1.1, updated 2026-06-19):** R1/R2/R3 below were triaged; items dispositioned
+> **Applied** are in Appendix A. **R2-S1, R3-S1, and R3-S3 were implemented after the triage (commit
+> `46134128`)** and are now in Appendix A. Still **open:** **R2-S2** ($PORT injected; hardcoded-port
+> detection unbuilt), **R2-S3** (per-RPC known-broken assertion specificity). The original round blocks
+> + R2/R3 coverage matrices are preserved verbatim below.
 
 #### Review Round R1 — gemini-3.1-pro — 2026-06-15
 
