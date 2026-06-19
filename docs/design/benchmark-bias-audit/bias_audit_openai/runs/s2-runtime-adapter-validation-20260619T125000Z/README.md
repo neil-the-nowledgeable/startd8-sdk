@@ -24,8 +24,8 @@ pricing suite regression coverage.
 ## Paid Cell Preflight
 
 The intended live cell is a one-repetition, LLM-maximized generation from
-`docs/design/model-benchmark/seeds/seed-resolvedpriceservice.json`, followed by
-`run_behavioral_cell(..., service="resolvedpriceservice", tier="hardened")`.
+`docs/design/model-benchmark/seeds/seed-resolvedpriceservice.json`, executed through
+`scripts/run_flagship_benchmark.py`, which then invokes the Track 2 behavioral runner.
 
 No `OPENAI_API_KEY` was exported in the execution shell. Doppler is installed and the authenticated
 account exposes a `startd8` project, but non-secret configuration lookup did not complete within the
@@ -36,6 +36,14 @@ any model comparison until a named Doppler configuration or an exported OpenAI c
 
 ## Remaining Execution Command
 
-Once a credentialed environment is available, execute one isolated cell with an explicit cost ceiling,
-then run the Track 2 suite against the generated workdir. The normal Online Boutique matrix CLI cannot
-select this hardened seed yet because it reads `seeds-index.json`, not `hardened-index.json`.
+Once a credentialed environment is available, execute one isolated cell with an explicit cost ceiling:
+
+```bash
+doppler run -p startd8 -c dev -- python3 scripts/run_flagship_benchmark.py \
+  --run --budget 5 --reps 1 \
+  --models openai:gpt-5.5 \
+  --services resolvedpriceservice
+```
+
+`run_flagship_benchmark.py` merges `hardened-index.json` and enables the Track 2 suite by default.
+The older `run_ob_benchmark.py` path remains baseline-only.
