@@ -1,10 +1,13 @@
 # Track 2 GraphQL Protocol Support — Implementation Plan
 
-**Version:** 1.1 (tracks requirements v0.2)
+**Version:** 1.2 (tracks requirements v0.3 — hybrid)
 **Date:** 2026-06-18
-**Tracks:** `GRAPHQL_LANE_REQUIREMENTS.md` (drove this plan; updated to v0.2 by it). Planning falsified
-FR-2 (protocol-field routing — not load-bearing) and FR-9 (protocol-adapter abstraction — the suite is
-the adapter); both re-scoped.
+**Tracks:** `GRAPHQL_LANE_REQUIREMENTS.md` (drove this plan; updated to v0.2 by it; v0.3 added the hybrid
+schema + memorization-resistance after cross-reference research). Planning falsified FR-2 (protocol-field
+routing — not load-bearing) and FR-9 (protocol-adapter abstraction — the suite is the adapter); both
+re-scoped. The build now implements the **hybrid** (FR-6): a `basket(input)` operation returning a
+computed-field graph, a **two-layer suite** (cross-protocol core + FR-10 hardening probes: selection-driven
++ `tierPercents` derivation + partial-error paths + FR-47 rename), and a **gated `graphql-core` oracle**.
 
 Maps each requirement onto the merged harness (`src/startd8/benchmark_matrix/`, incl. the just-shipped
 REST lane). Headline: GraphQL is **even lighter than REST** — the REST lane already built the HTTP
