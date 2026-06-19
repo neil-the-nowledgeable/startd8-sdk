@@ -1,0 +1,8 @@
+app:
+  name: otel-email-py
+  package: app
+telemetry:
+  enabled: true
+  patterns:
+    - http
+    - messaging

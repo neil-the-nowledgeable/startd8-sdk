@@ -1,0 +1,80 @@
+{
+  "kinds": [
+    {
+      "ast_nodes": [
+        "ClassDef"
+      ],
+      "id": "PY-MAN-001",
+      "kind": "class",
+      "landscape_role": "SERVER/RPC handler container; HTTP route class"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef"
+      ],
+      "id": "PY-MAN-002",
+      "kind": "function",
+      "landscape_role": "Top-level callable; CLI entry (§5.7), FaaS handler (§5.6)"
+    },
+    {
+      "ast_nodes": [
+        "AsyncFunctionDef"
+      ],
+      "id": "PY-MAN-003",
+      "kind": "async_function",
+      "landscape_role": "Async HTTP/RPC/messaging client or server"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef"
+      ],
+      "id": "PY-MAN-004",
+      "kind": "method",
+      "landscape_role": "Service method; gRPC servicer RPC (§5.3)"
+    },
+    {
+      "ast_nodes": [
+        "AsyncFunctionDef"
+      ],
+      "id": "PY-MAN-005",
+      "kind": "async_method",
+      "landscape_role": "Async service method (aiohttp/FastAPI/aiokafka)"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef"
+      ],
+      "id": "PY-MAN-006",
+      "kind": "property",
+      "landscape_role": "Internal; rarely a communication boundary"
+    },
+    {
+      "ast_nodes": [
+        "Assign",
+        "AnnAssign"
+      ],
+      "id": "PY-MAN-007",
+      "kind": "constant",
+      "landscape_role": "Config (URLs, topic names, DSN strings)"
+    },
+    {
+      "ast_nodes": [
+        "Assign",
+        "AnnAssign",
+        "NamedExpr"
+      ],
+      "id": "PY-MAN-008",
+      "kind": "variable",
+      "landscape_role": "Runtime state; indirect communication context"
+    },
+    {
+      "ast_nodes": [
+        "TypeAlias"
+      ],
+      "id": "PY-MAN-009",
+      "kind": "type_alias",
+      "landscape_role": "Typing only; no runtime signal"
+    }
+  ],
+  "schema_version": "1.0"
+}

@@ -1,0 +1,36 @@
+{#
+# GENERATED from prisma/schema.prisma — do not edit by hand; regenerate via `startd8 generate backend`.
+# startd8-artifact: htmx-base
+# Source of truth: the Prisma schema.
+# schema-sha256: 0b898e5f7f7f45151610a0e3830b0b5c32150ec8cc732b449b0d0ea40e8ce102
+#}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}StartDate{% endblock %}</title>
+  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; color: #222; }
+    main { max-width: 60rem; margin: 0 auto; padding: 1rem; }
+    nav { background: #f4f4f4; padding: .5rem 1rem; }
+    nav a { margin-right: .75rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: .75rem; }
+    th, td { border: 1px solid #ddd; padding: .4rem .6rem; text-align: left; }
+    tr.new-row td { background: #eaf7ea; }
+    .flash { background: #eaf7ea; border: 1px solid #b7e0b7; padding: .5rem .75rem; }
+    .field { margin-bottom: .75rem; }
+    .field label { display: block; font-weight: 600; margin-bottom: .2rem; }
+    .field-error { color: #b00020; }
+    button { padding: .3rem .8rem; }
+  </style>
+  <link rel="stylesheet" href="/static/css/app.css">
+  {% include "theme/_head_extra.html" ignore missing %}
+</head>
+<body>
+  {% include "theme/_header.html" ignore missing %}
+  <main id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>
+  {% include "theme/_footer.html" ignore missing %}
+</body>
+</html>

@@ -1,0 +1,104 @@
+{
+  "composites": [
+    {
+      "ast_nodes": [
+        "Import",
+        "ImportFrom"
+      ],
+      "id": "PY-LC-001",
+      "name": "import_binding",
+      "note": "Static import surface for library detection"
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "id": "PY-LC-002",
+      "name": "call_site",
+      "note": "Client/server invocation boundary"
+    },
+    {
+      "ast_nodes": [
+        "AsyncFunctionDef",
+        "Await",
+        "AsyncFor",
+        "AsyncWith"
+      ],
+      "id": "PY-LC-003",
+      "name": "async_await",
+      "note": "Concurrent I/O patterns"
+    },
+    {
+      "ast_nodes": [
+        "With",
+        "AsyncWith"
+      ],
+      "id": "PY-LC-004",
+      "name": "context_manager",
+      "note": "Connection/session scope (DB, HTTP)"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef",
+        "AsyncFunctionDef",
+        "ClassDef"
+      ],
+      "fields": [
+        "decorator_list"
+      ],
+      "id": "PY-LC-005",
+      "name": "decorator",
+      "note": "Framework route/instrumentation hooks"
+    },
+    {
+      "ast_nodes": [
+        "Try",
+        "ExceptHandler",
+        "Raise"
+      ],
+      "id": "PY-LC-006",
+      "name": "exception_boundary",
+      "note": "OTel exception recording (semconv exceptions)"
+    },
+    {
+      "ast_nodes": [
+        "Yield",
+        "YieldFrom"
+      ],
+      "id": "PY-LC-007",
+      "name": "generator",
+      "note": "Streaming/messaging pull patterns"
+    },
+    {
+      "ast_nodes": [
+        "Match",
+        "match_case"
+      ],
+      "id": "PY-LC-008",
+      "name": "pattern_match",
+      "note": "Structural dispatch (3.10+)"
+    },
+    {
+      "ast_nodes": [
+        "AnnAssign",
+        "arg",
+        "TypeAlias"
+      ],
+      "id": "PY-LC-009",
+      "name": "type_annotation",
+      "note": "Static typing; no direct OTel span"
+    },
+    {
+      "ast_nodes": [
+        "ListComp",
+        "DictComp",
+        "SetComp",
+        "GeneratorExp"
+      ],
+      "id": "PY-LC-010",
+      "name": "comprehension",
+      "note": "Data shaping; internal"
+    }
+  ],
+  "schema_version": "1.0"
+}

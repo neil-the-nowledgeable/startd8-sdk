@@ -55,7 +55,20 @@ After a successful Tier 0 attestation, copy from `coverage-attestation.json`:
 Populate `observed_names` from the live attestation rows (values may include concrete enum strings
 observed in Jaeger/Prometheus, e.g. `postgresql`, `kafka`).
 
-### ContextCore TODO (cross-repo)
+### Python fixture ports (Steps 1–6)
+
+Static import signatures from `fixtures/otel-demo/` (SDK-owned ports):
+
+| Pattern | Python imports (fixture evidence) |
+| --- | --- |
+| Messaging | `confluent_kafka` (accounting-py, checkout-kafka-py) |
+| Database SQL | `sqlalchemy`, `psycopg2` / `create_engine` (accounting-py) |
+| Database Redis | `redis` (cart-py) |
+| HTTP server | `fastapi`, `uvicorn` (email-py) |
+| gRPC | `grpc`, `demo_pb2_grpc` (cart-py, payment-py, product-reviews-py) |
+| GenAI | `openai` (product-reviews-py) |
+| Feature flags | `openfeature`, `flagd` (email-py, cart-py, payment-py, product-reviews-py) |
+
 
 1. Extend `_PROTOCOL_METRICS` with messaging + span-metrics connector names from attestation.
 2. Extend `_DATABASE_IMPORT_PATTERNS` with `db.system` values observed (`postgresql`, `valkey`, `redis`).

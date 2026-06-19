@@ -1,0 +1,6 @@
+model OrderConfirmation {
+  id        String @id @default(cuid())
+  orderId   String
+  email     String
+  createdAt DateTime @default(now())
+}
