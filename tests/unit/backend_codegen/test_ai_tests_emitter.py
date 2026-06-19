@@ -160,7 +160,8 @@ def test_emitted_ai_tests_run_green(tmp_path):
     # contract + completeness + edge + gate + route-smoke (1 unseeded GET case — F-8)
     # + confirm-route existence (FR-CA-8) + /ai POST-smoke (F-9: AI routes now mounted)
     # + health readiness/liveness (2 — the generated tests/test_health.py)
-    assert "21 passed" in result.stdout
+    # + openapi contract manifest/spec (4 — tests/test_openapi_contract.py)
+    assert "25 passed" in result.stdout
 
 
 # --------------------------------------------------------------------------- #

@@ -1,0 +1,53 @@
+{
+  "generator": "scripts/gen_graphql_pricing_seed.py",
+  "schema_version": "1.0",
+  "service_metadata": {
+    "dependencies": [
+      "graphql-core"
+    ],
+    "endpoints": [
+      "POST /graphql",
+      "GET /health"
+    ],
+    "estimated_loc": 320,
+    "language": "python",
+    "language_rationale": "Synthetic hardened GraphQL seed. Pinned to python; the model declares graphql-core in requirements.txt (provisioned via the existing path). Readiness is http-liveness.",
+    "protocol": "graphql",
+    "service": "graphql-pricingservice",
+    "spec_sha256": "f6478c2cd22eba92107962546d2b827a68e59ad3ad0d7833006e941d17acaa4d"
+  },
+  "startup": {
+    "cmd": [
+      "python3",
+      "src/graphql_pricingservice/server.py"
+    ],
+    "health_path": "/health",
+    "port_env": "PORT",
+    "readiness": "http"
+  },
+  "tasks": [
+    {
+      "config": {
+        "context": {
+          "artifact_types_addressed": [
+            "graphql_service"
+          ],
+          "estimated_loc": 320,
+          "feature_id": "HARDENED-GRAPHQL-PRICINGSERVICE",
+          "language": "python",
+          "protocol": "graphql",
+          "target_files": [
+            "src/graphql_pricingservice/server.py"
+          ]
+        },
+        "requirements_text": "## Hardened benchmark \u2014 Pricing calculator (python, GraphQL)\n\nImplement a **GraphQL** pricing calculator server in **python** (e.g. with `graphql-core`; declare it in\n`requirements.txt`). Serve `POST /graphql` accepting `{{\"query\",\"variables\"}}` and `GET /health` \u2192 200.\nBind `0.0.0.0:$PORT`. Stateless: every input is explicit (resolution performed upstream).\n\n### Schema (SDL \u2014 implement exactly)\n```graphql\ninput AdjustmentInput { kind: String!, tierFactors: [String!]!, maximumAmount: String }\ninput LineInput {\n  sku: String!, quantity: String!, unitPrice: String!, offerUnitPrice: String,\n  priceOnApplication: Boolean, adjustments: [AdjustmentInput!], taxRate: String\n}\ninput CurrencyInput { code: String!, scale: Int!, rounding: String! }\ninput BasketInput {\n  lines: [LineInput!]!, strategy: String!, currency: CurrencyInput!,\n  calculateTax: Boolean!, adjustmentsPreTax: Boolean!\n}\ntype AdjustmentBreakdown { amount: String!, effectivePercent: String!, tierPercents: [String!]! }\ntype PricedLine {\n  sku: String!, netPayable: String!, netPayableWithTax: String!, taxValue: String!,\n  priceOnApplication: Boolean!, adjustment: AdjustmentBreakdown!\n}\ntype PricedBasket { lines: [PricedLine]!, subtotalNetPayable: String!, subtotalNetPayableWithTax: String! }\ntype Query { basket(input: BasketInput!): PricedBasket! }\n```\n\n### GraphQL conventions (CRITICAL \u2014 different from REST)\n- **Always respond HTTP 200.** Validation/computation errors go in the response body's top-level `errors`\n  array (GraphQL spec), NEVER as a 4xx HTTP status.\n- **Partial results:** a single invalid line errors ONLY that line (the `PricedLine` list element is\n  nullable) \u2014 valid lines still resolve under `data`, and `errors[].path` points at the failing line,\n  e.g. `[\"basket\",\"lines\",1,\"netPayable\"]`. Do not null-propagate the whole response.\n- **Selection-driven:** return only the fields the client selected (standard GraphQL).\n\n### Money & rounding\nAll amounts/quantities are decimal STRINGS; use EXACT decimal arithmetic (NOT float \u2014 it fails the\nrounding cases). Round monetary outputs to `currency.scale` using `currency.rounding`\n(HALF_UP | HALF_EVEN); emit each as a string at exactly `scale` digits.\n\n### Pricing algorithm (per line, priceOnApplication = false)\n1. Base unit = `unitPrice`, unless `offerUnitPrice` is non-null, > 0, and < `unitPrice` (promo-min).\n2. Line base = base unit \u00d7 `quantity`.\n3. Apply each adjustment in order to the running amount:\n   - PERCENTAGE: `tierFactors` are percents combined by `strategy` \u2014 CHAIN: each tier on the running\n     amount (`d \u2190 d \u2212 d\u00d7tier/100`); ADDITION: `d \u2190 d \u00d7 (1 \u2212 \u03a3tiers/100)`.\n   - FIXED_AMOUNT: per-line absolute = `tierFactors[0]` (\u2264 running amount).\n   - `maximumAmount` caps that adjustment's amount.\n4. Tax (only if `calculateTax`; `taxRate` percent, null = 0):\n   - `adjustmentsPreTax`=true: round NET \u2192 `netPayable`; `taxValue`=round(net\u00d7rate/100);\n     `netPayableWithTax`=net+tax.\n   - `adjustmentsPreTax`=false: GROSS = line\u00d7(1+rate/100), adjust the gross \u2192 round to\n     `netPayableWithTax`; `netPayable`=round(withTax/(1+rate/100)); `taxValue`=withTax\u2212net.\n   - `calculateTax`=false: `taxValue`=\"0.00\"; `netPayableWithTax`=`netPayable`.\n\n### AdjustmentBreakdown (the derivation fields \u2014 exposed AS data)\n- `amount`: rounded total adjustment = round(base \u2212 discounted).\n- `effectivePercent`: the COMBINED effective adjustment percent = round((lineBase \u2212 discounted)/lineBase\n  \u00d7 100); \"0.00\" if no adjustments. NB this discriminates the strategy: tiers `[10,10]` \u2192 CHAIN \"19.00\",\n  ADDITION \"20.00\".\n- `tierPercents`: for PERCENTAGE adjustments, the input `tierFactors` concatenated; for FIXED_AMOUNT, a\n  single-element list `[effectivePercent]`; empty list if no adjustments.\n\n### Subtotals\n`subtotalNetPayable` = \u03a3 line `netPayable`; `subtotalNetPayableWithTax` = \u03a3 line `netPayableWithTax`\n(POA lines contribute 0). At currency scale.\n\n### price_on_application\nIf a line's `priceOnApplication` is true, resolve `priceOnApplication=true` and the numeric string fields\n(\"netPayable\", etc.) as \"\".\n\n### Validation\n- **Basket-level** (whole operation errors, `data` null): `strategy` is not \"CHAIN\" or \"ADDITION\" while\n  any line carries adjustments.\n- **Line-level** (partial \u2014 error `path` at that line): negative/malformed quantity, negative/malformed\n  price, or an adjustment with 0 or > 4 `tierFactors`.\n\n(Note: this is a synthetic basket operation. Liferay surfaces pricing as a `Price` field on a SKU/product\nand uses `Double`; the basket op + decimal-strings here are deliberate divergences \u2014 see the design docs.)\n",
+        "task_description": "Implement a stateless GraphQL pricing calculator in python (graphql-core). The single `basket(input)` query prices a basket of already-resolved line items and returns a computed-field graph (per-line net/tax + an AdjustmentBreakdown derivation sub-graph + subtotals). Honor GraphQL conventions: HTTP 200 always, errors in the body's `errors` array, partial results with correct `path` for an invalid line, and selection-driven responses. Serve POST /graphql and GET /health (200). Same pricing semantics as the gRPC/REST seeds (promo-min, chain/addition tiers, cap, tax pre/post, exact-decimal rounding, POA, validation)."
+      },
+      "depends_on": [],
+      "task_id": "HARDENED-GRAPHQL-PRICINGSERVICE",
+      "task_type": "task",
+      "title": "Pricing calculator (python, GraphQL) \u2014 hardened-tier"
+    }
+  ],
+  "version": "0.1"
+}

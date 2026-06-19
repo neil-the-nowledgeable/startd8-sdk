@@ -1,0 +1,20 @@
+{#
+# GENERATED from prisma/schema.prisma — do not edit by hand; regenerate via `startd8 generate backend`.
+# startd8-artifact: htmx-list
+# startd8-entity: OrderConfirmation
+# Source of truth: the Prisma schema.
+# schema-sha256: 0b898e5f7f7f45151610a0e3830b0b5c32150ec8cc732b449b0d0ea40e8ce102
+#}
+{% extends "base.html" %}
+{% block title %}OrderConfirmation{% endblock %}
+{% block content %}
+{% if created %}<p class="flash">✓ OrderConfirmation stored.</p>{% endif %}
+<h1>OrderConfirmation</h1>
+<a href="/ui/orderconfirmation/new">New OrderConfirmation</a>
+<table>
+  <thead><tr><th>orderId</th><th>email</th><th></th></tr></thead>
+  <tbody>
+  {% for item in items %}{% include "orderconfirmation/_row.html" %}{% endfor %}
+  </tbody>
+</table>
+{% endblock %}

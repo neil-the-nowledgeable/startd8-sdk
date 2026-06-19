@@ -30,11 +30,15 @@ from .htmx_generator import _confirm_field
 CONTRACT_TESTS_PATH = "tests/test_contract.py"
 COMPLETENESS_TESTS_PATH = "tests/test_completeness.py"
 ROUTE_SMOKE_TESTS_PATH = "tests/test_route_smoke.py"
+CROSS_CONTEXT_SMOKE_TESTS_PATH = "tests/test_cross_context_smoke.py"
 HEALTH_TESTS_PATH = "tests/test_health.py"
+OPENAPI_CONTRACT_TESTS_PATH = "tests/test_openapi_contract.py"
 _KIND = "python-tests-contract"
 _COMPLETENESS_KIND = "python-tests-completeness"
 _ROUTE_SMOKE_KIND = "python-tests-routes"
+_CROSS_CONTEXT_SMOKE_KIND = "python-tests-cross-context"
 _HEALTH_KIND = "python-tests-health"
+_OPENAPI_CONTRACT_KIND = "python-tests-openapi-contract"
 
 _SHIM = (
     "import sys\n"
@@ -199,6 +203,157 @@ def render_health_tests(
     sha = schema_sha256(schema_text)
     header = _header(source_file, sha, _HEALTH_KIND)
     return header + "\n\n" + _HEALTH_TESTS_BODY
+
+
+def _expected_crud_manifest_entries(schema: PrismaSchema, schema_text: str) -> List[str]:
+    """Python-literal lines for the baked ``_SCHEMA_CRUD`` manifest subset."""
+    from .openapi_contract_renderer import _crud_routes
+
+    return [
+        f'    ("{method}", "{path}"),'
+        for method, path in sorted(_crud_routes(schema, schema_text))
+    ]
+
+
+def _expected_conditional_manifest_entries(
+    schema_text: str,
+    *,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
+) -> List[str]:
+    """Baked conditional-route subset when manifests participate in generation."""
+    if not any((manifest_text, pages_text, views_text, imports_text)):
+        return []
+    from .openapi_contract_renderer import _conditional_routes
+
+    schema = parse_prisma_schema(schema_text)
+    return [
+        f'    ("{method}", "{path}"),'
+        for method, path in sorted(
+            _conditional_routes(
+                schema,
+                schema_text,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
+            )
+        )
+    ]
+
+
+def render_openapi_contract_tests(
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    *,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
+    api_text: Optional[str] = None,
+) -> str:
+    """Render ``tests/test_openapi_contract.py`` — manifest ↔ app routes + spec paths."""
+    schema = parse_prisma_schema(schema_text)
+    sha = schema_sha256(schema_text)
+    header = _header(source_file, sha, _OPENAPI_CONTRACT_KIND)
+    crud_lines = _expected_crud_manifest_entries(schema, schema_text)
+    crud_block = "\n".join(crud_lines) if crud_lines else ""
+    conditional_lines = _expected_conditional_manifest_entries(
+        schema_text,
+        manifest_text=manifest_text,
+        pages_text=pages_text,
+        views_text=views_text,
+        imports_text=imports_text,
+    )
+    conditional_block = "\n".join(conditional_lines) if conditional_lines else ""
+    conditional_section = ""
+    conditional_test = ""
+    if conditional_block:
+        conditional_section = f"""
+# Baked conditional manifest routes (pages/AI/flows/editors/import surface).
+_CONDITIONAL: tuple[tuple[str, str], ...] = (
+{conditional_block}
+)
+"""
+        conditional_test = """
+def test_conditional_routes_in_manifest():
+    missing = [pair for pair in _CONDITIONAL if pair not in ROUTE_MANIFEST]
+    assert not missing, "manifest missing conditional routes: " + repr(missing)
+"""
+    body = f'''{_SHIM}
+import pytest
+
+_testclient = pytest.importorskip("fastapi.testclient")
+pytest.importorskip("sqlmodel")
+pytest.importorskip("httpx")
+
+from app.main import app  # noqa: E402
+from app.openapi_contract import OPENAPI_SPEC, ROUTE_MANIFEST  # noqa: E402
+from fastapi.routing import APIRoute  # noqa: E402
+
+# Baked schema-derived CRUD subset (health is checked separately below).
+_SCHEMA_CRUD: tuple[tuple[str, str], ...] = (
+{crud_block}
+)
+{conditional_section}
+
+def _mounted() -> set[tuple[str, str]]:
+    out: set[tuple[str, str]] = set()
+    for r in app.routes:
+        if isinstance(r, APIRoute):
+            for m in r.methods or ():
+                if m in {{"GET", "POST", "PATCH", "DELETE", "PUT"}}:
+                    out.add((m, r.path))
+    return out
+
+
+def test_openapi_spec_paths_match_manifest():
+    assert set(OPENAPI_SPEC.get("paths", {{}}).keys()) == {{p for _, p in ROUTE_MANIFEST}}
+
+
+def test_openapi_internal_refs_resolve():
+    """FR-7: merged spec internal $refs resolve (no dangling pointers)."""
+    from startd8.openapi_contract.schema_resolve import resolve_schema
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            if "$ref" in obj:
+                yield obj["$ref"]
+            for v in obj.values():
+                yield from _walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                yield from _walk(item)
+
+    dangling = []
+    for ref in _walk(OPENAPI_SPEC):
+        if not ref.startswith("#/"):
+            dangling.append(ref)
+            continue
+        resolved = resolve_schema({{"$ref": ref}}, OPENAPI_SPEC)
+        if not resolved:
+            dangling.append(ref)
+    assert not dangling, "unresolved $refs: " + repr(dangling)
+
+
+def test_schema_crud_routes_in_manifest():
+    missing = [pair for pair in _SCHEMA_CRUD if pair not in ROUTE_MANIFEST]
+    assert not missing, "manifest missing schema-derived CRUD routes: " + repr(missing)
+{conditional_test}
+
+def test_manifest_routes_are_mounted():
+    mounted = _mounted()
+    missing = [pair for pair in ROUTE_MANIFEST if pair not in mounted]
+    assert not missing, "mounted app missing manifest routes: " + repr(missing)
+
+
+def test_health_routes_in_manifest():
+    for pair in (("GET", "/health"), ("GET", "/health/live")):
+        assert pair in ROUTE_MANIFEST
+'''
+    return header + "\n\n" + body
 
 
 def render_completeness_tests(
@@ -550,4 +705,110 @@ def render_route_smoke_tests(
     body = _ROUTE_SMOKE_BODY.format(
         tables=tables_literal, pk_map=pk_literal, confirm=confirm_literal
     )
+    return header + "\n\n" + body
+
+
+_CROSS_CONTEXT_TEST = '''\
+def test_{test_name}_client_list_create_round_trip():
+    """FR-6: context client list+create via select_crud_resource ground truth."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.openapi_contract import OPENAPI_SPEC
+    from clients.{module}_client import {class_name}
+    from startd8.deploy_harness.context_smoke import run_context_client_smoke
+
+    class _TestClientHttpx:
+        def __init__(self, tc):
+            self._tc = tc
+
+        def get(self, url, **kwargs):
+            return self._tc.get(url, **kwargs)
+
+        def post(self, url, **kwargs):
+            return self._tc.post(url, **kwargs)
+
+        def patch(self, url, **kwargs):
+            return self._tc.patch(url, **kwargs)
+
+        def delete(self, url, **kwargs):
+            return self._tc.delete(url, **kwargs)
+
+        def close(self) -> None:
+            pass
+
+    with TestClient(app) as tc:
+        with {class_name}("http://test", client=_TestClientHttpx(tc)) as outbound:
+            outcome = run_context_client_smoke(outbound, OPENAPI_SPEC)
+    assert outcome.status == "pass", outcome.reason or outcome.status
+'''
+
+
+_CROSS_CONTEXT_REMOTE_TEST = '''\
+def test_{test_name}_remote_producer_smoke():
+    """FR-6 remote: live producer round-trip when base URL is configured."""
+    from pathlib import Path
+
+    from startd8.backend_codegen.context_manifest import (
+        filter_spec_for_context,
+        load_contract_spec,
+        parse_contexts,
+    )
+    from startd8.deploy_harness.context_smoke import (
+        context_base_url_env_key,
+        resolve_context_base_url,
+        run_remote_producer_smoke,
+    )
+
+    contexts_text = Path("prisma/contexts.yaml").read_text(encoding="utf-8")
+    (ctx,) = [c for c in parse_contexts(contexts_text) if c.id == {ctx_id!r}]
+    base_url = resolve_context_base_url(ctx)
+    if not base_url:
+        pytest.skip(
+            f"set {{context_base_url_env_key({ctx_id!r})}} or contexts.yaml base_url"
+        )
+    root = Path(".").resolve()
+    raw = load_contract_spec(ctx.contract, project_root=root)
+    schema_text = (root / "prisma" / "schema.prisma").read_text(encoding="utf-8")
+    spec = filter_spec_for_context(raw, schema_text, ctx)
+    outcome = run_remote_producer_smoke(base_url, spec=spec)
+    assert outcome.status == "pass", outcome.reason or outcome.status
+'''
+
+
+def render_cross_context_smoke_tests(
+    schema_text: str,
+    contexts_text: str,
+    source_file: str = "prisma/schema.prisma",
+) -> str:
+    """Render ``tests/test_cross_context_smoke.py`` — FR-6 loopback round-trip per local outbound ctx."""
+    from ._headers import header_context_smoke_tests
+    from .context_client_renderer import _class_name
+    from .context_manifest import parse_contexts
+
+    sha = schema_sha256(schema_text)
+    contexts_sha = schema_sha256(contexts_text)
+    header = header_context_smoke_tests(
+        source_file, sha, contexts_sha, _CROSS_CONTEXT_SMOKE_KIND
+    )
+    local = [c for c in parse_contexts(contexts_text) if c.local]
+    remote = [c for c in parse_contexts(contexts_text) if not c.local]
+    blocks = [
+        _CROSS_CONTEXT_TEST.format(
+            test_name=ctx.id,
+            module=ctx.id,
+            class_name=_class_name(ctx.id),
+        )
+        for ctx in local
+    ]
+    blocks.extend(
+        _CROSS_CONTEXT_REMOTE_TEST.format(test_name=ctx.id, ctx_id=ctx.id)
+        for ctx in remote
+    )
+    if not blocks:
+        blocks = [
+            "def test_no_local_outbound_contexts():\n"
+            '    pytest.skip("no local outbound contexts in contexts.yaml")'
+        ]
+    body = _SHIM + "import pytest\n\n\n" + "\n\n\n".join(blocks) + "\n"
     return header + "\n\n" + body

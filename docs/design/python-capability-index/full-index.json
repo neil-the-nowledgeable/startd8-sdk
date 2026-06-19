@@ -1,0 +1,1740 @@
+{
+  "ast_nodes": [
+    {
+      "category": "operator",
+      "doc": "Add",
+      "fields": [],
+      "id": "PY-AST-001",
+      "name": "Add"
+    },
+    {
+      "category": "boolop",
+      "doc": "And",
+      "fields": [],
+      "id": "PY-AST-002",
+      "name": "And"
+    },
+    {
+      "category": "statement",
+      "doc": "AnnAssign(expr target, expr annotation, expr? value, int simple)",
+      "fields": [
+        "target",
+        "annotation",
+        "value",
+        "simple"
+      ],
+      "id": "PY-AST-003",
+      "name": "AnnAssign"
+    },
+    {
+      "category": "statement",
+      "doc": "Assert(expr test, expr? msg)",
+      "fields": [
+        "test",
+        "msg"
+      ],
+      "id": "PY-AST-004",
+      "name": "Assert"
+    },
+    {
+      "category": "statement",
+      "doc": "Assign(expr* targets, expr value, string? type_comment)",
+      "fields": [
+        "targets",
+        "value",
+        "type_comment"
+      ],
+      "id": "PY-AST-005",
+      "name": "Assign"
+    },
+    {
+      "category": "statement",
+      "doc": "AsyncFor(expr target, expr iter, stmt* body, stmt* orelse, string? type_comment)",
+      "fields": [
+        "target",
+        "iter",
+        "body",
+        "orelse",
+        "type_comment"
+      ],
+      "id": "PY-AST-006",
+      "name": "AsyncFor"
+    },
+    {
+      "category": "statement",
+      "doc": "AsyncFunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment, type_param* type_params)",
+      "fields": [
+        "name",
+        "args",
+        "body",
+        "decorator_list",
+        "returns",
+        "type_comment",
+        "type_params"
+      ],
+      "id": "PY-AST-007",
+      "name": "AsyncFunctionDef"
+    },
+    {
+      "category": "statement",
+      "doc": "AsyncWith(withitem* items, stmt* body, string? type_comment)",
+      "fields": [
+        "items",
+        "body",
+        "type_comment"
+      ],
+      "id": "PY-AST-008",
+      "name": "AsyncWith"
+    },
+    {
+      "category": "expression",
+      "doc": "Attribute(expr value, identifier attr, expr_context ctx)",
+      "fields": [
+        "value",
+        "attr",
+        "ctx"
+      ],
+      "id": "PY-AST-009",
+      "name": "Attribute"
+    },
+    {
+      "category": "statement",
+      "doc": "AugAssign(expr target, operator op, expr value)",
+      "fields": [
+        "target",
+        "op",
+        "value"
+      ],
+      "id": "PY-AST-010",
+      "name": "AugAssign"
+    },
+    {
+      "category": "other",
+      "doc": "Deprecated AST node class.  Unused in Python 3.",
+      "fields": [],
+      "id": "PY-AST-011",
+      "name": "AugLoad"
+    },
+    {
+      "category": "other",
+      "doc": "Deprecated AST node class.  Unused in Python 3.",
+      "fields": [],
+      "id": "PY-AST-012",
+      "name": "AugStore"
+    },
+    {
+      "category": "expression",
+      "doc": "Await(expr value)",
+      "fields": [
+        "value"
+      ],
+      "id": "PY-AST-013",
+      "name": "Await"
+    },
+    {
+      "category": "expression",
+      "doc": "BinOp(expr left, operator op, expr right)",
+      "fields": [
+        "left",
+        "op",
+        "right"
+      ],
+      "id": "PY-AST-014",
+      "name": "BinOp"
+    },
+    {
+      "category": "operator",
+      "doc": "BitAnd",
+      "fields": [],
+      "id": "PY-AST-015",
+      "name": "BitAnd"
+    },
+    {
+      "category": "operator",
+      "doc": "BitOr",
+      "fields": [],
+      "id": "PY-AST-016",
+      "name": "BitOr"
+    },
+    {
+      "category": "operator",
+      "doc": "BitXor",
+      "fields": [],
+      "id": "PY-AST-017",
+      "name": "BitXor"
+    },
+    {
+      "category": "expression",
+      "doc": "BoolOp(boolop op, expr* values)",
+      "fields": [
+        "op",
+        "values"
+      ],
+      "id": "PY-AST-018",
+      "name": "BoolOp"
+    },
+    {
+      "category": "statement",
+      "doc": "Break",
+      "fields": [],
+      "id": "PY-AST-019",
+      "name": "Break"
+    },
+    {
+      "category": "expression",
+      "doc": "Call(expr func, expr* args, keyword* keywords)",
+      "fields": [
+        "func",
+        "args",
+        "keywords"
+      ],
+      "id": "PY-AST-020",
+      "name": "Call"
+    },
+    {
+      "category": "statement",
+      "doc": "ClassDef(identifier name, expr* bases, keyword* keywords, stmt* body, expr* decorator_list, type_param* type_params)",
+      "fields": [
+        "name",
+        "bases",
+        "keywords",
+        "body",
+        "decorator_list",
+        "type_params"
+      ],
+      "id": "PY-AST-021",
+      "name": "ClassDef"
+    },
+    {
+      "category": "expression",
+      "doc": "Compare(expr left, cmpop* ops, expr* comparators)",
+      "fields": [
+        "left",
+        "ops",
+        "comparators"
+      ],
+      "id": "PY-AST-022",
+      "name": "Compare"
+    },
+    {
+      "category": "expression",
+      "doc": "Constant(constant value, string? kind)",
+      "fields": [
+        "value",
+        "kind"
+      ],
+      "id": "PY-AST-023",
+      "name": "Constant"
+    },
+    {
+      "category": "statement",
+      "doc": "Continue",
+      "fields": [],
+      "id": "PY-AST-024",
+      "name": "Continue"
+    },
+    {
+      "category": "other",
+      "doc": "Del",
+      "fields": [],
+      "id": "PY-AST-025",
+      "name": "Del"
+    },
+    {
+      "category": "statement",
+      "doc": "Delete(expr* targets)",
+      "fields": [
+        "targets"
+      ],
+      "id": "PY-AST-026",
+      "name": "Delete"
+    },
+    {
+      "category": "expression",
+      "doc": "Dict(expr?* keys, expr* values)",
+      "fields": [
+        "keys",
+        "values"
+      ],
+      "id": "PY-AST-027",
+      "name": "Dict"
+    },
+    {
+      "category": "expression",
+      "doc": "DictComp(expr key, expr value, comprehension* generators)",
+      "fields": [
+        "key",
+        "value",
+        "generators"
+      ],
+      "id": "PY-AST-028",
+      "name": "DictComp"
+    },
+    {
+      "category": "operator",
+      "doc": "Div",
+      "fields": [],
+      "id": "PY-AST-029",
+      "name": "Div"
+    },
+    {
+      "category": "cmpop",
+      "doc": "Eq",
+      "fields": [],
+      "id": "PY-AST-030",
+      "name": "Eq"
+    },
+    {
+      "category": "excepthandler",
+      "doc": "ExceptHandler(expr? type, identifier? name, stmt* body)",
+      "fields": [
+        "type",
+        "name",
+        "body"
+      ],
+      "id": "PY-AST-031",
+      "name": "ExceptHandler"
+    },
+    {
+      "category": "statement",
+      "doc": "Expr(expr value)",
+      "fields": [
+        "value"
+      ],
+      "id": "PY-AST-032",
+      "name": "Expr"
+    },
+    {
+      "category": "compile_unit",
+      "doc": "Expression(expr body)",
+      "fields": [
+        "body"
+      ],
+      "id": "PY-AST-033",
+      "name": "Expression"
+    },
+    {
+      "category": "slice",
+      "doc": "Deprecated AST node class. Use ast.Tuple instead.",
+      "fields": [],
+      "id": "PY-AST-034",
+      "name": "ExtSlice"
+    },
+    {
+      "category": "operator",
+      "doc": "FloorDiv",
+      "fields": [],
+      "id": "PY-AST-035",
+      "name": "FloorDiv"
+    },
+    {
+      "category": "statement",
+      "doc": "For(expr target, expr iter, stmt* body, stmt* orelse, string? type_comment)",
+      "fields": [
+        "target",
+        "iter",
+        "body",
+        "orelse",
+        "type_comment"
+      ],
+      "id": "PY-AST-036",
+      "name": "For"
+    },
+    {
+      "category": "expression",
+      "doc": "FormattedValue(expr value, int conversion, expr? format_spec)",
+      "fields": [
+        "value",
+        "conversion",
+        "format_spec"
+      ],
+      "id": "PY-AST-037",
+      "name": "FormattedValue"
+    },
+    {
+      "category": "statement",
+      "doc": "FunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment, type_param* type_params)",
+      "fields": [
+        "name",
+        "args",
+        "body",
+        "decorator_list",
+        "returns",
+        "type_comment",
+        "type_params"
+      ],
+      "id": "PY-AST-038",
+      "name": "FunctionDef"
+    },
+    {
+      "category": "compile_unit",
+      "doc": "FunctionType(expr* argtypes, expr returns)",
+      "fields": [
+        "argtypes",
+        "returns"
+      ],
+      "id": "PY-AST-039",
+      "name": "FunctionType"
+    },
+    {
+      "category": "expression",
+      "doc": "GeneratorExp(expr elt, comprehension* generators)",
+      "fields": [
+        "elt",
+        "generators"
+      ],
+      "id": "PY-AST-040",
+      "name": "GeneratorExp"
+    },
+    {
+      "category": "statement",
+      "doc": "Global(identifier* names)",
+      "fields": [
+        "names"
+      ],
+      "id": "PY-AST-041",
+      "name": "Global"
+    },
+    {
+      "category": "cmpop",
+      "doc": "Gt",
+      "fields": [],
+      "id": "PY-AST-042",
+      "name": "Gt"
+    },
+    {
+      "category": "cmpop",
+      "doc": "GtE",
+      "fields": [],
+      "id": "PY-AST-043",
+      "name": "GtE"
+    },
+    {
+      "category": "statement",
+      "doc": "If(expr test, stmt* body, stmt* orelse)",
+      "fields": [
+        "test",
+        "body",
+        "orelse"
+      ],
+      "id": "PY-AST-044",
+      "name": "If"
+    },
+    {
+      "category": "expression",
+      "doc": "IfExp(expr test, expr body, expr orelse)",
+      "fields": [
+        "test",
+        "body",
+        "orelse"
+      ],
+      "id": "PY-AST-045",
+      "name": "IfExp"
+    },
+    {
+      "category": "statement",
+      "doc": "Import(alias* names)",
+      "fields": [
+        "names"
+      ],
+      "id": "PY-AST-046",
+      "name": "Import"
+    },
+    {
+      "category": "statement",
+      "doc": "ImportFrom(identifier? module, alias* names, int? level)",
+      "fields": [
+        "module",
+        "names",
+        "level"
+      ],
+      "id": "PY-AST-047",
+      "name": "ImportFrom"
+    },
+    {
+      "category": "cmpop",
+      "doc": "In",
+      "fields": [],
+      "id": "PY-AST-048",
+      "name": "In"
+    },
+    {
+      "category": "slice",
+      "doc": "Deprecated AST node class. Use the index value directly instead.",
+      "fields": [],
+      "id": "PY-AST-049",
+      "name": "Index"
+    },
+    {
+      "category": "compile_unit",
+      "doc": "Interactive(stmt* body)",
+      "fields": [
+        "body"
+      ],
+      "id": "PY-AST-050",
+      "name": "Interactive"
+    },
+    {
+      "category": "expression",
+      "doc": "Interpolation(expr value, constant str, int conversion, expr? format_spec)",
+      "fields": [
+        "value",
+        "str",
+        "conversion",
+        "format_spec"
+      ],
+      "id": "PY-AST-051",
+      "name": "Interpolation"
+    },
+    {
+      "category": "unaryop",
+      "doc": "Invert",
+      "fields": [],
+      "id": "PY-AST-052",
+      "name": "Invert"
+    },
+    {
+      "category": "cmpop",
+      "doc": "Is",
+      "fields": [],
+      "id": "PY-AST-053",
+      "name": "Is"
+    },
+    {
+      "category": "cmpop",
+      "doc": "IsNot",
+      "fields": [],
+      "id": "PY-AST-054",
+      "name": "IsNot"
+    },
+    {
+      "category": "expression",
+      "doc": "JoinedStr(expr* values)",
+      "fields": [
+        "values"
+      ],
+      "id": "PY-AST-055",
+      "name": "JoinedStr"
+    },
+    {
+      "category": "operator",
+      "doc": "LShift",
+      "fields": [],
+      "id": "PY-AST-056",
+      "name": "LShift"
+    },
+    {
+      "category": "expression",
+      "doc": "Lambda(arguments args, expr body)",
+      "fields": [
+        "args",
+        "body"
+      ],
+      "id": "PY-AST-057",
+      "name": "Lambda"
+    },
+    {
+      "category": "expression",
+      "doc": "List(expr* elts, expr_context ctx)",
+      "fields": [
+        "elts",
+        "ctx"
+      ],
+      "id": "PY-AST-058",
+      "name": "List"
+    },
+    {
+      "category": "expression",
+      "doc": "ListComp(expr elt, comprehension* generators)",
+      "fields": [
+        "elt",
+        "generators"
+      ],
+      "id": "PY-AST-059",
+      "name": "ListComp"
+    },
+    {
+      "category": "other",
+      "doc": "Load",
+      "fields": [],
+      "id": "PY-AST-060",
+      "name": "Load"
+    },
+    {
+      "category": "cmpop",
+      "doc": "Lt",
+      "fields": [],
+      "id": "PY-AST-061",
+      "name": "Lt"
+    },
+    {
+      "category": "cmpop",
+      "doc": "LtE",
+      "fields": [],
+      "id": "PY-AST-062",
+      "name": "LtE"
+    },
+    {
+      "category": "operator",
+      "doc": "MatMult",
+      "fields": [],
+      "id": "PY-AST-063",
+      "name": "MatMult"
+    },
+    {
+      "category": "statement",
+      "doc": "Match(expr subject, match_case* cases)",
+      "fields": [
+        "subject",
+        "cases"
+      ],
+      "id": "PY-AST-064",
+      "name": "Match"
+    },
+    {
+      "category": "pattern",
+      "doc": "MatchAs(pattern? pattern, identifier? name)",
+      "fields": [
+        "pattern",
+        "name"
+      ],
+      "id": "PY-AST-065",
+      "name": "MatchAs"
+    },
+    {
+      "category": "pattern",
+      "doc": "MatchClass(expr cls, pattern* patterns, identifier* kwd_attrs, pattern* kwd_patterns)",
+      "fields": [
+        "cls",
+        "patterns",
+        "kwd_attrs",
+        "kwd_patterns"
+      ],
+      "id": "PY-AST-066",
+      "name": "MatchClass"
+    },
+    {
+      "category": "pattern",
+      "doc": "MatchMapping(expr* keys, pattern* patterns, identifier? rest)",
+      "fields": [
+        "keys",
+        "patterns",
+        "rest"
+      ],
+      "id": "PY-AST-067",
+      "name": "MatchMapping"
+    },
+    {
+      "category": "pattern",
+      "doc": "MatchOr(pattern* patterns)",
+      "fields": [
+        "patterns"
+      ],
+      "id": "PY-AST-068",
+      "name": "MatchOr"
+    },
+    {
+      "category": "pattern",
+      "doc": "MatchSequence(pattern* patterns)",
+      "fields": [
+        "patterns"
+      ],
+      "id": "PY-AST-069",
+      "name": "MatchSequence"
+    },
+    {
+      "category": "pattern",
+      "doc": "MatchSingleton(constant value)",
+      "fields": [
+        "value"
+      ],
+      "id": "PY-AST-070",
+      "name": "MatchSingleton"
+    },
+    {
+      "category": "pattern",
+      "doc": "MatchStar(identifier? name)",
+      "fields": [
+        "name"
+      ],
+      "id": "PY-AST-071",
+      "name": "MatchStar"
+    },
+    {
+      "category": "pattern",
+      "doc": "MatchValue(expr value)",
+      "fields": [
+        "value"
+      ],
+      "id": "PY-AST-072",
+      "name": "MatchValue"
+    },
+    {
+      "category": "operator",
+      "doc": "Mod",
+      "fields": [],
+      "id": "PY-AST-073",
+      "name": "Mod"
+    },
+    {
+      "category": "compile_unit",
+      "doc": "Module(stmt* body, type_ignore* type_ignores)",
+      "fields": [
+        "body",
+        "type_ignores"
+      ],
+      "id": "PY-AST-074",
+      "name": "Module"
+    },
+    {
+      "category": "operator",
+      "doc": "Mult",
+      "fields": [],
+      "id": "PY-AST-075",
+      "name": "Mult"
+    },
+    {
+      "category": "expression",
+      "doc": "Name(identifier id, expr_context ctx)",
+      "fields": [
+        "id",
+        "ctx"
+      ],
+      "id": "PY-AST-076",
+      "name": "Name"
+    },
+    {
+      "category": "expression",
+      "doc": "NamedExpr(expr target, expr value)",
+      "fields": [
+        "target",
+        "value"
+      ],
+      "id": "PY-AST-077",
+      "name": "NamedExpr"
+    },
+    {
+      "category": "statement",
+      "doc": "Nonlocal(identifier* names)",
+      "fields": [
+        "names"
+      ],
+      "id": "PY-AST-078",
+      "name": "Nonlocal"
+    },
+    {
+      "category": "unaryop",
+      "doc": "Not",
+      "fields": [],
+      "id": "PY-AST-079",
+      "name": "Not"
+    },
+    {
+      "category": "cmpop",
+      "doc": "NotEq",
+      "fields": [],
+      "id": "PY-AST-080",
+      "name": "NotEq"
+    },
+    {
+      "category": "cmpop",
+      "doc": "NotIn",
+      "fields": [],
+      "id": "PY-AST-081",
+      "name": "NotIn"
+    },
+    {
+      "category": "boolop",
+      "doc": "Or",
+      "fields": [],
+      "id": "PY-AST-082",
+      "name": "Or"
+    },
+    {
+      "category": "other",
+      "doc": "Deprecated AST node class.  Unused in Python 3.",
+      "fields": [],
+      "id": "PY-AST-083",
+      "name": "Param"
+    },
+    {
+      "category": "type_param",
+      "doc": "ParamSpec(identifier name, expr? default_value)",
+      "fields": [
+        "name",
+        "default_value"
+      ],
+      "id": "PY-AST-084",
+      "name": "ParamSpec"
+    },
+    {
+      "category": "statement",
+      "doc": "Pass",
+      "fields": [],
+      "id": "PY-AST-085",
+      "name": "Pass"
+    },
+    {
+      "category": "operator",
+      "doc": "Pow",
+      "fields": [],
+      "id": "PY-AST-086",
+      "name": "Pow"
+    },
+    {
+      "category": "operator",
+      "doc": "RShift",
+      "fields": [],
+      "id": "PY-AST-087",
+      "name": "RShift"
+    },
+    {
+      "category": "statement",
+      "doc": "Raise(expr? exc, expr? cause)",
+      "fields": [
+        "exc",
+        "cause"
+      ],
+      "id": "PY-AST-088",
+      "name": "Raise"
+    },
+    {
+      "category": "statement",
+      "doc": "Return(expr? value)",
+      "fields": [
+        "value"
+      ],
+      "id": "PY-AST-089",
+      "name": "Return"
+    },
+    {
+      "category": "expression",
+      "doc": "Set(expr* elts)",
+      "fields": [
+        "elts"
+      ],
+      "id": "PY-AST-090",
+      "name": "Set"
+    },
+    {
+      "category": "expression",
+      "doc": "SetComp(expr elt, comprehension* generators)",
+      "fields": [
+        "elt",
+        "generators"
+      ],
+      "id": "PY-AST-091",
+      "name": "SetComp"
+    },
+    {
+      "category": "expression",
+      "doc": "Slice(expr? lower, expr? upper, expr? step)",
+      "fields": [
+        "lower",
+        "upper",
+        "step"
+      ],
+      "id": "PY-AST-092",
+      "name": "Slice"
+    },
+    {
+      "category": "expression",
+      "doc": "Starred(expr value, expr_context ctx)",
+      "fields": [
+        "value",
+        "ctx"
+      ],
+      "id": "PY-AST-093",
+      "name": "Starred"
+    },
+    {
+      "category": "other",
+      "doc": "Store",
+      "fields": [],
+      "id": "PY-AST-094",
+      "name": "Store"
+    },
+    {
+      "category": "operator",
+      "doc": "Sub",
+      "fields": [],
+      "id": "PY-AST-095",
+      "name": "Sub"
+    },
+    {
+      "category": "expression",
+      "doc": "Subscript(expr value, expr slice, expr_context ctx)",
+      "fields": [
+        "value",
+        "slice",
+        "ctx"
+      ],
+      "id": "PY-AST-096",
+      "name": "Subscript"
+    },
+    {
+      "category": "module_root",
+      "doc": "Deprecated AST node class.  Unused in Python 3.",
+      "fields": [],
+      "id": "PY-AST-097",
+      "name": "Suite"
+    },
+    {
+      "category": "expression",
+      "doc": "TemplateStr(expr* values)",
+      "fields": [
+        "values"
+      ],
+      "id": "PY-AST-098",
+      "name": "TemplateStr"
+    },
+    {
+      "category": "statement",
+      "doc": "Try(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)",
+      "fields": [
+        "body",
+        "handlers",
+        "orelse",
+        "finalbody"
+      ],
+      "id": "PY-AST-099",
+      "name": "Try"
+    },
+    {
+      "category": "statement",
+      "doc": "TryStar(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)",
+      "fields": [
+        "body",
+        "handlers",
+        "orelse",
+        "finalbody"
+      ],
+      "id": "PY-AST-100",
+      "name": "TryStar"
+    },
+    {
+      "category": "expression",
+      "doc": "Tuple(expr* elts, expr_context ctx)",
+      "fields": [
+        "elts",
+        "ctx"
+      ],
+      "id": "PY-AST-101",
+      "name": "Tuple"
+    },
+    {
+      "category": "statement",
+      "doc": "TypeAlias(expr name, type_param* type_params, expr value)",
+      "fields": [
+        "name",
+        "type_params",
+        "value"
+      ],
+      "id": "PY-AST-102",
+      "name": "TypeAlias"
+    },
+    {
+      "category": "other",
+      "doc": "TypeIgnore(int lineno, string tag)",
+      "fields": [
+        "lineno",
+        "tag"
+      ],
+      "id": "PY-AST-103",
+      "name": "TypeIgnore"
+    },
+    {
+      "category": "type_param",
+      "doc": "TypeVar(identifier name, expr? bound, expr? default_value)",
+      "fields": [
+        "name",
+        "bound",
+        "default_value"
+      ],
+      "id": "PY-AST-104",
+      "name": "TypeVar"
+    },
+    {
+      "category": "type_param",
+      "doc": "TypeVarTuple(identifier name, expr? default_value)",
+      "fields": [
+        "name",
+        "default_value"
+      ],
+      "id": "PY-AST-105",
+      "name": "TypeVarTuple"
+    },
+    {
+      "category": "unaryop",
+      "doc": "UAdd",
+      "fields": [],
+      "id": "PY-AST-106",
+      "name": "UAdd"
+    },
+    {
+      "category": "unaryop",
+      "doc": "USub",
+      "fields": [],
+      "id": "PY-AST-107",
+      "name": "USub"
+    },
+    {
+      "category": "expression",
+      "doc": "UnaryOp(unaryop op, expr operand)",
+      "fields": [
+        "op",
+        "operand"
+      ],
+      "id": "PY-AST-108",
+      "name": "UnaryOp"
+    },
+    {
+      "category": "statement",
+      "doc": "While(expr test, stmt* body, stmt* orelse)",
+      "fields": [
+        "test",
+        "body",
+        "orelse"
+      ],
+      "id": "PY-AST-109",
+      "name": "While"
+    },
+    {
+      "category": "statement",
+      "doc": "With(withitem* items, stmt* body, string? type_comment)",
+      "fields": [
+        "items",
+        "body",
+        "type_comment"
+      ],
+      "id": "PY-AST-110",
+      "name": "With"
+    },
+    {
+      "category": "expression",
+      "doc": "Yield(expr? value)",
+      "fields": [
+        "value"
+      ],
+      "id": "PY-AST-111",
+      "name": "Yield"
+    },
+    {
+      "category": "expression",
+      "doc": "YieldFrom(expr value)",
+      "fields": [
+        "value"
+      ],
+      "id": "PY-AST-112",
+      "name": "YieldFrom"
+    },
+    {
+      "category": "other",
+      "doc": "alias(identifier name, identifier? asname)",
+      "fields": [
+        "name",
+        "asname"
+      ],
+      "id": "PY-AST-113",
+      "name": "alias"
+    },
+    {
+      "category": "other",
+      "doc": "arg(identifier arg, expr? annotation, string? type_comment)",
+      "fields": [
+        "arg",
+        "annotation",
+        "type_comment"
+      ],
+      "id": "PY-AST-114",
+      "name": "arg"
+    },
+    {
+      "category": "other",
+      "doc": "arguments(arg* posonlyargs, arg* args, arg? vararg, arg* kwonlyargs, expr?* kw_defaults, arg? kwarg, expr* defaults)",
+      "fields": [
+        "posonlyargs",
+        "args",
+        "vararg",
+        "kwonlyargs",
+        "kw_defaults",
+        "kwarg",
+        "defaults"
+      ],
+      "id": "PY-AST-115",
+      "name": "arguments"
+    },
+    {
+      "category": "boolop",
+      "doc": "boolop = And | Or",
+      "fields": [],
+      "id": "PY-AST-116",
+      "name": "boolop"
+    },
+    {
+      "category": "cmpop",
+      "doc": "cmpop = Eq | NotEq | Lt | LtE | Gt | GtE | Is | IsNot | In | NotIn",
+      "fields": [],
+      "id": "PY-AST-117",
+      "name": "cmpop"
+    },
+    {
+      "category": "comprehension",
+      "doc": "comprehension(expr target, expr iter, expr* ifs, int is_async)",
+      "fields": [
+        "target",
+        "iter",
+        "ifs",
+        "is_async"
+      ],
+      "id": "PY-AST-118",
+      "name": "comprehension"
+    },
+    {
+      "category": "excepthandler",
+      "doc": "excepthandler = ExceptHandler(expr? type, identifier? name, stmt* body)",
+      "fields": [],
+      "id": "PY-AST-119",
+      "name": "excepthandler"
+    },
+    {
+      "category": "expression",
+      "doc": "expr = BoolOp(boolop op, expr* values)",
+      "fields": [],
+      "id": "PY-AST-120",
+      "name": "expr"
+    },
+    {
+      "category": "other",
+      "doc": "expr_context = Load | Store | Del",
+      "fields": [],
+      "id": "PY-AST-121",
+      "name": "expr_context"
+    },
+    {
+      "category": "other",
+      "doc": "keyword(identifier? arg, expr value)",
+      "fields": [
+        "arg",
+        "value"
+      ],
+      "id": "PY-AST-122",
+      "name": "keyword"
+    },
+    {
+      "category": "pattern_match",
+      "doc": "match_case(pattern pattern, expr? guard, stmt* body)",
+      "fields": [
+        "pattern",
+        "guard",
+        "body"
+      ],
+      "id": "PY-AST-123",
+      "name": "match_case"
+    },
+    {
+      "category": "module_root",
+      "doc": "mod = Module(stmt* body, type_ignore* type_ignores)",
+      "fields": [],
+      "id": "PY-AST-124",
+      "name": "mod"
+    },
+    {
+      "category": "operator",
+      "doc": "operator = Add | Sub | Mult | MatMult | Div | Mod | Pow | LShift | RShift | BitOr | BitXor | BitAnd | FloorDiv",
+      "fields": [],
+      "id": "PY-AST-125",
+      "name": "operator"
+    },
+    {
+      "category": "pattern",
+      "doc": "pattern = MatchValue(expr value)",
+      "fields": [],
+      "id": "PY-AST-126",
+      "name": "pattern"
+    },
+    {
+      "category": "slice",
+      "doc": "Deprecated AST node class.",
+      "fields": [],
+      "id": "PY-AST-127",
+      "name": "slice"
+    },
+    {
+      "category": "statement",
+      "doc": "stmt = FunctionDef(identifier name, arguments args, stmt* body, expr* decorator_list, expr? returns, string? type_comment, type_param* type_params)",
+      "fields": [],
+      "id": "PY-AST-128",
+      "name": "stmt"
+    },
+    {
+      "category": "other",
+      "doc": "type_ignore = TypeIgnore(int lineno, string tag)",
+      "fields": [],
+      "id": "PY-AST-129",
+      "name": "type_ignore"
+    },
+    {
+      "category": "type_param",
+      "doc": "type_param = TypeVar(identifier name, expr? bound, expr? default_value)",
+      "fields": [],
+      "id": "PY-AST-130",
+      "name": "type_param"
+    },
+    {
+      "category": "unaryop",
+      "doc": "unaryop = Invert | Not | UAdd | USub",
+      "fields": [],
+      "id": "PY-AST-131",
+      "name": "unaryop"
+    },
+    {
+      "category": "other",
+      "doc": "withitem(expr context_expr, expr? optional_vars)",
+      "fields": [
+        "context_expr",
+        "optional_vars"
+      ],
+      "id": "PY-AST-132",
+      "name": "withitem"
+    }
+  ],
+  "communication_crosswalk": [
+    {
+      "ast_nodes": [
+        "Import",
+        "ImportFrom",
+        "Call",
+        "FunctionDef",
+        "AsyncFunctionDef"
+      ],
+      "call_signatures": [
+        ".get(",
+        ".post(",
+        ".put(",
+        ".delete(",
+        ".request(",
+        "urlopen("
+      ],
+      "decorator_signatures": [
+        "route",
+        "get",
+        "post",
+        "api_view"
+      ],
+      "id": "PY-OTEL-5.1-HTTP",
+      "import_signatures": [
+        "urllib.request",
+        "urllib3",
+        "http.client",
+        "httpx",
+        "requests",
+        "aiohttp",
+        "fastapi",
+        "starlette",
+        "flask",
+        "django.http",
+        "uvicorn"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
+      "otel_pattern": "HTTP",
+      "semconv_domain": "http",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "id": "PY-OTEL-5.2-HTTP-METRICS",
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#52-http",
+      "metric_hints": [
+        "http.server.duration",
+        "http.client.duration"
+      ],
+      "note": "Emitted by instrumentation, not intrinsic to AST",
+      "otel_pattern": "HTTP metrics",
+      "semconv_domain": "http"
+    },
+    {
+      "ast_nodes": [
+        "ClassDef",
+        "FunctionDef",
+        "AsyncFunctionDef",
+        "Call"
+      ],
+      "attribute_hints": [
+        "rpc.system=grpc",
+        "rpc.service",
+        "rpc.method"
+      ],
+      "call_signatures": [
+        "grpc.server",
+        "insecure_channel",
+        "secure_channel",
+        "stub"
+      ],
+      "id": "PY-OTEL-5.3-RPC",
+      "import_signatures": [
+        "grpc",
+        "grpc.aio",
+        "google.protobuf"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#53-rpc-including-grpc",
+      "otel_pattern": "RPC / gRPC",
+      "semconv_domain": "rpc",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "ast_nodes": [
+        "Import",
+        "ImportFrom",
+        "Call"
+      ],
+      "id": "PY-OTEL-5.3-CONNECT",
+      "import_signatures": [
+        "connectrpc",
+        "connect-python"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#53-rpc-including-grpc",
+      "otel_pattern": "Connect RPC",
+      "semconv_domain": "rpc"
+    },
+    {
+      "ast_nodes": [
+        "Call",
+        "With",
+        "AsyncWith",
+        "FunctionDef",
+        "AsyncFunctionDef"
+      ],
+      "attribute_hints": [
+        "messaging.system",
+        "messaging.destination.name"
+      ],
+      "call_signatures": [
+        "send(",
+        "publish(",
+        "produce(",
+        "consume(",
+        "basic_publish"
+      ],
+      "id": "PY-OTEL-5.4-MESSAGING",
+      "import_signatures": [
+        "kafka",
+        "aiokafka",
+        "confluent_kafka",
+        "pika",
+        "celery",
+        "redis",
+        "boto3",
+        "google.cloud.pubsub_v1",
+        "azure.servicebus"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#54-messaging-async--event-driven",
+      "otel_pattern": "Messaging",
+      "semconv_domain": "messaging",
+      "span_kinds": [
+        "PRODUCER",
+        "CONSUMER"
+      ]
+    },
+    {
+      "ast_nodes": [
+        "Call",
+        "With",
+        "AsyncWith"
+      ],
+      "attribute_hints": [
+        "db.system",
+        "db.statement"
+      ],
+      "call_signatures": [
+        "execute(",
+        "executemany(",
+        "cursor(",
+        "connect(",
+        "from_url("
+      ],
+      "id": "PY-OTEL-5.5-DATABASE",
+      "import_signatures": [
+        "sqlite3",
+        "psycopg2",
+        "psycopg",
+        "asyncpg",
+        "pymysql",
+        "mysql.connector",
+        "sqlalchemy",
+        "django.db",
+        "pymongo",
+        "redis",
+        "elasticsearch",
+        "boto3.dynamodb"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#55-database-sync-data-access",
+      "otel_pattern": "Database",
+      "semconv_domain": "db",
+      "span_kinds": [
+        "CLIENT"
+      ]
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef",
+        "AsyncFunctionDef",
+        "ClassDef",
+        "Call"
+      ],
+      "id": "PY-OTEL-5.6-GRAPHQL",
+      "import_signatures": [
+        "graphene",
+        "strawberry",
+        "ariadne",
+        "graphql"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#56-graphql-faas-feature-flags-genai",
+      "otel_pattern": "GraphQL",
+      "semconv_domain": "graphql"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef"
+      ],
+      "call_signatures": [
+        "lambda_handler"
+      ],
+      "id": "PY-OTEL-5.6-FAAS",
+      "import_signatures": [
+        "awslambdaric",
+        "functions_framework"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#56-graphql-faas-feature-flags-genai",
+      "otel_pattern": "FaaS",
+      "semconv_domain": "faas"
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "attribute_hints": [
+        "feature_flag.key"
+      ],
+      "call_signatures": [
+        "get_boolean_value",
+        "resolve_boolean_details"
+      ],
+      "id": "PY-OTEL-5.6-FEATURE-FLAGS",
+      "import_signatures": [
+        "openfeature",
+        "flagd",
+        "launchdarkly"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#56-graphql-faas-feature-flags-genai",
+      "otel_pattern": "Feature flags",
+      "semconv_domain": "feature-flags"
+    },
+    {
+      "ast_nodes": [
+        "Call",
+        "Import",
+        "ImportFrom"
+      ],
+      "call_signatures": [
+        "chat.completions.create",
+        "messages.create"
+      ],
+      "id": "PY-OTEL-5.6-GENAI",
+      "import_signatures": [
+        "openai",
+        "anthropic",
+        "google.generativeai",
+        "langchain"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#56-graphql-faas-feature-flags-genai",
+      "note": "GenAI semconv lives in external OTel repo",
+      "otel_pattern": "Generative AI",
+      "semconv_domain": "gen-ai"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef",
+        "Call"
+      ],
+      "id": "PY-OTEL-5.7-CICD",
+      "import_signatures": [
+        "opentelemetry.instrumentation.cicd"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#57-cicd-and-cli",
+      "otel_pattern": "CI/CD",
+      "semconv_domain": "cicd"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef",
+        "Call",
+        "If"
+      ],
+      "call_signatures": [
+        "@click.command",
+        "typer.run",
+        "ArgumentParser.parse_args"
+      ],
+      "id": "PY-OTEL-5.7-CLI",
+      "import_signatures": [
+        "click",
+        "typer",
+        "argparse"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#57-cicd-and-cli",
+      "otel_pattern": "CLI",
+      "semconv_domain": "cli"
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "call_signatures": [
+        "getaddrinfo(",
+        "resolve("
+      ],
+      "id": "PY-OTEL-5.1-DNS",
+      "import_signatures": [
+        "socket",
+        "dns.resolver"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
+      "otel_pattern": "DNS",
+      "semconv_domain": "dns"
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "call_signatures": [
+        "upload_file",
+        "download_file",
+        "put_object",
+        "get_object"
+      ],
+      "id": "PY-OTEL-5.1-OBJECT-STORE",
+      "import_signatures": [
+        "boto3",
+        "google.cloud.storage",
+        "azure.storage.blob"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
+      "otel_pattern": "Object stores",
+      "semconv_domain": "object-stores"
+    },
+    {
+      "ast_nodes": [
+        "Import",
+        "ImportFrom",
+        "Call"
+      ],
+      "id": "PY-OTEL-5.1-CLOUD-SDK",
+      "import_signatures": [
+        "boto3",
+        "botocore",
+        "google.cloud",
+        "azure.identity"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
+      "otel_pattern": "Cloud provider SDKs",
+      "semconv_domain": "cloud-providers"
+    }
+  ],
+  "counts": {
+    "ast_nodes": 132,
+    "communication_patterns": 15,
+    "language_composites": 10,
+    "manifest_kinds": 9
+  },
+  "generator": "gen_python_ast_capability_index.py",
+  "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md",
+  "language_composites": [
+    {
+      "ast_nodes": [
+        "Import",
+        "ImportFrom"
+      ],
+      "id": "PY-LC-001",
+      "name": "import_binding",
+      "note": "Static import surface for library detection"
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "id": "PY-LC-002",
+      "name": "call_site",
+      "note": "Client/server invocation boundary"
+    },
+    {
+      "ast_nodes": [
+        "AsyncFunctionDef",
+        "Await",
+        "AsyncFor",
+        "AsyncWith"
+      ],
+      "id": "PY-LC-003",
+      "name": "async_await",
+      "note": "Concurrent I/O patterns"
+    },
+    {
+      "ast_nodes": [
+        "With",
+        "AsyncWith"
+      ],
+      "id": "PY-LC-004",
+      "name": "context_manager",
+      "note": "Connection/session scope (DB, HTTP)"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef",
+        "AsyncFunctionDef",
+        "ClassDef"
+      ],
+      "fields": [
+        "decorator_list"
+      ],
+      "id": "PY-LC-005",
+      "name": "decorator",
+      "note": "Framework route/instrumentation hooks"
+    },
+    {
+      "ast_nodes": [
+        "Try",
+        "ExceptHandler",
+        "Raise"
+      ],
+      "id": "PY-LC-006",
+      "name": "exception_boundary",
+      "note": "OTel exception recording (semconv exceptions)"
+    },
+    {
+      "ast_nodes": [
+        "Yield",
+        "YieldFrom"
+      ],
+      "id": "PY-LC-007",
+      "name": "generator",
+      "note": "Streaming/messaging pull patterns"
+    },
+    {
+      "ast_nodes": [
+        "Match",
+        "match_case"
+      ],
+      "id": "PY-LC-008",
+      "name": "pattern_match",
+      "note": "Structural dispatch (3.10+)"
+    },
+    {
+      "ast_nodes": [
+        "AnnAssign",
+        "arg",
+        "TypeAlias"
+      ],
+      "id": "PY-LC-009",
+      "name": "type_annotation",
+      "note": "Static typing; no direct OTel span"
+    },
+    {
+      "ast_nodes": [
+        "ListComp",
+        "DictComp",
+        "SetComp",
+        "GeneratorExp"
+      ],
+      "id": "PY-LC-010",
+      "name": "comprehension",
+      "note": "Data shaping; internal"
+    }
+  ],
+  "manifest_kinds": [
+    {
+      "ast_nodes": [
+        "ClassDef"
+      ],
+      "id": "PY-MAN-001",
+      "kind": "class",
+      "landscape_role": "SERVER/RPC handler container; HTTP route class"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef"
+      ],
+      "id": "PY-MAN-002",
+      "kind": "function",
+      "landscape_role": "Top-level callable; CLI entry (§5.7), FaaS handler (§5.6)"
+    },
+    {
+      "ast_nodes": [
+        "AsyncFunctionDef"
+      ],
+      "id": "PY-MAN-003",
+      "kind": "async_function",
+      "landscape_role": "Async HTTP/RPC/messaging client or server"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef"
+      ],
+      "id": "PY-MAN-004",
+      "kind": "method",
+      "landscape_role": "Service method; gRPC servicer RPC (§5.3)"
+    },
+    {
+      "ast_nodes": [
+        "AsyncFunctionDef"
+      ],
+      "id": "PY-MAN-005",
+      "kind": "async_method",
+      "landscape_role": "Async service method (aiohttp/FastAPI/aiokafka)"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef"
+      ],
+      "id": "PY-MAN-006",
+      "kind": "property",
+      "landscape_role": "Internal; rarely a communication boundary"
+    },
+    {
+      "ast_nodes": [
+        "Assign",
+        "AnnAssign"
+      ],
+      "id": "PY-MAN-007",
+      "kind": "constant",
+      "landscape_role": "Config (URLs, topic names, DSN strings)"
+    },
+    {
+      "ast_nodes": [
+        "Assign",
+        "AnnAssign",
+        "NamedExpr"
+      ],
+      "id": "PY-MAN-008",
+      "kind": "variable",
+      "landscape_role": "Runtime state; indirect communication context"
+    },
+    {
+      "ast_nodes": [
+        "TypeAlias"
+      ],
+      "id": "PY-MAN-009",
+      "kind": "type_alias",
+      "landscape_role": "Typing only; no runtime signal"
+    }
+  ],
+  "python_version": "3.14.5",
+  "schema_version": "1.0"
+}

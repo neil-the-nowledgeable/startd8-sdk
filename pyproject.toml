@@ -98,12 +98,16 @@ dev = [
     "hypothesis>=6.0.0",
     "cryptography>=42.0.0",
     "jsonschema>=4.0.0",
+    "openapi-spec-validator>=0.7.0",
     "respx>=0.21.0",
     # NFR-AES-5: Jsonnet toolchain for the dashboard_creator compile-based golden tests.
     # Provides the `_gojsonnet` backend compiler.py already supports, so compiled-JSON
     # goldens run without a separately-installed `jsonnet` binary. Tests that compile
     # skip-with-reason when the toolchain is absent (see tests/.../test_cosmetic_defaults.py).
     "gojsonnet>=0.20.0",
+    # GraphQL behavioral lane: the reference-oracle test builds a schema with graphql-core
+    # (pure-python). The test gates with importorskip("graphql"), so it skips when absent.
+    "graphql-core>=3.2",
 ]
 
 [project.scripts]
@@ -177,6 +181,9 @@ pydantic-sqlmodel = "startd8.backend_codegen.provider:PydanticSQLModelProvider"
 scaffold = "startd8.scaffold_codegen.provider:ScaffoldFileProvider"
 composite-view = "startd8.view_codegen.provider:CompositeViewProvider"
 presentation-polish = "startd8.presentation_polish.provider:PresentationPolishFileProvider"
+migration = "startd8.migration_codegen.provider:MigrationFileProvider"
+proto-skeleton = "startd8.proto_codegen.provider:ProtoSkeletonProvider"
+events = "startd8.events_codegen.provider:EventsFileProvider"
 
 [project.urls]
 Homepage = "https://github.com/neil-the-nowledgeable/startd8-sdk"

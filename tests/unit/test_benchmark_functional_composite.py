@@ -54,3 +54,33 @@ def test_functional_degraded_marks_missing_not_zero():
     c = compute_composite(0.8, _pass(), functional=None, functional_degraded=True)
     assert c.value == pytest.approx(0.8)
     assert c.degraded and "functional" in c.terms_missing
+
+
+def test_model_fault_floors_not_degrades():
+    # R3-F3: a model that built the wrong wire protocol (off-contract dep) is floored, NOT degraded
+    # to a free structural 1.0. A structurally-perfect but off-contract service must land at the floor.
+    c = compute_composite(1.0, _pass(), functional_model_fault=True)
+    assert c.value == pytest.approx(COMPILE_FLOOR)
+    assert "functional" in c.terms_available  # it's a real (zero) coverage, not a missing/degraded term
+    assert not c.degraded
+
+
+def test_model_fault_ranks_below_honest_but_failing_service():
+    # The inversion R3 flagged: an off-contract hallucinator must NOT outrank an honest gRPC service
+    # that launched and merely failed its RPCs (functional 0.0 → ~0.5). Floor (0.15) < 0.5.
+    hallucinator = compute_composite(1.0, _pass(), functional_model_fault=True)
+    honest_but_failing = compute_composite(1.0, _pass(), functional=0.0)
+    assert hallucinator.value < honest_but_failing.value
+
+
+def test_model_fault_takes_precedence_over_coverage_value():
+    # Even if a coverage number is also passed, model-fault flooring wins (defensive: runner sets 0.0).
+    c = compute_composite(1.0, _pass(), functional=0.0, functional_model_fault=True)
+    assert c.value == pytest.approx(COMPILE_FLOOR)
+
+
+def test_compile_fail_still_floors_before_model_fault():
+    # Compile gate still wins first — a non-compiling file floors regardless of the behavioral verdict.
+    c = compute_composite(1.0, _fail(), functional_model_fault=True)
+    assert c.value == pytest.approx(COMPILE_FLOOR)
+    assert "functional" not in c.terms_available

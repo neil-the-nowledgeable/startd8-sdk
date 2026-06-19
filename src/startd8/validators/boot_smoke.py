@@ -17,6 +17,7 @@ land with the AI layer (M-C) and are out of scope here.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -138,6 +139,46 @@ def resolve_app_target(project_root: str, *, package: Optional[str] = None) -> O
     return None
 
 
+def expected_routes_from_contract(project_root: str) -> Optional[List[str]]:
+    """Extract sorted path strings from a generated ``app/openapi_contract.py``.
+
+    Uses AST ``literal_eval`` on ``ROUTE_MANIFEST`` — no ``import app`` in this process (avoids
+    ``sys.modules`` pollution and import side effects).
+    """
+    contract = Path(project_root) / "app" / "openapi_contract.py"
+    if not contract.is_file():
+        return None
+    try:
+        text = contract.read_text(encoding="utf-8")
+        mod = ast.parse(text)
+    except (OSError, SyntaxError) as exc:
+        logger.debug("boot-smoke: could not read/parse %s: %s", contract, exc)
+        return None
+    for node in mod.body:
+        value = None
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "ROUTE_MANIFEST":
+                    value = node.value
+                    break
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "ROUTE_MANIFEST":
+                value = node.value
+        if value is None:
+            continue
+        try:
+            manifest = ast.literal_eval(value)
+        except (ValueError, TypeError) as exc:
+            logger.debug("boot-smoke: ROUTE_MANIFEST not a literal: %s", exc)
+            return None
+        try:
+            return sorted({str(pair[1]) for pair in manifest})
+        except (IndexError, TypeError) as exc:
+            logger.debug("boot-smoke: malformed ROUTE_MANIFEST: %s", exc)
+            return None
+    return None
+
+
 def run_boot_smoke(
     project_root: str,
     *,
@@ -169,6 +210,9 @@ def run_boot_smoke(
                     "(looked for {package}/server.py and {package}/main.py)"
                 ),
             )
+
+    if expected_routes is None:
+        expected_routes = expected_routes_from_contract(project_root)
 
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "_boot_smoke.py"

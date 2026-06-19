@@ -1206,6 +1206,7 @@ def build_spec_prompt(
     # `## Context` dump (build_spec_context_section), where the spec ignored it and invented a
     # non-existent `Match`. It is rendered as a dedicated section below — like the drafter does.
     upstream_interfaces = context.pop("upstream_interfaces", None)
+    context_integration = context.pop("context_integration", None)
     # RUN-036 (convention half): the Python house-style authority (FastAPI/SQLModel idiom +
     # `app.tables` module-source) the lead path threads for Python targets. Pop so it renders as a
     # dedicated section, not JSON-escaped into the `## Context` dump.
@@ -1254,6 +1255,8 @@ def build_spec_prompt(
     # referenced-entity-scoped upstream, so it survives budget without crowding the prompt.
     if isinstance(upstream_interfaces, str) and upstream_interfaces.strip():
         prioritized.append((0, "upstream_interfaces", upstream_interfaces))
+    if isinstance(context_integration, str) and context_integration.strip():
+        prioritized.append((0, "context_integration", context_integration))
 
     # P0: Python house-style convention authority (RUN-036 convention half) — module-source
     # (`app.tables`) + ORM idiom (SQLModel `session.exec`, not SQLAlchemy `session.query`) + FastAPI.

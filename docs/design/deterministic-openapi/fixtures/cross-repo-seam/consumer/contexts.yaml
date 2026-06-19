@@ -1,0 +1,6 @@
+# Pinned producer contract — filtering uses producer paths, not consumer Prisma entities.
+outbound:
+  - id: catalog
+    contract: openapi/catalog.json
+    base_url: http://127.0.0.1:8001
+    routes: crud

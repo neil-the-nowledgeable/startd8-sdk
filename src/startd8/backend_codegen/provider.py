@@ -46,6 +46,9 @@ class PydanticSQLModelProvider:
             completeness_text=self._read_completeness(context),
             display_text=self._read_display(context),
             imports_text=self._read_imports(context),
+            api_text=self._read_api(context),
+            contexts_text=self._read_contexts(context),
+            project_root=str(Path(context.project_root).resolve()),
         )
 
     @staticmethod
@@ -150,4 +153,18 @@ class PydanticSQLModelProvider:
         ``$0``-owned file (without it the two-hash check ERRORs → falls through to the LLM)."""
         return cls._read_anchored(
             context, suffix="imports.yaml", conventional_relpath="prisma/imports.yaml"
+        )
+
+    @classmethod
+    def _read_api(cls, context: ProviderContext) -> Optional[str]:
+        """``api.yaml`` (Role 2 surface overlay), raw text or ``None`` if absent."""
+        return cls._read_anchored(
+            context, suffix="api.yaml", conventional_relpath="prisma/api.yaml"
+        )
+
+    @classmethod
+    def _read_contexts(cls, context: ProviderContext) -> Optional[str]:
+        """``contexts.yaml`` (Role 3 outbound producers), raw text or ``None`` if absent."""
+        return cls._read_anchored(
+            context, suffix="contexts.yaml", conventional_relpath="prisma/contexts.yaml"
         )

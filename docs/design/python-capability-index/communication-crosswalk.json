@@ -1,0 +1,354 @@
+{
+  "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md",
+  "patterns": [
+    {
+      "ast_nodes": [
+        "Import",
+        "ImportFrom",
+        "Call",
+        "FunctionDef",
+        "AsyncFunctionDef"
+      ],
+      "call_signatures": [
+        ".get(",
+        ".post(",
+        ".put(",
+        ".delete(",
+        ".request(",
+        "urlopen("
+      ],
+      "decorator_signatures": [
+        "route",
+        "get",
+        "post",
+        "api_view"
+      ],
+      "id": "PY-OTEL-5.1-HTTP",
+      "import_signatures": [
+        "urllib.request",
+        "urllib3",
+        "http.client",
+        "httpx",
+        "requests",
+        "aiohttp",
+        "fastapi",
+        "starlette",
+        "flask",
+        "django.http",
+        "uvicorn"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
+      "otel_pattern": "HTTP",
+      "semconv_domain": "http",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "id": "PY-OTEL-5.2-HTTP-METRICS",
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#52-http",
+      "metric_hints": [
+        "http.server.duration",
+        "http.client.duration"
+      ],
+      "note": "Emitted by instrumentation, not intrinsic to AST",
+      "otel_pattern": "HTTP metrics",
+      "semconv_domain": "http"
+    },
+    {
+      "ast_nodes": [
+        "ClassDef",
+        "FunctionDef",
+        "AsyncFunctionDef",
+        "Call"
+      ],
+      "attribute_hints": [
+        "rpc.system=grpc",
+        "rpc.service",
+        "rpc.method"
+      ],
+      "call_signatures": [
+        "grpc.server",
+        "insecure_channel",
+        "secure_channel",
+        "stub"
+      ],
+      "id": "PY-OTEL-5.3-RPC",
+      "import_signatures": [
+        "grpc",
+        "grpc.aio",
+        "google.protobuf"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#53-rpc-including-grpc",
+      "otel_pattern": "RPC / gRPC",
+      "semconv_domain": "rpc",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "ast_nodes": [
+        "Import",
+        "ImportFrom",
+        "Call"
+      ],
+      "id": "PY-OTEL-5.3-CONNECT",
+      "import_signatures": [
+        "connectrpc",
+        "connect-python"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#53-rpc-including-grpc",
+      "otel_pattern": "Connect RPC",
+      "semconv_domain": "rpc"
+    },
+    {
+      "ast_nodes": [
+        "Call",
+        "With",
+        "AsyncWith",
+        "FunctionDef",
+        "AsyncFunctionDef"
+      ],
+      "attribute_hints": [
+        "messaging.system",
+        "messaging.destination.name"
+      ],
+      "call_signatures": [
+        "send(",
+        "publish(",
+        "produce(",
+        "consume(",
+        "basic_publish"
+      ],
+      "id": "PY-OTEL-5.4-MESSAGING",
+      "import_signatures": [
+        "kafka",
+        "aiokafka",
+        "confluent_kafka",
+        "pika",
+        "celery",
+        "redis",
+        "boto3",
+        "google.cloud.pubsub_v1",
+        "azure.servicebus"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#54-messaging-async--event-driven",
+      "otel_pattern": "Messaging",
+      "semconv_domain": "messaging",
+      "span_kinds": [
+        "PRODUCER",
+        "CONSUMER"
+      ]
+    },
+    {
+      "ast_nodes": [
+        "Call",
+        "With",
+        "AsyncWith"
+      ],
+      "attribute_hints": [
+        "db.system",
+        "db.statement"
+      ],
+      "call_signatures": [
+        "execute(",
+        "executemany(",
+        "cursor(",
+        "connect(",
+        "from_url("
+      ],
+      "id": "PY-OTEL-5.5-DATABASE",
+      "import_signatures": [
+        "sqlite3",
+        "psycopg2",
+        "psycopg",
+        "asyncpg",
+        "pymysql",
+        "mysql.connector",
+        "sqlalchemy",
+        "django.db",
+        "pymongo",
+        "redis",
+        "elasticsearch",
+        "boto3.dynamodb"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#55-database-sync-data-access",
+      "otel_pattern": "Database",
+      "semconv_domain": "db",
+      "span_kinds": [
+        "CLIENT"
+      ]
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef",
+        "AsyncFunctionDef",
+        "ClassDef",
+        "Call"
+      ],
+      "id": "PY-OTEL-5.6-GRAPHQL",
+      "import_signatures": [
+        "graphene",
+        "strawberry",
+        "ariadne",
+        "graphql"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#56-graphql-faas-feature-flags-genai",
+      "otel_pattern": "GraphQL",
+      "semconv_domain": "graphql"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef"
+      ],
+      "call_signatures": [
+        "lambda_handler"
+      ],
+      "id": "PY-OTEL-5.6-FAAS",
+      "import_signatures": [
+        "awslambdaric",
+        "functions_framework"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#56-graphql-faas-feature-flags-genai",
+      "otel_pattern": "FaaS",
+      "semconv_domain": "faas"
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "attribute_hints": [
+        "feature_flag.key"
+      ],
+      "call_signatures": [
+        "get_boolean_value",
+        "resolve_boolean_details"
+      ],
+      "id": "PY-OTEL-5.6-FEATURE-FLAGS",
+      "import_signatures": [
+        "openfeature",
+        "flagd",
+        "launchdarkly"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#56-graphql-faas-feature-flags-genai",
+      "otel_pattern": "Feature flags",
+      "semconv_domain": "feature-flags"
+    },
+    {
+      "ast_nodes": [
+        "Call",
+        "Import",
+        "ImportFrom"
+      ],
+      "call_signatures": [
+        "chat.completions.create",
+        "messages.create"
+      ],
+      "id": "PY-OTEL-5.6-GENAI",
+      "import_signatures": [
+        "openai",
+        "anthropic",
+        "google.generativeai",
+        "langchain"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#56-graphql-faas-feature-flags-genai",
+      "note": "GenAI semconv lives in external OTel repo",
+      "otel_pattern": "Generative AI",
+      "semconv_domain": "gen-ai"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef",
+        "Call"
+      ],
+      "id": "PY-OTEL-5.7-CICD",
+      "import_signatures": [
+        "opentelemetry.instrumentation.cicd"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#57-cicd-and-cli",
+      "otel_pattern": "CI/CD",
+      "semconv_domain": "cicd"
+    },
+    {
+      "ast_nodes": [
+        "FunctionDef",
+        "Call",
+        "If"
+      ],
+      "call_signatures": [
+        "@click.command",
+        "typer.run",
+        "ArgumentParser.parse_args"
+      ],
+      "id": "PY-OTEL-5.7-CLI",
+      "import_signatures": [
+        "click",
+        "typer",
+        "argparse"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#57-cicd-and-cli",
+      "otel_pattern": "CLI",
+      "semconv_domain": "cli"
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "call_signatures": [
+        "getaddrinfo(",
+        "resolve("
+      ],
+      "id": "PY-OTEL-5.1-DNS",
+      "import_signatures": [
+        "socket",
+        "dns.resolver"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
+      "otel_pattern": "DNS",
+      "semconv_domain": "dns"
+    },
+    {
+      "ast_nodes": [
+        "Call"
+      ],
+      "call_signatures": [
+        "upload_file",
+        "download_file",
+        "put_object",
+        "get_object"
+      ],
+      "id": "PY-OTEL-5.1-OBJECT-STORE",
+      "import_signatures": [
+        "boto3",
+        "google.cloud.storage",
+        "azure.storage.blob"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
+      "otel_pattern": "Object stores",
+      "semconv_domain": "object-stores"
+    },
+    {
+      "ast_nodes": [
+        "Import",
+        "ImportFrom",
+        "Call"
+      ],
+      "id": "PY-OTEL-5.1-CLOUD-SDK",
+      "import_signatures": [
+        "boto3",
+        "botocore",
+        "google.cloud",
+        "azure.identity"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
+      "otel_pattern": "Cloud provider SDKs",
+      "semconv_domain": "cloud-providers"
+    }
+  ],
+  "schema_version": "1.0"
+}

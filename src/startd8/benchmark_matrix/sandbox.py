@@ -282,6 +282,8 @@ def run_service_sandboxed(
     *,
     readiness_timeout_s: float = 15.0,
     extra_env: Optional[Dict[str, str]] = None,
+    readiness_mode: str = "tcp",
+    health_path: str = "/health",
 ) -> ServiceResult:
     """Run an untrusted long-lived server, drive it with a loopback client, ALWAYS tear it down.
 
@@ -321,7 +323,12 @@ def run_service_sandboxed(
             preexec_fn=preexec,
             start_new_session=(preexec is None),
         )
-        violation = _wait_ready(port, readiness_timeout_s, proc)
+        if readiness_mode == "http":
+            from .readiness import wait_ready as _wait_ready_http
+            violation = _wait_ready_http(port, readiness_timeout_s, proc,
+                                         mode="http", health_path=health_path)
+        else:
+            violation = _wait_ready(port, readiness_timeout_s, proc)
         ready = violation is None
         if ready:
             try:

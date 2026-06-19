@@ -8,6 +8,7 @@
   "app/health.py": "c56c074e0b271cae535d469edb6b4e17c3225f0048a7e7207b4e7842731caf1f",
   "app/main.py": "b7363c56d48b37827527d6774698f3760c36408ca0873f7be0103159c524fe14",
   "app/models.py": "28e5f17004ff6e298d4d329c3579ffbf5c0c352d7bf4b4297e9c07c1fb95aa1f",
+  "app/openapi_contract.py": "db917c3bb09727991b9e0997abb86afd116fe425328ef9a0194513adbb3d557a",
   "app/routers.py": "a8ae784ac8e94a853df013f2daacb618addd544dec2afe1899a320ae42f02ae5",
   "app/settings.py": "cf557b1e023586ab271c03a9a20a3ea3825e7d5dc6ee7304881bc76238798f8f",
   "app/tables.py": "f87cb0efe5b1aa63500cd997e76155e78b9387a08099f31a081405322c69396f",
@@ -18,9 +19,12 @@
   "app/templates/profile/form.html": "679a4695840789f7d6393e073f30125914cd68639f946a0afdc7e95df00b877e",
   "app/templates/profile/list.html": "eecde886d40906d01287d66331a82174f7e99c77959c01a59999c742cf352696",
   "app/web.py": "d2028dc334eb688acae23b01c9ab7931a55a1411e047ac8fa01624d8362be7f9",
+  "clients/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "clients/http_client.py": "bb9ba16db130610f558c01fc1387c3fd0791c061e3a8a22dcbc9d58bb4fa9c32",
   "requirements.txt": "034ddfce118cddded1e604d0675d8d86f73da764510379d4f0c0388c61081cde",
   "tests/test_completeness.py": "2fc46002881bcc10f6958fecdf07c67175ad099104aef21837c09d20d4a24f8a",
   "tests/test_contract.py": "65fed3b62c5b72dcbae075447d683fdaf21c28781d69a6451d6349d7a787b138",
   "tests/test_health.py": "fd69fe2b6497e7e9f8fe156105099d413319af029166561993de2c1a1691e247",
+  "tests/test_openapi_contract.py": "30c531a93e24df066bb462690c9a083b72f471ca1c3ea190c5ac0c0654dbfda0",
   "tests/test_route_smoke.py": "f27276f645d753ec68c0bac30e62989d18706c4751a70cb3a3d6579ef0f7f475"
 }

@@ -237,3 +237,160 @@ def test_check_detects_handedit(tmp_path):
         ["backend", "--schema", str(schema), "--out", str(tmp_path), "--check"],
     )
     assert chk.exit_code == 1
+
+
+def test_export_openapi_writes_json(tmp_path):
+    schema = _schema(tmp_path)
+    result = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--out", str(tmp_path), "--export-openapi"],
+    )
+    assert result.exit_code == 0, result.output
+    export_path = tmp_path / "openapi.json"
+    assert export_path.is_file()
+    data = __import__("json").loads(export_path.read_text(encoding="utf-8"))
+    assert data["openapi"] == "3.0.3"
+    assert "/proofpoint/" in data["paths"]
+
+
+def test_export_openapi_includes_merged_overlay_paths(tmp_path):
+    schema = _schema(tmp_path)
+    api = tmp_path / "prisma" / "api.yaml"
+    api.write_text(
+        "paths:\n  /webhooks/stripe:\n    post:\n      responses:\n        '200':\n"
+        "          description: OK\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+            "--export-openapi",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = __import__("json").loads((tmp_path / "openapi.json").read_text(encoding="utf-8"))
+    assert "/webhooks/stripe" in data["paths"]
+    assert "/proofpoint/" in data["paths"]
+
+
+def test_gate_runs_openapi_spec_validation(tmp_path):
+    pytest.importorskip("openapi_spec_validator")
+    schema = _schema(tmp_path)
+    result = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--out", str(tmp_path), "--gate"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "openapi spec gate: pass" in result.output
+
+
+def test_generate_with_api_overlay_merges_contract(tmp_path):
+    schema = _schema(tmp_path)
+    api = tmp_path / "prisma" / "api.yaml"
+    api.write_text(
+        "paths:\n  /webhooks/stripe:\n    post:\n      responses:\n        '200':\n"
+        "          description: OK\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    contract = (tmp_path / "app" / "openapi_contract.py").read_text(encoding="utf-8")
+    assert "/webhooks/stripe" in contract
+    assert "# api-sha256:" in contract
+    chk = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+            "--check",
+        ],
+    )
+    assert chk.exit_code == 0, chk.output
+
+
+def test_generate_with_validation_only_overlay_warns(tmp_path):
+    schema = _schema(tmp_path)
+    api = tmp_path / "prisma" / "api.yaml"
+    api.write_text(
+        "paths:\n  /ai/extract:\n    x-startd8-validation-only: true\n    post:\n"
+        "      responses:\n        '200':\n          description: OK\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "validation-only" in result.output
+    contract = (tmp_path / "app" / "openapi_contract.py").read_text(encoding="utf-8")
+    assert "/ai/extract" not in contract
+
+
+def test_generate_with_contexts_emits_consumer_client(tmp_path):
+    schema = _schema(tmp_path)
+    contexts = tmp_path / "prisma" / "contexts.yaml"
+    contexts.write_text(
+        "outbound:\n  - id: catalog\n    local: true\n    routes: crud\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--contexts",
+            str(contexts),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    client = tmp_path / "clients" / "catalog_client.py"
+    assert client.is_file()
+    assert "CatalogClient" in client.read_text(encoding="utf-8")
+    chk = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--contexts",
+            str(contexts),
+            "--check",
+        ],
+    )
+    assert chk.exit_code == 0, chk.output

@@ -17,6 +17,7 @@ from typing import List, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256  # generic sha256-over-text hasher
 from .manifest import parse_app_manifest
+from .telemetry_renderer import otel_runtime_dependencies, render_telemetry
 
 # The generated app's runtime + dev deps (fixed by the FastAPI+SQLModel+HTMX stack, not manifest-derived).
 _RUNTIME_DEPS: Tuple[str, ...] = (
@@ -49,6 +50,7 @@ def render_pyproject(manifest_text: str) -> str:
     """``pyproject.toml`` — the project env (deps + build system). THE #1 rebuild blocker."""
     m = parse_app_manifest(manifest_text)
     sha = schema_sha256(manifest_text)
+    runtime_deps = _RUNTIME_DEPS + otel_runtime_dependencies(manifest_text)
     body = (
         "[build-system]\n"
         'requires = ["setuptools>=68"]\n'
@@ -58,7 +60,7 @@ def render_pyproject(manifest_text: str) -> str:
         'version = "0.1.0"\n'
         f'requires-python = ">={m.python_version}"\n'
         # G4: contract-stack deps + any owned-glue deps declared in app.yaml `extra_dependencies`.
-        f"dependencies = {_toml_list(_RUNTIME_DEPS + m.extra_dependencies)}\n\n"
+        f"dependencies = {_toml_list(runtime_deps + m.extra_dependencies)}\n\n"
         "[project.optional-dependencies]\n"
         f"dev = {_toml_list(_DEV_DEPS)}\n\n"
         "[tool.setuptools]\n"
@@ -265,6 +267,12 @@ def render_env_example(manifest_text: str) -> str:
         "COST_BUDGET_USD=10",
         f"ENV={'production' if deployed else 'development'}",  # FR-OBS-1: OTel deployment.environment
     ]
+    if m.telemetry_enabled:
+        svc = m.telemetry_service_name or m.name
+        lines += [
+            f"OTEL_SERVICE_NAME={svc}",
+            f"OTEL_EXPORTER_OTLP_ENDPOINT={m.telemetry_otlp_endpoint}",
+        ]
     if deployed:
         # FR-SEC-1 / FR-OBS-1: deployed posture — external secrets manager + centralized OTel export
         # expected. These are DEFAULTS the operator fills/overrides; never forced over an explicit choice.
@@ -295,6 +303,8 @@ def render_scaffold(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
         out.append(("alembic/script.py.mako", render_alembic_mako(manifest_text)))
         # versions/ must exist for `alembic revision`/`upgrade`; .gitkeep keeps the empty dir in git.
         out.append(("alembic/versions/.gitkeep", ""))
+    if m.telemetry_enabled:
+        out.append((f"{m.package}/telemetry.py", render_telemetry(manifest_text)))
     return tuple(out)
 
 
@@ -309,4 +319,5 @@ SCAFFOLD_RENDERERS = {
     "scaffold-owned-requirements": render_owned_requirements,
     "scaffold-env": render_env_example,
     "scaffold-run-script": render_run_script,
+    "scaffold-telemetry": render_telemetry,
 }

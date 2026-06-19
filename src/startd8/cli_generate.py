@@ -7,8 +7,9 @@ fast and is unit-testable in isolation.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import typer
 from rich.console import Console
@@ -105,6 +106,36 @@ def frontend(
             console.print(f"  [dim]note:[/dim] {note}")
 
 
+def _migration_pending_hint(
+    project_root: Path,
+    contract_path: Path,
+    app_manifest: Optional[Path],
+) -> Optional[str]:
+    """Surface a pending Alembic revision during ``generate backend --check`` (Tier-1 FR-C3)."""
+    migrations_on = True
+    if app_manifest is not None:
+        try:
+            from .scaffold_codegen import parse_app_manifest
+
+            migrations_on = parse_app_manifest(
+                app_manifest.read_text(encoding="utf-8")
+            ).migrations
+        except (OSError, ValueError):
+            return None
+    if not migrations_on:
+        return None
+    versions = project_root / "alembic" / "versions"
+    if not (project_root / "alembic").is_dir() and not versions.is_dir():
+        return None
+    try:
+        schema_text = contract_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    from .migration_codegen import pending_migration_message
+
+    return pending_migration_message(versions, schema_text)
+
+
 @generate_app.command("backend")
 def backend(
     schema: Path = typer.Option(..., "--schema", help="Path to prisma/schema.prisma."),
@@ -119,7 +150,14 @@ def backend(
     gate: bool = typer.Option(
         False,
         "--gate",
-        help="After writing, run the Python build gate (compileall) over the project.",
+        help="After writing, run the Python build gate (compileall) and validate the static "
+        "OPENAPI_SPEC in app/openapi_contract.py (requires openapi-spec-validator).",
+    ),
+    export_openapi: bool = typer.Option(
+        False,
+        "--export-openapi",
+        help="After writing, export openapi.json (pretty-printed OPENAPI_SPEC) to the project root. "
+        "Drift authority remains app/openapi_contract.py.",
     ),
     boot_smoke: bool = typer.Option(
         False,
@@ -191,6 +229,20 @@ def backend(
         "app/importer.py (from_json upsert) is emitted; absent → no importer (opt-in). Threaded "
         "to both generate and --check so drift stays consistent.",
     ),
+    api_overlay: Optional[Path] = typer.Option(
+        None,
+        "--api",
+        help="Path to api.yaml (OpenAPI 3.0 surface overlay). When given, net-new paths are "
+        "merged into app/openapi_contract.py; absent → Role 1 schema-only contract (SOTTO). "
+        "Threaded to both generate and --check so drift stays consistent.",
+    ),
+    contexts_manifest: Optional[Path] = typer.Option(
+        None,
+        "--contexts",
+        help="Path to contexts.yaml (OpenAPI Role 3 outbound producer declarations). When given, "
+        "typed clients/{id}_client.py artifacts are emitted per outbound entry; absent → no "
+        "context clients (SOTTO). Threaded to both generate and --check.",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
@@ -229,7 +281,7 @@ def backend(
     pages_text: Optional[str] = None
     _reads = {
         "manifest": None, "human": None, "pages": None, "completeness": None, "views": None,
-        "display": None, "imports": None,
+        "display": None, "imports": None, "api": None, "contexts": None,
     }
     for label, path, dest in (
         ("ai_passes", ai_passes, "manifest"),
@@ -239,6 +291,8 @@ def backend(
         ("views", views, "views"),
         ("display", display, "display"),
         ("imports", imports, "imports"),
+        ("api", api_overlay, "api"),
+        ("contexts", contexts_manifest, "contexts"),
     ):
         if path is None:
             continue
@@ -247,7 +301,7 @@ def backend(
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
-    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text = (
+    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text, api_text, contexts_text = (
         _reads["manifest"],
         _reads["human"],
         _reads["pages"],
@@ -255,6 +309,8 @@ def backend(
         _reads["views"],
         _reads["display"],
         _reads["imports"],
+        _reads["api"],
+        _reads["contexts"],
     )
 
     # FR-CLI-1: resolve the deployment mode. app.yaml's `deployment.mode` is the source of truth;
@@ -333,6 +389,7 @@ def backend(
         raise typer.Exit(_EXIT_ERROR)
 
     try:
+        overlay_warnings: list[str] = []
         artifacts = render_backend(
             schema_text,
             source_label,
@@ -344,6 +401,10 @@ def backend(
             views_text=views_text,
             display_text=display_text,
             imports_text=imports_text,
+            api_text=api_text,
+            overlay_warnings=overlay_warnings,
+            contexts_text=contexts_text,
+            project_root=str(out.resolve()),
             # On --check we don't render the untracked prose fragments (they need the .md on disk
             # and never participate in drift); on write we do, reading app/pages/*.md under --out.
             pages_app_dir=None if check else (out / "app"),
@@ -356,6 +417,9 @@ def backend(
     ) as exc:  # reserved attr name / malformed ai_passes/pages/views manifest — fail loud
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
+
+    for warning in overlay_warnings:
+        console.print(f"[yellow]warning:[/yellow] api overlay: {warning}")
 
     if check:
         drifted = 0
@@ -375,6 +439,9 @@ def backend(
                 forms_text=views_text,
                 display_text=display_text,
                 imports_text=imports_text,
+                api_text=api_text,
+                contexts_text=contexts_text,
+                project_root=str(out.resolve()),
             )
             if result.status != "in_sync":
                 drifted += 1
@@ -384,6 +451,9 @@ def backend(
         if drifted:
             console.print(f"[yellow]{drifted} artifact(s) drifted[/yellow]")
             raise typer.Exit(1)
+        pending = _migration_pending_hint(out, schema, app_manifest)
+        if pending:
+            console.print(f"[yellow]{pending}[/yellow]")
         console.print(
             f"[green]in_sync[/green]: all {len(artifacts)} artifact(s) match the schema"
         )
@@ -401,6 +471,27 @@ def backend(
             raise typer.Exit(_EXIT_ERROR)
     console.print(f"[green]wrote[/green] {written} file(s) under {out}/app")
 
+    if export_openapi:
+        from .validators.openapi_spec_gate import extract_openapi_spec_from_project
+
+        spec = extract_openapi_spec_from_project(str(out))
+        if spec is None:
+            console.print(
+                "[red]error:[/red] --export-openapi: app/openapi_contract.py missing "
+                "or OPENAPI_SPEC not loadable"
+            )
+            raise typer.Exit(_EXIT_ERROR)
+        export_path = out / "openapi.json"
+        try:
+            export_path.write_text(
+                json.dumps(spec, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write {export_path}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        console.print(f"[green]exported[/green] {export_path}")
+
     if gate:
         from .validators.python_toolchain import run_project_check
 
@@ -416,6 +507,16 @@ def backend(
                 f"  [red]{d.stage}[/red] {d.file}:{d.line} {d.code}: {d.message}"
             )
         if not result.is_pass:
+            raise typer.Exit(_EXIT_ERROR)
+
+        from .validators.openapi_spec_gate import run_openapi_spec_gate
+
+        og = run_openapi_spec_gate(str(out))
+        color = "green" if og.is_pass else "red"
+        console.print(f"[{color}]openapi spec gate: {og.verdict}[/{color}] ({og.message})")
+        for d in og.diagnostics:
+            console.print(f"  [red]{d}[/red]")
+        if not og.is_pass:
             raise typer.Exit(_EXIT_ERROR)
 
     if boot_smoke:
@@ -812,3 +913,161 @@ def migrate(
         console.print(f"[yellow]note:[/yellow] {note}")
     console.print("apply with: [cyan]alembic upgrade head[/cyan]")
     raise typer.Exit(0)
+
+
+def _emit_or_check_artifacts(
+    artifacts: Sequence[Tuple[str, str]],
+    out: Path,
+    *,
+    check: bool,
+    in_sync: Callable[[str, str], bool],
+    noun: str,
+    source: str,
+) -> None:
+    """Drift-check (``--check``) or write deterministic ``(rel_path, content)`` artifacts.
+
+    Shared by the ``grpc`` and ``events`` commands so the missing/drift/write loop and exit-code
+    contract live in one place. ``in_sync(rel, ondisk_text) -> bool`` decides per-file sync.
+    Always exits via ``typer.Exit`` (0=ok, 1=drift, ``_EXIT_ERROR``=write failure).
+    """
+    if check:
+        drifted = 0
+        for rel, _content in artifacts:
+            target = out / rel
+            ondisk = target.read_text(encoding="utf-8") if target.exists() else None
+            if ondisk is None:
+                drifted += 1
+                console.print(f"[yellow]missing[/yellow]: {rel}")
+            elif not in_sync(rel, ondisk):
+                drifted += 1
+                console.print(f"[yellow]drift[/yellow]: {rel}")
+        if drifted:
+            console.print(f"[yellow]{drifted} {noun}(s) drifted[/yellow]")
+            raise typer.Exit(1)
+        console.print(f"[green]in_sync[/green]: all {len(artifacts)} {noun}(s) match {source}")
+        raise typer.Exit(0)
+
+    written = 0
+    for rel, content in artifacts:
+        target = out / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            written += 1
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write {target}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+    console.print(f"[green]wrote[/green] {written} {noun} file(s) under {out}")
+    raise typer.Exit(0)
+
+
+@generate_app.command("grpc")
+def grpc(
+    manifest: Path = typer.Option(
+        Path("grpc.yaml"), "--manifest", help="Path to grpc.yaml (service declarations)."
+    ),
+    out: Path = typer.Option(
+        Path("."), "--out", help="Project root containing the .proto files and output paths."
+    ),
+    check: bool = typer.Option(
+        False, "--check", help="Drift-check owned skeleton files instead of writing."
+    ),
+):
+    """Deterministically emit gRPC server skeletons (Python/Go) from grpc.yaml + .proto — $0 LLM."""
+    from .proto_codegen import is_owned_proto_skeleton, proto_skeleton_in_sync, render_grpc_skeletons
+
+    try:
+        manifest_text = manifest.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read manifest {manifest}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    try:
+        artifacts = render_grpc_skeletons(manifest_text, out)
+    except ValueError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    _emit_or_check_artifacts(
+        artifacts,
+        out,
+        check=check,
+        in_sync=lambda rel, ondisk: proto_skeleton_in_sync(manifest_text, out, rel, ondisk),
+        noun="gRPC skeleton",
+        source="grpc.yaml",
+    )
+
+
+@generate_app.command("events")
+def events(
+    manifest: Path = typer.Option(
+        Path("events.yaml"), "--manifest", help="Path to events.yaml (channel declarations)."
+    ),
+    schema: Path = typer.Option(
+        Path("prisma/schema.prisma"), "--schema", help="Prisma schema for payload projection."
+    ),
+    app_manifest: Path = typer.Option(
+        Path("app.yaml"), "--app-manifest", help="app.yaml for messaging.backend + package."
+    ),
+    out: Path = typer.Option(
+        Path("."), "--out", help="Project root for output paths."
+    ),
+    check: bool = typer.Option(
+        False, "--check", help="Drift-check owned event modules instead of writing."
+    ),
+):
+    """Deterministically emit Kafka event stubs from events.yaml + Prisma — $0 LLM."""
+    from .events_codegen import events_file_in_sync, is_owned_events_file, render_events_artifacts
+    from .scaffold_codegen.manifest import parse_app_manifest
+
+    try:
+        events_text = manifest.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read manifest {manifest}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    try:
+        schema_text = schema.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read schema {schema}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    messaging_backend = "aiokafka"
+    package = "app"
+    if app_manifest.is_file():
+        try:
+            app_m = parse_app_manifest(app_manifest.read_text(encoding="utf-8"))
+            messaging_backend = app_m.messaging_backend
+            package = app_m.package
+        except ValueError as exc:
+            console.print(f"[red]error:[/red] {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+
+    try:
+        artifacts = render_events_artifacts(
+            events_text,
+            schema_text,
+            events_source=manifest.as_posix(),
+            schema_source=schema.as_posix(),
+            messaging_backend=messaging_backend,
+            package=package,
+        )
+    except ValueError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    _emit_or_check_artifacts(
+        artifacts,
+        out,
+        check=check,
+        in_sync=lambda rel, ondisk: events_file_in_sync(
+            events_text,
+            schema_text,
+            rel,
+            ondisk,
+            messaging_backend=messaging_backend,
+            package=package,
+        ),
+        noun="event module",
+        source="events.yaml",
+    )

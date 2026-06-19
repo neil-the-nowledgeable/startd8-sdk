@@ -66,3 +66,18 @@ def test_conditional_surfaces_present(golden_root: Path) -> None:
         "Dockerfile",               # scaffold container
     ):
         assert must in claimed, must
+
+
+def test_openapi_contract_projects_golden_conditional_routes(golden_root: Path) -> None:
+    """Role 1 FR-3: wireframe manifests → conditional routes in static contract."""
+    from startd8.backend_codegen.openapi_contract_renderer import render_openapi_contract
+
+    schema = (golden_root / "prisma" / "schema.prisma").read_text(encoding="utf-8")
+    text = render_openapi_contract(
+        schema,
+        manifest_text=(golden_root / "prisma" / "ai_passes.yaml").read_text(encoding="utf-8"),
+        pages_text=(golden_root / "prisma" / "pages.yaml").read_text(encoding="utf-8"),
+        views_text=(golden_root / "prisma" / "views.yaml").read_text(encoding="utf-8"),
+    )
+    assert '("POST", "/ai/ai/suggest-notes")' in text
+    assert '("GET", "/")' in text

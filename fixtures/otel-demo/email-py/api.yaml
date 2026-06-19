@@ -1,0 +1,30 @@
+openapi: 3.0.3
+info:
+  title: OTel Demo Email (Python port)
+  version: 1.0.0
+paths:
+  /send_order_confirmation:
+    post:
+      operationId: sendOrderConfirmation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderConfirmationRequest'
+      responses:
+        '200':
+          description: Confirmation accepted
+components:
+  schemas:
+    OrderConfirmationRequest:
+      type: object
+      required: [order]
+      properties:
+        order:
+          type: object
+          properties:
+            order_id:
+              type: string
+            email:
+              type: string

@@ -19,6 +19,8 @@ from .crud_generator import (
 )
 from .derived import _load_completeness_manifest, render_derived, render_requirements
 from .health_renderer import render_health
+from .openapi_contract_renderer import render_openapi_contract
+from .openapi_client_renderer import render_http_client
 from .editor_generator import render_editors
 from .flow_generator import render_flows
 from .htmx_generator import render_ui
@@ -28,11 +30,15 @@ from .test_emitter import (
     COMPLETENESS_TESTS_PATH,
     CONTRACT_TESTS_PATH,
     HEALTH_TESTS_PATH,
+    OPENAPI_CONTRACT_TESTS_PATH,
     ROUTE_SMOKE_TESTS_PATH,
     render_completeness_tests,
     render_contract_tests,
     render_health_tests,
+    render_openapi_contract_tests,
     render_route_smoke_tests,
+    render_cross_context_smoke_tests,
+    CROSS_CONTEXT_SMOKE_TESTS_PATH,
 )
 
 
@@ -50,6 +56,10 @@ def render_backend(
     views_text: Optional[str] = None,
     display_text: Optional[str] = None,
     imports_text: Optional[str] = None,
+    api_text: Optional[str] = None,
+    overlay_warnings: Optional[List[str]] = None,
+    contexts_text: Optional[str] = None,
+    project_root: Optional[str] = None,
     deployment_mode: str = "installed",
     tenant_owner_field: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
@@ -83,6 +93,32 @@ def render_backend(
         (CANONICAL_LAYOUT["fastapi-db"], render_db(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-main"], render_main(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-health"], render_health(schema_text, source_file)),
+        (
+            CANONICAL_LAYOUT["python-openapi-contract"],
+            render_openapi_contract(
+                schema_text,
+                source_file,
+                api_text=api_text,
+                overlay_warnings=overlay_warnings,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
+            ),
+        ),
+        ("clients/__init__.py", ""),
+        (
+            CANONICAL_LAYOUT["python-openapi-client"],
+            render_http_client(
+                schema_text,
+                source_file,
+                api_text=api_text,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
+            ),
+        ),
     ]
     # app/web.py + templates (+ nav, + per-entity post-create behavior from views.yaml `forms:`)
     out.extend(render_ui(
@@ -121,6 +157,18 @@ def render_backend(
     out.append((CONTRACT_TESTS_PATH, render_contract_tests(schema_text, source_file)))
     out.append((HEALTH_TESTS_PATH, render_health_tests(schema_text, source_file)))
     out.append((
+        OPENAPI_CONTRACT_TESTS_PATH,
+        render_openapi_contract_tests(
+            schema_text,
+            source_file,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=views_text,
+            imports_text=imports_text,
+            api_text=api_text,
+        ),
+    ))
+    out.append((
         COMPLETENESS_TESTS_PATH,
         render_completeness_tests(
             schema_text, source_file, manifest=_load_completeness_manifest(completeness_text)
@@ -145,6 +193,77 @@ def render_backend(
         out.extend(render_ai_layer(
             schema_text, manifest_text, human_inputs_text, source_file,
             ai_agent_spec=ai_agent_spec,
+        ))
+    if contexts_text:
+        from .context_client_renderer import render_context_clients
+        from .context_integration_renderer import (
+            CONTEXT_INTEGRATION_PATH,
+            render_context_clients_module,
+        )
+        from .context_otel_renderer import CONTEXT_OTEL_PATH, render_context_otel
+
+        out.append((
+            CONTEXT_OTEL_PATH,
+            render_context_otel(source_file, schema_text),
+        ))
+        out.extend(
+            render_context_clients(
+                schema_text,
+                contexts_text,
+                source_file,
+                api_text=api_text,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
+                project_root=project_root,
+            )
+        )
+        from .context_grpc_client_renderer import render_context_grpc_clients
+        from .context_graph_renderer import CONTEXT_GRAPH_PATH, render_context_graph
+        from .context_ts_client_renderer import render_context_ts_clients
+
+        out.extend(
+            render_context_ts_clients(
+                schema_text,
+                contexts_text,
+                source_file,
+                api_text=api_text,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
+                project_root=project_root,
+            )
+        )
+        out.extend(
+            render_context_grpc_clients(
+                schema_text,
+                contexts_text,
+                source_file,
+                project_root=project_root,
+            )
+        )
+        integration = render_context_clients_module(
+            schema_text,
+            contexts_text,
+            source_file,
+            project_root=project_root,
+        )
+        if integration:
+            out.append((CONTEXT_INTEGRATION_PATH, integration))
+        out.append((
+            CONTEXT_GRAPH_PATH,
+            render_context_graph(
+                schema_text,
+                contexts_text,
+                source_file=source_file,
+                project_root=project_root,
+            ),
+        ))
+        out.append((
+            CROSS_CONTEXT_SMOKE_TESTS_PATH,
+            render_cross_context_smoke_tests(schema_text, contexts_text, source_file),
         ))
     # FR-CFG-7 / D11: app/settings.py is emitted ONLY in deployed mode. Installed mode is the
     # settings-absent default and stays byte-identical to today (R4). settings.py — present here,

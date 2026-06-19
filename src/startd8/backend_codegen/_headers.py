@@ -41,6 +41,27 @@ def header_emitted_contract(source_file: str, sha: str) -> str:
     )
 
 
+def header_api_overlay(
+    source_file: str,
+    schema_sha: str,
+    api_sha: str,
+    kind: str,
+) -> str:
+    """OpenAPI-contract provenance header — two inputs (schema + api.yaml), two hashes (Role 2).
+
+    Drift on ``app/openapi_contract.py`` is **stale if either** the schema or ``api.yaml`` changes
+    when the overlay header is present (see :func:`startd8.backend_codegen.drift.api_overlay_stale_reason`).
+    """
+    return (
+        f"# GENERATED from {source_file} (+ api.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# Source of truth: the Prisma schema and the API surface overlay.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# api-sha256: {api_sha}"
+    )
+
+
 def header_imports(
     source_file: str,
     schema_sha: str,
@@ -62,6 +83,62 @@ def header_imports(
         f"# Source of truth: the Prisma schema and the imports manifest.\n"
         f"# schema-sha256: {schema_sha}\n"
         f"# imports-sha256: {imports_sha}"
+    )
+
+
+def header_context_client(
+    source_file: str,
+    schema_sha: str,
+    contexts_sha: str,
+    contract_sha: str,
+    kind: str,
+    *,
+    producer_id: str,
+) -> str:
+    """Inter-context consumer client header — schema + contexts manifest + pinned contract (Role 3)."""
+    return (
+        f"# GENERATED from {source_file} (+ contexts.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# startd8-entity: {producer_id}\n"
+        f"# Source of truth: the Prisma schema, contexts manifest, and producer contract snapshot.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# contexts-sha256: {contexts_sha}\n"
+        f"# contract-sha256: {contract_sha}"
+    )
+
+
+def header_context_smoke_tests(
+    source_file: str,
+    schema_sha: str,
+    contexts_sha: str,
+    kind: str,
+) -> str:
+    """Cross-context smoke test provenance — schema + contexts manifest (Role 3 M2)."""
+    return (
+        f"# GENERATED from {source_file} (+ contexts.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# Source of truth: the Prisma schema and the contexts manifest.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# contexts-sha256: {contexts_sha}"
+    )
+
+
+def header_context_integration(
+    source_file: str,
+    schema_sha: str,
+    contexts_sha: str,
+    kind: str,
+) -> str:
+    """Outbound context client registry — schema + contexts manifest (Role 3 P2)."""
+    return (
+        f"# GENERATED from {source_file} (+ contexts.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# Source of truth: the Prisma schema and the contexts manifest.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# contexts-sha256: {contexts_sha}"
     )
 
 

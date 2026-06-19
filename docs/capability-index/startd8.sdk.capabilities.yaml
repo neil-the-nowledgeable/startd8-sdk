@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.5.0"
+version: "1.6.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -647,6 +647,54 @@ capabilities:
         description: "REQUIREMENTS v0.2 + PLAN v1.0 + NEXT_STEPS — all FRs shipped; runtime-verified on the real 15-model schema"
     confidence: 0.85
 
+  - capability_id: startd8.codegen.openapi_role3_intercontext
+    category: generate
+    maturity: beta
+    summary: "OpenAPI Role 3 inter-context seam — prisma/contexts.yaml drives typed outbound httpx clients, OTel spans, cross-context smoke, pinned cross-repo contracts, and Prime bucket-3 integration wiring ($0 LLM)"
+    audiences: [workflow_developer, integration_developer, sdk_architect]
+    description:
+      developer: |
+        `startd8 generate backend --contexts prisma/contexts.yaml` emits per-producer
+        `clients/{id}_client.py` (contract-sha256 drift), `app/context_clients.py` factories,
+        `clients/_context_otel.py`, and `tests/test_cross_context_smoke.py`. Producer promotion:
+        `--export-openapi openapi/{id}.json`. Pinned `contract:` entries filter producer OpenAPI
+        without consumer Prisma entity overlap (M5). Prime Contractor threads
+        `collect_context_integration_prompt()` into spec/draft for bucket-3 integration (P2).
+        Deploy harness `context_smoke` stage + `STARTD8_CONTEXT_<ID>_BASE_URL` for remote smoke.
+      agent: |
+        # Consumer with outbound catalog producer
+        startd8 generate backend --schema prisma/schema.prisma \
+          --contexts prisma/contexts.yaml --out .
+        # Producer contract publish
+        ./scripts/openapi_role3_publish_contract.sh /path/to/producer catalog
+    triggers: ["inter-context", "contexts.yaml", "outbound client", "contract-sha256", "cross-context smoke", "export-openapi", "openapi role 3", "bounded context split"]
+    evidence:
+      - type: code
+        ref: src/startd8/backend_codegen/context_manifest.py
+        description: "parse contexts.yaml, filter_spec_for_context, contract_sha256"
+      - type: code
+        ref: src/startd8/backend_codegen/context_client_renderer.py
+        description: "clients/{id}_client.py emission"
+      - type: code
+        ref: src/startd8/contractors/context_integration.py
+        description: "Prime bucket-3 context_integration prompt injection (P2)"
+      - type: code
+        ref: src/startd8/deploy_harness/context_smoke.py
+        description: "run_outbound_context_smokes, remote producer smoke"
+      - type: test
+        ref: tests/unit/backend_codegen/test_openapi_role3_m4_fixture.py
+        description: "Two-app producer→export→consumer pin→drift→remote smoke"
+      - type: test
+        ref: tests/unit/backend_codegen/test_openapi_role3_m5_cross_repo.py
+        description: "Cross-repo divergent Prisma schemas with pinned contract"
+      - type: docs
+        ref: docs/design/deterministic-openapi/OPENAPI_ROLE3_REQUIREMENTS.md
+        description: "Requirements v0.3 (FR-1..FR-14)"
+      - type: docs
+        ref: docs/design/deterministic-openapi/fixtures/
+        description: "two-app-seam + cross-repo-seam fixtures and smoke scripts"
+    confidence: 0.9
+
   - capability_id: startd8.codegen.wireframe_summary
     category: query
     maturity: beta
@@ -799,7 +847,7 @@ summary:
     action: 5      # system_prompt, generate_result, resolution, resilience, ratelimit
     observe: 3     # session_tracking, cost_tracking, otel_logging
     validate: 4    # truncation_detection, diagnostics, mock_provider, multilang_manifest_validation
-    generate: 4    # forward_manifest_draft_time_injection, observability_artifact_generation, deterministic_backend, presentation_polish
+    generate: 5    # forward_manifest_draft_time_injection, observability_artifact_generation, deterministic_backend, openapi_role3_intercontext, presentation_polish
     integration: 4 # provider_registry, contextcore, mcp, capdevpipe_install
     query: 2       # model_catalog, wireframe_summary
     transform: 1   # code_extraction
@@ -809,6 +857,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.6.0"
+    date: "2026-06-19"
+    changes:
+      - "Added startd8.codegen.openapi_role3_intercontext (generate, beta, confidence 0.9) — OpenAPI Role 3: prisma/contexts.yaml → clients/{id}_client.py + app/context_clients.py + OTel + cross-context smoke + pinned cross-repo contracts (M5) + Prime bucket-3 integration (P2); fixtures two-app-seam + cross-repo-seam"
+      - "24 capabilities: 16 stable, 8 beta; generate 4→5"
   - version: "1.5.0"
     date: "2026-06-08"
     changes:

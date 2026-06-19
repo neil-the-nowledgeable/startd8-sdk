@@ -1,0 +1,5 @@
+// Consumer shares entity DTO namespace with producer (modular-monolith split pattern).
+model Note {
+  id    String @id @default(cuid())
+  title String
+}

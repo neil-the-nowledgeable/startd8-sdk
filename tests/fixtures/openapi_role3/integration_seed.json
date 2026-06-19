@@ -1,0 +1,15 @@
+{
+  "name": "role3-p2-catalog-sync",
+  "tasks": [
+    {
+      "id": "sync-notes-from-catalog",
+      "config": {
+        "context": {
+          "task_description": "Implement app/note_sync.py: a thin integration module that lists remote notes via get_catalog_client() from app.context_clients (CatalogClient outbound producer catalog). Do NOT query Note rows from app.tables for catalog-owned data. Stamp provenance comments with producer_id=catalog and the contract-sha256 from the generated client header.",
+          "target_files": ["app/note_sync.py"],
+          "depends_on": []
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{#
+# GENERATED from prisma/schema.prisma — do not edit by hand; regenerate via `startd8 generate backend`.
+# startd8-artifact: htmx-row
+# startd8-entity: OrderConfirmation
+# Source of truth: the Prisma schema.
+# schema-sha256: 0b898e5f7f7f45151610a0e3830b0b5c32150ec8cc732b449b0d0ea40e8ce102
+#}
+<tr id="row-{{ item.id }}"{% if created == item.id|string %} class="new-row"{% endif %}><td>{{ item.orderId }}</td><td>{{ item.email }}</td><td>
+    <a href="/ui/orderconfirmation/{{ item.id }}">view</a>
+    <a href="/ui/orderconfirmation/{{ item.id }}/edit">edit</a>
+    <button hx-post="/ui/orderconfirmation/{{ item.id }}/delete" hx-target="#row-{{ item.id }}" hx-swap="outerHTML" hx-confirm="Delete?">delete</button>
+  </td></tr>
