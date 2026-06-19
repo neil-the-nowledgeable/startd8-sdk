@@ -45,6 +45,8 @@ _HEADER_PAGES_SHA_RE = re.compile(r"#\s*pages-sha256:\s*([0-9a-f]{64})")
 _HEADER_FORMS_SHA_RE = re.compile(r"#\s*forms-sha256:\s*([0-9a-f]{64})")
 # The import owned-kind (FR-IMP-1) derives from one extra input (imports.yaml) → one extra hash.
 _HEADER_IMPORTS_SHA_RE = re.compile(r"#\s*imports-sha256:\s*([0-9a-f]{64})")
+# Role 2: openapi contract may derive from schema + api.yaml overlay.
+_HEADER_API_SHA_RE = re.compile(r"#\s*api-sha256:\s*([0-9a-f]{64})")
 _GENERATED_MARKER = "# GENERATED from"
 
 # Artifact kinds whose drift derives from three inputs (schema + ai_passes + human_inputs). Kept in
@@ -97,6 +99,10 @@ def _renderers(
     completeness_text: Optional[str] = None,
     forms_text: Optional[str] = None,
     display_text: Optional[str] = None,
+    api_text: Optional[str] = None,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
 ) -> Dict[str, Callable[[str, str, Optional[str]], str]]:
     """Map artifact-kind → a ``(schema_text, source_file, entity) -> text`` renderer.
 
@@ -169,8 +175,24 @@ def _renderers(
         "fastapi-db": lambda s, sf, e: render_db(s, sf),
         "fastapi-main": lambda s, sf, e: render_main(s, sf),
         "fastapi-health": lambda s, sf, e: render_health(s, sf),
-        "python-openapi-contract": lambda s, sf, e: render_openapi_contract(s, sf),
-        "python-openapi-client": lambda s, sf, e: render_http_client(s, sf),
+        "python-openapi-contract": lambda s, sf, e: render_openapi_contract(
+            s,
+            sf,
+            api_text=api_text,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=forms_text,
+            imports_text=imports_text,
+        ),
+        "python-openapi-client": lambda s, sf, e: render_http_client(
+            s,
+            sf,
+            api_text=api_text,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=forms_text,
+            imports_text=imports_text,
+        ),
         "fastapi-web": lambda s, sf, e: render_web(s, sf),
         "htmx-base": lambda s, sf, e: render_base_template(s, sf),
         "htmx-field-error": lambda s, sf, e: render_field_error_template(s, sf),
@@ -194,7 +216,15 @@ def _renderers(
         "pages-admin-tmpl": lambda s, sf, e: render_pages_admin_template(s, sf),
         "python-tests-contract": lambda s, sf, e: render_contract_tests(s, sf),
         "python-tests-health": lambda s, sf, e: render_health_tests(s, sf),
-        "python-tests-openapi-contract": lambda s, sf, e: render_openapi_contract_tests(s, sf),
+        "python-tests-openapi-contract": lambda s, sf, e: render_openapi_contract_tests(
+            s,
+            sf,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=forms_text,
+            imports_text=imports_text,
+            api_text=api_text,
+        ),
         "python-tests-completeness": lambda s, sf, e: render_completeness_tests(s, sf, manifest=_cmpl),
         "python-tests-routes": lambda s, sf, e: render_route_smoke_tests(s, sf),
     }
@@ -260,6 +290,12 @@ def embedded_forms_sha(ondisk_text: str) -> Optional[str]:
 def embedded_imports_sha(ondisk_text: str) -> Optional[str]:
     """The ``imports-sha256`` recorded in the import owned-kind's header, or ``None`` (FR-IMP-1)."""
     m = _HEADER_IMPORTS_SHA_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
+
+
+def embedded_api_sha(ondisk_text: str) -> Optional[str]:
+    """The ``api-sha256`` recorded in an API-overlay contract header, or ``None`` (Role 2)."""
+    m = _HEADER_API_SHA_RE.search(ondisk_text or "")
     return m.group(1) if m else None
 
 
@@ -416,6 +452,7 @@ def owned_file_in_sync(
     completeness_text: Optional[str] = None,
     display_text: Optional[str] = None,
     imports_text: Optional[str] = None,
+    api_text: Optional[str] = None,
 ) -> bool:
     """True iff *ondisk_text* is an owned generated file that is **currently in-sync**.
 
@@ -449,6 +486,7 @@ def owned_file_in_sync(
             forms_text=views_text,  # check_drift names the views.yaml input `forms_text`
             display_text=display_text,
             imports_text=imports_text,
+            api_text=api_text,
         ).status
         == "in_sync"
     )
@@ -691,6 +729,73 @@ def imports_stale_reason(
     return None
 
 
+def api_overlay_stale_reason(
+    ondisk_text: str,
+    *,
+    schema_sha: str,
+    api_sha: str,
+) -> Optional[str]:
+    """For an API-overlay contract file, return why it is stale, or ``None`` if both inputs match."""
+    checks = (
+        ("schema", embedded_schema_sha(ondisk_text), schema_sha),
+        ("api", embedded_api_sha(ondisk_text), api_sha),
+    )
+    for label, embedded, current in checks:
+        if embedded is None:
+            return f"missing {label}-sha256 header"
+        if embedded != current:
+            return (
+                f"{label} changed (header {embedded[:12]}… != current {current[:12]}…) — regenerate"
+            )
+    return None
+
+
+def _check_api_contract_drift(
+    schema_text: str,
+    api_text: Optional[str],
+    ondisk_text: str,
+    source_file: str,
+    *,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
+) -> DriftResult:
+    """Drift for ``python-openapi-contract`` when an ``api.yaml`` overlay participates."""
+    if api_text is None:
+        return DriftResult(
+            "error",
+            ERROR,
+            "API-overlay drift check requires the api.yaml overlay",
+        )
+    reason = api_overlay_stale_reason(
+        ondisk_text,
+        schema_sha=schema_sha256(schema_text),
+        api_sha=schema_sha256(api_text),
+    )
+    if reason is not None:
+        status = "tampered" if "missing" in reason else "stale"
+        return DriftResult(status, DRIFT, reason)
+    from .openapi_contract_renderer import render_openapi_contract
+
+    rendered = render_openapi_contract(
+        schema_text,
+        source_file,
+        api_text=api_text,
+        manifest_text=manifest_text,
+        pages_text=pages_text,
+        views_text=views_text,
+        imports_text=imports_text,
+    )
+    if rendered != ondisk_text:
+        return DriftResult(
+            "tampered",
+            DRIFT,
+            "owned API contract differs from a fresh render of the unchanged inputs",
+        )
+    return DriftResult("in_sync", IN_SYNC, "owned API contract matches schema + api overlay")
+
+
 def _check_imports_drift(
     schema_text, imports_text, ondisk_text, source_file, kind
 ) -> DriftResult:
@@ -737,6 +842,7 @@ def check_drift(
     forms_text: Optional[str] = None,
     display_text: Optional[str] = None,
     imports_text: Optional[str] = None,
+    api_text: Optional[str] = None,
 ) -> DriftResult:
     """Compare an on-disk owned file against its source contract(s). No writes.
 
@@ -763,6 +869,19 @@ def check_drift(
         return _check_forms_drift(schema_text, forms_text, ondisk_text, source_file, kind)
     if kind in _IMPORTS_KINDS:
         return _check_imports_drift(schema_text, imports_text, ondisk_text, source_file, kind)
+    if kind == "python-openapi-contract" and (
+        api_text is not None or embedded_api_sha(ondisk_text) is not None
+    ):
+        return _check_api_contract_drift(
+            schema_text,
+            api_text,
+            ondisk_text,
+            source_file,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=forms_text,
+            imports_text=imports_text,
+        )
     if kind in _SETTINGS_KINDS:
         # The skip-hook path: re-derive the baked mode from the file's own header (FR-CFG-7a) — this
         # is the ONLY mode-varying file, and it needs no app.yaml to verify.
@@ -791,7 +910,13 @@ def check_drift(
     # completeness.py is schema + optional completeness.yaml → regen with the same manifest
     # the generate path used, or drift would false-flag a weighted file.
     renderer = _renderers(
-        completeness_text=completeness_text, forms_text=forms_text, display_text=display_text
+        completeness_text=completeness_text,
+        forms_text=forms_text,
+        display_text=display_text,
+        api_text=api_text,
+        manifest_text=manifest_text,
+        pages_text=pages_text,
+        imports_text=imports_text,
     ).get(kind or "")
     if renderer is None:
         return DriftResult(

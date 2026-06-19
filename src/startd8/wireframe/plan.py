@@ -27,6 +27,8 @@ from ..backend_codegen.pages_generator import ContentPage, parse_pages
 from ..backend_codegen.test_emitter import (
     COMPLETENESS_TESTS_PATH,
     CONTRACT_TESTS_PATH,
+    HEALTH_TESTS_PATH,
+    OPENAPI_CONTRACT_TESTS_PATH,
     ROUTE_SMOKE_TESTS_PATH,
 )
 from ..frontend_codegen.schema_renderer import composite_type_names
@@ -424,6 +426,10 @@ def _services_section(
                     CANONICAL_LAYOUT["fastapi-main"],
                     CANONICAL_LAYOUT["fastapi-db"],
                     CANONICAL_LAYOUT["fastapi-routers"],
+                    CANONICAL_LAYOUT["fastapi-health"],
+                    CANONICAL_LAYOUT["python-openapi-contract"],
+                    "clients/__init__.py",
+                    CANONICAL_LAYOUT["python-openapi-client"],
                 ),
             )
         )
@@ -450,6 +456,8 @@ def _services_section(
                     CANONICAL_LAYOUT["python-ai-schemas"],
                     CANONICAL_LAYOUT["python-requirements"],
                     CONTRACT_TESTS_PATH,
+                    HEALTH_TESTS_PATH,
+                    OPENAPI_CONTRACT_TESTS_PATH,
                     ROUTE_SMOKE_TESTS_PATH,  # rung-5 floor: generated HTTP smoke (F-8)
                 ),
             )
