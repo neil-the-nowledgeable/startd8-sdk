@@ -177,7 +177,7 @@ Tier-1 **implements** the existing spec without modification:
 
 - **OQ-6** Should OpenAPI `components.schemas` reference **`prisma_to_json_schema` output** directly or a trimmed CRUD subset? *(Lean: CRUD subset matching Create/Read/Update only.)*
 - **OQ-7** Proto skeleton: **one file per service** or **one file per RPC** for MicroPrime compatibility? *(Lean: one servicer class per service, RPC methods as stubs.)*
-- **OQ-8** Events: **`aiokafka` vs `kafka-python`** default? *(Lean: `aiokafka` for async FastAPI alignment.)*
+- **OQ-8** ✅ RESOLVED (shipped): default is **`aiokafka`** (async FastAPI alignment); OTel instrumentation is **backend-driven** — `kafka-python` uses the official `KafkaInstrumentor`, while `aiokafka` (no upstream auto-instrumentor) emits import-guarded **manual** PRODUCER/CONSUMER spans + W3C tracecontext via the CloudEvents envelope.
 
 ---
 
