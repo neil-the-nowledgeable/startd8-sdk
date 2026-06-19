@@ -64,16 +64,24 @@ def render_context_grpc_client(
     )
     target_doc = ctx.base_url or "localhost:50051"
     if ctx.auth:
+        auth = ctx.auth
+        if auth.scheme == "bearer":
+            meta_key = "authorization"
+            meta_val = "f'Bearer {{token}}'"
+        else:
+            meta_key = auth.header.lower()
+            meta_val = "token"
         auth_block = [
-            f"    _AUTH_ENV = {ctx.auth.env!r}",
+            f"    _AUTH_ENV = {auth.env!r}",
             "    def _metadata(self) -> tuple[tuple[str, str], ...]:",
             "        token = (os.environ.get(self._AUTH_ENV) or '').strip()",
             "        if not token:",
             "            return ()",
-            "        return (('authorization', f'Bearer {token}'),)",
+            f"        return (({meta_key!r}, {meta_val}),)",
             "",
         ]
         rpc_meta = ", metadata=self._metadata()"
+        os_import = "import os\n\n"
     else:
         auth_block = [
             "    def _metadata(self) -> tuple[tuple[str, str], ...]:",
@@ -81,6 +89,7 @@ def render_context_grpc_client(
             "",
         ]
         rpc_meta = ""
+        os_import = ""
     rpc_methods: List[str] = []
     for rpc in svc.rpcs:
         rpc_methods += [
@@ -92,7 +101,7 @@ def render_context_grpc_client(
     body = (
         '"""Generated gRPC client for outbound context — requires protoc stubs on PYTHONPATH."""\n'
         "from __future__ import annotations\n\n"
-        "import os\n\n"
+        f"{os_import}"
         "import grpc\n"
         f"import {stub_pb2}  # noqa: F401 — request types\n"
         f"import {stub_grpc}\n\n\n"

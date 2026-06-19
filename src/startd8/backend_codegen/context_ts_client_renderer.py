@@ -162,14 +162,20 @@ def render_context_ts_client(
     header = _ts_header(source_file, sha, contexts_sha, contract_sha, ctx.id)
     auth_env = ctx.auth.env if ctx.auth else None
     auth_scheme = ctx.auth.scheme if ctx.auth else ""
-    auth_header = (ctx.auth.header if ctx.auth else "") or "Authorization"
+    auth_header = ctx.auth.header if ctx.auth else "Authorization"
     methods = _ts_method_blocks(spec)
     lines = [
         f"export class {class_name} {{",
         "  constructor(private readonly baseUrl: string) {}",
         "",
         "  private async request(method: string, path: string, init: RequestInit = {}): Promise<Response> {",
-        "    const headers = { 'content-type': 'application/json', ...this.authHeaders(), ...(init.headers as Record<string, string> ?? {}) };",
+        "    const headers: Record<string, string> = {",
+        "      ...this.authHeaders(),",
+        "      ...(init.headers as Record<string, string> ?? {}),",
+        "    };",
+        "    if (init.body !== undefined) {",
+        "      headers['content-type'] = 'application/json';",
+        "    }",
         "    const url = `${this.baseUrl.replace(/\\/$/, '')}${path}`;",
         "    return fetch(url, { ...init, method, headers });",
         "  }",

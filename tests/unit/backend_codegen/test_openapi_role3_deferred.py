@@ -168,3 +168,53 @@ def test_grpc_client_emitted(tmp_path: Path) -> None:
 def test_parse_contexts_file_emit_languages() -> None:
     manifest = parse_contexts_file(CONTEXTS_TS)
     assert manifest.emit_languages == ("typescript",)
+
+
+def test_auth_header_scheme_requires_header_name() -> None:
+    with pytest.raises(ValueError, match="auth.header is required"):
+        parse_contexts_file(
+            """\
+outbound:
+  - id: catalog
+    contract: openapi/catalog.json
+    auth:
+      scheme: header
+      env: TOKEN
+"""
+        )
+
+
+def test_grpc_auth_api_key_metadata(tmp_path: Path) -> None:
+    contexts = """\
+outbound:
+  - id: billing
+    protocol: grpc
+    contract: proto/billing.proto
+    grpc_service: BillingService
+    auth:
+      scheme: api_key
+      env: BILLING_KEY
+      header: X-Billing-Key
+"""
+    (tmp_path / "proto").mkdir()
+    (tmp_path / "proto" / "billing.proto").write_text(
+        """\
+syntax = "proto3";
+service BillingService { rpc Ping(PingReq) returns (PingResp); }
+message PingReq {}
+message PingResp {}
+""",
+        encoding="utf-8",
+    )
+    from startd8.backend_codegen.context_grpc_client_renderer import (
+        render_context_grpc_client,
+    )
+
+    text = render_context_grpc_client(
+        SCHEMA,
+        contexts,
+        parse_contexts_file(contexts).outbound[0],
+        project_root=str(tmp_path),
+    )
+    assert "'x-billing-key', token" in text
+    assert "metadata=self._metadata()" in text

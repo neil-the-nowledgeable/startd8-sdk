@@ -115,6 +115,7 @@ def test_m5_cross_repo_client_without_app_tables_import(tmp_path: Path) -> None:
     assert "def list_note(self)" in client_text
     assert "def create_note(self" in client_text
     assert "dict[str, object]" in client_text
+    py_compile.compile(str(tmp_path / "consumer" / "clients" / "catalog_client.py"), doraise=True)
     paths = client_method_paths(client_text)
     assert ("GET", "/note/") in paths
     assert ("POST", "/note/") in paths

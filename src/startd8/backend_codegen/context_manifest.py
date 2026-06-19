@@ -19,11 +19,7 @@ import yaml
 
 from ..frontend_codegen.schema_renderer import schema_sha256
 from .openapi_contract_renderer import _crud_routes, _model_names
-from .openapi_client_renderer import (
-    _HTTP_METHODS,
-    _op_json_ref,
-    _prisma_dto_names,
-)
+from .openapi_client_renderer import _prisma_dto_names
 
 _ROUTE_MODES = frozenset({"crud", "all_json"})
 _PROTOCOLS = frozenset({"http", "grpc"})
@@ -89,6 +85,10 @@ def _parse_auth(ctx_id: str, raw: Any, index: int) -> Optional[ContextAuth]:
     if not env:
         raise ValueError(f"contexts.yaml: outbound {ctx_id!r}: auth.env is required")
     header = str(raw.get("header") or "").strip()
+    if scheme == "header" and not header:
+        raise ValueError(
+            f"contexts.yaml: outbound {ctx_id!r}: auth.header is required when scheme is header"
+        )
     if scheme == "api_key" and not header:
         header = "X-Api-Key"
     if scheme == "bearer" and not header:

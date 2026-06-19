@@ -314,7 +314,7 @@ def _pinned_spec_methods(
                 ret_line = None
 
             lines = [
-                f"    def {fn}(self{signature}){ret}",
+                f"    def {fn}(self{signature}){ret}:",
                 f'        """``{http_method} {path}`` — pinned contract operation."""',
                 http_line,
                 "        resp.raise_for_status()",
