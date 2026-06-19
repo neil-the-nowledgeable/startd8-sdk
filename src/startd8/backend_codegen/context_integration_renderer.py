@@ -60,6 +60,8 @@ def context_client_bindings(
     """Resolve integration bindings for every outbound context."""
     bindings: List[ContextClientBinding] = []
     for ctx in parse_contexts(contexts_text):
+        if ctx.protocol != "http":
+            continue
         class_name = _class_name(ctx.id)
         factory = f"get_{ctx.id}_client"
         bindings.append(

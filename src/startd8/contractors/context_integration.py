@@ -92,6 +92,7 @@ def render_context_integration(
         f"- Prefer `from {registry_path.replace('/', '.').removesuffix('.py')} import get_<producer>_client`",
         "- Do **NOT** use `app.tables` / `session.exec(select(...))` for entities served by outbound producers",
         "- Do **NOT** invent raw httpx calls or new client classes — use the generated methods only",
+        "- Auth tokens: use env vars from `contexts.yaml` `auth.env` — never hardcode credentials",
         "- Stamp integration provenance in comments: `producer_id=<id>`, `contract_sha256=<hash>`",
         "",
         "| Producer | Factory | Client | contract-sha256 |",

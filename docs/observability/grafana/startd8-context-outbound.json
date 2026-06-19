@@ -1,0 +1,115 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "expr": "sum by (io_startd8_context_producer_id) (rate(traces_spanmetrics_calls_total{span_name=~\"context.outbound.*\", io_startd8_context_outbound=\"true\"}[5m]))",
+          "legendFormat": "{{io_startd8_context_producer_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Outbound context request rate by producer",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum by (io_startd8_context_producer_id) (rate(traces_spanmetrics_calls_total{span_name=~\"context.outbound.*\", http_response_status_code=~\"5..\"}[5m])) / sum by (io_startd8_context_producer_id) (rate(traces_spanmetrics_calls_total{span_name=~\"context.outbound.*\"}[5m]))",
+          "legendFormat": "{{io_startd8_context_producer_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Outbound context 5xx error ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, io_startd8_context_producer_id) (rate(traces_spanmetrics_latency_bucket{span_name=~\"context.outbound.*\"}[5m])))",
+          "legendFormat": "p95 {{io_startd8_context_producer_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Outbound context p95 latency",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "startd8",
+    "context",
+    "role3"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "StartD8 — Inter-context outbound (Role 3)",
+  "uid": "startd8-context-outbound",
+  "version": 1
+}

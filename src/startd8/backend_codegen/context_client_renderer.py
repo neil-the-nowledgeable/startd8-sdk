@@ -14,6 +14,7 @@ from ..frontend_codegen.schema_renderer import schema_sha256
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 from ._headers import header_context_client
 from .context_manifest import (
+    ContextAuth,
     OutboundContext,
     contract_sha256,
     filter_spec_for_context,
@@ -34,6 +35,46 @@ from .openapi_contract_renderer import _model_names, _project_openapi
 def _class_name(ctx_id: str) -> str:
     parts = [p for p in re.split(r"[^0-9a-zA-Z]+", ctx_id) if p]
     return "".join(p[:1].upper() + p[1:] for p in parts) + "Client"
+
+
+def _auth_class_lines(auth: Optional[ContextAuth]) -> List[str]:
+    if auth is None:
+        return [
+            "    def _auth_headers(self) -> dict[str, str]:",
+            "        return {}",
+        ]
+    lines = [f"    _AUTH_ENV = {auth.env!r}"]
+    if auth.scheme == "bearer":
+        header = auth.header or "Authorization"
+        lines += [
+            f"    _AUTH_HEADER = {header!r}",
+            "    def _auth_headers(self) -> dict[str, str]:",
+            "        token = (os.environ.get(self._AUTH_ENV) or '').strip()",
+            "        if not token:",
+            "            return {}",
+            "        return {self._AUTH_HEADER: f'Bearer {token}'}",
+        ]
+    elif auth.scheme == "api_key":
+        header = auth.header or "X-Api-Key"
+        lines += [
+            f"    _AUTH_HEADER = {header!r}",
+            "    def _auth_headers(self) -> dict[str, str]:",
+            "        token = (os.environ.get(self._AUTH_ENV) or '').strip()",
+            "        if not token:",
+            "            return {}",
+            "        return {self._AUTH_HEADER: token}",
+        ]
+    else:  # header — raw header name + value from env
+        header = auth.header or "X-Context-Token"
+        lines += [
+            f"    _AUTH_HEADER = {header!r}",
+            "    def _auth_headers(self) -> dict[str, str]:",
+            "        token = (os.environ.get(self._AUTH_ENV) or '').strip()",
+            "        if not token:",
+            "            return {}",
+            "        return {self._AUTH_HEADER: token}",
+        ]
+    return lines
 
 
 def _resolve_producer_spec(
@@ -76,7 +117,9 @@ def render_context_client(
     imports_text: Optional[str] = None,
     project_root: Optional[str] = None,
 ) -> str:
-    """Render ``clients/{id}_client.py`` for one outbound context."""
+    """Render ``clients/{id}_client.py`` for one outbound HTTP context."""
+    if ctx.protocol != "http":
+        return ""
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     contexts_sha = schema_sha256(contexts_text)
@@ -138,8 +181,10 @@ def render_context_client(
     )
     base_doc = ctx.base_url or "(configure at runtime)"
     source_doc = "local OPENAPI_SPEC" if ctx.local else ctx.contract
-    imports = "from __future__ import annotations\n\nimport httpx\n\n"
-    imports += "from clients._context_otel import trace_outbound_request\n\n"
+    imports = "from __future__ import annotations\n\nimport httpx\n"
+    if ctx.auth:
+        imports += "import os\n"
+    imports += "\nfrom clients._context_otel import trace_outbound_request\n\n"
     if table_imports:
         imports += (
             "from app.tables import " + ", ".join(sorted(table_imports)) + "\n"
@@ -159,7 +204,14 @@ def render_context_client(
         "            self._owns_client = True",
         f'        self._producer_id = "{ctx.id}"',
         "",
+    ]
+    class_lines.extend(_auth_class_lines(ctx.auth))
+    class_lines += [
         "    def _request(self, method: str, path: str, **kwargs: object) -> httpx.Response:",
+        "        headers = dict(kwargs.pop('headers', None) or {})",
+        "        headers.update(self._auth_headers())",
+        "        if headers:",
+        "            kwargs['headers'] = headers",
         "        def _do() -> httpx.Response:",
         f"            return getattr(self._client, method.lower())(path, **kwargs)",
         "        return trace_outbound_request(self._producer_id, method, path, _do)",
@@ -196,24 +248,23 @@ def render_context_clients(
     """All ``(relative_path, text)`` pairs for declared outbound contexts."""
     pairs: List[Tuple[str, str]] = []
     for ctx in parse_contexts(contexts_text):
+        if ctx.protocol != "http":
+            continue
         rel = f"clients/{ctx.id}_client.py"
-        pairs.append(
-            (
-                rel,
-                render_context_client(
-                    schema_text,
-                    contexts_text,
-                    ctx,
-                    source_file,
-                    api_text=api_text,
-                    manifest_text=manifest_text,
-                    pages_text=pages_text,
-                    views_text=views_text,
-                    imports_text=imports_text,
-                    project_root=project_root,
-                ),
-            )
+        rendered = render_context_client(
+            schema_text,
+            contexts_text,
+            ctx,
+            source_file,
+            api_text=api_text,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=views_text,
+            imports_text=imports_text,
+            project_root=project_root,
         )
+        if rendered:
+            pairs.append((rel, rendered))
     return pairs
 
 

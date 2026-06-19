@@ -1,6 +1,6 @@
 # OpenAPI Role 3 — Inter-Context Seam (Requirements)
 
-**Version:** 0.3 (M0–M4 + P2 + M5 shipped)
+**Version:** 0.4 (M0–M5 + P2 + deferred D1–D5)
 **Date:** 2026-06-19
 **Status:** ✅ Shipped on `main` — continuation in `OPENAPI_ROLE3_NEXT_STEPS.md`
 **Owner:** SDK / backend_codegen + integrations

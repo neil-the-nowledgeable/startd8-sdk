@@ -219,6 +219,31 @@ def render_backend(
                 project_root=project_root,
             )
         )
+        from .context_grpc_client_renderer import render_context_grpc_clients
+        from .context_graph_renderer import CONTEXT_GRAPH_PATH, render_context_graph
+        from .context_ts_client_renderer import render_context_ts_clients
+
+        out.extend(
+            render_context_ts_clients(
+                schema_text,
+                contexts_text,
+                source_file,
+                api_text=api_text,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
+                project_root=project_root,
+            )
+        )
+        out.extend(
+            render_context_grpc_clients(
+                schema_text,
+                contexts_text,
+                source_file,
+                project_root=project_root,
+            )
+        )
         integration = render_context_clients_module(
             schema_text,
             contexts_text,
@@ -227,6 +252,15 @@ def render_backend(
         )
         if integration:
             out.append((CONTEXT_INTEGRATION_PATH, integration))
+        out.append((
+            CONTEXT_GRAPH_PATH,
+            render_context_graph(
+                schema_text,
+                contexts_text,
+                source_file=source_file,
+                project_root=project_root,
+            ),
+        ))
         out.append((
             CROSS_CONTEXT_SMOKE_TESTS_PATH,
             render_cross_context_smoke_tests(schema_text, contexts_text, source_file),

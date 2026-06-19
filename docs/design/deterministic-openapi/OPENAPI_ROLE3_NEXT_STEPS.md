@@ -108,13 +108,23 @@ with mismatched producer/consumer Prisma models — **satisfied**.
 
 ---
 
-## Deferred (explicit non-goals for v0.3)
+## Formerly deferred — now shipped (v0.4)
 
-- TypeScript / polyglot consumer emit
-- gRPC/proto inter-context promotion (`ProtoStubProvider` track)
-- Auth header / credential propagation in generated clients
-- Service mesh / API gateway codegen
-- Grafana dashboard for `io.startd8.context.*` spans (OTel landscape work is separate)
+| Item | Deliverable |
+|------|-------------|
+| Auth header hooks | `contexts.yaml` `auth: {scheme, env, header}` → `_auth_headers()` on HTTP clients |
+| Grafana dashboard | `docs/observability/grafana/startd8-context-outbound.json` |
+| TypeScript consumer | `emit_languages: [typescript]` → `clients/{id}_client.ts` |
+| Context graph export | `openapi/context-graph.json` (machine-readable outbound graph) |
+| gRPC inter-context | `protocol: grpc` + `grpc_service` → `clients/{id}_grpc_client.py` |
+
+---
+
+## Deferred (remaining non-goals)
+
+- Service mesh / API gateway codegen (use `openapi/context-graph.json` for external tooling)
+- Full protoc-owned stub emission (gRPC clients assume vendored `*_pb2_grpc` on PYTHONPATH)
+- Polyglot emit beyond TypeScript (Go/Java/C# clients)
 
 ---
 
