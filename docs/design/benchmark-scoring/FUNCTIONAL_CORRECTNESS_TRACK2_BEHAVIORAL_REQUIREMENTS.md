@@ -82,10 +82,13 @@ falsely scored 0), the startup contract + Node serve hook (FR-T2-CONTRACT/HOOK),
     `n_functional`; the leaderboard gains a conditional `functional (med)` column.
   - **R3-S1 / R1-F2** — `runner.persist_cell_atomic` flushes each cell to `cells/<id>.json`
     (tmp+`os.replace`) via `run_matrix(on_cell=)`, so a mid-run crash no longer loses the batch.
-- **Still open** (accepted, not yet implemented — Appendix C kept live):
-  - **R2-S2** — partial: `$PORT` injection is implemented (`contract.py`), but nothing detects/rewrites a
-    model that hardcodes a port and ignores `$PORT` (would false-degrade).
-  - **R2-S3** — known-broken-fixture assertion specificity not yet verified per-RPC.
+  - **R2-S2** (commit `52695f61`) — `execute._detect_effective_port` reads the generated source and
+    probes a hardcoded listen port when the model ignores `$PORT`; an env-read always keeps the injected
+    port, so a well-behaved model is never demoted. Recorded as `provenance["port_source"]`.
+  - **R2-S3** (commit `52695f61`) — a known-broken pricing fixture (ignores the discount cap) proves
+    the suite discriminates per-RPC: it fails exactly `g6_cap_70` for the right reason, not a crash.
+- **Open:** none of the CRP-logged items remain. (Operational follow-up only: re-render an existing
+  behavioral batch's `report.md` to surface the R2-S1 functional column — needs a persisted batch.)
 
 ## 1. Problem Statement
 
@@ -265,15 +268,16 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none) | — | — | No suggestion was rejected outright. R2-S2/R2-S3 remain **partial/open** in Appendix C / §0c rather than rejected — none belong here yet. | 2026-06-19 |
+| (none) | — | — | No suggestion was rejected outright — every R1/R2/R3 item was applied or clarified. | 2026-06-19 |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
-> **Triage status (v0.3, updated 2026-06-19):** R1/R2/R3 below were triaged; items dispositioned
-> **Applied** are in Appendix A. **R3-F3/R3-S3, R2-S1, and R3-S1/R1-F2 were implemented after the
-> triage (commit `46134128`)** and are now in Appendix A. **Still open:** **R2-S2** (`$PORT` injected,
-> but hardcoded-port detection/rewrite not built), **R2-S3** (known-broken-fixture per-RPC assertion
-> specificity unverified). The original round blocks are preserved verbatim below.
+> **Triage status (v0.3, updated 2026-06-19):** All R1/R2/R3 items are now dispositioned **Applied**
+> (Appendix A) or folded in as clarifications — none remain open. Post-triage implementation landed in
+> two commits: `46134128` (R3-F3/R3-S3, R2-S1, R3-S1/R1-F2) and `52695f61` (R2-S2 hardcoded-port
+> detection, R2-S3 known-broken fixture). The only remaining follow-up is operational, not a spec gap:
+> re-render an existing behavioral batch's `report.md` to surface the R2-S1 functional column (needs a
+> persisted batch). The original round blocks are preserved verbatim below.
 
 #### Review Round R1 — gemini-3.1-pro — 2026-06-15
 
