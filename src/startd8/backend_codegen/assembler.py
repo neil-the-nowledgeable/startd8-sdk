@@ -54,6 +54,7 @@ def render_backend(
     views_text: Optional[str] = None,
     display_text: Optional[str] = None,
     imports_text: Optional[str] = None,
+    api_text: Optional[str] = None,
     deployment_mode: str = "installed",
     tenant_owner_field: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
@@ -89,7 +90,7 @@ def render_backend(
         (CANONICAL_LAYOUT["fastapi-health"], render_health(schema_text, source_file)),
         (
             CANONICAL_LAYOUT["python-openapi-contract"],
-            render_openapi_contract(schema_text, source_file),
+            render_openapi_contract(schema_text, source_file, api_text=api_text),
         ),
         ("clients/__init__.py", ""),
         (

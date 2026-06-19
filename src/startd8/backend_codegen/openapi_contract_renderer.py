@@ -6,8 +6,8 @@ $0-LLM **offline** contract layer (``ROUTE_MANIFEST`` + minimal ``OPENAPI_SPEC``
 of truth.
 
 v1 scope: schema-derived CRUD paths (mirrors ``crud_generator._entity_block``) + default-on
-health paths. Optional manifest surfaces (pages/AI/flows) are deferred — they require the same
-multi-input drift threading as forms/AI kinds.
+health paths. Optional ``api.yaml`` overlay (Role 2) adds net-new / user-declared routes.
+Manifest-derived conditional surfaces (pages/AI/flows) remain Role 1 backlog.
 """
 
 from __future__ import annotations
@@ -17,7 +17,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
-from ._headers import header_standard as _header
+from .api_overlay_manifest import (
+    merge_openapi_specs,
+    parse_api_overlay,
+    reconcile_overlay,
+    routes_from_openapi_spec,
+)
+from ._headers import header_api_overlay, header_standard as _header
 from .crud_generator import _pk_field
 from .pydantic_renderer import _PY_SCALAR
 
@@ -217,16 +223,29 @@ def _format_route_manifest(routes: List[Tuple[str, str]]) -> str:
 
 
 def render_openapi_contract(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    *,
+    api_text: Optional[str] = None,
 ) -> str:
     """Render ``app/openapi_contract.py`` — static ``ROUTE_MANIFEST`` + ``OPENAPI_SPEC``."""
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     routes = sorted(_crud_routes(schema, schema_text) + _health_routes())
     spec = _build_openapi_spec(routes, schema, schema_text)
+    if api_text:
+        overlay = parse_api_overlay(api_text)
+        reconcile_overlay(spec, overlay, schema_text)
+        spec = merge_openapi_specs(spec, overlay)
+    routes = routes_from_openapi_spec(spec)
     spec_json = json.dumps(spec, indent=2, sort_keys=True)
 
-    header = _header(source_file, sha, "python-openapi-contract")
+    if api_text:
+        header = header_api_overlay(
+            source_file, sha, schema_sha256(api_text), "python-openapi-contract"
+        )
+    else:
+        header = _header(source_file, sha, "python-openapi-contract")
     body = (
         "from __future__ import annotations\n\n"
         "import json\n"
