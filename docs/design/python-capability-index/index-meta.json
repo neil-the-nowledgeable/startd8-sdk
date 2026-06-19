@@ -1,0 +1,12 @@
+{
+  "counts": {
+    "ast_nodes": 132,
+    "communication_patterns": 15,
+    "language_composites": 10,
+    "manifest_kinds": 9
+  },
+  "generator": "gen_python_ast_capability_index.py",
+  "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md",
+  "python_version": "3.14.5",
+  "schema_version": "1.0"
+}
