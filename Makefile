@@ -2,7 +2,7 @@
 #
 # Jsonnet dashboard generation targets (delegate to startd8-mixin/)
 
-.PHONY: jsonnet-generate jsonnet-test jsonnet-lint jsonnet-fmt jsonnet-install help
+.PHONY: jsonnet-generate jsonnet-test jsonnet-lint jsonnet-fmt jsonnet-install tier0-attest help
 
 jsonnet-generate: ## Generate dashboards and alerts from Jsonnet, copy to dashboards/
 	$(MAKE) -C startd8-mixin generate
@@ -20,6 +20,9 @@ jsonnet-fmt: ## Format Jsonnet files
 
 jsonnet-install: ## Install Jsonnet dependencies (grafonnet)
 	$(MAKE) -C startd8-mixin install
+
+tier0-attest: ## Run Tier 0 probe + attestation + verify + startup capture (live demo required)
+	bash scripts/otel_demo/tier0_attest.sh
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'

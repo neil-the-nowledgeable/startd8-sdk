@@ -165,3 +165,14 @@ exemplar-registry.json
 # Scoped to top-level *.md so tracked seeds/ and results/ stay tracked.
 docs/design/model-benchmark/*.md
 docs/design/model-benchmark/.startd8/
+
+# ---------------------------------------------------------------------------
+# Tier 0 OTel Demo reference environment (docs/design/otel-demo-corpus/TIER0_*)
+# - The pinned demo clone is a referenced (not vendored) work dir — never commit it.
+# - bring-up manifests are per-run evidence, not shared state.
+# ---------------------------------------------------------------------------
+.otel-demo/
+docs/design/otel-demo-corpus/bringup-manifest.json
+docs/design/otel-demo-corpus/bringup-images.txt
+docs/design/otel-demo-corpus/coverage-attestation.json
+docs/design/otel-demo-corpus/startup-capture.json

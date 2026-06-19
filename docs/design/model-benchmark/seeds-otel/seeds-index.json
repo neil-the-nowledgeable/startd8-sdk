@@ -1,0 +1,65 @@
+{
+  "corpus": "otel-demo",
+  "generator": "gen_otel_benchmark_seeds.py",
+  "proto": "demo.proto",
+  "proto_sha256": "712594c1e1a144c2211ff0695d8db05864b4ddccfad2e9862cadff8ce311225f",
+  "schema_version": "1.0",
+  "services": [
+    {
+      "behavioral_eligible": false,
+      "language": "go",
+      "seed_file": "seed-checkout.json",
+      "seed_sha256": "d797d964d2787157474aeeecfc7c2dee80a850f947ce2fa1c5abfa685b305a45",
+      "service": "checkout",
+      "target_file": "src/checkout/main.go"
+    },
+    {
+      "behavioral_eligible": true,
+      "language": "go",
+      "seed_file": "seed-product-catalog.json",
+      "seed_sha256": "09c1c0038c0f76c0e7f358d6d83af88323cb2a2b03db30d18ee9fb1594cc64cd",
+      "service": "product-catalog",
+      "target_file": "src/product-catalog/main.go"
+    },
+    {
+      "behavioral_eligible": false,
+      "language": "python",
+      "seed_file": "seed-recommendation.json",
+      "seed_sha256": "7910e13b386c18740a818278bef0e7158fa5aed733457d4388968eafacaa9564",
+      "service": "recommendation",
+      "target_file": "src/recommendation/recommendation_server.py"
+    },
+    {
+      "behavioral_eligible": false,
+      "language": "python",
+      "seed_file": "seed-product-reviews.json",
+      "seed_sha256": "e5bddd23ff78e7ff489cfcc3d5c58b5ede7d815c7ee2ef496358c055d1d8885d",
+      "service": "product-reviews",
+      "target_file": "src/product-reviews/product_reviews_server.py"
+    },
+    {
+      "behavioral_eligible": false,
+      "language": "csharp",
+      "seed_file": "seed-cart.json",
+      "seed_sha256": "7c0cbf241f991b9e989e8d63e2468b4bd4b55569af8032419155a4f317b7c0e8",
+      "service": "cart",
+      "target_file": "src/cart/src/services/CartService.cs"
+    },
+    {
+      "behavioral_eligible": false,
+      "language": "java",
+      "seed_file": "seed-ad.json",
+      "seed_sha256": "5646d9be6e900a268ab7c847d4fba753459c11b77f03cd92a3fca143cc53bbc3",
+      "service": "ad",
+      "target_file": "src/ad/src/main/java/oteldemo/AdService.java"
+    },
+    {
+      "behavioral_eligible": true,
+      "language": "nodejs",
+      "seed_file": "seed-payment.json",
+      "seed_sha256": "502683b977cfcea7e46dccf6c726afa43cdda192ac1778485a32f745ce3dc707",
+      "service": "payment",
+      "target_file": "src/payment/charge.js"
+    }
+  ]
+}
