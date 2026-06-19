@@ -941,3 +941,98 @@ def grpc(
             console.print(f"[red]error:[/red] cannot write {target}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
     console.print(f"[green]wrote[/green] {written} gRPC skeleton file(s) under {out}")
+
+
+@generate_app.command("events")
+def events(
+    manifest: Path = typer.Option(
+        Path("events.yaml"), "--manifest", help="Path to events.yaml (channel declarations)."
+    ),
+    schema: Path = typer.Option(
+        Path("prisma/schema.prisma"), "--schema", help="Prisma schema for payload projection."
+    ),
+    app_manifest: Path = typer.Option(
+        Path("app.yaml"), "--app-manifest", help="app.yaml for messaging.backend + package."
+    ),
+    out: Path = typer.Option(
+        Path("."), "--out", help="Project root for output paths."
+    ),
+    check: bool = typer.Option(
+        False, "--check", help="Drift-check owned event modules instead of writing."
+    ),
+):
+    """Deterministically emit Kafka event stubs from events.yaml + Prisma — $0 LLM."""
+    from .events_codegen import events_file_in_sync, is_owned_events_file, render_events_artifacts
+    from .scaffold_codegen.manifest import parse_app_manifest
+
+    try:
+        events_text = manifest.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read manifest {manifest}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    try:
+        schema_text = schema.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read schema {schema}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    messaging_backend = "aiokafka"
+    package = "app"
+    if app_manifest.is_file():
+        try:
+            app_m = parse_app_manifest(app_manifest.read_text(encoding="utf-8"))
+            messaging_backend = app_m.messaging_backend
+            package = app_m.package
+        except ValueError as exc:
+            console.print(f"[red]error:[/red] {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+
+    try:
+        artifacts = render_events_artifacts(
+            events_text,
+            schema_text,
+            events_source=manifest.as_posix(),
+            schema_source=schema.as_posix(),
+            messaging_backend=messaging_backend,
+            package=package,
+        )
+    except ValueError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    if check:
+        drifted = 0
+        for rel, content in artifacts:
+            target = out / rel
+            ondisk = target.read_text(encoding="utf-8") if target.exists() else None
+            if ondisk is None:
+                drifted += 1
+                console.print(f"[yellow]missing[/yellow]: {rel}")
+            elif not events_file_in_sync(
+                events_text,
+                schema_text,
+                rel,
+                ondisk,
+                messaging_backend=messaging_backend,
+                package=package,
+            ):
+                drifted += 1
+                console.print(f"[yellow]drift[/yellow]: {rel}")
+        if drifted:
+            console.print(f"[yellow]{drifted} event module(s) drifted[/yellow]")
+            raise typer.Exit(1)
+        console.print(f"[green]in_sync[/green]: all {len(artifacts)} event module(s) match events.yaml")
+        raise typer.Exit(0)
+
+    written = 0
+    for rel, content in artifacts:
+        target = out / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            written += 1
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write {target}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+    console.print(f"[green]wrote[/green] {written} event module(s) under {out}")

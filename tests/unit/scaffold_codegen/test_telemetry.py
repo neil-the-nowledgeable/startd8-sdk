@@ -62,3 +62,18 @@ def test_otel_deps_added_to_pyproject():
     deps = otel_runtime_dependencies(TELEMETRY_MANIFEST)
     assert "opentelemetry-sdk" in deps
     assert "opentelemetry-instrumentation-fastapi" in deps
+
+
+def test_messaging_backend_defaults():
+    m = parse_app_manifest(None)
+    assert m.messaging_backend == "aiokafka"
+
+
+def test_messaging_backend_parses():
+    m = parse_app_manifest("messaging:\n  backend: kafka-python\n")
+    assert m.messaging_backend == "kafka-python"
+
+
+def test_invalid_messaging_backend_fails():
+    with pytest.raises(ValueError, match="messaging.backend"):
+        parse_app_manifest("messaging:\n  backend: rabbitmq\n")

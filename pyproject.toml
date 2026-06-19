@@ -183,6 +183,7 @@ composite-view = "startd8.view_codegen.provider:CompositeViewProvider"
 presentation-polish = "startd8.presentation_polish.provider:PresentationPolishFileProvider"
 migration = "startd8.migration_codegen.provider:MigrationFileProvider"
 proto-skeleton = "startd8.proto_codegen.provider:ProtoSkeletonProvider"
+events = "startd8.events_codegen.provider:EventsFileProvider"
 
 [project.urls]
 Homepage = "https://github.com/neil-the-nowledgeable/startd8-sdk"

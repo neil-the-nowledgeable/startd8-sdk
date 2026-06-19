@@ -15,7 +15,7 @@ import yaml
 
 _TOP_KEYS = {
     "app", "persistence", "logging", "migrations", "container",
-    "extra_dependencies", "deployment", "telemetry",
+    "extra_dependencies", "deployment", "telemetry", "messaging",
 }
 
 # Deployment-mode enum (DEPLOYMENT_MODE_REQUIREMENTS.md FR-CFG-1). Exactly two declared modes in v1
@@ -25,6 +25,7 @@ _TOP_KEYS = {
 # ships), keeping the strict-key discipline this module already enforces.
 _VALID_DEPLOYMENT_MODES = frozenset({"installed", "deployed"})
 _VALID_TELEMETRY_PATTERNS = frozenset({"http", "grpc", "db", "messaging"})
+_VALID_MESSAGING_BACKENDS = frozenset({"aiokafka", "kafka-python"})
 # Tier B (M3): `deployment.tenant: {model, owner_field}` declares per-principal data isolation
 # (FR-TEN-2). Both sub-keys required when the block is present; the SCHEMA-level validation (the
 # model + owner_field actually exist) happens at generation time in backend_codegen, since this
@@ -60,6 +61,7 @@ class AppManifest:
     telemetry_otlp_endpoint: str = "http://127.0.0.1:4318"
     telemetry_service_name: Optional[str] = None
     telemetry_patterns: Tuple[str, ...] = ()
+    messaging_backend: str = "aiokafka"
 
     @property
     def has_tenant(self) -> bool:
@@ -151,6 +153,21 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
             )
         telemetry_patterns = tuple(dict.fromkeys(raw_patterns))
 
+    messaging_backend = "aiokafka"
+    messaging = data.get("messaging")
+    if messaging is not None:
+        if not isinstance(messaging, dict):
+            raise ValueError("app.yaml: `messaging` must be a mapping")
+        unknown_msg = set(messaging) - {"backend"}
+        if unknown_msg:
+            raise ValueError(f"app.yaml: `messaging` has unknown keys {sorted(unknown_msg)}")
+        messaging_backend = str(messaging.get("backend", messaging_backend))
+        if messaging_backend not in _VALID_MESSAGING_BACKENDS:
+            raise ValueError(
+                f"app.yaml: `messaging.backend` must be one of {sorted(_VALID_MESSAGING_BACKENDS)}, "
+                f"got {messaging_backend!r}"
+            )
+
     return AppManifest(
         name=str(app.get("name", "app")),
         package=str(app.get("package", "app")),
@@ -167,4 +184,5 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         telemetry_otlp_endpoint=telemetry_otlp_endpoint,
         telemetry_service_name=telemetry_service_name,
         telemetry_patterns=telemetry_patterns,
+        messaging_backend=messaging_backend,
     )
