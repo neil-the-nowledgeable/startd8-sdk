@@ -7,6 +7,8 @@ loud-degradation rule as ``boot_smoke`` and ``python_toolchain``.
 
 from __future__ import annotations
 
+import ast
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -38,17 +40,64 @@ class OpenApiSpecGateResult:
         return self.verdict == "pass"
 
 
-def extract_openapi_spec_from_text(text: str) -> Optional[Dict[str, Any]]:
-    """Load ``OPENAPI_SPEC`` from generated contract module text without importing ``app``."""
-    try:
-        head = text.split("def route_paths", 1)[0]
-        ns: dict = {}
-        exec(compile(head, "<openapi_contract>", "exec"), ns)  # noqa: S102
-        spec = ns.get("OPENAPI_SPEC")
-        return spec if isinstance(spec, dict) else None
-    except Exception as exc:
-        logger.debug("openapi-spec-gate: could not extract OPENAPI_SPEC: %s", exc)
+def _openapi_spec_node_value(mod: ast.Module) -> Optional[ast.AST]:
+    for node in mod.body:
+        if isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "OPENAPI_SPEC":
+                return node.value
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "OPENAPI_SPEC":
+                    return node.value
+    return None
+
+
+def _literal_from_json_loads(value: ast.AST) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, ast.Call):
         return None
+    func = value.func
+    if not (
+        isinstance(func, ast.Attribute)
+        and func.attr == "loads"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "json"
+    ):
+        return None
+    if not value.args:
+        return None
+    arg = value.args[0]
+    if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
+        return None
+    try:
+        loaded = json.loads(arg.value)
+    except json.JSONDecodeError:
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def extract_openapi_spec_from_text(text: str) -> Optional[Dict[str, Any]]:
+    """Load ``OPENAPI_SPEC`` from generated contract module text without importing ``app``.
+
+    Uses AST parsing (same trust model as ``boot_smoke.expected_routes_from_contract``) — no
+    ``exec`` of generated code in the gate process.
+    """
+    try:
+        mod = ast.parse(text)
+    except SyntaxError as exc:
+        logger.debug("openapi-spec-gate: could not parse contract module: %s", exc)
+        return None
+    value = _openapi_spec_node_value(mod)
+    if value is None:
+        return None
+    spec = _literal_from_json_loads(value)
+    if spec is not None:
+        return spec
+    try:
+        literal = ast.literal_eval(value)
+    except (ValueError, TypeError) as exc:
+        logger.debug("openapi-spec-gate: OPENAPI_SPEC not a literal: %s", exc)
+        return None
+    return literal if isinstance(literal, dict) else None
 
 
 def extract_openapi_spec_from_project(project_root: str) -> Optional[Dict[str, Any]]:

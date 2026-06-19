@@ -198,7 +198,8 @@ def _build_openapi_spec(
             op["parameters"] = params
         entry[method.lower()] = op
 
-    title = _model_names(schema, schema_text)[0] if _model_names(schema, schema_text) else "App"
+    names = _model_names(schema, schema_text)
+    title = names[0] if names else "App"
     return {
         "openapi": "3.0.3",
         "info": {"title": title, "version": "0.0.0"},

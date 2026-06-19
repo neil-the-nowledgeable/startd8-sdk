@@ -111,14 +111,13 @@ def test_contract_tests_render_and_compile() -> None:
 
 
 def test_openapi_spec_supports_smoke_resource_selection() -> None:
-    """FR-10: static OPENAPI_SPEC is compatible with deploy_harness smoke selection."""
-    from startd8.deploy_harness.smoke import select_crud_resource
+    """FR-10: static OPENAPI_SPEC is compatible with shared smoke resource selection."""
+    from startd8.openapi_contract import select_crud_resource
 
-    ns: dict = {}
-    exec(  # noqa: S102
-        render_openapi_contract(SCHEMA).split("def route_paths", 1)[0],
-        ns,
-    )
-    choice, reason = select_crud_resource(ns["OPENAPI_SPEC"])
+    from startd8.validators.openapi_spec_gate import extract_openapi_spec_from_text
+
+    spec = extract_openapi_spec_from_text(render_openapi_contract(SCHEMA))
+    assert spec is not None
+    choice, reason = select_crud_resource(spec)
     assert choice is not None, reason
     assert choice.path in {"/note/", "/link/"}

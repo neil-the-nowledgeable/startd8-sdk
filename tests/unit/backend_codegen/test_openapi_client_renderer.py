@@ -108,3 +108,9 @@ def test_client_create_and_list_via_mock_transport() -> None:
 
     assert ("POST", "/note/") in calls
     assert ("GET", "/note/") in calls
+
+
+def test_client_tracks_owned_client() -> None:
+    text = render_http_client(SCHEMA)
+    assert "_owns_client" in text
+    assert "if self._owns_client:" in text

@@ -9,15 +9,11 @@ from __future__ import annotations
 
 from typing import List, Set
 
-from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
+from ..frontend_codegen.schema_renderer import schema_sha256
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 from ._headers import header_standard as _header
 from .crud_generator import _pk_field
-
-
-def _model_names(schema: PrismaSchema, schema_text: str) -> List[str]:
-    composites = composite_type_names(schema_text)
-    return [n for n in schema.models if n not in composites]
+from .openapi_contract_renderer import _model_names
 
 
 def _pk_py_type(schema: PrismaSchema, name: str) -> str:
@@ -106,10 +102,16 @@ def render_http_client(
         "",
         "    def __init__(self, base_url: str, *, client: httpx.Client | None = None) -> None:",
         "        self._base_url = base_url.rstrip(\"/\")",
-        "        self._client = client or httpx.Client(base_url=self._base_url)",
+        "        if client is not None:",
+        "            self._client = client",
+        "            self._owns_client = False",
+        "        else:",
+        "            self._client = httpx.Client(base_url=self._base_url)",
+        "            self._owns_client = True",
         "",
         "    def close(self) -> None:",
-        "        self._client.close()",
+        "        if self._owns_client:",
+        "            self._client.close()",
         "",
         "    def __enter__(self) -> \"ApiClient\":",
         "        return self",
