@@ -1,8 +1,8 @@
 # OpenAPI Role 3 — Inter-Context Seam (Requirements)
 
-**Version:** 0.2 (M0+M1 shipped; M2 in progress)
+**Version:** 0.2 (M0–M3 shipped)
 **Date:** 2026-06-19
-**Status:** M2 implementing on `feat/openapi-role3-context`
+**Status:** ✅ Shipped on `main` (2026-06-19) — next steps in `OPENAPI_ROLE3_NEXT_STEPS.md`
 **Owner:** SDK / backend_codegen + integrations
 **Motivated by:** `OPENAPI_LEVERAGE_ANALYSIS.md` Role 3 — promote the static contract into the
 **cross-bounded-context** integration seam when a modular monolith splits
@@ -123,7 +123,7 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 
 ## 4. Open Questions — Closed
 
-All five open questions resolved in §0.1. M0+M1+M2 shipped on `feat/openapi-role3-context`.
+All five open questions resolved in §0.1. M0–M3 + M2b + M2c shipped on `main`.
 
 ---
 
@@ -141,4 +141,4 @@ All five open questions resolved in §0.1. M0+M1+M2 shipped on `feat/openapi-rol
 
 ---
 
-*v0.2 — Reflective loop closed; M0+M1 implementation on `feat/openapi-role3-context`.*
+*v0.2 — Reflective loop closed; shipped on `main`. Continuation: `OPENAPI_ROLE3_NEXT_STEPS.md`.*

@@ -132,7 +132,7 @@ prisma/schema.prisma (+ optional manifests)
 | **1d** | Python `httpx` typed client emitter | Fulfills IDEAL_TARGET_ARCHITECTURE §4 escape hatch |
 | **2** | Extract shared schema-resolution from `deploy_harness/smoke.py` | DRY for harness + codegen |
 | **3** | Role 2 (OpenAPI-as-input) | ✅ Shipped — `api.yaml` overlay merge |
-| **4** | Role 3 (inter-context promotion) | **Next** — see `OPENAPI_ROLE3_REQUIREMENTS.md` |
+| **4** | Role 3 (inter-context promotion) | ✅ Shipped — see `OPENAPI_ROLE3_NEXT_STEPS.md` for M4+ |
 
 ---
 

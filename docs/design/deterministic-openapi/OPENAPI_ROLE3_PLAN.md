@@ -1,8 +1,8 @@
 # OpenAPI Role 3 — Inter-Context Seam (Implementation Plan)
 
-**Version:** 0.2 (M0+M1 scope — paired with Requirements v0.2)
+**Version:** 0.2 (M0–M3 shipped — paired with Requirements v0.2)
 **Date:** 2026-06-19
-**Status:** Implementing on `feat/openapi-role3-context`
+**Status:** ✅ Shipped on `main` (2026-06-19) — see `OPENAPI_ROLE3_NEXT_STEPS.md`
 **Paired requirements:** `OPENAPI_ROLE3_REQUIREMENTS.md`
 
 ---
@@ -76,7 +76,9 @@
 - Deploy harness `context_smoke` ladder stage; env `STARTD8_CONTEXT_<ID>_BASE_URL`
 - Generated remote smoke tests in `test_cross_context_smoke.py`
 
-### Deferred
+### Deferred → see `OPENAPI_ROLE3_NEXT_STEPS.md`
+
+M4 two-app fixture, M5 cross-repo contract filter, bucket-3 Prime integration wiring.
 
 ---
 
@@ -116,4 +118,4 @@
 
 ---
 
-*Plan v0.2 — M0+M1 shipped on `feat/openapi-role3-context`; M2+ deferred.*
+*Plan v0.2 — M0–M3 + M2b + M2c shipped on `main`. Next: `OPENAPI_ROLE3_NEXT_STEPS.md`.*
