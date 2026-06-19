@@ -1,8 +1,8 @@
 # OpenAPI Role 2 — Implementation Plan
 
-**Version:** 1.1 (Post-reflective update — paired with Requirements v0.2)
+**Version:** 1.2 (Post-implementation — M0–M3 + Role 1 conditional routes)
 **Date:** 2026-06-19
-**Status:** Planned — ready for CRP / implementation
+**Status:** Shipped on `feat/openapi-role2-input` — ready to merge to main
 
 ---
 
@@ -13,7 +13,7 @@
 | New parallel contract artifact for overlay | Role 1 already owns `app/openapi_contract.py`; `drift.py` is single-kind re-render | **Merge into existing module** — one drift surface, one skip-hook kind |
 | Role 2 generates custom route handlers | `crud_generator.render_main` mounts project-owned `user_routers` only; `IDEAL_TARGET_ARCHITECTURE` §3 puts non-CRUD logic in LLM bucket | v1 is **contract-only** for overlay routes; handlers stay in `user_routers.py` (bucket 3) |
 | Need new OpenAPI parser from scratch | `openapi-spec-validator` already in `[dev]` (Role 1 M2); `openapi_contract/schema_resolve.py` resolves `$ref` | Validate overlay + merge with existing resolver; no `prance` in v1 |
-| Conditional routes = duplicate Role 1 work | `assembler` emits AI/pages/flows/import paths from **six** manifest types; replicating each in `openapi_contract_renderer` is N×complexity | **Split responsibility:** manifest-derived conditional routes remain Role 1 backlog; **overlay = net-new / user / brownfield** paths only |
+| Conditional routes = duplicate Role 1 work | `assembler` emits AI/pages/flows/import paths from **six** manifest types; replicating each in `openapi_contract_renderer` is N×complexity | **Split responsibility:** manifest-derived conditional routes **shipped in Role 1** (FR-3); **overlay = net-new / user / brownfield** paths only |
 | `api.yaml` might replace Prisma projection | `render_openapi_contract` is 100% Prisma-driven; collision with CRUD would break drift truth | Base-always-wins merge; overlay **additive only** |
 | Brownfield ingest is v1 | `imports.yaml` / `pages.yaml` use closed YAML grammars + round-trip parsers — brownfield OpenAPI is open-ended | **Defer FR-12** to Phase 2; v1 is authored overlay only |
 | Auth/pagination need implementation | No auth middleware gen in backend_codegen today (`auth_renderer` is deployed seam only) | Declare metadata in merged spec only; **no auth enforcement gen** in v1 |
@@ -27,7 +27,7 @@
 2. **`api-sha256` drift** — copy-paste `imports.yaml` pattern (~40 lines in `_headers.py` + `drift.py`) — unlocks `--check` for overlay edits day one.
 3. **Reuse `extract_openapi_spec_from_text` AST path** — reconciliation tests can load merged module without import pollution (Role 1 M4 hardening).
 4. **Wireframe slot** — `assembly-inputs.yaml` already lists manifests; adding `api: api.yaml` is doc + wireframe read — no codegen architecture change.
-5. **Role 1 conditional-route debt ↓** — teams can declare AI/import routes in overlay *for contract purposes* while manifest emission catches up (validation-only mode in OQ-2).
+5. **Role 1 conditional-route debt ↓** — teams can declare AI/import routes in overlay *for contract purposes* while manifest emission catches up (validation-only mode in OQ-2). **Role 1 FR-3 conditional projection now ships** alongside overlay.
 
 ---
 
@@ -108,8 +108,13 @@
 - Overlay may declare paths manifests already emit; warn if not in base and not additive
 - Document relationship to Role 1 conditional-route backlog (complement, not replace)
 
-### M3 — Client extension (optional — FR-10)
+### M3 — Client extension (optional — FR-10) ✅
 - `openapi_client_renderer` reads merged spec; emit methods for overlay ops with Prisma DTO refs
+- Schema-only client byte-identical when overlay has no Prisma `$ref` ops
+
+### M3b — Role 1 conditional route projection ✅
+- `_conditional_routes()` in `openapi_contract_renderer` mirrors `assembler` manifest guards
+- Manifest kwargs threaded through contract/client renderers + drift + contract tests
 
 ### M4 — Brownfield normalize (deferred)
 - `startd8 openapi normalize` — human-in-the-loop ingest
@@ -179,7 +184,7 @@ From `cli_generate.py` and `drift.owned_file_in_sync`:
 | Merged spec fails validator on minimal overlay | Unit test minimal overlay + wireframe base |
 | Drift kwargs not threaded to skip-hook | Copy `--imports` test in `test_cli_backend.py` |
 | Scope creep into handler gen | Non-requirements + plan explicitly defer `user_routers` emission |
-| Role 1 conditional routes still missing | M2 validation-only mode; Role 1 backlog unchanged |
+| Role 1 conditional routes still missing | **Resolved** — FR-3 conditional projection shipped; M2 validation-only mode complements |
 
 ---
 

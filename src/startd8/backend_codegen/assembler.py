@@ -92,13 +92,28 @@ def render_backend(
         (
             CANONICAL_LAYOUT["python-openapi-contract"],
             render_openapi_contract(
-                schema_text, source_file, api_text=api_text, overlay_warnings=overlay_warnings
+                schema_text,
+                source_file,
+                api_text=api_text,
+                overlay_warnings=overlay_warnings,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
             ),
         ),
         ("clients/__init__.py", ""),
         (
             CANONICAL_LAYOUT["python-openapi-client"],
-            render_http_client(schema_text, source_file),
+            render_http_client(
+                schema_text,
+                source_file,
+                api_text=api_text,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
+            ),
         ),
     ]
     # app/web.py + templates (+ nav, + per-entity post-create behavior from views.yaml `forms:`)
@@ -139,7 +154,15 @@ def render_backend(
     out.append((HEALTH_TESTS_PATH, render_health_tests(schema_text, source_file)))
     out.append((
         OPENAPI_CONTRACT_TESTS_PATH,
-        render_openapi_contract_tests(schema_text, source_file),
+        render_openapi_contract_tests(
+            schema_text,
+            source_file,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=views_text,
+            imports_text=imports_text,
+            api_text=api_text,
+        ),
     ))
     out.append((
         COMPLETENESS_TESTS_PATH,

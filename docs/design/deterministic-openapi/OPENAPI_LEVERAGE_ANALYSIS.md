@@ -131,7 +131,8 @@ prisma/schema.prisma (+ optional manifests)
 | **1c** | Minimal static OpenAPI 3.0 emitter (`OPENAPI_SPEC` dict) | Enables external tooling + future client gen |
 | **1d** | Python `httpx` typed client emitter | Fulfills IDEAL_TARGET_ARCHITECTURE §4 escape hatch |
 | **2** | Extract shared schema-resolution from `deploy_harness/smoke.py` | DRY for harness + codegen |
-| **3** | Role 2 (OpenAPI-as-input) / Role 3 (inter-context promotion) | After Role 1 proves the static emitter |
+| **3** | Role 2 (OpenAPI-as-input) | ✅ Shipped — `api.yaml` overlay merge |
+| **4** | Role 3 (inter-context promotion) | **Next** — see `OPENAPI_ROLE3_REQUIREMENTS.md` |
 
 ---
 

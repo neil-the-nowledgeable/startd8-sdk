@@ -1,8 +1,8 @@
 # OpenAPI Role 2 — API Surface Overlay (Requirements)
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post-implementation — M0–M3 complete)
 **Date:** 2026-06-19
-**Status:** Planned against `backend_codegen`; ready for CRP / implementation
+**Status:** Shipped on `feat/openapi-role2-input` — ready to merge to main
 **Owner:** SDK / backend_codegen
 **Motivated by:** `OPENAPI_LEVERAGE_ANALYSIS.md` Role 2 — accept OpenAPI as an **input** contract
 sibling to Prisma for endpoint surface beyond schema-derived CRUD
@@ -23,7 +23,7 @@ sibling to Prisma for endpoint surface beyond schema-derived CRUD
 | Role 2 emits custom route handlers | `render_main` mounts project-owned `user_routers` only; IDEAL_TARGET §3 assigns non-CRUD **logic** to bucket 3 | Removed implicit handler gen; overlay is **contract declaration** — implement in `user_routers.py` |
 | Need substantial new OpenAPI parser | Role 1 added `openapi-spec-validator` + `openapi_contract/schema_resolve.py` | FR-2/FR-6 use existing validator + resolver; **no `prance`/`openapi-core` in v1** |
 | Overlay might override CRUD paths | Prisma projection is the drift truth for schema-derived routes | FR-3: **additive-only merge** — overlay cannot replace base paths or schemas (collision ⇒ error) |
-| Role 1 conditional-route debt solved here | Six manifest types (`ai_passes`, `pages`, `views` forms/flows/editors, `imports`) each emit routes differently | **Split:** manifest→contract projection stays Role 1 backlog; overlay covers **net-new / user / brownfield** paths in v1 |
+| Role 1 conditional-route debt solved here | Six manifest types (`ai_passes`, `pages`, `views` forms/flows/editors, `imports`) each emit routes differently | **Split:** manifest→contract projection **shipped in Role 1 FR-3**; overlay covers **net-new / user / brownfield** paths in v1 |
 | Brownfield ingest is v1 (FR-12) | `imports.yaml` uses closed grammar + round-trip parser; external OpenAPI is open-ended | FR-12 **deferred to Phase 2** (`openapi normalize` helper) |
 | Auth/pagination need generated middleware | `auth_renderer` is deployed seam only; no auth middleware codegen exists | Auth/pagination/error envelopes: **declare in merged spec only** — no enforcement gen in v1 |
 | Drift needs new architecture | `drift.py` already threads `imports-sha256`, `pages-sha256`, `forms-sha256` with matching headers | FR-5: copy **`api-sha256`** pattern from `header_imports` (~40 lines) |
@@ -39,9 +39,8 @@ sibling to Prisma for endpoint surface beyond schema-derived CRUD
   **contract validation** (warn if declared but not mounted) without owning their emission.
 - **OQ-3 → `openapi-spec-validator` + existing `schema_resolve`.** Sufficient for v1 merge/reconcile;
   defer heavier parsers until brownfield ingest (Phase 2).
-- **OQ-4 → Role 1 backlog remains.** Manifest-derived conditional routes should still land in
-  `openapi_contract_renderer` for drift accuracy when manifests exist **without** `api.yaml`.
-  Overlay complements — does not replace — that work.
+- **OQ-4 → Resolved in Role 1 FR-3.** Manifest-derived conditional routes land in
+  `openapi_contract_renderer` when manifests exist. Overlay complements — does not replace — that work.
 - **OQ-5 → Phase 2.** v1 is **authored** `api.yaml` only; normalize/ingest CLI deferred.
 
 **Quick wins surfaced by planning (not evident pre-plan):**
@@ -66,7 +65,7 @@ derivable from the data contract:
 |-----------|--------------|-----|
 | CRUD + health routes | Owned in `app/openapi_contract.py` (Role 1) | Complete for schema-derived subset |
 | Custom / non-CRUD HTTP routes | Project-owned `app/user_routers.py` seam | No manifest input; absent from `ROUTE_MANIFEST`; boot-smoke blind |
-| Conditional surfaces (AI, pages, flows, imports) | Emitted when manifests present | Role 1 deferred manifest→contract projection |
+| Conditional surfaces (AI, pages, flows, imports) | Emitted when manifests present | Role 1 FR-3 conditional projection in `openapi_contract_renderer` |
 | Auth / pagination / error envelopes | Not modeled | Need declared shape for integration/brownfield docs |
 | Brownfield onboarding | Concierge survey triage only | No adoptable overlay path |
 | Two-contract discipline | Prisma = data; runtime OpenAPI = byproduct | No explicit reconciliation when surface ≠ projection |

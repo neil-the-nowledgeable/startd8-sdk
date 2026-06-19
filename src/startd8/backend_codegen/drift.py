@@ -100,6 +100,9 @@ def _renderers(
     forms_text: Optional[str] = None,
     display_text: Optional[str] = None,
     api_text: Optional[str] = None,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
 ) -> Dict[str, Callable[[str, str, Optional[str]], str]]:
     """Map artifact-kind → a ``(schema_text, source_file, entity) -> text`` renderer.
 
@@ -173,9 +176,23 @@ def _renderers(
         "fastapi-main": lambda s, sf, e: render_main(s, sf),
         "fastapi-health": lambda s, sf, e: render_health(s, sf),
         "python-openapi-contract": lambda s, sf, e: render_openapi_contract(
-            s, sf, api_text=api_text
+            s,
+            sf,
+            api_text=api_text,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=forms_text,
+            imports_text=imports_text,
         ),
-        "python-openapi-client": lambda s, sf, e: render_http_client(s, sf),
+        "python-openapi-client": lambda s, sf, e: render_http_client(
+            s,
+            sf,
+            api_text=api_text,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=forms_text,
+            imports_text=imports_text,
+        ),
         "fastapi-web": lambda s, sf, e: render_web(s, sf),
         "htmx-base": lambda s, sf, e: render_base_template(s, sf),
         "htmx-field-error": lambda s, sf, e: render_field_error_template(s, sf),
@@ -199,7 +216,15 @@ def _renderers(
         "pages-admin-tmpl": lambda s, sf, e: render_pages_admin_template(s, sf),
         "python-tests-contract": lambda s, sf, e: render_contract_tests(s, sf),
         "python-tests-health": lambda s, sf, e: render_health_tests(s, sf),
-        "python-tests-openapi-contract": lambda s, sf, e: render_openapi_contract_tests(s, sf),
+        "python-tests-openapi-contract": lambda s, sf, e: render_openapi_contract_tests(
+            s,
+            sf,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=forms_text,
+            imports_text=imports_text,
+            api_text=api_text,
+        ),
         "python-tests-completeness": lambda s, sf, e: render_completeness_tests(s, sf, manifest=_cmpl),
         "python-tests-routes": lambda s, sf, e: render_route_smoke_tests(s, sf),
     }
@@ -730,6 +755,11 @@ def _check_api_contract_drift(
     api_text: Optional[str],
     ondisk_text: str,
     source_file: str,
+    *,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
 ) -> DriftResult:
     """Drift for ``python-openapi-contract`` when an ``api.yaml`` overlay participates."""
     if api_text is None:
@@ -748,7 +778,15 @@ def _check_api_contract_drift(
         return DriftResult(status, DRIFT, reason)
     from .openapi_contract_renderer import render_openapi_contract
 
-    rendered = render_openapi_contract(schema_text, source_file, api_text=api_text)
+    rendered = render_openapi_contract(
+        schema_text,
+        source_file,
+        api_text=api_text,
+        manifest_text=manifest_text,
+        pages_text=pages_text,
+        views_text=views_text,
+        imports_text=imports_text,
+    )
     if rendered != ondisk_text:
         return DriftResult(
             "tampered",
@@ -835,7 +873,14 @@ def check_drift(
         api_text is not None or embedded_api_sha(ondisk_text) is not None
     ):
         return _check_api_contract_drift(
-            schema_text, api_text, ondisk_text, source_file
+            schema_text,
+            api_text,
+            ondisk_text,
+            source_file,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=forms_text,
+            imports_text=imports_text,
         )
     if kind in _SETTINGS_KINDS:
         # The skip-hook path: re-derive the baked mode from the file's own header (FR-CFG-7a) — this
@@ -869,6 +914,9 @@ def check_drift(
         forms_text=forms_text,
         display_text=display_text,
         api_text=api_text,
+        manifest_text=manifest_text,
+        pages_text=pages_text,
+        imports_text=imports_text,
     ).get(kind or "")
     if renderer is None:
         return DriftResult(

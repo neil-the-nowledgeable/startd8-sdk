@@ -2,18 +2,27 @@
 
 Projects schema-derived CRUD operations into ``clients/http_client.py`` — a minimal typed
 ``httpx`` wrapper for inter-context / escape-hatch consumers. Paths mirror
-``openapi_contract_renderer._crud_routes`` and DTOs come from ``app.tables``.
+``openapi_contract_renderer._crud_routes`` and DTOs come from ``app.tables``. Role 2 M3 adds
+methods for overlay operations whose request/response ``$ref`` resolve to Prisma-derived DTOs.
 """
 
 from __future__ import annotations
 
-from typing import List, Set
+import re
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
-from ._headers import header_standard as _header
+from ._headers import header_api_overlay, header_standard as _header
 from .crud_generator import _pk_field
-from .openapi_contract_renderer import _model_names
+from .openapi_contract_renderer import (
+    _crud_routes,
+    _model_names,
+    _project_openapi,
+)
+
+_HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+_DTO_SUFFIXES = ("Create", "Read", "Update")
 
 
 def _pk_py_type(schema: PrismaSchema, name: str) -> str:
@@ -21,6 +30,109 @@ def _pk_py_type(schema: PrismaSchema, name: str) -> str:
     if pk is not None and pk.type in ("Int", "BigInt"):
         return "int"
     return "str"
+
+
+def _prisma_dto_names(schema: PrismaSchema, schema_text: str) -> Set[str]:
+    names: Set[str] = set()
+    for entity in _model_names(schema, schema_text):
+        names.update(f"{entity}{suffix}" for suffix in _DTO_SUFFIXES)
+    return names
+
+
+def _ref_name(ref: Any) -> Optional[str]:
+    if not isinstance(ref, str) or not ref.startswith("#/components/schemas/"):
+        return None
+    return ref.rsplit("/", 1)[-1]
+
+
+def _op_json_ref(op: Dict[str, Any], *, response: bool) -> Optional[str]:
+    if response:
+        content = (
+            op.get("responses", {})
+            .get("200", {})
+            .get("content", {})
+            .get("application/json", {})
+        )
+        return _ref_name(content.get("schema", {}).get("$ref"))
+    body = op.get("requestBody", {})
+    content = body.get("content", {}).get("application/json", {})
+    return _ref_name(content.get("schema", {}).get("$ref"))
+
+
+def _overlay_method_name(method: str, path: str) -> str:
+    parts = [method.lower()]
+    for segment in path.strip("/").split("/"):
+        if segment.startswith("{") and segment.endswith("}"):
+            parts.append(segment[1:-1])
+        else:
+            parts.append(re.sub(r"[^0-9a-zA-Z_]+", "_", segment).strip("_").lower())
+    return "_".join(p for p in parts if p)
+
+
+def _path_param_names(path: str) -> List[str]:
+    return re.findall(r"\{([^}]+)\}", path)
+
+
+def _client_url_expr(path: str) -> str:
+    """OpenAPI path → generated Python URL expression (plain string or f-string)."""
+    params = _path_param_names(path)
+    if not params:
+        return f'"{path}"'
+    escaped = path.replace("{", "{{").replace("}", "}}")
+    for name in params:
+        escaped = escaped.replace("{{" + name + "}}", "{" + name + "}")
+    return f'f"{escaped}"'
+
+
+def _overlay_client_methods(
+    schema: PrismaSchema, schema_text: str, spec: Dict[str, Any]
+) -> str:
+    """Emit httpx methods for non-CRUD overlay ops with Prisma-derived ``$ref`` DTOs (FR-10)."""
+    crud = set(_crud_routes(schema, schema_text))
+    dto_names = _prisma_dto_names(schema, schema_text)
+    blocks: List[str] = []
+
+    for path, path_item in spec.get("paths", {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        for method, op in path_item.items():
+            if method not in _HTTP_METHODS or not isinstance(op, dict):
+                continue
+            http_method = method.upper()
+            if (http_method, path) in crud:
+                continue
+            req_dto = _op_json_ref(op, response=False)
+            resp_dto = _op_json_ref(op, response=True)
+            if (req_dto is None or req_dto not in dto_names) and (
+                resp_dto is None or resp_dto not in dto_names
+            ):
+                continue
+
+            fn = _overlay_method_name(http_method, path)
+            params = _path_param_names(path)
+            sig_parts = [f"{name}: str" for name in params]
+            if req_dto and req_dto in dto_names:
+                sig_parts.append(f"body: {req_dto}")
+            signature = ", ".join(sig_parts)
+            if signature:
+                signature = ", " + signature
+
+            call_kw = ""
+            if req_dto and req_dto in dto_names:
+                call_kw = ", json=body.model_dump()"
+
+            lines = [
+                f"    def {fn}(self{signature})"
+                + (f" -> {resp_dto}" if resp_dto and resp_dto in dto_names else " -> None"),
+                f'        """``{http_method} {path}`` — overlay operation."""',
+                f"        resp = self._client.{method.lower()}({_client_url_expr(path)}{call_kw})",
+                "        resp.raise_for_status()",
+            ]
+            if resp_dto and resp_dto in dto_names:
+                lines.append(f"        return {resp_dto}.model_validate(resp.json())")
+            blocks.append("\n".join(lines))
+
+    return "\n\n\n".join(blocks)
 
 
 def _entity_methods(schema: PrismaSchema, schema_text: str, name: str) -> str:
@@ -74,12 +186,28 @@ def _entity_methods(schema: PrismaSchema, schema_text: str, name: str) -> str:
 
 
 def render_http_client(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    *,
+    api_text: Optional[str] = None,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
 ) -> str:
     """Render ``clients/http_client.py`` — typed httpx CRUD client for schema-derived routes."""
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     names = _model_names(schema, schema_text)
+
+    _, spec = _project_openapi(
+        schema_text,
+        api_text=api_text,
+        manifest_text=manifest_text,
+        pages_text=pages_text,
+        views_text=views_text,
+        imports_text=imports_text,
+    )
 
     table_imports: Set[str] = set()
     for n in names:
@@ -88,8 +216,30 @@ def render_http_client(
         table_imports.add(f"{n}Read")
         if _pk_field(schema, n) is not None:
             table_imports.add(f"{n}Update")
+    for _, path_item in spec.get("paths", {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        for method in path_item:
+            if method not in _HTTP_METHODS:
+                continue
+            op = path_item[method]
+            if not isinstance(op, dict):
+                continue
+            for dto in (_op_json_ref(op, response=False), _op_json_ref(op, response=True)):
+                if dto and dto in _prisma_dto_names(schema, schema_text):
+                    table_imports.add(dto)
 
-    header = _header(source_file, sha, "python-openapi-client")
+    blocks = [_entity_methods(schema, schema_text, n) for n in names]
+    overlay_block = _overlay_client_methods(schema, schema_text, spec)
+    if overlay_block:
+        blocks.append(overlay_block)
+
+    if api_text and overlay_block:
+        header = header_api_overlay(
+            source_file, sha, schema_sha256(api_text), "python-openapi-client"
+        )
+    else:
+        header = _header(source_file, sha, "python-openapi-client")
     imports = "from __future__ import annotations\n\nimport httpx\n\n"
     if table_imports:
         imports += (
@@ -119,8 +269,6 @@ def render_http_client(
         "    def __exit__(self, *exc: object) -> None:",
         "        self.close()",
     ]
-
-    blocks = [_entity_methods(schema, schema_text, n) for n in names]
     body = imports + "\n\n" + "\n".join(class_lines)
     if blocks:
         body += "\n" + "\n\n\n".join(blocks)

@@ -13,6 +13,7 @@ from startd8.backend_codegen import (
     render_backend,
 )
 from startd8.backend_codegen.openapi_contract_renderer import (
+    _conditional_routes,
     _crud_routes,
     render_openapi_contract,
 )
@@ -121,3 +122,95 @@ def test_openapi_spec_supports_smoke_resource_selection() -> None:
     choice, reason = select_crud_resource(spec)
     assert choice is not None, reason
     assert choice.path in {"/note/", "/link/"}
+
+
+AI_MANIFEST = """
+passes:
+  - name: extract
+    output_entities: [Note]
+    route_path: /extract
+    prompt: prompts/extract.md
+""".strip()
+
+PAGES_MANIFEST = """
+pages:
+  - slug: /
+    title: Home
+    content: pages/home.md
+  - slug: /about
+    title: About
+    content: pages/about.md
+""".strip()
+
+FLOWS_VIEWS = """
+flows:
+  - name: wizard
+    draft_entity: Note
+    step_field: title
+    steps: [a, b]
+""".strip()
+
+EDITORS_VIEWS = """
+editors:
+  note_edit:
+    parent: Note
+    child: Link
+    fk: noteId
+    edit_field: url
+    route: /notes/{id}/edit
+""".strip()
+
+IMPORTS_SURFACE = """
+imports:
+  Note:
+    format: json
+    surface: yes
+""".strip()
+
+
+def test_conditional_routes_absent_without_manifests() -> None:
+    schema = parse_prisma_schema(SCHEMA)
+    routes = set(_conditional_routes(schema, SCHEMA))
+    assert routes == set()
+
+
+def test_conditional_routes_ai_paths() -> None:
+    schema = parse_prisma_schema(SCHEMA)
+    routes = set(_conditional_routes(schema, SCHEMA, manifest_text=AI_MANIFEST))
+    assert ("POST", "/ai/extract") in routes
+
+
+def test_conditional_routes_pages_paths() -> None:
+    schema = parse_prisma_schema(SCHEMA)
+    routes = set(_conditional_routes(schema, SCHEMA, pages_text=PAGES_MANIFEST))
+    assert ("GET", "/") in routes
+    assert ("GET", "/about") in routes
+
+
+def test_conditional_routes_flow_and_editor_paths() -> None:
+    schema = parse_prisma_schema(SCHEMA)
+    routes = set(_conditional_routes(schema, SCHEMA, views_text=FLOWS_VIEWS + "\n" + EDITORS_VIEWS))
+    assert ("POST", "/flow/wizard/start") in routes
+    assert ("GET", "/flow/wizard/{draft_id}") in routes
+    assert ("GET", "/notes/{id}/edit") in routes
+    assert ("POST", "/notes/{id}/edit") in routes
+
+
+def test_conditional_routes_import_surface() -> None:
+    schema = parse_prisma_schema(SCHEMA)
+    routes = set(_conditional_routes(schema, SCHEMA, imports_text=IMPORTS_SURFACE))
+    assert ("GET", "/import") in routes
+    assert ("POST", "/import") in routes
+
+
+def test_render_includes_conditional_routes_in_manifest() -> None:
+    text = render_openapi_contract(SCHEMA, manifest_text=AI_MANIFEST, pages_text=PAGES_MANIFEST)
+    assert '("POST", "/ai/extract")' in text
+    assert '("GET", "/")' in text
+    assert render_openapi_contract(SCHEMA) == render_openapi_contract(SCHEMA, manifest_text=None)
+
+
+def test_skip_hook_with_manifests_threaded() -> None:
+    text = render_openapi_contract(SCHEMA, manifest_text=AI_MANIFEST)
+    assert owned_file_in_sync(SCHEMA, text, manifest_text=AI_MANIFEST) is True
+    assert owned_file_in_sync(SCHEMA, text) is False
