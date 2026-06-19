@@ -37,6 +37,8 @@ from .test_emitter import (
     render_health_tests,
     render_openapi_contract_tests,
     render_route_smoke_tests,
+    render_cross_context_smoke_tests,
+    CROSS_CONTEXT_SMOKE_TESTS_PATH,
 )
 
 
@@ -56,6 +58,8 @@ def render_backend(
     imports_text: Optional[str] = None,
     api_text: Optional[str] = None,
     overlay_warnings: Optional[List[str]] = None,
+    contexts_text: Optional[str] = None,
+    project_root: Optional[str] = None,
     deployment_mode: str = "installed",
     tenant_owner_field: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
@@ -189,6 +193,31 @@ def render_backend(
         out.extend(render_ai_layer(
             schema_text, manifest_text, human_inputs_text, source_file,
             ai_agent_spec=ai_agent_spec,
+        ))
+    if contexts_text:
+        from .context_client_renderer import render_context_clients
+        from .context_otel_renderer import CONTEXT_OTEL_PATH, render_context_otel
+
+        out.append((
+            CONTEXT_OTEL_PATH,
+            render_context_otel(source_file, schema_text),
+        ))
+        out.extend(
+            render_context_clients(
+                schema_text,
+                contexts_text,
+                source_file,
+                api_text=api_text,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
+                project_root=project_root,
+            )
+        )
+        out.append((
+            CROSS_CONTEXT_SMOKE_TESTS_PATH,
+            render_cross_context_smoke_tests(schema_text, contexts_text, source_file),
         ))
     # FR-CFG-7 / D11: app/settings.py is emitted ONLY in deployed mode. Installed mode is the
     # settings-absent default and stays byte-identical to today (R4). settings.py — present here,

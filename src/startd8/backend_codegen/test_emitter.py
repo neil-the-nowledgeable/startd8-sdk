@@ -30,11 +30,13 @@ from .htmx_generator import _confirm_field
 CONTRACT_TESTS_PATH = "tests/test_contract.py"
 COMPLETENESS_TESTS_PATH = "tests/test_completeness.py"
 ROUTE_SMOKE_TESTS_PATH = "tests/test_route_smoke.py"
+CROSS_CONTEXT_SMOKE_TESTS_PATH = "tests/test_cross_context_smoke.py"
 HEALTH_TESTS_PATH = "tests/test_health.py"
 OPENAPI_CONTRACT_TESTS_PATH = "tests/test_openapi_contract.py"
 _KIND = "python-tests-contract"
 _COMPLETENESS_KIND = "python-tests-completeness"
 _ROUTE_SMOKE_KIND = "python-tests-routes"
+_CROSS_CONTEXT_SMOKE_KIND = "python-tests-cross-context"
 _HEALTH_KIND = "python-tests-health"
 _OPENAPI_CONTRACT_KIND = "python-tests-openapi-contract"
 
@@ -703,4 +705,110 @@ def render_route_smoke_tests(
     body = _ROUTE_SMOKE_BODY.format(
         tables=tables_literal, pk_map=pk_literal, confirm=confirm_literal
     )
+    return header + "\n\n" + body
+
+
+_CROSS_CONTEXT_TEST = '''\
+def test_{test_name}_client_list_create_round_trip():
+    """FR-6: context client list+create via select_crud_resource ground truth."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.openapi_contract import OPENAPI_SPEC
+    from clients.{module}_client import {class_name}
+    from startd8.deploy_harness.context_smoke import run_context_client_smoke
+
+    class _TestClientHttpx:
+        def __init__(self, tc):
+            self._tc = tc
+
+        def get(self, url, **kwargs):
+            return self._tc.get(url, **kwargs)
+
+        def post(self, url, **kwargs):
+            return self._tc.post(url, **kwargs)
+
+        def patch(self, url, **kwargs):
+            return self._tc.patch(url, **kwargs)
+
+        def delete(self, url, **kwargs):
+            return self._tc.delete(url, **kwargs)
+
+        def close(self) -> None:
+            pass
+
+    with TestClient(app) as tc:
+        with {class_name}("http://test", client=_TestClientHttpx(tc)) as outbound:
+            outcome = run_context_client_smoke(outbound, OPENAPI_SPEC)
+    assert outcome.status == "pass", outcome.reason or outcome.status
+'''
+
+
+_CROSS_CONTEXT_REMOTE_TEST = '''\
+def test_{test_name}_remote_producer_smoke():
+    """FR-6 remote: live producer round-trip when base URL is configured."""
+    from pathlib import Path
+
+    from startd8.backend_codegen.context_manifest import (
+        filter_spec_for_client,
+        load_contract_spec,
+        parse_contexts,
+    )
+    from startd8.deploy_harness.context_smoke import (
+        context_base_url_env_key,
+        resolve_context_base_url,
+        run_remote_producer_smoke,
+    )
+
+    contexts_text = Path("prisma/contexts.yaml").read_text(encoding="utf-8")
+    (ctx,) = [c for c in parse_contexts(contexts_text) if c.id == {ctx_id!r}]
+    base_url = resolve_context_base_url(ctx)
+    if not base_url:
+        pytest.skip(
+            f"set {{context_base_url_env_key({ctx_id!r})}} or contexts.yaml base_url"
+        )
+    root = Path(".").resolve()
+    raw = load_contract_spec(ctx.contract, project_root=root)
+    schema_text = (root / "prisma" / "schema.prisma").read_text(encoding="utf-8")
+    spec = filter_spec_for_client(raw, schema_text, routes=ctx.routes)
+    outcome = run_remote_producer_smoke(base_url, spec=spec)
+    assert outcome.status == "pass", outcome.reason or outcome.status
+'''
+
+
+def render_cross_context_smoke_tests(
+    schema_text: str,
+    contexts_text: str,
+    source_file: str = "prisma/schema.prisma",
+) -> str:
+    """Render ``tests/test_cross_context_smoke.py`` — FR-6 loopback round-trip per local outbound ctx."""
+    from ._headers import header_context_smoke_tests
+    from .context_client_renderer import _class_name
+    from .context_manifest import parse_contexts
+
+    sha = schema_sha256(schema_text)
+    contexts_sha = schema_sha256(contexts_text)
+    header = header_context_smoke_tests(
+        source_file, sha, contexts_sha, _CROSS_CONTEXT_SMOKE_KIND
+    )
+    local = [c for c in parse_contexts(contexts_text) if c.local]
+    remote = [c for c in parse_contexts(contexts_text) if not c.local]
+    blocks = [
+        _CROSS_CONTEXT_TEST.format(
+            test_name=ctx.id,
+            module=ctx.id,
+            class_name=_class_name(ctx.id),
+        )
+        for ctx in local
+    ]
+    blocks.extend(
+        _CROSS_CONTEXT_REMOTE_TEST.format(test_name=ctx.id, ctx_id=ctx.id)
+        for ctx in remote
+    )
+    if not blocks:
+        blocks = [
+            "def test_no_local_outbound_contexts():\n"
+            '    pytest.skip("no local outbound contexts in contexts.yaml")'
+        ]
+    body = _SHIM + "import pytest\n\n\n" + "\n\n\n".join(blocks) + "\n"
     return header + "\n\n" + body

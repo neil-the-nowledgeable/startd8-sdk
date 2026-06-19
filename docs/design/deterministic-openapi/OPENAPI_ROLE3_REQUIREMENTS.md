@@ -1,8 +1,8 @@
 # OpenAPI Role 3 — Inter-Context Seam (Requirements)
 
-**Version:** 0.1 (Pre-planning — post Role 1+2 merge)
+**Version:** 0.2 (M0+M1 shipped; M2 in progress)
 **Date:** 2026-06-19
-**Status:** Planned — ready for reflective requirements / CRP
+**Status:** M2 implementing on `feat/openapi-role3-context`
 **Owner:** SDK / backend_codegen + integrations
 **Motivated by:** `OPENAPI_LEVERAGE_ANALYSIS.md` Role 3 — promote the static contract into the
 **cross-bounded-context** integration seam when a modular monolith splits
@@ -29,6 +29,26 @@ Pydantic to served OpenAPI + typed consumer client?**
 **Architectural anchor:** `IDEAL_TARGET_ARCHITECTURE` §6 (bounded-context split) + §4 (escape hatch).
 Python-homogeneous services promote via OpenAPI; polyglot targets defer to gRPC/proto (`ProtoStubProvider`).
 
+### 0.1 Planning Insights (reflective loop — closed)
+
+| OQ | Resolution |
+|----|------------|
+| **OQ-1** | Standalone `prisma/contexts.yaml` + assembly-inputs catalog key `contexts` (same pattern as `api`, `imports`) |
+| **OQ-2** | Per-producer `clients/{id}_client.py`; keep `clients/http_client.py` for local in-process spine |
+| **OQ-3** | Default `routes: crud` — CRUD + overlay ops whose JSON bodies use Prisma DTO `$ref`s only; exclude HTML/AI/pages |
+| **OQ-4** | Fail-closed `--check` via `schema-sha256` + `contexts-sha256` + `contract-sha256` (filtered producer spec) |
+| **OQ-5** | OTel CLIENT spans on inter-context calls — span name ``context.outbound.<producer> <METHOD> <path>``; attrs ``io.startd8.context.producer_id``, ``io.startd8.context.outbound``, ``http.request.method``, ``url.path``; no-op without ``opentelemetry`` |
+
+**Grammar (`contexts.yaml`):**
+
+```yaml
+outbound:
+  - id: catalog              # alphanumeric/snake — drives clients/{id}_client.py
+    local: true              # OR contract: openapi/catalog.json (relative to project root)
+    base_url: "http://..."   # runtime doc comment only; override in __init__
+    routes: crud             # crud | all_json
+```
+
 ---
 
 ## 1. Problem Statement
@@ -49,13 +69,13 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 ## 2. Goals & Non-Goals
 
 **Goals**
-- Define an owned **inter-context manifest** (`contexts.yaml` or assembly-inputs extension) naming
-  producer context, consumer context, and promoted route subset.
+- Define an owned **inter-context manifest** (`prisma/contexts.yaml`) naming outbound producer contexts.
 - Promote `OPENAPI_SPEC` to a **served contract artifact** (static module remains drift authority).
-- Generate **consumer `ApiClient`** (or sibling package) from the **merged** producer spec with
-  stable import path and version pinning via content hash.
-- Wire **deploy smoke** to call producer via `ApiClient` using `select_crud_resource` ground truth.
-- Reuse Role 1+2 drift patterns — no parallel contract file.
+- Generate **per-producer consumer clients** from the **filtered** producer spec with stable import
+  path and version pinning via `contract-sha256`.
+- Cross-context smoke: generated `tests/test_cross_context_smoke.py` exercises each **local**
+  outbound client via in-process `TestClient` shim + `run_context_client_smoke` (M2); **remote**
+  producers via deploy harness `context_smoke` stage + env `STARTD8_CONTEXT_<ID>_BASE_URL` (M2c).
 
 **Non-Goals (v1)**
 - gRPC/proto promotion (separate `ProtoStubProvider` track).
@@ -66,53 +86,59 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 
 ---
 
-## 3. Requirements (draft)
+## 3. Requirements
 
 ### Manifest & promotion
-- **FR-1** Accept an optional **inter-context manifest** declaring named contexts and HTTP base URLs
-  (installed: loopback; deployed: operator-supplied).
-- **FR-2** **Producer promotion:** `OPENAPI_SPEC` exported to `openapi.json` (or served route) is a
-  **lossless JSON dump** of the owned module — no second editor.
-- **FR-3** **Consumer client gen:** emit `clients/{producer}_client.py` (or configured name) from
-  producer's merged spec; methods mirror Role 1 CRUD + Role 2 overlay ops with Prisma `$ref`s.
+- **FR-1** Accept optional `prisma/contexts.yaml` (CLI `--contexts`, wireframe catalog key `contexts`).
+- **FR-2** **Producer promotion:** `--export-openapi` writes `openapi.json` as a canonical JSON dump
+  of owned `OPENAPI_SPEC` (no second editor; drift authority remains `app/openapi_contract.py`).
+- **FR-3** **Consumer client gen:** emit `clients/{id}_client.py` per outbound entry from the
+  producer's **filtered** spec; methods mirror Role 1 CRUD + Role 2 overlay ops with Prisma `$ref`s.
 
 ### Drift & versioning
-- **FR-4** Consumer client header carries **producer contract hash** (`contract-sha256` or
-  `schema-sha256` + `api-sha256` composite) for fail-closed stale detection.
-- **FR-5** `owned_file_in_sync` threads inter-context manifest through provider skip-hook (FR-ED-16
-  precedent).
+- **FR-4** Consumer client header carries `schema-sha256`, `contexts-sha256`, and
+  `contract-sha256` (hash of canonical JSON of the filtered producer spec).
+- **FR-5** `owned_file_in_sync` threads `contexts.yaml` + `project_root` through provider skip-hook
+  (FR-ED-16 precedent); drift kind `python-context-client` with `startd8-entity: {producer_id}`.
 
 ### Verification
-- **FR-6** Cross-context smoke test template: `ApiClient` list+create round-trip against producer
-  `select_crud_resource` path (reuses `schema_resolve` + deploy harness patterns).
-- **FR-7** Contract tests assert consumer method paths ⊆ producer `ROUTE_MANIFEST`.
+- **FR-6** Cross-context smoke: emit `tests/test_cross_context_smoke.py` per **local** outbound
+  context (in-process TestClient shim) and per **remote** context (live base URL when configured).
+  Deploy harness `context_smoke` stage runs `run_outbound_context_smokes` after local smoke.
+- **FR-7** Unit tests assert consumer method paths ⊆ producer `ROUTE_MANIFEST` (filtered subset).
 
 ### CLI / UX
-- **FR-8** `startd8 generate backend --contexts <file>` (or wireframe slot) drives consumer client
-  emission when consumer context is current project.
+- **FR-8** `startd8 generate backend --contexts <file>` drives consumer client emission; absent → SOTTO.
 - **FR-9** `startd8 generate backend --export-openapi` remains the producer-side promotion command.
+
+### Observability (OQ-5)
+- **FR-10** Emit ``clients/_context_otel.py`` when contexts manifest present; each generated
+  ``clients/{id}_client.py`` wraps HTTP via ``_request()`` → ``trace_outbound_request``.
+- **FR-11** Span naming: ``context.outbound.<producer_id> <METHOD> <path>`` (CLIENT kind).
+  Attributes: ``io.startd8.context.producer_id``, ``io.startd8.context.outbound``,
+  ``http.request.method``, ``url.path``, ``http.response.status_code`` when available.
+  Optional OTel — no-op when ``opentelemetry`` is not installed.
 
 ---
 
-## 4. Open Questions
+## 4. Open Questions — Closed
 
-- **OQ-1:** Manifest shape — extend `assembly-inputs.yaml` vs standalone `contexts.yaml`?
-- **OQ-2:** Consumer client package layout — `clients/http_client.py` monolith vs per-producer modules?
-- **OQ-3:** How much of producer `ROUTE_MANIFEST` is promoted — CRUD-only default vs full conditional surface?
-- **OQ-4:** Version pinning — block consumer regen on producer hash mismatch vs warn-only in installed mode?
-- **OQ-5:** Relationship to ContextCore OTel — span naming on `ApiClient` calls part of Role 3 or observability track?
+All five open questions resolved in §0.1. M0+M1+M2 shipped on `feat/openapi-role3-context`.
 
 ---
 
 ## 5. Success Metrics
 
-| Metric | Target |
-|--------|--------|
-| Producer `openapi.json` matches owned `OPENAPI_SPEC` byte-for-byte (modulo formatting) | M0 |
-| Consumer `ApiClient` round-trip list+create in cross-context smoke | M1 |
-| Producer contract edit → consumer `--check` stale | M1 |
-| $0 LLM; deterministic skip-hook recognition | M1 |
+| Metric | Target | Milestone |
+|--------|--------|-----------|
+| Producer `openapi.json` matches owned `OPENAPI_SPEC` (canonical JSON) | ✅ | M0 |
+| Consumer `clients/{id}_client.py` emitted with typed CRUD methods | ✅ | M1 |
+| Producer contract edit → consumer `--check` stale | ✅ | M1 |
+| Local outbound context list+create smoke (TestClient shim) | ✅ | M2 |
+| Remote producer smoke via deploy harness | ✅ | M2c |
+| Assembly-inputs template documents `contexts` | ✅ | M3 |
+| $0 LLM; deterministic skip-hook recognition | ✅ | M1 |
 
 ---
 
-*v0.1 — Initial Role 3 requirements scaffold post Role 1+2 merge. Run reflective-requirements loop before implementation.*
+*v0.2 — Reflective loop closed; M0+M1 implementation on `feat/openapi-role3-context`.*

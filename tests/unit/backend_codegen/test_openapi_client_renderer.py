@@ -72,7 +72,11 @@ def test_client_create_and_list_via_mock_transport() -> None:
     httpx = pytest.importorskip("httpx")
     pytest.importorskip("sqlmodel")
 
-    schema = "model Note { id String @id @default(cuid())\n title String\n }\n"
+    # Unique model name avoids SQLAlchemy table redefinition when other tests
+    # registered ``Note`` on the shared MetaData registry first.
+    schema = (
+        "model HttpClientZed { id String @id @default(cuid())\n title String\n }\n"
+    )
     table_ns: dict = {}
     exec(compile(render_sqlmodel_tables(schema).text, "app.tables", "exec"), table_ns)
     app_pkg = types.ModuleType("app")
@@ -82,15 +86,15 @@ def test_client_create_and_list_via_mock_transport() -> None:
     app_pkg.tables = tables_mod
     sys.modules["app"] = app_pkg
     sys.modules["app.tables"] = tables_mod
-    NoteCreate = table_ns["NoteCreate"]
+    ZedCreate = table_ns["HttpClientZedCreate"]
 
     calls: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, request.url.path))
-        if request.method == "POST" and request.url.path == "/note/":
+        if request.method == "POST" and request.url.path == "/httpclientzed/":
             return httpx.Response(200, json={"id": "n1", "title": "hello"})
-        if request.method == "GET" and request.url.path == "/note/":
+        if request.method == "GET" and request.url.path == "/httpclientzed/":
             return httpx.Response(200, json=[{"id": "n1", "title": "hello"}])
         return httpx.Response(404)
 
@@ -101,13 +105,13 @@ def test_client_create_and_list_via_mock_transport() -> None:
     transport = httpx.MockTransport(handler)
     with httpx.Client(transport=transport, base_url="http://test") as hc:
         api = ApiClient("http://test", client=hc)
-        created = api.create_note(NoteCreate(title="hello"))
+        created = api.create_httpclientzed(ZedCreate(title="hello"))
         assert created.id == "n1"
-        listed = api.list_note()
+        listed = api.list_httpclientzed()
         assert len(listed) == 1
 
-    assert ("POST", "/note/") in calls
-    assert ("GET", "/note/") in calls
+    assert ("POST", "/httpclientzed/") in calls
+    assert ("GET", "/httpclientzed/") in calls
 
 
 def test_client_tracks_owned_client() -> None:
