@@ -23,6 +23,7 @@ from .charge_suite import run_charge_suite
 from .currency_suite import run_currency_suite
 from .contract import StartupContract, resolve_serve_command
 from .pricing_suite import run_pricing_suite
+from .rest_pricing_suite import run_rest_pricing_suite
 from .shipping_suite import run_shipping_suite
 
 # service name -> behavioral suite (the SDK-authored client). P1+P2 curated stateless set,
@@ -33,6 +34,7 @@ _SUITES: Dict[str, Callable[[int], object]] = {
     "shippingservice": run_shipping_suite,
     "adservice": run_ad_suite,
     "pricingservice": run_pricing_suite,
+    "rest-pricingservice": run_rest_pricing_suite,
 }
 
 _NODE_RUNTIME = Path(__file__).parent / "node_runtime"
