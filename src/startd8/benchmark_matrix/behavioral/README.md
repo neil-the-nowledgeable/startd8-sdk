@@ -10,6 +10,7 @@ is no build step at runtime, so the stubs are checked in.
 |-------|---------|----------|---------|
 | `demo.proto` | `hipstershop` | all 9 Online Boutique services | charge / currency / shipping / ad suites |
 | `pricing.proto` | `startd8.bench.pricing.v1` | `PricingService` (hardened tier, Liferay-derived) | pricing suite |
+| `resolved_pricing.proto` | `benchmark.pricing.v1` | `ResolvedPriceService` (OpenAI/Codex audit seed) | resolved pricing suite |
 
 `execute.py:_PROTO_BY_SERVICE` maps a service to the proto its generated server is provisioned with
 (default `demo.proto`; FR-14). OB cells are byte-identical to before this mapping existed.
@@ -22,10 +23,13 @@ Pin the toolchain to match the existing stubs (generated with **Protobuf Python 
 ```bash
 cd src/startd8/benchmark_matrix/behavioral
 python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. pricing.proto
+python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. resolved_pricing.proto
 ```
 
-After generating `pricing_pb2_grpc.py`, restore the package-relative import fallback (grpc-tools
-emits a bare top-level `import pricing_pb2`, which breaks when imported as part of the package):
+After generating `pricing_pb2_grpc.py` or `resolved_pricing_pb2_grpc.py`, restore the
+package-relative import fallback (grpc-tools emits a bare top-level `import *_pb2`, which breaks
+when imported as part of the package) and keep checked-in grpc/protobuf version guards aligned with
+the repo's supported local runtime:
 
 ```python
 try:

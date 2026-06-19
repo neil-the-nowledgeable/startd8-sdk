@@ -2,9 +2,8 @@
 """Generate the canonical ResolvedPriceService benchmark seed envelope.
 
 The seed is built from the OpenAI/Codex bias-audit canonical artifacts:
-the frozen proto, prose spec, and suite manifest. It intentionally does not
-register the seed in hardened-index.json; live behavioral execution needs a
-separate runner adapter for the resolvedpriceservice suite/proto mapping.
+the frozen proto, prose spec, and suite manifest. It also upserts the seed
+into hardened-index.json after the live resolvedpriceservice adapter exists.
 """
 from __future__ import annotations
 
@@ -19,6 +18,7 @@ AUDIT_DIR = ROOT / "docs/design/benchmark-bias-audit/bias_audit_openai"
 CANONICAL_DIR = AUDIT_DIR / "canonical"
 SUITE_RUN_DIR = AUDIT_DIR / "runs/s2-codex-suite-clean-20260618T215301Z"
 OUT = ROOT / "docs/design/model-benchmark/seeds/seed-resolvedpriceservice.json"
+INDEX = ROOT / "docs/design/model-benchmark/seeds/hardened-index.json"
 
 PROTO = CANONICAL_DIR / "pricing.proto"
 SPEC = CANONICAL_DIR / "spec.md"
@@ -206,10 +206,10 @@ def build_seed() -> dict[str, Any]:
     return {
         "artifacts": artifacts,
         "benchmark_packaging": {
-            "status": "seed_envelope_packaged",
+            "status": "seed_envelope_registered",
             "promotion_gate": (
-                "Register in hardened-index.json only after behavioral.execute has a "
-                "resolvedpriceservice suite/proto adapter."
+                "Registered in hardened-index.json after adding the resolvedpriceservice "
+                "behavioral suite/proto adapter."
             ),
         },
         "generator": "scripts/gen_resolved_pricing_seed.py",
@@ -259,11 +259,40 @@ def build_seed() -> dict[str, Any]:
     }
 
 
+def _upsert_index(seed_sha: str, proto_sha: str) -> None:
+    index = {
+        "generator": "scripts/gen_resolved_pricing_seed.py",
+        "schema_version": "1.0",
+        "tier": "hardened",
+        "seeds": [],
+    }
+    if INDEX.exists():
+        index = json.loads(INDEX.read_text(encoding="utf-8"))
+    entry = {
+        "axes": ["B", "C", "E"],
+        "derived_from": "Liferay Commerce via OpenAI/Codex bias audit canonical S2 artifacts",
+        "language": "nodejs",
+        "proto": "pricing.proto",
+        "proto_sha256": proto_sha,
+        "seed_file": OUT.name,
+        "seed_sha256": seed_sha,
+        "service": "resolvedpriceservice",
+        "target_file": "src/resolvedpriceservice/server.js",
+    }
+    others = [s for s in index.get("seeds", []) if s.get("service") != "resolvedpriceservice"]
+    index["seeds"] = sorted(others + [entry], key=lambda s: s["service"])
+    INDEX.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     seed = build_seed()
     seed_bytes = json.dumps(seed, indent=2, sort_keys=True) + "\n"
     OUT.write_text(seed_bytes, encoding="utf-8")
-    print(f"wrote {_rel(OUT)} (seed_sha256={_sha256_text(seed_bytes)})")
+    seed_sha = _sha256_text(seed_bytes)
+    proto_sha = seed["service_metadata"]["proto_sha256"]
+    _upsert_index(seed_sha, proto_sha)
+    print(f"wrote {_rel(OUT)} (seed_sha256={seed_sha})")
+    print(f"registered in {_rel(INDEX)} (seed_sha256={seed_sha[:12]})")
 
 
 if __name__ == "__main__":

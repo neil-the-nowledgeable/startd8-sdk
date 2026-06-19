@@ -48,8 +48,8 @@
     }
   },
   "benchmark_packaging": {
-    "promotion_gate": "Register in hardened-index.json only after behavioral.execute has a resolvedpriceservice suite/proto adapter.",
-    "status": "seed_envelope_packaged"
+    "promotion_gate": "Registered in hardened-index.json after adding the resolvedpriceservice behavioral suite/proto adapter.",
+    "status": "seed_envelope_registered"
   },
   "generator": "scripts/gen_resolved_pricing_seed.py",
   "schema_version": "1.0",
