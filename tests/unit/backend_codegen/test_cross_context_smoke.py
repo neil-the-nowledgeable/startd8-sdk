@@ -60,6 +60,7 @@ def test_cross_context_smoke_asgi_round_trip(tmp_path: Path) -> None:
         target = tmp_path / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
+    (tmp_path / "app" / "__init__.py").write_text("", encoding="utf-8")
     (tmp_path / "clients" / "__init__.py").write_text("", encoding="utf-8")
 
     sys.path.insert(0, str(tmp_path))

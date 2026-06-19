@@ -62,15 +62,20 @@
 - Drift kind `python-tests-cross-context` (schema + contexts hashes)
 - FR-6 integration test template
 
+### M2b — Inter-context OTel (OQ-5) ✅
+- `context_otel_renderer.py` → `clients/_context_otel.py` (`trace_outbound_request`)
+- Generated context clients route HTTP through `_request()` with CLIENT spans
+- Drift kind `python-context-otel`; `http_client.py` unchanged (in-process spine)
+
 ### M3 — Wireframe assembly-inputs docs (partial)
 - Catalog key `contexts` in `CONVENTION_PATHS` ✅
 - Wireframe claims consumer client paths when manifest present ✅
 - Full assembly-inputs template doc update — follow-on
 
 ### Deferred
-- OTel span naming on inter-context calls (OQ-5)
 - TypeScript consumer emit
 - gRPC/proto promotion
+- Remote deployed producer smoke via deploy harness (loopback covered in M2)
 
 ---
 

@@ -85,7 +85,11 @@ def _client_url_expr(path: str) -> str:
 
 
 def _overlay_client_methods(
-    schema: PrismaSchema, schema_text: str, spec: Dict[str, Any]
+    schema: PrismaSchema,
+    schema_text: str,
+    spec: Dict[str, Any],
+    *,
+    use_traced_request: bool = False,
 ) -> str:
     """Emit httpx methods for non-CRUD overlay ops with Prisma-derived ``$ref`` DTOs (FR-10)."""
     crud = set(_crud_routes(schema, schema_text))
@@ -121,11 +125,22 @@ def _overlay_client_methods(
             if req_dto and req_dto in dto_names:
                 call_kw = ", json=body.model_dump()"
 
+            if use_traced_request:
+                http_line = (
+                    f"        resp = self._request({http_method!r}, "
+                    f"{_client_url_expr(path)}{call_kw})"
+                )
+            else:
+                http_line = (
+                    f"        resp = self._client.{method.lower()}"
+                    f"({_client_url_expr(path)}{call_kw})"
+                )
+
             lines = [
                 f"    def {fn}(self{signature})"
                 + (f" -> {resp_dto}" if resp_dto and resp_dto in dto_names else " -> None"),
                 f'        """``{http_method} {path}`` — overlay operation."""',
-                f"        resp = self._client.{method.lower()}({_client_url_expr(path)}{call_kw})",
+                http_line,
                 "        resp.raise_for_status()",
             ]
             if resp_dto and resp_dto in dto_names:
@@ -135,24 +150,38 @@ def _overlay_client_methods(
     return "\n\n\n".join(blocks)
 
 
-def _entity_methods(schema: PrismaSchema, schema_text: str, name: str) -> str:
+def _entity_methods(
+    schema: PrismaSchema,
+    schema_text: str,
+    name: str,
+    *,
+    use_traced_request: bool = False,
+) -> str:
     """One block of CRUD methods for *name* on :class:`ApiClient`."""
     low = name.lower()
     prefix = f"/{low}"
     lines: List[str] = []
     pk_py = _pk_py_type(schema, name)
 
+    def _call(method: str, url: str, extra: str = "") -> str:
+        if use_traced_request:
+            return f'        resp = self._request({method!r}, {url}{extra})'
+        verb = method.lower()
+        if extra:
+            return f"        resp = self._client.{verb}({url}{extra})"
+        return f"        resp = self._client.{verb}({url})"
+
     lines += [
         f"    def list_{low}(self) -> list[{name}Read]:",
         f'        """``GET {prefix}/`` — list all {name} rows."""',
-        f'        resp = self._client.get("{prefix}/")',
+        _call("GET", f'"{prefix}/"'),
         "        resp.raise_for_status()",
         f"        return [{name}Read.model_validate(row) for row in resp.json()]",
         "",
         "",
         f"    def create_{low}(self, item: {name}Create) -> {name}Read:",
         f'        """``POST {prefix}/`` — create a {name}."""',
-        f'        resp = self._client.post("{prefix}/", json=item.model_dump())',
+        _call("POST", f'"{prefix}/"', ", json=item.model_dump()"),
         "        resp.raise_for_status()",
         f"        return {name}Read.model_validate(resp.json())",
     ]
@@ -163,23 +192,25 @@ def _entity_methods(schema: PrismaSchema, schema_text: str, name: str) -> str:
             "",
             f"    def get_{low}(self, item_id: {pk_py}) -> {name}Read:",
             f'        """``GET {prefix}/{{item_id}}`` — fetch one {name}."""',
-            f'        resp = self._client.get(f"{prefix}/{{item_id}}")',
+            _call("GET", f'f"{prefix}/{{item_id}}"'),
             "        resp.raise_for_status()",
             f"        return {name}Read.model_validate(resp.json())",
             "",
             "",
             f"    def update_{low}(self, item_id: {pk_py}, item: {name}Update) -> {name}Read:",
             f'        """``PATCH {prefix}/{{item_id}}`` — partial update."""',
-            f'        resp = self._client.patch(',
-            f'            f"{prefix}/{{item_id}}", json=item.model_dump(exclude_unset=True)',
-            "        )",
+            _call(
+                "PATCH",
+                f'f"{prefix}/{{item_id}}"',
+                ", json=item.model_dump(exclude_unset=True)",
+            ),
             "        resp.raise_for_status()",
             f"        return {name}Read.model_validate(resp.json())",
             "",
             "",
             f"    def delete_{low}(self, item_id: {pk_py}) -> None:",
             f'        """``DELETE {prefix}/{{item_id}}`` — remove a {name}."""',
-            f'        resp = self._client.delete(f"{prefix}/{{item_id}}")',
+            _call("DELETE", f'f"{prefix}/{{item_id}}"'),
             "        resp.raise_for_status()",
         ]
     return "\n".join(lines)

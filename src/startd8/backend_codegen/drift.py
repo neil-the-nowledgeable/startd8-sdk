@@ -156,6 +156,7 @@ def _renderers(
         render_route_smoke_tests,
         render_cross_context_smoke_tests,
     )
+    from .context_otel_renderer import render_context_otel
     # P0-2/FR-DM: list/row/detail re-render must use the SAME filter (views.yaml) + display
     # (display.yaml) inputs the generate path used, or a filtered/display-configured template
     # false-flags drift. Parsed lazily per entity from the threaded manifests.
@@ -223,6 +224,7 @@ def _renderers(
             views_text=forms_text,
             imports_text=imports_text,
         ),
+        "python-context-otel": lambda s, sf, e: render_context_otel(sf, s),
         "fastapi-web": lambda s, sf, e: render_web(s, sf),
         "htmx-base": lambda s, sf, e: render_base_template(s, sf),
         "htmx-field-error": lambda s, sf, e: render_field_error_template(s, sf),

@@ -470,8 +470,17 @@ def _services_section(
         )
         if contexts_state and contexts_state.status == Status.PLANNED and contexts_state.parsed:
             from ..backend_codegen.context_manifest import parse_contexts
+            from ..backend_codegen.context_otel_renderer import CONTEXT_OTEL_PATH
             from ..backend_codegen.test_emitter import CROSS_CONTEXT_SMOKE_TESTS_PATH
 
+            if parse_contexts(contexts_state.text):
+                items.append(
+                    WireframeItem(
+                        "Context OTel helper", Status.PLANNED,
+                        detail="OQ-5 traced outbound HTTP spans",
+                        paths=(CONTEXT_OTEL_PATH,),
+                    )
+                )
             for ctx in parse_contexts(contexts_state.text):
                 items.append(
                     WireframeItem(

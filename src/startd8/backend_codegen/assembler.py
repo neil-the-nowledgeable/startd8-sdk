@@ -196,7 +196,12 @@ def render_backend(
         ))
     if contexts_text:
         from .context_client_renderer import render_context_clients
+        from .context_otel_renderer import CONTEXT_OTEL_PATH, render_context_otel
 
+        out.append((
+            CONTEXT_OTEL_PATH,
+            render_context_otel(source_file, schema_text),
+        ))
         out.extend(
             render_context_clients(
                 schema_text,

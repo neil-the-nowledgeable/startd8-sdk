@@ -37,7 +37,7 @@ Python-homogeneous services promote via OpenAPI; polyglot targets defer to gRPC/
 | **OQ-2** | Per-producer `clients/{id}_client.py`; keep `clients/http_client.py` for local in-process spine |
 | **OQ-3** | Default `routes: crud` — CRUD + overlay ops whose JSON bodies use Prisma DTO `$ref`s only; exclude HTML/AI/pages |
 | **OQ-4** | Fail-closed `--check` via `schema-sha256` + `contexts-sha256` + `contract-sha256` (filtered producer spec) |
-| **OQ-5** | OTel span naming on inter-context `httpx` calls **deferred** to observability track |
+| **OQ-5** | OTel CLIENT spans on inter-context calls — span name ``context.outbound.<producer> <METHOD> <path>``; attrs ``io.startd8.context.producer_id``, ``io.startd8.context.outbound``, ``http.request.method``, ``url.path``; no-op without ``opentelemetry`` |
 
 **Grammar (`contexts.yaml`):**
 
@@ -109,6 +109,14 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 ### CLI / UX
 - **FR-8** `startd8 generate backend --contexts <file>` drives consumer client emission; absent → SOTTO.
 - **FR-9** `startd8 generate backend --export-openapi` remains the producer-side promotion command.
+
+### Observability (OQ-5)
+- **FR-10** Emit ``clients/_context_otel.py`` when contexts manifest present; each generated
+  ``clients/{id}_client.py`` wraps HTTP via ``_request()`` → ``trace_outbound_request``.
+- **FR-11** Span naming: ``context.outbound.<producer_id> <METHOD> <path>`` (CLIENT kind).
+  Attributes: ``io.startd8.context.producer_id``, ``io.startd8.context.outbound``,
+  ``http.request.method``, ``url.path``, ``http.response.status_code`` when available.
+  Optional OTel — no-op when ``opentelemetry`` is not installed.
 
 ---
 

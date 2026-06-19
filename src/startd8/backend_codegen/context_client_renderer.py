@@ -111,8 +111,13 @@ def render_context_client(
                 if dto and dto in _prisma_dto_names(schema, schema_text):
                     table_imports.add(dto)
 
-    blocks = [_entity_methods(schema, schema_text, n) for n in _model_names(schema, schema_text)]
-    overlay_block = _overlay_client_methods(schema, schema_text, spec)
+    blocks = [
+        _entity_methods(schema, schema_text, n, use_traced_request=True)
+        for n in _model_names(schema, schema_text)
+    ]
+    overlay_block = _overlay_client_methods(
+        schema, schema_text, spec, use_traced_request=True
+    )
     if overlay_block:
         blocks.append(overlay_block)
 
@@ -127,6 +132,7 @@ def render_context_client(
     base_doc = ctx.base_url or "(configure at runtime)"
     source_doc = "local OPENAPI_SPEC" if ctx.local else ctx.contract
     imports = "from __future__ import annotations\n\nimport httpx\n\n"
+    imports += "from clients._context_otel import trace_outbound_request\n\n"
     if table_imports:
         imports += (
             "from app.tables import " + ", ".join(sorted(table_imports)) + "\n"
@@ -144,6 +150,12 @@ def render_context_client(
         "        else:",
         "            self._client = httpx.Client(base_url=self._base_url)",
         "            self._owns_client = True",
+        f'        self._producer_id = "{ctx.id}"',
+        "",
+        "    def _request(self, method: str, path: str, **kwargs: object) -> httpx.Response:",
+        "        def _do() -> httpx.Response:",
+        f"            return getattr(self._client, method.lower())(path, **kwargs)",
+        "        return trace_outbound_request(self._producer_id, method, path, _do)",
         "",
         "    def close(self) -> None:",
         "        if self._owns_client:",
