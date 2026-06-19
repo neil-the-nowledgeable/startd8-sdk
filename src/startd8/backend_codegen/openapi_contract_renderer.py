@@ -18,9 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
 from .api_overlay_manifest import (
-    merge_openapi_specs,
+    apply_api_overlay,
     parse_api_overlay,
-    reconcile_overlay,
     routes_from_openapi_spec,
 )
 from ._headers import header_api_overlay, header_standard as _header
@@ -227,6 +226,7 @@ def render_openapi_contract(
     source_file: str = "prisma/schema.prisma",
     *,
     api_text: Optional[str] = None,
+    overlay_warnings: Optional[List[str]] = None,
 ) -> str:
     """Render ``app/openapi_contract.py`` — static ``ROUTE_MANIFEST`` + ``OPENAPI_SPEC``."""
     schema = parse_prisma_schema(schema_text)
@@ -235,8 +235,9 @@ def render_openapi_contract(
     spec = _build_openapi_spec(routes, schema, schema_text)
     if api_text:
         overlay = parse_api_overlay(api_text)
-        reconcile_overlay(spec, overlay, schema_text)
-        spec = merge_openapi_specs(spec, overlay)
+        spec, warnings = apply_api_overlay(spec, overlay, schema_text)
+        if overlay_warnings is not None:
+            overlay_warnings.extend(warnings)
     routes = routes_from_openapi_spec(spec)
     spec_json = json.dumps(spec, indent=2, sort_keys=True)
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import re
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Set, Tuple
 
 import yaml
@@ -19,10 +20,19 @@ from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 _HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
 _DTO_SUFFIXES = ("Create", "Read", "Update")
 _PATH_PARAM_RE = re.compile(r"\{([^}]+)\}")
+_VALIDATION_ONLY_KEY = "x-startd8-validation-only"
 
 
 class ReconcileError(ValueError):
     """Raised when an overlay conflicts with the Prisma-derived base contract."""
+
+
+@dataclass
+class OverlayMergePlan:
+    """Partition of an overlay into paths/schemas to merge vs validation-only declarations."""
+
+    additive: Dict[str, Any]
+    warnings: List[str] = field(default_factory=list)
 
 
 def parse_api_overlay(text: str) -> Dict[str, Any]:
@@ -78,6 +88,70 @@ def merge_openapi_specs(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[s
             raise ReconcileError(f"schema collision: {name}")
         merged_schemas[name] = copy.deepcopy(schema)
     return merged
+
+
+def _is_validation_only_path(path_item: Dict[str, Any]) -> bool:
+    return path_item.get(_VALIDATION_ONLY_KEY) is True
+
+
+def _warnings_for_base_path_validation(
+    path: str,
+    overlay_item: Dict[str, Any],
+    base_item: Dict[str, Any],
+) -> List[str]:
+    """Compare overlay declaration against an existing base path (FR-O1 / M2)."""
+    warnings: List[str] = []
+    for method, operation in overlay_item.items():
+        if method.startswith("x-") or method not in _HTTP_METHODS:
+            continue
+        if not isinstance(operation, dict):
+            continue
+        if method not in base_item:
+            warnings.append(
+                f"validation-only: {method.upper()} {path} declared in api.yaml "
+                "but not in contract base"
+            )
+    return warnings
+
+
+def prepare_overlay_merge(
+    base_spec: Dict[str, Any],
+    overlay: Dict[str, Any],
+) -> OverlayMergePlan:
+    """Split overlay into additive merge material vs validation-only declarations (M2 / FR-O1)."""
+    warnings: List[str] = []
+    base_paths = base_spec.get("paths", {})
+    base_schemas = base_spec.get("components", {}).get("schemas", {})
+    additive_paths: Dict[str, Any] = {}
+
+    for path, path_item in overlay.get("paths", {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        if path in base_paths:
+            warnings.extend(
+                _warnings_for_base_path_validation(path, path_item, base_paths[path])
+            )
+            continue
+        if _is_validation_only_path(path_item):
+            warnings.append(
+                f"validation-only: path {path!r} is not in the contract base yet "
+                "(manifest projection or inputs such as --ai-passes may be required)"
+            )
+            continue
+        additive_paths[path] = copy.deepcopy(path_item)
+
+    additive_schemas: Dict[str, Any] = {}
+    for name, schema in overlay.get("components", {}).get("schemas", {}).items():
+        if name in base_schemas:
+            raise ReconcileError(f"schema collision: {name}")
+        additive_schemas[name] = copy.deepcopy(schema)
+
+    additive: Dict[str, Any] = {
+        "openapi": overlay.get("openapi", "3.0.3"),
+        "paths": additive_paths,
+        "components": {"schemas": additive_schemas},
+    }
+    return OverlayMergePlan(additive=additive, warnings=warnings)
 
 
 def _model_names(schema: PrismaSchema, schema_text: str) -> List[str]:
@@ -162,18 +236,24 @@ def reconcile_overlay(
     base_spec: Dict[str, Any],
     overlay: Dict[str, Any],
     schema_text: str,
-) -> None:
-    """Validate overlay against base + Prisma; raise :class:`ReconcileError` on conflict."""
+) -> List[str]:
+    """Validate additive overlay slice; return validation-only warnings (M2 / FR-O1)."""
     schema = parse_prisma_schema(schema_text)
     names = _model_names(schema, schema_text)
-    base_paths = set(base_spec.get("paths", {}))
-    for path in overlay.get("paths", {}):
-        if path in base_paths:
-            raise ReconcileError(f"path collision: {path}")
+    plan = prepare_overlay_merge(base_spec, overlay)
     base_schemas = base_spec.get("components", {}).get("schemas", {})
-    overlay_schemas = overlay.get("components", {}).get("schemas", {})
-    for name in overlay_schemas:
-        if name in base_schemas:
-            raise ReconcileError(f"schema collision: {name}")
-    _validate_overlay_refs(overlay, base_schemas, names)
-    _validate_path_parameters(overlay)
+    _validate_overlay_refs(plan.additive, base_schemas, names)
+    _validate_path_parameters(plan.additive)
+    return plan.warnings
+
+
+def apply_api_overlay(
+    base_spec: Dict[str, Any],
+    overlay: Dict[str, Any],
+    schema_text: str,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Validate, partition, and merge an overlay; return merged spec + validation warnings."""
+    warnings = reconcile_overlay(base_spec, overlay, schema_text)
+    plan = prepare_overlay_merge(base_spec, overlay)
+    merged = merge_openapi_specs(base_spec, plan.additive)
+    return merged, warnings

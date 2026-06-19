@@ -350,6 +350,7 @@ def backend(
         raise typer.Exit(_EXIT_ERROR)
 
     try:
+        overlay_warnings: list[str] = []
         artifacts = render_backend(
             schema_text,
             source_label,
@@ -362,6 +363,7 @@ def backend(
             display_text=display_text,
             imports_text=imports_text,
             api_text=api_text,
+            overlay_warnings=overlay_warnings,
             # On --check we don't render the untracked prose fragments (they need the .md on disk
             # and never participate in drift); on write we do, reading app/pages/*.md under --out.
             pages_app_dir=None if check else (out / "app"),
@@ -374,6 +376,9 @@ def backend(
     ) as exc:  # reserved attr name / malformed ai_passes/pages/views manifest — fail loud
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
+
+    for warning in overlay_warnings:
+        console.print(f"[yellow]warning:[/yellow] api overlay: {warning}")
 
     if check:
         drifted = 0

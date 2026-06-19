@@ -302,3 +302,29 @@ def test_generate_with_api_overlay_merges_contract(tmp_path):
         ],
     )
     assert chk.exit_code == 0, chk.output
+
+
+def test_generate_with_validation_only_overlay_warns(tmp_path):
+    schema = _schema(tmp_path)
+    api = tmp_path / "prisma" / "api.yaml"
+    api.write_text(
+        "paths:\n  /ai/extract:\n    x-startd8-validation-only: true\n    post:\n"
+        "      responses:\n        '200':\n          description: OK\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "validation-only" in result.output
+    contract = (tmp_path / "app" / "openapi_contract.py").read_text(encoding="utf-8")
+    assert "/ai/extract" not in contract

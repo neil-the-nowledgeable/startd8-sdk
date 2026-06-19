@@ -7,8 +7,10 @@ import pytest
 from startd8.backend_codegen import owned_file_in_sync
 from startd8.backend_codegen.api_overlay_manifest import (
     ReconcileError,
+    apply_api_overlay,
     merge_openapi_specs,
     parse_api_overlay,
+    prepare_overlay_merge,
     reconcile_overlay,
 )
 from startd8.backend_codegen.openapi_contract_renderer import render_openapi_contract
@@ -60,17 +62,74 @@ def test_parse_minimal_overlay() -> None:
 def test_merge_adds_overlay_path() -> None:
     base = _base_spec()
     overlay = parse_api_overlay(OVERLAY_WEBHOOK)
-    reconcile_overlay(base, overlay, SCHEMA)
-    merged = merge_openapi_specs(base, overlay)
+    merged, warnings = apply_api_overlay(base, overlay, SCHEMA)
+    assert not warnings
     assert "/webhooks/stripe" in merged["paths"]
     assert "/note/" in merged["paths"]
 
 
-def test_collision_raises() -> None:
+def test_base_path_validation_only_no_collision() -> None:
     base = _base_spec()
     overlay = parse_api_overlay(OVERLAY_COLLISION)
-    with pytest.raises(ReconcileError, match="collision"):
-        reconcile_overlay(base, overlay, SCHEMA)
+    warnings = reconcile_overlay(base, overlay, SCHEMA)
+    assert not warnings
+    plan = prepare_overlay_merge(base, overlay)
+    assert "/note/" not in plan.additive["paths"]
+    merged = merge_openapi_specs(base, plan.additive)
+    assert merged["paths"] == base["paths"]
+
+
+def test_base_path_extra_method_warns() -> None:
+    base = _base_spec()
+    overlay = parse_api_overlay(
+        """\
+paths:
+  /note/:
+    put:
+      responses:
+        "200":
+          description: OK
+"""
+    )
+    warnings = reconcile_overlay(base, overlay, SCHEMA)
+    assert any("PUT /note/" in w for w in warnings)
+
+
+def test_validation_only_manifest_path_warns_not_merged() -> None:
+    base = _base_spec()
+    overlay = parse_api_overlay(
+        """\
+paths:
+  /ai/extract:
+    x-startd8-validation-only: true
+    post:
+      responses:
+        "200":
+          description: OK
+"""
+    )
+    warnings = reconcile_overlay(base, overlay, SCHEMA)
+    assert any("validation-only" in w and "/ai/extract" in w for w in warnings)
+    plan = prepare_overlay_merge(base, overlay)
+    assert "/ai/extract" not in plan.additive["paths"]
+
+
+def test_render_surfaces_validation_warnings() -> None:
+    warnings: list[str] = []
+    render_openapi_contract(
+        SCHEMA,
+        api_text="""\
+paths:
+  /ai/extract:
+    x-startd8-validation-only: true
+    post:
+      responses:
+        "200":
+          description: OK
+""",
+        overlay_warnings=warnings,
+    )
+    assert warnings
 
 
 def test_render_includes_overlay_route_in_manifest() -> None:
@@ -133,7 +192,7 @@ paths:
 """
     )
     reconcile_overlay(base, overlay, SCHEMA)
-    merged = merge_openapi_specs(base, overlay)
+    merged, _ = apply_api_overlay(base, overlay, SCHEMA)
     assert "/notes/summary" in merged["paths"]
 
 
