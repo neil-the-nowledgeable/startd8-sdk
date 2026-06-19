@@ -21,6 +21,7 @@ from .ladder import (
     HarnessEnv,
     LadderResult,
     Stage,
+    StageResult,
     StageStatus,
 )
 from .server import LiveServer

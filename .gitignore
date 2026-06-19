@@ -51,6 +51,10 @@ logs/
 *.tmp
 *.bak
 
+# Local SQLite databases (CWD-relative generated apps)
+app.db
+data/app.db
+
 # Local scratch
 backup/
 

@@ -64,7 +64,11 @@ def trace_outbound_request(
             result = fn()
             status = getattr(result, "status_code", None)
             if status is not None:
-                span.set_attribute("http.response.status_code", int(status))
+                code = int(status)
+                span.set_attribute("http.response.status_code", code)
+                if code >= 400:
+                    span.set_status(StatusCode.ERROR, f"HTTP {code}")
+                    return result
             span.set_status(StatusCode.OK)
             return result
         except Exception as exc:
