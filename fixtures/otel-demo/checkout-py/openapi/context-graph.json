@@ -1,0 +1,24 @@
+{
+  "contexts_sha256": "074ccef8b51da9de39da42467d525aa1967723ddaaa0844f34156d15d1826547",
+  "emit_languages": [],
+  "outbound": [
+    {
+      "base_url": "http://email:8080",
+      "clients": {
+        "python": "clients/email_client.py"
+      },
+      "contract": "../openapi/email.json",
+      "contract_sha256": "299289569c938de0f8096dc6e5460a18dda169ec9d1872d4683d7eb76628ac24",
+      "id": "email",
+      "local": false,
+      "protocol": "http",
+      "routes": "all_json",
+      "schemas": [
+        "OrderConfirmationRequest"
+      ]
+    }
+  ],
+  "schema_sha256": "b914136a55bbc023ec648d2a29986a918c88b6e70d55d4300cd1a0e7725e70ba",
+  "schema_version": 1,
+  "source_file": "prisma/schema.prisma"
+}

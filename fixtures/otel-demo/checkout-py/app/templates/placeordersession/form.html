@@ -1,0 +1,26 @@
+{#
+# GENERATED from prisma/schema.prisma — do not edit by hand; regenerate via `startd8 generate backend`.
+# startd8-artifact: htmx-form
+# startd8-entity: PlaceOrderSession
+# Source of truth: the Prisma schema.
+# schema-sha256: b914136a55bbc023ec648d2a29986a918c88b6e70d55d4300cd1a0e7725e70ba
+#}
+{% extends "base.html" %}
+{% block title %}PlaceOrderSession form{% endblock %}
+{% block content %}
+{% if created %}<p class="flash">✓ PlaceOrderSession stored. <a href="/ui/placeordersession/{{ created }}">view it</a></p>{% endif %}
+<h1>PlaceOrderSession</h1>
+<form method="post" action="{% if item %}/ui/placeordersession/{{ item.id }}{% else %}/ui/placeordersession{% endif %}">
+  <div class="field">
+    <label for="f-userId">userId</label>
+    <input type="text" name="userId" id="f-userId" value="{{ item.userId if item and item.userId is not none else (prefill.get('userId') if prefill else '') }}" required hx-post="/ui/placeordersession/validate" hx-trigger="blur changed" hx-target="#err-userId" hx-swap="innerHTML" hx-include="this">
+    <small id="err-userId" class="field-error"></small>
+  </div>
+  <div class="field">
+    <label for="f-email">email</label>
+    <input type="text" name="email" id="f-email" value="{{ item.email if item and item.email is not none else (prefill.get('email') if prefill else '') }}" required hx-post="/ui/placeordersession/validate" hx-trigger="blur changed" hx-target="#err-email" hx-swap="innerHTML" hx-include="this">
+    <small id="err-email" class="field-error"></small>
+  </div>
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

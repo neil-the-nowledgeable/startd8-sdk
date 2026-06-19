@@ -1,0 +1,8 @@
+# Step 3g — checkout (consumer) → email (producer) via pinned OpenAPI contract (Role 3 M5).
+outbound:
+  - id: email
+    contract: ../openapi/email.json
+    base_url: http://email:8080
+    routes: all_json
+    schemas:
+      - OrderConfirmationRequest

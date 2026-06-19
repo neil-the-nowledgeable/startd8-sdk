@@ -1,0 +1,7 @@
+// Consumer bounded context — orchestrates PlaceOrder; no shared DTO namespace with email producer.
+model PlaceOrderSession {
+  id        String   @id @default(cuid())
+  userId    String
+  email     String
+  createdAt DateTime @default(now())
+}

@@ -1,0 +1,23 @@
+# OTel Demo Python Rebuild — Next Steps
+
+**Canonical copy:** lives on branch `feat/otel-python-rebuild` (worktree: `~/Documents/dev/startd8-otel-python-rebuild`).
+
+**PR:** https://github.com/neil-the-nowledgeable/startd8-sdk/pull/32
+
+See the full document in the worktree at `docs/design/otel-demo-corpus/OTEL_PYTHON_REBUILD_NEXT_STEPS.md` after merge, or open the PR diff.
+
+## Status (2026-06-19)
+
+| Step | Status |
+| ---: | --- |
+| 1 Rebase on main | done |
+| 2 email-py codegen `--check --gate` | done |
+| 3 Merged coverage (70.6%) | done |
+| 4 Behavioral dry-run payment-py | done |
+| 5 Push + PR | done — [#32](https://github.com/neil-the-nowledgeable/startd8-sdk/pull/32) |
+
+## Deferred
+
+- Full behavioral `--run` on `payment-py` (node runtime vendor + LLM spend)
+- Role 3 `contexts.yaml` checkout→email
+- Retire stale `feat/otel-python-rebuild-openapi` branch on primary clone after merge

@@ -1,0 +1,20 @@
+{#
+# GENERATED from prisma/schema.prisma — do not edit by hand; regenerate via `startd8 generate backend`.
+# startd8-artifact: htmx-list
+# startd8-entity: PlaceOrderSession
+# Source of truth: the Prisma schema.
+# schema-sha256: b914136a55bbc023ec648d2a29986a918c88b6e70d55d4300cd1a0e7725e70ba
+#}
+{% extends "base.html" %}
+{% block title %}PlaceOrderSession{% endblock %}
+{% block content %}
+{% if created %}<p class="flash">✓ PlaceOrderSession stored.</p>{% endif %}
+<h1>PlaceOrderSession</h1>
+<a href="/ui/placeordersession/new">New PlaceOrderSession</a>
+<table>
+  <thead><tr><th>userId</th><th>email</th><th></th></tr></thead>
+  <tbody>
+  {% for item in items %}{% include "placeordersession/_row.html" %}{% endfor %}
+  </tbody>
+</table>
+{% endblock %}

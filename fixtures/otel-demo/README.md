@@ -9,11 +9,13 @@ Prime Contractor seeds, and Plan Ingestion import-pattern handoff.
 | --- | ---: | --- | --- | --- |
 | `accounting-py/` | 1 | accounting | C# | Kafka consumer, SQLAlchemy/Postgres |
 | `checkout-kafka-py/` | 2 | checkout (producer slice) | Go | Kafka producer (pattern fixture; no benchmark cell) |
+| `checkout-py/` | 3g | checkout (consumer) | Python | Role 3 consumer → `email` via pinned `openapi/email.json` |
 | `email-py/` | 3 | email | Ruby | FastAPI HTTP + OpenFeature + `api.yaml` overlay |
 | `cart-py/` | 4 | cart | C# | gRPC CartService + Redis/Valkey |
 | `product-reviews-py/` | 5 | product-reviews + llm | Python | GenAI RPC (`AskProductAIAssistant`) |
 | `payment-py/` | 6 | payment | Node.js | Leaf gRPC `Charge` (behavioral-eligible seed) |
 | `_proto/` | — | shared | — | Generated `demo_pb2` stubs (skipped by resolver) |
+| `openapi/` | 3g | email export | — | Pinned producer contract for Role 3 consumers |
 
 ## Coverage analysis
 
