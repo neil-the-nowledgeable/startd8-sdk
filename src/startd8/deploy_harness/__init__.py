@@ -31,6 +31,15 @@ from .smoke import (
     select_crud_resource,
     synthesize_body,
 )
+from .context_smoke import (
+    OutboundSmokeResult,
+    aggregate_outbound_smoke,
+    context_base_url_env_key,
+    resolve_context_base_url,
+    run_context_client_smoke,
+    run_outbound_context_smokes,
+    run_remote_producer_smoke,
+)
 from .venv_runner import InstallOutcome, ResourceLimits, Venv, create_venv, install_deps
 from .ladder import (
     Deviation,
@@ -71,6 +80,14 @@ __all__ = [
     "select_crud_resource",
     "synthesize_body",
     "SmokeOutcome",
+    # context smoke (Role 3)
+    "OutboundSmokeResult",
+    "aggregate_outbound_smoke",
+    "context_base_url_env_key",
+    "resolve_context_base_url",
+    "run_context_client_smoke",
+    "run_outbound_context_smokes",
+    "run_remote_producer_smoke",
     # result model (FR-11)
     "LadderResult",
     "Stage",

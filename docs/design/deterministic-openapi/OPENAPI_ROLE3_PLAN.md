@@ -67,15 +67,16 @@
 - Generated context clients route HTTP through `_request()` with CLIENT spans
 - Drift kind `python-context-otel`; `http_client.py` unchanged (in-process spine)
 
-### M3 — Wireframe assembly-inputs docs (partial)
-- Catalog key `contexts` in `CONVENTION_PATHS` ✅
-- Wireframe claims consumer client paths when manifest present ✅
-- Full assembly-inputs template doc update — follow-on
+### M3 — Wireframe + assembly-inputs ✅
+- Catalog keys `imports`, `api`, `contexts` in `CONVENTION_PATHS` + wireframe claims
+- `ASSEMBLY_INPUTS_TEMPLATE.md` v0.2 — full manifest inventory + Role 3 remote smoke notes
+
+### M2c — Remote/deployed producer smoke ✅
+- `run_outbound_context_smokes` + `run_remote_producer_smoke` in `context_smoke.py`
+- Deploy harness `context_smoke` ladder stage; env `STARTD8_CONTEXT_<ID>_BASE_URL`
+- Generated remote smoke tests in `test_cross_context_smoke.py`
 
 ### Deferred
-- TypeScript consumer emit
-- gRPC/proto promotion
-- Remote deployed producer smoke via deploy harness (loopback covered in M2)
 
 ---
 
@@ -110,7 +111,8 @@
 | M0 (promotion verify) | ✅ |
 | M1 (manifest + client) | ✅ this branch |
 | M2 (cross-context smoke) | ✅ |
-| M3 (assembly-inputs docs) | partial |
+| M2c (remote producer smoke) | ✅ |
+| M3 (assembly-inputs docs) | ✅ |
 
 ---
 

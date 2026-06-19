@@ -3,24 +3,35 @@
 Reuses :func:`startd8.openapi_contract.schema_resolve.select_crud_resource` and
 :func:`synthesize_body` to pick an FK-free list+create collection, then executes the round-trip
 through a generated ``clients/{id}_client.py`` (``list_*`` + ``create_*`` methods) instead of raw
-urllib. Intended for loopback (``httpx.ASGITransport`` / deployed base URL) — not in-process
-``TestClient`` on the consumer alone.
+urllib. Loopback uses in-process ``TestClient`` (generated tests); remote/deployed producers use
+:func:`run_remote_producer_smoke` / :func:`run_outbound_context_smokes` against a live ``base_url``.
 """
 
 from __future__ import annotations
 
 import importlib
-from typing import Any, Dict, Optional
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
-from startd8.deploy_harness.smoke import SmokeOutcome, _round_trip_ok
+from startd8.deploy_harness.smoke import SmokeOutcome, _round_trip_ok, run_smoke
 from startd8.openapi_contract.schema_resolve import (
-    ResourceChoice,
     resolve_schema,
     select_crud_resource,
     synthesize_body,
 )
 
-__all__ = ["run_context_client_smoke", "create_dto_name"]
+__all__ = [
+    "OutboundSmokeResult",
+    "context_base_url_env_key",
+    "create_dto_name",
+    "resolve_context_base_url",
+    "run_context_client_smoke",
+    "run_outbound_context_smokes",
+    "run_remote_producer_smoke",
+]
 
 
 def create_dto_name(create_schema: Dict[str, Any], spec: Dict[str, Any]) -> Optional[str]:
@@ -96,3 +107,153 @@ def run_context_client_smoke(
             resource=choice.path,
         )
     return SmokeOutcome(status="pass", resource=choice.path)
+
+
+@dataclass(frozen=True)
+class OutboundSmokeResult:
+    """One outbound producer smoke outcome (deploy harness / CI)."""
+
+    producer_id: str
+    outcome: SmokeOutcome
+    base_url: Optional[str] = None
+
+
+def context_base_url_env_key(producer_id: str) -> str:
+    """Env override for a producer base URL: ``STARTD8_CONTEXT_<ID>_BASE_URL``."""
+    safe = re.sub(r"[^0-9A-Z_]", "_", producer_id.upper())
+    return f"STARTD8_CONTEXT_{safe}_BASE_URL"
+
+
+def resolve_context_base_url(
+    ctx: Any,
+    *,
+    loopback_port: Optional[int] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> Optional[str]:
+    """Resolve live producer base URL: env wins, then manifest ``base_url``, then loopback for local."""
+    env_map = env if env is not None else os.environ
+    override = (env_map.get(context_base_url_env_key(ctx.id)) or "").strip()
+    if override:
+        return override.rstrip("/")
+    manifest_url = (getattr(ctx, "base_url", None) or "").strip()
+    if manifest_url:
+        url = manifest_url.rstrip("/")
+        if "{port}" in url and loopback_port is not None:
+            url = url.replace("{port}", str(loopback_port))
+        return url
+    if getattr(ctx, "local", False) and loopback_port is not None:
+        return f"http://127.0.0.1:{loopback_port}"
+    return None
+
+
+def _load_schema_text(project_root: Path) -> Optional[str]:
+    schema_path = project_root / "prisma" / "schema.prisma"
+    if not schema_path.is_file():
+        return None
+    try:
+        return schema_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _producer_spec_for_smoke(
+    ctx: Any,
+    project_root: Path,
+    schema_text: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Pinned contract for remote producers; ``None`` ⇒ fetch live ``/openapi.json``."""
+    if getattr(ctx, "local", False):
+        return None
+    from startd8.backend_codegen.context_manifest import (
+        filter_spec_for_client,
+        load_contract_spec,
+    )
+
+    raw = load_contract_spec(ctx.contract, project_root=project_root)
+    if schema_text:
+        return filter_spec_for_client(raw, schema_text, routes=ctx.routes)
+    return raw
+
+
+def run_remote_producer_smoke(
+    base_url: str,
+    *,
+    spec: Optional[Dict[str, Any]] = None,
+    timeout: float = 10.0,
+) -> SmokeOutcome:
+    """Live list+create round-trip against a remote/deployed producer (urllib, FR-6 remote path)."""
+    return run_smoke(base_url, spec=spec, timeout=timeout)
+
+
+def run_outbound_context_smokes(
+    project_root: Path | str,
+    *,
+    schema_text: Optional[str] = None,
+    loopback_port: Optional[int] = None,
+    timeout: float = 10.0,
+    env: Optional[Mapping[str, str]] = None,
+) -> Tuple[OutboundSmokeResult, ...]:
+    """Run smoke for every ``contexts.yaml`` outbound entry with a resolvable base URL."""
+    from startd8.backend_codegen.context_manifest import parse_contexts
+
+    root = Path(project_root).resolve()
+    contexts_path = root / "prisma" / "contexts.yaml"
+    if not contexts_path.is_file():
+        return ()
+    try:
+        contexts_text = contexts_path.read_text(encoding="utf-8")
+    except OSError:
+        return ()
+
+    contexts = parse_contexts(contexts_text)
+    if not contexts:
+        return ()
+
+    if schema_text is None:
+        schema_text = _load_schema_text(root)
+
+    results: list[OutboundSmokeResult] = []
+    for ctx in contexts:
+        base_url = resolve_context_base_url(
+            ctx, loopback_port=loopback_port, env=env
+        )
+        if not base_url:
+            results.append(
+                OutboundSmokeResult(
+                    ctx.id,
+                    SmokeOutcome(status="skipped", reason="skipped:no-base-url"),
+                    None,
+                )
+            )
+            continue
+        try:
+            spec = _producer_spec_for_smoke(ctx, root, schema_text)
+        except ValueError as exc:
+            results.append(
+                OutboundSmokeResult(
+                    ctx.id,
+                    SmokeOutcome(
+                        status="skipped",
+                        reason=f"skipped:contract-error:{exc}",
+                    ),
+                    base_url,
+                )
+            )
+            continue
+        outcome = run_remote_producer_smoke(base_url, spec=spec, timeout=timeout)
+        results.append(OutboundSmokeResult(ctx.id, outcome, base_url))
+    return tuple(results)
+
+
+def aggregate_outbound_smoke(
+    results: Sequence[OutboundSmokeResult],
+) -> Tuple[str, Optional[str]]:
+    """Roll up outbound results → (status, reason) for ladder recording."""
+    if not results:
+        return "skipped", "skipped:no-contexts"
+    if any(r.outcome.status == "fail" for r in results):
+        failed = [r.producer_id for r in results if r.outcome.status == "fail"]
+        return "fail", f"outbound-fail:{','.join(failed)}"
+    if all(r.outcome.status == "skipped" for r in results):
+        return "skipped", results[0].outcome.reason or "skipped:no-targets"
+    return "pass", None

@@ -25,6 +25,10 @@ from .ladder import (
 )
 from .server import LiveServer
 from .smoke import run_smoke
+from .context_smoke import (
+    aggregate_outbound_smoke,
+    run_outbound_context_smokes,
+)
 from .venv_runner import ResourceLimits, Venv, create_venv, install_deps
 
 logger = get_logger("startd8.deploy_harness.deploy")
@@ -45,6 +49,7 @@ def deploy_app_local(
     boot_timeout_s: float = 60.0,
     keep: bool = False,
     do_smoke: bool = True,
+    do_context_smoke: bool = True,
     limits: Optional[ResourceLimits] = None,
     runner_python: Optional[str] = None,
     editable_installs: Optional[list[str]] = None,
@@ -177,6 +182,29 @@ def deploy_app_local(
                     Stage.SMOKE,
                     _SMOKE_STATUS[sm.status],
                     reason=sm.reason,
+                    ms=(time.monotonic() - t0) * 1000,
+                )
+
+            # ---- context smoke (Role 3 remote/deployed producers) ----
+            if not do_context_smoke:
+                result.record(
+                    Stage.CONTEXT_SMOKE,
+                    StageStatus.SKIPPED,
+                    reason="skipped:context-smoke-disabled",
+                )
+            else:
+                t0 = time.monotonic()
+                outbound = run_outbound_context_smokes(root, loopback_port=boot.port)
+                for item in outbound:
+                    result.outbound_context_smoke[item.producer_id] = StageResult(
+                        status=_SMOKE_STATUS[item.outcome.status],
+                        reason=item.outcome.reason,
+                    )
+                status, reason = aggregate_outbound_smoke(outbound)
+                result.record(
+                    Stage.CONTEXT_SMOKE,
+                    _SMOKE_STATUS[status],
+                    reason=reason,
                     ms=(time.monotonic() - t0) * 1000,
                 )
         return result

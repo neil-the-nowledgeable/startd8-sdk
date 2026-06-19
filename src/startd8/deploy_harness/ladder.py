@@ -26,6 +26,7 @@ class Stage(str, Enum):
     BOOT = "boot"
     HEALTH = "health"
     SMOKE = "smoke"
+    CONTEXT_SMOKE = "context_smoke"
 
     @property
     def order(self) -> int:
@@ -38,6 +39,7 @@ _STAGE_ORDER: Dict[Stage, int] = {
     Stage.BOOT: 2,
     Stage.HEALTH: 3,
     Stage.SMOKE: 4,
+    Stage.CONTEXT_SMOKE: 5,
 }
 
 
@@ -110,6 +112,7 @@ class LadderResult(BaseModel):
     deviations: List[Deviation] = Field(default_factory=list)
     harness_env: HarnessEnv = Field(default_factory=HarnessEnv)
     log_paths: Dict[str, str] = Field(default_factory=dict)
+    outbound_context_smoke: Dict[str, StageResult] = Field(default_factory=dict)
 
     # ---- builder helpers (used by the stage orchestration in M1+) ----
 

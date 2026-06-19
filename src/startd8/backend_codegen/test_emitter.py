@@ -744,6 +744,38 @@ def test_{test_name}_client_list_create_round_trip():
 '''
 
 
+_CROSS_CONTEXT_REMOTE_TEST = '''\
+def test_{test_name}_remote_producer_smoke():
+    """FR-6 remote: live producer round-trip when base URL is configured."""
+    from pathlib import Path
+
+    from startd8.backend_codegen.context_manifest import (
+        filter_spec_for_client,
+        load_contract_spec,
+        parse_contexts,
+    )
+    from startd8.deploy_harness.context_smoke import (
+        context_base_url_env_key,
+        resolve_context_base_url,
+        run_remote_producer_smoke,
+    )
+
+    contexts_text = Path("prisma/contexts.yaml").read_text(encoding="utf-8")
+    (ctx,) = [c for c in parse_contexts(contexts_text) if c.id == {ctx_id!r}]
+    base_url = resolve_context_base_url(ctx)
+    if not base_url:
+        pytest.skip(
+            f"set {{context_base_url_env_key({ctx_id!r})}} or contexts.yaml base_url"
+        )
+    root = Path(".").resolve()
+    raw = load_contract_spec(ctx.contract, project_root=root)
+    schema_text = (root / "prisma" / "schema.prisma").read_text(encoding="utf-8")
+    spec = filter_spec_for_client(raw, schema_text, routes=ctx.routes)
+    outcome = run_remote_producer_smoke(base_url, spec=spec)
+    assert outcome.status == "pass", outcome.reason or outcome.status
+'''
+
+
 def render_cross_context_smoke_tests(
     schema_text: str,
     contexts_text: str,
@@ -760,6 +792,7 @@ def render_cross_context_smoke_tests(
         source_file, sha, contexts_sha, _CROSS_CONTEXT_SMOKE_KIND
     )
     local = [c for c in parse_contexts(contexts_text) if c.local]
+    remote = [c for c in parse_contexts(contexts_text) if not c.local]
     blocks = [
         _CROSS_CONTEXT_TEST.format(
             test_name=ctx.id,
@@ -768,6 +801,10 @@ def render_cross_context_smoke_tests(
         )
         for ctx in local
     ]
+    blocks.extend(
+        _CROSS_CONTEXT_REMOTE_TEST.format(test_name=ctx.id, ctx_id=ctx.id)
+        for ctx in remote
+    )
     if not blocks:
         blocks = [
             "def test_no_local_outbound_contexts():\n"

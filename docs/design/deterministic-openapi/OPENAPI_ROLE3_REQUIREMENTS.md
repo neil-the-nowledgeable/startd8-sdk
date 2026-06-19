@@ -74,7 +74,8 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 - Generate **per-producer consumer clients** from the **filtered** producer spec with stable import
   path and version pinning via `contract-sha256`.
 - Cross-context smoke: generated `tests/test_cross_context_smoke.py` exercises each **local**
-  outbound client via in-process `TestClient` shim + `run_context_client_smoke` (M2).
+  outbound client via in-process `TestClient` shim + `run_context_client_smoke` (M2); **remote**
+  producers via deploy harness `context_smoke` stage + env `STARTD8_CONTEXT_<ID>_BASE_URL` (M2c).
 
 **Non-Goals (v1)**
 - gRPC/proto promotion (separate `ProtoStubProvider` track).
@@ -82,7 +83,6 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 - Service mesh / API gateway codegen.
 - Auth middleware generation (declare schemes in spec only, same as Role 2).
 - Multi-region federation.
-- Live deployed multi-process smoke (M2 covers loopback; deploy harness for remote producers is follow-on).
 
 ---
 
@@ -103,7 +103,8 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 
 ### Verification
 - **FR-6** Cross-context smoke: emit `tests/test_cross_context_smoke.py` per **local** outbound
-  context; `run_context_client_smoke` list+create via `select_crud_resource` ground truth (M2).
+  context (in-process TestClient shim) and per **remote** context (live base URL when configured).
+  Deploy harness `context_smoke` stage runs `run_outbound_context_smokes` after local smoke.
 - **FR-7** Unit tests assert consumer method paths ⊆ producer `ROUTE_MANIFEST` (filtered subset).
 
 ### CLI / UX
@@ -133,9 +134,10 @@ All five open questions resolved in §0.1. M0+M1+M2 shipped on `feat/openapi-rol
 | Producer `openapi.json` matches owned `OPENAPI_SPEC` (canonical JSON) | ✅ | M0 |
 | Consumer `clients/{id}_client.py` emitted with typed CRUD methods | ✅ | M1 |
 | Producer contract edit → consumer `--check` stale | ✅ | M1 |
-| Local outbound context list+create smoke (ASGITransport) | ✅ | M2 |
+| Local outbound context list+create smoke (TestClient shim) | ✅ | M2 |
+| Remote producer smoke via deploy harness | ✅ | M2c |
+| Assembly-inputs template documents `contexts` | ✅ | M3 |
 | $0 LLM; deterministic skip-hook recognition | ✅ | M1 |
-| Cross-context smoke round-trip (deployed remote producer) | — | follow-on |
 
 ---
 

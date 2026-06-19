@@ -24,6 +24,9 @@ cascade" reference for <project>.
 | `prisma/completeness.yaml` | `generate backend` | completeness signal set + score formula (absent ⇒ presence rule) | <2> | <absent> |
 | `prisma/views.yaml` | `generate views` | composite views — <list views/archetypes> | <2> | <absent> |
 | `prisma/view_prose.yaml` | `generate views --view-prose` | **view copy (words layer)** — per-view title/intro/empty/success/error/controls; **hash-exempt**, rendered to untracked fragments (outside the drift hash — editing copy never flags drift, per [`SOTTO`](../../design-princples/SOTTO_DESIGN_PRINCIPLE.md)) | <2> | <absent> |
+| `prisma/imports.yaml` | `generate backend` | bulk-import owned-kind (`app/importer.py`) + optional paste/upload surface (FR-IMP-3; absent ⇒ no import artifacts) | <2> | <absent> |
+| `prisma/api.yaml` | `generate backend --api` | OpenAPI 3.0 **surface overlay** merged into `app/openapi_contract.py` (Role 2; absent ⇒ schema-only contract, SOTTO) | <2> | <absent> |
+| `prisma/contexts.yaml` | `generate backend --contexts` | **inter-context outbound producers** — emits `clients/{id}_client.py`, OTel helper, cross-context smoke tests (Role 3; absent ⇒ no context clients, SOTTO) | <2> | <absent> |
 
 `*` = the contract itself (Prisma IDL, not YAML) — the front human design bookend
 (`DATA_MODEL_AND_RETROSPECTIVE`): design it before the first cascade run; feed RETROSPECTIVE
@@ -79,14 +82,32 @@ inputs:
   completeness: {path: prisma/completeness.yaml, status: absent}   # declared ahead of authoring
   views: {path: prisma/views.yaml, status: absent}
   view_prose: {path: prisma/view_prose.yaml, status: absent}       # words layer — hash-exempt, optional
+  imports: {path: prisma/imports.yaml, status: absent}               # FR-IMP-3 bulk-import — optional
+  api: {path: prisma/api.yaml, status: absent}                       # Role 2 OpenAPI overlay — optional
+  contexts: {path: prisma/contexts.yaml, status: absent}             # Role 3 outbound producers — optional
 ```
 
 With no `--inputs` at all, `startd8 wireframe` falls back to exactly the conventional paths
-above. See `docs/design/wireframe/WIREFRAME_REQUIREMENTS.md` (FR-W6–W8).
+above (eleven catalog keys: schema, app, human_inputs, ai_passes, pages, completeness, views,
+view_prose, imports, api, contexts). See `docs/design/wireframe/WIREFRAME_REQUIREMENTS.md` (FR-W6–W8).
+
+### Role 3 — `contexts.yaml` (optional)
+
+Declares **outbound producer contexts** the app consumes across a process boundary. When present,
+`startd8 generate backend --contexts prisma/contexts.yaml` emits:
+
+- `clients/{producer_id}_client.py` — typed httpx consumer per outbound entry
+- `clients/_context_otel.py` — OTel CLIENT span wrapper (OQ-5)
+- `tests/test_cross_context_smoke.py` — loopback (local) + remote smoke templates (FR-6)
+
+**Remote producer smoke:** set `base_url` in the manifest or override at runtime with
+`STARTD8_CONTEXT_<PRODUCER_ID>_BASE_URL` (e.g. `STARTD8_CONTEXT_CATALOG_BASE_URL`).
+The deploy harness runs live list+create smoke on the `context_smoke` ladder stage when
+`prisma/contexts.yaml` is present.
 
 ---
 
-*Instantiated from `startd8-sdk/docs/design/kickoff/ASSEMBLY_INPUTS_TEMPLATE.md` (v0.1). The
+*Instantiated from `startd8-sdk/docs/design/kickoff/ASSEMBLY_INPUTS_TEMPLATE.md` (v0.2). The
 Status column uses the kickoff provisioning states; see `KICKOFF_REQUIREMENTS.md` for the
 collection machinery (POLISH flag → RESOLVE collect → VALIDATE gate) and the domain slices for
 per-class detail.*

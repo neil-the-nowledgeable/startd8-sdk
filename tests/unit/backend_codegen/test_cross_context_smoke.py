@@ -39,6 +39,19 @@ def test_render_cross_context_smoke_tests_emits_local_test() -> None:
     assert "CatalogClient" in text
 
 
+def test_render_cross_context_smoke_tests_emits_remote_test() -> None:
+    remote = """\
+outbound:
+  - id: payments
+    contract: openapi/payments.json
+    base_url: https://pay.example.com
+    routes: crud
+"""
+    text = render_cross_context_smoke_tests(SCHEMA, remote)
+    assert "test_payments_remote_producer_smoke" in text
+    assert "run_remote_producer_smoke" in text
+
+
 def test_render_backend_includes_cross_context_smoke_tests() -> None:
     arts = dict(render_backend(SCHEMA, contexts_text=CONTEXTS))
     assert CROSS_CONTEXT_SMOKE_TESTS_PATH in arts
