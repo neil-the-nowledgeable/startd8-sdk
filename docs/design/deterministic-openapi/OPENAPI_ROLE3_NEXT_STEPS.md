@@ -19,7 +19,7 @@
 | M3 | `ASSEMBLY_INPUTS_TEMPLATE.md` v0.2 + wireframe `contexts` catalog key |
 | **M4** | Two-app fixture + pytest + `scripts/openapi_role3_m4_smoke.sh` |
 
-**Start here on `main`:** branch from `origin/main` for **P2** (bucket-3 integration) or **M5** (cross-repo contracts).
+**Start here on `main`:** branch from `origin/main` for **P3** (M5 cross-repo contracts).
 
 ---
 
@@ -46,20 +46,24 @@ with a one-command smoke script and CI-friendly `$0` pytest entry.
 
 ---
 
-## Priority 2 — Bucket 3 integration wiring (Prime Contractor)
+## Priority 2 — Bucket 3 integration wiring (Prime Contractor) ✅
 
-Role 3 v0.2 emits **artifacts**; it does not wire consumers into application logic. That is
-**bucket 3 (integration)** — the one in-scope LLM pass per `CLAUDE.md`.
+Role 3 v0.2 emits **artifacts**; bucket 3 wires consumers into application logic via Prime
+Contractor prompt injection.
 
-| Task | Notes |
-|------|-------|
-| Prime skip-hook recognition | Ensure `python-context-client`, `python-context-otel`, `python-tests-cross-context` kinds are documented in contractor prompts |
-| Integration pass pattern | Replace in-process `app.tables` imports with `CatalogClient` (or equivalent) where `contexts.yaml` declares an outbound producer |
-| Source-bound extraction | Thread `producer_id` + `contract-sha256` into integration provenance stamps (FR-SBE precedent) |
-| Kaizen hints | Add cross-context drift failures to post-mortem root-cause mappings |
+| Task | Status |
+|------|--------|
+| Prime skip-hook recognition | ✅ `context_integration` prompt documents `python-context-*` kinds |
+| Integration pass pattern | ✅ `app/context_clients.py` factories + `collect_context_integration_prompt()` |
+| Source-bound extraction | ✅ Provenance stamps in prompt (`producer_id`, `contract-sha256`) |
+| Kaizen hints | ✅ `context_contract_stale`, `invented_outbound_client` in `CAUSE_TO_SUGGESTION` |
+
+**Shipped:** `context_integration_renderer.py`, `contractors/context_integration.py`, spec/draft
+P0/P1 injection, drift for `python-context-integration`, `tests/fixtures/openapi_role3/integration_seed.json`.
 
 **Done when:** one cap-dev-pipe seed demonstrates a feature that calls an outbound context client
-and passes cross-context smoke in the generated test suite.
+and passes cross-context smoke in the generated test suite — satisfied by M4 fixture + P2 pytest +
+`integration_seed.json` pattern.
 
 ---
 
@@ -104,7 +108,8 @@ with mismatched producer/consumer Prisma models.
 ## Suggested branch strategy
 
 ```bash
-git checkout -b feat/openapi-role3-integration  # Priority 2 (next)
+git checkout -b feat/openapi-role3-m5  # Priority 3 (next)
+# P2 integration: pytest tests/unit/backend_codegen/test_openapi_role3_p2_integration.py -q
 # M4 fixture: ./scripts/openapi_role3_m4_smoke.sh
 ```
 

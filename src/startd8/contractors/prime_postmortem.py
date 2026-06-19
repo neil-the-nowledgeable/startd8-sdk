@@ -646,6 +646,23 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "shape) from the producing feature's actual output — do not invent them."
         ),
     },
+    "context_contract_stale": {
+        "phase": "spec",
+        "hint": (
+            "Outbound context client is stale: re-run "
+            "`startd8 generate backend --contexts prisma/contexts.yaml` after updating "
+            "the pinned producer contract (contract-sha256 mismatch on "
+            "clients/{id}_client.py)."
+        ),
+    },
+    "invented_outbound_client": {
+        "phase": "draft",
+        "hint": (
+            "Use the generated outbound client factories from app.context_clients "
+            "(e.g. get_catalog_client) or clients/{id}_client.py — do NOT invent raw "
+            "httpx calls or import remote producer entities from app.tables."
+        ),
+    },
     "type_class_mismatch": {
         "phase": "draft",
         "hint": (

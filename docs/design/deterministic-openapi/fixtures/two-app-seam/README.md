@@ -56,7 +56,10 @@ startd8 generate backend \
   --out "$CON"
 ```
 
-Emits `clients/catalog_client.py`, `clients/_context_otel.py`, and `tests/test_cross_context_smoke.py`.
+Emits `clients/catalog_client.py`, `app/context_clients.py`, `clients/_context_otel.py`, and
+`tests/test_cross_context_smoke.py`.
+
+For bucket-3 Prime integration, see `tests/fixtures/openapi_role3/integration_seed.json`.
 
 ### 3. Drift — tamper contract
 

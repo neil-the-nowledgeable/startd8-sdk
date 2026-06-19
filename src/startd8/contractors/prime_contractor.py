@@ -4662,6 +4662,24 @@ class PrimeContractorWorkflow:
         if upstream_section:
             gen_context["upstream_interfaces"] = upstream_section
 
+        # Role 3 P2: thread outbound context client registry for bucket-3 integration.
+        if any(str(t).endswith(".py") for t in (feature.target_files or [])):
+            try:
+                from .context_integration import collect_context_integration_prompt
+
+                ctx_int = collect_context_integration_prompt(
+                    project_root=str(self.project_root),
+                )
+                if ctx_int:
+                    gen_context["context_integration"] = ctx_int
+                    logger.info(
+                        "Injected context_integration guidance for '%s' (%d chars)",
+                        feature.name,
+                        len(ctx_int),
+                    )
+            except Exception:
+                pass
+
         # RUN-036 (convention half): thread the Python house-style authority — FastAPI/SQLModel,
         # `app.tables` module-source, `session.exec(select())` not `session.query` — into the
         # lead/cloud path's spec+draft prompts. This is the SAME 8b authority micro-prime already
