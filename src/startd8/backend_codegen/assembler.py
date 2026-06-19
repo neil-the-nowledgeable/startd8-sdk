@@ -37,6 +37,8 @@ from .test_emitter import (
     render_health_tests,
     render_openapi_contract_tests,
     render_route_smoke_tests,
+    render_cross_context_smoke_tests,
+    CROSS_CONTEXT_SMOKE_TESTS_PATH,
 )
 
 
@@ -208,6 +210,10 @@ def render_backend(
                 project_root=project_root,
             )
         )
+        out.append((
+            CROSS_CONTEXT_SMOKE_TESTS_PATH,
+            render_cross_context_smoke_tests(schema_text, contexts_text, source_file),
+        ))
     # FR-CFG-7 / D11: app/settings.py is emitted ONLY in deployed mode. Installed mode is the
     # settings-absent default and stays byte-identical to today (R4). settings.py — present here,
     # absent in installed — is the single file that differs between the two modes.

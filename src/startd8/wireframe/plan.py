@@ -470,6 +470,7 @@ def _services_section(
         )
         if contexts_state and contexts_state.status == Status.PLANNED and contexts_state.parsed:
             from ..backend_codegen.context_manifest import parse_contexts
+            from ..backend_codegen.test_emitter import CROSS_CONTEXT_SMOKE_TESTS_PATH
 
             for ctx in parse_contexts(contexts_state.text):
                 items.append(
@@ -477,6 +478,14 @@ def _services_section(
                         f"Context client: {ctx.id}", Status.PLANNED,
                         detail=f"routes={ctx.routes}, local={ctx.local}",
                         paths=(f"clients/{ctx.id}_client.py",),
+                    )
+                )
+            if parse_contexts(contexts_state.text):
+                items.append(
+                    WireframeItem(
+                        "Cross-context smoke", Status.PLANNED,
+                        detail="FR-6 list+create via generated client",
+                        paths=(CROSS_CONTEXT_SMOKE_TESTS_PATH,),
                     )
                 )
     if ai_state.status == Status.PLANNED and schema_state.status in (

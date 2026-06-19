@@ -1,8 +1,8 @@
 # OpenAPI Role 3 — Inter-Context Seam (Requirements)
 
-**Version:** 0.2 (Reflective loop closed — OQ-1..OQ-5)
+**Version:** 0.2 (M0+M1 shipped; M2 in progress)
 **Date:** 2026-06-19
-**Status:** M0+M1 in progress on `feat/openapi-role3-context`
+**Status:** M2 implementing on `feat/openapi-role3-context`
 **Owner:** SDK / backend_codegen + integrations
 **Motivated by:** `OPENAPI_LEVERAGE_ANALYSIS.md` Role 3 — promote the static contract into the
 **cross-bounded-context** integration seam when a modular monolith splits
@@ -73,7 +73,8 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 - Promote `OPENAPI_SPEC` to a **served contract artifact** (static module remains drift authority).
 - Generate **per-producer consumer clients** from the **filtered** producer spec with stable import
   path and version pinning via `contract-sha256`.
-- Reuse Role 1+2 drift patterns — no parallel contract file.
+- Cross-context smoke: generated `tests/test_cross_context_smoke.py` exercises each **local**
+  outbound client via in-process `TestClient` shim + `run_context_client_smoke` (M2).
 
 **Non-Goals (v1)**
 - gRPC/proto promotion (separate `ProtoStubProvider` track).
@@ -81,7 +82,7 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 - Service mesh / API gateway codegen.
 - Auth middleware generation (declare schemes in spec only, same as Role 2).
 - Multi-region federation.
-- Cross-context smoke harness (M2).
+- Live deployed multi-process smoke (M2 covers loopback; deploy harness for remote producers is follow-on).
 
 ---
 
@@ -101,7 +102,8 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
   (FR-ED-16 precedent); drift kind `python-context-client` with `startd8-entity: {producer_id}`.
 
 ### Verification
-- **FR-6** Cross-context smoke test template — **deferred M2** (`ApiClient` list+create round-trip).
+- **FR-6** Cross-context smoke: emit `tests/test_cross_context_smoke.py` per **local** outbound
+  context; `run_context_client_smoke` list+create via `select_crud_resource` ground truth (M2).
 - **FR-7** Unit tests assert consumer method paths ⊆ producer `ROUTE_MANIFEST` (filtered subset).
 
 ### CLI / UX
@@ -112,7 +114,7 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 
 ## 4. Open Questions — Closed
 
-All five open questions resolved in §0.1. No remaining blockers for M0+M1.
+All five open questions resolved in §0.1. M0+M1+M2 shipped on `feat/openapi-role3-context`.
 
 ---
 
@@ -123,8 +125,9 @@ All five open questions resolved in §0.1. No remaining blockers for M0+M1.
 | Producer `openapi.json` matches owned `OPENAPI_SPEC` (canonical JSON) | ✅ | M0 |
 | Consumer `clients/{id}_client.py` emitted with typed CRUD methods | ✅ | M1 |
 | Producer contract edit → consumer `--check` stale | ✅ | M1 |
+| Local outbound context list+create smoke (ASGITransport) | ✅ | M2 |
 | $0 LLM; deterministic skip-hook recognition | ✅ | M1 |
-| Cross-context smoke round-trip | — | M2 |
+| Cross-context smoke round-trip (deployed remote producer) | — | follow-on |
 
 ---
 

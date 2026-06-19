@@ -56,8 +56,10 @@
 - Drift + skip-hook threading (FR-5)
 - Unit tests: parse, render, drift, FR-7 method paths ⊆ manifest
 
-### M2 — Cross-context smoke (deferred)
-- Harness invokes producer via generated client + `select_crud_resource`
+### M2 — Cross-context smoke ✅
+- `deploy_harness/context_smoke.py` — `run_context_client_smoke` via generated client + `select_crud_resource`
+- Emit `tests/test_cross_context_smoke.py` when `contexts.yaml` present (in-process TestClient shim)
+- Drift kind `python-tests-cross-context` (schema + contexts hashes)
 - FR-6 integration test template
 
 ### M3 — Wireframe assembly-inputs docs (partial)
@@ -102,7 +104,7 @@
 |-----------|--------|
 | M0 (promotion verify) | ✅ |
 | M1 (manifest + client) | ✅ this branch |
-| M2 (cross-context smoke) | deferred |
+| M2 (cross-context smoke) | ✅ |
 | M3 (assembly-inputs docs) | partial |
 
 ---

@@ -96,6 +96,7 @@ _SETTINGS_KINDS: frozenset = frozenset({"python-settings"})
 # module-load import cycle).
 _IMPORTS_KINDS: frozenset = frozenset({"python-import", "python-import-surface"})
 _CONTEXT_CLIENT_KINDS: frozenset = frozenset({"python-context-client"})
+_CONTEXT_SMOKE_KINDS: frozenset = frozenset({"python-tests-cross-context"})
 
 
 def _renderers(
@@ -153,6 +154,7 @@ def _renderers(
         render_health_tests,
         render_openapi_contract_tests,
         render_route_smoke_tests,
+        render_cross_context_smoke_tests,
     )
     # P0-2/FR-DM: list/row/detail re-render must use the SAME filter (views.yaml) + display
     # (display.yaml) inputs the generate path used, or a filtered/display-configured template
@@ -255,6 +257,11 @@ def _renderers(
         ),
         "python-tests-completeness": lambda s, sf, e: render_completeness_tests(s, sf, manifest=_cmpl),
         "python-tests-routes": lambda s, sf, e: render_route_smoke_tests(s, sf),
+        "python-tests-cross-context": lambda s, sf, e: (
+            render_cross_context_smoke_tests(s, contexts_text or "", sf)
+            if contexts_text
+            else ""
+        ),
         "python-context-client": _context_client_renderer,
     }
 
@@ -797,6 +804,27 @@ def context_client_stale_reason(
     return None
 
 
+def context_smoke_stale_reason(
+    ondisk_text: str,
+    *,
+    schema_sha: str,
+    contexts_sha: str,
+) -> Optional[str]:
+    """For cross-context smoke tests, return why stale, or ``None`` if inputs match."""
+    checks = (
+        ("schema", embedded_schema_sha(ondisk_text), schema_sha),
+        ("contexts", embedded_contexts_sha(ondisk_text), contexts_sha),
+    )
+    for label, embedded, current in checks:
+        if embedded is None:
+            return f"missing {label}-sha256 header"
+        if embedded != current:
+            return (
+                f"{label} changed (header {embedded[:12]}… != current {current[:12]}…) — regenerate"
+            )
+    return None
+
+
 def api_overlay_stale_reason(
     ondisk_text: str,
     *,
@@ -970,6 +998,41 @@ def _check_context_client_drift(
     return DriftResult("in_sync", IN_SYNC, "owned context client matches schema + contexts")
 
 
+def _check_context_smoke_drift(
+    schema_text: str,
+    contexts_text: Optional[str],
+    ondisk_text: str,
+    source_file: str,
+) -> DriftResult:
+    """Drift for ``python-tests-cross-context`` — schema + contexts manifest."""
+    if contexts_text is None:
+        return DriftResult(
+            "error", ERROR, "cross-context smoke drift check requires contexts.yaml"
+        )
+    from .test_emitter import render_cross_context_smoke_tests
+
+    reason = context_smoke_stale_reason(
+        ondisk_text,
+        schema_sha=schema_sha256(schema_text),
+        contexts_sha=schema_sha256(contexts_text),
+    )
+    if reason is not None:
+        status = "tampered" if "missing" in reason else "stale"
+        return DriftResult(status, DRIFT, reason)
+    rendered = render_cross_context_smoke_tests(
+        schema_text, contexts_text, source_file
+    )
+    if rendered != ondisk_text:
+        return DriftResult(
+            "tampered",
+            DRIFT,
+            "owned cross-context smoke tests differ from a fresh render",
+        )
+    return DriftResult(
+        "in_sync", IN_SYNC, "owned cross-context smoke tests match schema + contexts"
+    )
+
+
 def check_drift(
     schema_text: str,
     ondisk_text: Optional[str],
@@ -1023,6 +1086,10 @@ def check_drift(
             imports_text=imports_text,
             api_text=api_text,
             project_root=project_root,
+        )
+    if kind in _CONTEXT_SMOKE_KINDS:
+        return _check_context_smoke_drift(
+            schema_text, contexts_text, ondisk_text, source_file
         )
     if kind == "python-openapi-contract" and (
         api_text is not None or embedded_api_sha(ondisk_text) is not None
