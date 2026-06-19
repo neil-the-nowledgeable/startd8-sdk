@@ -126,7 +126,7 @@ def compute_basket(req: dict) -> dict:
         o["net_payable"] = _fmt(net, scale)
         o["tax_value"] = _fmt(tax, scale)
         o["net_payable_with_tax"] = _fmt(net_tax, scale)
-        o["discount_value"]["amount"] = _fmt(db - da, scale)
+        o["discount_value"]["amount"] = _fmt(_round(db - da, scale, mode), scale)  # H1: honor request rounding
         out_items.append(o)
         sub_net += net
         sub_tax += net_tax

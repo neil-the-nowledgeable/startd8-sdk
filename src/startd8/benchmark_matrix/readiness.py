@@ -31,10 +31,15 @@ def tcp_probe(port: int, host: str = "127.0.0.1") -> bool:
         return False
 
 
+# Proxy-free opener (M5): a loopback health probe must never be routed through an inherited HTTP_PROXY
+# env var (which would make every http-readiness cell hang/degrade despite a healthy server).
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def http_probe(url: str, *, timeout: float = 2.0) -> str:
     """Return ``ok`` (2xx) | ``http`` (connected, non-2xx) | ``down`` (no connection)."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - loopback only
+        with _OPENER.open(url, timeout=timeout) as resp:  # noqa: S310 - loopback only, proxy-free
             return "ok" if 200 <= resp.status < 300 else "http"
     except urllib.error.HTTPError:
         return "http"  # the server answered, just not 2xx (e.g. 404 on /health)
