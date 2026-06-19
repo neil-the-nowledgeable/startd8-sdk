@@ -17,7 +17,7 @@ from .context_client_renderer import _class_name
 from .context_manifest import (
     OutboundContext,
     contract_sha256,
-    filter_spec_for_client,
+    filter_spec_for_context,
     parse_contexts,
 )
 
@@ -47,7 +47,7 @@ def _contract_sha_for_ctx(
     from .context_client_renderer import _resolve_producer_spec
 
     raw = _resolve_producer_spec(schema_text, ctx, project_root=project_root)
-    filtered = filter_spec_for_client(raw, schema_text, routes=ctx.routes)
+    filtered = filter_spec_for_context(raw, schema_text, ctx)
     return contract_sha256(filtered)
 
 

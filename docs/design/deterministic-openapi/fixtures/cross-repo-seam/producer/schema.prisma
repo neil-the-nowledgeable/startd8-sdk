@@ -1,0 +1,5 @@
+// Producer bounded context — Note entity (consumer schema diverges).
+model Note {
+  id    String @id @default(cuid())
+  title String
+}

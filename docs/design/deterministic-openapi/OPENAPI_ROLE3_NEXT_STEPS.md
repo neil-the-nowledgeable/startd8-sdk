@@ -19,7 +19,7 @@
 | M3 | `ASSEMBLY_INPUTS_TEMPLATE.md` v0.2 + wireframe `contexts` catalog key |
 | **M4** | Two-app fixture + pytest + `scripts/openapi_role3_m4_smoke.sh` |
 
-**Start here on `main`:** branch from `origin/main` for **P3** (M5 cross-repo contracts).
+**Start here on `main`:** branch for **P4** (doc hygiene) — M5 cross-repo seam is shipped.
 
 ---
 
@@ -67,20 +67,23 @@ and passes cross-context smoke in the generated test suite — satisfied by M4 f
 
 ---
 
-## Priority 3 — Cross-repo contract story (M5)
+## Priority 3 — Cross-repo contract story (M5) ✅
 
-v0.2 filters remote contracts through the **consumer's** Prisma schema (`filter_spec_for_client`).
-That is correct for shared-entity modular monoliths but breaks when producer and consumer schemas
-diverge.
+v0.2 filtered remote contracts through the consumer Prisma schema. M5 adds **pinned-contract**
+filtering for divergent schemas.
 
-| Open question | Lean resolution |
-|---------------|-----------------|
-| Remote contract without consumer entity overlap | Add `routes: all_json` + optional `schemas: explicit` list in `contexts.yaml`; or skip Prisma filter when `contract:` is pinned |
-| Contract publish CI | Producer pipeline uploads `openapi/{id}.json` + `contract-sha256` as a versioned artifact |
-| Consumer regen workflow | Document: pin hash → edit `contexts.yaml` contract path → `generate backend --check` |
+| Task | Status |
+|------|--------|
+| Pinned contract filter | ✅ `filter_spec_for_context` — producer paths without consumer entity overlap |
+| `routes: all_json` + `schemas:` | ✅ Grammar + explicit schema allowlist |
+| Contract publish CI | ✅ `scripts/openapi_role3_publish_contract.sh` |
+| Consumer regen workflow | ✅ `fixtures/cross-repo-seam/README.md` |
+| Mismatched-schema test | ✅ `test_openapi_role3_m5_cross_repo.py` + `scripts/openapi_role3_m5_smoke.sh` |
 
 **Done when:** requirements v0.3 closes cross-repo filter semantics and adds one integration test
-with mismatched producer/consumer Prisma models.
+with mismatched producer/consumer Prisma models — **satisfied**.
+
+**Start here on `main`:** **P4** (doc + hygiene) or deferred polyglot tracks.
 
 ---
 
@@ -108,9 +111,8 @@ with mismatched producer/consumer Prisma models.
 ## Suggested branch strategy
 
 ```bash
-git checkout -b feat/openapi-role3-m5  # Priority 3 (next)
-# P2 integration: pytest tests/unit/backend_codegen/test_openapi_role3_p2_integration.py -q
-# M4 fixture: ./scripts/openapi_role3_m4_smoke.sh
+# M5 cross-repo: ./scripts/openapi_role3_m5_smoke.sh
+# M4 two-app: ./scripts/openapi_role3_m4_smoke.sh
 ```
 
 **Unrelated open threads (do not branch from these for Role 3):**

@@ -956,7 +956,7 @@ def _check_context_client_drift(
             "error", ERROR, "context-client drift check requires contexts.yaml"
         )
     from .context_client_renderer import render_context_client, _resolve_producer_spec
-    from .context_manifest import contract_sha256, filter_spec_for_client, parse_contexts
+    from .context_manifest import contract_sha256, filter_spec_for_context, parse_contexts
 
     producer_id = embedded_entity(ondisk_text)
     if not producer_id:
@@ -977,7 +977,7 @@ def _check_context_client_drift(
         imports_text=imports_text,
         project_root=project_root,
     )
-    filtered = filter_spec_for_client(raw_spec, schema_text, routes=ctx.routes)
+    filtered = filter_spec_for_context(raw_spec, schema_text, ctx)
     contract_sha = contract_sha256(filtered)
     reason = context_client_stale_reason(
         ondisk_text,

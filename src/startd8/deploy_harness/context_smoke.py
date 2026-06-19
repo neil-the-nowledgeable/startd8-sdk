@@ -165,13 +165,13 @@ def _producer_spec_for_smoke(
     if getattr(ctx, "local", False):
         return None
     from startd8.backend_codegen.context_manifest import (
-        filter_spec_for_client,
+        filter_spec_for_context,
         load_contract_spec,
     )
 
     raw = load_contract_spec(ctx.contract, project_root=project_root)
     if schema_text:
-        return filter_spec_for_client(raw, schema_text, routes=ctx.routes)
+        return filter_spec_for_context(raw, schema_text, ctx)
     return raw
 
 

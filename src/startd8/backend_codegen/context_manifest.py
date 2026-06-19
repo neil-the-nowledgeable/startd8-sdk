@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import yaml
 
@@ -26,7 +26,8 @@ from .openapi_client_renderer import (
 )
 
 _ROUTE_MODES = frozenset({"crud", "all_json"})
-_KEYS = frozenset({"id", "local", "contract", "base_url", "routes"})
+_KEYS = frozenset({"id", "local", "contract", "base_url", "routes", "schemas"})
+_HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class OutboundContext:
     contract: str = ""
     base_url: str = ""
     routes: str = "crud"
+    schemas: Tuple[str, ...] = ()
 
 
 def parse_contexts(text: Optional[str]) -> Tuple[OutboundContext, ...]:
@@ -76,6 +78,10 @@ def parse_contexts(text: Optional[str]) -> Tuple[OutboundContext, ...]:
                 f"contexts.yaml: outbound {ctx_id!r}: `routes` must be one of {sorted(_ROUTE_MODES)}"
             )
         base_url = str(entry.get("base_url") or "").strip()
+        raw_schemas = entry.get("schemas") or []
+        if raw_schemas and not isinstance(raw_schemas, list):
+            raise ValueError(f"contexts.yaml: outbound {ctx_id!r}: `schemas` must be a list")
+        schemas = tuple(str(s).strip() for s in raw_schemas if str(s).strip())
         out.append(
             OutboundContext(
                 id=ctx_id,
@@ -83,6 +89,7 @@ def parse_contexts(text: Optional[str]) -> Tuple[OutboundContext, ...]:
                 contract=contract,
                 base_url=base_url,
                 routes=routes,
+                schemas=schemas,
             )
         )
     return tuple(out)
@@ -110,16 +117,164 @@ def load_contract_spec(contract_path: str, *, project_root: Optional[Path] = Non
     return data
 
 
+def _ref_name(ref: Any) -> Optional[str]:
+    if not isinstance(ref, str) or not ref.startswith("#/components/schemas/"):
+        return None
+    return ref.rsplit("/", 1)[-1]
+
+
+def _op_json_ref(op: Dict[str, Any], *, response: bool) -> Optional[str]:
+    if response:
+        content = (
+            op.get("responses", {})
+            .get("200", {})
+            .get("content", {})
+            .get("application/json", {})
+        )
+        schema = content.get("schema", {})
+        if schema.get("type") == "array":
+            return _ref_name(schema.get("items", {}).get("$ref"))
+        return _ref_name(schema.get("$ref"))
+    body = op.get("requestBody", {})
+    content = body.get("content", {}).get("application/json", {})
+    return _ref_name(content.get("schema", {}).get("$ref"))
+
+
+def _openapi_crud_paths(spec: Dict[str, Any]) -> Set[Tuple[str, str]]:
+    """Detect collection/item CRUD paths from a producer OpenAPI spec (no Prisma)."""
+    kept: Set[Tuple[str, str]] = set()
+    for path, path_item in spec.get("paths", {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        is_collection = path.endswith("/") and "{" not in path
+        is_item = "{" in path
+        for method, op in path_item.items():
+            if method not in _HTTP_METHODS or not isinstance(op, dict):
+                continue
+            http = method.upper()
+            if is_collection and http in ("GET", "POST"):
+                kept.add((http, path))
+            elif is_item and http in ("GET", "PATCH", "DELETE", "PUT"):
+                kept.add((http, path))
+    return kept
+
+
+def _schema_refs_from_paths(
+    spec: Dict[str, Any], kept_paths: Set[Tuple[str, str]]
+) -> Set[str]:
+    refs: Set[str] = set()
+    paths = spec.get("paths", {})
+    for method, path in kept_paths:
+        path_item = paths.get(path, {})
+        if not isinstance(path_item, dict):
+            continue
+        op = path_item.get(method.lower())
+        if not isinstance(op, dict):
+            continue
+        for dto in (_op_json_ref(op, response=False), _op_json_ref(op, response=True)):
+            if dto:
+                refs.add(dto)
+    return refs
+
+
+def filter_spec_for_context(
+    spec: Dict[str, Any],
+    schema_text: str,
+    ctx: OutboundContext,
+) -> Dict[str, Any]:
+    """Filter a producer spec for one outbound context entry."""
+    return filter_spec_for_client(
+        spec,
+        schema_text,
+        routes=ctx.routes,
+        pinned_contract=not ctx.local,
+        explicit_schemas=ctx.schemas or None,
+    )
+
+
 def filter_spec_for_client(
     spec: Dict[str, Any],
     schema_text: str,
     *,
     routes: str = "crud",
+    pinned_contract: bool = False,
+    explicit_schemas: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
-    """Subset a producer spec to client-emittable JSON routes (FR-3 / OQ-3)."""
+    """Subset a producer spec to client-emittable JSON routes (FR-3 / OQ-3 / M5).
+
+    When ``pinned_contract`` is True (remote ``contract:`` pin), filtering uses the
+    producer OpenAPI paths/schemas directly — the consumer Prisma schema is not required
+    to share entity names with the producer (cross-repo seam).
+    """
     from ..languages.prisma_parser import parse_prisma_schema
 
     schema = parse_prisma_schema(schema_text)
+    if pinned_contract:
+        if routes == "crud":
+            kept = _openapi_crud_paths(spec)
+            filtered_paths: Dict[str, Any] = {}
+            for method, path in sorted(kept):
+                path_item = spec.get("paths", {}).get(path, {})
+                if not isinstance(path_item, dict):
+                    continue
+                op = path_item.get(method.lower())
+                if isinstance(op, dict):
+                    filtered_paths.setdefault(path, {})[method.lower()] = op
+            schema_refs = _schema_refs_from_paths(spec, kept)
+            if explicit_schemas:
+                schema_refs.update(explicit_schemas)
+            all_schemas = spec.get("components", {}).get("schemas", {})
+            filtered_schemas = {
+                name: all_schemas[name]
+                for name in sorted(schema_refs)
+                if isinstance(all_schemas, dict) and name in all_schemas
+            }
+            return {
+                "openapi": spec.get("openapi", "3.0.3"),
+                "info": spec.get("info", {"title": "context", "version": "0.0.0"}),
+                "paths": filtered_paths,
+                "components": {"schemas": filtered_schemas},
+            }
+        # pinned + all_json: keep every JSON op; schemas per explicit list or full set
+        filtered_paths = {}
+        for path, path_item in spec.get("paths", {}).items():
+            if not isinstance(path_item, dict):
+                continue
+            kept_ops: Dict[str, Any] = {}
+            for method, op in path_item.items():
+                if method not in _HTTP_METHODS or not isinstance(op, dict):
+                    continue
+                req_ct = (
+                    op.get("requestBody", {})
+                    .get("content", {})
+                    .get("application/json")
+                )
+                resp_ct = (
+                    op.get("responses", {})
+                    .get("200", {})
+                    .get("content", {})
+                    .get("application/json")
+                )
+                if req_ct or resp_ct:
+                    kept_ops[method] = op
+            if kept_ops:
+                filtered_paths[path] = kept_ops
+        all_schemas = spec.get("components", {}).get("schemas", {})
+        if explicit_schemas and isinstance(all_schemas, dict):
+            filtered_schemas = {
+                name: all_schemas[name]
+                for name in explicit_schemas
+                if name in all_schemas
+            }
+        else:
+            filtered_schemas = dict(all_schemas) if isinstance(all_schemas, dict) else {}
+        return {
+            "openapi": spec.get("openapi", "3.0.3"),
+            "info": spec.get("info", {"title": "context", "version": "0.0.0"}),
+            "paths": filtered_paths,
+            "components": {"schemas": filtered_schemas},
+        }
+
     crud = set(_crud_routes(schema, schema_text))
     dto_names = _prisma_dto_names(schema, schema_text)
     filtered_paths: Dict[str, Any] = {}

@@ -124,4 +124,4 @@ M4 two-app fixture, M5 cross-repo contract filter, bucket-3 Prime integration wi
 
 ---
 
-*Plan v0.2 — M0–M4 + P2 shipped on `feat/openapi-role3-integration`. Next: `OPENAPI_ROLE3_NEXT_STEPS.md` (P3 / M5).*
+*Plan v0.3 — M0–M4 + P2 + M5 shipped on `main`. Next: `OPENAPI_ROLE3_NEXT_STEPS.md` (P4 hygiene).*
