@@ -73,16 +73,16 @@ falsely scored 0), the startup contract + Node serve hook (FR-T2-CONTRACT/HOOK),
   R1-S1/R1-S2 (durable batch root + multi-path proto provisioning).
 - **Folded into v0.3 as inline clarifications** (below): R1-F1 (loopback binding scope), R1-F3
   (readiness timeout is a fixed 30s global today), R2-F3 (FUNCTIONAL_WEIGHT=0.5 is provisional).
-- **Genuinely open** (accepted, not yet implemented — tracked as v0.3 open work, Appendix C kept live):
-  - **R2-S1** — `aggregate.py:summarize_group` carries no `functional_median`/`functional_iqr`; the
-    matrix has no dedicated functional leaderboard column (composite already folds functional, but the
-    explicit column the spec calls for is absent).
-  - **R3-S1 / R1-F2** — persistence writes `cells.json`+`report.md` once at end of run; no
-    incremental/atomic per-cell flush, so a mid-run crash loses the batch.
-  - **R3-F3 / R3-S3** — the behavioral launch path (`execute.py`) degrades on **any** missing module
-    (naming it in provenance) and does **not** floor a hallucinated framework (`express`) vs degrade a
-    protocol dep (`@grpc/grpc-js`). The floor-vs-degrade split exists only in `scoring.py`'s compile
-    gate (Python imports), **not** the behavioral path — so the score-inversion R3 warned of is still live.
+- **Implemented after the triage** (commit `46134128`, 2026-06-19 — recorded in Appendix A):
+  - **R3-F3 / R3-S3** — `execute.py` now classifies a missing module against the service's wire
+    contract: an HTTP/GraphQL framework on a gRPC (`tcp`) contract — or a gRPC pkg on an HTTP contract —
+    is a **model fault** scored real zero coverage and floored to `COMPILE_FLOOR`, never degraded to a
+    free structural 1.0. Protocol-appropriate/unknown deps still degrade; REST/GraphQL lanes unaffected.
+  - **R2-S1** — `aggregate.py:summarize_group` now carries `functional_median`/`functional_iqr`/
+    `n_functional`; the leaderboard gains a conditional `functional (med)` column.
+  - **R3-S1 / R1-F2** — `runner.persist_cell_atomic` flushes each cell to `cells/<id>.json`
+    (tmp+`os.replace`) via `run_matrix(on_cell=)`, so a mid-run crash no longer loses the batch.
+- **Still open** (accepted, not yet implemented — Appendix C kept live):
   - **R2-S2** — partial: `$PORT` injection is implemented (`contract.py`), but nothing detects/rewrites a
     model that hardcodes a port and ignores `$PORT` (would false-degrade).
   - **R2-S3** — known-broken-fixture assertion specificity not yet verified per-RPC.
@@ -258,24 +258,22 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | R1-S3 | Explicit egress-denial test (external IP fails, loopback succeeds) | R1 gemini-3.1-pro | Implemented: `test_benchmark_sandbox_service.py::test_loopback_profile_allows_localhost_denies_egress`. | 2026-06-19 |
 | R1-S1 | Durable batch root + cells.json/report.md (away from $TMPDIR) | R1 gemini-3.1-pro | Implemented (FR-T2-PERSIST core): `run_behavioral_pilot.py` writes `cells.json`+`report.md` under a caller-provided `batch_root`; `rescore_behavioral.py` re-scores from it. (Incremental flush is the open R3-S1 below.) | 2026-06-19 |
 | R1-S2 | Multi-path proto provisioning + degrade on missing | R1 gemini-3.1-pro | Implemented: `provision.py`/`provision_workdir` place the proto at conventional paths; missing → degrade with attempted path in provenance. | 2026-06-19 |
+| R3-F3 | Floor model-caused (off-contract dep) launch failures, don't degrade | R3 claude-3-5-sonnet | Implemented (commit `46134128`): `execute._is_off_contract_dep` classifies a missing module vs the wire contract → `BehavioralResult.model_fault`; runner threads `functional_model_fault` to `scoring.compute_composite`, which floors to `COMPILE_FLOOR`. Resolves the inversion (off-contract `express` now 0.15 < an honest-but-failing service's 0.5). Tests in `test_benchmark_functional_composite.py` + `test_execute_dep_classification.py`. | 2026-06-19 |
+| R1-F2 | Partial-run durability — incremental/atomic per-cell flush | R1 gemini-3.1-pro | Implemented (commit `46134128`): `runner.persist_cell_atomic` writes `cells/<id>.json` (tmp+`os.replace`) per cell via `run_matrix(on_cell=)`; a mid-run crash leaves completed cells on disk. Test `test_incremental_persist_survives_midrun_crash`. | 2026-06-19 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none) | — | — | No suggestion was rejected outright. The three accepted-but-unimplemented items (R2-S1, R3-S1/R1-F2, R3-F3/R3-S3) remain **open** in Appendix C / §0c rather than rejected, and R2-S2/R2-S3 are partial — none belong here yet. | 2026-06-19 |
+| (none) | — | — | No suggestion was rejected outright. R2-S2/R2-S3 remain **partial/open** in Appendix C / §0c rather than rejected — none belong here yet. | 2026-06-19 |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
-> **Triage status (v0.3):** R1/R2/R3 below were triaged 2026-06-19. Items dispositioned **Applied** are
-> in Appendix A. The following remain **open** (accepted, not yet implemented) and are the live v0.3
-> backlog: **R2-S1** (no `functional_median`/`functional_iqr` in `aggregate.py`), **R3-S1 / R1-F2**
-> (persistence written once at end-of-run, no incremental/atomic per-cell flush), **R3-F3 / R3-S3**
-> (behavioral `execute.py` degrades all missing modules — does not floor a hallucinated `express` vs a
-> protocol `@grpc/grpc-js`; the floor/degrade split lives only in `scoring.py`'s compile gate).
-> **Partial:** **R2-S2** (`$PORT` injected, but hardcoded-port detection/rewrite not built), **R2-S3**
-> (known-broken-fixture per-RPC assertion specificity unverified). The original round blocks are
-> preserved verbatim below.
+> **Triage status (v0.3, updated 2026-06-19):** R1/R2/R3 below were triaged; items dispositioned
+> **Applied** are in Appendix A. **R3-F3/R3-S3, R2-S1, and R3-S1/R1-F2 were implemented after the
+> triage (commit `46134128`)** and are now in Appendix A. **Still open:** **R2-S2** (`$PORT` injected,
+> but hardcoded-port detection/rewrite not built), **R2-S3** (known-broken-fixture per-RPC assertion
+> specificity unverified). The original round blocks are preserved verbatim below.
 
 #### Review Round R1 — gemini-3.1-pro — 2026-06-15
 
