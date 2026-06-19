@@ -97,6 +97,7 @@ _SETTINGS_KINDS: frozenset = frozenset({"python-settings"})
 _IMPORTS_KINDS: frozenset = frozenset({"python-import", "python-import-surface"})
 _CONTEXT_CLIENT_KINDS: frozenset = frozenset({"python-context-client"})
 _CONTEXT_SMOKE_KINDS: frozenset = frozenset({"python-tests-cross-context"})
+_CONTEXT_INTEGRATION_KINDS: frozenset = frozenset({"python-context-integration"})
 
 
 def _renderers(
@@ -173,6 +174,7 @@ def _renderers(
         return parse_display(display_text, _pps(s))[0].get(e)
 
     from .context_client_renderer import render_context_client
+    from .context_integration_renderer import render_context_clients_module
     from .context_manifest import parse_contexts
 
     def _context_client_renderer(s: str, sf: str, e: Optional[str]) -> str:
@@ -261,6 +263,13 @@ def _renderers(
         "python-tests-routes": lambda s, sf, e: render_route_smoke_tests(s, sf),
         "python-tests-cross-context": lambda s, sf, e: (
             render_cross_context_smoke_tests(s, contexts_text or "", sf)
+            if contexts_text
+            else ""
+        ),
+        "python-context-integration": lambda s, sf, e: (
+            render_context_clients_module(
+                s, contexts_text or "", sf, project_root=project_root
+            )
             if contexts_text
             else ""
         ),
@@ -947,7 +956,7 @@ def _check_context_client_drift(
             "error", ERROR, "context-client drift check requires contexts.yaml"
         )
     from .context_client_renderer import render_context_client, _resolve_producer_spec
-    from .context_manifest import contract_sha256, filter_spec_for_client, parse_contexts
+    from .context_manifest import contract_sha256, filter_spec_for_context, parse_contexts
 
     producer_id = embedded_entity(ondisk_text)
     if not producer_id:
@@ -968,7 +977,7 @@ def _check_context_client_drift(
         imports_text=imports_text,
         project_root=project_root,
     )
-    filtered = filter_spec_for_client(raw_spec, schema_text, routes=ctx.routes)
+    filtered = filter_spec_for_context(raw_spec, schema_text, ctx)
     contract_sha = contract_sha256(filtered)
     reason = context_client_stale_reason(
         ondisk_text,
@@ -1035,6 +1044,46 @@ def _check_context_smoke_drift(
     )
 
 
+def _check_context_integration_drift(
+    schema_text: str,
+    contexts_text: Optional[str],
+    ondisk_text: str,
+    source_file: str,
+    *,
+    project_root: Optional[str] = None,
+) -> DriftResult:
+    """Drift for ``python-context-integration`` — schema + contexts manifest."""
+    if contexts_text is None:
+        return DriftResult(
+            "error", ERROR, "context integration drift check requires contexts.yaml"
+        )
+    from .context_integration_renderer import render_context_clients_module
+
+    reason = context_smoke_stale_reason(
+        ondisk_text,
+        schema_sha=schema_sha256(schema_text),
+        contexts_sha=schema_sha256(contexts_text),
+    )
+    if reason is not None:
+        status = "tampered" if "missing" in reason else "stale"
+        return DriftResult(status, DRIFT, reason)
+    rendered = render_context_clients_module(
+        schema_text,
+        contexts_text,
+        source_file,
+        project_root=project_root,
+    )
+    if rendered != ondisk_text:
+        return DriftResult(
+            "tampered",
+            DRIFT,
+            "owned context integration registry differs from a fresh render",
+        )
+    return DriftResult(
+        "in_sync", IN_SYNC, "owned context integration registry matches schema + contexts"
+    )
+
+
 def check_drift(
     schema_text: str,
     ondisk_text: Optional[str],
@@ -1092,6 +1141,14 @@ def check_drift(
     if kind in _CONTEXT_SMOKE_KINDS:
         return _check_context_smoke_drift(
             schema_text, contexts_text, ondisk_text, source_file
+        )
+    if kind in _CONTEXT_INTEGRATION_KINDS:
+        return _check_context_integration_drift(
+            schema_text,
+            contexts_text,
+            ondisk_text,
+            source_file,
+            project_root=project_root,
         )
     if kind == "python-openapi-contract" and (
         api_text is not None or embedded_api_sha(ondisk_text) is not None

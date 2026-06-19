@@ -1,0 +1,5 @@
+// Consumer schema has no Note entity — cross-repo DTO namespace diverges from producer.
+model DashboardJob {
+  id   String @id @default(cuid())
+  name String
+}

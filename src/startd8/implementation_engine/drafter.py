@@ -969,6 +969,10 @@ def build_supplementary_sections(
     if ui:
         p1_sections.append(ui if isinstance(ui, str) else str(ui))
 
+    ci = context.get("context_integration")
+    if ci:
+        p1_sections.append(ci if isinstance(ci, str) else str(ci))
+
     # P1: Python house-style convention authority (RUN-036 convention half) — same 8b authority
     # micro-prime receives, so the lead/cloud path (test features, 0-element features) generates
     # FastAPI/SQLModel + `app.tables` instead of inventing Flask/SQLAlchemy/`app.models`.

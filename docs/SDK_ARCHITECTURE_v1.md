@@ -199,6 +199,27 @@ PydanticSQLModelProvider, CANONICAL_LAYOUT
 CLI: `startd8 wireframe` (preview), `startd8 generate {frontend|backend|scaffold|views}`,
 `startd8 polish`. The deterministic toolchain gate lives in `validators/python_toolchain.py`.
 
+#### 9.1 Inter-context seam (OpenAPI Role 3)
+
+When a modular monolith splits across process boundaries, `prisma/contexts.yaml` declares outbound
+producer contexts. The `$0` cascade emits typed consumer artifacts:
+
+| Artifact | Purpose |
+|----------|---------|
+| `clients/{id}_client.py` | Typed httpx wrapper pinned by `contract-sha256` |
+| `app/context_clients.py` | Factory registry (`get_{id}_client()`) for bucket-3 integration |
+| `clients/_context_otel.py` | CLIENT spans on outbound HTTP (`io.startd8.context.*`) |
+| `tests/test_cross_context_smoke.py` | Local + remote list+create smoke |
+
+**Producer promotion:** `startd8 generate backend --export-openapi openapi/{id}.json`  
+**Consumer pin:** `contract: openapi/{id}.json` in `contexts.yaml` (M5: divergent Prisma OK)  
+**Drift:** `schema-sha256` + `contexts-sha256` + `contract-sha256` on `--check`  
+**Prime integration:** `collect_context_integration_prompt()` threads outbound clients into spec/draft  
+**Fixtures:** `docs/design/deterministic-openapi/fixtures/{two-app-seam,cross-repo-seam}/`
+
+Skip-hook kinds: `python-context-client`, `python-context-otel`, `python-context-integration`,
+`python-tests-cross-context`. See `OPENAPI_ROLE3_REQUIREMENTS.md` (v0.3).
+
 ### 10. Contractors (`contractors/`) — LLM-assisted integration
 
 Multi-phase workflow orchestration for the integration passes (bucket 3):

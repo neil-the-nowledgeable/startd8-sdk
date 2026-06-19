@@ -196,6 +196,10 @@ def render_backend(
         ))
     if contexts_text:
         from .context_client_renderer import render_context_clients
+        from .context_integration_renderer import (
+            CONTEXT_INTEGRATION_PATH,
+            render_context_clients_module,
+        )
         from .context_otel_renderer import CONTEXT_OTEL_PATH, render_context_otel
 
         out.append((
@@ -215,6 +219,14 @@ def render_backend(
                 project_root=project_root,
             )
         )
+        integration = render_context_clients_module(
+            schema_text,
+            contexts_text,
+            source_file,
+            project_root=project_root,
+        )
+        if integration:
+            out.append((CONTEXT_INTEGRATION_PATH, integration))
         out.append((
             CROSS_CONTEXT_SMOKE_TESTS_PATH,
             render_cross_context_smoke_tests(schema_text, contexts_text, source_file),

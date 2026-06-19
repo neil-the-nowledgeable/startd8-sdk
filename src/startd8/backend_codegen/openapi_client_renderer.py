@@ -216,6 +216,115 @@ def _entity_methods(
     return "\n".join(lines)
 
 
+def _response_json_kind(op: Dict[str, Any]) -> str:
+    """Return ``none``, ``object``, or ``array`` for the 200 JSON response."""
+    content = (
+        op.get("responses", {})
+        .get("200", {})
+        .get("content", {})
+        .get("application/json", {})
+    )
+    schema = content.get("schema", {})
+    if schema.get("type") == "array":
+        return "array"
+    if schema.get("$ref") or schema.get("type") == "object":
+        return "object"
+    return "none"
+
+
+def _crud_method_name(http_method: str, path: str) -> Optional[str]:
+    """Map standard collection/item CRUD paths to ``list_/create_/get_/…`` names."""
+    segment = _entity_segment(path)
+    if not segment:
+        return None
+    is_collection = path.endswith("/") and "{" not in path
+    is_item = "{" in path
+    if is_collection:
+        if http_method == "GET":
+            return f"list_{segment}"
+        if http_method == "POST":
+            return f"create_{segment}"
+    elif is_item:
+        if http_method == "GET":
+            return f"get_{segment}"
+        if http_method == "PATCH":
+            return f"update_{segment}"
+        if http_method == "DELETE":
+            return f"delete_{segment}"
+        if http_method == "PUT":
+            return f"update_{segment}"
+    return None
+
+
+def _entity_segment(path: str) -> str:
+    return path.strip("/").split("/")[0].lower()
+
+
+def _pinned_spec_methods(
+    spec: Dict[str, Any],
+    *,
+    use_traced_request: bool = False,
+) -> str:
+    """Emit httpx methods from a filtered OpenAPI spec without consumer Prisma DTOs (M5)."""
+    blocks: List[str] = []
+    for path, path_item in spec.get("paths", {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        for method, op in path_item.items():
+            if method not in _HTTP_METHODS or not isinstance(op, dict):
+                continue
+            http_method = method.upper()
+            fn = _crud_method_name(http_method, path) or _overlay_method_name(
+                http_method, path
+            )
+            params = _path_param_names(path)
+            sig_parts = [f"{name}: str" for name in params]
+            has_body = bool(
+                op.get("requestBody", {})
+                .get("content", {})
+                .get("application/json")
+            )
+            if has_body:
+                sig_parts.append("body: dict[str, object]")
+            signature = ", ".join(sig_parts)
+            if signature:
+                signature = ", " + signature
+
+            call_kw = ", json=body" if has_body else ""
+            if use_traced_request:
+                http_line = (
+                    f"        resp = self._request({http_method!r}, "
+                    f"{_client_url_expr(path)}{call_kw})"
+                )
+            else:
+                http_line = (
+                    f"        resp = self._client.{method.lower()}"
+                    f"({_client_url_expr(path)}{call_kw})"
+                )
+
+            resp_kind = _response_json_kind(op)
+            if resp_kind == "array":
+                ret = " -> list[dict[str, object]]"
+                ret_line = "        return resp.json()"
+            elif resp_kind == "object":
+                ret = " -> dict[str, object]"
+                ret_line = "        return resp.json()"
+            else:
+                ret = " -> None"
+                ret_line = None
+
+            lines = [
+                f"    def {fn}(self{signature}){ret}",
+                f'        """``{http_method} {path}`` — pinned contract operation."""',
+                http_line,
+                "        resp.raise_for_status()",
+            ]
+            if ret_line:
+                lines.append(ret_line)
+            blocks.append("\n".join(lines))
+    return "\n\n\n".join(blocks)
+
+
 def render_http_client(
     schema_text: str,
     source_file: str = "prisma/schema.prisma",

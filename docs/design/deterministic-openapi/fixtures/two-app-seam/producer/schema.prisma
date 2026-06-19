@@ -1,0 +1,5 @@
+// Minimal producer bounded context for Role 3 M4 two-app seam fixture.
+model Note {
+  id    String @id @default(cuid())
+  title String
+}

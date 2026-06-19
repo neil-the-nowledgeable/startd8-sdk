@@ -16,7 +16,7 @@ from ._headers import header_context_client
 from .context_manifest import (
     OutboundContext,
     contract_sha256,
-    filter_spec_for_client,
+    filter_spec_for_context,
     load_contract_spec,
     parse_contexts,
 )
@@ -25,6 +25,7 @@ from .openapi_client_renderer import (
     _entity_methods,
     _op_json_ref,
     _overlay_client_methods,
+    _pinned_spec_methods,
     _prisma_dto_names,
 )
 from .openapi_contract_renderer import _model_names, _project_openapi
@@ -89,37 +90,43 @@ def render_context_client(
         imports_text=imports_text,
         project_root=project_root,
     )
-    spec = filter_spec_for_client(raw_spec, schema_text, routes=ctx.routes)
+    spec = filter_spec_for_context(raw_spec, schema_text, ctx)
     contract_sha = contract_sha256(spec)
     class_name = _class_name(ctx.id)
+    pinned = not ctx.local
 
     table_imports: Set[str] = set()
-    for n in _model_names(schema, schema_text):
-        table_imports.add(n)
-        table_imports.add(f"{n}Create")
-        table_imports.add(f"{n}Read")
-        if _pk_field(schema, n) is not None:
-            table_imports.add(f"{n}Update")
-    for _, path_item in spec.get("paths", {}).items():
-        if not isinstance(path_item, dict):
-            continue
-        for method in path_item:
-            op = path_item.get(method)
-            if not isinstance(op, dict):
+    if not pinned:
+        for n in _model_names(schema, schema_text):
+            table_imports.add(n)
+            table_imports.add(f"{n}Create")
+            table_imports.add(f"{n}Read")
+            if _pk_field(schema, n) is not None:
+                table_imports.add(f"{n}Update")
+        for _, path_item in spec.get("paths", {}).items():
+            if not isinstance(path_item, dict):
                 continue
-            for dto in (_op_json_ref(op, response=False), _op_json_ref(op, response=True)):
-                if dto and dto in _prisma_dto_names(schema, schema_text):
-                    table_imports.add(dto)
+            for method in path_item:
+                op = path_item.get(method)
+                if not isinstance(op, dict):
+                    continue
+                for dto in (_op_json_ref(op, response=False), _op_json_ref(op, response=True)):
+                    if dto and dto in _prisma_dto_names(schema, schema_text):
+                        table_imports.add(dto)
 
-    blocks = [
-        _entity_methods(schema, schema_text, n, use_traced_request=True)
-        for n in _model_names(schema, schema_text)
-    ]
-    overlay_block = _overlay_client_methods(
-        schema, schema_text, spec, use_traced_request=True
-    )
-    if overlay_block:
-        blocks.append(overlay_block)
+    if pinned:
+        method_block = _pinned_spec_methods(spec, use_traced_request=True)
+        blocks = [method_block] if method_block else []
+    else:
+        blocks = [
+            _entity_methods(schema, schema_text, n, use_traced_request=True)
+            for n in _model_names(schema, schema_text)
+        ]
+        overlay_block = _overlay_client_methods(
+            schema, schema_text, spec, use_traced_request=True
+        )
+        if overlay_block:
+            blocks.append(overlay_block)
 
     header = header_context_client(
         source_file,

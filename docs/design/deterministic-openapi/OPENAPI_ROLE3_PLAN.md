@@ -1,8 +1,8 @@
 # OpenAPI Role 3 — Inter-Context Seam (Implementation Plan)
 
-**Version:** 0.2 (M0–M3 shipped — paired with Requirements v0.2)
+**Version:** 0.3 (M0–M5 + P2 shipped)
 **Date:** 2026-06-19
-**Status:** ✅ Shipped on `main` (2026-06-19) — see `OPENAPI_ROLE3_NEXT_STEPS.md`
+**Status:** ✅ Shipped on `main` — see `OPENAPI_ROLE3_NEXT_STEPS.md`
 **Paired requirements:** `OPENAPI_ROLE3_REQUIREMENTS.md`
 
 ---
@@ -76,6 +76,11 @@
 - Deploy harness `context_smoke` ladder stage; env `STARTD8_CONTEXT_<ID>_BASE_URL`
 - Generated remote smoke tests in `test_cross_context_smoke.py`
 
+### M4 — Two-app seam fixture ✅
+- `docs/design/deterministic-openapi/fixtures/two-app-seam/` (producer export + consumer pin)
+- `tests/unit/backend_codegen/test_openapi_role3_m4_fixture.py` (5 tests)
+- `scripts/openapi_role3_m4_smoke.sh` — one-command smoke
+
 ### Deferred → see `OPENAPI_ROLE3_NEXT_STEPS.md`
 
 M4 two-app fixture, M5 cross-repo contract filter, bucket-3 Prime integration wiring.
@@ -115,7 +120,10 @@ M4 two-app fixture, M5 cross-repo contract filter, bucket-3 Prime integration wi
 | M2 (cross-context smoke) | ✅ |
 | M2c (remote producer smoke) | ✅ |
 | M3 (assembly-inputs docs) | ✅ |
+| M4 (two-app fixture) | ✅ |
+| P2 (bucket-3 Prime integration) | ✅ |
+| M5 (cross-repo pinned contract) | ✅ |
 
 ---
 
-*Plan v0.2 — M0–M3 + M2b + M2c shipped on `main`. Next: `OPENAPI_ROLE3_NEXT_STEPS.md`.*
+*Plan v0.3 — fully shipped on `main`. Continuation: deferred polyglot tracks in `OPENAPI_ROLE3_NEXT_STEPS.md`.*

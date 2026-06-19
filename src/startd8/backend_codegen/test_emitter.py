@@ -750,7 +750,7 @@ def test_{test_name}_remote_producer_smoke():
     from pathlib import Path
 
     from startd8.backend_codegen.context_manifest import (
-        filter_spec_for_client,
+        filter_spec_for_context,
         load_contract_spec,
         parse_contexts,
     )
@@ -770,7 +770,7 @@ def test_{test_name}_remote_producer_smoke():
     root = Path(".").resolve()
     raw = load_contract_spec(ctx.contract, project_root=root)
     schema_text = (root / "prisma" / "schema.prisma").read_text(encoding="utf-8")
-    spec = filter_spec_for_client(raw, schema_text, routes=ctx.routes)
+    spec = filter_spec_for_context(raw, schema_text, ctx)
     outcome = run_remote_producer_smoke(base_url, spec=spec)
     assert outcome.status == "pass", outcome.reason or outcome.status
 '''

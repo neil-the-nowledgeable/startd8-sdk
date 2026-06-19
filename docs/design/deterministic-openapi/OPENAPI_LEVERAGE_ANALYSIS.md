@@ -84,12 +84,16 @@ surface** — non-CRUD routes, auth schemes, pagination, error envelopes. Enable
 onboarding and raises the deterministic ceiling for LLM-authored endpoints. Requires explicit
 two-contract reconciliation (Prisma = data, OpenAPI = surface). See §5 open questions.
 
-### Role 3 — OpenAPI as the **inter-context seam** *(architectural end-state)*
+### Role 3 — OpenAPI as the **inter-context seam** *(shipped on `main` — v0.3)*
 
 When a bounded context splits from the modular monolith (`IDEAL_TARGET_ARCHITECTURE` §6), the
 in-process Pydantic contract promotes to a served OpenAPI spec and the SDK generates the consuming
-context's typed client. Role 1's static emitter + client generator become the promotion mechanism.
-Python-homogeneous services use OpenAPI; polyglot uses gRPC/proto (`ProtoStubProvider`).
+context's typed client. Shipped path: `prisma/contexts.yaml` → `clients/{id}_client.py` +
+`app/context_clients.py` (P2) + cross-context smoke + pinned-contract filtering for divergent
+schemas (M5). Python-homogeneous services use OpenAPI; polyglot uses gRPC/proto (`ProtoStubProvider`).
+
+**Docs:** `OPENAPI_ROLE3_REQUIREMENTS.md` (v0.3), `OPENAPI_ROLE3_PLAN.md`, fixtures under
+`docs/design/deterministic-openapi/fixtures/{two-app-seam,cross-repo-seam}/`.
 
 ---
 
@@ -132,7 +136,7 @@ prisma/schema.prisma (+ optional manifests)
 | **1d** | Python `httpx` typed client emitter | Fulfills IDEAL_TARGET_ARCHITECTURE §4 escape hatch |
 | **2** | Extract shared schema-resolution from `deploy_harness/smoke.py` | DRY for harness + codegen |
 | **3** | Role 2 (OpenAPI-as-input) | ✅ Shipped — `api.yaml` overlay merge |
-| **4** | Role 3 (inter-context promotion) | ✅ Shipped — see `OPENAPI_ROLE3_NEXT_STEPS.md` for M4+ |
+| **4** | Role 3 (inter-context promotion) | ✅ Shipped on `main` (M0–M5 + P2) — `OPENAPI_ROLE3_*`, `scripts/openapi_role3_{m4,m5}_smoke.sh` |
 
 ---
 
@@ -173,5 +177,5 @@ Role 1 is successful when:
 
 ---
 
-*This analysis informs `OPENAPI_ROLE1_REQUIREMENTS.md` (v0.2) and `OPENAPI_ROLE1_PLAN.md`. Role 2/3
-are documented here for architectural continuity but are explicitly out of Role 1 scope.*
+*This analysis informed Role 1–3 implementation. Role 1–3 are shipped on `main`; see
+`OPENAPI_ROLE3_NEXT_STEPS.md` for deferred polyglot tracks.*

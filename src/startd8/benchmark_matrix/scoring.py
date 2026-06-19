@@ -258,15 +258,19 @@ def run_gate(name: str, command: Optional[List[str]], file_path: Path,
 def compute_composite(structural: Optional[float], compile_gate: GateResult,
                       lint_gate: Optional[GateResult] = None, *,
                       functional: Optional[float] = None,
-                      functional_degraded: bool = False) -> CompositeScore:
+                      functional_degraded: bool = False,
+                      functional_model_fault: bool = False) -> CompositeScore:
     """Combine the structural score with the compile gate (+ optional lint) per FR-11.
 
     ``functional`` (FR-T2-COMPOSITE): behavioral coverage ∈ [0,1] from executing the service. When
     present it is folded in as an added weighted term (``FUNCTIONAL_WEIGHT``); the compile gate still
     floors first (we never reward behavior on non-compiling code). ``functional_degraded`` marks a
     service that HAS a behavioral suite which could not be run (server never ready / sandbox
-    violation) → the term is recorded missing/degraded (FR-32), never scored 0. Both default off,
-    so callers that pass neither get byte-identical behavior to before."""
+    violation) → the term is recorded missing/degraded (FR-32), never scored 0.
+    ``functional_model_fault`` (R3-F3 / FR-T2-DEPS2): the model built a service that cannot honor its
+    own wire contract (e.g. a gRPC service that require()s an HTTP framework) — that is NOT a harness
+    gap, so it is real zero coverage and is floored to ``COMPILE_FLOOR``, never degraded to a free
+    structural score. All three default off, so callers that pass none get byte-identical behavior."""
     s = structural if structural is not None else 0.0
     available, missing = [], []
 
@@ -297,7 +301,15 @@ def compute_composite(structural: Optional[float], compile_gate: GateResult,
 
     # Behavioral (functional) term — FR-T2-COMPOSITE. Only when a suite actually produced coverage;
     # "no suite for this service" is neither available nor missing (existing terms stand, unchanged).
-    if functional is not None:
+    if functional_model_fault:
+        # R3-F3: model built the wrong wire protocol for its contract → real zero coverage, floored.
+        # Floors below the ~0.5 an honest service that launched-but-failed-RPCs scores, resolving the
+        # inversion where a hallucinated-framework cell would otherwise keep a degraded structural 1.0.
+        available.append("functional")
+        value = min(value, COMPILE_FLOOR)
+        fnote = f"functional 0.00 — off-contract (model fault → floored to {COMPILE_FLOOR})"
+        note = f"{note}; {fnote}" if note else fnote
+    elif functional is not None:
         available.append("functional")
         value = FUNCTIONAL_WEIGHT * functional + (1.0 - FUNCTIONAL_WEIGHT) * value
         fnote = f"functional {functional:.2f} (w={FUNCTIONAL_WEIGHT})"
@@ -318,12 +330,14 @@ def compute_composite(structural: Optional[float], compile_gate: GateResult,
 def score_file(file_path: Path, profile, *, cfg: Optional[SandboxConfig] = None,
                structural: Optional[float] = None, run_lint: bool = True,
                functional: Optional[float] = None,
-               functional_degraded: bool = False) -> CompositeScore:
+               functional_degraded: bool = False,
+               functional_model_fault: bool = False) -> CompositeScore:
     """Convenience: compile-gate (+ optional lint) a generated file via its LanguageProfile.
 
-    ``functional`` / ``functional_degraded`` (FR-T2-COMPOSITE) are passed straight through to
-    :func:`compute_composite` — the behavioral coverage is computed by the caller (the runner, via
-    ``behavioral.run_behavioral_cell``) since it requires executing the service, not just the file."""
+    ``functional`` / ``functional_degraded`` / ``functional_model_fault`` (FR-T2-COMPOSITE, R3-F3) are
+    passed straight through to :func:`compute_composite` — the behavioral coverage is computed by the
+    caller (the runner, via ``behavioral.run_behavioral_cell``) since it requires executing the
+    service, not just the file."""
     fp = Path(file_path)
     if not fp.exists():
         return CompositeScore(value=min(structural or 0.0, COMPILE_FLOOR), structural=structural,
@@ -378,7 +392,8 @@ def score_file(file_path: Path, profile, *, cfg: Optional[SandboxConfig] = None,
                 )
         lint = run_gate("lint", lint_cmd, gate_fp, cfg) if lint_cmd else None
         return compute_composite(structural, gate, lint,
-                                 functional=functional, functional_degraded=functional_degraded)
+                                 functional=functional, functional_degraded=functional_degraded,
+                                 functional_model_fault=functional_model_fault)
     finally:
         if _vue_tmp is not None:
             try:

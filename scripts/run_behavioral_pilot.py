@@ -127,7 +127,7 @@ def main(argv=None) -> int:
     import json
     from datetime import datetime
 
-    from startd8.benchmark_matrix.runner import SubprocessCellExecutor
+    from startd8.benchmark_matrix.runner import SubprocessCellExecutor, persist_cell_atomic
 
     # FR-T2-PERSIST: durable, inspectable batch root (NOT $TMPDIR, which the OS reaps). Per-cell
     # workdirs land here; cells.json + report.md are written here for re-scoring / audit.
@@ -136,8 +136,15 @@ def main(argv=None) -> int:
     batch_root.mkdir(parents=True, exist_ok=True)
     print(f"batch root (persistent): {batch_root}")
 
+    # R3-S1 / R1-F2: flush each finished cell atomically to cells/<id>.json as it completes, so a
+    # mid-run crash / OOM / timeout on a later cell never loses the expensive cells already scored
+    # (the v0.2 single end-of-run write lost the whole batch on any interruption). cells.json below is
+    # the convenience aggregate; these per-cell files are the durable source of truth.
+    cells_dir = batch_root / "cells"
+
     executor = SubprocessCellExecutor(seeds_dir, behavioral=True, workdir_root=str(batch_root))
-    result = run_matrix(spec, executor, languages=languages)
+    result = run_matrix(spec, executor, languages=languages,
+                        on_cell=lambda cr: persist_cell_atomic(cells_dir, cr))
     agg = aggregate_cells(result.cells)
 
     # Functional-coverage section (OQ-T2-2) — written into the report too, not just printed.

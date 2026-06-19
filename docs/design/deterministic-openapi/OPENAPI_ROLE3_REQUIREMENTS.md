@@ -1,8 +1,8 @@
 # OpenAPI Role 3 — Inter-Context Seam (Requirements)
 
-**Version:** 0.2 (M0–M3 shipped)
+**Version:** 0.3 (M0–M4 + P2 + M5 shipped)
 **Date:** 2026-06-19
-**Status:** ✅ Shipped on `main` (2026-06-19) — next steps in `OPENAPI_ROLE3_NEXT_STEPS.md`
+**Status:** ✅ Shipped on `main` — continuation in `OPENAPI_ROLE3_NEXT_STEPS.md`
 **Owner:** SDK / backend_codegen + integrations
 **Motivated by:** `OPENAPI_LEVERAGE_ANALYSIS.md` Role 3 — promote the static contract into the
 **cross-bounded-context** integration seam when a modular monolith splits
@@ -47,7 +47,13 @@ outbound:
     local: true              # OR contract: openapi/catalog.json (relative to project root)
     base_url: "http://..."   # runtime doc comment only; override in __init__
     routes: crud             # crud | all_json
+    schemas:                 # optional — explicit DTO allowlist (all_json / pinned contracts)
+      - InvoiceRead
 ```
+
+**M5 cross-repo (pinned `contract:`):** filtering uses producer OpenAPI paths/schemas directly;
+the consumer Prisma schema is **not** required to share entity names. Use `routes: all_json` for
+non-CRUD producer surfaces; optional `schemas:` restricts emitted component schemas.
 
 ---
 
@@ -111,7 +117,14 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 - **FR-8** `startd8 generate backend --contexts <file>` drives consumer client emission; absent → SOTTO.
 - **FR-9** `startd8 generate backend --export-openapi` remains the producer-side promotion command.
 
-### Observability (OQ-5)
+### Cross-repo contracts (M5)
+- **FR-12** Pinned `contract:` entries filter the producer spec **without** consumer Prisma entity
+  overlap (`pinned_contract` path in `filter_spec_for_client`).
+- **FR-13** Optional `schemas:` list in `contexts.yaml` restricts emitted component schemas for
+  `routes: all_json` or pinned CRUD contracts.
+- **FR-14** Pinned clients emit spec-driven methods (`dict[str, object]` bodies) when consumer
+  DTOs are absent — no `app.tables` imports for remote-only entities.
+
 - **FR-10** Emit ``clients/_context_otel.py`` when contexts manifest present; each generated
   ``clients/{id}_client.py`` wraps HTTP via ``_request()`` → ``trace_outbound_request``.
 - **FR-11** Span naming: ``context.outbound.<producer_id> <METHOD> <path>`` (CLIENT kind).
@@ -123,7 +136,7 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 
 ## 4. Open Questions — Closed
 
-All five open questions resolved in §0.1. M0–M3 + M2b + M2c shipped on `main`.
+All five open questions resolved in §0.1. M0–M5 + P2 shipped on `main`.
 
 ---
 
@@ -137,8 +150,10 @@ All five open questions resolved in §0.1. M0–M3 + M2b + M2c shipped on `main`
 | Local outbound context list+create smoke (TestClient shim) | ✅ | M2 |
 | Remote producer smoke via deploy harness | ✅ | M2c |
 | Assembly-inputs template documents `contexts` | ✅ | M3 |
-| $0 LLM; deterministic skip-hook recognition | ✅ | M1 |
+| Cross-repo pinned contract without consumer entity overlap | ✅ | M5 |
+| Prime bucket-3 integration prompt wiring | ✅ | P2 |
+| Two-app + cross-repo fixture smoke | ✅ | M4/M5 |
 
 ---
 
-*v0.2 — Reflective loop closed; shipped on `main`. Continuation: `OPENAPI_ROLE3_NEXT_STEPS.md`.*
+*v0.3 — shipped on `main`. Deferred tracks: `OPENAPI_ROLE3_NEXT_STEPS.md` §Deferred.*

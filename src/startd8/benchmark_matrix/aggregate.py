@@ -63,6 +63,11 @@ def summarize_group(cells: List[CellResult], pass_threshold: float = DEFAULT_PAS
     tps = [c.tokens_per_sec for c in cells if c.tokens_per_sec is not None]
     model_times = [c.model_time_s for c in cells if c.model_time_s is not None]   # FR-SPEED-3
     model_tps = [c.model_tokens_per_sec for c in cells if c.model_tokens_per_sec is not None]
+    # R2-S1 / FR-T2-COMPOSITE: behavioral coverage distribution (None = behavioral not run for the
+    # cell, so it's neither in the numerator nor denominator — the functional column simply stays
+    # absent for non-behavioral runs).
+    functionals = [c.functional_coverage for c in cells
+                   if getattr(c, "functional_coverage", None) is not None]
     ran = [c for c in cells if c.status not in _EXCLUDED_STATUSES]
     passes = sum(1 for c in cells if _is_pass(c, pass_threshold))
     infra = sum(1 for c in cells if c.status == STATUS_INFRA_FAIL)
@@ -81,6 +86,9 @@ def summarize_group(cells: List[CellResult], pass_threshold: float = DEFAULT_PAS
         "tokens_per_sec_median": _median(tps),            # pipeline throughput
         "model_time_median_s": _median(model_times),      # FR-SPEED-3: pure model API time
         "model_tokens_per_sec_median": _median(model_tps),  # FR-SPEED-3: pure-model throughput
+        "functional_median": _median(functionals),         # R2-S1: behavioral coverage (median)
+        "functional_iqr": _iqr(functionals),               # R2-S1: behavioral coverage spread
+        "n_functional": len(functionals),                  # cells with a behavioral score
     }
 
 
@@ -177,15 +185,23 @@ def build_matrix_markdown(spec_name: str, spec_hash: str, agg: Dict) -> str:
         "",
         "## Leaderboard (by median quality, then cost)",
         "",
-        "| Rank | Model | quality (median) | IQR | pass-rate | catastrophic | cost $ | model tok/s med |",
-        "|---:|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    # R2-S1: surface a behavioral-coverage column only when behavioral actually ran (keeps the
+    # leaderboard byte-identical for non-behavioral runs). `functional (med)` = median suite coverage.
+    has_func = any(s.get("functional_median") is not None for s in agg["by_model"].values())
+    fcol = " functional (med) |" if has_func else ""
+    fsep = "---:|" if has_func else ""
+    lines += [
+        f"| Rank | Model | quality (median) | IQR |{fcol} pass-rate | catastrophic | cost $ | model tok/s med |",
+        f"|---:|---|---:|---:|{fsep}---:|---:|---:|---:|",
     ]
     for i, (model, _q, _pr, _ct) in enumerate(rank_models_by_quality(agg), 1):
         s = agg["by_model"][model]
         def f(x, p=3):
             return f"{x:.{p}f}" if isinstance(x, (int, float)) else "N/A"
+        fval = f" {f(s.get('functional_median'))} |" if has_func else ""
         lines.append(
-            f"| {i} | `{model}` | {f(s['quality_median'])} | {f(s['quality_iqr'])} | "
+            f"| {i} | `{model}` | {f(s['quality_median'])} | {f(s['quality_iqr'])} |{fval} "
             f"{f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {f(s['cost_total_usd'],4)} | "
             f"{f(s.get('model_tokens_per_sec_median'),1)} |"  # FR-SPEED-2 headline; full breakdown in Speed
         )

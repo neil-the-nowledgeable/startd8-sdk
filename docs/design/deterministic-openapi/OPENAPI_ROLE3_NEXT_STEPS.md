@@ -1,13 +1,13 @@
 # OpenAPI Role 3 — Suggested Next Steps
 
 **Date:** 2026-06-19  
-**Status:** Handoff after v0.2 ship to `main`  
-**Shipped:** M0–M3 + M2b (OTel) + M2c (remote smoke) — merge `2d474bf2` + review fixes `a7bc68e6`  
-**Paired docs:** `OPENAPI_ROLE3_REQUIREMENTS.md`, `OPENAPI_ROLE3_PLAN.md`
+**Status:** ✅ Fully shipped on `main` (M0–M5 + P2 + P4 doc hygiene)  
+**Shipped:** M0–M3 + M2b (OTel) + M2c (remote smoke) + M4 + P2 + M5  
+**Paired docs:** `OPENAPI_ROLE3_REQUIREMENTS.md` (v0.3), `OPENAPI_ROLE3_PLAN.md` (v0.3)
 
 ---
 
-## What shipped (v0.2 recap)
+## What shipped (full recap)
 
 | Milestone | Deliverable |
 |-----------|-------------|
@@ -17,13 +17,29 @@
 | M2b | `clients/_context_otel.py` — CLIENT spans on outbound HTTP (OQ-5) |
 | M2c | Deploy harness `context_smoke` stage + `STARTD8_CONTEXT_<ID>_BASE_URL` |
 | M3 | `ASSEMBLY_INPUTS_TEMPLATE.md` v0.2 + wireframe `contexts` catalog key |
+| M4 | Two-app fixture + `scripts/openapi_role3_m4_smoke.sh` |
+| P2 | Bucket-3 Prime integration (`app/context_clients.py`, prompt injection) |
+| M5 | Cross-repo pinned contract + `scripts/openapi_role3_m5_smoke.sh` |
+| P4 | Doc/capability index/SDK architecture hygiene (this pass) |
 
-**Start here on `main`:** branch from `origin/main`; do **not** continue on `feat/openapi-role3-context`
-(the worktree at `startd8-openapi-role1` is merged and may be removed).
+**Regression guard:**
+
+```bash
+pytest tests/unit/backend_codegen/test_context_*.py \
+       tests/unit/backend_codegen/test_cross_context_smoke.py \
+       tests/unit/backend_codegen/test_openapi_role3_*.py \
+       tests/unit/deploy_harness/test_context_smoke*.py -q
+```
 
 ---
 
-## Priority 1 — Prove the seam on a real two-app fixture (M4)
+## Priority 1 — Prove the seam on a real two-app fixture (M4) ✅
+
+**Shipped:** `docs/design/deterministic-openapi/fixtures/two-app-seam/` + `tests/unit/backend_codegen/test_openapi_role3_m4_fixture.py` + `scripts/openapi_role3_m4_smoke.sh`
+
+```bash
+./scripts/openapi_role3_m4_smoke.sh
+```
 
 **Goal:** End-to-end producer → export → consumer pin → smoke, outside unit tests.
 
@@ -40,48 +56,55 @@ with a one-command smoke script and CI-friendly `$0` pytest entry.
 
 ---
 
-## Priority 2 — Bucket 3 integration wiring (Prime Contractor)
+## Priority 2 — Bucket 3 integration wiring (Prime Contractor) ✅
 
-Role 3 v0.2 emits **artifacts**; it does not wire consumers into application logic. That is
-**bucket 3 (integration)** — the one in-scope LLM pass per `CLAUDE.md`.
+Role 3 v0.2 emits **artifacts**; bucket 3 wires consumers into application logic via Prime
+Contractor prompt injection.
 
-| Task | Notes |
-|------|-------|
-| Prime skip-hook recognition | Ensure `python-context-client`, `python-context-otel`, `python-tests-cross-context` kinds are documented in contractor prompts |
-| Integration pass pattern | Replace in-process `app.tables` imports with `CatalogClient` (or equivalent) where `contexts.yaml` declares an outbound producer |
-| Source-bound extraction | Thread `producer_id` + `contract-sha256` into integration provenance stamps (FR-SBE precedent) |
-| Kaizen hints | Add cross-context drift failures to post-mortem root-cause mappings |
+| Task | Status |
+|------|--------|
+| Prime skip-hook recognition | ✅ `context_integration` prompt documents `python-context-*` kinds |
+| Integration pass pattern | ✅ `app/context_clients.py` factories + `collect_context_integration_prompt()` |
+| Source-bound extraction | ✅ Provenance stamps in prompt (`producer_id`, `contract-sha256`) |
+| Kaizen hints | ✅ `context_contract_stale`, `invented_outbound_client` in `CAUSE_TO_SUGGESTION` |
+
+**Shipped:** `context_integration_renderer.py`, `contractors/context_integration.py`, spec/draft
+P0/P1 injection, drift for `python-context-integration`, `tests/fixtures/openapi_role3/integration_seed.json`.
 
 **Done when:** one cap-dev-pipe seed demonstrates a feature that calls an outbound context client
-and passes cross-context smoke in the generated test suite.
+and passes cross-context smoke in the generated test suite — satisfied by M4 fixture + P2 pytest +
+`integration_seed.json` pattern.
 
 ---
 
-## Priority 3 — Cross-repo contract story (M5)
+## Priority 3 — Cross-repo contract story (M5) ✅
 
-v0.2 filters remote contracts through the **consumer's** Prisma schema (`filter_spec_for_client`).
-That is correct for shared-entity modular monoliths but breaks when producer and consumer schemas
-diverge.
+v0.2 filtered remote contracts through the consumer Prisma schema. M5 adds **pinned-contract**
+filtering for divergent schemas.
 
-| Open question | Lean resolution |
-|---------------|-----------------|
-| Remote contract without consumer entity overlap | Add `routes: all_json` + optional `schemas: explicit` list in `contexts.yaml`; or skip Prisma filter when `contract:` is pinned |
-| Contract publish CI | Producer pipeline uploads `openapi/{id}.json` + `contract-sha256` as a versioned artifact |
-| Consumer regen workflow | Document: pin hash → edit `contexts.yaml` contract path → `generate backend --check` |
+| Task | Status |
+|------|--------|
+| Pinned contract filter | ✅ `filter_spec_for_context` — producer paths without consumer entity overlap |
+| `routes: all_json` + `schemas:` | ✅ Grammar + explicit schema allowlist |
+| Contract publish CI | ✅ `scripts/openapi_role3_publish_contract.sh` |
+| Consumer regen workflow | ✅ `fixtures/cross-repo-seam/README.md` |
+| Mismatched-schema test | ✅ `test_openapi_role3_m5_cross_repo.py` + `scripts/openapi_role3_m5_smoke.sh` |
 
 **Done when:** requirements v0.3 closes cross-repo filter semantics and adds one integration test
-with mismatched producer/consumer Prisma models.
+with mismatched producer/consumer Prisma models — **satisfied**.
+
+**Start here on `main`:** deferred polyglot tracks below — Role 3 Python seam is complete.
 
 ---
 
-## Priority 4 — Doc + hygiene (quick wins)
+## Priority 4 — Doc + hygiene (quick wins) ✅
 
-| Task | Owner |
-|------|-------|
-| Update `OPENAPI_LEVERAGE_ANALYSIS.md` §4 — Role 3 → ✅ shipped | SDK docs |
-| Bump `OPENAPI_ROLE3_*` headers to **v0.2 shipped on main** | SDK docs |
-| Remove merged `startd8-openapi-role1` worktree + local `feat/openapi-role3-context` branch | Operator |
-| Add Role 3 row to capability index / `SDK_ARCHITECTURE` inter-context section | SDK docs |
+| Task | Status |
+|------|--------|
+| Update `OPENAPI_LEVERAGE_ANALYSIS.md` §4 — Role 3 shipped | ✅ |
+| Bump `OPENAPI_ROLE3_*` headers to **v0.3 shipped on main** | ✅ |
+| Remove merged `startd8-openapi-role1` worktree + local Role 3 feature branches | ✅ (operator) |
+| Add Role 3 to capability index + `SDK_ARCHITECTURE` inter-context section | ✅ |
 
 ---
 
@@ -98,10 +121,8 @@ with mismatched producer/consumer Prisma models.
 ## Suggested branch strategy
 
 ```bash
-git checkout main && git pull origin main
-git checkout -b feat/openapi-role3-m4-fixture   # Priority 1
-# or
-git checkout -b feat/openapi-role3-integration  # Priority 2
+# M5 cross-repo: ./scripts/openapi_role3_m5_smoke.sh
+# M4 two-app: ./scripts/openapi_role3_m4_smoke.sh
 ```
 
 **Unrelated open threads (do not branch from these for Role 3):**
@@ -116,9 +137,10 @@ git checkout -b feat/openapi-role3-integration  # Priority 2
 ```bash
 pytest tests/unit/backend_codegen/test_context_*.py \
        tests/unit/backend_codegen/test_cross_context_smoke.py \
+       tests/unit/backend_codegen/test_openapi_role3_*.py \
        tests/unit/deploy_harness/test_context_smoke*.py -q
 ```
 
 ---
 
-*Handoff doc — session 2026-06-19 (OpenAPI Role 3 M0–M3 merge).*
+*Handoff doc — Role 3 fully shipped on `main` (2026-06-19).*
