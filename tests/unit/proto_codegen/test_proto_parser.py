@@ -36,3 +36,25 @@ def test_get_service_rpcs(demo_text: str):
 def test_missing_service_raises(demo_text: str):
     with pytest.raises(ValueError, match="not found"):
         get_service(parse_proto(demo_text), "NoSuchService")
+
+
+def test_streaming_rpcs_are_not_dropped():
+    """The `stream` keyword on request/response must not cause the RPC to be omitted."""
+    proto = """
+    syntax = "proto3";
+    package chat;
+
+    service ChatService {
+      rpc Send(Message) returns (Ack) {}
+      rpc Subscribe(SubReq) returns (stream Message) {}
+      rpc Upload(stream Chunk) returns (UploadAck) {}
+      rpc Echo(stream Frame) returns (stream Frame) {}
+    }
+    """
+    svc = get_service(parse_proto(proto), "ChatService")
+    by_name = {r.name: r for r in svc.rpcs}
+    assert set(by_name) == {"Send", "Subscribe", "Upload", "Echo"}
+    assert by_name["Subscribe"].response == "Message"
+    assert by_name["Upload"].request == "Chunk"
+    assert by_name["Echo"].request == "Frame"
+    assert by_name["Echo"].response == "Frame"

@@ -10,8 +10,11 @@ from .models import ProtoDocument, ProtoRpc, ProtoService
 _PACKAGE_RE = re.compile(r"^\s*package\s+(\w+)\s*;", re.M)
 _GO_PACKAGE_RE = re.compile(r'^\s*option\s+go_package\s*=\s*"([^"]+)"\s*;', re.M)
 _SERVICE_START_RE = re.compile(r"service\s+(\w+)\s*\{")
+# Tolerate the optional `stream` keyword on request/response so streaming RPCs are not
+# silently dropped from the generated skeleton (they'd otherwise leave the servicer
+# missing methods → runtime errors when gRPC dispatches the call).
 _RPC_RE = re.compile(
-    r"rpc\s+(\w+)\s*\(\s*(\w+)\s*\)\s*returns\s*\(\s*(\w+)\s*\)",
+    r"rpc\s+(\w+)\s*\(\s*(?:stream\s+)?(\w+)\s*\)\s*returns\s*\(\s*(?:stream\s+)?(\w+)\s*\)",
 )
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import typer
 from rich.console import Console
@@ -422,7 +422,7 @@ def backend(
         if drifted:
             console.print(f"[yellow]{drifted} artifact(s) drifted[/yellow]")
             raise typer.Exit(1)
-        pending = _migration_pending_hint(out, contract_path, app_manifest)
+        pending = _migration_pending_hint(out, schema, app_manifest)
         if pending:
             console.print(f"[yellow]{pending}[/yellow]")
         console.print(
@@ -886,6 +886,52 @@ def migrate(
     raise typer.Exit(0)
 
 
+def _emit_or_check_artifacts(
+    artifacts: Sequence[Tuple[str, str]],
+    out: Path,
+    *,
+    check: bool,
+    in_sync: Callable[[str, str], bool],
+    noun: str,
+    source: str,
+) -> None:
+    """Drift-check (``--check``) or write deterministic ``(rel_path, content)`` artifacts.
+
+    Shared by the ``grpc`` and ``events`` commands so the missing/drift/write loop and exit-code
+    contract live in one place. ``in_sync(rel, ondisk_text) -> bool`` decides per-file sync.
+    Always exits via ``typer.Exit`` (0=ok, 1=drift, ``_EXIT_ERROR``=write failure).
+    """
+    if check:
+        drifted = 0
+        for rel, _content in artifacts:
+            target = out / rel
+            ondisk = target.read_text(encoding="utf-8") if target.exists() else None
+            if ondisk is None:
+                drifted += 1
+                console.print(f"[yellow]missing[/yellow]: {rel}")
+            elif not in_sync(rel, ondisk):
+                drifted += 1
+                console.print(f"[yellow]drift[/yellow]: {rel}")
+        if drifted:
+            console.print(f"[yellow]{drifted} {noun}(s) drifted[/yellow]")
+            raise typer.Exit(1)
+        console.print(f"[green]in_sync[/green]: all {len(artifacts)} {noun}(s) match {source}")
+        raise typer.Exit(0)
+
+    written = 0
+    for rel, content in artifacts:
+        target = out / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            written += 1
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write {target}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+    console.print(f"[green]wrote[/green] {written} {noun} file(s) under {out}")
+    raise typer.Exit(0)
+
+
 @generate_app.command("grpc")
 def grpc(
     manifest: Path = typer.Option(
@@ -913,34 +959,14 @@ def grpc(
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
-    if check:
-        drifted = 0
-        for rel, content in artifacts:
-            target = out / rel
-            ondisk = target.read_text(encoding="utf-8") if target.exists() else None
-            if ondisk is None:
-                drifted += 1
-                console.print(f"[yellow]missing[/yellow]: {rel}")
-            elif not proto_skeleton_in_sync(manifest_text, out, rel, ondisk):
-                drifted += 1
-                console.print(f"[yellow]drift[/yellow]: {rel}")
-        if drifted:
-            console.print(f"[yellow]{drifted} gRPC skeleton(s) drifted[/yellow]")
-            raise typer.Exit(1)
-        console.print(f"[green]in_sync[/green]: all {len(artifacts)} gRPC skeleton(s) match grpc.yaml")
-        raise typer.Exit(0)
-
-    written = 0
-    for rel, content in artifacts:
-        target = out / rel
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            written += 1
-        except OSError as exc:
-            console.print(f"[red]error:[/red] cannot write {target}: {exc}")
-            raise typer.Exit(_EXIT_ERROR)
-    console.print(f"[green]wrote[/green] {written} gRPC skeleton file(s) under {out}")
+    _emit_or_check_artifacts(
+        artifacts,
+        out,
+        check=check,
+        in_sync=lambda rel, ondisk: proto_skeleton_in_sync(manifest_text, out, rel, ondisk),
+        noun="gRPC skeleton",
+        source="grpc.yaml",
+    )
 
 
 @generate_app.command("events")
@@ -1001,38 +1027,18 @@ def events(
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
-    if check:
-        drifted = 0
-        for rel, content in artifacts:
-            target = out / rel
-            ondisk = target.read_text(encoding="utf-8") if target.exists() else None
-            if ondisk is None:
-                drifted += 1
-                console.print(f"[yellow]missing[/yellow]: {rel}")
-            elif not events_file_in_sync(
-                events_text,
-                schema_text,
-                rel,
-                ondisk,
-                messaging_backend=messaging_backend,
-                package=package,
-            ):
-                drifted += 1
-                console.print(f"[yellow]drift[/yellow]: {rel}")
-        if drifted:
-            console.print(f"[yellow]{drifted} event module(s) drifted[/yellow]")
-            raise typer.Exit(1)
-        console.print(f"[green]in_sync[/green]: all {len(artifacts)} event module(s) match events.yaml")
-        raise typer.Exit(0)
-
-    written = 0
-    for rel, content in artifacts:
-        target = out / rel
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            written += 1
-        except OSError as exc:
-            console.print(f"[red]error:[/red] cannot write {target}: {exc}")
-            raise typer.Exit(_EXIT_ERROR)
-    console.print(f"[green]wrote[/green] {written} event module(s) under {out}")
+    _emit_or_check_artifacts(
+        artifacts,
+        out,
+        check=check,
+        in_sync=lambda rel, ondisk: events_file_in_sync(
+            events_text,
+            schema_text,
+            rel,
+            ondisk,
+            messaging_backend=messaging_backend,
+            package=package,
+        ),
+        noun="event module",
+        source="events.yaml",
+    )

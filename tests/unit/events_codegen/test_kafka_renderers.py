@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import re
 import tempfile
-from ast import literal_eval
 from pathlib import Path
 from types import ModuleType
 
@@ -42,12 +40,6 @@ def _load_generated_module(source: str) -> ModuleType:
     mod = ModuleType("generated_events")
     exec(compile(source, "<generated>", "exec"), mod.__dict__)  # noqa: S102
     return mod
-
-
-def _payload_schema_from_source(source: str) -> dict:
-    match = re.search(r"PAYLOAD_SCHEMA: dict\[str, Any\] = (\{.*?\n\})\n\n", source, re.DOTALL)
-    assert match, "PAYLOAD_SCHEMA not found in generated source"
-    return literal_eval(match.group(1))
 
 
 @pytest.fixture()
@@ -101,8 +93,8 @@ def test_fr_f6_payload_matches_json_schema(artifacts: dict[str, str]):
     jsonschema = pytest.importorskip("jsonschema")
 
     producer_src = artifacts["app/events/order_paid_producer.py"]
-    schema = _payload_schema_from_source(producer_src)
     mod = _load_generated_module(producer_src)
+    schema = mod.PAYLOAD_SCHEMA
 
     payload = synthesize_body(schema, schema)
     jsonschema.validate(payload, schema)

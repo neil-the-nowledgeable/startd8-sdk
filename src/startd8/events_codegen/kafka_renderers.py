@@ -19,7 +19,14 @@ def _payload_schema(schema_text: str, model_name: str) -> Dict[str, Any]:
 
 
 def _schema_literal(schema: Dict[str, Any]) -> str:
-    return json.dumps(schema, indent=4, sort_keys=True)
+    """Embed the schema as a ``json.loads(...)`` call.
+
+    Parsing a JSON string at import (rather than inlining a Python dict literal) keeps the
+    generated module valid even if the schema later contains JSON ``true``/``false``/``null``,
+    which are not valid Python tokens. ``sort_keys`` keeps output byte-stable for drift checks.
+    """
+    json_text = json.dumps(schema, sort_keys=True)
+    return f"json.loads({json.dumps(json_text)})"
 
 
 def _cloudevent_type(channel: str) -> str:
