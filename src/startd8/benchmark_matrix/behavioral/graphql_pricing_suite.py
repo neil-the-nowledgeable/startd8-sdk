@@ -157,22 +157,22 @@ def run_graphql_pricing_suite(port: int, *, host: str = "127.0.0.1", connect_tim
             return (li["netPayable"] == "20.00" and b["subtotalNetPayable"] == "20.00",
                     f"net={li['netPayable']} sub={b['subtotalNetPayable']}")
         check("g1_sanity", g1)
-        check("g2a_promo_lower", lambda: ((lambda li: (li["netPayable"] == "8.00", li["netPayable"]))(
-            ok(_FULL, {"input": _input([_line(unit_price="10.00", offer_unit_price="8.00")])})["lines"][0])))
-        check("g2b_promo_higher_ignored", lambda: ((lambda li: (li["netPayable"] == "10.00", li["netPayable"]))(
-            ok(_FULL, {"input": _input([_line(unit_price="10.00", offer_unit_price="12.00")])})["lines"][0])))
-        check("g3_chain_81", lambda: ((lambda li: (li["netPayable"] == "81.00", li["netPayable"]))(
-            ok(_FULL, {"input": _input([_line(unit_price="100.00", adjustments=[_adj("PERCENTAGE", ["10", "10"])])],
-                                       strategy="CHAIN")})["lines"][0])))
-        check("g3_addition_80", lambda: ((lambda li: (li["netPayable"] == "80.00", li["netPayable"]))(
-            ok(_FULL, {"input": _input([_line(unit_price="100.00", adjustments=[_adj("PERCENTAGE", ["10", "10"])])],
-                                       strategy="ADDITION")})["lines"][0])))
-        check("g4_half_up_013", lambda: ((lambda li: (li["netPayable"] == "0.13", li["netPayable"]))(
-            ok(_FULL, {"input": _input([_line(unit_price="0.25", adjustments=[_adj("PERCENTAGE", ["50"])])],
-                                       currency=_ccy(rounding="HALF_UP"))})["lines"][0])))
-        check("g4_half_even_012", lambda: ((lambda li: (li["netPayable"] == "0.12", li["netPayable"]))(
-            ok(_FULL, {"input": _input([_line(unit_price="0.25", adjustments=[_adj("PERCENTAGE", ["50"])])],
-                                       currency=_ccy(rounding="HALF_EVEN"))})["lines"][0])))
+        def _net(li_input, expected, **req):
+            # Price a single-line basket over the full selection; assert its netPayable. Returns
+            # (passed, detail) keeping the actual value in the detail for failure diagnosis.
+            v = ok(_FULL, {"input": _input(li_input, **req)})["lines"][0]["netPayable"]
+            return (v == expected, f"net={v} (want {expected})")
+
+        check("g2a_promo_lower", lambda: _net([_line(unit_price="10.00", offer_unit_price="8.00")], "8.00"))
+        check("g2b_promo_higher_ignored", lambda: _net([_line(unit_price="10.00", offer_unit_price="12.00")], "10.00"))
+        check("g3_chain_81", lambda: _net(
+            [_line(unit_price="100.00", adjustments=[_adj("PERCENTAGE", ["10", "10"])])], "81.00", strategy="CHAIN"))
+        check("g3_addition_80", lambda: _net(
+            [_line(unit_price="100.00", adjustments=[_adj("PERCENTAGE", ["10", "10"])])], "80.00", strategy="ADDITION"))
+        check("g4_half_up_013", lambda: _net(
+            [_line(unit_price="0.25", adjustments=[_adj("PERCENTAGE", ["50"])])], "0.13", currency=_ccy(rounding="HALF_UP")))
+        check("g4_half_even_012", lambda: _net(
+            [_line(unit_price="0.25", adjustments=[_adj("PERCENTAGE", ["50"])])], "0.12", currency=_ccy(rounding="HALF_EVEN")))
 
         def g5_pre():
             li = ok(_FULL, {"input": _input([_line(unit_price="100.00", adjustments=[_adj("FIXED_AMOUNT", ["15"])],

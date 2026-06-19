@@ -168,6 +168,13 @@ def run_behavioral_cell(
                                     provenance={"reason": pr.degraded_reason,
                                                 "provision_language": pr.language})
 
+    # Python deps install to <workdir>/.pydeps (provision.py --target). The sandbox scrubs PYTHONPATH,
+    # so a launched Python server can't import them unless we re-inject the path via extra_env (which is
+    # applied AFTER the scrub). Harmless when .pydeps is absent (stdlib REST cells). Surfaced by the
+    # GraphQL e2e (graphql-core in .pydeps); the stdlib REST lane never needed it.
+    if lang == "python":
+        extra_env = {**(extra_env or {}), "PYTHONPATH": str(Path(workdir) / ".pydeps")}
+
     # Readiness window (option A): pilots showed servers that are alive but slow to bind on loopback
     # hit the old 15s node cap and degraded as "never became ready". Use 30s for all languages (Go
     # already needed it for binary startup) to recover slow-binding cells; genuine crashes (rc=1) exit
