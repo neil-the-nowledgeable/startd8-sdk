@@ -125,6 +125,13 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 - **FR-14** Pinned clients emit spec-driven methods (`dict[str, object]` bodies) when consumer
   DTOs are absent — no `app.tables` imports for remote-only entities.
 
+### Deferred follow-through (v0.4)
+- **FR-15** Optional `auth: {scheme, env, header}` on outbound entries — env-sourced credentials.
+- **FR-16** `emit_languages: [typescript]` emits `clients/{id}_client.ts`.
+- **FR-17** `openapi/context-graph.json` machine-readable outbound dependency graph.
+- **FR-18** `protocol: grpc` + `grpc_service` emits `clients/{id}_grpc_client.py`.
+- **FR-19** Grafana dashboard template for `io.startd8.context.*` span metrics.
+
 - **FR-10** Emit ``clients/_context_otel.py`` when contexts manifest present; each generated
   ``clients/{id}_client.py`` wraps HTTP via ``_request()`` → ``trace_outbound_request``.
 - **FR-11** Span naming: ``context.outbound.<producer_id> <METHOD> <path>`` (CLIENT kind).
