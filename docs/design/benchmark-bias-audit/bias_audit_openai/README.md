@@ -19,10 +19,9 @@ at `docs/design/model-benchmark/seeds/seed-resolvedpriceservice.json`. The seed 
 `resolvedpriceservice` suite/proto adapter and provisions the canonical proto as `pricing.proto` to
 the generated Node service workdir.
 
-The standard `scripts/run_ob_benchmark.py` matrix CLI currently reads only the baseline
-`seeds-index.json`. A paid `resolvedpriceservice` cell therefore uses the seed directly through
-`scripts/run_prime_workflow.py`, followed by the Track 2 behavioral runner, until the CLI grows an
-explicit hardened-index selection mode.
+`scripts/run_ob_benchmark.py` reads only the baseline `seeds-index.json`. Use the existing
+`scripts/run_flagship_benchmark.py` entry point for hardened seeds: it merges
+`hardened-index.json` and enables Track 2 behavioral scoring by default.
 
 The real authoring workspace is intentionally outside the repository at
 `/private/tmp/startd8-openai-bias-clean-workspace`. The repo root contains `CLAUDE.md`, and placing
