@@ -33,17 +33,17 @@ from startd8.benchmark_matrix import (  # noqa: E402
     run_matrix,
 )
 
-SEEDS_DIR = REPO / "docs" / "design" / "model-benchmark" / "seeds"
+DEFAULT_SEEDS_DIR = REPO / "docs" / "design" / "model-benchmark" / "seeds"
 NODE_RUNTIME = REPO / "src" / "startd8" / "benchmark_matrix" / "behavioral" / "node_runtime"
 # Roster: the three available flagships. Fable 5 removed (access-gated 404) — OQ-T2-3.
 DEFAULT_MODELS = ("anthropic:claude-opus-4-8", "openai:gpt-5.5", "gemini:gemini-2.5-pro")
 PILOT_SERVICE = "paymentservice"
 
 
-def _service_language(service: str) -> str:
+def _service_language(seeds_dir: Path, service: str) -> str:
     """Per-service language from the seed (for the run_matrix languages map)."""
     import json
-    seed = SEEDS_DIR / f"seed-{service}.json"
+    seed = seeds_dir / f"seed-{service}.json"
     if seed.is_file():
         return json.loads(seed.read_text()).get("service_metadata", {}).get("language", "unknown")
     return "unknown"
@@ -89,16 +89,24 @@ def main(argv=None) -> int:
     ap.add_argument("--budget", type=float, default=10.0, help="Fail-closed batch budget ceiling (USD).")
     ap.add_argument("--per-cell-cap", type=float, default=None)
     ap.add_argument("--workdir-root", default=None)
+    ap.add_argument(
+        "--seeds-dir",
+        type=Path,
+        default=DEFAULT_SEEDS_DIR,
+        help="Seeds directory (default: OB seeds/; use seeds-otel/ for OTel Demo corpus).",
+    )
     args = ap.parse_args(argv)
 
+    seeds_dir = args.seeds_dir.resolve()
     models = list(dict.fromkeys(args.models)) or list(DEFAULT_MODELS)
     services = [s.strip() for s in args.services.split(",") if s.strip()]
     tiers = [t.strip() for t in args.tiers.split(",") if t.strip()]
-    languages = {s: _service_language(s) for s in services}
+    languages = {s: _service_language(seeds_dir, s) for s in services}
     spec = build_spec(services, models, args.repetitions, args.budget, args.per_cell_cap, tiers)
     est = estimate_run_cost(spec)
 
     print("=== Behavioral pilot plan ===")
+    print(f"seeds dir: {seeds_dir}")
     print(f"services: {', '.join(f'{s} ({languages[s]})' for s in services)}")
     print(f"models  : {', '.join(models)}")
     print(f"tiers   : {', '.join(tiers)}")
@@ -128,7 +136,7 @@ def main(argv=None) -> int:
     batch_root.mkdir(parents=True, exist_ok=True)
     print(f"batch root (persistent): {batch_root}")
 
-    executor = SubprocessCellExecutor(SEEDS_DIR, behavioral=True, workdir_root=str(batch_root))
+    executor = SubprocessCellExecutor(seeds_dir, behavioral=True, workdir_root=str(batch_root))
     result = run_matrix(spec, executor, languages=languages)
     agg = aggregate_cells(result.cells)
 

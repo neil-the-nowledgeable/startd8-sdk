@@ -105,6 +105,6 @@ def test_otel_demo_coverage_artifact_present() -> None:
     if not path.exists():
         pytest.skip("run scripts/analyze_otel_demo_python_coverage.py first")
     doc = json.loads(path.read_text())
-    assert doc["corpus"] == "otel-demo-python"
-    assert doc["summary"]["overall_index_percent"] == 56.0
-    assert len(doc["summary"]["pattern_union"]) == 5
+    assert doc["corpus"] == "otel-demo-python+fixtures"
+    assert doc["summary"]["overall_index_percent"] == 70.6
+    assert len(doc["summary"]["pattern_union"]) == 7

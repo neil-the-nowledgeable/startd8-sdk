@@ -1,46 +1,54 @@
 {
-  "corpus": "otel-demo-python",
+  "corpus": "otel-demo-python+fixtures",
   "dimensions": [
     {
       "detected": [
+        "PY-OTEL-5.1-DNS",
         "PY-OTEL-5.1-HTTP",
         "PY-OTEL-5.3-RPC",
+        "PY-OTEL-5.4-MESSAGING",
         "PY-OTEL-5.5-DATABASE",
         "PY-OTEL-5.6-FEATURE-FLAGS",
         "PY-OTEL-5.6-GENAI"
       ],
-      "detected_count": 5,
+      "detected_count": 7,
       "dimension": "communication_patterns",
       "missing": [
         "PY-OTEL-5.2-HTTP-METRICS",
         "PY-OTEL-5.3-CONNECT",
-        "PY-OTEL-5.4-MESSAGING",
         "PY-OTEL-5.6-GRAPHQL",
         "PY-OTEL-5.6-FAAS",
         "PY-OTEL-5.7-CICD",
         "PY-OTEL-5.7-CLI",
-        "PY-OTEL-5.1-DNS",
         "PY-OTEL-5.1-OBJECT-STORE",
         "PY-OTEL-5.1-CLOUD-SDK"
       ],
-      "percent": 33.3,
+      "percent": 46.7,
       "total": 15
     },
     {
       "detected": [
         "Add",
         "And",
+        "AnnAssign",
+        "Assert",
         "Assign",
         "AsyncFunctionDef",
         "Attribute",
+        "AugAssign",
         "Await",
         "BinOp",
+        "BitOr",
         "BoolOp",
+        "Break",
         "Call",
         "ClassDef",
         "Compare",
         "Constant",
+        "Continue",
         "Dict",
+        "DictComp",
+        "Div",
         "Eq",
         "ExceptHandler",
         "Expr",
@@ -52,6 +60,7 @@
         "Global",
         "Gt",
         "If",
+        "IfExp",
         "Import",
         "ImportFrom",
         "In",
@@ -63,13 +72,18 @@
         "ListComp",
         "Load",
         "Lt",
+        "LtE",
         "Module",
         "Name",
         "Not",
+        "NotEq",
+        "NotIn",
         "Or",
         "Pass",
         "Raise",
         "Return",
+        "Set",
+        "SetComp",
         "Slice",
         "Starred",
         "Store",
@@ -79,7 +93,10 @@
         "Tuple",
         "USub",
         "UnaryOp",
+        "While",
         "With",
+        "Yield",
+        "YieldFrom",
         "alias",
         "arg",
         "arguments",
@@ -87,36 +104,26 @@
         "keyword",
         "withitem"
       ],
-      "detected_count": 58,
+      "detected_count": 75,
       "dimension": "ast_nodes",
       "missing": [
-        "AnnAssign",
-        "Assert",
         "AsyncFor",
         "AsyncWith",
-        "AugAssign",
         "AugLoad",
         "AugStore",
         "BitAnd",
-        "BitOr",
         "BitXor",
-        "Break",
-        "Continue",
         "Del",
         "Delete",
-        "DictComp",
-        "Div",
         "Expression",
         "ExtSlice",
         "FunctionType",
         "GtE",
-        "IfExp",
         "Index",
         "Interactive",
         "Interpolation",
         "Invert",
         "LShift",
-        "LtE",
         "MatMult",
         "Match",
         "MatchAs",
@@ -131,14 +138,10 @@
         "Mult",
         "NamedExpr",
         "Nonlocal",
-        "NotEq",
-        "NotIn",
         "Param",
         "ParamSpec",
         "Pow",
         "RShift",
-        "Set",
-        "SetComp",
         "Suite",
         "TemplateStr",
         "TryStar",
@@ -147,9 +150,6 @@
         "TypeVar",
         "TypeVarTuple",
         "UAdd",
-        "While",
-        "Yield",
-        "YieldFrom",
         "boolop",
         "cmpop",
         "excepthandler",
@@ -165,7 +165,7 @@
         "type_param",
         "unaryop"
       ],
-      "percent": 43.9,
+      "percent": 56.8,
       "total": 132
     },
     {
@@ -176,16 +176,16 @@
         "PY-LC-004",
         "PY-LC-005",
         "PY-LC-006",
+        "PY-LC-007",
         "PY-LC-009",
         "PY-LC-010"
       ],
-      "detected_count": 8,
+      "detected_count": 9,
       "dimension": "language_composites",
       "missing": [
-        "PY-LC-007",
         "PY-LC-008"
       ],
-      "percent": 80.0,
+      "percent": 90.0,
       "total": 10
     },
     {
@@ -195,16 +195,16 @@
         "PY-MAN-003",
         "PY-MAN-004",
         "PY-MAN-005",
-        "PY-MAN-008"
-      ],
-      "detected_count": 6,
-      "dimension": "manifest_kinds",
-      "missing": [
-        "PY-MAN-006",
         "PY-MAN-007",
+        "PY-MAN-008",
         "PY-MAN-009"
       ],
-      "percent": 66.7,
+      "detected_count": 8,
+      "dimension": "manifest_kinds",
+      "missing": [
+        "PY-MAN-006"
+      ],
+      "percent": 88.9,
       "total": 9
     }
   ],
@@ -382,7 +382,6 @@
     {
       "ast_node_count": 31,
       "hyp": [
-        "PY-OTEL-5.1-HTTP",
         "PY-OTEL-5.5-DATABASE"
       ],
       "imports_sample": [
@@ -398,18 +397,6 @@
       ],
       "parse_error": null,
       "pattern_matches": [
-        {
-          "call_hits": [
-            ".get("
-          ],
-          "decorator_hits": [],
-          "import_hits": [],
-          "matched_via": [
-            "call"
-          ],
-          "otel_pattern": "HTTP",
-          "pattern_id": "PY-OTEL-5.1-HTTP"
-        },
         {
           "call_hits": [
             "execute(",
@@ -471,7 +458,6 @@
     {
       "ast_node_count": 36,
       "hyp": [
-        "PY-OTEL-5.1-HTTP",
         "PY-OTEL-5.3-RPC",
         "PY-OTEL-5.6-FEATURE-FLAGS",
         "PY-OTEL-5.6-GENAI"
@@ -517,18 +503,6 @@
       ],
       "parse_error": null,
       "pattern_matches": [
-        {
-          "call_hits": [
-            ".get("
-          ],
-          "decorator_hits": [],
-          "import_hits": [],
-          "matched_via": [
-            "call"
-          ],
-          "otel_pattern": "HTTP",
-          "pattern_id": "PY-OTEL-5.1-HTTP"
-        },
         {
           "call_hits": [
             "grpc.server",
@@ -607,9 +581,7 @@
     },
     {
       "ast_node_count": 21,
-      "hyp": [
-        "PY-OTEL-5.1-HTTP"
-      ],
+      "hyp": [],
       "imports_sample": [
         "jsonlogger",
         "logging",
@@ -628,20 +600,7 @@
         "variable"
       ],
       "parse_error": null,
-      "pattern_matches": [
-        {
-          "call_hits": [
-            ".get("
-          ],
-          "decorator_hits": [],
-          "import_hits": [],
-          "matched_via": [
-            "call"
-          ],
-          "otel_pattern": "HTTP",
-          "pattern_id": "PY-OTEL-5.1-HTTP"
-        }
-      ],
+      "pattern_matches": [],
       "rel_path": "src/recommendation/logger.py",
       "skipped_generated": false
     },
@@ -662,7 +621,6 @@
     {
       "ast_node_count": 41,
       "hyp": [
-        "PY-OTEL-5.1-HTTP",
         "PY-OTEL-5.3-RPC",
         "PY-OTEL-5.6-FEATURE-FLAGS"
       ],
@@ -709,18 +667,6 @@
       "pattern_matches": [
         {
           "call_hits": [
-            ".get("
-          ],
-          "decorator_hits": [],
-          "import_hits": [],
-          "matched_via": [
-            "call"
-          ],
-          "otel_pattern": "HTTP",
-          "pattern_id": "PY-OTEL-5.1-HTTP"
-        },
-        {
-          "call_hits": [
             "grpc.server",
             "insecure_channel",
             "secure_channel",
@@ -756,33 +702,1420 @@
       ],
       "rel_path": "src/recommendation/recommendation_server.py",
       "skipped_generated": false
+    },
+    {
+      "ast_node_count": 0,
+      "hyp": [],
+      "imports_sample": [],
+      "lines": 0,
+      "manifest_kinds": [],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "_proto/demo_pb2.py",
+      "skipped_generated": true
+    },
+    {
+      "ast_node_count": 0,
+      "hyp": [],
+      "imports_sample": [],
+      "lines": 0,
+      "manifest_kinds": [],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "_proto/demo_pb2_grpc.py",
+      "skipped_generated": true
+    },
+    {
+      "ast_node_count": 34,
+      "hyp": [
+        "PY-OTEL-5.4-MESSAGING",
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "confluent_kafka",
+        "confluent_kafka.consumer",
+        "confluent_kafka.kafkaerror",
+        "consumer",
+        "demo_pb2",
+        "kafkaerror",
+        "models",
+        "models.orderentity",
+        "models.orderitementity",
+        "models.session_factory",
+        "models.shippingentity",
+        "orderentity",
+        "orderitementity",
+        "os",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "session_factory",
+        "shippingentity",
+        "sys"
+      ],
+      "lines": 89,
+      "manifest_kinds": [
+        "constant",
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [],
+          "decorator_hits": [],
+          "import_hits": [
+            "kafka",
+            "confluent_kafka"
+          ],
+          "matched_via": [
+            "import"
+          ],
+          "otel_pattern": "Messaging",
+          "pattern_id": "PY-OTEL-5.4-MESSAGING"
+        },
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "accounting-py/consumer.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 25,
+      "hyp": [
+        "PY-OTEL-5.5-DATABASE"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "create_engine",
+        "declarativebase",
+        "float",
+        "foreignkey",
+        "integer",
+        "mapped",
+        "mapped_column",
+        "os",
+        "sessionmaker",
+        "sqlalchemy",
+        "sqlalchemy.create_engine",
+        "sqlalchemy.float",
+        "sqlalchemy.foreignkey",
+        "sqlalchemy.integer",
+        "sqlalchemy.orm",
+        "sqlalchemy.orm.declarativebase",
+        "sqlalchemy.orm.mapped",
+        "sqlalchemy.orm.mapped_column",
+        "sqlalchemy.orm.sessionmaker",
+        "sqlalchemy.string",
+        "string"
+      ],
+      "lines": 55,
+      "manifest_kinds": [
+        "class",
+        "function",
+        "type_alias",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [],
+          "decorator_hits": [],
+          "import_hits": [
+            "sqlalchemy"
+          ],
+          "matched_via": [
+            "import"
+          ],
+          "otel_pattern": "Database",
+          "pattern_id": "PY-OTEL-5.5-DATABASE"
+        }
+      ],
+      "rel_path": "accounting-py/models.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 28,
+      "hyp": [
+        "PY-OTEL-5.3-RPC",
+        "PY-OTEL-5.6-FEATURE-FLAGS",
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "api",
+        "concurrent",
+        "concurrent.futures",
+        "demo_pb2",
+        "demo_pb2_grpc",
+        "flagdprovider",
+        "futures",
+        "grpc",
+        "openfeature",
+        "openfeature.api",
+        "openfeature.contrib.provider.flagd",
+        "openfeature.contrib.provider.flagd.flagdprovider",
+        "os",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "sys",
+        "valkey_store",
+        "valkey_store.valkeycartstore",
+        "valkeycartstore"
+      ],
+      "lines": 57,
+      "manifest_kinds": [
+        "class",
+        "constant",
+        "function",
+        "method",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            "grpc.server"
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "grpc"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "RPC / gRPC",
+          "pattern_id": "PY-OTEL-5.3-RPC"
+        },
+        {
+          "call_hits": [],
+          "decorator_hits": [],
+          "import_hits": [
+            "openfeature",
+            "flagd"
+          ],
+          "matched_via": [
+            "import"
+          ],
+          "otel_pattern": "Feature flags",
+          "pattern_id": "PY-OTEL-5.6-FEATURE-FLAGS"
+        },
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "cart-py/cart_server.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 36,
+      "hyp": [
+        "PY-OTEL-5.1-HTTP",
+        "PY-OTEL-5.4-MESSAGING",
+        "PY-OTEL-5.5-DATABASE"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "any",
+        "json",
+        "os",
+        "redis",
+        "typing",
+        "typing.any"
+      ],
+      "lines": 39,
+      "manifest_kinds": [
+        "class",
+        "method",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            ".get(",
+            ".delete("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "HTTP",
+          "pattern_id": "PY-OTEL-5.1-HTTP"
+        },
+        {
+          "call_hits": [],
+          "decorator_hits": [],
+          "import_hits": [
+            "redis"
+          ],
+          "matched_via": [
+            "import"
+          ],
+          "otel_pattern": "Messaging",
+          "pattern_id": "PY-OTEL-5.4-MESSAGING"
+        },
+        {
+          "call_hits": [
+            "from_url("
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "redis"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "Database",
+          "pattern_id": "PY-OTEL-5.5-DATABASE"
+        }
+      ],
+      "rel_path": "cart-py/valkey_store.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 26,
+      "hyp": [
+        "PY-OTEL-5.4-MESSAGING",
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "confluent_kafka",
+        "confluent_kafka.producer",
+        "demo_pb2",
+        "os",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "producer",
+        "sys"
+      ],
+      "lines": 49,
+      "manifest_kinds": [
+        "constant",
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            "produce("
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "kafka",
+            "confluent_kafka"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "Messaging",
+          "pattern_id": "PY-OTEL-5.4-MESSAGING"
+        },
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "checkout-kafka-py/producer.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 1,
+      "hyp": [],
+      "imports_sample": [],
+      "lines": 0,
+      "manifest_kinds": [],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "email-py/app/__init__.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 18,
+      "hyp": [],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "any",
+        "basemodel",
+        "dict",
+        "models",
+        "models.orderconfirmationschema",
+        "orderconfirmationschema",
+        "pydantic",
+        "pydantic.basemodel",
+        "type",
+        "typing",
+        "typing.any",
+        "typing.dict",
+        "typing.type"
+      ],
+      "lines": 23,
+      "manifest_kinds": [
+        "constant",
+        "function",
+        "type_alias"
+      ],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "email-py/app/ai_schemas.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 33,
+      "hyp": [],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "dataclass",
+        "dataclasses",
+        "dataclasses.dataclass",
+        "dict",
+        "list",
+        "typing",
+        "typing.dict",
+        "typing.list"
+      ],
+      "lines": 30,
+      "manifest_kinds": [
+        "class",
+        "constant",
+        "function",
+        "type_alias",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "email-py/app/completeness.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 35,
+      "hyp": [
+        "PY-OTEL-5.5-DATABASE"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "collections.abc",
+        "collections.abc.iterator",
+        "create_engine",
+        "event",
+        "inspect",
+        "iterator",
+        "logging",
+        "os",
+        "session",
+        "settings",
+        "sqlalchemy",
+        "sqlalchemy.event",
+        "sqlalchemy.inspect",
+        "sqlmodel",
+        "sqlmodel.create_engine",
+        "sqlmodel.session",
+        "sqlmodel.sqlmodel",
+        "tables"
+      ],
+      "lines": 83,
+      "manifest_kinds": [
+        "constant",
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            "execute(",
+            "cursor("
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "sqlalchemy"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "Database",
+          "pattern_id": "PY-OTEL-5.5-DATABASE"
+        }
+      ],
+      "rel_path": "email-py/app/db.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 24,
+      "hyp": [],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "any",
+        "dict",
+        "json",
+        "list",
+        "typing",
+        "typing.any",
+        "typing.dict",
+        "typing.list"
+      ],
+      "lines": 32,
+      "manifest_kinds": [
+        "constant",
+        "function",
+        "type_alias",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "email-py/app/export.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 20,
+      "hyp": [
+        "PY-OTEL-5.1-HTTP",
+        "PY-OTEL-5.5-DATABASE"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "apirouter",
+        "db",
+        "db.get_session",
+        "depends",
+        "fastapi",
+        "fastapi.apirouter",
+        "fastapi.depends",
+        "fastapi.responses",
+        "fastapi.responses.jsonresponse",
+        "get_session",
+        "jsonresponse",
+        "session",
+        "sqlalchemy",
+        "sqlalchemy.text",
+        "sqlmodel",
+        "sqlmodel.session",
+        "text"
+      ],
+      "lines": 36,
+      "manifest_kinds": [
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            ".get("
+          ],
+          "decorator_hits": [
+            "route",
+            "get"
+          ],
+          "import_hits": [
+            "fastapi"
+          ],
+          "matched_via": [
+            "import",
+            "call",
+            "decorator"
+          ],
+          "otel_pattern": "HTTP",
+          "pattern_id": "PY-OTEL-5.1-HTTP"
+        },
+        {
+          "call_hits": [
+            "execute("
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "sqlalchemy"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "Database",
+          "pattern_id": "PY-OTEL-5.5-DATABASE"
+        }
+      ],
+      "rel_path": "email-py/app/health.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 24,
+      "hyp": [
+        "PY-OTEL-5.1-HTTP"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "ai.routes",
+        "ai.routes.ai_router",
+        "ai.ui",
+        "ai.ui.ai_ui_router",
+        "ai_router",
+        "ai_ui_router",
+        "all_routers",
+        "annotations",
+        "asynccontextmanager",
+        "contextlib",
+        "contextlib.asynccontextmanager",
+        "db",
+        "db.init_db",
+        "editor_routers",
+        "editors",
+        "editors.editor_routers",
+        "fastapi",
+        "fastapi.fastapi",
+        "flow_routers",
+        "flows",
+        "flows.flow_routers",
+        "health",
+        "health.health_router",
+        "health_router",
+        "hydrate",
+        "import_surface",
+        "import_surface.import_surface_router",
+        "import_surface_router"
+      ],
+      "lines": 100,
+      "manifest_kinds": [
+        "async_function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [],
+          "decorator_hits": [],
+          "import_hits": [
+            "fastapi"
+          ],
+          "matched_via": [
+            "import"
+          ],
+          "otel_pattern": "HTTP",
+          "pattern_id": "PY-OTEL-5.1-HTTP"
+        }
+      ],
+      "rel_path": "email-py/app/main.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 8,
+      "hyp": [],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "basemodel",
+        "datetime",
+        "datetime.datetime",
+        "pydantic",
+        "pydantic.basemodel"
+      ],
+      "lines": 18,
+      "manifest_kinds": [
+        "class",
+        "type_alias",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "email-py/app/models.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 19,
+      "hyp": [],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "any",
+        "json",
+        "typing",
+        "typing.any"
+      ],
+      "lines": 271,
+      "manifest_kinds": [
+        "constant",
+        "function",
+        "type_alias"
+      ],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "email-py/app/openapi_contract.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 25,
+      "hyp": [
+        "PY-OTEL-5.1-HTTP"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "apirouter",
+        "db",
+        "db.get_session",
+        "depends",
+        "fastapi",
+        "fastapi.apirouter",
+        "fastapi.depends",
+        "fastapi.httpexception",
+        "get_session",
+        "httpexception",
+        "orderconfirmation",
+        "orderconfirmationcreate",
+        "orderconfirmationread",
+        "orderconfirmationupdate",
+        "select",
+        "session",
+        "sqlmodel",
+        "sqlmodel.select",
+        "sqlmodel.session",
+        "tables",
+        "tables.orderconfirmation",
+        "tables.orderconfirmationcreate",
+        "tables.orderconfirmationread",
+        "tables.orderconfirmationupdate"
+      ],
+      "lines": 66,
+      "manifest_kinds": [
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            ".get(",
+            ".post(",
+            ".delete("
+          ],
+          "decorator_hits": [
+            "route",
+            "get",
+            "post"
+          ],
+          "import_hits": [
+            "fastapi"
+          ],
+          "matched_via": [
+            "import",
+            "call",
+            "decorator"
+          ],
+          "otel_pattern": "HTTP",
+          "pattern_id": "PY-OTEL-5.1-HTTP"
+        }
+      ],
+      "rel_path": "email-py/app/routers.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 17,
+      "hyp": [],
+      "imports_sample": [
+        "datetime",
+        "datetime.datetime",
+        "datetime.timezone",
+        "field",
+        "optional",
+        "sqlmodel",
+        "sqlmodel.field",
+        "sqlmodel.sqlmodel",
+        "timezone",
+        "typing",
+        "typing.optional",
+        "uuid"
+      ],
+      "lines": 44,
+      "manifest_kinds": [
+        "class",
+        "function",
+        "type_alias",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "email-py/app/tables.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 43,
+      "hyp": [
+        "PY-OTEL-5.1-HTTP"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "apirouter",
+        "db",
+        "db.get_session",
+        "depends",
+        "fastapi",
+        "fastapi.apirouter",
+        "fastapi.depends",
+        "fastapi.httpexception",
+        "fastapi.request",
+        "fastapi.responses",
+        "fastapi.responses.htmlresponse",
+        "fastapi.responses.redirectresponse",
+        "fastapi.templating",
+        "fastapi.templating.jinja2templates",
+        "get_session",
+        "htmlresponse",
+        "httpexception",
+        "jinja2templates",
+        "orderconfirmation",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "redirectresponse",
+        "request",
+        "select",
+        "session",
+        "sqlmodel"
+      ],
+      "lines": 152,
+      "manifest_kinds": [
+        "async_function",
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            ".get(",
+            ".post(",
+            ".delete("
+          ],
+          "decorator_hits": [
+            "route",
+            "get",
+            "post"
+          ],
+          "import_hits": [
+            "fastapi"
+          ],
+          "matched_via": [
+            "import",
+            "call",
+            "decorator"
+          ],
+          "otel_pattern": "HTTP",
+          "pattern_id": "PY-OTEL-5.1-HTTP"
+        }
+      ],
+      "rel_path": "email-py/app/web.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 1,
+      "hyp": [],
+      "imports_sample": [],
+      "lines": 0,
+      "manifest_kinds": [],
+      "parse_error": null,
+      "pattern_matches": [],
+      "rel_path": "email-py/clients/__init__.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 28,
+      "hyp": [
+        "PY-OTEL-5.1-HTTP"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "app.tables",
+        "app.tables.orderconfirmation",
+        "app.tables.orderconfirmationcreate",
+        "app.tables.orderconfirmationread",
+        "app.tables.orderconfirmationupdate",
+        "httpx",
+        "orderconfirmation",
+        "orderconfirmationcreate",
+        "orderconfirmationread",
+        "orderconfirmationupdate"
+      ],
+      "lines": 66,
+      "manifest_kinds": [
+        "class",
+        "method",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            ".get(",
+            ".post(",
+            ".delete("
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "httpx"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "HTTP",
+          "pattern_id": "PY-OTEL-5.1-HTTP"
+        }
+      ],
+      "rel_path": "email-py/clients/http_client.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 20,
+      "hyp": [
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "app.completeness",
+        "app.completeness.compute_completeness",
+        "compute_completeness",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "sys"
+      ],
+      "lines": 24,
+      "manifest_kinds": [
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "email-py/tests/test_completeness.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 23,
+      "hyp": [
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "app.models",
+        "app.models.orderconfirmationschema",
+        "orderconfirmationschema",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "pydantic",
+        "pydantic.validationerror",
+        "pytest",
+        "sys",
+        "validationerror"
+      ],
+      "lines": 28,
+      "manifest_kinds": [
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "email-py/tests/test_contract.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 21,
+      "hyp": [
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "app",
+        "app.main",
+        "app.main.app",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "pytest",
+        "sys"
+      ],
+      "lines": 33,
+      "manifest_kinds": [
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "email-py/tests/test_health.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 41,
+      "hyp": [
+        "PY-OTEL-5.1-HTTP",
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "apiroute",
+        "app",
+        "app.main",
+        "app.main.app",
+        "app.openapi_contract",
+        "app.openapi_contract.openapi_spec",
+        "app.openapi_contract.route_manifest",
+        "fastapi.routing",
+        "fastapi.routing.apiroute",
+        "openapi_spec",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "pytest",
+        "resolve_schema",
+        "route_manifest",
+        "startd8.openapi_contract.schema_resolve",
+        "startd8.openapi_contract.schema_resolve.resolve_schema",
+        "sys"
+      ],
+      "lines": 84,
+      "manifest_kinds": [
+        "constant",
+        "function",
+        "type_alias",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            ".get("
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "fastapi"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "HTTP",
+          "pattern_id": "PY-OTEL-5.1-HTTP"
+        },
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "email-py/tests/test_openapi_contract.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 57,
+      "hyp": [
+        "PY-OTEL-5.1-HTTP",
+        "PY-OTEL-5.5-DATABASE",
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "apiroute",
+        "app",
+        "app.db",
+        "app.db.get_session",
+        "app.main",
+        "app.main.app",
+        "app.tables",
+        "create_engine",
+        "delete",
+        "fastapi.routing",
+        "fastapi.routing.apiroute",
+        "get_session",
+        "os",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "pytest",
+        "re",
+        "select",
+        "session",
+        "sqlalchemy",
+        "sqlalchemy.create_engine",
+        "sqlmodel",
+        "sqlmodel.delete",
+        "sqlmodel.select",
+        "sqlmodel.session",
+        "sqlmodel.sqlmodel",
+        "sys",
+        "tables",
+        "tempfile"
+      ],
+      "lines": 234,
+      "manifest_kinds": [
+        "constant",
+        "function",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            ".get(",
+            ".post("
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "fastapi"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "HTTP",
+          "pattern_id": "PY-OTEL-5.1-HTTP"
+        },
+        {
+          "call_hits": [],
+          "decorator_hits": [],
+          "import_hits": [
+            "sqlalchemy"
+          ],
+          "matched_via": [
+            "import"
+          ],
+          "otel_pattern": "Database",
+          "pattern_id": "PY-OTEL-5.5-DATABASE"
+        },
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "email-py/tests/test_route_smoke.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 35,
+      "hyp": [
+        "PY-OTEL-5.3-RPC",
+        "PY-OTEL-5.6-FEATURE-FLAGS",
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "api",
+        "concurrent",
+        "concurrent.futures",
+        "datetime",
+        "datetime.datetime",
+        "demo_pb2",
+        "demo_pb2_grpc",
+        "flagdprovider",
+        "futures",
+        "grpc",
+        "openfeature",
+        "openfeature.api",
+        "openfeature.contrib.provider.flagd",
+        "openfeature.contrib.provider.flagd.flagdprovider",
+        "os",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "sys",
+        "uuid"
+      ],
+      "lines": 65,
+      "manifest_kinds": [
+        "class",
+        "constant",
+        "function",
+        "method",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            "grpc.server"
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "grpc"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "RPC / gRPC",
+          "pattern_id": "PY-OTEL-5.3-RPC"
+        },
+        {
+          "call_hits": [],
+          "decorator_hits": [],
+          "import_hits": [
+            "openfeature",
+            "flagd"
+          ],
+          "matched_via": [
+            "import"
+          ],
+          "otel_pattern": "Feature flags",
+          "pattern_id": "PY-OTEL-5.6-FEATURE-FLAGS"
+        },
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "payment-py/payment_server.py",
+      "skipped_generated": false
+    },
+    {
+      "ast_node_count": 37,
+      "hyp": [
+        "PY-OTEL-5.3-RPC",
+        "PY-OTEL-5.6-FEATURE-FLAGS",
+        "PY-OTEL-5.6-GENAI",
+        "PY-OTEL-5.1-DNS"
+      ],
+      "imports_sample": [
+        "__future__",
+        "__future__.annotations",
+        "annotations",
+        "api",
+        "concurrent",
+        "concurrent.futures",
+        "demo_pb2",
+        "demo_pb2_grpc",
+        "flagdprovider",
+        "futures",
+        "grpc",
+        "json",
+        "openai",
+        "openfeature",
+        "openfeature.api",
+        "openfeature.contrib.provider.flagd",
+        "openfeature.contrib.provider.flagd.flagdprovider",
+        "os",
+        "path",
+        "pathlib",
+        "pathlib.path",
+        "sys"
+      ],
+      "lines": 78,
+      "manifest_kinds": [
+        "class",
+        "constant",
+        "function",
+        "method",
+        "type_alias",
+        "variable"
+      ],
+      "parse_error": null,
+      "pattern_matches": [
+        {
+          "call_hits": [
+            "grpc.server"
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "grpc"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "RPC / gRPC",
+          "pattern_id": "PY-OTEL-5.3-RPC"
+        },
+        {
+          "call_hits": [],
+          "decorator_hits": [],
+          "import_hits": [
+            "openfeature",
+            "flagd"
+          ],
+          "matched_via": [
+            "import"
+          ],
+          "otel_pattern": "Feature flags",
+          "pattern_id": "PY-OTEL-5.6-FEATURE-FLAGS"
+        },
+        {
+          "call_hits": [
+            "chat.completions.create"
+          ],
+          "decorator_hits": [],
+          "import_hits": [
+            "openai"
+          ],
+          "matched_via": [
+            "import",
+            "call"
+          ],
+          "otel_pattern": "Generative AI",
+          "pattern_id": "PY-OTEL-5.6-GENAI"
+        },
+        {
+          "call_hits": [
+            "resolve("
+          ],
+          "decorator_hits": [],
+          "import_hits": [],
+          "matched_via": [
+            "call"
+          ],
+          "otel_pattern": "DNS",
+          "pattern_id": "PY-OTEL-5.1-DNS"
+        }
+      ],
+      "rel_path": "product-reviews-py/product_reviews_server.py",
+      "skipped_generated": false
     }
   ],
   "schema_version": "1.0",
   "summary": {
-    "files_analyzed": 8,
+    "files_analyzed": 34,
     "files_parse_error": 0,
-    "files_skipped_generated": 4,
-    "overall_index_percent": 56.0,
+    "files_skipped_generated": 6,
+    "overall_index_percent": 70.6,
     "pattern_missing": [
       "PY-OTEL-5.2-HTTP-METRICS",
       "PY-OTEL-5.3-CONNECT",
-      "PY-OTEL-5.4-MESSAGING",
       "PY-OTEL-5.6-GRAPHQL",
       "PY-OTEL-5.6-FAAS",
       "PY-OTEL-5.7-CICD",
       "PY-OTEL-5.7-CLI",
-      "PY-OTEL-5.1-DNS",
       "PY-OTEL-5.1-OBJECT-STORE",
       "PY-OTEL-5.1-CLOUD-SDK"
     ],
     "pattern_union": [
+      "PY-OTEL-5.1-DNS",
       "PY-OTEL-5.1-HTTP",
       "PY-OTEL-5.3-RPC",
+      "PY-OTEL-5.4-MESSAGING",
       "PY-OTEL-5.5-DATABASE",
       "PY-OTEL-5.6-FEATURE-FLAGS",
       "PY-OTEL-5.6-GENAI"
     ]
   },
-  "workdir": "/private/tmp/otel-demo-proto-fetch"
+  "workdir": "/private/tmp/otel-demo-proto-fetch+/Users/neilyashinsky/Documents/dev/startd8-otel-python-rebuild/fixtures/otel-demo"
 }
