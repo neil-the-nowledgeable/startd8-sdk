@@ -41,6 +41,27 @@ def header_emitted_contract(source_file: str, sha: str) -> str:
     )
 
 
+def header_api_overlay(
+    source_file: str,
+    schema_sha: str,
+    api_sha: str,
+    kind: str,
+) -> str:
+    """OpenAPI-contract provenance header — two inputs (schema + api.yaml), two hashes (Role 2).
+
+    Drift on ``app/openapi_contract.py`` is **stale if either** the schema or ``api.yaml`` changes
+    when the overlay header is present (see :func:`startd8.backend_codegen.drift.api_overlay_stale_reason`).
+    """
+    return (
+        f"# GENERATED from {source_file} (+ api.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# Source of truth: the Prisma schema and the API surface overlay.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# api-sha256: {api_sha}"
+    )
+
+
 def header_imports(
     source_file: str,
     schema_sha: str,

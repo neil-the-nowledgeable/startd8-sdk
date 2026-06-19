@@ -213,8 +213,44 @@ def _expected_crud_manifest_entries(schema: PrismaSchema, schema_text: str) -> L
     ]
 
 
+def _expected_conditional_manifest_entries(
+    schema_text: str,
+    *,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
+) -> List[str]:
+    """Baked conditional-route subset when manifests participate in generation."""
+    if not any((manifest_text, pages_text, views_text, imports_text)):
+        return []
+    from .openapi_contract_renderer import _conditional_routes
+
+    schema = parse_prisma_schema(schema_text)
+    return [
+        f'    ("{method}", "{path}"),'
+        for method, path in sorted(
+            _conditional_routes(
+                schema,
+                schema_text,
+                manifest_text=manifest_text,
+                pages_text=pages_text,
+                views_text=views_text,
+                imports_text=imports_text,
+            )
+        )
+    ]
+
+
 def render_openapi_contract_tests(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    *,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
+    api_text: Optional[str] = None,
 ) -> str:
     """Render ``tests/test_openapi_contract.py`` — manifest ↔ app routes + spec paths."""
     schema = parse_prisma_schema(schema_text)
@@ -222,6 +258,28 @@ def render_openapi_contract_tests(
     header = _header(source_file, sha, _OPENAPI_CONTRACT_KIND)
     crud_lines = _expected_crud_manifest_entries(schema, schema_text)
     crud_block = "\n".join(crud_lines) if crud_lines else ""
+    conditional_lines = _expected_conditional_manifest_entries(
+        schema_text,
+        manifest_text=manifest_text,
+        pages_text=pages_text,
+        views_text=views_text,
+        imports_text=imports_text,
+    )
+    conditional_block = "\n".join(conditional_lines) if conditional_lines else ""
+    conditional_section = ""
+    conditional_test = ""
+    if conditional_block:
+        conditional_section = f"""
+# Baked conditional manifest routes (pages/AI/flows/editors/import surface).
+_CONDITIONAL: tuple[tuple[str, str], ...] = (
+{conditional_block}
+)
+"""
+        conditional_test = """
+def test_conditional_routes_in_manifest():
+    missing = [pair for pair in _CONDITIONAL if pair not in ROUTE_MANIFEST]
+    assert not missing, "manifest missing conditional routes: " + repr(missing)
+"""
     body = f'''{_SHIM}
 import pytest
 
@@ -237,7 +295,7 @@ from fastapi.routing import APIRoute  # noqa: E402
 _SCHEMA_CRUD: tuple[tuple[str, str], ...] = (
 {crud_block}
 )
-
+{conditional_section}
 
 def _mounted() -> set[tuple[str, str]]:
     out: set[tuple[str, str]] = set()
@@ -253,10 +311,35 @@ def test_openapi_spec_paths_match_manifest():
     assert set(OPENAPI_SPEC.get("paths", {{}}).keys()) == {{p for _, p in ROUTE_MANIFEST}}
 
 
+def test_openapi_internal_refs_resolve():
+    """FR-7: merged spec internal $refs resolve (no dangling pointers)."""
+    from startd8.openapi_contract.schema_resolve import resolve_schema
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            if "$ref" in obj:
+                yield obj["$ref"]
+            for v in obj.values():
+                yield from _walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                yield from _walk(item)
+
+    dangling = []
+    for ref in _walk(OPENAPI_SPEC):
+        if not ref.startswith("#/"):
+            dangling.append(ref)
+            continue
+        resolved = resolve_schema({{"$ref": ref}}, OPENAPI_SPEC)
+        if not resolved:
+            dangling.append(ref)
+    assert not dangling, "unresolved $refs: " + repr(dangling)
+
+
 def test_schema_crud_routes_in_manifest():
     missing = [pair for pair in _SCHEMA_CRUD if pair not in ROUTE_MANIFEST]
     assert not missing, "manifest missing schema-derived CRUD routes: " + repr(missing)
-
+{conditional_test}
 
 def test_manifest_routes_are_mounted():
     mounted = _mounted()

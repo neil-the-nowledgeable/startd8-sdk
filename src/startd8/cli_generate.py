@@ -229,6 +229,13 @@ def backend(
         "app/importer.py (from_json upsert) is emitted; absent → no importer (opt-in). Threaded "
         "to both generate and --check so drift stays consistent.",
     ),
+    api_overlay: Optional[Path] = typer.Option(
+        None,
+        "--api",
+        help="Path to api.yaml (OpenAPI 3.0 surface overlay). When given, net-new paths are "
+        "merged into app/openapi_contract.py; absent → Role 1 schema-only contract (SOTTO). "
+        "Threaded to both generate and --check so drift stays consistent.",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
@@ -267,7 +274,7 @@ def backend(
     pages_text: Optional[str] = None
     _reads = {
         "manifest": None, "human": None, "pages": None, "completeness": None, "views": None,
-        "display": None, "imports": None,
+        "display": None, "imports": None, "api": None,
     }
     for label, path, dest in (
         ("ai_passes", ai_passes, "manifest"),
@@ -277,6 +284,7 @@ def backend(
         ("views", views, "views"),
         ("display", display, "display"),
         ("imports", imports, "imports"),
+        ("api", api_overlay, "api"),
     ):
         if path is None:
             continue
@@ -285,7 +293,7 @@ def backend(
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
-    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text = (
+    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text, api_text = (
         _reads["manifest"],
         _reads["human"],
         _reads["pages"],
@@ -293,6 +301,7 @@ def backend(
         _reads["views"],
         _reads["display"],
         _reads["imports"],
+        _reads["api"],
     )
 
     # FR-CLI-1: resolve the deployment mode. app.yaml's `deployment.mode` is the source of truth;
@@ -371,6 +380,7 @@ def backend(
         raise typer.Exit(_EXIT_ERROR)
 
     try:
+        overlay_warnings: list[str] = []
         artifacts = render_backend(
             schema_text,
             source_label,
@@ -382,6 +392,8 @@ def backend(
             views_text=views_text,
             display_text=display_text,
             imports_text=imports_text,
+            api_text=api_text,
+            overlay_warnings=overlay_warnings,
             # On --check we don't render the untracked prose fragments (they need the .md on disk
             # and never participate in drift); on write we do, reading app/pages/*.md under --out.
             pages_app_dir=None if check else (out / "app"),
@@ -394,6 +406,9 @@ def backend(
     ) as exc:  # reserved attr name / malformed ai_passes/pages/views manifest — fail loud
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
+
+    for warning in overlay_warnings:
+        console.print(f"[yellow]warning:[/yellow] api overlay: {warning}")
 
     if check:
         drifted = 0
@@ -413,6 +428,7 @@ def backend(
                 forms_text=views_text,
                 display_text=display_text,
                 imports_text=imports_text,
+                api_text=api_text,
             )
             if result.status != "in_sync":
                 drifted += 1

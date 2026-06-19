@@ -114,3 +114,48 @@ def test_client_tracks_owned_client() -> None:
     text = render_http_client(SCHEMA)
     assert "_owns_client" in text
     assert "if self._owns_client:" in text
+
+
+OVERLAY_PRISMA_DTO = """\
+paths:
+  /custom/note:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteCreate'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteRead'
+"""
+
+OVERLAY_INLINE_ONLY = """\
+paths:
+  /webhooks/stripe:
+    post:
+      responses:
+        '200':
+          description: OK
+"""
+
+
+def test_overlay_client_emits_prisma_ref_method() -> None:
+    text = render_http_client(SCHEMA, api_text=OVERLAY_PRISMA_DTO)
+    assert "def post_custom_note(" in text
+    assert "body: NoteCreate" in text
+    assert "-> NoteRead" in text
+    assert "# api-sha256:" in text
+
+
+def test_overlay_inline_only_skips_client_method() -> None:
+    assert render_http_client(SCHEMA) == render_http_client(SCHEMA, api_text=OVERLAY_INLINE_ONLY)
+
+
+def test_overlay_client_byte_identical_without_api() -> None:
+    assert render_http_client(SCHEMA) == render_http_client(SCHEMA, api_text=None)

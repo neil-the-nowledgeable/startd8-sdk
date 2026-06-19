@@ -253,6 +253,33 @@ def test_export_openapi_writes_json(tmp_path):
     assert "/proofpoint/" in data["paths"]
 
 
+def test_export_openapi_includes_merged_overlay_paths(tmp_path):
+    schema = _schema(tmp_path)
+    api = tmp_path / "prisma" / "api.yaml"
+    api.write_text(
+        "paths:\n  /webhooks/stripe:\n    post:\n      responses:\n        '200':\n"
+        "          description: OK\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+            "--export-openapi",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = __import__("json").loads((tmp_path / "openapi.json").read_text(encoding="utf-8"))
+    assert "/webhooks/stripe" in data["paths"]
+    assert "/proofpoint/" in data["paths"]
+
+
 def test_gate_runs_openapi_spec_validation(tmp_path):
     pytest.importorskip("openapi_spec_validator")
     schema = _schema(tmp_path)
@@ -262,3 +289,69 @@ def test_gate_runs_openapi_spec_validation(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert "openapi spec gate: pass" in result.output
+
+
+def test_generate_with_api_overlay_merges_contract(tmp_path):
+    schema = _schema(tmp_path)
+    api = tmp_path / "prisma" / "api.yaml"
+    api.write_text(
+        "paths:\n  /webhooks/stripe:\n    post:\n      responses:\n        '200':\n"
+        "          description: OK\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    contract = (tmp_path / "app" / "openapi_contract.py").read_text(encoding="utf-8")
+    assert "/webhooks/stripe" in contract
+    assert "# api-sha256:" in contract
+    chk = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+            "--check",
+        ],
+    )
+    assert chk.exit_code == 0, chk.output
+
+
+def test_generate_with_validation_only_overlay_warns(tmp_path):
+    schema = _schema(tmp_path)
+    api = tmp_path / "prisma" / "api.yaml"
+    api.write_text(
+        "paths:\n  /ai/extract:\n    x-startd8-validation-only: true\n    post:\n"
+        "      responses:\n        '200':\n          description: OK\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "validation-only" in result.output
+    contract = (tmp_path / "app" / "openapi_contract.py").read_text(encoding="utf-8")
+    assert "/ai/extract" not in contract

@@ -6,18 +6,25 @@ $0-LLM **offline** contract layer (``ROUTE_MANIFEST`` + minimal ``OPENAPI_SPEC``
 of truth.
 
 v1 scope: schema-derived CRUD paths (mirrors ``crud_generator._entity_block``) + default-on
-health paths. Optional manifest surfaces (pages/AI/flows) are deferred — they require the same
-multi-input drift threading as forms/AI kinds.
+health paths; conditional manifest surfaces (pages/AI/flows/editors/import) when the same
+inputs that trigger ``assembler`` emission are present. Optional ``api.yaml`` overlay (Role 2)
+adds net-new / user-declared routes.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
-from ._headers import header_standard as _header
+from .api_overlay_manifest import (
+    apply_api_overlay,
+    parse_api_overlay,
+    routes_from_openapi_spec,
+)
+from ._headers import header_api_overlay, header_standard as _header
 from .crud_generator import _pk_field
 from .pydantic_renderer import _PY_SCALAR
 
@@ -97,12 +104,84 @@ def _health_routes() -> List[Tuple[str, str]]:
     return [("GET", "/health"), ("GET", "/health/live")]
 
 
+def _conditional_routes(
+    schema: PrismaSchema,
+    schema_text: str,
+    *,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
+) -> List[Tuple[str, str]]:
+    """Manifest-derived routes — empty when the triggering manifest is absent (FR-3 / SOTTO)."""
+    routes: List[Tuple[str, str]] = []
+    known = frozenset(_model_names(schema, schema_text))
+
+    if pages_text:
+        from .pages_generator import parse_pages
+
+        pages, _ = parse_pages(pages_text)
+        for page in pages:
+            routes.append(("GET", page.slug))
+
+    if manifest_text:
+        from .ai_layer import _triggered_passes, parse_ai_passes
+
+        for ps in parse_ai_passes(manifest_text):
+            routes.append(("POST", f"/ai{ps.route_path}"))
+        for ps in _triggered_passes(manifest_text):
+            entity = ps.trigger.entity.lower()
+            id_param = f"{entity}_id"
+            routes.append(("POST", f"/ui/{entity}/{{{id_param}}}/run-{ps.module}"))
+
+    if views_text:
+        from .editors_manifest import parse_editors
+        from .flows_manifest import parse_flows
+
+        for flow in parse_flows(views_text, known_entities=known):
+            name = flow.name
+            routes.extend(
+                [
+                    ("POST", f"/flow/{name}/start"),
+                    ("GET", f"/flow/{name}/{{draft_id}}"),
+                    ("POST", f"/flow/{name}/{{draft_id}}/advance"),
+                    ("POST", f"/flow/{name}/{{draft_id}}/back"),
+                ]
+            )
+        for editor in parse_editors(views_text, known_entities=known):
+            routes.append(("GET", editor.route))
+            routes.append(("POST", editor.route))
+
+    if imports_text:
+        from .import_surface import surface_enabled
+
+        if surface_enabled(imports_text):
+            routes.extend([("GET", "/import"), ("POST", "/import")])
+
+    return routes
+
+
+def _generic_path_parameters(path: str) -> List[Dict[str, Any]]:
+    """Declare OpenAPI path params for any ``{name}`` segment (non-CRUD conditional/overlay paths)."""
+    params: List[Dict[str, Any]] = []
+    for name in re.findall(r"\{([^}]+)\}", path):
+        params.append(
+            {
+                "name": name,
+                "in": "path",
+                "required": True,
+                "schema": {"type": "string"},
+            }
+        )
+    return params
+
+
 def _path_item_parameters(
     path: str, schema: PrismaSchema, schema_text: str
 ) -> List[Dict[str, Any]]:
     """OpenAPI path params for ``/{entity}/{item_id}`` routes (validator requires resolution)."""
     if "{item_id}" not in path:
-        return []
+        return _generic_path_parameters(path)
     segments = [s for s in path.split("/") if s and not s.startswith("{")]
     entity = next(
         (n for n in _model_names(schema, schema_text) if n.lower() == (segments[0] if segments else "")),
@@ -216,17 +295,70 @@ def _format_route_manifest(routes: List[Tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _project_openapi(
+    schema_text: str,
+    *,
+    api_text: Optional[str] = None,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
+    overlay_warnings: Optional[List[str]] = None,
+) -> Tuple[List[Tuple[str, str]], Dict[str, Any]]:
+    """Build sorted routes + OpenAPI spec from schema, conditional manifests, and optional overlay."""
+    schema = parse_prisma_schema(schema_text)
+    routes = sorted(
+        _crud_routes(schema, schema_text)
+        + _health_routes()
+        + _conditional_routes(
+            schema,
+            schema_text,
+            manifest_text=manifest_text,
+            pages_text=pages_text,
+            views_text=views_text,
+            imports_text=imports_text,
+        )
+    )
+    spec = _build_openapi_spec(routes, schema, schema_text)
+    if api_text:
+        overlay = parse_api_overlay(api_text)
+        spec, warnings = apply_api_overlay(spec, overlay, schema_text)
+        if overlay_warnings is not None:
+            overlay_warnings.extend(warnings)
+    routes = routes_from_openapi_spec(spec)
+    return routes, spec
+
+
 def render_openapi_contract(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    *,
+    api_text: Optional[str] = None,
+    manifest_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    views_text: Optional[str] = None,
+    imports_text: Optional[str] = None,
+    overlay_warnings: Optional[List[str]] = None,
 ) -> str:
     """Render ``app/openapi_contract.py`` — static ``ROUTE_MANIFEST`` + ``OPENAPI_SPEC``."""
-    schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
-    routes = sorted(_crud_routes(schema, schema_text) + _health_routes())
-    spec = _build_openapi_spec(routes, schema, schema_text)
+    routes, spec = _project_openapi(
+        schema_text,
+        api_text=api_text,
+        manifest_text=manifest_text,
+        pages_text=pages_text,
+        views_text=views_text,
+        imports_text=imports_text,
+        overlay_warnings=overlay_warnings,
+    )
     spec_json = json.dumps(spec, indent=2, sort_keys=True)
 
-    header = _header(source_file, sha, "python-openapi-contract")
+    if api_text:
+        header = header_api_overlay(
+            source_file, sha, schema_sha256(api_text), "python-openapi-contract"
+        )
+    else:
+        header = _header(source_file, sha, "python-openapi-contract")
     body = (
         "from __future__ import annotations\n\n"
         "import json\n"
