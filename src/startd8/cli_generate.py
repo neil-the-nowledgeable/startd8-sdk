@@ -7,6 +7,7 @@ fast and is unit-testable in isolation.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import List, Optional
 
@@ -119,7 +120,14 @@ def backend(
     gate: bool = typer.Option(
         False,
         "--gate",
-        help="After writing, run the Python build gate (compileall) over the project.",
+        help="After writing, run the Python build gate (compileall) and validate the static "
+        "OPENAPI_SPEC in app/openapi_contract.py (requires openapi-spec-validator).",
+    ),
+    export_openapi: bool = typer.Option(
+        False,
+        "--export-openapi",
+        help="After writing, export openapi.json (pretty-printed OPENAPI_SPEC) to the project root. "
+        "Drift authority remains app/openapi_contract.py.",
     ),
     boot_smoke: bool = typer.Option(
         False,
@@ -401,6 +409,27 @@ def backend(
             raise typer.Exit(_EXIT_ERROR)
     console.print(f"[green]wrote[/green] {written} file(s) under {out}/app")
 
+    if export_openapi:
+        from .validators.openapi_spec_gate import extract_openapi_spec_from_project
+
+        spec = extract_openapi_spec_from_project(str(out))
+        if spec is None:
+            console.print(
+                "[red]error:[/red] --export-openapi: app/openapi_contract.py missing "
+                "or OPENAPI_SPEC not loadable"
+            )
+            raise typer.Exit(_EXIT_ERROR)
+        export_path = out / "openapi.json"
+        try:
+            export_path.write_text(
+                json.dumps(spec, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write {export_path}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        console.print(f"[green]exported[/green] {export_path}")
+
     if gate:
         from .validators.python_toolchain import run_project_check
 
@@ -416,6 +445,16 @@ def backend(
                 f"  [red]{d.stage}[/red] {d.file}:{d.line} {d.code}: {d.message}"
             )
         if not result.is_pass:
+            raise typer.Exit(_EXIT_ERROR)
+
+        from .validators.openapi_spec_gate import run_openapi_spec_gate
+
+        og = run_openapi_spec_gate(str(out))
+        color = "green" if og.is_pass else "red"
+        console.print(f"[{color}]openapi spec gate: {og.verdict}[/{color}] ({og.message})")
+        for d in og.diagnostics:
+            console.print(f"  [red]{d}[/red]")
+        if not og.is_pass:
             raise typer.Exit(_EXIT_ERROR)
 
     if boot_smoke:

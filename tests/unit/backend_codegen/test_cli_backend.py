@@ -237,3 +237,28 @@ def test_check_detects_handedit(tmp_path):
         ["backend", "--schema", str(schema), "--out", str(tmp_path), "--check"],
     )
     assert chk.exit_code == 1
+
+
+def test_export_openapi_writes_json(tmp_path):
+    schema = _schema(tmp_path)
+    result = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--out", str(tmp_path), "--export-openapi"],
+    )
+    assert result.exit_code == 0, result.output
+    export_path = tmp_path / "openapi.json"
+    assert export_path.is_file()
+    data = __import__("json").loads(export_path.read_text(encoding="utf-8"))
+    assert data["openapi"] == "3.0.3"
+    assert "/proofpoint/" in data["paths"]
+
+
+def test_gate_runs_openapi_spec_validation(tmp_path):
+    pytest.importorskip("openapi_spec_validator")
+    schema = _schema(tmp_path)
+    result = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--out", str(tmp_path), "--gate"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "openapi spec gate: pass" in result.output

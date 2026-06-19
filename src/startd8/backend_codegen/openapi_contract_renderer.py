@@ -97,6 +97,32 @@ def _health_routes() -> List[Tuple[str, str]]:
     return [("GET", "/health"), ("GET", "/health/live")]
 
 
+def _path_item_parameters(
+    path: str, schema: PrismaSchema, schema_text: str
+) -> List[Dict[str, Any]]:
+    """OpenAPI path params for ``/{entity}/{item_id}`` routes (validator requires resolution)."""
+    if "{item_id}" not in path:
+        return []
+    segments = [s for s in path.split("/") if s and not s.startswith("{")]
+    entity = next(
+        (n for n in _model_names(schema, schema_text) if n.lower() == (segments[0] if segments else "")),
+        None,
+    )
+    pk_type = "string"
+    if entity is not None:
+        pk = _pk_field(schema, entity)
+        if pk is not None and pk.type in ("Int", "BigInt"):
+            pk_type = "integer"
+    return [
+        {
+            "name": "item_id",
+            "in": "path",
+            "required": True,
+            "schema": {"type": pk_type},
+        }
+    ]
+
+
 def _build_openapi_spec(
     routes: List[Tuple[str, str]], schema: PrismaSchema, schema_text: str
 ) -> Dict[str, Any]:
@@ -167,6 +193,9 @@ def _build_openapi_spec(
                     }
         elif method == "DELETE":
             op["responses"] = {"204": {"description": "No Content"}}
+        params = _path_item_parameters(path, schema, schema_text)
+        if params:
+            op["parameters"] = params
         entry[method.lower()] = op
 
     title = _model_names(schema, schema_text)[0] if _model_names(schema, schema_text) else "App"

@@ -98,6 +98,7 @@ dev = [
     "hypothesis>=6.0.0",
     "cryptography>=42.0.0",
     "jsonschema>=4.0.0",
+    "openapi-spec-validator>=0.7.0",
     "respx>=0.21.0",
     # NFR-AES-5: Jsonnet toolchain for the dashboard_creator compile-based golden tests.
     # Provides the `_gojsonnet` backend compiler.py already supports, so compiled-JSON

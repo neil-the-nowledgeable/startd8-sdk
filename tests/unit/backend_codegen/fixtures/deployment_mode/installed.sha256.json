@@ -7,7 +7,7 @@
   "app/health.py": "c56c074e0b271cae535d469edb6b4e17c3225f0048a7e7207b4e7842731caf1f",
   "app/main.py": "b7363c56d48b37827527d6774698f3760c36408ca0873f7be0103159c524fe14",
   "app/models.py": "28e5f17004ff6e298d4d329c3579ffbf5c0c352d7bf4b4297e9c07c1fb95aa1f",
-  "app/openapi_contract.py": "7589013c017c9634f4d21f5228a0eb300e17ea9f9530df979730d7943c37fe65",
+  "app/openapi_contract.py": "db917c3bb09727991b9e0997abb86afd116fe425328ef9a0194513adbb3d557a",
   "app/routers.py": "a8ae784ac8e94a853df013f2daacb618addd544dec2afe1899a320ae42f02ae5",
   "app/tables.py": "f87cb0efe5b1aa63500cd997e76155e78b9387a08099f31a081405322c69396f",
   "app/templates/_field_error.html": "1f06929c10d815363b1c644cff6866886c939fed9b2d6a37b7064df92f49ff2e",
