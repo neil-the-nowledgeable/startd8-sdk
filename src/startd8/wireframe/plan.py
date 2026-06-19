@@ -79,6 +79,8 @@ _ABSENT_STATUS = {
     "completeness": Status.DEFAULTS,
     "view_prose": Status.DEFAULTS,   # absent ⇒ raw machine-name view chrome (today's behavior)
     "imports": Status.NOT_DEFINED,   # absent ⇒ no import owned-kind (FR-IMP-3, opt-in)
+    "api": Status.NOT_DEFINED,       # absent ⇒ Role 1 schema-only contract (Role 2 opt-in)
+    "contexts": Status.NOT_DEFINED,  # absent ⇒ no inter-context consumer clients (Role 3 opt-in)
 }
 
 _ABSENT_CONSEQUENCE = {
@@ -90,6 +92,8 @@ _ABSENT_CONSEQUENCE = {
     "human_inputs": "only server-managed omissions apply",
     "completeness": "presence-rule fallback scoring",
     "imports": "no bulk-import owned-kind (app/importer.py) or paste/upload surface",
+    "api": "schema-only OpenAPI contract (no api.yaml overlay merge)",
+    "contexts": "no per-producer inter-context consumer clients",
 }
 
 
@@ -399,7 +403,9 @@ def _scaffold_section(state: _ManifestState) -> WireframeSection:
 
 
 def _services_section(
-    schema_state: _ManifestState, ai_state: _ManifestState
+    schema_state: _ManifestState,
+    ai_state: _ManifestState,
+    contexts_state: Optional[_ManifestState] = None,
 ) -> WireframeSection:
     # Composition (R6-F3 / R2-S3): schema always contributes; ai_passes contributes its
     # degradation states (invalid/placeholder). Mere absence of the *optional* AI manifest scopes
@@ -462,6 +468,17 @@ def _services_section(
                 ),
             )
         )
+        if contexts_state and contexts_state.status == Status.PLANNED and contexts_state.parsed:
+            from ..backend_codegen.context_manifest import parse_contexts
+
+            for ctx in parse_contexts(contexts_state.text):
+                items.append(
+                    WireframeItem(
+                        f"Context client: {ctx.id}", Status.PLANNED,
+                        detail=f"routes={ctx.routes}, local={ctx.local}",
+                        paths=(f"clients/{ctx.id}_client.py",),
+                    )
+                )
     if ai_state.status == Status.PLANNED and schema_state.status in (
         Status.PLANNED, Status.PLACEHOLDER
     ):
@@ -975,6 +992,11 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     states["imports"] = _yaml_state(
         "imports", *texts["imports"], lambda t: parse_imports(t, known_entities=known)
     )
+    from ..backend_codegen.context_manifest import parse_contexts
+
+    states["contexts"] = _yaml_state(
+        "contexts", *texts["contexts"], parse_contexts
+    )
 
     # Status overrides from the assembly-inputs YAML (FR-W6/R2-F1). Conflicts between an
     # override and disk reality join merge_warnings — visible in tree + JSON, never only logged.
@@ -989,7 +1011,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     sections = (
         _scaffold_section(states["app"]),
         _deployment_section(states["app"]),
-        _services_section(schema_state, states["ai_passes"]),
+        _services_section(schema_state, states["ai_passes"], states.get("contexts")),
         _entities_section(schema_state),
         _pages_section(states["pages"], authoring=authoring),
         _forms_section(schema_state, states["human_inputs"], texts["views"][0]),

@@ -355,3 +355,42 @@ def test_generate_with_validation_only_overlay_warns(tmp_path):
     assert "validation-only" in result.output
     contract = (tmp_path / "app" / "openapi_contract.py").read_text(encoding="utf-8")
     assert "/ai/extract" not in contract
+
+
+def test_generate_with_contexts_emits_consumer_client(tmp_path):
+    schema = _schema(tmp_path)
+    contexts = tmp_path / "prisma" / "contexts.yaml"
+    contexts.write_text(
+        "outbound:\n  - id: catalog\n    local: true\n    routes: crud\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--contexts",
+            str(contexts),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    client = tmp_path / "clients" / "catalog_client.py"
+    assert client.is_file()
+    assert "CatalogClient" in client.read_text(encoding="utf-8")
+    chk = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--contexts",
+            str(contexts),
+            "--check",
+        ],
+    )
+    assert chk.exit_code == 0, chk.output

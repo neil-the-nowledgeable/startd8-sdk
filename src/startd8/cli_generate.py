@@ -206,6 +206,13 @@ def backend(
         "merged into app/openapi_contract.py; absent → Role 1 schema-only contract (SOTTO). "
         "Threaded to both generate and --check so drift stays consistent.",
     ),
+    contexts_manifest: Optional[Path] = typer.Option(
+        None,
+        "--contexts",
+        help="Path to contexts.yaml (OpenAPI Role 3 outbound producer declarations). When given, "
+        "typed clients/{id}_client.py artifacts are emitted per outbound entry; absent → no "
+        "context clients (SOTTO). Threaded to both generate and --check.",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
@@ -244,7 +251,7 @@ def backend(
     pages_text: Optional[str] = None
     _reads = {
         "manifest": None, "human": None, "pages": None, "completeness": None, "views": None,
-        "display": None, "imports": None, "api": None,
+        "display": None, "imports": None, "api": None, "contexts": None,
     }
     for label, path, dest in (
         ("ai_passes", ai_passes, "manifest"),
@@ -255,6 +262,7 @@ def backend(
         ("display", display, "display"),
         ("imports", imports, "imports"),
         ("api", api_overlay, "api"),
+        ("contexts", contexts_manifest, "contexts"),
     ):
         if path is None:
             continue
@@ -263,7 +271,7 @@ def backend(
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
-    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text, api_text = (
+    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text, api_text, contexts_text = (
         _reads["manifest"],
         _reads["human"],
         _reads["pages"],
@@ -272,6 +280,7 @@ def backend(
         _reads["display"],
         _reads["imports"],
         _reads["api"],
+        _reads["contexts"],
     )
 
     # FR-CLI-1: resolve the deployment mode. app.yaml's `deployment.mode` is the source of truth;
@@ -364,6 +373,8 @@ def backend(
             imports_text=imports_text,
             api_text=api_text,
             overlay_warnings=overlay_warnings,
+            contexts_text=contexts_text,
+            project_root=str(out.resolve()),
             # On --check we don't render the untracked prose fragments (they need the .md on disk
             # and never participate in drift); on write we do, reading app/pages/*.md under --out.
             pages_app_dir=None if check else (out / "app"),
@@ -399,6 +410,8 @@ def backend(
                 display_text=display_text,
                 imports_text=imports_text,
                 api_text=api_text,
+                contexts_text=contexts_text,
+                project_root=str(out.resolve()),
             )
             if result.status != "in_sync":
                 drifted += 1
