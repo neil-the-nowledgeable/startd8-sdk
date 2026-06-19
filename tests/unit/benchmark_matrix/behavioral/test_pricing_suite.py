@@ -169,6 +169,46 @@ def test_suite_reaches_full_coverage_against_reference(reference_server):
     assert len(result.results) == 15  # G1..G7 + rollup
 
 
+class _BrokenNoCapPricing(_ReferencePricing):
+    """Correct in every respect EXCEPT it ignores a discount's ``maximum_amount`` cap — a realistic
+    single-bug model error (forgetting one clamp). Used to prove the suite discriminates per-RPC."""
+
+    def ComputeBasket(self, request, context):
+        for li in request.items:        # strip the cap so apply_discounts never clamps
+            for d in li.discounts:
+                d.maximum_amount = ""
+        return super().ComputeBasket(request, context)
+
+
+@pytest.fixture()
+def broken_nocap_server():
+    port = _free_port()
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    pricing_pb2_grpc.add_PricingServiceServicer_to_server(_BrokenNoCapPricing(), server)
+    server.add_insecure_port(f"127.0.0.1:{port}")
+    server.start()
+    try:
+        yield port
+    finally:
+        server.stop(grace=None)
+
+
+def test_suite_fails_exactly_the_capped_discount_check(broken_nocap_server):
+    """R2-S3: a single-bug server (ignores the discount cap) must fail EXACTLY ``g6_cap_70`` with the
+    wrong net — every other check still passes. This proves the suite discriminates per-RPC for a
+    specific reason, not merely on a generic crash/timeout that would fail everything at once."""
+    result = run_pricing_suite(broken_nocap_server)
+    assert result.connect_error == "", result.connect_error
+    by_name = {r.name: r for r in result.results}
+    # exactly the capped-discount check fails, and it fails for the RIGHT reason (uncapped 50% of 100
+    # = 50 → net 50.00, not the capped 70.00) — not a connect error or a blanket failure.
+    assert by_name["g6_cap_70"].passed is False
+    assert "50.00" in by_name["g6_cap_70"].detail, by_name["g6_cap_70"].detail
+    others = [r for r in result.results if r.name != "g6_cap_70"]
+    assert all(r.passed for r in others), [(r.name, r.detail) for r in others if not r.passed]
+    assert 0.0 < result.coverage < 1.0   # discriminates: not a total wipeout, not a false pass
+
+
 def test_fr14_proto_mapping_keeps_ob_on_demo_proto():
     """FR-14: OB services resolve to demo.proto (default), only pricingservice overrides."""
     default = (execute._PROTO, "demo.proto")
