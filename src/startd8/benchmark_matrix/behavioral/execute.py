@@ -21,8 +21,9 @@ from ..sandbox import SandboxConfig, run_service_sandboxed
 from .ad_suite import run_ad_suite
 from .charge_suite import run_charge_suite
 from .currency_suite import run_currency_suite
-from .contract import resolve_serve_command
+from .contract import StartupContract, resolve_serve_command
 from .pricing_suite import run_pricing_suite
+from .rest_pricing_suite import run_rest_pricing_suite
 from .shipping_suite import run_shipping_suite
 
 # service name -> behavioral suite (the SDK-authored client). P1+P2 curated stateless set,
@@ -33,6 +34,7 @@ _SUITES: Dict[str, Callable[[int], object]] = {
     "shippingservice": run_shipping_suite,
     "adservice": run_ad_suite,
     "pricingservice": run_pricing_suite,
+    "rest-pricingservice": run_rest_pricing_suite,
 }
 
 _NODE_RUNTIME = Path(__file__).parent / "node_runtime"
@@ -142,6 +144,11 @@ def run_behavioral_cell(
                                 provenance={"reason": "no serve command (no contract / unknown language)"})
     argv, extra_env = serve
     lang = ((seed or {}).get("service_metadata", {}).get("language") or (seed or {}).get("language"))
+    # Readiness mode from the seed's startup contract (FR-5/FR-11): "tcp" (gRPC default) or "http"
+    # (REST lane). Drives both provisioning (REST skips the grpc/proto runtime) and the readiness probe.
+    contract = StartupContract.from_seed(seed)
+    readiness_mode = contract.readiness if contract else "tcp"
+    health_path = contract.health_path if contract else "/health"
 
     # Provision the cell's deps at PREPARE time (before the egress-denied run), per language (P1).
     # Node uses the offline vendored closure (safest); others install securely (FR-P1-SEC-1..5).
@@ -153,7 +160,7 @@ def run_behavioral_cell(
                                     provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
     else:
         from .provision import provision_workdir
-        pr = provision_workdir(Path(workdir), lang, target_files)
+        pr = provision_workdir(Path(workdir), lang, target_files, grpc=(readiness_mode != "http"))
         if not pr.ok:
             return BehavioralResult(has_suite=True, degraded=True,
                                     provenance={"reason": pr.degraded_reason,
@@ -165,7 +172,8 @@ def run_behavioral_cell(
     # immediately and are unaffected.
     readiness = 30.0
     sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env,
-                               readiness_timeout_s=readiness)
+                               readiness_timeout_s=readiness,
+                               readiness_mode=readiness_mode, health_path=health_path)
     prov: Dict = {"ready": sr.ready, "isolation_level": sr.isolation_level,
                   "network_isolated": sr.network_isolated, "violation": sr.violation,
                   "server_stderr_tail": (sr.server_stderr or "")[-400:]}
