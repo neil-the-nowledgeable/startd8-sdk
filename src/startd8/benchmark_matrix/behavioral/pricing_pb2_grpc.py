@@ -8,7 +8,7 @@ try:
 except ImportError:  # standalone subprocess (server fixture): stubs co-located in cwd
     import pricing_pb2 as pricing__pb2
 
-GRPC_GENERATED_VERSION = '1.81.0'
+GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
