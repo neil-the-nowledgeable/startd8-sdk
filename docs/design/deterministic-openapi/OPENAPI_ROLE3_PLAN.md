@@ -1,8 +1,8 @@
 # OpenAPI Role 3 — Inter-Context Seam (Implementation Plan)
 
-**Version:** 0.2 (M0–M3 shipped — paired with Requirements v0.2)
+**Version:** 0.3 (M0–M5 + P2 shipped)
 **Date:** 2026-06-19
-**Status:** ✅ Shipped on `main` (2026-06-19) — see `OPENAPI_ROLE3_NEXT_STEPS.md`
+**Status:** ✅ Shipped on `main` — see `OPENAPI_ROLE3_NEXT_STEPS.md`
 **Paired requirements:** `OPENAPI_ROLE3_REQUIREMENTS.md`
 
 ---
@@ -121,7 +121,9 @@ M4 two-app fixture, M5 cross-repo contract filter, bucket-3 Prime integration wi
 | M2c (remote producer smoke) | ✅ |
 | M3 (assembly-inputs docs) | ✅ |
 | M4 (two-app fixture) | ✅ |
+| P2 (bucket-3 Prime integration) | ✅ |
+| M5 (cross-repo pinned contract) | ✅ |
 
 ---
 
-*Plan v0.3 — M0–M4 + P2 + M5 shipped on `main`. Next: `OPENAPI_ROLE3_NEXT_STEPS.md` (P4 hygiene).*
+*Plan v0.3 — fully shipped on `main`. Continuation: deferred polyglot tracks in `OPENAPI_ROLE3_NEXT_STEPS.md`.*

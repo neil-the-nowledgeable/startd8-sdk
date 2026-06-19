@@ -1,13 +1,13 @@
 # OpenAPI Role 3 — Suggested Next Steps
 
 **Date:** 2026-06-19  
-**Status:** Handoff after v0.2 ship to `main`  
-**Shipped:** M0–M3 + M2b (OTel) + M2c (remote smoke) — merge `2d474bf2` + review fixes `a7bc68e6`  
-**Paired docs:** `OPENAPI_ROLE3_REQUIREMENTS.md`, `OPENAPI_ROLE3_PLAN.md`
+**Status:** ✅ Fully shipped on `main` (M0–M5 + P2 + P4 doc hygiene)  
+**Shipped:** M0–M3 + M2b (OTel) + M2c (remote smoke) + M4 + P2 + M5  
+**Paired docs:** `OPENAPI_ROLE3_REQUIREMENTS.md` (v0.3), `OPENAPI_ROLE3_PLAN.md` (v0.3)
 
 ---
 
-## What shipped (v0.2 recap)
+## What shipped (full recap)
 
 | Milestone | Deliverable |
 |-----------|-------------|
@@ -17,9 +17,19 @@
 | M2b | `clients/_context_otel.py` — CLIENT spans on outbound HTTP (OQ-5) |
 | M2c | Deploy harness `context_smoke` stage + `STARTD8_CONTEXT_<ID>_BASE_URL` |
 | M3 | `ASSEMBLY_INPUTS_TEMPLATE.md` v0.2 + wireframe `contexts` catalog key |
-| **M4** | Two-app fixture + pytest + `scripts/openapi_role3_m4_smoke.sh` |
+| M4 | Two-app fixture + `scripts/openapi_role3_m4_smoke.sh` |
+| P2 | Bucket-3 Prime integration (`app/context_clients.py`, prompt injection) |
+| M5 | Cross-repo pinned contract + `scripts/openapi_role3_m5_smoke.sh` |
+| P4 | Doc/capability index/SDK architecture hygiene (this pass) |
 
-**Start here on `main`:** branch for **P4** (doc hygiene) — M5 cross-repo seam is shipped.
+**Regression guard:**
+
+```bash
+pytest tests/unit/backend_codegen/test_context_*.py \
+       tests/unit/backend_codegen/test_cross_context_smoke.py \
+       tests/unit/backend_codegen/test_openapi_role3_*.py \
+       tests/unit/deploy_harness/test_context_smoke*.py -q
+```
 
 ---
 
@@ -83,18 +93,18 @@ filtering for divergent schemas.
 **Done when:** requirements v0.3 closes cross-repo filter semantics and adds one integration test
 with mismatched producer/consumer Prisma models — **satisfied**.
 
-**Start here on `main`:** **P4** (doc + hygiene) or deferred polyglot tracks.
+**Start here on `main`:** deferred polyglot tracks below — Role 3 Python seam is complete.
 
 ---
 
-## Priority 4 — Doc + hygiene (quick wins)
+## Priority 4 — Doc + hygiene (quick wins) ✅
 
-| Task | Owner |
-|------|-------|
-| Update `OPENAPI_LEVERAGE_ANALYSIS.md` §4 — Role 3 → ✅ shipped | SDK docs |
-| Bump `OPENAPI_ROLE3_*` headers to **v0.2 shipped on main** | SDK docs |
-| Remove merged `startd8-openapi-role1` worktree + local `feat/openapi-role3-context` branch | Operator |
-| Add Role 3 row to capability index / `SDK_ARCHITECTURE` inter-context section | SDK docs |
+| Task | Status |
+|------|--------|
+| Update `OPENAPI_LEVERAGE_ANALYSIS.md` §4 — Role 3 shipped | ✅ |
+| Bump `OPENAPI_ROLE3_*` headers to **v0.3 shipped on main** | ✅ |
+| Remove merged `startd8-openapi-role1` worktree + local Role 3 feature branches | ✅ (operator) |
+| Add Role 3 to capability index + `SDK_ARCHITECTURE` inter-context section | ✅ |
 
 ---
 
@@ -127,9 +137,10 @@ with mismatched producer/consumer Prisma models — **satisfied**.
 ```bash
 pytest tests/unit/backend_codegen/test_context_*.py \
        tests/unit/backend_codegen/test_cross_context_smoke.py \
+       tests/unit/backend_codegen/test_openapi_role3_*.py \
        tests/unit/deploy_harness/test_context_smoke*.py -q
 ```
 
 ---
 
-*Handoff doc — session 2026-06-19 (OpenAPI Role 3 M0–M3 merge).*
+*Handoff doc — Role 3 fully shipped on `main` (2026-06-19).*

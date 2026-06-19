@@ -136,7 +136,7 @@ When a team extracts a service (payments, AI gateway, catalog), consumers need:
 
 ## 4. Open Questions — Closed
 
-All five open questions resolved in §0.1. M0–M3 + M2b + M2c shipped on `main`.
+All five open questions resolved in §0.1. M0–M5 + P2 shipped on `main`.
 
 ---
 
@@ -150,8 +150,10 @@ All five open questions resolved in §0.1. M0–M3 + M2b + M2c shipped on `main`
 | Local outbound context list+create smoke (TestClient shim) | ✅ | M2 |
 | Remote producer smoke via deploy harness | ✅ | M2c |
 | Assembly-inputs template documents `contexts` | ✅ | M3 |
-| $0 LLM; deterministic skip-hook recognition | ✅ | M1 |
+| Cross-repo pinned contract without consumer entity overlap | ✅ | M5 |
+| Prime bucket-3 integration prompt wiring | ✅ | P2 |
+| Two-app + cross-repo fixture smoke | ✅ | M4/M5 |
 
 ---
 
-*v0.2 — Reflective loop closed; shipped on `main`. Continuation: `OPENAPI_ROLE3_NEXT_STEPS.md`.*
+*v0.3 — shipped on `main`. Deferred tracks: `OPENAPI_ROLE3_NEXT_STEPS.md` §Deferred.*
