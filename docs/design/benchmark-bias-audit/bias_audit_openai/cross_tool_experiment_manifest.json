@@ -58,13 +58,13 @@
         "id": "suite_author",
         "varies": "behavioral_suite",
         "frozen_inputs": ["canonical_spec", "canonical_proto"],
-        "prompt_template": "prompts/s2-suite-author.md"
+        "prompt_template": "docs/design/benchmark-bias-audit/bias_audit_openai/prompts/suite-author.v0.1.md"
       },
       {
         "id": "spec_author",
         "varies": "functional_spec",
         "frozen_inputs": ["neutral_brief", "canonical_proto"],
-        "prompt_template": "prompts/s2-spec-author.md"
+        "prompt_template": "docs/design/benchmark-bias-audit/bias_audit_openai/prompts/spec-author.v0.1.md"
       }
     ],
     "retry_policy": {

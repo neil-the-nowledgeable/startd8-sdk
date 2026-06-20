@@ -216,7 +216,8 @@ class SubprocessCellExecutor:
     def __init__(self, seeds_dir: Path, *, per_run_timeout_s: Optional[float] = 1800.0,
                  workdir_root: Optional[Path] = None,
                  repair_mode: str = "apply", expose_defects: bool = False,
-                 behavioral: bool = False):
+                 behavioral: bool = False,
+                 operator_callback: Optional[Callable[[str, str, MatrixCell], None]] = None):
         self.seeds_dir = Path(seeds_dir)
         self.per_run_timeout_s = per_run_timeout_s
         # Coerce to Path: callers (e.g. the pilot's persistent batch root) may pass a str, and the
@@ -228,6 +229,7 @@ class SubprocessCellExecutor:
         # term. Default OFF — turning it on is the paymentservice pilot (spends LLM only via the
         # generation step; the suite itself is $0). Off ⇒ scoring path is byte-identical to today.
         self.behavioral = behavioral
+        self.operator_callback = operator_callback
 
     def __call__(self, cell: MatrixCell, spec: BenchmarkRunSpec, language: str) -> CellResult:
         from ..model_comparison import build_command, extract_metrics, run_command, SDK_ROOT
@@ -277,7 +279,17 @@ class SubprocessCellExecutor:
                 cmd.append("--micro-prime")
                 srcs.append("micro_prime")
             leverage_source = "both" if len(srcs) == 2 else (srcs[0] if srcs else None)
-        run = run_command(cmd, SDK_ROOT, timeout=self.per_run_timeout_s)
+        if self.operator_callback:
+            self.operator_callback("starting model workflow", "generation", cell)
+
+        def _stream(stream: str, line: str) -> None:
+            if self.operator_callback:
+                self.operator_callback(f"{stream}: {line}", "workflow_output", cell)
+
+        run = run_command(cmd, SDK_ROOT, timeout=self.per_run_timeout_s,
+                          on_output=_stream if self.operator_callback else None)
+        if self.operator_callback:
+            self.operator_callback("model workflow completed", "generation_complete", cell)
         metrics = extract_metrics(output)
 
         from ..model_comparison import _latest_match, _load_json
@@ -354,6 +366,8 @@ class SubprocessCellExecutor:
         # the composite floors non-compiling output. Failures here are scoring outcomes,
         # never fatal to the harness.
         if status == STATUS_OK:
+            if self.operator_callback:
+                self.operator_callback("starting compile and behavioral scoring", "compile_scoring", cell)
             try:
                 gen_file = self._generated_file(workdir, cell.service)
                 if gen_file is not None:
@@ -365,6 +379,8 @@ class SubprocessCellExecutor:
                     # startup contract + run the suite; fold coverage into the composite (the
                     # compile gate inside score_file still floors non-compiling code first).
                     if self.behavioral:
+                        if self.operator_callback:
+                            self.operator_callback("starting behavioral suite", "behavioral_execution", cell)
                         from ..model_comparison import _load_json
                         from .behavioral.execute import run_behavioral_cell
                         seed_data = _load_json(seed) or {}
