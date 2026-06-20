@@ -75,7 +75,7 @@
   },
   "execution_controls": {
     "clean_workspace_required": true,
-    "forbidden_ambient_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+    "forbidden_ambient_instruction_files": ["CLAUDE.md", "AGENTS.md", "GEMINI.md"],
     "network_policy": "authoring_cli_only; generated artifact validation is offline",
     "raw_artifact_capture": "immutable_before_normalization",
     "normalization": "mechanical_only"

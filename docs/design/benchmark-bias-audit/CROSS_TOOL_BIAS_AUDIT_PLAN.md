@@ -52,12 +52,31 @@ Antigravity is IDE-only → optional manual cross-check, not part of the automat
 - **Catastrophic-failure policy:** a generation is catastrophic if it is syntactically invalid, non-compiling, non-running, missing required files, or fails a majority of the brief. Allow ≤1 automated retry (same prompt/params) for truncation/formatting/file-boundary failures; no human semantic repair; log raw output + category + retry + exclusion reason. Count catastrophic failures in tool-capability + FR-11 variance, but **exclude them from semantic bias calls** unless consistent, vendor-specific, and adjudicated as authorship-relevant.
 - **Gate:** an artifact passes only at status `accepted` or `rejected_with_reason`; only accepted artifacts enter FR-4/5/6, rejects stay in capability reporting.
 
+**S2c — Existing-run reconciliation and quarantined promotion.** A collection produced outside the
+committed controller is not eligible for analysis merely because files exist. Before it enters the audit
+store, reconcile every raw run against the frozen schedule: require one metadata record per scheduled
+coordinate; match experiment/tool/vendor/sample/ordinal; require exit status, timestamp, rendered prompt,
+stdout/stderr, and experiment-specific outputs; verify source and artifact checksums; record retry history
+and tool versions; then write a reconciliation report. Secret/license scanning occurs in the isolated raw
+staging area. Only a clean report promotes the batch into the durable, queryable audit store; failed runs
+remain quarantined with reason codes. The store manifest records source path, scan result, checksum, and
+promotion timestamp. This stage is idempotent and does not modify raw artifacts.
+
+- **Gate:** no S3/S4/S5/S6 reader may consume a raw batch until its reconciliation report is `accepted`
+  and the store manifest identifies the promoted batch.
+
 **S2.5 / S3 — Oracle + mutant battery with validation gates** (`bias_audit/oracle/`, `bias_audit/mutants/`). Build the known-correct Node oracle + K single-fault mutants (wrong rounding, addition-when-chain, tax-before-discount, off-by-cap, float arithmetic, …), each targeting one OPEN choice; S2.5 first records the validation protocol/reviewers/adequacy gates before construction is treated as usable.
 - **Oracle provenance gate:** record human/tool authorship + commits + any Claude-derived portion; Claude-derived behaviors require independent non-Claude review/reimplementation before serving as the sole correctness anchor; validate against the S1 matrix + upstream Liferay evidence + seed schema (not against Claude's spec alone), with ≥2 reviewers (one blinded where practical) signing off.
 - **Oracle validation gate:** behavior-level evidence log (expected behavior / citation / test / sign-off) + property/metamorphic checks (decimal precision, monotonicity, cap, stable rounding, ordering, errors); oracle must pass all tests, satisfy FIXED constraints, and run deterministically under locked runtime.
 - **Mutant adequacy gate:** cover every material OPEN dimension (≥1 mutant, ≥2 for high-risk: rounding/ordering/caps/decimal/errors); single-fault unless flagged interaction; validate each against oracle + ≥1 calibration suite; exclude/rewrite equivalent or invalid mutants; require minimum discriminatory power (each OPEN dim killable, battery separates ≥1 weak calibration suite from oracle, each mutant differs on a targeted probe, no kill due solely to harness incompatibility).
 - Manifest fields per mutant: ID, targeted OPEN item, injected fault, expected behavior, source rationale, diff, expected kill condition; plus an expected-kill-matrix and adequacy report.
 - **Gate:** S3 passes only when provenance + validation + adequacy gates pass. If provisional, S4 may run for debugging but cannot support final verdicts.
+
+**S3a — Gate evidence schema.** The S3 status file is derived, never manually sufficient. It must link
+to: oracle provenance; fixed/open evidence mapping; reviewer sign-offs carrying reviewer ID/role, blinding,
+evidence reviewed, decision, rationale, and date; executable-mutant manifest; expected-kill matrix; and
+calibration/adequacy report. A validator fails closed when any required evidence is absent, malformed, or
+not accepted. An `accepted` status without these links is downgraded to `blocked`.
 
 **S4 — Factored experiment A (suite-author bias).** Fix the Claude spec; each tool authors only the
 **suite** (N samples). Run every accepted suite against the validated oracle + mutant battery → pass/fail vectors → equivalence matrix; a suite that misses a mutant the others catch reveals an author blind spot (localize to the weak/missing assertion without semantically repairing the suite).
