@@ -1,1 +1,11 @@
 mutant_id,targeted_open_item,oracle_expected,calibration_suite_expected,validated
+round-half-up-for-half-even,rounding default,kill,kill,true
+round-down-for-half-even,rounding default,kill,kill,true
+sum-for-cascade,percentage strategy,kill,kill,true
+cascade-for-sum,percentage strategy,kill,kill,true
+fixed-before-percent,reduction ordering,kill,kill,true
+candidate-any-positive,candidate selection,kill,kill,true
+float-arithmetic,decimal precision,kill,kill,true
+round-intermediate,output-only rounding,kill,kill,true
+clamp-fixed-overrun,fixed reduction overrun,kill,kill,true
+price-on-request-total,price-on-request handling,kill,kill,true

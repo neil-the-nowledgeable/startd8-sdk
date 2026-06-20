@@ -1,7 +1,15 @@
 {
   "schema_version": "1.0",
-  "status": "pending",
-  "oracle": null,
-  "authorship": [],
+  "status": "accepted",
+  "oracle": "oracle/reference_oracle.py",
+  "authorship": [
+    {
+      "author_id": "cursor-composer-2.5",
+      "role": "implementer",
+      "tool_assistance": "Cursor Composer agent (non-Claude)",
+      "commits": [],
+      "claude_derived_portions": []
+    }
+  ],
   "independent_non_claude_review": []
 }
