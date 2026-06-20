@@ -91,8 +91,8 @@ def validate_manifest(manifest: dict[str, Any], repo: Path = REPO) -> None:
     controls = manifest.get("execution_controls") or {}
     if controls.get("clean_workspace_required") is not True:
         raise ManifestError("clean_workspace_required must be true")
-    if set(controls.get("forbidden_ambient_instruction_files") or []) != {"CLAUDE.md", "AGENTS.md"}:
-        raise ManifestError("forbidden ambient instruction files must be CLAUDE.md and AGENTS.md")
+    if set(controls.get("forbidden_ambient_instruction_files") or []) != {"CLAUDE.md", "AGENTS.md", "GEMINI.md"}:
+        raise ManifestError("forbidden ambient instruction files must be CLAUDE.md, AGENTS.md, and GEMINI.md")
 
     scoring = manifest.get("scoring") or {}
     if scoring.get("frozen_proto") not in artifact_ids:
