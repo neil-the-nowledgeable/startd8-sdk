@@ -168,6 +168,10 @@ def main():
         try:
             for sf in suite_files:
                 suite_name = sf.name
+                # Ensure the target's pricing.proto is placed next to the suite before execution
+                import shutil
+                shutil.copy(target["proto"], sf.parent / "pricing.proto")
+                
                 outcome = execute_suite(sf, port, target["proto"])
                 
                 results[target_name][suite_name] = {

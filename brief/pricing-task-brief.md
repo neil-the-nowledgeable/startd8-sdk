@@ -14,9 +14,24 @@ This document serves as the neutral prompt input for the benchmark re-authoring 
 ## 1. Core Service Interface & Data Format
 
 * **[FIXED-1] Stateless Pure Function:** The service must be a pure, stateless calculator. Price-list lookup, eligibility, and address-to-tax-rate resolution are performed upstream. All data required for calculation must be provided in the request. No database, external network, or local caching is allowed.
-* **[OPEN-1] Service and Method Naming:** The gRPC service name and the RPC method name are not defined by the upstream source and are open to the tool's discretion.
+* **[FIXED-16] Service and Method Naming:** The gRPC package name must be `startd8.bench.pricing.v1`, the service name must be `PricingService`, and the RPC method name must be `ComputeBasket`.
 * **[FIXED-2] Data Type for Monetary Values:** To avoid binary floating-point representation errors and preserve exact decimal arithmetic, all monetary amounts and quantities must be handled as decimal strings (e.g., `"12.34"`).
-* **[OPEN-2] Message and Field Names:** The names of input and output messages, as well as their fields, are open.
+* **[FIXED-17] Message and Field Names:** The gRPC service interface must conform exactly to the following schemas, including exact names, types, and tag indices:
+  * **Enums:**
+    * `enum DiscountStrategy { DISCOUNT_STRATEGY_UNSPECIFIED = 0; CHAIN = 1; ADDITION = 2; }`
+    * `enum DiscountKind { DISCOUNT_KIND_UNSPECIFIED = 0; PERCENTAGE = 1; FIXED_AMOUNT = 2; }`
+    * `enum RoundingMode { ROUNDING_MODE_UNSPECIFIED = 0; HALF_UP = 1; HALF_EVEN = 2; }`
+  * **Nested Messages:**
+    * `message Currency { string code = 1; uint32 scale = 2; RoundingMode rounding = 3; }`
+    * `message Discount { DiscountKind kind = 1; repeated string tier_factors = 2; string maximum_amount = 3; }`
+    * `message LineItem { string sku = 1; string quantity = 2; string unit_price = 3; string offer_unit_price = 4; bool price_on_application = 5; repeated Discount discounts = 6; string tax_rate = 7; }`
+    * `message DiscountValue { string amount = 1; string percentage = 2; repeated string factor_percentages = 3; }`
+    * `message PricedLineItem { string sku = 1; string unit_price = 2; string offer_unit_price = 3; string net_payable = 4; DiscountValue discount_value = 5; string tax_value = 6; string net_payable_with_tax = 7; DiscountValue discount_value_with_tax = 8; bool price_on_application = 9; }`
+  * **Request and Response Messages:**
+    * `message ComputeBasketRequest { repeated LineItem items = 1; DiscountStrategy strategy = 2; Currency currency = 3; bool calculate_tax = 4; bool discounts_pre_tax = 5; }`
+    * `message ComputeBasketResponse { repeated PricedLineItem items = 1; string subtotal_net_payable = 2; string subtotal_net_payable_with_tax = 3; }`
+* **[FIXED-19] Listening Port Configuration:** The gRPC server must retrieve its listening port from the environment variable `PORT` (e.g., `process.env.PORT` in Node.js), defaulting to `50051` if not specified. This environment variable is dynamically injected by the test runner.
+* **[FIXED-20] Proto Loader Case Preservation:** The server must load the protobuf definition with `keepCase: true` (or the equivalent option for the selected library/language) to preserve snake_case properties on request and response objects, ensuring proper validation and calculation property mapping.
 
 ---
 
@@ -30,7 +45,7 @@ The calculation request must provide the following inputs:
    * The promo price is $> 0$, and
    * The promo price is strictly lower than the unit price.
 4. **[FIXED-6] Eligible Discounts:** A list of eligible discounts to apply. Each discount carries a collection of tiers (representing discount levels) and an optional maximum discount cap.
-5. **[OPEN-3] Discount Tier Structure:** The number of discount levels and the way they are represented in the message structure (e.g., individual fields `level1..4` vs. a repeated array of factors) is open.
+5. **[FIXED-18] Discount Tier Structure:** The Discount message must represent discount levels as a repeated list of factors named `tier_factors` (1..4 entries, where PERCENTAGE uses all available factors and FIXED_AMOUNT only uses the first factor).
 6. **[FIXED-7] Tax Rate:** A flat tax rate represented as a percentage (decimal string) per line item.
 7. **[OPEN-4] Rounding Parameters:** The currency representation must support specifying scale (fraction digits) and a rounding mode. The default rounding mode when none is specified is open.
 8. **[FIXED-8] Strategy and Ordering Flags:** Flags indicating:
@@ -106,6 +121,8 @@ The service must support two tax calculation paths (selected by request flag):
 | **FIXED-14** | FIXED | `source-evidence` | `CommerceChannel.isDiscountsTargetNetPrice = false` | Upstream gross-discounting logic: convert to gross, discount, then extract net. |
 | **FIXED-15** | FIXED | `source-evidence` | `PRICING_SEED_REQUIREMENTS.md` FR-8 | Price on Application (POA) is a standard Liferay product status requiring empty prices. |
 | **OPEN-5** | OPEN | `human-adjudication` | None | Upstream Liferay throws exceptions; gRPC status code mapping is a protocol choice left open to the author. |
+| **FIXED-19** | FIXED | `harness-constraint` | `StartupContract` in seed configuration | Server must bind to the dynamic port allocated by the sandbox environment. |
+| **FIXED-20** | FIXED | `harness-constraint` | `pricing_suite.py` assertions | Client assertions assume snake_case fields are preserved in request/response processing. |
 
 ---
 

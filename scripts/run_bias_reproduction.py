@@ -27,6 +27,10 @@ REPO = Path(__file__).resolve().parent.parent
 DB_PATH = REPO / ".startd8" / "bias_audit_reproduction.db"
 BRIEF_PATH = REPO / "brief" / "pricing-task-brief.md"
 
+# Safe PYTHONPATH path injection to import startd8 from main repo if not installed
+sys.path.insert(0, str(REPO / "src"))
+from startd8.prompt_builder import TemplateLoader, PromptGenerator, TemplateContext
+
 # ----------------------------------------------------------------------
 # 1. Base Runner Interface
 # ----------------------------------------------------------------------
@@ -220,6 +224,12 @@ The test suite must be compatible with the standard Node.js test runner (using `
 You must only output the Javascript code for the test suite, enclosed in a ```javascript code block.
 Ensure you assert the correct rounding limits, stacking discount strategies, tax precedence logic, and invalid quantity rejections.
 
+CRITICAL STRUCTURAL CONSTRAINTS:
+1. The gRPC server implements package `startd8.bench.pricing.v1`, service `PricingService`, with the RPC method `ComputeBasket`.
+2. The request/response messages must use the exact field names and structures defined in the task brief (e.g. repeated `LineItem items = 1` inside `ComputeBasketRequest`, and `repeated PricedLineItem items = 1` inside `ComputeBasketResponse`).
+3. Ensure your test client loads `pricing.proto` from its directory and queries package `startd8.bench.pricing.v1.PricingService` on method `ComputeBasket`.
+4. Your test client must connect to the address specified in the environment variable `SERVER_ADDRESS` (or `process.env.SERVER_ADDRESS`), falling back to `localhost:50051` only if undefined.
+
 [Upstream Neutral Brief]
 {brief}
 """
@@ -230,6 +240,13 @@ Using the neutral task brief below, author the complete, formal gRPC service int
 Your output must be divided clearly:
 1. The gRPC contract enclosed in a ```proto code block.
 2. The detailed functional requirement documentation in Markdown.
+
+CRITICAL STRUCTURAL CONSTRAINTS:
+1. The gRPC server implementation must be entirely self-contained within a single file: `src/pricingservice/server.js`.
+2. Do not split your logic across separate files (e.g., calculator.js, constants.js) or write external scripts, as the sandbox environment will only persist `server.js`.
+3. The server must load the gRPC definition from `pricing.proto` (which is copied dynamically next to the server file on startup).
+4. Do not reference custom filenames like `pricing_calculator.proto` for the protobuf contract. Use the name `pricing.proto`.
+5. You MUST explicitly state in the Markdown functional requirements that the server must load the protobuf definition from its local directory (i.e. next to `server.js` using `./pricing.proto` or `path.join(__dirname, 'pricing.proto')`), and that it must not attempt to load it from relative paths like `../../pb/pricing.proto`.
 
 [Upstream Neutral Brief]
 {brief}
@@ -262,11 +279,47 @@ def main(argv=None) -> int:
     # Read the neutral brief
     brief_content = args.brief_path.read_text(encoding="utf-8")
     
-    # Render prompt
+    # Render prompt using SDK PromptBuilder (Configurable audit redesign integration)
+    loader = TemplateLoader()
+    generator = PromptGenerator()
+    
     if args.experiment == "suite":
-        prompt = TEMPLATE_SUITE.format(brief=brief_content)
+        template = loader.get_template("bias_audit_suite")
+        policy_file = REPO / ".startd8" / "bias_audit" / "policy_suite.json"
     else:
-        prompt = TEMPLATE_SPEC.format(brief=brief_content)
+        template = loader.get_template("bias_audit_spec")
+        policy_file = REPO / ".startd8" / "bias_audit" / "policy_spec.json"
+
+    if not template:
+        print(f"Error: Prompt template for '{args.experiment}' not found.", file=sys.stderr)
+        return 1
+
+    # Load policy override (if configured)
+    policy_str = ""
+    if policy_file.exists():
+        try:
+            import json
+            policy_data = json.loads(policy_file.read_text(encoding="utf-8"))
+            if isinstance(policy_data, list):
+                policy_str = "\n".join(f"- {rule}" for rule in policy_data)
+            else:
+                policy_str = str(policy_data)
+        except Exception as e:
+            print(f"Warning: Failed to load policy file {policy_file}: {e}", file=sys.stderr)
+
+    # Build context suggestions (incorporating the configurable POLICY_CONSTRAINTS)
+    suggestions = {
+        "BRIEF": brief_content,
+        "POLICY_CONSTRAINTS": policy_str
+    }
+    
+    context = TemplateContext(
+        project_path=REPO,
+        variable_values=suggestions,
+        auto_filled=suggestions
+    )
+    result = generator.fill_template(template, context)
+    prompt = result.content
 
     print("=" * 80)
     print(f"Audit Experiment: {args.experiment.upper()}")

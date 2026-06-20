@@ -1,0 +1,25 @@
+id: bias_audit_suite
+name: Bias Audit Suite Prompt
+description: Prompt for generating a test suite in the bias audit.
+category: audit
+version: 1.0.0
+
+variables:
+  - name: BRIEF
+    description: Upstream neutral brief contents
+    required: true
+    input_type: multiline
+    order: 1
+
+content: |
+  [Task Description]
+  Using the neutral task brief below, write a comprehensive Node.js test suite for a stateless price calculator.
+  The test suite will execute assertions against a gRPC server implementing the calculator. 
+  The test suite must be compatible with the standard Node.js test runner (using `node:test` and `node:assert`).
+  You must only output the Javascript code for the test suite, enclosed in a ```javascript code block.
+  Ensure you assert the correct rounding limits, stacking discount strategies, tax precedence logic, and invalid quantity rejections.
+
+  {{POLICY_CONSTRAINTS|default=""}}
+
+  [Upstream Neutral Brief]
+  {{BRIEF}}

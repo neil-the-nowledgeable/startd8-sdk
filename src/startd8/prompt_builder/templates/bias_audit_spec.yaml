@@ -1,0 +1,24 @@
+id: bias_audit_spec
+name: Bias Audit Spec Prompt
+description: Prompt for generating a gRPC contract and functional spec in the bias audit.
+category: audit
+version: 1.0.0
+
+variables:
+  - name: BRIEF
+    description: Upstream neutral brief contents
+    required: true
+    input_type: multiline
+    order: 1
+
+content: |
+  [Task Description]
+  Using the neutral task brief below, author the complete, formal gRPC service interface (.proto file) AND the detailed Markdown functional specification describing the stateless calculator.
+  Your output must be divided clearly:
+  1. The gRPC contract enclosed in a ```proto code block.
+  2. The detailed functional requirement documentation in Markdown.
+
+  {{POLICY_CONSTRAINTS|default=""}}
+
+  [Upstream Neutral Brief]
+  {{BRIEF}}
