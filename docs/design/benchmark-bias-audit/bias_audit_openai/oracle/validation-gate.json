@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "status": "blocked",
+  "purpose": "Independent admission gate before suite equivalence or semantic bias analysis.",
+  "checks": [
+    {"id": "oracle_provenance", "status": "pending", "requirement": "Record authorship, commits, Claude-derived portions, and independent non-Claude review."},
+    {"id": "evidence_mapping", "status": "pending", "requirement": "Map fixed and adjudicated-open behavior to source traceability evidence."},
+    {"id": "reviewer_signoff", "status": "pending", "requirement": "Two reviewer sign-offs, including one blinded where practical."},
+    {"id": "mutant_adequacy", "status": "pending", "requirement": "Every material OPEN dimension has a discriminating single-fault mutant."}
+  ],
+  "admission_rule": "All checks must be accepted before external authoring enters semantic bias analysis."
+}

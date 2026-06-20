@@ -11,6 +11,8 @@ import argparse
 import hashlib
 import json
 import random
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,6 +84,9 @@ def validate_manifest(manifest: dict[str, Any], repo: Path = REPO) -> None:
     for item in experiments:
         if not set(item.get("frozen_inputs") or []).issubset(artifact_ids):
             raise ManifestError(f"experiment {item.get('id')} references an unknown frozen input")
+        template = repo / str(item.get("prompt_template", ""))
+        if not template.is_file():
+            raise ManifestError(f"experiment {item.get('id')} prompt template missing: {template}")
 
     controls = manifest.get("execution_controls") or {}
     if controls.get("clean_workspace_required") is not True:
@@ -133,6 +138,25 @@ def _assert_clean_workspace(workdir: Path, controls: dict[str, Any], repo: Path 
                 raise ManifestError(f"ambient instruction file found: {parent / name}")
 
 
+def preflight_tools(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Report CLI availability without authoring or reading credentials."""
+    executable_by_id = {"claude-code": "claude", "codex-cli": "codex", "gemini-cli": "gemini"}
+    results = []
+    for tool in manifest["authoring"]["tools"]:
+        executable = executable_by_id[tool["id"]]
+        path = shutil.which(executable)
+        version = None
+        if path:
+            try:
+                probe = subprocess.run([path, "--version"], text=True, capture_output=True, timeout=10, check=False)
+                output = (probe.stdout or probe.stderr).strip()
+                version = output.splitlines()[0] if output else None
+            except (OSError, subprocess.SubprocessError):
+                version = "unavailable"
+        results.append({"tool_id": tool["id"], "author_vendor": tool["author_vendor"], "executable": executable, "path": path, "version": version, "available": bool(path)})
+    return results
+
+
 def prepare(manifest_path: Path, output_dir: Path, *, repo: Path = REPO) -> dict[str, Any]:
     manifest = _load_manifest(manifest_path)
     validate_manifest(manifest, repo)
@@ -156,6 +180,11 @@ def prepare(manifest_path: Path, output_dir: Path, *, repo: Path = REPO) -> dict
     (output_dir / "authoring-schedule.json").write_text(
         json.dumps(schedule, indent=2) + "\n", encoding="utf-8"
     )
+    templates_dir = output_dir / "prompt-templates"
+    templates_dir.mkdir(exist_ok=True)
+    for experiment in manifest["authoring"]["experiments"]:
+        source = repo / experiment["prompt_template"]
+        (templates_dir / f"{experiment['id']}-{source.name}").write_bytes(source.read_bytes())
     return pre_registration
 
 
@@ -168,11 +197,15 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("/private/tmp/startd8-cross-tool-bias/pricing-cross-tool-authoring-v1"),
     )
     parser.add_argument("--prepare", action="store_true", help="Write the immutable pre-registration and schedule.")
+    parser.add_argument("--preflight-tools", action="store_true", help="Report local CLI availability without authoring.")
     args = parser.parse_args(argv)
     try:
         manifest = _load_manifest(args.manifest)
         validate_manifest(manifest)
         _assert_clean_workspace(args.output_dir, manifest["execution_controls"])
+        if args.preflight_tools:
+            print(json.dumps(preflight_tools(manifest), indent=2))
+            return 0
         if not args.prepare:
             print(f"validated {manifest['experiment_id']}: {len(build_schedule(manifest))} authoring runs planned")
             print("dry-run only; pass --prepare to write the pre-registration and schedule")

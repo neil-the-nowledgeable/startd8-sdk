@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "status": "planned",
+  "oracle_gate": "../oracle/validation-gate.json",
+  "mutants": [
+    {"id": "round-half-up-for-half-even", "open_item": "rounding default", "fault": "apply HALF_UP where HALF_EVEN is required"},
+    {"id": "round-down-for-half-even", "open_item": "rounding default", "fault": "truncate where HALF_EVEN is required"},
+    {"id": "sum-for-cascade", "open_item": "percentage strategy", "fault": "sum percentage levels under CASCADE"},
+    {"id": "cascade-for-sum", "open_item": "percentage strategy", "fault": "cascade percentage levels under SUM"},
+    {"id": "fixed-before-percent", "open_item": "reduction ordering", "fault": "apply fixed reductions before percentages"},
+    {"id": "candidate-any-positive", "open_item": "candidate selection", "fault": "select a positive candidate even when it is not lower"},
+    {"id": "float-arithmetic", "open_item": "decimal precision", "fault": "use binary floating point for arithmetic"},
+    {"id": "round-intermediate", "open_item": "output-only rounding", "fault": "quantize each intermediate operation"},
+    {"id": "clamp-fixed-overrun", "open_item": "fixed reduction overrun", "fault": "clamp a negative remaining amount to zero"},
+    {"id": "price-on-request-total", "open_item": "price-on-request handling", "fault": "include price-on-request lines in numeric totals"}
+  ],
+  "admission_note": "Definitions are not executable mutants until the validation gate accepts provenance, evidence, and discriminatory probes."
+}
