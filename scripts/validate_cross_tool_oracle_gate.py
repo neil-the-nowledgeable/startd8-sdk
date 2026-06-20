@@ -16,37 +16,91 @@ JSON_EVIDENCE = {
     "reviewer_signoff": ROOT / "oracle/reviewer-signoffs.json",
     "mutant_adequacy": ROOT / "mutants/adequacy-report.json",
 }
+CHECK_REQUIREMENTS = {
+    "oracle_provenance": (
+        "Record authorship, commits, Claude-derived portions, and independent "
+        "non-Claude review."
+    ),
+    "evidence_mapping": (
+        "Map fixed and adjudicated-open behavior to source traceability evidence."
+    ),
+    "reviewer_signoff": (
+        "Two reviewer sign-offs, including one blinded where practical."
+    ),
+    "mutant_adequacy": (
+        "Every material OPEN dimension has a discriminating single-fault mutant."
+    ),
+}
 
 
 def load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def is_complete_accepting_signoff(signoff: object) -> bool:
+    if not isinstance(signoff, dict):
+        return False
+    required = {
+        "reviewer_id",
+        "role",
+        "blinded",
+        "evidence_reviewed",
+        "decision",
+        "rationale",
+        "date",
+    }
+    return required.issubset(signoff) and signoff["decision"] in {"accept", "accepted"}
+
+
 def validate() -> dict:
     errors = []
+    check_errors = {check_id: [] for check_id in JSON_EVIDENCE}
+    evidence = {}
     for check_id, path in JSON_EVIDENCE.items():
         try:
             item = load(path)
         except (OSError, json.JSONDecodeError) as exc:
-            errors.append(f"{check_id}: unreadable ({type(exc).__name__})")
+            message = f"unreadable ({type(exc).__name__})"
+            check_errors[check_id].append(message)
+            errors.append(f"{check_id}: {message}")
             continue
+        evidence[check_id] = item
         if item.get("status") != "accepted":
-            errors.append(f"{check_id}: status is not accepted")
-    try:
-        signoffs = load(JSON_EVIDENCE["reviewer_signoff"]).get("signoffs", [])
-    except (OSError, json.JSONDecodeError):
-        signoffs = []
-    required = {"reviewer_id", "role", "blinded", "evidence_reviewed", "decision", "rationale", "date"}
-    if len(signoffs) < 2 or any(not required.issubset(signoff) for signoff in signoffs):
-        errors.append("reviewer_signoff: requires two complete sign-offs")
+            message = "status is not accepted"
+            check_errors[check_id].append(message)
+            errors.append(f"{check_id}: {message}")
+
+    signoffs = evidence.get("reviewer_signoff", {}).get("signoffs", [])
+    if len(signoffs) < 2 or any(not is_complete_accepting_signoff(signoff) for signoff in signoffs):
+        message = "requires two complete accepting sign-offs"
+        check_errors["reviewer_signoff"].append(message)
+        errors.append(f"reviewer_signoff: {message}")
     try:
         mutants = load(ROOT / "mutants/manifest.json")
         matrix = (ROOT / "mutants/expected-kill-matrix.csv").read_text(encoding="utf-8").splitlines()
         if mutants.get("status") != "accepted" or len(matrix) <= 1:
-            errors.append("mutant_adequacy: executable accepted mutants and expected-kill rows required")
+            message = "executable accepted mutants and expected-kill rows required"
+            check_errors["mutant_adequacy"].append(message)
+            errors.append(f"mutant_adequacy: {message}")
     except (OSError, json.JSONDecodeError):
-        errors.append("mutant_adequacy: mutant manifest or kill matrix unreadable")
-    return {"status": "accepted" if not errors else "blocked", "errors": errors}
+        message = "mutant manifest or kill matrix unreadable"
+        check_errors["mutant_adequacy"].append(message)
+        errors.append(f"mutant_adequacy: {message}")
+
+    checks = [
+        {
+            "id": check_id,
+            "status": "accepted" if not check_errors[check_id] else "blocked",
+            "requirement": CHECK_REQUIREMENTS[check_id],
+            "errors": check_errors[check_id],
+        }
+        for check_id in JSON_EVIDENCE
+    ]
+    return {
+        "status": "accepted" if not errors else "blocked",
+        "checks": checks,
+        "errors": errors,
+    }
 
 
 def main(argv=None) -> int:
@@ -57,6 +111,7 @@ def main(argv=None) -> int:
     if args.sync_status:
         gate = load(GATE)
         gate["status"] = result["status"]
+        gate["checks"] = result["checks"]
         gate["validation_errors"] = result["errors"]
         GATE.write_text(json.dumps(gate, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2))

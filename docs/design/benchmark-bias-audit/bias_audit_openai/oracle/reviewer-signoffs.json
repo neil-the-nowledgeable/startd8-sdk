@@ -1,5 +1,23 @@
 {
   "schema_version": "1.0",
   "status": "pending",
-  "signoffs": []
+  "signoffs": [
+    {
+      "reviewer_id": "openai-codex-gpt-5",
+      "role": "non-Claude readiness reviewer; OpenAI/Codex affiliation disclosed",
+      "blinded": false,
+      "evidence_reviewed": [
+        "canonical/spec.md",
+        "canonical/canonicalization_decisions.md",
+        "oracle/oracle-provenance.json",
+        "oracle/fixed-open-evidence.json",
+        "mutants/manifest.json",
+        "mutants/expected-kill-matrix.csv",
+        "mutants/adequacy-report.json"
+      ],
+      "decision": "blocked",
+      "rationale": "Readiness review found no reference oracle or provenance, no FIXED/OPEN evidence mappings, planned rather than executable mutants, no calibration rows, and no completed independent review. This unblinded reviewer is affiliated with the Codex tool cohort and cannot substitute for the required independent blinded review.",
+      "date": "2026-06-20"
+    }
+  ]
 }

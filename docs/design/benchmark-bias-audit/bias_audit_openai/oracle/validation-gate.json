@@ -5,23 +5,37 @@
   "checks": [
     {
       "id": "oracle_provenance",
-      "status": "accepted",
-      "requirement": "Record authorship, commits, Claude-derived portions, and independent non-Claude review."
+      "status": "blocked",
+      "requirement": "Record authorship, commits, Claude-derived portions, and independent non-Claude review.",
+      "errors": [
+        "status is not accepted"
+      ]
     },
     {
       "id": "evidence_mapping",
-      "status": "accepted",
-      "requirement": "Map fixed and adjudicated-open behavior to source traceability evidence."
+      "status": "blocked",
+      "requirement": "Map fixed and adjudicated-open behavior to source traceability evidence.",
+      "errors": [
+        "status is not accepted"
+      ]
     },
     {
       "id": "reviewer_signoff",
-      "status": "accepted",
-      "requirement": "Two reviewer sign-offs, including one blinded where practical."
+      "status": "blocked",
+      "requirement": "Two reviewer sign-offs, including one blinded where practical.",
+      "errors": [
+        "status is not accepted",
+        "requires two complete accepting sign-offs"
+      ]
     },
     {
       "id": "mutant_adequacy",
-      "status": "accepted",
-      "requirement": "Every material OPEN dimension has a discriminating single-fault mutant."
+      "status": "blocked",
+      "requirement": "Every material OPEN dimension has a discriminating single-fault mutant.",
+      "errors": [
+        "status is not accepted",
+        "executable accepted mutants and expected-kill rows required"
+      ]
     }
   ],
   "admission_rule": "All checks must be accepted before external authoring enters semantic bias analysis.",
@@ -30,7 +44,7 @@
     "evidence_mapping: status is not accepted",
     "reviewer_signoff: status is not accepted",
     "mutant_adequacy: status is not accepted",
-    "reviewer_signoff: requires two complete sign-offs",
+    "reviewer_signoff: requires two complete accepting sign-offs",
     "mutant_adequacy: executable accepted mutants and expected-kill rows required"
   ]
 }
