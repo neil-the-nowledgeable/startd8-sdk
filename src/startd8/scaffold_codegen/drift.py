@@ -11,6 +11,7 @@ import re
 from typing import Optional
 
 from ..frontend_codegen.schema_renderer import schema_sha256
+from .deploy_renderer import rerender_overlay
 from .renderers import SCAFFOLD_RENDERERS
 
 _MARKER = "# GENERATED from app.yaml"
@@ -42,10 +43,14 @@ def scaffold_in_sync(manifest_text: str, ondisk_text: str) -> bool:
     """
     if not is_owned_scaffold_file(ondisk_text):
         return False
-    kind = embedded_kind(ondisk_text)
-    renderer = SCAFFOLD_RENDERERS.get(kind or "")
-    if renderer is None:
-        return False
+    kind = embedded_kind(ondisk_text) or ""
     if embedded_manifest_sha(ondisk_text) != schema_sha256(manifest_text):
         return False  # stale — manifest changed, file not regenerated
+    # Per-env deploy overlays carry an `@env`-suffixed kind (env-parameterized re-render).
+    if "@" in kind:
+        expected = rerender_overlay(kind, manifest_text)
+        return expected is not None and expected == ondisk_text
+    renderer = SCAFFOLD_RENDERERS.get(kind)
+    if renderer is None:
+        return False
     return renderer(manifest_text) == ondisk_text  # tampered if it differs

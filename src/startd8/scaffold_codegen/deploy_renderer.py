@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 from typing import List, Tuple
 
+import yaml
+
 from ..frontend_codegen.schema_renderer import schema_sha256
 from .manifest import AppManifest, parse_app_manifest
 
@@ -346,9 +348,166 @@ prerequisites:
     return _header("scaffold-infra-contract", sha) + "\n\n" + body
 
 
+# --- DEPLOY_ENVIRONMENTS M1: base + per-env kustomize overlays ---------------------------------
+# Environment is orthogonal to mode (deployed-only). One env-agnostic base + per-env overlays patch
+# ONLY the varying values across the two binding planes (FR-ENV-3): app env-vars via a ConfigMap
+# strategic-merge patch; k8s object fields (replicas/resources/HPA) via Deployment patch / HPA add.
+# The Doppler config appears ONLY in the overlay's ExternalSecret ref, never the base (FR-ENV-7).
+
+_BASE_RESOURCES = (
+    "deployment.yaml", "service.yaml", "serviceaccount.yaml", "configmap.yaml",
+    "externalsecret.yaml", "httproute.yaml", "networkpolicy.yaml",
+)
+
+
+def _env_overrides(manifest_text: str, env: str) -> dict:
+    """The validated per-env override mapping (parse_app_manifest enforces the strict grammar)."""
+    parse_app_manifest(manifest_text)  # validate (raises on a bad manifest)
+    data = yaml.safe_load(manifest_text or "") or {}
+    envs = ((data.get("deploy") or {}).get("environments")) or {}
+    return envs.get(env) or {}
+
+
+def _indent(text: str, spaces: int) -> str:
+    pad = " " * spaces
+    return "".join(pad + line if line.strip() else line for line in text.splitlines(keepends=True))
+
+
+def _yaml_block(value: object) -> str:
+    """Deterministic YAML for a nested override value (sorted keys, block style)."""
+    return yaml.safe_dump(value, sort_keys=True, default_flow_style=False).rstrip("\n")
+
+
+def render_base_kustomization(manifest_text: str) -> str:
+    """``deploy/kustomization.yaml`` — the base. Emitted ONLY when environments are declared (SOTTO)."""
+    sha = schema_sha256(manifest_text)
+    res = "\n".join(f"  - {r}" for r in _BASE_RESOURCES)
+    body = "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n" + res + "\n"
+    return _header("scaffold-k8s-base-kustomization", sha) + "\n\n" + body
+
+
+def render_overlay_configmap(manifest_text: str, env: str) -> str:
+    m = parse_app_manifest(manifest_text)
+    o = _env_overrides(manifest_text, env)
+    sha = schema_sha256(manifest_text)
+    lines = [f'  ENV: "{o.get("env", env)}"']  # FR-ENV-6: per-env deployment.environment
+    if "log_level" in o:
+        lines.append(f'  LOG_LEVEL: "{o["log_level"]}"')
+    if "otlp_endpoint" in o:
+        lines.append(f'  OTEL_EXPORTER_OTLP_ENDPOINT: "{o["otlp_endpoint"]}"')
+    body = (
+        f"apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {_dns1123(m.name)}-config\ndata:\n"
+        + "\n".join(lines) + "\n"
+    )
+    return _header(f"scaffold-k8s-overlay-configmap@{env}", sha) + "\n\n" + body
+
+
+def render_overlay_deployment(manifest_text: str, env: str) -> str:
+    """Deployment strategic-merge patch for the k8s-field plane (replicas/resources)."""
+    m = parse_app_manifest(manifest_text)
+    o = _env_overrides(manifest_text, env)
+    sha = schema_sha256(manifest_text)
+    name = _dns1123(m.name)
+    spec = ""
+    if "replicas" in o:
+        spec += f"  replicas: {int(o['replicas'])}\n"
+    if "resources" in o:
+        res = _indent(_yaml_block({"resources": o["resources"]}), 10)
+        spec += "  template:\n    spec:\n      containers:\n        - name: app\n" + res + "\n"
+    body = f"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {name}\nspec:\n" + spec
+    return _header(f"scaffold-k8s-overlay-deployment@{env}", sha) + "\n\n" + body
+
+
+def render_overlay_externalsecret(manifest_text: str, env: str) -> str:
+    """ExternalSecret patch — per-env Doppler config (the ONLY place the config name appears)."""
+    m = parse_app_manifest(manifest_text)
+    o = _env_overrides(manifest_text, env)
+    sha = schema_sha256(manifest_text)
+    body = (
+        f"apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n"
+        f"  name: {_dns1123(m.name)}-secrets\nspec:\n  secretStoreRef:\n"
+        f"    name: {o['secrets_config']}   # per-env secrets scope (e.g. Doppler config); operator-owned\n"
+    )
+    return _header(f"scaffold-k8s-overlay-externalsecret@{env}", sha) + "\n\n" + body
+
+
+def render_overlay_hpa(manifest_text: str, env: str) -> str:
+    m = parse_app_manifest(manifest_text)
+    o = _env_overrides(manifest_text, env)
+    sha = schema_sha256(manifest_text)
+    name = _dns1123(m.name)
+    a = o.get("autoscaling") or {}
+    body = (
+        f"apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: {name}\nspec:\n"
+        f"  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: {name}\n"
+        f"  minReplicas: {int(a.get('min', 1))}\n  maxReplicas: {int(a.get('max', 3))}\n"
+        f"  metrics:\n    - type: Resource\n      resource:\n        name: cpu\n"
+        f"        target:\n          type: Utilization\n          averageUtilization: {int(a.get('cpu', 80))}\n"
+    )
+    return _header(f"scaffold-k8s-overlay-hpa@{env}", sha) + "\n\n" + body
+
+
+def render_overlay_kustomization(manifest_text: str, env: str) -> str:
+    o = _env_overrides(manifest_text, env)
+    sha = schema_sha256(manifest_text)
+    resources = ["  - ../../"]
+    if "autoscaling" in o:
+        resources.append("  - hpa.yaml")
+    patches = ["  - path: configmap-patch.yaml"]
+    if "replicas" in o or "resources" in o:
+        patches.append("  - path: deployment-patch.yaml")
+    if "secrets_config" in o:
+        patches.append("  - path: externalsecret-patch.yaml")
+    body = (
+        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n"
+        + "\n".join(resources) + "\npatches:\n" + "\n".join(patches) + "\n"
+    )
+    return _header(f"scaffold-k8s-overlay-kustomization@{env}", sha) + "\n\n" + body
+
+
+# Overlay re-render dispatch (env-parameterized; drift handles the `@env` kind suffix).
+_OVERLAY_FILE_RENDERERS = {
+    "scaffold-k8s-overlay-kustomization": render_overlay_kustomization,
+    "scaffold-k8s-overlay-configmap": render_overlay_configmap,
+    "scaffold-k8s-overlay-deployment": render_overlay_deployment,
+    "scaffold-k8s-overlay-externalsecret": render_overlay_externalsecret,
+    "scaffold-k8s-overlay-hpa": render_overlay_hpa,
+}
+
+
+def rerender_overlay(kind: str, manifest_text: str) -> str | None:
+    """Re-render an `@env`-suffixed overlay file for drift; None if the kind is not an overlay."""
+    if "@" not in kind:
+        return None
+    base_kind, _, env = kind.partition("@")
+    fn = _OVERLAY_FILE_RENDERERS.get(base_kind)
+    return fn(manifest_text, env) if (fn and env) else None
+
+
+def render_deploy_overlays(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
+    """Base kustomization + per-env overlays. Deployed mode with environments declared only (SOTTO)."""
+    m = parse_app_manifest(manifest_text)
+    if m.deployment_mode != "deployed" or not m.has_environments:
+        return ()
+    out: List[Tuple[str, str]] = [("deploy/kustomization.yaml", render_base_kustomization(manifest_text))]
+    for env in m.deploy_environments:  # already sorted (byte-stable, R1-S7)
+        o = _env_overrides(manifest_text, env)
+        base = f"deploy/overlays/{env}/"
+        out.append((base + "kustomization.yaml", render_overlay_kustomization(manifest_text, env)))
+        out.append((base + "configmap-patch.yaml", render_overlay_configmap(manifest_text, env)))
+        if "replicas" in o or "resources" in o:
+            out.append((base + "deployment-patch.yaml", render_overlay_deployment(manifest_text, env)))
+        if "secrets_config" in o:
+            out.append((base + "externalsecret-patch.yaml", render_overlay_externalsecret(manifest_text, env)))
+        if "autoscaling" in o:
+            out.append((base + "hpa.yaml", render_overlay_hpa(manifest_text, env)))
+    return tuple(out)
+
+
 # --- aggregator + drift map --------------------------------------------------------------------
 
 DEPLOY_RENDERERS = {
+    "scaffold-k8s-base-kustomization": render_base_kustomization,
     "scaffold-k8s-deployment": render_k8s_deployment,
     "scaffold-k8s-service": render_k8s_service,
     "scaffold-k8s-serviceaccount": render_k8s_serviceaccount,
@@ -375,4 +534,5 @@ def render_deploy_tree(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
         ("deploy/networkpolicy.yaml", render_k8s_networkpolicy(manifest_text)),
         ("deploy/infra-contract.yaml", render_infra_contract(manifest_text)),
     ]
+    out.extend(render_deploy_overlays(manifest_text))  # base kustomization + per-env overlays (M1)
     return tuple(out)

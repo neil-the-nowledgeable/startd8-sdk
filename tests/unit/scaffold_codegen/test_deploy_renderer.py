@@ -180,3 +180,70 @@ def test_cross_seam_no_gateway_app_hard_fails(tmp_path):
     proc = _run_check(tmp_path)
     assert proc.returncode == 3, proc.stderr  # decode-only-no-gateway-ack → HARD
     assert json.loads(proc.stdout)["verdict"] == "hard"
+
+
+# ---- M1: per-environment kustomize overlays (FR-ENV-3/5/7/8) -----------------------------------
+
+from startd8.scaffold_codegen.deploy_renderer import render_deploy_overlays  # noqa: E402
+
+DEPLOYED_ENVS = (
+    "app:\n  name: demo\n  package: app\n"
+    "deployment:\n  mode: deployed\n"
+    "persistence:\n  path: postgresql://db/app\n"
+    "deploy:\n  trust_gateway: true\n  secrets:\n    backend: eso-doppler\n"
+    "  environments:\n"
+    "    prod:\n      replicas: 3\n      env: production\n      secrets_config: prd\n"
+    "      resources:\n        limits:\n          cpu: '1'\n"
+    "      autoscaling:\n        min: 2\n        max: 10\n"
+    "    dev:\n      log_level: debug\n      otlp_endpoint: http://otel.dev:4318\n"
+)
+
+
+def _overlays(text=DEPLOYED_ENVS):
+    return dict(render_deploy_overlays(text))
+
+
+def test_no_environments_emits_no_overlays_sotto():
+    assert render_deploy_overlays(DEPLOYED) == ()  # deployed but no environments → SOTTO
+
+
+def test_environments_emit_base_kustomization_and_per_env_overlays():
+    o = _overlays()
+    assert "deploy/kustomization.yaml" in o  # base kustomization only appears WITH environments
+    # dev (log_level+otlp only) → kustomization + configmap; prod (full) → +deployment+es+hpa
+    assert "deploy/overlays/dev/kustomization.yaml" in o
+    assert "deploy/overlays/dev/configmap-patch.yaml" in o
+    assert "deploy/overlays/dev/deployment-patch.yaml" not in o  # dev declares no k8s-field overrides
+    assert "deploy/overlays/prod/deployment-patch.yaml" in o
+    assert "deploy/overlays/prod/externalsecret-patch.yaml" in o
+    assert "deploy/overlays/prod/hpa.yaml" in o
+
+
+def test_two_binding_planes_split():
+    o = _overlays()
+    dev_cm = yaml.safe_load(o["deploy/overlays/dev/configmap-patch.yaml"])
+    assert dev_cm["data"]["ENV"] == "dev" and dev_cm["data"]["LOG_LEVEL"] == "debug"
+    assert dev_cm["data"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://otel.dev:4318"
+    prod_dep = yaml.safe_load(o["deploy/overlays/prod/deployment-patch.yaml"])
+    assert prod_dep["spec"]["replicas"] == 3  # k8s-field plane, not os.environ
+    assert prod_dep["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["cpu"] == "1"
+
+
+def test_doppler_config_only_in_overlay_never_base():
+    full = dict(render_deploy_tree(DEPLOYED_ENVS))
+    assert "prd" not in full["deploy/externalsecret.yaml"]  # base carries no per-env config (R1-F2)
+    assert "prd" in full["deploy/overlays/prod/externalsecret-patch.yaml"]
+
+
+def test_overlays_parse_and_byte_stable():
+    for path, text in _overlays().items():
+        assert yaml.safe_load(text) is not None, path
+    assert render_deploy_overlays(DEPLOYED_ENVS) == render_deploy_overlays(DEPLOYED_ENVS)
+
+
+def test_overlay_files_drift_owned_and_in_sync():
+    o = _overlays()
+    cm = o["deploy/overlays/prod/configmap-patch.yaml"]
+    assert is_owned_scaffold_file(cm)
+    assert scaffold_in_sync(DEPLOYED_ENVS, cm) is True
+    assert scaffold_in_sync(DEPLOYED_ENVS, cm.replace('ENV: "production"', 'ENV: "hacked"')) is False
