@@ -38,10 +38,17 @@ def _header(kind: str, sha: str) -> str:
 
 
 def _dns1123(name: str) -> str:
-    """DNS-1123-safe object name from ``app.name`` (FR-CND-18): lowercase, ``a-z0-9-``, ≤63, trimmed."""
+    """DNS-1123-safe object name from ``app.name`` (FR-CND-18): lowercase, ``a-z0-9-``, ≤63, trimmed.
+
+    On truncation a stable 6-char hash of the full sanitized name is appended so two long names that
+    differ only past char 63 do not collide into the same K8s object name.
+    """
     s = re.sub(r"[^a-z0-9-]+", "-", (name or "app").lower()).strip("-")
-    s = s[:63].strip("-")
-    return s or "app"
+    if not s:
+        return "app"
+    if len(s) <= 63:
+        return s
+    return (s[:56].strip("-") + "-" + schema_sha256(s)[:6])
 
 
 def _secret_store(m: AppManifest) -> str:
@@ -233,6 +240,9 @@ spec:
   hostnames:
     - {_HOST_SENTINEL}            # operator-bound (deploy.hostnames); never default '*'
   rules:
+    # Probes are kubelet-internal (the Service is ClusterIP; kubelet reaches the pod directly), so
+    # /health and /health/live are NOT routed here. Readiness runs a DB SELECT 1 — the operator's
+    # gateway MUST NOT expose /health* externally (FR-CND-16).
     - matches:
         - path:
             type: PathPrefix

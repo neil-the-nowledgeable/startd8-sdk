@@ -89,6 +89,16 @@ def test_dns1123_object_names():
     assert dep["metadata"]["name"] == "my-app"  # "My App!!" → DNS-1123
 
 
+def test_dns1123_truncates_and_disambiguates_long_names():
+    base = "x" * 70
+    a = _tree(f"app:\n  name: {base}a\ndeployment:\n  mode: deployed\ndeploy:\n  trust_gateway: true\n")
+    b = _tree(f"app:\n  name: {base}b\ndeployment:\n  mode: deployed\ndeploy:\n  trust_gateway: true\n")
+    na = yaml.safe_load(a["deploy/deployment.yaml"])["metadata"]["name"]
+    nb = yaml.safe_load(b["deploy/deployment.yaml"])["metadata"]["name"]
+    assert len(na) <= 63 and len(nb) <= 63
+    assert na != nb  # the truncation hash disambiguates (FR-CND-18)
+
+
 # ---- security / contract field checks ---------------------------------------------------------
 
 def test_deployment_hardened_and_probed():
