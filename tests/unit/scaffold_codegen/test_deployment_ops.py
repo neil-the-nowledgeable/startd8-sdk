@@ -39,6 +39,9 @@ DEPLOYED_PG = (
     "deployment:\n  mode: deployed\n"
     "persistence:\n  path: postgresql://db/app\n"
 )
+# DEPLOYED_PG + a gateway acknowledgement → clears the FR-CND-6 fail-closed identity ERROR, so a
+# real deployed build (which emits the decode-only auth seam) succeeds.
+DEPLOYED_PG_TRUSTED = DEPLOYED_PG + "deploy:\n  trust_gateway: true\n"
 DEPLOYED_DEFAULT = "deployment:\n  mode: deployed\n"  # db_path defaults to ./data/app.db (sqlite)
 
 SCHEMA = "model Profile {\n  id   String @id\n  name String\n}\n"
@@ -118,7 +121,9 @@ def test_env_is_owned_and_drift_checks():
         ("app:\n  name: d\npersistence:\n  path: postgresql://db/app\n", {},
          ["installed-shared-dsn"]),                                # installed + shared DSN -> ERROR
         (DEPLOYED_PG, {"has_auth_seam": True, "has_tenant": False},
-         ["deployed-auth-no-tenant"]),                             # WARN (dormant until A6)
+         ["deployed-auth-no-tenant", "deployed-decode-only-no-gateway-ack"]),  # WARN + fail-closed ERROR
+        (DEPLOYED_PG_TRUSTED, {"has_auth_seam": True, "has_tenant": False},
+         ["deployed-auth-no-tenant"]),                             # trust_gateway clears the security ERROR
         (INSTALLED_YAML, {"has_auth_seam": True}, ["installed-auth-requested"]),  # ERROR
     ],
 )
@@ -133,6 +138,33 @@ def test_has_errors_distinguishes_severity():
     memory = "deployment:\n  mode: deployed\npersistence:\n  path: 'sqlite:///:memory:'\n"
     warn = evaluate_coherence(parse_app_manifest(memory))
     assert not has_errors(warn) and warn[0].severity == WARN
+
+
+# --- M0: the cloud-native `deploy:` block (strict-keyed) -----------------------------------------
+
+def test_deploy_block_parses_fields():
+    m = parse_app_manifest(
+        "deployment:\n  mode: deployed\n"
+        "deploy:\n  trust_gateway: true\n  target_cloud: gke\n  secrets:\n    backend: eso-doppler\n"
+    )
+    assert m.deploy_trust_gateway is True
+    assert m.deploy_target_cloud == "gke"
+    assert m.deploy_secrets_backend == "eso-doppler"
+
+
+def test_deploy_block_defaults_fail_closed():
+    m = parse_app_manifest("deployment:\n  mode: deployed\n")  # no deploy block
+    assert m.deploy_trust_gateway is False  # default = fail-closed
+
+
+def test_deploy_block_unknown_key_errors():
+    with pytest.raises(ValueError, match="deploy.*unknown keys"):
+        parse_app_manifest("deploy:\n  trust_gatewy: true\n")  # typo
+
+
+def test_deploy_secrets_backend_validated():
+    with pytest.raises(ValueError, match="secrets.backend"):
+        parse_app_manifest("deploy:\n  secrets:\n    backend: vault\n")  # not an allowed backend
 
 
 # --- A7 wired into `generate backend` ------------------------------------------------------------
@@ -159,7 +191,7 @@ def test_cli_coherence_error_blocks_the_build(tmp_path):
 def test_cli_coherent_deployed_builds(tmp_path):
     schema = _schema(tmp_path)
     manifest = tmp_path / "app.yaml"
-    manifest.write_text(DEPLOYED_PG, encoding="utf-8")  # deployed + postgres -> OK
+    manifest.write_text(DEPLOYED_PG_TRUSTED, encoding="utf-8")  # deployed + postgres + gateway ack -> OK
     res = runner.invoke(
         generate_app,
         ["backend", "--schema", str(schema), "--out", str(tmp_path), "--app-manifest", str(manifest)],

@@ -15,8 +15,19 @@ import yaml
 
 _TOP_KEYS = {
     "app", "persistence", "logging", "migrations", "container",
-    "extra_dependencies", "deployment", "telemetry", "messaging",
+    "extra_dependencies", "deployment", "telemetry", "messaging", "deploy",
 }
+
+# Cloud-native deploy block (CLOUD_NATIVE_DEPLOY_REQUIREMENTS.md M0). Strict-keyed like every other
+# block. Most fields are consumed by the (future) manifest renderers; `trust_gateway` is wired now
+# because the coherence guard's fail-closed identity check (FR-CND-6) reads it.
+_DEPLOY_KEYS = {
+    "trust_gateway", "secrets", "target_cloud", "namespace", "hostnames",
+    "replicas", "port", "image", "resources", "autoscaling", "emit_gateway_stub",
+}
+_DEPLOY_SECRETS_KEYS = {"backend"}
+# FR-CND-5: default `eso-doppler`; `doppler-operator` opt-in CRD; cloud-native secret managers.
+_VALID_SECRETS_BACKENDS = frozenset({"eso-doppler", "doppler-operator", "eso-aws", "eso-gcp"})
 
 # Deployment-mode enum (DEPLOYMENT_MODE_REQUIREMENTS.md FR-CFG-1). Exactly two declared modes in v1
 # (NR-2): `installed` (single-user, local-first — today's behavior, the default) vs `deployed`
@@ -62,6 +73,11 @@ class AppManifest:
     telemetry_service_name: Optional[str] = None
     telemetry_patterns: Tuple[str, ...] = ()
     messaging_backend: str = "aiokafka"
+    # Cloud-native deploy posture (M0). `deploy_trust_gateway` acknowledges that a verifying gateway
+    # fronts the app — it clears the FR-CND-6 fail-closed identity ERROR (default False = fail-closed).
+    deploy_trust_gateway: bool = False
+    deploy_secrets_backend: Optional[str] = None
+    deploy_target_cloud: Optional[str] = None
 
     @property
     def has_tenant(self) -> bool:
@@ -153,6 +169,38 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
             )
         telemetry_patterns = tuple(dict.fromkeys(raw_patterns))
 
+    # Cloud-native deploy block (M0) — strict-keyed; only the few fields needed now are extracted,
+    # the rest are validated-and-reserved for the manifest renderers (cloud-native M1).
+    deploy_trust_gateway = False
+    deploy_secrets_backend: Optional[str] = None
+    deploy_target_cloud: Optional[str] = None
+    deploy = data.get("deploy")
+    if deploy is not None:
+        if not isinstance(deploy, dict):
+            raise ValueError("app.yaml: `deploy` must be a mapping")
+        unknown_deploy = set(deploy) - _DEPLOY_KEYS
+        if unknown_deploy:
+            raise ValueError(f"app.yaml: `deploy` has unknown keys {sorted(unknown_deploy)}")
+        deploy_trust_gateway = bool(deploy.get("trust_gateway", False))
+        secrets = deploy.get("secrets")
+        if secrets is not None:
+            if not isinstance(secrets, dict):
+                raise ValueError("app.yaml: `deploy.secrets` must be a mapping")
+            unknown_sec = set(secrets) - _DEPLOY_SECRETS_KEYS
+            if unknown_sec:
+                raise ValueError(f"app.yaml: `deploy.secrets` has unknown keys {sorted(unknown_sec)}")
+            backend = secrets.get("backend")
+            if backend is not None:
+                if backend not in _VALID_SECRETS_BACKENDS:
+                    raise ValueError(
+                        f"app.yaml: `deploy.secrets.backend` must be one of "
+                        f"{sorted(_VALID_SECRETS_BACKENDS)}, got {backend!r}"
+                    )
+                deploy_secrets_backend = backend
+        tc = deploy.get("target_cloud")
+        if tc is not None:
+            deploy_target_cloud = str(tc)
+
     messaging_backend = "aiokafka"
     messaging = data.get("messaging")
     if messaging is not None:
@@ -185,4 +233,7 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         telemetry_service_name=telemetry_service_name,
         telemetry_patterns=telemetry_patterns,
         messaging_backend=messaging_backend,
+        deploy_trust_gateway=deploy_trust_gateway,
+        deploy_secrets_backend=deploy_secrets_backend,
+        deploy_target_cloud=deploy_target_cloud,
     )

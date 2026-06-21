@@ -95,6 +95,16 @@ def evaluate_coherence(
                 "(FR-PER-3). Enable migrations (migrations.enabled: true).",
                 severity_tier=OPERATIONAL,
             ))
+        if has_auth_seam and not manifest.deploy_trust_gateway:
+            findings.append(CoherenceFinding(
+                ERROR, "deployed-decode-only-no-gateway-ack",
+                "deployed mode emits the DECODE-ONLY auth seam (it does not verify JWT signatures), "
+                "but `deploy.trust_gateway` is not acknowledged and no gateway-fronting network guard "
+                "is declared: direct exposure is an AUTH BYPASS — any attacker-minted token is trusted. "
+                "Set `deploy.trust_gateway: true` (a verifying gateway/agentgateway fronts the app) or "
+                "emit the ClusterIP + NetworkPolicy guard (FR-CND-6).",
+                severity_tier=SECURITY,
+            ))
         if has_auth_seam and not has_tenant:
             findings.append(CoherenceFinding(
                 WARN, "deployed-auth-no-tenant",

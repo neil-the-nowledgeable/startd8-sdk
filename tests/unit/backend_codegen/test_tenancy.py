@@ -39,6 +39,7 @@ model Lookup {
 DEPLOYED_TENANT = (
     "deployment:\n  mode: deployed\n  tenant:\n    model: User\n    owner_field: ownerId\n"
     "persistence:\n  path: postgresql://db/app\n"
+    "deploy:\n  trust_gateway: true\n"  # ack a verifying gateway → clears the FR-CND-6 fail-closed ERROR
 )
 
 

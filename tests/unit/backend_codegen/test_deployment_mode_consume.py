@@ -160,9 +160,11 @@ def test_cli_default_mode_installed_no_settings(tmp_path):
 def test_cli_app_manifest_drives_mode(tmp_path):
     schema = _write_schema(tmp_path)
     manifest = tmp_path / "app.yaml"
-    # A coherent deployed manifest (shared DSN) — the FR-CFG-5 guard rejects deployed+SQLite.
+    # A coherent deployed manifest (shared DSN + gateway ack) — FR-CFG-5 rejects deployed+SQLite,
+    # and FR-CND-6 rejects a deployed auth seam without a gateway acknowledgement.
     manifest.write_text(
-        "deployment:\n  mode: deployed\npersistence:\n  path: postgresql://db/app\n",
+        "deployment:\n  mode: deployed\npersistence:\n  path: postgresql://db/app\n"
+        "deploy:\n  trust_gateway: true\n",
         encoding="utf-8",
     )
     res = runner.invoke(

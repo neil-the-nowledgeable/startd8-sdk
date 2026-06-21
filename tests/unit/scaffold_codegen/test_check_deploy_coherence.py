@@ -29,6 +29,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT = _REPO_ROOT / "scripts" / "check_deploy_coherence.py"
 _SRC = _REPO_ROOT / "src"
 
+# trust_gateway acks a verifying gateway → isolates the OPERATIONAL sqlite-file finding from the
+# fail-closed security default (deployed + auth seam + no gateway ack = HARD, FR-CND-6).
 DEPLOYED_SQLITE_FILE = """\
 app:
   name: demo
@@ -36,9 +38,23 @@ persistence:
   path: ./data/app.db
 deployment:
   mode: deployed
+deploy:
+  trust_gateway: true
 """
 
 DEPLOYED_CLEAN = """\
+app:
+  name: demo
+persistence:
+  path: postgresql://db.internal/demo
+deployment:
+  mode: deployed
+deploy:
+  trust_gateway: true
+"""
+
+# deployed + auth seam + NO gateway ack → the decode-only-no-gateway-ack security ERROR → HARD.
+DEPLOYED_NO_GATEWAY = """\
 app:
   name: demo
 persistence:
@@ -90,10 +106,23 @@ def test_verdict_soft_on_operational_error():
 
 
 def test_verdict_hard_on_security_error():
-    # No security-ERROR code ships until cloud-native M3 (decode-only-no-gateway-ack); the mapping
-    # is verified here with a synthetic finding so the HARD path is covered now.
     findings = (CoherenceFinding(ERROR, "synthetic-sec", "m", severity_tier=SECURITY),)
     assert deploy_coherence_verdict(findings, mode="deployed") == ("hard", 3)
+
+
+def test_decode_only_no_gateway_is_hard_real(tmp_path):
+    # M3 security code, end-to-end through the real guard: deployed + auth seam + no trust_gateway →
+    # decode-only-no-gateway-ack (security ERROR) → HARD. This is what lights up the fail-closed path.
+    findings = evaluate_coherence(parse_app_manifest(DEPLOYED_NO_GATEWAY), has_auth_seam=True)
+    sec = [f for f in findings if f.code == "deployed-decode-only-no-gateway-ack"]
+    assert sec and sec[0].severity == ERROR and sec[0].severity_tier == SECURITY
+    assert deploy_coherence_verdict(findings, mode="deployed") == ("hard", 3)
+
+
+def test_trust_gateway_clears_decode_only(tmp_path):
+    findings = evaluate_coherence(parse_app_manifest(DEPLOYED_CLEAN), has_auth_seam=True)
+    assert not any(f.code == "deployed-decode-only-no-gateway-ack" for f in findings)
+    assert deploy_coherence_verdict(findings, mode="deployed") == ("ok", 0)
 
 
 def test_security_warn_does_not_hard_abort():
@@ -150,3 +179,13 @@ def test_script_malformed_app_yaml_fails_closed_exit3(tmp_path):
     proc = _run(tmp_path)
     assert proc.returncode == 3, proc.stderr
     assert json.loads(proc.stdout)["verdict"] == "hard"
+
+
+def test_script_decode_only_no_gateway_exit3(tmp_path):
+    # deployed without trust_gateway → security HARD end-to-end through the CLI (the chain's teeth).
+    proc = _run(_write(tmp_path, DEPLOYED_NO_GATEWAY))
+    assert proc.returncode == 3, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["verdict"] == "hard"
+    assert any(f["code"] == "deployed-decode-only-no-gateway-ack"
+               and f["severity_tier"] == "security" for f in payload["findings"])

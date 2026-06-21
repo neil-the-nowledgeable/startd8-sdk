@@ -80,7 +80,9 @@ def test_cli_deployed_build_emits_auth_and_warns(tmp_path):
     schema.write_text(SCHEMA, encoding="utf-8")
     manifest = tmp_path / "app.yaml"
     manifest.write_text(
-        "deployment:\n  mode: deployed\npersistence:\n  path: postgresql://db/app\n", encoding="utf-8"
+        "deployment:\n  mode: deployed\npersistence:\n  path: postgresql://db/app\n"
+        "deploy:\n  trust_gateway: true\n",  # ack gateway → isolates the auth-no-tenant WARN path
+        encoding="utf-8",
     )
     res = runner.invoke(
         generate_app,
