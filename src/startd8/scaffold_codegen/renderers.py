@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import List, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256  # generic sha256-over-text hasher
+from .deploy_renderer import DEPLOY_RENDERERS, render_deploy_tree
 from .manifest import parse_app_manifest
 from .telemetry_renderer import otel_runtime_dependencies, render_telemetry
 
@@ -305,6 +306,8 @@ def render_scaffold(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
         out.append(("alembic/versions/.gitkeep", ""))
     if m.telemetry_enabled:
         out.append((f"{m.package}/telemetry.py", render_telemetry(manifest_text)))
+    # Cloud-native deploy tree (M1) — deployed mode only; vendor-neutral K8s/Gateway-API/ESO + contract.
+    out.extend(render_deploy_tree(manifest_text))
     return tuple(out)
 
 
@@ -320,4 +323,5 @@ SCAFFOLD_RENDERERS = {
     "scaffold-env": render_env_example,
     "scaffold-run-script": render_run_script,
     "scaffold-telemetry": render_telemetry,
+    **DEPLOY_RENDERERS,
 }
