@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.6.0"
+version: "1.8.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -834,29 +834,466 @@ capabilities:
         description: "fragment rendering + drift-stability + per-archetype validity; + manifest_extraction/test_view_prose_extraction.py (the compiler)"
     confidence: 0.8
 
+  # ============================================================================
+  # LLM-DRIVEN CONSTRUCTION & POLYGLOT ENGINE
+  # The SDK's SECOND generation path (distinct from the $0 deterministic Python-only
+  # codegen above): LLM-driven, POLYGLOT (Python/Go/Node.js/Java/C#), produces
+  # multi-language microservice fleets. This is bucket-3 (integration) construction —
+  # the path the Summer 2026 benchmark exercises against Online Boutique.
+  # ============================================================================
+
+  - capability_id: startd8.codegen.polyglot_construction
+    category: generate
+    maturity: stable
+    summary: "LLM-driven element-level code generation across 5 languages (Python, Go, Node.js, Java, C#) via Prime Contractor + Micro Prime — per-language parsers, splicers, semantic checks; produces polyglot microservice fleets (NOT deferred — distinct from the Python-only deterministic path)"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        The polyglot construction path: Prime Contractor (multi-feature batches) routes elements
+        through Micro Prime (element-level local generation) which generates code in ALL 5 languages.
+        `micro_prime/engine.py` branches per language (is_go/is_java/is_csharp/is_nodejs) and uses the
+        per-language splicer: Python AST splicer; Go/Java/C#/Node.js text-based splicers with brace
+        matching. Each LanguageProfile (15 properties: syntax check, lint, test, stub detection, dep-file
+        gen, Docker images, merge strategy) drives the generation + validation toolchain. Distinct from
+        startd8.codegen.deterministic_backend ($0, Python-only, bucket-1): this path is LLM-driven,
+        polyglot, and targets multi-service systems. The Summer 2026 benchmark builds the Online
+        Boutique polyglot microservices demo on this path with deterministic + micro-prime OFF (raw
+        model skill). CORRECTS the stale "non-Python generation is deferred" note — false for this path.
+      agent: |
+        from startd8.micro_prime.engine import MicroPrimeEngine
+        from startd8.languages import resolve_language
+        profile = resolve_language(["src/main.go"])  # -> GoLanguageProfile; 5 langs supported
+    triggers: ["polyglot generation", "multi-language codegen", "go generation", "java generation", "csharp generation", "nodejs generation", "micro prime", "element-level generation", "online boutique"]
+    evidence:
+      - type: code
+        ref: src/startd8/micro_prime/engine.py
+        description: "MicroPrimeEngine per-language branching (go/java/csharp/nodejs/vue) + splicer dispatch"
+      - type: code
+        ref: src/startd8/languages/
+        description: "go_/java_/csharp_/nodejs_ parser + splicer modules; protocol.py LanguageProfile (15 props)"
+      - type: docs
+        ref: docs/design/prime/MULTI_LANGUAGE_CAPABILITY_MAP.md
+        description: "12 language-sensitive capabilities mapped Python→Go/Node/Java with effort ranking"
+    confidence: 0.9
+
+  - capability_id: startd8.languages.profile_registry
+    category: integration
+    maturity: stable
+    summary: "7 registered LanguageProfiles (python, go, nodejs, java, csharp, vue, prisma) discovered via entry points; resolve_language() routes target files to the dominant-extension profile"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        `LanguageRegistry.discover()` loads profiles from the `startd8.languages` entry-point group
+        (same pattern as ProviderRegistry). `resolve_language(files)` counts extensions and returns the
+        dominant LanguageProfile (falls back to Python). Each profile implements the Protocol in
+        protocol.py: syntax_check_command, lint_command, test_command, stub detection, dependency-file
+        generation (requirements.txt/go.mod/package.json/build.gradle/.csproj), Docker images, and
+        merge strategy. Per-language semantic validators (validators/*_semantic_checks.py) layer
+        language-specific quality checks (e.g. Go unchecked-error, Java raw-types, C# SQL injection).
+      agent: |
+        from startd8.languages import LanguageRegistry, resolve_language
+        LanguageRegistry.discover()  # call before use, like ProviderRegistry
+    triggers: ["language profile", "resolve language", "language registry", "go.mod generation", "package.json generation", "build.gradle generation", "csproj generation"]
+    evidence:
+      - type: code
+        ref: src/startd8/languages/registry.py
+        description: "LanguageRegistry.discover + resolution.py resolve_language (extension-dominant)"
+      - type: code
+        ref: pyproject.toml
+        description: "startd8.languages entry points: python/go/nodejs/java/csharp/vue/prisma"
+      - type: test
+        ref: tests/unit/languages/
+        description: "per-language capability tests incl. test_go_capabilities.py"
+    confidence: 0.9
+
+  - capability_id: startd8.repair.pipeline
+    category: transform
+    maturity: stable
+    summary: "~45 post-generation repair steps (orchestrator/diagnostics/routing/staging), language-organized: Go (5), Java (5), C# (5), Node/JS (several), Python core + cross-language — fixes syntax, lint, imports, contamination, semantic issues"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        `repair/orchestrator.py` (run_file_repair, run_element_repair) routes generation failures to
+        repair steps via diagnostics.py (checkpoint parsing) + routing.py, with atomic staging.py.
+        Steps in repair/steps/ are language-organized: Go (contamination_strip, dot_import_cleanup,
+        unchecked_error, syntax_validate), Java (duplicate_method, import_sort, missing_override,
+        raw_type_fix, sql_parameterize), C# (access_modifier, convention, namespace, nullable, syntax),
+        Node/JS (eslint_autofix, dedup_require, var_to_const, contamination_strip_js, js_syntax_validate),
+        Python core (semantic_*_fix, future_import_reorder, import_completion) + cross-language
+        (fence_strip, bracket_balance, indent_normalize). Wired into IntegrationEngine pre-merge and
+        post-merge repair.
+      agent: |
+        from startd8.repair.orchestrator import run_file_repair  # post-gen syntax/lint/import/semantic repair
+    triggers: ["code repair", "post-generation repair", "import repair", "syntax repair", "contamination strip", "repair pipeline", "goimports", "eslint autofix"]
+    evidence:
+      - type: code
+        ref: src/startd8/repair/orchestrator.py
+        description: "run_file_repair/run_element_repair + diagnostics/routing/staging"
+      - type: code
+        ref: src/startd8/repair/steps/
+        description: "~45 repair steps organized by language"
+    confidence: 0.85
+
+  - capability_id: startd8.contractors.prime
+    category: generate
+    maturity: stable
+    summary: "PrimeContractorWorkflow — the active multi-feature LLM construction orchestrator: spec→draft→review→integrate per feature, edit-mode aware, with checkpoint/resume, queue cycle-detection, gate contracts, and post-mortem disk-quality scoring"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        The only active construction path (Artisan is ON HOLD). prime_contractor.py orchestrates
+        multi-feature batches; integration_engine.py merges generated code with pre/post-merge repair;
+        queue.py detects dependency cycles (broke a 17-task deadlock on online-boutique run-018);
+        gate_contracts.py + checkpoint.py give per-phase crash recovery + resume caching to
+        .startd8/state/ (3-layer validation). FIRST-CLASS EDIT MODE: _classify_edit_mode auto-detects
+        on-disk targets as edit (not create-only). prime_postmortem.py (PrimePostMortemEvaluator)
+        scores disk quality (contract_compliance/import_completeness/stub/semantic) and feeds Kaizen.
+      agent: |
+        from startd8.contractors.prime_contractor import PrimeContractorWorkflow  # multi-feature construction
+    triggers: ["prime contractor", "multi-feature generation", "code construction", "integration engine", "edit mode", "checkpoint resume", "post-mortem"]
+    evidence:
+      - type: code
+        ref: src/startd8/contractors/prime_contractor.py
+        description: "PrimeContractorWorkflow + integration_engine + queue (cycle detection) + checkpoint"
+      - type: docs
+        ref: docs/PRIME_CONTRACTOR_WORKFLOW_GUIDE.md
+        description: "Prime contractor pattern guide"
+    confidence: 0.85
+
+  - capability_id: startd8.complexity.tier_routing
+    category: action
+    maturity: stable
+    summary: "Complexity classification (classify_tier → TRIVIAL/SIMPLE/MODERATE/COMPLEX) routes code-gen tasks to the cost-appropriate generator; trivial=no LLM, simple/moderate=MicroPrime local, complex=full Prime"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        complexity/classifier.py classify_tier() assigns a tier from signals.py (blast radius, size,
+        framework coupling); router.py routes to the appropriate generator. The MicroPrimeEngine handles
+        SIMPLE/MODERATE locally (no LLM for trivial); decomposer.py breaks MODERATE elements into SIMPLE
+        sub-elements (Class/Function strategies). This is the cost-efficiency spine: route cheap work to
+        cheap paths. CAVEAT (RUN-028): micro_prime/ has no project_knowledge refs, so the convention
+        adherence injection that reaches the Prime lead/drafter path is bypassed on the micro-prime tier.
+      agent: |
+        from startd8.complexity.classifier import classify_tier  # -> TRIVIAL|SIMPLE|MODERATE|COMPLEX
+    triggers: ["complexity tier", "classify tier", "task routing", "complexity classification", "cost routing"]
+    evidence:
+      - type: code
+        ref: src/startd8/complexity/classifier.py
+        description: "classify_tier + router.py + signals.py (blast radius)"
+    confidence: 0.85
+
+  - capability_id: startd8.security_prime.gate
+    category: security
+    maturity: beta
+    summary: "Security Prime gate orchestration (~550 lines): derives a security contract from seed tasks, enriches spec/draft prompts, scores generated code (injection/credentials/lifecycle), and renders an Anzen gate pass/fail verdict"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        Orchestration, not new checks — wires query_prime/security verify_file() into the pipeline.
+        contract.py derive_security_contract() extracts security context from seed tasks; enrichment.py
+        injects it into spec/draft prompts; scorer.py compute_security_score() → SecurityScoreResult
+        (injection, credentials, lifecycle); gate_models.py GateVerdictReport for the Anzen pass/fail
+        decision. Wired via integration_engine.py. Kaizen integration writes a query_security section to
+        kaizen-metrics.json.
+      agent: |
+        from startd8.security_prime.scorer import compute_security_score  # -> SecurityScoreResult
+    triggers: ["security prime", "security gate", "security contract", "injection check", "credential leak", "anzen gate", "security score"]
+    evidence:
+      - type: code
+        ref: src/startd8/security_prime/
+        description: "contract/enrichment/scorer/gate_models (~550 lines)"
+      - type: docs
+        ref: docs/design/security-prime/
+        description: "Security Prime requirements (7 docs)"
+    confidence: 0.8
+
+  - capability_id: startd8.query_prime.secure_generation
+    category: generate
+    maturity: beta
+    summary: "Secure database query generation by tier (T1=template, T2=Haiku, T3=Sonnet) with injection/credential/lifecycle verification across Redis/MySQL/SQLite/Spanner/PostgreSQL patterns"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        QueryPrimeEngine (engine.py) generates DB queries routed by classify_query_tier() (classifier.py):
+        T1 template, T2 Haiku, T3 Sonnet — cost-tiered like complexity routing. query_prime/security/
+        verify_file() checks injection, credential leakage, and lifecycle issues; patterns/ holds
+        DB-specific patterns (Redis, MySQL, SQLite, Spanner, PostgreSQL). Integrated into plan ingestion
+        via query-informed enrichment (REQ-QPI). The verify_file() check is the shared primitive Security
+        Prime wires into the broader pipeline.
+      agent: |
+        from startd8.query_prime.engine import QueryPrimeEngine  # tiered secure query gen
+    triggers: ["query prime", "secure query generation", "sql injection prevention", "database query gen", "query tier"]
+    evidence:
+      - type: code
+        ref: src/startd8/query_prime/
+        description: "engine/classifier/security(verify_file)/patterns (5 DBs)"
+      - type: docs
+        ref: docs/design/query-prime/
+        description: "Query Prime requirements + query-informed plan ingestion (7 docs)"
+    confidence: 0.8
+
+  - capability_id: startd8.exemplars.proven_pipeline
+    category: generate
+    maturity: beta
+    summary: "Proven Exemplar Pipeline + Kaizen quality loop: mines perfect-score (1.00) features from prior runs as MicroPrime templates, and feeds cross-run disk-quality signals back as P1 prompt hints (don't-discard-lessons)"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        PEP: extractor.py extract_exemplars_from_run() identifies features scoring 1.00; registry.py
+        ExemplarRegistry does fingerprint-based lookup; structural_extractor.py AST fingerprints
+        (ConfigFingerprint); template_promoter.py promotes mature exemplars to MicroPrime templates
+        (persisted to exemplar-registry.json). Kaizen (Phases A-E): engine emits per-element generation
+        metadata; forward_manifest_validator validate_disk_compliance() → DiskComplianceResult;
+        prime_postmortem CAUSE_TO_SUGGESTION (25 mappings) → kaizen hints injected as P1 spec/draft
+        sections; dual scoring compute_disk_quality_score(). Cross-run trends/correlation artifacts.
+      agent: |
+        from startd8.exemplars.registry import ExemplarRegistry  # proven-exemplar lookup/promotion
+    triggers: ["exemplar", "proven exemplar", "kaizen", "quality feedback", "template promotion", "disk quality score", "cross-run improvement"]
+    evidence:
+      - type: code
+        ref: src/startd8/exemplars/
+        description: "extractor/registry/structural_extractor/template_promoter"
+      - type: docs
+        ref: docs/design/kaizen/
+        description: "Kaizen quality system requirements + per-language + validation reports"
+    confidence: 0.8
+
+  - capability_id: startd8.benchmark.matrix
+    category: validate
+    maturity: beta
+    summary: "Summer 2026 model benchmark matrix (service×model×repetition) measuring model SKILL (deterministic+micro-prime OFF): infra-fail classification, median/IQR/pass-rate aggregation, compile-gated composite scoring + Track 2 executed behavioral correctness, persist-then-rescore ($0 Mottainai)"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        benchmark_matrix/: BenchmarkRunSpec (immutable, content-hashed); budget.py fail-closed preflight;
+        SubprocessCellExecutor drives run_prime_workflow.py --benchmark-mode with infra-fail
+        classification (a missing key is infra_fail, never the model's 0); aggregate.py uses
+        median+IQR+pass-rate+catastrophic (not mean) with rank-by-quality and rank-by-consistency;
+        scoring.py composite = structural gated by a compile floor + optional behavioral functional term.
+        behavioral/ (Track 2): run_service_sandboxed (long-lived server + loopback client + guaranteed
+        process-group kill, egress-denied), vendored Node runtime closure, SDK-authored Charge ground
+        truth. Persist-then-rescore: runs write a durable batch; rescore_behavioral.py re-scores for $0.
+        model_comparison.py (compare-models) is the reusable single-seed→N-models core it builds on.
+      agent: |
+        from startd8.model_comparison import ...  # compare-models core; benchmark_matrix builds the grid
+    triggers: ["benchmark", "model benchmark", "compare models", "behavioral scoring", "track 2", "model skill", "rescore", "matrix"]
+    evidence:
+      - type: code
+        ref: src/startd8/benchmark_matrix/
+        description: "run_spec/budget/runner/aggregate/scoring/sandbox + behavioral/ (Track 2)"
+      - type: code
+        ref: src/startd8/model_comparison.py
+        description: "compare-models: one seed → N isolated models, ranked"
+      - type: docs
+        ref: docs/design/benchmark-scoring/
+        description: "FUNCTIONAL_CORRECTNESS_* incl. Track 2 v0.2"
+    confidence: 0.8
+
+  - capability_id: startd8.deploy.local_harness
+    category: validate
+    maturity: beta
+    summary: "Local deploy + graded-validation harness (`startd8 deploy local|batch`): pip-install → uvicorn → health-poll → smoke for generated apps, with a graded ladder (discover→install→boot→health→smoke) and batch join to comparison reports — code-quality signal + SDK defect feedback"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        Boots a generated app as a REAL local server (vs boot_smoke.py's in-process TestClient): layered
+        entry-point discovery (manifest fast-path → bounded ASGI scan), dep-floor fallback, probe order
+        /openapi.json→/health→/, CWD-relative DB in throwaway space removed on teardown. v1 live-boots
+        installed mode only (deployed → skipped:deployed-needs-db, needs Postgres). Batch mode globs
+        batch_root/*/workdir and joins comparison-report.json by model id. Trust boundary at pip install
+        (venv+subprocess+loopback+rlimits+process-group teardown; Docker=v2). Feeds the benchmark.
+      agent: |
+        # startd8 deploy local --app <workdir> ; startd8 deploy batch --batch-root <dir>
+    triggers: ["deploy local", "local deploy harness", "boot generated app", "health poll", "smoke test", "graded validation", "deploy batch"]
+    evidence:
+      - type: code
+        ref: src/startd8/server/
+        description: "deploy harness + boot smoke; startd8 deploy local|batch CLI"
+      - type: docs
+        ref: docs/design/local-deploy-harness/
+        description: "LOCAL_DEPLOY_HARNESS REQUIREMENTS v0.3 + PLAN (M0–M3)"
+    confidence: 0.8
+
+  - capability_id: startd8.codegen.deployment_mode
+    category: generate
+    maturity: beta
+    summary: "Installed-vs-deployed mode for backend_codegen apps ($0 deterministic): one declared mode governs persistence/identity/tenancy/networking/observability; bake only what security requires, bind the rest at runtime — settings.py is the single mode-varying file"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        deployment.mode (installed|deployed) drives behavioral differences while holding determinism
+        (same inputs incl. mode → byte-identical, drift-checkable). Deployed emits app/settings.py (the
+        only mode-varying generated file), a reference app/auth.py principal seam (Bearer/JWT contract —
+        see docs/design/auth-seam-jwt), an owned run.sh (mode-derived bind), and tenancy row-scoping
+        when deployment.tenant is declared (principal-scoped CRUD in routers.py + web.py). main.py stays
+        byte-identical (tolerant-import seam). coherence.py FR-CFG-5 ERROR/WARN/OK matrix wired into
+        generate backend; FR-CFG-7a self-embeds # startd8-mode: so the schema-only skip-hook verifies at
+        $0 without app.yaml. M0→M3 feature-complete for the deterministic path; PG-env proofs remain.
+      agent: |
+        # startd8 generate backend --mode deployed --app-manifest app.yaml
+    triggers: ["deployment mode", "installed vs deployed", "deployed app", "tenancy scoping", "auth seam", "settings.py", "mode-derived bind"]
+    evidence:
+      - type: code
+        ref: src/startd8/backend_codegen/settings_renderer.py
+        description: "settings_renderer + auth_renderer (seam) + coherence (FR-CFG-5)"
+      - type: docs
+        ref: docs/design/deployment-mode/
+        description: "DEPLOYMENT_MODE REQUIREMENTS v0.3.1 + PLAN (M0–M3 shipped)"
+    confidence: 0.8
+
+  # ============================================================================
+  # CLOUD-NATIVE DEPLOYMENT (this session) — deployed apps → EKS/GKE behind agentgateway
+  # ============================================================================
+
+  - capability_id: startd8.codegen.cloud_native_deploy
+    category: generate
+    maturity: beta
+    summary: "Deterministically ($0) emit a deployed app's cloud-native deploy/ tree — vendor-neutral Kubernetes + Gateway API + External Secrets manifests + a machine-readable infra-needs contract — for EKS/GKE behind agentgateway/kagent; operator values bound at deploy, never baked"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        `startd8 generate scaffold` in `deployment.mode: deployed` emits `deploy/`: Deployment
+        (non-root/restricted securityContext, readiness /health + liveness /health/live, no SA-token
+        automount, resources), Service (ClusterIP), ServiceAccount, ConfigMap (non-secret env incl.
+        OTLP), ExternalSecret (ESO, Doppler default, creationPolicy: Owner, refreshInterval), HTTPRoute
+        (explicit hostnames + parentRef bindings, never '*'), NetworkPolicy (gateway-only ingress +
+        egress allowlist), and infra-contract.yaml (versioned operator bindings + prereqs — the seam
+        to Terraform/StackGen + Kestra/Argo). Vendor-neutral apiVersions only (no Gloo/cloud CRDs in
+        the core, FR-CND-28); DNS-1123 naming; byte-stable; $0 drift-owned. Adds a strict `deploy:`
+        block to app.yaml (trust_gateway/secrets.backend/target_cloud/...).
+      agent: |
+        from startd8.scaffold_codegen.deploy_renderer import render_deploy_tree  # deployed mode → deploy/ pairs
+    triggers: ["deploy to kubernetes", "eks", "gke", "agentgateway", "gateway api", "external secrets", "k8s manifests", "infra-contract", "cloud native deploy"]
+    evidence:
+      - type: code
+        ref: src/startd8/scaffold_codegen/deploy_renderer.py
+        description: "render_deploy_tree + per-manifest renderers (Deployment/Service/ConfigMap/ExternalSecret/HTTPRoute/NetworkPolicy/infra-contract)"
+      - type: docs
+        ref: docs/design/cloud-native-deploy/
+        description: "CLOUD_NATIVE_DEPLOY REQUIREMENTS v0.3.1 (FR-CND-1..30) + PLAN; CRP R1–R5 triaged"
+    confidence: 0.85
+
+  - capability_id: startd8.codegen.deploy_environments
+    category: generate
+    maturity: beta
+    summary: "Deterministically ($0) emit dev/test/prod from one deploy/ base via per-env kustomize overlays — environment is ORTHOGONAL to mode; two binding planes (app env-vars vs k8s object fields); env↔Doppler config; byte-identical-when-absent"
+    audiences: [workflow_developer, integration_developer]
+    description: |
+      `deploy.environments` (strict, sorted) declares per-env value overrides. render_deploy_overlays
+      emits a kustomize base + deploy/overlays/{env}/ patching ONLY varying values across two planes
+      (FR-ENV-3): app env-vars via a ConfigMap strategic-merge (ENV/LOG_LEVEL/OTLP) vs k8s fields via
+      Deployment/HPA patches (replicas/resources/autoscaling). The Doppler config appears only in the
+      overlay ExternalSecret ref, never the base (FR-ENV-7). infra-contract gains a per-env section;
+      coherence WARNs on inconsistent secret scope. Absent → no overlays, byte-identical (SOTTO).
+      installed + environments → build error. `@env`-suffixed kinds keep per-env files $0 drift-owned.
+    triggers: ["dev test prod", "environments", "kustomize overlays", "per-environment config", "doppler config per env"]
+    evidence:
+      - type: code
+        ref: src/startd8/scaffold_codegen/deploy_renderer.py
+        description: "render_deploy_overlays + render_base_kustomization + render_overlay_* (M1); EnvironmentSpec (manifest.py)"
+      - type: docs
+        ref: docs/design/deploy-environments/
+        description: "DEPLOY_ENVIRONMENTS REQUIREMENTS v0.3 (FR-ENV-1..12) + PLAN; CRP R1 triaged (M0–M3 shipped)"
+    confidence: 0.85
+
+  - capability_id: startd8.deploy.coherence_gate
+    category: security
+    maturity: beta
+    summary: "Fail-closed deploy-coherence verdict (machine-readable) — security-tier ERRORs (decode-only-no-gateway auth bypass) → HARD; operational → SOFT; consumed by the cap-dev-pipe gate via returncode+JSON (the Keiyaku seam, FR-CND-30)"
+    audiences: [workflow_developer, integration_developer]
+    description: |
+      scaffold_codegen/coherence.py tags every finding with a severity_tier (security|operational|
+      advisory) and deploy_coherence_verdict() collapses to (verdict, exit_code): security ERROR →
+      hard/3 (non-overridable downstream), operational ERROR → soft/1, not-deployed → skip/2, else
+      ok/0. `scripts/check_deploy_coherence.py --json <project>` emits {schemaVersion, verdict,
+      findings[], unbound_bindings} — fail-closed on malformed app.yaml. The cap-dev-pipe
+      deploy-coherence gate consumes this without importing SDK code (REQ-CDP-DEPLOY-6/7/10). The
+      decode-only-no-gateway-ack security ERROR fires when deployed + auth seam + not trust_gateway.
+    triggers: ["deploy coherence", "is this deployable", "fail closed", "auth bypass", "deploy gate", "check_deploy_coherence", "severity tier"]
+    evidence:
+      - type: code
+        ref: scripts/check_deploy_coherence.py
+        description: "the --json verdict; src/startd8/scaffold_codegen/coherence.py (deploy_coherence_verdict + severity tiers)"
+      - type: docs
+        ref: docs/design/cloud-native-deploy/CLOUD_NATIVE_DEPLOY_REQUIREMENTS.md
+        description: "FR-CND-6/9/30; cap-dev-pipe DEPLOY_INTEGRATION_REQUIREMENTS REQ-CDP-DEPLOY-*"
+    confidence: 0.85
+
+  - capability_id: startd8.concierge.onboarding
+    category: action
+    maturity: beta
+    summary: "Project-side SDK-onboarding assist (`startd8 concierge`, with a read-only MCP tool): survey (brownfield triage), assess (onboarding-readiness + $0-cascade view via wireframe), instantiate-kickoff (project the kickoff package, prototype|production posture), log-friction — CLI-only writes via a safe-writer chokepoint"
+    audiences: [workflow_developer, integration_developer, gtm]
+    description: |
+      The human + agent front door to onboarding a project onto the SDK. `survey` triages requirement
+      docs / models / fixtures / PII; `assess` reports kickoff-input provenance + the $0 deterministic
+      cascade readiness (wraps wireframe); `instantiate-kickoff --posture prototype|production` projects
+      the kickoff package (preview by default, --apply to write); `log-friction` records onboarding
+      friction. The read-only survey/assess are exposed as the `startd8_concierge` MCP tool; write
+      actions go through a single safe-writer chokepoint (CLI is the sole writer). NOTE: assess/posture
+      do not yet surface this session's deployment posture (mode/deploy/environments/coherence) —
+      deployment-awareness is a tracked follow-on.
+    triggers: ["concierge", "onboard project", "kickoff", "survey project", "onboarding readiness", "instantiate kickoff"]
+    evidence:
+      - type: code
+        ref: src/startd8/concierge/core.py
+        description: "survey/assess/instantiate/log-friction + safe_write chokepoint; cli_concierge.py; startd8_concierge MCP tool"
+      - type: docs
+        ref: docs/design/kickoff/
+        description: "FR-C series (C3/C7/C10..C14); concierge_templates/ kickoff package"
+    confidence: 0.85
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
 
 summary:
-  total_capabilities: 23
+  # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
+  # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
+  total_capabilities: 41   # v1.8.0: +cloud_native_deploy, deploy_environments, deploy.coherence_gate, concierge.onboarding
   by_maturity:
-    stable: 16
-    beta: 7
+    stable: 21
+    beta: 20
   by_category:
-    action: 5      # system_prompt, generate_result, resolution, resilience, ratelimit
+    action: 7      # +complexity.tier_routing, +concierge.onboarding
     observe: 3     # session_tracking, cost_tracking, otel_logging
-    validate: 4    # truncation_detection, diagnostics, mock_provider, multilang_manifest_validation
-    generate: 5    # forward_manifest_draft_time_injection, observability_artifact_generation, deterministic_backend, openapi_role3_intercontext, presentation_polish
-    integration: 4 # provider_registry, contextcore, mcp, capdevpipe_install
+    validate: 6    # +benchmark.matrix, +deploy.local_harness
+    generate: 14   # +cloud_native_deploy, +deploy_environments (v1.8.0)
+    integration: 5 # +languages.profile_registry
     query: 2       # model_catalog, wireframe_summary
-    transform: 1   # code_extraction
+    transform: 2   # +repair.pipeline
+    security: 2    # security_prime.gate, +deploy.coherence_gate (v1.8.0)
 
 # ==============================================================================
 # CHANGELOG
 # ==============================================================================
 
 changelog:
+  - version: "1.8.0"
+    date: "2026-06-21"
+    changes:
+      - "Indexed this session's deployment-configuration + onboarding capabilities (were built but absent from the index → invisible to mcp-tools.json/agent-card)."
+      - "Added startd8.codegen.cloud_native_deploy (generate, beta, 0.85) — deployed apps emit a vendor-neutral K8s + Gateway API + ESO deploy/ tree + infra-contract for EKS/GKE behind agentgateway."
+      - "Added startd8.codegen.deploy_environments (generate, beta, 0.85) — dev/test/prod from one base via per-env kustomize overlays; environment orthogonal to mode; two binding planes; env↔Doppler config."
+      - "Added startd8.deploy.coherence_gate (security, beta, 0.85) — fail-closed machine-readable deploy verdict (security→HARD/operational→SOFT) consumed by the cap-dev-pipe gate (check_deploy_coherence.py --json, FR-CND-30)."
+      - "Added startd8.concierge.onboarding (action, beta, 0.85) — `startd8 concierge` survey/assess/instantiate-kickoff/log-friction + read-only MCP tool (recently built FR-C series; now indexed). Deployment-awareness is a tracked follow-on."
+      - "41 capabilities: 21 stable, 20 beta; generate 12→14, security 1→2, action 6→7."
+  - version: "1.7.0"
+    date: "2026-06-20"
+    changes:
+      - "MAJOR: indexed the SDK's SECOND generation path — LLM-driven POLYGLOT construction (Python/Go/Node.js/Java/C#), previously absent + actively misdescribed as 'non-Python generation deferred' (true only for the $0 deterministic Python-only path, not this one)"
+      - "Added startd8.codegen.polyglot_construction (generate, stable, 0.9) — Prime+MicroPrime 5-language element-level generation; benchmark builds Online Boutique on it"
+      - "Added startd8.languages.profile_registry (integration, stable, 0.9) — 7 LanguageProfiles + resolve_language"
+      - "Added startd8.repair.pipeline (transform, stable, 0.85) — ~45 language-organized post-gen repair steps"
+      - "Added startd8.contractors.prime (generate, stable, 0.85) — PrimeContractorWorkflow construction orchestrator (edit-mode, checkpoint/resume, post-mortem)"
+      - "Added startd8.complexity.tier_routing (action, stable, 0.85) — classify_tier cost-routing"
+      - "Added startd8.security_prime.gate (security, beta, 0.8) — NEW security category; gate orchestration"
+      - "Added startd8.query_prime.secure_generation (generate, beta, 0.8) — tiered secure DB query gen"
+      - "Added startd8.exemplars.proven_pipeline (generate, beta, 0.8) — PEP + Kaizen cross-run quality loop"
+      - "Added startd8.benchmark.matrix (validate, beta, 0.8) — Summer 2026 model benchmark + Track 2 behavioral scoring"
+      - "Added startd8.deploy.local_harness (validate, beta, 0.8) — startd8 deploy local|batch graded boot ladder"
+      - "Added startd8.codegen.deployment_mode (generate, beta, 0.8) — installed-vs-deployed $0 deterministic mode"
+      - "Recount: 37 capabilities (prior summary undercounted composite_views + view_prose); 21 stable, 16 beta"
   - version: "1.6.0"
     date: "2026-06-19"
     changes:

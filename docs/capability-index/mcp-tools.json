@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "startd8.agent.generate",
-      "description": "Send prompts to any LLM provider through a unified async interface\n\n\nAvoid:\n- Never call provider APIs directly \u2014 use resolve_agent_spec() for consistency\n- Don't assume response format differs by provider \u2014 GenerateResult normalizes all",
+      "description": "Send prompts to any LLM provider through a unified async interface\n\n\nAvoid:\n- Never call provider APIs directly — use resolve_agent_spec() for consistency\n- Don't assume response format differs by provider — GenerateResult normalizes all",
       "inputSchema": {
         "type": "object",
         "required": [
@@ -565,7 +565,83 @@
         "maturity": "beta",
         "confidence": 0.7
       }
+    },
+    {
+      "name": "startd8.deploy.coherence_check",
+      "description": "Check whether a generated project is deployment-coherent (fail-closed). Returns {verdict: ok|soft|hard|skip, findings[], unbound_bindings}. A security-tier ERROR (e.g. deployed app not gateway-fronted) is HARD/non-overridable.\n\nAvoid:\n- Don't treat a missing/malformed verdict as pass — fail closed.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "project_root"
+        ],
+        "properties": {
+          "project_root": {
+            "type": "string",
+            "description": "Path to the generated project (contains app.yaml / deploy/)"
+          }
+        }
+      }
+    },
+    {
+      "name": "startd8.codegen.generate_backend",
+      "description": "Deterministically ($0, no LLM) project one .prisma contract into a full all-Python app (Pydantic/SQLModel/FastAPI/HTMX). In deployed mode also emits settings/auth-seam/tenancy + the cloud-native deploy/ tree + per-env overlays.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "schema_path"
+        ],
+        "properties": {
+          "schema_path": {
+            "type": "string",
+            "description": "Path to prisma/schema.prisma"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "installed",
+              "deployed"
+            ],
+            "description": "Deployment mode (default: from app.yaml)"
+          },
+          "app_manifest": {
+            "type": "string",
+            "description": "Path to app.yaml (deploy posture, environments)"
+          }
+        }
+      }
+    },
+    {
+      "name": "startd8.codegen.cloud_native_deploy",
+      "description": "Render the vendor-neutral cloud-native deploy/ tree (Kubernetes + Gateway API + External Secrets + infra-contract) and per-env kustomize overlays (dev/test/prod) for a deployed app. Operator values bound at deploy, never baked.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "app_manifest"
+        ],
+        "properties": {
+          "app_manifest": {
+            "type": "string",
+            "description": "Path to app.yaml (deployment.mode: deployed + deploy: block)"
+          }
+        }
+      }
+    },
+    {
+      "name": "startd8.concierge.assess",
+      "description": "Onboarding-readiness assessment for a project: kickoff-input provenance + the $0 deterministic-cascade view (wraps wireframe). Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "project_root"
+        ],
+        "properties": {
+          "project_root": {
+            "type": "string",
+            "description": "Path to the project to assess"
+          }
+        }
+      }
     }
   ],
-  "tool_count": 34
+  "tool_count": 38
 }

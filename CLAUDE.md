@@ -160,7 +160,22 @@ provider.validate_config({})
 agent = provider.create_agent("claude-sonnet-4-20250514")
 ```
 
-### Deterministic App Generation (`backend_codegen`) — bucket 1, $0 LLM
+### Two Generation Paths — READ BEFORE saying "the SDK generates X"
+
+> **The recurring miscalibration this prevents:** describing the SDK as a "Python app generator."
+> That is only HALF the SDK. There are **two distinct generation paths**, and the polyglot story
+> lives entirely in the second one. Never flatten them.
+
+| Path | Languages | Output shape | Cost | Where |
+|------|-----------|--------------|------|-------|
+| **Deterministic codegen** | **Python only** (by design) | one `.prisma` → FastAPI/Pydantic/SQLModel/HTMX modular monolith | **$0, no LLM** (bucket 1) | `backend_codegen/` + `frontend_/scaffold_/view_codegen/`, `presentation_polish/` |
+| **LLM-driven construction** | **5 languages** (Python, Go, Node.js, Java, C#) | polyglot **microservice fleets** | LLM (bucket 3 integration) | `contractors/` (Prime), `micro_prime/`, `languages/`, `repair/`, `complexity/` |
+
+- The **LLM-driven path is the polyglot one** — it has per-language parsers + splicers (`languages/{go,java,csharp,nodejs}_{parser,splicer}.py`), per-language semantic validators, ~45 language-organized repair steps, and `micro_prime/engine.py` branches per language. The Summer 2026 benchmark builds the **Online Boutique polyglot microservices demo** on this path.
+- Any statement like "the SDK generates Python apps" must be qualified to "the **deterministic** path." Anything that reads "non-Python generation is deferred" is **stale/false** — it was only ever true of bucket 1. (The capability manifest carried this error until v1.7.0.)
+- Both paths share the `.prisma`/contract layer as the language-neutral IDL; only the deterministic path is locked to Python output.
+
+### Deterministic App Generation (`backend_codegen`) — bucket 1, $0 LLM (path 1 of 2)
 
 The active **applicational-completion** path: projects one `schema.prisma` contract into a working
 all-Python app (FastAPI + Pydantic + SQLModel + HTMX + Jinja2) with **zero LLM cost**. Drives the

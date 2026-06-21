@@ -4,7 +4,7 @@
     "name": "StartD8 LLM Orchestration Capabilities",
     "description": "Multi-LLM provider abstraction framework with cost tracking, workflow\norchestration, multi-phase code generation, and OpenTelemetry observability.\nBeaver (Amik) in the ContextCore expansion pack ecosystem.\n",
     "url": "https://api.example.com/startd8.agent",
-    "version": "1.0.0",
+    "version": "1.8.0",
     "capabilities": {
       "streaming": false,
       "pushNotifications": false,
@@ -652,6 +652,52 @@
         ],
         "outputModes": [
           "application/json"
+        ]
+      },
+      {
+        "id": "startd8.deploy.coherence_check",
+        "name": "Deploy Coherence Check",
+        "description": "Fail-closed deployment-coherence verdict (security→HARD, operational→SOFT) for a generated project",
+        "tags": [
+          "deploy coherence",
+          "is this deployable",
+          "fail closed",
+          "deploy gate"
+        ]
+      },
+      {
+        "id": "startd8.codegen.cloud_native_deploy",
+        "name": "Cloud-Native Deploy",
+        "description": "Emit a deployed app's vendor-neutral K8s + Gateway API + ESO deploy/ tree + infra-contract for EKS/GKE behind agentgateway",
+        "tags": [
+          "deploy to kubernetes",
+          "eks",
+          "gke",
+          "agentgateway",
+          "gateway api",
+          "external secrets"
+        ]
+      },
+      {
+        "id": "startd8.codegen.deploy_environments",
+        "name": "Deploy Environments",
+        "description": "dev/test/prod from one base via per-env kustomize overlays; environment orthogonal to mode",
+        "tags": [
+          "dev test prod",
+          "environments",
+          "kustomize overlays",
+          "per-environment config"
+        ]
+      },
+      {
+        "id": "startd8.concierge.onboarding",
+        "name": "Concierge Onboarding",
+        "description": "Project-side SDK-onboarding assist: survey, assess, instantiate-kickoff, log-friction",
+        "tags": [
+          "concierge",
+          "onboard project",
+          "kickoff",
+          "onboarding readiness"
         ]
       }
     ],
