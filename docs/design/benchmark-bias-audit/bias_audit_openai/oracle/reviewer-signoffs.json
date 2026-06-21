@@ -8,15 +8,21 @@
       "blinded": false,
       "evidence_reviewed": [
         "canonical/spec.md",
+        "canonical/pricing.proto",
         "canonical/canonicalization_decisions.md",
+        "oracle/reference_oracle.py",
+        "oracle/test_oracle.py",
+        "oracle/conftest.py",
         "oracle/oracle-provenance.json",
         "oracle/fixed-open-evidence.json",
         "mutants/manifest.json",
+        "mutants/src/*.py",
         "mutants/expected-kill-matrix.csv",
-        "mutants/adequacy-report.json"
+        "mutants/adequacy-report.json",
+        "oracle/REVIEWER_RE_REVIEW_GUIDE.md"
       ],
       "decision": "blocked",
-      "rationale": "Readiness review found no reference oracle or provenance, no FIXED/OPEN evidence mappings, planned rather than executable mutants, no calibration rows, and no completed independent review. This unblinded reviewer is affiliated with the Codex tool cohort and cannot substitute for the required independent blinded review.",
+      "rationale": "Re-review verified 43/43 reference tests, 22 mapped probes, and semantic kills for all 10 executable single-fault mutants. Blocked: oracle/test_oracle.py imports VALID_CASES, INVALID_CASES, and expected responses from runs/s2-codex-suite-clean-20260618T215301Z/suite.py, a measured Codex cohort artifact. That makes the oracle calibration and mutant adequacy vendor-dependent rather than an independent scoring instrument. In addition, oracle-provenance.json marks provenance accepted with no implementation commit and an empty independent_non_claude_review record. Replace the cohort-derived fixture source with independently authored canonical probes and complete immutable provenance before re-review. This unblinded reviewer is affiliated with the Codex tool cohort and cannot substitute for the required blinded independent review.",
       "date": "2026-06-20"
     },
     {
