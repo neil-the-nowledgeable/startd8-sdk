@@ -37,6 +37,37 @@ def load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def oracle_provenance_errors(provenance: dict) -> list[str]:
+    """Return errors for provenance fields that a status flag cannot prove."""
+    errors = []
+    oracle_ref = provenance.get("oracle")
+    if not isinstance(oracle_ref, str) or not oracle_ref or not (ROOT / oracle_ref).is_file():
+        errors.append("oracle path is missing or unreadable")
+
+    authorship = provenance.get("authorship")
+    if not isinstance(authorship, list) or not any(
+        isinstance(record, dict) and isinstance(record.get("commits"), list) and record["commits"]
+        for record in authorship
+    ):
+        errors.append("requires an immutable oracle implementation commit")
+
+    if not provenance.get("independent_non_claude_review"):
+        errors.append("requires an independent non-Claude review record")
+
+    for path in (
+        ROOT / "oracle/test_oracle.py",
+        ROOT / "oracle/canonical_cases.py",
+    ):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            errors.append(f"calibration source unreadable: {path.name}")
+            continue
+        if "runs/" in source:
+            errors.append(f"calibration source references authoring-run artifacts: {path.name}")
+    return errors
+
+
 def is_complete_accepting_signoff(signoff: object) -> bool:
     if not isinstance(signoff, dict):
         return False
@@ -69,6 +100,10 @@ def validate() -> dict:
             message = "status is not accepted"
             check_errors[check_id].append(message)
             errors.append(f"{check_id}: {message}")
+        elif check_id == "oracle_provenance":
+            for message in oracle_provenance_errors(item):
+                check_errors[check_id].append(message)
+                errors.append(f"{check_id}: {message}")
 
     signoffs = evidence.get("reviewer_signoff", {}).get("signoffs", [])
     if len(signoffs) < 2 or any(not is_complete_accepting_signoff(signoff) for signoff in signoffs):

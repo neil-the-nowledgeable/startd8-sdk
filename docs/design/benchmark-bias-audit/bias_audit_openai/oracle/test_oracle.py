@@ -2,31 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
 
+from canonical_cases import INVALID_CASES, VALID_CASES
 from conftest import get_oracle_module
-
-
-AUDIT_ROOT = Path(__file__).resolve().parents[1]
-SUITE_PATH = (
-    AUDIT_ROOT
-    / "runs/s2-codex-suite-clean-20260618T215301Z/suite.py"
-)
-
-
-def _load_suite_cases():
-    spec = importlib.util.spec_from_file_location("codex_suite", SUITE_PATH)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.VALID_CASES, module.INVALID_CASES
-
-
-VALID_CASES, INVALID_CASES = _load_suite_cases()
 
 
 def _assess(request, pytestconfig):
@@ -207,3 +188,14 @@ def test_runtime_packaging_out_of_scope(pytestconfig):
     """OPEN-012 probe: oracle is importable without server startup metadata."""
     oracle = get_oracle_module(pytestconfig)
     assert callable(oracle.assess_lines)
+
+
+def test_calibration_cases_are_not_authoring_run_artifacts():
+    """The oracle calibration must not depend on a measured vendor's output."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    cases_source = Path(__import__("canonical_cases").__file__).read_text(encoding="utf-8")
+    forbidden_filename = "suite" + ".py"
+    authoring_runs = "run" + "s/"
+    assert forbidden_filename not in source
+    assert forbidden_filename not in cases_source
+    assert authoring_runs not in cases_source

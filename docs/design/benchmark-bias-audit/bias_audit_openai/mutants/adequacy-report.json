@@ -1,6 +1,8 @@
 {
   "schema_version": "1.0",
   "status": "accepted",
+  "fixture_source": "oracle/canonical_cases.py",
+  "reference_test_count": 38,
   "calibration_runs": [
     {
       "mutant_id": "round-half-up-for-half-even",

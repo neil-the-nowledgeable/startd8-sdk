@@ -23,7 +23,16 @@ def _configure_evidence(tmp_path, monkeypatch, *, accepted: bool) -> Path:
     mutants.mkdir()
 
     status = "accepted" if accepted else "pending"
-    (oracle / "oracle-provenance.json").write_text(json.dumps({"status": status}))
+    (oracle / "reference_oracle.py").write_text("def assess_lines(request): return request\n")
+    (oracle / "test_oracle.py").write_text("from canonical_cases import VALID_CASES\n")
+    (oracle / "canonical_cases.py").write_text("VALID_CASES = []\n")
+    provenance = {
+        "status": status,
+        "oracle": "oracle/reference_oracle.py" if accepted else None,
+        "authorship": [{"commits": ["a" * 40]}] if accepted else [],
+        "independent_non_claude_review": [{"reviewer_id": "independent"}] if accepted else [],
+    }
+    (oracle / "oracle-provenance.json").write_text(json.dumps(provenance))
     (oracle / "fixed-open-evidence.json").write_text(json.dumps({"status": status}))
     signoffs = [
         {
@@ -112,3 +121,30 @@ def test_non_accepting_reviewer_decision_does_not_admit_gate(tmp_path, monkeypat
     assert result["status"] == "blocked"
     reviewer_check = next(check for check in result["checks"] if check["id"] == "reviewer_signoff")
     assert reviewer_check["errors"] == ["requires two complete accepting sign-offs"]
+
+
+def test_accepted_provenance_requires_immutable_commit(tmp_path, monkeypatch):
+    _configure_evidence(tmp_path, monkeypatch, accepted=True)
+    provenance_path = module.JSON_EVIDENCE["oracle_provenance"]
+    provenance = json.loads(provenance_path.read_text())
+    provenance["authorship"][0]["commits"] = []
+    provenance_path.write_text(json.dumps(provenance))
+
+    result = module.validate()
+
+    provenance_check = next(check for check in result["checks"] if check["id"] == "oracle_provenance")
+    assert result["status"] == "blocked"
+    assert provenance_check["errors"] == ["requires an immutable oracle implementation commit"]
+
+
+def test_accepted_provenance_rejects_authoring_run_fixture(tmp_path, monkeypatch):
+    _configure_evidence(tmp_path, monkeypatch, accepted=True)
+    (module.ROOT / "oracle/test_oracle.py").write_text("CASES = 'runs/vendor-suite.py'\n")
+
+    result = module.validate()
+
+    provenance_check = next(check for check in result["checks"] if check["id"] == "oracle_provenance")
+    assert result["status"] == "blocked"
+    assert provenance_check["errors"] == [
+        "calibration source references authoring-run artifacts: test_oracle.py"
+    ]
