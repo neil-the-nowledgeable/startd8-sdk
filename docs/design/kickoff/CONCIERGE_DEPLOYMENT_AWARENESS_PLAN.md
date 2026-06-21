@@ -1,7 +1,7 @@
 # Concierge Deployment-Awareness — Implementation Plan
 
-**Version:** 1.0
-**Tracks:** `CONCIERGE_DEPLOYMENT_AWARENESS_REQUIREMENTS.md` (v0.2)
+**Version:** 1.1 (Post-CRP R1 — deltas folded)
+**Tracks:** `CONCIERGE_DEPLOYMENT_AWARENESS_REQUIREMENTS.md` (v0.3)
 **Date:** 2026-06-21
 
 ---
@@ -44,6 +44,22 @@ environments, secrets, trust_gateway), keyed to posture.
 wrapper delegating to `scripts/check_deploy_coherence.py` (subprocess) or `deploy_coherence_verdict`;
 returns `{verdict, findings, unbound_bindings}`.
 
+## 2A. CRP R1 Deltas (v1.1 — dispositions in requirements Appendix A)
+
+- **M1/M2 single source (R1-S1/F2):** wireframe + assess surface the coherence verdict's
+  `unbound_bindings`/verdict — no independent re-read of the contract (FR-C10). Per-env items emitted
+  in sorted `deploy_environments` order; render-twice idempotency test (R1-S7).
+- **M2 tri-state readiness (R1-S3, OQ-6):** `not-declared` / `declared-not-generated` (via
+  `unbound_bindings is None`) / `generated`; plus **`stale`** when declared envs ⊄ contract envs (R1-S4).
+- **M3 posture policy (R1-S5):** explicit 3-step — read mode → seed-if-unset → keep-declared+advisory
+  on conflict; name the production-installed (desktop/CLI) non-conflict.
+- **M4 grammar gate (R1-S6):** parse every taught deployment key through `parse_app_manifest`; zero
+  strict-key errors.
+- **M5 subprocess + fail-closed (R1-S2/S8, OQ-7):** invoke `check_deploy_coherence.py --json` (argv =
+  project path + `--json` only); map returncode→verdict; unstartable/missing script → structured
+  `hard` (not a crash/silent pass); pin the interpreter/venv + cwd.
+- **M2/M5 redaction (R1-S9):** surface only names/counts/status — never secret values from the contract.
+
 ## 3. Validation
 
 - M1: wireframe of a deployed+environments project surfaces env names + `deploy/` artifacts + per-env
@@ -80,17 +96,27 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 - **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
 - **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
 
+> **Triage (v1.1, 2026-06-21):** all 9 S-suggestions ACCEPTED → §2A deltas. 0 rejected.
+
 ### Appendix A: Applied Suggestions
 
-| ID | Suggestion | Source | Implementation / Validation Notes | Date |
-|----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| ID | Suggestion | Delta (§2A) | Date |
+|----|------------|-------------|------|
+| R1-S1 | Single source for unbound bindings | M1/M2 | 2026-06-21 |
+| R1-S2 | Subprocess + fail-closed (OQ-7) | M5 | 2026-06-21 |
+| R1-S3 | Tri-state readiness (OQ-6) | M2 | 2026-06-21 |
+| R1-S4 | Staleness guard | M2 (FR-CDA-8) | 2026-06-21 |
+| R1-S5 | Posture seed order + conflict advisory | M3 | 2026-06-21 |
+| R1-S6 | Template grammar-coherence gate | M4 | 2026-06-21 |
+| R1-S7 | Sorted/idempotent per-env items | M1 | 2026-06-21 |
+| R1-S8 | Unstartable subprocess → structured hard | M5 | 2026-06-21 |
+| R1-S9 | Never echo secret values | M2/M5 | 2026-06-21 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| (none) | — | — | All R1 plan suggestions accepted | 2026-06-21 |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 

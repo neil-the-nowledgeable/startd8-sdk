@@ -1,8 +1,8 @@
 # Concierge Deployment-Awareness (items 4–6) — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post-CRP R1 — triage applied)
 **Date:** 2026-06-21
-**Status:** Ready for CRP / implementation
+**Status:** Ready for implementation
 **Owner:** StartD8 SDK / concierge + wireframe + mcp
 **Extends:** `CONCIERGE_MCP_REQUIREMENTS.md` (v0.3); builds on `cloud-native-deploy`,
 `deploy-environments`, `deployment-mode`.
@@ -57,30 +57,54 @@ deployment posture through the Concierge.
 
 ## 2. Requirements
 
-- **FR-CDA-1 (assess surfaces deployment readiness).** `concierge assess` SHALL include a
-  `deployment` block: declared mode, `deploy:` posture (target cloud, secrets backend, trust_gateway),
-  declared environments, whether the `deploy/` tree is present, per-env unbound operator-binding
-  count (from the infra-contract), and the deploy-coherence verdict.
+- **FR-CDA-1 (assess surfaces deployment readiness — hardened v0.3).** `concierge assess` SHALL
+  include a `deployment` block: declared mode, `deploy:` posture (target cloud, secrets backend,
+  trust_gateway), declared environments, a **tri-state readiness** per env/overall —
+  `not-declared` / `declared-not-generated` / `generated` (reusing the `unbound_bindings is None` =
+  no-contract signal, R1-F3/OQ-6) — the unbound operator-binding count, and the deploy-coherence
+  verdict. **Single source (R1-F2):** the unbound count + verdict SHALL be the values the coherence
+  check already returns — assess/wireframe surface them, never re-derive (FR-C10). assess/the tool
+  SHALL surface only names/counts/status, **never secret values** from the infra-contract (R1-S9).
 - **FR-CDA-2 (wireframe deployment section extended — narrowed v0.2).** The EXISTING
   `_deployment_section` (already surfaces mode/persistence/bind/schema-init/secrets/observability/
   identity + coherence) SHALL be extended with: declared environments, the emitted `deploy/` artifact
-  set, and per-env unbound bindings (from the infra-contract). Its 3 pre-existing-broken golden tests
-  SHALL be fixed in passing.
+  set, and per-env unbound bindings — **surfacing the coherence verdict's value, not an independent
+  re-read** (R1-F2/S1). New per-env items SHALL be emitted in the manifest's already-sorted
+  `deploy_environments` order so the section stays byte-stable/idempotent (R1-S7). Its 3
+  pre-existing-broken golden tests SHALL be fixed in passing.
 - **FR-CDA-3 (posture → deployment DEFAULT, not force — clarified v0.2).** Posture currently drives
   *convention provenance* only (`writes.py`). `instantiate-kickoff --posture prototype|production`
   SHALL additionally **seed a default** `deployment.mode` (prototype→installed, production→deployed) +
-  minimal `deploy:` block — seeded ONLY when mode is unset; an explicit `deployment.mode` always wins
-  (mirrors deployment-mode OQ-5). Mode/deploy stay independent declared fields; an advisory flags conflicts.
-- **FR-CDA-4 (kickoff templates deployment inputs).** The concierge kickoff templates SHALL explain
-  the deployment-posture inputs (mode, `deploy:` block, environments, secrets backend, trust_gateway)
-  in commissioner-friendly terms.
-- **FR-CDA-5 (check_deploy_coherence MCP tool).** Add an agent-callable, read-only
-  `check_deploy_coherence` MCP tool returning the fail-closed verdict (verdict/findings/unbound
-  bindings), delegating to the existing SDK check — no reimplementation.
-- **FR-CDA-6 (assist-not-operate preserved).** All additions SHALL be read-only over MCP (Concierge
-  never runs the deploy, applies manifests, or records a gate).
+  minimal `deploy:` block, with an explicit 3-step policy (R1-F5/S5): (1) read declared
+  `deployment.mode`; (2) if unset, seed from posture; (3) if set and it disagrees with the posture
+  mapping, **keep the declared value and emit an ADVISORY, never an error**. A **production *desktop/CLI*
+  tool legitimately running `installed`** is a named non-conflict, not a warning. Mode/deploy stay
+  independent declared fields (mirrors deployment-mode OQ-5).
+- **FR-CDA-4 (kickoff templates deployment inputs — gated v0.3).** The concierge kickoff templates
+  SHALL explain the deployment-posture inputs (mode, `deploy:` block, environments, secrets backend,
+  trust_gateway) in commissioner-friendly terms, using ONLY keys the strict `parse_app_manifest`
+  accepts (`_VALID_DEPLOY_KEYS`/`_VALID_DEPLOYMENT_MODES`). A grammar-coherence gate SHALL round-trip
+  every taught deployment key through `parse_app_manifest` with zero strict-key errors (R1-F7/S6) —
+  a template teaching a rejected key produces an unparseable manifest → fail-closed `hard`.
+- **FR-CDA-5 (check_deploy_coherence MCP tool — subprocess, normative v0.3).** Add an agent-callable,
+  read-only `check_deploy_coherence` MCP tool that invokes **`scripts/check_deploy_coherence.py
+  --json` via subprocess** (NOT in-process), mapping returncode (0/1/2/3) → verdict + surfacing the
+  payload (R1-F4/S2/OQ-7). This inherits the script's fail-closed exits (malformed app.yaml → `hard`)
+  and matches cap-dev-pipe's returncode+JSON Keiyaku; no reimplementation. A missing script / unstartable
+  subprocess / import error SHALL degrade to a structured `hard` verdict with a reason — never a tool
+  crash, never a silent pass (R1-S8). The interpreter/venv + cwd SHALL be specified.
+- **FR-CDA-6 (assist-not-operate preserved — tightened v0.3).** All additions SHALL be read-only over
+  MCP (Concierge never runs the deploy, applies manifests, or records a gate). The subprocess in
+  FR-CDA-5 MAY be invoked ONLY in its read-only `--json` form — **no flag that writes, binds, resolves
+  provenance, or renders `deploy/` may be passed or reachable** (R1-F1). Surfaced JSON carries only
+  names/counts/status, never secret values (R1-S9).
 - **FR-CDA-7 (deterministic, $0).** No LLM; all surfaces derive from the manifest + the deterministic
   cascade + the coherence verdict.
+- **FR-CDA-8 (Staleness guard — added v0.3 R1-F6/S4).** `assess`/wireframe read the live `app.yaml`
+  but the unbound-binding/verdict data comes from a generated `deploy/` snapshot. When the declared
+  environments (live app.yaml) are NOT a subset of those represented in `deploy/infra-contract.yaml`
+  (e.g. an env added since generation), readiness SHALL report **`stale`** (advisory), not silently
+  `generated`. A cheap set-diff keeps it $0.
 
 ## 3. Non-Requirements
 
@@ -91,20 +115,22 @@ deployment posture through the Concierge.
 
 ## 4. Open Questions
 
-> OQ-1..OQ-5 resolved by the planning pass — see §0. Remaining for CRP:
-
-- **OQ-6 (new).** Should `assess` distinguish "declared but not yet generated" (deploy block declared,
-  no `deploy/` tree on disk) from "generated" — i.e., surface a *readiness* state, not just presence?
-- **OQ-7 (new).** Should the `check_deploy_coherence` MCP tool shell out to the script (process
-  isolation, matches cap-dev-pipe's consumer contract) or call `deploy_coherence_verdict` in-process
-  (faster, but couples the tool to SDK internals)?
+> OQ-1..OQ-5 resolved by the planning pass — see §0. **OQ-6/OQ-7 RESOLVED by CRP R1:**
+> - **OQ-6 → YES, tri-state readiness** (not-declared / declared-not-generated / generated), reusing
+>   `unbound_bindings is None` = no-contract. Folded into FR-CDA-1 (R1-F3/S3).
+> - **OQ-7 → subprocess** (`--json`, returncode→verdict): inherits fail-closed exits + the cap-dev-pipe
+>   Keiyaku; no in-process coupling. Folded into FR-CDA-5 (R1-F4/S2).
+>
+> No open questions remain.
 
 ---
 
-*v0.2 — Post-planning self-reflective update. FR-CDA-2 narrowed to an extension of the existing
-wireframe section, FR-CDA-1 reframed as inherited-via-delegation (FR-C10), FR-CDA-3 clarified to
-default-not-force, 5 OQs resolved, 2 new for CRP. Headline: the deployment-surfacing substrate already
-exists — this is a small extension + posture default-seed + one read-only MCP tool, not new machinery.*
+*v0.2 — Post-planning self-reflective update. 5 OQs resolved, 2 new for CRP.*
+
+*v0.3 — Post-CRP R1 triage (claude-opus-4-8-1m). 16 suggestions ACCEPTED (0 rejected). Themes:
+single-source unbound bindings (FR-C10 no-recompute), subprocess+fail-closed MCP tool (OQ-7),
+tri-state readiness (OQ-6), staleness guard (new FR-CDA-8), posture conflict policy + production-installed
+exception, grammar-coherence gate, argv-safety + secret-value redaction. Dispositions in Appendix A.*
 
 ---
 
@@ -120,17 +146,29 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 - **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
 - **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
 
+> **Triage (v0.3, 2026-06-21):** all 16 R1 suggestions (7 F + 9 S) ACCEPTED, 0 rejected. Plan-side
+> S-items map to the same FRs as their F-pairs; the plan's §2A carries the milestone deltas.
+
 ### Appendix A: Applied Suggestions
 
-| ID | Suggestion | Source | Implementation / Validation Notes | Date |
-|----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| ID | Suggestion | Disposition (where merged) | Date |
+|----|------------|----------------------------|------|
+| R1-F1 | No mutating subprocess flag (invocation-contract read-only) | → FR-CDA-6 | 2026-06-21 |
+| R1-F2 / R1-S1 | Single source for unbound bindings (verdict value, no re-read) | → FR-CDA-1/FR-CDA-2 | 2026-06-21 |
+| R1-F3 / R1-S3 | Tri-state readiness (OQ-6) | → FR-CDA-1; OQ-6 resolved | 2026-06-21 |
+| R1-F4 / R1-S2 | Subprocess + fail-closed, normative (OQ-7) | → FR-CDA-5; OQ-7 resolved | 2026-06-21 |
+| R1-F5 / R1-S5 | Posture seed order + advisory conflict + production-installed | → FR-CDA-3 | 2026-06-21 |
+| R1-F6 / R1-S4 | Staleness guard | → FR-CDA-8 (new) | 2026-06-21 |
+| R1-F7 / R1-S6 | Template grammar-coherence gate | → FR-CDA-4 | 2026-06-21 |
+| R1-S7 | Sorted/idempotent per-env wireframe items | → FR-CDA-2 | 2026-06-21 |
+| R1-S8 | Unstartable subprocess → structured hard (not crash/silent pass) | → FR-CDA-5 | 2026-06-21 |
+| R1-S9 | Never echo secret values (names/counts/status only) | → FR-CDA-1/FR-CDA-6 | 2026-06-21 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| (none) | — | — | All R1 suggestions accepted | 2026-06-21 |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
