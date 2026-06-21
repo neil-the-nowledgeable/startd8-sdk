@@ -20,6 +20,25 @@ from .manifest import AppManifest
 ERROR = "ERROR"
 WARN = "WARN"
 
+# Severity TIER (orthogonal to ERROR/WARN) — tagged at source so the cap-dev-pipe deploy-coherence
+# gate can collapse to HARD/SOFT/warn (REQ-CDP-DEPLOY-7/10, cloud-native FR-CND-30). The 3-value
+# taxonomy is richer-at-source and future-proofs the OQ-6 deployability trend at no extra cost.
+#   security    → a security-critical posture (auth bypass, isolation gap). ERROR+security ⇒ HARD.
+#   operational → a correctness/ops posture (data loss, concurrency, missing migrations). ERROR ⇒ SOFT.
+#   advisory    → informational only.
+SECURITY = "security"
+OPERATIONAL = "operational"
+ADVISORY = "advisory"
+
+# Verdict + exit-code contract consumed by `scripts/check_deploy_coherence.py --json` and, downstream,
+# the cap-dev-pipe gate. Exit codes mirror `check_seed_quality.py`'s convention, extended with `3`.
+VERDICT_OK = "ok"      # exit 0 — no blocking deploy finding
+VERDICT_SOFT = "soft"  # exit 1 — operational ERROR (overridable downstream)
+VERDICT_SKIP = "skip"  # exit 2 — not a deployed posture (deploy gate N/A)
+VERDICT_HARD = "hard"  # exit 3 — security-critical ERROR (NON-overridable downstream)
+
+_VERDICT_EXIT = {VERDICT_OK: 0, VERDICT_SOFT: 1, VERDICT_SKIP: 2, VERDICT_HARD: 3}
+
 # DSN scheme prefixes that denote a shared/server database (vs a single-writer SQLite file).
 _SHARED_SCHEMES = (
     "postgres://", "postgresql://", "postgresql+", "mysql://", "mysql+",
@@ -32,6 +51,7 @@ class CoherenceFinding:
     severity: str  # "ERROR" | "WARN"
     code: str
     message: str
+    severity_tier: str = OPERATIONAL  # "security" | "operational" | "advisory" (REQ-CDP-DEPLOY-7)
 
 
 def _persistence_kind(db_path: str) -> str:
@@ -59,18 +79,21 @@ def evaluate_coherence(
                 f"deployed mode declares a single-writer SQLite file persistence ({manifest.db_path!r}); "
                 "under shared concurrency this corrupts/loses writes. Declare a shared DSN "
                 "(e.g. persistence.path: postgresql://…).",
+                severity_tier=OPERATIONAL,
             ))
         elif kind == "sqlite-memory":
             findings.append(CoherenceFinding(
                 WARN, "deployed-sqlite-memory",
                 "deployed mode with an in-memory SQLite persistence — acceptable only for "
                 "ephemeral/test runs; a real deployment needs a shared database.",
+                severity_tier=OPERATIONAL,
             ))
         if not manifest.migrations:
             findings.append(CoherenceFinding(
                 ERROR, "deployed-no-migrations",
                 "deployed mode with migrations disabled: a shared DB must not auto-create_all "
                 "(FR-PER-3). Enable migrations (migrations.enabled: true).",
+                severity_tier=OPERATIONAL,
             ))
         if has_auth_seam and not has_tenant:
             findings.append(CoherenceFinding(
@@ -78,6 +101,7 @@ def evaluate_coherence(
                 "deployed mode emits the auth seam but no deployment.tenant is declared: "
                 "AUTHENTICATED BUT NOT TENANT-ISOLATED — every principal can read all rows "
                 "(legal only for a single-owner / shared-read-only app).",
+                severity_tier=SECURITY,
             ))
     elif mode == "installed":
         if kind == "shared":
@@ -85,15 +109,46 @@ def evaluate_coherence(
                 ERROR, "installed-shared-dsn",
                 f"installed (single-user) mode declares a shared-DB persistence ({manifest.db_path!r}); "
                 "installed apps have no pool/isolation posture. Use deployed mode for a shared database.",
+                severity_tier=OPERATIONAL,
             ))
         if has_auth_seam or has_tenant:
             findings.append(CoherenceFinding(
                 ERROR, "installed-auth-requested",
                 "installed (single-user) mode with auth/tenancy requested — installed apps are "
                 "single-owner by definition (NR-3). Use deployed mode.",
+                severity_tier=OPERATIONAL,
             ))
     return tuple(findings)
 
 
 def has_errors(findings: Tuple[CoherenceFinding, ...]) -> bool:
     return any(f.severity == ERROR for f in findings)
+
+
+def deploy_coherence_verdict(
+    findings: Tuple[CoherenceFinding, ...], *, mode: str
+) -> Tuple[str, int]:
+    """Collapse findings to a (verdict, exit_code) for the deploy-coherence gate.
+
+    Only ``deployed`` postures are gated (installed has no ``deploy/`` tree → skip). A
+    **security-tier ERROR** is HARD (non-overridable downstream); any other ERROR is SOFT;
+    WARN/advisory never block. The mapping — not the raw severity — is the cross-repo Keiyaku
+    contract (REQ-CDP-DEPLOY-6/7/10, FR-CND-30).
+    """
+    if mode != "deployed":
+        return VERDICT_SKIP, _VERDICT_EXIT[VERDICT_SKIP]
+    if any(f.severity == ERROR and f.severity_tier == SECURITY for f in findings):
+        return VERDICT_HARD, _VERDICT_EXIT[VERDICT_HARD]
+    if any(f.severity == ERROR for f in findings):
+        return VERDICT_SOFT, _VERDICT_EXIT[VERDICT_SOFT]
+    return VERDICT_OK, _VERDICT_EXIT[VERDICT_OK]
+
+
+def finding_to_dict(f: CoherenceFinding) -> dict:
+    """Serialize a finding for the ``--json`` verdict (``severity_tier`` is always present)."""
+    return {
+        "severity": f.severity,
+        "severity_tier": f.severity_tier,
+        "code": f.code,
+        "message": f.message,
+    }
