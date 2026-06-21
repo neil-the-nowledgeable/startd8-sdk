@@ -205,6 +205,37 @@ def test_installed_with_environments_is_coherence_error():
     assert codes.get("installed-with-environments") == ERROR  # FR-ENV-2 guard
 
 
+def test_environment_specs_carry_overrides():
+    m = parse_app_manifest(_ENVS_YAML)
+    specs = {s.name: s for s in m.deploy_environment_specs}
+    assert specs["prod"].has_replicas is True and specs["prod"].secrets_config is None
+    assert specs["dev"].log_level == "debug"
+
+
+def test_m3_inconsistent_secrets_scope_warns():
+    """M3: some envs pin secrets_config, others don't → cross-env secret-bleed WARN (FR-ENV-7)."""
+    yaml_text = (
+        "deployment:\n  mode: deployed\npersistence:\n  path: postgresql://db/app\n"
+        "deploy:\n  trust_gateway: true\n  environments:\n"
+        "    prod:\n      secrets_config: prd\n    dev: {}\n"
+    )
+    m = parse_app_manifest(yaml_text)
+    codes = {f.code: f for f in evaluate_coherence(m, has_auth_seam=True)}
+    f = codes.get("env-inconsistent-secrets-scope")
+    assert f is not None and f.severity == WARN and "dev" in f.message
+
+
+def test_m3_consistent_secrets_scope_no_warn():
+    yaml_text = (
+        "deployment:\n  mode: deployed\npersistence:\n  path: postgresql://db/app\n"
+        "deploy:\n  trust_gateway: true\n  environments:\n"
+        "    prod:\n      secrets_config: prd\n    dev:\n      secrets_config: dev\n"
+    )
+    m = parse_app_manifest(yaml_text)
+    codes = {f.code for f in evaluate_coherence(m, has_auth_seam=True)}
+    assert "env-inconsistent-secrets-scope" not in codes  # all pinned → no warn
+
+
 # --- A7 wired into `generate backend` ------------------------------------------------------------
 
 def _schema(tmp_path):

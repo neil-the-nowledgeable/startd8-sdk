@@ -247,3 +247,18 @@ def test_overlay_files_drift_owned_and_in_sync():
     assert is_owned_scaffold_file(cm)
     assert scaffold_in_sync(DEPLOYED_ENVS, cm) is True
     assert scaffold_in_sync(DEPLOYED_ENVS, cm.replace('ENV: "production"', 'ENV: "hacked"')) is False
+
+
+def test_infra_contract_lists_per_env_bindings():
+    """M2: the infra-contract enumerates per-environment operator bindings (FR-ENV-9)."""
+    ic = yaml.safe_load(dict(render_deploy_tree(DEPLOYED_ENVS))["deploy/infra-contract.yaml"])
+    envs = {e["name"]: e for e in ic["environments"]}
+    assert set(envs) == {"dev", "prod"}
+    prod_binds = {b["name"]: b for b in envs["prod"]["bindings"]}
+    assert prod_binds["secrets_config"]["value"] == "prd"
+    assert any(b["name"] == "database" for b in envs["prod"]["bindings"])
+
+
+def test_infra_contract_has_no_environments_section_when_none():
+    ic = yaml.safe_load(dict(render_deploy_tree(DEPLOYED))["deploy/infra-contract.yaml"])
+    assert "environments" not in ic  # SOTTO: no per-env section without environments

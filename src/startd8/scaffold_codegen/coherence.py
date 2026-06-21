@@ -105,6 +105,21 @@ def evaluate_coherence(
                 "emit the ClusterIP + NetworkPolicy guard (FR-CND-6).",
                 severity_tier=SECURITY,
             ))
+        # M3: per-env secrets-scope consistency. If SOME environments pin a secrets_config and others
+        # don't, the unpinned ones fall back to the shared base SecretStore ref — so e.g. prod could
+        # silently share dev's secret scope. Flag the gap (FR-ENV-7 / R1-S6).
+        specs = manifest.deploy_environment_specs
+        if specs:
+            pinned = [s.name for s in specs if s.secrets_config]
+            unpinned = [s.name for s in specs if not s.secrets_config]
+            if pinned and unpinned:
+                findings.append(CoherenceFinding(
+                    WARN, "env-inconsistent-secrets-scope",
+                    "some environments pin `deploy.environments.<env>.secrets_config` but these do not: "
+                    f"{sorted(unpinned)} — they fall back to the shared base secret scope, which can "
+                    "leak one environment's secrets into another. Pin a per-env secrets_config for each.",
+                    severity_tier=SECURITY,
+                ))
         if has_auth_seam and not has_tenant:
             findings.append(CoherenceFinding(
                 WARN, "deployed-auth-no-tenant",

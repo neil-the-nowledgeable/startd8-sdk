@@ -54,6 +54,24 @@ DEFAULT_DEPLOYMENT_MODE = "installed"
 
 
 @dataclass(frozen=True)
+class EnvironmentSpec:
+    """One declared deploy environment (DEPLOY_ENVIRONMENTS). Scalar override values live here (for
+    coherence + the per-env contract); nested k8s-field values (resources/autoscaling) are read raw
+    by the overlay renderer. All-hashable so AppManifest stays hashable."""
+
+    name: str
+    env: Optional[str] = None
+    log_level: Optional[str] = None
+    otlp_endpoint: Optional[str] = None
+    secrets_config: Optional[str] = None
+    database_ref: Optional[str] = None
+    hostnames: Tuple[str, ...] = ()
+    has_replicas: bool = False
+    has_resources: bool = False
+    has_autoscaling: bool = False
+
+
+@dataclass(frozen=True)
 class AppManifest:
     """The resolved project-plumbing choices (all defaulted)."""
 
@@ -85,13 +103,18 @@ class AppManifest:
     deploy_trust_gateway: bool = False
     deploy_secrets_backend: Optional[str] = None
     deploy_target_cloud: Optional[str] = None
-    # DEPLOY_ENVIRONMENTS M0: the declared environment names (sorted for byte-stability, R1-S7).
-    # Empty = no environments → no overlays (SOTTO). Per-env override VALUES land in a later increment.
-    deploy_environments: Tuple[str, ...] = ()
+    # DEPLOY_ENVIRONMENTS: declared environments (sorted for byte-stability, R1-S7). Empty = none
+    # (SOTTO → no overlays). Each spec carries the scalar per-env overrides.
+    deploy_environment_specs: Tuple[EnvironmentSpec, ...] = ()
+
+    @property
+    def deploy_environments(self) -> Tuple[str, ...]:
+        """The declared environment names (sorted)."""
+        return tuple(s.name for s in self.deploy_environment_specs)
 
     @property
     def has_environments(self) -> bool:
-        return len(self.deploy_environments) > 0
+        return len(self.deploy_environment_specs) > 0
 
     @property
     def has_tenant(self) -> bool:
@@ -188,7 +211,7 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
     deploy_trust_gateway = False
     deploy_secrets_backend: Optional[str] = None
     deploy_target_cloud: Optional[str] = None
-    deploy_environments: Tuple[str, ...] = ()
+    deploy_environment_specs: Tuple[EnvironmentSpec, ...] = ()
     deploy = data.get("deploy")
     if deploy is not None:
         if not isinstance(deploy, dict):
@@ -223,22 +246,39 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
                 raise ValueError(
                     "app.yaml: `deploy.environments` must be a mapping {env-name: {overrides}}"
                 )
+            specs = []
             for env_name, overrides in environments.items():
                 if not (isinstance(env_name, str) and env_name):
                     raise ValueError("app.yaml: `deploy.environments` keys must be non-empty strings")
-                if overrides is None:
-                    continue
-                if not isinstance(overrides, dict):
+                ov = overrides or {}
+                if not isinstance(ov, dict):
                     raise ValueError(
                         f"app.yaml: `deploy.environments.{env_name}` must be a mapping of overrides"
                     )
-                unknown_env = set(overrides) - _ENV_OVERRIDE_KEYS
+                unknown_env = set(ov) - _ENV_OVERRIDE_KEYS
                 if unknown_env:
                     raise ValueError(
                         f"app.yaml: `deploy.environments.{env_name}` has unknown keys {sorted(unknown_env)}"
                     )
-            # Sorted for byte-stability regardless of YAML key insertion order (R1-S7).
-            deploy_environments = tuple(sorted(environments))
+                hostnames = ov.get("hostnames") or []
+                if not isinstance(hostnames, list) or not all(isinstance(h, str) for h in hostnames):
+                    raise ValueError(
+                        f"app.yaml: `deploy.environments.{env_name}.hostnames` must be a list of strings"
+                    )
+                specs.append(EnvironmentSpec(
+                    name=env_name,
+                    env=ov.get("env"),
+                    log_level=ov.get("log_level"),
+                    otlp_endpoint=ov.get("otlp_endpoint"),
+                    secrets_config=ov.get("secrets_config"),
+                    database_ref=ov.get("database_ref"),
+                    hostnames=tuple(hostnames),
+                    has_replicas="replicas" in ov,
+                    has_resources="resources" in ov,
+                    has_autoscaling="autoscaling" in ov,
+                ))
+            # Sorted by name for byte-stability regardless of YAML key insertion order (R1-S7).
+            deploy_environment_specs = tuple(sorted(specs, key=lambda s: s.name))
 
     messaging_backend = "aiokafka"
     messaging = data.get("messaging")
@@ -275,5 +315,5 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         deploy_trust_gateway=deploy_trust_gateway,
         deploy_secrets_backend=deploy_secrets_backend,
         deploy_target_cloud=deploy_target_cloud,
-        deploy_environments=deploy_environments,
+        deploy_environment_specs=deploy_environment_specs,
     )

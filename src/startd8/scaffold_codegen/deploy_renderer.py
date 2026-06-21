@@ -345,6 +345,22 @@ prerequisites:
   - name: pod-security-standard
     note: namespace must allow the restricted profile
 """
+    # M2: per-environment operator bindings (deployed + environments only). DB ref is routed by
+    # secret-ness (FR-ENV-3/R1-F5): a credentialed DSN → ExternalSecret; a non-secret DSN → here.
+    if m.has_environments:
+        env_lines = ["environments:"]
+        for s in m.deploy_environment_specs:  # already sorted (byte-stable)
+            env_lines.append(f"  - name: {s.name}")
+            env_lines.append("    bindings:")
+            env_lines.append(f"      - {{name: secrets_config, kind: secretstore-config, "
+                             f"value: {s.secrets_config or 'operator-provided'}, status: operator-provided}}")
+            env_lines.append(f"      - {{name: otlp_collector, kind: otlp, "
+                             f"value: {s.otlp_endpoint or 'inherits-base'}, status: operator-provided}}")
+            host = ",".join(s.hostnames) if s.hostnames else "operator-provided"
+            env_lines.append(f"      - {{name: hostnames, kind: dns, value: {host}, status: operator-provided}}")
+            db = "non-secret-binding" if s.database_ref else "via-externalsecret"
+            env_lines.append(f"      - {{name: database, kind: database, routing: {db}, status: operator-provided}}")
+        body += "\n".join(env_lines) + "\n"
     return _header("scaffold-infra-contract", sha) + "\n\n" + body
 
 
