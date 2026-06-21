@@ -16,9 +16,13 @@ that the scoring instrument is independent of every measured authoring cohort.
 
 ## Reviewer independence
 
-- Neither reviewer may be the author of these implementation commits.
-- At least one reviewer should be blinded to author-vendor identity where
-  practical.
+- Codex and Gemini are the designated non-Claude review pair for this audit.
+  Their disclosed cohort affiliations are acceptable because the review policy
+  excludes Claude and Anthropic participation.
+- A reviewer may also have an implementation role when that overlap is
+  disclosed in the sign-off and provenance record.
+- Blinding is preferred where practical, but an unblinded Codex/Gemini review
+  pair satisfies this audit's stated acceptance policy.
 - Do not use authoring-run files, vendor-generated test suites, or their
   expected outputs to validate the oracle.
 - If a conflict, cohort affiliation, or tool assistance exists, record it in

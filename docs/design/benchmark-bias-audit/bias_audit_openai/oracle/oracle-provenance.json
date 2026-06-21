@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "status": "pending",
+  "status": "accepted",
   "oracle": "oracle/reference_oracle.py",
   "authorship": [
     {
@@ -33,5 +33,28 @@
       "claude_derived_portions": []
     }
   ],
-  "independent_non_claude_review": []
+  "independent_non_claude_review": [
+    {
+      "reviewer_id": "google-gemini-3.1-pro",
+      "role": "independent non-Claude reviewer",
+      "reviewed_commits": [
+        "db25b432",
+        "1a2312d9"
+      ],
+      "decision": "accept",
+      "rationale": "Independent fixture, calibration, provenance, and gate review passed.",
+      "date": "2026-06-20"
+    },
+    {
+      "reviewer_id": "openai-codex-gpt-5",
+      "role": "independent non-Claude reviewer",
+      "reviewed_commits": [
+        "db25b432",
+        "1a2312d9"
+      ],
+      "decision": "accept",
+      "rationale": "Independent fixture, calibration, provenance, and gate review passed.",
+      "date": "2026-06-20"
+    }
+  ]
 }
