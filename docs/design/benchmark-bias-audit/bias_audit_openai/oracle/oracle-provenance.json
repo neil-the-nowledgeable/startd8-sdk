@@ -1,13 +1,35 @@
 {
   "schema_version": "1.0",
-  "status": "accepted",
+  "status": "pending",
   "oracle": "oracle/reference_oracle.py",
   "authorship": [
     {
       "author_id": "cursor-composer-2.5",
-      "role": "implementer",
+      "role": "reference oracle and mutant implementer",
       "tool_assistance": "Cursor Composer agent (non-Claude)",
-      "commits": [],
+      "commits": [
+        "0fbf9fb877d91bc48a1a9129719faeaa30f57d64"
+      ],
+      "source_inputs": [
+        "canonical/spec.md",
+        "canonical/pricing.proto",
+        "canonical/canonicalization_decisions.md"
+      ],
+      "claude_derived_portions": []
+    },
+    {
+      "author_id": "openai-codex-gpt-5",
+      "role": "independent canonical calibration fixture implementer",
+      "tool_assistance": "Codex (OpenAI, non-Claude)",
+      "commits": [
+        "db25b432"
+      ],
+      "source_inputs": [
+        "canonical/spec.md",
+        "canonical/pricing.proto",
+        "canonical/canonicalization_decisions.md",
+        "brief/source-to-brief-traceability.md"
+      ],
       "claude_derived_portions": []
     }
   ],

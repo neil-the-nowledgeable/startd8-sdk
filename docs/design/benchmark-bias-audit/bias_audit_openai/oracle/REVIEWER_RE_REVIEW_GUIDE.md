@@ -11,14 +11,15 @@ This document tells each reviewer exactly what changed, what to verify, and how 
 
 ## What changed since the blocked reviews
 
-An independent non-Claude implementer (**Cursor Composer**, `cursor-composer-2.5`) completed Deliverables 1–4 from `NON_CLAUDE_IMPLEMENTER_GUIDE.md`:
+Independent non-Claude implementers (Cursor Composer and Codex) completed the oracle, mutant, and fixture work:
 
 | Artifact | Previous state | Current state |
 |---|---|---|
 | `oracle/reference_oracle.py` | Missing | **Created** — `assess_lines()` pure-function oracle |
-| `oracle/test_oracle.py` | Missing | **Created** — 43 tests + FIXED/OPEN probes |
+| `oracle/canonical_cases.py` | Missing | **Created** — independent canonical fixtures |
+| `oracle/test_oracle.py` | Missing | **Created** — 38 tests + FIXED/OPEN probes |
 | `oracle/conftest.py` | Missing | **Created** — `--oracle-module` mutant swap |
-| `oracle/oracle-provenance.json` | `pending`, null oracle | `accepted`, authorship recorded |
+| `oracle/oracle-provenance.json` | `pending`, null oracle | `pending`, immutable commits recorded; independent review pending |
 | `oracle/fixed-open-evidence.json` | `pending`, 0 mappings | `accepted`, **22 mappings** |
 | `mutants/manifest.json` | `planned` | `accepted`, source paths added |
 | `mutants/src/*.py` | Missing | **10 executable single-fault mutants** |
@@ -26,11 +27,11 @@ An independent non-Claude implementer (**Cursor Composer**, `cursor-composer-2.5
 | `mutants/adequacy-report.json` | `pending` | `accepted`, calibration runs recorded |
 | `oracle/reviewer-signoffs.json` | 2 blocked | **Still pending** — awaiting your re-review |
 
-**Gate status today:** 3 of 4 checks pass. Only `reviewer_signoff` remains blocked.
+**Gate status today:** 2 of 4 checks pass. `oracle_provenance` and `reviewer_signoff` remain blocked pending independent review.
 
 ```bash
 python3 scripts/validate_cross_tool_oracle_gate.py
-# oracle_provenance: accepted
+# oracle_provenance: blocked
 # evidence_mapping: accepted
 # reviewer_signoff: blocked
 # mutant_adequacy: accepted
@@ -137,7 +138,7 @@ done
 
 **Expected results:**
 
-- Reference oracle: **43 passed**, 0 failed
+- Reference oracle: **38 passed**, 0 failed
 - Every mutant: **≥1 test failure** (kill), not a harness crash
 
 Compare your results to `mutants/expected-kill-matrix.csv` and `mutants/adequacy-report.json`. If any mutant survives (all tests pass) or crashes on import, record `blocked` and cite the mutant ID.
@@ -197,6 +198,7 @@ Update your existing entry in `oracle/reviewer-signoffs.json` (do not add a thir
     "canonical/pricing.proto",
     "canonical/canonicalization_decisions.md",
     "oracle/reference_oracle.py",
+    "oracle/canonical_cases.py",
     "oracle/test_oracle.py",
     "oracle/oracle-provenance.json",
     "oracle/fixed-open-evidence.json",
@@ -206,7 +208,7 @@ Update your existing entry in `oracle/reviewer-signoffs.json` (do not add a thir
     "mutants/adequacy-report.json"
   ],
   "decision": "accept",
-  "rationale": "Re-reviewed executable oracle, 22 evidence mappings, and 10 calibrated mutants. Independent pytest run: reference oracle 43/43 pass; all mutants kill on targeted probes. Provenance identifies non-Claude implementer with empty claude_derived_portions. Oracle semantics match canonical contract without vendor-specific assumptions.",
+  "rationale": "Re-reviewed independently authored canonical fixtures, executable oracle, 22 evidence mappings, and 10 calibrated mutants. Independent pytest run: reference oracle 38/38 pass; all mutants kill on targeted probes. Provenance identifies non-Claude implementers with immutable commits and no Claude-derived portions. Oracle semantics match canonical contract without vendor-specific assumptions.",
   "date": "YYYY-MM-DD"
 }
 ```
@@ -223,6 +225,7 @@ Update your existing entry in `oracle/reviewer-signoffs.json` (do not add a thir
     "canonical/pricing.proto",
     "canonical/canonicalization_decisions.md",
     "oracle/reference_oracle.py",
+    "oracle/canonical_cases.py",
     "oracle/test_oracle.py",
     "oracle/oracle-provenance.json",
     "oracle/fixed-open-evidence.json",
@@ -255,9 +258,10 @@ The validator must report `"status": "accepted"` with zero errors. Do **not** ha
 | File | Verify |
 |---|---|
 | `oracle/reference_oracle.py` | Correct `assess_lines` semantics |
-| `oracle/test_oracle.py` | 43 tests; probes match evidence mappings |
+| `oracle/canonical_cases.py` | Independently authored canonical fixtures; no authoring-run imports |
+| `oracle/test_oracle.py` | 38 tests; probes match evidence mappings |
 | `oracle/conftest.py` | `--oracle-module` loads mutants |
-| `oracle/oracle-provenance.json` | `accepted`, authorship complete |
+| `oracle/oracle-provenance.json` | Immutable commits recorded; independent review still required |
 | `oracle/fixed-open-evidence.json` | `accepted`, 22 mappings |
 | `mutants/manifest.json` | `accepted`, 10 mutants with `source` |
 | `mutants/src/mutant_*.py` | 10 files, one fault each |
