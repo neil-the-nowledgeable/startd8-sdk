@@ -1,8 +1,8 @@
 # Reviewer 1 Assessment — Codex (OpenAI)
 
 **Date:** 2026-06-20
-**Decision:** BLOCKED
-**Scope:** Phase 3 oracle and mutant admission readiness
+**Decision:** BLOCKED (re-review)
+**Scope:** Phase 3 oracle and mutant admission
 
 ## Reviewer identity and limitation
 
@@ -11,8 +11,8 @@ reviewer at the user's direction. Codex is affiliated with the codex-cli
 authoring cohort under evaluation. This reviewer is therefore unblinded and
 cannot replace the required independent blinded review.
 
-This is a readiness assessment, not an acceptance of semantic correctness.
-It does not inspect or adjudicate author-vendor outputs.
+This re-review inspects the oracle and mutant calibration only. It does not
+adjudicate author-vendor outputs.
 
 ## Materials reviewed
 
@@ -25,29 +25,49 @@ It does not inspect or adjudicate author-vendor outputs.
 - mutants/adequacy-report.json
 - oracle/reviewer-signoffs.json
 - oracle/validation-gate.json
+- oracle/REVIEWER_RE_REVIEW_GUIDE.md
+
+## Re-review verification
+
+- Reference oracle: 43/43 tests passed.
+- Mapping coverage: 22 mappings (10 FIXED and 12 OPEN); every named targeted
+  probe resolves to a test function.
+- Mutant calibration: all 10 executable mutants were killed by one or more
+  semantic test failures. No import, syntax, or harness crash was observed.
+
+These results establish that the current tests discriminate against the
+implemented faults. They do not establish a vendor-neutral scoring instrument.
 
 ## Findings
 
 | Area | Result | Evidence |
 |---|---|---|
 | Canonical contract | Reviewable | The specification fixes arithmetic, rounding, reduction ordering, validation, and price-on-request behavior. |
-| Oracle provenance | Blocked | oracle-provenance.json is pending and contains no oracle or authorship record. |
-| FIXED/OPEN mapping | Blocked | fixed-open-evidence.json is pending with no traceability mappings or probes. |
-| Mutant adequacy | Blocked | manifest is planned, mutants are definitions only, the kill matrix has only a header, and the adequacy report is pending. |
-| Reviewer evidence | Blocked | No accepting independent review exists. This assessment is deliberately recorded as blocked. |
+| Oracle provenance | Blocked | The accepted provenance record has no immutable implementation commit and no independent review record. |
+| FIXED/OPEN mapping | Structurally complete | Twenty-two mappings exist and all targeted probe names resolve. |
+| Mutant adequacy | Blocked | All mutants kill, but the calibration tests derive expected responses from a measured Codex cohort suite. |
+| Reviewer evidence | Blocked | Neither accepting independent review exists; this assessment is deliberately non-accepting. |
 
 ## Decision rationale
 
-The required semantic evidence does not exist yet. Accepting the gate would
-misrepresent the state of the audit. The reviewer-signoffs record therefore
-contains a complete but non-accepting review, while retaining pending status.
+The executable evidence is not independent. test_oracle.py loads its fixtures
+and expected responses from runs/s2-codex-suite-clean-20260618T215301Z/suite.py.
+That artifact belongs to the Codex authoring cohort being measured, so it cannot
+define the oracle calibration or mutant kill criterion. Accepting the gate would
+make the measured cohort part of the scoring instrument.
+
+The provenance record also omits an immutable implementation commit and an
+independent review entry. The reviewer-signoffs record therefore remains a
+complete but non-accepting review, with pending top-level status.
 
 ## Required follow-up
 
-1. Have an independent non-Claude implementer create the reference oracle and
-   provenance record.
-2. Add source-backed FIXED/OPEN mappings and probes.
-3. Implement, execute, and calibrate the mutant battery.
+1. Replace the Codex cohort suite dependency with independently authored
+   canonical request/response fixtures and probes.
+2. Record the implementation commit, source inputs, and independent review in
+   oracle-provenance.json.
+3. Re-run the reference and complete mutant calibration against the independent
+   fixture suite; update the matrix and adequacy report with the new evidence.
 4. Obtain an independent accepting second review using
    SECOND_NON_CLAUDE_REVIEWER_HOWTO.md.
-5. Re-review this assessment only after the new evidence is committed.
+5. Re-review this assessment only after the evidence is committed.
