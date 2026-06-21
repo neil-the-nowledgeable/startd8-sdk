@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package benchmark.pricing.v1;
+
+service ResolvedPriceService {
+  rpc AssessLines(AssessLinesRequest) returns (AssessLinesResponse);
+}
+
+message AssessLinesRequest {
+  string currency_code = 1;
+  optional uint32 currency_scale = 2;
+  RoundingMode rounding_mode = 3;
+  DiscountStrategy discount_strategy = 4;
+  repeated ResolvedLine lines = 5;
+}
+
+message ResolvedLine {
+  string line_key = 1;
+  string quantity = 2;
+  optional Amount unit_amount = 3;
+  optional Amount comparison_unit_amount = 4;
+  optional Amount candidate_unit_amount = 5;
+  bool price_on_request = 6;
+  repeated Reduction reductions = 7;
+}
+
+message Reduction {
+  ReductionKind kind = 1;
+  repeated string percent_levels = 2;
+  optional Amount amount = 3;
+}
+
+message AssessLinesResponse {
+  string currency_code = 1;
+  repeated AssessedLine lines = 2;
+  Totals totals = 3;
+}
+
+message AssessedLine {
+  string line_key = 1;
+  string quantity = 2;
+  bool price_on_request = 3;
+  optional Amount comparison_unit_amount = 4;
+  optional Amount selected_unit_amount = 5;
+  bool promotion_applied = 6;
+  optional Amount line_base_amount = 7;
+  ReductionSummary reduction = 8;
+  optional Amount line_due_amount = 9;
+}
+
+message ReductionSummary {
+  Amount amount = 1;
+  string percent_total = 2;
+  repeated string percent_levels = 3;
+}
+
+message Totals {
+  Amount base_amount = 1;
+  Amount reduction_amount = 2;
+  Amount due_amount = 3;
+  uint32 price_on_request_count = 4;
+}
+
+message Amount {
+  string decimal = 1;
+}
+
+enum DiscountStrategy {
+  DISCOUNT_STRATEGY_UNSPECIFIED = 0;
+  DISCOUNT_STRATEGY_CASCADE = 1;
+  DISCOUNT_STRATEGY_SUM = 2;
+}
+
+enum ReductionKind {
+  REDUCTION_KIND_UNSPECIFIED = 0;
+  REDUCTION_KIND_PERCENT_LEVELS = 1;
+  REDUCTION_KIND_FIXED_AMOUNT = 2;
+}
+
+enum RoundingMode {
+  ROUNDING_MODE_UNSPECIFIED = 0;
+  ROUNDING_MODE_HALF_EVEN = 1;
+  ROUNDING_MODE_HALF_UP = 2;
+  ROUNDING_MODE_DOWN = 3;
+}

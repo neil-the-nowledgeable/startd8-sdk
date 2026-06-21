@@ -1,0 +1,204 @@
+{
+  "schema_version": "1.0",
+  "status": "accepted",
+  "mappings": [
+    {
+      "item_id": "FIXED-001",
+      "tag": "FIXED",
+      "brief_item": "Pure calculator boundary",
+      "source_evidence": "CommercePricingConfiguration.java:46-55 separates discovery from calculation",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_oracle_no_external_state",
+      "expected_behavior": "Oracle function is pure — same inputs always produce same outputs with no I/O"
+    },
+    {
+      "item_id": "FIXED-002",
+      "tag": "FIXED",
+      "brief_item": "Result can represent unit/list, promo, final, discount, tax, with-tax, quantity, POA",
+      "source_evidence": "CommerceProductPrice.java:20-46",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_output_detail_fields",
+      "expected_behavior": "Response includes selected unit, comparison, base, reduction summary, due amount, and POA marker fields"
+    },
+    {
+      "item_id": "FIXED-003",
+      "tag": "FIXED",
+      "brief_item": "Discount value contains amount, percentage, percentages array",
+      "source_evidence": "CommerceDiscountValue.java:18-41",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_output_detail_fields",
+      "expected_behavior": "ReductionSummary exposes amount, percent_total, and percent_levels"
+    },
+    {
+      "item_id": "FIXED-004",
+      "tag": "FIXED",
+      "brief_item": "Discount strategy is runtime/configurable input",
+      "source_evidence": "CommercePricingConfiguration.java:26-30; ChainCommerceDiscountApplicationStrategyImpl.java:24-46; AdditionCommerceDiscountApplicationStrategyImpl.java:24-49",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_sum_strategy_distinct_from_cascade",
+      "expected_behavior": "Request discount_strategy selects CASCADE versus SUM semantics"
+    },
+    {
+      "item_id": "FIXED-005",
+      "tag": "FIXED",
+      "brief_item": "Up to four ordered discount levels",
+      "source_evidence": "CommerceDiscountCalculationV2Impl.java:280-325",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_invalid_case[rejects_too_many_percent_levels]",
+      "expected_behavior": "Reject percentage reductions with more than four ordered levels"
+    },
+    {
+      "item_id": "FIXED-006",
+      "tag": "FIXED",
+      "brief_item": "Promotional unit price candidate",
+      "source_evidence": "CommerceProductPrice.java:42-44; CommerceProductPriceCalculationV2Impl.java:155-168",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_promo_selection_strictly_lower",
+      "expected_behavior": "Use candidate_unit_amount only when present, positive, and strictly lower than unit_amount"
+    },
+    {
+      "item_id": "FIXED-007",
+      "tag": "FIXED",
+      "brief_item": "Price-on-application concept",
+      "source_evidence": "CommerceProductPrice.java:46-48; CommerceProductPriceCalculationV2Impl.java:143-168",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_price_on_request_excluded_from_totals",
+      "expected_behavior": "Echo POA marker and exclude price-on-request lines from numeric totals"
+    },
+    {
+      "item_id": "FIXED-008",
+      "tag": "FIXED",
+      "brief_item": "Exact decimal arithmetic",
+      "source_evidence": "CommerceProductPrice.java:30; CommerceDiscountValue.java:18-20; strategy implementations use BigDecimal",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_decimal_precision_not_binary_float",
+      "expected_behavior": "Parse and compute with exact Decimal arithmetic; binary float changes quantized outputs"
+    },
+    {
+      "item_id": "FIXED-009",
+      "tag": "FIXED",
+      "brief_item": "Benchmark seed envelope",
+      "source_evidence": "src/startd8/seeds/models.py ContextSeed; seed-paymentservice.json",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_runtime_packaging_out_of_scope",
+      "expected_behavior": "Oracle is importable as a pure function without benchmark server startup"
+    },
+    {
+      "item_id": "FIXED-010",
+      "tag": "FIXED",
+      "brief_item": "One gRPC service target for pilot",
+      "source_evidence": "seed-paymentservice.json service metadata; benchmark_matrix/run_spec.py cell shape",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_contract_names_and_field_shapes",
+      "expected_behavior": "AssessLines request/response mirrors canonical proto field names and totals shape"
+    },
+    {
+      "item_id": "OPEN-001",
+      "tag": "OPEN",
+      "brief_item": "Contract names and field names",
+      "source_evidence": "canonical/spec.md; canonical/pricing.proto",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_contract_names_and_field_shapes",
+      "expected_behavior": "Use ResolvedPriceService.AssessLines canonical message and field names"
+    },
+    {
+      "item_id": "OPEN-002",
+      "tag": "OPEN",
+      "brief_item": "Money representation",
+      "source_evidence": "canonical/pricing.proto Amount { string decimal }",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_money_decimal_representation",
+      "expected_behavior": "Monetary outputs are Amount messages with decimal strings"
+    },
+    {
+      "item_id": "OPEN-003",
+      "tag": "OPEN",
+      "brief_item": "Rounding policy",
+      "source_evidence": "CommerceDiscountCalculationV2Impl.java:333-380; canonicalization_decisions.md",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_rounding_half_even_boundary",
+      "expected_behavior": "Output-only rounding; default scale 2 and HALF_EVEN; intermediate arithmetic stays exact"
+    },
+    {
+      "item_id": "OPEN-004",
+      "tag": "OPEN",
+      "brief_item": "Discount level semantics",
+      "source_evidence": "CommerceDiscountCalculationV2Impl.java:280-325; canonical/spec.md Calculation Rules",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_fixed_after_percent_ordering",
+      "expected_behavior": "Percentage levels are ordered; fixed reductions apply after all percentage reductions"
+    },
+    {
+      "item_id": "OPEN-005",
+      "tag": "OPEN",
+      "brief_item": "Strategy semantics/defaults",
+      "source_evidence": "ChainCommerceDiscountApplicationStrategyImpl.java:24-46; AdditionCommerceDiscountApplicationStrategyImpl.java:24-49",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_cascade_default_strategy",
+      "expected_behavior": "Omitted discount_strategy defaults to CASCADE; SUM aggregates levels once"
+    },
+    {
+      "item_id": "OPEN-006",
+      "tag": "OPEN",
+      "brief_item": "Promo selection rule",
+      "source_evidence": "CommerceProductPriceCalculationV2Impl.java:155-168; BaseCommerceOrderPriceCalculation.java:596-606",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_promo_selection_strictly_lower",
+      "expected_behavior": "Promotional candidate must be positive and strictly lower than unit amount"
+    },
+    {
+      "item_id": "OPEN-007",
+      "tag": "OPEN",
+      "brief_item": "Tax handling and ordering",
+      "source_evidence": "CommerceProductPriceCalculationV2Impl.java:184-243; canonicalization_decisions.md deferred tax",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_tax_handling_deferred",
+      "expected_behavior": "Primary pilot excludes tax fields and tax-inclusive mirrors"
+    },
+    {
+      "item_id": "OPEN-008",
+      "tag": "OPEN",
+      "brief_item": "Discount cap behavior",
+      "source_evidence": "CommerceDiscountCalculationV2Impl.java:207-229; canonical/spec.md OPEN-008",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_fixed_overrun_rejects_instead_of_clamping",
+      "expected_behavior": "Fixed reduction overrun rejects request; no silent clamp to zero"
+    },
+    {
+      "item_id": "OPEN-009",
+      "tag": "OPEN",
+      "brief_item": "Error taxonomy",
+      "source_evidence": "canonical/spec.md Validation Behavior",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_invalid_argument_taxonomy",
+      "expected_behavior": "Invalid inputs raise ValueError mapped to INVALID_ARGUMENT"
+    },
+    {
+      "item_id": "OPEN-010",
+      "tag": "OPEN",
+      "brief_item": "Cart breadth and aggregation",
+      "source_evidence": "canonical/spec.md Service Behavior totals",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_multi_line_aggregation",
+      "expected_behavior": "Numeric totals aggregate all non-price-on-request lines in request"
+    },
+    {
+      "item_id": "OPEN-011",
+      "tag": "OPEN",
+      "brief_item": "Output detail",
+      "source_evidence": "CommerceProductPrice.java:20-46; canonical/spec.md OPEN-011",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_output_detail_fields",
+      "expected_behavior": "Outputs include selected unit, comparison, base, reduction summary, due, and POA markers"
+    },
+    {
+      "item_id": "OPEN-012",
+      "tag": "OPEN",
+      "brief_item": "Runtime language and startup command",
+      "source_evidence": "src/startd8/seeds/models.py; seed-paymentservice.json startup envelope",
+      "liferay_commit": "4d9e440ee64aa31d2d60e525e20fa9837a4f4df7",
+      "targeted_probe": "test_runtime_packaging_out_of_scope",
+      "expected_behavior": "Oracle contract is language-neutral; runtime packaging remains outside spec"
+    }
+  ]
+}

@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from pathlib import Path
 
@@ -48,6 +47,7 @@ from startd8.benchmark_matrix import (  # noqa: E402
     run_matrix,
 )
 from startd8.benchmark_matrix.budget import BudgetGuard  # noqa: E402
+from startd8.benchmark_matrix.operator_output import OperatorOutput  # noqa: E402
 
 SEEDS_DIR = REPO / "docs" / "design" / "model-benchmark" / "seeds"
 OB_INDEX = SEEDS_DIR / "seeds-index.json"
@@ -120,6 +120,10 @@ def main(argv=None) -> int:
     ap.add_argument("--est-output-tokens", type=int, default=9000)
     ap.add_argument("--timeout", type=float, default=1800.0, help="Per-cell timeout seconds.")
     ap.add_argument("--out-dir", type=Path, default=None)
+    ap.add_argument("--quiet", action="store_true", help="Suppress progress lines while retaining final errors.")
+    ap.add_argument("--verbose", action="store_true", help="Relay redacted nested workflow output.")
+    ap.add_argument("--json-events", nargs="?", const="auto", default=None,
+                    help="Write operator events to a file, or '-' for JSONL on stdout.")
     ap.add_argument("--allow-large", action="store_true", help="Permit > 200 cells.")
     args = ap.parse_args(argv)
 
@@ -152,7 +156,7 @@ def main(argv=None) -> int:
             print(f"\n⚠ {spec.total_cells} cells exceeds the {CELL_GUARD}-cell guard — a real run needs --allow-large.")
         print("\nDRY-RUN — nothing generated, $0 spent.")
         print("Re-run under Doppler to execute (SPENDS):")
-        print(f"  doppler run -p startd8 -c dev -- python3 scripts/run_flagship_benchmark.py --run --budget 40")
+        print("  doppler run -p startd8 -c dev -- python3 scripts/run_flagship_benchmark.py --run --budget 40")
         return 0
 
     if args.budget is None:
@@ -171,22 +175,53 @@ def main(argv=None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "run-spec.json").write_text(spec.to_json(), encoding="utf-8")
     print(f"\nrunning {spec.total_cells} cells → {out_dir}\n")
+    event_path = None if not args.json_events else (
+        out_dir / "operator-events.jsonl" if args.json_events == "auto" else args.json_events
+    )
+    output = OperatorOutput(spec.spec_hash()[:12], out_dir, quiet=args.quiet, json_events=event_path,
+                            text_stream=sys.stderr if args.json_events == "-" else sys.stdout)
+    output.emit("run_started", "preflight", "benchmark execution started", data={
+        "total_cells": spec.total_cells, "budget_ceiling_usd": spec.budget_ceiling_usd,
+        "behavioral": behavioral, "output_dir": str(out_dir),
+    })
+
+    def _operator_event(message, stage, cell):
+        if stage == "workflow_output" and not args.verbose:
+            return
+        output.emit("workflow_output" if stage == "workflow_output" else "stage_changed", stage,
+                    message, cell=cell)
 
     executor = SubprocessCellExecutor(
         SEEDS_DIR, per_run_timeout_s=args.timeout, workdir_root=out_dir / "sandboxes",
-        behavioral=behavioral,
+        behavioral=behavioral, operator_callback=_operator_event,
     )
 
+    observed = []
+
     def _progress(cr):
+        observed.append(cr)
         fc = "" if cr.functional_coverage is None else f" fn={cr.functional_coverage:.2f}"
-        print(f"  [{cr.status:<13}] {cr.service:<20} {cr.model:<30} r{cr.repetition} "
-              f"q={cr.quality if cr.quality is not None else 'NA'}{fc} ${cr.cost_usd or 0:.4f}")
+        message = (f"[{cr.status:<13}] {cr.service:<20} {cr.model:<30} r{cr.repetition} "
+                   f"q={cr.quality if cr.quality is not None else 'NA'}{fc} ${cr.cost_usd or 0:.4f}")
+        output.emit("cell_completed", "completed", message, cell=cr, data={
+            "quality": cr.quality, "functional_coverage": cr.functional_coverage,
+            "cost_usd": cr.cost_usd, "error": cr.error, "behavioral": cr.behavioral,
+        })
+        try:
+            output.checkpoint(observed, aggregate_cells(observed), spec.total_cells)
+        except OSError as exc:
+            output.emit("operator_warning", "checkpoint", f"checkpoint failed: {exc}", cell=cr)
 
     res = run_matrix(spec, executor, languages=languages, on_cell=_progress, preflight=False)
     agg = aggregate_cells(res.cells)
     (out_dir / "cells.json").write_text(json.dumps([c.to_dict() for c in res.cells], indent=2), encoding="utf-8")
     (out_dir / "aggregate.json").write_text(json.dumps(agg, indent=2), encoding="utf-8")
     (out_dir / "leaderboard.md").write_text(build_matrix_markdown(spec.name, spec.spec_hash(), agg), encoding="utf-8")
+    output.checkpoint(res.cells, agg, spec.total_cells)
+    output.emit("run_completed", "completed", "benchmark execution completed", data={
+        "completed_cells": len(res.cells), "total_cost_usd": res.total_cost_usd,
+        "artifacts": ["run-spec.json", "cells.json", "aggregate.json", "leaderboard.md"],
+    })
     print(f"\ndone → {out_dir}/leaderboard.md")
     return 0
 

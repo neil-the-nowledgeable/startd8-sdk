@@ -26,10 +26,11 @@ from .contract import StartupContract, resolve_serve_command
 from .graphql_pricing_suite import run_graphql_pricing_suite
 from .pricing_suite import run_pricing_suite
 from .rest_pricing_suite import run_rest_pricing_suite
+from .resolved_pricing_suite import run_resolved_pricing_suite
 from .shipping_suite import run_shipping_suite
 
 # service name -> behavioral suite (the SDK-authored client). P1+P2 curated stateless set,
-# plus the hardened-tier pricingservice (Liferay-derived; docs/design/liferay-pricing-seed/).
+# plus the Liferay-derived pricing service variants.
 _SUITES: Dict[str, Callable[[int], object]] = {
     "paymentservice": run_charge_suite,
     "currencyservice": run_currency_suite,
@@ -38,17 +39,20 @@ _SUITES: Dict[str, Callable[[int], object]] = {
     "pricingservice": run_pricing_suite,
     "rest-pricingservice": run_rest_pricing_suite,
     "graphql-pricingservice": run_graphql_pricing_suite,
+    "resolvedpriceservice": run_resolved_pricing_suite,
 }
 
 _NODE_RUNTIME = Path(__file__).parent / "node_runtime"
 _PROTO = Path(__file__).parent / "demo.proto"
 _PRICING_PROTO = Path(__file__).parent / "pricing.proto"
+_RESOLVED_PRICING_PROTO = Path(__file__).parent / "resolved_pricing.proto"
 
 # FR-14: which proto a service's generated server loads, as (source file, on-disk name). Online
 # Boutique services all share demo.proto (the default); the hardened pricingservice ships its own.
 # Keying off the service keeps every OB cell's provisioning byte-identical.
 _PROTO_BY_SERVICE: Dict[str, tuple] = {
     "pricingservice": (_PRICING_PROTO, "pricing.proto"),
+    "resolvedpriceservice": (_RESOLVED_PRICING_PROTO, "pricing.proto"),
 }
 
 # FR-T2-PROTO: conventional locations a generated server loads its proto from. The pilot saw models

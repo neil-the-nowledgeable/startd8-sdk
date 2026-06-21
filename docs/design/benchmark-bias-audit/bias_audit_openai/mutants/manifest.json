@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "status": "accepted",
+  "oracle_gate": "../oracle/validation-gate.json",
+  "mutants": [
+    {
+      "id": "round-half-up-for-half-even",
+      "open_item": "rounding default",
+      "fault": "apply HALF_UP where HALF_EVEN is required",
+      "source": "src/mutant_round_half_up.py"
+    },
+    {
+      "id": "round-down-for-half-even",
+      "open_item": "rounding default",
+      "fault": "truncate where HALF_EVEN is required",
+      "source": "src/mutant_round_down.py"
+    },
+    {
+      "id": "sum-for-cascade",
+      "open_item": "percentage strategy",
+      "fault": "sum percentage levels under CASCADE",
+      "source": "src/mutant_sum_for_cascade.py"
+    },
+    {
+      "id": "cascade-for-sum",
+      "open_item": "percentage strategy",
+      "fault": "cascade percentage levels under SUM",
+      "source": "src/mutant_cascade_for_sum.py"
+    },
+    {
+      "id": "fixed-before-percent",
+      "open_item": "reduction ordering",
+      "fault": "apply fixed reductions before percentages",
+      "source": "src/mutant_fixed_before_percent.py"
+    },
+    {
+      "id": "candidate-any-positive",
+      "open_item": "candidate selection",
+      "fault": "select a positive candidate even when it is not lower",
+      "source": "src/mutant_candidate_any_positive.py"
+    },
+    {
+      "id": "float-arithmetic",
+      "open_item": "decimal precision",
+      "fault": "use binary floating point for arithmetic",
+      "source": "src/mutant_float_arithmetic.py"
+    },
+    {
+      "id": "round-intermediate",
+      "open_item": "output-only rounding",
+      "fault": "quantize each intermediate operation",
+      "source": "src/mutant_round_intermediate.py"
+    },
+    {
+      "id": "clamp-fixed-overrun",
+      "open_item": "fixed reduction overrun",
+      "fault": "clamp a negative remaining amount to zero",
+      "source": "src/mutant_clamp_overrun.py"
+    },
+    {
+      "id": "price-on-request-total",
+      "open_item": "price-on-request handling",
+      "fault": "include price-on-request lines in numeric totals",
+      "source": "src/mutant_por_total.py"
+    }
+  ],
+  "admission_note": "Executable single-fault mutants calibrated against the independently authored oracle/canonical_cases.py fixture suite on 2026-06-20."
+}

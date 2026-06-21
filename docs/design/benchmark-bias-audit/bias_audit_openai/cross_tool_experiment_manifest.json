@@ -1,0 +1,106 @@
+{
+  "schema_version": "1.0",
+  "experiment_id": "pricing-cross-tool-authoring-v1",
+  "status": "pre_registered",
+  "purpose": "Measure author-vendor input divergence without treating the OpenAI generation smoke result as a bias verdict.",
+  "source_artifacts": [
+    {
+      "id": "neutral_brief",
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/brief/pricing-task-brief.md",
+      "sha256": "2154147fc5dc0a7a326606962a4f65ebf94a59cf0ed050c0224f78a4f5e9ae4f"
+    },
+    {
+      "id": "traceability_matrix",
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/brief/source-to-brief-traceability.md",
+      "sha256": "2d380c211014eeeb007b474bbffa6d7708c3602b6b50ef8f47bcb9e41855cbaa"
+    },
+    {
+      "id": "canonical_proto",
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/canonical/pricing.proto",
+      "sha256": "722f66c0e454b7c5c261346536dd8c017fce63c9ca8180941079cae8cae72211"
+    },
+    {
+      "id": "canonical_spec",
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/canonical/spec.md",
+      "sha256": "a40ef403c353a1b80fc731bd0f53d367867f4a054c581c18f66b26c7be1b0d86"
+    },
+    {
+      "id": "behavioral_suite_manifest",
+      "path": "docs/design/benchmark-bias-audit/bias_audit_openai/runs/s2-codex-suite-clean-20260618T215301Z/suite_manifest.json",
+      "sha256": "35e646d875e2717429915b89e3c50bdd03b576f4f861dbebf175f741ad756f6a",
+      "role": "validation_oracle_not_model_facing"
+    }
+  ],
+  "authoring": {
+    "samples_per_tool": 5,
+    "tools": [
+      {
+        "id": "claude-code",
+        "author_vendor": "anthropic",
+        "role": "authoring_control",
+        "version_policy": "record provider-reported version and timestamp; do not mix versions within a sample group"
+      },
+      {
+        "id": "codex-cli",
+        "author_vendor": "openai",
+        "role": "authoring_treatment",
+        "version_policy": "record CLI and provider-reported version and timestamp; do not mix versions within a sample group"
+      },
+      {
+        "id": "gemini-cli",
+        "author_vendor": "google",
+        "role": "authoring_treatment",
+        "version_policy": "record CLI and provider-reported version and timestamp; do not mix versions within a sample group"
+      }
+    ],
+    "experiments": [
+      {
+        "id": "suite_author",
+        "varies": "behavioral_suite",
+        "frozen_inputs": ["canonical_spec", "canonical_proto"],
+        "prompt_template": "docs/design/benchmark-bias-audit/bias_audit_openai/prompts/suite-author.v0.1.md"
+      },
+      {
+        "id": "spec_author",
+        "varies": "functional_spec",
+        "frozen_inputs": ["neutral_brief", "canonical_proto"],
+        "prompt_template": "docs/design/benchmark-bias-audit/bias_audit_openai/prompts/spec-author.v0.1.md"
+      }
+    ],
+    "retry_policy": {
+      "max_automated_retries": 1,
+      "allowed_reasons": ["truncation", "formatting", "file_boundary"],
+      "semantic_repair": "forbidden"
+    }
+  },
+  "execution_controls": {
+    "clean_workspace_required": true,
+    "forbidden_ambient_instruction_files": ["CLAUDE.md", "AGENTS.md", "GEMINI.md"],
+    "network_policy": "authoring_cli_only; generated artifact validation is offline",
+    "raw_artifact_capture": "immutable_before_normalization",
+    "normalization": "mechanical_only"
+  },
+  "randomization": {
+    "schedule_seed": 20260619,
+    "unit": "experiment_tool_sample",
+    "shuffle": "global_deterministic"
+  },
+  "scoring": {
+    "status": "planned_pending_authoring_and_oracle_gates",
+    "frozen_proto": "canonical_proto",
+    "frozen_behavioral_oracle": "behavioral_suite_manifest",
+    "evaluated_models": [
+      "anthropic:claude-opus-4-8",
+      "openai:gpt-5.5",
+      "gemini:gemini-2.5-pro"
+    ],
+    "repetitions_per_model_spec_cell": 5,
+    "selection": "predeclared; no score-based variant selection",
+    "budget_approval": "required_before_scoring"
+  },
+  "analysis": {
+    "primary": "model_by_spec_author_vendor_interaction",
+    "own_vendor_advantage_threshold": "absolute 5 points or 0.5 pooled within-cell SD, with interval excluding zero and Holm correction",
+    "neutrality_rule": "unanimous stable author-vendor choices only; a two-versus-one split is a flag, not a verdict"
+  }
+}

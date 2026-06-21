@@ -17,6 +17,8 @@ import json
 import re
 import shutil
 import subprocess
+import queue
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -193,32 +195,59 @@ def build_command(
 
 
 def run_command(
-    cmd: list[str], cwd: Path, timeout: Optional[float] = None
+    cmd: list[str], cwd: Path, timeout: Optional[float] = None,
+    on_output: Optional[Callable[[str, str], None]] = None,
 ) -> dict[str, Any]:
     """Run one model's workflow. A timeout marks the run failed but never wedges the batch (M1)."""
     started = time.monotonic()
     start_ts = datetime.now(timezone.utc)
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-        )
-        returncode, stdout, stderr, timed_out = (
-            proc.returncode,
-            proc.stdout,
-            proc.stderr,
-            False,
-        )
-    except subprocess.TimeoutExpired as e:
-        returncode, timed_out = 124, True
-        stdout = e.stdout or "" if isinstance(e.stdout, str) else ""
-        stderr = (
-            e.stderr or "" if isinstance(e.stderr, str) else ""
-        ) + f"\n[timed out after {timeout}s]"
+    if on_output is None:
+        try:
+            proc = subprocess.run(
+                cmd, cwd=str(cwd), capture_output=True, text=True, check=False, timeout=timeout,
+            )
+            returncode, stdout, stderr, timed_out = proc.returncode, proc.stdout, proc.stderr, False
+        except subprocess.TimeoutExpired as e:
+            returncode, timed_out = 124, True
+            stdout = e.stdout or "" if isinstance(e.stdout, str) else ""
+            stderr = (e.stderr or "" if isinstance(e.stderr, str) else "") + f"\n[timed out after {timeout}s]"
+    else:
+        events: queue.Queue[tuple[str, Optional[str]]] = queue.Queue()
+        proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, bufsize=1)
+
+        def drain(stream_name: str, stream: Any) -> None:
+            try:
+                for line in iter(stream.readline, ""):
+                    events.put((stream_name, line.rstrip("\n")))
+            finally:
+                events.put((stream_name, None))
+
+        threads = [threading.Thread(target=drain, args=("stdout", proc.stdout), daemon=True),
+                   threading.Thread(target=drain, args=("stderr", proc.stderr), daemon=True)]
+        for thread in threads:
+            thread.start()
+        tails = {"stdout": [], "stderr": []}
+        closed: set[str] = set()
+        timed_out = False
+        while len(closed) < 2:
+            if timeout is not None and time.monotonic() - started > timeout and proc.poll() is None:
+                proc.kill()
+                timed_out = True
+            try:
+                stream_name, line = events.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if line is None:
+                closed.add(stream_name)
+                continue
+            tails[stream_name].append(line)
+            tails[stream_name] = tails[stream_name][-20:]
+            on_output(stream_name, line)
+        returncode = 124 if timed_out else proc.wait()
+        stdout, stderr = "\n".join(tails["stdout"]), "\n".join(tails["stderr"])
+        if timed_out:
+            stderr += f"\n[timed out after {timeout}s]"
     return {
         "command": cmd,
         "returncode": returncode,
