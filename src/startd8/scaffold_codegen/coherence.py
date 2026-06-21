@@ -128,6 +128,14 @@ def evaluate_coherence(
                 "single-owner by definition (NR-3). Use deployed mode.",
                 severity_tier=OPERATIONAL,
             ))
+        if manifest.deploy_environments:
+            findings.append(CoherenceFinding(
+                ERROR, "installed-with-environments",
+                "installed (single-user) mode declares `deploy.environments` — environments are a "
+                "deployed-only concern (one local environment for installed). Use deployed mode or "
+                "remove the environments block (FR-ENV-2).",
+                severity_tier=OPERATIONAL,
+            ))
     return tuple(findings)
 
 

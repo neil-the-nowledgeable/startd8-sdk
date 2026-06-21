@@ -167,6 +167,44 @@ def test_deploy_secrets_backend_validated():
         parse_app_manifest("deploy:\n  secrets:\n    backend: vault\n")  # not an allowed backend
 
 
+# --- DEPLOY_ENVIRONMENTS M0: the deploy.environments grammar (FR-ENV-1/2) ------------------------
+
+_ENVS_YAML = (
+    "deployment:\n  mode: deployed\n"
+    "deploy:\n  trust_gateway: true\n  environments:\n"
+    "    prod:\n      replicas: 3\n    dev:\n      log_level: debug\n    test: {}\n"
+)
+
+
+def test_environments_parse_sorted_for_byte_stability():
+    m = parse_app_manifest(_ENVS_YAML)
+    assert m.deploy_environments == ("dev", "prod", "test")  # sorted, not insertion order
+    assert m.has_environments is True
+
+
+def test_no_environments_is_empty_sotto():
+    m = parse_app_manifest("deployment:\n  mode: deployed\ndeploy:\n  trust_gateway: true\n")
+    assert m.deploy_environments == () and m.has_environments is False  # absent → none (no overlays)
+
+
+def test_environment_unknown_override_key_errors():
+    with pytest.raises(ValueError, match="environments.prod.*unknown keys"):
+        parse_app_manifest("deploy:\n  environments:\n    prod:\n      replcas: 3\n")  # typo
+
+
+def test_environments_must_be_mapping():
+    with pytest.raises(ValueError, match="environments` must be a mapping"):
+        parse_app_manifest("deploy:\n  environments:\n    - dev\n    - prod\n")  # list, not mapping
+
+
+def test_installed_with_environments_is_coherence_error():
+    m = parse_app_manifest(
+        "deployment:\n  mode: installed\ndeploy:\n  environments:\n    dev: {}\n"
+    )
+    codes = {f.code: f.severity for f in evaluate_coherence(m)}
+    assert codes.get("installed-with-environments") == ERROR  # FR-ENV-2 guard
+
+
 # --- A7 wired into `generate backend` ------------------------------------------------------------
 
 def _schema(tmp_path):

@@ -24,8 +24,15 @@ _TOP_KEYS = {
 _DEPLOY_KEYS = {
     "trust_gateway", "secrets", "target_cloud", "namespace", "hostnames",
     "replicas", "port", "image", "resources", "autoscaling", "emit_gateway_stub",
+    "environments",
 }
 _DEPLOY_SECRETS_KEYS = {"backend"}
+# DEPLOY_ENVIRONMENTS M0 — per-environment override keys, split into the two binding planes
+# (FR-ENV-3): app env-vars (ConfigMap, read from os.environ) vs k8s object fields (manifest patches).
+_ENV_OVERRIDE_KEYS = {
+    "env", "log_level", "otlp_endpoint", "secrets_config", "database_ref",   # app env-var plane
+    "replicas", "resources", "hostnames", "autoscaling",                     # k8s-field plane
+}
 # FR-CND-5: default `eso-doppler`; `doppler-operator` opt-in CRD; cloud-native secret managers.
 _VALID_SECRETS_BACKENDS = frozenset({"eso-doppler", "doppler-operator", "eso-aws", "eso-gcp"})
 
@@ -78,6 +85,13 @@ class AppManifest:
     deploy_trust_gateway: bool = False
     deploy_secrets_backend: Optional[str] = None
     deploy_target_cloud: Optional[str] = None
+    # DEPLOY_ENVIRONMENTS M0: the declared environment names (sorted for byte-stability, R1-S7).
+    # Empty = no environments → no overlays (SOTTO). Per-env override VALUES land in a later increment.
+    deploy_environments: Tuple[str, ...] = ()
+
+    @property
+    def has_environments(self) -> bool:
+        return len(self.deploy_environments) > 0
 
     @property
     def has_tenant(self) -> bool:
@@ -174,6 +188,7 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
     deploy_trust_gateway = False
     deploy_secrets_backend: Optional[str] = None
     deploy_target_cloud: Optional[str] = None
+    deploy_environments: Tuple[str, ...] = ()
     deploy = data.get("deploy")
     if deploy is not None:
         if not isinstance(deploy, dict):
@@ -200,6 +215,30 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         tc = deploy.get("target_cloud")
         if tc is not None:
             deploy_target_cloud = str(tc)
+        # DEPLOY_ENVIRONMENTS M0: `deploy.environments` is a mapping env-name → per-env overrides.
+        # Strict-keyed (env names + override keys). Absent → no environments (SOTTO; no overlays).
+        environments = deploy.get("environments")
+        if environments is not None:
+            if not isinstance(environments, dict):
+                raise ValueError(
+                    "app.yaml: `deploy.environments` must be a mapping {env-name: {overrides}}"
+                )
+            for env_name, overrides in environments.items():
+                if not (isinstance(env_name, str) and env_name):
+                    raise ValueError("app.yaml: `deploy.environments` keys must be non-empty strings")
+                if overrides is None:
+                    continue
+                if not isinstance(overrides, dict):
+                    raise ValueError(
+                        f"app.yaml: `deploy.environments.{env_name}` must be a mapping of overrides"
+                    )
+                unknown_env = set(overrides) - _ENV_OVERRIDE_KEYS
+                if unknown_env:
+                    raise ValueError(
+                        f"app.yaml: `deploy.environments.{env_name}` has unknown keys {sorted(unknown_env)}"
+                    )
+            # Sorted for byte-stability regardless of YAML key insertion order (R1-S7).
+            deploy_environments = tuple(sorted(environments))
 
     messaging_backend = "aiokafka"
     messaging = data.get("messaging")
@@ -236,4 +275,5 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         deploy_trust_gateway=deploy_trust_gateway,
         deploy_secrets_backend=deploy_secrets_backend,
         deploy_target_cloud=deploy_target_cloud,
+        deploy_environments=deploy_environments,
     )
