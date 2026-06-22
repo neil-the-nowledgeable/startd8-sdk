@@ -5,9 +5,20 @@
   "authorship": [
     {
       "author_id": "cursor-composer-2.5",
-      "role": "implementer",
+      "role": "reference oracle implementer",
       "tool_assistance": "Cursor Composer agent (non-Claude)",
-      "commits": [],
+      "commits": [
+        "0fbf9fb877d91bc48a1a9129719faeaa30f57d64"
+      ],
+      "claude_derived_portions": []
+    },
+    {
+      "author_id": "cursor-gpt-5.5",
+      "role": "independent canonical fixture remediation implementer",
+      "tool_assistance": "Cursor agent (GPT-5.5, non-measured)",
+      "commits": [
+        "8cb986422d0e05d000666b7a90d9df28c6d8afd5"
+      ],
       "claude_derived_portions": []
     }
   ],
