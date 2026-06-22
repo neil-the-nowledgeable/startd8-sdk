@@ -1,11 +1,11 @@
-mutant_id,targeted_open_item,oracle_expected,calibration_suite_expected,validated
-round-half-up-for-half-even,rounding default,kill,kill,true
-round-down-for-half-even,rounding default,kill,kill,true
-sum-for-cascade,percentage strategy,kill,kill,true
-cascade-for-sum,percentage strategy,kill,kill,true
-fixed-before-percent,reduction ordering,kill,kill,true
-candidate-any-positive,candidate selection,kill,kill,true
-float-arithmetic,decimal precision,kill,kill,true
-round-intermediate,output-only rounding,kill,kill,true
-clamp-fixed-overrun,fixed reduction overrun,kill,kill,true
-price-on-request-total,price-on-request handling,kill,kill,true
+mutant_id,targeted_open_item,oracle_expected,calibration_suite_expected,validated,killing_probe,calibrated_fixture_source,calibrated_date
+round-half-up-for-half-even,rounding default,kill,kill,true,test_rounding_half_even_boundary,oracle/canonical_cases.py,2026-06-22
+round-down-for-half-even,rounding default,kill,kill,true,test_output_only_rounding,oracle/canonical_cases.py,2026-06-22
+sum-for-cascade,percentage strategy,kill,kill,true,test_cascade_default_strategy,oracle/canonical_cases.py,2026-06-22
+cascade-for-sum,percentage strategy,kill,kill,true,test_sum_strategy_distinct_from_cascade,oracle/canonical_cases.py,2026-06-22
+fixed-before-percent,reduction ordering,kill,kill,true,test_fixed_after_percent_ordering,oracle/canonical_cases.py,2026-06-22
+candidate-any-positive,candidate selection,kill,kill,true,test_promo_selection_strictly_lower,oracle/canonical_cases.py,2026-06-22
+float-arithmetic,decimal precision,kill,kill,true,test_decimal_precision_not_binary_float,oracle/canonical_cases.py,2026-06-22
+round-intermediate,output-only rounding,kill,kill,true,test_intermediate_rounding_changes_cascade_result,oracle/canonical_cases.py,2026-06-22
+clamp-fixed-overrun,fixed reduction overrun,kill,kill,true,test_fixed_overrun_rejects_instead_of_clamping,oracle/canonical_cases.py,2026-06-22
+price-on-request-total,price-on-request handling,kill,kill,true,test_price_on_request_excluded_from_totals,oracle/canonical_cases.py,2026-06-22

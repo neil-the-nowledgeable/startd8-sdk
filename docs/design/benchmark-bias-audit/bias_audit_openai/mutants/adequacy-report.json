@@ -1,76 +1,79 @@
 {
   "schema_version": "1.0",
   "status": "accepted",
+  "fixture_source": "oracle/canonical_cases.py",
+  "calibration_date": "2026-06-22",
+  "calibration_command": "cd oracle && pytest test_oracle.py --oracle-module <module> -q --tb=no",
   "calibration_runs": [
     {
       "mutant_id": "round-half-up-for-half-even",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_rounding_half_even_boundary",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     },
     {
       "mutant_id": "round-down-for-half-even",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_output_only_rounding",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     },
     {
       "mutant_id": "sum-for-cascade",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_cascade_default_strategy",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     },
     {
       "mutant_id": "cascade-for-sum",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_sum_strategy_distinct_from_cascade",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     },
     {
       "mutant_id": "fixed-before-percent",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_fixed_after_percent_ordering",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     },
     {
       "mutant_id": "candidate-any-positive",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_promo_selection_strictly_lower",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     },
     {
       "mutant_id": "float-arithmetic",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_decimal_precision_not_binary_float",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     },
     {
       "mutant_id": "round-intermediate",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_intermediate_rounding_changes_cascade_result",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     },
     {
       "mutant_id": "clamp-fixed-overrun",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_fixed_overrun_rejects_instead_of_clamping",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     },
     {
       "mutant_id": "price-on-request-total",
       "oracle_result": "kill",
       "suite_result": "kill",
       "discriminating_test": "test_price_on_request_excluded_from_totals",
-      "run_date": "2026-06-20"
+      "run_date": "2026-06-22"
     }
   ],
   "coverage": [
@@ -78,6 +81,12 @@
       "dimension": "rounding",
       "mutant_count": 2,
       "mutant_ids": ["round-half-up-for-half-even", "round-down-for-half-even"],
+      "adequate": true
+    },
+    {
+      "dimension": "percentage strategy",
+      "mutant_count": 2,
+      "mutant_ids": ["sum-for-cascade", "cascade-for-sum"],
       "adequate": true
     },
     {
@@ -96,6 +105,18 @@
       "dimension": "decimal precision",
       "mutant_count": 2,
       "mutant_ids": ["float-arithmetic", "round-intermediate"],
+      "adequate": true
+    },
+    {
+      "dimension": "candidate selection",
+      "mutant_count": 1,
+      "mutant_ids": ["candidate-any-positive"],
+      "adequate": true
+    },
+    {
+      "dimension": "price-on-request totals",
+      "mutant_count": 1,
+      "mutant_ids": ["price-on-request-total"],
       "adequate": true
     },
     {

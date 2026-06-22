@@ -2,31 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import pytest
 
+from canonical_cases import INVALID_CASES, VALID_CASES
 from conftest import get_oracle_module
-
-
-AUDIT_ROOT = Path(__file__).resolve().parents[1]
-SUITE_PATH = (
-    AUDIT_ROOT
-    / "runs/s2-codex-suite-clean-20260618T215301Z/suite.py"
-)
-
-
-def _load_suite_cases():
-    spec = importlib.util.spec_from_file_location("codex_suite", SUITE_PATH)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.VALID_CASES, module.INVALID_CASES
-
-
-VALID_CASES, INVALID_CASES = _load_suite_cases()
 
 
 def _assess(request, pytestconfig):

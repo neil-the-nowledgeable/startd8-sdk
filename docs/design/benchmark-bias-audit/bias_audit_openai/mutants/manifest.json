@@ -64,5 +64,5 @@
       "source": "src/mutant_por_total.py"
     }
   ],
-  "admission_note": "Executable single-fault mutants calibrated against oracle/test_oracle.py on 2026-06-20."
+  "admission_note": "Executable single-fault mutants calibrated against oracle/test_oracle.py and independent oracle/canonical_cases.py fixtures on 2026-06-22."
 }
