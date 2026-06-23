@@ -171,6 +171,10 @@ DEFAULT_SKILL_PATHS = [
 ]
 DEFAULT_SDK_PATHS = [
     Path(os.getenv("STARTD8_SDK_PATH", "")).expanduser(),
+    # When this MCP server lives at <repo>/mcp/startd8-mcp-builder/, the SDK
+    # source is the repo's own src/ tree (mcp-builder -> mcp -> repo -> src).
+    Path(__file__).resolve().parent.parent.parent / "src",
+    # Legacy standalone checkout layout (kept for backward compatibility).
     Path(__file__).resolve().parent.parent / "dev" / "startd8-sdk-project" / "src",
 ]
 DEFAULT_PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", Path.cwd())).resolve()
@@ -3672,20 +3676,30 @@ def _register_concrete_skill_tools(skills: Optional[List[Dict[str, Any]]] = None
                 display_name = str(skill.get("name") or raw_name)
                 display_desc = str(skill.get("description") or "Skill")
 
-                async def _tool_fn(params: SkillPromptInput, _lookup: str = lookup_name) -> str:
-                    """Run this specific skill against a prompt."""
-                    try:
-                        inner = UseSkillInput(
-                            skill_name=_lookup,
-                            prompt=params.prompt,
-                            model=params.model,
-                            max_tokens=params.max_tokens,
-                            track_response=params.track_response,
-                            response_format=params.response_format,
-                        )
-                    except Exception as e:
-                        return _handle_error(e)
-                    return await startd8_use_skill(inner)
+                # Bind the skill lookup via an enclosing factory rather than a
+                # default parameter. FastMCP introspects the tool signature and
+                # rejects any parameter whose name starts with "_" (raises
+                # InvalidSignature), so a `_lookup` bind-param silently broke
+                # registration for every skill on current mcp SDK versions.
+                def _make_tool_fn(lookup: str):
+                    async def _tool_fn(params: SkillPromptInput) -> str:
+                        """Run this specific skill against a prompt."""
+                        try:
+                            inner = UseSkillInput(
+                                skill_name=lookup,
+                                prompt=params.prompt,
+                                model=params.model,
+                                max_tokens=params.max_tokens,
+                                track_response=params.track_response,
+                                response_format=params.response_format,
+                            )
+                        except Exception as e:
+                            return _handle_error(e)
+                        return await startd8_use_skill(inner)
+
+                    return _tool_fn
+
+                _tool_fn = _make_tool_fn(lookup_name)
 
                 _tool_fn.__name__ = final_name
                 _tool_fn.__doc__ = (
@@ -3708,6 +3722,10 @@ def _register_concrete_skill_tools(skills: Optional[List[Dict[str, Any]]] = None
                 _CONCRETE_SKILL_TOOL_NAMES.add(final_name)
                 added += 1
             except Exception as e:
+                # Surface the failure in diagnostics (startd8_status) instead of
+                # only the debug log — a silent swallow here previously hid a
+                # total registration failure across every skill.
+                _record_startup_error(f"Failed to register skill tool for {skill.get('name', skill)!r}: {e}")
                 _log(f"Failed to register skill tool for {skill}: {e}")
                 continue
 
