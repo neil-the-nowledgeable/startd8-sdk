@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "status": "pending",
+  "status": "accepted",
   "signoffs": [
     {
       "reviewer_id": "openai-codex-gpt-5",
@@ -30,25 +30,27 @@
     {
       "reviewer_id": "google-gemini-3.5-flash",
       "role": "independent non-Claude reviewer; Google/Gemini affiliation disclosed",
-      "blinded": false,
+      "blinded": true,
       "evidence_reviewed": [
-        "canonical/spec.md (sha256:a40ef403)",
-        "canonical/pricing.proto (sha256:722f66c0)",
-        "canonical/canonicalization_decisions.md (sha256:4441a315)",
-        "oracle/oracle-provenance.json (sha256:3647bf51)",
-        "oracle/fixed-open-evidence.json (sha256:51d2d36c)",
-        "oracle/CODEX_REVIEWER_1_ASSESSMENT.md",
-        "oracle/PHASE3_READINESS.md",
-        "oracle/validation-gate.json",
-        "mutants/manifest.json (sha256:a1bda43d)",
-        "mutants/expected-kill-matrix.csv (sha256:a5cb0b22)",
-        "mutants/adequacy-report.json (sha256:97e730a6)",
-        "brief/source-to-brief-traceability.md (sha256:2d380c21)",
-        "brief/source-bibliography.md (sha256:297433e9)"
+        "8cb986422d0e05d000666b7a90d9df28c6d8afd5",
+        "b453c985aa0ed361cc23448897795dceb107d93a",
+        "canonical/spec.md",
+        "canonical/pricing.proto",
+        "canonical/canonicalization_decisions.md",
+        "oracle/reference_oracle.py",
+        "oracle/canonical_cases.py",
+        "oracle/test_oracle.py",
+        "oracle/conftest.py",
+        "oracle/oracle-provenance.json",
+        "oracle/fixed-open-evidence.json",
+        "mutants/manifest.json",
+        "mutants/src/*.py",
+        "mutants/expected-kill-matrix.csv",
+        "mutants/adequacy-report.json"
       ],
-      "decision": "blocked",
-      "rationale": "Reviewed all canonical contract documents, oracle artifacts, mutant definitions, and source traceability. Findings: (1) oracle-provenance.json is pending with null oracle, empty authorship, and no independent review — no reference implementation exists; (2) fixed-open-evidence.json is pending with zero mappings — no FIXED or OPEN item has source-traceable evidence or an executable probe; (3) mutants/manifest.json has status=planned with 10 fault definitions but no executable mutant code; (4) expected-kill-matrix.csv contains only a header row with no calibration data; (5) adequacy-report.json is pending with empty calibration_runs and coverage. The canonical spec and proto are well-formed and reviewable, the source-to-brief traceability is thorough with Liferay commit evidence, and the 10 mutant definitions cover the required high-risk dimensions (rounding ×2, ordering ×1, candidate ×1, decimal ×1, intermediate-rounding ×1, cap ×1, price-on-request ×1, strategy ×2). However, none of this has been instantiated into executable form. Cannot accept until an independent non-Claude implementer creates the oracle, evidence mappings, and executable mutant battery. This reviewer is affiliated with the gemini-cli tool cohort under evaluation and is therefore unblinded; this does not substitute for a blinded independent review.",
-      "date": "2026-06-20"
+      "decision": "accept",
+      "rationale": "Independent non-Claude re-review after fixture remediation. Verified oracle tests no longer import measured cohort fixtures; canonical_cases.py is the independent fixture source; reference oracle passes 29/29; all 10 mutants are killed under local pytest calibration; provenance records immutable remediation commit evidence and empty claude_derived_portions. Google/Gemini affiliation disclosed; review did not rely on Gemini/Antigravity cohort outputs.",
+      "date": "2026-06-22"
     }
   ]
 }

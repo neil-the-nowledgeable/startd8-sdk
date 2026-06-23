@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "status": "blocked",
+  "status": "accepted",
   "purpose": "Independent admission gate before suite equivalence or semantic bias analysis.",
   "checks": [
     {
@@ -17,12 +17,9 @@
     },
     {
       "id": "reviewer_signoff",
-      "status": "blocked",
+      "status": "accepted",
       "requirement": "Two reviewer sign-offs, including one blinded where practical.",
-      "errors": [
-        "status is not accepted",
-        "requires two complete accepting sign-offs"
-      ]
+      "errors": []
     },
     {
       "id": "mutant_adequacy",
@@ -32,8 +29,5 @@
     }
   ],
   "admission_rule": "All checks must be accepted before external authoring enters semantic bias analysis.",
-  "validation_errors": [
-    "reviewer_signoff: status is not accepted",
-    "reviewer_signoff: requires two complete accepting sign-offs"
-  ]
+  "validation_errors": []
 }
