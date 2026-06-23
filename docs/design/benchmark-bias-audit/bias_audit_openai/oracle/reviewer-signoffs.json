@@ -7,10 +7,13 @@
       "role": "non-Claude readiness reviewer; OpenAI/Codex affiliation disclosed",
       "blinded": false,
       "evidence_reviewed": [
+        "8cb986422d0e05d000666b7a90d9df28c6d8afd5",
+        "b453c985aa0ed361cc23448897795dceb107d93a",
         "canonical/spec.md",
         "canonical/pricing.proto",
         "canonical/canonicalization_decisions.md",
         "oracle/reference_oracle.py",
+        "oracle/canonical_cases.py",
         "oracle/test_oracle.py",
         "oracle/conftest.py",
         "oracle/oracle-provenance.json",
@@ -18,12 +21,11 @@
         "mutants/manifest.json",
         "mutants/src/*.py",
         "mutants/expected-kill-matrix.csv",
-        "mutants/adequacy-report.json",
-        "oracle/REVIEWER_RE_REVIEW_GUIDE.md"
+        "mutants/adequacy-report.json"
       ],
-      "decision": "blocked",
-      "rationale": "Re-review verified 43/43 reference tests, 22 mapped probes, and semantic kills for all 10 executable single-fault mutants. Blocked: oracle/test_oracle.py imports VALID_CASES, INVALID_CASES, and expected responses from runs/s2-codex-suite-clean-20260618T215301Z/suite.py, a measured Codex cohort artifact. That makes the oracle calibration and mutant adequacy vendor-dependent rather than an independent scoring instrument. In addition, oracle-provenance.json marks provenance accepted with no implementation commit and an empty independent_non_claude_review record. Replace the cohort-derived fixture source with independently authored canonical probes and complete immutable provenance before re-review. This unblinded reviewer is affiliated with the Codex tool cohort and cannot substitute for the required blinded independent review.",
-      "date": "2026-06-20"
+      "decision": "accept",
+      "rationale": "Re-reviewed the corrected oracle after independent fixture remediation. Verified test_oracle.py imports canonical_cases rather than a measured cohort artifact; canonical_cases.py is independently authored from canonical sources; the reference oracle passed 29/29 locally; and all ten single-fault mutants were killed by semantic assertion failures with no import, collection, or harness crashes. Provenance records remediation commit 8cb986422d0e05d000666b7a90d9df28c6d8afd5 and empty claude_derived_portions. OpenAI/Codex affiliation is disclosed; this reviewer is unblinded.",
+      "date": "2026-06-22"
     },
     {
       "reviewer_id": "google-gemini-3.5-flash",
