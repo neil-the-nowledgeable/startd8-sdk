@@ -38,6 +38,34 @@ def test_absence_semantics_empty_project(tmp_path: Path) -> None:
     assert plan.readiness["backend"] == "blocked(missing schema.prisma)"
 
 
+# Regression: every catalog key in inputs.entries must get a _ManifestState, else the
+# provenance pass (which iterates the full catalog) raises KeyError. `api` was omitted →
+# `KeyError: 'api'` crashed build_wireframe_plan for EVERY project (schema present or absent).
+_CATALOG_KEYS = {
+    "schema", "app", "pages", "views", "ai_passes", "human_inputs",
+    "completeness", "view_prose", "imports", "api", "contexts",
+}
+
+
+def test_every_catalog_key_has_provenance(tmp_path: Path) -> None:
+    # Must not raise; provenance covers the full catalog (api included).
+    plan = _plan(tmp_path)
+    assert _CATALOG_KEYS <= set(plan.input_provenance)
+    assert plan.input_provenance["api"]["status"] == Status.NOT_DEFINED  # absent ⇒ Role 1 schema-only
+
+
+def test_api_overlay_present_parses_to_planned(tmp_path: Path) -> None:
+    (tmp_path / "prisma").mkdir(parents=True)
+    (tmp_path / "prisma" / "api.yaml").write_text(
+        "openapi: 3.0.3\n"
+        "info: {title: t, version: '1.0'}\n"
+        "paths:\n  /ping:\n    get:\n      responses: {'200': {description: ok}}\n",
+        encoding="utf-8",
+    )
+    plan = _plan(tmp_path)
+    assert plan.input_provenance["api"]["status"] == Status.PLANNED
+
+
 def test_defaults_consequences_rendered(mini_root: Path) -> None:
     """FR-W5: consequence lines in app-shape terms."""
     plan = _plan(mini_root)

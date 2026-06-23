@@ -1010,6 +1010,11 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     states["imports"] = _yaml_state(
         "imports", *texts["imports"], lambda t: parse_imports(t, known_entities=known)
     )
+    # FR (Role 2): api.yaml OpenAPI surface overlay. Catalog key (see _ABSENT_STATUS["api"]); a
+    # state is required so the provenance pass (which iterates the full catalog) can look it up.
+    from ..backend_codegen.api_overlay_manifest import parse_api_overlay
+
+    states["api"] = _yaml_state("api", *texts["api"], parse_api_overlay)
     from ..backend_codegen.context_manifest import parse_contexts
 
     states["contexts"] = _yaml_state(
