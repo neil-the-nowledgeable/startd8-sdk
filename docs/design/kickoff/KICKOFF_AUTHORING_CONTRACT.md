@@ -1,6 +1,6 @@
 # Kickoff Authoring Contract — the Happy-Path Language
 
-**Version:** 0.2 (post-CRP — first review, 11 grammar suggestions applied; see Appendix A)
+**Version:** 0.3 (post-CRP v0.2 + `money` plain type & data-model-conventions vocabulary growth — see Appendix A / DMC-G1)
 **Date:** 2026-06-05
 **Status:** Draft
 **Audience:** Internal + the LLM/human co-work sessions that produce customer kickoff docs.
@@ -77,6 +77,7 @@ Relationships: a ProofPoint **belongs to** a Profile; a ProofPoint **links** Cap
   | long text | String |
   | number | **Int** (whole numbers — decided; use `decimal` for anything else) |
   | decimal | Float |
+  | money | **Int** (minor units / cents — exact sums; name the field `<thing>Cents`; the cents-vs-float choice is a `data_model.money` convention — KICKOFF_REQUIREMENTS FR-F6) |
   | date | DateTime |
   | date+time | DateTime *(adopted from the templates — was a vocabulary fork)* |
   | yes/no | Boolean |
@@ -357,6 +358,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 | R2-G3 | View-heading annotation stripping (`View: ` prefix first, then `*(…)*`) | R2 (sonnet) | §2.0 annotation rule covers both heading forms | 2026-06-05 |
 | R2-G4 | Completeness intro-sentence anchor pattern | R2 (sonnet) | §2.4 block-recognition bullet (`is complete when it has`, case-insensitive) | 2026-06-05 |
 | R2-G5 | Nudge suffix flagged `not_extracted(generator-gap)` PER ENTRY (two report rows), never silently dropped | R2 (sonnet, adversarial) | §2.4 nudge bullet | 2026-06-05 |
+| DMC-G1 | Add the `money` plain type (→ Int minor units) and surface the **data-model representation conventions** (money/dates/recurrence/references/computed/deferred) as a declared input + qualifying question set. The `references` loose-ref verb (already in §2.1, FR-PE-5c) and `default:` notes are synced into the teaching templates, which omitted them. | data-model-conventions update (household-o11y kickoff, 2026-06-23) | §2.1 type table (`money`); KICKOFF_REQUIREMENTS FR-F6/FR-H6; `conventions.yaml` `data_model:` block; template/how-to vocab sync | 2026-06-23 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 

@@ -28,6 +28,17 @@ naming:
   files: <snake_case>
   classes: <PascalCase>
 
+# Data-model representation conventions (KICKOFF_REQUIREMENTS FR-F6) — the non-derivable modeling
+# choices generation would otherwise INVENT. Declared ONCE here, never per entity. Each line answers
+# one RESOLVE question; provenance flips to `authored` when the architect decides it.
+data_model:
+  money: <cents | float>                    # Q: how is money stored? cents = integer minor units (exact sums)
+  datetime: <utc | local>                   # Q: how are timestamps stored? name the timezone policy
+  recurrence: <structured | rrule | none>   # Q: how are recurring schedules expressed (if any)?
+  references: <fk-only | loose-allowed>     # Q: may an entity hold a loose `references` id (polymorphic), or FK-only?
+  computed_fields: []                       # Q: which fields are DERIVED at runtime (no form input)? e.g. "Order.total"
+  deferred: []                              # Q: what is explicitly OUT of v1? (mirror requirements Non-goals)
+
 field_authorship: <path/to/human_inputs.yaml>   # fields AI must never write
 
 architecture_notes:

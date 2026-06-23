@@ -67,8 +67,8 @@ line.
 
 | Where | Allowed values | Plain meaning |
 |-------|----------------|---------------|
-| Field types | `text`, `long text`, `number`, `decimal`, `date`, `date+time`, `yes/no`, `choice of: a\|b\|c` | a line · a paragraph · whole number · number with decimals · calendar date · timestamp · checkbox · pick-one |
-| Relationships | **has one**, **has many**, **belongs to**, **links X to Y** / **links to many** | ownership both ways · user-made connections (never inferred) |
+| Field types | `text`, `long text`, `number`, `decimal`, `money`, `date`, `date+time`, `yes/no`, `choice of: a\|b\|c` | a line · a paragraph · whole number · number with decimals · **money in whole cents (exact sums)** · calendar date · timestamp · checkbox · pick-one |
+| Relationships | **has one**, **has many**, **belongs to**, **references** (a loose id, no FK — e.g. a polymorphic link), **links X to Y** / **links to many** | ownership both ways · a loose pointer · user-made connections (never inferred) |
 | View kinds | **detail-compose**, **dashboard**, **board**, **workspace**, **export-package** | one connected picture · counts & summaries · status columns · everything about one record · downloadable bundle |
 | Traffic profile | **test**, **internal**, **standard**, **high-traffic** | demo · team-sized · public app · scale |
 | Completeness | "at least *N* *Entity* (weight *W*)" | the formula behind the progress score |

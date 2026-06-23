@@ -65,9 +65,14 @@ Declared profile: **<test|internal|standard|high-traffic>**
 ## Entities
 
 ▷ One `###` block per kind of record. Plain types only: text, long text, number, decimal,
-▷ date, date+time, yes/no, choice of: a|b|c. Relationship verbs only: has one, has many,
-▷ belongs to, links X to Y / links to many. Mark human-only fields with ONLY HUMANS ENTER THIS.
-▷ Don't list bookkeeping fields (ids, timestamps, ownership) — every record gets them free.
+▷ money (whole cents — exact sums), date, date+time, yes/no, choice of: a|b|c. Relationship
+▷ verbs only: has one, has many, belongs to, references (a loose id — no FK, e.g. a polymorphic
+▷ link), links X to Y / links to many. Mark human-only fields with ONLY HUMANS ENTER THIS; set a
+▷ default with `default: <value>` in the Notes cell. Don't list bookkeeping fields (ids,
+▷ timestamps, ownership) — every record gets them free.
+▷ Cross-cutting modeling choices (money cents-vs-float, date/timezone, recurrence representation,
+▷ FK-vs-references, computed fields, deferrals) are declared ONCE in
+▷ `inputs/conventions.yaml` `data_model:` — not repeated per entity. See KICKOFF_AUTHORING_CONTRACT.md §2.1.
 
 ### <EntityName>
 <One sentence: what this record is, in the business's own words.>

@@ -211,6 +211,22 @@ The machinery every class shares. Domain slices state per-class requirements aga
   `app.yaml`, `human_inputs.yaml`, `ai_passes.yaml`, `pages.yaml` (dual role: cascade-consumed,
   Group-G-owned), `completeness.yaml`, `views.yaml` — plus the path convention are enumerated in
   the per-project inventory (FR-X5).
+- **FR-F6 — Data-model representation conventions (declared + question-set).** The non-derivable
+  per-data-model modeling choices an author would otherwise INVENT — **money representation**
+  (integer minor units vs float), **date/time storage + timezone policy**, **recurrence
+  representation** (structured cadence fields vs RRULE vs none), **reference policy** (FK-only vs a
+  loose `references` id / polymorphic), **computed-vs-stored fields**, and **v1 deferrals** — MUST
+  be a *declared* input (the `data_model:` block of `conventions.yaml`), provenance-recorded and
+  surfaced in the FR-X1 pre-flight. These are the FR-H5 "declaration wins for non-derivable
+  choices" class: the requirements Entities tables stay about WHAT records exist, never these HOW
+  choices. The qualifying **question set** rides the payload-agnostic RESOLVE machinery (FR-X2) —
+  *money? dates/timezone? recurrence? references/polymorphic? computed fields? deferrals?* — one
+  question per choice, each answer landing in the `data_model:` block. The authoring-contract
+  vocabulary that makes the per-field choices expressible in the Entities grammar (`money` plain
+  type, `references` loose-ref verb, `default:` notes) is owned by
+  [`kickoff/KICKOFF_AUTHORING_CONTRACT.md`](kickoff/KICKOFF_AUTHORING_CONTRACT.md) §2.1
+  (grammar v0.3 / DMC-G1). *Origin: surfaced by the household-o11y kickoff — recurrence, money
+  units, and polymorphic refs were all silent-invention points until declared.*
 
 ### Group G — User/company content & fixtures (buckets 2/4)
 *(detail: [`kickoff/KICKOFF_CONTENT_INPUTS.md`](kickoff/KICKOFF_CONTENT_INPUTS.md))*
@@ -244,6 +260,12 @@ The machinery every class shares. Domain slices state per-class requirements aga
   no duplicate accumulation machinery here.
 - **FR-H5 — Evidence vs declaration precedence.** Evidence wins for field-sets; declaration wins
   for non-derivable choices; conflicts flagged, never silently resolved.
+- **FR-H6 — Data-model conventions are part of the conventions declaration.** The FR-F6
+  `data_model:` block lives in the **same** `conventions.yaml` as the stack/module-path/naming
+  declarations, so injection reach (FR-H2) and the evidence-vs-declaration precedence (FR-H5)
+  apply to it unchanged — a tier that can't receive `conventions.yaml` MUST NOT be routed work
+  whose correctness depends on a `data_model:` choice (e.g. emitting `money` as float when the
+  declaration says cents).
 
 ### Group I — Build preferences & orchestration config
 *(detail: [`kickoff/KICKOFF_BUILD_PREFERENCE_INPUTS.md`](kickoff/KICKOFF_BUILD_PREFERENCE_INPUTS.md))*
