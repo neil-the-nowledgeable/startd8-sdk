@@ -238,7 +238,7 @@ def test_behavioral_present_only_when_coverage(tmp_path):
     beh = (
         build_scorecard(tmp_path, now=_NOW)
         .split("## Behavioral")[1]
-        .split("## Determinism")[0]
+        .split("\n## ")[0]  # just the Behavioral section (pricing-lane sections follow it)
     )
     assert "functional coverage" in beh and "0.660" in beh and "Not computed" not in beh
 
@@ -298,3 +298,87 @@ def test_write_both_files(tmp_path):
     assert out.name == "SCORECARD.html" and out.read_text().startswith(
         "<!doctype html>"
     )
+
+
+# --------------------------------------------------------------------------- pricing lane (D2/D3)
+
+
+def _pricing_cell(model, *, service="resolvedpriceservice", fc=1.0, cases=None, degraded=False):
+    """A pricing-lane cell. ``cases`` = [(name, passed), ...] persisted at behavioral.suite.results.
+    ``degraded=True`` → behavioral present but no ``suite`` key (the FR-6 degrade path)."""
+    beh = {"ready": not degraded, "isolation_level": "loopback-allowed/egress-denied"}
+    if not degraded:
+        beh["suite"] = {
+            "suite_version": "resolved-pricing-suite/1",
+            "coverage": fc,
+            "results": [{"name": n, "passed": p, "detail": ""} for n, p in (cases or [])],
+        }
+    c = CellResult(
+        cell_id=f"{model}-{service}-c", service=service, model=model, language="python",
+        repetition=1, status=STATUS_OK, quality=0.9, cost_usd=0.5,
+        functional_coverage=(None if degraded else fc),
+    )
+    c.behavioral = beh
+    return c
+
+
+def test_pricing_lane_section_ranks_and_shows_leaf_delta(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, [
+        _pricing_cell("anthropic:claude-opus-4-8", fc=0.5,
+                      cases=[("sum_strategy", True), ("half_even_rounding", False)]),
+        _pricing_cell("gemini:gemini-2.5-pro", fc=1.0,
+                      cases=[("sum_strategy", True), ("half_even_rounding", True)]),
+        _cell("anthropic:claude-opus-4-8", fc=1.0),  # OB-leaf for the delta
+    ])
+    md = build_scorecard(tmp_path, now=_NOW)
+    sec = md.split("## Pricing lane")[1].split("\n## ")[0]
+    # ranked best-first: gemini (1.0) above opus (0.5)
+    assert sec.index("gemini:gemini-2.5-pro") < sec.index("anthropic:claude-opus-4-8")
+    # opus de-saturation vs its own OB-leaf 1.0 → leaf Δ -0.500
+    assert "-0.500" in sec
+    assert "Not computed" not in sec
+
+
+def test_pricing_discriminators_expose_per_case_divergence(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, [
+        _pricing_cell("anthropic:claude-opus-4-8", fc=0.5,
+                      cases=[("half_even_rounding", False)]),
+        _pricing_cell("gemini:gemini-2.5-pro", fc=1.0,
+                      cases=[("half_even_rounding", True)]),
+    ])
+    md = build_scorecard(tmp_path, now=_NOW)
+    sec = md.split("## Pricing discriminators")[1].split("\n## ")[0]
+    assert "resolvedpriceservice" in sec and "half_even_rounding" in sec
+    # opus fails the rounding case (0/1), gemini passes (1/1) — the divergence aggregate hides
+    assert "0/1" in sec and "1/1" in sec
+
+
+def test_pricing_lane_degrade_honest_when_no_pricing_cells(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, _five_cells())  # all service "s1", none in the lane
+    md = build_scorecard(tmp_path, now=_NOW)
+    lane = md.split("## Pricing lane")[1].split("\n## ")[0]
+    disc = md.split("## Pricing discriminators")[1].split("\n## ")[0]
+    assert "Not computed" in lane and "Not computed" in disc
+
+
+def test_pricing_discriminators_degrade_when_suite_missing(tmp_path):
+    _write_spec(tmp_path)
+    # a pricing cell that ran but degraded (no suite results) — coverage section still 'not computed'
+    # for coverage (fc=None), and per-case must degrade WITHOUT crashing on the missing suite key.
+    _write_cells(tmp_path, [_pricing_cell("openai:gpt-5.5", degraded=True)])
+    md = build_scorecard(tmp_path, now=_NOW)
+    disc = md.split("## Pricing discriminators")[1].split("\n## ")[0]
+    assert "Not computed" in disc
+
+
+def test_pricing_lane_in_html(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, [
+        _pricing_cell("gemini:gemini-2.5-pro", fc=1.0, cases=[("sum_strategy", True)]),
+    ])
+    html = build_scorecard_html(tmp_path, now=_NOW)
+    assert "Pricing lane" in html and "Pricing discriminators" in html
+    assert "sum_strategy" in html

@@ -49,6 +49,21 @@ _PROVIDER_LABEL = {
     "google": "Google",
 }
 
+# The Liferay-derived complex-pricing lane (FR-1). One named home, not a scattered literal.
+# Mirrors the four services in docs/design/model-benchmark/seeds/hardened-index.json whose
+# `derived_from` is Liferay Commerce pricing. These are hardened-tier by construction (axes
+# B/C/E) — there is no baseline pricing seed; the lane IS the hardened tier. The behavioral
+# suites for these de-saturate where the OB-leaf services saturate, which is where flagship
+# models actually differentiate.
+PRICING_LANE = frozenset(
+    {
+        "resolvedpriceservice",
+        "pricingservice",
+        "rest-pricingservice",
+        "graphql-pricingservice",
+    }
+)
+
 
 def _provider(model: str) -> str:
     return _PROVIDER_LABEL.get(
@@ -319,6 +334,122 @@ def _behavioral_section(cells: List[CellResult]) -> str:
     return f"{head}\n\n" + "\n".join(rows)
 
 
+def _is_pricing(c: CellResult) -> bool:
+    return c.service in PRICING_LANE
+
+
+def _suite_results(c: CellResult) -> List[dict]:
+    """Per-case results persisted at behavioral.suite.results ({name, passed, detail}).
+
+    Returns [] for a degraded/no-suite cell (behavioral present but no suite key) — the
+    degrade-honest path (FR-6). Guards every level since a degraded cell's behavioral dict
+    has only readiness/violation keys, no ``suite``."""
+    beh = getattr(c, "behavioral", None) or {}
+    suite = beh.get("suite") or {}
+    res = suite.get("results") or []
+    return [r for r in res if isinstance(r, dict) and "name" in r]
+
+
+def _pricing_lane_section(cells: List[CellResult]) -> str:
+    """FR-3/FR-5: the pricing lane as a distinct discriminator + the lane-vs-leaf contrast.
+
+    Coverage restricted to the Liferay pricing services, ranked best→worst per model, beside
+    the OB-leaf coverage so the 'where models differentiate' gap is one glance. Reported, never
+    folded into the Scoreboard ranking (Scorecard Principle 7)."""
+    head = "## Pricing lane (Liferay-derived discriminator)"
+    priced = [c for c in cells if _is_pricing(c) and c.functional_coverage is not None]
+    if not priced:
+        return f"{head}\n\n" + _NOT_COMPUTED.format(
+            why="no pricing-lane cells with behavioral coverage were persisted"
+        )
+    leaf: Dict[str, List[float]] = {}
+    for c in cells:
+        if not _is_pricing(c) and c.functional_coverage is not None:
+            leaf.setdefault(c.model, []).append(c.functional_coverage)
+    by_model: Dict[str, List[float]] = {}
+    for c in priced:
+        by_model.setdefault(c.model, []).append(c.functional_coverage)
+    rows = [
+        "> Functional coverage over the **Liferay-derived complex-pricing** services only "
+        "(`resolvedpriceservice`,",
+        "> `pricingservice`, `rest-/graphql-pricingservice`) — chain-vs-addition stacking, "
+        "rounding-mode, tax",
+        "> ordering. This lane de-saturates where the OB-leaf services (Section above) saturate. "
+        "`leaf Δ` =",
+        "> pricing-lane mean − OB-leaf mean for the same model (negative ⇒ the lane is harder, "
+        "as intended).",
+        "> Reported, not folded into the Scoreboard (Principle 7).",
+        "",
+        "| Model | pricing coverage (mean) | cells | OB-leaf (mean) | leaf Δ |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for m in sorted(by_model, key=lambda m: -_st.mean(by_model[m])):
+        v = by_model[m]
+        pmean = _st.mean(v)
+        if leaf.get(m):
+            lmean = _st.mean(leaf[m])
+            lcol, dcol = _f(lmean), _f(pmean - lmean)
+        else:
+            lcol, dcol = "N/A", "N/A"
+        rows.append(f"| `{m}` | {_f(pmean)} | {len(v)} | {lcol} | {dcol} |")
+    return f"{head}\n\n" + "\n".join(rows)
+
+
+def _pricing_discriminator_rows(cells: List[CellResult]) -> Dict[str, Dict[str, Dict[str, Tuple[int, int]]]]:
+    """{service: {case_name: {model: (passed, total)}}} over pricing cells with suite results."""
+    out: Dict[str, Dict[str, Dict[str, Tuple[int, int]]]] = {}
+    for c in cells:
+        if not _is_pricing(c):
+            continue
+        results = _suite_results(c)
+        if not results:
+            continue
+        svc = out.setdefault(c.service, {})
+        for r in results:
+            cell = svc.setdefault(r["name"], {})
+            p, t = cell.get(c.model, (0, 0))
+            cell[c.model] = (p + (1 if r.get("passed") else 0), t + 1)
+    return out
+
+
+def _pricing_discriminators_section(cells: List[CellResult]) -> str:
+    """FR-4: per-case pass/fail of the named discriminator cases, per service, per model.
+
+    Aggregate coverage hides that a model fails *exactly* the spec-reasoning cases (chain-vs-
+    addition, rounding-mode, tax-ordering). This exposes it — a per-service matrix of case ×
+    model showing pass-rate across reps (e.g. `5/5`, `0/5`)."""
+    head = "## Pricing discriminators (per-case, by model)"
+    data = _pricing_discriminator_rows(cells)
+    if not data:
+        return f"{head}\n\n" + _NOT_COMPUTED.format(
+            why="no pricing-lane cell persisted per-case suite results (degraded or not run)"
+        )
+    blocks: List[str] = [
+        "> Per-case outcome of the SDK-authored ground-truth suites, by service and model "
+        "(`passed/reps`).",
+        "> The cases that separate spec-reasoning from pattern-matching — strategy stacking, "
+        "rounding mode,",
+        "> tax/discount ordering — are where flagships diverge even when aggregate coverage looks even.",
+    ]
+    for svc in sorted(data):
+        cases = data[svc]
+        models = sorted({m for case in cases.values() for m in case})
+        header = "| Case | " + " | ".join(f"`{m}`" for m in models) + " |"
+        sep = "|---|" + "|".join([":--:"] * len(models)) + "|"
+        block = [f"\n### `{svc}`", "", header, sep]
+        for case in sorted(cases):
+            cells_out = []
+            for m in models:
+                if m in cases[case]:
+                    p, t = cases[case][m]
+                    cells_out.append(f"{p}/{t}")
+                else:
+                    cells_out.append("—")
+            block.append(f"| `{case}` | " + " | ".join(cells_out) + " |")
+        blocks.append("\n".join(block))
+    return f"{head}\n\n" + "\n".join(blocks)
+
+
 def _determinism_section(comparison: Optional[dict]) -> str:
     head = "## Determinism boundary (spine in-sync)"
     ranked = (comparison or {}).get("ranked")
@@ -454,6 +585,8 @@ def build_scorecard(run_dir, *, now: Optional[datetime] = None) -> str:
         _consistency_section(agg),
         _credibility_section(contam),
         _behavioral_section(cells),
+        _pricing_lane_section(cells),          # D2 — pricing lane discriminator (FR-3/FR-5)
+        _pricing_discriminators_section(cells),  # D3 — per-case discriminators (FR-4)
         _speed_section(agg),       # E — speed (two time measures), FR-SPEED-4
         _determinism_section(comparison),
         _refinement_trajectory_section(run_dir, cells),  # G — advisory, omitted if no sidecar
@@ -709,6 +842,61 @@ def _h_behavioral(cells: List[CellResult]) -> str:
     return _h_table(["Rank", "Model", "Functional coverage (mean)", "Cells run"], rows)
 
 
+def _h_pricing_lane(cells: List[CellResult]) -> str:
+    priced = [c for c in cells if _is_pricing(c) and c.functional_coverage is not None]
+    if not priced:
+        return _empty("no pricing-lane cells with behavioral coverage were persisted")
+    leaf: Dict[str, List[float]] = {}
+    for c in cells:
+        if not _is_pricing(c) and c.functional_coverage is not None:
+            leaf.setdefault(c.model, []).append(c.functional_coverage)
+    by_model: Dict[str, List[float]] = {}
+    for c in priced:
+        by_model.setdefault(c.model, []).append(c.functional_coverage)
+    rows = []
+    for i, m in enumerate(sorted(by_model, key=lambda m: -_st.mean(by_model[m])), 1):
+        v = by_model[m]
+        pmean = _st.mean(v)
+        cls = ' class="top"' if i == 1 else ""
+        if leaf.get(m):
+            lmean = _st.mean(leaf[m])
+            lcol, dcol = _hf(lmean), _hf(pmean - lmean)
+        else:
+            lcol = dcol = "<span class=dimv>—</span>"
+        rows.append(
+            f"<tr{cls}><td class=rank>{i}</td><td class=model>{_esc(m)}</td>"
+            f"<td class=big>{_hf(pmean)}</td><td class=dimv>{len(v)}</td>"
+            f"<td>{lcol}</td><td>{dcol}</td></tr>"
+        )
+    return _h_table(
+        ["Rank", "Model", "Pricing coverage (mean)", "Cells", "OB-leaf (mean)", "leaf Δ"], rows
+    )
+
+
+def _h_pricing_discriminators(cells: List[CellResult]) -> str:
+    data = _pricing_discriminator_rows(cells)
+    if not data:
+        return _empty("no pricing-lane cell persisted per-case suite results (degraded or not run)")
+    out = []
+    for svc in sorted(data):
+        cases = data[svc]
+        models = sorted({m for case in cases.values() for m in case})
+        rows = []
+        for case in sorted(cases):
+            tds = []
+            for m in models:
+                if m in cases[case]:
+                    p, t = cases[case][m]
+                    cell = f"{p}/{t}" if p == t else f'<span class="pill bad">{p}/{t}</span>'
+                    tds.append(f"<td>{cell}</td>")
+                else:
+                    tds.append("<td class=dimv>—</td>")
+            rows.append(f"<tr><td class=model>{_esc(case)}</td>" + "".join(tds) + "</tr>")
+        headers = ["Case"] + models
+        out.append(f"<h4><code>{_esc(svc)}</code></h4>" + _h_table(headers, rows))
+    return "".join(out)
+
+
 def _h_determinism(comparison: Optional[dict]) -> str:
     ranked = (comparison or {}).get("ranked")
     if not ranked:
@@ -823,6 +1011,16 @@ _DIMS: List[Tuple[str, str, str]] = [
         "Fraction of behavioral RPC contracts the live service satisfied. Folded into composite at 50% (FR-T2).",
     ),
     (
+        "D2",
+        "Pricing lane (Liferay discriminator)",
+        "Behavioral coverage over the Liferay-derived complex-pricing services only — de-saturates where OB-leaf saturates. <code>leaf Δ</code> = pricing − leaf mean (negative ⇒ harder, as intended). Reported, not scored.",
+    ),
+    (
+        "D3",
+        "Pricing discriminators (per-case)",
+        "Per-case pass-rate (<code>passed/reps</code>) of the spec-reasoning cases — strategy stacking, rounding mode, tax ordering — by service and model. Where flagships diverge even at even aggregate coverage.",
+    ),
+    (
         "E",
         "Determinism boundary",
         "Did the model drift an owned ($0-generated) skeleton file instead of only adding glue (generate backend --check).",
@@ -875,6 +1073,8 @@ def build_scorecard_html(run_dir, *, now: Optional[datetime] = None) -> str:
         _h_consistency(agg),
         _h_credibility(contam),
         _h_behavioral(cells),
+        _h_pricing_lane(cells),
+        _h_pricing_discriminators(cells),
         _h_determinism(comparison),
         _h_bylang(agg, contam),
         _h_refinement(run_dir, cells),

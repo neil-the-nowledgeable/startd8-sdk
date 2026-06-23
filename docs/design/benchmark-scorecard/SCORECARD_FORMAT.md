@@ -1,9 +1,16 @@
 # Benchmark Scorecard Format
 
-**Version:** 2.1
-**Date:** 2026-06-17
+**Version:** 2.2
+**Date:** 2026-06-23
 **Status:** Defined
 **Scope:** Summer 2026 Online Boutique model benchmark (`benchmark_matrix`).
+
+> **v2.2 change — the Liferay pricing lane is surfaced as a first-class discriminator.** Flagship
+> models do not differentiate on structural quality (it saturates). The Liferay-derived complex-pricing
+> suites already *run* (via `run_flagship_benchmark.py`, behavioral ON) but were buried in the generic
+> Section D. v2.2 adds **D2 (pricing lane + lane-vs-leaf contrast)** and **D3 (per-case discriminators)**,
+> both reading already-persisted `cells.json` ($0-recomputable). See
+> `docs/design/pricing-lane-integration/`.
 
 > **v2.1 change — speed is a first-class dimension, measured two ways.** The benchmark's mandate is
 > quality **/ cost / speed**, but speed was captured (`latency_s`) and never surfaced. v2.1 adds an
@@ -113,6 +120,27 @@ Each row: `| Rank | Model | quality (median) | IQR | pass-rate | catastrophic | 
 
 ### D. Behavioral (functional coverage) — *where Track-2 ran*
 `| Rank | Model | functional coverage (mean) | cells run |`.
+
+### D2. Pricing lane (Liferay-derived discriminator) — *the flagship-separating dimension*
+`| Model | pricing coverage (mean) | cells | OB-leaf (mean) | leaf Δ |`, ranked best→worst.
+Functional coverage restricted to the **`PRICING_LANE`** services (`resolvedpriceservice`,
+`pricingservice`, `rest-`/`graphql-pricingservice`) — the Liferay-derived complex-pricing carve
+(chain-vs-addition stacking, rounding-mode, tax/discount ordering). This lane **de-saturates where
+the OB-leaf services (Section D) saturate**, so it is where near-equal flagships differentiate.
+`leaf Δ = pricing-lane mean − OB-leaf mean` for the same model (negative ⇒ the lane is harder, as
+intended). There is **no baseline pricing seed** — the lane *is* the hardened tier (axes B/C/E), so
+the contrast is lane-vs-leaf, not baseline-vs-hardened. **Reported, never scored** (Principle 7);
+degrade-honest `not computed` when no pricing cells ran. Reads only persisted `cells.json`
+(`functional_coverage` + `service`), so it is $0-recomputable.
+
+### D3. Pricing discriminators (per-case, by model) — *what aggregate coverage hides*
+Per-service blocks; each a matrix of `| Case | <model> … |` with per-cell `passed/reps`. Reads the
+**named per-case results** persisted at `cell.behavioral["suite"]["results"]` (`{name, passed,
+detail}`). Aggregate coverage can read even while a model fails *exactly* the spec-reasoning cases
+(e.g. `half_even_is_default_rounding_mode`, `sum_strategy_adds_percent_levels_once`,
+`fixed_reductions_apply_after_all_percent_reductions`); this table exposes that. Case names are not
+1:1 across the protocol variants, so the table is **per-service**, not a forced union. Degrade-honest
+`not computed` when no pricing cell persisted suite results (degraded run / suite never ran). $0.
 
 ### E. Speed (generation time) — two measures, ranked by pure-model throughput
 `| Rank | Model | model time med (s) | model tok/s med | pipeline wall med (s) | pipeline tok/s med | harness overhead |`

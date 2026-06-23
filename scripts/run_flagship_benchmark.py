@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Full Summer-2026 benchmark across the 3 flagship models — OB baseline + the pricing hardened seed.
+"""Full Summer-2026 benchmark across the 3 flagship models — OB baseline + the Liferay pricing lane.
 
 Wraps the M3 matrix machinery (BenchmarkRunSpec + run_matrix + SubprocessCellExecutor) for the
 specific run the team sized: the 3 confirmed-callable flagships (Opus 4.8, gpt-5.5, Gemini 2.5 Pro —
-NOT Fable 5, which is access-gated) × the 9 Online Boutique services + the Liferay-derived
-``pricingservice`` hardened seed × N=5, with Track 2 behavioral scoring ON (so every suite-backed
-service — payment/currency/shipping/ad/pricing — gets a functional term).
+NOT Fable 5, which is access-gated) × the 9 Online Boutique services + the **full Liferay-derived
+pricing lane** × N=5, with Track 2 behavioral scoring ON (so every suite-backed service gets a
+functional term).
+
+``_load_seeds()`` merges the OB baseline index with **every** seed in ``hardened-index.json`` — which
+is the entire pricing lane: ``pricingservice``, ``rest-pricingservice``, ``graphql-pricingservice``,
+and ``resolvedpriceservice`` (the richest, 31-case suite). All four are hardened-tier by construction
+(axes B/C/E) and de-saturate where the OB-leaf services saturate — the discriminator the scorecard's
+"Pricing lane" section (D2/D3) surfaces. Disable with ``--no-behavioral``.
 
 DRY-RUN BY DEFAULT — prints the plan + cost estimate and spends NOTHING. Pass ``--run`` (and a
 ``--budget``, fail-closed) to actually generate code and call real LLM APIs.
@@ -73,7 +79,8 @@ def _sdk_version():
 
 def _load_seeds():
     """Merge the OB baseline index (9 services, shared demo.proto) with the hardened index
-    (pricingservice, own proto). Returns (services, languages, seed_hashes)."""
+    (the full pricing lane — pricingservice, rest-/graphql-pricingservice, resolvedpriceservice —
+    each carrying its own proto in-seed). Returns (services, languages, seed_hashes)."""
     services, languages, seed_hashes = [], {}, {}
     ob = json.loads(OB_INDEX.read_text())
     for s in ob["services"]:
