@@ -174,10 +174,14 @@ outcomes. (Not "every stage varied" — that's v2; see §1 and FR-2.)
   capability score ≥ a configurable `--advance-threshold`). The gate is **per-round** (Round 2/3 define
   their own — the user's "different bars" decision), so the threshold + criteria are parameters, not
   hardcoded. The verdict is persisted in `batch-run-manifest.json` (`advancement: {model: {advanced, reason, ...}}`)
-  and surfaced in the report, so a downstream tournament orchestrator can read which models clear Round 1
-  and advance. Default roster is the flagship set (`FLAGSHIP_MODELS`); a non-flagship model is gated the
-  same way. Degrade-honest: a model whose gate inputs are missing is `advanced: false` with reason
-  `inputs_missing`, never silently advanced.
+  and surfaced in the report. **The verdict is ADVISORY, not an automated gate** (decision 2026-06-23):
+  there is **no automated tournament orchestrator** — each round is run **manually**, and a human
+  **hand-selects the top candidates** (up to 4) for the final round. FR-21 exists to *inform* that
+  manual selection (a transparent, per-criterion advancement signal), not to auto-promote. The
+  outer-loop "tournament orchestrator" is therefore **explicitly out of scope** (NR-7). Default roster
+  is the flagship set (`FLAGSHIP_MODELS`); a non-flagship model is gated the same way. Degrade-honest:
+  a model whose gate inputs are missing is `advanced: false` with reason `inputs_missing`, never
+  silently advanced.
 
 ## 4. Non-Requirements
 
@@ -187,6 +191,10 @@ outcomes. (Not "every stage varied" — that's v2; see §1 and FR-2.)
 - **NR-4** No modification of pipeline stage logic beyond what's needed to thread the model through.
 - **NR-5** No new quality metrics inside stages — only aggregation of what stages already emit.
 - **NR-6** Does not replace the prime-stage-only `compare-models` (complementary, narrower tool).
+- **NR-7** *(2026-06-23)* **No automated tournament orchestrator.** Rounds run manually; a human
+  hand-selects the top candidates (up to 4) for the final round. FR-21's advancement verdict is an
+  **advisory** input to that manual choice, not an auto-promotion gate. The per-round `AdvancementGate`
+  is reused across rounds as a scoring/advisory aid only.
 
 ## 5. Open Questions
 
