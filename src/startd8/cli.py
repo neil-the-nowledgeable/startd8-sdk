@@ -327,6 +327,179 @@ def compare_models(
     )
 
 
+@app.command("compare-models-e2e")
+def compare_models_e2e(
+    plan: List[Path] = typer.Option(
+        ...,
+        "--plan",
+        help="Frozen plan.md path(s). Repeatable; the shared cap-delivery preamble takes the first.",
+    ),
+    requirements: List[Path] = typer.Option(
+        ...,
+        "--requirements",
+        help="Frozen requirements.md path(s). Repeatable.",
+    ),
+    models: List[str] = typer.Option(
+        ...,
+        "--model",
+        "-m",
+        help="Model spec provider:model (repeatable, >=2 distinct required). "
+        "Example: -m gemini:gemini-2.5-pro -m openai:gpt-5.5",
+    ),
+    source_root: Path = typer.Option(
+        Path("."), "--source-root", help="Target project root copied per model"
+    ),
+    batch_root: Optional[Path] = typer.Option(
+        None, "--batch-root", help="Output root for the batch (default out/<timestamp>)"
+    ),
+    cost_budget: Optional[float] = typer.Option(
+        None, "--cost-budget", help="Per-model cost budget (USD), fed to prime"
+    ),
+    global_budget: Optional[float] = typer.Option(
+        None,
+        "--global-budget",
+        help="Optional batch-wide spend cap (USD). With --cost-budget set, the harness "
+        "pre-checks per_model_budget * n_models <= global_budget and aborts before any spend.",
+    ),
+    comparison_mode: str = typer.Option(
+        "manifest_frozen_v1",
+        "--comparison-mode",
+        help="Comparison-mode label stamped into the manifest/report header (R1-S5)",
+    ),
+    per_stage_timeout: Optional[float] = typer.Option(
+        None,
+        "--per-stage-timeout",
+        help="Max seconds per stage (timeout marks the stage failed, batch continues)",
+    ),
+    advance_threshold: float = typer.Option(
+        0.6,
+        "--advance-threshold",
+        help="Round-1 advancement bar: min capability score [0,1] a model must clear (FR-21)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the per-model/per-stage command plan; execute nothing"
+    ),
+):
+    """Run one frozen seed through the full Cap-Dev-Pipe across 2+ models, score, rank, and gate (FR-13)."""
+    from datetime import datetime, timezone
+    from .model_comparison_e2e import (
+        AdvancementGate,
+        orchestrate_e2e,
+        plan_e2e,
+        preflight,
+        score_batch,
+        write_batch_outputs,
+    )
+
+    plan_paths = [p.resolve() for p in plan]
+    requirements_paths = [p.resolve() for p in requirements]
+    src = source_root.resolve()
+    deduped = list(dict.fromkeys(models))
+    if batch_root is not None:
+        br = batch_root.resolve()
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        br = (Path.cwd() / "out" / f"compare-models-e2e-{stamp}").resolve()
+
+    # 1. Preflight (FR-17) — fail fast before any work.
+    errors = preflight(deduped, plan_paths, requirements_paths, src, br)
+    if errors:
+        console.print("❌ Preflight failed:", style="red")
+        for e in errors:
+            console.print(f"   - {e}", style="red")
+        raise typer.Exit(2)
+
+    # FR/OQ-9: --global-budget guard. orchestrate_e2e takes only a per-model cost_budget, so the
+    # batch cap is enforced here as a pre-sum check (never silently ignored).
+    if global_budget is not None and cost_budget is not None:
+        projected = cost_budget * len(deduped)
+        if projected > global_budget:
+            console.print(
+                f"❌ Projected max spend ${projected:.2f} "
+                f"(--cost-budget ${cost_budget:.2f} × {len(deduped)} models) "
+                f"exceeds --global-budget ${global_budget:.2f}.",
+                style="red",
+            )
+            raise typer.Exit(2)
+
+    # 2. Dry-run: print the per-model/per-stage command plan; cap-delivery appears exactly once.
+    if dry_run:
+        console.print(
+            f"[bold]Dry run[/bold] — comparison_mode={comparison_mode}, "
+            f"batch_root={br}, models={len(deduped)}"
+        )
+        if global_budget is not None:
+            console.print(f"Global budget cap: ${global_budget:.2f}")
+        for entry in plan_e2e(
+            deduped, plan_paths, requirements_paths, src, br, cost_budget
+        ):
+            scope = entry["scope"]
+            who = entry.get("model", "")
+            tag = f"[{scope}] {entry['stage']}" + (f" {who}" if who else "")
+            console.print(f"  {tag}: {' '.join(entry['cmd'])}")
+        raise typer.Exit(0)
+
+    # 3. Real run.
+    batch = orchestrate_e2e(
+        deduped,
+        plan_paths,
+        requirements_paths,
+        src,
+        br,
+        cost_budget=cost_budget,
+        per_stage_timeout=per_stage_timeout,
+        log=print,
+    )
+    if batch.aborted:
+        reason = batch.shared.error or "; ".join(batch.preflight_errors) or "shared preamble failed"
+        console.print(f"❌ Batch aborted: {reason}", style="red")
+        raise typer.Exit(1)
+
+    # S5 scoring must read each model's artifacts from the SAME batch root the orchestrator wrote
+    # them to (``br/<slug>/output``). Without this, score_batch's default reads SDK_ROOT/batch/...
+    # — an empty dir for any real --batch-root — silently producing an all-N/A, no-advance report.
+    score_batch(batch, output_dir_for=lambda mr: br / mr.slug / "output")
+    gate = AdvancementGate(min_capability=advance_threshold)
+    paths = write_batch_outputs(
+        batch,
+        br,
+        comparison_mode=comparison_mode,
+        plan_paths=plan_paths,
+        requirements_paths=requirements_paths,
+        shared_dir=br / "_shared",
+        gate=gate,
+    )
+
+    # Summary table (best first: capability ↓).
+    ranked = sorted(
+        batch.models,
+        key=lambda m: -((m.capability or {}).get("score") or float("-inf")),
+    )
+    table = Table(title="E2E model comparison (single-run, indicative)")
+    table.add_column("Model", style="cyan")
+    table.add_column("Capability", justify="right", style="green")
+    table.add_column("Cost (attributable)", justify="right", style="yellow")
+    table.add_column("Advanced", justify="center")
+    for mr in ranked:
+        cap = (mr.capability or {}).get("score")
+        cost = (mr.cost_fields or {}).get("cost_attributable_usd")
+        table.add_row(
+            mr.model,
+            f"{cap:.4f}" if isinstance(cap, (int, float)) else "N/A",
+            f"${cost:.4f}" if isinstance(cost, (int, float)) else "N/A",
+            "✓" if mr.advanced else "✗",
+        )
+    console.print(table)
+
+    advancing = [mr.model for mr in ranked if mr.advanced]
+    console.print(
+        "[bold]Advancing to next round:[/bold] "
+        + (", ".join(advancing) if advancing else "[dim]none[/dim]")
+    )
+    console.print(f"Manifest: {paths['manifest']}", style="green")
+    console.print(f"Report:   {paths['report_md']}", style="green")
+
+
 @app.command()
 def compare(
     prompt_id: str = typer.Argument(..., help="Prompt ID to compare responses for"),

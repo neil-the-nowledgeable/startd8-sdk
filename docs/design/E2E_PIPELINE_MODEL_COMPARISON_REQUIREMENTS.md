@@ -165,6 +165,20 @@ outcomes. (Not "every stage varied" — that's v2; see §1 and FR-2.)
   shared-preamble placeholder → per-model ingestion → prime extraction → report generation with **no
   external API calls**, for CI regression coverage.
 
+### Tournament integration (added 2026-06-23 — staged-tournament frame)
+
+- **FR-21** *(Round-1 advancement verdict — tournament gate)* Beyond ranking, the harness MUST emit a
+  per-model **advancement verdict** for this round: a boolean `advanced` + `advancement_reason`,
+  computed against a **Round-1 gate** defined as explicit, documented criteria over signals the run
+  already produces (e.g. prime `cross_file_gate` pass, plan-ingestion success, `comparison_validity != invalid`,
+  capability score ≥ a configurable `--advance-threshold`). The gate is **per-round** (Round 2/3 define
+  their own — the user's "different bars" decision), so the threshold + criteria are parameters, not
+  hardcoded. The verdict is persisted in `batch-run-manifest.json` (`advancement: {model: {advanced, reason, ...}}`)
+  and surfaced in the report, so a downstream tournament orchestrator can read which models clear Round 1
+  and advance. Default roster is the flagship set (`FLAGSHIP_MODELS`); a non-flagship model is gated the
+  same way. Degrade-honest: a model whose gate inputs are missing is `advanced: false` with reason
+  `inputs_missing`, never silently advanced.
+
 ## 4. Non-Requirements
 
 - **NR-1** No parallel execution in v1.
