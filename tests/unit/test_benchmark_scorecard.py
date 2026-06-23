@@ -382,3 +382,119 @@ def test_pricing_lane_in_html(tmp_path):
     html = build_scorecard_html(tmp_path, now=_NOW)
     assert "Pricing lane" in html and "Pricing discriminators" in html
     assert "sum_strategy" in html
+
+
+# --------------------------------------------------------------------------- checkout frontier (D4/D5)
+
+
+def _checkout_cell(model, *, fc=1.0, steps=None, call_counts=None, degraded=False, rep=1):
+    """A checkoutservice cell. ``steps`` = [(name, passed), ...] persisted at behavioral.suite.results
+    (the six PlaceOrder steps). ``call_counts`` = the fallback per-step provenance
+    (behavioral.checkout_call_counts). ``degraded=True`` → behavioral present but no suite/counts."""
+    beh = {"ready": not degraded, "suite_kind": "checkout-orchestrator"}
+    if not degraded:
+        if steps is not None:
+            beh["suite"] = {
+                "suite_version": "checkout-suite/1",
+                "coverage": fc,
+                "results": [{"name": n, "passed": p, "detail": ""} for n, p in steps],
+            }
+        if call_counts is not None:
+            beh["checkout_call_counts"] = call_counts
+    c = CellResult(
+        cell_id=f"{model}-checkout-r{rep}", service="checkoutservice", model=model, language="go",
+        repetition=rep, status=STATUS_OK, quality=0.9, cost_usd=0.5,
+        functional_coverage=(None if degraded else fc),
+    )
+    c.behavioral = beh
+    return c
+
+
+def test_checkout_frontier_section_ranks_best_first(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, [
+        _checkout_cell("anthropic:claude-opus-4-8", fc=1.0,
+                       steps=[("catalog_priced", True), ("email_confirmed", True)]),
+        _checkout_cell("gemini:gemini-2.5-pro", fc=0.5,
+                       steps=[("catalog_priced", True), ("email_confirmed", False)]),
+    ])
+    md = build_scorecard(tmp_path, now=_NOW)
+    sec = md.split("## Checkout integration frontier")[1].split("\n## ")[0]
+    # ranked best-first: opus (1.0) above gemini (0.5); a distinct integration axis
+    assert sec.index("anthropic:claude-opus-4-8") < sec.index("gemini:gemini-2.5-pro")
+    assert "orchestration frontier" in sec or "integration" in sec
+    assert "Not computed" not in sec
+
+
+def test_checkout_steps_per_step_breakdown_from_suite_results(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, [
+        _checkout_cell("anthropic:claude-opus-4-8", fc=0.5,
+                       steps=[("payment_charged", True), ("email_confirmed", False)]),
+        _checkout_cell("gemini:gemini-2.5-pro", fc=1.0,
+                       steps=[("payment_charged", True), ("email_confirmed", True)]),
+    ])
+    md = build_scorecard(tmp_path, now=_NOW)
+    sec = md.split("## Checkout orchestration steps")[1].split("\n## ")[0]
+    assert "payment_charged" in sec and "email_confirmed" in sec
+    # opus misses email (0/1), gemini wires it (1/1) — which dependency fails is exposed
+    assert "0/1" in sec and "1/1" in sec
+    # steps render in canonical PlaceOrder order (payment before email), not alphabetical
+    assert sec.index("payment_charged") < sec.index("email_confirmed")
+
+
+def test_checkout_steps_fallback_to_call_counts(tmp_path):
+    _write_spec(tmp_path)
+    # no suite.results persisted, but call-counts ARE → per-step derived from dialed dependencies
+    _write_cells(tmp_path, [
+        _checkout_cell("openai:gpt-5.5", fc=0.5, steps=None,
+                       call_counts={"PRODUCT_CATALOG_SERVICE_ADDR": 1, "EMAIL_SERVICE_ADDR": 0}),
+    ])
+    md = build_scorecard(tmp_path, now=_NOW)
+    sec = md.split("## Checkout orchestration steps")[1].split("\n## ")[0]
+    # catalog dialed (1/1), email not dialed (0/1)
+    assert "catalog_priced" in sec and "1/1" in sec
+    assert "email_confirmed" in sec and "0/1" in sec
+
+
+def test_checkout_frontier_degrade_honest_when_no_checkout_cells(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, _five_cells())  # all service "s1", none checkout
+    md = build_scorecard(tmp_path, now=_NOW)
+    frontier = md.split("## Checkout integration frontier")[1].split("\n## ")[0]
+    steps = md.split("## Checkout orchestration steps")[1].split("\n## ")[0]
+    assert "Not computed" in frontier and "Not computed" in steps
+
+
+def test_checkout_steps_degrade_when_provenance_absent(tmp_path):
+    _write_spec(tmp_path)
+    # a checkout cell that ran but degraded (no suite results, no call-counts) — per-step degrades
+    # WITHOUT crashing, while the frontier coverage section also stays 'not computed' (fc=None).
+    _write_cells(tmp_path, [_checkout_cell("openai:gpt-5.5", degraded=True)])
+    md = build_scorecard(tmp_path, now=_NOW)
+    steps = md.split("## Checkout orchestration steps")[1].split("\n## ")[0]
+    assert "Not computed" in steps
+
+
+def test_checkout_frontier_placed_after_pricing_before_speed(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, [
+        _checkout_cell("gemini:gemini-2.5-pro", fc=1.0, steps=[("catalog_priced", True)]),
+    ])
+    md = build_scorecard(tmp_path, now=_NOW)
+    assert (md.index("## Pricing discriminators")
+            < md.index("## Checkout integration frontier")
+            < md.index("## Checkout orchestration steps")
+            < md.index("## Speed"))
+
+
+def test_checkout_in_html(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, [
+        _checkout_cell("gemini:gemini-2.5-pro", fc=1.0,
+                       steps=[("payment_charged", True), ("email_confirmed", False)]),
+    ])
+    html = build_scorecard_html(tmp_path, now=_NOW)
+    assert "Checkout integration frontier" in html
+    assert "Checkout orchestration steps" in html
+    assert "payment_charged" in html and "email_confirmed" in html

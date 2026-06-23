@@ -1,9 +1,19 @@
 # Benchmark Scorecard Format
 
-**Version:** 2.2
+**Version:** 2.3
 **Date:** 2026-06-23
 **Status:** Defined
 **Scope:** Summer 2026 Online Boutique model benchmark (`benchmark_matrix`).
+
+> **v2.3 change — checkout gets its OWN integration-frontier axis (CQ-4).** `checkoutservice` is a
+> six-way orchestrator: the leaf suites measure a model's *per-service* skill, but checkout measures
+> whether the model wires six services into one working `PlaceOrder` — a distinct axis. v2.3 adds
+> **D4 (checkout integration frontier — per-model PlaceOrder coverage)** and **D5 (per-step
+> orchestration breakdown — which of the six dialed dependencies each model wires, FR-CO-19)**,
+> mirroring the pricing-lane D2/D3 structure + degrade-honesty. Both read already-persisted
+> `cells.json` ($0-recomputable: `functional_coverage` + `behavioral.suite.results`, falling back to
+> `behavioral.checkout_call_counts`). **Reported-not-scored** (Principle 7) — they do not alter the
+> Scoreboard ranking. See FR-CO-20 / `docs/design/checkout-orchestrator/`.
 
 > **v2.2 change — the Liferay pricing lane is surfaced as a first-class discriminator.** Flagship
 > models do not differentiate on structural quality (it saturates). The Liferay-derived complex-pricing
@@ -141,6 +151,26 @@ detail}`). Aggregate coverage can read even while a model fails *exactly* the sp
 `fixed_reductions_apply_after_all_percent_reductions`); this table exposes that. Case names are not
 1:1 across the protocol variants, so the table is **per-service**, not a forced union. Degrade-honest
 `not computed` when no pricing cell persisted suite results (degraded run / suite never ran). $0.
+
+### D4. Checkout integration frontier (orchestration coverage) — *a distinct axis (CQ-4)*
+`| Rank | Model | PlaceOrder coverage (mean) | cells |`, ranked best→worst. Mean coverage of the one
+happy-path `PlaceOrder` over the **six** orchestrated dependencies (catalog / cart / currency /
+shipping / payment / email), each an equal-weight step. This is the **integration/orchestration
+frontier** — does the model correctly wire six services into one order — a *separate* axis from the
+per-service skill the leaf suites (Section D) measure. Reads only persisted `cells.json`
+(`functional_coverage` where `service == "checkoutservice"`), so it is $0-recomputable. **Reported,
+never scored** (Principle 7); degrade-honest `not computed` when no checkout cells ran.
+
+### D5. Checkout orchestration steps (per-step, by model) — *which dependency a model fails to wire*
+A matrix of `| Step | <model> … |` with per-cell `passed/reps` over the six PlaceOrder steps, rendered
+in **canonical PlaceOrder order** (catalog → cart → currency → shipping → payment → email), not
+alphabetical. The analog of the pricing per-case table (D3) for the orchestrator (FR-CO-19). Primary
+signal: the named per-step results at `cell.behavioral["suite"]["results"]` (`{name, passed, …}`);
+**fallback** when no suite results were persisted but call-counts were — a step is treated as *reached*
+when its dependency was dialed (`cell.behavioral["checkout_call_counts"][<ADDR_ENV>] > 0`), a weaker
+proxy. Aggregate coverage hides *which* dependency a model fails to wire (e.g. never dialing email,
+charging payment with a wrong address); this table exposes it. Degrade-honest `not computed` when no
+checkout cell persisted either provenance (degraded run / never ran). $0.
 
 ### E. Speed (generation time) — two measures, ranked by pure-model throughput
 `| Rank | Model | model time med (s) | model tok/s med | pipeline wall med (s) | pipeline tok/s med | harness overhead |`
