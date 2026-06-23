@@ -10,6 +10,7 @@ Default-off in the runner — turning it on is the paymentservice pilot (M-T2.4,
 """
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shutil
@@ -21,6 +22,8 @@ from typing import Callable, Dict, List, Optional
 from ..sandbox import SandboxConfig, run_service_sandboxed
 from .ad_suite import run_ad_suite
 from .charge_suite import run_charge_suite
+from .checkout_stubs import CheckoutStubHarness, GroundTruth
+from .checkout_suite import run_checkout_suite
 from .currency_suite import run_currency_suite
 from .contract import StartupContract, resolve_serve_command
 from .graphql_pricing_suite import run_graphql_pricing_suite
@@ -217,12 +220,19 @@ def run_behavioral_cell(
     ``"hardened"`` cell runs the suite's hardened **superset** (baseline assertions + the hard ones).
     Suites that don't accept ``tier`` are unaffected — fully backward-compatible.
     """
+    # FR-CO-EXEC: checkoutservice is a 6-way orchestrator; the leaf-suite `client(port)` contract is
+    # insufficient (6 dependency stubs must be bound and their `*_SERVICE_ADDR` addresses injected into
+    # extra_env BEFORE the SUT launches, then torn down). Route it to the dedicated checkout branch —
+    # NOT through `_SUITES` (whose `client(port)` callables have no place to inject stub addresses or
+    # snapshot call-counts). This is the single structural divergence from the eight leaf suites.
+    if service == "checkoutservice":
+        return _run_checkout_cell(seed, workdir, target_files, cfg=cfg, port=port, tier=tier)
+
     suite_fn = _SUITES.get(service)
     if suite_fn is None:
         return BehavioralResult(has_suite=False, provenance={"reason": "no behavioral suite for service"})
     # Bind the difficulty tier into the suite only when the suite opts in (accepts a `tier` kwarg).
     # run_service_sandboxed calls client(port), so tier must be pre-bound here.
-    import functools
     import inspect
     if "tier" in inspect.signature(suite_fn).parameters:
         suite_fn = functools.partial(suite_fn, tier=tier)
@@ -236,6 +246,32 @@ def run_behavioral_cell(
         return BehavioralResult(has_suite=True, degraded=True,
                                 provenance={"reason": "no serve command (no contract / unknown language)"})
     argv, extra_env = serve
+    return _provision_launch_and_score(
+        seed, workdir, service, target_files, argv, extra_env, port, suite_fn,
+        port_source=port_source, cfg=cfg)
+
+
+def _provision_launch_and_score(
+    seed: dict,
+    workdir: Path,
+    service: str,
+    target_files: List[str],
+    argv: List[str],
+    extra_env: Dict[str, str],
+    port: int,
+    client: Callable[[int], object],
+    *,
+    port_source: str = "injected",
+    cfg: Optional[SandboxConfig] = None,
+    extra_provenance: Optional[Dict] = None,
+) -> BehavioralResult:
+    """Shared provision → sandboxed-launch → degrade/model-fault/score core (FR-T2-DEPS/DEPS2).
+
+    Reused by the leaf-suite path and the FR-CO-EXEC checkout branch so both honor identical
+    provisioning, readiness, and model-fault-vs-degrade classification. ``argv``/``extra_env`` are the
+    already-resolved serve command (the checkout branch has merged ``*_SERVICE_ADDR`` into ``extra_env``
+    before calling this); ``client`` is the suite ``client(port)`` to run against the live SUT.
+    """
     lang = ((seed or {}).get("service_metadata", {}).get("language") or (seed or {}).get("language"))
     # Readiness mode from the seed's startup contract (FR-5/FR-11): "tcp" (gRPC default) or "http"
     # (REST lane). Drives both provisioning (REST skips the grpc/proto runtime) and the readiness probe.
@@ -271,13 +307,15 @@ def run_behavioral_cell(
     # already needed it for binary startup) to recover slow-binding cells; genuine crashes (rc=1) exit
     # immediately and are unaffected.
     readiness = 30.0
-    sr = run_service_sandboxed(argv, Path(workdir), port, suite_fn, cfg=cfg, extra_env=extra_env,
+    sr = run_service_sandboxed(argv, Path(workdir), port, client, cfg=cfg, extra_env=extra_env,
                                readiness_timeout_s=readiness,
                                readiness_mode=readiness_mode, health_path=health_path)
     prov: Dict = {"ready": sr.ready, "isolation_level": sr.isolation_level,
                   "network_isolated": sr.network_isolated, "violation": sr.violation,
                   "port_source": port_source,  # R2-S2: "injected" or "hardcoded:<n>"
                   "server_stderr_tail": (sr.server_stderr or "")[-400:]}
+    if extra_provenance:
+        prov.update(extra_provenance)
     if not sr.ready or sr.violation is not None:
         # FR-T2-DEPS2 / FR-T2-PROV: name WHY it couldn't start so a provisioning gap is diagnosable
         # (a missing module / proto path) rather than an opaque "never ready".
@@ -306,3 +344,90 @@ def run_behavioral_cell(
 
     prov["suite"] = suite_res.to_dict()
     return BehavioralResult(has_suite=True, functional=suite_res.coverage, degraded=False, provenance=prov)
+
+
+def _run_checkout_cell(
+    seed: dict,
+    workdir: Path,
+    target_files: List[str],
+    *,
+    cfg: Optional[SandboxConfig] = None,
+    port: Optional[int] = None,
+    tier: str = "baseline",
+    ground_truth: Optional[GroundTruth] = None,
+) -> BehavioralResult:
+    """FR-CO-EXEC — the dedicated checkoutservice orchestration branch (the #1-risk step).
+
+    Structurally distinct from the leaf ``client(port)`` path: checkout only behaves correctly when its
+    six gRPC dependencies answer, so this branch brings up SDK-authored loopback stubs and runtime-injects
+    their ``*_SERVICE_ADDR`` addresses into the SUT's environment **before** it launches, then scores
+    per-step coverage from the response + the stubs' call-counters.
+
+    Flow (FR-CO-EXEC a–e):
+      (a) read the seed's declared dependency-address env NAMES (``startup.dependency_addr_env``);
+      (b) ``harness.start()`` binds the six stubs on free loopback ports → ``addr_map`` ({NAME: addr});
+      (c) allocate the SUT's $PORT (after the stubs, B4 port-ordering) + resolve the Go serve command;
+      (d) merge ``addr_map`` into ``extra_env`` so the sandboxed Go checkout dials the stubs (FR-CO-10);
+      (e) run the SUT under the existing sandbox path; the suite reads ``harness.call_counts`` AFTER
+          PlaceOrder returns (passed as a callable so the snapshot is live, FR-CO-8); ``finally`` tears
+          down all six stubs (FR-CO-3) — on EVERY path, including launch/readiness/suite exceptions.
+    """
+    gt = ground_truth or GroundTruth()
+
+    # (a) The seed declares the six dependency-address env NAMES; the harness owns the canonical set.
+    # We map the harness's addr_map (keyed by those same NAMES) straight through. If the seed declares a
+    # name the harness doesn't bind (a seed/harness drift), it simply won't be injected — surfaced in
+    # provenance so it is diagnosable rather than silently wrong.
+    contract = StartupContract.from_seed(seed)
+    if contract is None:
+        # FR-CO-9: without a startup block there is no Go launch + no declared dep-env names → degrade,
+        # don't crash (the seed re-author, B1, is the gating prerequisite).
+        return BehavioralResult(has_suite=True, degraded=True,
+                                provenance={"reason": "checkoutservice seed has no startup block "
+                                                      "(FR-CO-9 re-author prerequisite)"})
+    declared_names = list((seed or {}).get("startup", {}).get("dependency_addr_env") or [])
+
+    harness = CheckoutStubHarness(gt)
+    try:
+        # (b) Bind the six stubs FIRST (B4: stubs before the SUT port) → {ENV_NAME: "127.0.0.1:<port>"}.
+        addr_map = harness.start()
+        # (c) Allocate the SUT port AFTER the stubs are bound (B4 port-ordering minimizes the TOCTOU race
+        # window the shipped harness already tolerates), then resolve the Go serve command for it.
+        sut_port = port or _free_port()
+        serve = resolve_serve_command(seed, target_files, sut_port)
+        if serve is None:  # pragma: no cover — guarded by the startup-block check above
+            return BehavioralResult(has_suite=True, degraded=True,
+                                    provenance={"reason": "no serve command for checkoutservice"})
+        argv, extra_env = serve
+        # (d) Merge the runtime stub addresses into extra_env BEFORE launch (FR-CO-10). $PORT (from the
+        # contract) is already in extra_env; the six *_SERVICE_ADDR values are added here. Injected after
+        # the sandbox env-scrub (run_service_sandboxed applies extra_env post-scrub), so they survive.
+        injected = dict(addr_map)
+        extra_env = {**(extra_env or {}), **injected}
+        # Provenance the injected addresses + which declared names were/weren't covered (FR-CO-19).
+        missing_names = [n for n in declared_names if n not in addr_map]
+        extra_prov = {
+            "checkout_injected_addrs": injected,
+            "checkout_declared_dep_env": declared_names,
+            "checkout_unbound_declared_env": missing_names,
+            "suite_kind": "checkout-orchestrator",
+        }
+
+        # (e) The suite reads call_counts AFTER PlaceOrder returns — pass the live property as a CALLABLE
+        # so the snapshot reflects exactly the deps the SUT dialed during the order (FR-CO-8). A wrong /
+        # invented address means the matching stub is never called → count 0 → that step is a real MISS
+        # (FR-CO-17), scored as partial coverage, not a degrade.
+        client = functools.partial(
+            run_checkout_suite, stub_calls=lambda: harness.call_counts, ground_truth=gt)
+
+        result = _provision_launch_and_score(
+            seed, workdir, "checkoutservice", target_files, argv, extra_env, sut_port, client,
+            port_source="injected", cfg=cfg, extra_provenance=extra_prov)
+        # FR-CO-19: record the final dialed-dep call-counts alongside the per-step suite results.
+        result.provenance["checkout_call_counts"] = dict(harness.call_counts)
+        return result
+    finally:
+        # FR-CO-3: deterministic, exception-safe teardown of all six stubs on EVERY exit path
+        # (SUT-launch exception, readiness timeout, client/suite error, or success). harness.stop() is
+        # idempotent and never raises, so no stub server / loopback port is ever leaked.
+        harness.stop()

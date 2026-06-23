@@ -64,6 +64,22 @@ PRICING_LANE = frozenset(
     }
 )
 
+# The checkout orchestrator (CQ-4). checkoutservice is its OWN scorecard axis — distinct from the
+# per-service skill the leaf suites measure: it asks "does the model correctly *wire six services
+# together* into one PlaceOrder", the integration/orchestration frontier. One named home.
+CHECKOUT_SERVICE = "checkoutservice"
+
+# The six PlaceOrder orchestration steps (FR-CO-19), in step order. Mirrors checkout_suite's
+# RpcResult names + their dialed dependency (the call-counter provenance is keyed by *_SERVICE_ADDR).
+_CHECKOUT_STEPS: List[Tuple[str, str]] = [
+    ("catalog_priced", "PRODUCT_CATALOG_SERVICE_ADDR"),
+    ("cart_honored", "CART_SERVICE_ADDR"),
+    ("currency_converted", "CURRENCY_SERVICE_ADDR"),
+    ("shipping_applied", "SHIPPING_SERVICE_ADDR"),
+    ("payment_charged", "PAYMENT_SERVICE_ADDR"),
+    ("email_confirmed", "EMAIL_SERVICE_ADDR"),
+]
+
 
 def _provider(model: str) -> str:
     return _PROVIDER_LABEL.get(
@@ -450,6 +466,120 @@ def _pricing_discriminators_section(cells: List[CellResult]) -> str:
     return f"{head}\n\n" + "\n".join(blocks)
 
 
+def _is_checkout(c: CellResult) -> bool:
+    return c.service == CHECKOUT_SERVICE
+
+
+def _checkout_frontier_section(cells: List[CellResult]) -> str:
+    """FR-CO-20 / CQ-4: checkout's orchestration coverage as a distinct integration frontier.
+
+    Per-model PlaceOrder coverage (mean of the 6 equal-weight steps), ranked best→worst with `n`.
+    This is a SEPARATE axis from per-service skill: it measures whether the model wires the six
+    dependencies into one working order, where the leaf suites measure a single service in isolation.
+    Reported, never folded into the Scoreboard ranking (Scorecard Principle 7). Degrade-honest:
+    `not computed` when no checkout cells ran."""
+    head = "## Checkout integration frontier (orchestration coverage)"
+    ran = [c for c in cells if _is_checkout(c) and c.functional_coverage is not None]
+    if not ran:
+        return f"{head}\n\n" + _NOT_COMPUTED.format(
+            why="no checkoutservice cells with behavioral coverage were persisted"
+        )
+    by_model: Dict[str, List[float]] = {}
+    for c in ran:
+        by_model.setdefault(c.model, []).append(c.functional_coverage)
+    rows = [
+        "> PlaceOrder coverage over the **six** orchestrated dependencies "
+        "(catalog/cart/currency/shipping/",
+        "> payment/email), each an equal-weight step. This is the **integration/orchestration "
+        "frontier** —",
+        "> does the model correctly wire six services into one order — a distinct axis from the "
+        "per-service",
+        "> skill the leaf suites measure. Reported, not folded into the Scoreboard (Principle 7).",
+        "",
+        "| Rank | Model | PlaceOrder coverage (mean) | cells |",
+        "|---:|---|---:|---:|",
+    ]
+    for i, m in enumerate(sorted(by_model, key=lambda m: -_st.mean(by_model[m])), 1):
+        v = by_model[m]
+        rows.append(f"| {i} | `{m}` | {_f(_st.mean(v))} | {len(v)} |")
+    return f"{head}\n\n" + "\n".join(rows)
+
+
+def _checkout_step_passed(c: CellResult, step: str, addr_env: str) -> Optional[bool]:
+    """Per-step pass for one checkout cell, from persisted provenance (FR-CO-19).
+
+    Primary signal: the per-step suite result (``behavioral.suite.results`` — same shape as the
+    pricing per-case table, the six named PlaceOrder steps). Fallback when no suite results were
+    persisted but call-counts were: a step is treated as reached when its dependency was dialed
+    (``behavioral.checkout_call_counts[addr_env] > 0``) — a weaker proxy, surfaced as such. Returns
+    None when neither provenance is present (degrade-honest)."""
+    for r in _suite_results(c):
+        if r.get("name") == step:
+            return bool(r.get("passed"))
+    beh = getattr(c, "behavioral", None) or {}
+    counts = beh.get("checkout_call_counts")
+    if isinstance(counts, dict) and counts:
+        return counts.get(addr_env, 0) > 0
+    return None
+
+
+def _checkout_step_rows(cells: List[CellResult]) -> Dict[str, Dict[str, Tuple[int, int]]]:
+    """{step_name: {model: (passed, total)}} over checkout cells with per-step provenance."""
+    out: Dict[str, Dict[str, Tuple[int, int]]] = {}
+    for c in cells:
+        if not _is_checkout(c):
+            continue
+        for step, addr_env in _CHECKOUT_STEPS:
+            ok = _checkout_step_passed(c, step, addr_env)
+            if ok is None:
+                continue
+            cell = out.setdefault(step, {})
+            p, t = cell.get(c.model, (0, 0))
+            cell[c.model] = (p + (1 if ok else 0), t + 1)
+    return out
+
+
+def _checkout_steps_section(cells: List[CellResult]) -> str:
+    """FR-CO-19: per-step PlaceOrder breakdown — which of the six steps each model passed.
+
+    The analog of the pricing per-case table for the orchestrator: a matrix of step × model
+    (`passed/reps`) over the six dialed dependencies. Aggregate coverage hides *which* dependency a
+    model fails to wire (e.g. never dialing email, or charging payment with the wrong address);
+    this exposes it. Degrade-honest when no checkout cell persisted per-step provenance."""
+    head = "## Checkout orchestration steps (per-step, by model)"
+    data = _checkout_step_rows(cells)
+    if not data:
+        return f"{head}\n\n" + _NOT_COMPUTED.format(
+            why="no checkoutservice cell persisted per-step suite results or call-counts "
+                "(degraded or not run)"
+        )
+    models = sorted({m for step in data.values() for m in step})
+    blocks = [
+        "> Per-step outcome of the one happy-path PlaceOrder, by model (`passed/reps`). The six "
+        "steps are the",
+        "> six orchestrated dependencies — catalog, cart, currency, shipping, payment, email — each "
+        "equal-weight.",
+        "> Where aggregate coverage looks even, this shows *which* dependency a model fails to wire "
+        "(FR-CO-19).",
+        "",
+        "| Step | " + " | ".join(f"`{m}`" for m in models) + " |",
+        "|---|" + "|".join([":--:"] * len(models)) + "|",
+    ]
+    # Render in canonical step order (not alphabetical) — the order PlaceOrder executes them.
+    for step, _addr in _CHECKOUT_STEPS:
+        if step not in data:
+            continue
+        cells_out = []
+        for m in models:
+            if m in data[step]:
+                p, t = data[step][m]
+                cells_out.append(f"{p}/{t}")
+            else:
+                cells_out.append("—")
+        blocks.append(f"| `{step}` | " + " | ".join(cells_out) + " |")
+    return f"{head}\n\n" + "\n".join(blocks)
+
+
 def _determinism_section(comparison: Optional[dict]) -> str:
     head = "## Determinism boundary (spine in-sync)"
     ranked = (comparison or {}).get("ranked")
@@ -587,6 +717,8 @@ def build_scorecard(run_dir, *, now: Optional[datetime] = None) -> str:
         _behavioral_section(cells),
         _pricing_lane_section(cells),          # D2 — pricing lane discriminator (FR-3/FR-5)
         _pricing_discriminators_section(cells),  # D3 — per-case discriminators (FR-4)
+        _checkout_frontier_section(cells),     # D4 — checkout integration frontier (FR-CO-20/CQ-4)
+        _checkout_steps_section(cells),        # D5 — per-step PlaceOrder breakdown (FR-CO-19)
         _speed_section(agg),       # E — speed (two time measures), FR-SPEED-4
         _determinism_section(comparison),
         _refinement_trajectory_section(run_dir, cells),  # G — advisory, omitted if no sidecar
@@ -897,6 +1029,48 @@ def _h_pricing_discriminators(cells: List[CellResult]) -> str:
     return "".join(out)
 
 
+def _h_checkout_frontier(cells: List[CellResult]) -> str:
+    ran = [c for c in cells if _is_checkout(c) and c.functional_coverage is not None]
+    if not ran:
+        return _empty("no checkoutservice cells with behavioral coverage were persisted")
+    by_model: Dict[str, List[float]] = {}
+    for c in ran:
+        by_model.setdefault(c.model, []).append(c.functional_coverage)
+    rows = []
+    for i, m in enumerate(sorted(by_model, key=lambda m: -_st.mean(by_model[m])), 1):
+        v = by_model[m]
+        cls = ' class="top"' if i == 1 else ""
+        rows.append(
+            f"<tr{cls}><td class=rank>{i}</td><td class=model>{_esc(m)}</td>"
+            f"<td class=big>{_hf(_st.mean(v))}</td><td class=dimv>{len(v)}</td></tr>"
+        )
+    return _h_table(["Rank", "Model", "PlaceOrder coverage (mean)", "Cells"], rows)
+
+
+def _h_checkout_steps(cells: List[CellResult]) -> str:
+    data = _checkout_step_rows(cells)
+    if not data:
+        return _empty(
+            "no checkoutservice cell persisted per-step suite results or call-counts "
+            "(degraded or not run)"
+        )
+    models = sorted({m for step in data.values() for m in step})
+    rows = []
+    for step, _addr in _CHECKOUT_STEPS:
+        if step not in data:
+            continue
+        tds = []
+        for m in models:
+            if m in data[step]:
+                p, t = data[step][m]
+                cell = f"{p}/{t}" if p == t else f'<span class="pill bad">{p}/{t}</span>'
+                tds.append(f"<td>{cell}</td>")
+            else:
+                tds.append("<td class=dimv>—</td>")
+        rows.append(f"<tr><td class=model>{_esc(step)}</td>" + "".join(tds) + "</tr>")
+    return _h_table(["Step"] + models, rows)
+
+
 def _h_determinism(comparison: Optional[dict]) -> str:
     ranked = (comparison or {}).get("ranked")
     if not ranked:
@@ -1021,6 +1195,16 @@ _DIMS: List[Tuple[str, str, str]] = [
         "Per-case pass-rate (<code>passed/reps</code>) of the spec-reasoning cases — strategy stacking, rounding mode, tax ordering — by service and model. Where flagships diverge even at even aggregate coverage.",
     ),
     (
+        "D4",
+        "Checkout integration frontier",
+        "PlaceOrder coverage over the six orchestrated dependencies (catalog/cart/currency/shipping/payment/email) — does the model wire six services into one order. A distinct axis from per-service skill (CQ-4). Reported, not scored.",
+    ),
+    (
+        "D5",
+        "Checkout orchestration steps (per-step)",
+        "Per-step PlaceOrder pass-rate (<code>passed/reps</code>) by model — which of the six dialed dependencies the model wires correctly. The analog of the pricing per-case table for the orchestrator (FR-CO-19).",
+    ),
+    (
         "E",
         "Determinism boundary",
         "Did the model drift an owned ($0-generated) skeleton file instead of only adding glue (generate backend --check).",
@@ -1075,6 +1259,8 @@ def build_scorecard_html(run_dir, *, now: Optional[datetime] = None) -> str:
         _h_behavioral(cells),
         _h_pricing_lane(cells),
         _h_pricing_discriminators(cells),
+        _h_checkout_frontier(cells),
+        _h_checkout_steps(cells),
         _h_determinism(comparison),
         _h_bylang(agg, contam),
         _h_refinement(run_dir, cells),
