@@ -4,8 +4,51 @@
 **Question:** Can `benchmark_matrix/sandbox.py`'s `run_service_sandboxed` safely co-run the 9
 Online Boutique microservices (all model-generated, all untrusted) wired to each other over
 loopback — or is Docker-per-service required for Round 3?
-**Status:** Spike complete. **Verdict: B — current sandbox works, with a named containment
-weakening that must be recorded (FR-7a).**
+**Status:** Spike complete. ~~**Verdict: B — current sandbox works, with a named containment
+weakening that must be recorded (FR-7a).**~~ **SUPERSEDED — see the verified correction below.**
+
+---
+
+## 0. VERIFIED CORRECTION (2026-06-24) — verdict B is WRONG for gRPC dial-out on macOS
+
+The original spike measured peer reachability with a **raw socket** (and HTTP). That passed. But the
+OB services dial each other over **gRPC**, and gRPC's outbound connect behaves differently under the
+Seatbelt loopback profile. Reproduced definitively (real gRPC server on `127.0.0.1`, client run under
+the exact `_wrap_loopback_only` profile):
+
+| Connect from inside the sandbox | Result |
+|---|---|
+| raw `socket.create_connection(("127.0.0.1", port))` | **CONNECTED** |
+| gRPC `insecure_channel("127.0.0.1:port")` | **DENIED** (channel-ready timeout) |
+| gRPC `insecure_channel("localhost:port")` | **DENIED** |
+| control: egress to `1.1.1.1:443` | denied (containment holds) |
+
+And Seatbelt's `(remote ip …)` filter **only accepts `*` or `localhost`** as the host — an IP-literal
+rule (`(remote ip "127.0.0.1:*")`) is a hard parse error. So the only loopback-scoped rule is
+`localhost`, under which gRPC is denied; the only rule that lets gRPC dial is `*`, which **re-opens
+full external egress** (verified: `1.1.1.1:443` then reachable). **There is no Seatbelt profile that
+permits sandboxed gRPC loopback dial-out while denying egress.**
+
+**Corrected verdict (split by traffic direction):**
+- **Leaf services (inbound) — verdict B still holds.** The suite client dials *into* the sandboxed
+  server from outside; `network-inbound` to `localhost` is allowed. catalog/email/cart/payment/
+  currency/shipping/ad/pricing score correctly sandboxed on macOS.
+- **Dial-out services (a sandboxed SUT dials a loopback peer via gRPC) — verdict B FAILS on macOS.**
+  checkout (6 stubs), recommendation (1 stub), and the **entire Round 3 fleet** (inter-service gRPC)
+  cannot reach their peers under the egress-denied Seatbelt sandbox. Today their suites validate via
+  the **direct (non-sandboxed) path** — so this gap is latent, not caught by the green tests.
+
+**Implications for Round 3 (and Round 2 real runs):**
+1. **macOS Seatbelt cannot host the dial-out fleet with egress denied.** OQ-7 (Linux shared-netns /
+   veth) is therefore the **REQUIRED** substrate for a contained fleet, not an optional follow-up — a
+   fresh netns has a real loopback stack (gRPC works) and egress is impossible by construction. Docker
+   (shared network) is the other contained option.
+3. **On macOS specifically**, the only way to run dial-out SUTs is **non-sandboxed** (no egress
+   denial) — acceptable only under the FR-7a same-model/disposable-host posture, now extended: for
+   dial-out services on macOS, external egress is **not** denied either. Record this honestly.
+4. **Round 2 checkout + recommendation real sandboxed scoring is currently broken on macOS** at the
+   dial-out step (works on Linux netns). The shipped suites are correct; the macOS sandbox substrate
+   for dial-out is the gap.
 
 ---
 
