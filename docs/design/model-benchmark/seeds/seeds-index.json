@@ -25,14 +25,14 @@
     {
       "language": "csharp",
       "seed_file": "seed-cartservice.json",
-      "seed_sha256": "9c5e53fdb49a51a5c89715998bfcf9fc274ae92d3b7bb15eb22154454bf5f52b",
+      "seed_sha256": "f95baa4ce216b1558e0da38626f04ed7f194e37e701ad72d415d42a817dc4f65",
       "service": "cartservice",
       "target_file": "src/cartservice/src/services/CartService.cs"
     },
     {
       "language": "go",
       "seed_file": "seed-productcatalogservice.json",
-      "seed_sha256": "a772855ecc2d7c39273e5201d0c79c555f2b5a732d62bfa71fd57db842ff7622",
+      "seed_sha256": "fcc67d23c597028c5f5afe6c2dc9c09bb5ee074f62fabf22f4b492f8da88aee4",
       "service": "productcatalogservice",
       "target_file": "src/productcatalogservice/server.go"
     },
@@ -60,21 +60,21 @@
     {
       "language": "python",
       "seed_file": "seed-emailservice.json",
-      "seed_sha256": "99617f62d44702ca7ee824df458839baebb6568e8ffa9d91515cf728e512020c",
+      "seed_sha256": "ca7dfd2f06d4cb6b73b8e33ae8e83b5820ce5a301bb8aa86ad475b76bcc95c54",
       "service": "emailservice",
       "target_file": "src/emailservice/email_server.py"
     },
     {
       "language": "go",
       "seed_file": "seed-checkoutservice.json",
-      "seed_sha256": "44eaab46d2d222465b6e0e250691960a7b0439b546ee368c4c235c566150b316",
+      "seed_sha256": "198bc60b7762f1429e88a86be451e430e72509786e2b759abc8d89279a052c3c",
       "service": "checkoutservice",
       "target_file": "src/checkoutservice/main.go"
     },
     {
       "language": "python",
       "seed_file": "seed-recommendationservice.json",
-      "seed_sha256": "ffecfd34f91d71ca9551af2324f8387d74d20d2291d56428c7d5ab17c28d3f88",
+      "seed_sha256": "79353588751ec9d5c0262447fec4832e45b18ea33b0dcd23d4f0c405538d3414",
       "service": "recommendationservice",
       "target_file": "src/recommendationservice/recommendation_server.py"
     },

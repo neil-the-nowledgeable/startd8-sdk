@@ -17,10 +17,14 @@
     "service": "emailservice"
   },
   "startup": {
-    "cmd": ["sh", "-c", "cd src/emailservice && exec python3 email_server.py"],
+    "_note": "FR-X6-CONTRACT: launches the Python entry script directly (the _python_default convention), PORT injected via env (OB convention). Serves EmailService (SendOrderConfirmation). Leaf service — no gRPC dependencies, so no dependency_addr_env. Its only dependency is the local Jinja2 HTML template (FR-X5-DEPS templating-lib provisioning, deferred). TCP-listening readiness probe (gRPC).",
+    "cmd": [
+      "sh",
+      "-c",
+      "cd src/emailservice && exec python3 email_server.py"
+    ],
     "port_env": "PORT",
-    "readiness": "tcp",
-    "_note": "FR-X6-CONTRACT: launches the Python entry script directly (the _python_default convention), PORT injected via env (OB convention). Serves EmailService (SendOrderConfirmation). Leaf service — no gRPC dependencies, so no dependency_addr_env. Its only dependency is the local Jinja2 HTML template (FR-X5-DEPS templating-lib provisioning, deferred). TCP-listening readiness probe (gRPC)."
+    "readiness": "tcp"
   },
   "tasks": [
     {

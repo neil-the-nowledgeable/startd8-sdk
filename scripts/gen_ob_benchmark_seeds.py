@@ -40,6 +40,13 @@ SERVICES = [
         "deps": ["Redis (cart storage)"],
         "estimated_loc": 180,
         "description": "Stores items in the user's shopping cart in Redis and retrieves them.",
+        # Track 2 behavioral execution (FR-X6-CONTRACT / E6): launch the published .NET DLL offline.
+        "startup": {
+            "cmd": ["sh", "-c", "cd src/cartservice && exec dotnet ./.bin/server.dll"],
+            "port_env": "PORT",
+            "readiness": "tcp",
+            "_note": "FR-X6-CONTRACT / E6: launches the published .NET service DLL (the _csharp_default ./.bin/server.dll convention — no `dotnet run`/restore under the sandbox). PORT injected via env; Kestrel-hosted variants also honor ASPNETCORE_URLS (set by the _csharp_default launcher). Serves CartService (AddItem/GetCart/EmptyCart). Cart state is Redis (FR-X3-STATE / FR-X5-DEPS — provisioned offline at prepare time; not a gRPC peer, so no dependency_addr_env). RESOLVABLE-BUT-PROVISIONING-DEFERRED: the startup contract resolves to a valid launch plan, but the offline .NET publish closure (./.bin/server.dll) + Redis provisioning are NOT yet built here — if absent the cell degrades at boot with the reason named (FR-X5-LANG), never false-0. TCP-listening readiness probe (gRPC).",
+        },
     },
     {
         "key": "productcatalogservice", "proto_service": "ProductCatalogService", "language": "go",
@@ -48,6 +55,13 @@ SERVICES = [
         "deps": ["products.json (catalog data file)"],
         "estimated_loc": 220,
         "description": "Provides the product list from a JSON file plus search and single-product lookup.",
+        # Track 2 behavioral execution (FR-X6-CONTRACT): launch the prebuilt Go binary offline.
+        "startup": {
+            "cmd": ["sh", "-c", "cd src/productcatalogservice && exec ./.bin/server"],
+            "port_env": "PORT",
+            "readiness": "tcp",
+            "_note": "FR-X6-CONTRACT: launches the prebuilt Go binary (the _go_default ./.bin/server convention). Serves ProductCatalogService (ListProducts/GetProduct/SearchProducts). State is the local products.json catalog data file (FR-X5-DEPS provisioning, deferred) — no gRPC dependencies, so no dependency_addr_env. TCP-listening readiness probe (gRPC).",
+        },
     },
     {
         "key": "currencyservice", "proto_service": "CurrencyService", "language": "nodejs",
@@ -130,6 +144,13 @@ SERVICES = [
         "deps": ["Jinja2 HTML template"],
         "estimated_loc": 150,
         "description": "Sends an order-confirmation email (mock; logs in dummy mode) via a Jinja2 template.",
+        # Track 2 behavioral execution (FR-X6-CONTRACT): launch the Python entry script offline.
+        "startup": {
+            "cmd": ["sh", "-c", "cd src/emailservice && exec python3 email_server.py"],
+            "port_env": "PORT",
+            "readiness": "tcp",
+            "_note": "FR-X6-CONTRACT: launches the Python entry script directly (the _python_default convention), PORT injected via env (OB convention). Serves EmailService (SendOrderConfirmation). Leaf service — no gRPC dependencies, so no dependency_addr_env. Its only dependency is the local Jinja2 HTML template (FR-X5-DEPS templating-lib provisioning, deferred). TCP-listening readiness probe (gRPC).",
+        },
     },
     {
         "key": "checkoutservice", "proto_service": "CheckoutService", "language": "go",
@@ -140,6 +161,22 @@ SERVICES = [
         "estimated_loc": 320,
         "description": "Orchestration service: retrieves the cart, prepares the order, and coordinates "
                        "payment, shipping, and email. Highest-complexity service (6 gRPC dependencies).",
+        # Track 2 behavioral execution (FR-CO-9/10): launch the prebuilt Go binary; the 6
+        # *_SERVICE_ADDR env NAMES are declared here, the suite harness fills their VALUES at runtime.
+        "startup": {
+            "cmd": ["sh", "-c", "cd src/checkoutservice && exec ./.bin/server"],
+            "port_env": "PORT",
+            "readiness": "tcp",
+            "dependency_addr_env": [
+                "PRODUCT_CATALOG_SERVICE_ADDR",
+                "CART_SERVICE_ADDR",
+                "CURRENCY_SERVICE_ADDR",
+                "SHIPPING_SERVICE_ADDR",
+                "PAYMENT_SERVICE_ADDR",
+                "EMAIL_SERVICE_ADDR",
+            ],
+            "_note": "FR-CO-9/10: launches the prebuilt Go binary (the _go_default ./.bin/server convention). 'dependency_addr_env' declares the six *_SERVICE_ADDR env NAMES only; the execute.py checkout branch binds the in-process stubs and fills these VALUES (127.0.0.1:<stubport>) into extra_env at suite runtime — never hardcoded here, since stub ports bind at run time.",
+        },
     },
     {
         "key": "recommendationservice", "proto_service": "RecommendationService", "language": "python",
@@ -148,6 +185,17 @@ SERVICES = [
         "deps": ["productcatalogservice"],
         "estimated_loc": 120,
         "description": "Recommends products based on the cart contents; calls ProductCatalogService.",
+        # Track 2 behavioral execution (FR-X6-CONTRACT): launch the Python entry script; the
+        # productcatalogservice address env NAME is declared here, the harness fills its VALUE at runtime.
+        "startup": {
+            "cmd": ["sh", "-c", "cd src/recommendationservice && exec python3 recommendation_server.py"],
+            "port_env": "PORT",
+            "readiness": "tcp",
+            "dependency_addr_env": [
+                "PRODUCT_CATALOG_SERVICE_ADDR",
+            ],
+            "_note": "FR-X6-CONTRACT: launches the Python entry script directly (the _python_default convention), PORT injected via env (OB convention). Serves RecommendationService (ListRecommendations). 'dependency_addr_env' declares the productcatalogservice address env NAME only; the suite harness binds a productcatalogservice stub and fills 127.0.0.1:<stubport> into extra_env at run time (FR-X5-DEPS dep stub, deferred — never hardcoded here). TCP-listening readiness probe (gRPC).",
+        },
     },
     {
         "key": "adservice", "proto_service": "AdService", "language": "java",

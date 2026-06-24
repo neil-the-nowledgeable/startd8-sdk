@@ -17,13 +17,17 @@
     "service": "recommendationservice"
   },
   "startup": {
-    "cmd": ["sh", "-c", "cd src/recommendationservice && exec python3 recommendation_server.py"],
-    "port_env": "PORT",
-    "readiness": "tcp",
+    "_note": "FR-X6-CONTRACT: launches the Python entry script directly (the _python_default convention), PORT injected via env (OB convention). Serves RecommendationService (ListRecommendations). 'dependency_addr_env' declares the productcatalogservice address env NAME only; the suite harness binds a productcatalogservice stub and fills 127.0.0.1:<stubport> into extra_env at run time (FR-X5-DEPS dep stub, deferred — never hardcoded here). TCP-listening readiness probe (gRPC).",
+    "cmd": [
+      "sh",
+      "-c",
+      "cd src/recommendationservice && exec python3 recommendation_server.py"
+    ],
     "dependency_addr_env": [
       "PRODUCT_CATALOG_SERVICE_ADDR"
     ],
-    "_note": "FR-X6-CONTRACT: launches the Python entry script directly (the _python_default convention), PORT injected via env (OB convention). Serves RecommendationService (ListRecommendations). 'dependency_addr_env' declares the productcatalogservice address env NAME only; the suite harness binds a productcatalogservice stub and fills 127.0.0.1:<stubport> into extra_env at run time (FR-X5-DEPS dep stub, deferred — never hardcoded here). TCP-listening readiness probe (gRPC)."
+    "port_env": "PORT",
+    "readiness": "tcp"
   },
   "tasks": [
     {

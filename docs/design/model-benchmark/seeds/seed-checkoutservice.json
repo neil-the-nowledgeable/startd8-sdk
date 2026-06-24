@@ -22,9 +22,12 @@
     "service": "checkoutservice"
   },
   "startup": {
-    "cmd": ["sh", "-c", "cd src/checkoutservice && exec ./.bin/server"],
-    "port_env": "PORT",
-    "readiness": "tcp",
+    "_note": "FR-CO-9/10: launches the prebuilt Go binary (the _go_default ./.bin/server convention). 'dependency_addr_env' declares the six *_SERVICE_ADDR env NAMES only; the execute.py checkout branch binds the in-process stubs and fills these VALUES (127.0.0.1:<stubport>) into extra_env at suite runtime — never hardcoded here, since stub ports bind at run time.",
+    "cmd": [
+      "sh",
+      "-c",
+      "cd src/checkoutservice && exec ./.bin/server"
+    ],
     "dependency_addr_env": [
       "PRODUCT_CATALOG_SERVICE_ADDR",
       "CART_SERVICE_ADDR",
@@ -33,7 +36,8 @@
       "PAYMENT_SERVICE_ADDR",
       "EMAIL_SERVICE_ADDR"
     ],
-    "_note": "FR-CO-9/10: launches the prebuilt Go binary (the _go_default ./.bin/server convention). 'dependency_addr_env' declares the six *_SERVICE_ADDR env NAMES only; the execute.py checkout branch binds the in-process stubs and fills these VALUES (127.0.0.1:<stubport>) into extra_env at suite runtime — never hardcoded here, since stub ports bind at run time."
+    "port_env": "PORT",
+    "readiness": "tcp"
   },
   "tasks": [
     {
