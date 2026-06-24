@@ -210,19 +210,81 @@ seed/contract that drives the bare-process fleet keeps the two substrates honest
 
 ---
 
+## 7b. Canonical reference (microservices-demo-latest)
+
+Authoritative upstream: `~/Documents/dev/micro-service-demo/microservices-demo-latest/src/<service>/Dockerfile`.
+This is the **digest-pinned, multi-arch** canonical build for each language and is the TEMPLATE the
+harness's per-language Dockerfile should mirror (the harness swaps the network-fetch dep steps for
+pre-baked offline caches but keeps the *build pattern*). Every upstream Dockerfile uses
+`FROM --platform=$BUILDPLATFORM ... AS builder` + `ARG TARGETARCH`/`ARG TARGETOS` cross-compile — so
+**multi-arch is the canonical norm**, which directly answers OQ-C4 (build per-target-arch is the
+upstream default, not an exotic ask).
+
+| Lang | Canonical Dockerfile | Base (build → runtime), digest-pinned | Authoritative build pattern | Offline-prep hook |
+|---|---|---|---|---|
+| **Go** | `src/{checkoutservice,frontend,productcatalogservice,shippingservice}/Dockerfile` | `golang:1.25.6-alpine@sha256:98e6cf…` → `gcr.io/distroless/static` | `COPY go.mod go.sum` → `go mod download` → `GOOS/GOARCH CGO_ENABLED=0 go build -ldflags="-s -w" -o /<svc>` | `go mod download` after copying only go.mod/go.sum (cache layer) |
+| **Python** | `src/{recommendationservice,emailservice,loadgenerator}/Dockerfile` | `python:3.14.2-alpine@sha256:31da4c…` (`shoppingassistant` uses `-slim`) builder → same base | `COPY requirements.txt` → `pip install -r` (loadgen uses `--prefix=/install`) → `COPY --from=builder /usr/local/lib/python3.14/ …` | wheels installed in builder stage, copied into runtime (no network at run) |
+| **Node** | `src/{currencyservice,paymentservice}/Dockerfile` | `node:20.20.0-alpine@sha256:09e2b3…` builder → `alpine:3.23.3@sha256:251091…` + `apk add nodejs` | `COPY package*.json` → `npm install --only=production` → `COPY --from=builder …/node_modules` | `npm install --only=production` in builder; proto loaded at runtime |
+| **C#** | `src/cartservice/src/Dockerfile` | `mcr.microsoft.com/dotnet/sdk:10.0.100-noble@sha256:c7445f…` builder → `dotnet/runtime-deps:10.0.0-noble-chiseled@sha256:b857c8…` | `dotnet restore -a $TARGETARCH` → `dotnet publish -p:PublishSingleFile=true --self-contained true -p:PublishTrimmed=true -p:TrimMode=full -c release` → single chiseled `/app/cartservice` binary, `USER 1000` | **`dotnet restore` is the ONLY network step** — bake a warm NuGet cache and it's `--no-restore` |
+| **Java** | `src/adservice/Dockerfile` | `eclipse-temurin:24.0.2_12-jdk-noble@sha256:dacac8…` builder → `temurin:25.0.1_8-jre-alpine@sha256:9c65fe…` | `COPY build.gradle gradlew gradle/` → **`./gradlew downloadRepos`** → `COPY . .` → `./gradlew installDist` → run `build/install/hipstershop/bin/AdService` | **`./gradlew downloadRepos` IS a ready-made offline dep-prefetch hook** (a custom gradle task that pulls every repo dep into the local cache up front) |
+
+### De-risking the two hard lanes with canonical evidence
+
+- **C# (cartservice) — LESS risky than §3 ranked it.** The canonical proves the *only* network step is
+  `dotnet restore` (everything else — `Grpc.Tools` codegen, trimmed self-contained publish — runs
+  offline once the cache is warm). So the C# offline gap collapses to exactly **one** task: warm the
+  NuGet cache once (`dotnet restore` with network), snapshot `~/.nuget/packages` into the build context,
+  then `dotnet publish` against it. Note upstream **does** use `PublishSingleFile + self-contained +
+  PublishTrimmed=full` (heavier than the framework-dependent stance in §3/OQ-C3) — but it lands on a
+  *chiseled runtime-deps* image and a single binary, so it is the canonical target; the warm-cache bake
+  is the whole job. **Revised read: C# ≈ a quarter-suite, not half** (publish path + codegen are
+  upstream-proven; only the cache snapshot is new).
+- **Java (adservice) — LESS greenfield than §3 framed it.** Upstream ships **`./gradlew downloadRepos`**,
+  a purpose-built dep-prefetch task: run it once online to populate the gradle cache, then `installDist`
+  builds fully offline. So Java is NOT "no offline story" — the offline-prefetch hook already exists
+  upstream; the harness work is to (a) bake the gradle cache from `downloadRepos`, (b) inject the
+  harness-owned `build.gradle`/`gradlew`/`gradle/` wrapper around the generated `.java` (same
+  build-files-injection stance as every other language, §4), (c) add a `_java_default` launcher running
+  `build/install/hipstershop/bin/AdService`. The FR-P1-SEC-1 "untrusted build script" hazard remains
+  (gradle executes `build.gradle`), so the harness should own the build.gradle (not run the model's),
+  mirroring the C# "publish a harness-owned csproj" stance. **Revised read: Java ≈ half-to-three-quarters
+  of a suite, not a full greenfield lane** — `gradlew installDist` + `downloadRepos` is a known-good
+  pattern, not invention. The v2-defer recommendation can stay (adservice is still a leaf off the
+  canonical journey), but the *cost* of pulling it into v1 is materially lower than originally scoped.
+
+### Digest-pinning & multi-arch as canonical norms
+
+Every upstream base image is **sha256-digest-pinned** (reuse those exact digests in OQ-C1 — they are
+the authoritative pins, e.g. Go `golang:1.25.6-alpine@sha256:98e6cf…`, C# sdk `@sha256:c7445f…`). And
+every builder is **multi-arch via `--platform=$BUILDPLATFORM` + `ARG TARGETARCH`** — so for OQ-C4 the
+faithful answer is to build per-target-arch (the upstream default) rather than pinning one CI arch;
+only the *dep caches* (.pydeps wheels, grpcio C-ext, NuGet runtime-deps, dotnet self-contained runtime
+pack) are the arch-sensitive layers that need per-arch baking. Note the upstream pins are **newer**
+than §2's reference (`golang:1.21`, generic `python:3.x-slim`) — update the templates to the
+microservices-demo-latest digests above.
+
+---
+
 ## 8. Rough size/effort read
 
 **Bigger than one behavioral suite, but not by a lot — call it ~1.5–2× a suite, concentrated in 2 lanes.**
 
 - Go / Python / Node containerization ≈ **thin wrappers** over existing closures (~one suite's worth
   total for all three: templates + the builder + base-image prep).
-- C# ≈ **half a suite of new work** (warm-NuGet bake) on top of the existing publish path.
-- Java ≈ **a full new lane** (provisioning + launcher + offline gradle/maven) — which is exactly why
-  the recommendation is to **defer it to v2** and ship v1 at 8 services.
+- C# ≈ **~quarter-suite** (canonical §7b proves `dotnet restore` is the only network step → just the
+  warm-NuGet bake on top of the upstream-proven trimmed self-contained publish + Grpc.Tools codegen).
+- Java ≈ **~half-to-three-quarters of a suite** (canonical §7b shows `./gradlew downloadRepos` is a
+  ready offline dep-prefetch hook + `installDist` is the build pattern — bake the gradle cache, inject a
+  harness-owned `build.gradle`/wrapper, add a `_java_default` launcher). NOT a full greenfield lane.
+  The v2-defer recommendation can still hold (adservice is a leaf off the canonical journey), but the
+  cost of pulling it into v1 is materially lower than originally scoped.
 - The fleet-compose generation + network-egress denial + multi-arch caching ≈ another suite's worth,
   shared across all languages.
 
 So **v1 (8 services, no Java)** ≈ comparable to building **one-and-a-half behavioral suites**, most of
-it reuse-and-relocate. **v1 + Java** would push it toward **2.5×** because Java is greenfield. The
-compose prototype is feasible on the existing offline assets for 4 of 5 languages; C# needs one bake
-step and Java is the deferred frontier.
+it reuse-and-relocate. **v1 + Java** pushes it toward **~2×** (not 2.5×) — the canonical-reference
+re-read (§7b) downgrades Java from "full greenfield" to "known-good `downloadRepos` + `installDist`
+pattern with a cache bake," and C# from "half-suite" to "~quarter-suite (warm-NuGet bake only)." The
+compose prototype is feasible on the existing offline assets for 4 of 5 languages; C# needs one
+warm-cache bake step and Java needs a gradle-cache bake + harness-owned build.gradle — both now have an
+upstream-proven offline pattern to mirror rather than invent.
