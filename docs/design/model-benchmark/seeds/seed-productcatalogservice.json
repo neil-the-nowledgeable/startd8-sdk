@@ -18,6 +18,12 @@
     ],
     "service": "productcatalogservice"
   },
+  "startup": {
+    "cmd": ["sh", "-c", "cd src/productcatalogservice && exec ./.bin/server"],
+    "port_env": "PORT",
+    "readiness": "tcp",
+    "_note": "FR-X6-CONTRACT: launches the prebuilt Go binary (the _go_default ./.bin/server convention). Serves ProductCatalogService (ListProducts/GetProduct/SearchProducts). State is the local products.json catalog data file (FR-X5-DEPS provisioning, deferred) — no gRPC dependencies, so no dependency_addr_env. TCP-listening readiness probe (gRPC)."
+  },
   "tasks": [
     {
       "config": {

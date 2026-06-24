@@ -70,9 +70,73 @@ def _go_default(target_files: List[str], port: int) -> Optional[Tuple[List[str],
     return (["sh", "-c", f"cd {shlex.quote(svc_dir)} && exec ./.bin/server"], {"PORT": str(port)})
 
 
+def _python_default(target_files: List[str], port: int) -> Optional[Tuple[List[str], Dict[str, str]]]:
+    """Default Python launch (E6 / FR-X5-LANG): run the service entry script directly with
+    ``python3 <entry.py>``. The OB Python services (recommendation, email) start a gRPC server in
+    ``__main__`` and read ``PORT`` from the environment — so the port is injected via env (the OB
+    convention), the same way Node does. Run from the service dir so any sibling provisioned deps
+    (catalog client stub, Jinja2 template) resolve relatively. ``exec`` under setsid ⇒ killpg reaps
+    the interpreter, no orphan."""
+    entry = next((f for f in target_files if f.endswith(".py")),
+                 target_files[0] if target_files else None)
+    if not entry:
+        return None
+    svc_dir = str(Path(entry).parent)
+    script = Path(entry).name
+    return (
+        ["sh", "-c", f"cd {shlex.quote(svc_dir)} && exec python3 {shlex.quote(script)}"],
+        {"PORT": str(port)},
+    )
+
+
+def _csharp_default(target_files: List[str], port: int) -> Optional[Tuple[List[str], Dict[str, str]]]:
+    """Default C# launch (E6 / FR-X5-LANG): run the published .NET service DLL with
+    ``dotnet ./.bin/<svc>.dll`` — mirroring Go's pre-built-binary convention (no ``dotnet run`` /
+    ``dotnet build`` compile under the sandbox, which would need network restore). The published
+    closure is expected under ``./.bin/`` at prepare time (provision.py, deferred — see FR-X5-DEPS).
+
+    .NET binds via the ``ASPNETCORE_URLS`` / Kestrel ``PORT`` convention; the OB cartservice reads
+    ``PORT`` from the environment (gRPC C-core listener), so we inject ``PORT`` like the other
+    languages and additionally set ``ASPNETCORE_URLS`` to the loopback host:port for Kestrel-hosted
+    variants. The launcher itself is fully resolvable; whether the published DLL exists is a
+    *provisioning* concern (deferred) — if absent the cell degrades at boot, it never false-0s."""
+    entry = next((f for f in target_files if f.endswith(".cs")),
+                 target_files[0] if target_files else None)
+    if not entry:
+        return None
+    # The .cs target lives at .../src/services/CartService.cs; the published service root is the
+    # service dir (…/cartservice). Walk up to the directory named like the service, else the parent
+    # of the immediate dir. Provisioning publishes the DLL to ``<svc_root>/.bin/server.dll``.
+    p = Path(entry)
+    svc_root = p.parent
+    for anc in p.parents:
+        if anc.name.endswith("service"):
+            svc_root = anc
+            break
+    svc_root_s = str(svc_root)
+    return (
+        [
+            "sh",
+            "-c",
+            f"cd {shlex.quote(svc_root_s)} && exec dotnet ./.bin/server.dll",
+        ],
+        {
+            "PORT": str(port),
+            "ASPNETCORE_URLS": f"http://127.0.0.1:{port}",
+        },
+    )
+
+
 # Per-language fallback launchers (additive; the seed `startup` contract is authoritative).
-# Java/C# need a secured launcher (javac/vendored jars, not gradle/msbuild) → absent ⇒ degrade.
-_DEFAULTS = {"nodejs": _node_default, "go": _go_default}
+# Java still needs a secured launcher (javac/vendored jars, not gradle) → absent ⇒ degrade.
+# C# is resolvable here, but its published-DLL provisioning is deferred (E6) — boot degrades cleanly
+# until provision.py publishes the offline closure.
+_DEFAULTS = {
+    "nodejs": _node_default,
+    "go": _go_default,
+    "python": _python_default,
+    "csharp": _csharp_default,
+}
 
 
 def resolve_serve_command(

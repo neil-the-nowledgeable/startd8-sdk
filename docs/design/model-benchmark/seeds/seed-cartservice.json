@@ -18,6 +18,12 @@
     ],
     "service": "cartservice"
   },
+  "startup": {
+    "cmd": ["sh", "-c", "cd src/cartservice && exec dotnet ./.bin/server.dll"],
+    "port_env": "PORT",
+    "readiness": "tcp",
+    "_note": "FR-X6-CONTRACT / E6: launches the published .NET service DLL (the _csharp_default ./.bin/server.dll convention — no `dotnet run`/restore under the sandbox). PORT injected via env; Kestrel-hosted variants also honor ASPNETCORE_URLS (set by the _csharp_default launcher). Serves CartService (AddItem/GetCart/EmptyCart). Cart state is Redis (FR-X3-STATE / FR-X5-DEPS — provisioned offline at prepare time; not a gRPC peer, so no dependency_addr_env). RESOLVABLE-BUT-PROVISIONING-DEFERRED: the startup contract resolves to a valid launch plan, but the offline .NET publish closure (./.bin/server.dll) + Redis provisioning are NOT yet built here — if absent the cell degrades at boot with the reason named (FR-X5-LANG), never false-0. TCP-listening readiness probe (gRPC)."
+  },
   "tasks": [
     {
       "config": {
