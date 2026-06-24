@@ -9,6 +9,7 @@ import pytest
 
 from startd8.benchmark_matrix.runner import STATUS_OK, CellResult
 from startd8.benchmark_matrix.scorecard import (
+    _CHECKOUT_STEPS,
     build_scorecard,
     build_scorecard_html,
     write_scorecard,
@@ -474,6 +475,55 @@ def test_checkout_steps_degrade_when_provenance_absent(tmp_path):
     md = build_scorecard(tmp_path, now=_NOW)
     steps = md.split("## Checkout orchestration steps")[1].split("\n## ")[0]
     assert "Not computed" in steps
+
+
+def test_checkout_steps_degraded_cell_with_zero_call_counts_not_rendered_as_all_fail(tmp_path):
+    """Regression (D5 degrade-honesty): a checkout cell that NEVER ran the suite (provisioning
+    failed: functional_coverage=None, no suite.results) but persisted all-zero checkout_call_counts
+    must NOT be rendered as 0/1 across all six steps — those zeros are absence-of-a-run, not real
+    per-step misses. Prior behavior was the bug: it showed 6× 0/1 (model "failed" every step).
+    Now it is excluded and, being the only cell, D5 degrades to 'Not computed' (mirrors D4)."""
+    _write_spec(tmp_path)
+    c = _checkout_cell("gemini:gemini-2.5-flash", degraded=True)
+    # the real-fixture shape: behavioral carries all-zero call-counts + a degrade reason, no suite
+    c.behavioral = {
+        "ready": False,
+        "suite_kind": None,
+        "reason": "provision failed: service never launched",
+        "provision_language": "go",
+        "checkout_call_counts": {env: 0 for _name, env in _CHECKOUT_STEPS},
+    }
+    _write_cells(tmp_path, [c])
+    md = build_scorecard(tmp_path, now=_NOW)
+    steps = md.split("## Checkout orchestration steps")[1].split("\n## ")[0]
+    assert "0/1" not in steps  # the bug: must NOT fabricate all-fail rows
+    assert "Not computed" in steps
+    # D4 stays correctly 'not computed' too (fc is None) — unchanged behavior
+    frontier = md.split("## Checkout integration frontier")[1].split("\n## ")[0]
+    assert "Not computed" in frontier
+
+
+def test_checkout_steps_mixed_ran_and_degraded_shows_only_ran(tmp_path):
+    """When one model ran the suite and another degraded (zero call-counts, no run), D5 shows the
+    model that ran and omits the degraded one — never a fabricated all-fail column for the degraded
+    model."""
+    _write_spec(tmp_path)
+    degraded = _checkout_cell("gemini:gemini-2.5-flash", degraded=True)
+    degraded.behavioral = {
+        "ready": False,
+        "reason": "provision failed",
+        "checkout_call_counts": {env: 0 for _name, env in _CHECKOUT_STEPS},
+    }
+    _write_cells(tmp_path, [
+        _checkout_cell("anthropic:claude-opus-4-8", fc=1.0,
+                       steps=[("payment_charged", True), ("email_confirmed", True)]),
+        degraded,
+    ])
+    md = build_scorecard(tmp_path, now=_NOW)
+    steps = md.split("## Checkout orchestration steps")[1].split("\n## ")[0]
+    assert "claude-opus-4-8" in steps and "1/1" in steps
+    assert "gemini-2.5-flash" not in steps  # degraded model omitted, not shown as 0/1
+    assert "Not computed" not in steps
 
 
 def test_checkout_frontier_placed_after_pricing_before_speed(tmp_path):

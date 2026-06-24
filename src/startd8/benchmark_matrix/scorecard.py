@@ -523,11 +523,26 @@ def _checkout_step_passed(c: CellResult, step: str, addr_env: str) -> Optional[b
     return None
 
 
+def _checkout_ran_suite(c: CellResult) -> bool:
+    """A checkout cell has *real* per-step signal only if it actually ran the suite.
+
+    True when behavioral coverage was computed (``functional_coverage is not None``) OR per-step
+    suite results were persisted. A degraded cell (service never launched: provisioning failed, no
+    ``suite.results``, ``functional_coverage`` None) has all-zero ``checkout_call_counts`` — those
+    zeros are *absence of a run*, not genuine per-step misses, so it must be excluded from D5 rather
+    than rendered as ``0/1`` across all six steps (degrade-honest, mirrors D4's `not computed`)."""
+    return c.functional_coverage is not None or bool(_suite_results(c))
+
+
 def _checkout_step_rows(cells: List[CellResult]) -> Dict[str, Dict[str, Tuple[int, int]]]:
-    """{step_name: {model: (passed, total)}} over checkout cells with per-step provenance."""
+    """{step_name: {model: (passed, total)}} over checkout cells that actually ran the suite.
+
+    Degraded checkout cells (no run) are excluded so their all-zero call-counts are not fabricated
+    into ``0/1`` all-fail rows (degrade-honest). For a cell that *ran*, a step at count 0 is a real
+    miss (the model genuinely never dialed that dependency) and is kept."""
     out: Dict[str, Dict[str, Tuple[int, int]]] = {}
     for c in cells:
-        if not _is_checkout(c):
+        if not _is_checkout(c) or not _checkout_ran_suite(c):
             continue
         for step, addr_env in _CHECKOUT_STEPS:
             ok = _checkout_step_passed(c, step, addr_env)
