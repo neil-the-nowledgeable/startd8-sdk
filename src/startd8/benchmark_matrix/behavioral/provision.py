@@ -70,37 +70,65 @@ def secure_env(workdir: Path) -> Dict[str, str]:
     return env
 
 
+def _find_stub_import(svc_dir: Path) -> Optional[str]:
+    """Discover the hipstershop stub import string in the cell's ``.go`` sources.
+
+    Returns the full import path (e.g. ``github.com/GoogleCloudPlatform/microservices-demo/hipstershop``)
+    or None if the cell doesn't import the upstream stubs at all. We look at the SOURCES, not go.mod,
+    because a model-generated cell often imports the stubs but leaves go.mod bare (no ``require``) —
+    the asymmetry that made `go mod tidy` chase ``@latest`` (which no longer ships ``hipstershop``).
+    """
+    for go_file in sorted(Path(svc_dir).glob("*.go")):
+        try:
+            src = go_file.read_text()
+        except OSError:
+            continue
+        im = re.search(rf'"({re.escape(_GO_STUB_MODULE_MARKER)}[\w./-]*)"', src)
+        if im:
+            return im.group(1)
+    return None
+
+
 def setup_go_stubs(workdir: Path, svc_dir: Path) -> Optional[str]:
-    """FR-P1-GO-STUBS: vendor the proto stubs as a local module + ``replace`` the model's invented
-    stub-import module → local, so `go mod tidy` resolves it (the stubs aren't a fetchable module).
-    Returns None on success (or when there's nothing to vendor), else a degrade reason."""
+    """FR-P1-GO-STUBS: vendor the proto stubs as a local module + ``require``/``replace`` the model's
+    stub-import module → local, so `go build`/`go mod tidy` resolves it offline against KNOWN-GOOD
+    vendored stubs instead of chasing the upstream ``@latest`` (which restructured and dropped the
+    ``hipstershop`` package). Returns None on success (or when there's nothing to vendor), else a
+    degrade reason.
+
+    The import path IS the local module path, so stubs go at the localmod root and both the ``require``
+    and the ``replace`` target that exact module — no subpath gymnastics, and it works whether or not
+    the cell's go.mod already declared a ``require`` (model-generated cells often don't).
+    """
     gomod = Path(svc_dir) / "go.mod"
     if not gomod.is_file():
         return "go.mod missing"
     text = gomod.read_text()
-    m = re.search(rf"({re.escape(_GO_STUB_MODULE_MARKER)}[^\s]*)\s+v", text)
-    if not m:
-        return None  # no external proto module required → model self-contains; nothing to vendor
-    module = m.group(1)
-    # The pb import is `<module>[/<subpath>]` somewhere in the .go sources — place stubs at that subpath.
-    subpath = ""
-    for go_file in Path(svc_dir).glob("*.go"):
-        im = re.search(rf'"{re.escape(module)}(/[\w./-]+)?"', go_file.read_text())
-        if im:
-            subpath = (im.group(1) or "").lstrip("/")
-            break
+    # Resolve the stub module from the SOURCES (authoritative); fall back to a go.mod ``require`` line.
+    module = _find_stub_import(Path(svc_dir))
+    if not module:
+        m = re.search(rf"({re.escape(_GO_STUB_MODULE_MARKER)}[^\s]*)\s+v", text)
+        if not m:
+            return None  # cell doesn't reference the upstream stubs → nothing to vendor
+        module = m.group(1)
     localmod = Path(workdir).resolve() / ".gostubs"
-    dest = (localmod / subpath) if subpath else localmod
-    dest.mkdir(parents=True, exist_ok=True)
+    localmod.mkdir(parents=True, exist_ok=True)
     for f in ("demo.pb.go", "demo_grpc.pb.go"):
         if not (_GO_STUBS_DIR / f).is_file():
             return "vendored go stubs missing (regenerate go_stubs from demo.proto)"
-        shutil.copy(_GO_STUBS_DIR / f, dest / f)
+        shutil.copy(_GO_STUBS_DIR / f, localmod / f)
     (localmod / "go.mod").write_text(
         f"module {module}\n\ngo 1.21\n\n"
         "require (\n\tgoogle.golang.org/grpc v1.81.1\n\tgoogle.golang.org/protobuf v1.36.11\n)\n")
-    if f"replace {module}" not in text:
-        gomod.write_text(text.rstrip() + f"\n\nreplace {module} => {localmod}\n")
+    # Ensure both a versioned ``require`` (so the module is in the build graph) and a ``replace`` to the
+    # local vendored copy exist. A model-generated go.mod often has neither; the fixture has the require.
+    additions = ""
+    if not re.search(rf"{re.escape(module)}\s+v", text):
+        additions += f"\nrequire {module} v0.0.0\n"
+    if f"replace {module} " not in text and not re.search(rf"replace {re.escape(module)}\s*=>", text):
+        additions += f"\nreplace {module} => {localmod}\n"
+    if additions:
+        gomod.write_text(text.rstrip() + "\n" + additions)
     return None
 
 
