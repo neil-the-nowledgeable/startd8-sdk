@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!--
+    DELIBERATELY-BROKEN CartService project (oracle discrimination proof). Identical build to the
+    reference (Grpc.Tools generates the Hipstershop stubs from demo.proto, output assembly ``server``
+    → ./.bin/server.dll), but its Program.cs returns an EMPTY cart from GetCart regardless of what was
+    AddItem'd — so the stateful cases (add-then-get, accumulate, empty-then-get-is-empty) FAIL while
+    the unknown-user-is-empty case still passes. Proves the suite discriminates statefulness.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>cartservice</RootNamespace>
+    <AssemblyName>server</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.71.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="demo.proto" GrpcServices="Server" />
+  </ItemGroup>
+</Project>

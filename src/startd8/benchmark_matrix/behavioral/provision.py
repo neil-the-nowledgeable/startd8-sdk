@@ -187,6 +187,77 @@ def install_plan(language: str, workdir: Path, target_files: List[str],
     return None
 
 
+def publish_dotnet_service(
+    workdir: Path,
+    target_files: List[str],
+    *,
+    offline: bool = False,
+    runner: Optional[Runner] = None,
+    timeout: float = 600.0,
+) -> ProvisionResult:
+    """FR-X5-DEPS (C#): publish the cell's .NET service to ``<svc_dir>/.bin/server.dll`` at prepare
+    time so the ``_csharp_default`` startup contract (``cd <svc_dir> && exec dotnet ./.bin/server.dll``)
+    can launch it with no ``dotnet build``/restore under the egress-denied sandbox.
+
+    Mirrors the Go path (``go build -o .bin/server`` at prepare time): we run ``dotnet publish`` in the
+    service dir, which restores NuGet packages, runs Grpc.Tools to codegen the C# stubs from the
+    co-located ``demo.proto``, compiles, and emits the self-contained-ish framework-dependent closure
+    into ``.bin``. The csproj sets ``<AssemblyName>server</AssemblyName>`` so the entry DLL is
+    ``server.dll`` (the path the launcher expects).
+
+    Honesty about the network: ``dotnet publish`` performs a NuGet *restore*, which needs network on a
+    cold cache (it is cached under ``~/.nuget`` thereafter and on a warm cache is offline). This is the
+    documented network assumption for the C# lane — unlike Node's fully-vendored closure. ``offline=True``
+    fails closed (FR-P1-SEC-3) rather than silently hitting the network. The Redis store a generated
+    cart may insist on is NOT provisioned here — the reference oracle is in-memory; Redis provisioning
+    for a Redis-requiring generated cart is a documented follow-up (see cart_suite docstring).
+
+    Degrades honestly (``ok=False`` + reason) on any env failure: no .csproj, dotnet absent, offline,
+    or a non-zero publish — the caller folds a degraded term (FR-32), never a 0.
+    """
+    runner = runner or _subprocess_runner
+    workdir = Path(workdir)
+    svc_dir = (workdir / Path(target_files[0]).parent) if target_files else workdir
+    # A model may nest the .csproj a level under the .cs target (e.g. .../cartservice/src/Service.cs
+    # with the .csproj at .../cartservice/). Search the target's dir and its ancestors (bounded to the
+    # workdir) for the nearest .csproj so we publish the actual project, not an empty dir.
+    proj_dir: Optional[Path] = None
+    cur = svc_dir
+    workdir_res = workdir.resolve()
+    while True:
+        if cur.is_dir() and any(cur.glob("*.csproj")):
+            proj_dir = cur
+            break
+        if cur.resolve() == workdir_res or cur.parent == cur:
+            break
+        cur = cur.parent
+    if proj_dir is None:
+        return ProvisionResult(False, "csharp",
+                               degraded_reason="no .csproj found for C# service (publish skipped)")
+    tool = _TOOLCHAIN.get("csharp", "dotnet")
+    if shutil.which(tool) is None:
+        return ProvisionResult(False, "csharp", degraded_reason=f"toolchain absent: {tool}")
+    if offline:  # FR-P1-SEC-3: a cold NuGet cache needs network; fail closed rather than open it.
+        return ProvisionResult(False, "csharp",
+                               degraded_reason="offline: dotnet publish needs NuGet restore (fail-closed)")
+    # Publish into ``.bin`` next to the project (the svc_dir the launcher cd's into). Release config,
+    # no self-contained runtime pack (framework-dependent → smaller, dotnet is on PATH in the cell).
+    argv = ["dotnet", "publish", "-c", "Release", "-o", ".bin", "--nologo"]
+    env = secure_env(workdir)
+    env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+    env["DOTNET_NOLOGO"] = "1"
+    env["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1"
+    rc, out = runner(argv, proj_dir, env, timeout)
+    if rc != 0:
+        return ProvisionResult(False, "csharp", controls=V1_CONTROLS,
+                               degraded_reason=f"dotnet publish failed (rc={rc}): {out[-160:]}")
+    if not (proj_dir / ".bin" / "server.dll").is_file():
+        return ProvisionResult(False, "csharp", controls=V1_CONTROLS,
+                               degraded_reason="dotnet publish produced no .bin/server.dll "
+                                               "(AssemblyName must be 'server')")
+    return ProvisionResult(True, "csharp", controls=V1_CONTROLS, detail=" ".join(argv))
+
+
 def _subprocess_runner(argv: List[str], cwd: Path, env: Dict[str, str], timeout: float) -> Tuple[int, str]:
     try:
         p = subprocess.run(argv, cwd=str(cwd), env=env, capture_output=True, text=True,

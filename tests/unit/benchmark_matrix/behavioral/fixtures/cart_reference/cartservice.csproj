@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!--
+    CORRECT reference CartService project — the known-good oracle for the cart behavioral suite.
+    Published OFFLINE-after-first-restore to ./.bin/server.dll by the C# .NET provisioning
+    (provision.publish_dotnet_service / the e2e _publish_cart helper), then launched by the
+    _csharp_default startup contract: ``cd src/cartservice && exec dotnet ./.bin/server.dll``.
+
+    Grpc.Tools generates the C# gRPC stubs (namespace Hipstershop) from demo.proto AT BUILD TIME
+    via the <Protobuf> item — there is no committed/vendored C# stub set and no external
+    grpc_csharp_plugin needed (Grpc.Tools ships protoc + the plugin as a build dependency). The
+    proto is co-located into the project dir by the provisioner/stager (analogue of the Go fixture's
+    co-located products.json / the email fixture's confirmation.html).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>cartservice</RootNamespace>
+    <!-- Output assembly name is ``server`` so the published DLL is ./.bin/server.dll, the path the
+         _csharp_default startup contract launches (mirrors Go's ./.bin/server convention). -->
+    <AssemblyName>server</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.71.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Generate the SERVER-side C# stubs from the shared OB contract at build time. -->
+    <Protobuf Include="demo.proto" GrpcServices="Server" />
+  </ItemGroup>
+</Project>

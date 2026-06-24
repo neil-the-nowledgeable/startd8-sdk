@@ -21,6 +21,7 @@ from typing import Callable, Dict, List, Optional
 
 from ..sandbox import SandboxConfig, run_service_sandboxed
 from .ad_suite import run_ad_suite
+from .cart_suite import run_cart_suite
 from .catalog_suite import PRODUCTS_FILENAME, products_json, run_catalog_suite
 from .charge_suite import run_charge_suite
 from .checkout_stubs import CheckoutStubHarness, GroundTruth
@@ -34,6 +35,8 @@ from .email_suite import (
 from .contract import StartupContract, resolve_serve_command
 from .graphql_pricing_suite import run_graphql_pricing_suite
 from .pricing_suite import run_pricing_suite
+from .recommendation_stubs import RecommendationDepHarness
+from .recommendation_suite import run_recommendation_suite
 from .rest_pricing_suite import run_rest_pricing_suite
 from .resolved_pricing_suite import run_resolved_pricing_suite
 from .shipping_suite import run_shipping_suite
@@ -42,6 +45,7 @@ from .shipping_suite import run_shipping_suite
 # plus the Liferay-derived pricing service variants.
 _SUITES: Dict[str, Callable[[int], object]] = {
     "paymentservice": run_charge_suite,
+    "cartservice": run_cart_suite,
     "productcatalogservice": run_catalog_suite,
     "currencyservice": run_currency_suite,
     "emailservice": run_email_suite,
@@ -281,6 +285,13 @@ def run_behavioral_cell(
     if service == "checkoutservice":
         return _run_checkout_cell(seed, workdir, target_files, cfg=cfg, port=port, tier=tier)
 
+    # FR-REC-EXEC: recommendationservice is a 1-dependency mini-orchestrator — it dials productcatalog
+    # and returns ids EXCLUDING its input. Like checkout (but with ONE dep), the leaf `client(port)`
+    # contract is insufficient: the productcatalog stub must be bound and its `PRODUCT_CATALOG_SERVICE_ADDR`
+    # injected BEFORE the SUT launches, then call-counts snapshotted to prove it dialed the catalog.
+    if service == "recommendationservice":
+        return _run_recommendation_cell(seed, workdir, target_files, cfg=cfg, port=port, tier=tier)
+
     suite_fn = _SUITES.get(service)
     if suite_fn is None:
         return BehavioralResult(has_suite=False, provenance={"reason": "no behavioral suite for service"})
@@ -340,6 +351,21 @@ def _provision_launch_and_score(
                                     proto_src=proto_src, proto_name=proto_name):
             return BehavioralResult(has_suite=True, degraded=True,
                                     provenance={"reason": "node runtime not vendored — run node_runtime/vendor.sh"})
+    elif lang == "csharp":
+        # C# (.NET) lane (FR-X5-DEPS): co-locate demo.proto into the project dir (Grpc.Tools codegens
+        # the C# stubs from it at build time — analogue of the Node proto / catalog products.json),
+        # then ``dotnet publish`` the service to ``<svc_dir>/.bin/server.dll`` so the _csharp_default
+        # launcher (cd <svc_dir> && exec dotnet ./.bin/server.dll) can start it with no compile under
+        # the egress-denied sandbox. Publish needs a (cached) NuGet restore — the documented C#-lane
+        # network assumption; offline fails closed. Degrade honestly on any env failure (FR-32).
+        from .provision import publish_dotnet_service
+        proto_src, proto_name = _PROTO_BY_SERVICE.get(service, (_PROTO, "demo.proto"))
+        _provision_local_asset(Path(workdir), target_files, proto_name, proto_src.read_text())
+        pr = publish_dotnet_service(Path(workdir), target_files)
+        if not pr.ok:
+            return BehavioralResult(has_suite=True, degraded=True,
+                                    provenance={"reason": pr.degraded_reason,
+                                                "provision_language": "csharp"})
     else:
         from .provision import provision_workdir
         pr = provision_workdir(Path(workdir), lang, target_files, grpc=(readiness_mode != "http"))
@@ -502,3 +528,80 @@ def _run_checkout_cell(
         # (SUT-launch exception, readiness timeout, client/suite error, or success). harness.stop() is
         # idempotent and never raises, so no stub server / loopback port is ever leaked.
         harness.stop()
+
+
+def _run_recommendation_cell(
+    seed: dict,
+    workdir: Path,
+    target_files: List[str],
+    *,
+    cfg: Optional[SandboxConfig] = None,
+    port: Optional[int] = None,
+    tier: str = "baseline",
+    harness: Optional[RecommendationDepHarness] = None,
+) -> BehavioralResult:
+    """FR-REC-EXEC — the dedicated recommendationservice branch (a 1-dependency mini-orchestrator).
+
+    Structurally identical to ``_run_checkout_cell`` but with ONE dependency stub (productcatalog):
+    recommendation only behaves correctly when its productcatalog peer answers ``ListProducts``, so
+    this branch brings up the SDK-authored loopback stub, runtime-injects ``PRODUCT_CATALOG_SERVICE_ADDR``
+    into the SUT's environment BEFORE it launches, then scores from the responses + the stub's
+    call-counter (proving the catalog was actually dialed, not hardcoded).
+
+    Flow (mirrors checkout a–e, single dep):
+      (a) require a startup block (declares the dependency-addr env name + launch);
+      (b) ``harness.start()`` binds the productcatalog stub on a free loopback port → ``addr_map``;
+      (c) allocate the SUT's $PORT (after the stub) + resolve the serve command;
+      (d) merge ``addr_map`` into ``extra_env`` so the sandboxed SUT dials the stub;
+      (e) run the SUT under the shared launch/score core; the suite reads ``harness.call_counts``
+          AFTER the RPCs return (passed as a callable for a live snapshot); ``finally`` tears the stub
+          down on EVERY path.
+    """
+    contract = StartupContract.from_seed(seed)
+    if contract is None:
+        # No startup block → no launch + no declared dep-env name → degrade, don't crash.
+        return BehavioralResult(has_suite=True, degraded=True,
+                                provenance={"reason": "recommendationservice seed has no startup block "
+                                                      "(FR-REC re-author prerequisite)"})
+    declared_names = list((seed or {}).get("startup", {}).get("dependency_addr_env") or [])
+
+    h = harness or RecommendationDepHarness()
+    try:
+        # (b) Bind the single productcatalog stub FIRST → {PRODUCT_CATALOG_SERVICE_ADDR: "127.0.0.1:<port>"}.
+        addr_map = h.start()
+        # (c) Allocate the SUT port AFTER the stub is bound, then resolve the serve command.
+        sut_port = port or _free_port()
+        serve = resolve_serve_command(seed, target_files, sut_port)
+        if serve is None:  # pragma: no cover — guarded by the startup-block check above
+            return BehavioralResult(has_suite=True, degraded=True,
+                                    provenance={"reason": "no serve command for recommendationservice"})
+        argv, extra_env = serve
+        # (d) Merge the runtime stub address into extra_env BEFORE launch. Injected after the sandbox
+        # env-scrub (run_service_sandboxed applies extra_env post-scrub), so it survives.
+        injected = dict(addr_map)
+        extra_env = {**(extra_env or {}), **injected}
+        missing_names = [n for n in declared_names if n not in addr_map]
+        extra_prov = {
+            "recommendation_injected_addrs": injected,
+            "recommendation_declared_dep_env": declared_names,
+            "recommendation_unbound_declared_env": missing_names,
+            "suite_kind": "recommendation-orchestrator",
+        }
+
+        # (e) The suite reads call_counts AFTER the RPCs return — pass the live property as a CALLABLE so
+        # the snapshot reflects whether the SUT dialed productcatalog. A wrong / invented address (or a
+        # service returning hardcoded ids) means the stub is never called → count 0 → every case is a
+        # real MISS (catalog_dialed gate), scored as coverage, not a degrade.
+        client = functools.partial(
+            run_recommendation_suite, stub_calls=lambda: h.call_counts,
+            ground_truth=h.ground_truth, catalog_ids=h.catalog_ids)
+
+        result = _provision_launch_and_score(
+            seed, workdir, "recommendationservice", target_files, argv, extra_env, sut_port, client,
+            port_source="injected", cfg=cfg, extra_provenance=extra_prov)
+        result.provenance["recommendation_call_counts"] = dict(h.call_counts)
+        return result
+    finally:
+        # Deterministic, exception-safe teardown on EVERY exit path (launch/readiness/suite error or
+        # success). stop() is idempotent and never raises, so no stub server / loopback port leaks.
+        h.stop()
