@@ -22,6 +22,7 @@ copy one into your project's `docs/kickoff/authoring/`, replace the `<…>` plac
 
 | Prose source | Manifest | Grammar | Extractor today? | Validate with |
 |---|---|---|---|---|
+| `pages.md` | `prisma/pages.yaml` | §2.2 | **yes** | `startd8 kickoff check docs/kickoff/authoring/pages.md` |
 | `views.md` | `prisma/views.yaml` | §2.3 | **yes** | `startd8 kickoff check docs/kickoff/authoring/views.md` |
 | `conventions.md` | `inputs/conventions.yaml` | §2.9 | **no** — FR-VIP (`SDK_VALUE_INPUT_AUTHORING_REQUIREMENTS.md`) | round-trip-by-correspondence until `extract_conventions` ships |
 | build-preferences / business-targets / observability | `inputs/*.yaml` | §2.10+ | no — FR-VIP fan-out | — |
