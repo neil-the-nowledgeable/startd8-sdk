@@ -102,6 +102,10 @@ Navigation:
 ▷ detail-compose (one connected picture from several record types) · dashboard (counts/summaries)
 ▷ · board (status columns) · workspace (everything about one record) · export-package
 ▷ (downloadable bundle of a workspace).
+▷ ALTERNATIVE front door: instead of authoring views inline here, a project may keep a focused
+▷ single-manifest prose source at `docs/kickoff/authoring/views.md` (copy
+▷ `templates/authoring/views.md`) — same §2.3 grammar, validated standalone with
+▷ `startd8 kickoff check docs/kickoff/authoring/views.md`. See `templates/authoring/README.md`.
 
 ### View: <Name>
 - Kind: <dashboard | board | workspace | detail-compose | export-package | import-flow | computed-panel>
