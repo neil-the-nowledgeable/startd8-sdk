@@ -38,11 +38,20 @@ permits sandboxed gRPC loopback dial-out while denying egress.**
   cannot reach their peers under the egress-denied Seatbelt sandbox. Today their suites validate via
   the **direct (non-sandboxed) path** — so this gap is latent, not caught by the green tests.
 
+**VALIDATED on Linux (2026-06-24):** the netns fix is no longer theoretical. Ran the shared-netns
+substrate (`netns_substrate.py`) in a Linux container (rootless `unshare -rn`) with a **real gRPC**
+server+client over the shared loopback: `grpc_loopback_connect` **PASS** ("channel ready over
+shared-netns 127.0.0.1" — the exact thing Seatbelt denied) AND `egress_denied` **PASS** (1.1.1.1
+unreachable) — coverage 1.0. The raw-socket variant also passed. So netns delivers gRPC-loopback +
+egress-deny **simultaneously**, confirmed end-to-end. (Container needed `seccomp=unconfined` so Docker
+Desktop wouldn't block the rootless `unshare` syscall; a native Linux host / GitHub runner allows
+unprivileged user namespaces by default.)
+
 **Implications for Round 3 (and Round 2 real runs):**
 1. **macOS Seatbelt cannot host the dial-out fleet with egress denied.** OQ-7 (Linux shared-netns /
    veth) is therefore the **REQUIRED** substrate for a contained fleet, not an optional follow-up — a
-   fresh netns has a real loopback stack (gRPC works) and egress is impossible by construction. Docker
-   (shared network) is the other contained option.
+   fresh netns has a real loopback stack (gRPC works — **now validated**) and egress is impossible by
+   construction. Docker (shared network) is the other contained option.
 3. **On macOS specifically**, the only way to run dial-out SUTs is **non-sandboxed** (no egress
    denial) — acceptable only under the FR-7a same-model/disposable-host posture, now extended: for
    dial-out services on macOS, external egress is **not** denied either. Record this honestly.

@@ -110,6 +110,47 @@ _CELL_RUNNER_SRC = textwrap.dedent(
 ).strip()
 
 
+# Real-gRPC cell runner — the claim that ACTUALLY matters. Under the broken macOS Seatbelt profile a
+# raw loopback connect SUCCEEDED while gRPC's connect FAILED, so the raw-socket runner above is the
+# *weaker* proof. This variant stands up a real gRPC server + client over the shared-netns loopback and
+# asserts the channel goes ready (the exact thing Seatbelt denied) AND egress stays denied. Validated on
+# Linux 2026-06-24 (coverage 1.0). Skips when grpcio is absent rather than weakening the assertion.
+_GRPC_CELL_RUNNER_SRC = textwrap.dedent(
+    """
+    import json, socket
+    import grpc
+    from concurrent import futures
+
+    BEGIN = "<CELL_RESULT_BEGIN>"; END = "<CELL_RESULT_END>"
+    results = []
+
+    srv = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+    port = srv.add_insecure_port("127.0.0.1:0")   # shared netns loopback
+    srv.start()
+    ok, detail = False, ""
+    try:
+        ch = grpc.insecure_channel("127.0.0.1:%d" % port)
+        grpc.channel_ready_future(ch).result(timeout=6.0)
+        ok, detail = True, "gRPC channel ready over shared-netns 127.0.0.1"
+        ch.close()
+    except Exception as e:
+        detail = "%s: %s" % (type(e).__name__, e)
+    results.append({"name": "grpc_loopback_connect", "passed": ok, "detail": detail})
+
+    egress_denied, ed = False, ""
+    try:
+        socket.create_connection(("1.1.1.1", 443), timeout=3.0).close()
+        ed = "CONNECTED (containment FAILED)"
+    except Exception as e:
+        egress_denied, ed = True, "%s: %s" % (type(e).__name__, e)
+    results.append({"name": "egress_denied", "passed": egress_denied, "detail": ed})
+
+    coverage = sum(1 for r in results if r["passed"]) / len(results)
+    print(BEGIN + json.dumps({"coverage": coverage, "results": results}) + END)
+    """
+).strip()
+
+
 def test_shared_netns_grpc_loopback_works_and_egress_denied(tmp_path):
     """The verdict test: in one shared netns, loopback peers reach each other AND egress is denied."""
     runner = tmp_path / "cell_runner.py"
@@ -137,4 +178,29 @@ def test_shared_netns_grpc_loopback_works_and_egress_denied(tmp_path):
     )
 
     # Both true → the substrate gives gRPC-loopback + egress-deny SIMULTANEOUSLY (what Seatbelt can't).
+    assert res.payload["coverage"] == 1.0
+
+
+def test_shared_netns_REAL_grpc_connects_and_egress_denied(tmp_path):
+    """The strong verdict: a REAL gRPC channel goes ready over the shared-netns loopback (the exact
+    thing macOS Seatbelt denied) while egress stays denied. Skips if grpcio is not installed."""
+    pytest.importorskip("grpc", reason="grpcio not installed; raw-socket smoke covers the substrate")
+    runner = tmp_path / "grpc_cell_runner.py"
+    runner.write_text(_GRPC_CELL_RUNNER_SRC)
+
+    res = run_cell_in_shared_netns(["python3", str(runner)], timeout=60.0)
+
+    assert res.available and res.network_isolated and res.violation is None, (
+        f"netns cell failed: violation={res.violation}\nstderr={res.stderr}"
+    )
+    assert res.payload is not None, f"no payload; stdout tail:\n{res.stdout[-2000:]}"
+    by_name = {r["name"]: r for r in res.payload["results"]}
+    assert by_name["grpc_loopback_connect"]["passed"], (
+        "REAL gRPC channel did NOT go ready in the shared netns "
+        f"(detail={by_name['grpc_loopback_connect']['detail']})"
+    )
+    assert by_name["egress_denied"]["passed"], (
+        "external egress was REACHABLE inside the netns — containment broken "
+        f"(detail={by_name['egress_denied']['detail']})"
+    )
     assert res.payload["coverage"] == 1.0

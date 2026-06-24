@@ -1,8 +1,9 @@
 # Shared Network-Namespace Substrate — the Linux fix for the macOS-Seatbelt dial-out gap (OQ-7)
 
 **Date:** 2026-06-24
-**Status:** **PROTOTYPE — implemented + unit-tested on macOS; live-validated ONLY via a Linux-gated
-smoke (NOT run on this macOS dev host).**
+**Status:** **PROTOTYPE — implemented + unit-tested on macOS; LIVE-VALIDATED on Linux 2026-06-24**
+(real gRPC channel ready over the shared-netns loopback + egress denied, coverage 1.0; see §8). Not yet
+wired into the dial-out cells / R3 fleet (next).
 **Module:** `src/startd8/benchmark_matrix/netns_substrate.py`
 **Tests:** `tests/unit/test_netns_substrate.py` (macOS, 18) · `tests/integration/test_netns_substrate_smoke.py` (Linux-gated, skips here)
 **Resolves:** OQ-7 — the substrate the verified gap in `CONTAINMENT_SPIKE.md` §0 named as **REQUIRED**
@@ -162,8 +163,16 @@ fleet) for Linux runs, while the macOS path stays the FR-7a non-sandboxed postur
 | JSON result protocol (emit/parse, log-noise tolerance, last-span, malformed→None) | **PROVEN on macOS** (unit) |
 | Process-group teardown / lifecycle / timeout / launch-error degrade | **PROVEN on macOS** (mocked unit) |
 | Degrade-on-unavailable = no-op-skip (no subprocess, clear violation) | **PROVEN on macOS** (unit) |
-| **gRPC-loopback WORKS inside the shared netns** | **NOT run here** — Linux-gated smoke (SKIPPED on macOS) |
-| **External egress DENIED inside the netns** | **NOT run here** — Linux-gated smoke (SKIPPED on macOS) |
+| **gRPC-loopback WORKS inside the shared netns** | **VALIDATED on Linux 2026-06-24** — real gRPC `channel_ready` over shared-netns 127.0.0.1, coverage 1.0 (Docker linux, rootless `unshare -rn`) |
+| **External egress DENIED inside the netns** | **VALIDATED on Linux 2026-06-24** — `1.1.1.1:443` unreachable in the same cell, coverage 1.0 |
+
+> **Validation run (2026-06-24):** the substrate was exercised in a Linux container — both the raw
+> smoke and a **real gRPC** server+client cell scored coverage 1.0 (gRPC channel ready + egress denied).
+> The committed smoke now includes a real-gRPC test (`test_shared_netns_REAL_grpc_connects_and_egress_denied`,
+> skips if grpcio absent) so a persistent CI gate validates the claim that matters, not just raw sockets.
+> Caveat: the container needed `--security-opt seccomp=unconfined` so Docker Desktop wouldn't block the
+> rootless `unshare` syscall; native Linux / GitHub-hosted runners allow unprivileged user namespaces by
+> default (no relaxation needed).
 
 ## 9. Limitations / risks
 
