@@ -405,6 +405,9 @@ def run_shared_preamble(
     runner: Callable[..., dict[str, Any]] = run_command,
     timeout: Optional[float] = None,
     dry_run: bool = False,
+    skip_polish: bool = False,
+    skip_analyze: bool = False,
+    skip_validate: bool = False,
 ) -> StageResult:
     """S1 — run ``run-cap-delivery.sh`` ONCE into ``batch/_shared/`` (model-independent, FR-7).
 
@@ -414,8 +417,20 @@ def run_shared_preamble(
     Cost is recorded as a *shared* line item (``cost_source="shared"``); contextcore does not emit a
     per-run cost today, so ``cost_usd`` is typically None with ``cost_confidence="missing"``.
     Returns a single ``StageResult`` (never raises).
+
+    The ``skip_*`` flags pass through to cap-delivery's bypass flags (all default off — byte-identical
+    command when unset).
     """
-    cmd = build_shared_preamble_command(plan_paths, requirements_paths, shared_dir, project, name)
+    cmd = build_shared_preamble_command(
+        plan_paths,
+        requirements_paths,
+        shared_dir,
+        project,
+        name,
+        skip_polish=skip_polish,
+        skip_analyze=skip_analyze,
+        skip_validate=skip_validate,
+    )
     if dry_run:
         return StageResult(stage=STAGE_SHARED_PREAMBLE, status=StageStatus.NOT_STARTED)
 
@@ -459,8 +474,18 @@ def build_shared_preamble_command(
     shared_dir: Path,
     project: str = "compare-models-e2e",
     name: str = "shared",
+    *,
+    skip_polish: bool = False,
+    skip_analyze: bool = False,
+    skip_validate: bool = False,
 ) -> list[str]:
-    """The ``run-cap-delivery.sh`` invocation for the shared preamble (single plan + N reqs)."""
+    """The ``run-cap-delivery.sh`` invocation for the shared preamble (single plan + N reqs).
+
+    The three ``skip_*`` flags pass through to cap-delivery's bypass flags (``--skip-polish`` /
+    ``--skip-analyze`` / ``--skip-validate``) so a quick validation/test run can bypass the
+    contextcore preamble's strict quality gates (Stage 1 polish, Stage 1.5 analyze, Stage 3 manifest
+    schema validation). All default off — the emitted command is byte-identical when unset.
+    """
     cmd: list[str] = [
         "bash",
         str(RUN_CAP_DELIVERY),
@@ -475,6 +500,12 @@ def build_shared_preamble_command(
     ]
     for req in requirements_paths:
         cmd += ["--requirements", str(req)]
+    if skip_polish:
+        cmd.append("--skip-polish")
+    if skip_analyze:
+        cmd.append("--skip-analyze")
+    if skip_validate:
+        cmd.append("--skip-validate")
     return cmd
 
 
@@ -803,19 +834,33 @@ def plan_e2e(
     source_root: Path,
     batch_root: Path,
     cost_budget: Optional[float] = None,
+    *,
+    skip_polish: bool = False,
+    skip_analyze: bool = False,
+    skip_validate: bool = False,
 ) -> list[dict[str, Any]]:
     """Dry-run plan: the per-model/per-stage command sequence WITHOUT executing (FR-12, R1-S6).
 
     Returns an ordered list of ``{"stage", "scope", "model"?, "cmd"}`` entries. The shared
     cap-delivery command appears **exactly once** (first entry, ``scope="batch"``); each model then
     contributes its plan-ingestion + prime commands (``scope="model"``). No filesystem mutation.
+
+    The ``skip_*`` flags pass through to the planned cap-delivery command so the DRY-RUN plan also
+    shows the bypass flags (all default off — byte-identical plan when unset).
     """
     shared_dir = batch_root / "_shared"
     plan: list[dict[str, Any]] = [
         {
             "stage": STAGE_SHARED_PREAMBLE,
             "scope": "batch",
-            "cmd": build_shared_preamble_command(plan_paths, requirements_paths, shared_dir),
+            "cmd": build_shared_preamble_command(
+                plan_paths,
+                requirements_paths,
+                shared_dir,
+                skip_polish=skip_polish,
+                skip_analyze=skip_analyze,
+                skip_validate=skip_validate,
+            ),
         }
     ]
     seen: set[str] = set()
@@ -859,6 +904,9 @@ def orchestrate_e2e(
     runner: Callable[..., dict[str, Any]] = run_command,
     dry_run: bool = False,
     log: Callable[[str], None] = logger.info,
+    skip_polish: bool = False,
+    skip_analyze: bool = False,
+    skip_validate: bool = False,
 ) -> E2EBatchResult:
     """Serial E2E driver (FR-6): preflight → S1 shared preamble → per-model S2→S3→S4.
 
@@ -897,7 +945,15 @@ def orchestrate_e2e(
     if dry_run:
         # Plan only — no execution; cap-delivery shown exactly once (R1-S6).
         for entry in plan_e2e(
-            distinct_models, plan_paths, requirements_paths, source_root, batch_root, cost_budget
+            distinct_models,
+            plan_paths,
+            requirements_paths,
+            source_root,
+            batch_root,
+            cost_budget,
+            skip_polish=skip_polish,
+            skip_analyze=skip_analyze,
+            skip_validate=skip_validate,
         ):
             scope = entry["scope"]
             who = entry.get("model", "")
@@ -914,6 +970,9 @@ def orchestrate_e2e(
         shared_dir,
         runner=runner,
         timeout=per_stage_timeout,
+        skip_polish=skip_polish,
+        skip_analyze=skip_analyze,
+        skip_validate=skip_validate,
     )
     if shared.status != StageStatus.SUCCESS:
         log(f"shared preamble {shared.status} — aborting batch (FR-5): {shared.error}")

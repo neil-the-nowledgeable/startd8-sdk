@@ -379,6 +379,24 @@ def compare_models_e2e(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Print the per-model/per-stage command plan; execute nothing"
     ),
+    skip_polish: bool = typer.Option(
+        False,
+        "--skip-polish",
+        help="Bypass the contextcore preamble quality gates (Stage 1 polish) — for "
+        "validation/test runs",
+    ),
+    skip_analyze: bool = typer.Option(
+        False,
+        "--skip-analyze",
+        help="Bypass the contextcore preamble quality gates (Stage 1.5 plan analysis) — for "
+        "validation/test runs",
+    ),
+    skip_validate: bool = typer.Option(
+        False,
+        "--skip-validate",
+        help="Bypass the contextcore preamble quality gates (Stage 3 manifest schema validation) — "
+        "for validation/test runs",
+    ),
 ):
     """Run one frozen seed through the full Cap-Dev-Pipe across 2+ models, score, rank, and gate (FR-13)."""
     from datetime import datetime, timezone
@@ -431,7 +449,15 @@ def compare_models_e2e(
         if global_budget is not None:
             console.print(f"Global budget cap: ${global_budget:.2f}")
         for entry in plan_e2e(
-            deduped, plan_paths, requirements_paths, src, br, cost_budget
+            deduped,
+            plan_paths,
+            requirements_paths,
+            src,
+            br,
+            cost_budget,
+            skip_polish=skip_polish,
+            skip_analyze=skip_analyze,
+            skip_validate=skip_validate,
         ):
             scope = entry["scope"]
             who = entry.get("model", "")
@@ -449,6 +475,9 @@ def compare_models_e2e(
         cost_budget=cost_budget,
         per_stage_timeout=per_stage_timeout,
         log=print,
+        skip_polish=skip_polish,
+        skip_analyze=skip_analyze,
+        skip_validate=skip_validate,
     )
     if batch.aborted:
         reason = batch.shared.error or "; ".join(batch.preflight_errors) or "shared preamble failed"

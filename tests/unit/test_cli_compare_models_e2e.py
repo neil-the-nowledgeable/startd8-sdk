@@ -60,6 +60,63 @@ def test_dry_run_prints_plan_executes_nothing(tmp_path, monkeypatch):
     assert "manifest_frozen_v1" in res.output
 
 
+# (a2) --skip-polish / --skip-validate appear in the dry-run command plan.
+def test_dry_run_shows_skip_flags(tmp_path, monkeypatch):
+    plan, reqs = _inputs(tmp_path)
+    (tmp_path / "src").mkdir()
+    monkeypatch.setattr(e2e, "orchestrate_e2e", lambda *a, **k: None)
+
+    res = runner.invoke(
+        app,
+        _base_args(plan, reqs, tmp_path, "mock:mock-model", "mock:other-model")
+        + ["--dry-run", "--skip-polish", "--skip-validate"],
+    )
+    assert res.exit_code == 0, res.output
+    assert "--skip-polish" in res.output
+    assert "--skip-validate" in res.output
+    assert "--skip-analyze" not in res.output
+
+
+# (a3) --skip-polish / --skip-validate thread through to orchestrate_e2e kwargs (real-run path).
+def test_skip_flags_thread_to_orchestrate(tmp_path, monkeypatch):
+    plan, reqs = _inputs(tmp_path)
+    (tmp_path / "src").mkdir()
+    captured = {}
+
+    monkeypatch.setattr(e2e, "preflight", lambda *a, **k: [])
+
+    def fake_orchestrate(models, *a, **k):
+        captured["kwargs"] = k
+        return e2e.E2EBatchResult(
+            shared=e2e.StageResult(
+                stage=e2e.STAGE_SHARED_PREAMBLE, status=e2e.StageStatus.SUCCESS
+            ),
+            models=[],
+        )
+
+    monkeypatch.setattr(e2e, "orchestrate_e2e", fake_orchestrate)
+    monkeypatch.setattr(e2e, "score_batch", lambda b, *a, **k: b)
+    monkeypatch.setattr(
+        e2e,
+        "write_batch_outputs",
+        lambda b, br, **k: {
+            "manifest": str(br / "m.json"),
+            "report_md": str(br / "r.md"),
+            "report_json": str(br / "r.json"),
+        },
+    )
+
+    res = runner.invoke(
+        app,
+        _base_args(plan, reqs, tmp_path, "mock:mock-model", "mock:other-model")
+        + ["--skip-polish", "--skip-validate"],
+    )
+    assert res.exit_code == 0, res.output
+    assert captured["kwargs"]["skip_polish"] is True
+    assert captured["kwargs"]["skip_validate"] is True
+    assert captured["kwargs"]["skip_analyze"] is False
+
+
 # (b) preflight failure (<2 distinct models) exits non-zero with the error, before any work.
 def test_preflight_failure_too_few_models_exits_nonzero(tmp_path, monkeypatch):
     plan, reqs = _inputs(tmp_path)

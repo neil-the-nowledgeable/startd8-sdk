@@ -447,6 +447,57 @@ def test_dry_run_lists_cap_delivery_exactly_once(tmp_path):
     assert sum(1 for e in plan if e["stage"] == STAGE_PRIME) == 2
 
 
+def test_skip_flags_default_off_command_byte_identical(tmp_path):
+    """Without skip flags, the cap-delivery command is byte-identical to today (protects dry-run)."""
+    plans, reqs, _source_root, batch_root = _inputs(tmp_path)
+    shared_dir = batch_root / "_shared"
+    baseline = e2e.build_shared_preamble_command(plans, reqs, shared_dir)
+    assert "--skip-polish" not in baseline
+    assert "--skip-analyze" not in baseline
+    assert "--skip-validate" not in baseline
+    # Default-off kwargs produce the exact same list.
+    assert (
+        e2e.build_shared_preamble_command(
+            plans, reqs, shared_dir,
+            skip_polish=False, skip_analyze=False, skip_validate=False,
+        )
+        == baseline
+    )
+
+
+def test_skip_flags_thread_into_cap_delivery_command(tmp_path):
+    """skip_polish + skip_validate append the cap-delivery bypass flags."""
+    plans, reqs, _source_root, batch_root = _inputs(tmp_path)
+    shared_dir = batch_root / "_shared"
+    cmd = e2e.build_shared_preamble_command(
+        plans, reqs, shared_dir, skip_polish=True, skip_validate=True,
+    )
+    assert "--skip-polish" in cmd
+    assert "--skip-validate" in cmd
+    # skip_analyze left off → not present.
+    assert "--skip-analyze" not in cmd
+
+
+def test_dry_run_plan_shows_skip_flags(tmp_path):
+    """plan_e2e threads skip flags into the planned cap-delivery command (DRY-RUN visibility)."""
+    plans, reqs, source_root, batch_root = _inputs(tmp_path)
+    plan = plan_e2e(
+        [MOCK_A, MOCK_B], plans, reqs, source_root, batch_root, cost_budget=None,
+        skip_polish=True, skip_validate=True,
+    )
+    cap_entry = next(e for e in plan if e["stage"] == STAGE_SHARED_PREAMBLE)
+    assert "--skip-polish" in cap_entry["cmd"]
+    assert "--skip-validate" in cap_entry["cmd"]
+    assert "--skip-analyze" not in cap_entry["cmd"]
+    # Default-off plan stays byte-identical (no skip flags).
+    plain = plan_e2e(
+        [MOCK_A, MOCK_B], plans, reqs, source_root, batch_root, cost_budget=None,
+    )
+    plain_cap = next(e for e in plain if e["stage"] == STAGE_SHARED_PREAMBLE)
+    assert "--skip-polish" not in plain_cap["cmd"]
+    assert "--skip-validate" not in plain_cap["cmd"]
+
+
 def test_orchestrate_aborts_on_preflight_error(tmp_path):
     plans, reqs, source_root, batch_root = _inputs(tmp_path)
     runner = FakeRunner()
