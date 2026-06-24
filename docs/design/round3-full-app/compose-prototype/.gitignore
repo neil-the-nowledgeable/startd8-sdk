@@ -1,0 +1,6 @@
+# Generated build-context artifacts (assembled by prepare_build_context.sh from SDK sources).
+productcatalogservice/_stubs/
+productcatalogservice/products.json
+productcatalogservice/go.sum
+recommendationservice/demo_pb2.py
+recommendationservice/demo_pb2_grpc.py

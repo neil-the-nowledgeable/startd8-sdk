@@ -1,0 +1,62 @@
+# PROTOTYPE — Round 3 FLEET substrate: a minimal 2-service Online Boutique fleet proving the
+# substrate mechanism (faithful production-like networking + containment) on docker-compose.
+#
+# What this proves:
+#   (a) service-DNS gRPC      — recommendationservice dials `productcatalogservice:8080` by name over
+#                               the compose network, a REAL inter-service gRPC call.
+#   (b) egress DENIED         — both services sit on an `internal: true` network with NO route out;
+#                               external egress is impossible at the network layer (not a filter).
+#   (c) driver-scored         — drive_fleet.py runs run_recommendation_suite against recommendation,
+#                               asserts coverage 1.0 (proves the inter-service call worked) AND that
+#                               egress is denied from inside a container.
+#
+# The `*_SERVICE_ADDR` env is the OB convention the startup contracts declare (contract.py); here it
+# becomes compose service-DNS — exactly how it maps to the full 9-service fleet.
+
+services:
+  # productcatalogservice is a pure BACKEND: it sits ONLY on the internal fleet network, so it has
+  # NO route out (egress impossible) and is NOT reachable from the host — only its peers on `fleet`
+  # can dial it, over service-DNS. This is the service the egress-deny probe runs from.
+  productcatalogservice:
+    build:
+      context: ./productcatalogservice
+      dockerfile: Dockerfile
+    environment:
+      PORT: "8080"
+    networks:
+      - fleet      # internal-only: no egress, no host ingress
+
+  # recommendationservice is the INGRESS (the OB-frontend analogue): on BOTH the internal `fleet`
+  # network (to dial productcatalog by service-DNS — that path is egress-denied) AND the `edge`
+  # network (so the host scoring client can reach the SUT, exactly as the real frontend is reachable
+  # while backends stay internal). It still cannot egress to the internet via `fleet`; `edge` only
+  # carries host<->recommendation ingress.
+  recommendationservice:
+    build:
+      context: ./recommendationservice
+      dockerfile: Dockerfile
+    environment:
+      PORT: "8080"
+      # service-DNS: resolve the peer by its compose service name on the internal fleet network.
+      PRODUCT_CATALOG_SERVICE_ADDR: "productcatalogservice:8080"
+    depends_on:
+      - productcatalogservice
+    ports:
+      - "127.0.0.1:${REC_HOST_PORT:-18080}:8080"
+    networks:
+      - fleet
+      - edge
+
+networks:
+  fleet:
+    # internal: true => Docker creates NO default route / gateway to the outside. Containers on this
+    # network reach EACH OTHER by service-DNS but CANNOT reach any external host. This is the
+    # network-layer egress-deny that the macOS Seatbelt process-sandbox could not give us alongside
+    # working gRPC loopback (see NETNS_SUBSTRATE.md §1 — same either/or, solved structurally here).
+    internal: true
+  edge:
+    # A normal bridge network carrying ONLY host<->recommendation ingress (the published port). It
+    # does NOT connect productcatalog, so the inter-service productcatalog dial is forced through the
+    # internal `fleet` network. (A full hardening would also egress-deny `edge`; the prototype proves
+    # the deny on the pure-backend productcatalog, which is on `fleet` ONLY.)
+    driver: bridge
