@@ -38,8 +38,25 @@ _GO_STUB_MODULE_MARKER = "github.com/GoogleCloudPlatform/microservices-demo"
 
 V1_CONTROLS = "scripts-disabled+scrubbed-env+per-cell-cache+integrity"  # egress-allowlist proxy = v2
 
-# FR-P1-2 curated common set (the gRPC/proto runtime models routinely don't declare).
-_COMMON: Dict[str, List[str]] = {"python": ["grpcio", "protobuf"]}
+# FR-P1-2 curated common set (the gRPC/proto runtime models routinely don't declare). protobuf +
+# typing_extensions are pure-Python and provisioned into .pydeps so the launched subprocess gets a
+# gencode-compatible protobuf runtime + grpcio's pure-Python deps even when the HOME-redirected
+# sandbox env hides the interpreter's ~/.local closure (see install_plan); grpcio (C-extension) is
+# reused from the interpreter to avoid an ABI-mismatched wheel that can't load cygrpc.
+_COMMON: Dict[str, List[str]] = {"python": ["grpcio", "protobuf", "typing_extensions"]}
+
+# pip dist name -> import module name, for the "already-importable in this interpreter?" check below.
+_PY_IMPORT_NAME: Dict[str, str] = {"grpcio": "grpc", "protobuf": "google.protobuf"}
+
+
+def _importable(pkg: str) -> bool:
+    """True if ``pkg`` (a pip dist name) is already importable in the harness interpreter."""
+    import importlib.util
+    mod = _PY_IMPORT_NAME.get(pkg, pkg)
+    try:
+        return importlib.util.find_spec(mod) is not None
+    except (ImportError, ValueError):
+        return False
 # language -> toolchain executable that must be present (FR-P1-SEC-1/FR-P1-5).
 _TOOLCHAIN: Dict[str, str] = {"go": "go", "python": "python3", "java": "javac", "csharp": "dotnet"}
 
@@ -145,7 +162,19 @@ def install_plan(language: str, workdir: Path, target_files: List[str],
         return (["sh", "-c", "go mod tidy && go build -o .bin/server ."], svc_dir)
     if language == "python":
         target = Path(workdir) / ".pydeps"
-        pkgs = list(_COMMON["python"]) if grpc else []   # REST lane: no grpc/proto runtime
+        # Common gRPC runtime. Two host-skew hazards the injected PYTHONPATH (.pydeps shadows the
+        # interpreter) makes load-bearing, handled per-package:
+        #   - grpcio is a C-extension: a redundant wheel can be ABI-mismatched (e.g. a manylinux grpcio
+        #     under a newer CPython whose `cygrpc` C-extension won't load), so REUSE a working
+        #     in-interpreter grpcio (Mottainai) and only install it when genuinely absent.
+        #   - protobuf is pure-Python but version-checked against the committed gencode (demo_pb2 needs
+        #     runtime >= its gencode). Some hosts expose an OLDER base protobuf to the launched
+        #     subprocess (HOME-redirect drops ~/.local), failing the gencode/runtime guard. Always
+        #     provision a current protobuf into .pydeps so the runtime matches the gencode regardless of
+        #     host skew — safe because it's pure-Python (no ABI risk).
+        _REUSE_IF_PRESENT = {"grpcio"}
+        pkgs = [p for p in _COMMON["python"]
+                if not (p in _REUSE_IF_PRESENT and _importable(p))] if grpc else []
         req = svc_dir / "requirements.txt"
         if not pkgs and not req.is_file():
             return None  # nothing to install (e.g. a stdlib REST server) → caller skips, proceeds ok

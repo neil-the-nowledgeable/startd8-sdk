@@ -10,6 +10,7 @@ The sandbox primitive that hosts a service (``run_service_sandboxed``) lives in 
 """
 from .contract import StartupContract, resolve_serve_command
 from .charge_suite import RpcResult, SuiteResult, run_charge_suite, SUITE_VERSION
+from .catalog_suite import run_catalog_suite
 from .currency_suite import run_currency_suite
 from .shipping_suite import run_shipping_suite
 from .ad_suite import run_ad_suite
@@ -22,6 +23,7 @@ __all__ = [
     "RpcResult",
     "SuiteResult",
     "run_charge_suite",
+    "run_catalog_suite",
     "run_currency_suite",
     "run_shipping_suite",
     "run_ad_suite",

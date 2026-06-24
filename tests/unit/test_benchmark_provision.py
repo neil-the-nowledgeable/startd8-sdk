@@ -13,7 +13,11 @@ def test_install_plan_is_scripts_disabled_and_unsupported_degrades(tmp_path):
     go = install_plan("go", tmp_path, ["src/shippingservice/main.go"])
     assert "go mod tidy" in go[0][2] and "go build -o .bin/server" in go[0][2] and go[1].name == "shippingservice"
     argv, _ = install_plan("python", tmp_path, ["src/emailservice/email_server.py"])
-    assert "--only-binary=:all:" in argv and "grpcio" in argv and "--target" in argv  # SEC-1 + common set
+    # SEC-1 scripts-disabled install with the curated common set. protobuf + typing_extensions are
+    # pure-Python and ALWAYS provisioned (host-skew-proof gencode runtime); grpcio (C-extension) is
+    # reused from the interpreter when importable — so it is present here only if not already importable.
+    assert "--only-binary=:all:" in argv and "--target" in argv  # SEC-1
+    assert "protobuf" in argv and "typing_extensions" in argv     # always-provisioned pure-Python deps
     assert install_plan("java", tmp_path, ["X.java"]) is None  # secure path not built → degrade
 
 

@@ -21,10 +21,16 @@ from typing import Callable, Dict, List, Optional
 
 from ..sandbox import SandboxConfig, run_service_sandboxed
 from .ad_suite import run_ad_suite
+from .catalog_suite import PRODUCTS_FILENAME, products_json, run_catalog_suite
 from .charge_suite import run_charge_suite
 from .checkout_stubs import CheckoutStubHarness, GroundTruth
 from .checkout_suite import run_checkout_suite
 from .currency_suite import run_currency_suite
+from .email_suite import (
+    CONFIRMATION_TEMPLATE,
+    CONFIRMATION_TEMPLATE_FILENAME,
+    run_email_suite,
+)
 from .contract import StartupContract, resolve_serve_command
 from .graphql_pricing_suite import run_graphql_pricing_suite
 from .pricing_suite import run_pricing_suite
@@ -36,7 +42,9 @@ from .shipping_suite import run_shipping_suite
 # plus the Liferay-derived pricing service variants.
 _SUITES: Dict[str, Callable[[int], object]] = {
     "paymentservice": run_charge_suite,
+    "productcatalogservice": run_catalog_suite,
     "currencyservice": run_currency_suite,
+    "emailservice": run_email_suite,
     "shippingservice": run_shipping_suite,
     "adservice": run_ad_suite,
     "pricingservice": run_pricing_suite,
@@ -182,6 +190,51 @@ def prepare_node_workdir(
     return True
 
 
+def provision_catalog_state(workdir: Path, target_files: List[str]) -> List[str]:
+    """Materialize the harness-owned ground-truth ``products.json`` into the catalog cell's workdir.
+
+    ProductCatalogService is a stateful-LOCAL leaf: it reads a local catalog file rather than dialing
+    a gRPC peer. The harness owns that state (``catalog_suite.products_json()``) so the correct
+    ListProducts/GetProduct/SearchProducts responses are fixed BEFORE any model is judged. The Go
+    serve command does ``cd src/productcatalogservice && exec ./.bin/server``, so the server's cwd is
+    the service dir — we write ``products.json`` THERE (the upstream-OB "next to the binary" reading
+    convention) plus the workdir root as a belt-and-suspenders fallback for a server that reads from a
+    different cwd. Returns the relative paths written (for provenance)."""
+    return _provision_local_asset(workdir, target_files, PRODUCTS_FILENAME, products_json())
+
+
+def provision_email_template(workdir: Path, target_files: List[str]) -> List[str]:
+    """Materialize the harness-owned jinja2 ``confirmation.html`` into the email cell's workdir.
+
+    EmailService is a STATELESS leaf over the wire (Empty response), but the OB convention renders
+    the confirmation body from a local jinja2 template. The harness owns that template
+    (``email_suite.CONFIRMATION_TEMPLATE``) and provisions it into the launched server's workdir so a
+    reference server can render without inventing one — the analogue of catalog's products.json. The
+    Python serve command does ``cd src/emailservice && exec python3 <entry>`` (the server's cwd is the
+    service dir), so we write the template THERE plus the workdir root as a fallback. Returns the
+    relative paths written (for provenance). Harmless no-op for every other service."""
+    return _provision_local_asset(workdir, target_files, CONFIRMATION_TEMPLATE_FILENAME,
+                                  CONFIRMATION_TEMPLATE)
+
+
+def _provision_local_asset(workdir: Path, target_files: List[str], filename: str,
+                           body: str) -> List[str]:
+    """Write a harness-owned ground-truth asset into the service dir (server cwd) + the workdir root."""
+    workdir = Path(workdir)
+    dests = {Path(".")}  # workdir root (fallback)
+    for tf in target_files or []:
+        parent = Path(tf).parent
+        if str(parent) not in (".", ""):
+            dests.add(parent)
+    written: List[str] = []
+    for rel in dests:
+        dest_dir = workdir / rel
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        (dest_dir / filename).write_text(body, encoding="utf-8")
+        written.append(str(rel / filename))
+    return written
+
+
 @dataclass
 class BehavioralResult:
     has_suite: bool                       # a behavioral suite exists for this service at all
@@ -295,6 +348,22 @@ def _provision_launch_and_score(
                                     provenance={"reason": pr.degraded_reason,
                                                 "provision_language": pr.language})
 
+    # Stateful-LOCAL leaf state (FR-X5-DEPS): productcatalogservice reads a local products.json. The
+    # harness owns the ground-truth catalog and provisions it into the launched server's workdir so the
+    # RPC responses are fixed before any model is judged (oracle-first). Done after dep provisioning so
+    # the service dir exists; harmless no-op for every other service.
+    local_assets: List[str] = []
+    local_asset_key = ""
+    if service == "productcatalogservice":
+        local_assets = provision_catalog_state(Path(workdir), target_files)
+        local_asset_key = "catalog_state_files"
+    # emailservice is stateless over the wire (Empty response) but renders its confirmation from a
+    # local jinja2 template; the harness owns + provisions it (oracle-first), so a reference server
+    # never invents a template.
+    elif service == "emailservice":
+        local_assets = provision_email_template(Path(workdir), target_files)
+        local_asset_key = "email_template_files"
+
     # Python deps install to <workdir>/.pydeps (provision.py --target). The sandbox scrubs PYTHONPATH,
     # so a launched Python server can't import them unless we re-inject the path via extra_env (which is
     # applied AFTER the scrub). Harmless when .pydeps is absent (stdlib REST cells). Surfaced by the
@@ -314,6 +383,8 @@ def _provision_launch_and_score(
                   "network_isolated": sr.network_isolated, "violation": sr.violation,
                   "port_source": port_source,  # R2-S2: "injected" or "hardcoded:<n>"
                   "server_stderr_tail": (sr.server_stderr or "")[-400:]}
+    if local_assets and local_asset_key:
+        prov[local_asset_key] = local_assets
     if extra_provenance:
         prov.update(extra_provenance)
     if not sr.ready or sr.violation is not None:
