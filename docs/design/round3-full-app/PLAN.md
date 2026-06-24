@@ -3,7 +3,7 @@
 **Version:** 0.3 (CONSOLIDATED — sequences the full Round-3 design corpus into one authoritative build roadmap)
 **Date:** 2026-06-24
 **Status:** Plan — DESIGN/SEQUENCING ONLY, no code. Consolidates the 8-doc corpus and supersedes the v0.2 netns-fleet framing. The hard design thinking is done across the corpus; this plan turns it into clean milestone execution.
-**Paired with:** REQUIREMENTS.md v0.2 (the FRs are stable; v0.3 here only re-substrates the fleet and adds the frontend-bonus + layered-scoring milestones the post-v0.2 corpus designed).
+**Paired with:** REQUIREMENTS.md v0.3 (reconciled to this plan — §0 supersession re-substrates the fleet to containers; FR-7/7a/8/9 updated, FR-7b/7c/9a/9b/23/24 added for containerization + journey adapters + frontend bonus + capped bonus scoring).
 
 ---
 
@@ -207,5 +207,5 @@ M0..M6 + deferred roadmap** spanning the full 8-doc corpus. **Recorded the load-
 N-server generalization, the **transport-agnostic journey + Adapter B (M2)**, **layered scoring (M3)**,
 and the **frontend BONUS lane + bonus scoring (M4/M5)** the post-v0.2 corpus designed. Carried all LOCKED
 decisions. Added a **what's-already-done ledger**, a **critical path + first milestone**, a **per-milestone
-effort read (in suites)**, and a **consolidated OQ/risk register**. REQUIREMENTS FRs unchanged (v0.2
-stable); v0.3 only re-substrates the fleet and adds the frontend/scoring milestones.
+effort read (in suites)**, and a **consolidated OQ/risk register**. REQUIREMENTS reconciled to v0.3
+(FR-7/7a/8/9 updated, FR-7b/7c/9a/9b/23/24 added) — the §0 supersession + milestones are consistent across both.
