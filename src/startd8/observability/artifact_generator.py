@@ -463,6 +463,7 @@ def generate_observability_artifacts(
     portal_persona: str = "operator",
     portal_provision_url: Optional[str] = None,
     dashboard_provision_url: Optional[str] = None,
+    observability_yaml_path: Optional[Path] = None,
 ) -> GenerationReport:
     """Top-level orchestrator.
 
@@ -549,6 +550,21 @@ def generate_observability_artifacts(
         )
         if portal_result is not None:
             report.artifacts.append(portal_result)
+
+    # M1 / FR-OAA-12: domain alert rules from observability.yaml. Declared thresholds become ACTIVE
+    # rules — closing the gap the convention path leaves as `_domain_alert_todo_block` stubs. Strictly
+    # additive + opt-in: an absent observability_yaml_path ⇒ no new artifact and RED output stays
+    # byte-identical. The renderer is taxonomy-free; the _stamp_taxonomy pass below stamps the result.
+    if observability_yaml_path is not None and Path(observability_yaml_path).exists():
+        from .alert_renderer import render_domain_alert_rules
+        from .spec import from_observability_yaml
+        _obs = yaml.safe_load(Path(observability_yaml_path).read_text(encoding="utf-8")) or {}
+        report.artifacts.append(
+            render_domain_alert_rules(
+                from_observability_yaml(_obs),
+                project_id=business.project_id or "domain",
+            )
+        )
 
     # Closure 3B: project-level capability index runs last so its inventory
     # reflects every artifact produced this run (triplet + extended + dashboard
