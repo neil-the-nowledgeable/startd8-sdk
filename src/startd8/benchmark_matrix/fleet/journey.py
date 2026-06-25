@@ -41,6 +41,12 @@ class JourneyStep:
     outcome: str
     services: tuple[str, ...]
     weight: int
+    # orchestrated: True when the step calls a single ENTRY service (services[0]) that fans out to the
+    # rest (checkout → its 6 deps). For such a step a failure can PROPAGATE — a broken downstream dep
+    # fails the entry service without the entry being at fault (M3: propagated, not model-fault). Direct
+    # steps (Adapter B calls each service itself) are not orchestrated — their culprit is the broken
+    # service directly.
+    orchestrated: bool = False
 
 
 # The canonical 5-step journey (JOURNEY_DESIGN §2.1), weights from the §1 locust task mix
@@ -67,7 +73,7 @@ JOURNEY: tuple[JourneyStep, ...] = (
         "an order id is returned and the 6-dep PlaceOrder orchestration succeeds",
         # dialing service first, then its fan-out — the attribution order M3 reads.
         ("checkoutservice", "productcatalogservice", "cartservice", "currencyservice",
-         "shippingservice", "paymentservice", "emailservice"), weight=1),
+         "shippingservice", "paymentservice", "emailservice"), weight=1, orchestrated=True),
 )
 
 JOURNEY_BY_NAME = {s.name: s for s in JOURNEY}

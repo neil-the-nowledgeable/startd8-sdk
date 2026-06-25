@@ -102,6 +102,28 @@ def test_break_payment_only_checkout_fails():
     assert abs(res.weighted_coverage - (17 / 18)) < 1e-9
 
 
+def test_checkout_error_attributes_to_named_dep():
+    """The checkout orchestrator wraps its dep errors ("charge: ..."); Adapter B parses the prefix so
+    a checkout failure names the responsible DEP (paymentservice) — the live attribution mechanism."""
+    stubs = _healthy_stubs()
+
+    class _ChargeDown(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNKNOWN
+
+        def details(self):
+            return "charge: rpc error: code = Unavailable desc = connection refused"
+
+    class BrokenCheckout:
+        def PlaceOrder(self, req, timeout=None):
+            raise _ChargeDown()
+
+    stubs["checkoutservice"] = BrokenCheckout()
+    res = A.run_journey_with_stubs(stubs, now_year=2026)
+    checkout = next(s for s in res.steps if s.name == "checkout")
+    assert checkout.culprit == "paymentservice"  # parsed from the wrapped "charge:" error
+
+
 def test_break_cart_fails_only_cart_dependent_steps():
     """Breaking cart fails addToCart + viewCart (both touch cart); browse/setCurrency stay green.
     checkout also fans out to cart, so it fails too — i.e. failures localize to cart-touching steps."""
