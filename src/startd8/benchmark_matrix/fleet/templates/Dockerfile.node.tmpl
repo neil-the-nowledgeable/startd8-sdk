@@ -1,0 +1,24 @@
+# Round-3 M0 per-language Dockerfile TEMPLATE — Node.js service.
+#
+# Mirrors the canonical currencyservice/paymentservice Dockerfile (node-alpine) but uses the harness's
+# FULLY VENDORED offline closure: build_service_image() stages node_runtime/node_modules (grpc-js +
+# proto-loader + pino + uuid + decimal.js — the exact closure execute.prepare_node_workdir copies) and
+# the demo.proto next to the server, so NO `npm install` runs at build (the closure is authoritative).
+# This is the most offline-ready lane: build only pulls the base image.
+#
+# Parameters filled by the builder:
+#   {NODE_BASE}   node base image (digest-pinnable)
+#   {ENTRY}       the server entry script name (e.g. server.js)
+#   {PORT}        gRPC listen port (server reads $PORT)
+#
+# Context layout (staged by build_service_image -> _stage_node_context):
+#   ./<entry>.js          generated server source
+#   ./node_modules/       vendored offline closure (hardlink-copied from node_runtime)
+#   ./demo.proto          the OB contract proto-loader reads at runtime
+
+FROM {NODE_BASE}
+WORKDIR /app
+COPY . /app/
+ENV PORT={PORT}
+EXPOSE {PORT}
+ENTRYPOINT ["node", "{ENTRY}"]

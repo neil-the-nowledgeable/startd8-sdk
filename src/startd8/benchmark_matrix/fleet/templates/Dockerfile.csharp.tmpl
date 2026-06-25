@@ -1,0 +1,36 @@
+# Round-3 M0 per-language Dockerfile TEMPLATE — C# / .NET service.
+#
+# Mirrors the canonical cartservice Dockerfile (dotnet/sdk builder publishing → minimal runtime),
+# reusing the provision.publish_dotnet_service stance: the harness co-locates demo.proto into the
+# project dir, Grpc.Tools codegen runs the C# server stubs from it at publish time, and
+# <AssemblyName>server</AssemblyName> makes the entry binary server.dll.
+#
+# OFFLINE NOTE (OQ-C6 — the one load-bearing reuse gap): `dotnet restore` is the ONLY network step.
+# v1 builds with network (restore over NuGet); the warm-NuGet-cache bake (snapshot ~/.nuget into the
+# build context, then `dotnet publish --no-restore`) for a hermetic `--network=none` build is DEFERRED.
+# We use framework-dependent publish (not the upstream PublishSingleFile/self-contained/trimmed) →
+# smaller build, runs on the dotnet runtime image; both are valid canonical targets.
+#
+# Parameters filled by the builder:
+#   {DOTNET_SDK}      sdk builder image (digest-pinnable)
+#   {DOTNET_RUNTIME}  aspnet runtime image (framework-dependent run)
+#   {PORT}            gRPC listen port (server reads $PORT / ASPNETCORE_URLS)
+#
+# Context layout (staged by build_service_image -> _stage_csharp_context):
+#   ./*.csproj        harness-owned project (AssemblyName=server, <Protobuf> demo.proto)
+#   ./*.cs            generated C# source
+#   ./demo.proto      co-located OB contract for Grpc.Tools codegen
+
+FROM {DOTNET_SDK} AS build
+WORKDIR /src
+COPY . .
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+RUN dotnet publish -c Release -o /out --nologo
+
+FROM {DOTNET_RUNTIME}
+WORKDIR /app
+COPY --from=build /out/ /app/
+ENV PORT={PORT}
+ENV ASPNETCORE_URLS=http://0.0.0.0:{PORT}
+EXPOSE {PORT}
+ENTRYPOINT ["dotnet", "/app/server.dll"]

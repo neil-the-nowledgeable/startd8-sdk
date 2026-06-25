@@ -1,0 +1,35 @@
+# Round-3 M0 per-language Dockerfile TEMPLATE — Go service.
+#
+# Mirrors the canonical microservices-demo productcatalogservice Dockerfile (golang-alpine builder →
+# minimal runtime) and the compose-prototype, but the build context is assembled by
+# build_service_image() which reuses provision.setup_go_stubs: the hipstershop proto stubs are
+# vendored as a LOCAL module under ./.gostubs and the service go.mod `replace`s the upstream import to
+# it. `go mod tidy` then derives grpc/protobuf from imports and writes go.sum (integrity), and a
+# static CGO-disabled binary is compiled. Build pulls base + go module deps over the network (v1);
+# offline `--network=none` build (pre-seed GOMODCACHE) is DEFERRED.
+#
+# Parameters filled by the builder:
+#   {GO_BUILDER}  builder base image (digest-pinnable)
+#   {RUNTIME}     minimal runtime base image
+#   {PORT}        gRPC listen port (EXPOSE + default PORT env; server reads $PORT)
+#
+# Context layout (staged by build_service_image -> _stage_go_context):
+#   ./<svc files>     the generated Go source (server.go / main.go ...) + go.mod
+#   ./.gostubs/*.pb.go + ./.gostubs/go.mod   vendored hipstershop stubs (setup_go_stubs)
+#   ./<assets>        any harness-owned ground-truth assets (e.g. products.json)
+
+FROM {GO_BUILDER} AS build
+WORKDIR /src
+COPY . .
+# Derive deps from imports + write go.sum, then compile a static binary (mirror provision install_plan).
+RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/server .
+
+FROM {RUNTIME}
+WORKDIR /app
+COPY --from=build /out/server /app/server
+# Carry any harness-owned ground-truth assets the server reads from cwd (products.json, etc.).
+COPY --from=build /src/ /app/
+RUN rm -f /app/*.go /app/go.mod /app/go.sum && rm -rf /app/.gostubs
+ENV PORT={PORT}
+EXPOSE {PORT}
+ENTRYPOINT ["/app/server"]

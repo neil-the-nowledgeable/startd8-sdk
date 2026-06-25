@@ -1,0 +1,15 @@
+{
+  "name": "payment-reference",
+  "version": "1.0.0",
+  "private": true,
+  "description": "R3-M0 Node lane build/boot target — minimal @grpc/grpc-js + @grpc/proto-loader PaymentService.Charge reference server (the charge_suite ground-truth oracle). ADVISORY ONLY: the build context's node_modules closure + demo.proto are staged by fleet.containerize._stage_node_context (execute.prepare_node_workdir), NOT installed from this manifest — the vendored closure is authoritative (CONTAINERIZATION_SCOPING §4).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.10.0",
+    "@grpc/proto-loader": "^0.7.10",
+    "uuid": "^9.0.0"
+  }
+}

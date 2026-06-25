@@ -1,0 +1,27 @@
+# Round-3 M0 per-language Dockerfile TEMPLATE — Python service.
+#
+# Mirrors the canonical recommendationservice/emailservice Dockerfile (python-slim base) and the
+# compose-prototype, but the build context is assembled by build_service_image(): the gRPC stubs
+# (demo_pb2 / demo_pb2_grpc — the OB co-located convention) are staged next to the server, and the
+# common gRPC runtime (grpcio + protobuf, the same set provision.install_plan("python") installs into
+# .pydeps) is pip-installed. Build pulls base + wheels over the network (v1); a fully offline build
+# (copy a pre-built .pydeps wheel closure) is DEFERRED.
+#
+# Parameters filled by the builder:
+#   {PYTHON_BASE}  python base image (digest-pinnable)
+#   {PIP_PKGS}     space-separated pip requirements (grpcio protobuf [jinja2 ...])
+#   {ENTRY}        the server entry script name (e.g. server.py / recommendation_server.py)
+#   {PORT}         gRPC listen port (server reads $PORT)
+#
+# Context layout (staged by build_service_image -> _stage_python_context):
+#   ./<entry>.py             generated server source
+#   ./demo_pb2.py ./demo_pb2_grpc.py   co-located gRPC stubs
+#   ./<assets>               harness-owned assets (e.g. confirmation.html)
+
+FROM {PYTHON_BASE}
+WORKDIR /app
+RUN pip install --no-cache-dir {PIP_PKGS}
+COPY . /app/
+ENV PORT={PORT}
+EXPOSE {PORT}
+ENTRYPOINT ["python3", "{ENTRY}"]
