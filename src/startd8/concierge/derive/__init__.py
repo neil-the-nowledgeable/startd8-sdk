@@ -19,8 +19,11 @@ from .introspect import (
     resolve_models,
 )
 from .containment import run_contained_introspection
+from .mapper import DerivationReport, build_entity_graph
 
 __all__ = [
+    "DerivationReport",
+    "build_entity_graph",
     "SCHEMA_VERSION",
     "DeriveError",
     "DeriveImportError",
