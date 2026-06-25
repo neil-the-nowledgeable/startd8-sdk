@@ -2,7 +2,6 @@
 import sys
 import shutil
 import tempfile
-import time
 import subprocess
 from pathlib import Path
 from startd8.benchmark_matrix.fleet.containerize import build_service_image, boot_and_probe, docker_available
@@ -29,13 +28,16 @@ def _run(service, language, fixture, files, provision, probe, port, extra_pip=No
     if not res.ok:
         print(f"[{language}] BUILD LOG:\n{(res.log or '')[-2000:]}", flush=True)
         return False
+    # boot_and_probe now READINESS-gates: boot.ok means the published port accepted a connection
+    # (the server is actually serving), not merely that `docker run` returned an id. On failure
+    # boot.log carries the container logs, so a crash/wrong-bind is self-explaining.
     boot = boot_and_probe(res.tag, service, language, host_port=port, run=True)
-    print(f"[{language}] boot ok={boot.ok} {(boot.log or '')[-200:]}", flush=True)
     name = f"r3-{service}-{language}"
     try:
         if not boot.ok:
+            print(f"[{language}] boot NOT ready:\n{boot.log}", flush=True)
             return False
-        time.sleep(5)
+        print(f"[{language}] boot ok (ready on :{port})", flush=True)
         cov = probe(port)
         print(f"[{language}] PROBE coverage={cov}", flush=True)
         return bool(cov and cov > 0)

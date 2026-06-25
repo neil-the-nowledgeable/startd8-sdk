@@ -205,10 +205,50 @@ def test_fake_runner_build_ok(tmp_path):
 
 def test_boot_and_probe_command_only(tmp_path):
     bp = C.boot_and_probe("r3/productcatalogservice:go", "productcatalogservice", "go", host_port=18080)
-    assert bp.run_cmd[:3] == ["docker", "run", "--rm"]
+    assert bp.run_cmd[:2] == ["docker", "run"]
+    assert "-d" in bp.run_cmd
+    # NO --rm: a crashed container must persist so its logs are readable on a readiness failure
+    # (the caller tears it down explicitly with `docker rm -f`).
+    assert "--rm" not in bp.run_cmd
     assert any("127.0.0.1:18080:" in a for a in bp.run_cmd)
     assert bp.probe_suite  # a behavioral probe suite is mapped for this service
     assert "run=False" in bp.skipped_reason  # command-only by default
+
+
+def test_boot_readiness_gate_fails_when_port_never_accepts(monkeypatch):
+    """A clean `docker run` exit with a process that never serves must report ok=False (not ok), with
+    the container logs captured — the fix for the misleading 'boot ok -> coverage 0.0' failure mode."""
+    class _Proc:
+        returncode = 0
+        stdout = "deadbeef\n"  # docker run printed a container id (launch accepted)
+        stderr = ""
+
+    monkeypatch.setattr(C, "docker_available", lambda: True)
+    monkeypatch.setattr(C, "_container_logs", lambda name, **kw: "ModuleNotFoundError: jinja2")
+    bp = C.boot_and_probe(
+        "r3/emailservice:python", "emailservice", "python",
+        host_port=18099, run=True, runner=lambda *a, **k: _Proc(),
+        ready_check=lambda port, timeout: False,  # never becomes ready
+    )
+    assert bp.returncode == 0  # docker run itself succeeded...
+    assert bp.ready is False and bp.ok is False  # ...but the server never served -> NOT ok
+    assert "did not become ready" in bp.skipped_reason
+    assert "jinja2" in bp.log  # container logs surfaced for a self-explaining failure
+
+
+def test_boot_readiness_gate_passes_when_port_accepts(monkeypatch):
+    class _Proc:
+        returncode = 0
+        stdout = "deadbeef\n"
+        stderr = ""
+
+    monkeypatch.setattr(C, "docker_available", lambda: True)
+    bp = C.boot_and_probe(
+        "r3/productcatalogservice:go", "productcatalogservice", "go",
+        host_port=18098, run=True, runner=lambda *a, **k: _Proc(),
+        ready_check=lambda port, timeout: True,
+    )
+    assert bp.ready is True and bp.ok is True
 
 
 def test_unsupported_language_raises(tmp_path):

@@ -34,7 +34,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import socket
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -341,7 +343,14 @@ def build_service_image(
 
 @dataclass
 class BootProbeResult:
-    """Outcome of constructing (and, via the runner, optionally running) a container boot + RPC probe."""
+    """Outcome of constructing (and, via the runner, optionally running) a container boot + RPC probe.
+
+    ``ok`` means **booted AND ready** — the container started AND its published port accepted a TCP
+    connection within ``readiness_timeout``. A clean ``docker run`` exit is NOT sufficient: a process
+    that crashes on startup (missing dep) or binds the wrong address (container-localhost instead of
+    0.0.0.0) returns ``docker run`` rc=0 yet never serves. ``ready`` records the readiness check
+    outcome explicitly; ``log`` carries the container logs when readiness fails, so the failure is
+    self-explaining instead of surfacing downstream as a misleading probe coverage 0.0."""
 
     image: str
     service: str
@@ -352,7 +361,36 @@ class BootProbeResult:
     returncode: Optional[int] = None
     log: str = ""
     ok: bool = False
+    ready: Optional[bool] = None       # readiness-gate outcome (None when not run / not gated)
     skipped_reason: str = ""
+
+
+def _await_port_ready(host_port: int, timeout: float, *, host: str = "127.0.0.1",
+                      interval: float = 0.5) -> bool:
+    """Poll ``host:host_port`` until a TCP connection is accepted or ``timeout`` elapses. A published
+    container port only accepts once the server inside is actually listening on its external interface
+    (0.0.0.0) — a crashed process or a container-localhost-only bind never accepts, which is exactly
+    the failure this gate catches."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, host_port), timeout=2.0):
+                return True
+        except OSError:
+            time.sleep(interval)
+    return False
+
+
+def _container_logs(name: str, *, tail: int = 60) -> str:
+    """Best-effort tail of a container's logs (for a self-explaining readiness failure). The boot run
+    drops ``--rm`` so a crashed container persists long enough to read its logs here; the caller is
+    responsible for explicit ``docker rm -f`` teardown."""
+    try:
+        r = subprocess.run(["docker", "logs", "--tail", str(tail), name],
+                           capture_output=True, text=True, check=False, timeout=15)
+        return ((r.stdout or "") + (r.stderr or ""))[-1500:]
+    except Exception:  # noqa: BLE001 — log fetch is diagnostic-only; never mask the real failure
+        return ""
 
 
 # Which behavioral suite probes a booted container for a one-RPC liveness check (the orchestrator
@@ -378,6 +416,8 @@ def boot_and_probe(
     runner: Runner = subprocess.run,
     run: bool = False,
     container_name: Optional[str] = None,
+    readiness_timeout: float = 30.0,
+    ready_check: Optional[Callable[[int, float], bool]] = None,
 ) -> BootProbeResult:
     """Construct (and, via the injected ``runner``, optionally run) the ``docker run`` that boots a
     built image + name the one-RPC behavioral probe the ORCHESTRATOR runs against the published port.
@@ -390,13 +430,22 @@ def boot_and_probe(
 
     ``host_port=0`` lets docker pick an ephemeral host port; the orchestrator reads the actual mapping
     from ``docker port`` after the run. A non-zero ``host_port`` pins the mapping (used by tests).
+
+    **Readiness gate:** when a non-zero ``host_port`` is pinned, ``ok`` requires the published port to
+    accept a TCP connection within ``readiness_timeout`` — not merely a clean ``docker run`` exit. The
+    boot run drops ``--rm`` (so a crashed container's logs survive for diagnosis); **the caller MUST
+    explicitly ``docker rm -f`` the container in teardown** (``validate_m0``/``validate_m1`` do). On a
+    readiness failure the container logs are captured into ``log`` so the cause (crash, wrong bind) is
+    visible instead of surfacing as a misleading downstream probe coverage 0.0. ``ready_check`` is
+    injectable for tests.
     """
     name = container_name or f"r3-{service}-{language}"
     publish = f"{host_port}:{container_port}" if host_port else str(container_port)
-    # Detached, auto-remove on exit, loopback-published, named for deterministic teardown by the
-    # orchestrator. Loopback bind (127.0.0.1) keeps the published port host-local.
+    # Detached, loopback-published, named for deterministic teardown by the orchestrator. NO --rm: a
+    # crashed container must persist so its logs are readable on a readiness failure (the caller tears
+    # it down explicitly). Loopback bind (127.0.0.1) keeps the published port host-local.
     run_cmd = [
-        "docker", "run", "--rm", "-d", "--name", name,
+        "docker", "run", "-d", "--name", name,
         "-p", f"127.0.0.1:{publish}",
         image,
     ]
@@ -419,6 +468,29 @@ def boot_and_probe(
     proc = runner(run_cmd, capture_output=True, text=True, check=False)
     result.returncode = getattr(proc, "returncode", None)
     out = (getattr(proc, "stderr", "") or "") + (getattr(proc, "stdout", "") or "")
-    result.log = out[-2000:]
-    result.ok = result.returncode == 0
+    if result.returncode != 0:
+        result.log = out[-2000:]  # docker run itself failed (bad image / port clash) — keep its error
+        result.ok = False
+        return result
+
+    # docker run accepted the launch — now GATE on actual readiness. A pinned host_port lets us poll
+    # the published port; an ephemeral (0) port can't be polled here, so fall back to the launch rc.
+    if not host_port:
+        result.ok = True
+        result.skipped_reason = "readiness not gated (ephemeral host_port=0; pin a port to gate)"
+        result.log = out[-2000:]
+        return result
+    check = ready_check or _await_port_ready
+    result.ready = bool(check(host_port, readiness_timeout))
+    result.ok = result.ready
+    if not result.ready:
+        logs = _container_logs(name)
+        result.skipped_reason = (
+            f"container '{name}' booted (docker run rc=0) but did not become ready on "
+            f"127.0.0.1:{host_port} within {readiness_timeout:.0f}s — the process likely crashed on "
+            f"startup or bound a non-published address (e.g. container-localhost, not 0.0.0.0)"
+        )
+        result.log = f"{result.skipped_reason}\n--- container logs ({name}) ---\n{logs}"
+    else:
+        result.log = out[-2000:]
     return result
