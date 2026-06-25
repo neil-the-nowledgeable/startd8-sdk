@@ -748,7 +748,13 @@ class ClaudeAgent(BaseAgent):
 
         start_time = time.time()
         response = await _call()
+        return self._turn_from_message(response, start_time)
 
+    def _turn_from_message(self, response: Any, start_time: float) -> AgenticTurn:
+        """Parse an Anthropic Messages response (or a streamed final message) into an AgenticTurn.
+
+        Shared by :meth:`agenerate_tools` and :meth:`agenerate_tools_stream` so the streaming and
+        non-streaming paths produce a structurally-identical turn (FR-S2 parity)."""
         text_parts: list[str] = []
         tool_calls: list[ToolCallRequest] = []
         for block in getattr(response, "content", None) or []:
@@ -792,3 +798,45 @@ class ClaudeAgent(BaseAgent):
             finish_reason=stop_reason,
             time_ms=response_time_ms,
         )
+
+    def supports_streaming(self) -> bool:
+        """ClaudeAgent implements per-token streaming (FR-S2, MVP-A)."""
+        return True
+
+    async def agenerate_tools_stream(
+        self,
+        messages: "list[dict] | str",
+        tools: list,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ):
+        """Stream a tool-use turn (FR-S2). Yields :class:`TextDelta` per text fragment, then a terminal
+        :class:`TurnComplete` carrying the accumulated turn. Tool calls are assembled from the stream's
+        final message (Anthropic's ``get_final_message``) — no manual tool-arg accumulation (that
+        robustness is MVP-B), so the turn is structurally identical to the non-streaming path."""
+        from ..models import TextDelta, TurnComplete
+
+        msgs = self._normalize_messages(messages)
+        effective_system = system_prompt if system_prompt is not None else self.system_prompt
+        effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+
+        kwargs: dict = {"model": self.model, "max_tokens": effective_max_tokens, "messages": msgs}
+        if effective_system is not None:
+            kwargs["system"] = effective_system
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if tools:
+            kwargs["tools"] = tools
+
+        start_time = time.time()
+        async with self.async_client.messages.stream(**kwargs) as stream:
+            async for event in stream:
+                if getattr(event, "type", None) == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if getattr(delta, "type", None) == "text_delta":
+                        text = getattr(delta, "text", "") or ""
+                        if text:
+                            yield TextDelta(text)
+            final_message = await stream.get_final_message()
+        yield TurnComplete(self._turn_from_message(final_message, start_time))

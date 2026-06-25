@@ -60,6 +60,28 @@ def reply(session: AgenticSession, user_input: str) -> AgenticResult:
     return asyncio.run(session.send(user_input))
 
 
+def stream_reply(session: AgenticSession, user_input: str, on_text) -> AgenticResult:
+    """Live-render bridge (FR-S11): drive the async event stream from the sync REPL, calling
+    ``on_text(chunk)`` for each text delta as it arrives, and return the terminal result.
+
+    Uses ``stream_sync`` so the synchronous `questionary` loop can consume the async generator. A
+    ``StreamReset`` (overflow retry) signals the caller to clear partial text by calling
+    ``on_text(None)``.
+    """
+    from ..agents.agentic import stream_sync
+    from ..models import RunComplete, StreamReset, TextDelta
+
+    result: Optional[AgenticResult] = None
+    for ev in stream_sync(session.stream(user_input)):
+        if isinstance(ev, TextDelta):
+            on_text(ev.text)
+        elif isinstance(ev, StreamReset):
+            on_text(None)  # caller clears already-rendered partial text before the retry
+        elif isinstance(ev, RunComplete):
+            result = ev.result
+    return result
+
+
 def cost_suffix(result: AgenticResult) -> str:
     """A compact per-turn cost line for the chat panel subtitle (parity with the legacy token line)."""
     return f"tokens: {result.total_tokens} · cost≈${result.total_cost_usd:.4f} · turn {result.turns}"

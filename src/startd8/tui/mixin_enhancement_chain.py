@@ -443,11 +443,17 @@ class EnhancementChainMixin:
         # FR-10: opt-in agentic mode gives the chat real multi-turn memory (a persistent
         # AgenticSession), vs the legacy stateless single-shot path. Gated on STARTD8_TUI_AGENTIC +
         # the agent supporting tool use; legacy path is retained for everything else.
-        from ..tui.agentic_chat import agentic_mode_enabled, cost_suffix, make_chat_session, reply
+        from ..tui.agentic_chat import (
+            agentic_mode_enabled, cost_suffix, make_chat_session, reply, stream_reply,
+        )
 
         use_agentic = agentic_mode_enabled(agent)
         chat_session = make_chat_session(agent) if use_agentic else None
-        mode_note = "multi-turn memory" if use_agentic else "single-shot"
+        use_streaming = use_agentic and agent.supports_streaming()
+        mode_note = (
+            "multi-turn · streaming" if use_streaming
+            else "multi-turn memory" if use_agentic else "single-shot"
+        )
 
         # Chat header
         self.console.print(Panel(
@@ -472,6 +478,29 @@ class EnhancementChainMixin:
 
             # Generate response
             try:
+                if use_streaming:
+                    # FR-S11: render text live as it streams, then show the final panel with cost.
+                    self.console.print(f"[bold]{agent_id}[/bold] ", end="")
+                    buffer: list = []
+
+                    def _on_text(chunk):
+                        if chunk is None:  # StreamReset: clear partial text before a retry
+                            buffer.clear()
+                            self.console.print("\n[dim](retrying…)[/dim] ", end="")
+                        else:
+                            buffer.append(chunk)
+                            self.console.print(chunk, end="")
+
+                    result = stream_reply(chat_session, user_input, _on_text)
+                    self.console.print()  # newline after the live stream
+                    self.console.print(Panel(
+                        Markdown("".join(buffer)),
+                        title=f"[bold]{agent_id}[/bold]",
+                        subtitle=f"[dim]{cost_suffix(result)}[/dim]",
+                        border_style="green",
+                    ))
+                    continue
+
                 with self.console.status("[bold cyan]Thinking...[/bold cyan]"):
                     if chat_session is not None:
                         result = reply(chat_session, user_input)  # async session via sync bridge

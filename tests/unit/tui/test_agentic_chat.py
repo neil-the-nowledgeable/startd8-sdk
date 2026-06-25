@@ -65,6 +65,22 @@ def test_cost_suffix_format():
     assert "tokens:" in s and "cost≈$" in s and "turn" in s
 
 
+def test_stream_reply_renders_deltas_live(monkeypatch):
+    """FR-S11: the live-render bridge feeds each text chunk to on_text as it streams (sync caller)."""
+    from startd8.tui.agentic_chat import stream_reply
+
+    agent = MockAgent(model="mock-model", streaming=True, tool_turns=[{"text": "hello there friend", "tool_calls": []}])
+    session = make_chat_session(agent)
+
+    rendered = []
+    result = stream_reply(session, "go", on_text=lambda c: rendered.append(c))
+
+    assert result is not None and result.ok
+    # text arrived as multiple incremental chunks (not one blob)
+    assert len([c for c in rendered if c]) >= 3
+    assert "".join(c for c in rendered if c).strip() == "hello there friend"
+
+
 # --- empty-tools guard: a tool-less session must not send tools=[] to the provider ---------------
 @pytest.mark.asyncio
 async def test_openai_omits_empty_tools(monkeypatch):
