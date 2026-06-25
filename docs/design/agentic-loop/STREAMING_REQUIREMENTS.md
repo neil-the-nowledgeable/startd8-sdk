@@ -155,23 +155,63 @@ swapped for the streaming primitive (FR-S9).
 > Built only when there is a real consumer (e.g. the loop running inside a cap-dev-pipe/workflow
 > context). The loop **never depends** on these.
 
+> **§3.0 Lessons-applied (Lessons Learned review, 2026-06-25).** A pass over the `observability`,
+> `sdk`, `mcp`, and `h2a_h2h_a2a` lesson domains sharpened the requirements below; the bracketed
+> `[LL …]` tags trace each refinement to its lesson. **Timely context:** the repo just shipped an
+> `ObservabilitySpec` model + `observability.yaml` normalizer + declared-thresholds→alert-rules — so
+> FR-CC3's "register a descriptor" now has a concrete target (the `ObservabilitySpec` manifest).
+
 - **FR-CC1 — Progress tee (observer).** A `ContextCoreProgressObserver` that consumes the FR-S1 event
   stream and emits `emit_progress()` / span events to ContextCore (turn started, tool called,
   completed) via the existing `TaskTrackerWrapper`. Pure observer — reads the tee, drives nothing.
+  - **[LL sdk-12 — protocol injection]** The session accepts a `ProgressEmitter` **protocol** (or
+    `None`), and ContextCore *implements* it — injected late via constructor/entry-point, **not** a
+    bridge package. Keeps the core loop import-clean (FR-S12).
+  - **[LL sdk-12/16 — defensive optional import]** The observer catches **both `ImportError` and
+    `TypeError`** (ContextCore absent *or* its emitter signature drifted), logs a warning, and
+    **no-ops** — never crashes or alters the loop's output/timing.
+  - **[LL mcp-02 — idempotent events]** Each emitted progress event is atomic: a dropped or duplicate
+    event must leave ContextCore state consistent (use stable per-event ids).
 - **FR-CC2 — Task-lifecycle wrapper.** A `ContextCoreAgenticAdapter` that runs a session as a tracked
   ContextCore **task** — SpanState-v2 compliant: top-level `status` (OK/ERROR/UNSET), `task.status`
   lifecycle (`in_progress`→`done`/`cancelled`), `task.type`, `task.percent_complete` derived from
   turns, zero-point `task.created` event. Reuses `ContextCoreWorkflowAdapter`'s `TaskTrackerWrapper`
   pattern (net-new ~50 LoC; no agent-run wrapper exists today).
+  - **[LL h2a-01 — zero-point first]** Emit the `task.created` event **at run start** (with
+    `task.type`, initial `task.status`), not retroactively — it is what makes the span task-aware and
+    drives burndown.
+  - **[LL h2a-03 — transition validation]** Validate status transitions against the canonical state
+    machine; reject illegal ones so the cross-agent audit trail can't be corrupted. On any lossy A2A
+    reduction, **preserve the canonical `task.status` value** in the span (don't discard it).
+  - **[LL sdk-09 — guard via filesystem probe]** The "adapter is wired" guard test **probes the file**
+    (or greps source), it does **not** import `integrations.contextcore` (an optional dep). (Matches
+    the existing FR-S12 guard.)
 - **FR-CC3 — `agentic.run` span convention [R3-F4].** **Net-new span name** `agentic.run` (a whole
-  multi-turn run, distinct from today's per-turn `agentic.turn`/`agent.generate`), carrying the
+  multi-turn run, distinct from today's per-turn `agentic.turn`/`agent.generate`, and from the
+  existing root `agentic.session` — FR-CC3 emits a *new* top-level span, not a rename), carrying the
   enumerated attributes `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens|output_tokens`
   (int), `io.contextcore.project.id|task.id` (str), `agentic.stop_reason` (str), `agentic.turns` (int),
-  `agentic.tool_count` (int). Register it as a **descriptor in the observability artifact-generator's
-  span manifest** (name the file when implementing) so the generator **auto-derives Dashboard/SLO/Alert
-  artifacts**. *This is net-new (a new span name + descriptor) — not re-documenting the existing
-  per-turn span attributes (already emitted via `fce92b6c`).* *Acceptance:* the artifact generator, fed
-  a recorded `agentic.run` span, emits a Dashboard/SLO/Alert set.
+  `agentic.tool_count` (int). Register it as a **descriptor in the `ObservabilitySpec` span manifest**
+  so the generator **auto-derives Dashboard/SLO/Alert artifacts**.
+  - **[LL obs — schema-first / single source of truth]** The descriptor is the contract; **never
+    hand-write** the dashboard JSON — derive via `/dbrd-cr8r`. No mixing derived + hand-edited artifacts.
+  - **[LL obs — "derive don't guess" + resolvability gate]** Before declaring success, verify the
+    generated queries **resolve against live `agentic.run` spans** (a dashboard that scores 100%
+    coverage but returns **0 series** — wrong selector/attr name — is the failure mode to gate out).
+  - **[LL obs/h2a — TraceQL dot/`span.` prefix]** Document every attribute **with the `span.` prefix**
+    in the descriptor (`{ span.agentic.stop_reason = "completed" }`); a bare attribute name *silently
+    returns empty*.
+  - **[LL obs — name both OTel & Prometheus]** For any derived metric, document both the OTel name and
+    its OTLP→Prometheus form (+ unit suffix), e.g. `gen_ai.usage.input_tokens` →
+    `gen_ai_usage_input_tokens`; the SLO/alert generators depend on the converted name.
+  - **[LL obs — emission≠capability + flush-at-exit]** Add a **runtime coverage assertion** that a real
+    run actually emits an `agentic.run` span with the declared attrs (registration alone doesn't prove
+    emission), and ensure a `BatchSpanProcessor` **atexit flush** so the final run's span isn't dropped.
+  - *Acceptance:* the artifact generator, fed a recorded `agentic.run` span, emits a Dashboard/SLO/
+    Alert set whose queries resolve against that span (non-zero series).
+- **FR-CC4 — Dogfood validation (NEW) [LL km-02].** Phase-2 integration tests emit **real**
+  `agentic.run` / task spans (in-memory exporter) and query them back — not mocks — to catch
+  attribute-name / timestamp-semantics mismatches before a user does.
 
 ---
 
