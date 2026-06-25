@@ -3,7 +3,7 @@
 **Version:** 0.3 (Field-driven — run-028: cost-aware remediation, FR-14)
 **Date:** 2026-06-03
 **Status:** Draft
-**Owner:** neil-the-nowledgable
+**Owner:** neil-the-nowledgeable
 
 ---
 
