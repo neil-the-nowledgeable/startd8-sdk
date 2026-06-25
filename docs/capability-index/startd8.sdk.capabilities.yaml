@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.8.0"
+version: "1.9.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1243,6 +1243,187 @@ capabilities:
         description: "FR-C series (C3/C7/C10..C14); concierge_templates/ kickoff package"
     confidence: 0.85
 
+  # ============================================================================
+  # AGENTIC LOOP — Multi-turn tool-use runtime (ported in pattern from ml-intern,
+  # built on the SDK's own provider/cost/MCP layers; NOT a LiteLLM dependency)
+  # ============================================================================
+
+  - capability_id: startd8.agentic.loop
+    category: action
+    maturity: beta
+    summary: "AgenticSession: multi-turn tool-use loop with safety bounds (turns/budget/breaker) and effect-class default-deny tool policy"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        AgenticSession runs a model to completion across turns: call agenerate_tools → dispatch tool
+        calls via a ToolRegistry → feed results back → repeat until the model answers (or a bound
+        fires). Safety is built in, not retrofitted: max_turns, max_tool_calls_per_turn, a
+        repeated-identical-call breaker, a fail-closed per-session token/cost budget checked before
+        each model call, FR-19 effect-class default-deny (only read tools run unless allow-listed),
+        ToolResultPolicy redaction, and a typed error taxonomy. Three consumers ride on it — the TUI
+        chat, an MCP agent surface, and a read-only Concierge front-end.
+      agent: |
+        session = AgenticSession(agent, ToolRegistry([...])); result = await session.send("...").
+        result.stop_reason ∈ completed|max_turns|repeated_calls|budget|context_overflow|stream_error.
+    triggers: ["agentic loop", "tool use loop", "multi-turn agent", "AgenticSession", "tool calling", "agent runtime"]
+    evidence:
+      - type: code
+        ref: src/startd8/agents/agentic.py
+        description: "AgenticSession, ToolRegistry, SessionConfig bounds, _run/_run_loop, effect-class default-deny"
+      - type: test
+        ref: tests/unit/agents/test_agentic_session.py
+        description: "8 end-to-end loop scenarios (dispatch, unknown-tool reject, default-deny, bounds, budget)"
+      - type: code
+        ref: src/startd8/tui/agentic_chat.py
+        description: "TUI consumer (multi-turn chat)"
+      - type: code
+        ref: src/startd8/mcp/client.py
+        description: "MCP agent surface consumer (drives the SDK's own FastMCP tools)"
+      - type: code
+        ref: src/startd8/concierge/chat.py
+        description: "read-only Concierge conversational front-end consumer"
+    confidence: 0.85
+
+  - capability_id: startd8.agentic.tool_use_primitive
+    category: action
+    maturity: beta
+    summary: "agenerate_tools(messages, tools) -> AgenticTurn — the tool-use generation primitive; additive opt-in (supports_tool_use), Claude + OpenAI"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        BaseAgent gains an additive opt-in primitive: supports_tool_use() (default False) +
+        agenerate_tools(messages, tools, **kw) -> AgenticTurn (text + ToolCallRequests + usage +
+        finish_reason). NOT a provider Protocol change — the 10 providers and downstream consumers are
+        untouched; only Claude and OpenAI implement it. AgenticTurn/ToolCallRequest are sibling types
+        in models.py (GenerateResult's 3-tuple can't carry tool calls).
+      agent: |
+        if agent.supports_tool_use(): turn = await agent.agenerate_tools(messages, tools).
+        turn.tool_calls: list[ToolCallRequest(id, name, arguments: dict)].
+    triggers: ["agenerate_tools", "tool use", "function calling", "AgenticTurn", "supports_tool_use"]
+    evidence:
+      - type: code
+        ref: src/startd8/agents/base.py
+        description: "supports_tool_use() + agenerate_tools() opt-in defaults"
+      - type: code
+        ref: src/startd8/agents/claude.py
+        description: "ClaudeAgent.agenerate_tools (generalizes agenerate_structured)"
+      - type: code
+        ref: src/startd8/agents/openai.py
+        description: "GPT4Agent.agenerate_tools (by-index tool-call accumulation)"
+      - type: test
+        ref: tests/unit/agents/test_agentic_tools_spike.py
+        description: "multi-tool parse, messages-list threading, opt-in default"
+    confidence: 0.85
+
+  - capability_id: startd8.agentic.streaming
+    category: action
+    maturity: beta
+    summary: "AgenticSession.stream(): teeable async event stream with per-token Claude/OpenAI streaming, sync-bridge, and tool-call/reasoning deltas"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        stream() yields a typed AgenticEvent stream (StreamStart, TextDelta, ToolCallStarted/Result,
+        ToolCallDelta, ReasoningDelta, CompactionEvent, StreamReset, ErrorEvent, TurnComplete,
+        RunComplete) sharing all loop logic with send(). Per-token streaming for Claude
+        (messages.stream + get_final_message) and OpenAI (stream + by-index tool-arg accumulation);
+        non-streaming agents fall back to one TextDelta + synthesized tool events (uniform). tee(n)
+        fans out to multiple consumers; stream_sync() bridges the async stream to sync callers (TUI).
+      agent: |
+        async for ev in session.stream("..."): handle(ev)  # ends with RunComplete(result).
+        sync: for ev in stream_sync(session.stream("...")): ...
+    triggers: ["streaming", "stream", "token streaming", "TextDelta", "tee", "live render", "ToolCallDelta", "reasoning delta"]
+    evidence:
+      - type: code
+        ref: src/startd8/agents/agentic.py
+        description: "stream(), _stream_loop, _stream_one_call, tee(), stream_sync(), AgenticEvent forwarding"
+      - type: code
+        ref: src/startd8/agents/claude.py
+        description: "agenerate_tools_stream (Anthropic messages.stream + tool/reasoning deltas)"
+      - type: test
+        ref: tests/unit/agents/test_streaming_mvp_a.py
+        description: "event sequence, fallback uniformity, overflow→reset, sync-bridge, tee fan-out"
+      - type: test
+        ref: tests/unit/agents/test_provider_streaming.py
+        description: "faked-chunk Claude + OpenAI streaming + structural parity with non-streaming"
+    confidence: 0.8
+
+  - capability_id: startd8.agentic.compaction
+    category: action
+    maturity: beta
+    summary: "Context-overflow recovery: pairing-safe compaction (tool_use<->tool_result invariant) + retry; graceful context_overflow terminal"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        On a provider-agnostic context-window-exceeded error, the loop summarizes older history and
+        retries. The load-bearing invariant: compaction never orphans a tool_use from its tool_result
+        (find_clean_cut snaps the boundary; both providers reject an orphan). When the transcript can't
+        be compacted further it ends gracefully as stop_reason="context_overflow", never a crash.
+      agent: |
+        Automatic within stream()/send(); surfaces CompactionEvent (and StreamReset on the streaming
+        path) to consumers. is_context_window_error() maps provider errors to one type.
+    triggers: ["compaction", "context window", "context overflow", "summarize history", "token ceiling"]
+    evidence:
+      - type: code
+        ref: src/startd8/agents/compaction.py
+        description: "is_context_window_error, find_clean_cut, compact, pairing_is_valid"
+      - type: test
+        ref: tests/unit/agents/test_compaction.py
+        description: "detector, pairing invariant + orphan detection, loop recovers / gives up gracefully"
+    confidence: 0.85
+
+  - capability_id: startd8.agentic.contextcore_integration
+    category: integration
+    maturity: beta
+    summary: "Optional ContextCore observer + SpanState-v2 task adapter for an agentic run — a pure outer layer; the loop imports nothing from ContextCore"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        ContextCoreProgressObserver tees the event stream into ContextCore progress events;
+        ContextCoreAgenticAdapter runs a session as a tracked SpanState-v2 task (task.created
+        zero-point, validated status transitions, terminal done/cancelled from stop_reason). A pure
+        outer layer in integrations/: protocol-injected, defensive optional import (catches ImportError
+        AND TypeError, no-ops when absent), and a guard test asserts the core loop never imports it.
+      agent: |
+        adapter = ContextCoreAgenticAdapter(session, project_id, task_id); result = await adapter.run("...").
+    triggers: ["contextcore", "task tracking", "progress observer", "spanstate", "agent task"]
+    evidence:
+      - type: code
+        ref: src/startd8/integrations/contextcore_agentic.py
+        description: "ProgressEmitter protocol, ContextCoreProgressObserver, ContextCoreAgenticAdapter"
+      - type: test
+        ref: tests/unit/integrations/test_contextcore_agentic.py
+        description: "observer emit, task lifecycle, non-completed→cancelled, no-contextcore-import guard"
+    confidence: 0.8
+
+  - capability_id: startd8.agentic.observability
+    category: observe
+    maturity: beta
+    summary: "OTel spans for agentic runs (session/turn/tool_call/compaction) with gen_ai.*+io.contextcore.* conventions, registered as descriptors"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        AgenticSession emits an OTel span tree (session → turn → tool_call / compaction) with gen_ai.*
+        (system, request.model, usage tokens) + optional io.contextcore.* (project/task) attributes;
+        no-op when OTel is absent/unconfigured. The spans are registered as descriptors
+        (_OTEL_DESCRIPTORS + collector._INSTRUMENTED_MODULES) so the observability artifact generator
+        can auto-derive dashboards/SLOs/alerts. A dashboard is generated from the descriptor via
+        /dbrd-cr8r (datasource/live-data wiring pending).
+      agent: |
+        Automatic; pass project_context=ProjectContext(...) to attribute a run. collect_span_descriptors()
+        returns the agentic.session descriptor.
+    triggers: ["agentic observability", "otel spans", "agentic.session span", "gen_ai", "span descriptor", "agentic dashboard"]
+    evidence:
+      - type: code
+        ref: src/startd8/agents/agentic_otel.py
+        description: "span()/set_attributes() helpers (no-op when OTel absent)"
+      - type: code
+        ref: src/startd8/observability/collector.py
+        description: "_INSTRUMENTED_MODULES registration; collect_span_descriptors harvest"
+      - type: test
+        ref: tests/unit/agents/test_agentic_otel.py
+        description: "span tree + gen_ai/contextcore attrs via in-memory exporter"
+    confidence: 0.8
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -1250,16 +1431,16 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 41   # v1.8.0: +cloud_native_deploy, deploy_environments, deploy.coherence_gate, concierge.onboarding
+  total_capabilities: 47   # v1.9.0: +agentic.{loop,tool_use_primitive,streaming,compaction,contextcore_integration,observability}
   by_maturity:
     stable: 21
-    beta: 20
+    beta: 26       # v1.9.0: +6 agentic.* (all beta)
   by_category:
-    action: 7      # +complexity.tier_routing, +concierge.onboarding
-    observe: 3     # session_tracking, cost_tracking, otel_logging
+    action: 11     # v1.9.0: +agentic.{loop,tool_use_primitive,streaming,compaction}
+    observe: 4     # +agentic.observability (v1.9.0)
     validate: 6    # +benchmark.matrix, +deploy.local_harness
     generate: 14   # +cloud_native_deploy, +deploy_environments (v1.8.0)
-    integration: 5 # +languages.profile_registry
+    integration: 6 # +agentic.contextcore_integration (v1.9.0)
     query: 2       # model_catalog, wireframe_summary
     transform: 2   # +repair.pipeline
     security: 2    # security_prime.gate, +deploy.coherence_gate (v1.8.0)
@@ -1269,6 +1450,17 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.9.0"
+    date: "2026-06-25"
+    changes:
+      - "NEW AGENTIC LOOP subsystem (6 capabilities, all beta) — multi-turn tool-use runtime built this session (PRs #36-#51), ported in pattern from ml-intern onto the SDK's own provider/cost/MCP layers (NOT a LiteLLM dependency)."
+      - "Added startd8.agentic.loop (action, beta, 0.85) — AgenticSession multi-turn tool-use loop with safety bounds (max_turns, per-turn cap, repeated-call breaker, fail-closed budget), effect-class default-deny tool policy, typed errors; 3 consumers (TUI/MCP/Concierge)."
+      - "Added startd8.agentic.tool_use_primitive (action, beta, 0.85) — agenerate_tools(messages, tools)->AgenticTurn, additive opt-in (supports_tool_use), no provider Protocol change; Claude+OpenAI."
+      - "Added startd8.agentic.streaming (action, beta, 0.8) — stream() teeable AgenticEvent stream, per-token Claude/OpenAI, tee()+stream_sync bridge, ToolCallDelta/ReasoningDelta."
+      - "Added startd8.agentic.compaction (action, beta, 0.85) — context-overflow detection + pairing-safe compaction (tool_use<->tool_result invariant), graceful context_overflow terminal."
+      - "Added startd8.agentic.contextcore_integration (integration, beta, 0.8) — optional ContextCore observer + SpanState-v2 task adapter; pure outer layer, loop import-clean (guard test)."
+      - "Added startd8.agentic.observability (observe, beta, 0.8) — OTel spans (agentic.session/turn/tool_call/compaction) with gen_ai.*+io.contextcore.* conventions, registered as span descriptors; dashboard generated via /dbrd-cr8r (live-wiring pending)."
+      - "47 capabilities: 21 stable, 26 beta; action 7→11, observe 3→4, integration 5→6."
   - version: "1.8.0"
     date: "2026-06-21"
     changes:
