@@ -79,6 +79,35 @@ async def test_session_turn_and_tool_spans_emitted(spans):
 
 
 @pytest.mark.asyncio
+async def test_session_span_carries_gen_ai_and_contextcore_attrs(spans):
+    """FR-18 enrichment: gen_ai.* conventions always; io.contextcore.* when a ProjectContext is set."""
+    from startd8.otel import ProjectContext
+
+    agent = MockAgent(model="mock-model")  # no script -> one final-text turn
+    pc = ProjectContext(project_id="proj-42", project_name="startd8", task_id="task-7")
+    session = AgenticSession(agent, ToolRegistry([]), project_context=pc)
+    await session.send("hi")
+
+    attrs = spans("agentic.session")[0].attributes
+    # gen_ai.* conventions (align with AI Agent Observability taxonomy)
+    assert attrs["gen_ai.system"] == "mock"
+    assert attrs["gen_ai.request.model"] == "mock-model"
+    assert "gen_ai.usage.input_tokens" in attrs and "gen_ai.usage.output_tokens" in attrs
+    # io.contextcore.* attribution (only because a ProjectContext was passed)
+    assert attrs["io.contextcore.project.id"] == "proj-42"
+    assert attrs["io.contextcore.task.id"] == "task-7"
+
+
+@pytest.mark.asyncio
+async def test_session_span_omits_contextcore_when_no_context(spans):
+    agent = MockAgent(model="mock-model")
+    await AgenticSession(agent, ToolRegistry([])).send("hi")
+    attrs = spans("agentic.session")[0].attributes
+    assert "io.contextcore.project.id" not in attrs  # no context => no contextcore attrs
+    assert attrs["gen_ai.system"] == "mock"  # gen_ai still present
+
+
+@pytest.mark.asyncio
 async def test_session_span_records_budget_stop(spans):
     agent = MockAgent(
         model="mock-model",
