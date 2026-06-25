@@ -246,7 +246,7 @@ class SessionConfig:
 @dataclass
 class AgenticResult:
     """Outcome of a :meth:`AgenticSession.send`. ``stop_reason`` ∈ completed | max_turns |
-    repeated_calls | budget | context_overflow."""
+    repeated_calls | budget | context_overflow | stream_error."""
 
     text: str
     stop_reason: str
@@ -273,6 +273,7 @@ def stream_sync(async_event_iter):
 
     agen = async_event_iter
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)  # hygiene: make awaited code that consults get_event_loop() see ours
     try:
         while True:
             try:
@@ -285,6 +286,7 @@ def stream_sync(async_event_iter):
         except Exception:
             pass
         loop.close()
+        asyncio.set_event_loop(None)
 
 
 async def tee(async_event_iter, n: int = 2):
@@ -303,10 +305,19 @@ async def tee(async_event_iter, n: int = 2):
                 for q in queues:
                     await q.put(ev)
         finally:
+            # Always deliver sentinels (even on a source error) so every branch terminates rather
+            # than hanging — then surface the failure via the done-callback below.
             for q in queues:
                 await q.put(_SENTINEL)
 
-    asyncio.ensure_future(_pump())  # the running loop keeps a ref until it completes
+    pump_task = asyncio.ensure_future(_pump())  # the running loop keeps a ref until it completes
+
+    def _surface(task) -> None:
+        # Don't silently swallow a pump failure (asyncio would log "exception never retrieved").
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning("tee pump failed: %s", task.exception())
+
+    pump_task.add_done_callback(_surface)
 
     async def _branch(q):
         while True:
@@ -553,7 +564,18 @@ class AgenticSession:
                 yield RunComplete(self._finish(result_holder, last_text, "context_overflow", turn))
                 return
 
-            assert turn_obj is not None  # the primitive always ends with TurnComplete
+            if turn_obj is None:
+                # A streaming primitive must terminate with a TurnComplete. A misbehaving agent (e.g.
+                # a third-party provider) that doesn't would otherwise crash the loop with an opaque
+                # AssertionError — and an assert is stripped under `python -O`. Fail gracefully with a
+                # typed terminal instead.
+                logger.warning("AgenticSession: streaming primitive ended without a TurnComplete")
+                yield ErrorEvent(
+                    "stream", "MalformedStream",
+                    "streaming primitive ended without a TurnComplete", False,
+                )
+                yield RunComplete(self._finish(result_holder, last_text, "stream_error", turn))
+                return
             self._account(turn_obj)
             last_text = turn_obj.text or last_text
             self.messages.append(_assistant_message(turn_obj, self.tool_format))
