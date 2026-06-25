@@ -34,6 +34,8 @@ from typing import Any, Callable, Optional
 
 from ..logging_config import get_logger
 from ..models import AgenticTurn, ToolCallRequest
+from .agentic_otel import set_attributes as otel_set_attributes
+from .agentic_otel import span as otel_span
 from .base import BaseAgent
 from .compaction import compact, find_clean_cut, is_context_window_error
 
@@ -288,6 +290,29 @@ class AgenticSession:
         return await self._run()
 
     async def _run(self) -> AgenticResult:
+        # FR-18: a root session span wraps the whole loop; the outcome is stamped on return.
+        with otel_span(
+            "agentic.session",
+            **{
+                "agentic.provider": self.agent.name,
+                "agentic.model": self.agent.model,
+                "agentic.tool_format": self.tool_format,
+                "agentic.tool_count": len(self.registry),
+            },
+        ) as session_span:
+            result = await self._run_loop()
+            otel_set_attributes(
+                session_span,
+                **{
+                    "agentic.stop_reason": result.stop_reason,
+                    "agentic.turns": result.turns,
+                    "agentic.total_tokens": result.total_tokens,
+                    "agentic.total_cost_usd": result.total_cost_usd,
+                },
+            )
+            return result
+
+    async def _run_loop(self) -> AgenticResult:
         tools = self.registry.for_format(self.tool_format)
         call_counts: dict[tuple, int] = {}
         cfg = self.config
@@ -302,30 +327,44 @@ class AgenticSession:
                 logger.warning("AgenticSession stopped: cost budget reached ($%.4f)", self.total_cost_usd)
                 return self._result(last_text, "budget", turn - 1)
 
-            try:
-                agent_turn = await self._call_with_compaction(tools)
-            except ContextWindowExceededError:
-                logger.warning("AgenticSession stopped: context overflow unrecoverable by compaction")
-                return self._result(last_text, "context_overflow", turn)
-            self._account(agent_turn)
-            last_text = agent_turn.text or last_text
-            self.messages.append(_assistant_message(agent_turn, self.tool_format))
+            with otel_span("agentic.turn", **{"agentic.turn": turn}) as turn_span:
+                try:
+                    agent_turn = await self._call_with_compaction(tools)
+                except ContextWindowExceededError:
+                    logger.warning("AgenticSession stopped: context overflow unrecoverable by compaction")
+                    otel_set_attributes(turn_span, **{"agentic.stop_reason": "context_overflow"})
+                    return self._result(last_text, "context_overflow", turn)
+                self._account(agent_turn)
+                last_text = agent_turn.text or last_text
+                self.messages.append(_assistant_message(agent_turn, self.tool_format))
 
-            if not agent_turn.tool_calls:  # model answered → done
-                return self._result(agent_turn.text, "completed", turn)
+                n_calls = len(agent_turn.tool_calls)
+                otel_set_attributes(turn_span, **{"agentic.tool_calls": n_calls})
 
-            calls = agent_turn.tool_calls[: cfg.max_tool_calls_per_turn]
+                if not agent_turn.tool_calls:  # model answered → done
+                    return self._result(agent_turn.text, "completed", turn)
 
-            # FR-15: repeated-identical-call breaker (guards the {}-degraded doom loop).
-            for c in calls:
-                key = (c.name, json.dumps(c.arguments, sort_keys=True, default=str))
-                call_counts[key] = call_counts.get(key, 0) + 1
-                if call_counts[key] > cfg.repeated_call_limit:
-                    logger.warning("AgenticSession stopped: repeated identical call %s", c.name)
-                    return self._result(last_text, "repeated_calls", turn)
+                calls = agent_turn.tool_calls[: cfg.max_tool_calls_per_turn]
 
-            results = [await self.registry.dispatch(c) for c in calls]
-            self.messages.extend(_tool_result_messages(results, self.tool_format))
+                # FR-15: repeated-identical-call breaker (guards the {}-degraded doom loop).
+                for c in calls:
+                    key = (c.name, json.dumps(c.arguments, sort_keys=True, default=str))
+                    call_counts[key] = call_counts.get(key, 0) + 1
+                    if call_counts[key] > cfg.repeated_call_limit:
+                        logger.warning("AgenticSession stopped: repeated identical call %s", c.name)
+                        otel_set_attributes(turn_span, **{"agentic.stop_reason": "repeated_calls"})
+                        return self._result(last_text, "repeated_calls", turn)
+
+                results = []
+                for c in calls:
+                    with otel_span("agentic.tool_call", **{"agentic.tool": c.name}) as tool_span:
+                        res = await self.registry.dispatch(c)
+                        otel_set_attributes(
+                            tool_span,
+                            **{"agentic.tool_ok": res.ok, "agentic.tool_truncated": res.truncated},
+                        )
+                        results.append(res)
+                self.messages.extend(_tool_result_messages(results, self.tool_format))
 
         return self._result(last_text, "max_turns", cfg.max_turns)
 
@@ -351,9 +390,10 @@ class AgenticSession:
                     raise ContextWindowExceededError(
                         "cannot compact further (transcript already at minimum)"
                     ) from exc
-                self.messages = await compact(
-                    self.messages, self.tool_format, self._summarize, self.config.compact_keep_recent
-                )
+                with otel_span("agentic.compaction", **{"agentic.compaction_attempt": attempts}):
+                    self.messages = await compact(
+                        self.messages, self.tool_format, self._summarize, self.config.compact_keep_recent
+                    )
                 logger.warning("AgenticSession compacted history (compaction %d)", attempts)
 
     async def _summarize(self, text: str) -> str:
