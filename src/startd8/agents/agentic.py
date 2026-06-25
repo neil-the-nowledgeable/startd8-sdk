@@ -673,6 +673,15 @@ class AgenticSession:
                 self.total_cost_usd += turn.token_usage.cost_estimate
             except Exception:  # cost estimation is best-effort
                 pass
+        else:
+            # FR-S4 budget-bypass guard: a stream that completed without a usage chunk would
+            # otherwise charge nothing, so the before-turn budget check (FR-15) reads stale totals
+            # and the loop can overspend. Charge a rough estimate from the assistant text (~4 chars/
+            # token) so the budget still advances. Conservative, never zero.
+            est_output = max(1, len(turn.text or "") // 4)
+            self.total_tokens += est_output
+            self.total_output_tokens += est_output
+            logger.debug("AgenticSession: turn had no usage; estimated %d output tokens", est_output)
 
     def _result(self, text: str, stop_reason: str, turns: int) -> AgenticResult:
         return AgenticResult(
