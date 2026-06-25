@@ -39,6 +39,61 @@ def _score(d: dict):
     return score_journey(r)
 
 
+def _bring_up_fleet(image_namespace: str):
+    """Build the driver (if missing) + start the ``image_namespace`` fleet (reference backends are
+    built-if-missing; a model namespace's images are assumed pre-built). Returns (workdir, specs,
+    contestant) with all contestants ready. Caller MUST teardown the workdir's compose."""
+    specs = _subset_specs(FULL_SUBSET)
+    contestant = [s for s in specs if not s.is_infra]
+    _build_driver_image()
+    if image_namespace == "r3":
+        for s in contestant:
+            _build_one(s.name)
+    compose = generate_compose_dict(specs, image_namespace=image_namespace)
+    compose["services"][PROBE] = {"image": "alpine:3.20", "command": "sleep infinity",
+                                  "networks": [FLEET_NETWORK], "depends_on": [s.name for s in specs]}
+    compose["services"][DRIVER_SERVICE] = {"image": DRIVER_IMAGE, "networks": [FLEET_NETWORK],
+                                           "depends_on": [s.name for s in contestant], "profiles": ["driver"]}
+    workdir = Path(tempfile.mkdtemp(prefix="m6-fleet-"))
+    (workdir / "docker-compose.yml").write_text(yaml.safe_dump(compose, sort_keys=False))
+    _compose(workdir, "up", "-d", timeout=300)
+    for s in contestant:
+        if not _await_ready(workdir, s.name, s.dial_port):
+            raise RuntimeError(f"{s.name} never became ready")
+    return workdir, specs, contestant
+
+
+def score_namespace_fleet(image_namespace: str = "r3"):
+    """Bring up the ``image_namespace`` fleet, drive Adapter B once (healthy), return the Scorecard.
+    Reusable per-finalist scorer for the round3 CLI. Tears the fleet down on every path."""
+    workdir, _, _ = _bring_up_fleet(image_namespace)
+    try:
+        return _score(_run_driver(workdir))
+    finally:
+        _compose(workdir, "down", "-v", "--remove-orphans", check=False, timeout=120)
+
+
+def reference_attribution_trustworthy() -> bool:
+    """Bring up the reference fleet, break payment then catalog, and confirm each is attributed to the
+    right service with checkout exonerated — the harness-level attribution-trustworthiness signal the
+    decision gate consumes."""
+    workdir, _, _ = _bring_up_fleet("r3")
+    try:
+        _compose(workdir, "stop", "paymentservice", check=False, timeout=60)
+        nopay = _score(_run_driver(workdir))
+        ok_pay = (nopay.model_faulted_services == {"paymentservice"}
+                  and "checkoutservice" not in nopay.model_faulted_services)
+        _compose(workdir, "start", "paymentservice", check=False, timeout=60)
+        _await_ready(workdir, "paymentservice", 50051)
+        _compose(workdir, "stop", "productcatalogservice", check=False, timeout=60)
+        nocat = _score(_run_driver(workdir))
+        ok_cat = (nocat.model_faulted_services == {"productcatalogservice"}
+                  and "checkoutservice" not in nocat.model_faulted_services)
+        return ok_pay and ok_cat
+    finally:
+        _compose(workdir, "down", "-v", "--remove-orphans", check=False, timeout=120)
+
+
 def main() -> int:
     if not docker_available():
         print("docker absent — skip", flush=True)

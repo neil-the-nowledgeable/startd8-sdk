@@ -14,6 +14,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+from rich.markdown import Markdown
 from rich import print as rprint
 
 from .framework import AgentFramework
@@ -1159,6 +1160,43 @@ def show_template(
         else template.content
     )
     console.print(Panel(preview, title="Content Preview", border_style="dim"))
+
+
+@app.command("benchmark-round3")
+def benchmark_round3(
+    roster: Optional[Path] = typer.Option(
+        None, "--roster", help="Finalist roster YAML (finalists: [{model, image_namespace}]). "
+        "Omit for the single SDK-reference finalist (self-test).",
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Directory to write round3-system-report.{json,md}",
+    ),
+):
+    """Round-3 system benchmark: score each finalist's polyglot fleet end-to-end (Adapter B journey +
+    per-service attribution) and render the ranked advisory system report + decision gate. Builds/boots
+    Docker fleets — see docs/design/round3-full-app/. Advisory only (no auto-orchestrator)."""
+    # lazy import: the fleet runner pulls heavy docker/grpc deps not needed by other CLI commands.
+    from .benchmark_matrix.fleet.roster import load_roster, reference_roster
+    from .benchmark_matrix.fleet.round3 import live_attribution_check, live_score_fn, run_round3
+    from .benchmark_matrix.fleet.containerize import docker_available
+
+    if not docker_available():
+        console.print("[red]docker not found on PATH — round3 needs Docker.[/red]")
+        raise typer.Exit(2)
+
+    specs = load_roster(roster) if roster else reference_roster()
+    console.print(f"[cyan]Round 3:[/cyan] {len(specs)} finalist(s): "
+                  f"{', '.join(s.model for s in specs)}")
+    console.print("[dim]Checking attribution trustworthiness (reference broken-mesh)…[/dim]")
+    trustworthy = live_attribution_check()
+    report, md = run_round3(specs, score_fn=live_score_fn,
+                            attribution_trustworthy=trustworthy, out_dir=out)
+    console.print(Panel(Markdown(md), title="Round 3 — System Report", border_style="green"))
+    gate = report["decision_gate"]
+    color = "green" if gate["verdict"] == "GO" else "yellow"
+    console.print(f"[bold {color}]Decision gate: {gate['verdict']}[/bold {color}] — {gate['note']}")
+    if out:
+        console.print(f"[dim]Report written to {out}/round3-system-report.{{json,md}}[/dim]")
 
 
 # =============================================================================
