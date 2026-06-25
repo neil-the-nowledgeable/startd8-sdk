@@ -517,14 +517,15 @@ def generate_observability_artifacts(
     # byte-identical. The renderer is taxonomy-free; the _stamp_taxonomy pass below stamps the result.
     if observability_yaml_path is not None and Path(observability_yaml_path).exists():
         from .alert_renderer import render_domain_alert_rules
+        from .dashboard_renderer import render_domain_dashboard
         from .spec import from_observability_yaml
         _obs = yaml.safe_load(Path(observability_yaml_path).read_text(encoding="utf-8")) or {}
-        report.artifacts.append(
-            render_domain_alert_rules(
-                from_observability_yaml(_obs),
-                project_id=business.project_id or "domain",
-            )
-        )
+        _spec = from_observability_yaml(_obs)
+        _pid = business.project_id or "domain"
+        # E1: the SAME observability.yaml drives both — domain alert rules AND a domain dashboard.
+        # Both additive/opt-in; the renderers are taxonomy-free (the _stamp_taxonomy pass stamps them).
+        report.artifacts.append(render_domain_alert_rules(_spec, project_id=_pid))
+        report.artifacts.append(render_domain_dashboard(_spec, project_id=_pid))
 
     # Closure 3B: project-level capability index runs last so its inventory
     # reflects every artifact produced this run (triplet + extended + dashboard

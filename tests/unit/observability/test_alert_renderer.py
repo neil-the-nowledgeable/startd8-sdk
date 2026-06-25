@@ -120,13 +120,16 @@ def test_orchestrator_wiring_additive_and_red_byte_identical(tmp_path):
         onboarding_metadata_path=meta_path, output_dir=out, dry_run=True,
         observability_yaml_path=obs)
 
-    # absent → no domain artifact
-    assert not any("domain-alerts" in a.output_path for a in r0.artifacts)
+    # absent → no domain artifacts at all
+    assert not any("domain-" in a.output_path for a in r0.artifacts)
     # present → exactly one active domain-alert artifact with the declared expr
     dom = [a for a in r1.artifacts if "domain-alerts" in a.output_path]
     assert len(dom) == 1 and dom[0].status == "generated"
     assert "widget_overdue > 0" in dom[0].content
-    # RED / everything-else byte-identical between the two runs
+    # E1: present → also exactly one domain-dashboard artifact (same observability.yaml)
+    dash = [a for a in r1.artifacts if "domain-dashboard" in a.output_path]
+    assert len(dash) == 1 and dash[0].status == "generated"
+    # RED / everything-else byte-identical between the two runs (excludes BOTH domain artifacts)
     def others(r):
-        return {a.output_path: a.content for a in r.artifacts if "domain-alerts" not in a.output_path}
+        return {a.output_path: a.content for a in r.artifacts if "domain-" not in a.output_path}
     assert others(r0) == others(r1)
