@@ -21,15 +21,17 @@
 FROM {GO_BUILDER} AS build
 WORKDIR /src
 COPY . .
-# Derive deps from imports + write go.sum, then compile a static binary (mirror provision install_plan).
-RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/server .
+# Derive deps from imports + write go.sum, compile a static binary, then assemble the runtime dir:
+# the binary + any harness-owned ground-truth data files (e.g. products.json) the server reads from
+# cwd — EXCLUDING source/build files. Done HERE (the builder has a shell) so the distroless runtime
+# stage (no shell) only needs COPY (gcr.io/distroless/static has no /bin/sh for a cleanup RUN).
+RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/server . \
+    && find . -maxdepth 1 -type f ! -name '*.go' ! -name 'go.mod' ! -name 'go.sum' \
+         -exec cp {} /out/ \;
 
 FROM {RUNTIME}
 WORKDIR /app
-COPY --from=build /out/server /app/server
-# Carry any harness-owned ground-truth assets the server reads from cwd (products.json, etc.).
-COPY --from=build /src/ /app/
-RUN rm -f /app/*.go /app/go.mod /app/go.sum && rm -rf /app/.gostubs
+COPY --from=build /out/ /app/
 ENV PORT={PORT}
 EXPOSE {PORT}
 ENTRYPOINT ["/app/server"]

@@ -31,6 +31,8 @@ DEFERRED (not M0):
 """
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -112,8 +114,23 @@ def _stage_go_context(workdir: Path, target_files: List[str]) -> Tuple[List[str]
     stub_err = _prov.setup_go_stubs(Path(workdir), svc)
     if stub_err:
         return [], stub_err
-    staged = ["go.mod"]
+    # CONTAINERIZE FIX: setup_go_stubs writes an ABSOLUTE host path in the `replace` directive (fine
+    # for the bare-process build, where that path exists on the host). Inside the container the host
+    # path is absent, so `go build` fails to read .gostubs/go.mod. Rewrite the replace target to a
+    # path RELATIVE to the service go.mod so `COPY . .` + the relative replace resolve in-image
+    # (mirrors the validated compose-prototype `=> ./_stubs` recipe). Leaves provision.py untouched.
+    gomod = svc / "go.mod"
     gostubs = Path(workdir) / ".gostubs"
+    if gomod.is_file() and gostubs.is_dir():
+        rel = os.path.relpath(gostubs.resolve(), svc.resolve())
+        # Go requires a replacement dir path to start with `./` or `../` — NOT just any leading dot
+        # (e.g. `.gostubs` is rejected; `./.gostubs` is required).
+        if not (rel.startswith("./") or rel.startswith("../")):
+            rel = "./" + rel
+        text = gomod.read_text()
+        text = re.sub(r"(replace\s+\S+\s+=>\s+)\S+", lambda m: m.group(1) + rel, text)
+        gomod.write_text(text)
+    staged = ["go.mod"]
     if gostubs.is_dir():
         staged += [str(p.relative_to(workdir)) for p in sorted(gostubs.iterdir())]
     return staged, ""
