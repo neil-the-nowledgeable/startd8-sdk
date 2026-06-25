@@ -201,15 +201,23 @@ def _entry_for(language: str, target_files: List[str]) -> str:
     return ""
 
 
-def _image_spec(language: str, service: str, target_files: List[str], port: int) -> ImageSpec:
-    """Build the per-language ImageSpec (template + filled params). Canonical bases per §7b."""
+def _image_spec(language: str, service: str, target_files: List[str], port: int,
+                extra_pip: Optional[List[str]] = None) -> ImageSpec:
+    """Build the per-language ImageSpec (template + filled params). Canonical bases per §7b.
+
+    ``extra_pip`` are per-service Python deps appended to the curated baseline (``_PY_PIP_PKGS``) —
+    the container analogue of ``provision.install_plan``'s service ``requirements.txt`` top-up. Kept
+    per-service (not baked into the baseline) so leaf services that don't need them stay lean: e.g.
+    emailservice renders its confirmation body from a jinja2 template and needs ``jinja2``, but
+    recommendationservice does not."""
     lang = "node" if language == "nodejs" else language
     if lang == "go":
         return ImageSpec(lang, "Dockerfile.go.tmpl",
                          {"GO_BUILDER": _GO_BUILDER, "RUNTIME": _GO_RUNTIME, "PORT": str(port)}, port)
     if lang == "python":
+        pip_pkgs = " ".join([_PY_PIP_PKGS, *(extra_pip or [])]).strip()
         return ImageSpec(lang, "Dockerfile.python.tmpl",
-                         {"PYTHON_BASE": _PYTHON_BASE, "PIP_PKGS": _PY_PIP_PKGS,
+                         {"PYTHON_BASE": _PYTHON_BASE, "PIP_PKGS": pip_pkgs,
                           "ENTRY": _entry_for("python", target_files), "PORT": str(port)}, port)
     if lang == "node":
         return ImageSpec(lang, "Dockerfile.node.tmpl",
@@ -254,6 +262,7 @@ def build_service_image(
     build: bool = True,
     runner: Runner = subprocess.run,
     build_port: int = 8080,
+    extra_pip: Optional[List[str]] = None,
 ) -> ImageBuildResult:
     """Prepare the build context (REUSING ``provision.py``) + render the Dockerfile + construct (and,
     via ``runner``, optionally run) the ``docker build`` command for ``service``'s generated workdir.
@@ -269,6 +278,9 @@ def build_service_image(
       runner: injected (argv, cwd=...) -> CompletedProcess; default ``subprocess.run``. A test/dry-run
         passes a fake runner so the command is captured WITHOUT executing docker.
       build_port: the EXPOSE/PORT baked into the image (compose rebinds at run; M0 default 8080).
+      extra_pip: per-service Python deps appended to the curated baseline (Python only) — e.g.
+        ``["jinja2"]`` for emailservice; the container analogue of the service ``requirements.txt``
+        top-up in ``provision.install_plan``.
 
     Returns an :class:`ImageBuildResult`. ``--network=none`` hermetic build is DEFERRED (see module
     docstring): M0 builds pull base + deps over the network; the offline base/cache bake is M1+.
@@ -278,7 +290,7 @@ def build_service_image(
     tag = tag or _default_tag(service, language)
 
     # Resolve the per-language image recipe (raises for an unsupported language — Java/v2).
-    spec = _image_spec(language, service, target_files, build_port)
+    spec = _image_spec(language, service, target_files, build_port, extra_pip)
 
     # Prepare the build context by REUSING the behavioral provisioning helpers (§4/§6 reuse ledger).
     stager = _STAGERS.get(language)
