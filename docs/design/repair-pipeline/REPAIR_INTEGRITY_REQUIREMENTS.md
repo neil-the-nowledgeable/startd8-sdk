@@ -3,7 +3,7 @@
 **Version:** 0.1 (Draft — RUN-038 #1/#2)
 **Date:** 2026-06-04
 **Status:** Draft
-**Owner:** neil-the-nowledgable
+**Owner:** neil-the-nowledgeable
 **Driver:** [`RUN_038_CONVENTION_FIDELITY_VALIDATION.md`](../RUN_038_CONVENTION_FIDELITY_VALIDATION.md) §2.3, §2.4
 **Predecessor evidence:** `RUN_036_CONVENTION_INJECTION_VALIDATION_POSTMORTEM.md` (#1, #4)
 

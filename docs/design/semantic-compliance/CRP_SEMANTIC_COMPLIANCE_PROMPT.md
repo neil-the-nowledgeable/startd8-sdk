@@ -1071,7 +1071,7 @@ SA detects completed run
 **Version:** 0.2 (Post-planning — self-reflective update)
 **Date:** 2026-06-03
 **Status:** Draft
-**Owner:** neil-the-nowledgable
+**Owner:** neil-the-nowledgeable
 **Related:** `docs/design/service-assistant/` (the Service Assistant orchestrates this reviewer post-run)
 
 ---

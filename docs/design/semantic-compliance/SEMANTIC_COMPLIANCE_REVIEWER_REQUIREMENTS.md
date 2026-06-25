@@ -3,7 +3,7 @@
 **Version:** 0.4 (Field-driven — run-029: FR-17 missing-required-symbol backstop)
 **Date:** 2026-06-03
 **Status:** Draft
-**Owner:** neil-the-nowledgable
+**Owner:** neil-the-nowledgeable
 **Related:** `docs/design/service-assistant/` (the Service Assistant orchestrates this reviewer post-run)
 
 ---

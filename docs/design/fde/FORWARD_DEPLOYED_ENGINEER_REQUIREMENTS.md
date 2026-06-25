@@ -3,7 +3,7 @@
 **Version:** 0.3.1 (adds FR-28 latest-run resolution)
 **Date:** 2026-06-04
 **Status:** Draft
-**Owner:** neil-the-nowledgable
+**Owner:** neil-the-nowledgeable
 
 > **v0.3 triage summary.** Convergent Review produced 5 rounds (R1 opus + R2–R5 sonnet) totalling
 > ~35 F-suggestions (requirements) and ~31 S-suggestions (plan), all code-anchored. **Disposition:

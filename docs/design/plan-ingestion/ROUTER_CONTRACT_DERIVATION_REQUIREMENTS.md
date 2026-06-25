@@ -3,7 +3,7 @@
 **Version:** 0.3 (external-review fixes folded in — bare-router / FR-10 split / verifier reuse)
 **Date:** 2026-06-04
 **Status:** Draft
-**Owner:** neil-the-nowledgable
+**Owner:** neil-the-nowledgeable
 **Driver:** run-029 / run-032 boot failures; root-caused via Service Assistant + Semantic Compliance Reviewer
 
 > **v0.3 fold-in (3 review fixes, all complexity-reducing):** **R2-F1** — the deterministic floor emits a

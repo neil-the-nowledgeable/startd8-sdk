@@ -1188,7 +1188,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 **Version:** 0.2.2 (All open questions resolved — pre-CRP)
 **Date:** 2026-06-04
 **Status:** Draft
-**Owner:** neil-the-nowledgable
+**Owner:** neil-the-nowledgeable
 
 ---
 
