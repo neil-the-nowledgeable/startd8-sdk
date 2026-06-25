@@ -13,9 +13,9 @@ extractable into an `ObservabilitySpec` — the same model the alert renderer co
 closes end-to-end: **prose → spec → active alert rule**. Prose outside the `## Observability`
 section is tolerated and ignored.
 
-> **Slice status:** **Slice 1 = `#### Thresholds` + `#### Receivers`** extracts now (it feeds
-> alerts/notifications). Service-levels, collection, and the runbook (Slices 2–3) are authored below
-> for human value but are not extracted yet.
+> **Slice status:** all of `## Observability` extracts now — **Slice 1** (Thresholds + Receivers →
+> alert/notification rules) and **Slices 2–3** (Service-levels, Collection, Channels, Runbook → the
+> spec `context` for dashboards/SLOs/notifications).
 >
 > **Secret safety (load-bearing):** a receiver `Target` (and any contact) **must** be
 > env-indirected (`${VAR}`) or an obviously-fictional `.test` value. A literal URL/email is
@@ -29,6 +29,12 @@ section is tolerated and ignored.
 - Industry dataset: <end_user_application | …>
 
 ### Alerting
+
+#### Channels
+
+▷ Alert channels — one per bullet (free-text, not `Key: value`).
+
+- #<alerts-channel>
 
 #### Receivers
 
@@ -50,14 +56,37 @@ section is tolerated and ignored.
 | <app_error_rate> | > | 0.02 | ratio | critical | 5m |
 | <your_domain_signal> | > | 0 | count | warning | 0m |
 
-### Service levels   *(Slice 2 — authored for humans, not yet extracted)*
+### Service levels
 
 - Availability: <99.5>
 - Latency p99: <500ms>
 
-### Runbook   *(Slice 3 — authored for humans, not yet extracted)*
+#### Per service   *(optional — stricter SLOs where user trust is on the line)*
 
-- Overview: <one paragraph: what user-facing failure looks like, what backend failure looks like>
+| Service | Availability | Latency p99 |
+|---------|--------------|-------------|
+| <entry-app> | <99.9> | <300ms> |
+
+### Collection
+
+- Metrics interval: <30s>
+- Log level: <info>
+
+### Runbook
+
+- Overview: <one line: what user-facing failure looks like, what backend failure looks like>
+- Escalation: <oncall -> team lead -> vendor>
+
+#### Risks
+
+| Type | Description | Mitigation | Priority |
+|------|-------------|------------|----------|
+| <availability> | <known failure mode> | <the guard> | <high> |
+
+#### Procedures
+
+- <triage step 1 — start from the dashboard>
+- <a failure-mode-specific step>
 
 ---
 
@@ -66,8 +95,12 @@ section is tolerated and ignored.
 | Prose | → spec / `observability.yaml` | Rule |
 |---|---|---|
 | `- Provenance default:` / `- Industry dataset:` | `provenance_default` / `industry_dataset` | scalar key-lines |
+| `### Service levels` + `#### Per service` | `context.service_levels` (+ `per_service`) | key-lines (label → snake_case) + table |
+| `### Collection` | `context.collection` | key-lines |
+| `#### Channels` bullets | `context.alerting.channels[]` | free-text bullets |
 | `#### Receivers` table | `receivers[]` | `Target` MUST be `${VAR}` — a literal secret is **flagged** |
 | `#### Thresholds` table | `signals[].threshold` | `Op ∈ {> < >= <= ==}`; `Value` numeric; bad op / non-number → flagged |
+| `### Runbook` + `#### Risks` + `#### Procedures` | `context.runbook` (`overview/escalation/risks[]/procedures[]`) | key-lines + table + bullets |
 
 A receiver target that is a **literal** secret → `not_extracted(secret-literal)`. An out-of-vocab
 `Op` or a non-numeric `Value` → flagged in the `kickoff check` report (never guessed, contract §3).

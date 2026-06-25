@@ -824,5 +824,26 @@ def extract_observability(
             value=r.target,
             source=SourceRef(doc=label, heading_path=("Observability", "Alerting", "Receivers")),
         ))
-    return {"alerting": {"metric_thresholds": spec.metric_thresholds(),
-                         "receivers": spec.receivers_list()}}
+    # Slices 2-3 (context) — one record per present section + per channel.
+    obs_src = SourceRef(doc=label, heading_path=("Observability",))
+    for key in ("service_levels", "collection", "runbook"):
+        if key in spec.context:
+            records.append(ExtractionRecord(
+                "observability.yaml", f"/{key}", Status.EXTRACTED, source=obs_src,
+            ))
+    for i, ch in enumerate(spec.context.get("alerting", {}).get("channels", [])):
+        records.append(ExtractionRecord(
+            "observability.yaml", f"/alerting/channels/{i}", Status.EXTRACTED, value=ch,
+            source=SourceRef(doc=label, heading_path=("Observability", "Alerting", "Channels")),
+        ))
+    # Full observability.yaml candidate (context + alerting + scalars) — complete + round-trippable.
+    candidate = dict(spec.context)
+    alerting = dict(candidate.get("alerting", {}))
+    alerting["metric_thresholds"] = spec.metric_thresholds()
+    alerting["receivers"] = spec.receivers_list()
+    candidate["alerting"] = alerting
+    if spec.provenance_default:
+        candidate["provenance_default"] = spec.provenance_default
+    if spec.industry_dataset:
+        candidate["industry_dataset"] = spec.industry_dataset
+    return candidate

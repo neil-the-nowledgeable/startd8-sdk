@@ -116,12 +116,74 @@ def _receivers(sections) -> List[Receiver]:
     return out
 
 
-def extract_observability(doc: str) -> ObservabilitySpec:
-    """Prose ``## Observability`` (§2.12, Slice 1) → :class:`ObservabilitySpec`.
+# --------------------------------------------------------------------------- #
+# Slices 2-3: the non-alert surface → context (service-levels / collection /
+# channels / runbook). Mirrors from_observability_yaml's context shape so the
+# prose and YAML front doors produce the SAME spec over the whole doc (FR-OTP-4).
+# --------------------------------------------------------------------------- #
+def _snake(label: str) -> str:
+    """``Latency p99`` → ``latency_p99`` (a key-line label → a context key)."""
+    return re.sub(r"[^0-9a-z]+", "_", label.strip().lower()).strip("_")
 
-    An absent ``## Observability`` section yields an empty spec (the section is optional). Malformed
-    rows loud-fail (bad ``op`` via ``Threshold``, non-numeric ``value``, literal-secret target),
-    matching the strict-parser philosophy; the soft ``kickoff check`` flag report is P2 (FR-OTP-11).
+
+def _bullets(body: str) -> List[str]:
+    """``- item`` lines (whole content after the dash) — Channels/Procedures are free-text bullets,
+    distinct from ``- Key: value`` key-lines, so they are parsed by section, never ambiguously."""
+    return [s[2:].strip() for s in (ln.strip() for ln in body.splitlines()) if s.startswith("- ")]
+
+
+def _kv_section(scoped: List, title: str) -> dict:
+    sec = find_section(scoped, title)
+    if sec is None:
+        return {}
+    kv, _ = key_lines(sec.body)
+    return {_snake(k): v for k, v in kv.items()}
+
+
+def _service_levels(scoped: List) -> dict:
+    sl = _kv_section(scoped, "Service levels")
+    per_sec = find_section(scoped, "Per service")
+    if per_sec is not None:
+        for table in md_tables(per_sec.body):
+            if "service" not in set(table.headers):
+                continue
+            ps = {
+                row["service"].strip(): {_snake(h): row[h] for h in table.headers if h != "service"}
+                for row in table.dicts() if row.get("service", "").strip()
+            }
+            if ps:
+                sl["per_service"] = ps
+    return sl
+
+
+def _channels(scoped: List) -> List[str]:
+    sec = find_section(scoped, "Channels")
+    return _bullets(sec.body) if sec is not None else []
+
+
+def _runbook(scoped: List) -> dict:
+    rb: dict = _kv_section(scoped, "Runbook")  # overview / escalation key-lines
+    risks_sec = find_section(scoped, "Risks")
+    if risks_sec is not None:
+        rows = [dict(row) for table in md_tables(risks_sec.body)
+                if "type" in set(table.headers) for row in table.dicts()]
+        if rows:
+            rb["risks"] = rows
+    procs_sec = find_section(scoped, "Procedures")
+    if procs_sec is not None:
+        procs = _bullets(procs_sec.body)
+        if procs:
+            rb["procedures"] = procs
+    return rb
+
+
+def extract_observability(doc: str) -> ObservabilitySpec:
+    """Prose ``## Observability`` (§2.12, Slices 1-3) → :class:`ObservabilitySpec`.
+
+    Slice 1 = Thresholds + Receivers (signals/receivers); Slices 2-3 = Service-levels/Collection/
+    Channels/Runbook (``context``). An absent ``## Observability`` section yields an empty spec.
+    Malformed rows loud-fail (bad ``op`` via ``Threshold``, non-numeric ``value``, literal-secret
+    target), matching the strict-parser philosophy; the soft ``kickoff check`` flag report is P2.
     """
     sections = parse_sections(doc)
     obs = find_section(sections, "Observability")
@@ -132,9 +194,22 @@ def extract_observability(doc: str) -> ObservabilitySpec:
     scoped = [s for s in sections if "Observability" in s.heading_path]
     kv, _ = key_lines(obs.body)
     kv_lower = {k.lower(): v for k, v in kv.items()}
+
+    # Slices 2-3 → context, in from_observability_yaml's shape (so prose ≡ YAML over the whole doc).
+    context: dict = {}
+    if (sl := _service_levels(scoped)):
+        context["service_levels"] = sl
+    if (col := _kv_section(scoped, "Collection")):
+        context["collection"] = col
+    if (channels := _channels(scoped)):
+        context.setdefault("alerting", {})["channels"] = channels
+    if (rb := _runbook(scoped)):
+        context["runbook"] = rb
+
     return ObservabilitySpec(
         signals=_thresholds(scoped),
         receivers=_receivers(scoped),
+        context=context,
         provenance_default=kv_lower.get("provenance default", ""),
         industry_dataset=kv_lower.get("industry dataset", ""),
         domain="observability",
