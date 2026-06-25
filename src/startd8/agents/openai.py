@@ -472,7 +472,8 @@ class GPT4Agent(BaseAgent):
         kwargs = _build_chat_kwargs(
             self.model, msgs, token_limit, temperature, None, enforce_next_gen=True
         )
-        kwargs["tools"] = tools
+        if tools:  # empty tool set => omit the kwarg (OpenAI rejects tools=[])
+            kwargs["tools"] = tools
 
         async def _create():
             return await self.async_client.chat.completions.create(**kwargs)

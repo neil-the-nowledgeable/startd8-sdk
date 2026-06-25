@@ -725,17 +725,19 @@ class ClaudeAgent(BaseAgent):
             system_prompt if system_prompt is not None else self.system_prompt
         )
 
+        api_tools = tools or None  # empty tool set => omit the kwarg (Anthropic rejects tools=[])
+
         async def _call():
             try:
                 if self.retry_config is not None:
                     make_call = with_retry(self.retry_config)(self._make_api_call)
                     return await make_call(
                         messages=msgs, system_prompt=effective_system_prompt, max_tokens=max_tokens,
-                        temperature=temperature, tools=tools,
+                        temperature=temperature, tools=api_tools,
                     )
                 return await self._make_api_call(
                     messages=msgs, system_prompt=effective_system_prompt, max_tokens=max_tokens,
-                    temperature=temperature, tools=tools,
+                    temperature=temperature, tools=api_tools,
                 )
             except RetryError as exc:  # mirror agenerate (L3): wrap exhausted transport retries
                 raise APIError(

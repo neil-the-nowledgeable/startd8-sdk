@@ -440,9 +440,18 @@ class EnhancementChainMixin:
                 questionary.press_any_key_to_continue().ask()
                 return
 
+        # FR-10: opt-in agentic mode gives the chat real multi-turn memory (a persistent
+        # AgenticSession), vs the legacy stateless single-shot path. Gated on STARTD8_TUI_AGENTIC +
+        # the agent supporting tool use; legacy path is retained for everything else.
+        from ..tui.agentic_chat import agentic_mode_enabled, cost_suffix, make_chat_session, reply
+
+        use_agentic = agentic_mode_enabled(agent)
+        chat_session = make_chat_session(agent) if use_agentic else None
+        mode_note = "multi-turn memory" if use_agentic else "single-shot"
+
         # Chat header
         self.console.print(Panel(
-            f"[bold cyan]Chatting with {agent_id}[/bold cyan]\n\n"
+            f"[bold cyan]Chatting with {agent_id}[/bold cyan]  [dim]({mode_note})[/dim]\n\n"
             "[dim]Type 'exit', 'quit', or 'back' to return to menu[/dim]",
             border_style="cyan"
         ))
@@ -464,19 +473,20 @@ class EnhancementChainMixin:
             # Generate response
             try:
                 with self.console.status("[bold cyan]Thinking...[/bold cyan]"):
-                    response, tokens_in, token_usage = agent.generate(user_input)
-
-                # Extract output tokens (handle both int and TokenUsage object)
-                if hasattr(token_usage, 'output'):
-                    tokens_out = token_usage.output
-                else:
-                    tokens_out = token_usage
+                    if chat_session is not None:
+                        result = reply(chat_session, user_input)  # async session via sync bridge
+                        response, subtitle = result.text, cost_suffix(result)
+                    else:
+                        response, tokens_in, token_usage = agent.generate(user_input)
+                        # Extract output tokens (handle both int and TokenUsage object)
+                        tokens_out = token_usage.output if hasattr(token_usage, 'output') else token_usage
+                        subtitle = f"tokens: {tokens_in} in / {tokens_out} out"
 
                 # Display response with markdown rendering
                 self.console.print(Panel(
                     Markdown(response),
                     title=f"[bold]{agent_id}[/bold]",
-                    subtitle=f"[dim]tokens: {tokens_in} in / {tokens_out} out[/dim]",
+                    subtitle=f"[dim]{subtitle}[/dim]",
                     border_style="green"
                 ))
             except Exception as e:
