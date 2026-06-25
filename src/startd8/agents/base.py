@@ -268,6 +268,15 @@ class BaseAgent(ABC):
         """
         return False
 
+    def supports_streaming(self) -> bool:
+        """Whether this agent implements ``agenerate_tools_stream`` (FR-S2).
+
+        Opt-in capability flag, default ``False``. ``AgenticSession.stream()`` gates on this: streaming
+        agents drive the live path; others fall back to one text delta from :meth:`agenerate_tools`
+        (FR-S6), so consumers get a uniform event stream regardless.
+        """
+        return False
+
     async def agenerate_tools(
         self,
         messages: "list[dict] | str",

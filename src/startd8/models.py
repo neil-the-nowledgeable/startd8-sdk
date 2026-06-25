@@ -7,6 +7,7 @@
 Data models for StartDate Agent Framework
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, TYPE_CHECKING, TypedDict, NamedTuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -153,6 +154,74 @@ class AgenticTurn(NamedTuple):
     token_usage: Optional[TokenUsage]
     finish_reason: Optional[str]
     time_ms: int
+
+
+# --------------------------------------------------------------------------- streaming events (FR-S1)
+@dataclass(frozen=True)
+class AgenticEvent:
+    """Base of the closed streaming-event union yielded by ``AgenticSession.stream()`` (FR-2).
+
+    Events are **data only** so the stream is teeable — any number of consumers (TUI render, a
+    ContextCore progress observer, …) may read every event without one blocking another."""
+
+
+@dataclass(frozen=True)
+class StreamStart(AgenticEvent):
+    """Emitted once when a streamed run begins."""
+
+
+@dataclass(frozen=True)
+class TextDelta(AgenticEvent):
+    """An incremental chunk of assistant text."""
+    text: str
+
+
+@dataclass(frozen=True)
+class ToolCallStarted(AgenticEvent):
+    """The model requested a tool; dispatch is about to run."""
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class ToolCallResult(AgenticEvent):
+    """A dispatched tool finished. (Named to avoid colliding with the ``ToolResult`` envelope.)"""
+    id: str
+    name: str
+    ok: bool
+
+
+@dataclass(frozen=True)
+class CompactionEvent(AgenticEvent):
+    """History was compacted to recover from a context-window overflow (so a live UI isn't 'frozen')."""
+    attempt: int
+
+
+@dataclass(frozen=True)
+class StreamReset(AgenticEvent):
+    """Discard already-rendered partial text: the turn is being retried (e.g. after mid-stream overflow)."""
+    reason: str
+
+
+@dataclass(frozen=True)
+class ErrorEvent(AgenticEvent):
+    """A typed failure surfaced mid-run (before the terminal ``RunComplete``)."""
+    scope: str
+    error_type: str
+    message: str
+    recoverable: bool
+
+
+@dataclass(frozen=True)
+class TurnComplete(AgenticEvent):
+    """One turn finished (after any tool dispatch); carries the accumulated turn."""
+    turn: "AgenticTurn"
+
+
+@dataclass(frozen=True)
+class RunComplete(AgenticEvent):
+    """Terminal event: the run reached a stop state. ``result`` is the sole source of truth (OQ-S2)."""
+    result: "object"  # AgenticResult (defined in agents.agentic; kept un-imported to avoid a cycle)
 
 
 @lru_cache(maxsize=1)
