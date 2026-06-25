@@ -811,11 +811,12 @@ class ClaudeAgent(BaseAgent):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ):
-        """Stream a tool-use turn (FR-S2). Yields :class:`TextDelta` per text fragment, then a terminal
-        :class:`TurnComplete` carrying the accumulated turn. Tool calls are assembled from the stream's
-        final message (Anthropic's ``get_final_message``) — no manual tool-arg accumulation (that
-        robustness is MVP-B), so the turn is structurally identical to the non-streaming path."""
-        from ..models import TextDelta, TurnComplete
+        """Stream a tool-use turn (FR-S2). Yields :class:`TextDelta` per text fragment (and, MVP-B,
+        :class:`ToolCallDelta` per streamed tool-arg fragment + :class:`ReasoningDelta` per thinking
+        fragment), then a terminal :class:`TurnComplete` carrying the accumulated turn. The turn's tool
+        calls are assembled from the stream's final message (Anthropic's ``get_final_message``), so it
+        is structurally identical to the non-streaming path regardless of how deltas arrived."""
+        from ..models import ReasoningDelta, TextDelta, ToolCallDelta, TurnComplete
 
         msgs = self._normalize_messages(messages)
         effective_system = system_prompt if system_prompt is not None else self.system_prompt
@@ -830,13 +831,30 @@ class ClaudeAgent(BaseAgent):
             kwargs["tools"] = tools
 
         start_time = time.time()
+        # Track the tool_use block currently streaming (id/name arrive on content_block_start) so a
+        # streamed input_json_delta can be surfaced as a ToolCallDelta with its call id/name.
+        block: dict = {"id": "", "name": ""}
         async with self.async_client.messages.stream(**kwargs) as stream:
             async for event in stream:
-                if getattr(event, "type", None) == "content_block_delta":
+                etype = getattr(event, "type", None)
+                if etype == "content_block_start":
+                    cb = getattr(event, "content_block", None)
+                    if getattr(cb, "type", None) == "tool_use":
+                        block = {"id": getattr(cb, "id", "") or "", "name": getattr(cb, "name", "") or ""}
+                elif etype == "content_block_delta":
                     delta = getattr(event, "delta", None)
-                    if getattr(delta, "type", None) == "text_delta":
+                    dtype = getattr(delta, "type", None)
+                    if dtype == "text_delta":
                         text = getattr(delta, "text", "") or ""
                         if text:
                             yield TextDelta(text)
+                    elif dtype == "input_json_delta":  # MVP-B: streamed tool-call args
+                        frag = getattr(delta, "partial_json", "") or ""
+                        if frag:
+                            yield ToolCallDelta(block["id"], block["name"], frag)
+                    elif dtype == "thinking_delta":  # MVP-B: extended-thinking reasoning
+                        think = getattr(delta, "thinking", "") or ""
+                        if think:
+                            yield ReasoningDelta(think)
             final_message = await stream.get_final_message()
         yield TurnComplete(self._turn_from_message(final_message, start_time))

@@ -554,7 +554,7 @@ class GPT4Agent(BaseAgent):
         terminal :class:`TurnComplete`. OpenAI has no final-message helper, so tool calls are assembled
         **by index** across chunks (basic accumulation — the FR-S3 edge-case hardening is MVP-B). Usage
         arrives in the final chunk via ``stream_options.include_usage``."""
-        from ..models import TextDelta, TurnComplete
+        from ..models import TextDelta, ToolCallDelta, TurnComplete
 
         effective_system_prompt = (
             system_prompt if system_prompt is not None else self.system_prompt
@@ -601,8 +601,11 @@ class GPT4Agent(BaseAgent):
                 if fn is not None:
                     if getattr(fn, "name", None):
                         slot["name"] = fn.name
-                    if getattr(fn, "arguments", None):
-                        slot["args"] += fn.arguments
+                    frag = getattr(fn, "arguments", None)
+                    if frag:
+                        slot["args"] += frag
+                        # MVP-B: surface the argument fragment as it streams (capability-gated event).
+                        yield ToolCallDelta(slot["id"], slot["name"], frag)
 
         tool_calls: list[ToolCallRequest] = []
         for idx in sorted(tc_acc):

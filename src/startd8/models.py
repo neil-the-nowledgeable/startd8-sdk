@@ -213,6 +213,23 @@ class ErrorEvent(AgenticEvent):
 
 
 @dataclass(frozen=True)
+class ToolCallDelta(AgenticEvent):
+    """MVP-B (optional, capability-gated): a streamed fragment of a tool call's arguments, surfaced as
+    it arrives so a slow tool-arg stream isn't invisible until the call completes. ``name`` may be
+    empty for fragments that arrive before the name."""
+    id: str
+    name: str
+    partial_args: str
+
+
+@dataclass(frozen=True)
+class ReasoningDelta(AgenticEvent):
+    """MVP-B (optional, capability-gated): a streamed fragment of the model's reasoning / extended
+    thinking (e.g. Claude thinking deltas), distinct from the assistant answer (``TextDelta``)."""
+    text: str
+
+
+@dataclass(frozen=True)
 class TurnComplete(AgenticEvent):
     """One turn finished (after any tool dispatch); carries the accumulated turn."""
     turn: "AgenticTurn"
