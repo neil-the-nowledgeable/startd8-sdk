@@ -10,7 +10,7 @@ from typing import Any, Optional, Tuple
 
 from pydantic import ValidationError
 
-from ..models import TokenUsage, GenerateResult, StructuredResult
+from ..models import TokenUsage, GenerateResult, StructuredResult, AgenticTurn, ToolCallRequest
 from .model_timing import record_model_time_ms  # FR-SPEED-1: accumulate pure model API time
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent
@@ -693,3 +693,95 @@ class ClaudeAgent(BaseAgent):
         if last_error is not None:
             raise last_error
         raise RuntimeError("structured generation produced no result")  # unreachable; not an assert (L1)
+
+    def supports_tool_use(self) -> bool:
+        """ClaudeAgent implements the FR-0 tool-use primitive (:meth:`agenerate_tools`)."""
+        return True
+
+    async def agenerate_tools(
+        self,
+        prompt: str,
+        tools: list,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> AgenticTurn:
+        """One agentic turn (FR-0): present *tools* unforced, return text + all tool calls.
+
+        Generalizes :meth:`agenerate_structured` — N tools instead of one, no ``tool_choice``
+        forcing, no schema validation. Parses every ``tool_use`` block into a
+        :class:`ToolCallRequest` and concatenates ``text`` blocks. Transport retry/usage extraction
+        mirror :meth:`agenerate`. Multi-message threading and compaction live in the loop (Increment
+        1); this primitive is single-prompt.
+        """
+        from ..exceptions import APIError
+
+        effective_system_prompt = (
+            system_prompt if system_prompt is not None else self.system_prompt
+        )
+
+        async def _call():
+            try:
+                if self.retry_config is not None:
+                    make_call = with_retry(self.retry_config)(self._make_api_call)
+                    return await make_call(
+                        prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                        temperature=temperature, tools=tools,
+                    )
+                return await self._make_api_call(
+                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    temperature=temperature, tools=tools,
+                )
+            except RetryError as exc:  # mirror agenerate (L3): wrap exhausted transport retries
+                raise APIError(
+                    f"API call failed after {exc.attempts} attempts: {exc.last_exception}",
+                    provider=self.name,
+                    original_error=exc.last_exception,
+                ) from exc
+
+        start_time = time.time()
+        response = await _call()
+
+        text_parts: list[str] = []
+        tool_calls: list[ToolCallRequest] = []
+        for block in getattr(response, "content", None) or []:
+            btype = getattr(block, "type", None)
+            if btype == "text":
+                text_parts.append(getattr(block, "text", "") or "")
+            elif btype == "tool_use":
+                tool_calls.append(
+                    ToolCallRequest(
+                        id=getattr(block, "id", "") or "",
+                        name=getattr(block, "name", "") or "",
+                        arguments=dict(getattr(block, "input", None) or {}),
+                    )
+                )
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        stop_reason = getattr(response, "stop_reason", None)
+        usage = getattr(response, "usage", None)
+        token_usage = None
+        if usage is not None:
+            _raw_creation = getattr(usage, "cache_creation_input_tokens", None)
+            _raw_read = getattr(usage, "cache_read_input_tokens", None)
+            token_usage = TokenUsage(
+                input=usage.input_tokens,
+                output=usage.output_tokens,
+                total=usage.input_tokens + usage.output_tokens,
+                model_name=self.model,
+                finish_reason=stop_reason,
+                cache_creation_input_tokens=(
+                    _raw_creation if isinstance(_raw_creation, int) else None
+                ),
+                cache_read_input_tokens=(
+                    _raw_read if isinstance(_raw_read, int) else None
+                ),
+            )
+        record_model_time_ms(response_time_ms)
+        return AgenticTurn(
+            text="".join(text_parts),
+            tool_calls=tool_calls,
+            token_usage=token_usage,
+            finish_reason=stop_reason,
+            time_ms=response_time_ms,
+        )

@@ -259,6 +259,40 @@ class BaseAgent(ABC):
             f"{type(self).__name__} does not support structured (tool-use) output yet"
         )
 
+    def supports_tool_use(self) -> bool:
+        """Whether this agent implements :meth:`agenerate_tools` (the agentic-loop primitive).
+
+        Opt-in capability flag (FR-0). Default ``False`` so the 10 existing providers and downstream
+        consumers are untouched until a provider's tool-use path passes its smoke test. The agentic
+        loop must gate on this before calling :meth:`agenerate_tools`.
+        """
+        return False
+
+    async def agenerate_tools(
+        self,
+        prompt: str,
+        tools: list,
+        **kwargs: Any,
+    ) -> "AgenticTurn":
+        """Generate one agentic turn: assistant text + any tool calls the model requested.
+
+        The foundational primitive for the agentic loop (FR-0). Unlike
+        :meth:`agenerate_structured` (a *single forced* tool for schema output), this presents N
+        tools with no forced choice and returns **all** tool calls plus text, as an
+        :class:`AgenticTurn` (a sibling type — ``GenerateResult`` cannot carry tool calls).
+
+        Args:
+            prompt: The user/turn prompt text. (Multi-message threading lands in Increment 1.)
+            tools: Provider-native tool specs (Anthropic ``{name, description, input_schema}``).
+            **kwargs: Per-call overrides (``system_prompt``, ``max_tokens``, ``temperature``).
+
+        Raises:
+            NotImplementedError: Providers that have not implemented the tool-use primitive.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement agenerate_tools (FR-0) yet"
+        )
+
     def generate(self, prompt: str, **kwargs: Any) -> GenerateResult:
         """
         Synchronous wrapper for backward compatibility.

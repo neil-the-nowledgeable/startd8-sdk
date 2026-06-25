@@ -126,6 +126,35 @@ class StructuredResult(NamedTuple):
     raw: GenerateResult
 
 
+class ToolCallRequest(NamedTuple):
+    """A single tool call the model wants executed: ``(id, name, arguments)``.
+
+    Provider-neutral. ``arguments`` is the already-parsed input object (dict), not a JSON string —
+    the per-provider ``agenerate_tools`` adapter normalizes Anthropic ``tool_use.input`` (dict) and
+    OpenAI ``function.arguments`` (JSON string) into this one shape.
+    """
+    id: str
+    name: str
+    arguments: dict
+
+
+class AgenticTurn(NamedTuple):
+    """One turn of a tool-use loop: assistant text + the tool calls it requested.
+
+    Sibling return type for ``BaseAgent.agenerate_tools``, deliberately NOT an extension of
+    :class:`GenerateResult` (a strict 3-tuple unpacked at ~77 sites — see :class:`StructuredResult`).
+    ``tool_calls`` is empty when the model produced a final text answer (``finish_reason`` is then the
+    natural stop, e.g. ``"end_turn"``/``"stop"``); non-empty when it wants tools run before
+    continuing (``finish_reason`` ~ ``"tool_use"``/``"tool_calls"``). The loop appends results and
+    re-enters until ``tool_calls`` is empty.
+    """
+    text: str
+    tool_calls: List["ToolCallRequest"]
+    token_usage: Optional[TokenUsage]
+    finish_reason: Optional[str]
+    time_ms: int
+
+
 @lru_cache(maxsize=1)
 def _default_pricing_service():
     from .costs.pricing import PricingService
