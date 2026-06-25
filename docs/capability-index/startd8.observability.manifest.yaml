@@ -423,6 +423,15 @@ metrics:
   - database
   category: pipeline_innate
   orientation: system
+- name: sapper.findings.count
+  instrument: counter
+  unit: '1'
+  description: Number of friction findings in a Sapper convention-survey report
+  meter: startd8.sapper
+  source_file: src/startd8/sapper/report.py
+  labels: []
+  category: pipeline_innate
+  orientation: system
 - name: pipeline.artifact_inventory.lookup
   instrument: counter
   unit: '1'

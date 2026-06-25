@@ -39,6 +39,7 @@ _INSTRUMENTED_MODULES = [
     ("startd8.micro_prime.repair", "src/startd8/micro_prime/repair.py"),
     ("startd8.workflows.builtin.plan_ingestion_mottainai", "src/startd8/workflows/builtin/plan_ingestion_mottainai.py"),
     ("startd8.security_prime.otel", "src/startd8/security_prime/otel.py"),
+    ("startd8.sapper.report", "src/startd8/sapper/report.py"),  # declares sapper.findings.count
     ("startd8.utils.artifact_inventory", "src/startd8/utils/artifact_inventory.py"),
     ("startd8.frontend_codegen.telemetry", "src/startd8/frontend_codegen/telemetry.py"),
     ("startd8.presentation_polish.telemetry", "src/startd8/presentation_polish/telemetry.py"),
