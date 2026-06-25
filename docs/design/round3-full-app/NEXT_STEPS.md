@@ -34,10 +34,14 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 - ✅ **LIVE — M2 EXIT CRITERION MET** (`validate_m2`, `dedf9ec7`): the `m2driver` container (python+grpc, runs `adapter_b` on the fleet net, dials by service-DNS, prints per-step JSON — egress-deny preserved). **Healthy mesh = coverage 1.00** (all 5 steps pass end-to-end: browse; setCurrency→EUR; addToCart; viewCart w/ live shipping quote; checkout order_id). **Break payment (`compose stop paymentservice`) → `failed=['checkout']`** — only checkout fails (live per-service attribution). Harness bug caught+fixed live: `compose run` was reviving the stopped dep → `--no-deps`. Confirmed `checkout_reference` is a real 6-dep orchestrator.
 - ✅ **M2 LANDED on `origin/main`** (FF `0c810feb..cd4ae11b`).
 
-**M3 EXIT CRITERION MET — layered scoring + per-service attribution, live on 3 meshes; NOT yet pushed** — branch `feat/r3-m3-scoring` (worktree `startd8-r3-m3`, off the M2-merged `origin/main`; commits `ab766192`/`65ca9246`):
+**M3 EXIT CRITERION MET + MERGED — layered scoring + per-service attribution, live on 3 meshes** (FF `c642fedb..be9e9783`):
 - ✅ **Culprit-aware Adapter B** — `adapter_b.py`: each failed step names the responsible service (a `_rpc(service, fn)` helper tags RPC errors; direct steps return the broken service; the checkout step parses the orchestrator's wrapped error — `charge:`→payment, `getproduct:`→catalog, … — so a checkout failure names the failing DEP). `StepResult.culprit`; `journey.py` `JourneyStep.orchestrated` (checkout only).
 - ✅ **Scorer** — `fleet/score.py`: `score_journey(JourneyResult) → Scorecard` (per-step coverage weighted+unweighted; per-service attribution `model-fault`/`propagated`/`harness`; `journey_completed` FR-13; `confidence` low-when-all-fail FR-22). A downstream-dep break of an orchestrated step → **model-fault on the dep + propagated (NOT model-fault) on checkoutservice**. Pure function, unit-tested.
 - ✅ **LIVE (`validate_m3`)** — run + score on the reference mesh + 2 broken meshes: **reference** coverage 1.00, no model-fault; **break payment** → `model-fault: paymentservice` + `propagated: checkoutservice via paymentservice`; **break catalog** → `model-fault: productcatalogservice` + `propagated: checkoutservice`. Checkout NEVER charged for an upstream break (the load-bearing M3 rule), live on both. **32 M1/M2/M3 unit tests pass.**
+
+**M6 EXIT CRITERION MET — system report + decision gate; R3 BACKBONE M0→M6 COMPLETE; NOT yet pushed** — branch `feat/r3-m6-finalists` (worktree `startd8-r3-m6`, off the M3-merged `origin/main`; commits `220e398a`):
+- ✅ **Report + ranking + gate** — `fleet/report.py`: `FinalistScore` + `rank_finalists` (system score = weighted per-step coverage desc; tie-break fewer own model-faults, then cost) + `DecisionGate` (advisory FR-21 — **GO iff the journey DISCRIMINATES finalists AND attribution is TRUSTWORTHY**) + `build_system_report → (json, markdown leaderboard)`. Pure functions over `Scorecard`. **7 unit tests** (rank, tie-breaks, GO/NO-GO for tie / untrustworthy / single-finalist, render).
+- ✅ **LIVE capstone (`validate_m6`)** — proves the END-TO-END M0→M6 pipeline emits `round3-system-report.{json,md}` from LIVE Scorecards. Drove the reference fleet in 3 configs as discriminating finalists: **`reference` 1.000 > `reference-no-payment` 0.944 > `reference-no-catalog` 0.278** (the browse-heavy §1 weighting makes a catalog break far more damaging than a payment break — the weighting discriminates as intended); per-finalist model-faults attributed correctly; **decision gate GO** (spread 0.722, attribution trustworthy). A real benchmark run feeds distinct MODEL fleets into the same report path.
 
 **Already SHIPPED / VALIDATED (start from this reality, don't rebuild):**
 - **5 per-service behavioral suites + reference fixtures** — `behavioral/{catalog,email,cart,recommendation,checkout}_suite.py` (+ currency/charge/shipping/ad/pricing).
@@ -50,16 +54,20 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 
 ---
 
-## Continue here → land M3 on `origin/main`, then M6 (or the M4/M5 frontend bonus)
+## Continue here → land M6, then the remaining wiring / parallel branch
 
-The R3 **backbone M0→M3 is complete** (M0/M1/M2 landed; M3 exit criterion met). M3 — culprit-aware `adapter_b` + `score.py` + `validate_m3` — is committed on `feat/r3-m3-scoring` (`ab766192`/`65ca9246` + docs), **NOT yet pushed**.
+The R3 **backbone M0→M6 is COMPLETE and live-proven end-to-end** (M0–M3 landed; M6 — `report.py` + `validate_m6` capstone — committed on `feat/r3-m6-finalists` (`220e398a`), **NOT yet pushed**). The harness builds 8-backend polyglot fleets, drives the journey, scores per-step coverage with honest per-service attribution, and emits a ranked advisory system report with a decision gate.
 
-1. **Land M3 on `origin/main`** via the contended-`main` recipe: worktree off `origin/main` → cherry-pick the M3 commits → confirm `merge-tree` clean + `merge-base --is-ancestor` → FF-push. (`origin/main` may have diverged — re-check.) Then remove the merged worktrees (`startd8-r3-m0*`, `startd8-r3-m1`, `startd8-r3-m2`, `startd8-r3-m3`).
-2. **M6 — real finalists + system report + CLI + decision gate** (the backbone's last step). Run single-model fleets through M0→M3 (each model builds the 8 backends; `validate_m1/m2/m3` score them), rank by system score + attribution + (later) frontend-bonus columns; the decision gate: does the journey discriminate + is attribution trustworthy? Reuse `score.Scorecard` + `scorecard.py` markdown + the leaderboard/verbatim-id join. **OR** the **M4/M5 frontend BONUS** parallel branch (seed + health/OpenAPI gate + canonical substitution + Adapter A → additive capped bonus) — never on the critical path; can run anytime.
+1. **Land M6 on `origin/main`** via the contended-`main` recipe: worktree off `origin/main` → cherry-pick → `merge-tree` clean + `merge-base --is-ancestor` → FF-push. Then remove the merged worktrees (`startd8-r3-m0*` … `startd8-r3-m6`).
+2. **Remaining to a real benchmark run** (thin, mostly wiring):
+   - **`startd8 benchmark round3` CLI** + **roster resolver** (`roster.py`): resolve a finalist roster (model ids → each model's `r3/<model>/<svc>` fleet images), run `validate_m1/m2/m3` per finalist, build the report. The report/ranking/gate path is done — this is the orchestration wrapper.
+   - **Per-finalist fleets** — the actual model-generated 9-service workdirs (reuse by verbatim model id, regenerate gaps — OQ-3; real LLM spend). Persist per-cell (Mottainai → $0 rescore).
+   - **Cost/speed columns** — wire the per-model `cost_usd`/`wall_seconds` into `FinalistScore` from the generation run.
+3. **M4/M5 frontend BONUS** (parallel branch, never on the critical path): seed + health/OpenAPI gate + canonical substitution + Adapter A → additive capped bonus column in the report.
 
-**Reproduce M3:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m3` (force-rebuilds the culprit-aware m2driver, reuses the 8 backend images, scores reference + break-payment + break-catalog). The scorer is unit-tested (`test_score.py`, synthetic JourneyResults — no docker).
+**Reproduce M6:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m6` (force-rebuilds the driver, reuses the 8 images, drives 3 configs, writes `round3-system-report.{json,md}`). Report/ranking/gate unit-tested (`test_report.py` — no docker).
 
-**Effectiveness practices carried through** (`craft/Lessons_Learned/sdk/lessons/01-benchmarking.md`): readiness-gated boot (#14), build-if-missing / Mottainai (#10 — M3 reused all 8 backend images, only force-rebuilt the driver), invariant-based attribution (the journey's earlier steps act as per-service liveness probes; checkout's wrapped error names the failing dep), live-proven-not-just-wired (#14).
+**Effectiveness practices carried through the whole backbone** (`craft/Lessons_Learned/sdk/lessons/01-benchmarking.md`): readiness-gated boot (#14), build-if-missing / Mottainai (#10 — M6 reused all 8 images), invariant-based attribution + the journey's earlier steps as per-service liveness probes, weighted coverage by the §1 locust mix (a catalog break scores far worse than a payment break — the weighting discriminates), live-proven-not-just-wired (#14 — every milestone caught real bugs only the live run could: jinja2/ListenLocalhost/arm64-protoc/compose-run-dep-revival).
 
 **Exit criterion (M3): ✅ MET** (see Status). Remaining R3 backbone: **M6** (finalists + report). M4/M5 frontend bonus is the parallel branch (joins at M5/M6).
 
@@ -72,7 +80,7 @@ The R3 **backbone M0→M3 is complete** (M0/M1/M2 landed; M3 exit criterion met)
 ## Critical path
 
 ```
-Track-2 contracts (DONE/scope gaps) → M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M6
+Track-2 contracts (DONE/scope gaps) → M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M6 ✅  (backbone COMPLETE)
                                                     └ M4 → M5  (frontend BONUS — PARALLEL branch, joins at M5/M6, NEVER on the critical path)
 ```
 The frontend bonus branch can never block backend scoring — that is the whole point of the substitution seam.
@@ -89,7 +97,7 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 | **M3** ✅ | Layered scoring → scorecard (per-step coverage + per-service fault attribution + journey-completed bool) | **MET** — live on SDK-ref + break-payment + break-catalog meshes: each fault attributed to the right service+class; checkout never charged model-fault for an upstream break; all-degrade → low-confidence. score.py + culprit-aware adapter_b + validate_m3 (32 unit + live). **Not yet pushed.** | done |
 | **M4** | Frontend BONUS lane (seed + health/OpenAPI gate + canonical substitution + Adapter A) | a subtly-broken frontend (confirmation w/o real order id) FAILS gate + falls to canonical cleanly; Adapter A green over canonical; report records which ran + verdict | ~1 |
 | **M5** | Frontend bonus → scorecard (additive, capped) | brilliant-frontend/weak-backend model never outranks strong-backend; bonus = labeled "+frontend" tie-break; substituted runs show `frontend_bonus=0` | ~¼ |
-| **M6** | Real finalists (single-model fleets) + system report + CLI + decision gate | finalists ranked by system score + attribution + frontend-bonus columns; decision gate: does the journey discriminate + is attribution trustworthy? | ~½ |
+| **M6** ✅ | Real finalists (single-model fleets) + system report + CLI + decision gate | **MET (harness)** — `report.py` (rank + advisory gate) + `validate_m6` capstone: live 3-config finalists ranked by system score, attribution columns, decision gate GO (discriminates + trustworthy), `round3-system-report.{json,md}` emitted. **A real benchmark run feeds distinct model fleets into the same path; `startd8 benchmark round3` CLI wrapper is the remaining thin wiring.** Not yet pushed. | done (harness) |
 
 **v1 total ≈ 5 suites** (Java + kind + offline-build hermeticity deferred).
 
