@@ -35,6 +35,7 @@ from typing import Any, Callable, Optional
 from ..logging_config import get_logger
 from ..models import AgenticTurn, ToolCallRequest
 from .base import BaseAgent
+from .compaction import compact, find_clean_cut, is_context_window_error
 
 logger = get_logger(__name__)
 
@@ -185,12 +186,16 @@ class SessionConfig:
     repeated_call_limit: int = 3  # same (name, args) more than N times → break
     max_total_tokens: Optional[int] = None
     max_cost_usd: Optional[float] = None
+    # FR-3/FR-4 reactive compaction: on a context-window overflow, summarize older history and
+    # retry, keeping the most-recent `compact_keep_recent` messages intact. Bounded by max_compactions.
+    compact_keep_recent: int = 6
+    max_compactions: int = 3
 
 
 @dataclass
 class AgenticResult:
     """Outcome of a :meth:`AgenticSession.send`. ``stop_reason`` ∈ completed | max_turns |
-    repeated_calls | budget."""
+    repeated_calls | budget | context_overflow."""
 
     text: str
     stop_reason: str
@@ -297,9 +302,11 @@ class AgenticSession:
                 logger.warning("AgenticSession stopped: cost budget reached ($%.4f)", self.total_cost_usd)
                 return self._result(last_text, "budget", turn - 1)
 
-            agent_turn = await self.agent.agenerate_tools(
-                self.messages, tools, system_prompt=self.system_prompt
-            )
+            try:
+                agent_turn = await self._call_with_compaction(tools)
+            except ContextWindowExceededError:
+                logger.warning("AgenticSession stopped: context overflow unrecoverable by compaction")
+                return self._result(last_text, "context_overflow", turn)
             self._account(agent_turn)
             last_text = agent_turn.text or last_text
             self.messages.append(_assistant_message(agent_turn, self.tool_format))
@@ -321,6 +328,42 @@ class AgenticSession:
             self.messages.extend(_tool_result_messages(results, self.tool_format))
 
         return self._result(last_text, "max_turns", cfg.max_turns)
+
+    async def _call_with_compaction(self, tools: list) -> AgenticTurn:
+        """Call the model; on a context-window overflow (FR-3), compact older history (FR-4) and
+        retry — up to ``max_compactions``. Raises :class:`ContextWindowExceededError` when the
+        transcript cannot be compacted further (already minimal) or compaction is exhausted."""
+        attempts = 0
+        while True:
+            try:
+                return await self.agent.agenerate_tools(
+                    self.messages, tools, system_prompt=self.system_prompt
+                )
+            except Exception as exc:  # noqa: BLE001 — only context-overflow is handled; others re-raise
+                if not is_context_window_error(exc):
+                    raise
+                attempts += 1
+                if attempts > self.config.max_compactions:
+                    raise ContextWindowExceededError(
+                        "context overflow persists after compaction"
+                    ) from exc
+                if find_clean_cut(self.messages, self.tool_format, self.config.compact_keep_recent) <= 0:
+                    raise ContextWindowExceededError(
+                        "cannot compact further (transcript already at minimum)"
+                    ) from exc
+                self.messages = await compact(
+                    self.messages, self.tool_format, self._summarize, self.config.compact_keep_recent
+                )
+                logger.warning("AgenticSession compacted history (compaction %d)", attempts)
+
+    async def _summarize(self, text: str) -> str:
+        """Summarize transcript head via the agent's plain text path (no tools)."""
+        prompt = (
+            "Summarize the following conversation history concisely, preserving key facts, decisions, "
+            "and any tool results that later turns may rely on:\n\n" + text
+        )
+        result = await self.agent.agenerate(prompt)
+        return result.text
 
     def _account(self, turn: AgenticTurn) -> None:
         if turn.token_usage is not None:
