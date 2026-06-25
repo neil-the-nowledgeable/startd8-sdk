@@ -6,7 +6,7 @@
 
 ## Status
 
-Round 3 (full 9-service Online Boutique system round) is **design + plan complete** (PLAN v0.3, REQUIREMENTS v0.3 reconciled). **M0 is COMPLETE + MERGED to `origin/main`**; **M1 (compose-fleet generator) is IN PROGRESS — generator core done, live validation pending** (see below).
+Round 3 (full 9-service Online Boutique system round) is **design + plan complete** (PLAN v0.3, REQUIREMENTS v0.3 reconciled). **M0 is COMPLETE + MERGED to `origin/main`**; **M1 (compose-fleet generator) — EXIT CRITERION MET (full 8-backend fleet live-validated); NOT yet pushed** (see below).
 
 **M0 COMPLETE + MERGED** — all 4 lanes (Go + Python + Node + C#) live-validated; landed on `origin/main` via FF-push (`2ee76f38..b2a73ef7`, cherry-picked onto diverged main per the contended-`main` rule). The two M0 worktrees (`startd8-r3-m0`, `startd8-r3-m0-python`) are now merged and can be removed.
 - ✅ **Builder built** — `benchmark_matrix/fleet/containerize.py`: `build_service_image(service, workdir, language)` + `boot_and_probe(...)` + `ImageBuildResult`/`BootProbeResult`, reusing `provision.py` per language; 4 per-language templates (`fleet/templates/Dockerfile.{go,python,node,csharp}.tmpl`); injected runner (dry-run/CI-safe). `build_service_image` now takes `extra_pip` (per-service Python deps).
@@ -18,13 +18,14 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 - ⚠️ **Tooling note:** drive docker-heavy validation in the main loop with backgrounded `docker build` (`run_in_background`) so no single call blocks for minutes. `validate_m0.py <lang>` is the entrypoint.
 - ⏳ **Java deferred** (leaf, off journey; only lang with no offline build).
 
-**M1 IN PROGRESS — generator + readiness-gate + live substrate proven; full 8-svc fleet gated on 2 reference servers** — branch `feat/r3-m1-compose-fleet` (worktree `startd8-r3-m1`, off the M0-merged `origin/main`; commits `0dc554be`/`41766ec3`/`0056754c`, NOT pushed):
+**M1 EXIT CRITERION MET — full 8-backend fleet live-validated; NOT yet pushed** — branch `feat/r3-m1-compose-fleet` (worktree `startd8-r3-m1`, off the M0-merged `origin/main`; commits `0dc554be`/`41766ec3`/`0056754c`/`dd1326ff`):
 - ✅ **Service inventory** — `fleet/services.py`: the authoritative OB topology (JOURNEY_DESIGN §3) as `ServiceSpec(name, language, listen_port, dial_port, addr_env, deps, is_infra, image)`. **This is now the code single-source for the OB topology** (JOURNEY_DESIGN §3 is the doc source; keep them in sync — vocabulary-drift rule). Both faithfulness traps encoded in the data model: emailservice `listen 8080 / dial 5000` (`port_asymmetric`) + redis-cart `is_infra` sidecar. `topo_order()` = dependency-ordered bring-up, rejects cycles/unknown deps. v1 = 8 backends + redis (adservice/Java deferred; frontend = M4).
 - ✅ **Compose generator** — `fleet/compose.py`: `generate_compose_dict/_yaml` → `internal:true` `fleet` net (egress-deny + service-DNS), optional `edge` bridge for a host-reachable ingress, each dep edge as `{ADDR_ENV}: peer:dial_port`, redis sidecar, email `PORT=dial_port`, `depends_on` ordering, M0-matching image tags `r3/<svc>:<lang>`.
 - ✅ **14 no-docker unit tests** (`tests/unit/benchmark_matrix/test_compose_fleet.py`) — inventory, both traps, topo order (+ cycle/unknown-dep rejection), internal net, service-DNS wiring, redis sidecar, ingress edge/host-port, YAML round-trip.
 - ✅ **Readiness-gate fix** (`41766ec3`) — `boot_and_probe` now means "serving" (port accepts), not "docker run returned an id"; drops `--rm` so a crashed container's logs survive; +2 tests; live-reproven on the go lane. De-risks fleet bring-up.
 - ✅ **Live substrate PROVEN** (`validate_m1.py`, `0056754c`) — build-if-missing → `generate_compose` → `up` → readiness + service-DNS + egress-deny (from an alpine probe sidecar; the M0 Go image is distroless, no in-container shell) → clean teardown. **Two live PASSes on macOS Docker:** default `{productcatalog, recommendation}` (recommendation built fresh, 0 fixes); expanded `{cart, email, payment, recommendation}` = **5 backends / 4 languages + redis-cart**, with **both faithfulness traps validated end-to-end** — emailservice ready on `:5000` (port asymmetry) and `service-DNS redis-cart:6379 OK` (sidecar). Egress denied + clean teardown both runs.
-- ⏳ **Full 8-svc fleet (the M1 exit criterion) gated on 2 reference servers** — only services with a buildable reference fixture can join: today `{productcatalog, checkout, cart, email, payment, recommendation}`. **`shippingservice` (go) + `currencyservice` (node) reference servers do not exist yet**, so the full 8-backend fleet AND checkout's 6-dep fan-out are blocked until they're authored. See "Continue here".
+- ✅ **shipping + currency reference servers authored** (`dd1326ff`) — the 2 previously-missing backends. `shipping_reference/main.go` (Go: GetQuote deterministic non-negative USD + ShipOrder) and `currency_reference/server.js` (Node: Convert EUR-base rate table w/ exact same-currency identity + integer-nano normalization + unknown-code reject, GetSupportedCurrencies). Both **coverage 1.0** via new `validate_m0 {shipping,currency}` lanes, 0 server fixes. All 8 backends now buildable.
+- ✅ **FULL 8-BACKEND FLEET — M1 EXIT CRITERION MET** (`validate_m1 --subset checkoutservice,recommendationservice`): 8 backends + redis-cart (9 services, 5 languages) all ready; **checkout's full 6-dep fan-out resolved over service-DNS** (productcatalog/shipping/payment/email/currency/cart) + cart→redis + rec→catalog; email on `:5000` (asymmetry); **egress to 1.1.1.1:443 DENIED**; clean teardown leaves zero containers/networks. checkout built fresh, 0 fixes.
 
 **Already SHIPPED / VALIDATED (start from this reality, don't rebuild):**
 - **5 per-service behavioral suites + reference fixtures** — `behavioral/{catalog,email,cart,recommendation,checkout}_suite.py` (+ currency/charge/shipping/ad/pricing).
@@ -37,15 +38,18 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 
 ---
 
-## Continue here → author shipping + currency reference servers → full 8-svc fleet → land M1
+## Continue here → land M1 on `origin/main`, then M2
 
-The generator, the readiness-gate fix, and live `validate_m1` are **done and proven** on the buildable subset (5 backends / 4 languages + redis, both faithfulness traps validated live). The M1 **exit criterion** ("SDK-reference 8-service fleet boots; every `*_SERVICE_ADDR` resolves; egress denied; clean teardown") is **gated on two missing reference servers**:
+M1 is **done — exit criterion met** (full 8-backend fleet + redis live-validated: service-DNS resolves checkout's 6-dep fan-out, egress denied, clean teardown). The generator, readiness-gate fix, `validate_m0/m1`, and the 2 new reference servers are committed on `feat/r3-m1-compose-fleet` (`0dc554be`/`41766ec3`/`0056754c`/`dd1326ff` + docs), **NOT yet pushed**.
 
-1. **Author `shippingservice` (Go) + `currencyservice` (Node) reference servers** — the only 2 of the 8 backends without a `*_reference` fixture. Mirror the existing reference servers (`catalog_reference/main.go` for Go shape; `payment_reference/server.js` for Node) + their behavioral suites (`shipping_suite`, `currency_suite` already exist). Each is a small gRPC server reading `$PORT`, binding `0.0.0.0` (NOT loopback — the C# `ListenLocalhost` lesson), serving its OB RPC (ShipOrder/GetQuote; Convert/GetSupportedCurrencies). Add a `validate_m1` build recipe + a `validate_m0`-style lane for each.
-2. **Run the full 8-service fleet** `validate_m1 --subset checkoutservice` (dependency-closure pulls in all 6 checkout deps + redis). This exercises checkout's 6-dep fan-out — the journey's deepest node — over real service-DNS. This is the M1 exit gate.
-3. **Land M1 on `origin/main`** via the contended-`main` recipe (worktree off `origin/main` → cherry-pick the M1 commits → confirm `merge-tree` clean + `merge-base --is-ancestor` → FF-push), then proceed to **M2** (transport-agnostic journey + Adapter B over the live fleet — Adapter B replays checkout's fan-out against the live mesh, the natural next step now that the fleet stands up).
+1. **Land M1 on `origin/main`** via the contended-`main` recipe: worktree off `origin/main` → cherry-pick the M1 commits → confirm `merge-tree` clean + `merge-base --is-ancestor` → FF-push. (Same recipe M0 used; `origin/main` may have diverged again — re-check.) Then remove the merged worktrees (`startd8-r3-m0*`, `startd8-r3-m1`).
+2. **M2 — transport-agnostic journey + Adapter B over the live fleet.** The fleet now stands up, so Adapter B (an SDK-authored direct-gRPC driver) can replay checkout's PlaceOrder 6-dep fan-out against the **live** mesh (vs the stub-based checkout suite). Promote `checkout_stubs.GroundTruth` math to a fleet oracle; assert 100% step coverage on the known-good mesh; break payment → only checkout's step fails. See PLAN M2.
 
-**Effectiveness practices already baked into `validate_m1`** (`craft/Lessons_Learned/sdk/lessons/01-benchmarking.md`): readiness-gated boot (#14), build-if-missing / Mottainai (#10), `--subset` quick mode (#1), generator-inert-until-live-proven (#14 "wired ≠ working" — M1 not done on the generator alone). Still available to add: **parallelize the image builds** (independent; currently serial) for the full-fleet cold build.
+**Reproduce M1:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m1 --subset checkoutservice,recommendationservice` (full fleet) or no args (rec+catalog quick). Node lanes need `node_runtime/vendor.sh` first (gitignored closure).
+
+**Effectiveness practices baked into `validate_m1`** (`craft/Lessons_Learned/sdk/lessons/01-benchmarking.md`): readiness-gated boot (#14), build-if-missing / Mottainai (#10 — the full-fleet run reused 6 of 8 images), `--subset` quick mode (#1), generator-inert-until-live-proven (#14). Still available: **parallelize the image builds** for a cold full-fleet build (currently serial).
+
+**Exit criterion (M1): ✅ MET** (see Status). Remaining R3 backbone: M2 (journey) → M3 (scoring) → M6 (finalists); M4/M5 frontend bonus is the parallel branch.
 
 **Reproduce M0 locally:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m0 <go|python|node|csharp>` via backgrounded `docker build`. Node needs `node_runtime/vendor.sh` first (gitignored closure).
 
@@ -56,7 +60,7 @@ The generator, the readiness-gate fix, and live `validate_m1` are **done and pro
 ## Critical path
 
 ```
-Track-2 contracts (DONE/scope gaps) → M0 ✅ → M1 → M2 → M3 → M6
+Track-2 contracts (DONE/scope gaps) → M0 ✅ → M1 ✅ → M2 → M3 → M6
                                                     └ M4 → M5  (frontend BONUS — PARALLEL branch, joins at M5/M6, NEVER on the critical path)
 ```
 The frontend bonus branch can never block backend scoring — that is the whole point of the substitution seam.
@@ -68,7 +72,7 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 | M | Goal | Exit criterion | Effort |
 |---|---|---|---|
 | **M0** ✅ | `build_service_image` + Go/Python/Node/C# Dockerfiles | runnable image per lang from a workdir; boots + 1 RPC. **DONE — all 4 lanes live (coverage 1.0): Go (3 fixes), Python (jinja2 extra_pip), Node (0), C# (arm64 protoc + ListenAnyIP)** | done |
-| **M1** ⏳ | N-service compose-fleet generator (8/9 backends, egress-denied, service-DNS) | SDK-ref 8-svc fleet boots on macOS Docker; every `*_SERVICE_ADDR` resolves; egress to 1.1.1.1:443 DENIED; teardown leaves zero containers. **Generator + readiness-gate + live `validate_m1` ✅ (5-backend/4-lang+redis subset, both traps proven); full 8-svc gated on authoring shipping+currency reference servers** | ~1 (+¼ for 2 servers) |
+| **M1** ✅ | N-service compose-fleet generator (8/9 backends, egress-denied, service-DNS) | **MET** — full 8-backend fleet + redis (9 svc, 5 langs) boots on macOS Docker; every `*_SERVICE_ADDR` resolves (checkout's 6-dep fan-out); egress to 1.1.1.1:443 DENIED; clean teardown. Generator + readiness-gate + `validate_m0/m1` + 2 new reference servers. **Not yet pushed.** | done |
 | **M2** | Transport-agnostic journey + Adapter B (direct-gRPC, always-on) | Adapter B over a known-good 9-svc mesh = 100% step coverage; break payment → only checkout's step fails | ~1 |
 | **M3** | Layered scoring → scorecard (per-step coverage + per-service fault attribution + journey-completed bool) | run on SDK-ref + 2 broken meshes (break payment / catalog) → each fault attributed to right service+class; downstream never charged model-fault for upstream break; all-degrade flagged low-confidence | ~1 |
 | **M4** | Frontend BONUS lane (seed + health/OpenAPI gate + canonical substitution + Adapter A) | a subtly-broken frontend (confirmation w/o real order id) FAILS gate + falls to canonical cleanly; Adapter A green over canonical; report records which ran + verdict | ~1 |
