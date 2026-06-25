@@ -22,6 +22,7 @@ from .core import (
     ConciergeError,
     build_assess,
     build_survey,
+    handle_concierge_read,
     handle_concierge_tool,
 )
 
@@ -30,5 +31,6 @@ __all__ = [
     "ConciergeError",
     "build_assess",
     "build_survey",
+    "handle_concierge_read",
     "handle_concierge_tool",
 ]
