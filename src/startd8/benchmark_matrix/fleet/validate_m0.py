@@ -6,7 +6,7 @@ import time
 import subprocess
 from pathlib import Path
 from startd8.benchmark_matrix.fleet.containerize import build_service_image, boot_and_probe, docker_available
-from startd8.benchmark_matrix.behavioral import catalog_suite, email_suite, charge_suite, execute
+from startd8.benchmark_matrix.behavioral import catalog_suite, email_suite, charge_suite, cart_suite, execute
 
 WT = Path(__file__).resolve().parents[4]  # repo/worktree root
 FIX = WT / "tests/unit/benchmark_matrix/behavioral/fixtures"
@@ -66,8 +66,18 @@ def node():
                 None,
                 lambda p: charge_suite.run_charge_suite(p).coverage, 18083)
 
+def csharp():
+    # cartservice — the slowest lane. The Dockerfile runs `dotnet publish` INSIDE the build:
+    # Grpc.Tools codegens the C# server stubs from the co-located demo.proto, restoring NuGet over the
+    # network on a cold cache (OQ-C6, the one unsolved offline-reuse gap). _stage_csharp_context
+    # co-locates demo.proto; the harness-owned .csproj (AssemblyName=server) makes /app/server.dll the
+    # entry. No provision. ASP.NET startup is slower — _run's 5s pre-probe wait may need bumping.
+    return _run("cartservice", "csharp", "cart_reference", ["Program.cs", "cartservice.csproj"],
+                None,
+                lambda p: cart_suite.run_cart_suite(p).coverage, 18084)
+
 if __name__ == "__main__":
     lang = sys.argv[1] if len(sys.argv) > 1 else "go"
-    fn = {"go": go, "python": python, "node": node}[lang]
+    fn = {"go": go, "python": python, "node": node, "csharp": csharp}[lang]
     ok = fn()
     print(f"=== {lang} M0: {'PASS' if ok else ('SKIP' if ok is None else 'FAIL')} ===", flush=True)

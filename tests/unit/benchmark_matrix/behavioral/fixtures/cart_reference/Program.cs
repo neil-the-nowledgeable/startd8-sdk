@@ -19,11 +19,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddGrpc();
 
 // Read the port the harness injected ($PORT, the OB convention shared with the other languages) and
-// bind HTTP/2 cleartext (h2c) on loopback so the SDK gRPC client can reach it.
+// bind HTTP/2 cleartext (h2c) on ALL interfaces (0.0.0.0) so the SDK gRPC client can reach it both
+// on loopback (the co-located behavioral path) AND via a published port when run from a container
+// (the M0 fleet path) — matching the real OB cartservice, which binds 0.0.0.0. ListenLocalhost binds
+// 127.0.0.1 only, which a host can't reach through a container port mapping.
 var portEnv = Environment.GetEnvironmentVariable("PORT");
 int port = int.TryParse(portEnv, out var p) ? p : 8080;
 builder.WebHost.ConfigureKestrel(options =>
-    options.ListenLocalhost(port, listen =>
+    options.ListenAnyIP(port, listen =>
         listen.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2));
 
 var app = builder.Build();

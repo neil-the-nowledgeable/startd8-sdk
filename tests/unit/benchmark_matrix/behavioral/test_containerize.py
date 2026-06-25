@@ -37,6 +37,13 @@ def _node_workdir(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _csharp_workdir(tmp_path: Path) -> Path:
+    ref = _FIX / "cart_reference"
+    shutil.copy(ref / "Program.cs", tmp_path / "Program.cs")
+    shutil.copy(ref / "cartservice.csproj", tmp_path / "cartservice.csproj")
+    return tmp_path
+
+
 def _pip_line(dockerfile_text: str) -> str:
     return next(l for l in dockerfile_text.splitlines() if l.startswith("RUN pip install"))
 
@@ -135,6 +142,35 @@ def test_node_vendored_closure_staged(tmp_path):
     assert "node_modules" in res.context_files and "demo.proto" in res.context_files
     assert (wd / "node_modules" / "@grpc").is_dir()
     assert (wd / "demo.proto").is_file()
+
+
+def test_csharp_build_command_constructed(tmp_path):
+    wd = _csharp_workdir(tmp_path)
+    res = C.build_service_image("cartservice", wd, "csharp", target_files=["Program.cs"], build=False)
+    assert res.tag == "r3/cartservice:csharp"
+    assert res.language == "csharp"
+    df = (wd / "Dockerfile").read_text()
+    assert 'ENTRYPOINT ["dotnet", "/app/server.dll"]' in df
+
+
+def test_csharp_proto_colocated(tmp_path):
+    """CONTAINERIZE staging: demo.proto is co-located into the project dir so Grpc.Tools codegens the
+    C# server stubs at publish time (no committed/vendored stub set)."""
+    wd = _csharp_workdir(tmp_path)
+    res = C.build_service_image("cartservice", wd, "csharp", target_files=["Program.cs"], build=False)
+    assert "demo.proto" in res.context_files
+    assert (wd / "demo.proto").is_file()
+
+
+def test_csharp_uses_system_protoc_arm64_fix(tmp_path):
+    """CONTAINERIZE FIX (OQ-C4): Grpc.Tools 2.71's bundled linux_arm64 protoc SIGSEGVs (exit 139)
+    under the MSBuild Protobuf_Compile invocation; the build installs the system protoc and points
+    Grpc.Tools at it (Protobuf_ProtocFullPath) so codegen succeeds."""
+    wd = _csharp_workdir(tmp_path)
+    C.build_service_image("cartservice", wd, "csharp", target_files=["Program.cs"], build=False)
+    df = (wd / "Dockerfile").read_text()
+    assert "protobuf-compiler" in df  # system protoc installed in the build stage
+    assert "-p:Protobuf_ProtocFullPath=/usr/bin/protoc" in df  # Grpc.Tools points at it
 
 
 def test_docker_absent_degrades_honestly(tmp_path, monkeypatch):

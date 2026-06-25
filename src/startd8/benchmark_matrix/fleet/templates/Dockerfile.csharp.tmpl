@@ -25,7 +25,15 @@ FROM {DOTNET_SDK} AS build
 WORKDIR /src
 COPY . .
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
-RUN dotnet publish -c Release -o /out --nologo
+# arm64 protoc fix (OQ-C4): Grpc.Tools 2.71's bundled tools/linux_arm64/protoc SIGSEGVs (exit 139)
+# under the MSBuild Protobuf_Compile invocation (which adds --dependency_out) on this host — verified
+# deterministic. The binary itself is fine (protoc --version + a manual --csharp_out/--grpc_out codegen
+# of demo.proto both succeed); only the MSBuild call path crashes it. The system protoc (apt) +
+# Grpc.Tools' own grpc_csharp_plugin codegen demo.proto cleanly, so point Grpc.Tools at the system
+# protoc via Protobuf_ProtocFullPath. Harmless on amd64 (where the bundled protoc works); proto3 has
+# no external imports so the standard-imports path (still Grpc.Tools') needs no change.
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler && rm -rf /var/lib/apt/lists/*
+RUN dotnet publish -c Release -o /out --nologo -p:Protobuf_ProtocFullPath=/usr/bin/protoc
 
 FROM {DOTNET_RUNTIME}
 WORKDIR /app
