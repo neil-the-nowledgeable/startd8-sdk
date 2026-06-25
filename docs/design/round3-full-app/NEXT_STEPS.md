@@ -28,10 +28,10 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 - ✅ **FULL 8-BACKEND FLEET — M1 EXIT CRITERION MET** (`validate_m1 --subset checkoutservice,recommendationservice`): 8 backends + redis-cart (9 services, 5 languages) all ready; **checkout's full 6-dep fan-out resolved over service-DNS** (productcatalog/shipping/payment/email/currency/cart) + cart→redis + rec→catalog; email on `:5000` (asymmetry); **egress to 1.1.1.1:443 DENIED**; clean teardown leaves zero containers/networks. checkout built fresh, 0 fixes.
 - ✅ **M1 LANDED on `origin/main`** (FF `c0f8f3af..ab12e241`).
 
-**M2 IN PROGRESS — journey spec + Adapter B core done; live driver-container run pending** — branch `feat/r3-m2-journey` (worktree `startd8-r3-m2`, off the M1-merged `origin/main`; commits `1afae94b`/`fd26fc1b`, NOT pushed):
+**M2 EXIT CRITERION MET — Adapter B live over the full mesh; NOT yet pushed** — branch `feat/r3-m2-journey` (worktree `startd8-r3-m2`, off the M1-merged `origin/main`; commits `1afae94b`/`fd26fc1b`/`dedf9ec7` + docs):
 - ✅ **Journey spec** — `fleet/journey.py`: the defined-once transport-agnostic 5-step journey (browse→setCurrency→addToCart→viewCart→checkout) as `JourneyStep(name, intent, outcome, services, weight)`; weights = §1 locust mix (browse 10 dominant; checkout 1 deep); each step's `services` = the M3 per-service attribution set; canonical future-dated checkout payload reused verbatim by both adapters. (+TRY added to the currency server so the full setCurrency whitelist is supported.)
 - ✅ **Adapter B core** — `fleet/adapter_b.py`: the direct-gRPC driver replaying the 5 steps' fan-out, scoring invariant-based per-step outcomes (weighted + unweighted coverage) + per-service attribution; `run_journey_with_stubs` (injectable, unit-tested) / `run_journey(addr_map)` (live) / `__main__` (in-fleet driver-container entrypoint, prints per-step JSON). **11 M2 unit tests** incl. the KEY attribution property: healthy mesh = coverage 1.0; break payment → ONLY checkout fails.
-- ⏳ **Live PENDING** — the `m2driver` container (python+grpc image running `adapter_b` on the fleet net) + `validate_m2`. **Decision (user): driver-container-on-fleet** (dials by service-DNS; preserves egress-deny). Exit: Adapter B vs reference mesh = 100% step coverage; break payment → only checkout's step fails.
+- ✅ **LIVE — M2 EXIT CRITERION MET** (`validate_m2`, `dedf9ec7`): the `m2driver` container (python+grpc, runs `adapter_b` on the fleet net, dials by service-DNS, prints per-step JSON — egress-deny preserved). **Healthy mesh = coverage 1.00** (all 5 steps pass end-to-end: browse; setCurrency→EUR; addToCart; viewCart w/ live shipping quote; checkout order_id). **Break payment (`compose stop paymentservice`) → `failed=['checkout']`** — only checkout fails (live per-service attribution). Harness bug caught+fixed live: `compose run` was reviving the stopped dep → `--no-deps`. Confirmed `checkout_reference` is a real 6-dep orchestrator.
 
 **Already SHIPPED / VALIDATED (start from this reality, don't rebuild):**
 - **5 per-service behavioral suites + reference fixtures** — `behavioral/{catalog,email,cart,recommendation,checkout}_suite.py` (+ currency/charge/shipping/ad/pricing).
@@ -44,18 +44,18 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 
 ---
 
-## Continue here → land M1 on `origin/main`, then M2
+## Continue here → land M2 on `origin/main`, then M3
 
-M1 is **done — exit criterion met** (full 8-backend fleet + redis live-validated: service-DNS resolves checkout's 6-dep fan-out, egress denied, clean teardown). The generator, readiness-gate fix, `validate_m0/m1`, and the 2 new reference servers are committed on `feat/r3-m1-compose-fleet` (`0dc554be`/`41766ec3`/`0056754c`/`dd1326ff` + docs), **NOT yet pushed**.
+M1 (landed `ab12e241`) and M2 (exit criterion met) are done. M2 — journey spec + Adapter B core + m2driver + `validate_m2` — is committed on `feat/r3-m2-journey` (`1afae94b`/`fd26fc1b`/`dedf9ec7` + docs), **NOT yet pushed**.
 
-1. **Land M1 on `origin/main`** via the contended-`main` recipe: worktree off `origin/main` → cherry-pick the M1 commits → confirm `merge-tree` clean + `merge-base --is-ancestor` → FF-push. (Same recipe M0 used; `origin/main` may have diverged again — re-check.) Then remove the merged worktrees (`startd8-r3-m0*`, `startd8-r3-m1`).
-2. **M2 — transport-agnostic journey + Adapter B over the live fleet.** The fleet now stands up, so Adapter B (an SDK-authored direct-gRPC driver) can replay checkout's PlaceOrder 6-dep fan-out against the **live** mesh (vs the stub-based checkout suite). Promote `checkout_stubs.GroundTruth` math to a fleet oracle; assert 100% step coverage on the known-good mesh; break payment → only checkout's step fails. See PLAN M2.
+1. **Land M2 on `origin/main`** via the contended-`main` recipe: worktree off `origin/main` → cherry-pick the M2 commits → confirm `merge-tree` clean + `merge-base --is-ancestor` → FF-push. (`origin/main` may have diverged — re-check.) Then remove the merged worktrees (`startd8-r3-m0*`, `startd8-r3-m1`, `startd8-r3-m2`).
+2. **M3 — layered scoring → scorecard.** The journey already yields per-step pass/fail + the per-service attribution set (`JourneyStep.services`, dialing service first). M3 turns that into the system score: **per-step coverage** (headline, weighted by the §1 locust mix + unweighted — `adapter_b.JourneyResult` already exposes both) + **per-service fault attribution** (classify each failed step `model-fault:S` / `propagated:S←D` / `degraded:S` / `harness`) + the "canonical journey completed" boolean. Validate on the SDK-reference mesh + 2 broken meshes (break payment; break catalog) → each fault attributed to the right service+class; a downstream service never charged model-fault for an upstream break. **Reuse:** `aggregate._median/_iqr`, `scorecard.py` markdown, the verbatim-id join. The `validate_m2 --no-deps`-style stop-a-service mechanism is the broken-mesh generator. See PLAN M3.
 
-**Reproduce M1:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m1 --subset checkoutservice,recommendationservice` (full fleet) or no args (rec+catalog quick). Node lanes need `node_runtime/vendor.sh` first (gitignored closure).
+**Reproduce M2:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m2` (builds m2driver if missing, reuses the 8 backend images, runs the journey healthy + payment-stopped). Adapter B core is unit-tested (`test_adapter_b.py`, mock stubs, incl. the attribution property — no docker).
 
-**Effectiveness practices baked into `validate_m1`** (`craft/Lessons_Learned/sdk/lessons/01-benchmarking.md`): readiness-gated boot (#14), build-if-missing / Mottainai (#10 — the full-fleet run reused 6 of 8 images), `--subset` quick mode (#1), generator-inert-until-live-proven (#14). Still available: **parallelize the image builds** for a cold full-fleet build (currently serial).
+**Effectiveness practices carried through** (`craft/Lessons_Learned/sdk/lessons/01-benchmarking.md`): readiness-gated boot (#14), build-if-missing / Mottainai (#10 — M2 reused all 8 images + the m2driver across runs), invariant-based outcomes over fragile exact-oracle (#5 saturation discipline), live-proven-not-just-wired (#14 — the live run caught the `compose run` dep-revival bug the unit tests couldn't).
 
-**Exit criterion (M1): ✅ MET** (see Status). Remaining R3 backbone: M2 (journey) → M3 (scoring) → M6 (finalists); M4/M5 frontend bonus is the parallel branch.
+**Exit criterion (M2): ✅ MET** (see Status). Remaining R3 backbone: M3 (scoring) → M6 (finalists); M4/M5 frontend bonus is the parallel branch (joins at M5/M6).
 
 **Reproduce M0 locally:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m0 <go|python|node|csharp>` via backgrounded `docker build`. Node needs `node_runtime/vendor.sh` first (gitignored closure).
 
@@ -66,7 +66,7 @@ M1 is **done — exit criterion met** (full 8-backend fleet + redis live-validat
 ## Critical path
 
 ```
-Track-2 contracts (DONE/scope gaps) → M0 ✅ → M1 ✅ → M2 → M3 → M6
+Track-2 contracts (DONE/scope gaps) → M0 ✅ → M1 ✅ → M2 ✅ → M3 → M6
                                                     └ M4 → M5  (frontend BONUS — PARALLEL branch, joins at M5/M6, NEVER on the critical path)
 ```
 The frontend bonus branch can never block backend scoring — that is the whole point of the substitution seam.
@@ -79,7 +79,7 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 |---|---|---|---|
 | **M0** ✅ | `build_service_image` + Go/Python/Node/C# Dockerfiles | runnable image per lang from a workdir; boots + 1 RPC. **DONE — all 4 lanes live (coverage 1.0): Go (3 fixes), Python (jinja2 extra_pip), Node (0), C# (arm64 protoc + ListenAnyIP)** | done |
 | **M1** ✅ | N-service compose-fleet generator (8/9 backends, egress-denied, service-DNS) | **MET** — full 8-backend fleet + redis (9 svc, 5 langs) boots on macOS Docker; every `*_SERVICE_ADDR` resolves (checkout's 6-dep fan-out); egress to 1.1.1.1:443 DENIED; clean teardown. Generator + readiness-gate + `validate_m0/m1` + 2 new reference servers. **Not yet pushed.** | done |
-| **M2** | Transport-agnostic journey + Adapter B (direct-gRPC, always-on) | Adapter B over a known-good 9-svc mesh = 100% step coverage; break payment → only checkout's step fails | ~1 |
+| **M2** ✅ | Transport-agnostic journey + Adapter B (direct-gRPC, always-on) | **MET** — Adapter B over the live 9-svc mesh = 100% step coverage; break payment → only checkout's step fails. journey spec + adapter_b + m2driver + validate_m2 (25 unit + live). **Not yet pushed.** | done |
 | **M3** | Layered scoring → scorecard (per-step coverage + per-service fault attribution + journey-completed bool) | run on SDK-ref + 2 broken meshes (break payment / catalog) → each fault attributed to right service+class; downstream never charged model-fault for upstream break; all-degrade flagged low-confidence | ~1 |
 | **M4** | Frontend BONUS lane (seed + health/OpenAPI gate + canonical substitution + Adapter A) | a subtly-broken frontend (confirmation w/o real order id) FAILS gate + falls to canonical cleanly; Adapter A green over canonical; report records which ran + verdict | ~1 |
 | **M5** | Frontend bonus → scorecard (additive, capped) | brilliant-frontend/weak-backend model never outranks strong-backend; bonus = labeled "+frontend" tie-break; substituted runs show `frontend_bonus=0` | ~¼ |
