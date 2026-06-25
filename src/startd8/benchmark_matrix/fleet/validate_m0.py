@@ -6,7 +6,7 @@ import time
 import subprocess
 from pathlib import Path
 from startd8.benchmark_matrix.fleet.containerize import build_service_image, boot_and_probe, docker_available
-from startd8.benchmark_matrix.behavioral import catalog_suite, email_suite, execute
+from startd8.benchmark_matrix.behavioral import catalog_suite, email_suite, charge_suite, execute
 
 WT = Path(__file__).resolve().parents[4]  # repo/worktree root
 FIX = WT / "tests/unit/benchmark_matrix/behavioral/fixtures"
@@ -57,8 +57,17 @@ def python():
                 lambda p: email_suite.run_email_suite(p).coverage, 18082,
                 extra_pip=["jinja2"])
 
+def node():
+    # paymentservice — the most offline-ready lane: _stage_node_context stages the FULLY VENDORED
+    # node_runtime closure (grpc-js + proto-loader + uuid) + demo.proto, so NO npm install runs at
+    # build. Requires node_runtime/node_modules vendored (node_runtime/vendor.sh) — else the stager
+    # degrades honestly. No provision (deps + proto come from the closure).
+    return _run("paymentservice", "node", "payment_reference", ["server.js", "package.json"],
+                None,
+                lambda p: charge_suite.run_charge_suite(p).coverage, 18083)
+
 if __name__ == "__main__":
     lang = sys.argv[1] if len(sys.argv) > 1 else "go"
-    fn = {"go": go, "python": python}[lang]
+    fn = {"go": go, "python": python, "node": node}[lang]
     ok = fn()
     print(f"=== {lang} M0: {'PASS' if ok else ('SKIP' if ok is None else 'FAIL')} ===", flush=True)

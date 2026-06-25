@@ -30,8 +30,22 @@ def _python_workdir(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _node_workdir(tmp_path: Path) -> Path:
+    ref = _FIX / "payment_reference"
+    shutil.copy(ref / "server.js", tmp_path / "server.js")
+    shutil.copy(ref / "package.json", tmp_path / "package.json")
+    return tmp_path
+
+
 def _pip_line(dockerfile_text: str) -> str:
     return next(l for l in dockerfile_text.splitlines() if l.startswith("RUN pip install"))
+
+
+# The Node closure (node_runtime/node_modules) is gitignored — present only after vendor.sh runs.
+_NODE_VENDORED = (
+    Path(C.__file__).resolve().parents[1]
+    / "behavioral" / "node_runtime" / "node_modules" / "@grpc"
+).is_dir()
 
 
 def test_go_build_command_constructed(tmp_path):
@@ -86,6 +100,41 @@ def test_python_no_extra_pip_stays_lean(tmp_path):
     wd = _python_workdir(tmp_path)
     C.build_service_image("recommendationservice", wd, "python", target_files=["server.py"], build=False)
     assert "jinja2" not in _pip_line((wd / "Dockerfile").read_text())
+
+
+def test_node_build_command_constructed(tmp_path):
+    """The Node Dockerfile is rendered regardless of vendoring (ENTRYPOINT + tag); the offline
+    closure is staged by _stage_node_context, so the template carries NO npm install step."""
+    wd = _node_workdir(tmp_path)
+    res = C.build_service_image("paymentservice", wd, "node", target_files=["server.js"], build=False)
+    assert res.tag == "r3/paymentservice:node"
+    assert res.language == "node"
+    df = (wd / "Dockerfile").read_text()
+    assert 'ENTRYPOINT ["node", "server.js"]' in df
+    # vendored closure is authoritative — no npm in any actual build step (RUN line); comments may mention it
+    run_lines = [l for l in df.splitlines() if l.startswith("RUN")]
+    assert not any("npm" in l for l in run_lines)
+
+
+def test_node_unvendored_degrades_honestly(tmp_path, monkeypatch):
+    """When the node_runtime closure isn't vendored, the stager must degrade honestly (named reason),
+    never run a build guaranteed to fail on a missing require('@grpc/grpc-js')."""
+    wd = _node_workdir(tmp_path)
+    monkeypatch.setattr(C, "prepare_node_workdir", lambda *a, **k: False)
+    res = C.build_service_image("paymentservice", wd, "node", target_files=["server.js"], build=True)
+    assert not res.ok
+    assert "vendor" in res.skipped_reason.lower()
+
+
+@pytest.mark.skipif(not _NODE_VENDORED, reason="node_runtime/node_modules not vendored (run vendor.sh)")
+def test_node_vendored_closure_staged(tmp_path):
+    """CONTAINERIZE staging: the vendored offline closure + proto are staged into the build context
+    so the Node server runs with no network — node_modules + demo.proto land in the workdir."""
+    wd = _node_workdir(tmp_path)
+    res = C.build_service_image("paymentservice", wd, "node", target_files=["server.js"], build=False)
+    assert "node_modules" in res.context_files and "demo.proto" in res.context_files
+    assert (wd / "node_modules" / "@grpc").is_dir()
+    assert (wd / "demo.proto").is_file()
 
 
 def test_docker_absent_degrades_honestly(tmp_path, monkeypatch):
