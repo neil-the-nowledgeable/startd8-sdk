@@ -101,10 +101,35 @@ def test_absent_section_is_empty_spec():
 
 @pytest.mark.parametrize("target,safe", [
     ("${HOOK_URL}", True), ("", True), ("ops@team.test", True), ("#alerts", True),
+    ("https://hooks.test/x", True),                       # .test TLD with a path boundary → safe
     ("https://hooks.slack.com/services/XXX", False), ("ops@real-company.com", False),
+    ("https://api.test.evil.com/hook", False),            # ".test." is NOT the TLD → unsafe (the fix)
 ])
 def test_secret_safe_predicate(target, safe):
     assert secret_safe(target) is safe
+
+
+def test_extraction_scoped_to_observability_section():
+    """A same-named heading outside ## Observability must not leak into the spec (the scope fix)."""
+    doc = textwrap.dedent("""\
+        ## Other Section
+
+        #### Thresholds
+
+        | Metric | Op | Value |
+        |--------|----|-------|
+        | not_mine | > | 99 |
+
+        ## Observability
+
+        #### Thresholds
+
+        | Metric | Op | Value | Severity | For |
+        |--------|----|-------|----------|-----|
+        | mine | > | 0 | warning | 0m |
+    """)
+    spec = extract_observability(doc)
+    assert {s.name for s in spec.signals} == {"mine"}
 
 
 def test_literal_secret_target_loud_fails():

@@ -140,12 +140,17 @@ def from_observability_yaml(data: Dict[str, Any]) -> ObservabilitySpec:
     for name, row in thresholds.items():
         if not isinstance(row, dict) or "op" not in row or "value" not in row:
             raise ValueError(f"metric_thresholds[{name!r}] needs `op` and `value`")
+        value = row["value"]
+        # bool is a subclass of int — exclude it; a threshold value must be a real number, else
+        # the rendered PromQL expr (`<metric> <op> <value>`) is nonsense.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"metric_thresholds[{name!r}] `value` must be a number, got {value!r}")
         signals.append(
             Signal(
                 name=str(name),
                 threshold=Threshold(
                     op=str(row["op"]),
-                    value=row["value"],  # preserve numeric type for exact round-trip
+                    value=value,  # preserve numeric type for exact round-trip
                     severity=str(row.get("severity", "warning")),
                     for_=str(row.get("for", "0m")),
                     unit=str(row.get("unit", "")),

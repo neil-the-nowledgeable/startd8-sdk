@@ -17,12 +17,18 @@ runbook) follow the identical shape.
 
 from __future__ import annotations
 
+import re
 from typing import List, Union
 
 from ..manifest_extraction.grammar import find_section, key_lines, md_tables, parse_sections
 from .spec import ObservabilitySpec, Receiver, Signal, Threshold
 
 Number = Union[int, float]
+
+# The reserved ``.test`` TLD as a HOST-BOUNDARY token (followed by a path/port/query/end), so a
+# real host that merely contains the substring ``.test`` (e.g. ``api.test.evil.com``) is NOT
+# treated as fictional.
+_TEST_TLD = re.compile(r"\.test(?=[/:?#]|$)")
 
 
 def _num(raw: str) -> Number:
@@ -43,7 +49,9 @@ def secret_safe(target: str) -> bool:
     email is NOT safe (it must use env indirection so a real secret never extracts as ``authored``).
     A plain token (e.g. a ``#slack-channel``) is fine."""
     v = (target or "").strip()
-    if not v or v.startswith("${") or ".test" in v:
+    if not v or v.startswith("${"):
+        return True
+    if _TEST_TLD.search(v):  # obviously-fictional reserved TLD (boundary-checked, not a substring)
         return True
     if v.startswith(("http://", "https://")) or "@" in v:
         return False
@@ -119,11 +127,14 @@ def extract_observability(doc: str) -> ObservabilitySpec:
     obs = find_section(sections, "Observability")
     if obs is None:
         return ObservabilitySpec()
+    # Scope subsection lookups to the Observability subtree: a same-named "Thresholds"/"Receivers"
+    # heading elsewhere in the doc must not be misread as observability config (robustness).
+    scoped = [s for s in sections if "Observability" in s.heading_path]
     kv, _ = key_lines(obs.body)
     kv_lower = {k.lower(): v for k, v in kv.items()}
     return ObservabilitySpec(
-        signals=_thresholds(sections),
-        receivers=_receivers(sections),
+        signals=_thresholds(scoped),
+        receivers=_receivers(scoped),
         provenance_default=kv_lower.get("provenance default", ""),
         industry_dataset=kv_lower.get("industry dataset", ""),
         domain="observability",

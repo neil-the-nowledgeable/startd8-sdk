@@ -104,6 +104,14 @@ def test_strict_loud_fail(bad):
         from_observability_yaml(bad)
 
 
+@pytest.mark.parametrize("bad_value", ["soon", True, [1, 2], None])
+def test_non_numeric_threshold_value_rejected(bad_value):
+    with pytest.raises(ValueError, match="number"):
+        from_observability_yaml(
+            {"alerting": {"metric_thresholds": {"m": {"op": ">", "value": bad_value}}}}
+        )
+
+
 def test_expr_escape_hatch_is_representable():
     # A signal may carry a raw PromQL expr instead of a declarative threshold (AlertTemplate shape).
     s = Signal(name="custom", expr='rate(x[5m]) > 0', origin="declared")
