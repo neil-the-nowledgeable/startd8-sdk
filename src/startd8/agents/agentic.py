@@ -43,6 +43,54 @@ from .compaction import compact, find_clean_cut, is_context_window_error
 logger = get_logger(__name__)
 
 
+# FR-CC3: register the run-level span (agentic.session) so the observability artifact generator
+# (collect_span_descriptors → artifact_generator) auto-derives Dashboard/SLO/Alert artifacts. This
+# DESCRIBES the span already emitted by AgenticSession._run/.stream (since fce92b6c) — it does not
+# emit a new span. Harvested via collector.py:_INSTRUMENTED_MODULES.
+_OTEL_DESCRIPTORS = {
+    "category": "ai_agent_observability",
+    "orientation": "system",
+    "spans": [
+        {
+            "name_pattern": "agentic.session",
+            "kind": "INTERNAL",
+            "attributes": [
+                "agentic.provider",
+                "agentic.model",
+                "agentic.tool_format",
+                "agentic.tool_count",
+                "agentic.streaming",
+                "agentic.stop_reason",
+                "agentic.turns",
+                "agentic.total_tokens",
+                "agentic.total_cost_usd",
+                "gen_ai.system",
+                "gen_ai.request.model",
+                "gen_ai.usage.input_tokens",
+                "gen_ai.usage.output_tokens",
+                "io.contextcore.project.id",
+                "io.contextcore.task.id",
+            ],
+        },
+        {
+            "name_pattern": "agentic.turn",
+            "kind": "INTERNAL",
+            "attributes": ["agentic.turn", "agentic.tool_calls", "agentic.stop_reason"],
+        },
+        {
+            "name_pattern": "agentic.tool_call",
+            "kind": "INTERNAL",
+            "attributes": ["agentic.tool", "agentic.tool_ok", "agentic.tool_truncated"],
+        },
+        {
+            "name_pattern": "agentic.compaction",
+            "kind": "INTERNAL",
+            "attributes": ["agentic.compaction_attempt"],
+        },
+    ],
+}
+
+
 # --------------------------------------------------------------------------- errors (FR-17)
 class AgenticError(Exception):
     """Base for agentic-loop errors."""

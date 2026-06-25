@@ -24,6 +24,7 @@ _INSTRUMENTED_MODULES = [
     ("startd8.session_tracking", "src/startd8/session_tracking.py"),
     ("startd8.costs.otel_metrics", "src/startd8/costs/otel_metrics.py"),
     ("startd8.events.otel_bridge", "src/startd8/events/otel_bridge.py"),
+    ("startd8.agents.agentic", "src/startd8/agents/agentic.py"),  # FR-CC3: agentic-loop run spans
     ("startd8.agents.tracked", "src/startd8/agents/tracked.py"),
     ("startd8.workflows.base", "src/startd8/workflows/base.py"),
     ("startd8.orchestration", "src/startd8/orchestration.py"),
