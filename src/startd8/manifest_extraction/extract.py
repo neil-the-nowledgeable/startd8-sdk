@@ -20,6 +20,7 @@ from ..scaffold_codegen.manifest import parse_app_manifest
 from ..backend_codegen.forms_manifest import parse_forms
 from ..view_codegen.manifest import parse_views
 from ..view_codegen.view_prose import parse_view_prose
+from ..observability.spec import from_observability_yaml
 from .entities import EntityGraph, diff_against_live, extract_entities, extract_enums
 from .extractors import (
     extract_ai_passes,
@@ -27,6 +28,7 @@ from .extractors import (
     extract_completeness,
     extract_human_inputs,
     extract_imports,
+    extract_observability,
     extract_pages,
     extract_view_prose,
     extract_views,
@@ -168,6 +170,10 @@ def extract_manifests(
         # so the round-trip gate can validate `extract_via`/`provenance` against the live candidates.
         if "imports.yaml" not in candidates or candidates["imports.yaml"] is None:
             candidates["imports.yaml"] = extract_imports(label, sections, graph, records)
+        # §2.12 observability value-input prose (Slice 1). Takes the doc text (the spec parser
+        # re-parses sections internally), unlike the section-based assembly extractors above.
+        if "observability.yaml" not in candidates or candidates["observability.yaml"] is None:
+            candidates["observability.yaml"] = extract_observability(label, text, records)
 
     # Prune view-copy to views that SURVIVED views.yaml extraction (a view dropped for a bad compute
     # binding / unknown kind must not leave its copy dangling in view_prose → the round-trip would
@@ -217,6 +223,8 @@ def extract_manifests(
             known_passes=known_passes,
             known_provenance=known_provenance,
         ),
+        # §2.12 value input: the emitted observability.yaml must round-trip through the spec loader.
+        "observability.yaml": lambda t: from_observability_yaml(yaml.safe_load(t)),
     }
     for filename, data in candidates.items():
         if data is None:

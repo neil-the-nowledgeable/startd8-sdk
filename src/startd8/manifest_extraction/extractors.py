@@ -778,3 +778,51 @@ def extract_imports(
             value=f"{entity} ({fmt})", source=src,
         ))
     return {"imports": imports} if imports else None
+
+
+# --------------------------------------------------------------------------- #
+# §2.12 Observability → observability.yaml (Slice 1: Thresholds + Receivers)
+# --------------------------------------------------------------------------- #
+def extract_observability(
+    label: str, text: str, records: List[ExtractionRecord]
+) -> Optional[dict]:
+    """§2.12 ``## Observability`` prose → observability.yaml candidate + traceability records.
+
+    Reuses the strict ``ObservabilitySpec`` parser (no grammar duplication). A malformed row (bad
+    op, non-numeric value, literal-secret receiver target) is reported as one ``not_extracted`` flag
+    for the section (the strict parser loud-fails on the first); fix the flagged prose and re-check
+    (the §3 friction loop). Returns ``None`` when there is no ``## Observability`` section.
+    """
+    from ..observability.spec_from_prose import extract_observability as _to_spec
+
+    try:
+        spec = _to_spec(text)
+    except ValueError as exc:
+        records.append(ExtractionRecord(
+            "observability.yaml", "/alerting", Status.NOT_EXTRACTED,
+            source=SourceRef(doc=label, heading_path=("Observability",)),
+            reason=str(exc),
+        ))
+        return None
+
+    if not spec.signals and not spec.receivers:
+        return None  # absent / empty ## Observability section
+
+    for sig in spec.signals:
+        val = (
+            f"{sig.name} {sig.threshold.op} {sig.threshold.value}"
+            if sig.threshold is not None else (sig.expr or "")
+        )
+        records.append(ExtractionRecord(
+            "observability.yaml", f"/alerting/metric_thresholds/{sig.name}", Status.EXTRACTED,
+            value=val,
+            source=SourceRef(doc=label, heading_path=("Observability", "Alerting", "Thresholds")),
+        ))
+    for r in spec.receivers:
+        records.append(ExtractionRecord(
+            "observability.yaml", f"/alerting/receivers/{r.name}", Status.EXTRACTED,
+            value=r.target,
+            source=SourceRef(doc=label, heading_path=("Observability", "Alerting", "Receivers")),
+        ))
+    return {"alerting": {"metric_thresholds": spec.metric_thresholds(),
+                         "receivers": spec.receivers_list()}}

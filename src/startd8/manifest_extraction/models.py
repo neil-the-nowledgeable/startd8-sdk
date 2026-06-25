@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 # Pinned to the authoring contract version these grammars implement (FR-WPI-11c: the
 # vocabularies are corpus-versioned; bump together with KICKOFF_AUTHORING_CONTRACT.md).
-GRAMMAR_VERSION = "authoring-contract-v0.2"
+GRAMMAR_VERSION = "authoring-contract-v0.3"
 
 
 class Status:
