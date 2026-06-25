@@ -74,6 +74,13 @@ _RECIPES = {
                            files=["server.js", "package.json"], provision=None),
     "cartservice": dict(language="csharp", fixture="cart_reference",
                         files=["Program.cs", "cartservice.csproj"], provision=None),
+    "shippingservice": dict(language="go", fixture="shipping_reference",
+                            files=["main.go", "go.mod"], provision=None),
+    "currencyservice": dict(language="node", fixture="currency_reference",
+                            files=["server.js", "package.json"], provision=None),
+    # checkoutservice: the journey's deepest node — dials all 6 deps at runtime via *_SERVICE_ADDR.
+    "checkoutservice": dict(language="go", fixture="checkout_reference",
+                            files=["main.go", "go.mod"], provision=None),
 }
 
 DEFAULT_SUBSET = ["productcatalogservice", "recommendationservice"]

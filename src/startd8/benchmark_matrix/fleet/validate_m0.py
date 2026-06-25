@@ -5,7 +5,9 @@ import tempfile
 import subprocess
 from pathlib import Path
 from startd8.benchmark_matrix.fleet.containerize import build_service_image, boot_and_probe, docker_available
-from startd8.benchmark_matrix.behavioral import catalog_suite, email_suite, charge_suite, cart_suite, execute
+from startd8.benchmark_matrix.behavioral import (
+    catalog_suite, email_suite, charge_suite, cart_suite, shipping_suite, currency_suite, execute,
+)
 
 WT = Path(__file__).resolve().parents[4]  # repo/worktree root
 FIX = WT / "tests/unit/benchmark_matrix/behavioral/fixtures"
@@ -78,8 +80,23 @@ def csharp():
                 None,
                 lambda p: cart_suite.run_cart_suite(p).coverage, 18084)
 
+def shipping():
+    # shippingservice (Go) — a 2nd Go service (after catalog); GetQuote invariants (non-negative USD,
+    # deterministic). No provision (no products.json); stubs staged by build_service_image.
+    return _run("shippingservice", "go", "shipping_reference", ["main.go", "go.mod"],
+                None,
+                lambda p: shipping_suite.run_shipping_suite(p).coverage, 18086)
+
+def currency():
+    # currencyservice (Node) — a 2nd Node service (after payment); Convert + GetSupportedCurrencies
+    # invariants. Reuses the vendored node_runtime closure (no npm install).
+    return _run("currencyservice", "node", "currency_reference", ["server.js", "package.json"],
+                None,
+                lambda p: currency_suite.run_currency_suite(p).coverage, 18087)
+
 if __name__ == "__main__":
     lang = sys.argv[1] if len(sys.argv) > 1 else "go"
-    fn = {"go": go, "python": python, "node": node, "csharp": csharp}[lang]
+    fn = {"go": go, "python": python, "node": node, "csharp": csharp,
+          "shipping": shipping, "currency": currency}[lang]
     ok = fn()
     print(f"=== {lang} M0: {'PASS' if ok else ('SKIP' if ok is None else 'FAIL')} ===", flush=True)
