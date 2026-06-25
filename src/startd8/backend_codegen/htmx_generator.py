@@ -36,6 +36,7 @@ PK get list + create only (no by-id routes), mirroring the CRUD generator.
 
 from __future__ import annotations
 
+import html
 from typing import List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
@@ -44,6 +45,7 @@ from .ai_layer import _PROVENANCE_OMIT
 from .crud_generator import _model_names, _pk_field
 from .display_manifest import parse_display
 from .filters_manifest import EntityFilter, parse_filters
+from .form_prose import FormFieldProse, FormProse, parse_form_prose
 from .forms_manifest import ON_CREATE_DEFAULT, parse_forms
 from .tenancy import scoped_entities as _scoped_entities
 
@@ -440,13 +442,39 @@ def render_detail_template(schema_text: str, source_file: str, entity: str, disp
     return head + "\n" + body
 
 
-def _form_input_html(
-    entity_lower: str, field: PrismaField, schema: PrismaSchema
+def _field_extra_attrs(
+    name: str, kind: str, fp_field: Optional[FormFieldProse]
 ) -> str:
-    """The label + widget + inline-validation hooks + error slot for one form field."""
+    """Form-Words widget attributes for one field: ``aria-describedby`` (when help exists, FR-FH-7) and
+    ``placeholder`` (a structural hint, FR-FH-1). Empty when no prose ⇒ byte-identical widget (FR-FH-4).
+
+    ``aria-describedby`` names the help fragment's id, never the help *words*, so it is content-
+    independent and editing copy never drifts the owned template (FR-FH-3). A ``placeholder`` is a real
+    attribute on the owned input (only ``select``/``checkbox`` skip it — it is meaningless there)."""
+    if fp_field is None:
+        return ""
+    attrs = ""
+    if fp_field.placeholder is not None and kind not in ("select", "checkbox"):
+        attrs += f' placeholder="{html.escape(fp_field.placeholder, quote=True)}"'
+    if fp_field.help is not None:
+        attrs += f' aria-describedby="help-{name}"'
+    return attrs
+
+
+def _form_input_html(
+    entity_lower: str,
+    field: PrismaField,
+    schema: PrismaSchema,
+    fp_field: Optional[FormFieldProse] = None,
+) -> str:
+    """The label + widget + inline-validation hooks + error slot for one form field.
+
+    *fp_field* (the form Words layer for this field) adds a ``placeholder`` + ``aria-describedby`` to the
+    widget and a ``{% include %}`` of the untracked help fragment; absent ⇒ byte-identical to today."""
     name = field.name
     kind = _field_kind(field, schema)
     required = " required" if _is_required(field) else ""
+    extra = _field_extra_attrs(name, kind, fp_field)  # "" when no prose ⇒ widget byte-identical
     hx = (
         f' hx-post="/ui/{entity_lower}/validate" hx-trigger="blur changed"'
         f' hx-target="#err-{name}" hx-swap="innerHTML" hx-include="this"'
@@ -466,40 +494,57 @@ def _form_input_html(
             )
             opts.append(f'    <option value="{v}" {sel}>{v}</option>')
         widget = (
-            f'<select name="{name}" id="f-{name}"{required}{hx}>\n'
+            f'<select name="{name}" id="f-{name}"{extra}{required}{hx}>\n'
             + "\n".join(opts)
             + "\n  </select>"
         )
     elif kind == "checkbox":
         chk = "{% if item and item." + name + " %}checked{% endif %}"
-        widget = f'<input type="checkbox" name="{name}" id="f-{name}" {chk}{hx}>'
+        widget = f'<input type="checkbox" name="{name}" id="f-{name}"{extra} {chk}{hx}>'
     elif kind in ("int", "float"):
         step = ' step="any"' if kind == "float" else ""
         widget = (
-            f'<input type="number"{step} name="{name}" id="f-{name}"'
+            f'<input type="number"{step} name="{name}" id="f-{name}"{extra}'
             f' value="{val}"{required}{hx}>'
         )
     elif kind == "datetime":
         widget = (
-            f'<input type="datetime-local" name="{name}" id="f-{name}"'
+            f'<input type="datetime-local" name="{name}" id="f-{name}"{extra}'
             f' value="{val}"{required}{hx}>'
         )
     else:
         widget = (
-            f'<input type="text" name="{name}" id="f-{name}"'
+            f'<input type="text" name="{name}" id="f-{name}"{extra}'
             f' value="{val}"{required}{hx}>'
         )
 
+    # The help line is the untracked Words-layer fragment (FR-FH-3); present only when help is authored,
+    # so a field with no prose renders the exact pre-feature markup (FR-FH-4). The include names the
+    # field id, never the help words → editing copy never drifts this owned template.
+    help_line = (
+        f'    {{% include "{entity_lower}/_help_{name}.html" %}}\n'
+        if (fp_field is not None and fp_field.help is not None)
+        else ""
+    )
     return (
         f'  <div class="field">\n'
         f'    <label for="f-{name}">{name}</label>\n'
         f"    {widget}\n"
+        f"{help_line}"
         f'    <small id="err-{name}" class="field-error"></small>\n'
         f"  </div>"
     )
 
 
-def render_form_template(schema_text: str, source_file: str, entity: str) -> str:
+def render_form_template(
+    schema_text: str,
+    source_file: str,
+    entity: str,
+    form_prose: Optional[FormProse] = None,
+) -> str:
+    """The owned ``<entity>/form.html``. *form_prose* (the form Words layer) adds a per-form intro
+    include + per-field help/placeholder; absent ⇒ byte-identical to today (FR-FH-4). The include lines
+    are content-independent (they name ids, never the copy), so editing words never drifts this file."""
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     e = entity.lower()
@@ -515,7 +560,16 @@ def render_form_template(schema_text: str, source_file: str, entity: str) -> str
         )
     else:
         action = "/ui/" + e
-    inputs = "\n".join(_form_input_html(e, f, schema) for f in fields)
+    fp_fields = form_prose.fields if form_prose else {}
+    inputs = "\n".join(_form_input_html(e, f, schema, fp_fields.get(f.name)) for f in fields)
+
+    # The per-form intro is the untracked Words fragment (FR-FH-2/3), included above the form only when
+    # authored — so a no-intro form is byte-identical to today (the include never names the intro words).
+    intro_line = (
+        f'{{% include "{e}/_form_intro.html" %}}\n'
+        if (form_prose is not None and form_prose.intro is not None)
+        else ""
+    )
 
     # ?created=<pk> (form mode) gets a "view it" link; no-PK entities echo created=1 — no link.
     view_link = (
@@ -528,6 +582,7 @@ def render_form_template(schema_text: str, source_file: str, entity: str) -> str
         # Post-create flash (FR-FS-3): on_create: form lands back here with ?created=<pk>.
         '{% if created %}<p class="flash">✓ ' + entity + f" stored.{view_link}</p>{{% endif %}}\n"
         f"<h1>{entity}</h1>\n"
+        f"{intro_line}"
         f'<form method="post" action="{action}">\n'
         f"{inputs}\n"
         '  <button type="submit">Save</button>\n'
@@ -535,6 +590,40 @@ def render_form_template(schema_text: str, source_file: str, entity: str) -> str
         "{% endblock %}\n"
     )
     return head + "\n" + body
+
+
+def render_form_prose_fragments(
+    entity: str, form_prose: Optional[FormProse]
+) -> List[Tuple[str, str]]:
+    """The untracked, **headerless** form-Words fragments for one entity (FR-FH-3): a per-form intro
+    (``<e>/_form_intro.html``) + a per-field help span (``<e>/_help_<field>.html``).
+
+    Carry no provenance header ⇒ not "owned files" ⇒ skipped by ``--check`` (the ``app/pages/*.md``
+    precedent); overwritten on every regenerate. Editing copy only rewrites these, never the owned
+    template ⇒ ``--check`` stays green. Empty list when there is no prose (FR-FH-4)."""
+    if form_prose is None:
+        return []
+    e = entity.lower()
+    out: List[Tuple[str, str]] = []
+    if form_prose.intro is not None:
+        from .pages_generator import render_markdown
+
+        out.append(
+            (
+                f"app/templates/{e}/_form_intro.html",
+                f'<div class="form-intro">{render_markdown(form_prose.intro)}</div>\n',
+            )
+        )
+    for fname, fp in form_prose.fields.items():
+        if fp.help is None:
+            continue  # placeholder-only fields are structural (no fragment)
+        out.append(
+            (
+                f"app/templates/{e}/_help_{fname}.html",
+                f'<small id="help-{fname}" class="field-help">{html.escape(fp.help)}</small>\n',
+            )
+        )
+    return out
 
 
 def render_created_template(
@@ -954,6 +1043,7 @@ def render_ui(
     forms_text: Optional[str] = None,
     display_text: Optional[str] = None,
     tenant_owner_field: Optional[str] = None,
+    form_prose_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """All UI artifacts as ``(relative_path, text)`` pairs: web.py + base/error + per-entity templates.
 
@@ -961,13 +1051,25 @@ def render_ui(
     *forms_text* (``views.yaml``) selects per-entity post-create behavior; entities declaring
     ``on_create: confirmation`` additionally get a ``<e>/created.html`` template (FR-FS-5).
     *display_text* (``display.yaml``) drives per-entity list columns/labels/order + detail sections
-    (FR-DM); absent ⇒ today's all-scalars behavior (opt-in)."""
+    (FR-DM); absent ⇒ today's all-scalars behavior (opt-in).
+    *form_prose_text* (``form_prose.yaml``) is the form Words layer: per-field help/placeholder + a
+    per-form intro rendered into the form (+ untracked help/intro fragments); absent ⇒ byte-identical."""
     schema = parse_prisma_schema(schema_text)
     composites = composite_type_names(schema_text)
     names = [n for n in schema.models if n not in composites]
     forms = parse_forms(forms_text, known_entities=frozenset(names))
     filters = parse_filters(forms_text, known_entities=frozenset(names))
     displays, _ = parse_display(display_text, schema)
+    # Form Words layer: strict-validate field targets against each entity's writable (form) fields so a
+    # help entry for a non-form field is a loud, sourced error (FR-FH-5), not silently dropped.
+    known_form_fields = {
+        n: frozenset(f.name for f in _writable_fields(schema, n)) for n in names
+    }
+    form_proses = parse_form_prose(
+        form_prose_text,
+        known_entities=frozenset(names),
+        known_fields=known_form_fields,
+    )
 
     out: List[Tuple[str, str]] = [
         ("app/web.py", render_web(schema_text, source_file, forms_text, tenant_owner_field)),
@@ -998,12 +1100,14 @@ def render_ui(
                 render_detail_template(schema_text, source_file, n, ed),
             )
         )
+        fp = form_proses.get(n)                    # form Words layer (None ⇒ today's bare form)
         out.append(
             (
                 f"app/templates/{e}/form.html",
-                render_form_template(schema_text, source_file, n),
+                render_form_template(schema_text, source_file, n, fp),
             )
         )
+        out.extend(render_form_prose_fragments(n, fp))  # headerless help/intro fragments (skipped by --check)
         # FR-CA-5: the detail-page confirm block, only for confirmed-bearing entities with a PK.
         if _confirm_field(schema, n) is not None and _pk_field(schema, n) is not None:
             out.append(

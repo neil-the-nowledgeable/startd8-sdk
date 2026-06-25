@@ -229,6 +229,14 @@ def backend(
         "app/importer.py (from_json upsert) is emitted; absent → no importer (opt-in). Threaded "
         "to both generate and --check so drift stays consistent.",
     ),
+    form_prose: Optional[Path] = typer.Option(
+        None,
+        "--form-prose",
+        help="Path to form_prose.yaml (the form WORDS layer): per-field help/placeholder + a per-form "
+        "intro rendered into the generated forms. help/intro are hash-exempt (untracked fragments, "
+        "SOTTO) so editing copy never trips --check; absent → byte-identical forms (opt-in). Threaded "
+        "to both generate and --check so drift stays consistent.",
+    ),
     api_overlay: Optional[Path] = typer.Option(
         None,
         "--api",
@@ -281,7 +289,7 @@ def backend(
     pages_text: Optional[str] = None
     _reads = {
         "manifest": None, "human": None, "pages": None, "completeness": None, "views": None,
-        "display": None, "imports": None, "api": None, "contexts": None,
+        "display": None, "imports": None, "api": None, "contexts": None, "form_prose": None,
     }
     for label, path, dest in (
         ("ai_passes", ai_passes, "manifest"),
@@ -293,6 +301,7 @@ def backend(
         ("imports", imports, "imports"),
         ("api", api_overlay, "api"),
         ("contexts", contexts_manifest, "contexts"),
+        ("form_prose", form_prose, "form_prose"),
     ):
         if path is None:
             continue
@@ -301,7 +310,7 @@ def backend(
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
-    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text, api_text, contexts_text = (
+    manifest_text, human_text, pages_text, completeness_text, views_text, display_text, imports_text, api_text, contexts_text, form_prose_text = (
         _reads["manifest"],
         _reads["human"],
         _reads["pages"],
@@ -311,6 +320,7 @@ def backend(
         _reads["imports"],
         _reads["api"],
         _reads["contexts"],
+        _reads["form_prose"],
     )
 
     # FR-CLI-1: resolve the deployment mode. app.yaml's `deployment.mode` is the source of truth;
@@ -411,6 +421,7 @@ def backend(
             authoring=pages_authoring,
             deployment_mode=deployment_mode,
             tenant_owner_field=tenant_owner_field,
+            form_prose_text=form_prose_text,
         )
     except (
         ValueError
@@ -442,6 +453,7 @@ def backend(
                 api_text=api_text,
                 contexts_text=contexts_text,
                 project_root=str(out.resolve()),
+                form_prose_text=form_prose_text,
             )
             if result.status != "in_sync":
                 drifted += 1
