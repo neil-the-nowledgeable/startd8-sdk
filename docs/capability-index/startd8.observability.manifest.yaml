@@ -429,7 +429,6 @@ metrics:
   description: Number of friction findings in a Sapper convention-survey report
   meter: startd8.sapper
   source_file: src/startd8/sapper/report.py
-  labels: []
   category: pipeline_innate
   orientation: system
 - name: pipeline.artifact_inventory.lookup
@@ -509,6 +508,52 @@ metrics:
   category: pipeline_innate
   orientation: system
 spans:
+- name_pattern: agentic.session
+  kind: INTERNAL
+  source_file: src/startd8/agents/agentic.py
+  attributes:
+  - agentic.provider
+  - agentic.model
+  - agentic.tool_format
+  - agentic.tool_count
+  - agentic.streaming
+  - agentic.stop_reason
+  - agentic.turns
+  - agentic.total_tokens
+  - agentic.total_cost_usd
+  - gen_ai.system
+  - gen_ai.request.model
+  - gen_ai.usage.input_tokens
+  - gen_ai.usage.output_tokens
+  - io.contextcore.project.id
+  - io.contextcore.task.id
+  category: ai_agent_observability
+  orientation: system
+- name_pattern: agentic.turn
+  kind: INTERNAL
+  source_file: src/startd8/agents/agentic.py
+  attributes:
+  - agentic.turn
+  - agentic.tool_calls
+  - agentic.stop_reason
+  category: ai_agent_observability
+  orientation: system
+- name_pattern: agentic.tool_call
+  kind: INTERNAL
+  source_file: src/startd8/agents/agentic.py
+  attributes:
+  - agentic.tool
+  - agentic.tool_ok
+  - agentic.tool_truncated
+  category: ai_agent_observability
+  orientation: system
+- name_pattern: agentic.compaction
+  kind: INTERNAL
+  source_file: src/startd8/agents/agentic.py
+  attributes:
+  - agentic.compaction_attempt
+  category: ai_agent_observability
+  orientation: system
 - name_pattern: agent.generate:{agent_name}
   kind: CLIENT
   source_file: src/startd8/agents/tracked.py
@@ -704,6 +749,18 @@ event_types:
   event_group: truncation
 - name: QUALITY_GATE_RESULT
   event_group: quality
+- name: RUN_DETECTED
+  event_group: service_assistant
+- name: POSTMORTEM_AVAILABLE
+  event_group: service_assistant
+- name: RUN_FAILED
+  event_group: service_assistant
+- name: SEMANTIC_REVIEW_COMPLETE
+  event_group: semantic_compliance
+- name: FDE_EXPLAIN_COMPLETE
+  event_group: fde
+- name: FDE_PREFLIGHT_COMPLETE
+  event_group: fde
 - name: SYSTEM_ERROR
   event_group: system
 - name: SYSTEM_WARNING
