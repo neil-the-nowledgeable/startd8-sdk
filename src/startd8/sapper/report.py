@@ -20,6 +20,27 @@ from .models import AssumptionVerdict, FrictionReport, UnresolvedReason
 
 logger = get_logger(__name__)
 
+# Observability descriptor — declares the metric this module emits so the manifest
+# descriptor↔emission bijection (test_real_manifest_full_parity) closes at zero tolerance.
+# Only `sapper.findings.count` is emitted as an OTel instrument (see `_try_emit`); the other
+# `emit_metrics` payload keys are computed-but-not-instrumented, so they are NOT declared here
+# (declaring a non-emitted name would fail the bijection the other way — `declared_not_emitted`).
+# Module is registered in observability/collector.py:_INSTRUMENTED_MODULES.
+_OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "sapper.findings.count",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Number of friction findings in a Sapper convention-survey report",
+            "meter": "startd8.sapper",
+            "labels": [],
+        },
+    ],
+}
+
 JSON_NAME = "sapper-friction-report.json"
 MD_NAME = "sapper-friction-report.md"
 
