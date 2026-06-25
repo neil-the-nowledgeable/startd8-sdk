@@ -6,7 +6,14 @@
 
 ## Status
 
-Round 3 (full 9-service Online Boutique system round) is **design + plan complete** (PLAN v0.3, REQUIREMENTS v0.3 reconciled). No Round-3 build code yet; the substrates and per-service assets it composes on are shipped/validated.
+Round 3 (full 9-service Online Boutique system round) is **design + plan complete** (PLAN v0.3, REQUIREMENTS v0.3 reconciled). **M0 is IN PROGRESS** (see below). The substrates and per-service assets it composes on are shipped/validated.
+
+**M0 IN PROGRESS** — branch `feat/r3-m0-build-service-image`, worktree `/Users/neilyashinsky/Documents/dev/startd8-r3-m0` (commits `d479c2fc` + `bdc9c797`, NOT yet pushed/merged):
+- ✅ **Builder built** — `benchmark_matrix/fleet/containerize.py`: `build_service_image(service, workdir, language)` + `boot_and_probe(...)` + `ImageBuildResult`/`BootProbeResult`, reusing `provision.py` per language; 4 per-language templates (`fleet/templates/Dockerfile.{go,python,node,csharp}.tmpl`); Node `payment_reference` fixture; injected runner (dry-run/CI-safe).
+- ✅ **Go lane LIVE-VALIDATED on macOS Docker** — `build ok → boot ok → catalog suite coverage 1.0` over real gRPC. Found+fixed **3 real container bugs** the bare-process path never hit: (1) `setup_go_stubs` abspath `replace` → relativized `./.gostubs` in `_stage_go_context`; (2) the relative-path guard mis-fired on `.gostubs`' leading dot → check `./`/`../`; (3) distroless/static has no `/bin/sh` → assemble `/out` in the build stage, runtime only `COPY`s.
+- ✅ **6 unit tests** (`tests/.../behavioral/test_containerize.py`, fake-runner/no-docker) + `fleet/validate_m0.py` (repeatable live entrypoint).
+- ⏳ **Python / Node / C# lanes — code-ready, live-validation PENDING** (templates + staging + the driver exist; each will likely surface 0–1 similar container-path fixes like Go's 3). Java deferred.
+- ⚠️ **Tooling note:** background subagents were dropping their socket on long runs this session — **drive the docker-heavy validation in the main loop with backgrounded `docker build`** (`run_in_background`) so no single call blocks for minutes. `validate_m0.py <lang>` is the entrypoint.
 
 **Already SHIPPED / VALIDATED (start from this reality, don't rebuild):**
 - **5 per-service behavioral suites + reference fixtures** — `behavioral/{catalog,email,cart,recommendation,checkout}_suite.py` (+ currency/charge/shipping/ad/pricing).
@@ -19,18 +26,21 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 
 ---
 
-## Start here → M0 (`build_service_image` + Go/Python/Node Dockerfile templates)
+## Continue here → finish M0 (Python / Node / C# lanes live-validation)
 
-**Why M0 first:** foundation everything composes on, highest reuse (~80% existing offline closures), fully **macOS-runnable**, and the compose prototype already proves the staging end-to-end for 2 lanes.
+The builder (`benchmark_matrix/fleet/containerize.py`) + the 4 templates + the Go lane are **done and Go is live-proven** (above). Remaining M0 = run the other three lanes through the same `build_service_image → boot_and_probe → one-RPC` validation and fix whatever container-path issues surface.
 
-**Concrete first actions:**
-1. Add a `benchmark_matrix.containers` layer with `build_service_image(service, workdir)`.
-2. Write the **Go / Python / Node** parameterized Dockerfile templates (thin wrappers ≈ 1 suite total): stage generated source + offline deps + OB gRPC stubs into a build stage; derive `CMD` from `contract.resolve_serve_command`. Seed from `compose-prototype/` Dockerfiles + `prepare_build_context.sh`.
-3. In M0's back half, start the **C# warm-NuGet bake** (`+¼` suite — the one load-bearing offline gap: bake+snapshot `~/.nuget`, then `--no-restore` publish).
+**Concrete next actions (in the M0 worktree, branch `feat/r3-m0-build-service-image`):**
+1. **Extend `fleet/validate_m0.py`** (currently Go-only) with the Python / Node / C# lanes, mirroring the Go lane:
+   - **Python (emailservice):** workdir = `email_reference/server.py`; provision the jinja2 `confirmation.html` template into the svc dir (`provision_email_template` — mirrors catalog's `products.json`); probe = `email_suite.run_email_suite`. Simplest Python lane (leaf; recommendation needs a dep stub, skip for the boot check).
+   - **Node (paymentservice):** workdir = `payment_reference/{server.js,package.json}`; `_stage_node_context` reuses the vendored `node_runtime` closure; probe = `charge_suite.run_charge_suite`.
+   - **C# (cartservice):** workdir = `cart_reference/{Program.cs,cartservice.csproj}`; `_stage_csharp_context` (dotnet publish — needs NuGet network on cold cache, OQ-C6); probe = `cart_suite.run_cart_suite`. The slow + most-likely-to-need-fixes lane.
+2. **Run each lane** with `PYTHONPATH=src python3 -m … fleet.validate_m0 <lang>` via **backgrounded `docker build`** (long builds drop foreground/subagent connections). Expect 0–1 container-path fixes per lane (the Go lane needed 3 — abspath replace, `./`-prefix, distroless-no-shell; the C#/Node template runtime stages may have analogous shell/asset issues).
+3. **Add each passing lane's assertion** to `test_containerize.py` (fake-runner, no-docker) so the construction stays locked.
 
-**Prereq (don't skip):** the **Track-2 startup contracts** for cart/catalog/recommendation/email must exist (only checkout's was complete). The image/fleet CMD derives from `contract.resolve_serve_command`; add any missing contract (scope to budget).
+**Exit criterion (M0):** `build_service_image` produces a runnable image for **Go ✅ + Python + Node + C#** from a generated workdir; each boots and answers one RPC. *Stretch:* `--network=none` hermetic build after base+cache pre-pull (deferred to M1+).
 
-**Exit criterion (M0):** `build_service_image` produces a runnable image for Go + Python + Node + C# from a generated workdir; each boots and answers one RPC in a one-container smoke (extend compose-prototype patterns). *Stretch:* build under `--network=none` after base+cache pre-pull (offline hermeticity).
+**Then:** FF-merge the M0 branch to `origin/main` and proceed to **M1** (the N-service compose-fleet generator — the validated `compose-prototype/` is the seed).
 
 ---
 
@@ -48,7 +58,7 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 
 | M | Goal | Exit criterion | Effort |
 |---|---|---|---|
-| **M0** | `build_service_image` + Go/Python/Node Dockerfiles (+C# warm-NuGet) | runnable image per lang from a workdir; boots + 1 RPC in a 1-container smoke | ~1 + ¼ |
+| **M0** ⏳ | `build_service_image` + Go/Python/Node/C# Dockerfiles (+C# warm-NuGet) | runnable image per lang from a workdir; boots + 1 RPC. **Go ✅ live (coverage 1.0); Python/Node/C# pending** | ~1 + ¼ |
 | **M1** | N-service compose-fleet generator (8/9 backends, egress-denied, service-DNS) | SDK-ref 8-svc fleet boots on macOS Docker; every `*_SERVICE_ADDR` resolves; egress to 1.1.1.1:443 DENIED; teardown leaves zero containers | ~1 |
 | **M2** | Transport-agnostic journey + Adapter B (direct-gRPC, always-on) | Adapter B over a known-good 9-svc mesh = 100% step coverage; break payment → only checkout's step fails | ~1 |
 | **M3** | Layered scoring → scorecard (per-step coverage + per-service fault attribution + journey-completed bool) | run on SDK-ref + 2 broken meshes (break payment / catalog) → each fault attributed to right service+class; downstream never charged model-fault for upstream break; all-degrade flagged low-confidence | ~1 |
