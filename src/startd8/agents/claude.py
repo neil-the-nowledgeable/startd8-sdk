@@ -272,12 +272,13 @@ class ClaudeAgent(BaseAgent):
 
     async def _make_api_call(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         tools: Optional[list] = None,
         tool_choice: Optional[dict] = None,
+        messages: Optional[list] = None,
     ):
         """
         Make the raw API call to Anthropic.
@@ -308,7 +309,9 @@ class ClaudeAgent(BaseAgent):
         kwargs = {
             "model": self.model,
             "max_tokens": effective_max_tokens,
-            "messages": [
+            # FR-0: a full canonical message list (multi-turn tool loop) takes precedence; a single
+            # prompt string is the legacy single-message convenience path.
+            "messages": messages if messages is not None else [
                 {"role": "user", "content": prompt}
             ],
         }
@@ -700,7 +703,7 @@ class ClaudeAgent(BaseAgent):
 
     async def agenerate_tools(
         self,
-        prompt: str,
+        messages: "list[dict] | str",
         tools: list,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
@@ -709,13 +712,15 @@ class ClaudeAgent(BaseAgent):
         """One agentic turn (FR-0): present *tools* unforced, return text + all tool calls.
 
         Generalizes :meth:`agenerate_structured` — N tools instead of one, no ``tool_choice``
-        forcing, no schema validation. Parses every ``tool_use`` block into a
-        :class:`ToolCallRequest` and concatenates ``text`` blocks. Transport retry/usage extraction
-        mirror :meth:`agenerate`. Multi-message threading and compaction live in the loop (Increment
-        1); this primitive is single-prompt.
+        forcing, no schema validation. Accepts a **canonical message list** (so the loop can thread
+        prior ``tool_use``/``tool_result`` blocks back; a bare ``str`` is wrapped). Anthropic carries
+        ``system`` out-of-band, so it is passed separately, not inside ``messages``. Parses every
+        ``tool_use`` block into a :class:`ToolCallRequest` and concatenates ``text`` blocks. Transport
+        retry/usage extraction mirror :meth:`agenerate`.
         """
         from ..exceptions import APIError
 
+        msgs = self._normalize_messages(messages)
         effective_system_prompt = (
             system_prompt if system_prompt is not None else self.system_prompt
         )
@@ -725,11 +730,11 @@ class ClaudeAgent(BaseAgent):
                 if self.retry_config is not None:
                     make_call = with_retry(self.retry_config)(self._make_api_call)
                     return await make_call(
-                        prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                        messages=msgs, system_prompt=effective_system_prompt, max_tokens=max_tokens,
                         temperature=temperature, tools=tools,
                     )
                 return await self._make_api_call(
-                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    messages=msgs, system_prompt=effective_system_prompt, max_tokens=max_tokens,
                     temperature=temperature, tools=tools,
                 )
             except RetryError as exc:  # mirror agenerate (L3): wrap exhausted transport retries

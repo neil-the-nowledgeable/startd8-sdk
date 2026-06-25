@@ -443,7 +443,7 @@ class GPT4Agent(BaseAgent):
 
     async def agenerate_tools(
         self,
-        prompt: str,
+        messages: "list[dict] | str",
         tools: list,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
@@ -451,24 +451,26 @@ class GPT4Agent(BaseAgent):
     ) -> AgenticTurn:
         """One agentic turn (FR-0): present OpenAI-format *tools*, return text + all tool calls.
 
-        OpenAI's chat-completions tool shape differs from Anthropic's: tool calls arrive on
-        ``message.tool_calls`` with ``function.arguments`` as a **JSON string**, which this adapter
-        parses into the provider-neutral :class:`ToolCallRequest` ``arguments`` dict. ``_make_api_call``
-        does not accept ``tools``, so the tool-enabled request is built directly via
-        ``_build_chat_kwargs``. Retry/usage extraction mirror :meth:`agenerate`. Single-prompt;
-        multi-message threading and compaction live in the loop (Increment 1).
+        Accepts a **canonical message list** (so the loop can thread prior assistant ``tool_calls``
+        and ``tool`` result messages back; a bare ``str`` is wrapped). For OpenAI the system prompt
+        rides *inside* the message list, so it is prepended when not already present. Tool calls
+        arrive on ``message.tool_calls`` with ``function.arguments`` as a **JSON string**, parsed into
+        the provider-neutral :class:`ToolCallRequest` ``arguments`` dict. ``_make_api_call`` does not
+        accept ``tools``, so the request is built via ``_build_chat_kwargs``. Retry/usage extraction
+        mirror :meth:`agenerate`.
         """
         effective_system_prompt = (
             system_prompt if system_prompt is not None else self.system_prompt
         )
-        messages = []
-        if effective_system_prompt is not None:
-            messages.append({"role": "system", "content": effective_system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        msgs = self._normalize_messages(messages)
+        if effective_system_prompt is not None and not any(
+            m.get("role") == "system" for m in msgs
+        ):
+            msgs = [{"role": "system", "content": effective_system_prompt}] + msgs
 
         token_limit = max_tokens if max_tokens is not None else self.max_tokens
         kwargs = _build_chat_kwargs(
-            self.model, messages, token_limit, temperature, None, enforce_next_gen=True
+            self.model, msgs, token_limit, temperature, None, enforce_next_gen=True
         )
         kwargs["tools"] = tools
 

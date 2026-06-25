@@ -270,7 +270,7 @@ class BaseAgent(ABC):
 
     async def agenerate_tools(
         self,
-        prompt: str,
+        messages: "list[dict] | str",
         tools: list,
         **kwargs: Any,
     ) -> "AgenticTurn":
@@ -282,8 +282,13 @@ class BaseAgent(ABC):
         :class:`AgenticTurn` (a sibling type — ``GenerateResult`` cannot carry tool calls).
 
         Args:
-            prompt: The user/turn prompt text. (Multi-message threading lands in Increment 1.)
-            tools: Provider-native tool specs (Anthropic ``{name, description, input_schema}``).
+            messages: The conversation as a **canonical message list** —
+                ``[{"role": "user"|"assistant"|"tool", "content": ...}, ...]`` — so the loop can
+                thread prior ``tool_use``/``tool_result`` blocks back (a plain string cannot encode
+                that pairing; FR-0/R1-F1). A bare ``str`` is accepted as a convenience and wrapped
+                into a single user message. Per-provider adapters render this to their native shape.
+            tools: Tool specs (provider-native at this primitive boundary; canonical→provider
+                translation is owned by the loop's ToolRegistry — FR-9).
             **kwargs: Per-call overrides (``system_prompt``, ``max_tokens``, ``temperature``).
 
         Raises:
@@ -292,6 +297,17 @@ class BaseAgent(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not implement agenerate_tools (FR-0) yet"
         )
+
+    @staticmethod
+    def _normalize_messages(messages: "list[dict] | str") -> "list[dict]":
+        """Convenience: wrap a bare ``str`` into ``[{"role": "user", "content": str}]``.
+
+        FR-0 keeps ``messages`` as the canonical primary shape; this lets simple callers (and the
+        existing spike tests) pass a prompt string without building a message list.
+        """
+        if isinstance(messages, str):
+            return [{"role": "user", "content": messages}]
+        return list(messages)
 
     def generate(self, prompt: str, **kwargs: Any) -> GenerateResult:
         """

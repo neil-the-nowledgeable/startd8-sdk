@@ -46,7 +46,7 @@ async def test_agenerate_tools_parses_multiple_tool_calls(monkeypatch):
     agent = _agent()
     assert agent.supports_tool_use() is True
 
-    async def fake_call(prompt, **kwargs):
+    async def fake_call(prompt=None, **kwargs):
         # Two tools presented, no tool_choice forcing => kwargs must NOT contain tool_choice.
         assert "tool_choice" not in kwargs
         assert kwargs.get("tools") is not None
@@ -86,7 +86,7 @@ async def test_agenerate_tools_final_text_no_tools(monkeypatch):
     """When the model answers directly, tool_calls is empty and finish_reason is the natural stop."""
     agent = _agent()
 
-    async def fake_call(prompt, **kwargs):
+    async def fake_call(prompt=None, **kwargs):
         return _fake_response(text="The project is ready.", tool_uses=[], stop_reason="end_turn")
 
     monkeypatch.setattr(agent, "_make_api_call", fake_call)
@@ -163,13 +163,75 @@ async def test_openai_agenerate_tools_parses_json_string_args(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_base_agent_optin_default_is_unsupported():
-    """The opt-in flag keeps the 10 existing providers untouched: default False + NotImplementedError."""
+    """The opt-in flag keeps un-migrated providers untouched: default False + NotImplementedError."""
     from startd8.agents.base import BaseAgent
+    from startd8.models import GenerateResult
 
-    # MockAgent (or any agent not implementing the primitive) must report unsupported.
+    # A minimal agent that implements only the abstract surface and NOT the FR-0 primitive
+    # must still report unsupported and raise — proving the additive opt-in default holds.
+    class _BareAgent(BaseAgent):
+        async def agenerate(self, prompt, **kwargs):  # the one abstract method
+            return GenerateResult("x", 0, None)
+
+    bare = _BareAgent(name="bare", model="bare-model")
+    assert bare.supports_tool_use() is False
+    with pytest.raises(NotImplementedError):
+        await bare.agenerate_tools("hi", tools=[])
+
+
+@pytest.mark.asyncio
+async def test_claude_agenerate_tools_accepts_message_list(monkeypatch):
+    """FR-0/R1-F1: the primitive threads a canonical message list (incl. prior tool_use/tool_result),
+    not just a prompt string. The full list must reach the API unchanged."""
+    agent = _agent()
+    seen = {}
+
+    async def fake_call(prompt=None, messages=None, **kwargs):
+        seen["messages"] = messages
+        seen["prompt"] = prompt
+        return _fake_response(text="done", tool_uses=[], stop_reason="end_turn")
+
+    monkeypatch.setattr(agent, "_make_api_call", fake_call)
+
+    convo = [
+        {"role": "user", "content": "survey it"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_1", "name": "survey", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}]},
+    ]
+    turn = await agent.agenerate_tools(convo, tools=[{"name": "survey", "input_schema": {}}])
+    assert turn.text == "done"
+    # the full multi-turn transcript reached the API (pairing preserved), not a flattened string
+    assert seen["messages"] == convo
+    assert seen["prompt"] is None
+
+
+@pytest.mark.asyncio
+async def test_mock_agent_scripted_tool_turns_drive_a_loop():
+    """FR-0a: MockAgent is a tool-use test double — scripted turns then a terminal final-text turn,
+    so a 'stop when tool_calls empty' loop terminates. This is the double the loop tests depend on."""
     from startd8.agents.mock import MockAgent
 
-    mock = MockAgent(model="mock-model")
-    assert mock.supports_tool_use() is False
-    with pytest.raises(NotImplementedError):
-        await mock.agenerate_tools("hi", tools=[])
+    mock = MockAgent(
+        model="mock-model",
+        tool_turns=[
+            {"text": "calling survey", "tool_calls": [("c1", "survey", {"project_root": "."})]},
+            {"text": "The project is ready.", "tool_calls": []},
+        ],
+    )
+    assert mock.supports_tool_use() is True
+
+    # Turn 1: a tool call
+    t1 = await mock.agenerate_tools("how ready?", tools=[])
+    assert t1.tool_calls == [ToolCallRequest("c1", "survey", {"project_root": "."})]
+    assert t1.finish_reason == "tool_use"
+
+    # Turn 2: scripted final text, no tools
+    t2 = await mock.agenerate_tools([{"role": "user", "content": "tool result..."}], tools=[])
+    assert t2.tool_calls == []
+    assert t2.text == "The project is ready."
+
+    # Turn 3: script exhausted -> terminal final-text turn (loop-terminating safety net)
+    t3 = await mock.agenerate_tools("again", tools=[])
+    assert t3.tool_calls == []
+    assert t3.finish_reason == "end_turn"
+    assert len(mock.tool_calls_received) == 3  # records each call's messages
