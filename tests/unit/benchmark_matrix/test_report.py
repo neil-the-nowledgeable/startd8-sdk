@@ -68,6 +68,36 @@ def test_single_finalist_cannot_assess_discrimination():
     assert "one finalist" in g.note
 
 
+def test_frontend_bonus_never_rank_flips_a_better_backend():
+    """OQ-J3: a brilliant-frontend/weak-backend finalist must NEVER outrank a strong-backend one."""
+    fs = [
+        R.FinalistScore("weak-backend-great-frontend", _sc(0.80),
+                        frontend_mounted="generated", frontend_bonus=0.10),
+        R.FinalistScore("strong-backend-no-frontend", _sc(0.95),
+                        frontend_mounted="canonical-substituted", frontend_bonus=0.0),
+    ]
+    ranked = R.rank_finalists(fs)
+    assert ranked[0].model == "strong-backend-no-frontend"  # backend wins despite 0 bonus
+
+
+def test_frontend_bonus_breaks_ties_among_equal_backends():
+    """Among EQUAL backend scores (+ equal faults), the higher frontend bonus ranks first."""
+    fs = [
+        R.FinalistScore("equal-no-bonus", _sc(0.90), frontend_bonus=0.0),
+        R.FinalistScore("equal-with-bonus", _sc(0.90), frontend_mounted="generated", frontend_bonus=0.08),
+    ]
+    ranked = R.rank_finalists(fs)
+    assert ranked[0].model == "equal-with-bonus"
+
+
+def test_substituted_run_shows_zero_bonus():
+    fs = [R.FinalistScore("sub", _sc(1.0), frontend_mounted="canonical-substituted", frontend_bonus=0.0)]
+    report, md = R.build_system_report(fs, attribution_trustworthy=True)
+    row = report["finalists"][0]
+    assert row["frontend_mounted"] == "canonical-substituted" and row["frontend_bonus"] == 0.0
+    assert "+0.000" in md and "canonical" in md
+
+
 def test_build_report_json_and_markdown():
     fs = [
         R.FinalistScore("winner", _sc(1.00), cost_usd=0.40, wall_seconds=120.0),

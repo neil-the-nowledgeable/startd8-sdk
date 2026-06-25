@@ -22,14 +22,25 @@ from .score import Scorecard
 
 @dataclass
 class FinalistScore:
-    """One finalist: a model's id + its healthy-mesh system Scorecard + cost/speed metadata."""
+    """One finalist: a model's id + its healthy-mesh system Scorecard + cost/speed metadata + the
+    OPTIONAL M5 frontend bonus (additive, capped — a separate tie-break column, NEVER the rank key).
+
+    frontend_mounted: "generated" (gate passed, contestant frontend ran) | "canonical-substituted"
+                      (gate failed → upstream frontend ran) | "none" (no frontend lane this run).
+    frontend_bonus:   from fleet.frontend_contract.frontend_bonus — 0 unless the gate passed.
+    """
     model: str
     scorecard: Scorecard
     cost_usd: float = 0.0
     wall_seconds: float = 0.0
+    frontend_mounted: str = "none"
+    frontend_bonus: float = 0.0
+    frontend_fidelity: float = 0.0
 
     @property
     def system_score(self) -> float:
+        """The RANK key — the BACKEND system score only. The frontend bonus is never folded in here
+        (a brilliant frontend can't lift a weak backend's rank — OQ-J3)."""
         return self.scorecard.weighted_coverage
 
     @property
@@ -38,10 +49,13 @@ class FinalistScore:
 
 
 def rank_finalists(finalists: list[FinalistScore]) -> list[FinalistScore]:
-    """Rank by system score (desc); tie-break: fewer own model-faults, then lower cost, then model id
-    (stable + deterministic)."""
+    """Rank by BACKEND system score (desc); tie-break: fewer own model-faults, then HIGHER frontend
+    bonus (the labeled "+frontend" tie-break — only among equal backends), then lower cost, then model
+    id. The frontend bonus is a tie-break ONLY: it can never move a finalist past one with a strictly
+    better backend score."""
     return sorted(finalists,
-                  key=lambda f: (-f.system_score, f.model_fault_count, f.cost_usd, f.model))
+                  key=lambda f: (-f.system_score, f.model_fault_count, -f.frontend_bonus,
+                                 f.cost_usd, f.model))
 
 
 @dataclass
@@ -92,6 +106,9 @@ def build_system_report(finalists: list[FinalistScore], *, attribution_trustwort
             "model_faults": sorted(sc.model_faulted_services),
             "propagated": sorted(sc.propagated_services),
             "cost_usd": f.cost_usd, "wall_seconds": f.wall_seconds,
+            # M5 frontend bonus — SEPARATE columns, NOT folded into system_score (the rank key).
+            "frontend_mounted": f.frontend_mounted, "frontend_bonus": f.frontend_bonus,
+            "frontend_fidelity": f.frontend_fidelity,
         })
     report = {
         "round": "round3",
@@ -119,15 +136,20 @@ def _render_md(report: dict) -> str:
         "",
         "## Finalist leaderboard",
         "",
-        "| Rank | Model | system score | unweighted | journey | confidence | model-faults | cost $ | wall s |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "*Ranked by **backend** system score; `+frontend` is a capped tie-break only (never rank-flips).*",
+        "",
+        "| Rank | Model | system score | unweighted | journey | confidence | model-faults | +frontend | frontend | cost $ | wall s |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in report["finalists"]:
         faults = ", ".join(r["model_faults"]) or "—"
+        fe = r.get("frontend_mounted", "none")
+        fe_label = {"generated": "generated", "canonical-substituted": "canonical", "none": "—"}.get(fe, fe)
         lines.append(
             f"| {r['rank']} | `{r['model']}` | {_f(r['system_score'])} | {_f(r['unweighted_coverage'])} | "
             f"{'✓' if r['journey_completed'] else '✗'} | {r['confidence']} | {faults} | "
+            f"+{_f(r.get('frontend_bonus', 0.0))} | {fe_label} | "
             f"{_f(r['cost_usd'], 4)} | {_f(r['wall_seconds'], 1)} |")
     if not report["finalists"]:
-        lines.append("| — | (no finalists) | | | | | | | |")
+        lines.append("| — | (no finalists) | | | | | | | | | |")
     return "\n".join(lines) + "\n"
