@@ -46,6 +46,8 @@ class MockAgent(BaseAgent):
         # Pass `tool_turns=[...]` to drive a multi-turn loop deterministically in tests.
         self._scripted_tool_turns: list = list(kwargs.get("tool_turns") or [])
         self.tool_calls_received: list = []  # records messages passed to each agenerate_tools call
+        # FR-S0a: when True, supports_streaming() reports True and agenerate_tools_stream is used.
+        self.streaming: bool = bool(kwargs.get("streaming", False))
 
     async def agenerate(
         self,
@@ -86,30 +88,16 @@ class MockAgent(BaseAgent):
         """MockAgent implements the FR-0 tool-use primitive (FR-0a test double)."""
         return True
 
-    async def agenerate_tools(
-        self,
-        messages: "list[dict] | str",
-        tools: list,
-        system_prompt: Optional[str] = None,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-    ) -> AgenticTurn:
-        """Scripted tool-use turn (FR-0a). Drives the agentic loop deterministically in tests.
+    def supports_streaming(self) -> bool:
+        """Controlled by the ``streaming=`` constructor flag (exercises the FR-S6 fallback when False)."""
+        return bool(getattr(self, "streaming", False))
 
-        Pops the next pre-loaded :class:`AgenticTurn` from ``tool_turns`` (set at construction). A
-        scripted turn may be given as an ``AgenticTurn`` or as a shorthand ``dict`` —
-        ``{"text": str, "tool_calls": [(id, name, args_dict), ...], "finish_reason": str}``. When the
-        queue is exhausted, returns a terminal final-text turn with no tool calls, so a loop bounded
-        by "stop when ``tool_calls`` is empty" always terminates.
-        """
-        await asyncio.sleep(0)  # keep the coroutine genuinely async without test latency
-        self.tool_calls_received.append(self._normalize_messages(messages))
-
+    def _next_scripted_turn(self) -> AgenticTurn:
+        """Pop the next scripted turn (AgenticTurn or dict shorthand); terminal final-text when empty."""
         if self._scripted_tool_turns:
             nxt = self._scripted_tool_turns.pop(0)
             if isinstance(nxt, AgenticTurn):
                 return nxt
-            # dict shorthand
             calls = [
                 tc if isinstance(tc, ToolCallRequest) else ToolCallRequest(*tc)
                 for tc in (nxt.get("tool_calls") or [])
@@ -121,8 +109,6 @@ class MockAgent(BaseAgent):
                 finish_reason=nxt.get("finish_reason", "tool_use" if calls else "end_turn"),
                 time_ms=0,
             )
-
-        # Exhausted script → terminal final-text turn (no tool calls) so loops terminate.
         return AgenticTurn(
             text="Mock final answer.",
             tool_calls=[],
@@ -130,6 +116,44 @@ class MockAgent(BaseAgent):
             finish_reason="end_turn",
             time_ms=0,
         )
+
+    async def agenerate_tools(
+        self,
+        messages: "list[dict] | str",
+        tools: list,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> AgenticTurn:
+        """Scripted tool-use turn (FR-0a). Drives the agentic loop deterministically in tests.
+
+        Pops the next pre-loaded :class:`AgenticTurn` from ``tool_turns`` (set at construction). When
+        the queue is exhausted, returns a terminal final-text turn with no tool calls.
+        """
+        await asyncio.sleep(0)  # keep the coroutine genuinely async without test latency
+        self.tool_calls_received.append(self._normalize_messages(messages))
+        return self._next_scripted_turn()
+
+    async def agenerate_tools_stream(
+        self,
+        messages: "list[dict] | str",
+        tools: list,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ):
+        """Scripted streaming turn (FR-S0a). Yields ``TextDelta`` chunks (one per word) then a
+        terminal ``TurnComplete`` carrying the same scripted :class:`AgenticTurn` ``agenerate_tools``
+        would return — so one script drives both the streaming and non-streaming paths."""
+        from ..models import TextDelta, TurnComplete
+
+        await asyncio.sleep(0)
+        self.tool_calls_received.append(self._normalize_messages(messages))
+        turn = self._next_scripted_turn()
+        for word in (turn.text or "").split(" "):
+            if word:
+                yield TextDelta(word + " ")
+        yield TurnComplete(turn)
 
 
 class ComposerAgent(OpenAICompatibleAgent):

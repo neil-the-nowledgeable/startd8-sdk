@@ -217,6 +217,59 @@ def _resolve_tool_format(agent: BaseAgent) -> str:
     return "anthropic" if "Claude" in type(agent).__name__ else "openai"
 
 
+def stream_sync(async_event_iter):
+    """Sync bridge for `stream()` (FR-S5a). Drives an ``AsyncIterator[AgenticEvent]`` from a
+    synchronous caller (e.g. the questionary TUI REPL, which cannot ``asyncio.run`` an async
+    generator) and yields each event. Runs its own event loop, pumping one event per ``__anext__``."""
+    import asyncio
+
+    agen = async_event_iter
+    loop = asyncio.new_event_loop()
+    try:
+        while True:
+            try:
+                yield loop.run_until_complete(agen.__anext__())
+            except StopAsyncIteration:
+                return
+    finally:
+        try:
+            loop.run_until_complete(agen.aclose())  # FR-S5b: propagate teardown on early exit
+        except Exception:
+            pass
+        loop.close()
+
+
+async def tee(async_event_iter, n: int = 2):
+    """Fan-out an async event stream into *n* independent iterators (FR-S7, OQ-S1).
+
+    Buffers events so a slow consumer does not drop events, and a blocked consumer does not deadlock
+    the others (each gets its own queue). Returns a list of *n* async iterators."""
+    import asyncio
+
+    queues = [asyncio.Queue() for _ in range(n)]
+    _SENTINEL = object()
+
+    async def _pump():
+        try:
+            async for ev in async_event_iter:
+                for q in queues:
+                    await q.put(ev)
+        finally:
+            for q in queues:
+                await q.put(_SENTINEL)
+
+    asyncio.ensure_future(_pump())  # the running loop keeps a ref until it completes
+
+    async def _branch(q):
+        while True:
+            ev = await q.get()
+            if ev is _SENTINEL:
+                return
+            yield ev
+
+    return [_branch(q) for q in queues]
+
+
 def _assistant_message(turn: AgenticTurn, fmt: str) -> dict:
     if fmt == "anthropic":
         content: list[dict] = []
@@ -383,6 +436,148 @@ class AgenticSession:
                 self.messages.extend(_tool_result_messages(results, self.tool_format))
 
         return self._result(last_text, "max_turns", cfg.max_turns)
+
+    # ----------------------------------------------------------------- streaming (FR-2, MVP-A)
+    async def stream(self, user_message: str):
+        """Stream a run as typed events (FR-S5): ``StreamStart`` → per-turn ``TextDelta``/tool events
+        → terminal ``RunComplete(result)``. The event stream is teeable (FR-S7) and the loop logic is
+        shared with :meth:`send` (same tool dispatch, budget, compaction). ``send()`` is unchanged and
+        remains the non-streaming default."""
+        from ..models import RunComplete, StreamStart
+
+        self.messages.append({"role": "user", "content": user_message})
+        yield StreamStart()
+        with otel_span(
+            "agentic.session",
+            **{
+                "agentic.provider": self.agent.name,
+                "agentic.model": self.agent.model,
+                "gen_ai.system": self.agent.name,
+                "gen_ai.request.model": self.agent.model,
+                "agentic.streaming": True,
+                "agentic.tool_count": len(self.registry),
+            },
+        ) as session_span:
+            if self.project_context is not None:
+                add_project_context_to_span(session_span, self.project_context)
+            result_holder: list = []
+            async for ev in self._stream_loop(result_holder):
+                if isinstance(ev, RunComplete):
+                    otel_set_attributes(
+                        session_span,
+                        **{
+                            "agentic.stop_reason": ev.result.stop_reason,
+                            "agentic.turns": ev.result.turns,
+                            "agentic.total_tokens": ev.result.total_tokens,
+                            "gen_ai.usage.input_tokens": self.total_input_tokens,
+                            "gen_ai.usage.output_tokens": self.total_output_tokens,
+                        },
+                    )
+                yield ev
+
+    async def _stream_loop(self, result_holder: list):
+        from ..models import (
+            ErrorEvent, RunComplete, ToolCallResult, ToolCallStarted, TurnComplete,
+        )
+
+        tools = self.registry.for_format(self.tool_format)
+        call_counts: dict[tuple, int] = {}
+        cfg = self.config
+        last_text = ""
+
+        for turn in range(1, cfg.max_turns + 1):
+            if cfg.max_total_tokens is not None and self.total_tokens >= cfg.max_total_tokens:
+                yield RunComplete(self._finish(result_holder, last_text, "budget", turn - 1))
+                return
+            if cfg.max_cost_usd is not None and self.total_cost_usd >= cfg.max_cost_usd:
+                yield RunComplete(self._finish(result_holder, last_text, "budget", turn - 1))
+                return
+
+            turn_obj: Optional[AgenticTurn] = None
+            try:
+                async for ev in self._stream_one_call(tools):
+                    if isinstance(ev, TurnComplete):
+                        turn_obj = ev.turn  # primitive's terminal marker — captured, not forwarded
+                    else:
+                        yield ev  # TextDelta / CompactionEvent / StreamReset
+            except ContextWindowExceededError as exc:
+                yield ErrorEvent("context", "ContextWindowExceededError", str(exc), False)
+                yield RunComplete(self._finish(result_holder, last_text, "context_overflow", turn))
+                return
+
+            assert turn_obj is not None  # the primitive always ends with TurnComplete
+            self._account(turn_obj)
+            last_text = turn_obj.text or last_text
+            self.messages.append(_assistant_message(turn_obj, self.tool_format))
+
+            if not turn_obj.tool_calls:
+                yield TurnComplete(turn_obj)
+                yield RunComplete(self._finish(result_holder, turn_obj.text, "completed", turn))
+                return
+
+            calls = turn_obj.tool_calls[: cfg.max_tool_calls_per_turn]
+            for c in calls:
+                key = (c.name, json.dumps(c.arguments, sort_keys=True, default=str))
+                call_counts[key] = call_counts.get(key, 0) + 1
+                if call_counts[key] > cfg.repeated_call_limit:
+                    yield RunComplete(self._finish(result_holder, last_text, "repeated_calls", turn))
+                    return
+
+            results = []
+            for c in calls:
+                yield ToolCallStarted(c.id, c.name)
+                with otel_span("agentic.tool_call", **{"agentic.tool": c.name}) as tool_span:
+                    res = await self.registry.dispatch(c)
+                    otel_set_attributes(tool_span, **{"agentic.tool_ok": res.ok})
+                yield ToolCallResult(c.id, c.name, res.ok)
+                results.append(res)
+            self.messages.extend(_tool_result_messages(results, self.tool_format))
+            yield TurnComplete(turn_obj)
+
+        yield RunComplete(self._finish(result_holder, last_text, "max_turns", cfg.max_turns))
+
+    async def _stream_one_call(self, tools: list):
+        """Yield one turn's model events (text deltas + a terminal ``TurnComplete``), handling
+        overflow → compaction → retry (FR-S9) with a ``StreamReset``/``CompactionEvent`` before each
+        retry. Falls back to a single ``TextDelta`` for non-streaming agents (FR-S6). Raises
+        :class:`ContextWindowExceededError` when overflow cannot be recovered."""
+        from ..models import CompactionEvent, StreamReset, TextDelta, TurnComplete
+
+        attempts = 0
+        while True:
+            try:
+                if self.agent.supports_streaming():
+                    async for ev in self.agent.agenerate_tools_stream(
+                        self.messages, tools, system_prompt=self.system_prompt
+                    ):
+                        yield ev
+                else:  # FR-S6 uniform fallback: one text delta + a synthetic TurnComplete
+                    turn = await self.agent.agenerate_tools(
+                        self.messages, tools, system_prompt=self.system_prompt
+                    )
+                    if turn.text:
+                        yield TextDelta(turn.text)
+                    yield TurnComplete(turn)
+                return
+            except Exception as exc:  # noqa: BLE001 — only overflow handled; others re-raise
+                if not is_context_window_error(exc):
+                    raise
+                attempts += 1
+                if attempts > self.config.max_compactions or find_clean_cut(
+                    self.messages, self.tool_format, self.config.compact_keep_recent
+                ) <= 0:
+                    raise ContextWindowExceededError("context overflow unrecoverable by compaction") from exc
+                yield StreamReset("overflow_retry")  # FR-S9: consumer clears partial text before retry
+                yield CompactionEvent(attempts)
+                with otel_span("agentic.compaction", **{"agentic.compaction_attempt": attempts}):
+                    self.messages = await compact(
+                        self.messages, self.tool_format, self._summarize, self.config.compact_keep_recent
+                    )
+
+    def _finish(self, holder: list, text: str, stop_reason: str, turns: int) -> "AgenticResult":
+        result = self._result(text, stop_reason, turns)
+        holder.append(result)
+        return result
 
     async def _call_with_compaction(self, tools: list) -> AgenticTurn:
         """Call the model; on a context-window overflow (FR-3), compact older history (FR-4) and
