@@ -6,14 +6,17 @@
 
 ## Status
 
-Round 3 (full 9-service Online Boutique system round) is **design + plan complete** (PLAN v0.3, REQUIREMENTS v0.3 reconciled). **M0 is IN PROGRESS** (see below). The substrates and per-service assets it composes on are shipped/validated.
+Round 3 (full 9-service Online Boutique system round) is **design + plan complete** (PLAN v0.3, REQUIREMENTS v0.3 reconciled). **M0 is COMPLETE — all 4 lanes (Go + Python + Node + C#) live-validated** (see below). The substrates and per-service assets it composes on are shipped/validated.
 
-**M0 IN PROGRESS** — branch `feat/r3-m0-build-service-image`, worktree `/Users/neilyashinsky/Documents/dev/startd8-r3-m0` (commits `d479c2fc` + `bdc9c797`, NOT yet pushed/merged):
-- ✅ **Builder built** — `benchmark_matrix/fleet/containerize.py`: `build_service_image(service, workdir, language)` + `boot_and_probe(...)` + `ImageBuildResult`/`BootProbeResult`, reusing `provision.py` per language; 4 per-language templates (`fleet/templates/Dockerfile.{go,python,node,csharp}.tmpl`); Node `payment_reference` fixture; injected runner (dry-run/CI-safe).
-- ✅ **Go lane LIVE-VALIDATED on macOS Docker** — `build ok → boot ok → catalog suite coverage 1.0` over real gRPC. Found+fixed **3 real container bugs** the bare-process path never hit: (1) `setup_go_stubs` abspath `replace` → relativized `./.gostubs` in `_stage_go_context`; (2) the relative-path guard mis-fired on `.gostubs`' leading dot → check `./`/`../`; (3) distroless/static has no `/bin/sh` → assemble `/out` in the build stage, runtime only `COPY`s.
-- ✅ **6 unit tests** (`tests/.../behavioral/test_containerize.py`, fake-runner/no-docker) + `fleet/validate_m0.py` (repeatable live entrypoint).
-- ⏳ **Python / Node / C# lanes — code-ready, live-validation PENDING** (templates + staging + the driver exist; each will likely surface 0–1 similar container-path fixes like Go's 3). Java deferred.
-- ⚠️ **Tooling note:** background subagents were dropping their socket on long runs this session — **drive the docker-heavy validation in the main loop with backgrounded `docker build`** (`run_in_background`) so no single call blocks for minutes. `validate_m0.py <lang>` is the entrypoint.
+**M0 COMPLETE** — Go lane on `feat/r3-m0-build-service-image` (worktree `startd8-r3-m0`, commits `d479c2fc`+`bdc9c797`); Python/Node/C# lanes on `feat/r3-m0-python-lane` (worktree `startd8-r3-m0-python`, branched off the Go branch — commits `d91de7ac` Python, `4e9e61bb` Node, `420923e5` C#). **NONE pushed/merged yet** — next action is to consolidate + FF-merge to `origin/main`.
+- ✅ **Builder built** — `benchmark_matrix/fleet/containerize.py`: `build_service_image(service, workdir, language)` + `boot_and_probe(...)` + `ImageBuildResult`/`BootProbeResult`, reusing `provision.py` per language; 4 per-language templates (`fleet/templates/Dockerfile.{go,python,node,csharp}.tmpl`); injected runner (dry-run/CI-safe). `build_service_image` now takes `extra_pip` (per-service Python deps).
+- ✅ **Go lane** (coverage 1.0) — 3 container bugs fixed: abspath `replace`→`./.gostubs`; `./`/`../` guard; distroless-no-`/bin/sh` (assemble `/out` in build stage).
+- ✅ **Python lane (emailservice, coverage 1.0)** — 1 fix: the jinja2-rendering server import-crashed (boot ok → exit → probe 0.0) because the image lacked `jinja2`. Threaded per-service `extra_pip=["jinja2"]` (container analogue of provision's requirements.txt top-up); kept per-service, not baked into the baseline.
+- ✅ **Node lane (paymentservice, coverage 1.0)** — 0 fixes (most offline-ready: vendored `node_runtime` closure staged, no npm install). Prereq: run `node_runtime/vendor.sh` (`npm ci`; `node_modules` is gitignored).
+- ✅ **C# lane (cartservice, coverage 1.0)** — 2 fixes, the runbook-predicted hardest lane: **(a) arm64 protoc SIGSEGV (OQ-C4)** — Grpc.Tools 2.71's bundled `linux_arm64/protoc` exits 139 under MSBuild's `Protobuf_Compile` (`--dependency_out`), verified deterministic and NOT the OQ-C6 cold-NuGet gap; the binary is fine standalone, only the MSBuild path crashes it → build stage apt-installs `protobuf-compiler` + `-p:Protobuf_ProtocFullPath=/usr/bin/protoc`, keeping the bundled `grpc_csharp_plugin`. **(b) loopback bind** — `Program.cs` used `ListenLocalhost` (127.0.0.1 only, unreachable via published port) → `ListenAnyIP` (0.0.0.0, matches real OB; loopback behavioral path still works).
+- ✅ **15 unit tests** (`tests/.../behavioral/test_containerize.py`, fake-runner/no-docker) + `fleet/validate_m0.py <lang>` (repeatable live entrypoint, all 4 lanes wired).
+- ⚠️ **Tooling note:** drive docker-heavy validation in the main loop with backgrounded `docker build` (`run_in_background`) so no single call blocks for minutes. `validate_m0.py <lang>` is the entrypoint.
+- ⏳ **Java deferred** (leaf, off journey; only lang with no offline build).
 
 **Already SHIPPED / VALIDATED (start from this reality, don't rebuild):**
 - **5 per-service behavioral suites + reference fixtures** — `behavioral/{catalog,email,cart,recommendation,checkout}_suite.py` (+ currency/charge/shipping/ad/pricing).
@@ -26,28 +29,26 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 
 ---
 
-## Continue here → finish M0 (Python / Node / C# lanes live-validation)
+## Continue here → consolidate + merge M0, then start M1
 
-The builder (`benchmark_matrix/fleet/containerize.py`) + the 4 templates + the Go lane are **done and Go is live-proven** (above). Remaining M0 = run the other three lanes through the same `build_service_image → boot_and_probe → one-RPC` validation and fix whatever container-path issues surface.
+M0 is **done — all 4 lanes live-proven** (`build_service_image → boot_and_probe → one-RPC`, coverage 1.0 each). The work spans **two branches** that need consolidating before merge:
+- `feat/r3-m0-build-service-image` (Go lane + builder)
+- `feat/r3-m0-python-lane` (branched off the Go branch; Python+Node+C# lanes) — `startd8-r3-m0-python`
 
-**Concrete next actions (in the M0 worktree, branch `feat/r3-m0-build-service-image`):**
-1. **Extend `fleet/validate_m0.py`** (currently Go-only) with the Python / Node / C# lanes, mirroring the Go lane:
-   - **Python (emailservice):** workdir = `email_reference/server.py`; provision the jinja2 `confirmation.html` template into the svc dir (`provision_email_template` — mirrors catalog's `products.json`); probe = `email_suite.run_email_suite`. Simplest Python lane (leaf; recommendation needs a dep stub, skip for the boot check).
-   - **Node (paymentservice):** workdir = `payment_reference/{server.js,package.json}`; `_stage_node_context` reuses the vendored `node_runtime` closure; probe = `charge_suite.run_charge_suite`.
-   - **C# (cartservice):** workdir = `cart_reference/{Program.cs,cartservice.csproj}`; `_stage_csharp_context` (dotnet publish — needs NuGet network on cold cache, OQ-C6); probe = `cart_suite.run_cart_suite`. The slow + most-likely-to-need-fixes lane.
-2. **Run each lane** with `PYTHONPATH=src python3 -m … fleet.validate_m0 <lang>` via **backgrounded `docker build`** (long builds drop foreground/subagent connections). Expect 0–1 container-path fixes per lane (the Go lane needed 3 — abspath replace, `./`-prefix, distroless-no-shell; the C#/Node template runtime stages may have analogous shell/asset issues).
-3. **Add each passing lane's assertion** to `test_containerize.py` (fake-runner, no-docker) so the construction stays locked.
+**Concrete next actions:**
+1. **Consolidate + FF-merge to `origin/main`.** `feat/r3-m0-python-lane` already contains the Go branch as its base (it was branched off it), so merging the python-lane branch carries all 4 lanes. Verify `git log origin/main..feat/r3-m0-python-lane` is the expected 4 commits, confirm `merge-tree` is clean vs `origin/main`, then FF-push. (Per the repo's contended-`main` rule: prefer a worktree off `origin/main` + cherry-pick + FF-push; never merge into the shared local `main` working tree.)
+2. **Proceed to M1** — the N-service compose-fleet generator (the validated `compose-prototype/` is the seed). See the M1 row below + the faithfulness traps (email port asymmetry, redis-cart sidecar).
 
-**Exit criterion (M0):** `build_service_image` produces a runnable image for **Go ✅ + Python + Node + C#** from a generated workdir; each boots and answers one RPC. *Stretch:* `--network=none` hermetic build after base+cache pre-pull (deferred to M1+).
+**Reproduce/extend M0 locally:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m0 <go|python|node|csharp>` via **backgrounded `docker build`**. Node needs `node_runtime/vendor.sh` run first (gitignored closure).
 
-**Then:** FF-merge the M0 branch to `origin/main` and proceed to **M1** (the N-service compose-fleet generator — the validated `compose-prototype/` is the seed).
+**Exit criterion (M0): ✅ MET** — runnable image for Go + Python + Node + C# from a generated workdir; each boots and answers one RPC. *Stretch (deferred to M1+):* `--network=none` hermetic build after base+cache pre-pull.
 
 ---
 
 ## Critical path
 
 ```
-Track-2 contracts (DONE/scope gaps) → M0 → M1 → M2 → M3 → M6
+Track-2 contracts (DONE/scope gaps) → M0 ✅ → M1 → M2 → M3 → M6
                                                     └ M4 → M5  (frontend BONUS — PARALLEL branch, joins at M5/M6, NEVER on the critical path)
 ```
 The frontend bonus branch can never block backend scoring — that is the whole point of the substitution seam.
@@ -58,7 +59,7 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 
 | M | Goal | Exit criterion | Effort |
 |---|---|---|---|
-| **M0** ⏳ | `build_service_image` + Go/Python/Node/C# Dockerfiles (+C# warm-NuGet) | runnable image per lang from a workdir; boots + 1 RPC. **Go ✅ live (coverage 1.0); Python/Node/C# pending** | ~1 + ¼ |
+| **M0** ✅ | `build_service_image` + Go/Python/Node/C# Dockerfiles | runnable image per lang from a workdir; boots + 1 RPC. **DONE — all 4 lanes live (coverage 1.0): Go (3 fixes), Python (jinja2 extra_pip), Node (0), C# (arm64 protoc + ListenAnyIP)** | done |
 | **M1** | N-service compose-fleet generator (8/9 backends, egress-denied, service-DNS) | SDK-ref 8-svc fleet boots on macOS Docker; every `*_SERVICE_ADDR` resolves; egress to 1.1.1.1:443 DENIED; teardown leaves zero containers | ~1 |
 | **M2** | Transport-agnostic journey + Adapter B (direct-gRPC, always-on) | Adapter B over a known-good 9-svc mesh = 100% step coverage; break payment → only checkout's step fails | ~1 |
 | **M3** | Layered scoring → scorecard (per-step coverage + per-service fault attribution + journey-completed bool) | run on SDK-ref + 2 broken meshes (break payment / catalog) → each fault attributed to right service+class; downstream never charged model-fault for upstream break; all-degrade flagged low-confidence | ~1 |
@@ -87,8 +88,8 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 
 - **Frontend gate robustness (R2/OQ-J1 — load-bearing):** lean strict. The **stateful end-to-end checkout against known-good backends** is the decisive defense against a subtly-broken frontend (confirmation page w/o a real order id).
 - **Bonus cap (OQ-J3/OQ-F3):** cap low — rank on `backend_score`, frontend is tie-break ONLY; must never rank-flip; don't tempt over-investment in the frontend.
-- **C# warm-NuGet bake (OQ-C6):** the one unsolved reuse gap — `dotnet restore` is the only network step; cold cache breaks offline. Bake+snapshot `~/.nuget`, then `--no-restore` publish.
-- **arm64 vs amd64 (OQ-C4):** dep caches are arch-specific; build per-target-arch (Node closure is portable).
+- **C# warm-NuGet bake (OQ-C6):** still the unsolved OFFLINE reuse gap — `dotnet restore` is the only network step; cold cache breaks an offline build. Bake+snapshot `~/.nuget`, then `--no-restore` publish. (M0 builds with network; confirmed NOT the cause of the C# build failure — restore succeeded in ~6-12s.)
+- **arm64 vs amd64 (OQ-C4):** dep caches are arch-specific; build per-target-arch (Node closure is portable). **RESOLVED for C# M0:** Grpc.Tools 2.71's bundled `linux_arm64/protoc` SIGSEGVs (139) under MSBuild's `Protobuf_Compile` (`--dependency_out`) — deterministic; the build now uses the apt system protoc via `Protobuf_ProtocFullPath` (harmless on amd64 where the bundled protoc works). If a future move to amd64-only CI builds makes this moot, the override can be dropped on amd64.
 - **Faithfulness traps (M1):** emailservice **port asymmetry** (`listen 8080 / dial 5000`) and the **redis-cart** infra sidecar cartservice needs — encode the `(listen,dial)` pair per service + redis as a non-seed infra sidecar.
 - **Mesh-compat of reused workdirs (OQ-3):** verify Round-1/2 non-checkout services honor `*_SERVICE_ADDR` at runtime; regenerate gaps (Mottainai saving partly evaporates if not).
 - **Attribution correctness (FR-14):** mis-attributing an upstream break to a downstream service silently blames the wrong model — the known-broken-mesh tests (break payment/catalog) are the gate.
