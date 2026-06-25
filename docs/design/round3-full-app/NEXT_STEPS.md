@@ -6,9 +6,9 @@
 
 ## Status
 
-Round 3 (full 9-service Online Boutique system round) is **design + plan complete** (PLAN v0.3, REQUIREMENTS v0.3 reconciled). **M0 is COMPLETE — all 4 lanes (Go + Python + Node + C#) live-validated** (see below). The substrates and per-service assets it composes on are shipped/validated.
+Round 3 (full 9-service Online Boutique system round) is **design + plan complete** (PLAN v0.3, REQUIREMENTS v0.3 reconciled). **M0 is COMPLETE + MERGED to `origin/main`**; **M1 (compose-fleet generator) is IN PROGRESS — generator core done, live validation pending** (see below).
 
-**M0 COMPLETE** — Go lane on `feat/r3-m0-build-service-image` (worktree `startd8-r3-m0`, commits `d479c2fc`+`bdc9c797`); Python/Node/C# lanes on `feat/r3-m0-python-lane` (worktree `startd8-r3-m0-python`, branched off the Go branch — commits `d91de7ac` Python, `4e9e61bb` Node, `420923e5` C#). **NONE pushed/merged yet** — next action is to consolidate + FF-merge to `origin/main`.
+**M0 COMPLETE + MERGED** — all 4 lanes (Go + Python + Node + C#) live-validated; landed on `origin/main` via FF-push (`2ee76f38..b2a73ef7`, cherry-picked onto diverged main per the contended-`main` rule). The two M0 worktrees (`startd8-r3-m0`, `startd8-r3-m0-python`) are now merged and can be removed.
 - ✅ **Builder built** — `benchmark_matrix/fleet/containerize.py`: `build_service_image(service, workdir, language)` + `boot_and_probe(...)` + `ImageBuildResult`/`BootProbeResult`, reusing `provision.py` per language; 4 per-language templates (`fleet/templates/Dockerfile.{go,python,node,csharp}.tmpl`); injected runner (dry-run/CI-safe). `build_service_image` now takes `extra_pip` (per-service Python deps).
 - ✅ **Go lane** (coverage 1.0) — 3 container bugs fixed: abspath `replace`→`./.gostubs`; `./`/`../` guard; distroless-no-`/bin/sh` (assemble `/out` in build stage).
 - ✅ **Python lane (emailservice, coverage 1.0)** — 1 fix: the jinja2-rendering server import-crashed (boot ok → exit → probe 0.0) because the image lacked `jinja2`. Threaded per-service `extra_pip=["jinja2"]` (container analogue of provision's requirements.txt top-up); kept per-service, not baked into the baseline.
@@ -17,6 +17,12 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 - ✅ **15 unit tests** (`tests/.../behavioral/test_containerize.py`, fake-runner/no-docker) + `fleet/validate_m0.py <lang>` (repeatable live entrypoint, all 4 lanes wired).
 - ⚠️ **Tooling note:** drive docker-heavy validation in the main loop with backgrounded `docker build` (`run_in_background`) so no single call blocks for minutes. `validate_m0.py <lang>` is the entrypoint.
 - ⏳ **Java deferred** (leaf, off journey; only lang with no offline build).
+
+**M1 IN PROGRESS — generator core done** — branch `feat/r3-m1-compose-fleet` (worktree `startd8-r3-m1`, off the M0-merged `origin/main`; commit `0dc554be`, NOT pushed):
+- ✅ **Service inventory** — `fleet/services.py`: the authoritative OB topology (JOURNEY_DESIGN §3) as `ServiceSpec(name, language, listen_port, dial_port, addr_env, deps, is_infra, image)`. **This is now the code single-source for the OB topology** (JOURNEY_DESIGN §3 is the doc source; keep them in sync — vocabulary-drift rule). Both faithfulness traps encoded in the data model: emailservice `listen 8080 / dial 5000` (`port_asymmetric`) + redis-cart `is_infra` sidecar. `topo_order()` = dependency-ordered bring-up, rejects cycles/unknown deps. v1 = 8 backends + redis (adservice/Java deferred; frontend = M4).
+- ✅ **Compose generator** — `fleet/compose.py`: `generate_compose_dict/_yaml` → `internal:true` `fleet` net (egress-deny + service-DNS), optional `edge` bridge for a host-reachable ingress, each dep edge as `{ADDR_ENV}: peer:dial_port`, redis sidecar, email `PORT=dial_port`, `depends_on` ordering, M0-matching image tags `r3/<svc>:<lang>`.
+- ✅ **14 no-docker unit tests** (`tests/unit/benchmark_matrix/test_compose_fleet.py`) — inventory, both traps, topo order (+ cycle/unknown-dep rejection), internal net, service-DNS wiring, redis sidecar, ingress edge/host-port, YAML round-trip.
+- ⏳ **Live validation PENDING** (`validate_m1.py`) — the M1 exit criterion. See "Continue here".
 
 **Already SHIPPED / VALIDATED (start from this reality, don't rebuild):**
 - **5 per-service behavioral suites + reference fixtures** — `behavioral/{catalog,email,cart,recommendation,checkout}_suite.py` (+ currency/charge/shipping/ad/pricing).
@@ -29,19 +35,23 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 
 ---
 
-## Continue here → consolidate + merge M0, then start M1
+## Continue here → finish M1 (live `validate_m1`)
 
-M0 is **done — all 4 lanes live-proven** (`build_service_image → boot_and_probe → one-RPC`, coverage 1.0 each). The work spans **two branches** that need consolidating before merge:
-- `feat/r3-m0-build-service-image` (Go lane + builder)
-- `feat/r3-m0-python-lane` (branched off the Go branch; Python+Node+C# lanes) — `startd8-r3-m0-python`
+The generator core is done + unit-tested. Remaining M1 = `validate_m1.py` (reusing the prototype's `drive_fleet.py` shape): build the 8 backend images → write the generated compose → `docker compose up` → assert every `*_SERVICE_ADDR` resolves over service-DNS + egress to `1.1.1.1:443` is **DENIED** from a pure-backend container + clean teardown leaves zero containers/networks.
 
-**Concrete next actions:**
-1. **Consolidate + FF-merge to `origin/main`.** `feat/r3-m0-python-lane` already contains the Go branch as its base (it was branched off it), so merging the python-lane branch carries all 4 lanes. Verify `git log origin/main..feat/r3-m0-python-lane` is the expected 4 commits, confirm `merge-tree` is clean vs `origin/main`, then FF-push. (Per the repo's contended-`main` rule: prefer a worktree off `origin/main` + cherry-pick + FF-push; never merge into the shared local `main` working tree.)
-2. **Proceed to M1** — the N-service compose-fleet generator (the validated `compose-prototype/` is the seed). See the M1 row below + the faithfulness traps (email port asymmetry, redis-cart sidecar).
+**Build it per these lessons-learned effectiveness practices** (`craft/Lessons_Learned/sdk/lessons/01-benchmarking.md` unless noted):
+1. **Fix the misleading "boot ok" signal FIRST** (Leg 1 #14 "DONE ≠ working / looks-like-success"). M0's `boot_and_probe` reports `boot ok` when `docker run -d` merely returns a container id — it does **not** confirm the process survived. Both the Python (jinja2) and C# (ListenLocalhost) lanes presented as `boot ok` → `coverage 0.0`, costing diagnostic cycles. **Add a readiness gate** (poll the published/DNS port for a TCP accept, or a compose `healthcheck`) so a dead/unreachable process reports "never ready" with its container logs, not a misleading 0.0. This single fix would have short-circuited two of this session's hardest debugs.
+2. **Persist-then-rescore / build-once (Leg 1 #10, Mottainai).** The compose already references pre-built `r3/<svc>:<lang>` tags. `validate_m1` should **build-if-missing, not always rebuild** — bring the fleet up against existing images and re-probe cheaply ($0-ish) while iterating the harness. Only rebuild a service when its workdir changes. Don't pay 8 image builds per harness tweak.
+3. **Build the 8 images in PARALLEL** (process effectiveness). They're independent; M0 built lanes serially. Fan out `build_service_image` concurrently (backgrounded `docker build`), gated on the C# lane being slowest (NuGet + emulated protoc).
+4. **Quick vs full subset (Leg 1 #1, Configurable Thoroughness).** Give `validate_m1` a `--subset` (e.g., the proven `recommendationservice,productcatalogservice` prototype pair) for ~1-min iteration vs the full 8-service fleet for the exit gate. Default full; quick for dev.
+5. **Verify the call site (Leg 1 #14 / "wired ≠ working").** The generator is unit-tested but inert until `validate_m1` actually stands a fleet up — **M1 is NOT done until the live fleet boots, DNS resolves, egress is denied, and teardown is clean.** Don't mark M1 complete on the generator alone.
+6. **Re-run flaky probes 2-3× before calling a regression (Leg 1 #24, REPEAT-vs-FLIP).** The C# protoc SIGSEGV was confirmed deterministic by re-running (it REPEATED); a one-shot failure could have been variance.
 
-**Reproduce/extend M0 locally:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m0 <go|python|node|csharp>` via **backgrounded `docker build`**. Node needs `node_runtime/vendor.sh` run first (gitignored closure).
+**Then:** land M1 on `origin/main` via the contended-`main` recipe (worktree off `origin/main` → cherry-pick → confirm `merge-tree` clean + `merge-base --is-ancestor` → FF-push), and proceed to **M2** (transport-agnostic journey + Adapter B over the live fleet).
 
-**Exit criterion (M0): ✅ MET** — runnable image for Go + Python + Node + C# from a generated workdir; each boots and answers one RPC. *Stretch (deferred to M1+):* `--network=none` hermetic build after base+cache pre-pull.
+**Reproduce M0 locally:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m0 <go|python|node|csharp>` via backgrounded `docker build`. Node needs `node_runtime/vendor.sh` first (gitignored closure).
+
+**Exit criterion (M0): ✅ MET + MERGED.** *Stretch (deferred to M1+):* `--network=none` hermetic build after base+cache pre-pull.
 
 ---
 
@@ -60,7 +70,7 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 | M | Goal | Exit criterion | Effort |
 |---|---|---|---|
 | **M0** ✅ | `build_service_image` + Go/Python/Node/C# Dockerfiles | runnable image per lang from a workdir; boots + 1 RPC. **DONE — all 4 lanes live (coverage 1.0): Go (3 fixes), Python (jinja2 extra_pip), Node (0), C# (arm64 protoc + ListenAnyIP)** | done |
-| **M1** | N-service compose-fleet generator (8/9 backends, egress-denied, service-DNS) | SDK-ref 8-svc fleet boots on macOS Docker; every `*_SERVICE_ADDR` resolves; egress to 1.1.1.1:443 DENIED; teardown leaves zero containers | ~1 |
+| **M1** ⏳ | N-service compose-fleet generator (8/9 backends, egress-denied, service-DNS) | SDK-ref 8-svc fleet boots on macOS Docker; every `*_SERVICE_ADDR` resolves; egress to 1.1.1.1:443 DENIED; teardown leaves zero containers. **Generator core ✅ (services/compose + 14 tests); live `validate_m1` pending** | ~1 |
 | **M2** | Transport-agnostic journey + Adapter B (direct-gRPC, always-on) | Adapter B over a known-good 9-svc mesh = 100% step coverage; break payment → only checkout's step fails | ~1 |
 | **M3** | Layered scoring → scorecard (per-step coverage + per-service fault attribution + journey-completed bool) | run on SDK-ref + 2 broken meshes (break payment / catalog) → each fault attributed to right service+class; downstream never charged model-fault for upstream break; all-degrade flagged low-confidence | ~1 |
 | **M4** | Frontend BONUS lane (seed + health/OpenAPI gate + canonical substitution + Adapter A) | a subtly-broken frontend (confirmation w/o real order id) FAILS gate + falls to canonical cleanly; Adapter A green over canonical; report records which ran + verdict | ~1 |
