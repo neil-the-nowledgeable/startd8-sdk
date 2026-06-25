@@ -275,7 +275,13 @@ func (f *frontend) placeOrder(w http.ResponseWriter, r *http.Request) {
 		page(w, http.StatusInternalServerError, "error", "checkout failed: "+err.Error())
 		return
 	}
-	// THE decisive gate signal: render the REAL order id from PlaceOrder.
+	// THE decisive gate signal: render the REAL order id from PlaceOrder. The broken variant
+	// (FRONTEND_BREAK_ORDER_ID=1) renders a confirmation page WITHOUT the order id — a subtly-broken
+	// frontend that passes route-presence but must FAIL the gate's stateful-journey stage.
+	if os.Getenv("FRONTEND_BREAK_ORDER_ID") == "1" {
+		page(w, http.StatusOK, "order confirmation", "<h1>Order Confirmed</h1><p>Thank you for shopping!</p>")
+		return
+	}
 	oid := resp.GetOrder().GetOrderId()
 	body := fmt.Sprintf("<h1>Order Confirmed</h1><p id=\"order-id\">Order ID: %s</p>"+
 		"<p id=\"tracking-id\">Tracking: %s</p>",
