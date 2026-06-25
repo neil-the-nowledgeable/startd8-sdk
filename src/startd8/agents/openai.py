@@ -538,6 +538,103 @@ class GPT4Agent(BaseAgent):
             time_ms=response_time_ms,
         )
 
+    def supports_streaming(self) -> bool:
+        """GPT4Agent implements per-token streaming (FR-S2, MVP-A)."""
+        return True
+
+    async def agenerate_tools_stream(
+        self,
+        messages: "list[dict] | str",
+        tools: list,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ):
+        """Stream a tool-use turn (FR-S2). Yields :class:`TextDelta` per content fragment, then a
+        terminal :class:`TurnComplete`. OpenAI has no final-message helper, so tool calls are assembled
+        **by index** across chunks (basic accumulation — the FR-S3 edge-case hardening is MVP-B). Usage
+        arrives in the final chunk via ``stream_options.include_usage``."""
+        from ..models import TextDelta, TurnComplete
+
+        effective_system_prompt = (
+            system_prompt if system_prompt is not None else self.system_prompt
+        )
+        msgs = self._normalize_messages(messages)
+        if effective_system_prompt is not None and not any(m.get("role") == "system" for m in msgs):
+            msgs = [{"role": "system", "content": effective_system_prompt}] + msgs
+
+        token_limit = max_tokens if max_tokens is not None else self.max_tokens
+        kwargs = _build_chat_kwargs(self.model, msgs, token_limit, temperature, None, enforce_next_gen=True)
+        if tools:
+            kwargs["tools"] = tools
+        kwargs["stream"] = True
+        kwargs["stream_options"] = {"include_usage": True}
+
+        start_time = time.time()
+        text_parts: list[str] = []
+        tc_acc: dict[int, dict] = {}
+        finish_reason = None
+        usage_obj = None
+
+        stream = await self.async_client.chat.completions.create(**kwargs)
+        async for chunk in stream:
+            if getattr(chunk, "usage", None) is not None:
+                usage_obj = chunk.usage
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            choice = choices[0]
+            if getattr(choice, "finish_reason", None):
+                finish_reason = choice.finish_reason
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            if content:
+                text_parts.append(content)
+                yield TextDelta(content)
+            for tcd in (getattr(delta, "tool_calls", None) or []):
+                slot = tc_acc.setdefault(getattr(tcd, "index", 0), {"id": "", "name": "", "args": ""})
+                if getattr(tcd, "id", None):
+                    slot["id"] = tcd.id
+                fn = getattr(tcd, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        slot["name"] = fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["args"] += fn.arguments
+
+        tool_calls: list[ToolCallRequest] = []
+        for idx in sorted(tc_acc):
+            slot = tc_acc[idx]
+            try:
+                args = json.loads(slot["args"]) if slot["args"].strip() else {}
+            except (json.JSONDecodeError, ValueError, TypeError):
+                args = {}
+            tool_calls.append(ToolCallRequest(id=slot["id"], name=slot["name"], arguments=args))
+
+        token_usage = None
+        if usage_obj is not None:
+            _cached = _cached_input_tokens(usage_obj)
+            token_usage = TokenUsage(
+                input=max(0, usage_obj.prompt_tokens - _cached),
+                output=usage_obj.completion_tokens,
+                total=usage_obj.total_tokens,
+                model_name=self.model,
+                finish_reason=finish_reason,
+                cache_read_input_tokens=_cached or None,
+            )
+        record_model_time_ms(int((time.time() - start_time) * 1000))
+        yield TurnComplete(
+            AgenticTurn(
+                text="".join(text_parts),
+                tool_calls=tool_calls,
+                token_usage=token_usage,
+                finish_reason=finish_reason,
+                time_ms=int((time.time() - start_time) * 1000),
+            )
+        )
+
 
 class OpenAICompatibleAgent(BaseAgent):
     """Agent for OpenAI-compatible APIs (Cursor, Ollama, Together AI, Groq, etc.) with async support, optional retry, configurable timeouts, and connection pooling"""
