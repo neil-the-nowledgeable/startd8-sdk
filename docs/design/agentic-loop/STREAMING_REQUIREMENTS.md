@@ -155,11 +155,13 @@ swapped for the streaming primitive (FR-S9).
 > Built only when there is a real consumer (e.g. the loop running inside a cap-dev-pipe/workflow
 > context). The loop **never depends** on these.
 
-> **§3.0 Lessons-applied (Lessons Learned review, 2026-06-25).** A pass over the `observability`,
-> `sdk`, `mcp`, and `h2a_h2h_a2a` lesson domains sharpened the requirements below; the bracketed
-> `[LL …]` tags trace each refinement to its lesson. **Timely context:** the repo just shipped an
-> `ObservabilitySpec` model + `observability.yaml` normalizer + declared-thresholds→alert-rules — so
-> FR-CC3's "register a descriptor" now has a concrete target (the `ObservabilitySpec` manifest).
+> **§3.0 Lessons-applied (Lessons Learned review, 2026-06-25; build-recon corrected same day).** A
+> pass over the `observability`, `sdk`, `mcp`, and `h2a_h2h_a2a` lesson domains sharpened the
+> requirements below; the `[LL …]` tags trace each refinement to its lesson. **A subsequent build-surface
+> recon corrected two FR-CC3 assumptions** (see the box on FR-CC3): the span-registration target is the
+> **`_OTEL_DESCRIPTORS` + `collector.py:_INSTRUMENTED_MODULES`** mechanism (not `ObservabilitySpec`,
+> which is alert/signal-only), and the run-level span **already exists as `agentic.session`** — so
+> FR-CC3 **registers** it rather than emitting a redundant new span (Decision A).
 
 - **FR-CC1 — Progress tee (observer).** A `ContextCoreProgressObserver` that consumes the FR-S1 event
   stream and emits `emit_progress()` / span events to ContextCore (turn started, tool called,
@@ -186,31 +188,45 @@ swapped for the streaming primitive (FR-S9).
   - **[LL sdk-09 — guard via filesystem probe]** The "adapter is wired" guard test **probes the file**
     (or greps source), it does **not** import `integrations.contextcore` (an optional dep). (Matches
     the existing FR-S12 guard.)
-- **FR-CC3 — `agentic.run` span convention [R3-F4].** **Net-new span name** `agentic.run` (a whole
-  multi-turn run, distinct from today's per-turn `agentic.turn`/`agent.generate`, and from the
-  existing root `agentic.session` — FR-CC3 emits a *new* top-level span, not a rename), carrying the
-  enumerated attributes `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens|output_tokens`
-  (int), `io.contextcore.project.id|task.id` (str), `agentic.stop_reason` (str), `agentic.turns` (int),
-  `agentic.tool_count` (int). Register it as a **descriptor in the `ObservabilitySpec` span manifest**
-  so the generator **auto-derives Dashboard/SLO/Alert artifacts**.
+- **FR-CC3 — Register the run-level span for artifact generation [R3-F4].**
+  > **Build-recon correction (2026-06-25).** v0.3 said "emit a net-new `agentic.run` span" and
+  > "register a descriptor in the `ObservabilitySpec` span manifest." Reading the bytes corrected
+  > **both**: (1) the existing **`agentic.session`** root span is already emitted once per
+  > `send()`/`stream()` run and already carries every run-level attribute below — a separate
+  > `agentic.run` span would be **redundant telemetry** (**Decision A**, confirmed). (2)
+  > `ObservabilitySpec` is **alert/signal-focused** (`signals`+`receivers`) and has **no span field**;
+  > spans are registered via a **different** mechanism — an `_OTEL_DESCRIPTORS` dict in the module plus
+  > listing the module in `collector.py:_INSTRUMENTED_MODULES`, harvested by `collect_span_descriptors()`.
+
+  **Register `agentic.session` (the run-level span) as a `SpanDescriptor`** so the artifact generator
+  (`observability/artifact_generator.py`) auto-derives Dashboard/SLO/Alert artifacts. Concretely:
+  add an `_OTEL_DESCRIPTORS` dict to `agents/agentic.py` declaring the span name `agentic.session`,
+  kind INTERNAL, and its attributes — `gen_ai.system`, `gen_ai.request.model`,
+  `gen_ai.usage.input_tokens|output_tokens`, `io.contextcore.project.id|task.id`, `agentic.stop_reason`,
+  `agentic.turns`, `agentic.tool_count` — and add `agents/agentic` to `_INSTRUMENTED_MODULES`. *(No
+  new span emission; the span already exists from `fce92b6c`.)*
   - **[LL obs — schema-first / single source of truth]** The descriptor is the contract; **never
-    hand-write** the dashboard JSON — derive via `/dbrd-cr8r`. No mixing derived + hand-edited artifacts.
-  - **[LL obs — "derive don't guess" + resolvability gate]** Before declaring success, verify the
-    generated queries **resolve against live `agentic.run` spans** (a dashboard that scores 100%
-    coverage but returns **0 series** — wrong selector/attr name — is the failure mode to gate out).
-  - **[LL obs/h2a — TraceQL dot/`span.` prefix]** Document every attribute **with the `span.` prefix**
-    in the descriptor (`{ span.agentic.stop_reason = "completed" }`); a bare attribute name *silently
-    returns empty*.
-  - **[LL obs — name both OTel & Prometheus]** For any derived metric, document both the OTel name and
-    its OTLP→Prometheus form (+ unit suffix), e.g. `gen_ai.usage.input_tokens` →
-    `gen_ai_usage_input_tokens`; the SLO/alert generators depend on the converted name.
-  - **[LL obs — emission≠capability + flush-at-exit]** Add a **runtime coverage assertion** that a real
-    run actually emits an `agentic.run` span with the declared attrs (registration alone doesn't prove
-    emission), and ensure a `BatchSpanProcessor` **atexit flush** so the final run's span isn't dropped.
-  - *Acceptance:* the artifact generator, fed a recorded `agentic.run` span, emits a Dashboard/SLO/
-    Alert set whose queries resolve against that span (non-zero series).
+    hand-write** the dashboard JSON — derive via the generator / `/dbrd-cr8r`. No mixing derived +
+    hand-edited artifacts.
+  - **[LL obs — "derive don't guess" + resolvability gate]** Verify generated queries **resolve
+    against live `agentic.session` spans** (a 100%-coverage / **0-series** dashboard from a wrong
+    selector is the failure to gate out).
+  - **[LL obs/h2a — TraceQL `span.` prefix]** Document every attribute **with the `span.` prefix**
+    (`{ span.agentic.stop_reason = "completed" }`); a bare name *silently returns empty*.
+  - **[LL obs — name both OTel & Prometheus]** For any derived metric/threshold, document the OTel name
+    **and** its OTLP→Prometheus form (+ unit suffix), e.g. `gen_ai.usage.input_tokens` →
+    `gen_ai_usage_input_tokens`. *Note: the spec validator now rejects non-numeric threshold values
+    (`a3015a84`) — any declared SLO threshold must be a real number.*
+  - **[LL obs — emission≠capability]** Add a **runtime coverage assertion** (FR-CC4) that a real run
+    actually emits the `agentic.session` span with the declared attrs — registration alone doesn't
+    prove emission. *(The `BatchSpanProcessor` atexit flush this lesson also called for is **already
+    satisfied** — `otel.py:configure_otel` registers `atexit → shutdown_otel → force_flush`; nothing
+    to add.)*
+  - *Acceptance:* `collect_span_descriptors()` returns the `agentic.session` descriptor; the artifact
+    generator, fed a recorded `agentic.session` span, emits a Dashboard/SLO/Alert set whose queries
+    resolve against that span (non-zero series).
 - **FR-CC4 — Dogfood validation (NEW) [LL km-02].** Phase-2 integration tests emit **real**
-  `agentic.run` / task spans (in-memory exporter) and query them back — not mocks — to catch
+  `agentic.session` / task spans (in-memory exporter) and query them back — not mocks — to catch
   attribute-name / timestamp-semantics mismatches before a user does.
 
 ---
@@ -248,7 +264,7 @@ swapped for the streaming primitive (FR-S9).
 | **S1 (MVP-A)** | FR-S2(text) streaming primitive (Claude+OpenAI) + FR-S5/S5a/S5b + FR-S6 + FR-S8/S9/S10/S12 | ✅ faked chunk iterators + streaming double |
 | **S2 (MVP-B)** | FR-S3/S4 tool-call delta accumulation + optional `ToolCallDelta`/`ReasoningDelta` | ✅ faked chunks |
 | **S3** | FR-S11 TUI live render (via FR-S5a sync bridge) | ✅ (helper testable; live render manual) |
-| **P2** | FR-CC1/CC2/CC3 ContextCore observer + adapter + `agentic.run` convention | ✅ in-memory exporter + fake tracker |
+| **P2** | FR-CC1/CC2 ContextCore observer + task adapter; FR-CC3 register `agentic.session` descriptor; FR-CC4 dogfood | ✅ in-memory exporter + fake tracker |
 
 ---
 
