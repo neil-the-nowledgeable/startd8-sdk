@@ -97,6 +97,70 @@ async def test_agenerate_tools_final_text_no_tools(monkeypatch):
     assert turn.finish_reason == "end_turn"
 
 
+def _fake_openai_response(*, content, tool_calls: list[dict], finish_reason: str):
+    """Build a SimpleNamespace shaped like an OpenAI chat-completions response.
+
+    Key difference vs Anthropic: tool args arrive as a JSON **string** on function.arguments.
+    """
+    tcs = [
+        SimpleNamespace(
+            id=tc["id"],
+            type="function",
+            function=SimpleNamespace(name=tc["name"], arguments=tc["arguments"]),
+        )
+        for tc in tool_calls
+    ]
+    message = SimpleNamespace(content=content, tool_calls=tcs or None)
+    choice = SimpleNamespace(message=message, finish_reason=finish_reason)
+    usage = SimpleNamespace(
+        prompt_tokens=200,
+        completion_tokens=50,
+        total_tokens=250,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=80),
+    )
+    return SimpleNamespace(choices=[choice], usage=usage)
+
+
+@pytest.mark.asyncio
+async def test_openai_agenerate_tools_parses_json_string_args(monkeypatch):
+    """OpenAI adapter must json.loads the function.arguments string into a dict, and subtract
+    folded cached tokens from input (OpenAI folds cache into prompt_tokens, unlike Anthropic)."""
+    from startd8.agents.openai import GPT4Agent
+
+    agent = GPT4Agent(model="gpt-5.5-pro", api_key="test-key-not-used")
+    assert agent.supports_tool_use() is True
+
+    fake = _fake_openai_response(
+        content=None,
+        tool_calls=[
+            {"id": "call_1", "name": "survey", "arguments": '{"project_root": ".", "deep": true}'},
+            {"id": "call_2", "name": "assess", "arguments": "not-valid-json"},  # must degrade to {}
+        ],
+        finish_reason="tool_calls",
+    )
+
+    class _Completions:
+        async def create(self, **kwargs):
+            assert "tool_choice" not in kwargs  # unforced
+            assert kwargs.get("tools") is not None
+            return fake
+
+    agent.async_client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+
+    tools = [{"type": "function", "function": {"name": "survey", "parameters": {"type": "object"}}}]
+    turn = await agent.agenerate_tools("ready?", tools=tools)
+
+    assert isinstance(turn, AgenticTurn)
+    assert turn.text == ""  # content None -> ""
+    assert turn.finish_reason == "tool_calls"
+    assert len(turn.tool_calls) == 2
+    assert turn.tool_calls[0] == ToolCallRequest("call_1", "survey", {"project_root": ".", "deep": True})
+    assert turn.tool_calls[1].arguments == {}  # malformed JSON degraded, did not crash
+    # OpenAI folds cached into prompt_tokens -> input must be net of cache (200 - 80)
+    assert turn.token_usage.input == 120
+    assert turn.token_usage.cache_read_input_tokens == 80
+
+
 @pytest.mark.asyncio
 async def test_base_agent_optin_default_is_unsupported():
     """The opt-in flag keeps the 10 existing providers untouched: default False + NotImplementedError."""
