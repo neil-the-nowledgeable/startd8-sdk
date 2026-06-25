@@ -259,6 +259,56 @@ class BaseAgent(ABC):
             f"{type(self).__name__} does not support structured (tool-use) output yet"
         )
 
+    def supports_tool_use(self) -> bool:
+        """Whether this agent implements :meth:`agenerate_tools` (the agentic-loop primitive).
+
+        Opt-in capability flag (FR-0). Default ``False`` so the 10 existing providers and downstream
+        consumers are untouched until a provider's tool-use path passes its smoke test. The agentic
+        loop must gate on this before calling :meth:`agenerate_tools`.
+        """
+        return False
+
+    async def agenerate_tools(
+        self,
+        messages: "list[dict] | str",
+        tools: list,
+        **kwargs: Any,
+    ) -> "AgenticTurn":
+        """Generate one agentic turn: assistant text + any tool calls the model requested.
+
+        The foundational primitive for the agentic loop (FR-0). Unlike
+        :meth:`agenerate_structured` (a *single forced* tool for schema output), this presents N
+        tools with no forced choice and returns **all** tool calls plus text, as an
+        :class:`AgenticTurn` (a sibling type — ``GenerateResult`` cannot carry tool calls).
+
+        Args:
+            messages: The conversation as a **canonical message list** —
+                ``[{"role": "user"|"assistant"|"tool", "content": ...}, ...]`` — so the loop can
+                thread prior ``tool_use``/``tool_result`` blocks back (a plain string cannot encode
+                that pairing; FR-0/R1-F1). A bare ``str`` is accepted as a convenience and wrapped
+                into a single user message. Per-provider adapters render this to their native shape.
+            tools: Tool specs (provider-native at this primitive boundary; canonical→provider
+                translation is owned by the loop's ToolRegistry — FR-9).
+            **kwargs: Per-call overrides (``system_prompt``, ``max_tokens``, ``temperature``).
+
+        Raises:
+            NotImplementedError: Providers that have not implemented the tool-use primitive.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement agenerate_tools (FR-0) yet"
+        )
+
+    @staticmethod
+    def _normalize_messages(messages: "list[dict] | str") -> "list[dict]":
+        """Convenience: wrap a bare ``str`` into ``[{"role": "user", "content": str}]``.
+
+        FR-0 keeps ``messages`` as the canonical primary shape; this lets simple callers (and the
+        existing spike tests) pass a prompt string without building a message list.
+        """
+        if isinstance(messages, str):
+            return [{"role": "user", "content": messages}]
+        return list(messages)
+
     def generate(self, prompt: str, **kwargs: Any) -> GenerateResult:
         """
         Synchronous wrapper for backward compatibility.

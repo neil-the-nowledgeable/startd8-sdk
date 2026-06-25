@@ -5,7 +5,7 @@ Mock agents for testing.
 import asyncio
 from typing import Optional, Tuple, TYPE_CHECKING
 
-from ..models import TokenUsage, GenerateResult
+from ..models import TokenUsage, GenerateResult, AgenticTurn, ToolCallRequest
 from .model_timing import record_model_time_ms  # FR-SPEED-1: accumulate pure model API time
 from .base import BaseAgent
 from .openai import OpenAICompatibleAgent
@@ -42,6 +42,10 @@ class MockAgent(BaseAgent):
         self.timeout_config = timeout_config
         self.retry_config = retry_config
         self.system_prompt = system_prompt
+        # FR-0a: a queue of scripted AgenticTurns the tool-use loop consumes one-per-call.
+        # Pass `tool_turns=[...]` to drive a multi-turn loop deterministically in tests.
+        self._scripted_tool_turns: list = list(kwargs.get("tool_turns") or [])
+        self.tool_calls_received: list = []  # records messages passed to each agenerate_tools call
 
     async def agenerate(
         self,
@@ -77,6 +81,55 @@ class MockAgent(BaseAgent):
 
         record_model_time_ms(response_time_ms)
         return GenerateResult(response, response_time_ms, token_usage)
+
+    def supports_tool_use(self) -> bool:
+        """MockAgent implements the FR-0 tool-use primitive (FR-0a test double)."""
+        return True
+
+    async def agenerate_tools(
+        self,
+        messages: "list[dict] | str",
+        tools: list,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> AgenticTurn:
+        """Scripted tool-use turn (FR-0a). Drives the agentic loop deterministically in tests.
+
+        Pops the next pre-loaded :class:`AgenticTurn` from ``tool_turns`` (set at construction). A
+        scripted turn may be given as an ``AgenticTurn`` or as a shorthand ``dict`` —
+        ``{"text": str, "tool_calls": [(id, name, args_dict), ...], "finish_reason": str}``. When the
+        queue is exhausted, returns a terminal final-text turn with no tool calls, so a loop bounded
+        by "stop when ``tool_calls`` is empty" always terminates.
+        """
+        await asyncio.sleep(0)  # keep the coroutine genuinely async without test latency
+        self.tool_calls_received.append(self._normalize_messages(messages))
+
+        if self._scripted_tool_turns:
+            nxt = self._scripted_tool_turns.pop(0)
+            if isinstance(nxt, AgenticTurn):
+                return nxt
+            # dict shorthand
+            calls = [
+                tc if isinstance(tc, ToolCallRequest) else ToolCallRequest(*tc)
+                for tc in (nxt.get("tool_calls") or [])
+            ]
+            return AgenticTurn(
+                text=nxt.get("text", ""),
+                tool_calls=calls,
+                token_usage=TokenUsage(input=1, output=1, total=2, model_name=self.model),
+                finish_reason=nxt.get("finish_reason", "tool_use" if calls else "end_turn"),
+                time_ms=0,
+            )
+
+        # Exhausted script → terminal final-text turn (no tool calls) so loops terminate.
+        return AgenticTurn(
+            text="Mock final answer.",
+            tool_calls=[],
+            token_usage=TokenUsage(input=1, output=1, total=2, model_name=self.model),
+            finish_reason="end_turn",
+            time_ms=0,
+        )
 
 
 class ComposerAgent(OpenAICompatibleAgent):

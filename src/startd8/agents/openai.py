@@ -7,12 +7,13 @@ This module provides:
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
 from typing import Any, Optional, Tuple
 
-from ..models import TokenUsage, GenerateResult
+from ..models import TokenUsage, GenerateResult, AgenticTurn, ToolCallRequest
 from .model_timing import record_model_time_ms  # FR-SPEED-1: accumulate pure model API time
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent, is_completion_model, requires_max_completion_tokens
@@ -435,6 +436,106 @@ class GPT4Agent(BaseAgent):
 
         record_model_time_ms(response_time_ms)
         return GenerateResult(response_text, response_time_ms, token_usage)
+
+    def supports_tool_use(self) -> bool:
+        """GPT4Agent implements the FR-0 tool-use primitive (:meth:`agenerate_tools`)."""
+        return True
+
+    async def agenerate_tools(
+        self,
+        messages: "list[dict] | str",
+        tools: list,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> AgenticTurn:
+        """One agentic turn (FR-0): present OpenAI-format *tools*, return text + all tool calls.
+
+        Accepts a **canonical message list** (so the loop can thread prior assistant ``tool_calls``
+        and ``tool`` result messages back; a bare ``str`` is wrapped). For OpenAI the system prompt
+        rides *inside* the message list, so it is prepended when not already present. Tool calls
+        arrive on ``message.tool_calls`` with ``function.arguments`` as a **JSON string**, parsed into
+        the provider-neutral :class:`ToolCallRequest` ``arguments`` dict. ``_make_api_call`` does not
+        accept ``tools``, so the request is built via ``_build_chat_kwargs``. Retry/usage extraction
+        mirror :meth:`agenerate`.
+        """
+        effective_system_prompt = (
+            system_prompt if system_prompt is not None else self.system_prompt
+        )
+        msgs = self._normalize_messages(messages)
+        if effective_system_prompt is not None and not any(
+            m.get("role") == "system" for m in msgs
+        ):
+            msgs = [{"role": "system", "content": effective_system_prompt}] + msgs
+
+        token_limit = max_tokens if max_tokens is not None else self.max_tokens
+        kwargs = _build_chat_kwargs(
+            self.model, msgs, token_limit, temperature, None, enforce_next_gen=True
+        )
+        kwargs["tools"] = tools
+
+        async def _create():
+            return await self.async_client.chat.completions.create(**kwargs)
+
+        start_time = time.time()
+        try:
+            if self.retry_config is not None:
+                response = await with_retry(self.retry_config)(_create)()
+            else:
+                response = await _create()
+        except RetryError as e:  # mirror agenerate: wrap exhausted transport retries
+            from ..exceptions import APIError
+
+            raise APIError(
+                f"API call failed after {e.attempts} attempts: {e.last_exception}",
+                provider=self.name,
+                original_error=e.last_exception,
+            ) from e
+
+        response_time_ms = int((time.time() - start_time) * 1000)
+        choice = response.choices[0]
+        message = choice.message
+        finish_reason = getattr(choice, "finish_reason", None)
+
+        tool_calls: list[ToolCallRequest] = []
+        for tc in (getattr(message, "tool_calls", None) or []):
+            fn = getattr(tc, "function", None)
+            raw_args = getattr(fn, "arguments", None)
+            try:
+                if isinstance(raw_args, str):
+                    args = json.loads(raw_args) if raw_args.strip() else {}
+                else:
+                    args = dict(raw_args or {})
+            except (json.JSONDecodeError, TypeError, ValueError):
+                args = {}  # malformed tool args degrade to empty, never crash the turn
+            tool_calls.append(
+                ToolCallRequest(
+                    id=getattr(tc, "id", "") or "",
+                    name=getattr(fn, "name", "") or "",
+                    arguments=args,
+                )
+            )
+
+        usage = getattr(response, "usage", None)
+        token_usage = None
+        if usage is not None:
+            _cached = _cached_input_tokens(usage)
+            token_usage = TokenUsage(
+                input=max(0, usage.prompt_tokens - _cached),
+                output=usage.completion_tokens,
+                total=usage.total_tokens,
+                model_name=self.model,
+                finish_reason=finish_reason,
+                cache_read_input_tokens=_cached or None,
+            )
+        record_model_time_ms(response_time_ms)
+        return AgenticTurn(
+            text=getattr(message, "content", None) or "",
+            tool_calls=tool_calls,
+            token_usage=token_usage,
+            finish_reason=finish_reason,
+            time_ms=response_time_ms,
+        )
 
 
 class OpenAICompatibleAgent(BaseAgent):

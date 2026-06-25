@@ -267,3 +267,19 @@ def handle_concierge_tool(action: str, project_root: str | Path, **params: Any) 
     raise ConciergeError(
         f"unknown action '{action}'. Known: {READ_ACTIONS + DEFERRED_ACTIONS}."
     )
+
+
+def handle_concierge_read(action: str, project_root: str | Path, **params: Any) -> Dict[str, Any]:
+    """Read-only dispatch floor for the conversational front-end (FR-13, second enforcement layer).
+
+    The agentic Concierge surface routes **every** tool call through here. It hard-rejects any action
+    not in ``READ_ACTIONS`` *before* delegating, so the loop can never reach an
+    ``instantiate-kickoff``/``log-friction``/``derive-contract`` branch — independent of what tools
+    happened to get registered. This is the structural guarantee behind "assist, not operate": the
+    registry allow-list (layer 1) protects the prompt; this entry protects the executor.
+    """
+    if action not in READ_ACTIONS:
+        raise ConciergeError(
+            f"concierge chat is read-only; action '{action}' is refused (allowed: {READ_ACTIONS})"
+        )
+    return handle_concierge_tool(action, project_root, **params)
