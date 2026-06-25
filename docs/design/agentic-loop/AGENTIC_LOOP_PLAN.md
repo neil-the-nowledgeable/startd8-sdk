@@ -1,11 +1,12 @@
 # SDK-Native Agentic Tool-Use Loop — Implementation Plan
 
-**Version:** 1.0 (against Requirements v0.1, updated alongside v0.2)
+**Version:** 1.1 (against Requirements v0.3 — post-CRP)
 **Date:** 2026-06-24
-**Status:** Planning
+**Status:** Planning (CRP-revised)
 
 > This plan maps each requirement to real files/APIs. Where planning contradicted a v0.1 assumption,
-> it is flagged **[DISCOVERY Dn]** and fed back into Requirements §0.
+> it is flagged **[DISCOVERY Dn]** and fed back into Requirements §0. **§E (bottom) records the
+> CRP-driven revisions (R1–R5 triage) layered onto the increment sequence below.**
 
 ---
 
@@ -103,6 +104,53 @@ can't carry tool calls.
   prove the loop before the MCP client is built.
 - Concierge cost reframing (FR-14) is a posture-adjacent nuance, not a posture violation — must be
   stated, see Requirements §0 OQ-4.
+
+---
+
+## E. Post-CRP revisions (R1–R5 triage → Requirements v0.3)
+
+The CRP added 8 FRs and hardened 6. Layering onto the increment sequence:
+
+### Increment 0 — Tool-use primitive (REVISED)
+- **0.1** Change `agenerate_tools` to **`messages: list[dict]`** primary (+ `prompt:str` overload)
+  — the landed spike's `prompt:str` is rework-bait (FR-0/R1-F1/R5-A3). Update the 3 spike tests.
+- **0.2** Adopt a **canonical tool-spec** input; translate to provider-native *inside* each adapter
+  (FR-9/R5-A1) — fixes the current Claude-Anthropic-native vs OpenAI-native asymmetry.
+- **0.3 (NEW)** `MockAgent.agenerate_tools` scripted-turn double — **blocks all loop testing**
+  (FR-0a/R5-C2). Same-increment prerequisite.
+- **0.4** Provider-neutral transcript model + `MessageCodec`s (FR-1/R3-F1) so canonical records render
+  to Claude/OpenAI shapes; golden codec tests.
+
+### Increment 1 — The loop (EXPANDED with safety, was under-scoped)
+- **1.1** `AgenticSession` loop (unchanged shape) **+ FR-15 bounds**: `max_turns`,
+  `max_tool_calls_per_turn`, per-tool **timeout + cancellation** (R5-C4), repeated-identical-call
+  breaker, **per-session token/$ budget** via `costs/budget.py` checked before each re-entry.
+- **1.2** `ToolRegistry`: canonical schema, **unknown-tool reject + pre-exec arg validation + result
+  envelope + ordering/bounded-parallelism** (FR-9). Effect-class tags + **default-deny** (FR-19) —
+  build this *before* the MCP consumer.
+- **1.3** Token budgeting via `get_model_info` with documented fallback + warn-log (FR-4/R5-D3).
+- **1.4** Compaction = **tool-result-eviction-as-units then summarize**, gated on the **pairing
+  invariant** (FR-4/OQ-6); typed **`ContextWindowExceededError`** + per-provider detector (FR-3/FR-17).
+- **1.5** `costs/` usage wiring (FR-7) + idempotent retry across tool execution (FR-8/OQ-9).
+- **1.6 (NEW)** `FR-16 ToolResultPolicy` (redact/size-cap/truncate) on every surface.
+- **1.7 (NEW)** `FR-17` typed error taxonomy; `FR-18` OTel spans; `FR-20` trajectory serialization +
+  fail-closed resume; `FR-21` mark new types **experimental**.
+
+### Increment 4 — Consumers (REVISED)
+- **4a Concierge**: FR-13 **two-layer** enforcement — frozen registry (`len==2`) **+ dispatch floor**
+  `handle_concierge_read` hard-rejecting non-READ actions. FR-14 banner + running cost + fail-closed
+  budget. Opt-in/config-gated (FR-12).
+- **4b TUI**: swap the call site (`:467`) for `AgenticSession` via the **sync-bridge** (R5-C3),
+  opt-in, legacy REPL retained (FR-10/R4-F6).
+- **4c MCP**: `mcp/client.py` returns **canonical** specs (R5-A5); `list_tools` snapshot + drift
+  invalidation (FR-11/R4-F4). **Gated on FR-19 default-deny existing.**
+
+### Validation (NEW)
+- One **gated live** round-trip (`STARTD8_RUN_INTEGRATION=1`, `max_turns=2`, hard $ budget) (FR-0/R5-D5/OQ-10).
+
+### Falsified during triage
+- The "live `startd8_concierge` `readOnlyHint:True`→disk-write" claim was **verified false** (MCP is
+  preview-only; `writes.py:9`). Defensive floor (4a) kept regardless. See Requirements Appendix B.
 
 ---
 

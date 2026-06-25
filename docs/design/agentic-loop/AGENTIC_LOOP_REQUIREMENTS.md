@@ -1,8 +1,8 @@
 # SDK-Native Agentic Tool-Use Loop — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post-CRP — triaged across 5 review rounds)
 **Date:** 2026-06-24
-**Status:** Reviewed against implementation plan
+**Status:** CRP-reviewed (R1–R5 triaged; dispositions in Appendix A/B)
 **Author:** Neil Yashinsky
 
 ---
@@ -63,57 +63,121 @@ three consumers.
 
 ### Foundational — the tool-use primitive (NEW, prerequisite)
 
-- **FR-0 — Tool-use generation primitive.** `BaseAgent.agenerate_tools(messages, tools, **kw) ->
-  AgenticTurn` returning text + zero-or-more `ToolCallRequest`s + usage + finish_reason. Implemented
-  for **Claude first** (generalizing `agenerate_structured`, `claude.py:563`), then **OpenAI**. A new
-  `AgenticTurn`/`ToolCallRequest` type carries tool calls — `GenerateResult` (frozen 3-tuple,
-  `models.py:106`) **cannot**. *This did not exist in v0.1; it is the prerequisite for FR-1.*
+- **FR-0 — Tool-use generation primitive.** `BaseAgent.agenerate_tools(messages: list[dict], tools,
+  **kw) -> AgenticTurn` returning text + zero-or-more `ToolCallRequest`s + usage + finish_reason.
+  **[R1-F1/R3-F1 — messages, not prompt]** The primary param is a **canonical message list** (not a
+  `str`), because the loop must thread prior `assistant{tool_use}` + `user{tool_result}` blocks back —
+  a string cannot encode that pairing. A `prompt: str` convenience overload is allowed. *The landed
+  Increment-0 spike ships `prompt: str` and MUST be revised to `messages` in Increment 0, before the
+  loop depends on the string shape.* Implemented **Claude first** (generalizing `agenerate_structured`,
+  `claude.py:563`), then **OpenAI**. `AgenticTurn`/`ToolCallRequest` carry tool calls — `GenerateResult`
+  (frozen 3-tuple, `models.py:106`) cannot; they live in `models.py` (**OQ-8 resolved**).
+  *Acceptance* **[R2-F6]**: normalize valid blocks and degrade gracefully on malformed OpenAI JSON args
+  (→`{}`), non-dict Anthropic `input`, duplicate tool-call IDs, and final-text-with-no-tools; a
+  `supports_tool_use()==False` agent must never be entered into a tool loop.
+- **FR-0a — Tool-use test double (NEW, prerequisite).** `MockAgent.agenerate_tools` returns a scripted
+  queue of `AgenticTurn`s (tool-call turn → final-text turn). **[R5-C2]** Without it the loop (FR-1/3/9)
+  and every CRP acceptance test ("a fake model that always requests a tool") is unrunnable — the
+  codebase has no tool-capable double today. Same prerequisite class as FR-0.
 
 ### Foundational — the loop
 
-- **FR-1 — `agents/agentic.py` AgenticSession.** A new async, multi-turn session object that holds
-  conversation history and drives a model to completion across turns by calling **FR-0's
-  `agenerate_tools`** (NOT `agenerate()`, which is text-only).
-- **FR-2 — Streaming + tool-call accumulation.** *(Increment 2, deferrable.)* Stream model output;
-  reassemble streamed `tool_calls` deltas (id, name, concatenated args) across chunks. Requires new
-  provider-level streaming (none exists today). The non-streaming loop (FR-1) ships first.
-- **FR-3 — Context-overflow recovery.** Catch a provider-agnostic context-window-exceeded error,
-  trigger compaction, retry the turn.
-- **FR-4 — Context compaction at the model ceiling.** Summarize older history when usage approaches
-  the model's real input-token ceiling (read from provider model info).
-- **FR-5 — Reasoning-effort probe-and-cascade (optional).** On model switch, probe highest effort and
-  walk down until accepted; cache the working effort per model.
-- **FR-6 — Prompt caching.** Inject Anthropic `cache_control` breakpoints (tool block + system
-  prompt); no-op for non-Anthropic. (Finish the existing stub flag in `claude.py`.)
-- **FR-7 — Reuse cost telemetry.** Record usage via `costs/` including cache tokens; do **not**
-  reimplement cost math.
-- **FR-8 — Reuse retry.** Use `utils/retry.py` backoff; add rate-limit-specific schedule.
-- **FR-9 — Tool routing.** Present tools in OpenAI function-calling format; execute tool calls and
-  feed results back into the loop. Tool sources are pluggable (built-in fns + MCP tools).
+- **FR-1 — `agents/agentic.py` AgenticSession.** Async, multi-turn session driving a model to
+  completion by calling FR-0's `agenerate_tools`. Holds a **provider-neutral transcript model**;
+  per-provider `MessageCodec`s render Anthropic/OpenAI request shapes from canonical records
+  **[R3-F1]**. (NOT `agenerate()`, which is text-only.)
+- **FR-2 — Streaming + tool-call accumulation.** *(Increment 2, deferrable.)* Stream output; reassemble
+  `tool_calls` deltas across chunks. Requires new provider-level streaming. Non-streaming loop ships
+  first.
+- **FR-3 — Context-overflow recovery + typed error.** Catch a **named** `ContextWindowExceededError`
+  with a **per-provider detector** (Anthropic 400 `invalid_request_error`/"prompt is too long"; OpenAI
+  `context_length_exceeded`) — none exists today; overflow currently surfaces as a generic `APIError`
+  and would silently never trigger compaction **[R2-D1/R3-F5]**. On catch → compaction → retry.
+- **FR-4 — Context compaction at the model ceiling.** Summarize older history near the model's
+  input-token ceiling (`get_model_info`). *Invariant (acceptance)* **[R1-F2/R5-D2]**: after compaction
+  **every `tool_use` id has a matching `tool_result` and vice-versa — never orphan either** (both
+  providers hard-reject an orphan); tool-result eviction drops the request+result **as a unit**;
+  system prompt + recent tool block stay cache-eligible (FR-6). *Fallback direction* **[R5-D3]**: on
+  registry-miss, prefer a usage-reported ceiling else a **documented conservative default + one-shot
+  warn-log** (current `get_model_info` default is `8192` — conservatively low, avoids overflow loops
+  but risks compaction thrash on large models; surface it).
+- **FR-5 — Reasoning-effort probe-and-cascade (optional, Increment 3).** Probe highest effort, walk
+  down, cache per model.
+- **FR-6 — Prompt caching (Increment 3).** Inject Anthropic `cache_control` (tool block + system
+  prompt); no-op non-Anthropic. **[R2-F5/R4-F4]** Cache key/invalidation tied to **active tool schema +
+  system prompt + provider**; a tool-schema/MCP-discovery change invalidates the boundary.
+- **FR-7 — Reuse cost telemetry.** Record usage via `costs/` incl. cache tokens; no reimplemented cost
+  math.
+- **FR-8 — Reuse retry + idempotency.** `utils/retry.py` backoff + rate-limit schedule. **[R2-F3]**
+  Distinguish retrying a *provider call* from retrying a *committed tool execution*: once a tool result
+  is committed, retry reuses the recorded result unless the tool declares itself idempotent/retry-safe.
+- **FR-9 — Tool routing (canonical schema + safe execution).** One **canonical SDK tool schema**;
+  `ToolRegistry` owns canonical→provider translation and **must not leak Anthropic/OpenAI-native shapes
+  to callers** **[R2-F2/R5-A1]** (the spike's provider-native `tools` param is a shortcut to fix here).
+  Execution contract **[R1-F3/R3-F2/R3-F3]**: (a) **reject** calls whose `name` ∉ registered set →
+  provider-format tool-error result, never execute; (b) **validate args** against the tool schema
+  pre-execution → tool-error on failure, callable not invoked; (c) standard **result envelope**
+  (success/error, bounded size); (d) preserve model-provided call **order**, execute **sequentially by
+  default**, bounded parallelism only for tools tagged read-only.
 
 ### Consumers (separate increments)
 
-- **FR-10 — TUI chat consumer.** Replace the one-shot REPL at `tui/mixin_enhancement_chain.py:391`
-  with an `AgenticSession`; gain multi-turn memory + streaming render.
-- **FR-11 — MCP agent surface.** An agent that lists and calls the SDK's own FastMCP server tools
-  through the loop. **Requires a new `mcp/client.py`** (generic `list_tools`/`call_tool` MCP client,
-  ported from ml-intern `tools.py`) — the existing `mcp/gateway.py` is skill/workflow-oriented and
-  cannot drive arbitrary MCP tools. **This is the heaviest consumer; sequence it last.**
-- **FR-12 — Concierge conversational front-end.** A chat surface whose toolbox is **only** Concierge's
-  read-only `survey`/`assess` (wrapping `handle_concierge_tool`, registering only `READ_ACTIONS`).
-  Makes onboarding a dialogue. **Thinnest consumer; sequence it first.**
+- **FR-10 — TUI chat consumer.** Replace the call site `agent.generate(user_input)`
+  (`tui/mixin_enhancement_chain.py:467`, inside `chat_with_agent` at `:391`) with an `AgenticSession`.
+  **[R5-C3]** Resolve the async/sync impedance via the existing **sync-bridge** (`generate()`'s
+  `run_until_complete` pattern, `base.py:296`) for v1 — keeps it thin; full async rewrite is out of
+  scope. **[R4-F6]** Opt-in/config-gated; legacy one-shot REPL remains until parity + budget tests pass.
+- **FR-11 — MCP agent surface.** Lists/calls the SDK's own FastMCP tools through the loop via a **new
+  `mcp/client.py`** (generic `list_tools`/`call_tool`, ported from ml-intern `tools.py`) — `mcp/gateway.py`
+  is skill/workflow-oriented and cannot. **Returns canonical tool specs in the same shape `ToolRegistry`
+  consumes** (reuse the FR-9 seam, not a parallel path) **[R5-A5]**. **[R4-F4]** `list_tools` is frozen
+  per session or explicitly refreshed; schema/effect-class drift invalidates cache + requires renewed
+  approval. **Heaviest consumer; sequence last — and only after FR-19 default-deny exists.**
+- **FR-12 — Concierge conversational front-end.** Toolbox is **only** `survey`/`assess`. Thinnest
+  consumer; sequence first. Opt-in/config-gated, legacy deterministic path remains **[R4-F6]**.
 
-### Constraint
+### Constraint & safety (expanded by CRP)
 
-- **FR-13 — Concierge posture is inviolable.** The Concierge consumer must not gain write power or
-  autonomy. Its tool set is restricted to `READ_ACTIONS`; no `instantiate-kickoff`/`log-friction`/
-  `derive-contract`, no cascade, no gate writes. Enforcement is structural: the registry receives
-  only the two read tools — write actions are never constructed for this surface.
-- **FR-14 — Concierge chat-layer cost disclosure (NEW).** The Concierge front-end's *tools* stay
-  `$0`/deterministic/read-only, but the *conversation* spends LLM tokens. The surface must show a
-  posture banner ("assist, not operate — read-only") **and** a per-session cost line, so the
-  capability's historical "`$0`, no LLM" property is not silently broken. Posture is preserved
-  (explaining ≠ operating); the cost property is not, and that must be visible.
+- **FR-13 — Concierge posture is inviolable (hardened).** No write power or autonomy. **[R1-F6/R5-S1]**
+  Enforce at **two** layers, not just registration: (a) registry **frozen at session construction** —
+  no runtime `register()`; assert `len(tools)==2`; (b) a **dispatch-level floor** — a Concierge-only
+  entry (e.g. `handle_concierge_read`) that **hard-rejects any action ∉ `{survey, assess}`** and can
+  never reach `instantiate-kickoff`/`log-friction`/`DEFERRED_ACTIONS`. *(Note: a reviewer's "live
+  `readOnlyHint:True`→disk-write" example was **falsified** — over MCP those actions return a
+  preview-only `WritePlan`, `writes.py:9`; see Appendix B. The defensive floor stands regardless.)*
+- **FR-14 — Concierge chat-layer cost disclosure + fail-closed budget.** Tools stay `$0`/read-only but
+  the *conversation* spends tokens. Show a **session-lifetime posture banner** + a **running cost total
+  updated each turn** **[R1-F6]**; and a **fail-closed per-session budget** (FR-15) — disclosure alone
+  cannot stop spend **[R3-F4/R5-S5]**.
+- **FR-15 — Loop safety bounds (NEW).** `AgenticSession` exposes `max_turns`, `max_tool_calls_per_turn`,
+  **per-tool timeout**, **cancellation**, a **repeated-identical-call breaker** (same tool+normalized
+  args ×N → stop), and a **per-session token/$ budget checked before each model re-entry** (wired to
+  `costs/budget.py`). Reaching any limit yields a **typed non-success terminal state** with stop reason
+  **[R2-F1/R3-F4/R5-D4]**.
+- **FR-16 — Tool-result hygiene (NEW).** A `ToolResultPolicy` applied to **every** surface before
+  results re-enter model context: redact known secret patterns, cap size, mark truncated/summarized.
+  Surveyed project files (possible PII, navig8 F-2) flow to providers — read-only ≠ safe-to-prompt
+  **[R2-F4/R5-S2]**.
+- **FR-17 — Typed agentic error taxonomy (NEW).** Stable types for: unsupported-tool-use provider,
+  `ContextWindowExceededError`, invalid tool arguments, tool-execution failure, budget-exceeded,
+  loop-limit-exceeded — so TUI/Concierge/MCP render consistent messages **[R3-F5]**.
+- **FR-18 — Observability (NEW).** OTel spans/events for session start/end, model turn, tool call,
+  compaction, approval decision, budget stop, provider-error mapping — attrs: provider, model, tool
+  name, effect-class, cost, status, session-id (reuse the MCP span pattern) **[R4-F3]**.
+- **FR-19 — Effect-class tool policy / default-deny (NEW, resolves OQ-7).** Every tool carries an
+  effect-class tag (`read`/`write`/`destructive`). Concierge = read-only allowlist (no approval path).
+  TUI/MCP = **deny-by-default** for `write`/`destructive` unless session-allowlisted or per-call
+  approved; approval leaves an **audit record** (tool, effect-class, normalized-args **hash** — not raw
+  secrets, redaction policy, session-id, timestamp, decision). **Must exist before FR-11 ships**
+  **[R1-F4/R4-F5]**.
+- **FR-20 — Trajectory log stance (NEW, resolves OQ-3).** Define `AgenticTurn`/`ToolCallRequest` JSON
+  serialization (they're `NamedTuple`s today, no encoder). v1 logs are **debug-only and
+  non-resumable** (resume fails closed with a typed error) **unless** they carry schema-version +
+  session-id + transcript checksum + invariant validation. The same FR-16 redaction applies to
+  **persisted** records; location `.startd8/` (gitignored) + stated retention **[R4-F2/R5-S4]**.
+- **FR-21 — Public API status (NEW).** `AgenticSession`, `ToolRegistry`, `AgenticTurn`,
+  `ToolCallRequest`, and the FR-17 error types are marked **experimental** for v1 (pre-1.0 SemVer);
+  import paths and status documented and smoke-tested **[R4-F1]**.
 
 ---
 
@@ -124,26 +188,38 @@ three consumers.
 - Not replacing `orchestration.py` / contractor workflows (those are deterministic pipelines).
 - Not enabling autonomous file writes from the loop in v1.
 - Not a new provider; works with existing providers.
+- **Tool-use stays an additive opt-in capability for v1, NOT a provider `Protocol` change** **[R5-A2]**
+  — `supports_tool_use()` (default `False`) + `agenerate_tools` keep the 10 providers / ~9 downstream
+  repos untouched. *Revisit trigger:* promote `supports_tool_use` into `ProviderProtocol` once ≥3
+  providers pass FR-0 smoke **and** a mixed-fleet capability selector exists. Recorded boundary, not an
+  accident.
+- FR-5 (effort cascade) and FR-6 (prompt caching) are **Increment 3** polish — not required for the v1
+  non-streaming loop.
 
 ---
 
 ## 4. Open Questions
 
-*All five v0.1 open questions were resolved by planning — see §0 "Resolved open questions."* Remaining
-items for CRP/implementation:
+*v0.1's five OQs were resolved in §0; CRP resolved OQ-6/7/8 (below). Remaining for implementation:*
 
-- **OQ-6.** Compaction strategy: summarize-and-replace vs. sliding-window vs. tool-result eviction —
-  which preserves agentic correctness best? (Increment 1.4.)
-- **OQ-7.** Tool-execution safety: do non-Concierge surfaces (TUI, MCP) need a per-tool approval gate
-  (ml-intern has one) before v1, or is read-only-by-default sufficient?
-- **OQ-8.** Should the new `AgenticTurn` type live in `models.py` or a new `agents/agentic_types.py`?
+- **OQ-6 → RESOLVED.** Compaction = **tool-result eviction (as request+result units) then
+  summarize**, gated on the FR-4 pairing invariant. Sliding-window rejected (cuts mid-pair).
+- **OQ-7 → RESOLVED** as normative default-deny — see **FR-19**.
+- **OQ-8 → RESOLVED.** `AgenticTurn`/`ToolCallRequest` stay in `models.py` (settled by landed code;
+  one-way `agents → models` import, no cycle risk).
+- **OQ-9 (NEW).** Idempotency (FR-8): for v1 (read-only tools only) replay-safety has limited exposure
+  — confirm whether the recorded-result-reuse machinery is v1 or deferred to when effectful tools land.
+- **OQ-10 (NEW).** Bounded **live** integration test: one gated (`STARTD8_RUN_INTEGRATION=1`) real
+  round-trip, `max_turns=2`, hard $ budget — confirm the single trivial tool + budget shape.
 
 ---
 
-*v0.2 — Post-planning self-reflective update. **1 requirement added as prerequisite (FR-0),
-1 added (FR-14), 4 corrected (FR-1, FR-2, FR-11, FR-12), 5 open questions resolved.** Central
-correction: there is no tool-use/streaming primitive to build on — the foundational scope is larger
-than v0.1 assumed, and the three consumers are not uniformly thin.*
+*v0.3 — Post-CRP triage across 5 rounds (R1 composer-2.5; R2–R4 gpt-5.5; R5 Opus-4.8 panel of 4
+lenses). **8 new FRs (FR-0a, FR-15…FR-21), 6 FRs hardened (FR-0, FR-3, FR-4, FR-9, FR-13, FR-14),
+OQ-6/7/8 resolved, 2 new OQs.** 1 reviewer security claim falsified (Appendix B). Central CRP themes:
+the primitive must be `messages`-shaped (not `prompt`); compaction must preserve tool-call/result
+pairing; safety (default-deny, loop bounds, result redaction, typed errors) must be first-class before
+the MCP consumer ships.*
 
 ---
 
@@ -161,15 +237,39 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 ### Appendix A: Applied Suggestions
 
-| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+> Triaged 2026-06-24 across R1–R5. Convergent items merged under one FR; multiple IDs cite the same row.
+
+| ID(s) | Suggestion (theme) | Source | Merged into | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F1, R3-F1, R5-A3, R5-C1 | Primitive must be `messages`-shaped, not `prompt`; provider-neutral transcript + MessageCodecs | R1/R3/R5 | FR-0, FR-1 | 2026-06-24 |
+| R5-C2 | MockAgent tool-use double (test prerequisite) | R5 | FR-0a | 2026-06-24 |
+| R2-F6 | FR-0 normalization-failure acceptance (malformed args, dup IDs, no-tools) | R2 | FR-0 acceptance | 2026-06-24 |
+| R2-D1, R3-F5 | Name `ContextWindowExceededError` + per-provider detector | R2(panel)/R3 | FR-3, FR-17 | 2026-06-24 |
+| R1-F2, R5-D2 | Compaction tool_use↔tool_result pairing invariant; evict as units | R1/R5 | FR-4 (OQ-6 resolved) | 2026-06-24 |
+| R5-D3 | Token-budget fallback direction + warn-log | R5 | FR-4 | 2026-06-24 |
+| R2-F2, R3-F3, R5-A1, R5-A5 | Canonical tool schema + provider translation owned by ToolRegistry; no native leak | R2/R3/R5 | FR-9, FR-11 | 2026-06-24 |
+| R1-F3, R3-F2 | Unknown-tool reject + pre-exec arg validation + result envelope + ordering | R1/R3 | FR-9 | 2026-06-24 |
+| R2-F1, R3-F4, R5-D4 | Loop bounds, timeout, cancellation, repeated-call breaker, per-session budget | R2/R3/R5 | FR-15 | 2026-06-24 |
+| R2-F4, R5-S2 | ToolResultPolicy redaction/size-cap (all surfaces) | R2/R5 | FR-16 | 2026-06-24 |
+| R2-F3 | Idempotency across tool-execution retry | R2 | FR-8 (+OQ-9 scope) | 2026-06-24 |
+| R2-F5, R4-F4 | Prompt-cache invalidation tied to tool schema; MCP drift snapshot | R2/R4 | FR-6, FR-11 | 2026-06-24 |
+| R1-F4, R4-F5, R5-S3 | OQ-7 → default-deny effect-class policy + approval audit (args-hash) | R1/R4/R5 | FR-19 (OQ-7 resolved) | 2026-06-24 |
+| R4-F3 | OTel spans for session/turn/tool/compaction/approval/budget | R4 | FR-18 | 2026-06-24 |
+| R4-F2, R5-S4, R5-D5 | Trajectory-log resume stance + serialization + persisted redaction | R4/R5 | FR-20 (OQ-3) | 2026-06-24 |
+| R4-F1 | Public API status (experimental v1) | R4 | FR-21 | 2026-06-24 |
+| R1-F6, R5-S1 | Frozen Concierge registry + dispatch-level floor | R1/R5 | FR-13 | 2026-06-24 |
+| R3-F4(disclosure), R5-S5 | FR-14 needs fail-closed budget, not just a cost line | R3/R5 | FR-14, FR-15 | 2026-06-24 |
+| R4-F6, R5-C3 | Opt-in/config-gated rollout + TUI async/sync via sync-bridge | R4/R5 | FR-10, FR-12 | 2026-06-24 |
+| R1-F5 | Fix FR-10 line anchor to the `agent.generate` call site | R1 | FR-10 (`:467` in `:391`) | 2026-06-24 |
+| R5-A2 | Additive opt-in is the documented v1 boundary + revisit trigger | R5 | §3 Non-Requirements | 2026-06-24 |
+| R5-A4 | OQ-8 → keep types in models.py | R5 | FR-0 (OQ-8 resolved) | 2026-06-24 |
 
-### Appendix B: Rejected Suggestions (with Rationale)
+### Appendix B: Rejected / Falsified Suggestions (with Rationale)
 
-| ID | Suggestion | Source | Rejection Rationale | Date |
+| ID | Suggestion | Source | Disposition & Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| R5-S1 (motivating claim) | "Live `startd8_concierge` is `readOnlyHint:True` but `log-friction` writes to disk via `build_friction_entry`" | R5 (Security lens) | **FALSIFIED (verified against bytes).** Over MCP every concierge action is **preview-only**: `build_friction_entry` returns a `WritePlan` dict and never touches disk (`concierge/writes.py:9` "Builders never touch disk beyond `stat`; `apply_write_plan` is the only writer"; MCP tool `startd8_mcp.py:1006/1014` "preview-only — the CLI is the only writer"). `readOnlyHint:True` is correct. **The defensive *principle* (dispatch-level floor) was still ACCEPTED into FR-13** — only the example was wrong. | 2026-06-24 |
+| R5-C4 (partial) | "Push back on over-spec idempotency/audit machinery for a write-disabled v1" | R5 (Adversarial) | **PARTIAL/N-A.** The cited over-spec lived in the reviewer's mental model of other rounds, not the actual doc. Idempotency (R2-F3) kept but **scoped via OQ-9** (confirm v1-vs-deferred); audit (FR-19) retained because FR-11 exposes effectful MCP tools. No doc text removed. | 2026-06-24 |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
@@ -316,3 +416,31 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 **Disagreements**:
 - None.
+
+#### Review Round R5 — claude-opus-4-8 (4-lens panel) — 2026-06-24 21:55:00 UTC
+
+- **Reviewer**: claude-opus-4-8 — independent 4-lens panel (Architecture/Interfaces, Data/Risks/Validation, Security/Ops/Posture, Adversarial/Completeness), run blind, each grounded in the landed Increment-0 spike.
+- **Scope**: confirm/extend R1–R4 with code-verified items; surface genuinely new gaps.
+
+**Executive summary** — R5 strongly endorses R1–R4 (esp. R1-F1 messages-shape, R1-F2 pairing invariant, R1-F4 default-deny, R2-F1 bounds, R3-F5 typed errors). New, code-confirmed items below.
+
+| ID | Lens | Severity | Suggestion | Rationale |
+|----|------|----------|------------|-----------|
+| R5-A1 | Arch/Iface | HIGH | The spike normalized tool-call **output** (`ToolCallRequest`) but left **input** tool-specs provider-native (Claude takes Anthropic `{name,description,input_schema}`, OpenAI takes OpenAI function specs). Make the input format **canonical, translated inside each adapter** — symmetric with output. | Contradicts the shipped "provider-neutral" docstring; cheapest to fix with only 2 adapters. Sharpens R2-F2 by pinning the concrete in-code asymmetry. |
+| R5-A2 | Arch/Iface | HIGH | Record additive-opt-in-vs-Protocol as an explicit §3 v1 boundary **with a named revisit trigger** (≥3 providers pass FR-0 + mixed-fleet selector exists). | Additive is right now (zero churn), but un-stated it forces the session to gate every call forever with no home for capability discovery. |
+| R5-A3 | Arch/Iface | HIGH | Land the `messages: list` signature in **Increment 0** (with `prompt:str` overload), not Increment 1. | A `str` primitive can't encode `tool_use`↔`tool_result` pairing; deferring guarantees a rewrite of the just-landed signature + its 3 tests. (= R1-F1 fix direction + increment.) |
+| R5-A5 | Arch/Iface | MED | `mcp/client.py` must return tools in the **same canonical shape** `ToolRegistry` consumes (one seam, not a parallel registration path). | Otherwise FR-11 becomes a back door around the FR-9 schema/effect contract. |
+| R5-D1 | Data/Risk | HIGH | Name `ContextWindowExceededError` + per-provider detector; today overflow is a generic wrapped `APIError` and FR-3's compaction path is dead code. | Verified: no such exception in `exceptions.py`. (= R3-F5 first member.) |
+| R5-D2 | Data/Risk | HIGH | Compaction acceptance bar = the pairing invariant, validated **before** retry; tool-result eviction drops request+result as a unit; sliding-window unsafe. | Naive `agenerate` summarization can strip a result while leaving its call → permanent 400. (= R1-F2 as load-bearing invariant.) |
+| R5-D3 | Data/Risk | HIGH | Guard token-budget fallback: `get_model_info` default is `8192` (low = safe from overflow loops, but causes compaction thrash on real 200k models). Prefer reported ceiling, documented default, one-shot warn. | Verified default. Neither direction is currently tested. |
+| R5-D4 | Data/Risk | HIGH | Bound the malformed-call doom loop: `{}`-degradation trades a crash for a silent empty-arg spend loop. Add `max_turns`+`max_tool_calls`, repeated-identical-call breaker, and a per-session $ ceiling checked before re-entry. | `{}`-degrade verified (`openai.py`/`claude.py`). (Extends R2-F1.) |
+| R5-D5 | Validation | MED | Add a bounded gated live test (`STARTD8_RUN_INTEGRATION=1`, `max_turns=2`, hard $ budget) + define `AgenticTurn`/`ToolCallRequest` JSON serialization (NamedTuples have no encoder; `token_usage` needs one). | Mocks alone miss provider dialect drift; trajectory log can't be parsed without serialization. |
+| R5-S1 | Security | HIGH | Enforce FR-13 at the **dispatch** boundary, not just registration: hard-reject `name ∉ {survey,assess}`, never fall through to write/deferred branches; add `handle_concierge_read`. | "Registry has only 2 tools" protects the prompt, not the executor; the model can hallucinate a write-action name. *(Motivating "live readOnlyHint→write" example FALSIFIED — see Appendix B.)* |
+| R5-S2 | Security | HIGH | `ToolResultPolicy` (redact + size-cap + truncation marker) on ALL surfaces before re-entry; surveyed files (PII, navig8 F-2) flow to providers. | Read-only ≠ safe-to-prompt; prompt-injection from a surveyed README can steer a non-Concierge loop. (= R2-F4 generalized.) |
+| R5-S3 | Security | HIGH | Resolve OQ-7 as normative default-deny **before** FR-11 ships (it exposes effectful MCP tools). | Verified effectful `readOnlyHint:False` tools exist in the FastMCP surface. (= R1-F4.) |
+| R5-S5 | Ops | MED | FR-14's cost line discloses but cannot **stop** spend; add a fail-closed per-session budget (`costs/budget.py`) + OTel spans per tool call. | An agentic loop multiplies calls; disclosure without a budget is insufficient for the lost-`$0` posture. (= R3-F4.) |
+| R5-C2 | Adversarial | HIGH | `MockAgent` has no `agenerate_tools` → the loop is untestable end-to-end; every R1–R4 acceptance test assumes a tool-capable double that doesn't exist. Add `MockAgent.agenerate_tools` (scripted turns) as FR-0a. | Verified `mock.py` inherits the `NotImplementedError` default. Same prerequisite class as FR-0. |
+| R5-C3 | Adversarial | MED-HIGH | FR-10 is under-specified: the TUI REPL is **synchronous** `questionary`; `AgenticSession` is async. State sync-bridge vs async rewrite. | Verified `:451` sync `while` + `:467` `agent.generate()`. The "thin" consumer hides an impedance mismatch. |
+| R5-C4 | Adversarial | MED | Promote per-tool **timeout/cancellation** to a first-class FR (a hung MCP `call_tool` blocks the async loop); keep FR-5/FR-6 deferred. | A real concurrency hazard buried as a sub-bullet while polish (effort/caching) sits in v1 scope. |
+
+**Process note**: R5 verified one R-round security claim against source and **falsified** it (Appendix B) before triage — read-the-bytes discipline.
