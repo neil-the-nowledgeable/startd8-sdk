@@ -34,6 +34,7 @@ from typing import Any, Callable, Optional
 
 from ..logging_config import get_logger
 from ..models import AgenticTurn, ToolCallRequest
+from ..otel import ProjectContext, add_project_context_to_span
 from .agentic_otel import set_attributes as otel_set_attributes
 from .agentic_otel import span as otel_span
 from .base import BaseAgent
@@ -270,6 +271,7 @@ class AgenticSession:
         system_prompt: Optional[str] = None,
         config: Optional[SessionConfig] = None,
         tool_format: Optional[str] = None,
+        project_context: "Optional[ProjectContext]" = None,
     ) -> None:
         if not agent.supports_tool_use():
             raise UnsupportedToolUseError(
@@ -280,8 +282,14 @@ class AgenticSession:
         self.system_prompt = system_prompt
         self.config = config or SessionConfig()
         self.tool_format = tool_format or _resolve_tool_format(agent)
+        # FR-18: optional ContextCore project/task attribution. When set, the root session span is
+        # stamped with io.contextcore.* attributes so an agentic run is attributable in the same
+        # project views humans + other agents use. The loop stays fully usable without it.
+        self.project_context = project_context
         self.messages: list[dict] = []
         self.total_tokens = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
         self.total_cost_usd = 0.0
 
     async def send(self, user_message: str) -> AgenticResult:
@@ -296,10 +304,16 @@ class AgenticSession:
             **{
                 "agentic.provider": self.agent.name,
                 "agentic.model": self.agent.model,
+                # gen_ai.* semantic conventions — align with the AI Agent Observability taxonomy so
+                # the shipped artifact generator (dashboards/SLOs) can target agentic runs.
+                "gen_ai.system": self.agent.name,
+                "gen_ai.request.model": self.agent.model,
                 "agentic.tool_format": self.tool_format,
                 "agentic.tool_count": len(self.registry),
             },
         ) as session_span:
+            if self.project_context is not None:
+                add_project_context_to_span(session_span, self.project_context)
             result = await self._run_loop()
             otel_set_attributes(
                 session_span,
@@ -308,6 +322,8 @@ class AgenticSession:
                     "agentic.turns": result.turns,
                     "agentic.total_tokens": result.total_tokens,
                     "agentic.total_cost_usd": result.total_cost_usd,
+                    "gen_ai.usage.input_tokens": self.total_input_tokens,
+                    "gen_ai.usage.output_tokens": self.total_output_tokens,
                 },
             )
             return result
@@ -408,6 +424,8 @@ class AgenticSession:
     def _account(self, turn: AgenticTurn) -> None:
         if turn.token_usage is not None:
             self.total_tokens += turn.token_usage.total or 0
+            self.total_input_tokens += turn.token_usage.input or 0
+            self.total_output_tokens += turn.token_usage.output or 0
             try:
                 self.total_cost_usd += turn.token_usage.cost_estimate
             except Exception:  # cost estimation is best-effort
