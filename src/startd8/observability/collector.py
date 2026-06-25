@@ -87,6 +87,15 @@ _EVENT_GROUPS = {
     "TRUNCATION_WARNING": "truncation",
     "TRUNCATION_PREFLIGHT_REJECT": "truncation",
     "QUALITY_GATE_RESULT": "quality",
+    # Service Assistant (project<->SDK bridge; service_assistant/)
+    "RUN_DETECTED": "service_assistant",
+    "POSTMORTEM_AVAILABLE": "service_assistant",
+    "RUN_FAILED": "service_assistant",
+    # Semantic Compliance Reviewer (semantic_compliance/)
+    "SEMANTIC_REVIEW_COMPLETE": "semantic_compliance",
+    # Forward Deployed Engineer (fde/)
+    "FDE_EXPLAIN_COMPLETE": "fde",
+    "FDE_PREFLIGHT_COMPLETE": "fde",
     "SYSTEM_ERROR": "system",
     "SYSTEM_WARNING": "system",
     "FRAMEWORK_INITIALIZED": "system",
