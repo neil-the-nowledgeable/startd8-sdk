@@ -294,20 +294,12 @@ def generate_alert_rules(
                 f"{runbook_base}/{service.service_id}/{rule['alert']}"
             )
 
-    # Closure 1 / Gap 1: commented-out alert stubs for declared domain metrics
-    # (TODO-when-absent — no manifest threshold, so not emitted as active rules).
-    todo_block = _domain_alert_todo_block(service)
-    if todo_block:
-        derivations.append(
-            DerivationTrace(
-                field="domain_alert_todos",
-                source=f"instrumentation_hints.{service.service_id}.metrics.manifest_declared",
-                transformation=f"{len(service.declared_metrics)} declared metrics → TODO alert stubs",
-                tier="manifest",
-            )
-        )
+    # Domain-metric alerts are now ACTIVE rules, rendered from observability.yaml via the
+    # ObservabilitySpec (alert_renderer.render_domain_alert_rules). The old commented-out
+    # `_domain_alert_todo_block` stubs are removed (M3 — accidental-complexity AC-2/AC-6:
+    # declared metrics no longer get asymmetric stub-vs-rule handling on the alert path).
 
-    if not rules and not todo_block:
+    if not rules:
         return ArtifactResult(
             artifact_type="alert_rule",
             service_id=service.service_id,
@@ -338,7 +330,7 @@ def generate_alert_rules(
         service_id=service.service_id,
         output_path=f"alerts/{service.service_id}-alerts.yaml",
         status="generated",
-        content=header + body + todo_block,
+        content=header + body,
         derivations=derivations,
     )
 
@@ -594,47 +586,6 @@ def _pascal(text: str) -> str:
     """Convert a snake/dot/dash name to PascalCase (startd8_cost_total → Startd8CostTotal)."""
     cleaned = text.replace(".", " ").replace("_", " ").replace("-", " ")
     return "".join(w.title() for w in cleaned.split())
-
-
-def _domain_alert_todo_block(service: ServiceHints) -> str:
-    """Build a commented-out alert stub block for declared metrics.
-
-    Policy (TODO-when-absent): the manifest carries no thresholds for domain
-    metrics, so rather than silently omitting them, each declared metric is
-    emitted as a commented-out alert stub with a ``<THRESHOLD>`` placeholder.
-    The active rules in the file stay valid Prometheus YAML; the stubs make the
-    missing domain alerts visible to the operator. Returns "" when there are no
-    declared metrics.
-    """
-    if not service.declared_metrics:
-        return ""
-
-    lines = [
-        "",
-        "# " + "-" * 73,
-        "# TODO: domain-metric alerts (Closure 1 / Gap 1)",
-        "# The manifest_declared metrics below have no threshold in the manifest, so",
-        "# no active alert is emitted (policy: TODO-when-absent). Set a threshold and",
-        "# uncomment to activate.",
-        "# " + "-" * 73,
-    ]
-    for metric in service.declared_metrics:
-        expr = _domain_query(metric, service.service_id)
-        alert_name = _alert_name(service.service_id, _pascal(metric.name) + "High")
-        lines.extend(
-            [
-                f"#  - alert: {alert_name}",
-                f"#    expr: {expr} > <THRESHOLD>",
-                "#    for: 5m",
-                "#    labels:",
-                "#      severity: warning",
-                f"#      service: {service.service_id}",
-                "#    annotations:",
-                f'#      summary: "{service.service_id} {metric.name} above threshold"',
-                '#      todo: "Set <THRESHOLD>; no manifest value available"',
-            ]
-        )
-    return "\n".join(lines) + "\n"
 
 
 def _add_domain_panels(

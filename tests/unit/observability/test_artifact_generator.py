@@ -793,44 +793,9 @@ class TestDomainDashboardPanels:
         assert "domain_panels" in fields
 
 
-class TestDomainAlertTodos:
-    def test_alerts_contain_commented_todo_block(self, strtd8_service, business):
-        result = generate_alert_rules(strtd8_service, business)
-        assert result.status == "generated"
-        assert "TODO: domain-metric alerts" in result.content
-        assert "startd8_cost_total" in result.content
-        assert "<THRESHOLD>" in result.content
-
-    def test_todo_stubs_are_not_active_rules(self, strtd8_service, business):
-        """Declared-metric alerts are commented out, not parsed as active rules."""
-        result = generate_alert_rules(strtd8_service, business)
-        # Strip the trailing commented TODO block before parsing YAML.
-        active = "\n".join(
-            ln for ln in result.content.splitlines() if not ln.lstrip().startswith("#")
-        )
-        parsed = yaml.safe_load(active)
-        rule_names = [
-            r["alert"] for g in parsed["groups"] for r in g["rules"]
-        ]
-        # No active rule references a domain metric.
-        assert not any("Cost" in n or "Token" in n for n in rule_names)
-
-    def test_declared_only_service_still_emits_file(self, business):
-        """A service with declared metrics but no alertable convention metrics
-        still produces an alerts file (with the TODO block), not a skip."""
-        svc = ServiceHints(
-            service_id="domain-only",
-            transport="http",
-            convention_metrics=[],
-            declared_metrics=[ConventionMetric("startd8_cost_total", "counter", "manifest")],
-        )
-        result = generate_alert_rules(svc, business)
-        assert result.status == "generated"
-        assert "TODO: domain-metric alerts" in result.content
-
-    def test_no_declared_metrics_no_todo_block(self, http_service, business):
-        result = generate_alert_rules(http_service, business)
-        assert "TODO: domain-metric alerts" not in result.content
+# TestDomainAlertTodos removed (M3): the commented-out `_domain_alert_todo_block` stubs it asserted
+# are deleted. Declared-threshold alerts are now ACTIVE rules via the ObservabilitySpec path —
+# covered by tests/unit/observability/test_alert_renderer.py + test_spec_from_prose.py.
 
 
 class TestMetricCoverageInQualityReport:

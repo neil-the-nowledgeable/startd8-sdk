@@ -57,7 +57,6 @@ from .artifact_generator_generators import (  # noqa: F401
     _alert_name,
     _assign_gridpos,
     _derivation_comment,
-    _domain_alert_todo_block,
     _domain_metric_type,
     _domain_panel_group,
     _domain_query,
@@ -160,14 +159,6 @@ _COMPOSITE_COVERAGE_WEIGHT = 0.3
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: Input loading
-# ---------------------------------------------------------------------------
-
-
-# Known non-service directory names that may appear in instrumentation_hints
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -176,39 +167,8 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# ---------------------------------------------------------------------------
-# Phase 2: Alert rule generation
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Phase 3: Dashboard spec generation
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Domain (manifest_declared) metric helpers — Closure 1 / Gap 1
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Phase 4: SLO definition generation
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Phase 4c: Extended artifact generators (Closure 3B / Gap 2)
-#
-# Native generators for the declared artifact types beyond the RED triplet.
-# Contract-driven: only produced when the onboarding metadata declares the type
-# in artifact_types. Each is derived from ServiceHints + BusinessContext, so
-# they carry the same per-service provenance as the triplet.
-# ---------------------------------------------------------------------------
-
-
-# Maps a generated artifact type to a capability-index category (Run-007 Finding 2).
-
-# Artifact types that are intermediates/self and not surfaced as capabilities.
+# Native extended generators for declared artifact types beyond the RED triplet — produced only
+# when the onboarding metadata declares the type (contract-driven).
 
 
 # Declared-type-name → (per-service generator, output_prefix). Contract-driven:
