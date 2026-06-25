@@ -35,10 +35,13 @@ const RATES = {
   GBP: 0.8618,
   JPY: 126.4,
   CAD: 1.4980,
+  TRY: 19.520,
   AUD: 1.6072,
   CHF: 1.1360,
   CNY: 7.5727,
 };
+// NOTE: must cover the journey's setCurrency whitelist (fleet.journey.CURRENCY_WHITELIST:
+// EUR/USD/JPY/CAD/GBP/TRY) so an Adapter-B setCurrency to any whitelisted code succeeds.
 
 const NANOS = 1000000000; // 1e9, as an exact integer
 
