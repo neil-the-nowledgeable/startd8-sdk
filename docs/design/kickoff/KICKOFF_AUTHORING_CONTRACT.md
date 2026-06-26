@@ -181,6 +181,35 @@ permitted for views (unlike pages, which stay pure-derived) because workspace/ex
 parameterized and nav targets may predate the view name. The override is authored format data,
 never an LLM product.
 
+### 2.3b Form Help → `form_prose.yaml` *(the form WORDS layer — FR-FH-8)*
+
+One block per entity form you want to guide. The **Words layer** for forms (per-field help/placeholder
++ a per-form intro), rendered into the generated create/edit forms and kept **outside the drift hash**
+(help/intro ride untracked fragments, SOTTO) — editing copy never trips `generate backend --check`.
+Absent ⇒ today's bare forms (opt-in).
+
+```markdown
+### Form: Bill
+- Intro: Amounts are entered in dollars.
+
+| Field       | Help                                           | Placeholder |
+|-------------|------------------------------------------------|-------------|
+| amountCents | Amount in dollars, e.g. 42.00; stored as cents | 42.00       |
+| weekday     | For a weekly cadence: 0 = Monday … 6 = Sunday  |             |
+```
+
+**Grammar.** Heading `### Form: <Entity>` (annotation-stripped, name-derivation §2.0). An optional
+`- Intro:` bullet (a key-line, like §2.3's `- Title:`). A `Field | Help | Placeholder` table — one row
+per field; `Help` is the persistent description (wired as `aria-describedby`), `Placeholder` the
+in-field example hint (either may be blank; a field with neither is omitted).
+
+**Sequencing + dangling-target guard (mirrors §2.3).** The Form-Help extractor runs AFTER the
+entity/relationship pass: the `### Form: <Entity>` heading resolves against the §2.1-derived entities
+and each `Field` cell against that entity's fields (case-tolerant → the canonical field name). An
+unknown entity or field is recorded **`not_extracted`** (sourced, advisory) and dropped — never guessed.
+The emitted `prisma/form_prose.yaml` round-trips through `parse_form_prose` at ingestion. (Help is
+bucket-4 human content; no AI pass originates a value — FR-FH-6.)
+
 ### 2.4 Completeness → `completeness.yaml`
 
 A **"What counts as complete"** list in controlled sentences:
@@ -266,6 +295,79 @@ extraction flags disagreement).
 | migrations | `migrations.enabled` | leading tool/yes ⇒ true |
 | container | `container.dockerfile` | leading `yes`/`no` |
 | port · sqlite mode · env keys | **`not_extracted(generator-gap)`** — no `AppManifest` home (scaffold-codegen backlog); env-key entries still parsed (`·`-separated, `KEY (qualifier…)`) for the build-preferences agreement check | |
+
+### 2.9 Technology conventions → `conventions.yaml` *(value input — FR-VIP)*
+
+The highest-leverage value input: the stack/layout/naming generated and bespoke code must FOLLOW,
+so generation never INVENTS it (the run-028 Flask-where-FastAPI class). A `## Technology conventions`
+section, with subsections. Emits `domain: conventions`; the round-trip authority is
+`kickoff_inputs.parse_conventions` (a `ConventionsManifest`).
+
+```markdown
+## Technology conventions
+
+- Language: python
+- Field authorship: prisma/human_inputs.yaml
+- Provenance default: templated
+
+| Layer | Choice | Plain meaning |
+|-------|--------|---------------|
+| framework | fastapi | … |
+| data layer | sqlmodel | … |
+
+### Module layout
+| Role | Path |
+|------|------|
+| tables | app.tables |
+| templates dir | app/templates |
+
+### Naming
+| Aspect | Style |
+|--------|-------|
+| routes | kebab-case |
+| metric prefix | household_ |
+
+### Data-model conventions
+- Money: cents
+- Datetime: utc
+- Recurrence: structured
+- References: loose-allowed
+- Weekday: iso
+
+#### Computed fields
+- <free text, one bullet each>
+
+#### Deferred
+- <free text, one bullet each>
+
+### Architecture invariants
+- <the load-bearing rules, one bullet each — carried verbatim>
+```
+
+**Mapping (normative).** Leading key-lines → `language` (**required**), `field_authorship`,
+`provenance_default`. The `| Layer | Choice |` table → `stack:` (Layer→key, spaces→`_`:
+`data layer`→`data_layer`; open vocabulary, D-VIP-3). `### Module layout` `| Role | Path |` →
+`module_paths:` (`templates dir`→`templates_dir`). `### Naming` `| Aspect | Style |` → `naming:`
+(aspect synonyms: `routes`→`route_style`, `files`→`files`, `classes`→`classes`, `metric prefix`→
+`metric_prefix`). `### Architecture invariants` bullets → `architecture_notes: [str, …]` (verbatim).
+
+**Data-model conventions (FR-F6 / DMC-G1)** — the §2.9 `### Data-model conventions` subsection. Key
+lines map to `data_model:` with controlled enums; the two `####` lists are free text:
+
+| Prose | → `data_model` key | Controlled vocabulary |
+|---|---|---|
+| `- Money: <v>` | `money` | `cents` \| `float` |
+| `- Datetime: <v>` | `datetime` | `utc` \| `local` |
+| `- Recurrence: <v>` | `recurrence` | `structured` \| `rrule` \| `none` |
+| `- References: <v>` | `references` | `fk-only` \| `loose-allowed` |
+| `- Weekday: <v>` | `weekday` | `iso` \| `us` (optional) |
+| `#### Computed fields` bullets | `computed_fields` | `list[str]` |
+| `#### Deferred` bullets | `deferred` | `list[str]` |
+
+An out-of-vocabulary enum or an unknown data-model key → `not_extracted(...)` (flag, never guess —
+§3); the subsection is optional (absent ⇒ no `data_model:` emitted). Unknown **top-level** keys are
+rejected by `parse_conventions` (typo guard); `stack`/`naming` sub-keys are open vocab. Project-
+agnostic (FR-VIP-9) — household's sheet is a fixture, never a built-in.
 
 ## 3. The friction loop (when prose doesn't match)
 
@@ -359,6 +461,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 | R2-G4 | Completeness intro-sentence anchor pattern | R2 (sonnet) | §2.4 block-recognition bullet (`is complete when it has`, case-insensitive) | 2026-06-05 |
 | R2-G5 | Nudge suffix flagged `not_extracted(generator-gap)` PER ENTRY (two report rows), never silently dropped | R2 (sonnet, adversarial) | §2.4 nudge bullet | 2026-06-05 |
 | DMC-G1 | Add the `money` plain type (→ Int minor units) and surface the **data-model representation conventions** (money/dates/recurrence/references/computed/deferred) as a declared input + qualifying question set. The `references` loose-ref verb (already in §2.1, FR-PE-5c) and `default:` notes are synced into the teaching templates, which omitted them. | data-model-conventions update (household-o11y kickoff, 2026-06-23) | §2.1 type table (`money`); KICKOFF_REQUIREMENTS FR-F6/FR-H6; `conventions.yaml` `data_model:` block; template/how-to vocab sync | 2026-06-23 |
+| VIP-G1 | Add **§2.9 Technology conventions → `conventions.yaml`** — the first prose-authored *value* input. Defines the section/subsection grammar (key-lines + stack/module-layout/naming tables + the FR-F6 `### Data-model conventions` enum block + architecture-invariant bullets), the controlled vocabularies, and flag-don't-guess handling. Implemented as `manifest_extraction.extract_conventions` + the strict round-trip authority `kickoff_inputs.parse_conventions` (`ConventionsManifest`). | FR-VIP slice (household-o11y kickoff, 2026-06-23); `SDK_VALUE_INPUT_AUTHORING_REQUIREMENTS.md` + `HOWTO_DATA_MODEL_CONVENTIONS_GRAMMAR.md` | §2.9 grammar + mapping/enum tables; `kickoff_inputs/conventions.py`; round-trip wired into `extract.py`; GRAMMAR_VERSION already `v0.3` | 2026-06-25 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 

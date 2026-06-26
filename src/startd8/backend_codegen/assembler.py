@@ -62,6 +62,7 @@ def render_backend(
     project_root: Optional[str] = None,
     deployment_mode: str = "installed",
     tenant_owner_field: Optional[str] = None,
+    form_prose_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
@@ -124,6 +125,7 @@ def render_backend(
     out.extend(render_ui(
         schema_text, source_file, pages_text, views_text, display_text,
         tenant_owner_field=tenant_owner_field,
+        form_prose_text=form_prose_text,
     ))
     # P0-1: step-state flow routers + shells from views.yaml `flows:` (empty when none declared)
     out.extend(render_flows(schema_text, views_text or ""))

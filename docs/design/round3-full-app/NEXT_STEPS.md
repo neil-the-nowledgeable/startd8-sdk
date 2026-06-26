@@ -43,6 +43,15 @@ Round 3 (full 9-service Online Boutique system round) is **design + plan complet
 - ✅ **Report + ranking + gate** — `fleet/report.py`: `FinalistScore` + `rank_finalists` (system score = weighted per-step coverage desc; tie-break fewer own model-faults, then cost) + `DecisionGate` (advisory FR-21 — **GO iff the journey DISCRIMINATES finalists AND attribution is TRUSTWORTHY**) + `build_system_report → (json, markdown leaderboard)`. Pure functions over `Scorecard`. **7 unit tests** (rank, tie-breaks, GO/NO-GO for tie / untrustworthy / single-finalist, render).
 - ✅ **LIVE capstone (`validate_m6`)** — proves the END-TO-END M0→M6 pipeline emits `round3-system-report.{json,md}` from LIVE Scorecards. Drove the reference fleet in 3 configs as discriminating finalists: **`reference` 1.000 > `reference-no-payment` 0.944 > `reference-no-catalog` 0.278** (the browse-heavy §1 weighting makes a catalog break far more damaging than a payment break — the weighting discriminates as intended); per-finalist model-faults attributed correctly; **decision gate GO** (spread 0.722, attribution trustworthy). A real benchmark run feeds distinct MODEL fleets into the same report path.
 
+> **NOTE (post-M6):** M6 + the **roster/CLI wiring** (`startd8 benchmark-round3`, `fleet/roster.py` + `fleet/round3.py`) are **LANDED on `origin/main`** (M6 FF `fade9638..831c3021`; CLI FF `5d664a78..e96ae07b`). The CLI live smoke caught a real bug (`live_score_fn` returned a `Scorecard` where `run_round3` expected a `ScoreOutcome`) — fixed + regression-tested. The R3 backbone M0→M6 is done end-to-end; only **M4/M5 (frontend bonus)** + a real multi-model run remain.
+
+**M4/M5 COMPLETE — frontend BONUS lane live-validated end-to-end; NOT yet pushed** — branch `feat/r3-m4-frontend` (worktree `startd8-r3-m4`, off the M6-merged `origin/main`; commits `58999fad`/`ec5043be`/`f74d7e1b`/`3e6a5c55`/`ce18beb8`):
+- ✅ **Contract foundation** — `fleet/frontend_contract.py`: the defined-once executable HTTP contract (6 routes + §3 fan-out, the gate stages BOOT/ROUTES/JOURNEY-blocking + ORCHESTRATION-advisory, `make_verdict`, the capped bonus model, `checkout_form`). 9 tests.
+- ✅ **Frontend reference server** — `frontend_reference/{main.go,go.mod}` (Go HTTP→gRPC): serves the 6 routes + `/_healthz`, threads session/currency cookies, fans out to the backends; binds 0.0.0.0 (#31); real 302 redirects (Leg 16 #21); checkout renders the **real PlaceOrder order id** (the decisive signal); +FRONTEND_BREAK_ORDER_ID broken-variant toggle. Compiles via the Go lane; 7 structural tests.
+- ✅ **Gate runner + Adapter A** — `fleet/frontend_gate.py`: `run_gate(base_url)` (boot→routes→journey→orchestration → verdict) + `run_journey_http` (the stateful one-session HTTP journey = Adapter A's core, runs over either frontend; the contract is the seam). 5 real-HTTP-loopback tests (correct→PASS; subtly-broken→FAIL@journey→substitute).
+- ✅ **M5 bonus → report** — `report.py`: `FinalistScore` gains `frontend_mounted`/`frontend_bonus`/`frontend_fidelity`; ranking stays by BACKEND score, bonus is a capped `+frontend` tie-break (never rank-flips, OQ-J3); substituted runs show bonus 0. +3 tests.
+- ✅ **LIVE — M4 EXIT CRITERION MET** (`validate_m4`, `ce18beb8`): on the live 8-backend fleet — **generated frontend** gates all-GREEN, order id rendered, **bonus 0.100**; **subtly-broken frontend** (confirmation w/o a real order id) FAILS at the decisive JOURNEY stage → **canonical-substituted**; **Adapter A** completes the journey over the canonical frontend. 31 M4/M5 unit tests pass; clean teardown.
+
 **Already SHIPPED / VALIDATED (start from this reality, don't rebuild):**
 - **5 per-service behavioral suites + reference fixtures** — `behavioral/{catalog,email,cart,recommendation,checkout}_suite.py` (+ currency/charge/shipping/ad/pricing).
 - **Startup contracts + launchers** — `resolve_serve_command`, `StartupContract`, `_DEFAULTS` for 4 langs (Java absent) — `behavioral/contract.py`.
@@ -63,7 +72,30 @@ The R3 **backbone M0→M6 is COMPLETE and live-proven end-to-end** (M0–M3 land
    - **`startd8 benchmark round3` CLI** + **roster resolver** (`roster.py`): resolve a finalist roster (model ids → each model's `r3/<model>/<svc>` fleet images), run `validate_m1/m2/m3` per finalist, build the report. The report/ranking/gate path is done — this is the orchestration wrapper.
    - **Per-finalist fleets** — the actual model-generated 9-service workdirs (reuse by verbatim model id, regenerate gaps — OQ-3; real LLM spend). Persist per-cell (Mottainai → $0 rescore).
    - **Cost/speed columns** — wire the per-model `cost_usd`/`wall_seconds` into `FinalistScore` from the generation run.
-3. **M4/M5 frontend BONUS** (parallel branch, never on the critical path): seed + health/OpenAPI gate + canonical substitution + Adapter A → additive capped bonus column in the report.
+3. **M4/M5 frontend BONUS** (parallel branch, never on the critical path) — the contract foundation (`frontend_contract.py`) is done; build the rest per the **lessons-folded plan** below.
+
+### M4/M5 build plan (Lessons_Learned-folded)
+
+> Each piece carries the specific `craft/Lessons_Learned/sdk/lessons/` lesson that shapes it. The
+> load-bearing theme: **the gate is BEHAVIORAL, not structural** — route-presence saturates; only the
+> stateful checkout-with-a-real-order-id discriminates (R2/OQ-J1: lean strict).
+
+1. **Frontend reference server (Go HTTP→gRPC)** — serves the 6 `frontend_contract.JOURNEY_ROUTES` + `GET /_healthz`, threads the `shop_session-id`/`shop_currency` cookies, fans out per §3.
+   - **#31 (boot ok ≠ serving):** bind `0.0.0.0` (NOT `localhost`) so the published port is reachable; ship the server's runtime deps IN the image; the gate's BOOT stage polls `GET /_healthz`, not `docker run` rc.
+   - **#27 (Go container gotchas):** it's "just another Go service" — reuse `setup_go_stubs` vendoring, relative `./` go.mod replace, distroless-no-shell (shell work in the build stage). Build via the existing `build_service_image` Go lane.
+   - **Leg 16 #21 (real redirect, not a header):** `POST /setCurrency` + `POST /cart` must do a real `http.Redirect` (302 → `/cart`/Referer) — a plain browser form POST ignores `HX-Redirect`-style headers. Verify with a no-follow client asserting `302` + `Location`, then follow.
+2. **Gate runner** (`frontend_contract.GateStage`) — boot generated → route-presence (malformed → 4xx) → **stateful one-session journey** (decisive) → orchestration sanity (advisory). Run it against a **known-good** backend fleet so a backend bug can't fail the frontend's gate.
+   - **#5 + #28 + Leg 16 #1 (behavioral over structural):** the route-presence stage SATURATES; the discriminator is the stateful checkout yielding a **real order id** — a subtly-broken frontend (confirmation page w/o a real order id) passes shape checks but must FAIL JOURNEY. Drive a real one-session HTTP journey, don't shape-diff.
+   - **#34 (layered = attribution):** record WHICH stage failed (`FrontendVerdict.failing_stage`) — boot vs routes vs journey pinpoints where the frontend broke.
+3. **Canonical substitution** — gate FAIL → mount the upstream `src/frontend` image (built once — Mottainai), wired to the contestant backends via `*_SERVICE_ADDR`; record `frontend=canonical-substituted` + the failing stage.
+   - **#29 (bonus = judged-but-NOT-contingent):** already the design — backend scoring is unaffected; bonus = 0 on substitution.
+   - **#33 (`--no-deps`):** the live `validate_m4` stops/swaps services to prove fail-to-canonical — run the gate/Adapter-A driver with `--no-deps` so a deliberately-broken frontend stays broken during the drive.
+4. **Adapter A (HTTP driver)** — the form-encoded locust-mix journey over either frontend.
+   - **#22 (protocol-agnostic; the suite IS the adapter):** reuse `journey.JOURNEY` + `frontend_contract.checkout_form` (done) — Adapter A just HTTP-encodes the same journey; the contract is the seam so it runs unchanged over generated *or* canonical. (Mirror of Adapter B.)
+   - **Leg 16 #34 (CRLF):** if the gate/Adapter-A diffs form fields, CRLF→LF-normalize BOTH sides (browsers normalize `<textarea>`; clients don't); verify with real bytes.
+5. **M5 bonus scorer → report** — fold `frontend_bonus` (from `frontend_contract.frontend_bonus`) as a SEPARATE column next to `backend_score` in `report.py`; ranking stays by `backend_score`, bonus is a labeled "+frontend" tie-break only; substituted runs show `frontend_bonus=0` + a `canonical_journey_completed` authenticity flag.
+   - **OQ-J3 cap:** the cap (`FRONTEND_BONUS_CAP`) keeps it a tie-break — assert a brilliant-frontend/weak-backend finalist NEVER outranks a strong-backend one.
+6. **Live `validate_m4`** — a subtly-broken frontend (confirmation w/o a real order id) FAILS the gate → falls to canonical cleanly → Adapter A green over canonical; a correct one PASSES + Adapter A green + earns bonus. Reuse the `validate_m2/m3` fleet machinery + the `--no-deps` driver pattern.
 
 **Reproduce M6:** `PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m6` (force-rebuilds the driver, reuses the 8 images, drives 3 configs, writes `round3-system-report.{json,md}`). Report/ranking/gate unit-tested (`test_report.py` — no docker).
 
@@ -81,7 +113,7 @@ The R3 **backbone M0→M6 is COMPLETE and live-proven end-to-end** (M0–M3 land
 
 ```
 Track-2 contracts (DONE/scope gaps) → M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M6 ✅  (backbone COMPLETE)
-                                                    └ M4 → M5  (frontend BONUS — PARALLEL branch, joins at M5/M6, NEVER on the critical path)
+                                                    └ M4 ✅ → M5 ✅  (frontend BONUS — PARALLEL branch, live-validated; NEVER on the critical path)
 ```
 The frontend bonus branch can never block backend scoring — that is the whole point of the substitution seam.
 
@@ -95,8 +127,8 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 | **M1** ✅ | N-service compose-fleet generator (8/9 backends, egress-denied, service-DNS) | **MET** — full 8-backend fleet + redis (9 svc, 5 langs) boots on macOS Docker; every `*_SERVICE_ADDR` resolves (checkout's 6-dep fan-out); egress to 1.1.1.1:443 DENIED; clean teardown. Generator + readiness-gate + `validate_m0/m1` + 2 new reference servers. **Not yet pushed.** | done |
 | **M2** ✅ | Transport-agnostic journey + Adapter B (direct-gRPC, always-on) | **MET** — Adapter B over the live 9-svc mesh = 100% step coverage; break payment → only checkout's step fails. journey spec + adapter_b + m2driver + validate_m2 (25 unit + live). **Not yet pushed.** | done |
 | **M3** ✅ | Layered scoring → scorecard (per-step coverage + per-service fault attribution + journey-completed bool) | **MET** — live on SDK-ref + break-payment + break-catalog meshes: each fault attributed to the right service+class; checkout never charged model-fault for an upstream break; all-degrade → low-confidence. score.py + culprit-aware adapter_b + validate_m3 (32 unit + live). **Not yet pushed.** | done |
-| **M4** | Frontend BONUS lane (seed + health/OpenAPI gate + canonical substitution + Adapter A) | a subtly-broken frontend (confirmation w/o real order id) FAILS gate + falls to canonical cleanly; Adapter A green over canonical; report records which ran + verdict | ~1 |
-| **M5** | Frontend bonus → scorecard (additive, capped) | brilliant-frontend/weak-backend model never outranks strong-backend; bonus = labeled "+frontend" tie-break; substituted runs show `frontend_bonus=0` | ~¼ |
+| **M4** ✅ | Frontend BONUS lane (seed + health/OpenAPI gate + canonical substitution + Adapter A) | **MET** — live: subtly-broken frontend (confirmation w/o real order id) FAILS @journey + falls to canonical cleanly; Adapter A green over canonical; generated PASSES + bonus 0.100. frontend_contract + Go server + gate + Adapter A + validate_m4 (31 unit + live). **Not yet pushed.** | done |
+| **M5** ✅ | Frontend bonus → scorecard (additive, capped) | **MET** — `report.py`: ranking stays by backend score; `+frontend` is a capped tie-break (never rank-flips); substituted runs show `frontend_bonus=0`. | done |
 | **M6** ✅ | Real finalists (single-model fleets) + system report + CLI + decision gate | **MET (harness)** — `report.py` (rank + advisory gate) + `validate_m6` capstone: live 3-config finalists ranked by system score, attribution columns, decision gate GO (discriminates + trustworthy), `round3-system-report.{json,md}` emitted. **A real benchmark run feeds distinct model fleets into the same path; `startd8 benchmark round3` CLI wrapper is the remaining thin wiring.** Not yet pushed. | done (harness) |
 
 **v1 total ≈ 5 suites** (Java + kind + offline-build hermeticity deferred).
@@ -132,7 +164,8 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 
 | Doc | Covers |
 |---|---|
-| `PLAN.md` (v0.3) | The authoritative consolidated M0..M6 + deferred roadmap, effort read, OQ/risk register. |
+| **`BENCHMARK_METHODOLOGY.md` (v1.0)** | **The methodology reference for the SHIPPED system** — what it measures + how (pipeline, journey, scoring/attribution, frontend gate, report/decision-gate, how to run, module map). Start here for "how the built benchmark works." |
+| `PLAN.md` (v0.3) | The authoritative consolidated M0..M6 + deferred roadmap, effort read, OQ/risk register. **BUILD COMPLETE** — retained as the build record. |
 | `REQUIREMENTS.md` (v0.3) | The FRs (substrate, fleet, journey, frontend bonus, scoring) + §0′ supersession + OQ decision record. |
 | `CONTAINMENT_SPIKE.md` | §0 VERIFIED CORRECTION — why verdict B was overturned (Seatbelt denies sandboxed gRPC dial-out); the substrate split. |
 | `COMPOSE_FLEET_PROTOTYPE.md` | The validated container substrate (service-DNS gRPC + `internal:true` egress-deny on macOS Docker) — the M1 seed. |

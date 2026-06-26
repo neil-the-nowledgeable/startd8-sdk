@@ -38,6 +38,7 @@ from ..scaffold_codegen.manifest import AppManifest, parse_app_manifest
 from ..scaffold_codegen.coherence import evaluate_coherence
 from ..view_codegen.manifest import ViewSpec, parse_views
 from ..view_codegen.view_prose import parse_view_prose
+from ..backend_codegen.form_prose import parse_form_prose
 from .inputs import AssemblyInputs
 
 logger = get_logger(__name__)
@@ -78,6 +79,7 @@ _ABSENT_STATUS = {
     "human_inputs": Status.DEFAULTS,
     "completeness": Status.DEFAULTS,
     "view_prose": Status.DEFAULTS,   # absent ⇒ raw machine-name view chrome (today's behavior)
+    "form_prose": Status.DEFAULTS,   # absent ⇒ bare forms, no per-field help (FR-FH-9, opt-in)
     "imports": Status.NOT_DEFINED,   # absent ⇒ no import owned-kind (FR-IMP-3, opt-in)
     "api": Status.NOT_DEFINED,       # absent ⇒ Role 1 schema-only contract (Role 2 opt-in)
     "contexts": Status.NOT_DEFINED,  # absent ⇒ no inter-context consumer clients (Role 3 opt-in)
@@ -150,19 +152,22 @@ class CoverageStat:
 
 @dataclass(frozen=True)
 class ContentCoverageStats:
-    """FR-WCI-2: a unified rollup of words/content coverage across the three author→approve surfaces
-    the wireframe already tracks per-item — **page bodies**, **view copy**, and **AI prompts**.
+    """FR-WCI-2: a unified rollup of words/content coverage across the author→approve surfaces the
+    wireframe tracks per-item — **page bodies**, **view copy**, **AI prompts**, and **form help**.
     Visibility only (bucket 2/4), never a gate; placeholder/missing content is honestly *un*-authored."""
 
     page_bodies: CoverageStat = field(default_factory=CoverageStat)
     view_copy: CoverageStat = field(default_factory=CoverageStat)
     ai_prompts: CoverageStat = field(default_factory=CoverageStat)
+    form_help: CoverageStat = field(default_factory=CoverageStat)  # FR-FH-9: the form Words layer
 
     @property
     def overall(self) -> CoverageStat:
         return CoverageStat(
-            self.page_bodies.authored + self.view_copy.authored + self.ai_prompts.authored,
-            self.page_bodies.total + self.view_copy.total + self.ai_prompts.total,
+            self.page_bodies.authored + self.view_copy.authored + self.ai_prompts.authored
+            + self.form_help.authored,
+            self.page_bodies.total + self.view_copy.total + self.ai_prompts.total
+            + self.form_help.total,
         )
 
     def as_dict(self) -> Dict[str, object]:
@@ -170,6 +175,7 @@ class ContentCoverageStats:
             "page_bodies": self.page_bodies.as_dict(),
             "view_copy": self.view_copy.as_dict(),
             "ai_prompts": self.ai_prompts.as_dict(),
+            "form_help": self.form_help.as_dict(),
             "overall": self.overall.as_dict(),
         }
 
@@ -622,12 +628,22 @@ def _forms_section(
     schema_state: _ManifestState,
     human_state: _ManifestState,
     views_text: Optional[str] = None,
+    form_prose_state: Optional[_ManifestState] = None,
 ) -> WireframeSection:
     status = worst(schema_state.status, human_state.status)
     worst_state = (
         schema_state
         if _PRECEDENCE[schema_state.status] <= _PRECEDENCE[human_state.status]
         else human_state
+    )
+    # FR-FH-9: form help is the WORDS layer — like view_prose it only annotates coverage, it never
+    # degrades the section (absent ⇒ the opt-in default; an INVALID form_prose is caught at
+    # `kickoff check` / `generate backend`). Used only when PLANNED with a parsed result.
+    form_prose = (
+        form_prose_state.parsed
+        if form_prose_state is not None
+        and form_prose_state.status == Status.PLANNED
+        and form_prose_state.parsed else {}
     )
     if (
         schema_state.status not in (Status.PLANNED, Status.PLACEHOLDER)
@@ -665,6 +681,13 @@ def _forms_section(
             omitted_bits.append(f"owned: {', '.join(owned)}")
         if omitted_bits:
             detail += f" | omitted — {'; '.join(omitted_bits)}"
+        # FR-FH-9: per-form help coverage — how many writable fields carry authored help text.
+        fp = form_prose.get(n)
+        if fp is not None:
+            helped = {f for f, spec in fp.fields.items() if spec.help is not None}
+            n_help = sum(1 for f in writable if f.name in helped)
+            intro_tag = ", intro" if fp.intro is not None else ""
+            detail += f" | help: {n_help}/{len(writable)}{intro_tag}"
         if n in on_create:
             detail += f" | on_create: {on_create[n]}"
         paths = [f"app/templates/{e}/form.html"]
@@ -818,13 +841,17 @@ def _content_coverage(
     content_section: WireframeSection,
     views_state: _ManifestState,
     view_prose_state: Optional[_ManifestState],
+    schema_state: Optional[_ManifestState] = None,
+    form_prose_state: Optional[_ManifestState] = None,
 ) -> ContentCoverageStats:
     """FR-WCI-2: aggregate the per-item words/content coverage the wireframe already surfaces.
 
     Page bodies + AI prompts come from the built ``content`` section's items (``PLANNED`` ⇒ authored;
     ``PLACEHOLDER``/``NOT_DEFINED`` ⇒ not authored). View copy is recomputed from the parsed states
-    (no extra I/O), keyed by VIEW name to match ``_views_section`` (FR-WCI-1 / R1-S8). Reading the
-    already-built section keeps this a pure rollup — one source of truth per surface."""
+    (no extra I/O), keyed by VIEW name to match ``_views_section`` (FR-WCI-1 / R1-S8). Form help
+    (FR-FH-9) is recomputed the same way: authored = form fields carrying ``help``; total = all writable
+    form fields across the entity graph (the help-eligible surface). Reading the already-built section
+    keeps this a pure rollup — one source of truth per surface."""
     pb_total = pb_auth = pr_total = pr_auth = 0
     for it in content_section.items:
         if it.label.startswith("page body:"):
@@ -846,10 +873,33 @@ def _content_coverage(
     vc_total = len(specs)
     vc_auth = sum(1 for v in specs if v.name in chromed)
 
+    # Form help: authored = writable form fields with help; total = all writable form fields.
+    fh_total = fh_auth = 0
+    schema = (
+        schema_state.parsed
+        if schema_state is not None
+        and schema_state.status in (Status.PLANNED, Status.PLACEHOLDER)
+        and schema_state.parsed
+        else None
+    )
+    if schema is not None:
+        prose = (
+            form_prose_state.parsed
+            if form_prose_state is not None and form_prose_state.parsed else {}
+        )
+        for n in _entity_names(schema, schema_state.text or ""):
+            writable = writable_fields(schema, n)
+            fh_total += len(writable)
+            fp = prose.get(n)
+            if fp:
+                helped = {f for f, spec in fp.fields.items() if spec.help is not None}
+                fh_auth += sum(1 for f in writable if f.name in helped)
+
     return ContentCoverageStats(
         page_bodies=CoverageStat(pb_auth, pb_total),
         view_copy=CoverageStat(vc_auth, vc_total),
         ai_prompts=CoverageStat(pr_auth, pr_total),
+        form_help=CoverageStat(fh_auth, fh_total),
     )
 
 
@@ -1005,6 +1055,18 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     # FR-WCI-1: view copy (the WORDS layer). Keyed by VIEW name (matches `_views_section`'s idents,
     # not model names) so per-view chrome coverage lines up.
     states["view_prose"] = _yaml_state("view_prose", *texts["view_prose"], parse_view_prose)
+    # FR-FH-9: form help (the WORDS layer). Field targets validate against each entity's WRITABLE
+    # fields — consumer parity, so a dangling help target is INVALID here exactly as `generate backend`
+    # would reject it (not a silent advisory). Degrades to entity-only validation if the schema is unusable.
+    _known_form_fields = (
+        {n: frozenset(f.name for f in writable_fields(schema_state.parsed, n)) for n in known}
+        if schema_state.status in (Status.PLANNED, Status.PLACEHOLDER) and schema_state.parsed
+        else {}
+    )
+    states["form_prose"] = _yaml_state(
+        "form_prose", *texts["form_prose"],
+        lambda t: parse_form_prose(t, known_entities=known, known_fields=_known_form_fields),
+    )
     # FR-IMP-3: import declarations. Keyed/validated against the schema entities (degrade, don't
     # crash, when the schema is unusable — same posture as views).
     states["imports"] = _yaml_state(
@@ -1037,13 +1099,16 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         _services_section(schema_state, states["ai_passes"], states.get("contexts")),
         _entities_section(schema_state),
         _pages_section(states["pages"], authoring=authoring),
-        _forms_section(schema_state, states["human_inputs"], texts["views"][0]),
+        _forms_section(schema_state, states["human_inputs"], texts["views"][0], states["form_prose"]),
         _views_section(schema_state, states["views"], states["view_prose"]),
         content_section,
         _completeness_section(states["completeness"], schema_state),
     )
     # FR-WCI-2: a unified words/content coverage rollup over the three author→approve surfaces.
-    content_coverage = _content_coverage(content_section, states["views"], states["view_prose"])
+    content_coverage = _content_coverage(
+        content_section, states["views"], states["view_prose"],
+        schema_state=schema_state, form_prose_state=states["form_prose"],
+    )
 
     # Shape summary (R3-F3) — magnitude, not provisioning.
     n_entities = (

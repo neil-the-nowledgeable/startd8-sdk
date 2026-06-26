@@ -110,6 +110,7 @@ def _renderers(
     imports_text: Optional[str] = None,
     contexts_text: Optional[str] = None,
     project_root: Optional[str] = None,
+    form_prose_text: Optional[str] = None,
 ) -> Dict[str, Callable[[str, str, Optional[str]], str]]:
     """Map artifact-kind → a ``(schema_text, source_file, entity) -> text`` renderer.
 
@@ -173,6 +174,16 @@ def _renderers(
             return None
         return parse_display(display_text, _pps(s))[0].get(e)
 
+    from .form_prose import parse_form_prose as _parse_form_prose
+
+    def _fp(s, e):
+        # form.html re-render must use the SAME form_prose.yaml input as generate, or a help/intro-
+        # configured form false-flags drift (FR-FH-3). Field-existence validation already ran at
+        # generate; re-render only needs this entity's FormProse, so we parse without the known sets.
+        if not form_prose_text or not e:
+            return None
+        return _parse_form_prose(form_prose_text).get(e)
+
     from .context_client_renderer import render_context_client
     from .context_integration_renderer import render_context_clients_module
     from .context_manifest import parse_contexts
@@ -234,7 +245,7 @@ def _renderers(
         "htmx-row": lambda s, sf, e: render_row_template(s, sf, e, _disp(s, e)),
         "htmx-confirm": lambda s, sf, e: render_confirm_template(s, sf, e),
         "htmx-detail": lambda s, sf, e: render_detail_template(s, sf, e, _disp(s, e)),
-        "htmx-form": lambda s, sf, e: render_form_template(s, sf, e),
+        "htmx-form": lambda s, sf, e: render_form_template(s, sf, e, _fp(s, e)),
         "python-export": lambda s, sf, e: render_export(s, sf),
         "python-ai-schemas": lambda s, sf, e: render_ai_schemas(s, sf),
         "python-completeness": lambda s, sf, e: render_completeness(s, sf, manifest=_cmpl),
@@ -514,6 +525,7 @@ def owned_file_in_sync(
     api_text: Optional[str] = None,
     contexts_text: Optional[str] = None,
     project_root: Optional[str] = None,
+    form_prose_text: Optional[str] = None,
 ) -> bool:
     """True iff *ondisk_text* is an owned generated file that is **currently in-sync**.
 
@@ -550,6 +562,7 @@ def owned_file_in_sync(
             api_text=api_text,
             contexts_text=contexts_text,
             project_root=project_root,
+            form_prose_text=form_prose_text,
         ).status
         == "in_sync"
     )
@@ -1099,6 +1112,7 @@ def check_drift(
     api_text: Optional[str] = None,
     contexts_text: Optional[str] = None,
     project_root: Optional[str] = None,
+    form_prose_text: Optional[str] = None,
 ) -> DriftResult:
     """Compare an on-disk owned file against its source contract(s). No writes.
 
@@ -1200,6 +1214,7 @@ def check_drift(
         imports_text=imports_text,
         contexts_text=contexts_text,
         project_root=project_root,
+        form_prose_text=form_prose_text,
     ).get(kind or "")
     if renderer is None:
         return DriftResult(

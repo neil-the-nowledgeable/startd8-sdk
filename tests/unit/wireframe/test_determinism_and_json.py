@@ -37,7 +37,7 @@ def test_meta_excluded_from_canonical_body(golden_root: Path) -> None:
 def test_schema_version_and_fingerprint(golden_root: Path, golden_copy: Path) -> None:
     """FR-W10 schema_version; R3-F2 fingerprint moves only when inputs change."""
     body = json.loads(canonical_json(_plan(golden_root)))
-    assert body["schema_version"] == SCHEMA_VERSION == 2
+    assert body["schema_version"] == SCHEMA_VERSION == 3
     fp1 = body["inputs_fingerprint"]
     assert fp1 == json.loads(canonical_json(_plan(golden_root)))["inputs_fingerprint"]
     # Editing the contract bumps the fingerprint.

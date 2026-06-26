@@ -3,6 +3,8 @@
 **Version:** 0.3 (CONSOLIDATED — sequences the full Round-3 design corpus into one authoritative build roadmap)
 **Date:** 2026-06-24
 **Status:** Plan — DESIGN/SEQUENCING ONLY, no code. Consolidates the 8-doc corpus and supersedes the v0.2 netns-fleet framing. The hard design thinking is done across the corpus; this plan turns it into clean milestone execution.
+> **BUILD COMPLETE (2026-06-25):** the full roadmap (M0→M6 backbone + the M4/M5 frontend bonus lane) is **SHIPPED on `origin/main`**, every milestone live-validated. For how the built system works see **`BENCHMARK_METHODOLOGY.md`** (the methodology reference); for status/next steps see `NEXT_STEPS.md`. This plan is retained as the build record.
+
 **Paired with:** REQUIREMENTS.md v0.3 (reconciled to this plan — §0 supersession re-substrates the fleet to containers; FR-7/7a/8/9 updated, FR-7b/7c/9a/9b/23/24 added for containerization + journey adapters + frontend bonus + capped bonus scoring).
 
 ---

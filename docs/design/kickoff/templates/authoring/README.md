@@ -10,6 +10,7 @@ carry you to the format."* The emitted manifest is the round-trip acceptance tar
 ```
 <project>/docs/kickoff/authoring/
 ├── views.md          → prisma/views.yaml        (contract §2.3 — extractor EXISTS today)
+├── form_help.md      → prisma/form_prose.yaml   (contract §2.3b — extractor EXISTS today, FR-FH-8)
 ├── conventions.md    → kickoff/inputs/conventions.yaml   (contract §2.9 — extractor PENDING, FR-VIP)
 └── …                 → one prose source per extractable manifest
 ```
@@ -24,8 +25,9 @@ copy one into your project's `docs/kickoff/authoring/`, replace the `<…>` plac
 |---|---|---|---|---|
 | `pages.md` | `prisma/pages.yaml` | §2.2 | **yes** | `startd8 kickoff check docs/kickoff/authoring/pages.md` |
 | `views.md` | `prisma/views.yaml` | §2.3 | **yes** | `startd8 kickoff check docs/kickoff/authoring/views.md` |
+| `form_help.md` | `prisma/form_prose.yaml` | §2.3b | **yes (per-field help/placeholder + intro)** | `startd8 kickoff check docs/kickoff/authoring/form_help.md` |
 | `observability.md` | `inputs/observability.yaml` | §2.12 | **yes (Slice 1: Thresholds + Receivers)** | `startd8 kickoff check docs/kickoff/authoring/observability.md` |
-| `conventions.md` | `inputs/conventions.yaml` | §2.9 | **no** — FR-VIP (`SDK_VALUE_INPUT_AUTHORING_REQUIREMENTS.md`) | round-trip-by-correspondence until `extract_conventions` ships |
+| `conventions.md` | `inputs/conventions.yaml` | §2.9 | **yes** (FR-VIP proving slice: stack/module_paths/naming/data_model/architecture_notes) | `startd8 kickoff check docs/kickoff/authoring/conventions.md` |
 | build-preferences / business-targets | `inputs/*.yaml` | §2.10+ | no — FR-VIP fan-out | — |
 
 > The **assembly** manifests (schema/pages/views/…) have extractors (`manifest_extraction/`); the

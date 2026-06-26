@@ -48,6 +48,7 @@ class PydanticSQLModelProvider:
             imports_text=self._read_imports(context),
             api_text=self._read_api(context),
             contexts_text=self._read_contexts(context),
+            form_prose_text=self._read_form_prose(context),
             project_root=str(Path(context.project_root).resolve()),
         )
 
@@ -143,6 +144,17 @@ class PydanticSQLModelProvider:
         """``display.yaml`` (presentation-structure layer, FR-DM), raw text or ``None`` if absent."""
         return cls._read_anchored(
             context, suffix="display.yaml", conventional_relpath="prisma/display.yaml"
+        )
+
+    @classmethod
+    def _read_form_prose(cls, context: ProviderContext) -> Optional[str]:
+        """``form_prose.yaml`` (the form WORDS layer, FR-FH-1/2), raw text or ``None`` if absent.
+
+        Threaded into the skip-hook so a freshly-generated ``<e>/form.html`` carrying form-help include
+        lines is recognized as a ``$0``-owned file (without it the htmx-form re-render omits the includes
+        → drift → falls through to the LLM)."""
+        return cls._read_anchored(
+            context, suffix="form_prose.yaml", conventional_relpath="prisma/form_prose.yaml"
         )
 
     @classmethod

@@ -22,7 +22,7 @@ def test_json_stdout_is_parseable_json_only(golden_root: Path) -> None:
     result = runner.invoke(app, ["--project", str(golden_root), "--json", "--no-write"])
     assert result.exit_code == 0, result.output
     body = json.loads(result.stdout)
-    assert body["schema_version"] == 2
+    assert body["schema_version"] == 3
     assert "Wireframe —" not in result.stdout  # tree suppressed without --verbose
 
 

@@ -395,6 +395,81 @@ _CONTROL_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
 _IMPORT_CONTROL_IDS = frozenset({"validate", "restore", "confirm"})
 
 
+# --------------------------------------------------------------------------- #
+# §2.3c Form help → form_prose.yaml (the form WORDS layer — outside the drift hash, FR-FH-8)
+# --------------------------------------------------------------------------- #
+
+def extract_form_prose(
+    doc_label: str,
+    sections: List[Section],
+    graph: EntityGraph,
+    records: List[ExtractionRecord],
+) -> Optional[dict]:
+    """Harvest authored form help from each ``### Form: <Entity>`` block → the ``form_prose.yaml`` shape.
+
+    The producer half of the kickoff→``form_prose.yaml`` loop (the consumer ``parse_form_prose`` ships).
+    Per block: an optional ``Intro:`` line (key_lines) + a ``Field | Help | Placeholder`` table
+    (md_tables). Entity + field targets resolve against the live entity graph — an unknown entity or
+    field is recorded ``NOT_EXTRACTED`` (sourced, advisory) and dropped, never guessed, so a typo never
+    silently becomes help on the wrong field (the dangling-target discipline, FR-FH-5). The emitted key
+    is the **canonical** entity name (so the round-trip's ``known_entities`` lines up), and the canonical
+    field name (tolerating case drift in the prose)."""
+    blocks = [s for s in sections if s.title.lower().startswith("form:")]
+    if not blocks:
+        return None
+    out: Dict[str, dict] = {}
+    for sec in blocks:
+        raw_name = strip_annotations(sec.title.split(":", 1)[1]).strip()
+        src = SourceRef(doc_label, sec.heading_path)
+        ename = graph.resolve_entity(raw_name)
+        if ename is None:
+            records.append(ExtractionRecord(
+                "form_prose.yaml", f"/{nfkd_kebab(raw_name)}", Status.NOT_EXTRACTED, source=src,
+                reason=f"`Form: {raw_name}` names no declared entity — author the contract first",
+            ))
+            continue
+        by_lower = {f.name.lower(): f.name for f in graph.entities[ename].fields}
+        keys, _ = key_lines(sec.body)
+        entry: Dict[str, object] = {}
+        intro = _strip_quotes(keys.get("Intro", ""))
+        if intro:
+            entry["intro"] = intro
+            records.append(ExtractionRecord(
+                "form_prose.yaml", f"/{ename}/intro", Status.EXTRACTED, value=intro[:60], source=src,
+            ))
+        fields: Dict[str, dict] = {}
+        tables = md_tables(sec.body)
+        table = next((t for t in tables if "field" in t.headers), None)
+        for i, row in enumerate(table.dicts() if table else ()):
+            raw_field = strip_annotations(row.get("field", "")).strip()
+            if not raw_field:
+                continue
+            rsrc = SourceRef(doc_label, sec.heading_path, row_index=i)
+            field = raw_field if raw_field in by_lower.values() else by_lower.get(raw_field.lower())
+            if field is None:
+                records.append(ExtractionRecord(
+                    "form_prose.yaml", f"/{ename}/fields/{raw_field}", Status.NOT_EXTRACTED, source=rsrc,
+                    reason=f"{ename} has no field {raw_field!r} — help dropped (dangling target)",
+                ))
+                continue
+            spec: Dict[str, str] = {}
+            for col in ("help", "placeholder"):
+                val = _strip_quotes(row.get(col, ""))
+                if val:
+                    spec[col] = val
+            if spec:
+                fields[field] = spec
+                records.append(ExtractionRecord(
+                    "form_prose.yaml", f"/{ename}/fields/{field}", Status.EXTRACTED,
+                    value=spec.get("help", spec.get("placeholder", ""))[:60], source=rsrc,
+                ))
+        if fields:
+            entry["fields"] = fields
+        if entry:
+            out[ename] = entry
+    return {"forms": out} if out else None
+
+
 def _strip_quotes(value: str) -> str:
     """Authored copy may be quoted (the template shows `- Title: "..."`) or bare; strip one matched
     surrounding pair so the emitted manifest carries the words, not the delimiters."""
@@ -847,3 +922,185 @@ def extract_observability(
     if spec.industry_dataset:
         candidate["industry_dataset"] = spec.industry_dataset
     return candidate
+
+
+# --------------------------------------------------------------------------- #
+# §2.9 Technology conventions → conventions.yaml (the value-input proving slice — FR-VIP)
+# --------------------------------------------------------------------------- #
+
+# `### Naming` aspect synonyms → the conventions.yaml `naming` keys (FR-VIP §4). Open vocab otherwise
+# (D-VIP-3): an unrecognized aspect normalizes by spaces→underscore rather than being dropped.
+_NAMING_SYNONYMS = {
+    "routes": "route_style", "route": "route_style", "route style": "route_style",
+    "files": "files", "file": "files",
+    "classes": "classes", "class": "classes",
+    "metric prefix": "metric_prefix", "metrics prefix": "metric_prefix",
+}
+_DATA_MODEL_SCALAR_ENUMS = {
+    "money": frozenset({"cents", "float"}),
+    "datetime": frozenset({"utc", "local"}),
+    "recurrence": frozenset({"structured", "rrule", "none"}),
+    "references": frozenset({"fk-only", "loose-allowed"}),
+    "weekday": frozenset({"iso", "us"}),
+}
+
+
+def _norm_key(text: str) -> str:
+    """A table Role/Layer cell → a YAML key: lower-cased, spaces→underscore (``data layer``→``data_layer``)."""
+    return "_".join(strip_annotations(text).strip().lower().split())
+
+
+def _bullets(body: str) -> List[str]:
+    """Top-level ``- `` bullets in *body*, verbatim (one line each, the leading marker stripped). Stops
+    at the first sub-heading is unnecessary — a Section's body already excludes child-heading content."""
+    out: List[str] = []
+    for line in body.splitlines():
+        s = line.strip()
+        if s.startswith("- "):
+            out.append(s[2:].strip())
+    return out
+
+
+def _child_section(sections: List[Section], parent: str, title: str) -> Optional[Section]:
+    """The section whose heading is *title* and whose heading_path contains *parent* (so a subsection is
+    resolved unambiguously even if the title recurs elsewhere — the same scoping the form/view extractors use)."""
+    tl = title.lower()
+    for s in sections:
+        if s.title.lower() == tl and parent in s.heading_path:
+            return s
+    return None
+
+
+def extract_conventions(
+    doc_label: str,
+    sections: List[Section],
+    records: List[ExtractionRecord],
+) -> Optional[dict]:
+    """§2.9 ``## Technology conventions`` prose → ``conventions.yaml`` candidate + traceability records.
+
+    The value-input proving slice (FR-VIP-1). Reads the section's key-lines (``Language``/``Field
+    authorship``/``Provenance default``) + the ``| Layer | Choice |`` stack table, and the subsections
+    ``### Module layout`` (``| Role | Path |``), ``### Naming`` (``| Aspect | Style |``, aspect synonyms),
+    ``### Data-model conventions`` (FR-F6 enums + ``#### Computed fields``/``#### Deferred`` bullets), and
+    ``### Architecture invariants`` (bullets, verbatim). Emits ``domain: conventions``. A bad data-model
+    enum or an unknown data-model key is recorded ``NOT_EXTRACTED`` (flag, never guess — contract §3);
+    the round-trip gate validates the whole candidate through ``parse_conventions``. Returns ``None`` when
+    there is no ``## Technology conventions`` section (project-agnostic — FR-VIP-9)."""
+    root = find_section(sections, "Technology conventions")
+    if root is None:
+        return None
+    parent = root.title  # the heading_path anchor for the subsections
+    src = SourceRef(doc_label, root.heading_path)
+
+    out: Dict[str, object] = {"domain": "conventions"}
+    keys, _ = key_lines(root.body)  # leading prose tolerated; the stack table terminates the key block
+    language = strip_annotations(keys.get("Language", "")).strip()
+    if not language:
+        records.append(ExtractionRecord(
+            "conventions.yaml", "/language", Status.NOT_EXTRACTED, source=src,
+            reason="`## Technology conventions` has no `- Language:` line (required)",
+        ))
+        return None  # without the required field there is no valid candidate to round-trip
+    out["language"] = language
+    records.append(ExtractionRecord(
+        "conventions.yaml", "/language", Status.EXTRACTED, value=language, source=src))
+    for src_key, dest in (("Field authorship", "field_authorship"),
+                          ("Provenance default", "provenance_default")):
+        val = strip_annotations(keys.get(src_key, "")).strip()
+        if val:
+            out[dest] = val
+            records.append(ExtractionRecord(
+                "conventions.yaml", f"/{dest}", Status.EXTRACTED, value=val, source=src))
+
+    # stack: the `| Layer | Choice | … |` table in the root body (Layer→key, Choice→value).
+    stack_tables = [t for t in md_tables(root.body) if "layer" in t.headers and "choice" in t.headers]
+    if stack_tables:
+        stack = {}
+        for i, row in enumerate(stack_tables[0].dicts()):
+            layer, choice = _norm_key(row.get("layer", "")), strip_annotations(row.get("choice", "")).strip()
+            if layer and choice:
+                stack[layer] = choice
+                records.append(ExtractionRecord(
+                    "conventions.yaml", f"/stack/{layer}", Status.EXTRACTED, value=choice,
+                    source=SourceRef(doc_label, root.heading_path, row_index=i)))
+        if stack:
+            out["stack"] = stack
+
+    # module_paths: `### Module layout` `| Role | Path |`.
+    ml = _child_section(sections, parent, "Module layout")
+    if ml is not None:
+        mtables = [t for t in md_tables(ml.body) if "role" in t.headers and "path" in t.headers]
+        if mtables:
+            paths = {}
+            for i, row in enumerate(mtables[0].dicts()):
+                role, path = _norm_key(row.get("role", "")), strip_annotations(row.get("path", "")).strip()
+                if role and path:
+                    paths[role] = path
+                    records.append(ExtractionRecord(
+                        "conventions.yaml", f"/module_paths/{role}", Status.EXTRACTED, value=path,
+                        source=SourceRef(doc_label, ml.heading_path, row_index=i)))
+            if paths:
+                out["module_paths"] = paths
+
+    # naming: `### Naming` `| Aspect | Style |` (aspect synonyms → the canonical naming keys).
+    nm = _child_section(sections, parent, "Naming")
+    if nm is not None:
+        ntables = [t for t in md_tables(nm.body) if "aspect" in t.headers and "style" in t.headers]
+        if ntables:
+            naming = {}
+            for i, row in enumerate(ntables[0].dicts()):
+                raw = strip_annotations(row.get("aspect", "")).strip().lower()
+                key = _NAMING_SYNONYMS.get(raw, _norm_key(raw))
+                style = strip_annotations(row.get("style", "")).strip()
+                if key and style:
+                    naming[key] = style
+                    records.append(ExtractionRecord(
+                        "conventions.yaml", f"/naming/{key}", Status.EXTRACTED, value=style,
+                        source=SourceRef(doc_label, nm.heading_path, row_index=i)))
+            if naming:
+                out["naming"] = naming
+
+    # data_model: `### Data-model conventions` (FR-F6) — enum scalars + computed/deferred bullet lists.
+    dm = _child_section(sections, parent, "Data-model conventions")
+    if dm is not None:
+        dm_src = SourceRef(doc_label, dm.heading_path)
+        dmodel: Dict[str, object] = {}
+        dm_keys, _ = key_lines(dm.body)
+        for raw_key, raw_val in dm_keys.items():
+            key = raw_key.strip().lower()
+            val = strip_annotations(raw_val).strip().lower()
+            allowed = _DATA_MODEL_SCALAR_ENUMS.get(key)
+            if allowed is None:
+                records.append(ExtractionRecord(
+                    "conventions.yaml", f"/data_model/{key}", Status.NOT_EXTRACTED, source=dm_src,
+                    reason=f"unknown data-model key {raw_key!r} (allowed: {sorted(_DATA_MODEL_SCALAR_ENUMS)})"))
+            elif val not in allowed:
+                records.append(ExtractionRecord(
+                    "conventions.yaml", f"/data_model/{key}", Status.NOT_EXTRACTED, source=dm_src,
+                    reason=f"`{key}` value {val!r} outside the vocabulary {sorted(allowed)}"))
+            else:
+                dmodel[key] = val
+                records.append(ExtractionRecord(
+                    "conventions.yaml", f"/data_model/{key}", Status.EXTRACTED, value=val, source=dm_src))
+        for sub, dest in (("Computed fields", "computed_fields"), ("Deferred", "deferred")):
+            child = _child_section(sections, "Data-model conventions", sub)
+            items = _bullets(child.body) if child is not None else []
+            if items:
+                dmodel[dest] = items
+                records.append(ExtractionRecord(
+                    "conventions.yaml", f"/data_model/{dest}", Status.EXTRACTED,
+                    value=f"{len(items)} item(s)", source=dm_src))
+        if dmodel:
+            out["data_model"] = dmodel
+
+    # architecture_notes: `### Architecture invariants` bullets, verbatim (the load-bearing rules).
+    ai = _child_section(sections, parent, "Architecture invariants")
+    if ai is not None:
+        notes = _bullets(ai.body)
+        if notes:
+            out["architecture_notes"] = notes
+            records.append(ExtractionRecord(
+                "conventions.yaml", "/architecture_notes", Status.EXTRACTED,
+                value=f"{len(notes)} invariant(s)", source=SourceRef(doc_label, ai.heading_path)))
+
+    return out
