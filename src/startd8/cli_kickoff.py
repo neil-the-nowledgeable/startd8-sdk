@@ -261,6 +261,58 @@ def chat_cmd(
     )
 
 
+@kickoff_app.command("concierge-chat")
+def concierge_chat_cmd(
+    project: Path = typer.Argument(Path("."), help="Project root to onboard (agentic Concierge)."),
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="Agent spec provider:model (default: balanced catalog model)."),
+) -> None:
+    """Agentic Concierge — conversational onboarding that RECOMMENDS actions you confirm.
+
+    The assistant surveys/assesses and can propose writes (scaffold the package, draft friction, set
+    a field). It never writes to disk: after each turn you confirm each recommendation, and only then
+    is it applied through the safe-writer. Spends LLM tokens.
+    """
+    import asyncio
+
+    from .kickoff_experience.chat import new_agentic_kickoff_chat, run_kickoff_repl
+    from .kickoff_experience.proposals import apply_proposal
+    from .kickoff_experience.tui_concierge import _questionary_confirm
+    from .model_catalog import Models
+    from .utils.agent_resolution import resolve_agent_spec
+
+    spec = agent or Models.CLAUDE_SONNET_LATEST
+    try:
+        the_agent = resolve_agent_spec(spec)
+    except Exception as exc:
+        console.print(f"[red]could not start agent {spec!r}:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL)
+    try:
+        chat = new_agentic_kickoff_chat(the_agent, str(project))
+    except Exception as exc:
+        console.print(f"[red]agent {spec!r} does not support tool use:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL)
+
+    def _read(prompt: str) -> Optional[str]:
+        try:
+            return typer.prompt(prompt, default="", show_default=False)
+        except (EOFError, KeyboardInterrupt):
+            return None
+
+    console.print(f"[dim]agent: {spec} · propose-only (you confirm every write)[/dim]")
+    run_kickoff_repl(
+        banner=chat.banner(),
+        ask_sync=lambda m: asyncio.run(chat.ask(m)),
+        read_input=_read,
+        emit_line=lambda line: console.print(line),
+        cost_line=chat.cost_line,
+        pending=lambda: chat.buffer.pending(),
+        confirm=_questionary_confirm,
+        apply_proposal=lambda a: apply_proposal(str(project), a),
+        consume=lambda a: chat.buffer.pop(a.id),
+    )
+
+
 @kickoff_app.command("concierge")
 def concierge_cmd(
     project: Path = typer.Argument(Path("."), help="Project root to onboard (Concierge mode)."),

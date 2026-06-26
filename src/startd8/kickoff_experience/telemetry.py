@@ -45,6 +45,10 @@ EV_FRICTION_LOGGED = "friction_logged"
 EV_SURVEY_VIEWED = "survey_viewed"
 EV_KICKOFF_INSTANTIATED = "kickoff_instantiated"
 EV_CONCIERGE_WRITE_REFUSED = "concierge_write_refused"
+# Agentic Concierge (proposals)
+EV_PROPOSAL_MADE = "proposal_made"
+EV_PROPOSAL_CONFIRMED = "proposal_confirmed"
+EV_PROPOSAL_DISCARDED = "proposal_discarded"
 
 FUNNEL_EVENTS = (
     EV_SESSION_STARTED,
@@ -57,6 +61,9 @@ FUNNEL_EVENTS = (
     EV_SURVEY_VIEWED,
     EV_KICKOFF_INSTANTIATED,
     EV_CONCIERGE_WRITE_REFUSED,
+    EV_PROPOSAL_MADE,
+    EV_PROPOSAL_CONFIRMED,
+    EV_PROPOSAL_DISCARDED,
 )
 
 # Attribute allowlist for Concierge events (R2-F4 privacy): NEVER emit free-text friction fields or

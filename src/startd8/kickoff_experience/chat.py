@@ -37,6 +37,12 @@ POSTURE_BANNER = (
     "apply captured values via the kickoff UI or the `startd8 kickoff` CLI."
 )
 
+# Propose-aware banner — agentic Concierge only (paired with the propose-aware prompt, FR-NEW-1).
+AGENTIC_POSTURE_BANNER = (
+    "🛈 Concierge (agentic) — I survey/assess and can RECOMMEND actions (scaffold the package, draft "
+    "friction, set a field). I never write to disk; you confirm each recommendation before it applies."
+)
+
 KICKOFF_SYSTEM_PROMPT = (
     "You are the StartD8 Kickoff assistant: a READ-ONLY guide that helps a user complete a project "
     "kickoff. You have exactly three tools:\n"
@@ -48,6 +54,24 @@ KICKOFF_SYSTEM_PROMPT = (
     "values, run the cascade, or log friction — and you must never claim to. If the user wants to "
     "save a value, explain that the kickoff UI or the `startd8 kickoff` CLI applies writes at their "
     "privilege, and that you only survey, assess, report state, and advise the next step."
+)
+
+# Propose-aware system prompt — used ONLY when the agentic Concierge registers `propose_action`
+# (proposal_sink set). It must NOT be the pure chat's prompt, or the model would call a tool it
+# does not have (FR-NEW-1/FR-NEW-5: mode-paired prompts).
+KICKOFF_AGENTIC_SYSTEM_PROMPT = (
+    "You are the StartD8 Concierge: a kickoff onboarding assistant. You have four tools:\n"
+    "  • survey       — brownfield triage of the project\n"
+    "  • assess       — kickoff-input readiness\n"
+    "  • field_states — what the kickoff grammar extracted (per-field status + next action)\n"
+    "  • propose_action — RECOMMEND a write the user can then confirm. kinds:\n"
+    "        instantiate {posture}              — scaffold the kickoff package\n"
+    "        friction {friction, what_happened, implication} — draft a friction-log entry\n"
+    "        capture {value_path, value}        — set one kickoff input field\n"
+    "IMPORTANT: you NEVER write to disk yourself. `propose_action` only RECORDS a recommendation; a "
+    "human reviews and confirms it before anything is applied. Ground every factual claim in a tool "
+    "result. When you draft friction text or a field value, call `propose_action` — do not claim you "
+    "saved/created/logged anything. Use the read tools first to ground a proposal in the real state."
 )
 
 _NO_ARGS_SCHEMA = {"type": "object", "properties": {}, "additionalProperties": False}
@@ -94,8 +118,35 @@ def handle_kickoff_read(action: str, project_root: str | Path, **_params: object
     return handle_concierge_read(action, project_root)
 
 
-def build_kickoff_registry(project_root: str | Path) -> ToolRegistry:
-    """A registry with exactly the three read tools, pinned to *project_root* (R1-S5, layer 1)."""
+# JSON schema for propose_action (kind + the kind-specific params; permissive — validated in handler).
+_PROPOSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": list(("instantiate", "friction", "capture"))},
+        "posture": {"type": "string"},
+        "friction": {"type": "string"},
+        "what_happened": {"type": "string"},
+        "implication": {"type": "string"},
+        "value_path": {"type": "string"},
+        "value": {"type": "string"},
+    },
+    "required": ["kind"],
+    "additionalProperties": False,
+}
+
+
+def build_kickoff_registry(
+    project_root: str | Path,
+    *,
+    proposal_sink: "Optional[Callable[[dict], str]]" = None,
+) -> ToolRegistry:
+    """A read-only registry pinned to *project_root* (R1-S5, layer 1).
+
+    Pure chat → the three read tools. When *proposal_sink* (a `propose_action` handler) is given,
+    add the **read-effect** `propose_action` tool — it records a recommendation and writes nothing;
+    the read-only floor is unchanged. This is the only difference between pure chat and the agentic
+    Concierge registry (FR-NEW-5).
+    """
     root = str(project_root)
 
     def survey_handler(_args: dict) -> dict:
@@ -107,55 +158,99 @@ def build_kickoff_registry(project_root: str | Path) -> ToolRegistry:
     def field_states_handler(_args: dict) -> dict:
         return handle_kickoff_read("field_states", root)
 
-    return ToolRegistry(
-        [
-            ToolSpec(
-                name="survey",
-                description="Survey the project's onboarding state (read-only). No arguments.",
-                parameters=_NO_ARGS_SCHEMA,
-                handler=survey_handler,
-                effect_class="read",
+    tools = [
+        ToolSpec(
+            name="survey",
+            description="Survey the project's onboarding state (read-only). No arguments.",
+            parameters=_NO_ARGS_SCHEMA,
+            handler=survey_handler,
+            effect_class="read",
+        ),
+        ToolSpec(
+            name="assess",
+            description="Assess kickoff-input readiness (read-only). No arguments.",
+            parameters=_NO_ARGS_SCHEMA,
+            handler=assess_handler,
+            effect_class="read",
+        ),
+        ToolSpec(
+            name="field_states",
+            description=(
+                "Report what the kickoff grammar extracted: per-field status, source, and the "
+                "recommended next action (read-only). No arguments."
             ),
+            parameters=_NO_ARGS_SCHEMA,
+            handler=field_states_handler,
+            effect_class="read",
+        ),
+    ]
+    if proposal_sink is not None:
+        tools.append(
             ToolSpec(
-                name="assess",
-                description="Assess kickoff-input readiness (read-only). No arguments.",
-                parameters=_NO_ARGS_SCHEMA,
-                handler=assess_handler,
-                effect_class="read",
-            ),
-            ToolSpec(
-                name="field_states",
+                name="propose_action",
                 description=(
-                    "Report what the kickoff grammar extracted: per-field status, source, and the "
-                    "recommended next action (read-only). No arguments."
+                    "RECOMMEND a write the user can confirm (records a proposal; writes nothing). "
+                    "kind=instantiate{posture} | friction{friction,what_happened,implication} | "
+                    "capture{value_path,value}."
                 ),
-                parameters=_NO_ARGS_SCHEMA,
-                handler=field_states_handler,
-                effect_class="read",
-            ),
-        ],
-        allow_effect_classes=("read",),
-    )
+                parameters=_PROPOSE_SCHEMA,
+                handler=proposal_sink,
+                effect_class="read",   # read-effect: records intent, never touches disk
+            )
+        )
+    return ToolRegistry(tools, allow_effect_classes=("read",))
 
 
 @dataclass
 class KickoffChat:
-    """A read-only kickoff chat session bound to one project."""
+    """A kickoff chat session bound to one project. ``buffer`` is set only for agentic Concierge."""
 
     session: AgenticSession
     project_root: str
+    buffer: "Optional[object]" = None   # ProposalBuffer when agentic; None for pure read-only chat
 
     def banner(self) -> str:
-        return POSTURE_BANNER
+        return AGENTIC_POSTURE_BANNER if self.buffer is not None else POSTURE_BANNER
+
+    @property
+    def agentic(self) -> bool:
+        return self.buffer is not None
 
     async def ask(self, message: str) -> AgenticResult:
         return await self.session.send(message)
 
     def cost_line(self, result: AgenticResult) -> str:
+        tag = "concierge · propose-only" if self.agentic else "kickoff · read-only"
         return (
-            f"[kickoff · read-only] turns={result.turns} "
+            f"[{tag}] turns={result.turns} "
             f"tokens={result.total_tokens} cost≈${result.total_cost_usd:.4f}"
         )
+
+
+def new_agentic_kickoff_chat(
+    agent: BaseAgent,
+    project_root: str | Path,
+    *,
+    config: Optional[SessionConfig] = None,
+) -> KickoffChat:
+    """Construct the AGENTIC Concierge chat: read tools + the read-effect `propose_action` tool.
+
+    The loop still never writes — `propose_action` records a proposal into the returned chat's
+    ``buffer``; a human confirms via the host, which applies through the typed write path.
+    """
+    from .proposals import ProposalBuffer, make_propose_handler
+
+    buffer = ProposalBuffer()
+    registry = build_kickoff_registry(
+        project_root, proposal_sink=make_propose_handler(project_root, buffer)
+    )
+    session = AgenticSession(
+        agent,
+        registry,
+        system_prompt=KICKOFF_AGENTIC_SYSTEM_PROMPT,   # propose-aware (FR-NEW-1 mode-paired)
+        config=config,
+    )
+    return KickoffChat(session=session, project_root=str(project_root), buffer=buffer)
 
 
 def new_kickoff_chat(
@@ -164,7 +259,7 @@ def new_kickoff_chat(
     *,
     config: Optional[SessionConfig] = None,
 ) -> KickoffChat:
-    """Construct a read-only kickoff chat over *agent*, pinned to *project_root*."""
+    """Construct a read-only kickoff chat over *agent*, pinned to *project_root* (no propose tool)."""
     registry = build_kickoff_registry(project_root)
     session = AgenticSession(
         agent,
@@ -189,16 +284,29 @@ def run_kickoff_repl(
     emit_line: "Callable[[str], None]",
     cost_line: "Callable[[AgenticResult], str]" = lambda r: "",
     max_turns: int = 100,
+    pending: "Optional[Callable[[], list]]" = None,
+    confirm: "Optional[Callable[[str], Optional[bool]]]" = None,
+    apply_proposal: "Optional[Callable[[object], object]]" = None,
+    consume: "Optional[Callable[[object], None]]" = None,
 ) -> int:
-    """Drive a read-only kickoff chat REPL. Pure of the agent/IO so it is testable.
+    """Drive a kickoff chat REPL. Pure of the agent/IO so it is testable.
 
-    *ask_sync* turns one user message into an :class:`AgenticResult` synchronously (the command wraps
-    the async ``KickoffChat.ask`` in ``asyncio.run``). *read_input* returns the next user line or
-    ``None`` (EOF / non-TTY) to end. Returns the number of completed turns.
+    *ask_sync* turns one user message into an :class:`AgenticResult` synchronously. *read_input*
+    returns the next user line or ``None`` (EOF / non-TTY) to end.
+
+    When *pending*/*confirm*/*apply_proposal*/*consume* are given (agentic Concierge — FR-NEW-3),
+    after each turn the host drains pending proposals: each is shown verbatim, the human confirms,
+    and on confirm it applies through *apply_proposal*. The host prints the typed outcome code
+    (proposed-vs-applied is structural — FR-AC-9). Fail-closed on a ``None`` confirmation (NR-5); a
+    proposal is consumed only on a terminal (non-retriable) outcome or an explicit discard (R1-F5).
+    Returns the number of completed turns.
     """
     emit_line(banner)
-    emit_line("(read-only — I can survey, assess, and report kickoff state; I cannot edit files. "
-              "Empty line / 'quit' to exit.)")
+    agentic = pending is not None and confirm is not None and apply_proposal is not None
+    emit_line("(I report kickoff state; "
+              + ("I can RECOMMEND actions you confirm before they apply. "
+                 if agentic else "I cannot edit files. ")
+              + "Empty line / 'quit' to exit.)")
     turns = 0
     while turns < max_turns:
         message = read_input("you> ")
@@ -210,5 +318,32 @@ def run_kickoff_repl(
         if line:
             emit_line(line)
         turns += 1
+        if agentic:
+            _handle_proposals(pending, confirm, apply_proposal, consume, emit_line)
     return turns
+
+
+def _handle_proposals(pending, confirm, apply_proposal, consume, emit_line) -> None:
+    """Post-turn: surface each pending proposal, confirm, apply, and consume per outcome."""
+    for action in pending():
+        emit_line(f"📝 Proposed — {action.summary()}")
+        decision = confirm("Apply this proposal?")
+        if decision is None:                       # no foreground confirmation → fail closed (NR-5)
+            emit_line("   (no confirmation available — left pending, not applied)")
+            break
+        if not decision:
+            if consume:
+                consume(action)
+            from .telemetry import EV_PROPOSAL_DISCARDED, emit
+
+            emit(EV_PROPOSAL_DISCARDED, kind=getattr(action, "kind", "?"))
+            emit_line("   discarded.")
+            continue
+        outcome = apply_proposal(action)
+        emit_line(f"   → {getattr(outcome, 'code', '?')}"
+                  + (f": {outcome.detail}" if getattr(outcome, "detail", "") else ""))
+        if getattr(outcome, "retriable", False):
+            emit_line("   (kept pending — fix the cause and retry)")
+        elif consume:
+            consume(action)                        # terminal success OR terminal failure → remove
 

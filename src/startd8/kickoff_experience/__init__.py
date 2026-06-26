@@ -25,8 +25,11 @@ from .chat import (
     KickoffChat,
     build_kickoff_registry,
     handle_kickoff_read,
+    new_agentic_kickoff_chat,
     new_kickoff_chat,
+    run_kickoff_repl,
 )
+from .proposals import ProposalBuffer, ProposedAction, apply_proposal, make_propose_handler
 from .manifest import (
     FieldDef,
     KickoffExperienceConfig,
@@ -101,6 +104,12 @@ __all__ = [
     # M5 — conversational driver + ranking
     "KICKOFF_READ_ACTIONS",
     "KickoffChat",
+    "new_agentic_kickoff_chat",
+    "run_kickoff_repl",
+    "ProposalBuffer",
+    "ProposedAction",
+    "apply_proposal",
+    "make_propose_handler",
     "NextAction",
     "build_kickoff_registry",
     "handle_kickoff_read",
