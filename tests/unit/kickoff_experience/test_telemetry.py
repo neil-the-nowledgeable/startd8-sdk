@@ -85,6 +85,8 @@ def test_funnel_event_names_are_stable() -> None:
         "gap_closed", "capture_failed", "friction_logged",
         # Concierge mode (M-CM5)
         "survey_viewed", "kickoff_instantiated", "concierge_write_refused",
+        # Agentic Concierge (proposals)
+        "proposal_made", "proposal_confirmed", "proposal_discarded",
     }
 
 
