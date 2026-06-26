@@ -164,7 +164,8 @@ The frontend bonus branch can never block backend scoring — that is the whole 
 
 | Doc | Covers |
 |---|---|
-| `PLAN.md` (v0.3) | The authoritative consolidated M0..M6 + deferred roadmap, effort read, OQ/risk register. |
+| **`BENCHMARK_METHODOLOGY.md` (v1.0)** | **The methodology reference for the SHIPPED system** — what it measures + how (pipeline, journey, scoring/attribution, frontend gate, report/decision-gate, how to run, module map). Start here for "how the built benchmark works." |
+| `PLAN.md` (v0.3) | The authoritative consolidated M0..M6 + deferred roadmap, effort read, OQ/risk register. **BUILD COMPLETE** — retained as the build record. |
 | `REQUIREMENTS.md` (v0.3) | The FRs (substrate, fleet, journey, frontend bonus, scoring) + §0′ supersession + OQ decision record. |
 | `CONTAINMENT_SPIKE.md` | §0 VERIFIED CORRECTION — why verdict B was overturned (Seatbelt denies sandboxed gRPC dial-out); the substrate split. |
 | `COMPOSE_FLEET_PROTOTYPE.md` | The validated container substrate (service-DNS gRPC + `internal:true` egress-deny on macOS Docker) — the M1 seed. |
