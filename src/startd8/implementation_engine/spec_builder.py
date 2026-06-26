@@ -1229,6 +1229,12 @@ def build_spec_prompt(
     requirements_context = context.pop("requirements_context", None)
     protocol_guidance = context.pop("protocol_guidance", None)
     scope_boundary = context.pop("scope_boundary", None)
+    # FR-A8: prior_error_feedback is a *second-order* untrusted carrier — its error
+    # text can echo untrusted source content from a prior run. Pop it so it does NOT
+    # land JSON-escaped-but-unfenced in the generic `## Context` dump, and render it
+    # as a dedicated DATA-not-instructions fenced section below (the spec embeds into
+    # the draft prompt, so fencing here covers both paths). [R1-S5]
+    prior_error_feedback = context.pop("prior_error_feedback", None)
     # RUN-036: the field-set + entity-name + module-path authority (real entities, their
     # canonical module, and the "do not invent" negatives) the lead path builds into
     # `upstream_interfaces`. POP it here so it does NOT get JSON-escaped into the generic
@@ -1377,6 +1383,10 @@ def build_spec_prompt(
         prioritized.append((1, "requirements_ctx", f"## Requirements Context\n{requirements_context}"))
     if protocol_guidance:
         prioritized.append((1, "protocol", f"## Protocol Guidance\n{protocol_guidance}"))
+    # FR-A8: prior error feedback fenced as data (second-order untrusted carrier).
+    if prior_error_feedback:
+        _pef = _fence_untrusted(format_context_value(prior_error_feedback), "prior_error_feedback")
+        prioritized.append((1, "prior_error_feedback", f"## Prior Error Feedback\n{_pef}"))
 
     # P0: Database security guidance with language-specific parameterized query examples
     # Inject task_description into context for auto-detection (it's a separate
