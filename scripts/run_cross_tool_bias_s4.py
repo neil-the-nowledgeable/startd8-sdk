@@ -12,7 +12,6 @@ import ast
 import csv
 import hashlib
 import json
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -47,6 +46,52 @@ def accepted_suite_rows(ledger: dict) -> list[dict]:
         for row in ledger.get("runs", [])
         if row.get("status") == "accepted" and row.get("experiment") == "suite_author"
     ]
+
+
+def suite_author_rows(ledger: dict) -> list[dict]:
+    return [row for row in ledger.get("runs", []) if row.get("experiment") == "suite_author"]
+
+
+def normalized_suite_record(batch_root: Path, row: dict) -> tuple[dict, list[str]]:
+    """Validate the promoted normalized suite artifact before any bridge inspection.
+
+    S4 must consume exactly the artifact admitted by intake. Missing files, missing hashes, or
+    checksum drift are input-gate failures, not bridge failures and never execution evidence.
+    """
+    errors: list[str] = []
+    run_id = row.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        return {
+            "run_id": run_id,
+            "status": "invalid_intake",
+            "detail": "accepted suite_author row has no run_id",
+        }, ["intake accepted suite_author row has no run_id"]
+
+    suite_path = batch_root / "normalized" / run_id / "suite.py"
+    manifest_path = batch_root / "normalized" / run_id / "suite_manifest.json"
+    expected_sha = row.get("normalized_sha256")
+    actual_sha = sha256(suite_path) if suite_path.is_file() else None
+
+    if not suite_path.is_file():
+        errors.append(f"accepted suite_author missing normalized suite.py:{run_id}")
+    if not manifest_path.is_file():
+        errors.append(f"accepted suite_author missing normalized suite_manifest.json:{run_id}")
+    if not isinstance(expected_sha, str) or not expected_sha:
+        errors.append(f"accepted suite_author missing normalized_sha256:{run_id}")
+    elif actual_sha is not None and actual_sha != expected_sha:
+        errors.append(f"accepted suite_author normalized_sha256 mismatch:{run_id}")
+
+    record = {
+        "run_id": run_id,
+        "author_vendor": row.get("author_vendor"),
+        "sample_index": row.get("sample_index"),
+        "normalized_sha256": expected_sha,
+        "normalized_sha256_actual": actual_sha,
+        "suite_path": str(suite_path),
+        "manifest_path": str(manifest_path),
+        "intake_status": row.get("status"),
+    }
+    return record, errors
 
 
 def declared_bridge_contract(suite_path: Path, manifest_path: Path) -> dict:
@@ -145,6 +190,11 @@ def run_preflight(
     if mutant_manifest.get("status") != "accepted":
         errors.append("mutant manifest is not accepted")
 
+    all_suite_rows = suite_author_rows(ledger)
+    rejected_suite_rows = [row for row in all_suite_rows if row.get("status") != "accepted"]
+    if rejected_suite_rows:
+        errors.append(f"intake ledger has rejected suite_author artifacts:{len(rejected_suite_rows)}")
+
     suite_rows = accepted_suite_rows(ledger)
     if not suite_rows:
         errors.append("intake ledger has no accepted suite_author artifacts")
@@ -154,18 +204,18 @@ def run_preflight(
 
     suites = []
     for row in suite_rows:
-        run_id = row.get("run_id")
-        suite_path = batch_root / "normalized" / run_id / "suite.py"
-        manifest_path = batch_root / "normalized" / run_id / "suite_manifest.json"
-        bridge = declared_bridge_contract(suite_path, manifest_path)
-        suites.append({
-            "run_id": run_id,
-            "author_vendor": row.get("author_vendor"),
-            "sample_index": row.get("sample_index"),
-            "normalized_sha256": row.get("normalized_sha256"),
-            "suite_path": str(suite_path),
-            "bridge": bridge,
-        })
+        suite_record, suite_errors = normalized_suite_record(batch_root, row)
+        errors.extend(suite_errors)
+        if suite_errors:
+            suite_record["bridge"] = {
+                "status": "invalid_intake",
+                "detail": "normalized suite artifact failed S4 intake invariants",
+            }
+        else:
+            suite_record["bridge"] = declared_bridge_contract(
+                Path(suite_record["suite_path"]), Path(suite_record["manifest_path"])
+            )
+        suites.append(suite_record)
 
     bridge_block = "no reviewed isolated no-egress S4 execution bridge is installed"
     errors.append(bridge_block)
