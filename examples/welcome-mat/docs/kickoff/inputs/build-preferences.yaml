@@ -1,0 +1,9 @@
+# Welcome Mat — Kickoff inputs: BUILD PREFERENCES
+domain: build-preferences
+provenance_default: estimate
+
+budgets:
+  per_pipeline_run: "$5.00"    # welcome-mat builds deterministically — $0 LLM in the input UI
+generation:
+  profile: full
+  language: python

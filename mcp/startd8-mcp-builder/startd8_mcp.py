@@ -1039,6 +1039,16 @@ class ConciergeInput(BaseModel):
     check: bool = Field(default=False, description="Report drift vs the live contract instead of a candidate (derive-contract)")
 
 
+class KickoffStateInput(BaseModel):
+    """Input for the read-only kickoff-state tool (FR-13). No write fields exist — the tool serves
+    no port and writes nothing, so the read-only posture is structural, not just annotated."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    project_root: Optional[str] = Field(
+        default=None,
+        description="Path to the project to inspect (default: server PROJECT_ROOT). Read-only.",
+    )
+
+
 class TaskListInput(BaseModel):
     """Input for tasks.list."""
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -3078,6 +3088,50 @@ async def startd8_concierge(params: ConciergeInput) -> str:
     except Exception as e:
         _emit_event({
             "event": "tool.end", "tool": "startd8_concierge", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "status": "error", "error_type": type(e).__name__, "error": str(e),
+        })
+        return _handle_error(e)
+
+
+@mcp.tool(
+    name="startd8_kickoff_state",
+    annotations={
+        "title": "Startd8 Kickoff State (read-only)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def startd8_kickoff_state(params: KickoffStateInput) -> str:
+    """What the kickoff grammar understands about a project (read-only, $0, no LLM — FR-13).
+
+    Returns the canonical kickoff state — per-field status (extracted / defaulted / missing) with
+    each value's source, the readiness view, the recommended next action, and a preflight report —
+    plus a ``schema_version`` for safe agent consumption. Serves no port and writes nothing, so the
+    read-only posture is structural, not just annotated.
+    """
+    request_id = _new_request_id()
+    started = time.perf_counter()
+    project_root = params.project_root or str(DEFAULT_PROJECT_ROOT)
+    _emit_event({
+        "event": "tool.start", "tool": "startd8_kickoff_state", "request_id": request_id,
+        "params": {"project_root": project_root},
+    })
+    try:
+        with _redirect_stdout_to_stderr():
+            _ensure_sdk_available()
+            from startd8.kickoff_experience import kickoff_state_tool
+            result = kickoff_state_tool(project_root)
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_kickoff_state", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000), "status": "ok",
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_kickoff_state", "request_id": request_id,
             "duration_ms": int((time.perf_counter() - started) * 1000),
             "status": "error", "error_type": type(e).__name__, "error": str(e),
         })
