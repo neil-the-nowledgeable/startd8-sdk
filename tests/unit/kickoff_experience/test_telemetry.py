@@ -87,6 +87,8 @@ def test_funnel_event_names_are_stable() -> None:
         "survey_viewed", "kickoff_instantiated", "concierge_write_refused",
         # Agentic Concierge (proposals)
         "proposal_made", "proposal_confirmed", "proposal_discarded",
+        # Welcome Mat 2.0 — template download (FR-WM2-14)
+        "template_downloaded", "template_bundle_downloaded",
     }
 
 

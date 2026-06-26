@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -121,6 +122,93 @@ def build_instantiate_plan(
         "writes": writes,
         "warnings": warnings,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Template manifest — the read-only download surface (Welcome Mat 2.0, FR-WM2-1..4).
+#
+# The download set is the SAME inventory `build_instantiate_plan` writes (`_KICKOFF_FILES` +
+# `_AUTHORING_FILES`) — derived here, never re-listed, so the two consumers can never drift (P-E).
+# Files are addressed by a closed `key` slug (never a caller path → no traversal, NR-3).
+# --------------------------------------------------------------------------- #
+
+# group label → the (template_rel, dest) list it covers. The single source of truth.
+_TEMPLATE_GROUPS: List[tuple] = [
+    ("package", _KICKOFF_FILES),
+    ("authoring", _AUTHORING_FILES),
+]
+
+
+@dataclass(frozen=True)
+class TemplateEntry:
+    """One downloadable kickoff template, keyed by a closed slug (FR-WM2-1/2/4)."""
+
+    key: str            # closed-vocabulary slug, e.g. "kickoff-intro" (never a path)
+    template_rel: str   # source under `concierge_templates/` (the `_load_template` arg)
+    dest: str           # where instantiate would write it (`docs/kickoff/…`) — also the zip member path
+    group: str          # "package" | "authoring"
+    label: str          # human label for the index
+
+
+def is_safe_template_dest(dest: str) -> bool:
+    """A manifest `dest` must be a safe **relative** path (zip-slip guard, R3-S6): no leading slash,
+    no `..` / empty segment, no backslash. Validated at accessor build time, not at serve time."""
+    if not dest or dest.startswith("/") or "\\" in dest:
+        return False
+    return all(seg not in ("", "..") for seg in dest.split("/"))
+
+
+def _template_key(dest: str) -> str:
+    """A stable, single-segment slug from the destination basename (no slashes ⇒ no path converter)."""
+    base = dest.rsplit("/", 1)[-1]
+    stem = base.rsplit(".", 1)[0] if "." in base else base
+    return stem.lower().replace("_", "-")
+
+
+def _template_label(dest: str) -> str:
+    base = dest.rsplit("/", 1)[-1]
+    stem = base.rsplit(".", 1)[0] if "." in base else base
+    return stem.replace("_", " ").replace("-", " ").strip().title()
+
+
+def kickoff_template_manifest() -> List[TemplateEntry]:
+    """The complete downloadable set, derived from the instantiate inventory (FR-WM2-4/11/16).
+
+    Raises ``ConciergeWriteError`` on a duplicate key or an unsafe ``dest`` — a CI/bijection guard
+    that fires before any route can serve a bad row (FR-WM2-16).
+    """
+    entries: List[TemplateEntry] = []
+    seen: Dict[str, str] = {}
+    for group, files in _TEMPLATE_GROUPS:
+        for template_rel, dest in files:
+            if not is_safe_template_dest(dest):
+                raise ConciergeWriteError(f"unsafe template dest (zip-slip guard): {dest!r}")
+            key = _template_key(dest)
+            if key in seen:
+                raise ConciergeWriteError(
+                    f"duplicate template key {key!r} (from {dest!r} and {seen[key]!r})"
+                )
+            seen[key] = dest
+            entries.append(TemplateEntry(
+                key=key, template_rel=template_rel, dest=dest, group=group,
+                label=_template_label(dest),
+            ))
+    return entries
+
+
+def get_template_entry(key: str) -> Optional[TemplateEntry]:
+    """Exact-match lookup against the closed key set (an unknown/encoded key ⇒ ``None`` ⇒ 404)."""
+    return next((e for e in kickoff_template_manifest() if e.key == key), None)
+
+
+def render_template_content(entry: TemplateEntry, posture: str = "prototype") -> str:
+    """The exact bytes `instantiate` would write for *entry* at *posture* — the SAME content path
+    (`_render_input` for inputs, `_load_template` otherwise), so download ≡ instantiate (FR-WM2-4)."""
+    if posture not in VALID_POSTURES:
+        raise ConciergeWriteError(f"posture must be one of {VALID_POSTURES}, got {posture!r}")
+    if entry.template_rel.startswith("inputs/"):
+        return _render_input(entry.template_rel, posture)
+    return _load_template(entry.template_rel)
 
 
 def build_friction_entry(
