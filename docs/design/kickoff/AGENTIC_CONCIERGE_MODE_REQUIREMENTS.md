@@ -1,6 +1,6 @@
 # Agentic Concierge Mode Requirements
 
-**Version:** 0.3 (Post-CRP R1)
+**Version:** 0.4 (added §E provider/model config, via the reflective loop)
 **Date:** 2026-06-26
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -204,6 +204,32 @@ action; the host shows pending proposals; the human confirms; the existing typed
     presence selects the mode-paired prompt/banner variant (see FR-NEW-1), so the pure session never
     advertises `propose_action`. Test: pure session's system prompt has no "propose_action" and lists
     no 4th tool.
+
+### E. Provider/Model configuration (FR-PC-*) — *added v0.4*
+
+> Detail + planning insights: `AGENTIC_CONCIERGE_PROVIDER_CONFIG_REQUIREMENTS.md` (v0.2) +
+> `AGENTIC_CONCIERGE_PROVIDER_CONFIG_PLAN.md` (v1.0). Summary:
+
+- **FR-PC-1 — Config-file provider/model selection.** The agent is resolvable from a config-file value
+  that is a full agent **spec** (`provider:model` / provider / model-id / alias — anything
+  `resolve_agent_spec` accepts; **no tiers**), not only `--agent`.
+- **FR-PC-2 — Per-project key.** A new top-level `concierge_agent:` in
+  `docs/kickoff/inputs/build-preferences.yaml` (added to the parser's closed key allowlist + manifest).
+- **FR-PC-3 — Global default.** A `concierge_agent` preference in `~/.startd8/config.json` applies when
+  no per-project value is set.
+- **FR-PC-4 — Precedence.** `--agent` flag > project config > global config >
+  catalog default (`Models.CLAUDE_SONNET_LATEST`); first present, non-placeholder value wins.
+- **FR-PC-5 — Graceful degradation (unchanged).** Resolution returns a spec string only; validation
+  stays at the existing sites — a bad configured spec degrades exactly like a bad `--agent` (CLI
+  actionable error; web "chat not enabled" notice). Never a hard crash.
+- **FR-PC-6 — No hardcoded model.** The default stays a `model_catalog` reference; no literal version.
+- **FR-PC-7 — Discoverability.** The surface prints the resolved spec + its source (flag / project /
+  global / default).
+- **FR-PC-8 — Pinned path.** Project config = `<project_root>/docs/kickoff/inputs/build-preferences.yaml`
+  only. **FR-PC-9 — Malformed config is non-fatal** (skip-and-warn). **FR-PC-10 — Angle-bracket
+  placeholders are unset.** **FR-PC-11 — Both chat surfaces share the `concierge_agent` key.**
+- **Mechanism:** one helper `resolve_concierge_agent_spec(project_root, flag) -> (spec, source)` in
+  `kickoff_experience/concierge_agent.py`, called by the three chat surfaces.
 
 ---
 

@@ -27,7 +27,6 @@ from .docs import load_kickoff_docs
 from .manifest import KickoffExperienceConfig, default_config
 from .ranking import next_action
 from .readiness import build_readiness
-from .state import build_kickoff_state
 from .web import app_fingerprint, load_state
 
 INSPECT_SCHEMA_VERSION = 1  # R4-F8: bump on a breaking change to the inspect JSON shape
@@ -211,6 +210,22 @@ def inspect_payload(
 # --- serve (loopback) --------------------------------------------------------------------------
 
 
+def make_chat_factory(project_root: str | Path, agent_spec: str):
+    """Build a `chat_factory` for the web agentic panel, or None if the agent can't be resolved.
+
+    Returns a zero-arg callable yielding a fresh agentic Concierge chat. Returns ``None`` (panel
+    disabled) on a missing key / unknown provider so serving degrades gracefully.
+    """
+    try:
+        from ..utils.agent_resolution import resolve_agent_spec
+        from .chat import new_agentic_kickoff_chat
+
+        new_agentic_kickoff_chat(resolve_agent_spec(agent_spec), project_root)  # validate up front
+    except Exception:
+        return None
+    return lambda: new_agentic_kickoff_chat(resolve_agent_spec(agent_spec), project_root)
+
+
 def serve_kickoff(
     project_root: str | Path,
     *,
@@ -219,11 +234,13 @@ def serve_kickoff(
     host: str = "127.0.0.1",
     port: Optional[int] = None,
     config: Optional[KickoffExperienceConfig] = None,
+    agent_spec: Optional[str] = None,
 ) -> None:  # pragma: no cover - blocking I/O; covered indirectly via build_kickoff_app + preflight
     """Serve the kickoff web app on the loopback (R1-S8). Blocks until interrupted.
 
     Runs preflight first and refuses on a blocking failure. The scratch GC reclaims stale app
-    fingerprints before serving (R5-S8).
+    fingerprints before serving (R5-S8). When *agent_spec* resolves, the web agentic chat panel
+    (`/concierge/chat`) is enabled (spends LLM tokens); else the panel shows a disabled notice.
     """
     from .web import build_kickoff_app
 
@@ -236,7 +253,9 @@ def serve_kickoff(
         raise RuntimeError(f"kickoff preflight failed: {failed}")
 
     gc_stale_scratch(project_root, app_fingerprint(cfg, theme=theme))
-    app = build_kickoff_app(project_root, config=cfg, theme=theme, mode=mode)
+    chat_factory = make_chat_factory(project_root, agent_spec) if agent_spec else None
+    app = build_kickoff_app(project_root, config=cfg, theme=theme, mode=mode,
+                            chat_factory=chat_factory)
     bind_port = port or find_free_port(host)
 
     import uvicorn

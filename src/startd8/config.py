@@ -100,6 +100,7 @@ class ConfigManager:
             "preferences": {
                 "auto_save_results": True,
                 "default_agent": "claude",
+                "concierge_agent": None,  # global agent spec for the agentic Concierge (FR-PC-3)
                 "show_cost_warnings": True
             },
             "tui": {
