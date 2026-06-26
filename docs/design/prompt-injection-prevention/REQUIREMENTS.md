@@ -1,7 +1,7 @@
 # Prompt-Injection Prevention Requirements (startd8-sdk + apps built with it)
 
-**Version:** 0.2.1 (Post-planning + open-questions resolved)
-**Date:** 2026-06-11
+**Version:** 0.3 (Post-CRP triage)
+**Date:** 2026-06-11 (v0.3: 2026-06-26)
 **Status:** Draft
 **Authors:** SDK team (drafted with the StartDate FR-MSG pilot as grounding)
 **Scope:** Two audiences — (A) the SDK as a code generator, (B) apps the SDK generates.
@@ -111,6 +111,11 @@ function may sit defined-but-uncalled).
   requirements `[:2000]`, `_MAX_INPUT_ROWS`=200, `MAX_PROMPT_LENGTH`=1 MB, Kaizen 2 MiB — MUST be
   reconciled into a single documented cap policy (per-field input caps + one outbound full-prompt
   total), so truncation behavior is predictable and not silently duplicated.
+  Reconciliation MUST first **classify each cap as security vs functional** in a documented table:
+  `[:2000]` (derivation *summarization*) and `_MAX_INPUT_ROWS` (context *budget*) are **functional** caps
+  that encode generation-quality decisions, and MUST be **excluded** from the security cap policy —
+  folding them under it could silently change generation output. Only security-purpose truncations belong
+  to the unified policy; generation output MUST be unchanged after reconciliation. [R1-F5]
 
 **FR-A3 (Denylist is telemetry, never a boundary).** `_INJECTION_PATTERNS` matches MUST NOT be the
 sole control. Matches SHOULD be **logged/counted** (injection-attempt telemetry) and MAY raise the
@@ -155,6 +160,16 @@ artifact/source carried the attempt — without logging the full payload. This t
 automated self-correction path, because that would route attacker-controlled signal into generation
 (feedback-poisoning). A read-only, non-driving cross-run count for human review MAY be added later. *(OQ-6.)*
 
+**FR-A8 (Fencing coverage beyond the spec prompt — follow-up).** FR-A1's *shipped* coverage test
+enumerates the **spec-prompt** (`spec_builder`) fields only; its "every prompt-assembly path" intent is
+**not yet met** for the other untrusted-text→prompt paths and they MUST be brought under the same
+`normalize → fence` discipline: the **draft** prompt (`drafter.py`, including `prior_error_feedback` — a
+*second-order* carrier whose error text can echo untrusted source), the **review** path (`reviewer.py`),
+**`micro_prime`** (whose generic prompt path bypasses spec-path fencing), and **`query_prime`**
+generation prompts. The coverage test SHOULD become **discovery/inventory-based** — failing when a *new*
+prompt-assembly site interpolates an unfenced untrusted field — rather than a hardcoded field list, so
+the universality claim is actually enforceable. [R1-F4, R1-S5]
+
 ### Audience B — apps built with the SDK (FR-B), lifting the FR-MSG guards to SDK-generic
 
 **FR-B1 (Default instruction/data separation in generated passes — all three shapes).** Every
@@ -178,8 +193,13 @@ the persist helpers (the provenance stamp) may stay inline. *(Resolves OQ-5.)*
 truncation event. Applies to all passes, not just FR-MSG.
 
 **FR-B3 (Declarative output-validation gate — C2c / FR-MSG-11).** `ai_passes.yaml` MUST support a
-`guards.validate_output` block (per-field length caps, control-char stripping, and a degenerate-output
-check) enforced **before persist**.
+`guards.validate_output` block enforced **before persist**, covering: per-field length caps,
+control-char stripping, a degenerate-output check, **and a no-verbatim-input-dump check** — the
+persisted/sent output MUST NOT contain a verbatim untrusted-input span longer than a configured
+threshold. This is the echo/exfil control named in the Audience-B gap table; without it the gate cannot
+catch the model echoing injected input into the body. Partial-failure behavior MUST be declarable via
+`guards.on_violation: drop|reject|flag` (drop the offending field / reject the whole pass / persist with
+a flag), and the chosen mode applies to multi-field passes uniformly; default `reject`. [R1-F1]
 
 **FR-B4 (Declarative single-in-flight guard — C2d).** `ai_passes.yaml` MUST support
 `guards.single_in_flight_by: [keys]` so the generated harness rejects concurrent duplicate runs (one
@@ -191,12 +211,29 @@ are not a subset of the rows actually supplied, before persist. This is a **gene
 three pass shapes (independent of the scoped shape — it ships without it). The "supplied set" MUST be
 assembled **per-shape from what the pass actually fed the prompt**: whole-model `input_entities` **plus
 resolved `scope_relations`** when a `scope` is present — so the check neither false-flags a legitimate
-relation citation nor misses fabrication against a resolved relation. *(OQ-7.)*
+relation citation nor misses fabrication against a resolved relation. *(OQ-7.)* For the **source-bound**
+shape (`_render_pass_text_bound`, which feeds bound source rows, not `input_entities`), the supplied set
+is **the bound source row(s) actually fed to the prompt**. The subset check MUST key on a **stable
+identity (primary key), not the title/headline** — two rows sharing a title must remain distinguishable,
+or a fabricated `drew_on` entry false-matches a same-title row. [R1-F2]
 
 **FR-B6 (Proportionate threat model, surfaced not hidden).** The generated guards MUST default to the
 *output-corruption* threat model (a single-user/curated app), with the **human curation step as the
 documented trust boundary** — not a claim of exfil-proofing. Apps with a stronger threat model (multi-
-tenant, auto-send) MUST be able to opt into stricter guards declaratively.
+tenant, auto-send) MUST be able to opt into stricter guards declaratively. "Stricter mode" is **not a
+bare flag**: it MUST enable a concrete, enumerated set of additional controls — at minimum (a) an
+**output-side verbatim/exfil scan** that rejects output embedding a confirmed-row value not in the pass's
+own output fields, and (b) **no-auto-send-without-acknowledgment**. Because fencing only *reduces* (does
+not eliminate) semantic-injection success (NR-1) and the default model's trust boundary *is* the human
+curation step, a pass declaring **auto-send** (no human curation) MUST be **refused at build time**
+unless it explicitly opts into stricter mode — the safe-sounding default must not silently permit an
+unsafe auto-send configuration. [R1-F3, R1-S8]
+
+**FR-B7 (Emitted guards are observable in the generated app).** Every guard action the SDK emits —
+input truncation (FR-B2), output rejection/flag (FR-B3), single-in-flight rejection (FR-B4), and dropped
+provenance entry (FR-B5) — MUST emit a structured log line in the **generated app's own runtime logger**,
+not only as SDK-side build-time telemetry (FR-A7). A silently-dropped exfil attempt in a deployed
+auto-send app is precisely what an operator must be able to audit. [R1-F6]
 
 ---
 
@@ -270,6 +307,12 @@ operational-only, FR-A7 updated), OQ-7 (provenance shape-aware supplied-set, FR-
 and the StartDate FR-MSG pilot (`SDK_FR_MSG_SCOPED_PASS_CAPABILITY_BRIEF_2026-06-11.md`,
 `FR_MSG_INTERVIEWER_MESSAGE_REQUIREMENTS_v0.2-draft.md` FR-MSG-6/8/11 + CRP R1 appendix).*
 
+*v0.3 — Post-CRP-R1 triage (all 6 F-suggestions accepted; see Appendix A). FR-B3 (no-verbatim-dump +
+`on_violation`), FR-B5 (source-bound supplied-set + PK key), FR-B6 (concrete stricter mode + auto-send
+refusal), FR-A2a (security-vs-functional cap classification) strengthened; FR-B7 (emitted-guard app-side
+logging) and FR-A8 (fencing coverage for draft/review/micro_prime/query_prime paths) added. Audience A
+remains implemented/merged (PR #58); FR-A8 is the next Audience-A follow-up, FR-B* the Audience-B increment.*
+
 ---
 
 ## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
@@ -288,13 +331,18 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F1 | Restore "no verbatim input dump" to FR-B3 + declare partial-failure `on_violation` | CRP R1 | ACCEPTED — merged into **FR-B3**: added no-verbatim-input-dump check + `guards.on_violation: drop\|reject\|flag` (default reject), uniform across multi-field passes. | 2026-06-26 |
+| R1-F2 | FR-B5 source-bound supplied-set + PK (not title) identity key | CRP R1 | ACCEPTED — merged into **FR-B5**: source-bound supplied set = bound source rows; subset check keys on stable PK, not title. | 2026-06-26 |
+| R1-F3 | FR-B6 specify "stricter mode" + warn/refuse auto-send | CRP R1 | ACCEPTED — merged into **FR-B6**: enumerated stricter-mode controls (exfil scan + no-auto-send-without-ack); auto-send refused at build time unless stricter mode opted in. | 2026-06-26 |
+| R1-F4 | FR-A1 universality vs enumerated set; cover review/micro_prime/query_prime; discovery-based test | CRP R1 | ACCEPTED — added **FR-A8** (follow-up) scoping shipped FR-A1 to the spec path and requiring the draft/review/micro_prime/query_prime paths + a discovery-based coverage test. Not a reopen of merged FR-A1. | 2026-06-26 |
+| R1-F5 | FR-A2a classify caps security vs functional before unifying | CRP R1 | ACCEPTED — merged into **FR-A2a**: classification table required; `[:2000]`/`_MAX_INPUT_ROWS` excluded as functional; generation output unchanged after reconciliation. | 2026-06-26 |
+| R1-F6 | Emitted guards must log in the generated app's runtime | CRP R1 | ACCEPTED — added **FR-B7**: every emitted guard action logs a structured line in the generated app's own logger (not just SDK-side FR-A7). | 2026-06-26 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| (none — all R1 F-suggestions accepted; they were anchored, correct spec gaps) |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
