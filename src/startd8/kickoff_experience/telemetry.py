@@ -45,6 +45,9 @@ EV_FRICTION_LOGGED = "friction_logged"
 EV_SURVEY_VIEWED = "survey_viewed"
 EV_KICKOFF_INSTANTIATED = "kickoff_instantiated"
 EV_CONCIERGE_WRITE_REFUSED = "concierge_write_refused"
+# Welcome Mat 2.0 — template download (FR-WM2-14). The chat events join here with the chat pillar.
+EV_TEMPLATE_DOWNLOADED = "template_downloaded"
+EV_TEMPLATE_BUNDLE_DOWNLOADED = "template_bundle_downloaded"
 
 FUNNEL_EVENTS = (
     EV_SESSION_STARTED,
@@ -57,12 +60,20 @@ FUNNEL_EVENTS = (
     EV_SURVEY_VIEWED,
     EV_KICKOFF_INSTANTIATED,
     EV_CONCIERGE_WRITE_REFUSED,
+    EV_TEMPLATE_DOWNLOADED,
+    EV_TEMPLATE_BUNDLE_DOWNLOADED,
 )
 
 # Attribute allowlist for Concierge events (R2-F4 privacy): NEVER emit free-text friction fields or
 # raw filesystem paths — only these bounded keys are permitted on Concierge funnel events.
 CONCIERGE_EVENT_ATTR_ALLOWLIST = frozenset(
     {"action", "code", "posture", "with_authoring", "written_count", "skipped_count", "mode", "source"}
+)
+
+# Attribute allowlist for Welcome Mat 2.0 events (FR-WM2-14, R3-S3): bounded slugs only — the manifest
+# `key`/`group` are closed-vocabulary slugs, never raw filesystem paths; no message text is ever emitted.
+WM2_EVENT_ATTR_ALLOWLIST = frozenset(
+    {"key", "group", "posture", "with_authoring", "count", "code", "mode"}
 )
 
 

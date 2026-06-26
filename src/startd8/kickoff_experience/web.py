@@ -40,6 +40,9 @@ _RATE_MAX = 20
 _RATE_WINDOW_S = 60.0
 # CSRF/session token idle expiry (R6-S6).
 _TOKEN_TTL_S = 3600.0
+# Welcome Mat 2.0 bundle ceiling (FR-WM2-3): fail closed before allocating an oversized in-memory zip.
+# 2 MiB is ample for the ~11-file template set; a manifest-bloat regression returns 413, never a partial.
+_BUNDLE_MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024
 
 
 def app_fingerprint(config: KickoffExperienceConfig, *, theme: str = "professional") -> str:
@@ -130,6 +133,53 @@ def _esc(s: object) -> str:
     )
 
 
+def _template_media_type(dest: str) -> str:
+    """Content type for a downloaded template (R2-S8): YAML/Markdown, always utf-8."""
+    if dest.endswith((".yaml", ".yml")):
+        return "text/yaml; charset=utf-8"
+    if dest.endswith(".md"):
+        return "text/markdown; charset=utf-8"
+    return "text/plain; charset=utf-8"
+
+
+def _render_templates(entries, posture: str, stylesheet: str) -> str:
+    """The read-only download index (FR-WM2-1): grouped list + posture selector + bundle links."""
+    from ..concierge.writes import render_template_content
+
+    parts = [
+        "<h1>Kickoff templates</h1>",
+        "<p>Download the kickoff-input and authoring templates — read-only, $0. "
+        "These are the same files the Concierge would scaffold into a project.</p>",
+        "<p><a href='/'>← back to kickoff</a></p>",
+        "<form method='get' action='/templates'><label>Posture "
+        "<select name='posture' onchange='this.form.submit()'>",
+    ]
+    for p in ("prototype", "production"):
+        sel = " selected" if p == posture else ""
+        parts.append(f"<option value='{_esc(p)}'{sel}>{_esc(p)}</option>")
+    parts.append("</select></label></form>")
+    parts.append(
+        f"<p><a href='/templates/bundle.zip?posture={_esc(posture)}&amp;with_authoring=true'>"
+        "⬇ Download all (zip)</a> · "
+        f"<a href='/templates/bundle.zip?posture={_esc(posture)}&amp;with_authoring=false'>"
+        "package only</a></p>"
+    )
+    for group in ("package", "authoring"):
+        parts.append(
+            f"<h2>{_esc(group)}</h2><table><thead><tr><th>Template</th><th>Destination</th>"
+            "<th>Bytes</th></tr></thead><tbody>"
+        )
+        for e in (x for x in entries if x.group == group):
+            nbytes = len(render_template_content(e, posture).encode("utf-8"))
+            href = f"/templates/file/{_esc(e.key)}?posture={_esc(posture)}"
+            parts.append(
+                f"<tr><td><a href='{href}'>{_esc(e.label)}</a></td>"
+                f"<td><code>{_esc(e.dest)}</code></td><td>{nbytes}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+    return _page("Kickoff templates", "".join(parts), stylesheet)
+
+
 def _page(title: str, body: str, stylesheet: str) -> str:
     extra = (
         ".badge-ok{color:var(--color-success)}.badge-review{color:#b45309}"
@@ -145,7 +195,26 @@ def _page(title: str, body: str, stylesheet: str) -> str:
     )
 
 
-def _render_overview(state: KickoffState, readiness, action, config, stylesheet: str) -> str:
+def _concierge_cta(concierge_view) -> str:
+    """The home-page Concierge entry (R2-S7). When the shared view-model reports a package is
+    missing/partial (`instantiate_offer.needed`), surface its own `next_action` as a prominent CTA —
+    reusing `build_concierge_view`'s decision rather than re-detecting package state here. Otherwise
+    fall back to the generic link. `concierge_view` is optional so the renderer degrades to the link."""
+    offer = (concierge_view or {}).get("instantiate_offer") or {}
+    if offer.get("needed"):
+        na = (concierge_view or {}).get("next_action") or {}
+        title = na.get("title") or "Create the kickoff package"
+        detail = na.get("detail") or "This project has no kickoff inputs yet."
+        return (
+            f"<div class='card'><h2>🛈 {_esc(title)}</h2><p>{_esc(detail)}</p>"
+            "<p><a href='/concierge'>Open Concierge →</a></p></div>"
+        )
+    return ("<p><a href='/concierge'>🛈 Concierge — survey, instantiate a kickoff package, "
+            "log friction</a></p>")
+
+
+def _render_overview(state: KickoffState, readiness, action, config, stylesheet: str,
+                     concierge_view=None) -> str:
     counts = state.attention_counts
     pct = int(round((readiness.score or 0.0) * 100)) if readiness else 0
     parts = [
@@ -156,7 +225,8 @@ def _render_overview(state: KickoffState, readiness, action, config, stylesheet:
         f"{_esc(counts.get('blocked',0))} blocked · {_esc(counts.get('backlog',0))} backlog</p>",
         f"<div class='card'><h2>Next step</h2><p><strong>{_esc(action.title)}</strong></p>"
         f"<p>{_esc(action.detail)}</p></div>",
-        "<p><a href='/concierge'>🛈 Concierge — survey, instantiate a kickoff package, log friction</a></p>",
+        _concierge_cta(concierge_view),
+        "<p><a href='/templates'>⬇ Download kickoff templates</a></p>",
         "<h2>Steps</h2><ul>",
     ]
     for step in config.steps:
@@ -321,7 +391,7 @@ def build_kickoff_app(
     fixture. *clock* is injectable so rate-limit/expiry behavior is testable without real time.
     """
     from fastapi import FastAPI, Form, Header
-    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, Response
 
     from ..presentation_polish import get_theme, render_stylesheet
 
@@ -343,13 +413,21 @@ def build_kickoff_app(
 
     @app.get("/", response_class=HTMLResponse)
     def overview() -> HTMLResponse:
+        from .concierge_view import build_concierge_view
+
         state = load_state(root)
         try:
             readiness = build_readiness(root)
         except Exception:
             readiness = None
         action = next_action(state, readiness)
-        html = _render_overview(state, readiness, action, cfg, stylesheet)
+        try:
+            # Shared view-model (TTL-memoized survey) drives the Concierge CTA; never break the
+            # overview if it degrades (R2-S7).
+            concierge_view = build_concierge_view(root)
+        except Exception:
+            concierge_view = None
+        html = _render_overview(state, readiness, action, cfg, stylesheet, concierge_view)
         resp = HTMLResponse(html)
         # Issue a CSRF/session token cookie (same-origin POSTs echo it via a hidden field).
         token = sessions.issue(clock())
@@ -434,6 +512,89 @@ def build_kickoff_app(
                     "refreshed_status": fs.attention if fs else None,
                 }
             )
+
+    # --- Template download (Welcome Mat 2.0, FR-WM2-1..4) ---------------------------------------
+
+    from ..concierge.writes import (
+        VALID_POSTURES,
+        get_template_entry,
+        kickoff_template_manifest,
+        render_template_content,
+    )
+
+    @app.get("/templates", response_class=HTMLResponse)
+    def templates_index(posture: str = "prototype") -> HTMLResponse:
+        # The index is lenient (clamp an odd posture); the download routes below are strict.
+        sel = posture if posture in VALID_POSTURES else "prototype"
+        return HTMLResponse(_render_templates(kickoff_template_manifest(), sel, stylesheet))
+
+    @app.get("/templates/file/{key}")
+    def template_file(key: str, posture: str = "prototype") -> Response:
+        # `key` is a single path segment (no slashes); an unknown/encoded key simply misses the closed
+        # set → typed 404 (NR-3 key-closure). `posture` is validated strictly (R4-S7).
+        from .telemetry import EV_TEMPLATE_DOWNLOADED, emit
+
+        if posture not in VALID_POSTURES:
+            return JSONResponse(
+                {"ok": False, "code": "posture_invalid",
+                 "message": f"posture must be one of {list(VALID_POSTURES)}"},
+                status_code=400,
+            )
+        entry = get_template_entry(key)
+        if entry is None:
+            return JSONResponse(
+                {"ok": False, "code": "unknown_template", "message": "no such template key"},
+                status_code=404,
+            )
+        body = render_template_content(entry, posture).encode("utf-8")
+        filename = entry.dest.rsplit("/", 1)[-1]
+        emit(EV_TEMPLATE_DOWNLOADED, key=entry.key, group=entry.group, posture=posture)
+        return Response(
+            body,
+            media_type=_template_media_type(entry.dest),
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.get("/templates/bundle.zip")
+    def template_bundle(posture: str = "prototype", with_authoring: bool = True) -> Response:
+        import io
+        import zipfile
+
+        from .telemetry import EV_TEMPLATE_BUNDLE_DOWNLOADED, emit
+
+        if posture not in VALID_POSTURES:
+            return JSONResponse(
+                {"ok": False, "code": "posture_invalid",
+                 "message": f"posture must be one of {list(VALID_POSTURES)}"},
+                status_code=400,
+            )
+        entries = [e for e in kickoff_template_manifest()
+                   if with_authoring or e.group == "package"]
+        # Resolve content + enforce the uncompressed-bytes ceiling BEFORE building (FR-WM2-3): fail
+        # closed with 413, never stream a partial archive.
+        members = []
+        total = 0
+        for e in entries:
+            content = render_template_content(e, posture).encode("utf-8")
+            total += len(content)
+            if total > _BUNDLE_MAX_UNCOMPRESSED_BYTES:
+                return JSONResponse(
+                    {"ok": False, "code": "bundle_too_large",
+                     "message": "template bundle exceeds the size ceiling"},
+                    status_code=413,
+                )
+            members.append((e.dest, content))  # dest is accessor-validated safe-relative (zip-slip)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for dest, content in members:
+                zf.writestr(dest, content)
+        emit(EV_TEMPLATE_BUNDLE_DOWNLOADED, count=len(members), posture=posture,
+             with_authoring=with_authoring)
+        return Response(
+            buf.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="kickoff-templates.zip"'},
+        )
 
     # --- Concierge mode (M-CM3) -----------------------------------------------------------------
 
