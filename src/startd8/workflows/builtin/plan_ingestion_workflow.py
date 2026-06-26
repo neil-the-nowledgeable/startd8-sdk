@@ -498,8 +498,15 @@ def _build_parse_prompt(plan_text: str) -> str:
     if detected_lang and detected_lang in _PARSE_DEP_ORDERING_GUIDANCE:
         dep_ordering = _PARSE_DEP_ORDERING_GUIDANCE[detected_lang]
 
+    # FR-A4/FR-A8: the raw plan doc is untrusted (can originate from a third party /
+    # job board / uploaded file). Fence it as DATA-not-instructions before it enters
+    # the PARSE prompt — the bare <plan> tags in the template are a delimiter, not an
+    # instruction/data trust boundary. Lazy import keeps the workflows→implementation_engine
+    # edge cycle-safe; the fence is idempotent and normalizes (strips control chars).
+    from startd8.implementation_engine.spec_builder import _fence_untrusted
+
     return _PARSE_PROMPT_TEMPLATE.format(
-        plan_text=plan_text,
+        plan_text=_fence_untrusted(plan_text, "plan_text"),
         lang_hint=lang_hint,
         lang_schema_fields=lang_schema_block,
         lang_guidance=lang_guidance_block,

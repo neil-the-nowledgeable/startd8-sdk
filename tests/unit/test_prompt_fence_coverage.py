@@ -53,7 +53,9 @@ PROMPT_MODULES = (
 # got fenced) is the expected end state. A module referencing untrusted fields that
 # is NOT here and has no fence call fails the discovery test.
 TRACKED_UNFENCED = {
-    "workflows/builtin/plan_ingestion_workflow.py": "FR-A4 — plan-ingestion PARSE prompt not yet fenced",
+    # (empty) — spec/draft/review/plan-ingestion prompt paths are all fenced. The
+    # remaining FR-A8 work is the micro_prime/query_prime carrier inventory
+    # (KNOWN_DIFFERENT_VOCAB), which the canonical field-name scan can't see yet.
 }
 
 # Modules whose untrusted input uses a DIFFERENT field vocabulary than UNTRUSTED_FIELDS
