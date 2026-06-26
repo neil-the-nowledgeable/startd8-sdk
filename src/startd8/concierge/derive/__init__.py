@@ -20,10 +20,15 @@ from .introspect import (
 )
 from .containment import run_contained_introspection
 from .mapper import DerivationReport, build_entity_graph
+from .derive import DerivationResult, DriftResult, build_derivation, check_drift
 
 __all__ = [
     "DerivationReport",
+    "DerivationResult",
+    "DriftResult",
+    "build_derivation",
     "build_entity_graph",
+    "check_drift",
     "SCHEMA_VERSION",
     "DeriveError",
     "DeriveImportError",
