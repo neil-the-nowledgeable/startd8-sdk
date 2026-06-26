@@ -156,6 +156,7 @@ def _render_overview(state: KickoffState, readiness, action, config, stylesheet:
         f"{_esc(counts.get('blocked',0))} blocked · {_esc(counts.get('backlog',0))} backlog</p>",
         f"<div class='card'><h2>Next step</h2><p><strong>{_esc(action.title)}</strong></p>"
         f"<p>{_esc(action.detail)}</p></div>",
+        "<p><a href='/concierge'>🛈 Concierge — survey, instantiate a kickoff package, log friction</a></p>",
         "<h2>Steps</h2><ul>",
     ]
     for step in config.steps:
@@ -205,6 +206,95 @@ def _render_step(step, csrf: str, stylesheet: str) -> str:
     return _page(step.title, "".join(parts), stylesheet)
 
 
+# --- Concierge mode (M-CM3): hardening helpers + renderer ---------------------------------------
+
+# Clickjacking / UI-redress defense for the local write surface (R5-S2).
+_FRAME_DENY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+}
+# DNS-rebinding defense (R1-S8): a local app must only answer for loopback Host names.
+_ALLOWED_HOSTS = ("127.0.0.1", "localhost")
+
+
+def _host_ok(host_header: Optional[str]) -> bool:
+    """True if the request's Host is a loopback name (defeats DNS-rebinding)."""
+    if not host_header:
+        return False
+    hostname = host_header.split(":", 1)[0].strip().lower()
+    return hostname in _ALLOWED_HOSTS
+
+
+class _IntentStore:
+    """One-time apply-intents (R3-S1): a preview issues an intent bound to (action, digest); apply
+    consumes it exactly once, so a double-submit/replay does not write twice."""
+
+    def __init__(self) -> None:
+        self._intents: Dict[str, tuple] = {}
+
+    def issue(self, action: str, digest: str) -> str:
+        token = secrets.token_urlsafe(18)
+        self._intents[token] = (action, digest)
+        return token
+
+    def consume(self, token: Optional[str], action: str, digest: str) -> bool:
+        rec = self._intents.pop(token or "", None)
+        return rec is not None and rec == (action, digest)
+
+
+def _plan_digest(plan: dict) -> str:
+    paths = sorted(w.get("path", "") for w in plan.get("writes", []))
+    return hashlib.sha256((plan.get("action", "") + "|" + "|".join(paths)).encode()).hexdigest()[:16]
+
+
+def _render_concierge(view: dict, csrf: str, intents: dict, stylesheet: str) -> str:
+    """Render the shared Concierge view-model (the same payload the TUI renders)."""
+    s = view["survey"]
+    offer = view["instantiate_offer"]
+    na = view["next_action"]
+    parts = [
+        "<p><a href='/'>← overview</a></p><h1>Concierge</h1>",
+        f"<p class='muted'>{_esc(view['posture_banner'])}</p>",
+        f"<div class='card'><h2>Next step</h2><p><strong>{_esc(na['title'])}</strong></p>"
+        f"<p>{_esc(na['detail'])}</p></div>",
+        "<h2>Survey — brownfield triage</h2>",
+        f"<p>Requirement/PRD docs: <strong>{len(s.get('requirement_docs', []))}</strong> · "
+        f"model files: <strong>{len(s.get('model_files', []))}</strong> · "
+        f"fixtures: <strong>{len(s.get('fixture_candidates', []))}</strong> · "
+        f"PII risk flags: <strong>{len(s.get('pii_risk_flags', []))}</strong></p>",
+    ]
+    docs = s.get("requirement_docs", [])
+    if docs:
+        parts.append("<table><thead><tr><th>Doc</th><th>Extraction format?</th></tr></thead><tbody>")
+        for d in docs:
+            ok = d.get("extraction_format")
+            parts.append(f"<tr><td><code>{_esc(d.get('path'))}</code></td>"
+                         f"<td>{'✓' if ok else '✗ needs reformat'}</td></tr>")
+        parts.append("</tbody></table>")
+    # Instantiate offer
+    parts.append(f"<h2>Kickoff package — {_esc(offer['package_state'])}</h2>")
+    if offer["needed"]:
+        opts = "".join(f"<option value='{p}'>{p}</option>" for p in offer["postures"])
+        parts.append(
+            "<form method='post' action='/concierge/instantiate' class='field'>"
+            f"<input type='hidden' name='csrf' value='{_esc(csrf)}'>"
+            f"<input type='hidden' name='intent' value='{_esc(intents['instantiate'])}'>"
+            f"<label>Posture <select name='posture'>{opts}</select></label>"
+            "<button type='submit'>Create / complete kickoff package</button></form>"
+        )
+    else:
+        parts.append("<p class='muted'>The kickoff package is complete.</p>")
+    # Friction form
+    parts.append("<h2>Log friction</h2><form method='post' action='/concierge/friction' class='field'>"
+                 f"<input type='hidden' name='csrf' value='{_esc(csrf)}'>"
+                 f"<input type='hidden' name='intent' value='{_esc(intents['friction'])}'>")
+    for fld in view["friction_form"]["fields"]:
+        parts.append(f"<label>{_esc(fld['label'])}"
+                     f"<textarea name='{_esc(fld['name'])}' maxlength='{fld['max_length']}'></textarea></label>")
+    parts.append("<button type='submit'>Log friction</button></form>")
+    return _page("Concierge", "".join(parts), stylesheet)
+
+
 # --- the app factory ----------------------------------------------------------------------------
 
 
@@ -222,7 +312,7 @@ def build_kickoff_app(
     ``inspect`` refuse apply (the surface is read/preview only); ``demo`` allows applies on a
     fixture. *clock* is injectable so rate-limit/expiry behavior is testable without real time.
     """
-    from fastapi import FastAPI, Form
+    from fastapi import FastAPI, Form, Header
     from fastapi.responses import HTMLResponse, JSONResponse
 
     from ..presentation_polish import get_theme, render_stylesheet
@@ -235,6 +325,7 @@ def build_kickoff_app(
 
     app = FastAPI(title="StartD8 Kickoff")
     app.state.kickoff_fingerprint = fingerprint
+    intents = _IntentStore()  # one-time apply intents for Concierge writes (R3-S1)
 
     def _capture_error(exc: CaptureError, http_status: int = 400) -> JSONResponse:
         return JSONResponse(
@@ -335,5 +426,134 @@ def build_kickoff_app(
                     "refreshed_status": fs.attention if fs else None,
                 }
             )
+
+    # --- Concierge mode (M-CM3) -----------------------------------------------------------------
+
+    from ..concierge.writes import build_friction_entry, build_instantiate_plan
+    from .concierge_apply import (
+        ConciergeInputError,
+        ConciergeWriteCode,
+        apply_concierge_plan,
+        validate_friction,
+        validate_posture,
+    )
+    from .concierge_view import build_concierge_view
+
+    def _concierge_write_gate(host: Optional[str], csrf: str, now: float):
+        """Shared gate for Concierge write POSTs: mode, loopback Host, CSRF, rate-limit."""
+        if mode in ("preview", "inspect"):
+            return JSONResponse({"ok": False, "code": "preview_only",
+                                 "message": f"mode {mode!r} is read/preview only"}, status_code=403)
+        if not _host_ok(host):
+            return JSONResponse({"ok": False, "code": "forbidden_host",
+                                 "message": "request Host is not a loopback address"}, status_code=403)
+        if not sessions.valid(csrf, now):
+            return JSONResponse({"ok": False, "code": "session_expired",
+                                 "message": "invalid or expired token"}, status_code=403)
+        if not sessions.rate_ok(csrf, now):
+            return JSONResponse({"ok": False, "code": "rate_limited",
+                                 "message": "too many writes; slow down"}, status_code=429)
+        return None
+
+    @app.get("/concierge", response_class=HTMLResponse)
+    def concierge() -> HTMLResponse:
+        from .telemetry import EV_SURVEY_VIEWED, emit
+
+        view = build_concierge_view(root)
+        emit(EV_SURVEY_VIEWED)
+        token = sessions.issue(clock())
+        issued = {
+            "instantiate": intents.issue("instantiate", _plan_digest(build_instantiate_plan(root))),
+            "friction": intents.issue("friction", "friction"),
+        }
+        resp = HTMLResponse(_render_concierge(view, token, issued, stylesheet),
+                            headers=dict(_FRAME_DENY_HEADERS))
+        resp.set_cookie("kickoff_csrf", token, httponly=True, samesite="strict")
+        return resp
+
+    @app.get("/concierge.json")
+    def concierge_json() -> JSONResponse:
+        # Shared view-model payload (parity oracle; the TUI renders the same dict).
+        return JSONResponse(build_concierge_view(root), headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.post("/concierge/instantiate/preview")
+    def instantiate_preview(posture: str = Form("prototype")) -> JSONResponse:
+        try:
+            validate_posture(posture)
+        except ConciergeInputError as exc:
+            return JSONResponse({"ok": False, "code": exc.code, "message": str(exc)}, status_code=400)
+        plan = build_instantiate_plan(root, posture)
+        # Preview only — no write; summarize per-file path/status/bytes (R2-S1).
+        summary = [{"path": w["path"], "status": w["status"], "bytes": w["bytes"]}
+                   for w in plan["writes"]]
+        return JSONResponse({"ok": True, "action": "instantiate-kickoff", "posture": posture,
+                             "writes": summary, "warnings": plan.get("warnings", [])},
+                            headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.post("/concierge/instantiate")
+    def instantiate(posture: str = Form("prototype"), csrf: str = Form(...),
+                    intent: str = Form(...), host: Optional[str] = Header(default=None)) -> JSONResponse:
+        from .telemetry import EV_CONCIERGE_WRITE_REFUSED, EV_KICKOFF_INSTANTIATED, emit, kickoff_span
+
+        gate = _concierge_write_gate(host, csrf, clock())
+        if gate is not None:
+            return gate
+        try:
+            validate_posture(posture)
+        except ConciergeInputError as exc:
+            return JSONResponse({"ok": False, "code": exc.code, "message": str(exc)}, status_code=400)
+        plan = build_instantiate_plan(root, posture)
+        if not intents.consume(intent, "instantiate", _plan_digest(plan)):
+            return JSONResponse({"ok": False, "code": "replay",
+                                 "message": "intent already used or mismatched; reload Concierge"},
+                                status_code=409, headers=dict(_FRAME_DENY_HEADERS))
+        with kickoff_span("kickoff.concierge.instantiate", posture=posture):
+            result = apply_concierge_plan(root, plan)
+        # Post-apply reconciliation (R3-S2): the refreshed package state.
+        refreshed = build_concierge_view(root)["instantiate_offer"]
+        if result.ok and result.wrote_anything:
+            emit(EV_KICKOFF_INSTANTIATED, posture=posture, code=result.code,
+                 written_count=len(result.written))
+        elif not result.ok:
+            emit(EV_CONCIERGE_WRITE_REFUSED, action="instantiate", code=result.code)
+        body = {"ok": result.ok, **result.to_dict(), "package_state": refreshed["package_state"]}
+        status = 200 if result.ok else (409 if result.code == ConciergeWriteCode.WRITE_BLOCKED else 400)
+        return JSONResponse(body, status_code=status, headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.post("/concierge/friction")
+    def friction(friction: str = Form(""), what_happened: str = Form(""),
+                 implication: str = Form(""), csrf: str = Form(...),
+                 intent: str = Form(...), host: Optional[str] = Header(default=None)) -> JSONResponse:
+        # Fields default to "" so blank input reaches validate_friction (typed 400) rather than a
+        # bare FastAPI 422 — the typed-validation contract (R2-F5).
+        import uuid
+        from datetime import datetime, timezone
+
+        from .telemetry import EV_CONCIERGE_WRITE_REFUSED, EV_FRICTION_LOGGED, emit
+
+        gate = _concierge_write_gate(host, csrf, clock())
+        if gate is not None:
+            return gate
+        try:
+            validate_friction(friction, what_happened, implication)
+        except ConciergeInputError as exc:
+            return JSONResponse({"ok": False, "code": exc.code, "message": str(exc)}, status_code=400)
+        if not intents.consume(intent, "friction", "friction"):
+            return JSONResponse({"ok": False, "code": "replay",
+                                 "message": "intent already used; reload Concierge"},
+                                status_code=409, headers=dict(_FRAME_DENY_HEADERS))
+        # NR-CM-B: the SURFACE stamps the timestamp INTO the builder (it bakes ts into append_text).
+        plan = build_friction_entry(
+            root, friction=friction, what_happened=what_happened, implication=implication,
+            entry_id=uuid.uuid4().hex, timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        result = apply_concierge_plan(root, plan)
+        if result.ok:
+            emit(EV_FRICTION_LOGGED, code=result.code)  # no free-text/paths (R2-F4 privacy)
+        else:
+            emit(EV_CONCIERGE_WRITE_REFUSED, action="friction", code=result.code)
+        status = 200 if result.ok else (409 if result.code == ConciergeWriteCode.WRITE_BLOCKED else 400)
+        return JSONResponse({"ok": result.ok, **result.to_dict()}, status_code=status,
+                            headers=dict(_FRAME_DENY_HEADERS))
 
     return app

@@ -41,6 +41,10 @@ EV_FIELD_CAPTURED = "field_captured"
 EV_GAP_CLOSED = "gap_closed"
 EV_CAPTURE_FAILED = "capture_failed"
 EV_FRICTION_LOGGED = "friction_logged"
+# Concierge mode (M-CM5)
+EV_SURVEY_VIEWED = "survey_viewed"
+EV_KICKOFF_INSTANTIATED = "kickoff_instantiated"
+EV_CONCIERGE_WRITE_REFUSED = "concierge_write_refused"
 
 FUNNEL_EVENTS = (
     EV_SESSION_STARTED,
@@ -50,6 +54,15 @@ FUNNEL_EVENTS = (
     EV_GAP_CLOSED,
     EV_CAPTURE_FAILED,
     EV_FRICTION_LOGGED,
+    EV_SURVEY_VIEWED,
+    EV_KICKOFF_INSTANTIATED,
+    EV_CONCIERGE_WRITE_REFUSED,
+)
+
+# Attribute allowlist for Concierge events (R2-F4 privacy): NEVER emit free-text friction fields or
+# raw filesystem paths — only these bounded keys are permitted on Concierge funnel events.
+CONCIERGE_EVENT_ATTR_ALLOWLIST = frozenset(
+    {"action", "code", "posture", "with_authoring", "written_count", "skipped_count", "mode", "source"}
 )
 
 
