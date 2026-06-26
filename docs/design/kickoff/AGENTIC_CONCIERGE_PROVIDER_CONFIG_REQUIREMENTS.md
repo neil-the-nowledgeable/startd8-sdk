@@ -2,7 +2,7 @@
 
 **Version:** 0.2 (Post-planning — self-reflective update)
 **Date:** 2026-06-26
-**Status:** Draft
+**Status:** Implemented (2026-06-26)
 **Owner:** neil-the-nowledgeable
 **Plan:** `AGENTIC_CONCIERGE_PROVIDER_CONFIG_PLAN.md` (v1.0)
 **Folds into:** `AGENTIC_CONCIERGE_MODE_REQUIREMENTS.md` (→ v0.4, §E)

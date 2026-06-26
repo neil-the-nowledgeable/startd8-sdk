@@ -20,6 +20,7 @@ import yaml
 
 _TOP_LEVEL_KEYS = frozenset({
     "domain", "provenance_default", "budgets", "model_routing", "generation", "unattended",
+    "concierge_agent",
 })
 
 
@@ -33,6 +34,9 @@ class BuildPreferencesManifest:
     model_routing: Dict[str, str] = field(default_factory=dict)
     generation: Dict[str, str] = field(default_factory=dict)
     unattended: Dict[str, object] = field(default_factory=dict)  # values are str or bool
+    # The agent spec (provider:model / provider / model-id / alias) the agentic Concierge uses
+    # for THIS project (FR-PC-2). A full resolve_agent_spec string, never a tier.
+    concierge_agent: Optional[str] = None
 
 
 def _scalar_map(value: object, key: str, *, bool_keys: frozenset = frozenset()) -> Dict[str, object]:
@@ -81,6 +85,9 @@ def parse_build_preferences(text: Optional[str]) -> BuildPreferencesManifest:
     prov = data.get("provenance_default")
     if prov is not None and not isinstance(prov, str):
         raise ValueError("build-preferences.yaml: `provenance_default` must be a string")
+    concierge_agent = data.get("concierge_agent")
+    if concierge_agent is not None and not isinstance(concierge_agent, str):
+        raise ValueError("build-preferences.yaml: `concierge_agent` must be a string (agent spec)")
 
     return BuildPreferencesManifest(
         domain=domain,
@@ -91,4 +98,5 @@ def parse_build_preferences(text: Optional[str]) -> BuildPreferencesManifest:
         unattended=_scalar_map(
             data.get("unattended"), "unattended", bool_keys=frozenset({"non_interactive"})
         ),
+        concierge_agent=concierge_agent,
     )

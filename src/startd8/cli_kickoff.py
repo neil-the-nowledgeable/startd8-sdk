@@ -205,6 +205,7 @@ def start_cmd(
 
     Pass --agent to enable the conversational Concierge chat panel at /concierge/chat.
     """
+    from .kickoff_experience.concierge_agent import resolve_concierge_agent_spec
     from .kickoff_experience.serve import Mode, make_chat_factory, preflight, serve_kickoff
 
     if mode not in Mode.ALL:
@@ -217,12 +218,17 @@ def start_cmd(
     if not pf.ok:
         console.print("[red]preflight failed — not serving.[/red]")
         raise typer.Exit(_EXIT_FATAL)
-    if agent:
-        enabled = make_chat_factory(project, agent) is not None
+    # The agentic panel spends tokens, so it stays opt-in: enable it only on an EXPLICIT agent choice
+    # — the --agent flag or a configured `concierge_agent` (project/global) — never the bare default.
+    spec, source = resolve_concierge_agent_spec(project, agent)
+    panel_spec = spec if source != "default" else None
+    if panel_spec:
+        enabled = make_chat_factory(project, panel_spec) is not None
         console.print(f"  {'[green]✓[/green]' if enabled else '[yellow]•[/yellow]'} agentic chat: "
-                      + (f"enabled ({agent})" if enabled else f"could not resolve {agent!r} — panel disabled"))
+                      + (f"enabled ({panel_spec}, source: {source})" if enabled
+                         else f"could not resolve {panel_spec!r} (source: {source}) — panel disabled"))
     console.print(f"[green]serving kickoff[/green] (mode={mode}, theme={theme}) — Ctrl-C to stop")
-    serve_kickoff(project, mode=mode, theme=theme, port=port, agent_spec=agent)
+    serve_kickoff(project, mode=mode, theme=theme, port=port, agent_spec=panel_spec)
 
 
 @kickoff_app.command("chat")
@@ -239,10 +245,10 @@ def chat_cmd(
     import asyncio
 
     from .kickoff_experience.chat import new_kickoff_chat, run_kickoff_repl
-    from .model_catalog import Models
+    from .kickoff_experience.concierge_agent import resolve_concierge_agent_spec
     from .utils.agent_resolution import resolve_agent_spec
 
-    spec = agent or Models.CLAUDE_SONNET_LATEST
+    spec, source = resolve_concierge_agent_spec(project, agent)
     try:
         the_agent = resolve_agent_spec(spec)
     except Exception as exc:  # missing key / unknown provider → actionable, not a traceback
@@ -260,7 +266,7 @@ def chat_cmd(
         except (EOFError, KeyboardInterrupt):
             return None
 
-    console.print(f"[dim]agent: {spec}[/dim]")
+    console.print(f"[dim]agent: {spec} (source: {source})[/dim]")
     run_kickoff_repl(
         banner=chat.banner(),
         ask_sync=lambda m: asyncio.run(chat.ask(m)),
@@ -285,12 +291,12 @@ def concierge_chat_cmd(
     import asyncio
 
     from .kickoff_experience.chat import new_agentic_kickoff_chat, run_kickoff_repl
+    from .kickoff_experience.concierge_agent import resolve_concierge_agent_spec
     from .kickoff_experience.proposals import apply_proposal
     from .kickoff_experience.tui_concierge import _questionary_confirm
-    from .model_catalog import Models
     from .utils.agent_resolution import resolve_agent_spec
 
-    spec = agent or Models.CLAUDE_SONNET_LATEST
+    spec, source = resolve_concierge_agent_spec(project, agent)
     try:
         the_agent = resolve_agent_spec(spec)
     except Exception as exc:
@@ -308,7 +314,7 @@ def concierge_chat_cmd(
         except (EOFError, KeyboardInterrupt):
             return None
 
-    console.print(f"[dim]agent: {spec} · propose-only (you confirm every write)[/dim]")
+    console.print(f"[dim]agent: {spec} (source: {source}) · propose-only (you confirm every write)[/dim]")
     run_kickoff_repl(
         banner=chat.banner(),
         ask_sync=lambda m: asyncio.run(chat.ask(m)),

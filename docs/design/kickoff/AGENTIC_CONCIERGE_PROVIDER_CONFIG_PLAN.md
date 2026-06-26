@@ -2,7 +2,8 @@
 
 **Version:** 1.0 (Post-planning, paired with Requirements v0.2)
 **Date:** 2026-06-26
-**Status:** Draft
+**Status:** Implemented (2026-06-26) — `concierge_agent.py` resolver + `build-preferences.yaml`
+`concierge_agent` key + global `~/.startd8` preference + 3 CLI surfaces wired; 9 unit tests green.
 **Requirements:** `AGENTIC_CONCIERGE_PROVIDER_CONFIG_REQUIREMENTS.md` (v0.2) →
 folded into `AGENTIC_CONCIERGE_MODE_REQUIREMENTS.md` (v0.4)
 
