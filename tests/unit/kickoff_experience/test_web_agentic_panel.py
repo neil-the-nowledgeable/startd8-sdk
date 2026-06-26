@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,15 +10,22 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("fastapi")
+import httpx  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from startd8.kickoff_experience.proposals import ProposalBuffer, ProposedAction  # noqa: E402
+from startd8.kickoff_experience.telemetry import (  # noqa: E402
+    EV_CHAT_REFUSED,
+    EV_CHAT_TURN,
+    record_events,
+)
 from startd8.kickoff_experience.web import build_kickoff_app  # noqa: E402
 
 
 @dataclass
 class _Result:
     text: str
+    stop_reason: str = "completed"
     turns: int = 1
     total_tokens: int = 5
     total_cost_usd: float = 0.001
@@ -177,3 +185,76 @@ def test_confirm_unknown_proposal_404(tmp_path: Path) -> None:
     csrf = _csrf(client)
     r = client.post("/concierge/chat/confirm", data={"proposal_id": "nope", "csrf": csrf})
     assert r.status_code == 404 and r.json()["code"] == "no_such_proposal"
+
+
+# --- chat_message hardening (FR-WM2-5b / 5c / 8b / 8c / 14a) ------------------------------------
+
+def test_message_too_long_rejected_before_provider(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _csrf(client)
+    r = client.post("/concierge/chat/message", data={"message": "x" * 5000})
+    assert r.status_code == 400 and r.json()["code"] == "message_too_long"   # FR-WM2-5b
+
+
+def test_stop_reason_maps_to_typed_code(tmp_path: Path) -> None:
+    class _BudgetChat(_FakeChat):
+        async def ask(self, message: str) -> _Result:
+            await super().ask(message)                       # populate the proposal buffer
+            return _Result(text="partial", stop_reason="budget")
+
+    client = TestClient(build_kickoff_app(tmp_path, chat_factory=lambda: _BudgetChat()),
+                        headers={"host": "127.0.0.1:8000"})
+    _csrf(client)
+    r = client.post("/concierge/chat/message", data={"message": "x"})
+    assert r.status_code == 200                              # FR-WM2-8b — never 500
+    assert r.json()["ok"] is False and r.json()["code"] == "chat_budget_exceeded"
+    assert r.json()["text"] == "partial"
+
+
+def test_provider_error_degrades_without_500_or_leak(tmp_path: Path) -> None:
+    class _BoomChat(_FakeChat):
+        async def ask(self, message: str) -> _Result:
+            raise RuntimeError("sk-ant-secret boom from provider")
+
+    client = TestClient(build_kickoff_app(tmp_path, chat_factory=lambda: _BoomChat()),
+                        headers={"host": "127.0.0.1:8000"})
+    _csrf(client)
+    r = client.post("/concierge/chat/message", data={"message": "x"})
+    assert r.status_code == 200 and r.json()["code"] == "chat_error"   # FR-WM2-8c
+    assert "sk-ant" not in r.text and "boom" not in r.text             # sanitized, no leak
+    assert client.get("/").status_code == 200                          # home page unaffected
+
+
+def test_chat_turn_event_emitted_without_message_text(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _csrf(client)
+    with record_events() as events:
+        client.post("/concierge/chat/message", data={"message": "secret question"})
+    turns = [e for e in events if e.name == EV_CHAT_TURN]
+    assert len(turns) == 1                                              # FR-WM2-14a
+    attrs = turns[0].attributes
+    assert attrs["stop_reason"] == "completed" and "tokens" in attrs
+    assert "secret question" not in str(attrs)                         # privacy: no message text
+
+
+@pytest.mark.asyncio
+async def test_concurrent_message_returns_chat_busy(tmp_path: Path) -> None:
+    release = asyncio.Event()
+
+    class _SlowChat(_FakeChat):
+        async def ask(self, message: str) -> _Result:
+            await release.wait()                  # hold the per-session lock until the test releases
+            return await super().ask(message)
+
+    app = build_kickoff_app(tmp_path, chat_factory=lambda: _SlowChat())
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8000",
+                                 headers={"host": "127.0.0.1:8000"}) as ac:
+        await ac.get("/concierge/chat")           # sets the kickoff_chat cookie on the client
+        first = asyncio.create_task(ac.post("/concierge/chat/message", data={"message": "a"}))
+        await asyncio.sleep(0.05)                 # let `first` enter and acquire the session lock
+        second = await ac.post("/concierge/chat/message", data={"message": "b"})
+        assert second.status_code == 429 and second.json()["code"] == "chat_busy"   # FR-WM2-5c
+        release.set()
+        r1 = await first
+        assert r1.status_code == 200 and r1.json()["ok"] is True

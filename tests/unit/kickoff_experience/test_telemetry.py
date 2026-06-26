@@ -89,6 +89,8 @@ def test_funnel_event_names_are_stable() -> None:
         "proposal_made", "proposal_confirmed", "proposal_discarded",
         # Welcome Mat 2.0 — template download (FR-WM2-14)
         "template_downloaded", "template_bundle_downloaded",
+        # Welcome Mat 2.0 — agentic chat (FR-WM2-14a)
+        "chat_turn", "chat_refused",
     }
 
 

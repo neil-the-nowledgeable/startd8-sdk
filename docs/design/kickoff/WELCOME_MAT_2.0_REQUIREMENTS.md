@@ -202,23 +202,23 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
 - **FR-WM2-8a — Preview/inspect mode gate on the spend path** ✅ **DELIVERED 2026-06-26** *(R2-F3/R2-S4)*. `chat_message` checks
   host+session+rate but **not `mode`** — a `preview`/`inspect` serve still spends tokens. Refuse with
   typed `preview_only` (confirm is already mode-gated; the message/spend path is not).
-- **FR-WM2-5b — Inbound message length cap** *(R2-F6/R2-S5)*. Cap `message` (document the max, e.g.
+- **FR-WM2-5b — Inbound message length cap** ✅ **DELIVERED 2026-06-26** *(R2-F6/R2-S5)*. Cap `message` (document the max, e.g.
   ≤4096) → typed `message_too_long` **before** invoking the provider.
-- **FR-WM2-5c — Per-session concurrency lock** *(R2-F7/R2-S3)*. One in-flight message per chat session
+- **FR-WM2-5c — Per-session concurrency lock** ✅ **DELIVERED 2026-06-26** *(R2-F7/R2-S3)*. One in-flight message per chat session
   (`asyncio.Lock` across `await chat.ask`) or typed `chat_busy`; never mutate session history concurrently.
 - **FR-WM2-9a — `SessionConfig` budget guard** *(R1-F4/R2-S1/R4-S4)*. Enforce `max_turns` /
   `max_total_tokens` / `max_cost_usd` / `max_tool_calls_per_turn` via `AgenticSession.SessionConfig`,
   built from **one shared factory** with the CLI (`kickoff_chat_session_config()` — R4-F4/FR-WM2-15 in
   §D); crossing the ceiling → typed `chat_budget_exceeded` (never a 500). #62 bounds turn-rate only.
-- **FR-WM2-8b — `stop_reason` → typed codes** *(R4-F3/R4-S3)*. Map non-`completed`
+- **FR-WM2-8b — `stop_reason` → typed codes** ✅ **DELIVERED 2026-06-26** *(R4-F3/R4-S3)*. Map non-`completed`
   `AgenticResult.stop_reason` (`max_turns`/`budget`/`context_overflow`/`repeated_calls`/`stream_error`)
   to typed `chat_<reason>` (200/503, never 500); include `stop_reason` in the cost block.
-- **FR-WM2-8c — Sanitized mid-turn provider-error degradation** *(R1-F2/R1-S4)*. #62 has **no
+- **FR-WM2-8c — Sanitized mid-turn provider-error degradation** ✅ **DELIVERED 2026-06-26** *(R1-F2/R1-S4)*. #62 has **no
   try/except** around `await chat.ask` — a turn-N provider 401/timeout would 500. Wrap it to return a
   **sanitized** typed `chat_error` (no key substrings / raw provider body), never a 500.
 - **FR-WM2-5d — Memory-wipe on idle expiry** *(R3-F5/R3-S5)*. Beyond evict-oldest, destroy the
   `AgenticSession` message list on idle TTL; history stays RAM-only, never on disk.
-- **FR-WM2-14a — Turn/refusal funnel events** *(R2-F4)*. Emit `chat_turn`
+- **FR-WM2-14a — Turn/refusal funnel events** ✅ **DELIVERED 2026-06-26** *(R2-F4)*. Emit `chat_turn`
   (turns/tokens/cost/`stop_reason`, **no** message text) + the refusal events (`chat_rate_limited`,
   `chat_budget_exceeded`, `chat_session_expired`, `chat_busy`, `message_too_long`,
   `chat_provider_timeout`, `preview_only`), registered in `telemetry.py` with the attr allowlist.

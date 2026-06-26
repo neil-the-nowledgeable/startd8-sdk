@@ -18,6 +18,7 @@ same-session CSRF token and are per-session rate-limited; typed reason codes (R4
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import secrets
 import time
@@ -43,6 +44,16 @@ _TOKEN_TTL_S = 3600.0
 # Welcome Mat 2.0 bundle ceiling (FR-WM2-3): fail closed before allocating an oversized in-memory zip.
 # 2 MiB is ample for the ~11-file template set; a manifest-bloat regression returns 413, never a partial.
 _BUNDLE_MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024
+# Welcome Mat 2.0 chat input cap (FR-WM2-5b): reject an oversized message before any provider call.
+_MAX_CHAT_MESSAGE_CHARS = 4096
+# stop_reason → typed /chat code (FR-WM2-8b); `completed` is the only non-refusal outcome.
+_CHAT_STOP_CODE = {
+    "budget": "chat_budget_exceeded",
+    "max_turns": "chat_max_turns",
+    "repeated_calls": "chat_repeated_calls",
+    "context_overflow": "chat_context_overflow",
+    "stream_error": "chat_stream_error",
+}
 
 
 def app_fingerprint(config: KickoffExperienceConfig, *, theme: str = "professional") -> str:
@@ -465,6 +476,7 @@ def build_kickoff_app(
     app.state.kickoff_fingerprint = fingerprint
     intents = _IntentStore()  # one-time apply intents for Concierge writes (R3-S1)
     chats = _ChatStore()       # live agentic chat sessions (web agentic panel)
+    chat_locks: Dict[str, asyncio.Lock] = {}   # FR-WM2-5c: one in-flight turn per chat session
     app.state.kickoff_agentic_enabled = chat_factory is not None
 
     def _capture_error(exc: CaptureError, http_status: int = 400) -> JSONResponse:
@@ -825,27 +837,54 @@ def build_kickoff_app(
         is an expired session — a bare CSRF token can never substitute for it."""
         return chats.get(kickoff_chat or "")
 
+    def _chat_refused(code: str, status: int) -> JSONResponse:
+        from .telemetry import EV_CHAT_REFUSED, emit
+        emit(EV_CHAT_REFUSED, code=code)   # bounded code; never the message text (FR-WM2-14a)
+        return JSONResponse({"ok": False, "code": code}, status_code=status,
+                            headers=dict(_FRAME_DENY_HEADERS))
+
     @app.post("/concierge/chat/message")
     async def chat_message(message: str = Form(...), host: Optional[str] = Header(default=None),
                            kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
-        from .telemetry import kickoff_span
-        if mode in ("preview", "inspect"):
-            # FR-WM2-8a: the spend path fails closed in read/preview modes — never invoke the provider.
-            return JSONResponse({"ok": False, "code": "preview_only",
-                                 "message": f"mode {mode!r} is read/preview only; chat is disabled"},
-                                status_code=403)
+        from .telemetry import EV_CHAT_TURN, emit, kickoff_span
+        if mode in ("preview", "inspect"):           # FR-WM2-8a — never spend in read/preview modes
+            return _chat_refused("preview_only", 403)
         if not _host_ok(host):
             return JSONResponse({"ok": False, "code": "forbidden_host"}, status_code=403)
+        if len(message) > _MAX_CHAT_MESSAGE_CHARS:   # FR-WM2-5b — reject before any provider call
+            return _chat_refused("message_too_long", 400)
         chat = _chat_for(kickoff_chat)
         if chat is None:
-            return JSONResponse({"ok": False, "code": "chat_session_expired",
-                                 "message": "reload the chat page"}, status_code=403)
+            return _chat_refused("chat_session_expired", 403)
         if not sessions.rate_ok(kickoff_chat, clock()):   # bound LLM-spend turns (per chat session)
-            return JSONResponse({"ok": False, "code": "rate_limited"}, status_code=429)
-        with kickoff_span("kickoff.concierge.chat_turn"):
-            result = await chat.ask(message)
+            return _chat_refused("rate_limited", 429)
+        # FR-WM2-5c — one in-flight turn per session; a concurrent request fails fast (never interleaves
+        # AgenticSession history). Prune unlocked locks so the registry stays bounded.
+        if len(chat_locks) > _ChatStore._MAX * 2:
+            for k in [k for k, lk in chat_locks.items() if not lk.locked()]:
+                chat_locks.pop(k, None)
+        lock = chat_locks.setdefault(kickoff_chat, asyncio.Lock())
+        if lock.locked():
+            return _chat_refused("chat_busy", 429)
+        async with lock:
+            try:
+                with kickoff_span("kickoff.concierge.chat_turn"):
+                    result = await chat.ask(message)
+            except Exception:                        # FR-WM2-8c — sanitized; a provider fault never 500s
+                return _chat_refused("chat_error", 200)
+        stop_code = _CHAT_STOP_CODE.get(result.stop_reason)   # FR-WM2-8b
+        if stop_code is not None:
+            from .telemetry import EV_CHAT_REFUSED
+            emit(EV_CHAT_REFUSED, code=stop_code, stop_reason=result.stop_reason)
+            return JSONResponse({"ok": False, "code": stop_code, "text": result.text,
+                                 "cost": chat.cost_line(result)},
+                                status_code=200, headers=dict(_FRAME_DENY_HEADERS))
         proposals = [{"id": a.id, "kind": a.kind, "summary": a.summary()}
                      for a in chat.buffer.pending()]
+        emit(EV_CHAT_TURN, turns=getattr(result, "turns", None),
+             tokens=getattr(result, "total_tokens", None),
+             cost_usd=getattr(result, "total_cost_usd", None),
+             stop_reason=result.stop_reason)
         return JSONResponse({"ok": True, "text": result.text, "cost": chat.cost_line(result),
                              "proposals": proposals}, headers=dict(_FRAME_DENY_HEADERS))
 
