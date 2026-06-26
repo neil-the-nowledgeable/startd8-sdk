@@ -144,6 +144,29 @@ _SPEC_EDIT_QUANTITATIVE_FALLBACK = ""
 _SPEC_CREATE_PREAMBLE_FALLBACK = ""
 
 
+def _fence_untrusted(content: str, content_type: str) -> str:
+    """Wrap untrusted prompt content in a DATA-not-instructions fence (FR-A1/A1a).
+
+    Lazy import of ``wrap_user_content`` keeps the ``implementation_engine →
+    contractors`` layering one-directional (contractors depends on
+    implementation_engine, not vice versa) and avoids an import cycle.
+
+    The fence is idempotent: content already wrapped on the PIPELINE-mode path
+    (``context_resolution`` wraps before injection) is returned unchanged, so
+    fencing here only adds the boundary for the STANDALONE path where it was
+    previously missing — without double-wrapping.
+    """
+    if not content or not content.strip():
+        return content
+    from ..contractors.context_formatters import wrap_user_content
+    from ..security import normalize_untrusted_text
+
+    # Normalize (strip null/control chars, repair UTF-8, bound size) before
+    # fencing (FR-A2) — removes a fence-evasion vector and hands the fence clean,
+    # bounded text. Idempotent for already-fenced PIPELINE content.
+    return wrap_user_content(normalize_untrusted_text(content), content_type)
+
+
 def build_spec_plan_section(
     plan_ctx: Optional[str],
     is_edit: bool = False,
@@ -168,7 +191,7 @@ def build_spec_plan_section(
             "Spec prompt: plan context truncated from %d to %d chars",
             len(plan_ctx), len(truncated),
         )
-    return f"## Plan Context\n{framing}{truncated}"
+    return f"## Plan Context\n{framing}{_fence_untrusted(truncated, 'plan_context')}"
 
 
 def build_spec_arch_section(arch_ctx: Any, is_edit: bool = False) -> str:
@@ -182,27 +205,30 @@ def build_spec_arch_section(arch_ctx: Any, is_edit: bool = False) -> str:
             "Spec prompt: arch context truncated from %d to %d chars",
             orig_len, len(truncated),
         )
+    fenced = _fence_untrusted(truncated, "architectural_context")
     if is_edit:
         framing = _format_lead_prompt(
             "arch_context_edit_framing",
             _ARCH_CONTEXT_EDIT_FRAMING_FALLBACK,
         ).rstrip() + "\n\n"
-        return f"## Project Architecture\n{framing}{truncated}"
-    return f"## Project Architecture\n{truncated}"
+        return f"## Project Architecture\n{framing}{fenced}"
+    return f"## Project Architecture\n{fenced}"
 
 
 def build_spec_objectives_section(project_obj: Any) -> str:
     """Build project objectives section."""
     if not project_obj:
         return ""
-    return f"## Project Objectives\n{format_context_value(project_obj)}"
+    fenced = _fence_untrusted(format_context_value(project_obj), "project_objectives")
+    return f"## Project Objectives\n{fenced}"
 
 
 def build_spec_conventions_section(sem_conv: Any) -> str:
     """Build semantic conventions section."""
     if not sem_conv:
         return ""
-    return f"## Semantic Conventions\n{format_context_value(sem_conv)}"
+    fenced = _fence_untrusted(format_context_value(sem_conv), "semantic_conventions")
+    return f"## Semantic Conventions\n{fenced}"
 
 
 def _build_exemplar_section(context: Dict[str, Any]) -> str:
@@ -1142,9 +1168,12 @@ def build_spec_prompt(
     requirements_text = context.pop("requirements_text", "")
     requirements_section = ""
     if requirements_text:
+        # FR-A1: STANDALONE path delivers this raw; fence it as data. The
+        # "verbatim — authoritative" framing makes an un-fenced injection here
+        # especially potent, so the DATA-not-instructions boundary is essential.
         requirements_section = (
             "\n## Requirements (verbatim — authoritative for parameter details)\n"
-            f"{requirements_text}\n"
+            f"{_fence_untrusted(requirements_text, 'requirements_text')}\n"
         )
 
     # --- Forward contracts ---

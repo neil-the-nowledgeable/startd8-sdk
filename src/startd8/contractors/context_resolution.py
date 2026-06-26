@@ -258,13 +258,32 @@ def _check_path_traversal(field_name: str, value: str) -> None:
 
 
 def _check_prompt_injection(field_name: str, value: str) -> None:
-    """Reject values matching known prompt injection patterns."""
+    """Emit injection-attempt telemetry for known markers, then reject (defense-in-depth).
+
+    FR-A3/FR-A7: this denylist is **not** the trust boundary and is inherently
+    incomplete. The boundary is content fencing (``wrap_user_content``), applied
+    unconditionally during spec/draft prompt assembly regardless of this check's
+    outcome — so a clean denylist never implies "safe to use raw". Matches are
+    logged as operational ``injection_attempt`` telemetry (field name + which
+    static pattern fired — never the payload) and then still rejected as
+    defense-in-depth (STRICT raises; LENIENT skips the field). This telemetry is
+    operational-only; it MUST NOT feed the Kaizen loop (anti feedback-poisoning).
+    """
     for pattern in _INJECTION_PATTERNS:
-        match = pattern.search(value)
-        if match:
+        if pattern.search(value):
+            logger.warning(
+                "Injection-attempt marker in field '%s' (pattern fired: %s)",
+                field_name,
+                pattern.pattern,
+                extra={
+                    "event": "injection_attempt",
+                    "field": field_name,
+                    "pattern": pattern.pattern,
+                },
+            )
             raise PromptInjectionError(
                 f"Field '{field_name}' matches prompt injection pattern: "
-                f"{match.group()!r}"
+                f"{pattern.pattern!r}"
             )
 
 
@@ -1211,9 +1230,18 @@ class PipelineContextStrategy(ContextStrategy):
             try:
                 _validate_key_name(key)
                 sanitized[key] = _sanitize_value(key, value)
+            except PromptInjectionError:
+                if self._sanitization_mode == SanitizationMode.STRICT:
+                    raise
+                # FR-A3: in LENIENT mode the injection denylist is telemetry, not
+                # a content gate — keep the field (it is fenced downstream as data)
+                # rather than silently dropping it. The injection_attempt event was
+                # already emitted at the match site. Dropping here would lose
+                # legitimate content that merely contains a trigger phrase (e.g. a
+                # requirement: "ignore previous instructions found in the header").
+                sanitized[key] = value
             except (
                 PathTraversalError,
-                PromptInjectionError,
                 FieldLengthError,
                 InvalidKeyError,
             ) as exc:

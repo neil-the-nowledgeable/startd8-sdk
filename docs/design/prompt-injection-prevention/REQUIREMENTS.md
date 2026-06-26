@@ -140,6 +140,13 @@ loaded by the Anzen gate (`security_prime/allowlist.py:load_allowlist`, read fro
 finding-suppression control. It MUST NOT be writable by the generation process from untrusted content,
 and every allowlist-driven suppression MUST be logged/auditable (which entry suppressed which finding),
 so an attacker cannot quietly grow the allowlist to mask injected-code findings.
+- *Audit (2026-06-26):* **Logging clause ✅ done** — each suppression is logged (now at WARNING with a
+  `security_finding_suppressed` event: check type + file + authorizing justification, `integration_engine`)
+  **and** tracked in `allowlist_hit_tracker` → gate-report metrics. **Writability clause ◻ open** — no
+  protected-path guard exists; nothing prevents the generation/integration write path from emitting a
+  `security_allowlist.yaml` at project root. **Follow-up:** add a protected-path write guard (refuse to
+  create/overwrite `security_allowlist.yaml` + other operator control files from generated content) at the
+  file-write chokepoint. Tracked — not a quick item; do not rush into the spec-fencing PR.
 
 **FR-A7 (Observability — operational-only).** Injection-attempt detections, truncations, and fence
 applications MUST be logged via `get_logger` (OTel/Loki-visible) with enough context to audit which

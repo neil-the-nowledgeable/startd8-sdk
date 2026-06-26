@@ -44,9 +44,17 @@ def wrap_user_content(content: str, content_type: str) -> str:
     Returns:
         Content wrapped in <context type="...">...</context> with
         a system instruction prefix.
+
+    Idempotent: content that is already fenced (begins with the system
+    instruction prefix) is returned unchanged, so callers on different
+    execution-mode paths can wrap without risk of nesting <context> blocks
+    (FR-A1a — no double-wrap).
     """
     if not content or not content.strip():
         return ""
+    # Idempotency guard: don't re-wrap content that is already fenced.
+    if content.lstrip().startswith(_SYSTEM_INSTRUCTION):
+        return content
     opening = _CONTEXT_OPEN.format(content_type=content_type)
     return f"{_SYSTEM_INSTRUCTION}\n{opening}\n{content}\n{_CONTEXT_CLOSE}"
 
