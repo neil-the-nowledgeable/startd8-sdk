@@ -62,6 +62,30 @@ def _load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _scanner_record() -> dict:
+    return {
+        "ruleset_version": SCANNER_RULESET_VERSION,
+        "allowlist_rules": [{
+            "rule": "dotenv_line_lowercase_identifier",
+            "rationale": (
+                "Shared prose-redaction dotenv_line rule is case-insensitive and over-fires on "
+                "lowercase source identifiers; re-verified case-sensitively against ALL-CAPS env "
+                "names. Lowercase-only hits (no strict match) are reviewed false positives."
+            ),
+        }],
+        "total_allowlisted": 0,
+    }
+
+
+def _blocked_report(raw_root: Path, schedule_path: Path, errors: list[str]) -> dict:
+    return {
+        "schema_version": "1.1", "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "raw_root": str(raw_root), "schedule": str(schedule_path), "expected_runs": 0,
+        "observed_runs": 0, "missing_ordinals": [], "scanner": _scanner_record(),
+        "runs": [], "status": "blocked", "preflight_errors": errors,
+    }
+
+
 def _scan(path: Path) -> tuple[list[str], list[dict]]:
     """Return (kept_findings, allowlisted). Real secret patterns pass through untouched; a
     `dotenv_line` hit that is only a lowercase source identifier (no case-sensitive ALL-CAPS match)
@@ -89,7 +113,23 @@ def _scan(path: Path) -> tuple[list[str], list[dict]]:
 
 
 def reconcile(raw_root: Path, schedule_path: Path) -> dict:
-    schedule = _load(schedule_path)
+    preflight_errors: list[str] = []
+    try:
+        schedule = _load(schedule_path)
+    except FileNotFoundError:
+        preflight_errors.append(f"missing_schedule:{schedule_path}")
+        schedule = []
+    except (OSError, json.JSONDecodeError) as exc:
+        preflight_errors.append(f"invalid_schedule:{type(exc).__name__}:{schedule_path}")
+        schedule = []
+    if not isinstance(schedule, list):
+        preflight_errors.append(f"invalid_schedule:not_list:{schedule_path}")
+        schedule = []
+    if not raw_root.is_dir():
+        preflight_errors.append(f"missing_raw_root:{raw_root}")
+    if preflight_errors:
+        return _blocked_report(raw_root, schedule_path, preflight_errors)
+
     expected = {item["ordinal"]: item for item in schedule}
     seen, runs = set(), []
     for metadata_path in sorted(raw_root.glob("*/metadata.json")):
@@ -135,18 +175,8 @@ def reconcile(raw_root: Path, schedule_path: Path) -> dict:
         "schema_version": "1.1", "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "raw_root": str(raw_root), "schedule": str(schedule_path), "expected_runs": len(expected),
         "observed_runs": len(runs), "missing_ordinals": missing_ordinals,
-        "scanner": {
-            "ruleset_version": SCANNER_RULESET_VERSION,
-            "allowlist_rules": [{
-                "rule": "dotenv_line_lowercase_identifier",
-                "rationale": (
-                    "Shared prose-redaction dotenv_line rule is case-insensitive and over-fires on "
-                    "lowercase source identifiers; re-verified case-sensitively against ALL-CAPS env "
-                    "names. Lowercase-only hits (no strict match) are reviewed false positives."
-                ),
-            }],
-            "total_allowlisted": sum(len(r.get("allowlisted_findings", [])) for r in runs),
-        },
+        "scanner": {**_scanner_record(),
+                    "total_allowlisted": sum(len(r.get("allowlisted_findings", [])) for r in runs)},
         "runs": runs,
         "status": "accepted" if not missing_ordinals and all(run["status"] == "accepted" for run in runs) else "blocked",
     }
