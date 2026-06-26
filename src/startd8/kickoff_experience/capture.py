@@ -48,6 +48,7 @@ class CaptureCode:
     ROUND_TRIP_FAILED = "round_trip_failed"
     STALE_FILE = "stale_file"
     DEFERRED_VALIDATION = "deferred_validation"
+    WRITE_REFUSED = "write_refused"
 
 
 class CaptureError(ValueError):
@@ -353,7 +354,12 @@ def apply_capture(project_root: str | Path, plan: CapturePlan) -> CaptureResult:
     Refuses with ``STALE_FILE`` if the target changed on disk since the plan was built (R1-S6);
     surfaces drive the R4-F1 recovery path (re-read → new preview) from that code.
     """
-    from ..concierge.safe_write import ACTION_OVERWRITE, PlannedWrite, apply_write_plan
+    from ..concierge.safe_write import (
+        ACTION_OVERWRITE,
+        PlannedWrite,
+        SafeWriteError,
+        apply_write_plan,
+    )
 
     root = Path(project_root).expanduser()
     target_path = _inputs_path(root, plan.file)
@@ -376,7 +382,20 @@ def apply_capture(project_root: str | Path, plan: CapturePlan) -> CaptureResult:
         content=plan.candidate_text,
         action=ACTION_OVERWRITE,
     )
-    apply_write_plan(root, [write], force=True)
+    # The safe-writer enforces confinement (rejects symlinked/.. roots) and reports per-file
+    # blocks/errors. Surface both as a typed CaptureError so callers never see a raw write error.
+    try:
+        result = apply_write_plan(root, [write], force=True)
+    except SafeWriteError as exc:
+        raise CaptureError(CaptureCode.WRITE_REFUSED, f"safe-writer refused the write: {exc}",
+                           value_path=plan.value_path)
+    if not result.ok:
+        detail = (result.blocked or result.errors or [{"reason": "unknown"}])[0]
+        raise CaptureError(
+            CaptureCode.WRITE_REFUSED,
+            f"write did not complete: {detail}",
+            value_path=plan.value_path,
+        )
     from .telemetry import EV_FIELD_CAPTURED, emit
 
     emit(EV_FIELD_CAPTURED, value_path=plan.value_path, file=rel_dest, code=CaptureCode.OK)

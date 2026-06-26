@@ -1,0 +1,47 @@
+// Welcome Mat — kickoff INPUTS modeled as entities so the deterministic $0 cascade
+// (`startd8 generate backend`) produces the input-collection UI. Each entity is a single-row
+// config form; closed-vocabulary fields are enums → generated <select> dropdowns. The captured
+// rows are exported to docs/kickoff/inputs/*.yaml (the kickoff grammar) by the welcome-mat exporter.
+
+enum Language {
+  python
+}
+
+enum Framework {
+  fastapi
+}
+
+enum MoneyRepr {
+  cents
+  float
+}
+
+enum DatetimePolicy {
+  utc
+  local
+}
+
+enum GenerationProfile {
+  full
+  observability
+}
+
+/// Technology conventions (-> conventions.yaml). One row.
+model ConventionInput {
+  id        String         @id @default(cuid())
+  language  Language       @default(python)
+  framework Framework      @default(fastapi)
+  money     MoneyRepr      @default(cents)
+  tzPolicy  DatetimePolicy @default(utc)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+}
+
+/// Build preferences (-> build-preferences.yaml). One row.
+model BuildPreferenceInput {
+  id             String            @id @default(cuid())
+  perPipelineRun String            @default("$5.00")
+  profile        GenerationProfile @default(full)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}

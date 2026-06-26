@@ -1,0 +1,14 @@
+# Welcome Mat — Kickoff inputs: TECHNOLOGY CONVENTIONS
+domain: conventions
+provenance_default: authored
+
+language: python
+stack:
+  framework: fastapi           # the kickoff input UI is itself a generated FastAPI+HTMX app
+  data_layer: sqlmodel
+  templates: jinja2
+  frontend: htmx
+  database: sqlite
+data_model:
+  money: cents                 # exact integer minor units
+  datetime: utc
