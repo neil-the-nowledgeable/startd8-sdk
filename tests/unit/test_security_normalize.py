@@ -1,8 +1,8 @@
 """FR-A2: non-throwing normalize_untrusted_text + its wiring into the fence path.
 
-normalize_untrusted_text is the boundary-safe counterpart to the throwing
-sanitize_prompt_content: it never raises, strips null/control chars (a fence-
-evasion vector), repairs invalid UTF-8, and bounds size. See
+normalize_untrusted_text is the boundary-safe normalizer: it never raises,
+strips null/control chars (a fence-evasion vector), repairs invalid UTF-8, and
+bounds size. See
 docs/design/prompt-injection-prevention/REQUIREMENTS.md (FR-A2/FR-A2a).
 """
 

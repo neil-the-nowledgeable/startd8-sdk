@@ -653,55 +653,11 @@ def validate_file_size(file_path: Path) -> None:
         )
 
 
-def sanitize_prompt_content(content: str) -> str:
-    """
-    Sanitize prompt content to prevent encoding issues and injection.
-    
-    Args:
-        content: Prompt content to sanitize
-    
-    Returns:
-        Sanitized content
-    
-    Raises:
-        ValidationError: If content is invalid
-    """
-    if not content:
-        raise ValidationError("Prompt content cannot be empty", field="content")
-    
-    # Remove null bytes
-    content = content.replace('\x00', '')
-    
-    # Validate encoding
-    try:
-        content.encode('utf-8')
-    except UnicodeEncodeError as e:
-        raise ValidationError(
-            f"Prompt contains invalid UTF-8 characters: {e}",
-            field="content"
-        )
-    
-    # Validate length
-    if len(content) > MAX_PROMPT_LENGTH:
-        raise ValidationError(
-            f"Prompt content exceeds maximum length of {MAX_PROMPT_LENGTH:,} characters",
-            field="content"
-        )
-    
-    # Strip leading/trailing whitespace but preserve intentional formatting
-    content = content.strip()
-    
-    if not content:
-        raise ValidationError("Prompt content cannot be empty after sanitization", field="content")
-
-    return content
-
-
 # Untrusted-text cap policy (FR-A2a). Per-field input cap applied at the fence
-# boundary; distinct from MAX_PROMPT_LENGTH (the outbound full-prompt total guard
-# enforced by the throwing sanitize_prompt_content). Generous so legitimate
-# requirement/plan text is never silently lost — it bounds pathological/DoS input,
-# not normal content. Section builders apply their own tighter display budgets.
+# boundary; distinct from MAX_PROMPT_LENGTH (reserved for a future outbound
+# full-prompt total guard). Generous so legitimate requirement/plan text is never
+# silently lost — it bounds pathological/DoS input, not normal content. Section
+# builders apply their own tighter display budgets.
 MAX_UNTRUSTED_FIELD_CHARS = 200_000
 
 # C0/C1 control characters except tab (\x09), newline (\x0a), carriage return (\x0d).
@@ -713,9 +669,8 @@ def normalize_untrusted_text(
 ) -> str:
     """Non-throwing normalization of untrusted text before prompt fencing (FR-A2).
 
-    Unlike :func:`sanitize_prompt_content` (which *raises* on empty/oversized/
-    invalid input), this never raises — it is meant to run at the untrusted-text
-    boundary where rejecting would drop legitimate content. It:
+    Unlike a throwing reject-validator, this never raises — it is meant to run at
+    the untrusted-text boundary where rejecting would drop legitimate content. It:
 
     - returns ``""`` for falsy input (no raise on empty),
     - repairs invalid UTF-8 / lone surrogates deterministically (replacement),
