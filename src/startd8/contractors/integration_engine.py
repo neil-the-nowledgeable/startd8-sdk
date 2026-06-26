@@ -1670,9 +1670,20 @@ class IntegrationEngine:
                         str(fpath), finding.check_type.value, allowlist,
                     )
                     if justification:
-                        logger.info(
-                            "Anzen allowlist: suppressed %s in %s (%s)",
+                        # FR-A6a: suppressing a security finding is a trust-sensitive
+                        # action — log at WARNING so it surfaces operationally (Loki/
+                        # alerts), not just in the gate-report JSON, with the entry
+                        # that authorized it for audit.
+                        logger.warning(
+                            "Anzen allowlist: SUPPRESSED security finding %s in %s — "
+                            "authorized by allowlist justification: %s",
                             finding.check_type.value, fpath.name, justification,
+                            extra={
+                                "event": "security_finding_suppressed",
+                                "check_type": finding.check_type.value,
+                                "file": fpath.name,
+                                "justification": justification,
+                            },
                         )
                         was_allowlisted = True
                         # Track allowlist hit for audit
