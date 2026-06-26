@@ -129,6 +129,19 @@ def test_discard_removes_without_applying(tmp_path: Path) -> None:
     assert client.post("/concierge/chat/pending").json()["proposals"] == []
 
 
+def test_chat_disabled_in_preview_mode(tmp_path: Path) -> None:
+    # FR-WM2-8a: a read/preview serve must never spend LLM tokens on chat.
+    client = TestClient(
+        build_kickoff_app(tmp_path, chat_factory=lambda: _FakeChat(), mode="preview"),
+        headers={"host": "127.0.0.1:8000"})
+    page = client.get("/concierge/chat")
+    assert page.status_code == 200 and "preview" in page.text.lower()
+    assert "const CSRF=" not in page.text       # panel disabled → no live chat session issued
+    # the spend path refuses before invoking the provider, even with no session cookie
+    r = client.post("/concierge/chat/message", data={"message": "x"})
+    assert r.status_code == 403 and r.json()["code"] == "preview_only"
+
+
 # --- hardening (FR-WM2-5a) ---------------------------------------------------------------------
 
 def test_message_rejects_unknown_session(tmp_path: Path) -> None:

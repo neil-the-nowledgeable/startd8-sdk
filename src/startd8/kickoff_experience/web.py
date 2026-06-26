@@ -799,6 +799,16 @@ def build_kickoff_app(
                       "anthropic:claude-sonnet-4-6</code>) to enable the conversational Concierge.</p>",
                       stylesheet),
                 headers=dict(_FRAME_DENY_HEADERS))
+        if mode in ("preview", "inspect"):
+            # FR-WM2-8a: chat spends LLM tokens, so it is disabled in read/preview serve modes
+            # (parity with the capture/Concierge write refusal). The spend path below also refuses.
+            return HTMLResponse(
+                _page("Concierge — chat",
+                      "<p><a href='/concierge'>← Concierge</a></p><h1>Chat disabled in read/preview mode</h1>"
+                      f"<p>This server runs in <code>{_esc(mode)}</code> mode — the conversational "
+                      "Concierge spends LLM tokens and is disabled. Serve in write mode to enable it.</p>",
+                      stylesheet),
+                headers=dict(_FRAME_DENY_HEADERS))
         now = clock()
         # FR-WM2-5a: the chat SESSION id and the CSRF/write token are SEPARATE secrets in SEPARATE
         # httponly cookies. The chat sid keys _ChatStore (+ message rate); csrf gates the write path.
@@ -819,6 +829,11 @@ def build_kickoff_app(
     async def chat_message(message: str = Form(...), host: Optional[str] = Header(default=None),
                            kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         from .telemetry import kickoff_span
+        if mode in ("preview", "inspect"):
+            # FR-WM2-8a: the spend path fails closed in read/preview modes — never invoke the provider.
+            return JSONResponse({"ok": False, "code": "preview_only",
+                                 "message": f"mode {mode!r} is read/preview only; chat is disabled"},
+                                status_code=403)
         if not _host_ok(host):
             return JSONResponse({"ok": False, "code": "forbidden_host"}, status_code=403)
         chat = _chat_for(kickoff_chat)

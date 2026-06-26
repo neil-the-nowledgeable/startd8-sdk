@@ -199,7 +199,7 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
   confirm/discard additionally require `csrf`. Missing/unknown session → typed `chat_session_expired`;
   CSRF alone cannot drive `/concierge/chat/*` (verified: `test_csrf_alone_cannot_drive_chat`,
   `test_chat_session_cookie_is_separate_from_csrf`).
-- **FR-WM2-8a — Preview/inspect mode gate on the spend path** *(R2-F3/R2-S4)*. `chat_message` checks
+- **FR-WM2-8a — Preview/inspect mode gate on the spend path** ✅ **DELIVERED 2026-06-26** *(R2-F3/R2-S4)*. `chat_message` checks
   host+session+rate but **not `mode`** — a `preview`/`inspect` serve still spends tokens. Refuse with
   typed `preview_only` (confirm is already mode-gated; the message/spend path is not).
 - **FR-WM2-5b — Inbound message length cap** *(R2-F6/R2-S5)*. Cap `message` (document the max, e.g.
