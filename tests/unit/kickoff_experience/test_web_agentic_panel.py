@@ -237,6 +237,49 @@ def test_chat_turn_event_emitted_without_message_text(tmp_path: Path) -> None:
     assert "secret question" not in str(attrs)                         # privacy: no message text
 
 
+def test_chat_budget_config_shared_and_applied(tmp_path: Path) -> None:
+    # FR-WM2-9a / FR-WM2-15: both chat constructors default to one shared budget envelope.
+    from startd8.kickoff_experience.chat import (
+        kickoff_chat_session_config,
+        new_agentic_kickoff_chat,
+        new_kickoff_chat,
+    )
+
+    cfg = kickoff_chat_session_config()
+    assert cfg.max_cost_usd is not None and cfg.max_total_tokens is not None and cfg.max_turns >= 1
+
+    class _StubAgent:  # AgenticSession construction only stores the agent/registry/config
+        def supports_tool_use(self) -> bool:
+            return True
+
+    web = new_agentic_kickoff_chat(_StubAgent(), tmp_path)
+    cli = new_kickoff_chat(_StubAgent(), tmp_path)
+    assert web.session.config.max_cost_usd == cfg.max_cost_usd
+    assert cli.session.config.max_cost_usd == cfg.max_cost_usd
+    assert web.session.config.max_tool_calls_per_turn == cfg.max_tool_calls_per_turn
+
+
+def test_chat_idle_expiry_wipes_history(tmp_path: Path) -> None:
+    # FR-WM2-5d: past the idle TTL the session is gone (chat_session_expired) and its history wiped.
+    from types import SimpleNamespace
+
+    class _ChatWithHistory(_FakeChat):
+        def __init__(self) -> None:
+            super().__init__()
+            self.session = SimpleNamespace(messages=[{"role": "user", "content": "secret"}])
+
+    chat = _ChatWithHistory()
+    t = [1000.0]
+    app = build_kickoff_app(tmp_path, chat_factory=lambda: chat, clock=lambda: t[0])
+    client = TestClient(app, headers={"host": "127.0.0.1:8000"})
+    client.get("/concierge/chat")                       # session created at t=1000
+    assert client.post("/concierge/chat/message", data={"message": "x"}).json()["ok"] is True
+    t[0] += 3600.0                                       # advance well past the 30-min idle TTL
+    r = client.post("/concierge/chat/message", data={"message": "x"})
+    assert r.status_code == 403 and r.json()["code"] == "chat_session_expired"
+    assert chat.session.messages == []                  # history destroyed, RAM-only
+
+
 @pytest.mark.asyncio
 async def test_concurrent_message_returns_chat_busy(tmp_path: Path) -> None:
     release = asyncio.Event()

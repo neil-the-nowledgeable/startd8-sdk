@@ -227,6 +227,21 @@ class KickoffChat:
         )
 
 
+def kickoff_chat_session_config() -> SessionConfig:
+    """The shared loop-safety + spend envelope for the kickoff chat (FR-WM2-9a / FR-WM2-15).
+
+    Both the web agentic panel and the CLI chat default to this **one** config, so per-session turn,
+    tool-call, token, and cost caps are identical across surfaces. Crossing a cap stops the loop with
+    ``stop_reason="budget"``, which the web handler maps to a typed ``chat_budget_exceeded`` refusal.
+    """
+    return SessionConfig(
+        max_turns=8,
+        max_tool_calls_per_turn=8,
+        max_total_tokens=60_000,
+        max_cost_usd=0.50,
+    )
+
+
 def new_agentic_kickoff_chat(
     agent: BaseAgent,
     project_root: str | Path,
@@ -248,7 +263,7 @@ def new_agentic_kickoff_chat(
         agent,
         registry,
         system_prompt=KICKOFF_AGENTIC_SYSTEM_PROMPT,   # propose-aware (FR-NEW-1 mode-paired)
-        config=config,
+        config=config or kickoff_chat_session_config(),
     )
     return KickoffChat(session=session, project_root=str(project_root), buffer=buffer)
 
@@ -265,7 +280,7 @@ def new_kickoff_chat(
         agent,
         registry,
         system_prompt=KICKOFF_SYSTEM_PROMPT,
-        config=config,
+        config=config or kickoff_chat_session_config(),
     )
     return KickoffChat(session=session, project_root=str(project_root))
 

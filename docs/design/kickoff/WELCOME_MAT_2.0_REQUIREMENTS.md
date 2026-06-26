@@ -206,7 +206,7 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
   ≤4096) → typed `message_too_long` **before** invoking the provider.
 - **FR-WM2-5c — Per-session concurrency lock** ✅ **DELIVERED 2026-06-26** *(R2-F7/R2-S3)*. One in-flight message per chat session
   (`asyncio.Lock` across `await chat.ask`) or typed `chat_busy`; never mutate session history concurrently.
-- **FR-WM2-9a — `SessionConfig` budget guard** *(R1-F4/R2-S1/R4-S4)*. Enforce `max_turns` /
+- **FR-WM2-9a — `SessionConfig` budget guard** ✅ **DELIVERED 2026-06-26** (+ FR-WM2-15 shared factory) *(R1-F4/R2-S1/R4-S4)*. Enforce `max_turns` /
   `max_total_tokens` / `max_cost_usd` / `max_tool_calls_per_turn` via `AgenticSession.SessionConfig`,
   built from **one shared factory** with the CLI (`kickoff_chat_session_config()` — R4-F4/FR-WM2-15 in
   §D); crossing the ceiling → typed `chat_budget_exceeded` (never a 500). #62 bounds turn-rate only.
@@ -216,7 +216,7 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
 - **FR-WM2-8c — Sanitized mid-turn provider-error degradation** ✅ **DELIVERED 2026-06-26** *(R1-F2/R1-S4)*. #62 has **no
   try/except** around `await chat.ask` — a turn-N provider 401/timeout would 500. Wrap it to return a
   **sanitized** typed `chat_error` (no key substrings / raw provider body), never a 500.
-- **FR-WM2-5d — Memory-wipe on idle expiry** *(R3-F5/R3-S5)*. Beyond evict-oldest, destroy the
+- **FR-WM2-5d — Memory-wipe on idle expiry** ✅ **DELIVERED 2026-06-26** *(R3-F5/R3-S5)*. Beyond evict-oldest, destroy the
   `AgenticSession` message list on idle TTL; history stays RAM-only, never on disk.
 - **FR-WM2-14a — Turn/refusal funnel events** ✅ **DELIVERED 2026-06-26** *(R2-F4)*. Emit `chat_turn`
   (turns/tokens/cost/`stop_reason`, **no** message text) + the refusal events (`chat_rate_limited`,

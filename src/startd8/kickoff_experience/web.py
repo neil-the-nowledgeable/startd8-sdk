@@ -338,20 +338,44 @@ def _plan_digest(plan: dict) -> str:
 
 class _ChatStore:
     """Bounded per-app store of live agentic chat sessions, keyed by the **`kickoff_chat`** session id
-    (a server-issued httponly cookie, FR-WM2-5a) — distinct from the `kickoff_csrf` write token."""
+    (a server-issued httponly cookie, FR-WM2-5a) — distinct from the `kickoff_csrf` write token.
+
+    History lives in RAM only and is **destroyed on eviction or idle expiry** (FR-WM2-5d): the
+    `AgenticSession.messages` list is cleared so a stale session never lingers in memory."""
 
     _MAX = 16
+    _IDLE_S = 1800.0   # 30-min idle expiry (FR-WM2-5d)
 
-    def __init__(self) -> None:
-        self._chats: Dict[str, object] = {}
+    def __init__(self, clock: "Callable[[], float]" = time.monotonic) -> None:
+        self._clock = clock
+        self._chats: Dict[str, list] = {}   # token -> [chat, last_used]
+
+    @staticmethod
+    def _wipe(chat: object) -> None:
+        """Destroy the in-RAM conversation history (never persisted)."""
+        msgs = getattr(getattr(chat, "session", None), "messages", None)
+        if isinstance(msgs, list):
+            msgs.clear()
+
+    def _prune(self, now: float) -> None:
+        for tok in [t for t, (_, used) in self._chats.items() if now - used > self._IDLE_S]:
+            self._wipe(self._chats.pop(tok)[0])
 
     def put(self, token: str, chat: object) -> None:
+        now = self._clock()
+        self._prune(now)
         if len(self._chats) >= self._MAX:
-            self._chats.pop(next(iter(self._chats)), None)   # evict oldest
-        self._chats[token] = chat
+            self._wipe(self._chats.pop(next(iter(self._chats)))[0])   # evict + wipe oldest
+        self._chats[token] = [chat, now]
 
     def get(self, token: str):
-        return self._chats.get(token)
+        now = self._clock()
+        self._prune(now)
+        entry = self._chats.get(token)
+        if entry is None:
+            return None
+        entry[1] = now   # touch
+        return entry[0]
 
 
 def _render_chat_page(csrf: str, stylesheet: str) -> str:
@@ -475,7 +499,7 @@ def build_kickoff_app(
     app = FastAPI(title="StartD8 Kickoff")
     app.state.kickoff_fingerprint = fingerprint
     intents = _IntentStore()  # one-time apply intents for Concierge writes (R3-S1)
-    chats = _ChatStore()       # live agentic chat sessions (web agentic panel)
+    chats = _ChatStore(clock=clock)   # live agentic chat sessions (web agentic panel); idle-expiring
     chat_locks: Dict[str, asyncio.Lock] = {}   # FR-WM2-5c: one in-flight turn per chat session
     app.state.kickoff_agentic_enabled = chat_factory is not None
 
