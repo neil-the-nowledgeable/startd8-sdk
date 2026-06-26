@@ -69,7 +69,9 @@ def test_preflight_refuses_to_execute_without_reviewed_bridge(tmp_path: Path) ->
     assert result["targets"][1]["target_id"] == "m1"
     assert result["suites"][0]["normalized_sha256_actual"] == result["suites"][0]["normalized_sha256"]
     assert result["suites"][0]["bridge"]["status"] == "bridge_required"
-    assert "no reviewed isolated no-egress S4 execution bridge is installed" in result["errors"]
+    assert result["bridge"]["status"] == "not_installed"
+    assert any(error.startswith("reviewed S4 bridge manifest is not installed:") for error in result["errors"])
+    assert "S4 bridge execution remains disabled until the reviewed executor consumes the dry-run gate" in result["errors"]
     assert (tmp_path / "results/mutant_kill_matrix.csv").is_file()
 
 
@@ -112,3 +114,67 @@ def test_preflight_blocks_when_suite_author_row_is_rejected(tmp_path: Path) -> N
 
     assert "intake ledger has rejected suite_author artifacts:1" in result["errors"]
     assert "intake ledger has no accepted suite_author artifacts" in result["errors"]
+
+
+def test_bridge_env_scrubs_secrets_and_redirects_home(tmp_path: Path) -> None:
+    env = s4.scrub_bridge_env(
+        tmp_path,
+        {
+            "PATH": "/bin",
+            "OPENAI_API_KEY": "secret",
+            "GEMINI_TOKEN": "secret",
+            "HOME": "/Users/real",
+            "PYTHONPATH": "/repo/src",
+        },
+    )
+
+    assert env["PATH"] == "/bin"
+    assert env["HOME"] == str(tmp_path)
+    assert env["TMPDIR"] == str(tmp_path)
+    assert "OPENAI_API_KEY" not in env
+    assert "GEMINI_TOKEN" not in env
+    assert "PYTHONPATH" not in env
+
+
+def test_bridge_dry_run_gate_requires_reviewed_manifest(tmp_path: Path) -> None:
+    bridge, errors = s4.bridge_dry_run_gate(tmp_path / "missing.json", tmp_path / "results")
+
+    assert bridge["status"] == "not_installed"
+    assert errors == [f"reviewed S4 bridge manifest is not installed:{tmp_path / 'missing.json'}"]
+
+
+def test_bridge_dry_run_gate_runs_trusted_sentinel_with_real_isolation(tmp_path: Path) -> None:
+    manifest = tmp_path / "s4-bridge-manifest.json"
+    _write_json(
+        manifest,
+        {
+            "status": "reviewed",
+            "require_no_egress": True,
+            "require_scrubbed_env": True,
+            "require_identical_inventory": True,
+            "timeout_seconds": 3,
+            "max_output_bytes": 128,
+        },
+    )
+    captured = {}
+
+    def fake_runner(command, **kwargs):
+        captured["command"] = command
+        captured["env"] = kwargs["env"]
+        captured["cwd"] = kwargs["cwd"]
+        return s4.subprocess.CompletedProcess(command, 0, stdout="s4-bridge-dry-run-ok\n", stderr="")
+
+    bridge, errors = s4.bridge_dry_run_gate(
+        manifest,
+        tmp_path / "results",
+        caps={"sandbox_exec": True, "unshare": False},
+        runner=fake_runner,
+    )
+
+    assert errors == []
+    assert bridge["status"] == "ready"
+    assert bridge["dry_run"]["returncode"] == 0
+    assert bridge["dry_run"]["isolation"] == "seatbelt-no-egress"
+    assert captured["command"][:3] == ["sandbox-exec", "-p", "(version 1)(allow default)(deny network*)"]
+    assert captured["env"]["HOME"] == str(tmp_path / "results/bridge-dry-run-workspace")
+    assert "PYTHONPATH" not in captured["env"]
