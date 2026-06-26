@@ -23,7 +23,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from .capture import CaptureCode, CaptureError, apply_capture, build_capture_plan
 from .docs import live_schema_text, load_kickoff_docs
@@ -255,6 +255,58 @@ def _plan_digest(plan: dict) -> str:
     return hashlib.sha256((plan.get("action", "") + "|" + "|".join(paths)).encode()).hexdigest()[:16]
 
 
+class _ChatStore:
+    """Bounded per-app store of live agentic chat sessions, keyed by the session token."""
+
+    _MAX = 16
+
+    def __init__(self) -> None:
+        self._chats: Dict[str, object] = {}
+
+    def put(self, token: str, chat: object) -> None:
+        if len(self._chats) >= self._MAX:
+            self._chats.pop(next(iter(self._chats)), None)   # evict oldest
+        self._chats[token] = chat
+
+    def get(self, token: str):
+        return self._chats.get(token)
+
+
+def _render_chat_page(token: str, stylesheet: str) -> str:
+    """The agentic Concierge chat panel — message box + transcript + pending proposals."""
+    body = (
+        "<p><a href='/concierge'>← Concierge</a></p><h1>Concierge — chat</h1>"
+        "<p class='muted'>I survey/assess and can RECOMMEND actions. I never write to disk: you "
+        "confirm each recommendation before it applies.</p>"
+        "<div id='log' class='card' style='min-height:8rem'></div>"
+        "<div id='proposals'></div>"
+        "<form id='f' class='field'><input id='msg' name='msg' placeholder='ask about the kickoff…' "
+        "autocomplete='off' style='width:80%'><button type='submit'>Send</button></form>"
+        f"<script>const TOK={token!r};\n"
+        "const log=document.getElementById('log'),prop=document.getElementById('proposals');\n"
+        "function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}\n"
+        "function add(who,t){log.innerHTML+=`<p><strong>${who}:</strong> ${esc(t)}</p>`;log.scrollTop=log.scrollHeight;}\n"
+        "function renderProposals(ps){prop.innerHTML=ps.length?'<h3>Proposed (confirm to apply)</h3>':'';\n"
+        " ps.forEach(p=>{const id=esc(p.id);prop.innerHTML+=`<div class='card'><pre>${esc(p.summary)}</pre>`+\n"
+        "  `<button onclick=\"act('confirm','${id}')\">Confirm</button> `+\n"
+        "  `<button onclick=\"act('discard','${id}')\">Discard</button><div id='r-${id}'></div></div>`;});}\n"
+        "async function act(kind,id){const fd=new FormData();fd.append('token',TOK);fd.append('proposal_id',id);\n"
+        " const r=await fetch('/concierge/chat/'+kind,{method:'POST',body:fd});const j=await r.json();\n"
+        " document.getElementById('r-'+id).innerHTML=esc(kind==='confirm'?(j.code+': '+(j.detail||'')):'discarded');\n"
+        " refresh();}\n"
+        "async function refresh(){const fd=new FormData();fd.append('token',TOK);\n"
+        " const r=await fetch('/concierge/chat/pending',{method:'POST',body:fd});renderProposals((await r.json()).proposals||[]);}\n"
+        "document.getElementById('f').onsubmit=async e=>{e.preventDefault();const m=document.getElementById('msg').value;\n"
+        " if(!m)return;document.getElementById('msg').value='';add('you',m);add('…','thinking');\n"
+        " const fd=new FormData();fd.append('token',TOK);fd.append('message',m);\n"
+        " const r=await fetch('/concierge/chat/message',{method:'POST',body:fd});const j=await r.json();\n"
+        " log.lastChild.remove();add('concierge',j.ok?j.text:('error: '+(j.message||j.code)));\n"
+        " renderProposals(j.proposals||[]);};\n"
+        "</script>"
+    )
+    return _page("Concierge — chat", body, stylesheet)
+
+
 def _render_concierge(view: dict, csrf: str, intents: dict, stylesheet: str) -> str:
     """Render the shared Concierge view-model (the same payload the TUI renders)."""
     s = view["survey"]
@@ -263,6 +315,8 @@ def _render_concierge(view: dict, csrf: str, intents: dict, stylesheet: str) -> 
     parts = [
         "<p><a href='/'>← overview</a></p><h1>Concierge</h1>",
         f"<p class='muted'>{_esc(view['posture_banner'])}</p>",
+        "<p><a href='/concierge/chat'>💬 Chat with the Concierge — conversational, recommends "
+        "actions you confirm</a></p>",
         f"<div class='card'><h2>Next step</h2><p><strong>{_esc(na['title'])}</strong></p>"
         f"<p>{_esc(na['detail'])}</p></div>",
         "<h2>Survey — brownfield triage</h2>",
@@ -313,6 +367,7 @@ def build_kickoff_app(
     theme: str = "professional",
     mode: str = "write",
     clock=time.monotonic,
+    chat_factory: "Optional[Callable[[], object]]" = None,
 ):
     """Build the kickoff web app (FastAPI). Pure function of *project_root* + config + theme.
 
@@ -334,6 +389,8 @@ def build_kickoff_app(
     app = FastAPI(title="StartD8 Kickoff")
     app.state.kickoff_fingerprint = fingerprint
     intents = _IntentStore()  # one-time apply intents for Concierge writes (R3-S1)
+    chats = _ChatStore()       # live agentic chat sessions (web agentic panel)
+    app.state.kickoff_agentic_enabled = chat_factory is not None
 
     def _capture_error(exc: CaptureError, http_status: int = 400) -> JSONResponse:
         return JSONResponse(
@@ -563,5 +620,83 @@ def build_kickoff_app(
         status = 200 if result.ok else (409 if result.code == ConciergeWriteCode.WRITE_BLOCKED else 400)
         return JSONResponse({"ok": result.ok, **result.to_dict()}, status_code=status,
                             headers=dict(_FRAME_DENY_HEADERS))
+
+    # --- agentic chat panel (web agentic surface) ----------------------------------------------
+
+    @app.get("/concierge/chat", response_class=HTMLResponse)
+    def chat_page() -> HTMLResponse:
+        if chat_factory is None:
+            return HTMLResponse(
+                _page("Concierge — chat",
+                      "<p><a href='/concierge'>← Concierge</a></p><h1>Agentic chat not enabled</h1>"
+                      "<p>Start the server with an agent (e.g. <code>startd8 kickoff start --agent "
+                      "anthropic:claude-sonnet-4-6</code>) to enable the conversational Concierge.</p>",
+                      stylesheet),
+                headers=dict(_FRAME_DENY_HEADERS))
+        token = sessions.issue(clock())
+        chats.put(token, chat_factory())
+        resp = HTMLResponse(_render_chat_page(token, stylesheet), headers=dict(_FRAME_DENY_HEADERS))
+        resp.set_cookie("kickoff_csrf", token, httponly=True, samesite="strict")
+        return resp
+
+    @app.post("/concierge/chat/message")
+    async def chat_message(token: str = Form(...), message: str = Form(...),
+                           host: Optional[str] = Header(default=None)) -> JSONResponse:
+        from .telemetry import kickoff_span
+        if not _host_ok(host):
+            return JSONResponse({"ok": False, "code": "forbidden_host"}, status_code=403)
+        chat = chats.get(token)
+        if chat is None:
+            return JSONResponse({"ok": False, "code": "session_expired",
+                                 "message": "reload the chat page"}, status_code=403)
+        if not sessions.rate_ok(token, clock()):   # bound LLM-spend turns
+            return JSONResponse({"ok": False, "code": "rate_limited"}, status_code=429)
+        with kickoff_span("kickoff.concierge.chat_turn"):
+            result = await chat.ask(message)
+        proposals = [{"id": a.id, "kind": a.kind, "summary": a.summary()}
+                     for a in chat.buffer.pending()]
+        return JSONResponse({"ok": True, "text": result.text, "cost": chat.cost_line(result),
+                             "proposals": proposals}, headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.post("/concierge/chat/pending")
+    def chat_pending(token: str = Form(...)) -> JSONResponse:
+        chat = chats.get(token)
+        proposals = ([{"id": a.id, "kind": a.kind, "summary": a.summary()}
+                      for a in chat.buffer.pending()] if chat else [])
+        return JSONResponse({"ok": True, "proposals": proposals}, headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.post("/concierge/chat/confirm")
+    def chat_confirm(token: str = Form(...), proposal_id: str = Form(...),
+                     host: Optional[str] = Header(default=None)) -> JSONResponse:
+        from .proposals import apply_proposal
+        from .telemetry import EV_PROPOSAL_CONFIRMED, emit
+        gate = _concierge_write_gate(host, token, clock())   # token is the chat+csrf token
+        if gate is not None:
+            return gate
+        chat = chats.get(token)
+        if chat is None:
+            return JSONResponse({"ok": False, "code": "session_expired"}, status_code=403)
+        action = next((a for a in chat.buffer.pending() if a.id == proposal_id), None)
+        if action is None:
+            return JSONResponse({"ok": False, "code": "no_such_proposal"}, status_code=404)
+        outcome = apply_proposal(root, action, config=cfg)
+        if not outcome.retriable:                 # pop on terminal success/failure; keep if retriable
+            chat.buffer.pop(action.id)
+        emit(EV_PROPOSAL_CONFIRMED, kind=outcome.kind, code=outcome.code)
+        package_state = build_concierge_view(root)["instantiate_offer"]["package_state"]
+        status = 200 if outcome.ok else (409 if outcome.retriable else 400)
+        return JSONResponse({"ok": outcome.ok, "code": outcome.code, "detail": outcome.detail,
+                             "retriable": outcome.retriable, "package_state": package_state},
+                            status_code=status, headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.post("/concierge/chat/discard")
+    def chat_discard(token: str = Form(...), proposal_id: str = Form(...)) -> JSONResponse:
+        from .telemetry import EV_PROPOSAL_DISCARDED, emit
+        chat = chats.get(token)
+        if chat is not None:
+            kind = next((a.kind for a in chat.buffer.pending() if a.id == proposal_id), "?")
+            chat.buffer.pop(proposal_id)
+            emit(EV_PROPOSAL_DISCARDED, kind=kind)
+        return JSONResponse({"ok": True}, headers=dict(_FRAME_DENY_HEADERS))
 
     return app

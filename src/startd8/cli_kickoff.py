@@ -198,9 +198,14 @@ def start_cmd(
     mode: str = typer.Option("write", "--mode", help="inspect | preview | write | demo (R4-F5)."),
     theme: str = typer.Option("professional", "--theme", help="Presentation-polish theme."),
     port: Optional[int] = typer.Option(None, "--port", help="Bind port (default: ephemeral)."),
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="Enable the web agentic chat panel with this agent (spends tokens)."),
 ) -> None:
-    """Serve the interactive kickoff web app on the loopback (preflight first; teardown on exit)."""
-    from .kickoff_experience.serve import Mode, preflight, serve_kickoff
+    """Serve the interactive kickoff web app on the loopback (preflight first; teardown on exit).
+
+    Pass --agent to enable the conversational Concierge chat panel at /concierge/chat.
+    """
+    from .kickoff_experience.serve import Mode, make_chat_factory, preflight, serve_kickoff
 
     if mode not in Mode.ALL:
         console.print(f"[red]unknown mode {mode!r}[/red] (one of {Mode.ALL})")
@@ -212,8 +217,12 @@ def start_cmd(
     if not pf.ok:
         console.print("[red]preflight failed — not serving.[/red]")
         raise typer.Exit(_EXIT_FATAL)
+    if agent:
+        enabled = make_chat_factory(project, agent) is not None
+        console.print(f"  {'[green]✓[/green]' if enabled else '[yellow]•[/yellow]'} agentic chat: "
+                      + (f"enabled ({agent})" if enabled else f"could not resolve {agent!r} — panel disabled"))
     console.print(f"[green]serving kickoff[/green] (mode={mode}, theme={theme}) — Ctrl-C to stop")
-    serve_kickoff(project, mode=mode, theme=theme, port=port)
+    serve_kickoff(project, mode=mode, theme=theme, port=port, agent_spec=agent)
 
 
 @kickoff_app.command("chat")
