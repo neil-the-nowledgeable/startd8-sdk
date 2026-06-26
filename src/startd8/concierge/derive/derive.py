@@ -140,7 +140,9 @@ def _check(
     graph, report = build_entity_graph(result)
     report.flags.extend(excl_flags)
     raw = parity_against_live(graph, live_schema_text)
-    prefixes = _flag_prefixes(report)
+    # semantic_diff lines are "{Entity}.{field}: …" — anchor on the ':' boundary so a flagged
+    # field "tag" does not falsely suppress drift on a different field "tags".
+    prefixes = {f"{p}:" for p in _flag_prefixes(report)}
     kept, excluded = [], []
     for line in raw:
         if any(line.startswith(p) for p in prefixes):
