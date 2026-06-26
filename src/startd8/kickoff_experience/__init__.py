@@ -20,6 +20,15 @@ Public read-only API (the data spine):
 
 from __future__ import annotations
 
+from .manifest import (
+    FieldDef,
+    KickoffExperienceConfig,
+    LintIssue,
+    StepDef,
+    WriteTarget,
+    default_config,
+    lint_config,
+)
 from .readiness import (
     BUDGET_INITIAL_MS,
     BUDGET_REFRESH_MS,
@@ -58,4 +67,12 @@ __all__ = [
     "PerfSample",
     "ReadinessView",
     "build_readiness",
+    # M3 — experience config
+    "FieldDef",
+    "KickoffExperienceConfig",
+    "LintIssue",
+    "StepDef",
+    "WriteTarget",
+    "default_config",
+    "lint_config",
 ]
