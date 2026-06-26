@@ -83,6 +83,8 @@ def test_funnel_event_names_are_stable() -> None:
     assert set(FUNNEL_EVENTS) == {
         "session_started", "step_entered", "preview_built", "field_captured",
         "gap_closed", "capture_failed", "friction_logged",
+        # Concierge mode (M-CM5)
+        "survey_viewed", "kickoff_instantiated", "concierge_write_refused",
     }
 
 

@@ -214,3 +214,28 @@ def start_cmd(
         raise typer.Exit(_EXIT_FATAL)
     console.print(f"[green]serving kickoff[/green] (mode={mode}, theme={theme}) — Ctrl-C to stop")
     serve_kickoff(project, mode=mode, theme=theme, port=port)
+
+
+@kickoff_app.command("concierge")
+def concierge_cmd(
+    project: Path = typer.Argument(Path("."), help="Project root to onboard (Concierge mode)."),
+    posture: str = typer.Option("prototype", "--posture", help="prototype | production (instantiate)."),
+) -> None:
+    """Concierge mode in the terminal: survey, instantiate a kickoff package, log friction.
+
+    Read-only triage + readiness; writes (instantiate / friction) happen only on an explicit
+    confirmation and fail closed when no interactive terminal is available.
+    """
+    from .kickoff_experience.tui_concierge import (
+        _questionary_confirm,
+        _questionary_prompt,
+        run_concierge,
+    )
+
+    run_concierge(
+        str(project),
+        confirm=_questionary_confirm,
+        prompt=_questionary_prompt,
+        emit_line=lambda line: console.print(line),
+        posture=posture,
+    )
