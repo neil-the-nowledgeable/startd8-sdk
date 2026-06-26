@@ -65,6 +65,13 @@ def check(
         "--project",
         help="Consumer project root: enables the contract DIFF against prisma/schema.prisma.",
     ),
+    contract: Optional[Path] = typer.Option(
+        None,
+        "--contract",
+        help="Path to an authored schema.prisma. Contract-first projects (no prose `## Entities`) "
+        "resolve assembly-manifest entity references — views Root, completeness, imports — against it "
+        "(FR-CFE). Overrides --project's prisma/schema.prisma when both are given.",
+    ),
     json_out: bool = typer.Option(
         False, "--json", help="Emit the extraction report JSON to stdout (machine output)."
     ),
@@ -85,10 +92,12 @@ def check(
             raise typer.Exit(_EXIT_FATAL)
 
     live_schema_text = None
-    if project is not None:
-        schema = project / "prisma" / "schema.prisma"
-        if schema.is_file():
-            live_schema_text = schema.read_text(encoding="utf-8")
+    # An explicit --contract wins over --project's conventional prisma/schema.prisma.
+    schema_path = contract if contract is not None else (
+        project / "prisma" / "schema.prisma" if project is not None else None
+    )
+    if schema_path is not None and schema_path.is_file():
+        live_schema_text = schema_path.read_text(encoding="utf-8")
 
     result = extract_manifests(doc_texts, live_schema_text=live_schema_text)
 

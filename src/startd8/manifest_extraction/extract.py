@@ -27,7 +27,15 @@ from ..kickoff_inputs import (
     parse_business_targets,
     parse_conventions,
 )
-from .entities import EntityGraph, diff_against_live, extract_entities, extract_enums
+from ..languages.prisma_parser import parse_prisma_schema
+from .entities import (
+    EntityGraph,
+    diff_against_live,
+    extract_entities,
+    extract_enums,
+    graph_from_prisma,
+    merge_contract_graph,
+)
 from .extractors import (
     extract_ai_passes,
     extract_app,
@@ -156,7 +164,12 @@ def extract_manifests(
     graph, per_doc_sections = _build_graph(docs, records)
 
     if live_schema_text:
-        result.contract_diff = diff_against_live(graph, live_schema_text)
+        # FR-WPI-8 DIFF: prose-declared entities vs the live contract. In a contract-first project
+        # (no prose `## Entities`) there is nothing authored to drift, so the diff is moot — skip the
+        # all-models-extra noise. FR-CFE-1/2/3: then merge the contract-derived graph so the assembly
+        # extractors resolve entity references from the contract (prose wins; prose-only is unchanged).
+        result.contract_diff = diff_against_live(graph, live_schema_text) if graph.entities else []
+        merge_contract_graph(graph, graph_from_prisma(parse_prisma_schema(live_schema_text)))
 
     candidates: Dict[str, Optional[dict]] = {}
     for label, text, sections in per_doc_sections:

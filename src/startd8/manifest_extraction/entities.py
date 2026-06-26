@@ -494,3 +494,123 @@ def diff_against_live(graph: EntityGraph, live_schema_text: str) -> List[str]:
             if f.name not in live_fields:
                 out.append(f"{name}.{f.name}: declared in docs, absent from live contract")
     return out
+
+
+# --------------------------------------------------------------------------- #
+# FR-CFE: build the EntityGraph FROM an authored contract (the reverse of the emitter).
+# Contract-first projects author `prisma/schema.prisma` as the single source of truth and have no
+# prose `## Entities` section — so the assembly extractors (views/completeness/imports) had nothing
+# to resolve references against. This reconstructs the resolution-supporting half of the graph
+# (entities/fields/enums/fk_parents/joins) from a parsed schema; `resolve_entity`/`join_between` then
+# work identically to a prose-derived graph. Emission-only attributes (loose_refs / reverse_names /
+# indexes / uniques) are NOT reconstructed — in contract-first mode the schema already exists, so the
+# entities pass runs in DIFF mode and never re-emits.
+# --------------------------------------------------------------------------- #
+
+_PRISMA_TO_PLAIN = {
+    "String": "text", "Int": "number", "Float": "decimal",
+    "DateTime": "date", "Boolean": "yes/no",
+}
+_DEFAULT_ATTR_RE = re.compile(r"@default\((.*)\)")
+_FK_FIELDS_RE = re.compile(r"fields:\s*\[([^\]]+)\]")
+
+
+def _owns_fk(f) -> bool:
+    """True for the FK-OWNING side of a relation (the child): a non-list object relation whose
+    ``@relation`` names the scalar FK column(s). The reverse list (``Type[]``) and a bare 1:1 back-ref
+    (no ``fields:``) are excluded — only the side that actually holds the foreign key."""
+    return (
+        f.has_relation_attr and not f.is_list
+        and any(a.startswith("@relation(") and "fields:" in a for a in f.attributes)
+    )
+
+
+def _fk_columns(f) -> Tuple[str, ...]:
+    for a in f.attributes:
+        m = _FK_FIELDS_RE.search(a)
+        if m:
+            return tuple(c.strip() for c in m.group(1).split(",") if c.strip())
+    return ()
+
+
+def _field_default(f) -> Optional[str]:
+    for a in f.attributes:
+        m = _DEFAULT_ATTR_RE.match(a)
+        if m:
+            return m.group(1)
+    return None
+
+
+def graph_from_prisma(schema: PrismaSchema, *, doc_label: str = "<contract>") -> EntityGraph:
+    """Reconstruct an :class:`EntityGraph` from a parsed ``schema.prisma`` (FR-CFE-1).
+
+    Classifies each model as an entity or an explicit **M2M join** (exactly two FK-owning relations +
+    a compound ``@@unique``/``@@id`` over those FK columns); populates ``entities`` (with ``DocField``s
+    for every scalar column), ``enums``, ``fk_parents`` (1:N), and ``joins`` (M2M). Implicit Prisma
+    many-to-many (no explicit join model) is out of scope (v1) — such pairs simply won't resolve a
+    ``Shows:`` arrow (a flag, never a crash). Project-agnostic (FR-CFE-5)."""
+    graph = EntityGraph()
+    graph.enums.update(schema.enums)
+
+    # First classify the explicit join tables so they are excluded from `entities` and the FK pass.
+    joins: Dict[str, Tuple[str, str]] = {}
+    for name, model in schema.models.items():
+        owning = [f for f in model.fields if _owns_fk(f)]
+        if len(owning) != 2:
+            continue
+        cols: set = set()
+        for f in owning:
+            cols.update(_fk_columns(f))
+        if len(cols) >= 2 and any(set(ck) == cols for ck in model.compound_unique_keys):
+            joins[name] = (owning[0].type, owning[1].type)
+    for name, (left, right) in joins.items():
+        graph.joins.append(JoinModel(name=name, left=left, right=right))
+
+    for name, model in schema.models.items():
+        if name in joins:
+            continue
+        fields: List[DocField] = []
+        for i, f in enumerate(schema.scalar_fields(name)):
+            enum_vals = schema.enums.get(f.type)
+            fields.append(DocField(
+                name=f.name,
+                plain_type=_PRISMA_TO_PLAIN.get(f.type, f.type),
+                prisma_type=f.type,
+                required=not f.is_optional,
+                notes="",
+                human_only=False,
+                row_index=i,
+                default=_field_default(f),
+                is_list=f.is_list,
+                enum_values=enum_vals,
+            ))
+        graph.entities[name] = DocEntity(
+            name=name, fields=tuple(fields), heading_path=(doc_label, name)
+        )
+        # fk_parents: each FK-owning relation on this (non-join) entity points to its parent.
+        for f in model.fields:
+            if _owns_fk(f) and f.type in schema.models and f.type not in joins:
+                dst = graph.fk_parents.setdefault(name, [])
+                if f.type not in dst:
+                    dst.append(f.type)
+    return graph
+
+
+def merge_contract_graph(graph: EntityGraph, contract: EntityGraph) -> None:
+    """Merge a contract-derived *contract* graph into the (prose-derived) *graph* in place (FR-CFE-2).
+
+    **Prose wins**: an entity/enum/join already present from prose is left untouched, so a prose-only
+    project is byte-identical and the contract only FILLS the entities the prose lacks. Additive across
+    every resolution attribute (entities, enums, fk_parents, joins)."""
+    for name, ent in contract.entities.items():
+        graph.entities.setdefault(name, ent)
+    for name, vals in contract.enums.items():
+        graph.enums.setdefault(name, vals)
+    for child, parents in contract.fk_parents.items():
+        dst = graph.fk_parents.setdefault(child, [])
+        for p in parents:
+            if p not in dst:
+                dst.append(p)
+    for j in contract.joins:
+        if graph.join_between(j.left, j.right) is None:
+            graph.joins.append(j)
