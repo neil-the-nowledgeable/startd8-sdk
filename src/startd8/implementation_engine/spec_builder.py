@@ -159,8 +159,12 @@ def _fence_untrusted(content: str, content_type: str) -> str:
     if not content or not content.strip():
         return content
     from ..contractors.context_formatters import wrap_user_content
+    from ..security import normalize_untrusted_text
 
-    return wrap_user_content(content, content_type)
+    # Normalize (strip null/control chars, repair UTF-8, bound size) before
+    # fencing (FR-A2) — removes a fence-evasion vector and hands the fence clean,
+    # bounded text. Idempotent for already-fenced PIPELINE content.
+    return wrap_user_content(normalize_untrusted_text(content), content_type)
 
 
 def build_spec_plan_section(

@@ -693,8 +693,49 @@ def sanitize_prompt_content(content: str) -> str:
     
     if not content:
         raise ValidationError("Prompt content cannot be empty after sanitization", field="content")
-    
+
     return content
+
+
+# Untrusted-text cap policy (FR-A2a). Per-field input cap applied at the fence
+# boundary; distinct from MAX_PROMPT_LENGTH (the outbound full-prompt total guard
+# enforced by the throwing sanitize_prompt_content). Generous so legitimate
+# requirement/plan text is never silently lost — it bounds pathological/DoS input,
+# not normal content. Section builders apply their own tighter display budgets.
+MAX_UNTRUSTED_FIELD_CHARS = 200_000
+
+# C0/C1 control characters except tab (\x09), newline (\x0a), carriage return (\x0d).
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def normalize_untrusted_text(
+    text: str, max_chars: Optional[int] = MAX_UNTRUSTED_FIELD_CHARS
+) -> str:
+    """Non-throwing normalization of untrusted text before prompt fencing (FR-A2).
+
+    Unlike :func:`sanitize_prompt_content` (which *raises* on empty/oversized/
+    invalid input), this never raises — it is meant to run at the untrusted-text
+    boundary where rejecting would drop legitimate content. It:
+
+    - returns ``""`` for falsy input (no raise on empty),
+    - repairs invalid UTF-8 / lone surrogates deterministically (replacement),
+    - strips null bytes and C0/C1 control characters (keeping tab/newline/CR),
+    - truncates to ``max_chars`` when set (``None`` disables the cap).
+
+    Control-character stripping removes a common fence-evasion vector (e.g. a
+    NUL or escape byte spliced mid-``</context>``). Fencing remains the boundary;
+    this just hands the fence clean, bounded text.
+    """
+    if not text:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    # Deterministically repair any invalid UTF-8 / lone surrogates.
+    text = text.encode("utf-8", "replace").decode("utf-8", "replace")
+    text = _CONTROL_CHARS_RE.sub("", text)
+    if max_chars is not None and len(text) > max_chars:
+        text = text[:max_chars]
+    return text
 
 
 def validate_env_var_name(name: str) -> str:
