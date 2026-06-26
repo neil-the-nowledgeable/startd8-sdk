@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from ..agents.agentic import AgenticResult, AgenticSession, SessionConfig, ToolRegistry, ToolSpec
 from ..agents.base import BaseAgent
@@ -173,3 +173,42 @@ def new_kickoff_chat(
         config=config,
     )
     return KickoffChat(session=session, project_root=str(project_root))
+
+
+# --- REPL host (expose the read-only agentic chat) ---------------------------------------------
+
+# Inputs the driver treats as "end the session".
+_QUIT_WORDS = frozenset({"", "exit", "quit", ":q", "q"})
+
+
+def run_kickoff_repl(
+    *,
+    banner: str,
+    ask_sync: "Callable[[str], AgenticResult]",
+    read_input: "Callable[[str], Optional[str]]",
+    emit_line: "Callable[[str], None]",
+    cost_line: "Callable[[AgenticResult], str]" = lambda r: "",
+    max_turns: int = 100,
+) -> int:
+    """Drive a read-only kickoff chat REPL. Pure of the agent/IO so it is testable.
+
+    *ask_sync* turns one user message into an :class:`AgenticResult` synchronously (the command wraps
+    the async ``KickoffChat.ask`` in ``asyncio.run``). *read_input* returns the next user line or
+    ``None`` (EOF / non-TTY) to end. Returns the number of completed turns.
+    """
+    emit_line(banner)
+    emit_line("(read-only — I can survey, assess, and report kickoff state; I cannot edit files. "
+              "Empty line / 'quit' to exit.)")
+    turns = 0
+    while turns < max_turns:
+        message = read_input("you> ")
+        if message is None or message.strip().lower() in _QUIT_WORDS:
+            break
+        result = ask_sync(message)
+        emit_line(result.text)
+        line = cost_line(result)
+        if line:
+            emit_line(line)
+        turns += 1
+    return turns
+

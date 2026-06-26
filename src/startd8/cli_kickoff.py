@@ -216,6 +216,51 @@ def start_cmd(
     serve_kickoff(project, mode=mode, theme=theme, port=port)
 
 
+@kickoff_app.command("chat")
+def chat_cmd(
+    project: Path = typer.Argument(Path("."), help="Project root to discuss (read-only)."),
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="Agent spec provider:model (default: balanced catalog model)."),
+) -> None:
+    """Conversational, READ-ONLY kickoff assistant (spends LLM tokens).
+
+    Hosts the agentic loop with exactly the read tools survey/assess/field_states — it can explain
+    inputs, report what the grammar understood, and advise the next step, but never edits files.
+    """
+    import asyncio
+
+    from .kickoff_experience.chat import new_kickoff_chat, run_kickoff_repl
+    from .model_catalog import Models
+    from .utils.agent_resolution import resolve_agent_spec
+
+    spec = agent or Models.CLAUDE_SONNET_LATEST
+    try:
+        the_agent = resolve_agent_spec(spec)
+    except Exception as exc:  # missing key / unknown provider → actionable, not a traceback
+        console.print(f"[red]could not start agent {spec!r}:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL)
+    try:
+        chat = new_kickoff_chat(the_agent, str(project))
+    except Exception as exc:
+        console.print(f"[red]agent {spec!r} does not support tool use:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL)
+
+    def _read(prompt: str) -> Optional[str]:
+        try:
+            return typer.prompt(prompt, default="", show_default=False)
+        except (EOFError, KeyboardInterrupt):
+            return None
+
+    console.print(f"[dim]agent: {spec}[/dim]")
+    run_kickoff_repl(
+        banner=chat.banner(),
+        ask_sync=lambda m: asyncio.run(chat.ask(m)),
+        read_input=_read,
+        emit_line=lambda line: console.print(line),
+        cost_line=chat.cost_line,
+    )
+
+
 @kickoff_app.command("concierge")
 def concierge_cmd(
     project: Path = typer.Argument(Path("."), help="Project root to onboard (Concierge mode)."),
