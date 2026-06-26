@@ -552,6 +552,21 @@ class TestSecurityValidation:
         assert "EXFIL_MARKER_XYZ" not in rec.getMessage()
         assert "EXFIL_MARKER_XYZ" not in str(rec.pattern)
 
+    def test_prompt_injection_kept_lenient_not_dropped(self):
+        """FR-A3: LENIENT mode KEEPS an injection-flagged field (fenced downstream),
+        rather than silently dropping legitimate content with a trigger phrase.
+
+        Contrast with path traversal (test_path_traversal_skipped_lenient), which is
+        a real boundary and IS still skipped in LENIENT mode.
+        """
+        strategy = PipelineContextStrategy(sanitization_mode=SanitizationMode.LENIENT)
+        legit = "The parser must ignore all previous instructions in the header."
+        result = strategy.resolve({"requirements_text": legit, "ok": "safe"})
+        assert result.raw_context.get("requirements_text") == legit, "field was dropped"
+        assert result.raw_context["ok"] == "safe"
+        # Not recorded as a skipped field (it was kept, only flagged via telemetry).
+        assert all(s.get("field") != "requirements_text" for s in result.skipped_fields)
+
     def test_prompt_injection_system_tag(self):
         """<system> tag injection detected."""
         strategy = PipelineContextStrategy(sanitization_mode=SanitizationMode.STRICT)

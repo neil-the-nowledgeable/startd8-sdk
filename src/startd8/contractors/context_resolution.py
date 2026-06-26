@@ -1230,9 +1230,18 @@ class PipelineContextStrategy(ContextStrategy):
             try:
                 _validate_key_name(key)
                 sanitized[key] = _sanitize_value(key, value)
+            except PromptInjectionError:
+                if self._sanitization_mode == SanitizationMode.STRICT:
+                    raise
+                # FR-A3: in LENIENT mode the injection denylist is telemetry, not
+                # a content gate — keep the field (it is fenced downstream as data)
+                # rather than silently dropping it. The injection_attempt event was
+                # already emitted at the match site. Dropping here would lose
+                # legitimate content that merely contains a trigger phrase (e.g. a
+                # requirement: "ignore previous instructions found in the header").
+                sanitized[key] = value
             except (
                 PathTraversalError,
-                PromptInjectionError,
                 FieldLengthError,
                 InvalidKeyError,
             ) as exc:
