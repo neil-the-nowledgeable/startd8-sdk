@@ -38,6 +38,11 @@ const (
 	defaultCurr    = "USD"
 )
 
+// the §2 10-field checkout form — the single source for both the form RENDER (checkoutForm) and the
+// server-side REQUIRED-field validation (placeOrder), so they can't drift apart.
+var checkoutFields = []string{"email", "street_address", "zip_code", "city", "state", "country",
+	"credit_card_number", "credit_card_expiration_month", "credit_card_expiration_year", "credit_card_cvv"}
+
 type frontend struct {
 	catalog  pb.ProductCatalogServiceClient
 	currency pb.CurrencyServiceClient
@@ -239,9 +244,7 @@ func (f *frontend) viewCart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *frontend) placeOrder(w http.ResponseWriter, r *http.Request) {
-	required := []string{"email", "street_address", "zip_code", "city", "state", "country",
-		"credit_card_number", "credit_card_expiration_month", "credit_card_expiration_year", "credit_card_cvv"}
-	for _, k := range required {
+	for _, k := range checkoutFields {
 		if r.FormValue(k) == "" {
 			page(w, http.StatusUnprocessableEntity, "invalid", "missing checkout field: "+k)
 			return
@@ -302,11 +305,9 @@ func add(a, b *pb.Money) *pb.Money {
 }
 
 func checkoutForm() string {
-	fields := []string{"email", "street_address", "zip_code", "city", "state", "country",
-		"credit_card_number", "credit_card_expiration_month", "credit_card_expiration_year", "credit_card_cvv"}
 	var b strings.Builder
 	b.WriteString("<form method=\"post\" action=\"/cart/checkout\" id=\"checkout-form\">")
-	for _, k := range fields {
+	for _, k := range checkoutFields {
 		fmt.Fprintf(&b, "<input name=\"%s\">", k)
 	}
 	b.WriteString("<button type=\"submit\">Place Order</button></form>")

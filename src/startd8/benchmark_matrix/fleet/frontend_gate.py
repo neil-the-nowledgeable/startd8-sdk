@@ -14,6 +14,7 @@ mock), no docker.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -91,11 +92,20 @@ def _safe(client: httpx.Client, method: str, path: str, **kw) -> httpx.Response:
         return httpx.Response(599, text=f"transport error: {e}")
 
 
-def _stage_boot(client: httpx.Client) -> bool:
-    """process binds + GET /_healthz (or /) → 200 within the deadline."""
-    if _safe(client, "GET", FC.HEALTH_ROUTE.path).status_code == 200:
-        return True
-    return _safe(client, "GET", "/").status_code == 200
+def _stage_boot(client: httpx.Client, *, startup_timeout: float) -> bool:
+    """process binds + GET /_healthz (or /) → 200 **within the startup deadline** (§4 stage 1). The
+    gate owns the readiness wait — it boots a freshly-started frontend, so a single check would flake
+    on a slow boot; poll until ready or the deadline (a dead frontend fails fast: each GET errors
+    immediately)."""
+    deadline = time.monotonic() + max(0.0, startup_timeout)
+    while True:
+        if _safe(client, "GET", FC.HEALTH_ROUTE.path).status_code == 200:
+            return True
+        if _safe(client, "GET", "/").status_code == 200:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.5)
 
 
 def _stage_routes(client: httpx.Client) -> bool:
@@ -116,14 +126,17 @@ def _stage_routes(client: httpx.Client) -> bool:
     return ok
 
 
-def run_gate(base_url: str, *, timeout: float = 10.0, now_year: int | None = None) -> GateResult:
+def run_gate(base_url: str, *, timeout: float = 10.0, startup_timeout: float = 30.0,
+             now_year: int | None = None) -> GateResult:
     """Run the §4 gate against the frontend at ``base_url`` (wired to a known-good backend fleet) and
-    resolve the substitution verdict. BOOT→ROUTES→JOURNEY are blocking; ORCHESTRATION is advisory."""
+    resolve the substitution verdict. BOOT→ROUTES→JOURNEY are blocking; ORCHESTRATION is advisory.
+    ``startup_timeout`` bounds the BOOT readiness poll (the gate owns the boot wait); ``timeout`` is the
+    per-request deadline."""
     results: dict[FC.GateStage, bool] = {}
     fidelity = 0.0
     order_id = ""
     with httpx.Client(base_url=base_url, follow_redirects=False, timeout=timeout) as client:
-        results[FC.GateStage.BOOT] = _stage_boot(client)
+        results[FC.GateStage.BOOT] = _stage_boot(client, startup_timeout=startup_timeout)
         results[FC.GateStage.ROUTES] = _stage_routes(client) if results[FC.GateStage.BOOT] else False
         if results[FC.GateStage.ROUTES]:
             # a FRESH session for the stateful journey (the route checks above mutated the cookie jar)

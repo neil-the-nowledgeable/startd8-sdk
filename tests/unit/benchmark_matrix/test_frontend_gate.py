@@ -128,8 +128,8 @@ def test_missing_route_fails_at_routes_stage():
 
 
 def test_dead_frontend_fails_at_boot():
-    # nothing listening on this port → boot fails fast
-    res = G.run_gate("http://127.0.0.1:1", timeout=1.0)
+    # nothing listening on this port → boot poll exhausts the (short) startup deadline → fail at boot
+    res = G.run_gate("http://127.0.0.1:1", timeout=1.0, startup_timeout=1.0)
     assert res.verdict.failing_stage == "boot"
 
 
