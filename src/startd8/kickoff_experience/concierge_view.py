@@ -39,6 +39,7 @@ PACKAGE_COMPLETE = "complete"
 
 # Survey memo: {root: (monotonic_stamp, survey_dict)}. Cheap TTL guard for repeated GET /concierge.
 _SURVEY_TTL_S = 5.0
+_SURVEY_CACHE_MAX = 64  # bound entries so a multi-root process can't accumulate stale surveys
 _survey_cache: Dict[str, Tuple[float, dict]] = {}
 
 
@@ -51,6 +52,8 @@ def cached_survey(project_root: str, *, ttl: float = _SURVEY_TTL_S, clock: Calla
     if hit is not None and (now - hit[0]) < ttl:
         return hit[1]
     survey = build_survey(project_root)
+    if project_root not in _survey_cache and len(_survey_cache) >= _SURVEY_CACHE_MAX:
+        _survey_cache.pop(next(iter(_survey_cache)), None)  # evict oldest
     _survey_cache[project_root] = (now, survey)
     return survey
 

@@ -15,7 +15,6 @@ from typing import Callable, Dict, List, Optional
 
 from .concierge_apply import (
     ConciergeInputError,
-    ConciergeWriteCode,
     apply_concierge_plan,
     validate_friction,
 )

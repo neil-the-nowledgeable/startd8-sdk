@@ -227,13 +227,21 @@ def _host_ok(host_header: Optional[str]) -> bool:
 
 class _IntentStore:
     """One-time apply-intents (R3-S1): a preview issues an intent bound to (action, digest); apply
-    consumes it exactly once, so a double-submit/replay does not write twice."""
+    consumes it exactly once, so a double-submit/replay does not write twice.
+
+    Bounded (FIFO) so abandoned intents — a Concierge page viewed but never applied — cannot grow
+    without limit on a long-running local server.
+    """
+
+    _MAX = 256
 
     def __init__(self) -> None:
         self._intents: Dict[str, tuple] = {}
 
     def issue(self, action: str, digest: str) -> str:
         token = secrets.token_urlsafe(18)
+        if len(self._intents) >= self._MAX:
+            self._intents.pop(next(iter(self._intents)), None)  # evict oldest
         self._intents[token] = (action, digest)
         return token
 

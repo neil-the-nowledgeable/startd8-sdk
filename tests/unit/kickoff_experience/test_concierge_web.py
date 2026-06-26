@@ -145,3 +145,13 @@ def test_preview_mode_refuses_concierge_write(tmp_path: Path) -> None:
                     data={"posture": "prototype", "csrf": csrf, "intent": tokens[0]})
     assert r.status_code == 403
     assert r.json()["code"] == "preview_only"
+
+
+def test_intent_store_is_bounded() -> None:
+    # Code-review fix: abandoned intents (viewed, never applied) must not grow without limit.
+    from startd8.kickoff_experience.web import _IntentStore
+
+    store = _IntentStore()
+    for _ in range(_IntentStore._MAX + 50):
+        store.issue("instantiate", "d")
+    assert len(store._intents) <= _IntentStore._MAX
