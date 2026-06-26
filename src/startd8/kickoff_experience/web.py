@@ -204,11 +204,14 @@ def build_kickoff_app(
     *,
     config: Optional[KickoffExperienceConfig] = None,
     theme: str = "professional",
+    mode: str = "write",
     clock=time.monotonic,
 ):
     """Build the kickoff web app (FastAPI). Pure function of *project_root* + config + theme.
 
-    *clock* is injectable so rate-limit/expiry behavior is testable without real time.
+    *mode* is the R4-F5 feature mode: ``write`` (default) allows applies; ``preview`` /
+    ``inspect`` refuse apply (the surface is read/preview only); ``demo`` allows applies on a
+    fixture. *clock* is injectable so rate-limit/expiry behavior is testable without real time.
     """
     from fastapi import FastAPI, Form
     from fastapi.responses import HTMLResponse, JSONResponse
@@ -275,6 +278,13 @@ def build_kickoff_app(
         value: str = Form(...),
         csrf: str = Form(...),
     ) -> JSONResponse:
+        # Feature-mode gate (R4-F5): preview/inspect modes cannot reach apply_write_plan.
+        if mode in ("preview", "inspect"):
+            return JSONResponse(
+                {"ok": False, "code": "preview_only",
+                 "message": f"mode {mode!r} is read/preview only; use /capture/preview"},
+                status_code=403,
+            )
         now = clock()
         if not sessions.valid(csrf, now):
             return JSONResponse(

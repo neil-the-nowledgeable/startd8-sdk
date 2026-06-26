@@ -154,3 +154,63 @@ def _render(result: ExtractionResult) -> None:
             console.print(f"  [yellow]• {line}[/yellow]")
     elif result.contract_diff == [] and result.records:
         console.print("[dim]Contract DIFF: clean (or no live contract supplied).[/dim]")
+
+
+@kickoff_app.command("lint-config")
+def lint_config_cmd() -> None:
+    """Lint the SDK-internal kickoff experience config (R3-S2). Exit 1 if any issue."""
+    from .kickoff_experience.manifest import default_config, lint_config
+
+    issues = lint_config(default_config())
+    if not issues:
+        console.print("[green]kickoff config: clean[/green]")
+        return
+    for issue in issues:
+        console.print(f"[red]✗[/red] {issue.field_key}: [yellow]{issue.code}[/yellow] — {issue.message}")
+    raise typer.Exit(_EXIT_CONFORMANCE)
+
+
+@kickoff_app.command("inspect")
+def inspect_cmd(
+    project: Path = typer.Argument(Path("."), help="Project root (default: current directory)."),
+    json_out: bool = typer.Option(True, "--json/--no-json", help="Emit inspect JSON to stdout."),
+) -> None:
+    """Read-only kickoff state for CI/agents (R4-F3): no serve, no port, no write."""
+    import json as _json
+
+    from .kickoff_experience.serve import inspect_payload
+
+    payload = inspect_payload(project)
+    if json_out:
+        sys.stdout.write(_json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    else:
+        state = payload["state"]
+        na = payload["next_action"]
+        console.print(
+            f"[bold]Kickoff state[/bold] — {state['counts']} · next: [cyan]{na['title']}[/cyan]"
+        )
+        console.print(f"[dim]preflight ok={payload['preflight']['ok']}[/dim]")
+
+
+@kickoff_app.command("start")
+def start_cmd(
+    project: Path = typer.Argument(Path("."), help="Project root to serve the kickoff UI for."),
+    mode: str = typer.Option("write", "--mode", help="inspect | preview | write | demo (R4-F5)."),
+    theme: str = typer.Option("professional", "--theme", help="Presentation-polish theme."),
+    port: Optional[int] = typer.Option(None, "--port", help="Bind port (default: ephemeral)."),
+) -> None:
+    """Serve the interactive kickoff web app on the loopback (preflight first; teardown on exit)."""
+    from .kickoff_experience.serve import Mode, preflight, serve_kickoff
+
+    if mode not in Mode.ALL:
+        console.print(f"[red]unknown mode {mode!r}[/red] (one of {Mode.ALL})")
+        raise typer.Exit(_EXIT_FATAL)
+    pf = preflight(project, mode=mode)
+    for c in pf.checks:
+        mark = "[green]✓[/green]" if c.ok else ("[red]✗[/red]" if c.blocking else "[yellow]•[/yellow]")
+        console.print(f"  {mark} {c.name}: {c.detail}")
+    if not pf.ok:
+        console.print("[red]preflight failed — not serving.[/red]")
+        raise typer.Exit(_EXIT_FATAL)
+    console.print(f"[green]serving kickoff[/green] (mode={mode}, theme={theme}) — Ctrl-C to stop")
+    serve_kickoff(project, mode=mode, theme=theme, port=port)

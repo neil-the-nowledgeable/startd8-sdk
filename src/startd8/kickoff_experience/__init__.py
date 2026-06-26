@@ -37,7 +37,20 @@ from .manifest import (
     lint_config,
 )
 from .ranking import NextAction, next_action
+from .serve import (
+    INSPECT_SCHEMA_VERSION,
+    Mode,
+    inspect_payload,
+    preflight,
+    serve_kickoff,
+)
 from .web import app_fingerprint, build_kickoff_app
+
+
+def kickoff_state_tool(project_root) -> dict:
+    """MCP-ready read-only payload (FR-13). The MCP ``kickoff-state`` tool wraps this verbatim;
+    it serves no port and writes nothing, so ``readOnlyHint`` is preserved."""
+    return inspect_payload(project_root, mode=Mode.INSPECT)
 from .readiness import (
     BUDGET_INITIAL_MS,
     BUDGET_REFRESH_MS,
@@ -95,4 +108,11 @@ __all__ = [
     # M4 — web front-end
     "app_fingerprint",
     "build_kickoff_app",
+    # M7 — serve / inspect / MCP
+    "INSPECT_SCHEMA_VERSION",
+    "Mode",
+    "inspect_payload",
+    "kickoff_state_tool",
+    "preflight",
+    "serve_kickoff",
 ]
