@@ -171,6 +171,19 @@ def splice_yaml_value(text: str, dotted_key: str, new_value: str) -> SpliceResul
     head = m.group("head")
     comment = m.group("comment") or ""
     old_value = (m.group("val") or "").strip()
+    # Refuse a mapping/sequence parent (empty inline value followed by an indented child block):
+    # splicing a scalar onto it would silently clobber the whole nested block.
+    if old_value == "":
+        this_indent = _leading_spaces(line)
+        for nxt in lines[idx + 1 :]:
+            if _is_blank_or_comment(nxt):
+                continue
+            if _leading_spaces(nxt) > this_indent:
+                raise CaptureError(
+                    CaptureCode.KEY_NOT_FOUND,
+                    f"key {dotted_key!r} is a mapping/block, not a scalar — refusing to clobber it",
+                )
+            break
     new_line = f"{head} {_format_scalar(new_value)}{comment}"
     new_lines = list(lines)
     new_lines[idx] = new_line
@@ -275,7 +288,14 @@ def build_capture_plan(
             value_path=value_path,
         )
     field = cfg.field_by_value_path(value_path)
-    assert field is not None and field.write_target is not None  # guaranteed by allow-list
+    # The allow-list guarantees this, but guard explicitly so the invariant holds under `python -O`
+    # (which strips asserts) and against any future allow-list/field-lookup skew.
+    if field is None or field.write_target is None:
+        raise CaptureError(
+            CaptureCode.VALUE_PATH_NOT_ALLOWED,
+            f"value_path {value_path!r} has no write target",
+            value_path=value_path,
+        )
     target: WriteTarget = field.write_target
     if (
         ".." in target.key

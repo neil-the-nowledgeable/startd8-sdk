@@ -70,7 +70,14 @@ class _SessionStore:
     def __init__(self) -> None:
         self._sessions: Dict[str, _Session] = {}
 
+    def _prune(self, now: float) -> None:
+        """Drop expired sessions so a long-running local server doesn't leak tokens."""
+        expired = [t for t, s in self._sessions.items() if now - s.created > _TOKEN_TTL_S]
+        for t in expired:
+            self._sessions.pop(t, None)
+
     def issue(self, now: float) -> str:
+        self._prune(now)
         token = secrets.token_urlsafe(24)
         self._sessions[token] = _Session(token=token, created=now)
         return token
@@ -85,7 +92,9 @@ class _SessionStore:
         return True
 
     def rate_ok(self, token: str, now: float) -> bool:
-        s = self._sessions[token]
+        s = self._sessions.get(token)
+        if s is None:  # token expired/evicted between valid() and here — treat as not allowed
+            return False
         s.hits = [t for t in s.hits if now - t < _RATE_WINDOW_S]
         if len(s.hits) >= _RATE_MAX:
             return False

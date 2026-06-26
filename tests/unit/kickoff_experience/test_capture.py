@@ -78,6 +78,16 @@ def test_splice_missing_key_raises_key_not_found() -> None:
     assert ei.value.code == CaptureCode.KEY_NOT_FOUND
 
 
+def test_splice_refuses_to_clobber_a_mapping_parent() -> None:
+    # Targeting a mapping/block key (e.g. "stack", which has children) must NOT write a scalar
+    # over it — that would silently destroy the nested block.
+    with pytest.raises(CaptureError) as ei:
+        splice_yaml_value(SAMPLE, "stack", "oops")
+    assert ei.value.code == CaptureCode.KEY_NOT_FOUND
+    assert "mapping" in str(ei.value)
+    assert "framework: fastapi" in SAMPLE  # untouched
+
+
 # --- build_capture_plan: allow-list, traversal, round-trip --------------------------------------
 
 
