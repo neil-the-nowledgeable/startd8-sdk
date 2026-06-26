@@ -58,12 +58,18 @@ TRACKED_UNFENCED = {
     # (KNOWN_DIFFERENT_VOCAB), which the canonical field-name scan can't see yet.
 }
 
-# Modules whose untrusted input uses a DIFFERENT field vocabulary than UNTRUSTED_FIELDS
-# (so the field-name scan can't see it) — they need their own carrier inventory before
-# this guard can enforce them. Tracked in FR-A8 (task #14).
+# Per-module untrusted carriers that use a DIFFERENT vocabulary than UNTRUSTED_FIELDS
+# (the canonical field-name scan can't see these). Discovered by the FR-A8 carrier
+# inventory; once listed, the module is enforced like any other (must fence or be tracked).
+MODULE_EXTRA_CARRIERS = {
+    "query_prime/generator.py": ("work_item.description",),
+    "micro_prime/prompt_builder.py": ("task_description", "design_doc_sections"),
+}
+
+# Modules still pending a carrier inventory (different vocabulary, not yet mapped).
+# engine.py orchestrates micro_prime; the prompts themselves are built in
+# prompt_builder.py (now inventoried + fenced).
 KNOWN_DIFFERENT_VOCAB = {
-    "query_prime/generator.py",
-    "micro_prime/prompt_builder.py",
     "micro_prime/engine.py",
 }
 
@@ -74,8 +80,9 @@ def _read(rel: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _refs_untrusted(src: str) -> set[str]:
-    return {f for f in UNTRUSTED_FIELDS if f in src}
+def _refs_untrusted(src: str, rel: str = "") -> set[str]:
+    fields = set(UNTRUSTED_FIELDS) | set(MODULE_EXTRA_CARRIERS.get(rel, ()))
+    return {f for f in fields if f in src}
 
 
 def _has_fence(src: str) -> bool:
@@ -86,9 +93,9 @@ def _has_fence(src: str) -> bool:
 def test_module_fences_or_is_tracked(rel):
     """A module referencing untrusted fields must fence them, or be tracked debt."""
     src = _read(rel)
-    refs = _refs_untrusted(src)
+    refs = _refs_untrusted(src, rel)
     if not refs:
-        return  # references no canonical untrusted field — nothing to enforce here
+        return  # references no untrusted carrier — nothing to enforce here
     if _has_fence(src):
         return  # references untrusted fields AND fences — compliant
     # References untrusted fields with no fence call → must be conscious debt.
@@ -104,7 +111,7 @@ def test_tracked_debt_stays_accurate(rel):
     """A tracked-unfenced module that has GAINED a fence should be removed from the
     debt list (keeps the FR-A8 backlog honest), and must still reference untrusted fields."""
     src = _read(rel)
-    assert _refs_untrusted(src), (
+    assert _refs_untrusted(src, rel), (
         f"'{rel}' is in TRACKED_UNFENCED but references no untrusted field — remove it."
     )
     assert not _has_fence(src), (

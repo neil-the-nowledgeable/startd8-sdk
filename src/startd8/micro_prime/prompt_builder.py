@@ -298,9 +298,17 @@ def _build_element_prompt_core(
         sections.extend(import_lines)
         sections.append("")
 
+    # FR-A8: task_description and design_doc_sections are untrusted-derived free text
+    # (from the plan/design doc). Fence them as DATA-not-instructions before they enter
+    # this element-generation prompt. domain_constraints are SDK-authored enrichment
+    # (trusted) and are left as-is. Lazy import keeps the micro_prime→implementation_engine
+    # edge cycle-safe.
+    from startd8.implementation_engine.spec_builder import _fence_untrusted
+
     # Task context (Mottainai Rule 2)
     if task_description:
-        sections.append(f"# Task context: {task_description}")
+        sections.append("# Task context:")
+        sections.append(_fence_untrusted(task_description, "task_description"))
         sections.append("")
 
     # Domain constraints
@@ -317,13 +325,15 @@ def _build_element_prompt_core(
         )
         if relevant:
             sections.append(f"# What `{element.name}` must do:")
-            for ds in relevant:
-                sections.append(f"# - {ds}")
+            sections.append(_fence_untrusted(
+                "\n".join(f"- {ds}" for ds in relevant), "design_doc_sections",
+            ))
             sections.append("")
         if general:
             sections.append("# Implementation context (other parts of this feature):")
-            for ds in general:
-                sections.append(f"# - {ds}")
+            sections.append(_fence_untrusted(
+                "\n".join(f"- {ds}" for ds in general), "design_doc_sections",
+            ))
             sections.append("")
 
     # Sibling context (REQ-MP-201)
