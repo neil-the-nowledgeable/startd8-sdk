@@ -1,6 +1,6 @@
 # Agentic Concierge Mode Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post-CRP R1)
 **Date:** 2026-06-26
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -104,10 +104,20 @@ action; the host shows pending proposals; the human confirms; the existing typed
   plan (`build_instantiate_plan` / `build_friction_entry` / `build_capture_plan`) and applies it via
   the existing typed path (`apply_concierge_plan` / `apply_capture`), bound to a one-time intent. The
   loop is not in this path.
+  - **Acceptance (R1):** define double-confirm / idempotency semantics. A proposal is popped from the
+    buffer only on **terminal success or explicit discard** — never pop-before-apply. A retriable
+    failure (e.g. `STALE_FILE`) **retains / re-offers** the proposal (the friction append path has no
+    `(action,digest)` dedup, unlike web `_IntentStore.consume`). Test: confirm a friction proposal
+    twice → assert exactly **one** log entry; a failed apply does not silently consume the buffer entry.
 - **FR-AC-4 — Read-only floor intact + guarded.** The loop's tool set is exactly
   `{survey, assess, field_states, propose_action}`, all `effect_class="read"`; **no** apply/write tool
   is reachable. Extend the M-CM6 negative regression guard to assert this (and that `propose_action`
   cannot itself write).
+  - **Acceptance (R1):** strengthen the guard to the **agentic** registry (`proposal_sink` set), not
+    just the pure 3-tool one: the registry is exactly `{survey, assess, field_states, propose_action}`,
+    every spec `effect_class="read"`, **and** `propose_action`'s handler performs **zero filesystem
+    writes**. Test: snapshot the project tree before/after invoking the handler → assert byte-identical
+    except the in-memory buffer.
 
 ### B. The experiences
 
@@ -116,12 +126,26 @@ action; the host shows pending proposals; the human confirms; the existing typed
   a friction entry (candidate `friction`/`what_happened`/`implication`) and proposes it. The human
   edits/confirms; apply via the friction path. This realizes the deferred "deterministic friction
   prefill" item as an LLM-assisted, human-confirmed flow.
+  - **Acceptance (R1):** before confirm, the host MUST display **all three candidate friction fields
+    verbatim** (within `FRICTION_FIELD_MAX`) so a human can catch prompt-injected / PII-laden /
+    low-quality LLM prose before it lands in the **tracked append-only** friction log. Length is capped
+    (`validate_friction`); content review is not — so the exact bytes that will be written must be
+    shown in full, not summarized. Test: a multiline/PII candidate is echoed in full at the confirm
+    prompt.
 - **FR-AC-6 — Agentic instantiate.** When the package is `missing`/`partial`, the assistant may
   propose instantiate (with a posture); on confirm, the existing instantiate path runs (honest
   no-clobber, package-state reconciliation).
 - **FR-AC-7 — Agentic capture.** The assistant may propose a field value for a capturable
   `value_path` (e.g. "set conventions.language = python"); on confirm, the M6 capture path applies
   (allow-list, round-trip gate, stale-file precondition all intact).
+  - **Acceptance (R1):** `base_sha` is captured at **PROPOSE** time (not re-read at confirm). If the
+    plan re-read the inputs at confirm and applied immediately, `apply_capture`'s
+    `current_sha != base_sha` guard (`capture.py:370`) could never fire — vacuous, leaving the
+    propose→confirm human-edit window unprotected. Capturing `base_sha` at propose keeps the guard
+    meaningful across that window. Test: edit the inputs file in the propose→confirm window → apply
+    returns `STALE_FILE`, not a silent overwrite. *(Reconciles the FR-AC-7 "precondition intact" claim
+    with OQ-7's "rebuild plan at confirm against live state" — params, including `base_sha`, are
+    snapshotted at propose; only the build/apply happens at confirm.)*
 
 ### C. Surfaces, wording, ops
 
@@ -150,9 +174,23 @@ action; the host shows pending proposals; the human confirms; the existing typed
   edit files" — which **contradict** the new `propose_action` tool. They must be rewritten: the loop
   still never writes, but it has a fourth tool to *recommend* an action, and a human confirms before
   anything is applied. **Hard prerequisite** (gates FR-AC-2/5/6/7).
+  - **Acceptance (R1):** the prompt + banner are **mode-paired**, NOT a single rewritten constant.
+    Rewriting the one shared `KICKOFF_SYSTEM_PROMPT`/`POSTURE_BANNER` to mention `propose_action` would
+    advertise a fourth tool to the pure `kickoff chat` session that (per FR-NEW-5) never registers it —
+    inviting an unknown-tool call. Pure path keeps the **read-only** prompt/banner (3 tools); the
+    agentic path uses a **propose-aware** variant (mentions `propose_action` + "a human confirms");
+    selection is driven by `proposal_sink` presence. Test: the pure session's effective system prompt
+    **excludes** "propose_action"; the agentic session's **includes** it.
 - **FR-NEW-2 — Surface a stale-proposal outcome.** Because the plan is rebuilt at confirm against live
   state (OQ-7), the state may have changed since the proposal (package now complete; a `STALE_FILE`
   on capture). The host must render the typed outcome, not silently no-op.
+  - **Acceptance (R1):** expand the outcome set beyond "complete / `STALE_FILE`" to include **`PARTIAL`**
+    and **`WRITE_REFUSED`** — `apply_concierge_plan` is explicitly **non-atomic** (`concierge_apply.py:148-156`:
+    "some files may still have been written before/after the failing one" → `PARTIAL`), so a confirmed
+    instantiate can half-apply. The host MUST render the **written/skipped counts** and define recovery:
+    **resume = re-confirm completes the remaining `ACTION_NEW` files** (idempotent), not silently leave a
+    half-built package. Test: inject a per-file write block mid-plan → assert the host renders `PARTIAL`
+    with written/skipped counts (not `OK`).
 - **FR-NEW-3 — Extend the REPL host signature.** `run_kickoff_repl` must accept a pending-proposals
   accessor, a `ConfirmFn` (fail closed on `None`/non-TTY, NR-5), and an `apply_proposal` callback —
   this is a requirement, not an implementation detail (FR-AC-8 understated it).
@@ -162,6 +200,10 @@ action; the host shows pending proposals; the human confirms; the existing typed
 - **FR-NEW-5 — Keep `kickoff chat` pure.** `build_kickoff_registry` gates `propose_action` behind a
   `proposal_sink` parameter (omitted → no propose tool), so plain `kickoff chat` stays strictly
   read-only/advisory and agentic Concierge is the opt-in superset.
+  - **Acceptance (R1):** purity covers the **prompt + banner too**, not just the tool — `proposal_sink`
+    presence selects the mode-paired prompt/banner variant (see FR-NEW-1), so the pure session never
+    advertises `propose_action`. Test: pure session's system prompt has no "propose_action" and lists
+    no 4th tool.
 
 ---
 
@@ -197,6 +239,9 @@ action; the host shows pending proposals; the human confirms; the existing typed
   enforceable, which is acceptable because a human confirms.
 - **OQ-7 — RESOLVED → re-validate at confirm** by rebuilding the plan against live state (instantiate
   re-stats; capture re-reads with the `STALE_FILE` guard). Proposals store params, not plans.
+  - **Acceptance (R1):** the snapshotted params **include `base_sha` captured at propose time** — so
+    capture's `STALE_FILE` guard stays meaningful across the propose→confirm window (see FR-AC-7).
+    "Rebuild at confirm" rebuilds the *plan/apply*, not the staleness baseline.
 
 ---
 
@@ -205,3 +250,70 @@ clarified-structural (FR-AC-9), 1 narrowed (FR-AC-11), 1 trimmed (FR-AC-10), 5 a
 6 of 7 OQs resolved. Headline: the mechanism is feasible (a read-effect propose tool), but the
 existing system prompt/banner **forbid** the new tool (FR-NEW-1 — a hard prerequisite), and the buffer
 is host-owned, not on the generic session. Ready for optional CRP review before implementation.*
+
+*v0.3 — Post-CRP R1. All 6 R1 F-suggestions (claude-opus-4-8) accepted and merged: base_sha-at-propose
+(FR-AC-7/OQ-7), PARTIAL/WRITE_REFUSED outcomes (FR-NEW-2), mode-paired prompt/banner (FR-NEW-1/5),
+verbatim friction display (FR-AC-5), double-confirm idempotency (FR-AC-3), agentic-registry floor guard
+(FR-AC-4). See Appendix A for dispositions; Appendix C retains the R1 round verbatim.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| R1-F1 | Capture `base_sha` at propose time so the STALE_FILE guard isn't vacuous across the propose→confirm window | R1 / claude-opus-4-8 | Merged into FR-AC-7 (+ OQ-7 note) | 2026-06-26 |
+| R1-F2 | Expand stale-outcome set to PARTIAL + WRITE_REFUSED for non-atomic instantiate; render written/skipped + resume recovery | R1 / claude-opus-4-8 | Merged into FR-NEW-2 | 2026-06-26 |
+| R1-F3 | Mode-pair the prompt/banner (not a single rewrite); pure path read-only, agentic propose-aware, selected by proposal_sink | R1 / claude-opus-4-8 | Merged into FR-NEW-1 and FR-NEW-5 | 2026-06-26 |
+| R1-F4 | Host displays all three candidate friction fields verbatim before confirm (content review, not just length cap) | R1 / claude-opus-4-8 | Merged into FR-AC-5 | 2026-06-26 |
+| R1-F5 | Define double-confirm/idempotency: pop on terminal success or discard, never pop-before-apply; retain on retriable failure | R1 / claude-opus-4-8 | Merged into FR-AC-3 | 2026-06-26 |
+| R1-F6 | Strengthen floor guard to the agentic registry (4-tool set, read-only, zero-write handler via tree snapshot) | R1 / claude-opus-4-8 | Merged into FR-AC-4 | 2026-06-26 |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8 — 2026-06-26
+
+- **Reviewer**: claude-opus-4-8
+- **Date**: 2026-06-26 17:55:00 UTC
+- **Scope**: Requirements quality for the read-effect propose tool, confirm-then-apply TOCTOU, prompt-rewrite/surface-boundary, friction grounding. Grounded against `chat.py`, `agentic.py`, `concierge_apply.py`, `capture.py`, `web.py`.
+
+**Executive summary (top risks / gaps):**
+- The §0 STALE_FILE claim ("precondition all intact", FR-AC-7) is in tension with OQ-7: if the plan is *rebuilt at confirm* the read→apply window collapses and `apply_capture`'s `base_sha` guard (`capture.py:370`) becomes vacuous for the propose→confirm gap — the window the human actually edits in is unprotected.
+- FR-NEW-2's outcome set is incomplete: `apply_concierge_plan` is explicitly **non-atomic** (`concierge_apply.py:150` — `PARTIAL`, "some files may still have been written before/after the failing one"). A confirmed instantiate can half-apply; no requirement covers this.
+- FR-NEW-1 (rewrite the one shared prompt/banner) and FR-NEW-5 (omit the tool for pure `kickoff chat`) collide: a single rewritten `KICKOFF_SYSTEM_PROMPT` would advertise `propose_action` to the pure session that doesn't register it → model emits an unknown-tool call (`agentic.py:215`).
+- FR-AC-5's only gate is human-confirm, but no requirement forces the candidate friction prose to be *shown verbatim* before it lands in the tracked append-only log — injection / PII can pass unreviewed.
+- FR-AC-3 "one-time intent" is underspecified for double-confirm and failure: the friction append path has no digest-dedup (unlike web `_IntentStore`, `web.py:246`).
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Risks | high | Specify at which instant `base_sha` is captured for capture proposals. FR-AC-7 says "stale-file precondition all intact" but OQ-7 says "rebuild the plan at confirm against live state". If `build_capture_plan` re-reads at confirm and applies immediately, `apply_capture`'s `current_sha != plan.base_sha` check (`capture.py:370`) can never fire — the guard is vacuous and the propose→confirm human-edit window is unprotected. State: base_sha is read at **propose** time (preserving the guard), or that STALE_FILE is intentionally inert in the agentic path (and what protects the gap instead). | A vacuous concurrency guard is worse than none — it reads as protection in the requirement but provides none in the agentic flow. The focus file names exactly this TOCTOU. | FR-AC-7 ("the M6 capture path applies (allow-list, round-trip gate, stale-file precondition all intact)") + OQ-7 | Test: edit the inputs file in the propose→confirm window; assert apply returns `STALE_FILE` (not a silent overwrite). |
+| R1-F2 | Risks | high | Expand FR-NEW-2 from "package now complete; STALE_FILE on capture" to the full typed-outcome set including **PARTIAL** and **WRITE_REFUSED** for a non-atomic instantiate. `apply_concierge_plan` returns `PARTIAL` when some files wrote and one failed (`concierge_apply.py:148-156`). Require the host to render the partial state and define recovery (resume vs re-propose). | FR-NEW-2 as written treats confirm-apply as all-or-nothing; the real write path is not atomic, so a confirmed instantiate can leave a half-built package with no stated recovery. | FR-NEW-2 ("the state may have changed since the proposal ... render the typed outcome, not silently no-op") | Test: inject a per-file write block mid-plan; assert host renders `PARTIAL` with the written/skipped counts, not OK. |
+| R1-F3 | Architecture | high | Make FR-NEW-1 and FR-NEW-5 jointly consistent: the system prompt **and** banner must be **mode-paired**. Rewriting the single `KICKOFF_SYSTEM_PROMPT`/`POSTURE_BANNER` (`chat.py:34-51`) to mention `propose_action` would advertise a fourth tool to the pure `kickoff chat` session that (per FR-NEW-5) does not register it, inviting an unknown-tool call. Require: pure path keeps the read-only prompt/banner; agentic path uses the propose-aware variant; selection is driven by `proposal_sink` presence. | FR-NEW-5's purity guarantee is silently broken by FR-NEW-1 if the prompt is a single shared constant. This is a cross-requirement contradiction, not an implementation detail. | FR-NEW-1 + FR-NEW-5 | Test: pure session's effective system prompt does **not** contain "propose_action"; agentic session's does; pure session never lists a 4th tool. |
+| R1-F4 | Security | medium | Add an acceptance criterion to FR-AC-5: before confirm, the host MUST display **all three candidate friction fields verbatim** (within `FRICTION_FIELD_MAX`) so the human can catch prompt-injected, PII-laden, or low-quality LLM prose before it lands in the **tracked append-only** friction log. Length is already capped (`validate_friction`, `concierge_apply.py:95`); content review is not. | The focus flags injection/privacy. Human-confirm is only a real gate if the human sees the exact bytes that will be written and committed. | FR-AC-5 ("The human edits/confirms; apply via the friction path") | Manual + test: confirm prompt echoes the candidate text; a multiline/PII candidate is shown in full, not summarized. |
+| R1-F5 | Interfaces | medium | Define double-confirm / idempotency semantics for FR-AC-3. The friction append path has no `(action,digest)` dedup (the web `_IntentStore.consume`, `web.py:246`, does). Two identical proposals in one session, or a re-confirm after a non-terminal apply failure, can duplicate the friction entry. Specify: a proposal is consumed (popped) only on **terminal success or explicit discard**; on retriable failure it is retained or re-offered, never both popped and partially applied. | "Bound to a one-time intent" (FR-AC-3) is asserted but the pop timing and the no-dedup append path make double-write reachable. | FR-AC-3 ("bound to a one-time intent. The loop is not in this path") | Test: confirm a friction proposal twice; assert exactly one log entry; failed apply does not silently consume the buffer entry. |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F6 | Validation | medium | Strengthen FR-AC-4 to assert the **agentic** registry (proposal_sink set), not just the pure one: registry is exactly `{survey, assess, field_states, propose_action}`, every spec `effect_class="read"`, **and** `propose_action`'s handler performs zero filesystem writes (assert no new/modified files under a temp project root after invoking it). Today the guard text only pins the pure 3-tool set; the new tool is the one that needs the negative proof. | A "read-effect tool that records intent" is exactly where a future edit could leak a write; the regression guard must cover the handler's side-effect surface, not just its `effect_class` label. | FR-AC-4 ("Extend the M-CM6 negative regression guard to assert this (and that propose_action cannot itself write)") | Test: snapshot project tree before/after `propose_action` handler call; assert byte-identical except the in-memory buffer. |
+
+**Endorsements / Disagreements:** none (R1 — no prior untriaged items).
