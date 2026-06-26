@@ -263,8 +263,15 @@ class KickoffState:
         return out
 
     def blocked_fields(self) -> List[FieldState]:
-        """Author-actionable gaps (FR-6) — the worklist, in stable order."""
-        return [f for f in self.fields if f.attention == Attention.BLOCKED]
+        """Author-actionable gaps (FR-6) — the worklist, in byte-stable identity order.
+
+        Sorted defensively so the next-action ranking is deterministic for parity (R2-S3)
+        regardless of how the state was assembled.
+        """
+        return sorted(
+            (f for f in self.fields if f.attention == Attention.BLOCKED),
+            key=lambda f: f.identity,
+        )
 
     def to_dict(self) -> dict:
         """Canonical snapshot. Deterministic + byte-stable for a given extraction result."""

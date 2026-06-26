@@ -20,6 +20,13 @@ Public read-only API (the data spine):
 
 from __future__ import annotations
 
+from .chat import (
+    KICKOFF_READ_ACTIONS,
+    KickoffChat,
+    build_kickoff_registry,
+    handle_kickoff_read,
+    new_kickoff_chat,
+)
 from .manifest import (
     FieldDef,
     KickoffExperienceConfig,
@@ -29,6 +36,7 @@ from .manifest import (
     default_config,
     lint_config,
 )
+from .ranking import NextAction, next_action
 from .readiness import (
     BUDGET_INITIAL_MS,
     BUDGET_REFRESH_MS,
@@ -75,4 +83,12 @@ __all__ = [
     "WriteTarget",
     "default_config",
     "lint_config",
+    # M5 — conversational driver + ranking
+    "KICKOFF_READ_ACTIONS",
+    "KickoffChat",
+    "NextAction",
+    "build_kickoff_registry",
+    "handle_kickoff_read",
+    "new_kickoff_chat",
+    "next_action",
 ]
