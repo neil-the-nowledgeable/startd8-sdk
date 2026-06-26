@@ -17,6 +17,7 @@ from .drafter import build_supplementary_sections
 from .models import ReviewResult
 from .parsers import parse_list_section, parse_score
 from .prompts import get_template
+from .spec_builder import _fence_untrusted  # FR-A8: shared DATA-not-instructions fence
 
 
 __all__ = [
@@ -79,17 +80,18 @@ def build_enrichment_sections(
         if shared:
             parts.append(shared)
 
-    # Design document — primary review input, separate budget
+    # Design document — primary review input, separate budget. Untrusted-derived
+    # (built from requirements/plan), so fence as data (FR-A8).
     if design_document:
         design_budget = min(budget_chars, 8000)
         truncated = truncate_with_marker(design_document, design_budget)
-        parts.append(f"## Design Document (compliance reference)\n{truncated}")
+        fenced_design = _fence_untrusted(truncated, "design_document")
+        parts.append(f"## Design Document (compliance reference)\n{fenced_design}")
 
-    # Semantic conventions
+    # Semantic conventions — untrusted-derived → fence as data (FR-A8).
     if semantic_conventions:
-        parts.append(
-            f"## Semantic Conventions\n{str(semantic_conventions)[:2000]}",
-        )
+        fenced_conv = _fence_untrusted(str(semantic_conventions)[:2000], "semantic_conventions")
+        parts.append(f"## Semantic Conventions\n{fenced_conv}")
 
     return "\n\n".join(parts)
 

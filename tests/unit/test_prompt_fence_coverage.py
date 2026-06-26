@@ -53,7 +53,6 @@ PROMPT_MODULES = (
 # got fenced) is the expected end state. A module referencing untrusted fields that
 # is NOT here and has no fence call fails the discovery test.
 TRACKED_UNFENCED = {
-    "implementation_engine/reviewer.py": "FR-A8 — review prompt path not yet fenced",
     "workflows/builtin/plan_ingestion_workflow.py": "FR-A4 — plan-ingestion PARSE prompt not yet fenced",
 }
 
