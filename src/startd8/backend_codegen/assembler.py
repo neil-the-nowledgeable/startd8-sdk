@@ -24,6 +24,7 @@ from .openapi_client_renderer import render_http_client
 from .editor_generator import render_editors
 from .flow_generator import render_flows
 from .htmx_generator import render_ui
+from .nav_generator import render_nav
 from .pydantic_renderer import render_pydantic_models
 from .sqlmodel_renderer import render_sqlmodel_tables
 from .test_emitter import (
@@ -63,6 +64,7 @@ def render_backend(
     deployment_mode: str = "installed",
     tenant_owner_field: Optional[str] = None,
     form_prose_text: Optional[str] = None,
+    no_nav: bool = False,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
@@ -127,6 +129,11 @@ def render_backend(
         tenant_owner_field=tenant_owner_field,
         form_prose_text=form_prose_text,
     ))
+    # Always-on default top nav: app/nav.py + app/templates/_nav.html (FR-13). base.html includes the
+    # partial tolerantly, so suppressing nav (--no-nav) just omits these two files — base.html is
+    # byte-identical either way. Derives from schema + views.yaml + pages.yaml (3-input owned kind).
+    if not no_nav:
+        out.extend(render_nav(schema_text, views_text, pages_text, source_file))
     # P0-1: step-state flow routers + shells from views.yaml `flows:` (empty when none declared)
     out.extend(render_flows(schema_text, views_text or ""))
     # FR-ED: bulk child-field editors from views.yaml `editors:` (empty when none declared)

@@ -271,6 +271,30 @@ def header_forms_tmpl(
     return "\n".join(lines)
 
 
+def header_nav(
+    source_file: str,
+    schema_sha: str,
+    views_sha: str,
+    pages_sha: str,
+    kind: str,
+) -> str:
+    """Default-nav ``.py`` module header — THREE inputs (schema + views.yaml + pages.yaml).
+
+    The ``#``-comment form (for ``app/nav.py``); :func:`header_nav_tmpl` is the Jinja-comment form for
+    the ``.html`` partial. Reuses the existing ``forms-sha256`` (views.yaml) + ``pages-sha256``
+    (pages.yaml) header lines so drift needs no new regex — stale if *any* of the three changes.
+    """
+    return (
+        f"# GENERATED from {source_file} (+ views.yaml + pages.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# Source of truth: the Prisma schema, the views manifest, and the pages manifest.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# forms-sha256: {views_sha}\n"
+        f"# pages-sha256: {pages_sha}"
+    )
+
+
 def header_nav_tmpl(
     source_file: str,
     schema_sha: str,
@@ -278,7 +302,7 @@ def header_nav_tmpl(
     pages_sha: str,
     kind: str,
 ) -> str:
-    """SPIKE: default-nav partial header — THREE inputs (schema + views.yaml + pages.yaml).
+    """Default-nav partial header — THREE inputs (schema + views.yaml + pages.yaml).
 
     Wrapped in a Jinja ``{# … #}`` comment for the ``.html`` partial. Reuses the existing
     ``forms-sha256`` (views.yaml) and ``pages-sha256`` (pages.yaml) header lines so no new drift

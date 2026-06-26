@@ -182,19 +182,18 @@ def render_base_template(
     source_file: str = "prisma/schema.prisma",
     pages_text: Optional[str] = None,
 ) -> str:
-    """The shared base layout. With *pages_text* it carries the manifest ``<nav>`` (kind ``pages-base``,
-    2-hash header) so the nav appears on **every** page (entity + content); without it, the nav-less
-    schema-only base (kind ``htmx-base``)."""
+    """The shared base layout. The top nav is the always-on default-nav partial (``_nav.html``,
+    FR-13/14) — included tolerantly so base.html stays byte-identical whether or not nav is generated
+    (e.g. ``--no-nav``). The header kind still distinguishes a pages-configured app (``pages-base``,
+    carrying ``pages-sha``) from a schema-only one (``htmx-base``); the body no longer varies by pages
+    (the nav, the only pages-dependent part, now lives in the partial)."""
     sha = schema_sha256(schema_text)
     if pages_text is not None:
         from ._headers import header_pages_tmpl
-        from .pages_generator import build_nav_html
 
         head = header_pages_tmpl(source_file, sha, schema_sha256(pages_text), "pages-base")
-        nav = build_nav_html(pages_text)
     else:
         head = _tmpl_header(source_file, sha, "htmx-base")
-        nav = ""
     body = (
         "<!doctype html>\n"
         '<html lang="en">\n'
@@ -210,7 +209,9 @@ def render_base_template(
         + '  {% include "theme/_head_extra.html" ignore missing %}\n'
         + "</head>\n<body>\n"
         + '  {% include "theme/_header.html" ignore missing %}\n'
-        + nav
+        # Always-on default top nav (FR-13/14). `ignore missing` keeps base.html byte-identical when
+        # nav is suppressed (--no-nav); the partial reads runtime visibility from app.state.nav_hidden.
+        + '  {% include "_nav.html" ignore missing %}\n'
         + '  <main id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>\n'
         + '  {% include "theme/_footer.html" ignore missing %}\n'
         "</body>\n</html>\n"

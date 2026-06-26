@@ -1,11 +1,16 @@
-"""SPIKE: default top-navigation registry + partial (3-input owned kind).
+"""Default top-navigation: deterministic registry + always-on partial + runtime visibility module.
 
-This is a *spike* to falsify the R3 risk in
-``docs/design/default-navigation/DEFAULT_NAVIGATION_PLAN.md``: can an always-on nav be added as a
-3-input (schema + views.yaml + pages.yaml) owned/deterministic kind that the real drift + skip-hook
-machinery recognizes as ``$0``-owned and ``in_sync``? Only the pieces needed to answer that are built.
+The always-on top nav for every generated app (FR-13). It aggregates all three navigable surface
+classes deterministically at build time and renders them into a shared ``_nav.html`` partial that
+``base.html`` includes on every page. Per-item visibility is a *runtime* concern: an operator lists
+hidden keys in an optional ``nav.config.json`` (read once at startup), and the partial omits those —
+edit the file, restart (FR-6/7). No DB, no migration, no auth coupling (req v0.3).
 
-Enumeration is deterministic and aggregates all three navigable surface classes:
+Three owned artifacts, all deriving from THREE inputs (schema + ``views.yaml`` + ``pages.yaml``):
+- ``app/nav.py``            (kind ``nav-registry``) — ``DEFAULT_NAV`` data + ``load_hidden()``/``visible_nav()``
+- ``app/templates/_nav.html`` (kind ``nav-partial``) — the rendered ``<nav>`` (links gated by ``nav_hidden``)
+
+Enumeration:
 - content pages (pages.yaml): label = ``nav_label or title``, href = slug  (all-visible default, FR-2)
 - entity CRUD UIs (schema):   label = titleized class name, href = ``/ui/<name.lower()>``  (FR-1a)
 - views (views.yaml):         label = ``ViewSpec.name``, href = ``ViewSpec.route``  (FR-1b)
@@ -14,12 +19,18 @@ Enumeration is deterministic and aggregates all three navigable surface classes:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256
-from ._headers import header_nav_tmpl
+from ._headers import header_nav, header_nav_tmpl
 
-NAV_KINDS = ("nav-partial",)
+NAV_KINDS = ("nav-registry", "nav-partial")
+
+# Owned output paths → artifact kind (mirrors pages_layout / the CANONICAL_LAYOUT precedent).
+NAV_LAYOUT: Dict[str, str] = {
+    "app/nav.py": "nav-registry",
+    "app/templates/_nav.html": "nav-partial",
+}
 
 
 @dataclass(frozen=True)
@@ -45,7 +56,7 @@ def nav_registry(
     views_text: Optional[str] = None,
     pages_text: Optional[str] = None,
 ) -> Tuple[NavEntry, ...]:
-    """The deterministic, all-visible default nav registry. Order: page -> entity -> view."""
+    """The deterministic, all-visible default nav registry. Order: page -> entity -> view (FR-1/5)."""
     entries: List[NavEntry] = []
 
     # pages.yaml (optional) — all-visible default: label falls back to title (NOT the nav_label filter)
@@ -55,12 +66,7 @@ def nav_registry(
         pages, _ = parse_pages(pages_text)
         for p in pages:
             entries.append(
-                NavEntry(
-                    key=f"page:{p.slug}",
-                    label=p.nav_label or p.title,
-                    href=p.slug,
-                    group="page",
-                )
+                NavEntry(key=f"page:{p.slug}", label=p.nav_label or p.title, href=p.slug, group="page")
             )
 
     # entities (schema) — no label exists in generated code; derive one (FR-1a)
@@ -70,24 +76,31 @@ def nav_registry(
     schema = parse_prisma_schema(schema_text)
     for name in _model_names(schema, schema_text):
         entries.append(
-            NavEntry(
-                key=f"entity:{name}",
-                label=_titleize(name),
-                href=f"/ui/{name.lower()}",
-                group="entity",
-            )
+            NavEntry(key=f"entity:{name}", label=_titleize(name), href=f"/ui/{name.lower()}", group="entity")
         )
 
-    # views.yaml (optional) — friendly name + route already exist (FR-1b)
-    if views_text:
+    # views.yaml `views:` section (optional) — friendly name + route already exist (FR-1b). NOTE:
+    # views.yaml is a MULTI-section manifest (views:/forms:/flows:/editors:); an app may declare only
+    # `flows:` with no top-level `views:`. parse_views is strict, so enumerate views only when the
+    # `views:` section is actually present (else this is a forms/flows/editors-only manifest).
+    if views_text and _has_views_section(views_text):
         from ..view_codegen.manifest import parse_views
 
         for v in parse_views(views_text, known_entities=frozenset(schema.models)):
-            entries.append(
-                NavEntry(key=f"view:{v.route}", label=v.name, href=v.route, group="view")
-            )
+            entries.append(NavEntry(key=f"view:{v.route}", label=v.name, href=v.route, group="view"))
 
     return tuple(entries)
+
+
+def _has_views_section(views_text: str) -> bool:
+    """True iff *views_text* declares a non-empty top-level ``views:`` list (vs forms/flows/editors only)."""
+    import yaml
+
+    try:
+        doc = yaml.safe_load(views_text) or {}
+    except Exception:
+        return False
+    return isinstance(doc, dict) and bool(doc.get("views"))
 
 
 def render_nav_partial(
@@ -98,10 +111,10 @@ def render_nav_partial(
 ) -> str:
     """``app/templates/_nav.html`` (kind ``nav-partial``) — the always-on top nav.
 
-    Carries a 3-sha provenance header (schema + views.yaml + pages.yaml). The visibility filter is a
-    runtime concern (startup-read config, FR-6) and is NOT baked here: the partial renders the FULL
-    default set; ``visible_nav`` subtracts hidden keys at request time. So these bytes depend only on
-    the three deterministic inputs.
+    Carries a 3-sha provenance header. The full default set is baked here; each link is gated by
+    ``{% if key not in nav_hidden %}`` so the **runtime** config (``app.state.nav_hidden``, set at
+    startup from ``nav.config.json``) subtracts hidden items without changing these bytes (FR-7/11).
+    ``nav_hidden`` is read from ``request.app.state`` so no per-handler context threading is needed.
     """
     head = header_nav_tmpl(
         source_file,
@@ -110,20 +123,101 @@ def render_nav_partial(
         schema_sha256(pages_text or ""),
         "nav-partial",
     )
-    links: List[str] = []
     base_style = "margin-right:1.25rem;color:#0a7d4b;text-decoration:none"
+    links: List[str] = []
     for n in nav_registry(schema_text, views_text, pages_text):
         active = "{% if request.url.path == " + repr(n.href) + " %};font-weight:700{% endif %}"
-        # the runtime visibility gate: render only if this key is not hidden (config-driven, FR-7)
         links.append(
             "{% if " + repr(n.key) + " not in nav_hidden %}"
             f'<a href="{n.href}" style="{base_style}{active}">{n.label}</a>'
             "{% endif %}"
         )
     body = (
+        # nav_hidden defaults to an empty set if the app didn't set state (e.g. partial rendered
+        # outside a request) — fail-open to all-visible (FR-7).
+        "{% set nav_hidden = (request.app.state.nav_hidden "
+        "if request and request.app.state.nav_hidden is defined else []) %}\n"
         '<nav style="padding:0.9rem 1.25rem;border-bottom:1px solid #e3e3e3;'
         'background:#fafafa;font-family:system-ui,-apple-system,sans-serif">'
         + "".join(links)
         + "</nav>\n"
     )
     return head + "\n" + body
+
+
+def render_nav_module(
+    schema_text: str,
+    views_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    source_file: str = "prisma/schema.prisma",
+) -> str:
+    """``app/nav.py`` (kind ``nav-registry``) — the baked default registry + the runtime visibility read.
+
+    ``load_hidden()`` reads the optional ``nav.config.json`` at app root once (fail-open to empty on
+    missing/malformed — the app must never fail to render nav, FR-7). ``main.py`` calls it at startup
+    and stashes the result on ``app.state.nav_hidden`` for the partial. ``DEFAULT_NAV``/``visible_nav``
+    expose the registry as data (transparency + tests, FR-1).
+    """
+    head = header_nav(
+        source_file,
+        schema_sha256(schema_text),
+        schema_sha256(views_text or ""),
+        schema_sha256(pages_text or ""),
+        "nav-registry",
+    )
+    rows = ",\n".join(
+        f"    {{'key': {n.key!r}, 'label': {n.label!r}, 'href': {n.href!r}, 'group': {n.group!r}}}"
+        for n in nav_registry(schema_text, views_text, pages_text)
+    )
+    body = f'''from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, FrozenSet, List
+
+# The deterministic, all-visible default top-navigation registry (one entry per navigable surface).
+DEFAULT_NAV: List[Dict[str, str]] = [
+{rows}
+]
+
+# Where an operator lists hidden nav keys to hide them across restarts (FR-6). Override with
+# STARTD8_NAV_CONFIG; default is `nav.config.json` at the app root (sibling of the `app/` package).
+_CONFIG_PATH = os.environ.get(
+    "STARTD8_NAV_CONFIG", str(Path(__file__).resolve().parent.parent / "nav.config.json")
+)
+
+
+def load_hidden() -> FrozenSet[str]:
+    """The set of hidden nav keys from `nav.config.json`, read once at startup.
+
+    Fail-open: a missing / unreadable / malformed config yields an empty set (all visible), so the
+    app never fails to render its nav because of operator config (FR-7).
+    """
+    try:
+        data: Any = json.loads(Path(_CONFIG_PATH).read_text())
+        hidden = data.get("hidden", []) if isinstance(data, dict) else []
+        return frozenset(str(k) for k in hidden)
+    except Exception:
+        return frozenset()
+
+
+def visible_nav(hidden: FrozenSet[str] | None = None) -> List[Dict[str, str]]:
+    """`DEFAULT_NAV` minus the hidden keys (defaults to the on-disk config)."""
+    hidden = load_hidden() if hidden is None else hidden
+    return [item for item in DEFAULT_NAV if item["key"] not in hidden]
+'''
+    return head + "\n\n" + body
+
+
+def render_nav(
+    schema_text: str,
+    views_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    source_file: str = "prisma/schema.prisma",
+) -> List[Tuple[str, str]]:
+    """Both nav artifacts as ``(path, text)`` pairs — what the assembler emits (always-on, FR-13)."""
+    return [
+        ("app/nav.py", render_nav_module(schema_text, views_text, pages_text, source_file)),
+        ("app/templates/_nav.html", render_nav_partial(schema_text, views_text, pages_text, source_file)),
+    ]
