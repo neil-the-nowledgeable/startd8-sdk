@@ -100,6 +100,35 @@ The v0.2 live-toggle design is preserved here so it isn't lost:
 
 ---
 
+## Implementation status (2026-06-26) — M0–M3 COMPLETE on `feat/default-navigation`
+
+Shipped on this branch: deterministic registry + always-on partial + runtime config visibility.
+- **M0/M1** — `nav_generator.py` (`nav_registry`, `render_nav_partial`, `render_nav_module`, `render_nav`);
+  `app/nav.py` (`DEFAULT_NAV` + `load_hidden()` + `visible_nav()`); `_nav.html` partial; `header_nav`/
+  `header_nav_tmpl` (3-input); drift `_NAV_KINDS`/`nav_stale_reason`/`_check_nav_drift` + dispatch.
+- **M2** — config visibility: `nav.config.json` read once at startup; `main.py` lifespan stashes
+  `app.state.nav_hidden`; partial subtracts it; fail-open to all-visible. **Runtime-proven** (serve →
+  all visible; write config → restart → item hidden; route still reachable).
+- **M3** — always-on via `base.html` `{% include "_nav.html" ignore missing %}`; assembler emits both
+  nav files by default; `--no-nav` opt-out (`render_backend(no_nav=True)`). base.html no longer inlines
+  `<nav>` (moved to partial); FR-14 corrected (one-time include-line re-stamp).
+- **Tests:** `test_nav_drift.py` (9, real drift/skip-hook), `test_nav_runtime.py` (1, serve + config
+  hide across restart). Updated `test_pages`/`test_cli_backend` for the always-on shape; golden trees
+  re-pinned for the 4 nav-delta files.
+- **Integration bug found+fixed during build:** `views.yaml` is multi-section — an app with only
+  `flows:`/`forms:` has no top-level `views:`, so the strict `parse_views` hard-failed. `nav_registry`
+  now enumerates the `views:` section only when present (`_has_views_section`). Caught by the flows
+  runtime test — the value of building, not just planning.
+
+**Known caveats (pre-existing, NOT introduced here):**
+- `test_deployment_mode_consume` golden tree fails on `clients/http_client.py` + `tests/test_openapi_contract.py`
+  — **already drifted on clean `origin/main`** (env/version-sensitive); deliberately NOT absorbed into
+  the golden so the pre-existing issue stays visible. The 4 nav-delta files ARE re-pinned and pass.
+- Full-suite runs trip a pre-existing SQLModel registry collision (`Multiple classes found for path
+  "Capability"`) that fails every app-generating runtime test (`test_runtime_smoke`, `test_import_runtime`,
+  …) in one process. `test_nav_runtime` joins that set: **green in isolation**, victim of the shared infra
+  bug in the full suite. No new failure class.
+
 ## 2. Step sequence
 
 - **M0 — Registry core.** `nav_generator.py` + `NavEntry` + deterministic enumeration over

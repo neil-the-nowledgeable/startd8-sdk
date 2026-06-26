@@ -126,17 +126,28 @@ def test_shell_extends_base_and_includes_untracked_fragment():
     assert embedded_entity(shell) == "home"
 
 
-def test_base_template_nav_only_when_pages_given():
+def test_base_template_always_includes_nav_partial():
+    """The top nav is now the always-on default-nav partial (FR-13/14): base.html includes
+    ``_nav.html`` tolerantly in BOTH the schema-only and pages-configured shapes, and no longer
+    inlines ``<nav>`` itself. The header kind still distinguishes the two shapes."""
     plain = render_base_template(SCHEMA)
-    assert "<nav" not in plain
+    assert '{% include "_nav.html" ignore missing %}' in plain
+    assert "<nav" not in plain  # nav markup lives in the partial, not base.html
     assert embedded_artifact_kind(plain) == "htmx-base"
 
-    withnav = render_base_template(SCHEMA, "prisma/schema.prisma", PAGES)
-    assert "<nav" in withnav
-    assert '<a href="/how-it-works"' in withnav
-    assert "request.url.path == '/how-it-works'" in withnav  # active-link highlight
-    assert embedded_artifact_kind(withnav) == "pages-base"
-    assert embedded_pages_sha(withnav) is not None
+    withpages = render_base_template(SCHEMA, "prisma/schema.prisma", PAGES)
+    assert '{% include "_nav.html" ignore missing %}' in withpages
+    assert "<nav" not in withpages
+    assert embedded_artifact_kind(withpages) == "pages-base"
+    assert embedded_pages_sha(withpages) is not None
+
+    # The nav markup + active-link highlight now live in the partial (render_nav_partial).
+    from startd8.backend_codegen.nav_generator import render_nav_partial
+
+    partial = render_nav_partial(SCHEMA, None, PAGES)
+    assert "<nav" in partial
+    assert '<a href="/how-it-works"' in partial
+    assert "request.url.path == '/how-it-works'" in partial  # active-link highlight
 
 
 def test_body_fragment_is_rendered_at_generate_time_and_untracked(tmp_path):

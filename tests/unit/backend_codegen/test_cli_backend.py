@@ -142,7 +142,12 @@ def test_generate_with_pages_then_recheck_in_sync(tmp_path):
     assert gen.exit_code == 0, gen.output
     assert (tmp_path / "app/pages.py").exists()
     assert (tmp_path / "app/templates/pages/home.html").exists()
-    assert "<nav" in (tmp_path / "app/templates/base.html").read_text()
+    # nav is now the always-on default-nav partial (FR-13/14): base.html includes it; the <nav>
+    # markup + the runtime visibility module live in the generated nav files.
+    assert '{% include "_nav.html"' in (tmp_path / "app/templates/base.html").read_text()
+    assert (tmp_path / "app/templates/_nav.html").exists()
+    assert (tmp_path / "app/nav.py").exists()
+    assert "<nav" in (tmp_path / "app/templates/_nav.html").read_text()
     chk = runner.invoke(
         generate_app,
         ["backend", "--schema", str(schema), "--pages", str(pages), "--out", str(tmp_path), "--check"],
