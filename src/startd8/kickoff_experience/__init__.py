@@ -20,6 +20,14 @@ Public read-only API (the data spine):
 
 from __future__ import annotations
 
+from .readiness import (
+    BUDGET_INITIAL_MS,
+    BUDGET_REFRESH_MS,
+    BUDGET_RENDER_MS,
+    PerfSample,
+    ReadinessView,
+    build_readiness,
+)
 from .state import (
     Attention,
     Ambiguity,
@@ -33,6 +41,7 @@ from .state import (
 )
 
 __all__ = [
+    # M1 — extraction state
     "Attention",
     "Ambiguity",
     "FieldState",
@@ -42,4 +51,11 @@ __all__ = [
     "classify_ambiguity",
     "field_states",
     "source_inventory",
+    # M2 — readiness
+    "BUDGET_INITIAL_MS",
+    "BUDGET_REFRESH_MS",
+    "BUDGET_RENDER_MS",
+    "PerfSample",
+    "ReadinessView",
+    "build_readiness",
 ]
