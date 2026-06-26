@@ -28,7 +28,10 @@ READ_ACTIONS = ("survey", "assess")
 # Write actions return a PREVIEW (WritePlan) from handle_concierge_tool; the CLI is the only path
 # that applies it (OQ-7). handle_concierge_tool never writes — it builds the plan.
 WRITE_ACTIONS = ("instantiate-kickoff", "log-friction")
-DEFERRED_ACTIONS = ("derive-contract",)
+# derive-contract returns a PREVIEW (candidate contract + report) or a drift report from
+# handle_concierge_tool; the CLI is the only path that writes the contract (OQ-7).
+DERIVE_ACTIONS = ("derive-contract",)
+DEFERRED_ACTIONS = ()
 
 # --- survey heuristics (all path/name-based; never reads flagged file contents — OQ-8 lean) ---
 
@@ -257,15 +260,36 @@ def handle_concierge_tool(action: str, project_root: str | Path, **params: Any) 
             raise ConciergeError(f"log-friction requires field {e}") from None
         except ConciergeWriteError as e:
             raise ConciergeError(str(e)) from None
+    if action == "derive-contract":
+        import dataclasses
+
+        from .derive import build_derivation, check_drift
+
+        modules = params.get("modules")
+        if not modules:
+            raise ConciergeError("derive-contract requires `modules` (Pydantic model import paths)")
+        pythonpath = params.get("pythonpath") or str(project_root)
+        common = dict(project_pythonpath=pythonpath, model_names=params.get("model_names"),
+                      exclude_models=params.get("exclude_models"))
+        # Preview by default; `check` reads the live contract and returns drift (no write either way).
+        if params.get("check"):
+            live = params.get("live_schema_text")
+            if live is None:
+                live_file = Path(params.get("live_schema_path") or (Path(project_root) / "prisma" / "schema.prisma"))
+                if not live_file.is_file():
+                    raise ConciergeError(f"--check needs a live schema; none at {live_file}")
+                live = live_file.read_text(encoding="utf-8")
+            return dataclasses.asdict(check_drift(modules, live_schema_text=live, **common))
+        return dataclasses.asdict(build_derivation(modules, **common))
     if action in DEFERRED_ACTIONS:
         return {
             "schema_version": SCHEMA_VERSION,
             "action": action,
             "status": "not_implemented",
-            "detail": f"'{action}' is deferred; v1 read-only actions are {READ_ACTIONS}.",
+            "detail": f"'{action}' is deferred.",
         }
     raise ConciergeError(
-        f"unknown action '{action}'. Known: {READ_ACTIONS + DEFERRED_ACTIONS}."
+        f"unknown action '{action}'. Known: {READ_ACTIONS + WRITE_ACTIONS + DERIVE_ACTIONS}."
     )
 
 

@@ -71,12 +71,15 @@ def test_handle_unknown_action_raises(project):
         handle_concierge_tool("nuke", project)
 
 
-def test_handle_deferred_action_is_structured_not_crash(project):
-    # log-friction graduated to implemented in the write-path increment; derive-contract
-    # remains the deferred action.
-    out = handle_concierge_tool("derive-contract", project)
-    assert out["status"] == "not_implemented"
-    assert out["action"] == "derive-contract"
+def test_handle_unknown_action_raises_not_crash(project):
+    # All v1 actions (survey/assess/instantiate-kickoff/log-friction/derive-contract) are now
+    # implemented — DEFERRED_ACTIONS is empty. An out-of-scope action degrades gracefully
+    # (a clear ConciergeError listing the known actions), never an opaque crash.
+    import pytest
+
+    with pytest.raises(ConciergeError) as exc:
+        handle_concierge_tool("teleport", project)
+    assert "teleport" in str(exc.value) and "derive-contract" in str(exc.value)
 
 
 def test_survey_is_pure_no_writes(project):

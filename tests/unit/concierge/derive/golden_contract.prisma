@@ -1,0 +1,49 @@
+// Golden oracle for the derive-contract two-sided test (Step 7 / OQ-DC-1).
+// Reviewed-correct expected derivation of golden_models.py. Comments + the generated sha header
+// are ignored by semantic_diff (it compares models + enums structurally); this is the structural
+// contract the deriver must reproduce. Regenerate consciously if the derivation rules change.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Status {
+  not_started
+  done
+}
+
+model Item {
+  id String   @id @default(cuid())
+  ownerId String   @default("local")
+  source String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  itemKey String
+  label String
+  qty Int @default(1)
+  status Status @default(done)
+  notes String?
+  orderId String
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  @@unique([orderId, itemKey])
+}
+
+model Order {
+  id String   @id @default(cuid())
+  ownerId String   @default("local")
+  source String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meta Json?
+  tag_ids Json?
+  items Item[]
+}

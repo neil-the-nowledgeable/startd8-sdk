@@ -44,6 +44,9 @@ def _scrubbed_env(project_pythonpath: Optional[str]) -> dict:
     parts = [project_pythonpath, _sdk_src_root()] if project_pythonpath else [_sdk_src_root()]
     env["PYTHONPATH"] = os.pathsep.join(p for p in parts if p)
     env["PYTHONUNBUFFERED"] = "1"
+    # The introspection subprocess is ephemeral — don't litter the target with __pycache__/.pyc
+    # (keeps the contained run genuinely non-writing to the consumer's tree).
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     # Refuse network for the pure-introspection path is not enforced here (documented posture);
     # offline DNS/socket policy is the operator env's job. The scrubbed secrets are the control.
     return env

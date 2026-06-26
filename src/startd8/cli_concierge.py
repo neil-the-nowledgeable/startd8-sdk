@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import List, Optional
 
 import typer
 
@@ -252,5 +253,83 @@ def concierge_log_friction(
         console.print(f"[red]concierge: blocked — {exc}[/red]")
         raise typer.Exit(_EXIT_BLOCKED)
     _render_write_result(res)
+    if not res.ok:
+        raise typer.Exit(_EXIT_BLOCKED)
+
+
+@concierge_app.command("derive-contract")
+def concierge_derive_contract(
+    project_root: Path = typer.Argument(Path("."), help="Project root (default: current dir)."),
+    models: List[str] = typer.Option(..., "--models", help="Pydantic model module import path(s) (repeatable)."),
+    pythonpath: Optional[Path] = typer.Option(None, "--pythonpath", help="Where to import the models from (default: project root)."),
+    model_names: Optional[List[str]] = typer.Option(None, "--model-name", help="Restrict to these class names (repeatable)."),
+    exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Exclude these models, FQ or bare class name (repeatable)."),
+    out: Path = typer.Option(Path("prisma/schema.prisma"), "--out", help="Contract path (relative to project root) for --apply."),
+    check: bool = typer.Option(False, "--check", help="Report drift vs the live contract; non-zero exit on drift (FR-DC-11)."),
+    apply: bool = typer.Option(False, "--apply", help="Write the candidate contract (default: preview only)."),
+    force: bool = typer.Option(False, "--force", help="With --apply: overwrite an existing contract."),
+    json_out: bool = typer.Option(False, "--json", help="Emit schema-versioned JSON."),
+) -> None:
+    """Derive a candidate schema.prisma from a project's Pydantic models (FR-DC-1..14).
+
+    Preview by default; --check reports drift; --apply writes the candidate (CLI is the sole
+    writer, OQ-7). The emitted contract is marked `unratified` — the Architect ratifies (FR-DC-7c).
+    """
+    from .concierge.derive import DeriveImportError, build_derivation, check_drift
+    from .concierge.safe_write import ACTION_NEW, ACTION_OVERWRITE, PlannedWrite, SafeWriteError, apply_write_plan
+
+    ppath = str(pythonpath) if pythonpath else str(project_root)
+    try:
+        if check:
+            live_file = project_root / out
+            if not live_file.is_file():
+                console.print(f"[red]concierge:[/red] --check needs a live contract; none at {live_file}")
+                raise typer.Exit(_EXIT_FATAL_INPUTS)
+            drift = check_drift(list(models), live_schema_text=live_file.read_text(encoding="utf-8"),
+                                project_pythonpath=ppath, model_names=model_names, exclude_models=exclude)
+            if json_out:
+                _emit_json(drift.__dict__)
+            else:
+                color = "green" if drift.verdict == "in_sync" else "red"
+                console.print(f"[bold]derive-contract --check[/bold] — [{color}]{drift.verdict}[/{color}] "
+                              f"({len(drift.drift)} drift, {len(drift.excluded_flagged)} ratified-flagged suppressed)")
+                for line in drift.drift:
+                    console.print(f"  [red]drift[/red] {line}")
+            raise typer.Exit(0 if drift.verdict == "in_sync" else _EXIT_DRIFT)
+
+        derivation = build_derivation(list(models), project_pythonpath=ppath,
+                                      model_names=model_names, exclude_models=exclude)
+    except DeriveImportError as exc:
+        console.print(f"[red]concierge: derivation failed (fail-closed) — {exc}[/red]")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    r = derivation.report
+    if json_out and not apply:
+        _emit_json(derivation.__dict__)
+        return
+    console.print(f"[bold]derive-contract[/bold] {'(preview)' if not apply else ''} — "
+                  f"{derivation.shape['entities']} entities, {derivation.shape['enums']} enums, "
+                  f"{derivation.shape['joins']} joins")
+    for e in derivation.errors:
+        console.print(f"  [red]error[/red] {e}")
+    if r.get("flags"):
+        console.print(f"  [yellow]{len(r['flags'])} flag(s)[/yellow] for review (ambiguities/exclusions)")
+    if derivation.unrenderable:
+        console.print(f"  [yellow]{len(derivation.unrenderable)} unrenderable field(s)[/yellow]")
+
+    if not apply:
+        console.print("\n  [dim]preview only — re-run with --apply to write the candidate contract[/dim]")
+        return
+
+    rel = out.as_posix()
+    action = ACTION_OVERWRITE if (project_root / out).is_file() else ACTION_NEW
+    plan = [PlannedWrite(path=rel, action=action, content=derivation.contract_text)]
+    try:
+        res = apply_write_plan(project_root, plan, force=force)
+    except SafeWriteError as exc:
+        console.print(f"[red]concierge: blocked — {exc}[/red]")
+        raise typer.Exit(_EXIT_BLOCKED)
+    _render_write_result(res)
+    console.print("  [dim]written as a CANDIDATE (unratified) — the Architect must ratify (FR-DC-7c)[/dim]")
     if not res.ok:
         raise typer.Exit(_EXIT_BLOCKED)
