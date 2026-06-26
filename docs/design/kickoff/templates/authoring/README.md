@@ -28,7 +28,8 @@ copy one into your project's `docs/kickoff/authoring/`, replace the `<…>` plac
 | `form_help.md` | `prisma/form_prose.yaml` | §2.3b | **yes (per-field help/placeholder + intro)** | `startd8 kickoff check docs/kickoff/authoring/form_help.md` |
 | `observability.md` | `inputs/observability.yaml` | §2.12 | **yes (Slice 1: Thresholds + Receivers)** | `startd8 kickoff check docs/kickoff/authoring/observability.md` |
 | `conventions.md` | `inputs/conventions.yaml` | §2.9 | **yes** (FR-VIP proving slice: stack/module_paths/naming/data_model/architecture_notes) | `startd8 kickoff check docs/kickoff/authoring/conventions.md` |
-| build-preferences / business-targets | `inputs/*.yaml` | §2.10+ | no — FR-VIP fan-out | — |
+| `business-targets.md` | `inputs/business-targets.yaml` | §2.10 | **yes** (FR-VIP fan-out: outcomes/usage/unit-economics/per-role goals + monetization) | `startd8 kickoff check docs/kickoff/authoring/business-targets.md` |
+| `build-preferences.md` | `inputs/build-preferences.yaml` | §2.11 | **yes** (FR-VIP fan-out: budgets/model_routing/generation/unattended) | `startd8 kickoff check docs/kickoff/authoring/build-preferences.md` |
 
 > The **assembly** manifests (schema/pages/views/…) have extractors (`manifest_extraction/`); the
 > **value** inputs (conventions/build-prefs/…) do not yet — that gap is the FR-VIP capability. A

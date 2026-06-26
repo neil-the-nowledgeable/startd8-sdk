@@ -12,6 +12,12 @@ Conventions is the proving slice; build-preferences / business-targets follow th
 
 from __future__ import annotations
 
+from .build_preferences import BuildPreferencesManifest, parse_build_preferences
+from .business_targets import (
+    BusinessTargetsManifest,
+    Target,
+    parse_business_targets,
+)
 from .conventions import (
     ConventionsManifest,
     DataModelConventions,
@@ -22,4 +28,9 @@ __all__ = [
     "ConventionsManifest",
     "DataModelConventions",
     "parse_conventions",
+    "BuildPreferencesManifest",
+    "parse_build_preferences",
+    "BusinessTargetsManifest",
+    "Target",
+    "parse_business_targets",
 ]

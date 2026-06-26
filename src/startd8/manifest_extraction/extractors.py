@@ -1104,3 +1104,181 @@ def extract_conventions(
                 value=f"{len(notes)} invariant(s)", source=SourceRef(doc_label, ai.heading_path)))
 
     return out
+
+
+# --------------------------------------------------------------------------- #
+# §2.11 Build preferences → build-preferences.yaml (value-input fan-out — FR-VIP)
+# --------------------------------------------------------------------------- #
+
+_BOOL_TRUE = {"true", "yes", "y", "1"}
+_BOOL_FALSE = {"false", "no", "n", "0"}
+_INT_RE = re.compile(r"^-?\d+$")
+
+# `### <Subsection>` → conventions-style `- Key: value` group. `unattended.non_interactive` is the
+# one bool field (the how-to mapping); everything else is a string (model TIER names, never versions).
+_BP_GROUPS = (
+    ("Budgets", "budgets", frozenset()),
+    ("Model routing", "model_routing", frozenset()),
+    ("Generation", "generation", frozenset()),
+    ("Unattended", "unattended", frozenset({"non_interactive"})),
+)
+
+
+def extract_build_preferences(
+    doc_label: str,
+    sections: List[Section],
+    records: List[ExtractionRecord],
+) -> Optional[dict]:
+    """§2.11 ``## Build preferences`` prose → ``build-preferences.yaml`` candidate + records (FR-VIP).
+
+    A ``Provenance default`` key-line + one ``### <group>`` per ``budgets``/``model_routing``/
+    ``generation``/``unattended`` (each a block of ``- Key: value`` lines, key→snake_case).
+    ``unattended.non_interactive`` coerces to a bool; a non-bool there is flagged, never guessed.
+    Emits ``domain: build-preferences``. Returns ``None`` when there is no section (FR-VIP-9)."""
+    root = find_section(sections, "Build preferences")
+    if root is None:
+        return None
+    parent = root.title
+    src = SourceRef(doc_label, root.heading_path)
+    out: Dict[str, object] = {"domain": "build-preferences"}
+
+    keys, _ = key_lines(root.body)
+    prov = strip_annotations(keys.get("Provenance default", "")).strip()
+    if prov:
+        out["provenance_default"] = prov
+        records.append(ExtractionRecord(
+            "build-preferences.yaml", "/provenance_default", Status.EXTRACTED, value=prov, source=src))
+
+    for title, dest, bool_keys in _BP_GROUPS:
+        sec = _child_section(sections, parent, title)
+        if sec is None:
+            continue
+        gsrc = SourceRef(doc_label, sec.heading_path)
+        gkeys, _ = key_lines(sec.body)
+        group: Dict[str, object] = {}
+        for raw_key, raw_val in gkeys.items():
+            k = _norm_key(raw_key)
+            v = strip_annotations(raw_val).strip()
+            if k in bool_keys:
+                low = v.lower()
+                if low in _BOOL_TRUE:
+                    group[k] = True
+                elif low in _BOOL_FALSE:
+                    group[k] = False
+                else:
+                    records.append(ExtractionRecord(
+                        "build-preferences.yaml", f"/{dest}/{k}", Status.NOT_EXTRACTED, source=gsrc,
+                        reason=f"`{k}` must be a boolean (true/false), got {v!r}"))
+                    continue
+            else:
+                group[k] = v
+            records.append(ExtractionRecord(
+                "build-preferences.yaml", f"/{dest}/{k}", Status.EXTRACTED,
+                value=str(group[k])[:60], source=gsrc))
+        if group:
+            out[dest] = group
+
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# §2.10 Business targets → business-targets.yaml (value-input fan-out — FR-VIP)
+# --------------------------------------------------------------------------- #
+
+# `### <Subsection>` → the metric-group key (the only recognized groups; anything else is flagged).
+_BT_METRIC_GROUPS = {"outcomes": "product_funnel", "usage": "traction", "unit economics": "unit_economics"}
+# The v1 monetization vocabulary: `not-applicable` expands to the full block (the only supported value).
+_MONETIZATION_NA = {
+    "mode_now": "not-applicable",
+    "conversion_rate": {"target": "N/A", "status": "not-applicable"},
+    "price_point": {"target": "N/A", "status": "not-applicable"},
+}
+
+
+def _target_literal(text: str):
+    """A `Target` cell → int when it is a bare integer (`0`/`3`/`20`), else the string verbatim."""
+    s = text.strip()
+    return int(s) if _INT_RE.match(s) else s
+
+
+def extract_business_targets(
+    doc_label: str,
+    sections: List[Section],
+    records: List[ExtractionRecord],
+) -> Optional[dict]:
+    """§2.10 ``## Business targets`` prose → ``business-targets.yaml`` candidate + records (FR-VIP).
+
+    A ``Provenance default`` + optional ``Monetization`` key-line (``not-applicable`` expands to the full
+    block); one ``| Metric | Target | Why |`` table per group (``### Outcomes``→``product_funnel``,
+    ``### Usage``→``traction``, ``### Unit economics``→``unit_economics``); a ``### Per-role goals``
+    ``| Role | Goal |`` table → ``per_role_top_goals``. ``Target`` is an int when bare, else a string. An
+    unrecognized ``###`` group is flagged ``not_extracted(unknown-group)``, never guessed. Emits
+    ``domain: business-targets``. Returns ``None`` when there is no section (FR-VIP-9)."""
+    root = find_section(sections, "Business targets")
+    if root is None:
+        return None
+    parent = root.title
+    src = SourceRef(doc_label, root.heading_path)
+    out: Dict[str, object] = {"domain": "business-targets"}
+
+    keys, _ = key_lines(root.body)
+    prov = strip_annotations(keys.get("Provenance default", "")).strip()
+    if prov:
+        out["provenance_default"] = prov
+        records.append(ExtractionRecord(
+            "business-targets.yaml", "/provenance_default", Status.EXTRACTED, value=prov, source=src))
+    monet = strip_annotations(keys.get("Monetization", "")).strip().lower()
+    if monet:
+        if monet == "not-applicable":
+            out["monetization"] = dict(_MONETIZATION_NA)
+            records.append(ExtractionRecord(
+                "business-targets.yaml", "/monetization", Status.EXTRACTED, value="not-applicable", source=src))
+        else:
+            records.append(ExtractionRecord(
+                "business-targets.yaml", "/monetization", Status.NOT_EXTRACTED, source=src,
+                reason=f"only `not-applicable` is supported in v1 (got {monet!r}); a live funnel needs its own sub-grammar"))
+
+    # One `### <group>` per metric table; `### Per-role goals` is the role table; anything else flagged.
+    for sec in [s for s in sections if parent in s.heading_path and s.title != parent
+                and len(s.heading_path) == len(root.heading_path) + 1]:
+        title = sec.title.strip()
+        low = title.lower()
+        gsrc = SourceRef(doc_label, sec.heading_path)
+        if low in _BT_METRIC_GROUPS:
+            dest = _BT_METRIC_GROUPS[low]
+            tables = [t for t in md_tables(sec.body) if "metric" in t.headers and "target" in t.headers]
+            metrics: Dict[str, dict] = {}
+            for i, row in enumerate(tables[0].dicts() if tables else ()):
+                metric = _norm_key(row.get("metric", ""))
+                if not metric:
+                    continue
+                entry = {"target": _target_literal(row.get("target", ""))}
+                why = strip_annotations(row.get("why", "")).strip()
+                if why:
+                    entry["why"] = why
+                metrics[metric] = entry
+                records.append(ExtractionRecord(
+                    "business-targets.yaml", f"/{dest}/{metric}", Status.EXTRACTED,
+                    value=str(entry["target"]), source=SourceRef(doc_label, sec.heading_path, row_index=i)))
+            if metrics:
+                out[dest] = metrics
+        elif low in ("per-role goals", "per role goals"):
+            tables = [t for t in md_tables(sec.body) if "role" in t.headers and "goal" in t.headers]
+            roles: Dict[str, str] = {}
+            for i, row in enumerate(tables[0].dicts() if tables else ()):
+                role = strip_annotations(row.get("role", "")).strip()
+                goal = strip_annotations(row.get("goal", "")).strip()
+                if role and goal:
+                    roles[role] = goal
+                    records.append(ExtractionRecord(
+                        "business-targets.yaml", f"/per_role_top_goals/{role}", Status.EXTRACTED,
+                        value=goal[:60], source=SourceRef(doc_label, sec.heading_path, row_index=i)))
+            if roles:
+                out["per_role_top_goals"] = roles
+        else:
+            records.append(ExtractionRecord(
+                "business-targets.yaml", f"/{_norm_key(title)}", Status.NOT_EXTRACTED, source=gsrc,
+                reason=f"unknown business-targets group {title!r} (allowed: Outcomes, Usage, "
+                       "Unit economics, Per-role goals)"))
+
+    return out

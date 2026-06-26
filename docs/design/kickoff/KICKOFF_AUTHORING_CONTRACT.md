@@ -369,6 +369,46 @@ An out-of-vocabulary enum or an unknown data-model key → `not_extracted(...)` 
 rejected by `parse_conventions` (typo guard); `stack`/`naming` sub-keys are open vocab. Project-
 agnostic (FR-VIP-9) — household's sheet is a fixture, never a built-in.
 
+### 2.10 Business targets → `business-targets.yaml` *(value input — FR-VIP)*
+
+What success looks like in numbers (the goal lines on dashboards). A `## Business targets` section:
+key-lines + a `| Metric | Target | Why |` table per group. Round-trip authority
+`kickoff_inputs.parse_business_targets`; emits `domain: business-targets`.
+
+| Prose | → YAML | Rule |
+|---|---|---|
+| `- Provenance default: <v>` | `provenance_default` | scalar |
+| `- Monetization: not-applicable` | `monetization: {mode_now, conversion_rate, price_point}` | `not-applicable` **expands** to the full block (the only v1 value; a live funnel needs its own sub-grammar) |
+| `### Outcomes` table | `product_funnel` | Metric→snake_case key; `{target, why}` per row |
+| `### Usage` table | `traction` | same |
+| `### Unit economics` table | `unit_economics` | same |
+| `### Per-role goals` `\| Role \| Goal \|` | `per_role_top_goals` | Role→key (verbatim), Goal→string |
+
+`Target` parses as an **int** when it is a bare integer (`0`/`3`/`20`), else a string (`"95%"`,
+`"<= $25"`). `Why` is free text. An **unrecognized `###` group** → `not_extracted(unknown-group)`
+(flag, never guess). The whole section is optional. Project-agnostic — a personal tool's
+household-outcome targets parse exactly like a SaaS funnel (FR-VIP-9).
+
+### 2.11 Build preferences → `build-preferences.yaml` *(value input — FR-VIP)*
+
+How the build factory runs (spend / model routing / profile). A `## Build preferences` section: a
+`Provenance default` key-line + one `###` subsection per group, each a block of `- Key: value` lines.
+Round-trip authority `kickoff_inputs.parse_build_preferences`; emits `domain: build-preferences`.
+
+| Prose | → YAML | Rule |
+|---|---|---|
+| `- Provenance default: <v>` | `provenance_default` | scalar |
+| `### Budgets` block | `budgets` | key→snake_case (`Per pipeline run`→`per_pipeline_run`); string values |
+| `### Model routing` block | `model_routing` | key→snake_case; `Note`→`note` (free text) |
+| `### Generation` block | `generation` | key→snake_case |
+| `### Unattended` block | `unattended` | `Question answers`→`question_answers`; `Non interactive`→`non_interactive` (**bool**) |
+
+`unattended.non_interactive` coerces `true`/`false` to a bool; a non-bool there is
+`not_extracted`, never guessed. **Never** emit a pinned model version — only `*_tier` names (tiers
+resolve via `model_catalog`). `language` should equal `conventions.yaml` `language` (one value, two
+surfaces — disagreement is a preflight concern, not an extraction error). Unknown top-level keys are
+rejected; group sub-keys are open vocab. The section is optional.
+
 ## 3. The friction loop (when prose doesn't match)
 
 Non-conforming sections are **flagged, never guessed**: the extraction report lists each
@@ -462,6 +502,8 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 | R2-G5 | Nudge suffix flagged `not_extracted(generator-gap)` PER ENTRY (two report rows), never silently dropped | R2 (sonnet, adversarial) | §2.4 nudge bullet | 2026-06-05 |
 | DMC-G1 | Add the `money` plain type (→ Int minor units) and surface the **data-model representation conventions** (money/dates/recurrence/references/computed/deferred) as a declared input + qualifying question set. The `references` loose-ref verb (already in §2.1, FR-PE-5c) and `default:` notes are synced into the teaching templates, which omitted them. | data-model-conventions update (household-o11y kickoff, 2026-06-23) | §2.1 type table (`money`); KICKOFF_REQUIREMENTS FR-F6/FR-H6; `conventions.yaml` `data_model:` block; template/how-to vocab sync | 2026-06-23 |
 | VIP-G1 | Add **§2.9 Technology conventions → `conventions.yaml`** — the first prose-authored *value* input. Defines the section/subsection grammar (key-lines + stack/module-layout/naming tables + the FR-F6 `### Data-model conventions` enum block + architecture-invariant bullets), the controlled vocabularies, and flag-don't-guess handling. Implemented as `manifest_extraction.extract_conventions` + the strict round-trip authority `kickoff_inputs.parse_conventions` (`ConventionsManifest`). | FR-VIP slice (household-o11y kickoff, 2026-06-23); `SDK_VALUE_INPUT_AUTHORING_REQUIREMENTS.md` + `HOWTO_DATA_MODEL_CONVENTIONS_GRAMMAR.md` | §2.9 grammar + mapping/enum tables; `kickoff_inputs/conventions.py`; round-trip wired into `extract.py`; GRAMMAR_VERSION already `v0.3` | 2026-06-25 |
+| VIP-G2 | Add **§2.10 Business targets → `business-targets.yaml`** — the value-input fan-out (table-per-group grammar: Outcomes/Usage/Unit-economics `\| Metric \| Target \| Why \|` → `product_funnel`/`traction`/`unit_economics`; Per-role goals table; int-vs-string target literal; `not-applicable` monetization expansion; unknown-group flag). `extract_business_targets` + `parse_business_targets` (`BusinessTargetsManifest`). | FR-VIP fan-out (household-o11y, 2026-06-23) | §2.10 grammar + mapping table; `kickoff_inputs/business_targets.py`; round-trip wired into `extract.py` | 2026-06-25 |
+| VIP-G3 | Add **§2.11 Build preferences → `build-preferences.yaml`** — the value-input fan-out (key-line groups: Budgets/Model-routing/Generation/Unattended → snake_case scalar maps; `non_interactive` bool coercion; tier-names-never-versions). `extract_build_preferences` + `parse_build_preferences` (`BuildPreferencesManifest`). Closes the `cli_kickoff` "needs a `build_preferences_text` pass" backlog note. | FR-VIP fan-out (household-o11y, 2026-06-23) | §2.11 grammar + mapping table; `kickoff_inputs/build_preferences.py`; round-trip wired into `extract.py` | 2026-06-25 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 

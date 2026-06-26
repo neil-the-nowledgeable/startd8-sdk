@@ -22,11 +22,17 @@ from ..view_codegen.manifest import parse_views
 from ..view_codegen.view_prose import parse_view_prose
 from ..backend_codegen.form_prose import parse_form_prose
 from ..observability.spec import from_observability_yaml
-from ..kickoff_inputs import parse_conventions
+from ..kickoff_inputs import (
+    parse_build_preferences,
+    parse_business_targets,
+    parse_conventions,
+)
 from .entities import EntityGraph, diff_against_live, extract_entities, extract_enums
 from .extractors import (
     extract_ai_passes,
     extract_app,
+    extract_build_preferences,
+    extract_business_targets,
     extract_completeness,
     extract_conventions,
     extract_form_prose,
@@ -186,6 +192,11 @@ def extract_manifests(
         # assembly extractors; round-trips through the kickoff_inputs parser (FR-VIP-1/3).
         if "conventions.yaml" not in candidates or candidates["conventions.yaml"] is None:
             candidates["conventions.yaml"] = extract_conventions(label, sections, records)
+        # §2.11 build preferences + §2.10 business targets — the value-input fan-out (same pattern).
+        if "build-preferences.yaml" not in candidates or candidates["build-preferences.yaml"] is None:
+            candidates["build-preferences.yaml"] = extract_build_preferences(label, sections, records)
+        if "business-targets.yaml" not in candidates or candidates["business-targets.yaml"] is None:
+            candidates["business-targets.yaml"] = extract_business_targets(label, sections, records)
 
     # Prune view-copy to views that SURVIVED views.yaml extraction (a view dropped for a bad compute
     # binding / unknown kind must not leave its copy dangling in view_prose → the round-trip would
@@ -240,6 +251,9 @@ def extract_manifests(
         # §2.9 conventions value input (FR-VIP-3): the emitted conventions.yaml must round-trip
         # through the strict kickoff_inputs parser (the canonical schema authority).
         "conventions.yaml": lambda t: parse_conventions(t),
+        # §2.11 / §2.10 value-input fan-out — same round-trip discipline.
+        "build-preferences.yaml": lambda t: parse_build_preferences(t),
+        "business-targets.yaml": lambda t: parse_business_targets(t),
         # Form help (FR-FH-8): entity targets validate against the entity graph at ingestion (the
         # producer already dropped unknown FIELDS, so a clean candidate round-trips here).
         "form_prose.yaml": lambda t: parse_form_prose(t, known_entities=known),
