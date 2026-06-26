@@ -55,10 +55,13 @@ def test_preflight_ok_on_real_project(project: Path) -> None:
 
 
 def test_preflight_flags_missing_inputs(tmp_path: Path) -> None:
+    # NR-CM-A: missing inputs is ADVISORY now (so a package-less project can still be served and
+    # offered an instantiate via Concierge mode). The check is flagged but non-blocking → pf.ok.
     pf = preflight(tmp_path, mode=Mode.WRITE)
-    assert not pf.ok
+    assert pf.ok
     inputs_check = next(c for c in pf.checks if c.name == "inputs_dir")
     assert not inputs_check.ok
+    assert inputs_check.blocking is False
     assert "missing" in inputs_check.detail
 
 

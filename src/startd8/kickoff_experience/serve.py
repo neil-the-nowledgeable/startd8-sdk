@@ -43,6 +43,18 @@ class Mode:
     ALL = (INSPECT, PREVIEW, WRITE, DEMO)
 
 
+def _nearest_existing(path: Path) -> Optional[Path]:
+    """The nearest existing ancestor of *path* (where a package would be created)."""
+    cur = path
+    for _ in range(64):
+        if cur.is_dir():
+            return cur
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return None
+
+
 def find_free_port(host: str = "127.0.0.1") -> int:
     """Bind an ephemeral port on the loopback and return it (the OS picks a free one)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -92,18 +104,26 @@ def preflight(
     inputs = root / "docs" / "kickoff" / "inputs"
     checks: List[Check] = []
 
+    # NR-CM-A: `inputs_dir`/`inputs_writable` are ADVISORY, not blocking — a package-less project
+    # must still serve so the Concierge mode can offer to instantiate it (FR-CM-6). When `inputs/`
+    # is present but a parent dir is writable, a write-mode serve can still create it.
     inputs_ok = inputs.is_dir()
     checks.append(
         Check("inputs_dir", inputs_ok,
-              f"{inputs} {'exists' if inputs_ok else 'missing — run `startd8 concierge instantiate-kickoff`'}")
+              f"{inputs} {'exists' if inputs_ok else 'missing — use Concierge mode to instantiate a kickoff package'}",
+              blocking=False)
     )
 
-    # Writability matters only when the mode can write.
     if mode in (Mode.WRITE, Mode.DEMO):
-        writable = inputs_ok and os.access(inputs, os.W_OK)
+        # Writability of inputs/ if it exists, else of the nearest existing ancestor (where
+        # instantiate would create the package). Advisory either way.
+        probe = inputs if inputs_ok else _nearest_existing(inputs.parent)
+        writable = bool(probe and os.access(probe, os.W_OK))
         checks.append(
             Check("inputs_writable", writable,
-                  "inputs dir writable" if writable else "inputs dir not writable for a write-mode serve")
+                  "kickoff inputs path is writable" if writable
+                  else "kickoff inputs path is not writable for a write-mode serve",
+                  blocking=False)
         )
 
     try:
