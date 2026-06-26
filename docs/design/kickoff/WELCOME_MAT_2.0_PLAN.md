@@ -164,6 +164,11 @@ registry tools ⊆ `{survey, assess, field_states}`.
 *Plan v0.1 — drafted against the live code. Feeds 7 discoveries into requirements §0 for v0.2.*
 *Plan v0.2 — Post-CRP R1–R4. 16 plan suggestions accepted (14 folded into §7 step refinements, 2 phased);
 none rejected. Pairs with requirements v0.3. Sequencing unchanged: download pillar first.*
+*Plan v0.3 note — Pairs with requirements v0.4. **Download pillar (S1–S3) SHIPPED** to `origin/main`.
+The **chat steps S4–S9 are superseded by shipped PR #62** (`web-agentic-panel`): S4 agent-threading +
+the chat panel/store/propose model are DONE — do not rebuild. The remaining chat work is requirements
+§B.1's 9 hardening deltas applied on top of #62, not these steps. S10–S11 templates: `conventions.md`
+done; the manifest accessor shipped (S1).*
 
 ---
 

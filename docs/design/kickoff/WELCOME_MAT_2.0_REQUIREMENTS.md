@@ -1,6 +1,6 @@
 # Welcome Mat 2.0 — Requirements
 
-**Version:** 0.3 (Post-CRP R1–R4)
+**Version:** 0.4 (Post-CRP + reconciled against shipped PR #62 `web-agentic-panel`)
 **Date:** 2026-06-26
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -149,95 +149,80 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
     entry, and `build_instantiate_plan(...)` content for that `dest` are **identical** — a parametrized
     test over all keys × `{prototype, production}`, not just the `conventions.yaml` example.
 
-### B. Home-page agentic chat (P2)
+### B. Agentic chat (P2) — largely DELIVERED by PR #62 (`web-agentic-panel`)
 
-- **FR-WM2-5 — Chat on the home page.** The home page (`/`, inline panel — OQ-6) surfaces the
-  read-only agentic kickoff chat (`build_kickoff_registry` — `survey` / `assess` / `field_states`) as a
-  conversational panel. An **`async def POST /chat`** endpoint accepts a user message and returns the
-  assistant's turn by `await chat.ask(...)` (uvicorn owns the loop; the CLI's `asyncio.run` is not
-  reused). Multi-turn history is held in a server-side **`_ChatStore`** (session-id → `KickoffChat` +
-  last-used + turn count; idle expiry + bounded entries), modeled on `_SessionStore` — which holds
-  CSRF tokens, *not* history.
-  - **Acceptance (CRP R1–R4) — session identity & lifecycle:**
-    - *(R1-F3/R1-S2/R4-F5/R4-S5 — separate cookie, bootstrapped)* `_ChatStore` is keyed by a
-      **server-issued** `kickoff_chat` cookie (`httponly`, `SameSite=strict`), **distinct from**
-      `kickoff_csrf` and never a client-supplied id. The cookie is **issued on `GET /`** when
-      `agent is not None` (parallel to CSRF issuance) so the first `POST /chat` is not session-bootstrap
-      + spend in one step. A missing/expired session → typed `chat_session_expired`; CSRF alone cannot
-      drive `/chat`.
-    - *(R3-F5/R3-S5 — memory-only)* history lives **in RAM only** (never written to `.startd8/` or
-      disk); on idle expiry/eviction the entry **and** the `AgenticSession` message list are destroyed,
-      and the store stays bounded.
-    - *(R2-F7/R2-S3 — concurrency)* at most **one in-flight `POST /chat` per session** (an
-      `asyncio.Lock` held across `await chat.ask`); a concurrent request is serialized or returns typed
-      `chat_busy` — `AgenticSession` history is never mutated concurrently.
-    - *(R2-F6/R2-S5 — input cap)* the inbound `message` is length-capped (document the max, e.g. ≤4096);
-      over-length → typed `message_too_long` **without** invoking the provider.
-    - *(R1-S1 — endpoint hardening)* `POST /chat` applies the loopback `_host_ok` check and a per-session
-      chat rate window (typed `chat_rate_limited`), distinct from the capture/Concierge limits.
-    - *(R3-F7/R3-S7 — stable JSON contract)* the endpoint returns a documented schema:
-      success `{ok: true, text, cost: {turns, tokens, usd, stop_reason?}, propose?}`; refusal/error
-      `{ok: false, code, message?}` with the typed codes named here and in FR-WM2-8.
-    - *(R4-F1/R4-S1 — CLI threading, makes this reachable)* `--agent` is threaded **end-to-end**:
-      `kickoff start --agent <spec>` → `serve_kickoff(..., agent=...)` → `build_kickoff_app(..., agent=...)`
-      (both call sites today omit it — `serve.py:214-239`, `cli_kickoff.py start`). Without this the chat
-      is dead on the primary launch path.
-- **FR-WM2-6 — Read-only floor preserved.** The web chat uses the **same** registry and dispatch floor
-  as the CLI (`handle_kickoff_read` hard-rejects any non-read action). No write tool is ever
-  registered. The posture banner (`chat.py:POSTURE_BANNER`) is shown.
-  - **Acceptance (CRP R1–R4):** *(R2-F2/R2-S2 — prompt alignment)* `KICKOFF_SYSTEM_PROMPT` is updated so
-    the assistant may **suggest/prefill** friction & instantiate drafts for Concierge submission, while
-    still being forbidden from claiming it *wrote/logged* anything — today `chat.py:47-50` flatly says it
-    "CANNOT … log friction", which would make the model refuse to draft (a functional gap, not just
-    security). A prompt test asserts it contains "suggest/prefill" + "human applies via Concierge" and
-    forbids "I logged/wrote". *(R4-S8 — static guard)* a CI test asserts the module defining `POST /chat`
-    **never imports** `apply_concierge_plan` / `apply_write_plan` / the `concierge/writes` apply paths —
-    "the loop never posts" is enforced by an import guard, not convention.
-- **FR-WM2-7 — Propose-only writes (bridge, not a new write path).** The assistant may *draft* a
-  friction entry or *prefill* an instantiate posture; the UI renders those as a **prefilled form** that
-  posts to the existing `/concierge/friction` / `/concierge/instantiate` endpoints. The human reviews
-  and submits; the existing preview-then-apply + CSRF + loopback + one-time-intent gates are unchanged.
-  The loop never calls those endpoints itself.
-  - **Acceptance (CRP R1–R4):**
-    - *(R1-F1/R1-S3/R4-F2/R4-S2 — server-produced, bounded `propose`)* drafts arrive as a
-      **server-produced, server-validated** `propose` object in the `/chat` JSON (`friction` triple +
-      `posture` enum), extracted from the `AgenticResult` (structured output / a constrained slice —
-      **never** a regex/loose parse of free-form assistant prose). `propose` is **omitted** when any
-      field fails `validate_friction` / `VALID_POSTURES` or exceeds `FRICTION_FIELD_MAX`. The client may
-      only populate **empty** Concierge form fields; it must never treat assistant `text` as the
-      authoritative prefill source.
-    - *(invariant)* chat output can **never** supply `csrf` or `intent` tokens; the server **re-validates
-      every field on apply** regardless of prefill origin (a tampered hidden intent/csrf still 403/409;
-      chat-suggested text over the cap is still rejected on apply).
-    - *(R3-F2/R3-S2 — XSS)* assistant `text` and any `propose` value rendered into the home page are
-      treated as **untrusted**: server-escaped (`_esc`) or assigned via `textContent`/`value` — **never**
-      `innerHTML`. Markup in a fixture reply renders as literal text and does not execute.
-- **FR-WM2-8 — Graceful degradation & error containment.** If no agent can be resolved (missing API
-  key, no provider), the chat panel renders a disabled state with an explanatory message and the rest
-  of the home page is unaffected. Chat failures **never** 500 the home page; `GET /` never awaits chat.
-  - **Acceptance (CRP R1–R4):**
-    - *(R1-F2/R1-S4 — mid-conversation provider failure)* provider 401/429/timeout/infra errors on a
-      turn return a typed `chat_error` (e.g. `chat_provider_timeout`) JSON with a **sanitized** message
-      — no API-key substrings, no raw provider body; `GET /` remains 200. A response-body grep asserts
-      no `sk-`/`ANTHROPIC` fragments leak.
-    - *(R4-F3/R4-S3 — agentic stop_reason)* when `AgenticResult.stop_reason` is not `completed`
-      (`max_turns` / `budget` / `context_overflow` / `repeated_calls` / `stream_error`), `/chat` returns
-      typed `{ok: false, code: chat_<reason>}` (200/503, never 500). This is a **distinct failure class**
-      from provider HTTP errors and is testable with fixture configs (no provider mock for `max_turns`).
-    - *(R2-F3/R2-S4 — feature-mode parity)* in `preview`/`inspect` serve modes the chat panel is disabled
-      and `POST /chat` returns typed `preview_only` (mirrors capture/Concierge write refusal) — a
-      read/preview serve must never spend tokens.
-- **FR-WM2-9 — Cost visibility & budget guard.** Each assistant turn surfaces the per-turn cost line
-  (`KickoffChat.cost_line`: turns / tokens / `cost≈$`, plus `stop_reason` when not `completed`), so the
-  one non-`$0` surface is honest about spend.
-  - **Acceptance (CRP R1–R4):** *(R1-F4/R1-S5/R2-F1/R2-S1/R4-F4/R4-S4 — budget via `SessionConfig`,
-    one source of truth)* per-session **turn / token / cost** limits are enforced via the
-    `AgenticSession` `SessionConfig` (`max_turns`, `max_total_tokens`, `max_cost_usd`, **and**
-    `max_tool_calls_per_turn`) — **not** ad-hoc counters duplicated in `_ChatStore` (the agentic layer
-    already accumulates totals and returns `stop_reason ∈ {budget, max_turns, …}`). Crossing a documented
-    ceiling surfaces as a typed `chat_budget_exceeded` refusal (never a 500), while download/overview keep
-    working. Web and CLI consume **one shared `SessionConfig` factory** (see FR-WM2-15) so the loop-safety
-    envelope is identical across surfaces.
+> **v0.4 reconciliation (verified on `origin/main`, merge #62, 2026-06-26).** While this spec was in
+> CRP, another track shipped the agentic chat: `concierge_agent.py` (provider/model resolution),
+> `GET /concierge/chat` + `_ChatStore`, a first-class **proposal/confirm** write model
+> (`proposals.py`), and agent threading through `serve.py`/`cli_kickoff.py`. The **core of
+> FR-WM2-5/6/7 is done and must not be rebuilt.** Two of this spec's v0.3 choices are superseded by
+> #62's (both improvements — adopted). What remains is the set of v0.3 CRP **hardening deltas** #62 did
+> not include — the build list in **B.1**.
+
+**Two adopted reconciliations (v0.3 → v0.4):**
+- **Location.** Chat lives at **`/concierge/chat`** (a sub-page reached from the Concierge page and the
+  home-page CTA), **not** inline on `/`. OQ-6's "inline on `/`" is superseded; the home page links to it.
+- **Propose mechanism.** The **proposal/confirm buffer** supersedes the "prefill the existing forms"
+  bridge. The loop calls a **read-effect `propose_action` tool** (never writes); proposals surface in a
+  pending buffer; a human **confirms** via `POST /concierge/chat/confirm` (gated by the existing
+  `_concierge_write_gate`) → `apply_proposal` re-validates live and applies through the typed write
+  path. Same security property, cleaner realization.
+
+#### B.0 — Delivered by #62 (verified on `origin/main` — do not rebuild)
+
+- **FR-WM2-5 (core) — DELIVERED.** `async def chat_message` → `await chat.ask`; bounded evict-oldest
+  `_ChatStore`; loopback `_host_ok` + a per-session rate limit; agent threaded **end-to-end** via
+  `concierge_agent.py` resolution (**flag → project → global → default** — richer than the spec's "one
+  agent per server") + `serve.py`/`cli_kickoff.py`. *(R4-S1 satisfied, plus an FR-PC-* provider-config
+  bonus beyond this spec.)*
+- **FR-WM2-6 — DELIVERED.** Read-only floor preserved via a **read-effect `propose_action` tool**
+  (`proposals.py`: *"the loop never writes … not in the apply path"*); the panel shows the posture.
+- **FR-WM2-7 — DELIVERED** (proposal model above). Confirmed proposals **re-validate live** and apply
+  through `apply_proposal` → the existing typed write path at human privilege (host/CSRF/one-time/mode
+  gate). **XSS-safe** (R3-S2): the panel JS `esc()`-wraps every dynamic value
+  (`textContent`→escaped). The loop cannot supply `csrf`/`intent`.
+- **FR-WM2-8 / FR-WM2-9 / FR-WM2-14 — DELIVERED IN PART.** No-agent ⇒ disabled panel
+  (`test_panel_disabled_without_agent`) + `make_chat_factory` degrade; per-turn cost via `cost_line`;
+  `proposal_made/confirmed/discarded` events registered. The remaining error/budget/event criteria move
+  to B.1.
+
+#### B.1 — Remaining chat hardening deltas (the actual build list)
+
+> The v0.3 CRP criteria #62 omitted. Each is a small, isolated hardening of the **shipped** panel —
+> not a rebuild. Ordered by risk.
+
+- **FR-WM2-5a — Separate `kickoff_chat` session cookie** *(R1-F3/R1-S2/R4-F5 — the load-bearing
+  security delta)*. #62 keys `_ChatStore` on the **`kickoff_csrf` token** (`token=sessions.issue()`;
+  confirm comment: *"token is the chat+csrf token"*). Split it: a server-issued `kickoff_chat`
+  (`httponly`, `SameSite=strict`) cookie distinct from `kickoff_csrf`, issued on the chat-page load;
+  missing/expired → typed `chat_session_expired`; CSRF alone cannot drive `/concierge/chat/*`.
+- **FR-WM2-8a — Preview/inspect mode gate on the spend path** *(R2-F3/R2-S4)*. `chat_message` checks
+  host+session+rate but **not `mode`** — a `preview`/`inspect` serve still spends tokens. Refuse with
+  typed `preview_only` (confirm is already mode-gated; the message/spend path is not).
+- **FR-WM2-5b — Inbound message length cap** *(R2-F6/R2-S5)*. Cap `message` (document the max, e.g.
+  ≤4096) → typed `message_too_long` **before** invoking the provider.
+- **FR-WM2-5c — Per-session concurrency lock** *(R2-F7/R2-S3)*. One in-flight message per chat session
+  (`asyncio.Lock` across `await chat.ask`) or typed `chat_busy`; never mutate session history concurrently.
+- **FR-WM2-9a — `SessionConfig` budget guard** *(R1-F4/R2-S1/R4-S4)*. Enforce `max_turns` /
+  `max_total_tokens` / `max_cost_usd` / `max_tool_calls_per_turn` via `AgenticSession.SessionConfig`,
+  built from **one shared factory** with the CLI (`kickoff_chat_session_config()` — R4-F4/FR-WM2-15 in
+  §D); crossing the ceiling → typed `chat_budget_exceeded` (never a 500). #62 bounds turn-rate only.
+- **FR-WM2-8b — `stop_reason` → typed codes** *(R4-F3/R4-S3)*. Map non-`completed`
+  `AgenticResult.stop_reason` (`max_turns`/`budget`/`context_overflow`/`repeated_calls`/`stream_error`)
+  to typed `chat_<reason>` (200/503, never 500); include `stop_reason` in the cost block.
+- **FR-WM2-8c — Sanitized mid-turn provider-error degradation** *(R1-F2/R1-S4)*. #62 has **no
+  try/except** around `await chat.ask` — a turn-N provider 401/timeout would 500. Wrap it to return a
+  **sanitized** typed `chat_error` (no key substrings / raw provider body), never a 500.
+- **FR-WM2-5d — Memory-wipe on idle expiry** *(R3-F5/R3-S5)*. Beyond evict-oldest, destroy the
+  `AgenticSession` message list on idle TTL; history stays RAM-only, never on disk.
+- **FR-WM2-14a — Turn/refusal funnel events** *(R2-F4)*. Emit `chat_turn`
+  (turns/tokens/cost/`stop_reason`, **no** message text) + the refusal events (`chat_rate_limited`,
+  `chat_budget_exceeded`, `chat_session_expired`, `chat_busy`, `message_too_long`,
+  `chat_provider_timeout`, `preview_only`), registered in `telemetry.py` with the attr allowlist.
+- **Stable `/chat` JSON schema** *(R3-F7/R3-S7)*: as these land, settle the response on
+  `{ok, text?, cost?: {turns, tokens, usd, stop_reason?}, proposals?, code?, message?}` — #62 currently
+  returns `cost` as a *string*, so the panel client needs one contract.
+- **[Phase 2]** New-conversation reset *(R4-F6/R4-S6)* + OTel span nesting *(R3-S8)* — unchanged (§F).
 
 ### C. Complete the template set (P3)
 
@@ -332,7 +317,8 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
   the CLI `asyncio.run` bridge is not reused).
 - **OQ-3 — RESOLVED → one agent per server**, `--agent` on `serve`/`start`, default
   `Models.CLAUDE_SONNET_LATEST`, resolved with the CLI's existing `resolve_agent_spec` degradation.
-- **OQ-6 — RESOLVED → inline chat panel on `/`** (single home page), not a separate `/chat` page.
+- **OQ-6 — RESOLVED, then SUPERSEDED by #62 → `/concierge/chat` sub-page** (reached from the Concierge
+  page + the home-page CTA), not inline on `/`. v0.3 said inline; v0.4 adopts #62's location (§B).
 - **OQ-7 — RESOLVED → per-session turn cap** in `_ChatStore` (the cost guard the paid surface needs),
   distinct from the capture rate-limit.
 - **OQ-4 — RESOLVED (CRP R1) → zip with a hard uncompressed-bytes ceiling** (≤2 MB), typed 413
@@ -362,8 +348,18 @@ gate, `SessionConfig` budget guard, shared `SessionConfig` factory, key-encoding
 posture validation, `with_authoring` split + triple-byte parity, zip ceiling + zip-slip guard,
 telemetry-module registration); **2 new gates** added in §E (FR-WM2-16 bijection, FR-WM2-17 write-route
 CI); **2 phased** to §F (new-conversation reset, OTel nesting). OQ-4 + OQ-5 resolved. Both R4 blocks were
-double-appended by the reviewer; triaged once. Dispositions in Appendix A; rounds verbatim in Appendix C.
-Ready for implementation (download pillar first; `conventions.md` already authored + validated).*
+double-appended by the reviewer; triaged once. Dispositions in Appendix A; rounds verbatim in Appendix C.*
+
+*v0.4 — Reconciled against shipped PR #62 (`web-agentic-panel`, merged to `origin/main` 2026-06-26).
+**Download pillar + home-page Concierge CTA + `conventions.md` SHIPPED** (FR-WM2-1/2/3/4/10/14/16).
+Reconciled §B against #62: the agentic chat **core (FR-WM2-5/6/7) is DELIVERED** — `/concierge/chat`
+panel + `_ChatStore` + `concierge_agent.py` resolution + a read-effect `propose_action` →
+proposal/confirm write model + XSS-safe render — **do not rebuild.** Adopted 2 of #62's choices over
+v0.3 (chat location `/concierge/chat`; proposal/confirm over form-prefill — both improvements; OQ-6
+superseded). §B re-cast into **B.0 (delivered)** + **B.1 (the 9-item hardening build list)**: separate
+`kickoff_chat` cookie (load-bearing), preview-mode spend gate, message cap, concurrency lock,
+`SessionConfig` budget, `stop_reason` mapping, sanitized provider-error degradation, memory-wipe,
+turn/refusal events. Next coding = B.1 deltas on top of #62, not a chat build.*
 
 ---
 
