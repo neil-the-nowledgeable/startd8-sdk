@@ -175,3 +175,16 @@ def test_apply_capture_revalidates_allow_list(project: Path) -> None:
         "capture", {"value_path": "conventions.yaml#/not_allowed", "value": "x"}, id="c"))
     assert out.code == CaptureCode.VALUE_PATH_NOT_ALLOWED
     assert not out.ok
+
+
+def test_apply_proposal_unknown_kind_is_typed_not_crash(project: Path) -> None:
+    # apply_proposal is public — a malformed proposal must return a typed outcome, not KeyError.
+    out = apply_proposal(project, ProposedAction("frobnicate", {}, id="z"))
+    assert out.code == "unknown_kind"
+    assert not out.ok
+
+
+def test_apply_proposal_missing_params_typed(project: Path) -> None:
+    out = apply_proposal(project, ProposedAction("capture", {}, id="z"))  # no value_path
+    assert out.code == CaptureCode.VALUE_PATH_NOT_ALLOWED
+    assert not out.ok

@@ -191,21 +191,25 @@ def apply_proposal(
 
 
 def _apply_proposal_inner(root, action, cfg, build_instantiate_plan, build_friction_entry):
+    # Explicit kind dispatch (a malformed/unknown ProposedAction returns a typed outcome, never a
+    # KeyError — apply_proposal is a public entry point). Params accessed defensively.
+    p = action.params or {}
 
     if action.kind == "instantiate":
-        posture = action.params["posture"]
+        posture = p.get("posture", "prototype")
         try:
             validate_posture(posture)  # R1-S4: re-validate at confirm
         except ConciergeInputError as exc:
             return ProposalOutcome("instantiate", exc.code, str(exc))
         res = apply_concierge_plan(root, build_instantiate_plan(root, posture))
         detail = f"{len(res.written)} written, {len(res.skipped)} skipped"
-        return ProposalOutcome("instantiate", res.code, detail + (f" — {res.message}" if res.message else ""))
+        return ProposalOutcome("instantiate", res.code,
+                               detail + (f" — {res.message}" if res.message else ""))
 
     if action.kind == "friction":
-        p = action.params
         try:
-            validate_friction(p["friction"], p["what_happened"], p["implication"])
+            validate_friction(p.get("friction", ""), p.get("what_happened", ""),
+                              p.get("implication", ""))
         except ConciergeInputError as exc:
             return ProposalOutcome("friction", exc.code, str(exc))
         plan = build_friction_entry(root, friction=p["friction"], what_happened=p["what_happened"],
@@ -214,17 +218,19 @@ def _apply_proposal_inner(root, action, cfg, build_instantiate_plan, build_frict
         res = apply_concierge_plan(root, plan)
         return ProposalOutcome("friction", res.code, res.message or "")
 
-    # capture
-    vp = action.params["value_path"]
-    if vp not in cfg.allowed_value_paths():  # R1-S4: allow-list may have changed since propose
-        return ProposalOutcome("capture", CaptureCode.VALUE_PATH_NOT_ALLOWED,
-                               f"{vp} is no longer a capturable field")
-    try:
-        plan = build_capture_plan(root, vp, action.params["value"], config=cfg)
-        # R1-F1: enforce the stale-file guard against the PROPOSE-time sha, not the confirm-time read.
-        if action.base_sha is not None:
-            plan = dataclasses.replace(plan, base_sha=action.base_sha)
-        apply_capture(root, plan)
-        return ProposalOutcome("capture", CaptureCode.OK, f"{vp} set")
-    except CaptureError as exc:
-        return ProposalOutcome("capture", exc.code, str(exc))
+    if action.kind == "capture":
+        vp = p.get("value_path", "")
+        if vp not in cfg.allowed_value_paths():  # R1-S4: allow-list may have changed since propose
+            return ProposalOutcome("capture", CaptureCode.VALUE_PATH_NOT_ALLOWED,
+                                   f"{vp} is no longer a capturable field")
+        try:
+            plan = build_capture_plan(root, vp, str(p.get("value", "")), config=cfg)
+            # R1-F1: enforce the stale-file guard against the PROPOSE-time sha, not the confirm read.
+            if action.base_sha is not None:
+                plan = dataclasses.replace(plan, base_sha=action.base_sha)
+            apply_capture(root, plan)
+            return ProposalOutcome("capture", CaptureCode.OK, f"{vp} set")
+        except CaptureError as exc:
+            return ProposalOutcome("capture", exc.code, str(exc))
+
+    return ProposalOutcome(action.kind, "unknown_kind", f"unknown proposal kind {action.kind!r}")
