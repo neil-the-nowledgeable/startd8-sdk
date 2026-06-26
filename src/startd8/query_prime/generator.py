@@ -101,10 +101,15 @@ def _build_system_prompt(
 
 def _build_user_prompt(work_item: QueryWorkItem) -> str:
     """Build the user prompt describing what to generate."""
+    # FR-A8: the query description is untrusted (a natural-language request that can
+    # carry injected instructions). Fence it as DATA-not-instructions. Lazy import
+    # keeps the query_prime→implementation_engine edge cycle-safe.
+    from startd8.implementation_engine.spec_builder import _fence_untrusted
+
     parts = [
         f"Generate a {work_item.operation_type.value} implementation "
         f"for {work_item.database.value} in {work_item.target_language}.",
-        f"\nDescription: {work_item.description}",
+        f"\nDescription:\n{_fence_untrusted(work_item.description, 'query_description')}",
     ]
 
     if work_item.tables:
