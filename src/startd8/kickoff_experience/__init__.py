@@ -37,6 +37,7 @@ from .manifest import (
     lint_config,
 )
 from .ranking import NextAction, next_action
+from .web import app_fingerprint, build_kickoff_app
 from .readiness import (
     BUDGET_INITIAL_MS,
     BUDGET_REFRESH_MS,
@@ -91,4 +92,7 @@ __all__ = [
     "handle_kickoff_read",
     "new_kickoff_chat",
     "next_action",
+    # M4 — web front-end
+    "app_fingerprint",
+    "build_kickoff_app",
 ]

@@ -67,7 +67,7 @@ class ReadinessView:
     perf sample so a surface can show a "large project / still checking" state.
     """
 
-    readiness: Optional[float]                    # 0..1 cascade readiness (None if inputs errored)
+    readiness: Optional[object]                   # raw per-stage map {stage: status} (or None)
     cascade_status: str                           # "ok" | "inputs_error" | "absent"
     status_counts: Mapping[str, int]
     blockers: Tuple[Mapping[str, Any], ...]
@@ -78,6 +78,24 @@ class ReadinessView:
     @property
     def over_budget(self) -> bool:
         return bool(self.perf and self.perf.over_budget)
+
+    @property
+    def score(self) -> Optional[float]:
+        """A 0..1 readiness score derived from the raw cascade readiness.
+
+        ``build_assess`` reports ``readiness`` as a per-stage status map
+        (``{"scaffold": "ready", "backend": "blocked(...)"}``); the fraction of ``ready`` stages is
+        the surfaceable meter value. A plain number is passed through; anything else → None.
+        """
+        r = self.readiness
+        if isinstance(r, bool):  # guard: bool is an int subclass
+            return 1.0 if r else 0.0
+        if isinstance(r, (int, float)):
+            return float(r)
+        if isinstance(r, dict) and r:
+            ready = sum(1 for v in r.values() if str(v).strip().lower() == "ready")
+            return ready / len(r)
+        return None
 
     @classmethod
     def from_assess(
@@ -102,6 +120,7 @@ class ReadinessView:
     def to_dict(self) -> dict:
         d: Dict[str, Any] = {
             "readiness": self.readiness,
+            "score": self.score,
             "cascade_status": self.cascade_status,
             "status_counts": dict(sorted(self.status_counts.items())),
             "blockers": [dict(b) for b in self.blockers],
