@@ -191,11 +191,14 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
 > The v0.3 CRP criteria #62 omitted. Each is a small, isolated hardening of the **shipped** panel —
 > not a rebuild. Ordered by risk.
 
-- **FR-WM2-5a — Separate `kickoff_chat` session cookie** *(R1-F3/R1-S2/R4-F5 — the load-bearing
-  security delta)*. #62 keys `_ChatStore` on the **`kickoff_csrf` token** (`token=sessions.issue()`;
-  confirm comment: *"token is the chat+csrf token"*). Split it: a server-issued `kickoff_chat`
-  (`httponly`, `SameSite=strict`) cookie distinct from `kickoff_csrf`, issued on the chat-page load;
-  missing/expired → typed `chat_session_expired`; CSRF alone cannot drive `/concierge/chat/*`.
+- **FR-WM2-5a — Separate `kickoff_chat` session cookie** ✅ **DELIVERED 2026-06-26** *(R1-F3/R1-S2/R4-F5
+  — the load-bearing security delta)*. #62 keyed `_ChatStore` on the `kickoff_csrf` token; now split:
+  the chat page issues **two distinct** httponly+`SameSite=strict` cookies — `kickoff_chat` (the chat
+  session id keying `_ChatStore`, ridden via cookie, never in the page) and `kickoff_csrf` (the
+  write-gate token rendered into the JS). message/pending read only the `kickoff_chat` cookie;
+  confirm/discard additionally require `csrf`. Missing/unknown session → typed `chat_session_expired`;
+  CSRF alone cannot drive `/concierge/chat/*` (verified: `test_csrf_alone_cannot_drive_chat`,
+  `test_chat_session_cookie_is_separate_from_csrf`).
 - **FR-WM2-8a — Preview/inspect mode gate on the spend path** *(R2-F3/R2-S4)*. `chat_message` checks
   host+session+rate but **not `mode`** — a `preview`/`inspect` serve still spends tokens. Refuse with
   typed `preview_only` (confirm is already mode-gated; the message/spend path is not).

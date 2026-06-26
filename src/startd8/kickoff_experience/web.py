@@ -326,7 +326,8 @@ def _plan_digest(plan: dict) -> str:
 
 
 class _ChatStore:
-    """Bounded per-app store of live agentic chat sessions, keyed by the session token."""
+    """Bounded per-app store of live agentic chat sessions, keyed by the **`kickoff_chat`** session id
+    (a server-issued httponly cookie, FR-WM2-5a) — distinct from the `kickoff_csrf` write token."""
 
     _MAX = 16
 
@@ -342,8 +343,12 @@ class _ChatStore:
         return self._chats.get(token)
 
 
-def _render_chat_page(token: str, stylesheet: str) -> str:
-    """The agentic Concierge chat panel — message box + transcript + pending proposals."""
+def _render_chat_page(csrf: str, stylesheet: str) -> str:
+    """The agentic Concierge chat panel — message box + transcript + pending proposals.
+
+    The chat **session** rides the httponly `kickoff_chat` cookie (FR-WM2-5a), so it is never embedded
+    in the page or readable by JS; only the write-gate `csrf` token is rendered in. `fetch` uses
+    ``credentials:'same-origin'`` so the cookie accompanies each POST."""
     body = (
         "<p><a href='/concierge'>← Concierge</a></p><h1>Concierge — chat</h1>"
         "<p class='muted'>I survey/assess and can RECOMMEND actions. I never write to disk: you "
@@ -352,7 +357,7 @@ def _render_chat_page(token: str, stylesheet: str) -> str:
         "<div id='proposals'></div>"
         "<form id='f' class='field'><input id='msg' name='msg' placeholder='ask about the kickoff…' "
         "autocomplete='off' style='width:80%'><button type='submit'>Send</button></form>"
-        f"<script>const TOK={token!r};\n"
+        f"<script>const CSRF={csrf!r};const OPTS={{method:'POST',credentials:'same-origin'}};\n"
         "const log=document.getElementById('log'),prop=document.getElementById('proposals');\n"
         "function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}\n"
         "function add(who,t){log.innerHTML+=`<p><strong>${who}:</strong> ${esc(t)}</p>`;log.scrollTop=log.scrollHeight;}\n"
@@ -360,16 +365,16 @@ def _render_chat_page(token: str, stylesheet: str) -> str:
         " ps.forEach(p=>{const id=esc(p.id);prop.innerHTML+=`<div class='card'><pre>${esc(p.summary)}</pre>`+\n"
         "  `<button onclick=\"act('confirm','${id}')\">Confirm</button> `+\n"
         "  `<button onclick=\"act('discard','${id}')\">Discard</button><div id='r-${id}'></div></div>`;});}\n"
-        "async function act(kind,id){const fd=new FormData();fd.append('token',TOK);fd.append('proposal_id',id);\n"
-        " const r=await fetch('/concierge/chat/'+kind,{method:'POST',body:fd});const j=await r.json();\n"
+        "async function act(kind,id){const fd=new FormData();fd.append('proposal_id',id);fd.append('csrf',CSRF);\n"
+        " const r=await fetch('/concierge/chat/'+kind,{...OPTS,body:fd});const j=await r.json();\n"
         " document.getElementById('r-'+id).innerHTML=esc(kind==='confirm'?(j.code+': '+(j.detail||'')):'discarded');\n"
         " refresh();}\n"
-        "async function refresh(){const fd=new FormData();fd.append('token',TOK);\n"
-        " const r=await fetch('/concierge/chat/pending',{method:'POST',body:fd});renderProposals((await r.json()).proposals||[]);}\n"
+        "async function refresh(){\n"
+        " const r=await fetch('/concierge/chat/pending',{...OPTS,body:new FormData()});renderProposals((await r.json()).proposals||[]);}\n"
         "document.getElementById('f').onsubmit=async e=>{e.preventDefault();const m=document.getElementById('msg').value;\n"
         " if(!m)return;document.getElementById('msg').value='';add('you',m);add('…','thinking');\n"
-        " const fd=new FormData();fd.append('token',TOK);fd.append('message',m);\n"
-        " const r=await fetch('/concierge/chat/message',{method:'POST',body:fd});const j=await r.json();\n"
+        " const fd=new FormData();fd.append('message',m);\n"
+        " const r=await fetch('/concierge/chat/message',{...OPTS,body:fd});const j=await r.json();\n"
         " log.lastChild.remove();add('concierge',j.ok?j.text:('error: '+(j.message||j.code)));\n"
         " renderProposals(j.proposals||[]);};\n"
         "</script>"
@@ -445,7 +450,7 @@ def build_kickoff_app(
     ``inspect`` refuse apply (the surface is read/preview only); ``demo`` allows applies on a
     fixture. *clock* is injectable so rate-limit/expiry behavior is testable without real time.
     """
-    from fastapi import FastAPI, Form, Header
+    from fastapi import Cookie, FastAPI, Form, Header
     from fastapi.responses import HTMLResponse, JSONResponse, Response
 
     from ..presentation_polish import get_theme, render_stylesheet
@@ -794,23 +799,33 @@ def build_kickoff_app(
                       "anthropic:claude-sonnet-4-6</code>) to enable the conversational Concierge.</p>",
                       stylesheet),
                 headers=dict(_FRAME_DENY_HEADERS))
-        token = sessions.issue(clock())
-        chats.put(token, chat_factory())
-        resp = HTMLResponse(_render_chat_page(token, stylesheet), headers=dict(_FRAME_DENY_HEADERS))
-        resp.set_cookie("kickoff_csrf", token, httponly=True, samesite="strict")
+        now = clock()
+        # FR-WM2-5a: the chat SESSION id and the CSRF/write token are SEPARATE secrets in SEPARATE
+        # httponly cookies. The chat sid keys _ChatStore (+ message rate); csrf gates the write path.
+        chat_sid = sessions.issue(now)
+        csrf = sessions.issue(now)
+        chats.put(chat_sid, chat_factory())
+        resp = HTMLResponse(_render_chat_page(csrf, stylesheet), headers=dict(_FRAME_DENY_HEADERS))
+        resp.set_cookie("kickoff_chat", chat_sid, httponly=True, samesite="strict")
+        resp.set_cookie("kickoff_csrf", csrf, httponly=True, samesite="strict")
         return resp
 
+    def _chat_for(kickoff_chat: Optional[str]):
+        """Resolve the live chat from the `kickoff_chat` cookie (FR-WM2-5a). A missing/unknown cookie
+        is an expired session — a bare CSRF token can never substitute for it."""
+        return chats.get(kickoff_chat or "")
+
     @app.post("/concierge/chat/message")
-    async def chat_message(token: str = Form(...), message: str = Form(...),
-                           host: Optional[str] = Header(default=None)) -> JSONResponse:
+    async def chat_message(message: str = Form(...), host: Optional[str] = Header(default=None),
+                           kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         from .telemetry import kickoff_span
         if not _host_ok(host):
             return JSONResponse({"ok": False, "code": "forbidden_host"}, status_code=403)
-        chat = chats.get(token)
+        chat = _chat_for(kickoff_chat)
         if chat is None:
-            return JSONResponse({"ok": False, "code": "session_expired",
+            return JSONResponse({"ok": False, "code": "chat_session_expired",
                                  "message": "reload the chat page"}, status_code=403)
-        if not sessions.rate_ok(token, clock()):   # bound LLM-spend turns
+        if not sessions.rate_ok(kickoff_chat, clock()):   # bound LLM-spend turns (per chat session)
             return JSONResponse({"ok": False, "code": "rate_limited"}, status_code=429)
         with kickoff_span("kickoff.concierge.chat_turn"):
             result = await chat.ask(message)
@@ -820,23 +835,24 @@ def build_kickoff_app(
                              "proposals": proposals}, headers=dict(_FRAME_DENY_HEADERS))
 
     @app.post("/concierge/chat/pending")
-    def chat_pending(token: str = Form(...)) -> JSONResponse:
-        chat = chats.get(token)
+    def chat_pending(kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
+        chat = _chat_for(kickoff_chat)
         proposals = ([{"id": a.id, "kind": a.kind, "summary": a.summary()}
                       for a in chat.buffer.pending()] if chat else [])
         return JSONResponse({"ok": True, "proposals": proposals}, headers=dict(_FRAME_DENY_HEADERS))
 
     @app.post("/concierge/chat/confirm")
-    def chat_confirm(token: str = Form(...), proposal_id: str = Form(...),
-                     host: Optional[str] = Header(default=None)) -> JSONResponse:
+    def chat_confirm(proposal_id: str = Form(...), csrf: str = Form(...),
+                     host: Optional[str] = Header(default=None),
+                     kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         from .proposals import apply_proposal
         from .telemetry import EV_PROPOSAL_CONFIRMED, emit
-        gate = _concierge_write_gate(host, token, clock())   # token is the chat+csrf token
+        gate = _concierge_write_gate(host, csrf, clock())   # csrf is distinct from the chat sid
         if gate is not None:
             return gate
-        chat = chats.get(token)
+        chat = _chat_for(kickoff_chat)
         if chat is None:
-            return JSONResponse({"ok": False, "code": "session_expired"}, status_code=403)
+            return JSONResponse({"ok": False, "code": "chat_session_expired"}, status_code=403)
         action = next((a for a in chat.buffer.pending() if a.id == proposal_id), None)
         if action is None:
             return JSONResponse({"ok": False, "code": "no_such_proposal"}, status_code=404)
@@ -851,9 +867,12 @@ def build_kickoff_app(
                             status_code=status, headers=dict(_FRAME_DENY_HEADERS))
 
     @app.post("/concierge/chat/discard")
-    def chat_discard(token: str = Form(...), proposal_id: str = Form(...)) -> JSONResponse:
+    def chat_discard(proposal_id: str = Form(...), csrf: str = Form(...),
+                     kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         from .telemetry import EV_PROPOSAL_DISCARDED, emit
-        chat = chats.get(token)
+        if not sessions.valid(csrf, clock()):     # a discard mutates server state → CSRF-protected
+            return JSONResponse({"ok": False, "code": "session_expired"}, status_code=403)
+        chat = _chat_for(kickoff_chat)
         if chat is not None:
             kind = next((a.kind for a in chat.buffer.pending() if a.id == proposal_id), "?")
             chat.buffer.pop(proposal_id)
