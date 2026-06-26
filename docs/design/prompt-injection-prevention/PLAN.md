@@ -11,32 +11,41 @@ trace pass (SDK at `bc8177a2`). Anchors will drift; treat them as starting point
 
 ## Workstream A — SDK-as-generator (internal prompt assembly)
 
-### A1. Close the STANDALONE fencing gap (FR-A1, FR-A1a)
-- **Edit `context_resolution.py` `StandaloneContextStrategy`** — wrap each currently-raw untrusted field
-  with `wrap_user_content(value, "<field>")` at the assignment sites: `project_objectives` (:840),
-  `semantic_conventions` (:843), `architectural_context` (:847), `plan_context` (:861),
-  `requirements_text` (:866). **Do NOT touch** `PipelineContextStrategy` (:1067–1120) — it already wraps.
-- **Handle `prior_error_feedback`** (:903) — raw in both modes. Decide: is prior error feedback
-  untrusted? It's model-generated from a prior run over untrusted input, so treat as untrusted → fence.
-- **Make `wrap_user_content()` idempotent** (`context_formatters.py:34`): return input unchanged if it
-  already starts with `<context`. Cheap insurance against double-wrap and against the key-divergence trap.
-- **Coverage test**: a parametrized test enumerating the untrusted-field set; an injection marker placed
-  in each must appear inside a `<context>` fence in the assembled prompt. New field not in fence → fail.
+### A1. Close the STANDALONE fencing gap (FR-A1, FR-A1a) — ✅ IMPLEMENTED (commit 8b6b3da7)
+> **Strategy correction (impl reality, 2026-06-26):** the original plan said "wrap at the
+> `StandaloneContextStrategy` assignment sites" (Strategy A). That is **wrong** — `StandaloneContextStrategy`
+> stores several fields as **raw `dict`/`list`** (`project_objectives`/`semantic_conventions`/
+> `architectural_context` at :840/:843/:847), but `wrap_user_content()` needs a **string**. Fencing was
+> therefore moved to where each field is **stringified for the prompt** — the `spec_builder` section
+> builders (Strategy C) — with the idempotency guard handling PIPELINE's already-wrapped content. This
+> fences both modes through one chokepoint and sidesteps the raw-value problem.
+- **Done:** `wrap_user_content()` idempotency guard (`context_formatters.py`); `_fence_untrusted()` lazy
+  helper + fencing in `build_spec_plan/arch/objectives/conventions_section` and the `requirements_section`
+  (`spec_builder.py`); enumerated coverage test (`test_spec_builder_injection_fencing.py`, 11 tests).
+- **Deferred:** `prior_error_feedback` (:903) is rendered on a different path (likely `drafter.py`, not the
+  spec section builders) — fence it when the draft-prompt path is done. Tracked separately.
 
-### A2. Normalize-before-fence + cap reconciliation (FR-A2, FR-A2a)
-- **Add `normalize_untrusted_text(text, max_chars)`** to `security.py` (non-throwing: strip null +
-  control chars, validate/repair UTF-8, truncate with marker). Distinct from the existing throwing
-  `sanitize_prompt_content()` (:656), which may stay as the **outbound full-prompt** total-size guard.
-- **Reconcile caps** into one declared policy module/constants: per-field input caps replacing the
-  scattered `_PLAN_LOAD_MAX_BYTES`=16 KB (`prime_contractor.py:131`), requirements `[:2000]`
-  (`derivation.py:782`), `_MAX_INPUT_ROWS`=200; document the outbound total. Wire `normalize_*` into the
-  ingestion points so truncation happens once, predictably.
-- **Wire-in test**: assert `normalize_untrusted_text` is on the path (kill the dead-primitive state).
+### A2. Normalize-before-fence + cap reconciliation (FR-A2, FR-A2a) — ◑ PARTIAL (commit bcf5cfec)
+- **✅ Done — normalize core:** `normalize_untrusted_text(text, max_chars=MAX_UNTRUSTED_FIELD_CHARS)`
+  added to `security.py` (non-throwing: strip null + C0/C1 control chars keeping tab/newline/CR, repair
+  UTF-8 via replacement, bound size). Wired into `_fence_untrusted` so every fenced spec-prompt field is
+  normalized before fencing; tests in `test_security_normalize.py` (incl. control-char fence-evasion).
+- **◻ Deferred — FR-A2a full cap reconciliation:** the `[:2000]`/16 KB/200-row caps are scattered across
+  **8+ modules** (`reviewer.py`, `plan_ingestion_workflow.py`, `derivation.py`, `prime_adapter.py`,
+  `context_seed/core.py`, `gemini.py`, …) — a genuine cross-module refactor. `MAX_UNTRUSTED_FIELD_CHARS`
+  is the documented per-field policy anchor; unifying the rest is its own increment.
+- **◻ Deferred — dead `sanitize_prompt_content()`:** still defined-but-uncalled (zero internal callers,
+  not in `__all__`). FR-A2 wants it wired-in (as the outbound full-prompt total guard) or removed.
+  Removal risks the 9 downstream consumers; wiring needs the single outbound-prompt assembly point.
+  **Decision pending** — do not silently delete.
 
-### A3. Denylist → telemetry (FR-A3) + observability (FR-A7)
-- `_INJECTION_PATTERNS` (`context_resolution.py:177`): keep matching, but downgrade from gate to
-  **counter/log** via `get_logger` (OTel/Loki). Emit an `injection_attempt` event with artifact/source
-  id + matched-pattern name, **not** the payload. No path may branch to "safe" on a clean denylist.
+### A3. Denylist → telemetry (FR-A3) + observability (FR-A7) — ✅ IMPLEMENTED (commit 3ccbf316)
+- `_check_prompt_injection` now emits an `injection_attempt` event via `get_logger` (field + which static
+  pattern fired, **not** the payload). **Interpretation taken:** FR-A3 says the denylist must not be the
+  *sole* control and "no path may depend on it returning clean to be safe" — both satisfied because
+  fencing (A1) is now applied **unconditionally** downstream. So the existing reject was **kept as
+  defense-in-depth** (STRICT raises / LENIENT skips) rather than removed; telemetry was added. Error/log
+  no longer echo the matched payload substring. Operational-only (not Kaizen).
 
 ### A4. Gate-invocation control-plane audit (FR-A6, OQ-4)
 - **Trace** `integration_engine.py` security/quality gate invocation. Confirm gate runs are driven by
