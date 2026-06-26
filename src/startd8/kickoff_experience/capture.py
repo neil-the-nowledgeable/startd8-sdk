@@ -357,6 +357,9 @@ def apply_capture(project_root: str | Path, plan: CapturePlan) -> CaptureResult:
         action=ACTION_OVERWRITE,
     )
     apply_write_plan(root, [write], force=True)
+    from .telemetry import EV_FIELD_CAPTURED, emit
+
+    emit(EV_FIELD_CAPTURED, value_path=plan.value_path, file=rel_dest, code=CaptureCode.OK)
     return CaptureResult(
         code=CaptureCode.OK, value_path=plan.value_path, file=rel_dest, applied=True
     )

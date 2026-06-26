@@ -258,6 +258,9 @@ def build_kickoff_app(
         match = next((s for s in cfg.steps if s.key == key), None)
         if match is None:
             return HTMLResponse("<p>unknown step</p>", status_code=404)
+        from .telemetry import EV_STEP_ENTERED, emit
+
+        emit(EV_STEP_ENTERED, step=key)
         token = sessions.issue(clock())
         resp = HTMLResponse(_render_step(match, token, stylesheet))
         resp.set_cookie("kickoff_csrf", token, httponly=True, samesite="strict")
@@ -270,6 +273,9 @@ def build_kickoff_app(
             plan = build_capture_plan(root, value_path, value, config=cfg)
         except CaptureError as exc:
             return _capture_error(exc)
+        from .telemetry import EV_PREVIEW_BUILT, emit
+
+        emit(EV_PREVIEW_BUILT, value_path=value_path)
         return JSONResponse({"ok": True, "preview": plan.preview()})
 
     @app.post("/capture/apply")
@@ -296,23 +302,29 @@ def build_kickoff_app(
                 {"ok": False, "code": "rate_limited", "message": "too many captures; slow down"},
                 status_code=429,
             )
-        try:
-            plan = build_capture_plan(root, value_path, value, config=cfg)
-            apply_capture(root, plan)
-        except CaptureError as exc:
-            status = 409 if exc.code == CaptureCode.STALE_FILE else 400
-            return _capture_error(exc, http_status=status)
-        # Post-write refresh (R1-S10): re-run extraction so the badge flips immediately.
-        state = load_state(root)
-        fs = next((f for f in state.fields if f.value_path == plan.value_path), None)
-        return JSONResponse(
-            {
-                "ok": True,
-                "code": CaptureCode.OK,
-                "value_path": plan.value_path,
-                "applied": plan.preview(),
-                "refreshed_status": fs.attention if fs else None,
-            }
-        )
+        from .telemetry import EV_CAPTURE_FAILED, EV_GAP_CLOSED, emit, kickoff_span
+
+        with kickoff_span("kickoff.capture", value_path=value_path):
+            try:
+                plan = build_capture_plan(root, value_path, value, config=cfg)
+                apply_capture(root, plan)  # emits field_captured on success
+            except CaptureError as exc:
+                emit(EV_CAPTURE_FAILED, value_path=value_path, code=exc.code)
+                status = 409 if exc.code == CaptureCode.STALE_FILE else 400
+                return _capture_error(exc, http_status=status)
+            # Post-write refresh (R1-S10): re-run extraction so the badge flips immediately.
+            state = load_state(root)
+            fs = next((f for f in state.fields if f.value_path == plan.value_path), None)
+            if fs is not None and fs.attention == "ok":
+                emit(EV_GAP_CLOSED, value_path=plan.value_path)
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "code": CaptureCode.OK,
+                    "value_path": plan.value_path,
+                    "applied": plan.preview(),
+                    "refreshed_status": fs.attention if fs else None,
+                }
+            )
 
     return app

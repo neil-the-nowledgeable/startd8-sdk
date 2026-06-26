@@ -70,6 +70,7 @@ from .state import (
     field_states,
     source_inventory,
 )
+from .telemetry import FUNNEL_EVENTS, KickoffEvent, emit, kickoff_span, record_events
 
 __all__ = [
     # M1 — extraction state
@@ -115,4 +116,10 @@ __all__ = [
     "kickoff_state_tool",
     "preflight",
     "serve_kickoff",
+    # M8 — observability
+    "FUNNEL_EVENTS",
+    "KickoffEvent",
+    "emit",
+    "kickoff_span",
+    "record_events",
 ]
