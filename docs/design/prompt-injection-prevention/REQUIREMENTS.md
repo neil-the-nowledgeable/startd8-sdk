@@ -269,3 +269,64 @@ operational-only, FR-A7 updated), OQ-7 (provenance shape-aware supplied-set, FR-
 (`context_formatters.py`, `context_resolution.py`, `security.py`, `ai_layer.py`, `plan_ingestion_workflow.py`)
 and the StartDate FR-MSG pilot (`SDK_FR_MSG_SCOPED_PASS_CAPABILITY_BRIEF_2026-06-11.md`,
 `FR_MSG_INTERVIEWER_MESSAGE_REQUIREMENTS_v0.2-draft.md` FR-MSG-6/8/11 + CRP R1 appendix).*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8[1m] — 2026-06-26
+
+- **Reviewer**: claude-opus-4-8[1m]
+- **Date**: 2026-06-26 00:00:00 UTC
+- **Scope**: Requirements quality for unbuilt Audience B (FR-B0–B6) + deferred follow-ups (FR-A2a, FR-A6a) + missing-security hunt. Merged Audience A design treated as built context. (Companion plan suggestions R1-S* in PLAN.md.)
+
+##### Executive summary
+
+- FR-B3 requirement text drops the "no verbatim input dump" clause its own gap table requires — the actual exfil/echo control (R1-F1).
+- FR-B5 leaves the source-bound shape's supplied-set and the subset identity key undefined (R1-F2).
+- FR-B6 "stricter mode" is a named flag with no specified behavior; the default can mislead auto-send operators (R1-F3).
+- FR-A1's "every point" universality is not matched by its enumerated field set — review/`micro_prime`/`query_prime` paths escape (R1-F4).
+- FR-A2a unifies security caps with functional truncations, risking silent generation-behavior change (R1-F5).
+- Emitted-guard actions (truncate/drop) are not required to be logged in the generated app — an audit gap, especially for auto-send (R1-F6).
+
+##### Requirements suggestions (F-prefix)
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Validation | high | Restore the "no verbatim input dump" check to FR-B3, whose text only lists "per-field length caps, control-char stripping, and a degenerate-output check" — the Audience-B gap table row already names "no verbatim input dump" as a required output control. Also specify partial-failure semantics (one field fails: drop-field vs reject-pass vs persist-flag). | FR-B3 is the output gate; without the verbatim-dump check it cannot catch echo/exfil of untrusted input into the persisted/sent body. The clause exists in the gap table but was dropped from the normative requirement. | §2 FR-B3 | Output containing a verbatim untrusted span > N chars is flagged; multi-field pass with one failing field behaves per declared `on_violation`. |
+| R1-F2 | Interfaces | high | In FR-B5, define the supplied-set for the **source-bound** shape (it feeds bound source rows via `_render_pass_text_bound`, not `input_entities`) and specify the **identity key** for the subset check (stable PK, not title). | FR-B5 says "all three pass shapes" but only specifies the supplied-set for whole-model + scoped ("`input_entities` plus resolved `scope_relations`"); source-bound is omitted, and a title-based subset check false-matches two same-title rows. | §2 FR-B5 ("The 'supplied set' MUST be assembled per-shape…") | Fabricated `drew_on` against a source-bound pass is dropped; two rows sharing a title are distinguished by PK. |
+| R1-F3 | Security | high | FR-B6 names "opt into stricter guards declaratively" but does not say what stricter mode *does*. Enumerate its concrete additions (output-side verbatim/exfil scan, no-auto-send-without-ack) and require the SDK to **warn or refuse** when a pass declares auto-send under the curation-default model. | The default's trust boundary *is* the human-curation step; auto-send removes it. A flag with undefined behavior cannot be engaged, so the safe-sounding default silently permits an unsafe configuration (false sense of safety). | §2 FR-B6 | Declaring an auto-send pass without stricter-mode acknowledgment emits a build-time warning/refusal; stricter mode enables the enumerated extra checks. |
+| R1-F4 | Architecture | medium | FR-A1 says "Every point where untrusted … text is interpolated into a generation prompt MUST route through `wrap_user_content()`," but its enumerated set + acceptance test cover only `spec_builder` fields. Either make the coverage test **discovery-based** (inventory all prompt-assembly sites) or explicitly scope FR-A1 and add a follow-up FR for the review (`reviewer.py`), `micro_prime`, and `query_prime` generation prompts. | A hardcoded field list cannot enforce a universal claim; `micro_prime`'s generic prompt path (per project memory) and the review path interpolate untrusted text and would escape the test. | §2 FR-A1 *Acceptance* bullet | A grep/AST-based site-inventory test fails when a new prompt-assembly site interpolates an unfenced untrusted field. |
+| R1-F5 | Data | medium | FR-A2a unifies `_PLAN_LOAD_MAX_BYTES`=16 KB, requirements `[:2000]`, `_MAX_INPUT_ROWS`=200, `MAX_PROMPT_LENGTH`=1 MB, Kaizen 2 MiB into "one documented cap policy." First **classify** each cap as security vs functional: `[:2000]` (derivation summarization) and `_MAX_INPUT_ROWS` (context budget) are functional — folding them under the security policy could silently change generation output. | "Reconciled into a single documented cap policy" risks conflating field-level security truncation with functional content budgets that encode generation-quality decisions. | §2 FR-A2a | Doc carries a cap-classification table; functional caps are explicitly excluded from the security cap policy; derivation output unchanged after reconciliation. |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F6 | Ops | medium | Require the **emitted** Audience-B guards to log their actions (truncation, output rejection, dropped provenance entry) in the *generated app's* logger. FR-B2 mentions "a logged truncation event," but FR-B3 and FR-B5 specify silent drops; FR-A7's observability is SDK-side only and does not reach the app runtime. | A silently-dropped provenance entry or silently-rejected output in a deployed app leaves no audit trail — acute for auto-send, where a dropped exfil attempt is exactly what an operator must see. | §2 FR-B3 / FR-B5 (add a logging clause; cross-ref FR-A7) | Each guard action emits a structured log line in the generated app; an injected output that trips FR-B3/B5 leaves an auditable record. |
+
+**Disagreements** (none — this is the first round; Appendix A/B empty, no prior untriaged items to react to).
