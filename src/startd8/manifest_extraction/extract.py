@@ -20,12 +20,14 @@ from ..scaffold_codegen.manifest import parse_app_manifest
 from ..backend_codegen.forms_manifest import parse_forms
 from ..view_codegen.manifest import parse_views
 from ..view_codegen.view_prose import parse_view_prose
+from ..backend_codegen.form_prose import parse_form_prose
 from ..observability.spec import from_observability_yaml
 from .entities import EntityGraph, diff_against_live, extract_entities, extract_enums
 from .extractors import (
     extract_ai_passes,
     extract_app,
     extract_completeness,
+    extract_form_prose,
     extract_human_inputs,
     extract_imports,
     extract_observability,
@@ -164,6 +166,10 @@ def extract_manifests(
         # match extract_views so the round-trip's known_views (from the views candidate) lines up.
         if "view_prose.yaml" not in candidates or candidates["view_prose.yaml"] is None:
             candidates["view_prose.yaml"] = extract_view_prose(label, sections, records)
+        # Form help (the WORDS layer → form_prose.yaml, FR-FH-8). Entity/field targets resolve against
+        # the live graph, so a help row for an unknown field is flagged, not guessed.
+        if "form_prose.yaml" not in candidates or candidates["form_prose.yaml"] is None:
+            candidates["form_prose.yaml"] = extract_form_prose(label, sections, graph, records)
         if "completeness.yaml" not in candidates or candidates["completeness.yaml"] is None:
             candidates["completeness.yaml"] = extract_completeness(label, sections, graph, records)
         # Imports (FR-IMP-3) — runs after the siblings it cross-references (ai_passes, human_inputs)
@@ -225,6 +231,9 @@ def extract_manifests(
         ),
         # §2.12 value input: the emitted observability.yaml must round-trip through the spec loader.
         "observability.yaml": lambda t: from_observability_yaml(yaml.safe_load(t)),
+        # Form help (FR-FH-8): entity targets validate against the entity graph at ingestion (the
+        # producer already dropped unknown FIELDS, so a clean candidate round-trips here).
+        "form_prose.yaml": lambda t: parse_form_prose(t, known_entities=known),
     }
     for filename, data in candidates.items():
         if data is None:

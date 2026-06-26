@@ -181,6 +181,35 @@ permitted for views (unlike pages, which stay pure-derived) because workspace/ex
 parameterized and nav targets may predate the view name. The override is authored format data,
 never an LLM product.
 
+### 2.3b Form Help → `form_prose.yaml` *(the form WORDS layer — FR-FH-8)*
+
+One block per entity form you want to guide. The **Words layer** for forms (per-field help/placeholder
++ a per-form intro), rendered into the generated create/edit forms and kept **outside the drift hash**
+(help/intro ride untracked fragments, SOTTO) — editing copy never trips `generate backend --check`.
+Absent ⇒ today's bare forms (opt-in).
+
+```markdown
+### Form: Bill
+- Intro: Amounts are entered in dollars.
+
+| Field       | Help                                           | Placeholder |
+|-------------|------------------------------------------------|-------------|
+| amountCents | Amount in dollars, e.g. 42.00; stored as cents | 42.00       |
+| weekday     | For a weekly cadence: 0 = Monday … 6 = Sunday  |             |
+```
+
+**Grammar.** Heading `### Form: <Entity>` (annotation-stripped, name-derivation §2.0). An optional
+`- Intro:` bullet (a key-line, like §2.3's `- Title:`). A `Field | Help | Placeholder` table — one row
+per field; `Help` is the persistent description (wired as `aria-describedby`), `Placeholder` the
+in-field example hint (either may be blank; a field with neither is omitted).
+
+**Sequencing + dangling-target guard (mirrors §2.3).** The Form-Help extractor runs AFTER the
+entity/relationship pass: the `### Form: <Entity>` heading resolves against the §2.1-derived entities
+and each `Field` cell against that entity's fields (case-tolerant → the canonical field name). An
+unknown entity or field is recorded **`not_extracted`** (sourced, advisory) and dropped — never guessed.
+The emitted `prisma/form_prose.yaml` round-trips through `parse_form_prose` at ingestion. (Help is
+bucket-4 human content; no AI pass originates a value — FR-FH-6.)
+
 ### 2.4 Completeness → `completeness.yaml`
 
 A **"What counts as complete"** list in controlled sentences:

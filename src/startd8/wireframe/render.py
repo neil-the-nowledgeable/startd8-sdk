@@ -31,7 +31,7 @@ from .plan import Status, WireframePlan, WireframeSection
 
 logger = get_logger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3  # v3: content_completeness gains `form_help` (FR-FH-9), changing the `overall` rollup
 
 _STATUS_STYLE = {
     Status.PLANNED: "green",

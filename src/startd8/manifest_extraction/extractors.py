@@ -395,6 +395,81 @@ _CONTROL_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
 _IMPORT_CONTROL_IDS = frozenset({"validate", "restore", "confirm"})
 
 
+# --------------------------------------------------------------------------- #
+# §2.3c Form help → form_prose.yaml (the form WORDS layer — outside the drift hash, FR-FH-8)
+# --------------------------------------------------------------------------- #
+
+def extract_form_prose(
+    doc_label: str,
+    sections: List[Section],
+    graph: EntityGraph,
+    records: List[ExtractionRecord],
+) -> Optional[dict]:
+    """Harvest authored form help from each ``### Form: <Entity>`` block → the ``form_prose.yaml`` shape.
+
+    The producer half of the kickoff→``form_prose.yaml`` loop (the consumer ``parse_form_prose`` ships).
+    Per block: an optional ``Intro:`` line (key_lines) + a ``Field | Help | Placeholder`` table
+    (md_tables). Entity + field targets resolve against the live entity graph — an unknown entity or
+    field is recorded ``NOT_EXTRACTED`` (sourced, advisory) and dropped, never guessed, so a typo never
+    silently becomes help on the wrong field (the dangling-target discipline, FR-FH-5). The emitted key
+    is the **canonical** entity name (so the round-trip's ``known_entities`` lines up), and the canonical
+    field name (tolerating case drift in the prose)."""
+    blocks = [s for s in sections if s.title.lower().startswith("form:")]
+    if not blocks:
+        return None
+    out: Dict[str, dict] = {}
+    for sec in blocks:
+        raw_name = strip_annotations(sec.title.split(":", 1)[1]).strip()
+        src = SourceRef(doc_label, sec.heading_path)
+        ename = graph.resolve_entity(raw_name)
+        if ename is None:
+            records.append(ExtractionRecord(
+                "form_prose.yaml", f"/{nfkd_kebab(raw_name)}", Status.NOT_EXTRACTED, source=src,
+                reason=f"`Form: {raw_name}` names no declared entity — author the contract first",
+            ))
+            continue
+        by_lower = {f.name.lower(): f.name for f in graph.entities[ename].fields}
+        keys, _ = key_lines(sec.body)
+        entry: Dict[str, object] = {}
+        intro = _strip_quotes(keys.get("Intro", ""))
+        if intro:
+            entry["intro"] = intro
+            records.append(ExtractionRecord(
+                "form_prose.yaml", f"/{ename}/intro", Status.EXTRACTED, value=intro[:60], source=src,
+            ))
+        fields: Dict[str, dict] = {}
+        tables = md_tables(sec.body)
+        table = next((t for t in tables if "field" in t.headers), None)
+        for i, row in enumerate(table.dicts() if table else ()):
+            raw_field = strip_annotations(row.get("field", "")).strip()
+            if not raw_field:
+                continue
+            rsrc = SourceRef(doc_label, sec.heading_path, row_index=i)
+            field = raw_field if raw_field in by_lower.values() else by_lower.get(raw_field.lower())
+            if field is None:
+                records.append(ExtractionRecord(
+                    "form_prose.yaml", f"/{ename}/fields/{raw_field}", Status.NOT_EXTRACTED, source=rsrc,
+                    reason=f"{ename} has no field {raw_field!r} — help dropped (dangling target)",
+                ))
+                continue
+            spec: Dict[str, str] = {}
+            for col in ("help", "placeholder"):
+                val = _strip_quotes(row.get(col, ""))
+                if val:
+                    spec[col] = val
+            if spec:
+                fields[field] = spec
+                records.append(ExtractionRecord(
+                    "form_prose.yaml", f"/{ename}/fields/{field}", Status.EXTRACTED,
+                    value=spec.get("help", spec.get("placeholder", ""))[:60], source=rsrc,
+                ))
+        if fields:
+            entry["fields"] = fields
+        if entry:
+            out[ename] = entry
+    return {"forms": out} if out else None
+
+
 def _strip_quotes(value: str) -> str:
     """Authored copy may be quoted (the template shows `- Title: "..."`) or bare; strip one matched
     surrounding pair so the emitted manifest carries the words, not the delimiters."""
