@@ -271,6 +271,33 @@ def header_forms_tmpl(
     return "\n".join(lines)
 
 
+def header_nav_tmpl(
+    source_file: str,
+    schema_sha: str,
+    views_sha: str,
+    pages_sha: str,
+    kind: str,
+) -> str:
+    """SPIKE: default-nav partial header — THREE inputs (schema + views.yaml + pages.yaml).
+
+    Wrapped in a Jinja ``{# … #}`` comment for the ``.html`` partial. Reuses the existing
+    ``forms-sha256`` (views.yaml) and ``pages-sha256`` (pages.yaml) header lines so no new drift
+    regex is needed — drift is stale if *any* of the three changes (mirrors :func:`header_ai_layer`).
+    """
+    lines = [
+        "{#",
+        f"# GENERATED from {source_file} (+ views.yaml + pages.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.",
+        f"# startd8-artifact: {kind}",
+        "# Source of truth: the Prisma schema, the views manifest, and the pages manifest.",
+        f"# schema-sha256: {schema_sha}",
+        f"# forms-sha256: {views_sha}",
+        f"# pages-sha256: {pages_sha}",
+        "#}",
+    ]
+    return "\n".join(lines)
+
+
 def header_ai_layer(
     source_file: str,
     schema_sha: str,
