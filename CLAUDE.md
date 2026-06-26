@@ -82,6 +82,17 @@ startd8 wireframe    # Pre-generation summary of what the $0 cascade will build 
 doppler run -p startd8 -c dev -- python3 scripts/run_behavioral_pilot.py   # --dry-run default; --run spends
 python3 scripts/rescore_behavioral.py <batch-root>   # $0 re-score of persisted servers (no regen)
 
+# Round-3 SYSTEM benchmark — build a model's 9-service polyglot fleet, drive the user journey, score
+#   per-step coverage + per-service fault attribution + frontend bonus, emit a ranked advisory system
+#   report (the benchmark_matrix/fleet/ subsystem; macOS Docker; docs/design/round3-full-app/BENCHMARK_METHODOLOGY.md)
+startd8 benchmark-round3 --roster roster.yaml --out ./round3-out   # full round (advisory); omit --roster = ref self-test
+PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m0 <go|python|node|csharp|shipping|currency>  # per-lane image build
+PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m1 --subset checkoutservice,recommendationservice  # full fleet boots
+PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m2   # Adapter B journey: 100% + break-payment attribution
+PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m3   # layered scoring on reference + 2 broken meshes
+PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m4   # frontend gate + canonical substitution + Adapter A
+PYTHONPATH=src python3 -m startd8.benchmark_matrix.fleet.validate_m6   # end-to-end system-report capstone
+
 # Deterministic $0 generation cascade (bucket 1 — no LLM)
 startd8 generate frontend   # Render Prisma→Zod schema file deterministically
 startd8 generate backend    # Full all-Python backend (Pydantic + SQLModel + FastAPI + HTMX + derived)
@@ -118,7 +129,9 @@ src/startd8/
 ├── model_comparison.py     # `startd8 compare-models`: same seed → N models, isolated, ranked (see Architecture)
 ├── benchmark_matrix/       # Summer 2026 model benchmark (service×model×repetition): run_spec, budget,
 │                   #   runner, aggregate (median/IQR/pass-rate + consistency), scoring (compile gate +
-│                   #   functional term), sandbox (untrusted exec); behavioral/ = Track 2 executed scoring
+│                   #   functional term), sandbox (untrusted exec); behavioral/ = Track 2 executed scoring;
+│                   #   fleet/ = Round-3 SYSTEM benchmark (compose-fleet gen + journey + Adapter B/A +
+│                   #   layered scoring/attribution + frontend gate + system report; validate_m0..m6)
 ├── contractors/    # Multi-phase orchestration — see Architecture. Key: prime_contractor.py, integration_engine.py,
 │                   #   context_seed/ (phase handlers + compat wrapper context_seed_handlers.py), prime_postmortem.py,
 │                   #   queue.py (cycle detection), gate_contracts.py, checkpoint.py; artisan_*/ (ON HOLD)
@@ -239,6 +252,34 @@ Benchmarks measure *model skill* (deterministic cascade + micro-prime OFF), dist
   re-scores persisted servers for **$0** as the harness improves (generate once, re-score free). Pilot:
   `scripts/run_behavioral_pilot.py` (`--dry-run` default, `--run` spends; run under `doppler run -p startd8 -c dev`).
 - Design: `docs/design/benchmark-scoring/` (FUNCTIONAL_CORRECTNESS_* incl. Track 2 v0.2), `docs/design/PRIME_MODEL_COMPARISON_*`.
+
+### Round-3 System Benchmark (`benchmark_matrix/fleet/`)
+
+A **system-level** benchmark (distinct from the per-service Track-2 grid above): can a model build a
+*working, integrated* 9-service polyglot Online Boutique, scored by a **real user journey** over the
+live fleet with **honest per-service fault attribution**. SHIPPED + live-validated; behavioral-over-
+structural (only executed journey behavior discriminates). Pipeline M0→M6 + the M4/M5 frontend bonus:
+- `services.py` — the OB topology inventory (8 backends + redis-cart; `(listen_port, dial_port)`; dep
+  edges; the email port-asymmetry + redis-sidecar **faithfulness traps**, encoded so they can't be dropped).
+- `compose.py` — N-service compose-fleet generator: `internal: true` `fleet` net (**network-layer
+  egress-deny** + service-DNS), each `*_SERVICE_ADDR` dep edge wired.
+- `containerize.py` — `build_service_image` (per-language image from a generated workdir) + **readiness-
+  gated** `boot_and_probe` ("ok" = the published port accepts, NOT just `docker run` rc).
+- `journey.py` — the defined-once 5-step transport-agnostic journey (browse→setCurrency→addToCart→
+  viewCart→checkout), **weighted by the §1 locust mix** (browse-heavy → a catalog break scores far worse
+  than a payment break). `adapter_b.py` = direct-gRPC driver; `frontend_gate.run_journey_http` = Adapter A (HTTP).
+- `score.py` — `score_journey → Scorecard`: per-step coverage (weighted+unweighted) + per-service
+  attribution (`model-fault` / `propagated` (a downstream break is **never charged** to the entry
+  orchestrator) / `harness`) + `journey_completed` + `confidence`.
+- `frontend_contract.py` + `frontend_gate.py` — the frontend bonus: a behavioral health/contract GATE
+  (boot→routes→**stateful-journey-with-a-real-order-id** (decisive)→orchestration); FAIL → **substitute
+  the canonical** frontend (backend scoring unaffected); bonus is **capped + additive** (never rank-flips — `report.py`).
+- `report.py` + `roster.py` + `round3.py` — rank finalists by **backend** score, render
+  `round3-system-report.{json,md}`, the advisory **decision gate** (GO iff the journey *discriminates*
+  finalists AND attribution is *trustworthy*). Behind `startd8 benchmark-round3`.
+- Run via `validate_m0..m6` (per-stage live entrypoints, build-if-missing/Mottainai) or the CLI.
+  **Methodology: `docs/design/round3-full-app/BENCHMARK_METHODOLOGY.md`** (the how-it-works reference);
+  reference service fixtures in `tests/.../behavioral/fixtures/*_reference/` (incl. `frontend_reference/`).
 
 ### Key Classes
 
@@ -537,6 +578,7 @@ Key docs in `docs/`:
 - `PATTERN-silent-telemetry-loss.md` - OTel log bridge init gap pattern
 - `ARTISAN_WORKFLOW_ISSUES_CATALOG.md` - Known artisan pipeline issues and fixes
 - `docs/design/` - Design documents for major features
+- `docs/design/round3-full-app/` - **Round-3 SYSTEM benchmark** (the `benchmark_matrix/fleet/` subsystem). Start with `BENCHMARK_METHODOLOGY.md` (how the shipped system works); `PLAN.md`/`REQUIREMENTS.md` = build record; `JOURNEY_DESIGN.md`/`FRONTEND_OPENAPI_CONTRACT.md` = slice rationale
 - `docs/design/micro-prime/` - Micro Prime engine requirements and plans
 - `docs/design/prime/` - Prime Contractor requirements, Kaizen convergent review
 - `docs/design/kaizen/` - Kaizen quality system requirements, validation reports, phase plans
