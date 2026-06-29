@@ -294,7 +294,18 @@ def _renderers(
             else ""
         ),
         "python-context-client": _context_client_renderer,
+        # Live-toggle artifacts (FR-29) — schema-only, mode-invariant; constant bodies re-render here.
+        "nav-store": lambda s, sf, e: _nav_store_renderers()[0](s, sf),
+        "nav-admin-router": lambda s, sf, e: _nav_store_renderers()[1](s, sf),
+        "nav-admin-page": lambda s, sf, e: _nav_store_renderers()[2](s, sf),
     }
+
+
+def _nav_store_renderers():
+    """The FR-29 live-toggle renderers (lazy, to avoid an import cycle at module load)."""
+    from .nav_generator import render_nav_admin_page, render_nav_admin_router, render_nav_store
+
+    return (render_nav_store, render_nav_admin_router, render_nav_admin_page)
 
 
 def embedded_artifact_kind(ondisk_text: str) -> Optional[str]:

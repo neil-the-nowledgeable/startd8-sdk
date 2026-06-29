@@ -178,3 +178,44 @@ def test_index_shows_per_entity_record_counts(tmp_path, monkeypatch):
         assert "(1)" in html  # the single Gadget
     finally:
         _purge_app_modules()
+
+
+def test_live_admin_toggle_hides_without_restart(tmp_path, monkeypatch):
+    """FR-29: POST /admin/nav hides an entity in the SAME running process (no restart), persisted in
+    the nav_hidden table; the admin page is reachable and (installed) shows the unauthenticated banner."""
+    for rel, content in render_backend(SCHEMA):  # no pages → index + admin emitted
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    assert (tmp_path / "app/nav_store.py").exists() and (tmp_path / "app/nav_admin.py").exists()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'app.db'}")
+    sys.path.insert(0, str(tmp_path))
+    _purge_app_modules()
+    try:
+        main = importlib.import_module("app.main")
+        from fastapi.testclient import TestClient
+
+        with TestClient(main.app) as c:
+            before = c.get("/ui/widget").text
+            assert 'href="/ui/widget"' in before and 'href="/ui/gadget"' in before
+            # admin page reachable; installed mode → unauthenticated banner
+            admin = c.get("/admin/nav")
+            assert admin.status_code == 200
+            assert "Manage navigation" in admin.text and "unauthenticated" in admin.text
+            # hide Gadget: submit every key as visible EXCEPT entity:Gadget
+            r = c.post("/admin/nav", data={"visible": ["entity:Widget", "index"]})
+            assert r.status_code == 200  # redirect followed back to the form
+            # live, same process, no restart:
+            after = c.get("/ui/widget").text
+            assert 'href="/ui/widget"' in after  # still visible
+            assert 'href="/ui/gadget"' not in after  # hidden by the live toggle
+        # persisted in the nav_hidden table
+        db = importlib.import_module("app.db")
+        from sqlalchemy import text
+        with db.engine.connect() as conn:
+            rows = {r[0] for r in conn.execute(text("SELECT key FROM nav_hidden")).all()}
+        assert "entity:Gadget" in rows
+    finally:
+        _purge_app_modules()

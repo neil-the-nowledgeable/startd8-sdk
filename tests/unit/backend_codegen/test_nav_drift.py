@@ -150,3 +150,34 @@ def test_entity_nav_label_override_from_schema():
 def test_entity_label_defaults_when_no_annotation():
     by_key = {e.key: e for e in nav_registry("model Widget {\n  id String @id\n}\n")}
     assert by_key["entity:Widget"].label == "Widget"
+
+
+# --- FR-29: live admin toggle (store + mode-aware admin router) -----------------------------------
+
+def test_nav_admin_router_is_mode_invariant_with_tolerant_auth():
+    """FR-29c: the admin router is byte-identical across modes; auth is a tolerant import (enforced
+    when app/auth.py exists = deployed, open otherwise = installed)."""
+    from startd8.backend_codegen.nav_generator import render_nav_admin_router
+
+    installed = render_nav_admin_router(SCHEMA)
+    # the mode-aware-but-mode-invariant wiring
+    assert "from .auth import require_principal" in installed
+    assert "_guard = [Depends(_require_principal)]" in installed
+    assert "dependencies=_guard" in installed
+    # the generated router must be identical regardless of deployment mode (mode-invariant bytes)
+    from startd8.backend_codegen import render_backend
+
+    inst = dict(render_backend(SCHEMA, deployment_mode="installed"))["app/nav_admin.py"]
+    depl = dict(render_backend(SCHEMA, deployment_mode="deployed"))["app/nav_admin.py"]
+    assert inst == depl
+
+
+def test_nav_store_uses_raw_sql_not_a_sqlmodel_table():
+    """FR-29a: the system table is raw SQL (CREATE TABLE IF NOT EXISTS) — NOT a SQLModel model — so it
+    stays out of the user contract and out of create_all/alembic."""
+    from startd8.backend_codegen.nav_generator import render_nav_store
+
+    store = render_nav_store(SCHEMA)
+    assert "CREATE TABLE IF NOT EXISTS nav_hidden" in store
+    assert "table=True" not in store  # not a SQLModel table
+    assert "def resolve_visible" in store and "load_hidden" in store  # config UNION db composition

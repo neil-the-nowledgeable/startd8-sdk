@@ -22,9 +22,13 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256
-from ._headers import header_nav, header_nav_tmpl
+from ._headers import header_nav, header_nav_tmpl, header_standard
 
+# The 3-input nav kinds (schema + views.yaml + pages.yaml). The live-toggle artifacts (nav-store /
+# nav-admin-*) are schema-only + mode-invariant, so they are NOT here — they route through the default
+# schema-only drift renderer.
 NAV_KINDS = ("nav-registry", "nav-partial", "nav-index-router", "nav-index-page")
+NAV_STORE_KINDS = ("nav-store", "nav-admin-router", "nav-admin-page")
 
 # Owned output paths → artifact kind (mirrors pages_layout / the CANONICAL_LAYOUT precedent).
 # The index pair is conditional (emitted only when no content page owns ``/`` — see render_nav).
@@ -33,6 +37,9 @@ NAV_LAYOUT: Dict[str, str] = {
     "app/templates/_nav.html": "nav-partial",
     "app/index.py": "nav-index-router",
     "app/templates/index.html": "nav-index-page",
+    "app/nav_store.py": "nav-store",
+    "app/nav_admin.py": "nav-admin-router",
+    "app/templates/nav_admin.html": "nav-admin-page",
 }
 
 
@@ -287,6 +294,9 @@ def render_index_page(
         "  </section>\n"
         "{%- endif %}\n"
         "{%- endfor %}\n"
+        # FR-29e: discoverable link to the live admin toggle.
+        '<p style="margin-top:1.5rem"><a href="/admin/nav" style="color:#0a7d4b">'
+        "Manage navigation →</a></p>\n"
         "{% endblock %}\n"
     )
     return head + "\n" + body
@@ -367,6 +377,164 @@ def render_index_router(
     return head + "\n\n" + body
 
 
+def render_nav_store(schema_text: str, source_file: str = "prisma/schema.prisma") -> str:
+    """``app/nav.store.py`` → ``app/nav_store.py`` (kind ``nav-store``) — the live-toggle persistence (FR-29a).
+
+    A presence-based ``nav_hidden(key, updated_at)`` table (a row = that key is hidden), created via an
+    idempotent ``CREATE TABLE IF NOT EXISTS`` at startup with **raw SQL** — NOT a SQLModel model — so it
+    is not in the user contract and is decoupled from ``create_all``/alembic (works byte-identically in
+    both deployment modes). Visibility is the union of the FR-6 config file and this table.
+    Schema-independent (constant body); the header carries schema-sha only for drift bookkeeping.
+    """
+    head = header_standard(source_file, schema_sha256(schema_text), "nav-store")
+    body = '''from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Dict, List, Set
+
+from sqlalchemy import text
+from sqlmodel import Session
+
+from .nav import DEFAULT_NAV, load_hidden
+
+_DDL = (
+    "CREATE TABLE IF NOT EXISTS nav_hidden ("
+    "  key TEXT PRIMARY KEY,"
+    "  updated_at TEXT"
+    ")"
+)
+
+
+def ensure_nav_table(engine) -> None:
+    """Create the nav_hidden table if absent (idempotent; mode-invariant — no create_all/alembic)."""
+    with engine.begin() as conn:
+        conn.execute(text(_DDL))
+
+
+def db_hidden_keys(session: Session) -> Set[str]:
+    """The set of nav keys hidden via the live admin toggle (presence in nav_hidden = hidden)."""
+    try:
+        return {row[0] for row in session.execute(text("SELECT key FROM nav_hidden")).all()}
+    except Exception:
+        return set()  # fail-open: never break nav rendering on a store error
+
+
+def set_hidden(session: Session, key: str, hidden: bool) -> None:
+    """Hide (insert) or reveal (delete) a nav key. Portable upsert (sqlite 3.24+ / postgres)."""
+    if hidden:
+        session.execute(
+            text(
+                "INSERT INTO nav_hidden (key, updated_at) VALUES (:k, :t) "
+                "ON CONFLICT (key) DO NOTHING"
+            ),
+            {"k": key, "t": datetime.now(timezone.utc).isoformat()},
+        )
+    else:
+        session.execute(text("DELETE FROM nav_hidden WHERE key = :k"), {"k": key})
+    session.commit()
+
+
+def resolve_visible(session: Session) -> List[Dict[str, str]]:
+    """DEFAULT_NAV minus the union of config-hidden (FR-6) and DB-hidden (live toggle) keys (FR-29)."""
+    hidden = set(load_hidden()) | db_hidden_keys(session)
+    return [item for item in DEFAULT_NAV if item["key"] not in hidden]
+'''
+    return head + "\n\n" + body
+
+
+def render_nav_admin_router(schema_text: str, source_file: str = "prisma/schema.prisma") -> str:
+    """``app/nav_admin.py`` (kind ``nav-admin-router``) — the live admin toggle UI (FR-29b/c).
+
+    Mode-INVARIANT bytes: auth is a **tolerant import** — enforced when ``app/auth.py`` exists (deployed),
+    open when it doesn't (installed, loopback-only) with a banner. POST refreshes ``app.state.nav`` so the
+    toggle is live in-process (FR-29d)."""
+    head = header_standard(source_file, schema_sha256(schema_text), "nav-admin-router")
+    body = '''from __future__ import annotations
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
+from sqlmodel import Session
+
+from .db import get_session
+from .nav import DEFAULT_NAV
+from .nav_store import db_hidden_keys, resolve_visible, set_hidden
+
+# Mode-aware auth, mode-invariant bytes: enforce when auth.py is present (deployed), else open
+# (installed — loopback-only). `_SECURED` drives the unauthenticated banner in the template.
+try:  # deployed mode emits app/auth.py
+    from .auth import require_principal as _require_principal
+
+    _guard = [Depends(_require_principal)]
+    _SECURED = True
+except ModuleNotFoundError:  # installed mode — no auth configured (local, loopback-only)
+    _guard = []
+    _SECURED = False
+
+templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+nav_admin_router = APIRouter()
+
+
+@nav_admin_router.get("/admin/nav", response_class=HTMLResponse, dependencies=_guard)
+def nav_admin(request: Request, session: Session = Depends(get_session)):
+    """List every nav entry with its current visibility (config + DB) so an admin can toggle it."""
+    hidden = db_hidden_keys(session)
+    return templates.TemplateResponse(
+        request,
+        "nav_admin.html",
+        {"entries": DEFAULT_NAV, "hidden": hidden, "secured": _SECURED},
+    )
+
+
+@nav_admin_router.post("/admin/nav", dependencies=_guard)
+async def nav_admin_save(request: Request, session: Session = Depends(get_session)):
+    """Apply the form: checked = visible, unchecked = hidden. Writes the DB and refreshes app.state.nav."""
+    form = await request.form()
+    visible = set(form.getlist("visible"))
+    for item in DEFAULT_NAV:
+        set_hidden(session, item["key"], hidden=item["key"] not in visible)
+    request.app.state.nav = resolve_visible(session)  # live refresh (FR-29d)
+    return RedirectResponse("/admin/nav", status_code=303)
+
+
+__all__ = ["nav_admin_router"]
+'''
+    return head + "\n\n" + body
+
+
+def render_nav_admin_page(schema_text: str, source_file: str = "prisma/schema.prisma") -> str:
+    """``app/templates/nav_admin.html`` (kind ``nav-admin-page``) — the admin toggle form (FR-29b/c)."""
+    head = header_nav_tmpl(  # Jinja-comment header; schema-only (views/pages shas are constant "")
+        source_file, schema_sha256(schema_text), schema_sha256(""), schema_sha256(""), "nav-admin-page"
+    )
+    body = (
+        '{% extends "base.html" %}\n'
+        "{% block title %}Manage navigation{% endblock %}\n"
+        "{% block content %}\n"
+        '<h1 style="font-family:system-ui,-apple-system,sans-serif">Manage navigation</h1>\n'
+        "{%- if not secured %}\n"
+        '  <p role="alert" style="background:#fff3cd;border:1px solid #ffe69c;padding:0.6rem 0.9rem">\n'
+        "    ⚠ This admin page is <strong>unauthenticated</strong> (installed/local mode, "
+        "loopback-only). Deploy with auth to protect it.</p>\n"
+        "{%- endif %}\n"
+        '<form method="post" action="/admin/nav">\n'
+        '  <p style="color:#555">Unchecked items are hidden from the top nav and index '
+        "(across restarts, until changed here).</p>\n"
+        "{%- for item in entries %}\n"
+        '  <div style="margin:0.25rem 0">\n'
+        '    <label><input type="checkbox" name="visible" value="{{ item.key }}"'
+        "{% if item.key not in hidden %} checked{% endif %}> "
+        "{{ item.label }} <span style=\"color:#888\">({{ item.group }})</span></label>\n"
+        "  </div>\n"
+        "{%- endfor %}\n"
+        '  <button type="submit" style="margin-top:0.75rem;padding:0.4rem 1rem">Save</button>\n'
+        "</form>\n"
+        "{% endblock %}\n"
+    )
+    return head + "\n" + body
+
+
 def render_nav(
     schema_text: str,
     views_text: Optional[str] = None,
@@ -375,13 +543,17 @@ def render_nav(
 ) -> List[Tuple[str, str]]:
     """The nav artifacts as ``(path, text)`` pairs — what the assembler emits (always-on, FR-13).
 
-    All four are always emitted (the registry module, the nav partial, and the home/index pair). The
-    index is **always reachable at** ``/_index`` and additionally serves ``/`` when no content page
-    claims it — that route choice lives inside :func:`render_index_router` (FR-28a/28e), not here.
+    Always emitted: the registry module, the nav partial, the home/index pair, and the live-toggle trio
+    (nav_store + admin router + admin template, FR-29). The index is **always reachable at** ``/_index``
+    and additionally serves ``/`` when no content page claims it — that route choice lives inside
+    :func:`render_index_router` (FR-28a/28e), not here.
     """
     return [
         ("app/nav.py", render_nav_module(schema_text, views_text, pages_text, source_file)),
         ("app/templates/_nav.html", render_nav_partial(schema_text, views_text, pages_text, source_file)),
         ("app/index.py", render_index_router(schema_text, views_text, pages_text, source_file)),
         ("app/templates/index.html", render_index_page(schema_text, views_text, pages_text, source_file)),
+        ("app/nav_store.py", render_nav_store(schema_text, source_file)),
+        ("app/nav_admin.py", render_nav_admin_router(schema_text, source_file)),
+        ("app/templates/nav_admin.html", render_nav_admin_page(schema_text, source_file)),
     ]
