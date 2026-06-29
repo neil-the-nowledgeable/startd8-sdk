@@ -18,6 +18,7 @@ Enumeration:
 
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -126,10 +127,15 @@ def render_nav_partial(
     base_style = "margin-right:1.25rem;color:#0a7d4b;text-decoration:none"
     links: List[str] = []
     for n in nav_registry(schema_text, views_text, pages_text):
+        # Labels/hrefs are build-time manifest values (page titles, view names), but may still
+        # contain & / < / " — HTML-escape them so the baked markup stays valid (and injection-safe).
+        # The active-link test compares the RAW href to request.url.path, so it uses the unescaped href.
+        href_attr = html.escape(n.href, quote=True)
+        label = html.escape(n.label)
         active = "{% if request.url.path == " + repr(n.href) + " %};font-weight:700{% endif %}"
         links.append(
             "{% if " + repr(n.key) + " not in nav_hidden %}"
-            f'<a href="{n.href}" style="{base_style}{active}">{n.label}</a>'
+            f'<a href="{href_attr}" style="{base_style}{active}">{label}</a>'
             "{% endif %}"
         )
     body = (

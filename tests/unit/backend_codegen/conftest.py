@@ -25,6 +25,12 @@ import sys
 import pytest
 
 
+def _is_generated_app_class(obj: object) -> bool:
+    """True if *obj* is a class defined by a generated app (``__module__`` under ``app``)."""
+    module = getattr(obj, "__module__", "")
+    return isinstance(module, str) and (module == "app" or module.startswith("app."))
+
+
 def _purge_generated_app_state() -> None:
     """Reset generated-app modules + SQLModel's process-global registry to the empty baseline.
 
@@ -50,12 +56,7 @@ def _purge_generated_app_state() -> None:
         return
 
     # No-op unless a generated app actually registered classes this test (keeps non-app tests untouched).
-    has_generated = any(
-        isinstance(getattr(class_registry.get(k), "__module__", ""), str)
-        and (class_registry.get(k).__module__ == "app" or class_registry.get(k).__module__.startswith("app."))
-        for k in list(class_registry)
-    )
-    if not has_generated:
+    if not any(_is_generated_app_class(class_registry.get(k)) for k in list(class_registry)):
         return
 
     clear_mappers()
