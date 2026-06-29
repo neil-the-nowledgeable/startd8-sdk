@@ -134,6 +134,15 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             raw_sha256 TEXT, normalized_sha256 TEXT, diff TEXT,
             FOREIGN KEY (run_id) REFERENCES intake_runs(run_id)
         );
+        CREATE TABLE IF NOT EXISTS intake_dispositions (
+            rejected_run_id TEXT PRIMARY KEY,
+            replacement_run_id TEXT,
+            reason_code TEXT,
+            reviewer TEXT,
+            timestamp TEXT,
+            FOREIGN KEY (rejected_run_id) REFERENCES intake_runs(run_id),
+            FOREIGN KEY (replacement_run_id) REFERENCES intake_runs(run_id)
+        );
     """)
     conn.commit()
     return conn
@@ -200,6 +209,14 @@ def main(argv: list[str] | None = None) -> int:
     conn = init_db(batch_root / "intake.sqlite")
     cur = conn.cursor()
 
+    dispositions = []
+    dispositions_file = batch_root / "dispositions.json"
+    if dispositions_file.is_file():
+        try:
+            dispositions = json.loads(dispositions_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            print(f"Warning: failed to parse dispositions.json: {e}", file=sys.stderr)
+
     summary = []
     for run_dir in sorted(d for d in raw_root.iterdir() if d.is_dir()):
         metadata_file = run_dir / "metadata.json"
@@ -245,6 +262,12 @@ def main(argv: list[str] | None = None) -> int:
                         "raw_sha256": raw_sha, "normalized_sha256": norm_sha})
         print(f"{run_id}: {status}" + (f" ({reason_code}: {detail})" if reason_code else ""))
 
+    if dispositions:
+        cur.execute("DELETE FROM intake_dispositions")
+        for disp in dispositions:
+            cur.execute("INSERT OR REPLACE INTO intake_dispositions VALUES (?,?,?,?,?)",
+                        (disp.get("rejected_run_id"), disp.get("replacement_run_id"),
+                         disp.get("reason_code"), disp.get("reviewer"), disp.get("timestamp")))
     conn.commit()
     conn.close()
     accepted = sum(1 for s in summary if s["status"] == "accepted")
@@ -252,6 +275,8 @@ def main(argv: list[str] | None = None) -> int:
               "store_batch": str(batch_root), "raw_root": str(raw_root),
               "total": len(summary), "accepted": accepted, "rejected": len(summary) - accepted,
               "runs": summary}
+    if dispositions:
+        ledger["dispositions"] = dispositions
     (batch_root / "intake-ledger.json").write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     print(f"\nintake: {accepted}/{len(summary)} accepted -> {batch_root}/intake-ledger.json")
     return 0

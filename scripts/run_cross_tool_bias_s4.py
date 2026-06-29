@@ -173,7 +173,7 @@ def suite_author_rows(ledger: dict) -> list[dict]:
     return [row for row in ledger.get("runs", []) if row.get("experiment") == "suite_author"]
 
 
-def normalized_suite_record(batch_root: Path, row: dict) -> tuple[dict, list[str]]:
+def normalized_suite_record(batch_root: Path, row: dict, run_dir: str) -> tuple[dict, list[str]]:
     """Validate the promoted normalized suite artifact before any bridge inspection.
 
     S4 must consume exactly the artifact admitted by intake. Missing files, missing hashes, or
@@ -188,8 +188,8 @@ def normalized_suite_record(batch_root: Path, row: dict) -> tuple[dict, list[str
             "detail": "accepted suite_author row has no run_id",
         }, ["intake accepted suite_author row has no run_id"]
 
-    suite_path = batch_root / "normalized" / run_id / "suite.py"
-    manifest_path = batch_root / "normalized" / run_id / "suite_manifest.json"
+    suite_path = batch_root / "normalized" / run_dir / "suite.py"
+    manifest_path = batch_root / "normalized" / run_dir / "suite_manifest.json"
     expected_sha = row.get("normalized_sha256")
     actual_sha = sha256(suite_path) if suite_path.is_file() else None
 
@@ -311,8 +311,22 @@ def run_preflight(
     if mutant_manifest.get("status") != "accepted":
         errors.append("mutant manifest is not accepted")
 
+    # Build a lookup from run_id to run_dir name from the reconciliation report
+    run_dir_by_id = {}
+    for run in reconciliation.get("runs", []):
+        r_id = run.get("metadata", {}).get("run_id")
+        r_dir = run.get("run_dir")
+        if r_id and r_dir:
+            run_dir_by_id[r_id] = r_dir
+
+    dispositions = ledger.get("dispositions", [])
+    replaced_run_ids = {d["rejected_run_id"] for d in dispositions}
+
     all_suite_rows = suite_author_rows(ledger)
-    rejected_suite_rows = [row for row in all_suite_rows if row.get("status") != "accepted"]
+    rejected_suite_rows = [
+        row for row in all_suite_rows
+        if row.get("status") != "accepted" and row.get("run_id") not in replaced_run_ids
+    ]
     if rejected_suite_rows:
         errors.append(f"intake ledger has rejected suite_author artifacts:{len(rejected_suite_rows)}")
 
@@ -325,7 +339,9 @@ def run_preflight(
 
     suites = []
     for row in suite_rows:
-        suite_record, suite_errors = normalized_suite_record(batch_root, row)
+        run_id = row.get("run_id")
+        run_dir = run_dir_by_id.get(run_id, run_id) # Fallback to run_id if missing
+        suite_record, suite_errors = normalized_suite_record(batch_root, row, run_dir)
         errors.extend(suite_errors)
         if suite_errors:
             suite_record["bridge"] = {
