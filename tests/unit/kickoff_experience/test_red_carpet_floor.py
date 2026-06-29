@@ -19,16 +19,16 @@ from startd8.kickoff_experience.proposals import (
 
 
 def test_proposal_kinds_is_the_closed_allowlist() -> None:
-    # The single source of truth shared by the propose handler and apply. RCT will EXTEND this
-    # (add `schema`/`manifest`) — but only alongside an explicit apply branch. This pins the
-    # current closed set so an accidental widening is caught.
-    assert PROPOSAL_KINDS == ("instantiate", "friction", "capture")
+    # The single source of truth shared by the propose handler and apply. RCT extends this only
+    # alongside an explicit apply branch — `schema` landed with N2; `manifest` is still future.
+    assert PROPOSAL_KINDS == ("instantiate", "friction", "capture", "schema")
 
 
 def test_apply_rejects_kind_outside_allowlist_without_writing(tmp_path: Path) -> None:
-    # A future/unimplemented kind (e.g. RCT's `schema`) must be rejected at apply with NO write.
+    # A future/unimplemented kind (e.g. RCT's not-yet-built `manifest`) must be rejected at apply
+    # with NO write — the closed-allow-list floor.
     before = sorted(p.name for p in tmp_path.rglob("*"))
-    out = apply_proposal(tmp_path, ProposedAction(kind="schema", params={"x": 1}, id="p1"))
+    out = apply_proposal(tmp_path, ProposedAction(kind="manifest", params={"x": 1}, id="p1"))
     assert out.code == "unknown_kind" and out.ok is False
     assert sorted(p.name for p in tmp_path.rglob("*")) == before   # nothing written to disk
 

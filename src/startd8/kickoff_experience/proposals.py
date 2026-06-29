@@ -38,7 +38,7 @@ from .concierge_apply import (
 )
 from .manifest import KickoffExperienceConfig, default_config
 
-PROPOSAL_KINDS = ("instantiate", "friction", "capture")
+PROPOSAL_KINDS = ("instantiate", "friction", "capture", "schema")
 
 # Outcomes that keep the proposal pending (user can retry / resume) vs consume it.
 _RETRIABLE_CODES = frozenset({CaptureCode.STALE_FILE, ConciergeWriteCode.WRITE_BLOCKED,
@@ -75,6 +75,10 @@ class ProposedAction:
             return f"instantiate the kickoff package (posture={p.get('posture', 'prototype')})"
         if self.kind == "capture":
             return f"set {p.get('value_path')} = {p.get('value')!r}"
+        if self.kind == "schema":
+            ack = " (acknowledging contract drift)" if p.get("acknowledge_drift") else ""
+            return (f"derive + promote the data-model contract → {p.get('contract_path', 'prisma/schema.prisma')}{ack}\n"
+                    "    (from the confirmed requirements brief; gated round-trip + parity)")
         return f"{self.kind} {p}"
 
 
@@ -148,13 +152,24 @@ def make_propose_handler(
                 posture = args.get("posture", "prototype") or "prototype"
                 validate_posture(posture)
                 action = ProposedAction("instantiate", {"posture": posture}, id=_new_id())
-            else:  # capture
+            elif kind == "capture":
                 vp = args.get("value_path", "") or ""
                 val = str(args.get("value", ""))
                 # Full validation + propose-time base_sha via a trial plan (allow-list, round-trip).
                 plan = build_capture_plan(root, vp, val, config=cfg)
                 action = ProposedAction("capture", {"value_path": vp, "value": val},
                                         id=_new_id(), base_sha=plan.base_sha)
+            else:  # schema (RCT N2) — propose-time is lenient; the full emit/gate runs at apply (R1-F11)
+                brief = args.get("brief", "") or ""
+                if not brief.strip():
+                    raise ConciergeInputError(
+                        "missing_brief", "a requirements brief is required to derive the schema")
+                action = ProposedAction(
+                    "schema",
+                    {"brief": brief,
+                     "contract_path": args.get("contract_path", "prisma/schema.prisma"),
+                     "acknowledge_drift": bool(args.get("acknowledge_drift", False))},
+                    id=_new_id())
         except (ConciergeInputError, CaptureError) as exc:
             return f"error: proposal rejected ({getattr(exc, 'code', 'invalid')}): {exc}"
         try:
@@ -225,6 +240,9 @@ def _apply_proposal_inner(root, action, cfg, build_instantiate_plan, build_frict
         res = apply_concierge_plan(root, plan)
         return ProposalOutcome("friction", res.code, res.message or "")
 
+    if action.kind == "schema":
+        return _apply_schema(root, p)
+
     if action.kind == "capture":
         vp = p.get("value_path", "")
         if vp not in cfg.allowed_value_paths():  # R1-S4: allow-list may have changed since propose
@@ -241,3 +259,46 @@ def _apply_proposal_inner(root, action, cfg, build_instantiate_plan, build_frict
             return ProposalOutcome("capture", exc.code, str(exc))
 
     return ProposalOutcome(action.kind, "unknown_kind", f"unknown proposal kind {action.kind!r}")
+
+
+def _apply_schema(root: str, p: Dict[str, Any]) -> ProposalOutcome:
+    """RCT N2 — derive + promote the data-model contract from the confirmed requirements brief.
+
+    The `schema` kind is the SECOND ratification gate (FR-RCT-4): brief-confirm wrote no `.prisma`;
+    this apply runs the existing `$0` `generate contract` pipeline (build_entity_graph → gated
+    emit_schema_draft → promote_schema) at human privilege, then **only promotes when the gate passes**:
+    - structural error / no round-trip  → `schema_gate_failed` (no write),
+    - dropped (unrenderable) fields      → `schema_lossy` (no write, R1-F12 — never promote a lossy schema),
+    - parity drift vs a live contract    → `schema_drift` unless `acknowledge_drift` (FR-RCT-16 — a
+      revision after manifests may derive from the prior contract is blocked, not silent).
+    """
+    import tempfile
+
+    from ..manifest_extraction.extract import build_entity_graph
+    from ..manifest_extraction.prisma_emitter import emit_schema_draft, promote_schema
+
+    brief = (p.get("brief") or "").strip()
+    if not brief:
+        return ProposalOutcome("schema", "missing_brief", "no requirements brief to derive from")
+    rel_contract = p.get("contract_path", "prisma/schema.prisma")
+    target = Path(root) / rel_contract
+    live = target.read_text(encoding="utf-8") if target.is_file() else None
+
+    graph = build_entity_graph({"requirements.md": brief})
+    run_dir = tempfile.mkdtemp(prefix="startd8-rct-schema-")
+    res = emit_schema_draft(graph, run_dir, live_text=live, source_file=rel_contract)
+
+    if not res.round_trips or res.errors:                       # R1-F12 — never promote a broken schema
+        return ProposalOutcome("schema", "schema_gate_failed",
+                               "; ".join(res.errors) or "schema did not round-trip; not promoted")
+    if res.unrenderable:                                        # R1-F12 — never promote a lossy schema
+        return ProposalOutcome("schema", "schema_lossy",
+                               "brief declares fields the contract can't express (not promoted): "
+                               + ", ".join(map(str, res.unrenderable)))
+    if res.parity_drift and not p.get("acknowledge_drift"):     # FR-RCT-16 — block silent revision
+        return ProposalOutcome("schema", "schema_drift",
+                               f"would change the live contract ({len(res.parity_drift)} drift) — "
+                               "re-confirm with acknowledge_drift to proceed: "
+                               + "; ".join(map(str, res.parity_drift[:3])))
+    promote_schema(run_dir, str(target))                        # the sole `.prisma` write (FR-RCT-4)
+    return ProposalOutcome("schema", ConciergeWriteCode.OK, f"promoted {rel_contract}")

@@ -139,18 +139,23 @@ increment).
     **`generate contract --promote`** are **distinct** human gates — confirming the brief writes **no**
     `.prisma`; only the separate promote action does. *Verify:* filesystem has no `.prisma` after
     brief-confirm; only promote writes it.
-  - **Acceptance (CRP R1-F12 — no lossy promote):** the schema quality is bounded by `generate
-    contract`'s prose grammar; RCT must **surface unparseable/ambiguous brief fragments back to the
-    human** rather than promoting a degraded schema (honors P3). *Verify:* a brief with an unsupported
-    construct → RCT reports the gap, does not promote.
+  - **Acceptance (CRP R1-F12 — no lossy promote) ✅ DELIVERED (N2):** the schema quality is bounded by
+    `generate contract`'s prose grammar; RCT must **surface unparseable/ambiguous brief fragments back
+    to the human** rather than promoting a degraded schema (honors P3). *(N2: the `schema` apply path
+    rejects with `schema_gate_failed`/`schema_lossy` and never promotes when the gate fails or a field
+    is unrenderable.)* *Verify:* a brief with an unsupported construct → RCT reports the gap, does not
+    promote.
 - **FR-RCT-5 — Data model gates the rest.** The schema is the **first** stage and a **gate**: manifests
   derive from it, so RCT will not drive manifest stages until a confirmed `schema.prisma` exists. This
   enforces "data model = the front bookend" rather than letting generation invent a contract.
-- **FR-RCT-16 — Schema-revision drift (CRP R1-F5).** A **second** `--promote` after downstream
-  manifests already derive from the prior schema must **detect** the dependency and **block / warn /
-  trigger re-assessment** — never silently invalidate manifests that derive from a removed/renamed
-  entity. *Verify:* promote schema v1 → derive a manifest → promote v2 with an entity removed → RCT
-  flags the now-orphaned manifest rather than passing readiness with a broken surface.
+- **FR-RCT-16 — Schema-revision drift (CRP R1-F5) ✅ DELIVERED (N2, parity-based).** A **second**
+  promote after a live contract exists must **detect** the change and **block** (typed `schema_drift`)
+  unless the human re-confirms with `acknowledge_drift` — never a silent revision. *(N2: the `schema`
+  apply path runs `emit_schema_draft(live_text=…)`; any `parity_drift` blocks promotion by default.
+  This parity-based block **subsumes** the manifest-orphan case — any contract change is caught — for
+  v1; a finer manifest-orphan-specific message is a later refinement.)* *Verify:* promote v1 → promote
+  v2 with an entity removed → blocked as `schema_drift`; `acknowledge_drift` proceeds
+  (`test_red_carpet_schema.py`).
 
 ### C. Manifests & value inputs — derive from the contract
 
