@@ -8,6 +8,7 @@ confirmed=False — and a Metric persists with no AI-authored value). Both are t
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 
@@ -157,11 +158,15 @@ def test_emitted_ai_tests_run_green(tmp_path):
         text=True,
     )
     assert result.returncode == 0, f"emitted tests failed:\n{result.stdout}\n{result.stderr}"
-    # contract + completeness + edge + gate + route-smoke (1 unseeded GET case — F-8)
-    # + confirm-route existence (FR-CA-8) + /ai POST-smoke (F-9: AI routes now mounted)
-    # + health readiness/liveness (2 — the generated tests/test_health.py)
-    # + openapi contract manifest/spec (4 — tests/test_openapi_contract.py)
-    assert "25 passed" in result.stdout
+    # The generated gate suite must run green (returncode 0 above) AND not silently shrink. We assert a
+    # MINIMUM count rather than an exact one: adding generated tests must not break this guard, but
+    # dropping below the baseline (silent under-generation) must. Baseline 27 = contract(6) +
+    # openapi_contract(6) + edge_privacy(3) + route_smoke(3) + ai_passes(2) + completeness(2) +
+    # health(2) + keyless_boot(2) + cost_logging(1).
+    match = re.search(r"(\d+) passed", result.stdout)
+    assert match and int(match.group(1)) >= 27, (
+        f"expected >=27 generated tests passing, got:\n{result.stdout}"
+    )
 
 
 # --------------------------------------------------------------------------- #

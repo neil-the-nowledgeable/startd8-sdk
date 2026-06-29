@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import py_compile
 import sys
 from pathlib import Path
 
@@ -124,7 +125,7 @@ def test_m5_cross_repo_client_without_app_tables_import(tmp_path: Path) -> None:
 def test_m5_contract_hash_uses_pinned_filter(tmp_path: Path) -> None:
     producer = tmp_path / "producer"
     producer.mkdir()
-    spec = _write_producer(producer)
+    _write_producer(producer)
 
     consumer = tmp_path / "consumer"
     consumer.mkdir()
