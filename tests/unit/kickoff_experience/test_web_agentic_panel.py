@@ -192,6 +192,63 @@ def test_confirm_unknown_proposal_404(tmp_path: Path) -> None:
     assert r.status_code == 404 and r.json()["code"] == "no_such_proposal"
 
 
+# --- Phase 2: new-conversation reset (R4-F6) + OTel nesting (R3-S8) -----------------------------
+
+def test_chat_reset_clears_history_and_reissues(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    csrf = _csrf(client)
+    old_sid = client.cookies.get("kickoff_chat")
+    client.post("/concierge/chat/message", data={"message": "x"})
+    assert client.post("/concierge/chat/pending").json()["proposals"]        # something pending
+    with record_events() as events:
+        r = client.post("/concierge/chat/reset", data={"csrf": csrf})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert all(e.name != EV_CHAT_TURN for e in events)                       # no provider call
+    new_sid = client.cookies.get("kickoff_chat")
+    assert new_sid and new_sid != old_sid                                    # fresh session minted
+    assert client.post("/concierge/chat/pending").json()["proposals"] == []  # clean thread
+
+
+def test_chat_reset_requires_csrf(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _csrf(client)
+    r = client.post("/concierge/chat/reset", data={"csrf": "bogus"})
+    assert r.status_code == 403 and r.json()["code"] == "session_expired"
+
+
+def test_chat_turn_nested_in_kickoff_span(tmp_path: Path, monkeypatch) -> None:
+    # R3-S8: chat_turn is emitted INSIDE the kickoff span (so it + the agentic child spans attach to
+    # one trace), not after the span closes.
+    import contextlib
+
+    from startd8.kickoff_experience import telemetry as tel
+
+    active = {"in": False}
+    emitted_inside: list = []
+
+    @contextlib.contextmanager
+    def _fake_span(name, **kw):
+        active["in"] = True
+        try:
+            yield object()
+        finally:
+            active["in"] = False
+
+    orig_emit = tel.emit
+
+    def _rec_emit(name, **kw):
+        if name == tel.EV_CHAT_TURN:
+            emitted_inside.append(active["in"])
+        return orig_emit(name, **kw)
+
+    monkeypatch.setattr(tel, "kickoff_span", _fake_span)
+    monkeypatch.setattr(tel, "emit", _rec_emit)
+    client = _client(tmp_path)
+    _csrf(client)
+    client.post("/concierge/chat/message", data={"message": "x"})
+    assert emitted_inside == [True]
+
+
 # --- chat_message hardening (FR-WM2-5b / 5c / 8b / 8c / 14a) ------------------------------------
 
 def test_message_too_long_rejected_before_provider(tmp_path: Path) -> None:

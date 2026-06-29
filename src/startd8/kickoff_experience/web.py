@@ -389,6 +389,12 @@ class _ChatStore:
         entry[1] = now   # touch
         return entry[0]
 
+    def discard(self, token: Optional[str]) -> None:
+        """Drop + wipe a session's history (new-conversation reset, R4-F6)."""
+        entry = self._chats.pop(token or "", None)
+        if entry is not None:
+            self._wipe(entry[0])
+
 
 def _render_chat_page(csrf: str, stylesheet: str) -> str:
     """The agentic Concierge chat panel — message box + transcript + pending proposals.
@@ -404,6 +410,7 @@ def _render_chat_page(csrf: str, stylesheet: str) -> str:
         "<div id='proposals'></div>"
         "<form id='f' class='field'><input id='msg' name='msg' placeholder='ask about the kickoff…' "
         "autocomplete='off' style='width:80%'><button type='submit'>Send</button></form>"
+        "<p><button type='button' id='reset'>New conversation</button></p>"
         f"<script>const CSRF={csrf!r};const OPTS={{method:'POST',credentials:'same-origin'}};\n"
         "const log=document.getElementById('log'),prop=document.getElementById('proposals');\n"
         "function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}\n"
@@ -424,6 +431,8 @@ def _render_chat_page(csrf: str, stylesheet: str) -> str:
         " const r=await fetch('/concierge/chat/message',{...OPTS,body:fd});const j=await r.json();\n"
         " log.lastChild.remove();add('concierge',j.ok?j.text:('error: '+(j.message||j.code)));\n"
         " renderProposals(j.proposals||[]);};\n"
+        "document.getElementById('reset').onclick=async()=>{const fd=new FormData();fd.append('csrf',CSRF);\n"
+        " await fetch('/concierge/chat/reset',{...OPTS,body:fd});log.innerHTML='';prop.innerHTML='';};\n"
         "</script>"
     )
     return _page("Concierge — chat", body, stylesheet)
@@ -902,27 +911,30 @@ def build_kickoff_app(
         lock = chat_locks.setdefault(kickoff_chat, asyncio.Lock())
         if lock.locked():
             return _chat_refused("chat_busy", 429)
+        from .telemetry import EV_CHAT_REFUSED
         async with lock:
-            try:
-                with kickoff_span("kickoff.concierge.chat_turn"):
+            # R3-S8: wrap the whole turn so the AgenticSession `agentic.session`/`agentic.turn` child
+            # spans AND the funnel events (chat_turn / chat_refused) nest under one kickoff span.
+            with kickoff_span("kickoff.concierge.chat_turn"):
+                try:
                     result = await chat.ask(message)
-            except Exception:                        # FR-WM2-8c — sanitized; a provider fault never 500s
-                return _chat_refused("chat_error", 200)
-        stop_code = _CHAT_STOP_CODE.get(result.stop_reason)   # FR-WM2-8b
-        if stop_code is not None:
-            from .telemetry import EV_CHAT_REFUSED
-            emit(EV_CHAT_REFUSED, code=stop_code, stop_reason=result.stop_reason)
-            return JSONResponse({"ok": False, "code": stop_code, "text": result.text,
-                                 "cost": _chat_cost_block(chat, result)},
-                                status_code=200, headers=dict(_FRAME_DENY_HEADERS))
-        proposals = [{"id": a.id, "kind": a.kind, "summary": a.summary()}
-                     for a in chat.buffer.pending()]
-        emit(EV_CHAT_TURN, turns=getattr(result, "turns", None),
-             tokens=getattr(result, "total_tokens", None),
-             cost_usd=getattr(result, "total_cost_usd", None),
-             stop_reason=result.stop_reason)
-        return JSONResponse({"ok": True, "text": result.text, "cost": _chat_cost_block(chat, result),
-                             "proposals": proposals}, headers=dict(_FRAME_DENY_HEADERS))
+                except Exception:                    # FR-WM2-8c — sanitized; a provider fault never 500s
+                    return _chat_refused("chat_error", 200)
+                stop_code = _CHAT_STOP_CODE.get(result.stop_reason)   # FR-WM2-8b
+                if stop_code is not None:
+                    emit(EV_CHAT_REFUSED, code=stop_code, stop_reason=result.stop_reason)
+                    return JSONResponse({"ok": False, "code": stop_code, "text": result.text,
+                                         "cost": _chat_cost_block(chat, result)},
+                                        status_code=200, headers=dict(_FRAME_DENY_HEADERS))
+                proposals = [{"id": a.id, "kind": a.kind, "summary": a.summary()}
+                             for a in chat.buffer.pending()]
+                emit(EV_CHAT_TURN, turns=getattr(result, "turns", None),
+                     tokens=getattr(result, "total_tokens", None),
+                     cost_usd=getattr(result, "total_cost_usd", None),
+                     stop_reason=result.stop_reason)
+                return JSONResponse({"ok": True, "text": result.text,
+                                     "cost": _chat_cost_block(chat, result),
+                                     "proposals": proposals}, headers=dict(_FRAME_DENY_HEADERS))
 
     @app.post("/concierge/chat/pending")
     def chat_pending(kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
@@ -968,5 +980,24 @@ def build_kickoff_app(
             chat.buffer.pop(proposal_id)
             emit(EV_PROPOSAL_DISCARDED, kind=kind)
         return JSONResponse({"ok": True}, headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.post("/concierge/chat/reset")
+    def chat_reset(csrf: str = Form(...),
+                   kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
+        # R4-F6 — new conversation: destroy the current session's history and mint a fresh one. $0,
+        # no provider call, no chat_turn event. CSRF-protected (it mutates server state).
+        if chat_factory is None:
+            return JSONResponse({"ok": False, "code": "chat_disabled"}, status_code=409,
+                                headers=dict(_FRAME_DENY_HEADERS))
+        if not sessions.valid(csrf, clock()):
+            return JSONResponse({"ok": False, "code": "session_expired"}, status_code=403,
+                                headers=dict(_FRAME_DENY_HEADERS))
+        chats.discard(kickoff_chat)               # drop + wipe old history (FR-WM2-5d)
+        chat_locks.pop(kickoff_chat or "", None)
+        new_sid = sessions.issue(clock())
+        chats.put(new_sid, chat_factory())
+        resp = JSONResponse({"ok": True}, headers=dict(_FRAME_DENY_HEADERS))
+        resp.set_cookie("kickoff_chat", new_sid, httponly=True, samesite="strict")
+        return resp
 
     return app

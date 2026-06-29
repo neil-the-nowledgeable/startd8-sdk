@@ -286,11 +286,11 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
 > Accepted but deferred to keep the first cut focused on the security-essential mechanisms. Both are
 > additive and non-blocking.
 
-- **[Phase 2] New-conversation reset** *(R4-F6/R4-S6)*. A `POST /chat/reset` clears the current
+- **[Phase 2] New-conversation reset** ✅ **DELIVERED 2026-06-29** *(R4-F6/R4-S6)*. A `POST /chat/reset` clears the current
   `_ChatStore` entry, mints a fresh `kickoff_chat` cookie, and returns `{ok: true}` **without** a
   provider call (no `chat_turn` emitted). User-facing recovery from a bad thread; idle expiry (FR-WM2-5)
   covers the v1 safety need.
-- **[Phase 2] OTel trace nesting** *(R3-S8)*. Wrap `POST /chat` in `kickoff_span` so the built-in
+- **[Phase 2] OTel trace nesting** ✅ **DELIVERED 2026-06-29** *(R3-S8)*. Wrap `POST /chat` in `kickoff_span` so the built-in
   `AgenticSession` `agentic.session`/`agentic.turn` spans nest under `kickoff.session` (free
   observability; the funnel events in FR-WM2-14 are the v1 essential).
 
