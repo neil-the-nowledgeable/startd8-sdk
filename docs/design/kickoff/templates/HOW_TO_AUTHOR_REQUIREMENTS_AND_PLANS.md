@@ -65,15 +65,20 @@ line.
 
 ## 3. The controlled vocabularies (the only words with rules)
 
-| Where | Allowed values | Plain meaning |
-|-------|----------------|---------------|
-| Field types | `text`, `long text`, `number`, `decimal`, `money`, `date`, `date+time`, `yes/no`, `choice of: a\|b\|c` | a line · a paragraph · whole number · number with decimals · **money in whole cents (exact sums)** · calendar date · timestamp · checkbox · pick-one |
-| Relationships | **has one**, **has many**, **belongs to**, **references** (a loose id, no FK — e.g. a polymorphic link), **links X to Y** / **links to many** | ownership both ways · a loose pointer · user-made connections (never inferred) |
-| View kinds | **detail-compose**, **dashboard**, **board**, **workspace**, **export-package** | one connected picture · counts & summaries · status columns · everything about one record · downloadable bundle |
-| Traffic profile | **test**, **internal**, **standard**, **high-traffic** | demo · team-sized · public app · scale |
-| Completeness | "at least *N* *Entity* (weight *W*)" | the formula behind the progress score |
-| Owned fields | "Only humans enter: *Entity.field*" | the AI never writes these values |
-| Risk types | availability, cost, quality | will it be up · will it overspend · will it be wrong |
+> This table is a **non-normative snapshot** for authors. The single normative owner of every
+> controlled vocabulary and grammar is `../KICKOFF_AUTHORING_CONTRACT.md` — §-refs are cited per
+> row; if this snapshot and the contract ever disagree, the contract wins.
+
+| Where | Allowed values | Plain meaning | Contract |
+|-------|----------------|---------------|----------|
+| Field types | `text`, `long text`, `number`, `decimal`, `money`, `date`, `date+time`, `yes/no`, `choice of: a\|b\|c` — **one field per row** (a slash-row is flagged, never split) | a line · a paragraph · whole number · number with decimals · **money in whole cents (exact sums)** · calendar date · timestamp · checkbox · pick-one | §2.1 |
+| Relationships | **has one**, **has many**, **belongs to**, **references** (a loose id, no FK — e.g. a polymorphic link), **links X to Y** / **links to many** | ownership both ways · a loose pointer · user-made connections (never inferred) | §2.1 |
+| View kinds | **detail-compose**, **dashboard**, **board** (requires **`Group by:`**, a Root-entity field), **workspace**, **export-package** | one connected picture · counts & summaries · status columns · everything about one record · downloadable bundle | §2.3 |
+| View route | DERIVED by kind; an optional **`Route:`** line overrides | you never write URLs unless overriding a parameterized/nav route | §2.3 |
+| Traffic profile | **test**, **internal**, **standard**, **high-traffic** | demo · team-sized · public app · scale | §2.7 / KICKOFF_REQUIREMENTS |
+| Completeness | "*Record* is complete when it has:" + "at least *N* *Entity* (weight *W*)" + optional ` — nudge: "…"` (tolerated, flagged) | the formula behind the progress score | §2.4 |
+| Owned fields | "Only humans enter: *Entity.field*" | the AI never writes these values | §2.6 |
+| Risk types | availability, cost, quality | will it be up · will it overspend · will it be wrong | — |
 
 Everything else in your document is **free prose** — encouraged, read by humans, ignored by
 extraction.
