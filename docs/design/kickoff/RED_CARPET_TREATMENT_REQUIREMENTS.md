@@ -171,12 +171,12 @@ increment).
     maps each extracted manifest → its project destination and writes it through the **existing**
     `apply_write_plan` confinement/atomic seam (mirroring `build_instantiate_plan`). This is RCT's
     biggest genuinely-new piece — pure plumbing over existing extraction, no new extractor.
-  - **Acceptance (CRP R1-F2 — dest confinement, CRITICAL):** the write **destination is derived
+  - **Acceptance (CRP R1-F2 — dest confinement, CRITICAL) ✅ DELIVERED (N1):** the write **destination is derived
     server-side from the manifest filename**, **never** taken from the proposal payload; every resolved
     `realpath` is asserted to live **under `docs/kickoff/inputs/`** (reject `..`, absolute paths,
     symlink escape). *Verify:* a proposal with `dest=../../etc/x.yaml` / absolute / symlink → apply
     rejected; the filename→path map is fuzzed against a realpath-under-root assertion.
-  - **Acceptance (CRP R1-F3 — overwrite & atomicity):** **no-clobber by default** of an existing
+  - **Acceptance (CRP R1-F3 — overwrite & atomicity) ✅ DELIVERED (N1):** **no-clobber by default** of an existing
     `inputs/*.yaml` that differs from the last RCT-written content; overwrite only on an explicit human
     **"replace"** confirm; the multi-file write is **all-or-nothing** (staged, atomic — rollback on any
     per-file failure). *Verify:* a pre-edited manifest is not overwritten without replace-confirm; an

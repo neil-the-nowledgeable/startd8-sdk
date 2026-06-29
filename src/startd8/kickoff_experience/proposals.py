@@ -38,7 +38,7 @@ from .concierge_apply import (
 )
 from .manifest import KickoffExperienceConfig, default_config
 
-PROPOSAL_KINDS = ("instantiate", "friction", "capture", "schema")
+PROPOSAL_KINDS = ("instantiate", "friction", "capture", "schema", "manifest")
 
 # Outcomes that keep the proposal pending (user can retry / resume) vs consume it.
 _RETRIABLE_CODES = frozenset({CaptureCode.STALE_FILE, ConciergeWriteCode.WRITE_BLOCKED,
@@ -79,6 +79,10 @@ class ProposedAction:
             ack = " (acknowledging contract drift)" if p.get("acknowledge_drift") else ""
             return (f"derive + promote the data-model contract → {p.get('contract_path', 'prisma/schema.prisma')}{ack}\n"
                     "    (from the confirmed requirements brief; gated round-trip + parity)")
+        if self.kind == "manifest":
+            rep = " (replacing existing)" if p.get("replace") else ""
+            return (f"author the assembly manifest(s) from {p.get('source_label', 'authoring.md')}{rep}\n"
+                    "    (extracted + round-trip-gated; written to their conventional prisma/ paths)")
         return f"{self.kind} {p}"
 
 
@@ -159,7 +163,7 @@ def make_propose_handler(
                 plan = build_capture_plan(root, vp, val, config=cfg)
                 action = ProposedAction("capture", {"value_path": vp, "value": val},
                                         id=_new_id(), base_sha=plan.base_sha)
-            else:  # schema (RCT N2) — propose-time is lenient; the full emit/gate runs at apply (R1-F11)
+            elif kind == "schema":  # RCT N2 — propose-time is lenient; the full emit/gate runs at apply (R1-F11)
                 brief = args.get("brief", "") or ""
                 if not brief.strip():
                     raise ConciergeInputError(
@@ -169,6 +173,16 @@ def make_propose_handler(
                     {"brief": brief,
                      "contract_path": args.get("contract_path", "prisma/schema.prisma"),
                      "acknowledge_drift": bool(args.get("acknowledge_drift", False))},
+                    id=_new_id())
+            else:  # manifest (RCT N1) — prose only; extraction + dest mapping happen at apply (R1-F2/F11)
+                src = args.get("source", "") or ""
+                if not src.strip():
+                    raise ConciergeInputError(
+                        "missing_source", "authoring prose is required for a manifest proposal")
+                action = ProposedAction(
+                    "manifest",
+                    {"source": src, "source_label": args.get("source_label", "authoring.md"),
+                     "replace": bool(args.get("replace", False))},
                     id=_new_id())
         except (ConciergeInputError, CaptureError) as exc:
             return f"error: proposal rejected ({getattr(exc, 'code', 'invalid')}): {exc}"
@@ -243,6 +257,9 @@ def _apply_proposal_inner(root, action, cfg, build_instantiate_plan, build_frict
     if action.kind == "schema":
         return _apply_schema(root, p)
 
+    if action.kind == "manifest":
+        return _apply_manifest(root, p)
+
     if action.kind == "capture":
         vp = p.get("value_path", "")
         if vp not in cfg.allowed_value_paths():  # R1-S4: allow-list may have changed since propose
@@ -302,3 +319,64 @@ def _apply_schema(root: str, p: Dict[str, Any]) -> ProposalOutcome:
                                + "; ".join(map(str, res.parity_drift[:3])))
     promote_schema(run_dir, str(target))                        # the sole `.prisma` write (FR-RCT-4)
     return ProposalOutcome("schema", ConciergeWriteCode.OK, f"promoted {rel_contract}")
+
+
+def _apply_manifest(root: str, p: Dict[str, Any]) -> ProposalOutcome:
+    """RCT N1 — materialize an authoring prose source's extracted manifest(s) into the project tree.
+
+    The proposal supplies **prose, never a path** (R1-F2): the server extracts (round-trip-gated =
+    apply-time re-validation, R1-F11) and maps each yielded manifest to its **server-derived**
+    `CONVENTION_PATHS` destination — a payload-supplied `dest`/`path` is ignored. No-clobber by default;
+    `replace` overwrites; the multi-file write is **all-or-nothing** via a pre-flight (R1-F3).
+    """
+    from ..concierge.safe_write import ACTION_NEW, ACTION_OVERWRITE, PlannedWrite, apply_write_plan
+    from ..manifest_extraction.extract import RoundTripError, extract_manifests
+    from ..wireframe.inputs import CONVENTION_PATHS
+
+    source = (p.get("source") or "").strip()
+    if not source:
+        return ProposalOutcome("manifest", "missing_source", "no authoring prose to extract from")
+    replace = bool(p.get("replace", False))
+    rootp = Path(root)
+
+    live = None
+    schema = rootp / CONVENTION_PATHS["schema"]
+    if schema.is_file():                                  # views/fk resolution needs the live contract
+        live = schema.read_text(encoding="utf-8")
+    try:
+        result = extract_manifests({p.get("source_label", "authoring.md"): source}, live_schema_text=live)
+    except RoundTripError as exc:                         # R1-F11 — extraction is the apply-time gate
+        return ProposalOutcome("manifest", "manifest_round_trip_failed", str(exc))
+
+    if not result.manifests:
+        return ProposalOutcome("manifest", "no_manifest",
+                               "the prose yielded no recognized assembly-manifest section")
+
+    # Map each yielded manifest → its server-derived, confined dest (R1-F2). The proposal cannot
+    # choose a path: an unknown manifest (no convention dest) is refused.
+    targets: List[tuple] = []
+    for filename, text in result.manifests.items():
+        key = filename[:-5] if filename.endswith(".yaml") else filename
+        dest = CONVENTION_PATHS.get(key)
+        if dest is None:
+            return ProposalOutcome("manifest", "unknown_manifest",
+                                   f"no confined destination for {filename!r}")
+        targets.append((dest, text))
+
+    # Pre-flight all-or-nothing (R1-F3): refuse the WHOLE batch if any target would clobber, rather
+    # than leave a partial materialization. (apply_write_plan is per-file, not transactional.)
+    if not replace:
+        clashes = sorted(dest for dest, _ in targets if (rootp / dest).exists())
+        if clashes:
+            return ProposalOutcome("manifest", "would_clobber",
+                                   "exists (re-confirm with replace=true): " + ", ".join(clashes))
+
+    act = ACTION_OVERWRITE if replace else ACTION_NEW
+    planned = [PlannedWrite(path=dest, action=act, content=text) for dest, text in targets]
+    res = apply_write_plan(root, planned, force=replace)
+    if res.ok and len(res.written) == len(planned):
+        return ProposalOutcome("manifest", ConciergeWriteCode.OK,
+                               f"wrote {', '.join(sorted(res.written))}")
+    issues = res.blocked + res.skipped + res.errors      # confinement re-check / OS error → no silent partial
+    code = ConciergeWriteCode.PARTIAL if res.written else "manifest_refused"
+    return ProposalOutcome("manifest", code, f"wrote {len(res.written)}/{len(planned)}; {issues}")
