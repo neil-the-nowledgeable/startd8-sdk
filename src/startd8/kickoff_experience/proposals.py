@@ -38,7 +38,11 @@ from .concierge_apply import (
 )
 from .manifest import KickoffExperienceConfig, default_config
 
-PROPOSAL_KINDS = ("instantiate", "friction", "capture", "schema", "manifest")
+PROPOSAL_KINDS = ("instantiate", "friction", "capture", "schema", "manifest", "brief")
+
+# Where the confirmed requirements brief lands (RCT N2 two-step, R1-F4): the `brief` kind writes it;
+# the `schema` kind reads it to derive + promote the contract. A conventional, human-editable doc.
+_RC_BRIEF_PATH = "docs/kickoff/REQUIREMENTS.md"
 
 # Outcomes that keep the proposal pending (user can retry / resume) vs consume it.
 _RETRIABLE_CODES = frozenset({CaptureCode.STALE_FILE, ConciergeWriteCode.WRITE_BLOCKED,
@@ -83,6 +87,10 @@ class ProposedAction:
             rep = " (replacing existing)" if p.get("replace") else ""
             return (f"author the assembly manifest(s) from {p.get('source_label', 'authoring.md')}{rep}\n"
                     "    (extracted + round-trip-gated; written to their conventional prisma/ paths)")
+        if self.kind == "brief":
+            n = len((p.get("source") or "").splitlines())
+            return (f"write the requirements brief → {_RC_BRIEF_PATH} ({n} lines)\n"
+                    "    (step 1 of the data model: confirm the brief, then confirm `schema` to promote)")
         return f"{self.kind} {p}"
 
 
@@ -163,18 +171,15 @@ def make_propose_handler(
                 plan = build_capture_plan(root, vp, val, config=cfg)
                 action = ProposedAction("capture", {"value_path": vp, "value": val},
                                         id=_new_id(), base_sha=plan.base_sha)
-            elif kind == "schema":  # RCT N2 — propose-time is lenient; the full emit/gate runs at apply (R1-F11)
-                brief = args.get("brief", "") or ""
-                if not brief.strip():
-                    raise ConciergeInputError(
-                        "missing_brief", "a requirements brief is required to derive the schema")
+            elif kind == "schema":  # RCT N2 — brief is OPTIONAL at propose (apply reads the on-disk
+                # requirements brief when absent — the two-step, R1-F4). Full emit/gate runs at apply.
                 action = ProposedAction(
                     "schema",
-                    {"brief": brief,
+                    {"brief": args.get("brief", "") or "",
                      "contract_path": args.get("contract_path", "prisma/schema.prisma"),
                      "acknowledge_drift": bool(args.get("acknowledge_drift", False))},
                     id=_new_id())
-            else:  # manifest (RCT N1) — prose only; extraction + dest mapping happen at apply (R1-F2/F11)
+            elif kind == "manifest":  # RCT N1 — prose only; extraction + dest mapping happen at apply (R1-F2/F11)
                 src = args.get("source", "") or ""
                 if not src.strip():
                     raise ConciergeInputError(
@@ -183,6 +188,14 @@ def make_propose_handler(
                     "manifest",
                     {"source": src, "source_label": args.get("source_label", "authoring.md"),
                      "replace": bool(args.get("replace", False))},
+                    id=_new_id())
+            else:  # brief (RCT N2 two-step, R1-F4) — step 1: write the requirements brief to disk
+                src = args.get("source", "") or ""
+                if not src.strip():
+                    raise ConciergeInputError(
+                        "missing_source", "requirements prose is required for a brief proposal")
+                action = ProposedAction(
+                    "brief", {"source": src, "replace": bool(args.get("replace", False))},
                     id=_new_id())
         except (ConciergeInputError, CaptureError) as exc:
             return f"error: proposal rejected ({getattr(exc, 'code', 'invalid')}): {exc}"
@@ -242,6 +255,9 @@ def _apply_proposal_inner(root, action, cfg, build_instantiate_plan, build_frict
         return ProposalOutcome("instantiate", res.code,
                                detail + (f" — {res.message}" if res.message else ""))
 
+    if action.kind == "brief":
+        return _apply_brief(root, p)
+
     if action.kind == "friction":
         try:
             validate_friction(p.get("friction", ""), p.get("what_happened", ""),
@@ -294,9 +310,16 @@ def _apply_schema(root: str, p: Dict[str, Any]) -> ProposalOutcome:
     from ..manifest_extraction.extract import build_entity_graph
     from ..manifest_extraction.prisma_emitter import emit_schema_draft, promote_schema
 
+    # Two-step (R1-F4): prefer an explicit params brief, else read the confirmed on-disk brief that a
+    # prior `brief` proposal wrote — so the brief-confirm and the promote are distinct human gates.
     brief = (p.get("brief") or "").strip()
     if not brief:
-        return ProposalOutcome("schema", "missing_brief", "no requirements brief to derive from")
+        brief_file = Path(root) / _RC_BRIEF_PATH
+        if brief_file.is_file():
+            brief = brief_file.read_text(encoding="utf-8").strip()
+    if not brief:
+        return ProposalOutcome("schema", "missing_brief",
+                               f"no requirements brief — propose a `brief` first (writes {_RC_BRIEF_PATH})")
     rel_contract = p.get("contract_path", "prisma/schema.prisma")
     target = Path(root) / rel_contract
     live = target.read_text(encoding="utf-8") if target.is_file() else None
@@ -319,6 +342,28 @@ def _apply_schema(root: str, p: Dict[str, Any]) -> ProposalOutcome:
                                + "; ".join(map(str, res.parity_drift[:3])))
     promote_schema(run_dir, str(target))                        # the sole `.prisma` write (FR-RCT-4)
     return ProposalOutcome("schema", ConciergeWriteCode.OK, f"promoted {rel_contract}")
+
+
+def _apply_brief(root: str, p: Dict[str, Any]) -> ProposalOutcome:
+    """RCT N2 two-step (R1-F4) step 1 — write the confirmed requirements brief to the conventional
+    `docs/kickoff/REQUIREMENTS.md`. This writes **no `.prisma`**; the human then confirms a separate
+    `schema` proposal to derive + promote the contract from this brief. No-clobber by default."""
+    from ..concierge.safe_write import ACTION_NEW, ACTION_OVERWRITE, PlannedWrite, apply_write_plan
+
+    source = (p.get("source") or "").strip()
+    if not source:
+        return ProposalOutcome("brief", "missing_source", "no requirements prose to write")
+    replace = bool(p.get("replace", False))
+    if (Path(root) / _RC_BRIEF_PATH).exists() and not replace:
+        return ProposalOutcome("brief", "would_clobber",
+                               f"{_RC_BRIEF_PATH} exists (re-confirm with replace=true)")
+    act = ACTION_OVERWRITE if replace else ACTION_NEW
+    res = apply_write_plan(root, [PlannedWrite(path=_RC_BRIEF_PATH, action=act, content=source)],
+                           force=replace)
+    if res.ok and res.written:
+        return ProposalOutcome("brief", ConciergeWriteCode.OK,
+                               f"wrote {_RC_BRIEF_PATH} — next: confirm `schema` to promote the contract")
+    return ProposalOutcome("brief", "brief_refused", f"{res.blocked + res.skipped + res.errors}")
 
 
 def _apply_manifest(root: str, p: Dict[str, Any]) -> ProposalOutcome:

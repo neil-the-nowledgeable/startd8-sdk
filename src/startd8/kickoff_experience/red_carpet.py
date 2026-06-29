@@ -82,6 +82,14 @@ def build_red_carpet_state(project_root: str | Path) -> RedCarpetState:
     value_inputs_done = bool(domains) and all(
         (d or {}).get("status") == "present" for d in domains.values()
     )
+    # Bootstrap-if-absent (N2-inc2): the value inputs live in the kickoff package; when it is missing
+    # the value-inputs stage starts by scaffolding it (the `instantiate` proposal kind).
+    package_present = (root / "docs" / "kickoff" / "inputs").is_dir()
+    value_inputs_detail = (
+        "all four value-input domains present" if value_inputs_done
+        else ("scaffold the kickoff package (propose `instantiate`), then fill the four domains"
+              if not package_present
+              else "fill conventions / build-preferences / business-targets / observability"))
 
     data_model_done = gates["schema"]
     manifests_done = gates["app"] and gates["pages"] and gates["views"]
@@ -96,9 +104,7 @@ def build_red_carpet_state(project_root: str | Path) -> RedCarpetState:
             "app + pages + views present" if manifests_done
             else "author the assembly manifests (pages/views/app/…) from the schema"),
         RedCarpetStage(
-            "value_inputs", "done" if value_inputs_done else "pending",
-            "all four value-input domains present" if value_inputs_done
-            else "fill conventions / build-preferences / business-targets / observability"),
+            "value_inputs", "done" if value_inputs_done else "pending", value_inputs_detail),
         # Placeholder bucket-2 content is driven in a later increment; not gating the cascade offer.
         RedCarpetStage("content", "pending", "placeholder content + static test data (later)"),
         RedCarpetStage(

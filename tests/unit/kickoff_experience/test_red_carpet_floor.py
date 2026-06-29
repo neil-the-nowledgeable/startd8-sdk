@@ -21,7 +21,7 @@ from startd8.kickoff_experience.proposals import (
 def test_proposal_kinds_is_the_closed_allowlist() -> None:
     # The single source of truth shared by the propose handler and apply. RCT extends this only
     # alongside an explicit apply branch — `schema` (N2) and `manifest` (N1) have landed.
-    assert PROPOSAL_KINDS == ("instantiate", "friction", "capture", "schema", "manifest")
+    assert PROPOSAL_KINDS == ("instantiate", "friction", "capture", "schema", "manifest", "brief")
 
 
 def test_apply_rejects_kind_outside_allowlist_without_writing(tmp_path: Path) -> None:

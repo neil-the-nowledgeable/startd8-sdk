@@ -100,6 +100,7 @@ def test_propose_handler_records_schema(tmp_path: Path) -> None:
     ack = handler({"kind": "schema", "brief": _BRIEF_V1})
     assert "recorded" in ack.lower()
     assert len(buf.pending()) == 1 and buf.pending()[0].kind == "schema"
-    # empty brief is rejected at propose time (no proposal recorded)
-    err = handler({"kind": "schema", "brief": ""})
-    assert err.startswith("error:") and len(buf.pending()) == 1
+    # N2-inc2: brief is OPTIONAL at propose (apply reads the on-disk brief from the two-step), so an
+    # empty-brief schema proposal is now recorded; the gate that needs a brief is at apply.
+    ack2 = handler({"kind": "schema"})
+    assert "recorded" in ack2.lower() and len(buf.pending()) == 2

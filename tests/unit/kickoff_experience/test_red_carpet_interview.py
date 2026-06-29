@@ -29,7 +29,7 @@ class _StubAgent:  # AgenticSession construction only stores the agent/registry/
 
 def test_propose_schema_enum_covers_all_kinds() -> None:
     enum = _PROPOSE_SCHEMA["properties"]["kind"]["enum"]
-    assert set(enum) == {"instantiate", "friction", "capture", "schema", "manifest"}
+    assert set(enum) == {"instantiate", "friction", "capture", "schema", "manifest", "brief"}
     # the schema/manifest params are declared so the agent can fill them
     props = _PROPOSE_SCHEMA["properties"]
     assert "brief" in props and "source" in props and "source_label" in props

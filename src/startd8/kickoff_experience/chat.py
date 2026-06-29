@@ -90,17 +90,23 @@ RED_CARPET_SYSTEM_PROMPT = (
     "  • red_carpet_state — the staged build map: the next gap + whether the cascade is offerable\n"
     "  • survey / assess / field_states — read the project's current state\n"
     "  • propose_action — RECOMMEND a write the user confirms. Use the kind for the current stage:\n"
-    "        schema   {brief}                 — DATA MODEL (the front bookend): interview the user about\n"
-    "                                           their domain, draft a requirements brief (## Entities with\n"
-    "                                           field tables + Relationships), and propose it; on confirm\n"
-    "                                           it derives + promotes prisma/schema.prisma\n"
+    "        brief    {source}                 — DATA MODEL step 1: interview the user about their domain\n"
+    "                                           and draft a requirements brief (## Entities with field\n"
+    "                                           tables + Relationships); on confirm it writes\n"
+    "                                           docs/kickoff/REQUIREMENTS.md (NO schema yet)\n"
+    "        schema   {}                       — DATA MODEL step 2: on confirm, derive + promote\n"
+    "                                           prisma/schema.prisma FROM the confirmed brief\n"
     "        manifest {source, source_label}  — an authoring-contract prose source (## Pages / ## Views /\n"
     "                                           …) → its assembly manifest(s)\n"
     "        capture  {value_path, value}     — one value-input field (conventions/build-prefs/…)\n"
-    "WORKFLOW: call `red_carpet_state` to find the next gap; START with the DATA MODEL (schema) — nothing\n"
-    "derives until it is confirmed. Interview the user, ground each proposal in the real state, propose\n"
-    "ONE input at a time, and re-check `red_carpet_state` after each confirm. When the cascade is\n"
-    "offerable, tell the user to run `startd8 generate backend`. You author placeholder structure only —\n"
+    "        instantiate {posture}            — scaffold the kickoff package (do this before the value\n"
+    "                                           inputs if `red_carpet_state` shows it is missing)\n"
+    "WORKFLOW: call `red_carpet_state` to find the next gap; START with the DATA MODEL — propose `brief`\n"
+    "first (the human confirms the requirements doc), THEN propose `schema` to promote the contract from\n"
+    "it (two deliberate gates). Nothing derives until the schema is confirmed. Interview the user, ground\n"
+    "each proposal in the real state, propose ONE input at a time, and re-check `red_carpet_state` after\n"
+    "each confirm. When the cascade is offerable, tell the user to run `startd8 generate backend`. You\n"
+    "author placeholder structure only —\n"
     "the user's real content is theirs. You NEVER write to disk; `propose_action` only records a\n"
     "recommendation the human confirms — never claim you created/saved/promoted anything yourself."
 )
@@ -158,7 +164,7 @@ _PROPOSE_SCHEMA = {
     "type": "object",
     "properties": {
         "kind": {"type": "string",
-                 "enum": ["instantiate", "friction", "capture", "schema", "manifest"]},
+                 "enum": ["instantiate", "friction", "capture", "schema", "manifest", "brief"]},
         "posture": {"type": "string"},
         "friction": {"type": "string"},
         "what_happened": {"type": "string"},

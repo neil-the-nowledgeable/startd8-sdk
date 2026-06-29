@@ -127,8 +127,9 @@ increment).
   `apply_proposal`). Web: a **"Build progress" stage rail on `/concierge/chat`** ✅ DELIVERED (OQ-4) —
   a read-only `/red-carpet.json` endpoint backs the staged map on the chat page (refreshed per turn),
   and `startd8 kickoff start --red-carpet` makes the served chat the stage-aware conductor.
-  Bootstrap-instantiate-if-absent — pending (the loop currently assumes/scaffolds the package via the
-  `instantiate` proposal kind).
+  Bootstrap-instantiate-if-absent ✅ DELIVERED — when the kickoff package is missing the `value_inputs`
+  stage detail tells the agent to scaffold it first (the `instantiate` proposal kind), surfaced in the
+  RCT prompt.
 
 ### B. Data model — the front human bookend
 
@@ -140,10 +141,11 @@ increment).
   `concierge/derive` is conversational — `derive` reverse-derives from existing Pydantic models, a
   **side door** for users who already have them.)* The agent originates the draft; the human owns the
   ratification. This is piece **N2**.
-  - **Acceptance (CRP R1-F4 — two ratification gates):** the **prose-brief confirm** and the
-    **`generate contract --promote`** are **distinct** human gates — confirming the brief writes **no**
-    `.prisma`; only the separate promote action does. *Verify:* filesystem has no `.prisma` after
-    brief-confirm; only promote writes it.
+  - **Acceptance (CRP R1-F4 — two ratification gates) ✅ DELIVERED (N2-inc2):** the **brief confirm**
+    (the `brief` proposal kind → writes `docs/kickoff/REQUIREMENTS.md`, NO `.prisma`) and the **schema
+    confirm** (the `schema` kind reads the on-disk brief → derives + promotes) are **distinct** human
+    gates. *Verify:* `test_red_carpet_two_step.py` — no `.prisma` after brief-confirm; only the schema
+    confirm writes it; a `schema` with no brief is rejected pointing at the brief step.
   - **Acceptance (CRP R1-F12 — no lossy promote) ✅ DELIVERED (N2):** the schema quality is bounded by
     `generate contract`'s prose grammar; RCT must **surface unparseable/ambiguous brief fragments back
     to the human** rather than promoting a degraded schema (honors P3). *(N2: the `schema` apply path
