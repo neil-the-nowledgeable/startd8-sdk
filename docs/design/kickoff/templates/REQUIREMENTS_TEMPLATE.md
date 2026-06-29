@@ -8,7 +8,7 @@
 
 **Project:** <name>   **Criticality:** <low|medium|high>   **Industry dataset:** <end_user_application | …>
 **Version:** <0.1.0>   **Date:** <YYYY-MM-DD>
-**Format:** requirements-and-plan-format v0.1 / authoring-contract grammar v0.1
+**Format:** requirements-and-plan-format v0.1 / authoring-contract grammar v0.3
 **Pairs with:** `<PLAN file>`
 
 ▷ §0 is the reflective-loop lineage record (human convention; extraction ignores it). Leave the
@@ -53,7 +53,8 @@ Declared profile: **<test|internal|standard|high-traffic>**
 ## Scaffold & runtime
 
 ▷ OPTIONAL — delete for prototypes (non-production defaults apply). When present, the scaffold
-▷ manifest derives from this table. Settings vocabulary: package name, display name,
+▷ manifest derives from this table. Settings vocabulary (non-normative snapshot of
+▷ KICKOFF_AUTHORING_CONTRACT.md §2.7 — the contract owns it): package name, display name,
 ▷ python version, port, database, sqlite mode, migrations, logging, container, env keys.
 ▷ Env-key defaults must agree with inputs/build-preferences.yaml.
 | Setting | Value | Plain meaning |
@@ -64,12 +65,15 @@ Declared profile: **<test|internal|standard|high-traffic>**
 
 ## Entities
 
-▷ One `###` block per kind of record. Plain types only: text, long text, number, decimal,
-▷ money (whole cents — exact sums), date, date+time, yes/no, choice of: a|b|c. Relationship
-▷ verbs only: has one, has many, belongs to, references (a loose id — no FK, e.g. a polymorphic
-▷ link), links X to Y / links to many. Mark human-only fields with ONLY HUMANS ENTER THIS; set a
-▷ default with `default: <value>` in the Notes cell. Don't list bookkeeping fields (ids,
-▷ timestamps, ownership) — every record gets them free.
+▷ One `###` block per kind of record. The type/verb vocabularies below are a non-normative
+▷ snapshot of KICKOFF_AUTHORING_CONTRACT.md §2.1 (the contract owns them). Plain types only:
+▷ text, long text, number, decimal, money (whole cents — exact sums), date, date+time, yes/no,
+▷ choice of: a|b|c — ONE field per row (a slash-row like `promptTokens / responseTokens` is
+▷ flagged, never split-parsed). Relationship verbs only: has one, has many, belongs to,
+▷ references (a loose id — no FK, e.g. a polymorphic link), links X to Y / links to many. Mark
+▷ human-only fields with ONLY HUMANS ENTER THIS; set a default with `default: <value>` in the
+▷ Notes cell. Don't list bookkeeping fields (ids, timestamps, ownership) — every record gets
+▷ them free.
 ▷ Cross-cutting modeling choices (money cents-vs-float, date/timezone, recurrence representation,
 ▷ FK-vs-references, computed fields, deferrals) are declared ONCE in
 ▷ `inputs/conventions.yaml` `data_model:` — not repeated per entity. See KICKOFF_AUTHORING_CONTRACT.md §2.1.
@@ -98,10 +102,13 @@ Navigation:
 
 ## Views
 
-▷ One block per composite screen. Kind is one of five patterns:
-▷ detail-compose (one connected picture from several record types) · dashboard (counts/summaries)
-▷ · board (status columns) · workspace (everything about one record) · export-package
-▷ (downloadable bundle of a workspace).
+▷ One block per composite screen. Kind is one of five patterns (non-normative snapshot of
+▷ KICKOFF_AUTHORING_CONTRACT.md §2.3 — the contract owns the archetypes, required keys, and
+▷ route derivation): detail-compose (one connected picture from several record types) ·
+▷ dashboard (counts/summaries) · board (status columns) · workspace (everything about one
+▷ record) · export-package (downloadable bundle of a workspace). A `board` additionally
+▷ REQUIRES a `Group by:` line (a Root-entity field — the column discriminator; optional
+▷ `Order:` lists the allowed column values).
 ▷ ALTERNATIVE front door: instead of authoring views inline here, a project may keep a focused
 ▷ single-manifest prose source at `docs/kickoff/authoring/views.md` (copy
 ▷ `templates/authoring/views.md`) — same §2.3 grammar, validated standalone with
@@ -110,6 +117,7 @@ Navigation:
 ### View: <Name>
 - Kind: <dashboard | board | workspace | detail-compose | export-package | import-flow | computed-panel>
 - Root: <EntityName>   *(omit for import-flow / computed-panel — they carry no entity)*
+- Group by: <Root-entity field>   *(REQUIRED for board only — the column discriminator; optional `Order:` allow-lists the column values)*
 - Shows: <Entity→Entity connections / fields to surface>
 ▷ computed-panel binds a registered compute function (e.g. the completeness score):
 - Compute: <binding>   *(computed-panel only; e.g. completeness)*
@@ -131,7 +139,10 @@ Navigation:
 
 ## Completeness
 
-▷ Controlled sentences only: "at least <N> <Entity>" with optional "(weight W)" and a nudge.
+▷ Controlled sentences only (non-normative snapshot of KICKOFF_AUTHORING_CONTRACT.md §2.4 — the
+▷ contract owns the grammar): "<Record> is complete when it has:" then "at least <N> <Entity>"
+▷ lines with optional "(weight W)" and an optional ` — nudge: "…"` suffix (the nudge has no SDK
+▷ home yet — it's tolerated and flagged, never silently dropped).
 ▷ Optional for prototypes — if "complete" has no business meaning yet, delete this section; a
 ▷ simple "has at least one of each main record" rule applies by default.
 <A record> is complete when it has:

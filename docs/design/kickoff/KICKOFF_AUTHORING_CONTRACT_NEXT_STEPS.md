@@ -50,16 +50,21 @@ F. strtd8 follow-ups                 — pilot-adjacent contract items      [tea
 3. **Tests**: the 13-case ambiguity corpus (plan v1.1) + the spike's F1–F6 cases; the spike's
    `spike.py` is the test-case source — *supersede, don't reuse*.
 
-### B — Teaching-surface alignment (contract §5 ownership — NOT yet done; do early, it's pure drift risk)
+### B — Teaching-surface alignment (contract §5 ownership — ✅ DONE 2026-06-29)
 
-4. Snapshot-mark every vocabulary list in the three teaching surfaces so they cite contract
-   §-refs as non-normative quotations: `templates/REQUIREMENTS_TEMPLATE.md` (types `:57`,
-   verbs `:58`, completeness-nudge guidance), `templates/HOW_TO_AUTHOR_REQUIREMENTS_AND_PLANS.md`
-   §3 vocabulary table, `templates/REQUIREMENTS_AND_PLAN_FORMAT.md`. The CRP resolved the three
-   drifts *into* the contract; the templates still present their lists as if self-owned.
-5. While there: reflect the v0.2 grammar additions authors should know (one-field-per-row;
-   `links to many` now official; board's required `Group by:`; the optional view `Route:`
-   override) — as §-cited snapshots, not restatements.
+4. ✅ Snapshot-marked every vocabulary list in the three teaching surfaces so they cite contract
+   §-refs as non-normative quotations: `templates/REQUIREMENTS_TEMPLATE.md` (Entities §2.1,
+   Scaffold §2.7, Views §2.3, Completeness §2.4 guidance lines now carry "non-normative snapshot
+   of …§X — the contract owns it"), `templates/HOW_TO_AUTHOR_REQUIREMENTS_AND_PLANS.md` §3 (added
+   a normative-owner header + a per-row `Contract` §-ref column), `templates/REQUIREMENTS_AND_PLAN_FORMAT.md`
+   (added an explicit §5 vocabulary-ownership note; per-section `contract §2.x` callouts were
+   already present). "Contract wins on disagreement" stated in all three.
+5. ✅ Reflected the grammar additions authors should know **as §-cited snapshots, not restatements**:
+   one-field-per-row (§2.1) and board's required `Group by:` + optional `Order:` (§2.3) were the two
+   genuinely missing — added to the template guidance, the view-block scaffold (`- Group by:` line),
+   and the how-to §3 table. `links to many`, `references`, `default:`, `money`, and the optional view
+   `Route:` override were already present in the templates from prior VIP/DMC syncs. Bumped the
+   template header's `authoring-contract grammar v0.1` → `v0.3` (it teaches v0.3 constructs now).
 
 ### C — Lint mode (contract OQ-2; natural follow-on after P2)
 
@@ -96,15 +101,15 @@ F. strtd8 follow-ups                 — pilot-adjacent contract items      [tea
 
 ## 3. Sequencing
 
-**Now:** A1–A3 (the build — gate green, spike de-risked) **and** B4–B5 in parallel (30-minute
-edits, pure drift protection). **After P2:** C6. **Independent, schedule by appetite:** D7–D9.
-**Event-driven:** E10 (corpus ships), F11–F12 (StartDate team cadence, pre-P2-derivation).
+**Done:** A1–A3 (the build) **and** B4–B5 (teaching-surface alignment, 2026-06-29). **After P2:**
+C6. **Independent, schedule by appetite:** D7–D9. **Event-driven:** E10 (corpus ships), F11–F12
+(StartDate team cadence, pre-P2-derivation).
 
-| Step | Effort | Blocked by |
-|------|--------|-----------|
-| A1–A3 build | the main work | nothing — gate satisfied |
-| B4–B5 templates | trivial | nothing |
-| C6 lint | small | P2 |
-| D7–D9 generator gaps | small–medium each | nothing (independent) |
-| E10 versioning | trivial | corpus |
-| F11–F12 strtd8 | team | pre-P2-derivation only |
+| Step | Effort | Blocked by | Status |
+|------|--------|-----------|--------|
+| A1–A3 build | the main work | nothing — gate satisfied | ✅ done |
+| B4–B5 templates | trivial | nothing | ✅ done (2026-06-29) |
+| C6 lint | small | P2 | open |
+| D7–D9 generator gaps | small–medium each | nothing (independent) | open |
+| E10 versioning | trivial | corpus | open |
+| F11–F12 strtd8 | team | pre-P2-derivation only | open |
