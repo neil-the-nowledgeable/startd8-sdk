@@ -44,8 +44,30 @@ pages:
 
 
 def _purge_app_modules():
+    """Full reset between this file's app-building functions: modules + SQLModel's process-global
+    registry. The module-scoped conftest fixture only isolates *across* files; this file builds an app
+    per function (same Widget/Gadget schema), so it must also clear the registry *between* functions or
+    the second import hits 'Table already defined'."""
     for m in [m for m in sys.modules if m == "app" or m.startswith("app.")]:
         del sys.modules[m]
+    try:
+        from sqlalchemy.orm import clear_mappers
+        from sqlmodel import SQLModel
+    except Exception:
+        return
+    reg = getattr(SQLModel, "_sa_registry", None)
+    cls_reg = getattr(reg, "_class_registry", None)
+    if cls_reg is None:
+        return
+    if any(
+        isinstance(getattr(cls_reg.get(k), "__module__", ""), str)
+        and getattr(cls_reg.get(k), "__module__", "").startswith("app")
+        for k in list(cls_reg)
+    ):
+        clear_mappers()
+        SQLModel.metadata.clear()
+        for k in [k for k in list(cls_reg) if not k.startswith("_")]:
+            del cls_reg[k]
 
 
 def test_nav_default_visible_then_config_hides_across_restart(tmp_path, monkeypatch):
@@ -85,5 +107,34 @@ def test_nav_default_visible_then_config_hides_across_restart(tmp_path, monkeypa
         assert 'href="/ui/widget"' in html2  # still visible
         assert 'href="/ui/gadget"' not in html2  # hidden by config at startup (FR-7)
         assert 'href="/"' in html2  # the content page is unaffected
+    finally:
+        _purge_app_modules()
+
+
+def test_home_index_serves_at_root_and_lists_app(tmp_path, monkeypatch):
+    """FR-28: with no content page owning `/`, the generated index serves `/` and lists the registry,
+    respecting the visibility config (a hidden entity is absent from the index too)."""
+    for rel, content in render_backend(SCHEMA):  # no pages → index claims `/`
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    assert (tmp_path / "app/index.py").exists() and (tmp_path / "app/templates/index.html").exists()
+    (tmp_path / "nav.config.json").write_text('{"hidden": ["entity:Gadget"]}', encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'app.db'}")
+    sys.path.insert(0, str(tmp_path))
+    _purge_app_modules()
+    try:
+        main = importlib.import_module("app.main")
+        from fastapi.testclient import TestClient
+
+        with TestClient(main.app) as c:
+            r = c.get("/")
+        assert r.status_code == 200, r.text
+        assert "What" in r.text and "this app" in r.text  # the index heading (FR-28c)
+        assert 'href="/ui/widget"' in r.text  # lists the entity surface
+        assert 'href="/ui/gadget"' not in r.text  # hidden by nav.config.json (FR-28b visibility)
+        assert "<h2" in r.text  # grouped section heading
     finally:
         _purge_app_modules()

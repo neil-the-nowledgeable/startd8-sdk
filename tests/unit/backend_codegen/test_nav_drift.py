@@ -12,7 +12,12 @@ from pathlib import Path
 import pytest
 
 from startd8.backend_codegen.drift import check_drift, owned_file_in_sync
-from startd8.backend_codegen.nav_generator import nav_registry, render_nav_partial
+from startd8.backend_codegen.nav_generator import (
+    nav_registry,
+    render_index_page,
+    render_index_router,
+    render_nav_partial,
+)
 
 FIX = Path(__file__).resolve().parents[2] / "fixtures" / "wireframe" / "prisma"
 SCHEMA = (FIX / "schema.prisma").read_text()
@@ -80,3 +85,33 @@ def test_unthreaded_manifests_fall_through_safely():
     rendered = render_nav_partial(SCHEMA, VIEWS, PAGES)
     # pages_text omitted → pages-sha can't be recomputed → not recognized as in_sync
     assert owned_file_in_sync(SCHEMA, rendered, views_text=VIEWS) is False
+
+
+# --- FR-28: home/index page (a 3-input owned kind in the nav family) -----------------------------
+
+def test_index_page_template_lists_groups_accessibly():
+    """The index template is data-driven over app.state.nav, grouped, with accessible headings."""
+    page = render_index_page(SCHEMA, VIEWS, None)
+    assert "{% extends \"base.html\" %}" in page
+    assert "<h1" in page  # single top heading (FR-28c)
+    assert "selectattr('group', 'equalto', group)" in page  # grouped by page/entity/view (FR-28b)
+    assert 'aria-labelledby="idx-{{ group }}"' in page  # accessible sections
+    assert "request.app.state.nav" in page  # single source of truth (FR-19/28b)
+
+
+def test_index_router_serves_root():
+    router = render_index_router(SCHEMA, VIEWS, None)
+    assert '@index_router.get("/", response_class=HTMLResponse)' in router
+    assert 'TemplateResponse(request, "index.html"' in router
+
+
+def test_index_artifacts_drift_roundtrip():
+    """Both index kinds round-trip through the real drift + skip-hook (3-input, like the rest of nav)."""
+    page = render_index_page(SCHEMA, VIEWS, None)
+    router = render_index_router(SCHEMA, VIEWS, None)
+    for text in (page, router):
+        assert check_drift(SCHEMA, text, forms_text=VIEWS, pages_text=None).status == "in_sync"
+        assert owned_file_in_sync(SCHEMA, text, views_text=VIEWS, pages_text=None) is True
+    # any input change → stale (3-input), same as the rest of the family
+    mutated = SCHEMA + "\nmodel Extra { id String @id }\n"
+    assert check_drift(mutated, page, forms_text=VIEWS, pages_text=None).status == "stale"

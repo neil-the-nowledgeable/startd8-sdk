@@ -24,12 +24,15 @@ from typing import Dict, List, Optional, Tuple
 from ..frontend_codegen.schema_renderer import schema_sha256
 from ._headers import header_nav, header_nav_tmpl
 
-NAV_KINDS = ("nav-registry", "nav-partial")
+NAV_KINDS = ("nav-registry", "nav-partial", "nav-index-router", "nav-index-page")
 
 # Owned output paths → artifact kind (mirrors pages_layout / the CANONICAL_LAYOUT precedent).
+# The index pair is conditional (emitted only when no content page owns ``/`` — see render_nav).
 NAV_LAYOUT: Dict[str, str] = {
     "app/nav.py": "nav-registry",
     "app/templates/_nav.html": "nav-partial",
+    "app/index.py": "nav-index-router",
+    "app/templates/index.html": "nav-index-page",
 }
 
 
@@ -213,14 +216,118 @@ def visible_nav(hidden: FrozenSet[str] | None = None) -> List[Dict[str, str]]:
     return head + "\n\n" + body
 
 
+def pages_owns_root(pages_text: Optional[str]) -> bool:
+    """True if a content page already claims ``/`` — then the index must not (FR-28a)."""
+    if not pages_text:
+        return False
+    from .pages_generator import parse_pages
+
+    return any(p.slug == "/" for p in parse_pages(pages_text)[0])
+
+
+_GROUP_LABELS = {"page": "Pages", "entity": "Records", "view": "Views"}
+
+
+def render_index_page(
+    schema_text: str,
+    views_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    source_file: str = "prisma/schema.prisma",
+) -> str:
+    """``app/templates/index.html`` (kind ``nav-index-page``) — the generated home/index (FR-28).
+
+    Data-driven over the same registry as the nav (``request.app.state.nav`` = ``visible_nav()``), so it
+    reflects the runtime visibility config (FR-6) and reuses the single source of truth (FR-19). Extends
+    ``base.html`` (so it also carries the top nav). Accessible: one ``<h1>``, a ``<section>``/``<h2>``
+    per non-empty group, a list of links (FR-28c). Labels/hrefs via ``{{ }}`` → Jinja auto-escapes.
+    """
+    head = header_nav_tmpl(
+        source_file,
+        schema_sha256(schema_text),
+        schema_sha256(views_text or ""),
+        schema_sha256(pages_text or ""),
+        "nav-index-page",
+    )
+    groups_map = ", ".join(f"'{g}': '{label}'" for g, label in _GROUP_LABELS.items())
+    body = (
+        '{% extends "base.html" %}\n'
+        "{% block title %}Home{% endblock %}\n"
+        "{% block content %}\n"
+        "{% set _nav = request.app.state.nav if request and request.app.state.nav is defined else [] %}\n"
+        "{% set _labels = {" + groups_map + "} %}\n"
+        '<h1 style="font-family:system-ui,-apple-system,sans-serif">What’s in this app</h1>\n'
+        "{%- for group in ['page', 'entity', 'view'] %}\n"
+        "{%- set _items = _nav | selectattr('group', 'equalto', group) | list %}\n"
+        "{%- if _items %}\n"
+        '  <section aria-labelledby="idx-{{ group }}" style="margin:1.25rem 0">\n'
+        '    <h2 id="idx-{{ group }}" style="font-family:system-ui,-apple-system,sans-serif">'
+        "{{ _labels[group] }}</h2>\n"
+        "    <ul>\n"
+        "{%- for item in _items %}\n"
+        '      <li><a href="{{ item.href }}" style="color:#0a7d4b">{{ item.label }}</a></li>\n'
+        "{%- endfor %}\n"
+        "    </ul>\n"
+        "  </section>\n"
+        "{%- endif %}\n"
+        "{%- endfor %}\n"
+        "{% endblock %}\n"
+    )
+    return head + "\n" + body
+
+
+def render_index_router(
+    schema_text: str,
+    views_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    source_file: str = "prisma/schema.prisma",
+) -> str:
+    """``app/index.py`` (kind ``nav-index-router``) — serves the home/index at ``/`` (FR-28a).
+
+    The route is fixed at ``/``; the assembler only emits this when no content page owns ``/`` (and
+    ``main.py`` mounts it after ``pages_router`` as a belt-and-suspenders shadow guard)."""
+    head = header_nav(
+        source_file,
+        schema_sha256(schema_text),
+        schema_sha256(views_text or ""),
+        schema_sha256(pages_text or ""),
+        "nav-index-router",
+    )
+    body = (
+        "from __future__ import annotations\n\n"
+        "from pathlib import Path\n\n"
+        "from fastapi import APIRouter, Request\n"
+        "from fastapi.responses import HTMLResponse\n"
+        "from fastapi.templating import Jinja2Templates\n\n"
+        'templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))\n'
+        "index_router = APIRouter()\n\n\n"
+        '@index_router.get("/", response_class=HTMLResponse)\n'
+        "def index(request: Request):\n"
+        '    """The generated home/index — lists what is in this app (FR-28)."""\n'
+        '    return templates.TemplateResponse(request, "index.html", {})\n\n\n'
+        '__all__ = ["index_router"]\n'
+    )
+    return head + "\n\n" + body
+
+
 def render_nav(
     schema_text: str,
     views_text: Optional[str] = None,
     pages_text: Optional[str] = None,
     source_file: str = "prisma/schema.prisma",
 ) -> List[Tuple[str, str]]:
-    """Both nav artifacts as ``(path, text)`` pairs — what the assembler emits (always-on, FR-13)."""
-    return [
+    """The nav artifacts as ``(path, text)`` pairs — what the assembler emits (always-on, FR-13).
+
+    Always: the registry module + the nav partial. The home/index (FR-28) is added **only when no
+    content page claims** ``/`` (an authored home wins) — the assembler is pages-aware via
+    :func:`pages_owns_root`.
+    """
+    out: List[Tuple[str, str]] = [
         ("app/nav.py", render_nav_module(schema_text, views_text, pages_text, source_file)),
         ("app/templates/_nav.html", render_nav_partial(schema_text, views_text, pages_text, source_file)),
     ]
+    if not pages_owns_root(pages_text):
+        out.append(("app/index.py", render_index_router(schema_text, views_text, pages_text, source_file)))
+        out.append(
+            ("app/templates/index.html", render_index_page(schema_text, views_text, pages_text, source_file))
+        )
+    return out

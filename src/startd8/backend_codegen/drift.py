@@ -97,7 +97,9 @@ _SETTINGS_KINDS: frozenset = frozenset({"python-settings"})
 # The always-on default nav derives from THREE inputs (schema + views.yaml + pages.yaml), reusing the
 # existing forms-sha256 (views) + pages-sha256 (pages) header lines — no new regex. ``owned_file_in_sync``
 # already threads both manifests, so the skip-hook recognizes these with no new plumbing.
-_NAV_KINDS: frozenset = frozenset({"nav-registry", "nav-partial"})
+_NAV_KINDS: frozenset = frozenset(
+    {"nav-registry", "nav-partial", "nav-index-router", "nav-index-page"}
+)
 
 _IMPORTS_KINDS: frozenset = frozenset({"python-import", "python-import-surface"})
 _CONTEXT_CLIENT_KINDS: frozenset = frozenset({"python-context-client"})
@@ -702,9 +704,15 @@ def _check_nav_drift(
 ) -> DriftResult:
     """Drift for an always-on nav artifact — stale if schema/views/pages changed; else byte re-render.
 
-    Both nav kinds derive from the same three inputs; the kind selects the renderer (``nav-registry`` →
-    ``app/nav.py``; ``nav-partial`` → ``app/templates/_nav.html``)."""
-    from .nav_generator import render_nav_module, render_nav_partial
+    All nav kinds derive from the same three inputs; the kind selects the renderer (``nav-registry`` →
+    ``app/nav.py``; ``nav-partial`` → ``_nav.html``; ``nav-index-router`` → ``app/index.py``;
+    ``nav-index-page`` → ``index.html``)."""
+    from .nav_generator import (
+        render_index_page,
+        render_index_router,
+        render_nav_module,
+        render_nav_partial,
+    )
 
     reason = nav_stale_reason(
         ondisk_text,
@@ -715,7 +723,12 @@ def _check_nav_drift(
     if reason is not None:
         status = "tampered" if "missing" in reason else "stale"
         return DriftResult(status, DRIFT, reason)
-    builder = render_nav_module if kind == "nav-registry" else render_nav_partial
+    builder = {
+        "nav-registry": render_nav_module,
+        "nav-partial": render_nav_partial,
+        "nav-index-router": render_index_router,
+        "nav-index-page": render_index_page,
+    }[kind]
     rendered = builder(schema_text, views_text, pages_text, source_file)
     if rendered != ondisk_text:
         return DriftResult(

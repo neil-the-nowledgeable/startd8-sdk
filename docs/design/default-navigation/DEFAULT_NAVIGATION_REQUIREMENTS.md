@@ -254,6 +254,23 @@ implemented now; M items (FR-26/27) are specced but deferred.
 - **FR-23 — Key-gated tests skip cleanly (XS, cross-cutting).** Tests needing `ANTHROPIC_API_KEY`
   shall **skip** with a reason when it is absent, not fail.
 
+### Home / index page (FR-28 — built)
+- **FR-28 — Generated home/index page.** The SDK shall generate a landing page that lists "what's in
+  this app" — the same registry the nav uses, grouped (Pages / Records / Views), as a browsable index.
+  - **FR-28a — Route, conflict-safe.** It serves `/` and is emitted **only when no content page
+    already claims `/`** (an authored home always wins). `main.py` mounts it **after** `pages_router`,
+    so even an orphaned index (a `/` page added after generation) is shadowed by the authored page.
+  - **FR-28b — Data-driven + visibility-aware.** It iterates `request.app.state.nav` (=`visible_nav()`),
+    so it reflects the FR-6 config (a hidden item is absent from the index too) and reuses the single
+    registry source of truth (FR-19). It `extends base.html` (so it also carries the top nav).
+  - **FR-28c — Accessible.** A single `<h1>`, a `<section>`/`<h2>` per non-empty group, and a list of
+    links — semantic and screen-reader navigable.
+  - **FR-28d — Default-on, gated with the nav.** Emitted by default; suppressed by `--no-nav` (the
+    index has nothing to list without the registry). Owned deterministic kinds
+    (`nav-index-router` + `nav-index-page`), drift-tracked like the rest of the nav family.
+  - *Deferred:* an always-present `/_index` sitemap (for apps that author their own `/`); per-entity
+    record counts on the index (needs runtime queries).
+
 ### Deferred (M — specced, not built now)
 - **FR-26 — Entity nav-label override (M).** Override an entity's derived label (`Invoice`→"Invoices")
   via app.yaml / a nav manifest, instead of only the titleized class name.
