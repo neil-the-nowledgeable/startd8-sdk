@@ -56,6 +56,18 @@ _CHAT_STOP_CODE = {
 }
 
 
+def _chat_cost_block(chat, result) -> dict:
+    """The stable structured `cost` on a /chat response (FR-WM2-9 / R3-F7) — one machine contract the
+    inline panel client consumes, plus a human-readable `line`. Never carries the user message."""
+    return {
+        "turns": getattr(result, "turns", None),
+        "tokens": getattr(result, "total_tokens", None),
+        "usd": getattr(result, "total_cost_usd", None),
+        "stop_reason": getattr(result, "stop_reason", None),
+        "line": chat.cost_line(result),
+    }
+
+
 def app_fingerprint(config: KickoffExperienceConfig, *, theme: str = "professional") -> str:
     """Freshness fingerprint (R5-S1): config + renderer version + theme.
 
@@ -901,7 +913,7 @@ def build_kickoff_app(
             from .telemetry import EV_CHAT_REFUSED
             emit(EV_CHAT_REFUSED, code=stop_code, stop_reason=result.stop_reason)
             return JSONResponse({"ok": False, "code": stop_code, "text": result.text,
-                                 "cost": chat.cost_line(result)},
+                                 "cost": _chat_cost_block(chat, result)},
                                 status_code=200, headers=dict(_FRAME_DENY_HEADERS))
         proposals = [{"id": a.id, "kind": a.kind, "summary": a.summary()}
                      for a in chat.buffer.pending()]
@@ -909,7 +921,7 @@ def build_kickoff_app(
              tokens=getattr(result, "total_tokens", None),
              cost_usd=getattr(result, "total_cost_usd", None),
              stop_reason=result.stop_reason)
-        return JSONResponse({"ok": True, "text": result.text, "cost": chat.cost_line(result),
+        return JSONResponse({"ok": True, "text": result.text, "cost": _chat_cost_block(chat, result),
                              "proposals": proposals}, headers=dict(_FRAME_DENY_HEADERS))
 
     @app.post("/concierge/chat/pending")

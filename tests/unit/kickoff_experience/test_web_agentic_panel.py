@@ -112,6 +112,11 @@ def test_message_turn_returns_text_and_proposals(tmp_path: Path) -> None:
     body = r.json()
     assert body["text"] == "echo: what's missing?"
     assert len(body["proposals"]) == 1 and body["proposals"][0]["kind"] == "friction"
+    # FR-WM2-9 / R3-F7: cost is a stable structured block, not a bare string.
+    cost = body["cost"]
+    assert isinstance(cost, dict)
+    assert set(cost) == {"turns", "tokens", "usd", "stop_reason", "line"}
+    assert cost["stop_reason"] == "completed" and isinstance(cost["tokens"], int)
 
 
 def test_confirm_applies_proposal_and_pops(tmp_path: Path) -> None:

@@ -222,7 +222,7 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
   (turns/tokens/cost/`stop_reason`, **no** message text) + the refusal events (`chat_rate_limited`,
   `chat_budget_exceeded`, `chat_session_expired`, `chat_busy`, `message_too_long`,
   `chat_provider_timeout`, `preview_only`), registered in `telemetry.py` with the attr allowlist.
-- **Stable `/chat` JSON schema** *(R3-F7/R3-S7)*: as these land, settle the response on
+- **Stable `/chat` JSON schema** ✅ **DELIVERED 2026-06-29** *(R3-F7/R3-S7)*: as these land, settle the response on
   `{ok, text?, cost?: {turns, tokens, usd, stop_reason?}, proposals?, code?, message?}` — #62 currently
   returns `cost` as a *string*, so the panel client needs one contract.
 - **[Phase 2]** New-conversation reset *(R4-F6/R4-S6)* + OTel span nesting *(R3-S8)* — unchanged (§F).
