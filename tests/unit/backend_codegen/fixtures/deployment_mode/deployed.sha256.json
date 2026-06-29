@@ -22,11 +22,11 @@
   "app/templates/profile/list.html": "eecde886d40906d01287d66331a82174f7e99c77959c01a59999c742cf352696",
   "app/web.py": "d2028dc334eb688acae23b01c9ab7931a55a1411e047ac8fa01624d8362be7f9",
   "clients/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "clients/http_client.py": "bb9ba16db130610f558c01fc1387c3fd0791c061e3a8a22dcbc9d58bb4fa9c32",
+  "clients/http_client.py": "ce5091a71b4acf91ec7c7186034e1637af2f6a2d9947d08a82539d9e157a6398",
   "requirements.txt": "034ddfce118cddded1e604d0675d8d86f73da764510379d4f0c0388c61081cde",
   "tests/test_completeness.py": "2fc46002881bcc10f6958fecdf07c67175ad099104aef21837c09d20d4a24f8a",
   "tests/test_contract.py": "65fed3b62c5b72dcbae075447d683fdaf21c28781d69a6451d6349d7a787b138",
   "tests/test_health.py": "fd69fe2b6497e7e9f8fe156105099d413319af029166561993de2c1a1691e247",
-  "tests/test_openapi_contract.py": "30c531a93e24df066bb462690c9a083b72f471ca1c3ea190c5ac0c0654dbfda0",
+  "tests/test_openapi_contract.py": "bc4994c12310983aa2dfb68d2ec9e862038dfc4e113432484c945ba79950a517",
   "tests/test_route_smoke.py": "f27276f645d753ec68c0bac30e62989d18706c4751a70cb3a3d6579ef0f7f475"
 }
