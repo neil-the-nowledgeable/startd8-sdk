@@ -124,7 +124,9 @@ increment).
 - **FR-RCT-3 — Discoverable entry** *(CLI ✅ DELIVERED — agentic interview loop)*. CLI:
   `startd8 kickoff red-carpet` (read-only staged status) and `--agent <spec>` (the conversational
   interview loop — stage-aware chat that proposes each input; the human confirms every write via
-  `apply_proposal`). Web: a "Build my app" stage-rail entry on `/concierge/chat` (OQ-4) — **pending**.
+  `apply_proposal`). Web: a **"Build progress" stage rail on `/concierge/chat`** ✅ DELIVERED (OQ-4) —
+  a read-only `/red-carpet.json` endpoint backs the staged map on the chat page (refreshed per turn),
+  and `startd8 kickoff start --red-carpet` makes the served chat the stage-aware conductor.
   Bootstrap-instantiate-if-absent — pending (the loop currently assumes/scaffolds the package via the
   `instantiate` proposal kind).
 
