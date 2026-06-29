@@ -31,8 +31,9 @@ def test_registry_aggregates_all_three_surface_classes():
     assert {"page:/", "page:/about"} <= keys
     assert {"entity:Profile", "entity:Metric", "entity:Note"} <= keys
     assert "view:/views/profiles" in keys
+    assert "index" in keys  # the sitemap is itself a nav entry (FR-28e)
     groups = {e.group for e in nav_registry(SCHEMA, VIEWS, PAGES)}
-    assert groups == {"page", "entity", "view"}
+    assert groups == {"page", "entity", "view", "index"}
 
 
 def test_render_is_deterministic_byte_identical():
@@ -99,10 +100,23 @@ def test_index_page_template_lists_groups_accessibly():
     assert "request.app.state.nav" in page  # single source of truth (FR-19/28b)
 
 
-def test_index_router_serves_root():
-    router = render_index_router(SCHEMA, VIEWS, None)
-    assert '@index_router.get("/", response_class=HTMLResponse)' in router
-    assert 'TemplateResponse(request, "index.html"' in router
+def test_index_router_routes_depend_on_root_page():
+    from startd8.backend_codegen.nav_generator import index_route
+
+    page_root = "pages:\n  - slug: /\n    title: Home\n    content: pages/home.md\n"
+    page_other = "pages:\n  - slug: /about\n    title: About\n    content: pages/about.md\n"
+
+    # No content page owns `/` → index serves BOTH `/_index` (stable) and `/` (home).
+    free = render_index_router(SCHEMA, VIEWS, page_other)
+    assert '@index_router.get("/_index"' in free
+    assert '@index_router.get("/", response_class=HTMLResponse)' in free
+    assert index_route(page_other) == "/"
+
+    # A content page owns `/` → index serves ONLY `/_index` (sitemap); `/` is left to the page.
+    taken = render_index_router(SCHEMA, VIEWS, page_root)
+    assert '@index_router.get("/_index"' in taken
+    assert '@index_router.get("/", response_class=HTMLResponse)' not in taken
+    assert index_route(page_root) == "/_index"
 
 
 def test_index_artifacts_drift_roundtrip():

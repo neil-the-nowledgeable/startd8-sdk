@@ -257,9 +257,14 @@ implemented now; M items (FR-26/27) are specced but deferred.
 ### Home / index page (FR-28 — built)
 - **FR-28 — Generated home/index page.** The SDK shall generate a landing page that lists "what's in
   this app" — the same registry the nav uses, grouped (Pages / Records / Views), as a browsable index.
-  - **FR-28a — Route, conflict-safe.** It serves `/` and is emitted **only when no content page
-    already claims `/`** (an authored home always wins). `main.py` mounts it **after** `pages_router`,
-    so even an orphaned index (a `/` page added after generation) is shadowed by the authored page.
+  - **FR-28a — Route, conflict-safe + always reachable (updated for FR-28e).** The index is **always
+    emitted** (when nav is on) and **always reachable at the stable `/_index`** sitemap route. It
+    **additionally** serves `/` **only when no content page claims `/`** (an authored home wins).
+    `main.py` mounts it **after** `pages_router` as a shadow guard. So an app with its own home page
+    still gets the index at `/_index`; an app without one gets it at `/` (and `/_index`).
+  - **FR-28e — Discoverable via the nav.** The index is itself a nav entry (`key: "index"`, label
+    "Index", href = its route), so the top nav always links it. It does **not** list itself on the
+    index page (the page lists only page/entity/view groups).
   - **FR-28b — Data-driven + visibility-aware.** It iterates `request.app.state.nav` (=`visible_nav()`),
     so it reflects the FR-6 config (a hidden item is absent from the index too) and reuses the single
     registry source of truth (FR-19). It `extends base.html` (so it also carries the top nav).
@@ -268,8 +273,7 @@ implemented now; M items (FR-26/27) are specced but deferred.
   - **FR-28d — Default-on, gated with the nav.** Emitted by default; suppressed by `--no-nav` (the
     index has nothing to list without the registry). Owned deterministic kinds
     (`nav-index-router` + `nav-index-page`), drift-tracked like the rest of the nav family.
-  - *Deferred:* an always-present `/_index` sitemap (for apps that author their own `/`); per-entity
-    record counts on the index (needs runtime queries).
+  - *Deferred:* per-entity record counts on the index (needs runtime queries).
 
 ### Deferred (M — specced, not built now)
 - **FR-26 — Entity nav-label override (M).** Override an entity's derived label (`Invoice`→"Invoices")

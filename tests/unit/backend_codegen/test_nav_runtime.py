@@ -90,15 +90,23 @@ def test_nav_default_visible_then_config_hides_across_restart(tmp_path, monkeypa
         #    extends base.html, so it renders the _nav.html partial.
         with TestClient(main.app) as c:
             html = c.get("/ui/widget").text
+            # This app authors `/` (Home page), so the index lives at the stable /_index sitemap and
+            # the nav links it (FR-28a/28e); `/` itself stays the content page.
+            sitemap = c.get("/_index")
+            root = c.get("/")
         assert 'href="/ui/widget"' in html
         assert 'href="/ui/gadget"' in html
         assert 'href="/"' in html  # the Home content page
+        assert 'href="/_index"' in html  # the nav links the sitemap (FR-28e)
         # FR-16 a11y: labelled landmark + the active item (current path) marked aria-current.
         assert '<nav aria-label="Primary"' in html
         assert 'href="/ui/widget" aria-current="page"' in html  # active on its own list route
         assert 'href="/ui/gadget" aria-current="page"' not in html  # a non-current item is not
         # FR-18 grouping: a separator is emitted at the page→entity boundary.
         assert 'aria-hidden="true"' in html
+        # FR-28a: the sitemap is reachable at /_index and lists the app; `/` is the authored home.
+        assert sitemap.status_code == 200 and 'href="/ui/widget"' in sitemap.text
+        assert root.status_code == 200 and "this app" not in root.text  # `/` is the content page
 
         # 2) Operator hides the Gadget entity, then "restarts" (a new lifespan re-reads the config).
         (tmp_path / "nav.config.json").write_text('{"hidden": ["entity:Gadget"]}', encoding="utf-8")

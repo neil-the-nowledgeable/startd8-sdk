@@ -92,7 +92,17 @@ def nav_registry(
         for v in parse_views(views_text, known_entities=frozenset(schema.models)):
             entries.append(NavEntry(key=f"view:{v.route}", label=v.name, href=v.route, group="view"))
 
+    # The generated home/index is itself a navigable surface (FR-28e), so it appears in the nav bar.
+    # Its own ``group`` is "index", which the index page deliberately does not list (it lists only
+    # page/entity/view) — so the sitemap never lists itself.
+    entries.append(NavEntry(key="index", label="Index", href=index_route(pages_text), group="index"))
+
     return tuple(entries)
+
+
+def index_route(pages_text: Optional[str]) -> str:
+    """The index's primary route: ``/`` when free, else the stable ``/_index`` sitemap (FR-28a)."""
+    return "/_index" if pages_owns_root(pages_text) else "/"
 
 
 def _has_views_section(views_text: str) -> bool:
@@ -283,14 +293,25 @@ def render_index_router(
 ) -> str:
     """``app/index.py`` (kind ``nav-index-router``) — serves the home/index at ``/`` (FR-28a).
 
-    The route is fixed at ``/``; the assembler only emits this when no content page owns ``/`` (and
-    ``main.py`` mounts it after ``pages_router`` as a belt-and-suspenders shadow guard)."""
+    Always serves the stable ``/_index`` sitemap; **additionally** serves ``/`` when no content page
+    owns it (FR-28a). ``main.py`` mounts it after ``pages_router`` as a belt-and-suspenders shadow
+    guard. The on-disk bytes therefore depend on ``pages.yaml`` (whether ``/`` is claimed) — covered by
+    the 3-sha header's ``pages-sha``."""
     head = header_nav(
         source_file,
         schema_sha256(schema_text),
         schema_sha256(views_text or ""),
         schema_sha256(pages_text or ""),
         "nav-index-router",
+    )
+    serves_root = not pages_owns_root(pages_text)
+    root_route = (
+        '@index_router.get("/", response_class=HTMLResponse)\n'
+        "def index(request: Request):\n"
+        '    """The home/index at ``/`` (no content page claims it) — same body as the sitemap."""\n'
+        '    return templates.TemplateResponse(request, "index.html", {})\n\n\n'
+        if serves_root
+        else ""
     )
     body = (
         "from __future__ import annotations\n\n"
@@ -300,11 +321,12 @@ def render_index_router(
         "from fastapi.templating import Jinja2Templates\n\n"
         'templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))\n'
         "index_router = APIRouter()\n\n\n"
-        '@index_router.get("/", response_class=HTMLResponse)\n'
-        "def index(request: Request):\n"
-        '    """The generated home/index — lists what is in this app (FR-28)."""\n'
+        '@index_router.get("/_index", response_class=HTMLResponse)\n'
+        "def sitemap(request: Request):\n"
+        '    """The always-reachable sitemap — lists what is in this app (FR-28/28e)."""\n'
         '    return templates.TemplateResponse(request, "index.html", {})\n\n\n'
-        '__all__ = ["index_router"]\n'
+        + root_route
+        + '__all__ = ["index_router"]\n'
     )
     return head + "\n\n" + body
 
@@ -317,17 +339,13 @@ def render_nav(
 ) -> List[Tuple[str, str]]:
     """The nav artifacts as ``(path, text)`` pairs — what the assembler emits (always-on, FR-13).
 
-    Always: the registry module + the nav partial. The home/index (FR-28) is added **only when no
-    content page claims** ``/`` (an authored home wins) — the assembler is pages-aware via
-    :func:`pages_owns_root`.
+    All four are always emitted (the registry module, the nav partial, and the home/index pair). The
+    index is **always reachable at** ``/_index`` and additionally serves ``/`` when no content page
+    claims it — that route choice lives inside :func:`render_index_router` (FR-28a/28e), not here.
     """
-    out: List[Tuple[str, str]] = [
+    return [
         ("app/nav.py", render_nav_module(schema_text, views_text, pages_text, source_file)),
         ("app/templates/_nav.html", render_nav_partial(schema_text, views_text, pages_text, source_file)),
+        ("app/index.py", render_index_router(schema_text, views_text, pages_text, source_file)),
+        ("app/templates/index.html", render_index_page(schema_text, views_text, pages_text, source_file)),
     ]
-    if not pages_owns_root(pages_text):
-        out.append(("app/index.py", render_index_router(schema_text, views_text, pages_text, source_file)))
-        out.append(
-            ("app/templates/index.html", render_index_page(schema_text, views_text, pages_text, source_file))
-        )
-    return out
