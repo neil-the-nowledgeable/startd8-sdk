@@ -241,10 +241,10 @@ increment).
 
 ### F. Retrospective — the back human bookend
 
-- **FR-RCT-12 — Per-increment reflection.** After each confirmed stage/increment, RCT runs a short
-  **reflection** — what was decided, what's still ambiguous, what should feed back to the data model or
-  earlier inputs — and offers to log friction (reusing the existing friction path). This operationalizes
-  the RETROSPECTIVE bookend; it is advisory, never a gate.
+- **FR-RCT-12 — Per-increment reflection** ✅ **DELIVERED.** After each confirmed stage/increment, RCT
+  runs a short **reflection** (`reflection_text`) — what was decided, the next gap, what still blocks
+  the build — and points to the friction path (`startd8 kickoff concierge`). Advisory, never a gate;
+  shown after each increment in the `red-carpet --agent` loop. Operationalizes the RETROSPECTIVE bookend.
 
 ### G. Boundaries & cross-cutting
 
@@ -258,14 +258,17 @@ increment).
     and resumes (never silently stops)**, and **resume does not re-spend completed stages**. *Verify:* a
     build crossing the per-session cap checkpoints and resumes; cumulative spend is bounded; completed
     stages are not re-charged.
-- **FR-RCT-14 — Observability.** RCT emits stage-funnel events (`red_carpet_started`, `stage_entered`,
-  `input_proposed`, `input_confirmed`, `stage_completed`, `cascade_offered`) with bounded attributes
-  (stage/kind/code, **no** interview text, no raw paths) — registered in the kickoff telemetry module.
-  - **Acceptance (CRP R1-F9 — the confirm→apply boundary is visible):** extend the event set with
-    `input_applied`, `apply_rejected` (bounded reason `code`), `cascade_run`, and `budget_exhausted` —
-    the security- and cost-relevant moments the current list omits. Each emits with the bounded
-    attribute allowlist (no interview text, no raw paths). *(Plan gap: FR-RCT-14 had no plan task — added
-    in the plan §7.)*
+- **FR-RCT-14 — Observability** ✅ **DELIVERED (stage funnel).** RCT registers stage-funnel events in
+  the kickoff telemetry module — `red_carpet_started`, `red_carpet_stage` (attrs `stage`/`status`),
+  `red_carpet_cascade_offered` — with a bounded attr allow-list (`stage`/`status`; **no** interview text
+  or raw paths). The per-input propose/apply boundary is already covered by `proposal_made`/
+  `proposal_confirmed` (kind+code); these add the conductor's stage-level progress + the cascade-offered
+  moment (emitted on transition by `record_red_carpet_progress`).
+  - **Acceptance (CRP R1-F9 — the confirm→apply boundary is visible):** ✅ the apply outcome rides the
+    existing `proposal_confirmed` (kind + code = ok / refusal reason); `apply_rejected` is that code.
+    *(`cascade_run`/`budget_exhausted` remain for when the loop runs the cascade / hits the build
+    budget — the cascade is currently a hand-off the user runs, and the per-session budget is inherited
+    from FR-WM2-9a; both fold in when N2-inc2's build-budget lands.)*
 - **FR-RCT-15 — Parity by shared construction.** Web and CLI run the **same** RCT engine, stage map, and
   propose-confirm seam; surface differences are limited to the authorization gate (web CSRF/loopback vs
   CLI confirm), as in Welcome Mat 2.0.

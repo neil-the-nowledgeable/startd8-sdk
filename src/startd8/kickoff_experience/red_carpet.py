@@ -113,6 +113,40 @@ def build_red_carpet_state(project_root: str | Path) -> RedCarpetState:
     )
 
 
+def record_red_carpet_progress(
+    prev: Optional[RedCarpetState], new: RedCarpetState
+) -> None:
+    """Emit the stage funnel on a transition (FR-RCT-14). Bounded attrs only (stage/status) — never
+    interview text or paths. The per-input propose/apply is already covered by proposal_made/confirmed;
+    this adds the conductor's stage-level progress + the cascade-offered moment."""
+    from .telemetry import EV_RED_CARPET_CASCADE_OFFERED, EV_RED_CARPET_STAGE, emit
+
+    if prev is None or prev.next_stage != new.next_stage:
+        emit(EV_RED_CARPET_STAGE,
+             stage=new.next_stage or "complete",
+             status="done" if new.next_stage is None else "next")
+    if new.cascade_offerable and (prev is None or not prev.cascade_offerable):
+        emit(EV_RED_CARPET_CASCADE_OFFERED)
+
+
+def reflection_text(state: RedCarpetState) -> str:
+    """The per-increment RETROSPECTIVE reflection (FR-RCT-12) — advisory, never a gate. What was
+    decided, the next gap, what still blocks the build, and the friction escape hatch."""
+    done = [s.key for s in state.stages if s.status == "done"]
+    lines = ["Reflection (advisory):",
+             f"  decided so far: {', '.join(done) if done else 'nothing yet'}"]
+    if state.next_stage is None:
+        lines.append("  the input surface is complete — the $0 cascade is offerable.")
+    else:
+        detail = next((s.detail for s in state.stages if s.key == state.next_stage), "")
+        lines.append(f"  next gap: {state.next_stage} — {detail}")
+    if not state.cascade_offerable and state.unmet_gates:
+        lines.append(f"  still blocking the build: {', '.join(state.unmet_gates)}")
+    lines.append("  if the kickoff grammar rejected something, you can log friction "
+                 "(`startd8 kickoff concierge`).")
+    return "\n".join(lines)
+
+
 # Inputs the driver treats as "end the session".
 _QUIT_WORDS = frozenset({"", "exit", "quit", ":q", "q"})
 

@@ -238,7 +238,12 @@ def red_carpet_cmd(
 
     from .kickoff_experience.chat import new_red_carpet_chat
     from .kickoff_experience.proposals import apply_proposal
-    from .kickoff_experience.red_carpet import run_red_carpet_repl
+    from .kickoff_experience.red_carpet import (
+        record_red_carpet_progress,
+        reflection_text,
+        run_red_carpet_repl,
+    )
+    from .kickoff_experience.telemetry import EV_RED_CARPET_STARTED, emit
     from .utils.agent_resolution import resolve_agent_spec
 
     try:
@@ -264,7 +269,20 @@ def red_carpet_cmd(
         except (EOFError, KeyboardInterrupt):
             return None
 
+    # Stage funnel (FR-RCT-14) + per-increment reflection (FR-RCT-12). _render fires on load + after
+    # each turn; it emits the stage transition and (after the first render) shows the reflection.
+    _prev = {"state": None}
+
+    def _render() -> None:
+        st = build_red_carpet_state(project)
+        _render_red_carpet_state(st)
+        record_red_carpet_progress(_prev["state"], st)
+        if _prev["state"] is not None:            # an increment just completed → reflect (advisory)
+            console.print(f"[dim]{reflection_text(st)}[/dim]")
+        _prev["state"] = st
+
     console.print(f"[dim]agent: {agent}[/dim]")
+    emit(EV_RED_CARPET_STARTED)
     run_red_carpet_repl(
         banner=chat.banner(),
         ask_sync=lambda m: asyncio.run(chat.ask(m)),
@@ -272,7 +290,7 @@ def red_carpet_cmd(
         emit_line=lambda line: console.print(line),
         pending=lambda: list(chat.buffer.pending()),
         on_proposal=_on_proposal,
-        render_state=lambda: _render_red_carpet_state(build_red_carpet_state(project)),
+        render_state=_render,
         cost_line=chat.cost_line,
     )
 

@@ -58,6 +58,11 @@ EV_TEMPLATE_BUNDLE_DOWNLOADED = "template_bundle_downloaded"
 # concierge_write_refused), so the funnel vocabulary stays small. NEVER carries message text.
 EV_CHAT_TURN = "chat_turn"
 EV_CHAT_REFUSED = "chat_refused"
+# Red Carpet Treatment — the staged build funnel (FR-RCT-14). The per-input propose/apply events are
+# already covered by proposal_made/confirmed; these add the STAGE-level progress the conductor drives.
+EV_RED_CARPET_STARTED = "red_carpet_started"
+EV_RED_CARPET_STAGE = "red_carpet_stage"             # attrs: stage, status (next | done)
+EV_RED_CARPET_CASCADE_OFFERED = "red_carpet_cascade_offered"
 
 FUNNEL_EVENTS = (
     EV_SESSION_STARTED,
@@ -77,6 +82,9 @@ FUNNEL_EVENTS = (
     EV_TEMPLATE_BUNDLE_DOWNLOADED,
     EV_CHAT_TURN,
     EV_CHAT_REFUSED,
+    EV_RED_CARPET_STARTED,
+    EV_RED_CARPET_STAGE,
+    EV_RED_CARPET_CASCADE_OFFERED,
 )
 
 # Attribute allowlist for Concierge events (R2-F4 privacy): NEVER emit free-text friction fields or
@@ -90,7 +98,9 @@ CONCIERGE_EVENT_ATTR_ALLOWLIST = frozenset(
 WM2_EVENT_ATTR_ALLOWLIST = frozenset(
     {"key", "group", "posture", "with_authoring", "count", "code", "mode",
      # chat_turn numeric telemetry (FR-WM2-14a) — never the user message text
-     "turns", "tokens", "cost_usd", "stop_reason"}
+     "turns", "tokens", "cost_usd", "stop_reason",
+     # Red Carpet stage funnel (FR-RCT-14) — bounded stage slugs, never interview text or paths
+     "stage", "status"}
 )
 
 
