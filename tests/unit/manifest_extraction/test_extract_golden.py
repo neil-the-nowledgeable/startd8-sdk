@@ -142,9 +142,13 @@ def test_app_subset_rule(result) -> None:
     data = yaml.safe_load(result.manifests["app.yaml"])
     assert data["app"]["package"] == "demoapp"
     assert data["persistence"]["path"] == "./data/demo.db"
+    # D8: port + env keys now have AppManifest homes (app.port / app.env_keys).
+    assert data["app"]["port"] == 8099
+    assert data["app"]["env_keys"] == [{"name": "ANTHROPIC_API_KEY", "qualifier": "optional"}]
+    # `sqlite mode` remains the sole §2.7 generator-gap (app-code concern, not scaffold plumbing).
     gap_rows = [r for r in result.by_status(Status.NOT_EXTRACTED)
                 if r.manifest == "app.yaml" and "generator-gap" in (r.reason or "")]
-    assert {r.value_path for r in gap_rows} == {"/port", "/env_keys"}
+    assert {r.value_path for r in gap_rows} == {"/sqlite_mode"}
 
 
 def test_report_byte_stable_and_sorted(result) -> None:

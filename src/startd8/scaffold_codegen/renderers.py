@@ -116,8 +116,8 @@ def render_dockerfile(manifest_text: str) -> str:
         "COPY pyproject.toml .\n"
         "RUN pip install --no-cache-dir .\n"
         "COPY . .\n\n"
-        "EXPOSE 8000\n"
-        f'CMD ["uvicorn", "{m.package}.main:app", "--host", "0.0.0.0", "--port", "8000"]\n'
+        f"EXPOSE {m.port}\n"
+        f'CMD ["uvicorn", "{m.package}.main:app", "--host", "0.0.0.0", "--port", "{m.port}"]\n'
     )
     return _header("scaffold-dockerfile", sha) + "\n\n" + body
 
@@ -134,7 +134,7 @@ def render_run_script(manifest_text: str) -> str:
     body = (
         "set -euo pipefail\n\n"
         f"# deployment mode: {m.deployment_mode} — bind {bind} (FR-NET-1).\n"
-        f'exec uvicorn {m.package}.main:app --host {bind} --port "${{PORT:-8000}}"\n'
+        f'exec uvicorn {m.package}.main:app --host {bind} --port "${{PORT:-{m.port}}}"\n'
     )
     return "#!/usr/bin/env bash\n" + _header("scaffold-run-script", sha) + "\n\n" + body
 
@@ -282,6 +282,17 @@ def render_env_example(manifest_text: str) -> str:
             "DOPPLER_TOKEN=",
             "OTEL_EXPORTER_OTLP_ENDPOINT=",
         ]
+    # D8 (§2.7): append the author's declared env keys — only those not already templated above
+    # (so the contract's ANTHROPIC_API_KEY/COST_BUDGET_USD don't duplicate). Empty / all-templated
+    # ⇒ no lines added, byte-identical to prior output. The qualifier rides as a trailing comment.
+    if m.env_keys:
+        templated = {ln.split("=", 1)[0] for ln in lines}
+        extra = [k for k in m.env_keys if k.name not in templated]
+        if extra:
+            lines.append("")
+            lines.append("# declared env keys (app.yaml):")
+            for k in extra:
+                lines.append(f"{k.name}=" + (f"  # {k.qualifier}" if k.qualifier else ""))
     return _header("scaffold-env", sha) + "\n\n" + "\n".join(lines) + "\n"
 
 

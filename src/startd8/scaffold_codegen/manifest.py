@@ -72,6 +72,16 @@ class EnvironmentSpec:
 
 
 @dataclass(frozen=True)
+class EnvKeySpec:
+    """One declared environment variable (D8, §2.7 `env keys`). ``name`` is the var name; ``qualifier``
+    is the author's free-text note (e.g. ``optional`` / ``default 10.00``), carried verbatim as an
+    ``.env.example`` comment. Frozen + hashable so AppManifest stays hashable."""
+
+    name: str
+    qualifier: str = ""
+
+
+@dataclass(frozen=True)
 class AppManifest:
     """The resolved project-plumbing choices (all defaulted)."""
 
@@ -82,6 +92,13 @@ class AppManifest:
     migrations: bool = True
     dockerfile: bool = True
     python_version: str = "3.11"
+    # D8 (§2.7): the dev/prod serving port baked into Dockerfile EXPOSE/CMD and run.sh's PORT
+    # default. Distinct from `deploy.port` (the k8s service port). Default 8000 → byte-identical
+    # to the prior hardcoded value for any app that doesn't declare a port.
+    port: int = 8000
+    # D8 (§2.7): declared env vars (name + optional qualifier note). Appended to `.env.example`
+    # (deduped against the templated vars); empty → byte-identical to prior output.
+    env_keys: Tuple[EnvKeySpec, ...] = ()
     # G4: owned-glue runtime deps (e.g. reportlab/pypdf for an owned PDF path) declared in app.yaml,
     # so an app that adds an owned capability can flow its deps through the generate path.
     extra_dependencies: Tuple[str, ...] = ()
@@ -295,6 +312,41 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
                 f"got {messaging_backend!r}"
             )
 
+    # D8 (§2.7): `app.port` — the dev/prod serving port. Strict-int (never an LLM fallback).
+    raw_port = app.get("port", 8000)
+    try:
+        port = int(raw_port)
+    except (TypeError, ValueError):
+        raise ValueError(f"app.yaml: `app.port` must be an integer, got {raw_port!r}")
+
+    # D8 (§2.7): `app.env_keys` — declared env vars, each a string or a {name, qualifier} mapping.
+    env_keys: Tuple[EnvKeySpec, ...] = ()
+    raw_env_keys = app.get("env_keys")
+    if raw_env_keys is not None:
+        if not isinstance(raw_env_keys, list):
+            raise ValueError("app.yaml: `app.env_keys` must be a list")
+        specs: list = []
+        for item in raw_env_keys:
+            if isinstance(item, str):
+                if not item:
+                    raise ValueError("app.yaml: `app.env_keys` entries must be non-empty")
+                specs.append(EnvKeySpec(name=item))
+            elif isinstance(item, dict):
+                unknown_ek = set(item) - {"name", "qualifier"}
+                if unknown_ek:
+                    raise ValueError(
+                        f"app.yaml: `app.env_keys` entry has unknown keys {sorted(unknown_ek)}"
+                    )
+                ek_name = item.get("name")
+                if not (isinstance(ek_name, str) and ek_name):
+                    raise ValueError("app.yaml: `app.env_keys` entry requires a non-empty `name`")
+                specs.append(EnvKeySpec(name=ek_name, qualifier=str(item.get("qualifier", ""))))
+            else:
+                raise ValueError(
+                    "app.yaml: `app.env_keys` entries must be strings or {name, qualifier} mappings"
+                )
+        env_keys = tuple(specs)
+
     return AppManifest(
         name=str(app.get("name", "app")),
         package=str(app.get("package", "app")),
@@ -303,6 +355,8 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         migrations=bool(migrations_.get("enabled", True)),
         dockerfile=bool(container.get("dockerfile", True)),
         python_version=str(app.get("python_version", "3.11")),
+        port=port,
+        env_keys=env_keys,
         extra_dependencies=tuple(extra_deps),
         deployment_mode=deployment_mode,
         tenant_model=tenant_model,

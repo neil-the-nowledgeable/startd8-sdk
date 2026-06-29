@@ -17,6 +17,9 @@ import pytest
 from startd8.scaffold_codegen import (
     ScaffoldFileProvider,
     parse_app_manifest,
+    render_dockerfile,
+    render_env_example,
+    render_run_script,
     render_scaffold,
     scaffold_in_sync,
 )
@@ -238,3 +241,55 @@ def test_alembic_mako_completes_the_migration_harness():
     # the mako is owned + drift-tracked like the other scaffold files
     assert scaffold_in_sync(MANIFEST, mako) is True
     assert scaffold_in_sync(MANIFEST, mako.replace("upgrade", "upgradeX", 1)) is False
+
+
+# --------------------------------------------------------------------------- #
+# D8 (§2.7): port + env_keys gained AppManifest homes (app.port / app.env_keys)
+# --------------------------------------------------------------------------- #
+
+def test_port_is_baked_into_dockerfile_and_run_script():
+    """D8: `app.port` drives the Dockerfile EXPOSE/CMD and run.sh's PORT default."""
+    manifest = "app:\n  package: demoapp\n  port: 8099\n"
+    dockerfile = render_dockerfile(manifest)
+    assert "EXPOSE 8099" in dockerfile
+    assert '"--port", "8099"' in dockerfile
+    assert '--port "${PORT:-8099}"' in render_run_script(manifest)
+
+
+def test_port_absent_is_byte_identical_to_prior_8000():
+    """D8 byte-identical-when-absent: no `port` key → the prior hardcoded 8000, unchanged."""
+    manifest = "app:\n  package: demoapp\n"
+    assert "EXPOSE 8000" in render_dockerfile(manifest)
+    assert '--port "${PORT:-8000}"' in render_run_script(manifest)
+
+
+def test_env_keys_append_to_env_example_deduped():
+    """D8: declared env keys append to .env.example with their qualifier as a comment; keys already
+    templated (ANTHROPIC_API_KEY / COST_BUDGET_USD) are deduped, not duplicated."""
+    manifest = (
+        "app:\n  package: demoapp\n"
+        "  env_keys:\n"
+        "    - {name: ANTHROPIC_API_KEY, qualifier: optional}\n"
+        "    - {name: CUSTOM_TOKEN, qualifier: required}\n"
+        "    - SIMPLE_FLAG\n"
+    )
+    env = render_env_example(manifest)
+    assert env.count("ANTHROPIC_API_KEY=") == 1            # already templated → not duplicated
+    assert "# declared env keys (app.yaml):" in env
+    assert "CUSTOM_TOKEN=  # required" in env
+    assert "SIMPLE_FLAG=" in env                            # no qualifier → bare
+
+
+def test_env_keys_absent_is_byte_identical():
+    """D8 byte-identical-when-absent: no env_keys → no declared-keys block."""
+    assert "declared env keys" not in render_env_example("app:\n  package: demoapp\n")
+
+
+def test_env_keys_parse_accepts_string_or_mapping():
+    """D8: `app.env_keys` entries may be bare strings or {name, qualifier} mappings; junk loud-fails."""
+    m = parse_app_manifest("app:\n  env_keys:\n    - PLAIN\n    - {name: K, qualifier: q}\n")
+    assert [(e.name, e.qualifier) for e in m.env_keys] == [("PLAIN", ""), ("K", "q")]
+    with pytest.raises(ValueError):
+        parse_app_manifest("app:\n  env_keys:\n    - {name: K, bogus: x}\n")
+    with pytest.raises(ValueError):
+        parse_app_manifest("app:\n  port: not-an-int\n")
