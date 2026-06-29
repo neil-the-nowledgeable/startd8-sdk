@@ -71,6 +71,12 @@ def test_nav_default_visible_then_config_hides_across_restart(tmp_path, monkeypa
         assert 'href="/ui/widget"' in html
         assert 'href="/ui/gadget"' in html
         assert 'href="/"' in html  # the Home content page
+        # FR-16 a11y: labelled landmark + the active item (current path) marked aria-current.
+        assert '<nav aria-label="Primary"' in html
+        assert 'href="/ui/widget" aria-current="page"' in html  # active on its own list route
+        assert 'href="/ui/gadget" aria-current="page"' not in html  # a non-current item is not
+        # FR-18 grouping: a separator is emitted at the page→entity boundary.
+        assert 'aria-hidden="true"' in html
 
         # 2) Operator hides the Gadget entity, then "restarts" (a new lifespan re-reads the config).
         (tmp_path / "nav.config.json").write_text('{"hidden": ["entity:Gadget"]}', encoding="utf-8")

@@ -269,6 +269,13 @@ def backend(
         help="Override the deployment mode (installed|deployed), winning over --app-manifest. "
         "Ergonomic shortcut; app.yaml remains the drift source of truth.",
     ),
+    no_nav: bool = typer.Option(
+        False,
+        "--no-nav",
+        help="Suppress the always-on default top navigation (FR-13/20): omit app/nav.py + "
+        "app/templates/_nav.html. base.html includes the partial tolerantly, so it stays "
+        "byte-identical either way. Threaded to both generate and --check so drift stays consistent.",
+    ),
 ) -> None:
     """Render the full all-Python backend (Pydantic + SQLModel + FastAPI + HTMX + derived).
 
@@ -422,6 +429,7 @@ def backend(
             deployment_mode=deployment_mode,
             tenant_owner_field=tenant_owner_field,
             form_prose_text=form_prose_text,
+            no_nav=no_nav,
         )
     except (
         ValueError

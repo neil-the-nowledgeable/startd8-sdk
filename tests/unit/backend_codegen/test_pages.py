@@ -141,13 +141,19 @@ def test_base_template_always_includes_nav_partial():
     assert embedded_artifact_kind(withpages) == "pages-base"
     assert embedded_pages_sha(withpages) is not None
 
-    # The nav markup + active-link highlight now live in the partial (render_nav_partial).
+    # The nav is now a generic, data-driven partial (FR-19): it iterates the registry resolved at
+    # startup (request.app.state.nav) rather than baking the links, with a11y + active state (FR-16/17).
     from startd8.backend_codegen.nav_generator import render_nav_partial
 
     partial = render_nav_partial(SCHEMA, None, PAGES)
-    assert "<nav" in partial
-    assert '<a href="/how-it-works"' in partial
-    assert "request.url.path == '/how-it-works'" in partial  # active-link highlight
+    assert '<nav aria-label="Primary"' in partial  # FR-16 labelled landmark
+    assert "{%- for item in _nav %}" in partial  # data-driven over app.state.nav
+    assert 'aria-current="page"' in partial  # FR-16 active item
+    assert "{{ item.href }}" in partial and "{{ item.label }}" in partial  # auto-escaped (FR-19)
+    assert "request.url.path.startswith(item.href ~ '/')" in partial  # FR-17 nested active match
+    assert "item.group !=" in partial  # FR-18 group separator
+    # No baked per-page links anymore — the rendered links come from the runtime registry.
+    assert '<a href="/how-it-works"' not in partial
 
 
 def test_body_fragment_is_rendered_at_generate_time_and_untracked(tmp_path):

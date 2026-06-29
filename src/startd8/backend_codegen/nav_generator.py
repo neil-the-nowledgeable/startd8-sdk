@@ -18,7 +18,6 @@ Enumeration:
 
 from __future__ import annotations
 
-import html
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -112,10 +111,17 @@ def render_nav_partial(
 ) -> str:
     """``app/templates/_nav.html`` (kind ``nav-partial``) — the always-on top nav.
 
-    Carries a 3-sha provenance header. The full default set is baked here; each link is gated by
-    ``{% if key not in nav_hidden %}`` so the **runtime** config (``app.state.nav_hidden``, set at
-    startup from ``nav.config.json``) subtracts hidden items without changing these bytes (FR-7/11).
-    ``nav_hidden`` is read from ``request.app.state`` so no per-handler context threading is needed.
+    **Generic + data-driven (FR-19):** the template iterates the registry the app resolves at startup
+    (``request.app.state.nav`` = ``visible_nav()``), rather than baking a copy of the links. So
+    ``app/nav.py`` is the single source of truth and the visibility config (FR-6/7) is honoured without
+    re-rendering. Fail-open to an empty nav if state is unset (e.g. rendered outside a request).
+    - **FR-16 accessibility:** ``<nav aria-label="Primary">`` landmark + ``aria-current="page"`` on the
+      active item.
+    - **FR-17 nested active state:** exact match for pages/views; entity items also match a path
+      *prefix* (``/ui/widget`` is active on ``/ui/widget/123``), guarded so a ``/`` href can't match all.
+    - **FR-18 grouping:** a separator is emitted at each ``group`` boundary (page → entity → view).
+    Labels/hrefs are emitted via ``{{ }}`` so Jinja **auto-escapes** them (no build-time escaping needed).
+    The body is input-independent; the 3-sha header still versions it against schema/views/pages.
     """
     head = header_nav_tmpl(
         source_file,
@@ -124,29 +130,20 @@ def render_nav_partial(
         schema_sha256(pages_text or ""),
         "nav-partial",
     )
-    base_style = "margin-right:1.25rem;color:#0a7d4b;text-decoration:none"
-    links: List[str] = []
-    for n in nav_registry(schema_text, views_text, pages_text):
-        # Labels/hrefs are build-time manifest values (page titles, view names), but may still
-        # contain & / < / " — HTML-escape them so the baked markup stays valid (and injection-safe).
-        # The active-link test compares the RAW href to request.url.path, so it uses the unescaped href.
-        href_attr = html.escape(n.href, quote=True)
-        label = html.escape(n.label)
-        active = "{% if request.url.path == " + repr(n.href) + " %};font-weight:700{% endif %}"
-        links.append(
-            "{% if " + repr(n.key) + " not in nav_hidden %}"
-            f'<a href="{href_attr}" style="{base_style}{active}">{label}</a>'
-            "{% endif %}"
-        )
+    link_style = "margin-right:1.25rem;color:#0a7d4b;text-decoration:none"
     body = (
-        # nav_hidden defaults to an empty set if the app didn't set state (e.g. partial rendered
-        # outside a request) — fail-open to all-visible (FR-7).
-        "{% set nav_hidden = (request.app.state.nav_hidden "
-        "if request and request.app.state.nav_hidden is defined else []) %}\n"
-        '<nav style="padding:0.9rem 1.25rem;border-bottom:1px solid #e3e3e3;'
-        'background:#fafafa;font-family:system-ui,-apple-system,sans-serif">'
-        + "".join(links)
-        + "</nav>\n"
+        "{% set _nav = request.app.state.nav if request and request.app.state.nav is defined else [] %}\n"
+        '<nav aria-label="Primary" style="padding:0.9rem 1.25rem;border-bottom:1px solid #e3e3e3;'
+        'background:#fafafa;font-family:system-ui,-apple-system,sans-serif">\n'
+        "{%- for item in _nav %}\n"
+        "{%- if not loop.first and item.group != _nav[loop.index0 - 1].group %}"
+        '<span aria-hidden="true" style="margin:0 0.5rem;color:#bbb">|</span>{% endif %}\n'
+        "{%- set _active = request.url.path == item.href or (item.group == 'entity' "
+        "and item.href != '/' and request.url.path.startswith(item.href ~ '/')) %}\n"
+        '  <a href="{{ item.href }}"{% if _active %} aria-current="page"{% endif %} '
+        f'style="{link_style}{{% if _active %}};font-weight:700{{% endif %}}">{{{{ item.label }}}}</a>\n'
+        "{%- endfor %}\n"
+        "</nav>\n"
     )
     return head + "\n" + body
 
@@ -159,10 +156,10 @@ def render_nav_module(
 ) -> str:
     """``app/nav.py`` (kind ``nav-registry``) — the baked default registry + the runtime visibility read.
 
-    ``load_hidden()`` reads the optional ``nav.config.json`` at app root once (fail-open to empty on
-    missing/malformed — the app must never fail to render nav, FR-7). ``main.py`` calls it at startup
-    and stashes the result on ``app.state.nav_hidden`` for the partial. ``DEFAULT_NAV``/``visible_nav``
-    expose the registry as data (transparency + tests, FR-1).
+    This is the **single source of truth** for the rendered nav (FR-19): ``main.py`` calls
+    ``visible_nav()`` at startup and stashes it on ``app.state.nav``, which the generic ``_nav.html``
+    partial iterates. ``load_hidden()`` reads the optional ``nav.config.json`` at app root once
+    (fail-open to empty on missing/malformed — the app must never fail to render nav, FR-7).
     """
     head = header_nav(
         source_file,

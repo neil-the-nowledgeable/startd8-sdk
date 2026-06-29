@@ -103,6 +103,9 @@ def test_bound_route_stamps_and_is_idempotent_by_source(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'app.db'}")
+    # Dummy key to clear the route's keyless precheck (FR-23); the agent is mocked below, so no real
+    # call is made — the test runs fully offline. Without this the route returns 503 before the mock.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     sys.path.insert(0, str(tmp_path))
     _purge_app()
     _drop_my_tables()  # defensive: clear any leftovers from a prior table-defining test

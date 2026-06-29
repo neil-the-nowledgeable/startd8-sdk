@@ -1,6 +1,6 @@
 # Default Navigation Requirements
 
-**Version:** 0.3 (Scope simplification — user-directed)
+**Version:** 0.4 (Post-ship value/quality pass — see §6)
 **Date:** 2026-06-26
 **Status:** Draft (planning-corrected + scope-cut; CRP review offered next)
 **Owner:** SDK / deterministic codegen (bucket 1, `backend_codegen`)
@@ -215,6 +215,59 @@ config is loaded once at startup, not queried per request.
 - **OQ-9 — Config location & format.** Where does `nav.config` live and in what format — a standalone
   `nav.config.json` at app root, a `[nav]` section in the runtime settings, or an env var? Leaning:
   standalone JSON at app root (simplest to hand-edit; no settings coupling). Confirm in planning.
+
+---
+
+## 6. Enhancements (v0.4 — post-ship value/quality pass)
+
+Discovered after M0–M3 shipped (several close gaps in the shipped code itself). XS/S items are being
+implemented now; M items (FR-26/27) are specced but deferred.
+
+### End-user (generated-app) value
+- **FR-16 — Accessible nav (XS).** The nav shall be a labelled landmark (`aria-label="Primary"`) and
+  the active item shall carry `aria-current="page"` (today "active" is signalled only by inline bold —
+  invisible to assistive tech).
+- **FR-17 — Active state for nested routes (XS).** The active item shall match nested routes, not just
+  exact equality — an entity item `/ui/widget` is active on `/ui/widget/123`. Pages/views match
+  exactly; entity items match by path prefix (a `/`-root guard prevents `/` matching everything).
+- **FR-18 — Grouped rendering (S).** The nav shall render its three groups (page → entity → view) with
+  a visible separation. The registry already carries `group`; rendering must use it.
+
+### Architecture / quality
+- **FR-19 — Single registry source of truth (S).** The generated `app/nav.py` registry
+  (`DEFAULT_NAV` + `visible_nav()`) shall be the **one** source the rendered nav derives from. Today
+  the partial bakes its own copy of the links and `DEFAULT_NAV`/`visible_nav()` are emitted but unused
+  (dead code). The partial shall become a **generic, data-driven** template that iterates the registry
+  resolved at startup (`app.state.nav = visible_nav()`). Side effect: Jinja `{{ }}` auto-escaping
+  replaces the build-time `html.escape`, satisfying the earlier review finding intrinsically.
+- **FR-20 — Build-time opt-out wired to the CLI (XS–S).** Expose `startd8 generate backend --no-nav`
+  (today only the `render_backend(no_nav=...)` param exists; three comments reference a `--no-nav`
+  flag that does **not** exist). Per-group suppression (OQ-3) stays deferred.
+
+### Operational
+- **FR-21 — Nav-key discoverability (S).** `startd8 nav keys --schema … [--pages …] [--views …]`
+  prints each entry's `key`/`label`/`href`/`group`, so an operator can author `nav.config.json`
+  without reading source. Without it the FR-6 config feature is undiscoverable.
+- **FR-22 — Goldens regeneration helper (S, cross-cutting).** One command regenerates the
+  `backend_codegen` deployment-mode golden trees, so a legitimate generator change is re-pinned in one
+  reviewable step (the stale-exact-pin pattern caused three separate reds this cycle).
+- **FR-23 — Key-gated tests skip cleanly (XS, cross-cutting).** Tests needing `ANTHROPIC_API_KEY`
+  shall **skip** with a reason when it is absent, not fail.
+
+### Deferred (M — specced, not built now)
+- **FR-26 — Entity nav-label override (M).** Override an entity's derived label (`Invoice`→"Invoices")
+  via app.yaml / a nav manifest, instead of only the titleized class name.
+- **FR-27 — Collapse the near-vestigial `pages-base` kind (M).** Post-FR-14 base.html's body is
+  identical across `htmx-base`/`pages-base`; candidate to collapse to one base kind (touches pages drift).
+
+Related strategic items (separate effort): re-open the deferred live admin toggle (NR-6); a generated
+home/index page that lists the registry.
+
+---
+
+*v0.4 — Post-ship value/quality pass. Adds FR-16..23 (XS/S, implemented now) + FR-26/27 (M, deferred).
+FR-19 makes the generated registry the single source of truth — killing the dead `DEFAULT_NAV`/
+`visible_nav` code and subsuming the build-time html.escape review fix via Jinja auto-escaping.*
 
 ---
 
