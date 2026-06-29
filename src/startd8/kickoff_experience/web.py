@@ -248,6 +248,11 @@ def _render_overview(state: KickoffState, readiness, action, config, stylesheet:
         f"{_esc(counts.get('blocked',0))} blocked · {_esc(counts.get('backlog',0))} backlog</p>",
         f"<div class='card'><h2>Next step</h2><p><strong>{_esc(action.title)}</strong></p>"
         f"<p>{_esc(action.detail)}</p></div>",
+        # Red Carpet entry (discoverability): the staged, agentic build-from-scratch experience.
+        "<div class='card'><h2>🟥 Build my app from scratch</h2>"
+        "<p>The Red Carpet Treatment walks you from an idea to a buildable app — co-author the data "
+        "model, then the pages/views/inputs the $0 cascade needs. You confirm every write.</p>"
+        "<p><a href='/concierge/chat'>Start the Red Carpet build →</a></p></div>",
         _concierge_cta(concierge_view),
         "<p><a href='/templates'>⬇ Download kickoff templates</a></p>",
         "<h2>Steps</h2><ul>",
@@ -425,7 +430,8 @@ def _render_chat_page(csrf: str, stylesheet: str) -> str:
         "async function refreshRail(){try{const j=await (await fetch('/red-carpet.json')).json();\n"
         "  const rows=(j.stages||[]).map(s=>`<div>${s.status==='done'?'✓':'…'} <strong>${esc(s.key)}</strong>`+\n"
         "    `${s.key===j.next_stage?' (next)':''} — ${esc(s.detail)}</div>`).join('');\n"
-        "  const foot=j.cascade_offerable?'<p><strong>The $0 cascade is offerable.</strong></p>':\n"
+        "  const pv=(j.cascade_offerable&&j.preview)?`<p class='muted'>preview: shape ${esc(j.preview.shape||'')}</p>`:'';\n"
+        "  const foot=j.cascade_offerable?`<p><strong>The $0 cascade is offerable.</strong></p>${pv}`:\n"
         "    `<p class='muted'>cascade not offerable — unmet: ${esc((j.unmet_gates||[]).join(', '))}</p>`;\n"
         "  rail.innerHTML=`<h3>Build progress</h3>${rows}${foot}`;}catch(e){}}\n"
         "async function act(kind,id){const fd=new FormData();fd.append('proposal_id',id);fd.append('csrf',CSRF);\n"

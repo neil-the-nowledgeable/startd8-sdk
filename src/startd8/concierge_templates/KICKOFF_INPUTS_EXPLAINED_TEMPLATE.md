@@ -45,7 +45,10 @@ use.)*
 
 **File:** `inputs/conventions.yaml`
 **What we ask:** framework, data layer, template engine, module layout, naming, implementation
-language — one page of "this is how code looks here."
+language — one page of "this is how code looks here." Plus the `data_model:` block (FR-F6): the
+cross-cutting modeling choices generation would otherwise invent — how money is stored
+(cents vs float), date/timezone handling, how recurring schedules are expressed, whether loose
+(polymorphic) references are allowed, which fields are computed, and what's deferred from v1.
 **Why:** the highest-leverage page in the package. When generation doesn't *know* the
 conventions, it **invents** them (real incident: a generator produced Flask where the project
 used FastAPI, purely because nothing said otherwise). A declared sheet, injected into every

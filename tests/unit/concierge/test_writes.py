@@ -131,19 +131,27 @@ def test_friction_roundtrip_appends(tmp_path):
 # ── Step 0 anti-fork: packaged templates == canonical docs tree ──────────────
 
 def test_packaged_templates_match_canonical():
-    from importlib import resources
+    # Invariant: every SHIPPED (packaged) template is byte-identical to its canonical source. Iterate
+    # the PACKAGED set — canonical also holds per-domain authoring guidance (templates/authoring/*.md)
+    # that is deliberately NOT packaged (it is not part of the kickoff-package + authoring quintet), so
+    # iterating canonical would false-fail on those. Each packaged file MUST have a canonical source.
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[3]
     canonical = repo_root / "docs" / "design" / "kickoff" / "templates"
-    packaged = resources.files("startd8.concierge_templates")
-    for f in canonical.rglob("*"):
-        if f.is_dir() or "__pycache__" in f.parts:
+    packaged = repo_root / "src" / "startd8" / "concierge_templates"
+    seen = 0
+    for f in packaged.rglob("*"):
+        if f.is_dir() or f.suffix == ".pyc" or f.name == "__init__.py" or "__pycache__" in f.parts:
             continue
-        rel = f.relative_to(canonical).as_posix()
-        assert (packaged / rel).read_text(encoding="utf-8") == f.read_text(encoding="utf-8"), (
+        rel = f.relative_to(packaged).as_posix()
+        canon = canonical / rel
+        assert canon.is_file(), f"packaged template has no canonical source: {rel}"
+        assert f.read_text(encoding="utf-8") == canon.read_text(encoding="utf-8"), (
             f"packaged template diverged from canonical: {rel}"
         )
+        seen += 1
+    assert seen >= 11, f"expected the kickoff-package + authoring quintet (>=11) packaged, saw {seen}"
 
 
 # ── dispatch: write actions return a PREVIEW and never touch disk (OQ-7) ──────

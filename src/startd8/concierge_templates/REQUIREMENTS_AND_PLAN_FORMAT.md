@@ -51,8 +51,12 @@ Declared profile: **<test|internal|standard|high-traffic>**
 
 ## Entities
 <one block per entity, authoring-contract §2.1: `### Name` + field table (plain-type
-vocabulary) + controlled relationship sentences>
+vocabulary, incl. `money` → Int cents) + controlled relationship sentences (incl. `references`
+for a loose/polymorphic id) + optional `default:` notes>
 [consumed by: manifest extraction → schema.prisma draft → generate backend/views; corpus terms]
+[cross-cutting modeling conventions (money units, date/timezone, recurrence repr, FK-vs-references,
+computed fields, deferrals) are NOT here — they are declared once in `inputs/conventions.yaml`
+`data_model:` (KICKOFF_REQUIREMENTS FR-F6), surfaced by the RESOLVE question set]
 
 ## Pages
 <single table, contract §2.2 — routes/nav are DERIVED, never authored>

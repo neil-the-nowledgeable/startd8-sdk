@@ -44,6 +44,7 @@ class RedCarpetState:
     cascade_offerable: bool              # the R1-F7 predicate
     unmet_gates: Tuple[str, ...]         # which cascade gates are unmet (named, R1-F7)
     readiness_score: Optional[float]
+    preview: Optional[dict] = None       # FR-RCT-11 wireframe preview {shape, counts}, set when offerable
 
     def to_dict(self) -> dict:
         return {
@@ -52,6 +53,7 @@ class RedCarpetState:
             "cascade_offerable": self.cascade_offerable,
             "unmet_gates": list(self.unmet_gates),
             "readiness_score": self.readiness_score,
+            "preview": self.preview,
         }
 
 
@@ -113,9 +115,20 @@ def build_red_carpet_state(project_root: str | Path) -> RedCarpetState:
             else f"cascade not offerable — unmet: {', '.join(unmet)}"),
     )
     next_stage = next((s.key for s in stages if s.status != "done"), None)
+    # FR-RCT-11 — the "$0 here's-what-we'll-build" preview, computed only at the offer point (inputs
+    # exist), reusing the wireframe machinery via build_assess's cascade view.
+    preview = None
+    if offerable:
+        try:
+            from ..concierge.core import build_assess
+
+            cascade = (build_assess(root) or {}).get("cascade") or {}
+            preview = {"shape": cascade.get("shape"), "counts": cascade.get("status_counts")}
+        except Exception:
+            preview = None
     return RedCarpetState(
         stages=stages, next_stage=next_stage, cascade_offerable=offerable,
-        unmet_gates=unmet, readiness_score=score,
+        unmet_gates=unmet, readiness_score=score, preview=preview,
     )
 
 

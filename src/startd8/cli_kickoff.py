@@ -200,6 +200,9 @@ def _render_red_carpet_state(state) -> None:
         marker = " [cyan](next)[/cyan]" if s.key == state.next_stage else ""
         console.print(f"  {glyph.get(s.status, '?')} [bold]{s.key}[/bold]{marker} — {s.detail}")
     if state.cascade_offerable:
+        if state.preview:                          # FR-RCT-11 — "here's what we'll build" ($0)
+            console.print(f"[dim]Preview (wireframe): shape={state.preview.get('shape')} · "
+                          f"{state.preview.get('counts')}[/dim]")
         console.print("[green]The $0 cascade is offerable[/green] — "
                       "run [cyan]startd8 generate backend[/cyan] (and scaffold/views).")
     else:
