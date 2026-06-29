@@ -165,3 +165,39 @@ class TestEdgeCases:
         assert "String" in PRISMA_SCALARS
         assert "DateTime" in PRISMA_SCALARS
         assert "Profile" not in PRISMA_SCALARS
+
+
+class TestNavLabelOverride:
+    """FR-26: a `/// @nav <Label>` doc-comment above a model overrides its derived nav label."""
+
+    SCHEMA = (
+        "/// @nav Invoices\n"
+        "model Invoice {\n"
+        "  id String @id\n"
+        "  amount Float\n"
+        "}\n\n"
+        "model LineItem {\n"
+        "  id String @id\n"
+        "}\n"
+    )
+
+    def test_annotation_sets_nav_label(self):
+        schema = parse_prisma_schema(self.SCHEMA)
+        assert schema.model("Invoice").nav_label == "Invoices"
+
+    def test_absent_annotation_is_none(self):
+        schema = parse_prisma_schema(self.SCHEMA)
+        assert schema.model("LineItem").nav_label is None
+
+    def test_annotation_does_not_disturb_fields_or_relations(self):
+        # the additive scan must not change normal parsing (fields, ids stay intact)
+        schema = parse_prisma_schema(self.SCHEMA)
+        inv = schema.model("Invoice")
+        assert inv.field_names == frozenset({"id", "amount"})
+        assert "id" in inv.single_column_unique_keys
+
+    def test_no_annotation_schema_unchanged(self):
+        # a schema with no `/// @nav` parses identically (nav_label defaults to None everywhere)
+        plain = parse_prisma_schema("model Widget {\n  id String @id\n  name String\n}\n")
+        assert plain.model("Widget").nav_label is None
+        assert plain.model("Widget").field_names == frozenset({"id", "name"})

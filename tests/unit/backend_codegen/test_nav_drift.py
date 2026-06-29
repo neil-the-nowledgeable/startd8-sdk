@@ -129,3 +129,24 @@ def test_index_artifacts_drift_roundtrip():
     # any input change → stale (3-input), same as the rest of the family
     mutated = SCHEMA + "\nmodel Extra { id String @id }\n"
     assert check_drift(mutated, page, forms_text=VIEWS, pages_text=None).status == "stale"
+
+
+# --- FR-26: entity nav-label override via the schema `/// @nav` doc-comment ----------------------
+
+def test_entity_nav_label_override_from_schema():
+    """`/// @nav <Label>` overrides the derived entity label; the key (identity) is unchanged."""
+    annotated = (
+        "/// @nav People\n"
+        "model Person {\n  id String @id\n  name String\n}\n"
+        "model InvoiceLine {\n  id String @id\n}\n"
+    )
+    by_key = {e.key: e for e in nav_registry(annotated)}
+    # overridden label, identity key unchanged
+    assert by_key["entity:Person"].label == "People"
+    # un-annotated entity still gets the title-cased default
+    assert by_key["entity:InvoiceLine"].label == "Invoice Line"
+
+
+def test_entity_label_defaults_when_no_annotation():
+    by_key = {e.key: e for e in nav_registry("model Widget {\n  id String @id\n}\n")}
+    assert by_key["entity:Widget"].label == "Widget"

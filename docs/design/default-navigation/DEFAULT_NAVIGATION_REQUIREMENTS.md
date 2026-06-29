@@ -278,9 +278,16 @@ implemented now; M items (FR-26/27) are specced but deferred.
     index has nothing to list without the registry). Owned deterministic kinds
     (`nav-index-router` + `nav-index-page`), drift-tracked like the rest of the nav family.
 
+### Entity label override (FR-26 — built)
+- **FR-26 — Entity nav-label override.** A `/// @nav <Label>` doc-comment directly above a `model` in
+  `prisma/schema.prisma` overrides that entity's derived nav label (`Invoice` → "Invoices"), in both
+  the nav bar and the index. The label **rides the schema** (the parser captures it additively via a
+  separate raw-text scan that does not touch the tokenizer), so the nav stays a **3-input owned kind**
+  — no `drift.py`/`_headers.py`/CLI/manifest changes, and a schema with no annotation produces
+  byte-identical output (the golden tree is unaffected). The `key` (`entity:<Name>`) is unchanged —
+  only the display label.
+
 ### Deferred (M — specced, not built now)
-- **FR-26 — Entity nav-label override (M).** Override an entity's derived label (`Invoice`→"Invoices")
-  via app.yaml / a nav manifest, instead of only the titleized class name.
 - **FR-27 — Collapse the near-vestigial `pages-base` kind (M).** Post-FR-14 base.html's body is
   identical across `htmx-base`/`pages-base`; candidate to collapse to one base kind (touches pages drift).
 

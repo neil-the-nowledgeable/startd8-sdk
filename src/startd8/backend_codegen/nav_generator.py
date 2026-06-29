@@ -72,14 +72,18 @@ def nav_registry(
                 NavEntry(key=f"page:{p.slug}", label=p.nav_label or p.title, href=p.slug, group="page")
             )
 
-    # entities (schema) — no label exists in generated code; derive one (FR-1a)
+    # entities (schema) — no label exists in generated code; derive one (FR-1a), unless the model
+    # carries a `/// @nav <Label>` override in the schema (FR-26). The override changes only the
+    # display label; the key stays ``entity:<Name>`` (identity is unchanged).
     from ..languages.prisma_parser import parse_prisma_schema
     from .crud_generator import _model_names
 
     schema = parse_prisma_schema(schema_text)
     for name in _model_names(schema, schema_text):
+        model = schema.model(name)
+        label = (model.nav_label if model and model.nav_label else _titleize(name))
         entries.append(
-            NavEntry(key=f"entity:{name}", label=_titleize(name), href=f"/ui/{name.lower()}", group="entity")
+            NavEntry(key=f"entity:{name}", label=label, href=f"/ui/{name.lower()}", group="entity")
         )
 
     # views.yaml `views:` section (optional) — friendly name + route already exist (FR-1b). NOTE:

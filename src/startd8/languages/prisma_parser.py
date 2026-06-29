@@ -74,6 +74,7 @@ class PrismaModel:
     name: str
     fields: Tuple[PrismaField, ...]
     block_attributes: Tuple[str, ...]  # raw ``@@`` tokens (e.g. "@@unique([a, b])")
+    nav_label: Optional[str] = None  # FR-26: override the derived nav label via `/// @nav <Label>`
 
     def field(self, name: str) -> Optional[PrismaField]:
         for f in self.fields:
@@ -273,6 +274,18 @@ def _parse_enum_body(body: str) -> Tuple[str, ...]:
     return tuple(values)
 
 
+# FR-26: a `/// @nav <Label>` doc-comment line directly above a `model <Name> {` overrides that
+# entity's derived nav label (e.g. `Invoice` → "Invoices"). Scanned from the raw text, additively.
+_NAV_DOC_RE = re.compile(
+    r"///\s*@nav\s+(?P<label>[^\n]+?)\s*\r?\n\s*model\s+(?P<name>\w+)\b"
+)
+
+
+def _scan_nav_labels(text: str) -> Dict[str, str]:
+    """Map model-name → nav-label override from `/// @nav <Label>` doc-comments (FR-26)."""
+    return {m.group("name"): m.group("label").strip() for m in _NAV_DOC_RE.finditer(text)}
+
+
 def parse_prisma_schema(text: str) -> PrismaSchema:
     """Parse Prisma schema *text* into a :class:`PrismaSchema`.
 
@@ -280,8 +293,15 @@ def parse_prisma_schema(text: str) -> PrismaSchema:
     partially-malformed schema still yields whatever structure is recoverable
     (the validator decides what to do with gaps). Returns an empty schema for
     empty/blank input.
+
+    A ``/// @nav <Label>`` doc-comment directly above a ``model`` sets that model's
+    :attr:`PrismaModel.nav_label` (FR-26) — overriding the title-cased default in the nav/index.
     """
     scrubbed = _strip_comments(text or "")
+    # FR-26: an ADDITIVE, independent scan of the RAW text for a `/// @nav <Label>` doc-comment
+    # directly above a `model <Name> {` — overrides the derived nav label for that entity. This does
+    # not touch the tokenizer/`_strip_comments` path, so all existing parsing is byte-for-byte unchanged.
+    nav_labels = _scan_nav_labels(text or "")
     models: Dict[str, PrismaModel] = {}
     enums: Dict[str, Tuple[str, ...]] = {}
     datasource_provider: Optional[str] = None
@@ -290,7 +310,12 @@ def parse_prisma_schema(text: str) -> PrismaSchema:
     for kind, name, body in _iter_blocks(scrubbed):
         if kind in ("model", "type"):
             fields, block_attrs = _parse_model_body(body)
-            models[name] = PrismaModel(name=name, fields=fields, block_attributes=block_attrs)
+            models[name] = PrismaModel(
+                name=name,
+                fields=fields,
+                block_attributes=block_attrs,
+                nav_label=nav_labels.get(name),
+            )
         elif kind == "enum":
             enums[name] = _parse_enum_body(body)
         elif kind == "datasource":
