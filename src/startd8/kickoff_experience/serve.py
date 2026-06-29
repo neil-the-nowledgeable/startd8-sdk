@@ -210,20 +210,23 @@ def inspect_payload(
 # --- serve (loopback) --------------------------------------------------------------------------
 
 
-def make_chat_factory(project_root: str | Path, agent_spec: str):
+def make_chat_factory(project_root: str | Path, agent_spec: str, *, red_carpet: bool = False):
     """Build a `chat_factory` for the web agentic panel, or None if the agent can't be resolved.
 
-    Returns a zero-arg callable yielding a fresh agentic Concierge chat. Returns ``None`` (panel
-    disabled) on a missing key / unknown provider so serving degrades gracefully.
+    Returns a zero-arg callable yielding a fresh chat. When *red_carpet*, that is the **stage-aware
+    Red Carpet conductor** chat (FR-RCT, OQ-4) — same propose/confirm floor, but it drives the staged
+    build; otherwise the agentic Concierge chat. Returns ``None`` (panel disabled) on a missing key /
+    unknown provider so serving degrades gracefully.
     """
     try:
         from ..utils.agent_resolution import resolve_agent_spec
-        from .chat import new_agentic_kickoff_chat
+        from .chat import new_agentic_kickoff_chat, new_red_carpet_chat
 
-        new_agentic_kickoff_chat(resolve_agent_spec(agent_spec), project_root)  # validate up front
+        factory = new_red_carpet_chat if red_carpet else new_agentic_kickoff_chat
+        factory(resolve_agent_spec(agent_spec), project_root)  # validate up front
     except Exception:
         return None
-    return lambda: new_agentic_kickoff_chat(resolve_agent_spec(agent_spec), project_root)
+    return lambda: factory(resolve_agent_spec(agent_spec), project_root)
 
 
 def serve_kickoff(
@@ -235,6 +238,7 @@ def serve_kickoff(
     port: Optional[int] = None,
     config: Optional[KickoffExperienceConfig] = None,
     agent_spec: Optional[str] = None,
+    red_carpet: bool = False,
 ) -> None:  # pragma: no cover - blocking I/O; covered indirectly via build_kickoff_app + preflight
     """Serve the kickoff web app on the loopback (R1-S8). Blocks until interrupted.
 
@@ -253,7 +257,8 @@ def serve_kickoff(
         raise RuntimeError(f"kickoff preflight failed: {failed}")
 
     gc_stale_scratch(project_root, app_fingerprint(cfg, theme=theme))
-    chat_factory = make_chat_factory(project_root, agent_spec) if agent_spec else None
+    chat_factory = (make_chat_factory(project_root, agent_spec, red_carpet=red_carpet)
+                    if agent_spec else None)
     app = build_kickoff_app(project_root, config=cfg, theme=theme, mode=mode,
                             chat_factory=chat_factory)
     bind_port = port or find_free_port(host)

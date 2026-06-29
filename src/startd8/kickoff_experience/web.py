@@ -406,23 +406,32 @@ def _render_chat_page(csrf: str, stylesheet: str) -> str:
         "<p><a href='/concierge'>← Concierge</a></p><h1>Concierge — chat</h1>"
         "<p class='muted'>I survey/assess and can RECOMMEND actions. I never write to disk: you "
         "confirm each recommendation before it applies.</p>"
+        # Red Carpet stage rail (FR-RCT, OQ-4): the staged build map, refreshed from /red-carpet.json.
+        "<div id='rail' class='card'></div>"
         "<div id='log' class='card' style='min-height:8rem'></div>"
         "<div id='proposals'></div>"
         "<form id='f' class='field'><input id='msg' name='msg' placeholder='ask about the kickoff…' "
         "autocomplete='off' style='width:80%'><button type='submit'>Send</button></form>"
         "<p><button type='button' id='reset'>New conversation</button></p>"
         f"<script>const CSRF={csrf!r};const OPTS={{method:'POST',credentials:'same-origin'}};\n"
-        "const log=document.getElementById('log'),prop=document.getElementById('proposals');\n"
+        "const log=document.getElementById('log'),prop=document.getElementById('proposals'),"
+        "rail=document.getElementById('rail');\n"
         "function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}\n"
         "function add(who,t){log.innerHTML+=`<p><strong>${who}:</strong> ${esc(t)}</p>`;log.scrollTop=log.scrollHeight;}\n"
         "function renderProposals(ps){prop.innerHTML=ps.length?'<h3>Proposed (confirm to apply)</h3>':'';\n"
         " ps.forEach(p=>{const id=esc(p.id);prop.innerHTML+=`<div class='card'><pre>${esc(p.summary)}</pre>`+\n"
         "  `<button onclick=\"act('confirm','${id}')\">Confirm</button> `+\n"
         "  `<button onclick=\"act('discard','${id}')\">Discard</button><div id='r-${id}'></div></div>`;});}\n"
+        "async function refreshRail(){try{const j=await (await fetch('/red-carpet.json')).json();\n"
+        "  const rows=(j.stages||[]).map(s=>`<div>${s.status==='done'?'✓':'…'} <strong>${esc(s.key)}</strong>`+\n"
+        "    `${s.key===j.next_stage?' (next)':''} — ${esc(s.detail)}</div>`).join('');\n"
+        "  const foot=j.cascade_offerable?'<p><strong>The $0 cascade is offerable.</strong></p>':\n"
+        "    `<p class='muted'>cascade not offerable — unmet: ${esc((j.unmet_gates||[]).join(', '))}</p>`;\n"
+        "  rail.innerHTML=`<h3>Build progress</h3>${rows}${foot}`;}catch(e){}}\n"
         "async function act(kind,id){const fd=new FormData();fd.append('proposal_id',id);fd.append('csrf',CSRF);\n"
         " const r=await fetch('/concierge/chat/'+kind,{...OPTS,body:fd});const j=await r.json();\n"
         " document.getElementById('r-'+id).innerHTML=esc(kind==='confirm'?(j.code+': '+(j.detail||'')):'discarded');\n"
-        " refresh();}\n"
+        " refresh();refreshRail();}\n"
         "async function refresh(){\n"
         " const r=await fetch('/concierge/chat/pending',{...OPTS,body:new FormData()});renderProposals((await r.json()).proposals||[]);}\n"
         "document.getElementById('f').onsubmit=async e=>{e.preventDefault();const m=document.getElementById('msg').value;\n"
@@ -430,9 +439,10 @@ def _render_chat_page(csrf: str, stylesheet: str) -> str:
         " const fd=new FormData();fd.append('message',m);\n"
         " const r=await fetch('/concierge/chat/message',{...OPTS,body:fd});const j=await r.json();\n"
         " log.lastChild.remove();add('concierge',j.ok?j.text:('error: '+(j.message||j.code)));\n"
-        " renderProposals(j.proposals||[]);};\n"
+        " renderProposals(j.proposals||[]);refreshRail();};\n"
         "document.getElementById('reset').onclick=async()=>{const fd=new FormData();fd.append('csrf',CSRF);\n"
-        " await fetch('/concierge/chat/reset',{...OPTS,body:fd});log.innerHTML='';prop.innerHTML='';};\n"
+        " await fetch('/concierge/chat/reset',{...OPTS,body:fd});log.innerHTML='';prop.innerHTML='';refreshRail();};\n"
+        "refreshRail();\n"
         "</script>"
     )
     return _page("Concierge — chat", body, stylesheet)
@@ -763,6 +773,14 @@ def build_kickoff_app(
     def concierge_json() -> JSONResponse:
         # Shared view-model payload (parity oracle; the TUI renders the same dict).
         return JSONResponse(build_concierge_view(root), headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.get("/red-carpet.json")
+    def red_carpet_json() -> JSONResponse:
+        # The Red Carpet staged build map (FR-RCT-2, OQ-4) — read-only, $0; the chat-page stage rail
+        # fetches this. Same payload as `startd8 kickoff red-carpet --json` and the agent's tool.
+        from .red_carpet import build_red_carpet_state
+
+        return JSONResponse(build_red_carpet_state(root).to_dict(), headers=dict(_FRAME_DENY_HEADERS))
 
     @app.post("/concierge/instantiate/preview")
     def instantiate_preview(posture: str = Form("prototype")) -> JSONResponse:

@@ -285,10 +285,13 @@ def start_cmd(
     port: Optional[int] = typer.Option(None, "--port", help="Bind port (default: ephemeral)."),
     agent: Optional[str] = typer.Option(
         None, "--agent", help="Enable the web agentic chat panel with this agent (spends tokens)."),
+    red_carpet: bool = typer.Option(
+        False, "--red-carpet", help="Make the web chat the stage-aware Red Carpet build conductor."),
 ) -> None:
     """Serve the interactive kickoff web app on the loopback (preflight first; teardown on exit).
 
-    Pass --agent to enable the conversational Concierge chat panel at /concierge/chat.
+    Pass --agent to enable the conversational Concierge chat panel at /concierge/chat; add --red-carpet
+    to make that panel the stage-aware Red Carpet build conductor.
     """
     from .kickoff_experience.concierge_agent import resolve_concierge_agent_spec
     from .kickoff_experience.serve import Mode, make_chat_factory, preflight, serve_kickoff
@@ -308,12 +311,13 @@ def start_cmd(
     spec, source = resolve_concierge_agent_spec(project, agent)
     panel_spec = spec if source != "default" else None
     if panel_spec:
-        enabled = make_chat_factory(project, panel_spec) is not None
-        console.print(f"  {'[green]✓[/green]' if enabled else '[yellow]•[/yellow]'} agentic chat: "
+        enabled = make_chat_factory(project, panel_spec, red_carpet=red_carpet) is not None
+        flavor = "Red Carpet build conductor" if red_carpet else "Concierge"
+        console.print(f"  {'[green]✓[/green]' if enabled else '[yellow]•[/yellow]'} agentic chat ({flavor}): "
                       + (f"enabled ({panel_spec}, source: {source})" if enabled
                          else f"could not resolve {panel_spec!r} (source: {source}) — panel disabled"))
     console.print(f"[green]serving kickoff[/green] (mode={mode}, theme={theme}) — Ctrl-C to stop")
-    serve_kickoff(project, mode=mode, theme=theme, port=port, agent_spec=panel_spec)
+    serve_kickoff(project, mode=mode, theme=theme, port=port, agent_spec=panel_spec, red_carpet=red_carpet)
 
 
 @kickoff_app.command("chat")
