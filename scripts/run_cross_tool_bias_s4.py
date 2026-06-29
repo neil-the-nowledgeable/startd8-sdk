@@ -173,6 +173,57 @@ def suite_author_rows(ledger: dict) -> list[dict]:
     return [row for row in ledger.get("runs", []) if row.get("experiment") == "suite_author"]
 
 
+def validated_suite_replacement_ids(ledger: dict) -> tuple[set[str], list[str]]:
+    """Return rejected suite run IDs that have an accepted replacement.
+
+    A disposition is not enough by itself to suppress a rejected suite row. S4 may ignore the
+    rejected row only when the replacement relationship is explicit and the replacement row is an
+    accepted `suite_author` artifact in the same intake ledger.
+    """
+    errors: list[str] = []
+    replaced_run_ids: set[str] = set()
+    rows_by_id = {
+        row.get("run_id"): row
+        for row in ledger.get("runs", [])
+        if isinstance(row.get("run_id"), str) and row.get("run_id")
+    }
+    dispositions = ledger.get("dispositions", [])
+    if not isinstance(dispositions, list):
+        return set(), ["intake ledger dispositions must be a list"]
+
+    for index, disposition in enumerate(dispositions):
+        if not isinstance(disposition, dict):
+            errors.append(f"invalid suite replacement disposition:{index}:not_object")
+            continue
+        rejected_id = disposition.get("rejected_run_id")
+        replacement_id = disposition.get("replacement_run_id")
+        if not isinstance(rejected_id, str) or not rejected_id:
+            errors.append(f"invalid suite replacement disposition:{index}:missing rejected_run_id")
+            continue
+        if not isinstance(replacement_id, str) or not replacement_id:
+            errors.append(f"invalid suite replacement disposition:{index}:missing replacement_run_id")
+            continue
+        rejected_row = rows_by_id.get(rejected_id)
+        replacement_row = rows_by_id.get(replacement_id)
+        if rejected_row is None:
+            errors.append(f"suite replacement disposition references missing rejected run:{rejected_id}")
+            continue
+        if replacement_row is None:
+            errors.append(f"suite replacement disposition references missing replacement run:{replacement_id}")
+            continue
+        if rejected_row.get("experiment") != "suite_author":
+            errors.append(f"suite replacement rejected run is not suite_author:{rejected_id}")
+            continue
+        if replacement_row.get("experiment") != "suite_author":
+            errors.append(f"suite replacement replacement run is not suite_author:{replacement_id}")
+            continue
+        if replacement_row.get("status") != "accepted":
+            errors.append(f"suite replacement run is not accepted:{replacement_id}")
+            continue
+        replaced_run_ids.add(rejected_id)
+    return replaced_run_ids, errors
+
+
 def normalized_suite_record(batch_root: Path, row: dict, run_dir: str) -> tuple[dict, list[str]]:
     """Validate the promoted normalized suite artifact before any bridge inspection.
 
@@ -319,8 +370,8 @@ def run_preflight(
         if r_id and r_dir:
             run_dir_by_id[r_id] = r_dir
 
-    dispositions = ledger.get("dispositions", [])
-    replaced_run_ids = {d["rejected_run_id"] for d in dispositions}
+    replaced_run_ids, replacement_errors = validated_suite_replacement_ids(ledger)
+    errors.extend(replacement_errors)
 
     all_suite_rows = suite_author_rows(ledger)
     rejected_suite_rows = [

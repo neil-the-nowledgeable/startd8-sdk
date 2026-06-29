@@ -116,6 +116,81 @@ def test_preflight_blocks_when_suite_author_row_is_rejected(tmp_path: Path) -> N
     assert "intake ledger has no accepted suite_author artifacts" in result["errors"]
 
 
+def test_suite_replacement_validation_requires_accepted_replacement_row() -> None:
+    replaced, errors = s4.validated_suite_replacement_ids({
+        "runs": [{
+            "run_id": "run-27",
+            "status": "rejected_with_reason",
+            "experiment": "suite_author",
+        }],
+        "dispositions": [{
+            "rejected_run_id": "run-27",
+            "replacement_run_id": "run-27-replacement-1",
+            "reason_code": "forbidden_import",
+        }],
+    })
+
+    assert replaced == set()
+    assert errors == [
+        "suite replacement disposition references missing replacement run:run-27-replacement-1"
+    ]
+
+
+def test_suite_replacement_validation_accepts_replacement_row() -> None:
+    replaced, errors = s4.validated_suite_replacement_ids({
+        "runs": [
+            {
+                "run_id": "run-27",
+                "status": "rejected_with_reason",
+                "experiment": "suite_author",
+            },
+            {
+                "run_id": "run-27-replacement-1",
+                "status": "accepted",
+                "experiment": "suite_author",
+            },
+        ],
+        "dispositions": [{
+            "rejected_run_id": "run-27",
+            "replacement_run_id": "run-27-replacement-1",
+            "reason_code": "forbidden_import",
+        }],
+    })
+
+    assert errors == []
+    assert replaced == {"run-27"}
+
+
+def test_preflight_does_not_suppress_rejected_suite_with_invalid_replacement(tmp_path: Path) -> None:
+    store, gate, mutants, pre_registration = _accepted_s4_store(
+        tmp_path, ledger_row={"status": "rejected_with_reason"}
+    )
+    _write_json(store / "batch/intake-ledger.json", {
+        "total": 1,
+        "runs": [{
+            "run_id": "run_01",
+            "status": "rejected_with_reason",
+            "experiment": "suite_author",
+            "author_vendor": "openai",
+            "sample_index": 1,
+            "normalized_sha256": None,
+        }],
+        "dispositions": [{
+            "rejected_run_id": "run_01",
+            "replacement_run_id": "missing-replacement",
+            "reason_code": "forbidden_import",
+        }],
+    })
+
+    _, result = s4.run_preflight(
+        store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
+        mutants_path=mutants, pre_registration_path=pre_registration,
+    )
+
+    assert "suite replacement disposition references missing replacement run:missing-replacement" in result["errors"]
+    assert "intake ledger has rejected suite_author artifacts:1" in result["errors"]
+
+
 def test_bridge_env_scrubs_secrets_and_redirects_home(tmp_path: Path) -> None:
     env = s4.scrub_bridge_env(
         tmp_path,

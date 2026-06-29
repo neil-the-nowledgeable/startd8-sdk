@@ -86,6 +86,53 @@ def _blocked_report(raw_root: Path, schedule_path: Path, errors: list[str]) -> d
     }
 
 
+def _load_dispositions(batch_root: Path) -> tuple[list[dict], list[str], Path]:
+    """Load optional replacement dispositions from the batch root.
+
+    A disposition is the only supported way for reconciliation to accept a raw batch with an
+    additional replacement run for the same scheduled ordinal. The original raw evidence remains in
+    the store, but the replacement relationship must be explicit and auditable.
+    """
+    path = batch_root / "dispositions.json"
+    if not path.is_file():
+        return [], [], path
+    try:
+        data = _load(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        return [], [f"invalid_dispositions:{type(exc).__name__}:{path}"], path
+    if not isinstance(data, list):
+        return [], [f"invalid_dispositions:not_list:{path}"], path
+
+    errors: list[str] = []
+    dispositions: list[dict] = []
+    seen_rejected: set[str] = set()
+    seen_replacement: set[str] = set()
+    required = ("rejected_run_id", "replacement_run_id", "reason_code", "reviewer", "timestamp")
+    for index, item in enumerate(data):
+        if not isinstance(item, dict):
+            errors.append(f"invalid_disposition:{index}:not_object")
+            continue
+        missing = [field for field in required if not isinstance(item.get(field), str) or not item.get(field)]
+        if missing:
+            errors.append(f"invalid_disposition:{index}:missing:{','.join(missing)}")
+            continue
+        rejected_id = item["rejected_run_id"]
+        replacement_id = item["replacement_run_id"]
+        if rejected_id == replacement_id:
+            errors.append(f"invalid_disposition:{index}:self_replacement:{rejected_id}")
+            continue
+        if rejected_id in seen_rejected:
+            errors.append(f"invalid_disposition:{index}:duplicate_rejected:{rejected_id}")
+            continue
+        if replacement_id in seen_replacement:
+            errors.append(f"invalid_disposition:{index}:duplicate_replacement:{replacement_id}")
+            continue
+        seen_rejected.add(rejected_id)
+        seen_replacement.add(replacement_id)
+        dispositions.append(item)
+    return dispositions, errors, path
+
+
 def _scan(path: Path) -> tuple[list[str], list[dict]]:
     """Return (kept_findings, allowlisted). Real secret patterns pass through untouched; a
     `dotenv_line` hit that is only a lowercase source identifier (no case-sensitive ALL-CAPS match)
@@ -130,8 +177,14 @@ def reconcile(raw_root: Path, schedule_path: Path) -> dict:
     if preflight_errors:
         return _blocked_report(raw_root, schedule_path, preflight_errors)
 
+    dispositions, disposition_errors, dispositions_path = _load_dispositions(raw_root.parent)
+    replacement_by_rejected = {item["rejected_run_id"]: item for item in dispositions}
+    rejected_by_replacement = {item["replacement_run_id"]: item for item in dispositions}
+
     expected = {item["ordinal"]: item for item in schedule}
     seen, runs = set(), []
+    runs_by_id: dict[str, dict] = {}
+    run_ids_by_ordinal: dict[int, list[str]] = {}
     for metadata_path in sorted(raw_root.glob("*/metadata.json")):
         run_dir, errors = metadata_path.parent, []
         try:
@@ -167,18 +220,93 @@ def reconcile(raw_root: Path, schedule_path: Path) -> dict:
         run_record = {"ordinal": ordinal, "run_dir": run_dir.name, "metadata": metadata,
                       "files": files, "errors": errors,
                       "status": "accepted" if not errors else "quarantined"}
+        run_id = metadata.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            runs_by_id[run_id] = run_record
+            if isinstance(ordinal, int):
+                run_ids_by_ordinal.setdefault(ordinal, []).append(run_id)
+            if run_id in replacement_by_rejected:
+                run_record["disposition"] = {
+                    "status": "replaced",
+                    "replacement_run_id": replacement_by_rejected[run_id]["replacement_run_id"],
+                    "reason_code": replacement_by_rejected[run_id]["reason_code"],
+                }
+            if run_id in rejected_by_replacement:
+                run_record["disposition"] = {
+                    "status": "replacement",
+                    "rejected_run_id": rejected_by_replacement[run_id]["rejected_run_id"],
+                    "reason_code": rejected_by_replacement[run_id]["reason_code"],
+                }
         if allowlisted:
             run_record["allowlisted_findings"] = allowlisted
         runs.append(run_record)
+
+    replacement_pairs: list[dict] = []
+    for item in dispositions:
+        rejected_id = item["rejected_run_id"]
+        replacement_id = item["replacement_run_id"]
+        rejected_run = runs_by_id.get(rejected_id)
+        replacement_run = runs_by_id.get(replacement_id)
+        if rejected_run is None:
+            disposition_errors.append(f"disposition_missing_rejected_run:{rejected_id}")
+            continue
+        if replacement_run is None:
+            disposition_errors.append(f"disposition_missing_replacement_run:{replacement_id}")
+            continue
+        if rejected_run.get("ordinal") != replacement_run.get("ordinal"):
+            disposition_errors.append(f"disposition_ordinal_mismatch:{rejected_id}->{replacement_id}")
+            continue
+        replacement_pairs.append({
+            "ordinal": rejected_run.get("ordinal"),
+            "rejected_run_id": rejected_id,
+            "replacement_run_id": replacement_id,
+            "reason_code": item["reason_code"],
+            "reviewer": item["reviewer"],
+            "timestamp": item["timestamp"],
+        })
+
+    disposition_pair_ids = {
+        (item["rejected_run_id"], item["replacement_run_id"]) for item in dispositions
+    }
+    duplicate_ordinals: dict[int, list[str]] = {
+        ordinal: sorted(run_ids)
+        for ordinal, run_ids in run_ids_by_ordinal.items()
+        if len(run_ids) > 1
+    }
+    for ordinal, run_ids in duplicate_ordinals.items():
+        if len(run_ids) != 2:
+            disposition_errors.append(f"duplicate_ordinal:{ordinal}:count:{len(run_ids)}")
+            continue
+        pair = (run_ids[0], run_ids[1])
+        reverse_pair = (run_ids[1], run_ids[0])
+        if pair not in disposition_pair_ids and reverse_pair not in disposition_pair_ids:
+            disposition_errors.append(f"duplicate_ordinal_without_disposition:{ordinal}:{','.join(run_ids)}")
+
     missing_ordinals = sorted(set(expected) - seen)
+    effective_observed_runs = len({run["ordinal"] for run in runs if run.get("status") == "accepted"})
     return {
         "schema_version": "1.1", "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "raw_root": str(raw_root), "schedule": str(schedule_path), "expected_runs": len(expected),
-        "observed_runs": len(runs), "missing_ordinals": missing_ordinals,
+        "observed_runs": len(runs), "raw_observed_runs": len(runs),
+        "effective_observed_runs": effective_observed_runs,
+        "missing_ordinals": missing_ordinals,
+        "duplicate_ordinals": duplicate_ordinals,
+        "dispositions": {
+            "path": str(dispositions_path),
+            "count": len(dispositions),
+            "replacement_pairs": replacement_pairs,
+            "errors": disposition_errors,
+        },
         "scanner": {**_scanner_record(),
                     "total_allowlisted": sum(len(r.get("allowlisted_findings", [])) for r in runs)},
         "runs": runs,
-        "status": "accepted" if not missing_ordinals and all(run["status"] == "accepted" for run in runs) else "blocked",
+        "status": (
+            "accepted"
+            if not missing_ordinals
+            and not disposition_errors
+            and all(run["status"] == "accepted" for run in runs)
+            else "blocked"
+        ),
     }
 
 
@@ -198,16 +326,26 @@ def promote(report: dict, raw_root: Path, store_root: Path, batch_id: str) -> Pa
     shutil.copytree(raw_root, raw_destination,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
     (batch_root / "reconciliation-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    dispositions_path = raw_root.parent / "dispositions.json"
+    if dispositions_path.is_file():
+        shutil.copy2(dispositions_path, batch_root / "dispositions.json")
     with sqlite3.connect(batch_root / "audit.sqlite") as connection:
         connection.executescript("""
-            CREATE TABLE authoring_runs (ordinal INTEGER PRIMARY KEY, run_dir TEXT, status TEXT, metadata_json TEXT);
-            CREATE TABLE artifacts (ordinal INTEGER, path TEXT, sha256 TEXT, bytes INTEGER);
+            CREATE TABLE authoring_runs (
+                run_id TEXT PRIMARY KEY, ordinal INTEGER, run_dir TEXT, status TEXT,
+                metadata_json TEXT, disposition_json TEXT
+            );
+            CREATE INDEX authoring_runs_ordinal_idx ON authoring_runs(ordinal);
+            CREATE TABLE artifacts (run_id TEXT, ordinal INTEGER, path TEXT, sha256 TEXT, bytes INTEGER);
         """)
         for run in report["runs"]:
-            connection.execute("INSERT INTO authoring_runs VALUES (?, ?, ?, ?)",
-                               (run["ordinal"], run["run_dir"], run["status"], json.dumps(run["metadata"])))
-            connection.executemany("INSERT INTO artifacts VALUES (?, ?, ?, ?)",
-                                   [(run["ordinal"], f["path"], f["sha256"], f["bytes"]) for f in run["files"]])
+            run_id = run["metadata"].get("run_id")
+            connection.execute("INSERT INTO authoring_runs VALUES (?, ?, ?, ?, ?, ?)",
+                               (run_id, run["ordinal"], run["run_dir"], run["status"],
+                                json.dumps(run["metadata"]), json.dumps(run.get("disposition"))))
+            connection.executemany("INSERT INTO artifacts VALUES (?, ?, ?, ?, ?)",
+                                   [(run_id, run["ordinal"], f["path"], f["sha256"], f["bytes"])
+                                    for f in run["files"]])
     return batch_root
 
 
