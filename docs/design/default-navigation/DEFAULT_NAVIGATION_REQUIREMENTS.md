@@ -287,9 +287,16 @@ implemented now; M items (FR-26/27) are specced but deferred.
   byte-identical output (the golden tree is unaffected). The `key` (`entity:<Name>`) is unchanged —
   only the display label.
 
-### Deferred (M — specced, not built now)
-- **FR-27 — Collapse the near-vestigial `pages-base` kind (M).** Post-FR-14 base.html's body is
-  identical across `htmx-base`/`pages-base`; candidate to collapse to one base kind (touches pages drift).
+### Base-template simplification (FR-27 — built)
+- **FR-27 — Collapse the near-vestigial `pages-base` kind.** Post-FR-14 base.html's body is identical
+  whether or not pages exist (the nav moved to the `_nav.html` partial), so `base.html` is now a single
+  **schema-only `htmx-base`** kind always — the `pages-base` two-hash variant is retired. Removed from
+  `pages_generator.PAGES_KINDS`, `drift._PAGES_KINDS`, and `_pages_renderers()`; `render_base_template`
+  always emits `htmx-base` (the `pages_text` param is retained but ignored). The page router/content
+  kinds (`pages-router`/`pages-content`) are unchanged. Migration: an old on-disk `pages-base` base.html
+  reads as drift on the next `--check` (unknown kind) — regenerate fixes it; no back-compat shim.
+
+*(All FR-26/27 deferred items are now built; only NR-6 — the live admin toggle — remains deferred.)*
 
 Related strategic items (separate effort): re-open the deferred live admin toggle (NR-6); a generated
 home/index page that lists the registry.

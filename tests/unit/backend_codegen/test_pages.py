@@ -135,11 +135,14 @@ def test_base_template_always_includes_nav_partial():
     assert "<nav" not in plain  # nav markup lives in the partial, not base.html
     assert embedded_artifact_kind(plain) == "htmx-base"
 
+    # FR-27: base.html is a single schema-only `htmx-base` kind always — and byte-identical whether or
+    # not pages_text is given (its body no longer depends on pages; the nav lives in the partial).
     withpages = render_base_template(SCHEMA, "prisma/schema.prisma", PAGES)
     assert '{% include "_nav.html" ignore missing %}' in withpages
     assert "<nav" not in withpages
-    assert embedded_artifact_kind(withpages) == "pages-base"
-    assert embedded_pages_sha(withpages) is not None
+    assert embedded_artifact_kind(withpages) == "htmx-base"
+    assert embedded_pages_sha(withpages) is None  # no pages-sha — base.html is schema-only now
+    assert withpages == plain  # the `pages-base` two-hash variant was retired
 
     # The nav is now a generic, data-driven partial (FR-19): it iterates the registry resolved at
     # startup (request.app.state.nav) rather than baking the links, with a11y + active state (FR-16/17).
@@ -228,8 +231,8 @@ def test_render_backend_includes_pages_and_nav(tmp_path):
     assert "app/pages.py" in arts
     assert "app/templates/pages/home.html" in arts
     assert "app/templates/pages/_home.body.html" in arts
-    # base.html carries the nav (pages-base kind)
-    assert embedded_artifact_kind(arts["app/templates/base.html"]) == "pages-base"
+    # base.html includes the nav partial and is the schema-only htmx-base kind (FR-27)
+    assert embedded_artifact_kind(arts["app/templates/base.html"]) == "htmx-base"
     # main.py mounts the optional pages_router
     assert "from .pages import pages_router" in arts["app/main.py"]
 

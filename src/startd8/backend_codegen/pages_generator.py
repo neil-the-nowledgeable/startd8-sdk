@@ -32,10 +32,11 @@ import yaml
 from ..frontend_codegen.schema_renderer import schema_sha256
 from ._headers import header_pages, header_pages_tmpl
 
-# Content-page artifact kinds (registered into drift._PAGES_KINDS). ``pages-base`` is the nav-bearing
-# base.html (emitted by htmx_generator), ``pages-router`` is app/pages.py, ``pages-content`` is a
-# per-page shell template (carries the slug-name in the startd8-entity slot for re-render dispatch).
-PAGES_KINDS = ("pages-base", "pages-router", "pages-content")
+# Content-page artifact kinds (registered into drift._PAGES_KINDS). ``pages-router`` is app/pages.py,
+# ``pages-content`` is a per-page shell template (carries the slug-name in the startd8-entity slot for
+# re-render dispatch). base.html is no longer a pages kind — it is the schema-only ``htmx-base`` kind
+# always (the former ``pages-base`` two-hash variant was retired in FR-27).
+PAGES_KINDS = ("pages-router", "pages-content")
 
 _PAGE_KEYS = {"slug", "title", "nav_label", "content"}
 _NAV_KEYS = {"label", "href"}

@@ -69,12 +69,14 @@ _AI_KINDS: frozenset = frozenset(
 )
 
 # Artifact kinds whose drift derives from two inputs (schema + pages.yaml). Kept in sync with
-# ``pages_generator.PAGES_KINDS`` (literal here to avoid an import cycle at module load).
-_PAGES_KINDS: frozenset = frozenset({"pages-base", "pages-router", "pages-content"})
+# ``pages_generator.PAGES_KINDS`` (literal here to avoid an import cycle at module load). base.html is
+# NOT here — it is the schema-only ``htmx-base`` kind always (the ``pages-base`` variant was retired,
+# FR-27), routed through the default schema-only renderer.
+_PAGES_KINDS: frozenset = frozenset({"pages-router", "pages-content"})
 
 # Artifact kinds whose drift derives from two inputs (schema + views.yaml). web.py only carries
 # ``fastapi-web-forms`` when generated WITH a forms manifest (else plain ``fastapi-web``) — the
-# htmx-base/pages-base precedent: a distinct kind per dep-set. The ``flow-*`` kinds (FR-ED-15) are
+# fastapi-web/fastapi-web-forms precedent: a distinct kind per dep-set. The ``flow-*`` kinds (FR-ED-15) are
 # views.yaml-derived too: ``fastapi-flow``/``flow-shell`` re-render a single flow BY NAME (the
 # ``startd8-entity`` slot), ``flow-aggregator`` re-renders the whole ``app/flows/__init__.py``.
 # Previously ``fastapi-flow`` was registered nowhere → freshly-generated flow apps failed ``--check``.
@@ -667,12 +669,13 @@ def pages_stale_reason(
 
 
 def _pages_renderers():
-    """Map content-page kind → a ``(schema, pages, source_file, entity) -> text`` renderer."""
-    from .htmx_generator import render_base_template
+    """Map content-page kind → a ``(schema, pages, source_file, entity) -> text`` renderer.
+
+    base.html is no longer here — it is the schema-only ``htmx-base`` kind (FR-27), re-rendered via the
+    default ``_renderers()`` map; only the pages router + per-page shells are two-input page kinds."""
     from .pages_generator import render_page_shell, render_pages_router
 
     return {
-        "pages-base": lambda s, p, sf, e: render_base_template(s, sf, p),
         "pages-router": lambda s, p, sf, e: render_pages_router(s, p, sf),
         "pages-content": lambda s, p, sf, e: render_page_shell(s, p, sf, e),
     }

@@ -184,16 +184,12 @@ def render_base_template(
 ) -> str:
     """The shared base layout. The top nav is the always-on default-nav partial (``_nav.html``,
     FR-13/14) — included tolerantly so base.html stays byte-identical whether or not nav is generated
-    (e.g. ``--no-nav``). The header kind still distinguishes a pages-configured app (``pages-base``,
-    carrying ``pages-sha``) from a schema-only one (``htmx-base``); the body no longer varies by pages
-    (the nav, the only pages-dependent part, now lives in the partial)."""
+    (e.g. ``--no-nav``). base.html is a single **schema-only** owned kind (``htmx-base``): its body no
+    longer varies by pages (the nav, the only pages-dependent part, lives in the partial), so the
+    former ``pages-base`` two-hash variant was retired (FR-27). ``pages_text`` is retained for
+    signature compatibility but no longer affects the output."""
     sha = schema_sha256(schema_text)
-    if pages_text is not None:
-        from ._headers import header_pages_tmpl
-
-        head = header_pages_tmpl(source_file, sha, schema_sha256(pages_text), "pages-base")
-    else:
-        head = _tmpl_header(source_file, sha, "htmx-base")
+    head = _tmpl_header(source_file, sha, "htmx-base")
     body = (
         "<!doctype html>\n"
         '<html lang="en">\n'
@@ -988,7 +984,7 @@ def render_web(
     *forms_text* (the full ``views.yaml``; only its ``forms:`` section is read) selects each
     entity's post-create destination (FR-FS-4). With it, the artifact derives from two inputs —
     kind ``fastapi-web-forms``, 2-hash header; without it, the schema-only ``fastapi-web``
-    (the ``htmx-base``/``pages-base`` precedent: a distinct kind per dep-set).
+    (the ``fastapi-web``/``fastapi-web-forms`` precedent: a distinct kind per dep-set).
     """
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)

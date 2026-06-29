@@ -299,7 +299,7 @@ def test_on_create_modes_route_the_redirect():
         'return RedirectResponse(f"/ui/metric/new?created={obj.id}", status_code=303)'
         in web
     )
-    # 2-hash header: kind switches per dep-set (htmx-base/pages-base precedent)
+    # 2-hash header: kind switches per dep-set (fastapi-web/fastapi-web-forms precedent)
     assert "# startd8-artifact: fastapi-web-forms" in web
     assert "# forms-sha256:" in web
 
