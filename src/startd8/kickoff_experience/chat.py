@@ -28,8 +28,9 @@ from .ranking import next_action
 from .readiness import build_readiness
 from .state import build_kickoff_state
 
-# The complete read-only allow-list for the kickoff conversation (OQ-8).
-KICKOFF_READ_ACTIONS = ("survey", "assess", "field_states")
+# The complete read-only allow-list for the kickoff conversation (OQ-8). `red_carpet_state` is the
+# Red Carpet conductor's staged view (read-only) — only registered for the RCT chat (FR-RCT-2).
+KICKOFF_READ_ACTIONS = ("survey", "assess", "field_states", "red_carpet_state")
 
 POSTURE_BANNER = (
     "🛈 Kickoff assistant — read-only. I can survey the project, assess readiness, and report what "
@@ -41,6 +42,12 @@ POSTURE_BANNER = (
 AGENTIC_POSTURE_BANNER = (
     "🛈 Concierge (agentic) — I survey/assess and can RECOMMEND actions (scaffold the package, draft "
     "friction, set a field). I never write to disk; you confirm each recommendation before it applies."
+)
+
+# Red Carpet banner — the staged, build-from-scratch conductor (paired with RED_CARPET_SYSTEM_PROMPT).
+RED_CARPET_BANNER = (
+    "🟥 Red Carpet — I'll walk you from an idea to a buildable app: we'll co-author the data model, "
+    "then the pages/views/inputs the $0 cascade needs. I only RECOMMEND; you confirm every write."
 )
 
 KICKOFF_SYSTEM_PROMPT = (
@@ -72,6 +79,30 @@ KICKOFF_AGENTIC_SYSTEM_PROMPT = (
     "human reviews and confirms it before anything is applied. Ground every factual claim in a tool "
     "result. When you draft friction text or a field value, call `propose_action` — do not claim you "
     "saved/created/logged anything. Use the read tools first to ground a proposal in the real state."
+)
+
+# Red Carpet system prompt — the staged build-from-scratch conductor (RCT). Stage-aware: it drives the
+# next gap from `red_carpet_state` and proposes the right kind for that stage. Like the agentic prompt
+# it is propose-only — every write is a recommendation the human confirms.
+RED_CARPET_SYSTEM_PROMPT = (
+    "You are the StartD8 Red Carpet guide: you help a user build an app FROM SCRATCH by co-authoring "
+    "every input the deterministic $0 cascade needs. Tools:\n"
+    "  • red_carpet_state — the staged build map: the next gap + whether the cascade is offerable\n"
+    "  • survey / assess / field_states — read the project's current state\n"
+    "  • propose_action — RECOMMEND a write the user confirms. Use the kind for the current stage:\n"
+    "        schema   {brief}                 — DATA MODEL (the front bookend): interview the user about\n"
+    "                                           their domain, draft a requirements brief (## Entities with\n"
+    "                                           field tables + Relationships), and propose it; on confirm\n"
+    "                                           it derives + promotes prisma/schema.prisma\n"
+    "        manifest {source, source_label}  — an authoring-contract prose source (## Pages / ## Views /\n"
+    "                                           …) → its assembly manifest(s)\n"
+    "        capture  {value_path, value}     — one value-input field (conventions/build-prefs/…)\n"
+    "WORKFLOW: call `red_carpet_state` to find the next gap; START with the DATA MODEL (schema) — nothing\n"
+    "derives until it is confirmed. Interview the user, ground each proposal in the real state, propose\n"
+    "ONE input at a time, and re-check `red_carpet_state` after each confirm. When the cascade is\n"
+    "offerable, tell the user to run `startd8 generate backend`. You author placeholder structure only —\n"
+    "the user's real content is theirs. You NEVER write to disk; `propose_action` only records a\n"
+    "recommendation the human confirms — never claim you created/saved/promoted anything yourself."
 )
 
 _NO_ARGS_SCHEMA = {"type": "object", "properties": {}, "additionalProperties": False}
@@ -114,21 +145,34 @@ def handle_kickoff_read(action: str, project_root: str | Path, **_params: object
         )
     if action == "field_states":
         return _field_states_payload(project_root)
+    if action == "red_carpet_state":
+        from .red_carpet import build_red_carpet_state
+        return build_red_carpet_state(project_root).to_dict()
     # survey/assess go through the concierge floor (which independently re-rejects non-read actions).
     return handle_concierge_read(action, project_root)
 
 
 # JSON schema for propose_action (kind + the kind-specific params; permissive — validated in handler).
+# The enum mirrors proposals.PROPOSAL_KINDS; the apply floor independently re-validates each kind.
 _PROPOSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "kind": {"type": "string", "enum": list(("instantiate", "friction", "capture"))},
+        "kind": {"type": "string",
+                 "enum": ["instantiate", "friction", "capture", "schema", "manifest"]},
         "posture": {"type": "string"},
         "friction": {"type": "string"},
         "what_happened": {"type": "string"},
         "implication": {"type": "string"},
         "value_path": {"type": "string"},
         "value": {"type": "string"},
+        # schema (RCT N2): a requirements/PRD prose brief → derive + promote the data-model contract.
+        "brief": {"type": "string"},
+        "contract_path": {"type": "string"},
+        "acknowledge_drift": {"type": "boolean"},
+        # manifest (RCT N1): an authoring-contract prose source → the assembly manifest(s) it yields.
+        "source": {"type": "string"},
+        "source_label": {"type": "string"},
+        "replace": {"type": "boolean"},
     },
     "required": ["kind"],
     "additionalProperties": False,
@@ -139,13 +183,15 @@ def build_kickoff_registry(
     project_root: str | Path,
     *,
     proposal_sink: "Optional[Callable[[dict], str]]" = None,
+    red_carpet: bool = False,
 ) -> ToolRegistry:
     """A read-only registry pinned to *project_root* (R1-S5, layer 1).
 
     Pure chat → the three read tools. When *proposal_sink* (a `propose_action` handler) is given,
     add the **read-effect** `propose_action` tool — it records a recommendation and writes nothing;
     the read-only floor is unchanged. This is the only difference between pure chat and the agentic
-    Concierge registry (FR-NEW-5).
+    Concierge registry (FR-NEW-5). When *red_carpet*, also add the read-only `red_carpet_state` tool
+    (the staged build map) so the conductor's chat is stage-aware (FR-RCT-2).
     """
     root = str(project_root)
 
@@ -184,6 +230,22 @@ def build_kickoff_registry(
             effect_class="read",
         ),
     ]
+    if red_carpet:
+        def red_carpet_state_handler(_args: dict) -> dict:
+            return handle_kickoff_read("red_carpet_state", root)
+
+        tools.append(
+            ToolSpec(
+                name="red_carpet_state",
+                description=(
+                    "The Red Carpet staged build map (read-only): per-stage status, the next gap, and "
+                    "whether the $0 cascade is offerable yet. No arguments."
+                ),
+                parameters=_NO_ARGS_SCHEMA,
+                handler=red_carpet_state_handler,
+                effect_class="read",
+            )
+        )
     if proposal_sink is not None:
         tools.append(
             ToolSpec(
@@ -191,7 +253,7 @@ def build_kickoff_registry(
                 description=(
                     "RECOMMEND a write the user can confirm (records a proposal; writes nothing). "
                     "kind=instantiate{posture} | friction{friction,what_happened,implication} | "
-                    "capture{value_path,value}."
+                    "capture{value_path,value} | schema{brief} | manifest{source,source_label}."
                 ),
                 parameters=_PROPOSE_SCHEMA,
                 handler=proposal_sink,
@@ -208,8 +270,11 @@ class KickoffChat:
     session: AgenticSession
     project_root: str
     buffer: "Optional[object]" = None   # ProposalBuffer when agentic; None for pure read-only chat
+    red_carpet: bool = False            # the staged build-from-scratch conductor variant (FR-RCT)
 
     def banner(self) -> str:
+        if self.red_carpet:
+            return RED_CARPET_BANNER
         return AGENTIC_POSTURE_BANNER if self.buffer is not None else POSTURE_BANNER
 
     @property
@@ -220,7 +285,8 @@ class KickoffChat:
         return await self.session.send(message)
 
     def cost_line(self, result: AgenticResult) -> str:
-        tag = "concierge · propose-only" if self.agentic else "kickoff · read-only"
+        tag = ("red-carpet · propose-only" if self.red_carpet
+               else "concierge · propose-only" if self.agentic else "kickoff · read-only")
         return (
             f"[{tag}] turns={result.turns} "
             f"tokens={result.total_tokens} cost≈${result.total_cost_usd:.4f}"
@@ -266,6 +332,33 @@ def new_agentic_kickoff_chat(
         config=config or kickoff_chat_session_config(),
     )
     return KickoffChat(session=session, project_root=str(project_root), buffer=buffer)
+
+
+def new_red_carpet_chat(
+    agent: BaseAgent,
+    project_root: str | Path,
+    *,
+    config: Optional[SessionConfig] = None,
+) -> KickoffChat:
+    """Construct the Red Carpet conductor chat (FR-RCT): the agentic propose-only chat + the staged
+    `red_carpet_state` read tool + the stage-aware build-from-scratch prompt.
+
+    Same propose/confirm floor as the agentic Concierge — the loop never writes; every input
+    (schema/manifest/value) is a proposal the human confirms — but stage-aware (it drives the next gap).
+    """
+    from .proposals import ProposalBuffer, make_propose_handler
+
+    buffer = ProposalBuffer()
+    registry = build_kickoff_registry(
+        project_root, proposal_sink=make_propose_handler(project_root, buffer), red_carpet=True,
+    )
+    session = AgenticSession(
+        agent,
+        registry,
+        system_prompt=RED_CARPET_SYSTEM_PROMPT,
+        config=config or kickoff_chat_session_config(),
+    )
+    return KickoffChat(session=session, project_root=str(project_root), buffer=buffer, red_carpet=True)
 
 
 def new_kickoff_chat(

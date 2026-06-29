@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 # Ordered build stages (FR-RCT-2): data model first (the front bookend), then the manifests that
 # derive from it, then the value inputs, then placeholder content, then the cascade run.
@@ -111,3 +111,47 @@ def build_red_carpet_state(project_root: str | Path) -> RedCarpetState:
         stages=stages, next_stage=next_stage, cascade_offerable=offerable,
         unmet_gates=unmet, readiness_score=score,
     )
+
+
+# Inputs the driver treats as "end the session".
+_QUIT_WORDS = frozenset({"", "exit", "quit", ":q", "q"})
+
+
+def run_red_carpet_repl(
+    *,
+    banner: str,
+    ask_sync: "Callable[[str], Any]",
+    read_input: "Callable[[str], Optional[str]]",
+    emit_line: "Callable[[str], None]",
+    pending: "Callable[[], List[Any]]",
+    on_proposal: "Callable[[Any], Optional[str]]",
+    render_state: "Callable[[], None]" = lambda: None,
+    cost_line: "Callable[[Any], str]" = lambda r: "",
+    max_turns: int = 100,
+) -> int:
+    """Drive the Red Carpet interview loop — **pure** of the agent/IO so it is unit-testable.
+
+    Each turn: read a user line → one agent turn (``ask_sync``) → for every pending proposal, hand it to
+    ``on_proposal`` (the host confirms + applies/discards at human privilege, returning a short outcome
+    line or ``None``) → re-render the staged state. The loop never applies a write itself: ``on_proposal``
+    is the sole human-privilege seam. Returns the number of completed turns.
+    """
+    emit_line(banner)
+    render_state()
+    turns = 0
+    while turns < max_turns:
+        message = read_input("you> ")
+        if message is None or message.strip().lower() in _QUIT_WORDS:
+            break
+        result = ask_sync(message)
+        emit_line(getattr(result, "text", str(result)))
+        line = cost_line(result)
+        if line:
+            emit_line(line)
+        for action in list(pending()):
+            outcome = on_proposal(action)   # host: confirm → apply_proposal (or discard); pops the buffer
+            if outcome:
+                emit_line(outcome)
+        render_state()
+        turns += 1
+    return turns

@@ -192,37 +192,89 @@ def inspect_cmd(
         console.print(f"[dim]preflight ok={payload['preflight']['ok']}[/dim]")
 
 
+def _render_red_carpet_state(state) -> None:
+    pct = f"{int(round((state.readiness_score or 0.0) * 100))}%" if state.readiness_score is not None else "—"
+    console.print(f"[bold]🟥 Red Carpet[/bold] — readiness {pct}")
+    glyph = {"done": "[green]✓[/green]", "pending": "[yellow]…[/yellow]"}
+    for s in state.stages:
+        marker = " [cyan](next)[/cyan]" if s.key == state.next_stage else ""
+        console.print(f"  {glyph.get(s.status, '?')} [bold]{s.key}[/bold]{marker} — {s.detail}")
+    if state.cascade_offerable:
+        console.print("[green]The $0 cascade is offerable[/green] — "
+                      "run [cyan]startd8 generate backend[/cyan] (and scaffold/views).")
+    else:
+        console.print(f"[yellow]Cascade not offerable yet[/yellow] — unmet gates: "
+                      f"{', '.join(state.unmet_gates)}.")
+
+
 @kickoff_app.command("red-carpet")
 def red_carpet_cmd(
     project: Path = typer.Argument(Path("."), help="Project root to build (default: current directory)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the staged build state as JSON."),
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="Run the agentic interview loop with this agent (spends tokens)."),
 ) -> None:
-    """Red Carpet Treatment — the staged, agentic build-from-scratch conductor (read-only status, $0).
+    """Red Carpet Treatment — the staged, agentic build-from-scratch conductor.
 
-    Shows where the build stands (data model → manifests → value inputs → content → run), the next gap,
-    and whether the deterministic $0 cascade is offerable yet. (This increment is the read-only stage
-    view + entry point; the agentic interview loop that drives each stage lands next.)
+    Without `--agent`: read-only staged status ($0) — where the build stands (data model → manifests →
+    value inputs → content → run), the next gap, and whether the deterministic $0 cascade is offerable.
+    With `--agent`: the conversational interview loop — the agent works the next gap and RECOMMENDS each
+    input; you confirm every write.
     """
     import json as _json
 
     from .kickoff_experience.red_carpet import build_red_carpet_state
 
-    state = build_red_carpet_state(project)
     if json_out:
-        sys.stdout.write(_json.dumps(state.to_dict(), indent=2, ensure_ascii=False) + "\n")
+        sys.stdout.write(
+            _json.dumps(build_red_carpet_state(project).to_dict(), indent=2, ensure_ascii=False) + "\n")
         return
-    pct = f"{int(round((state.readiness_score or 0.0) * 100))}%" if state.readiness_score is not None else "—"
-    console.print(f"[bold]🟥 Red Carpet[/bold] — readiness {pct}")
-    _glyph = {"done": "[green]✓[/green]", "pending": "[yellow]…[/yellow]"}
-    for s in state.stages:
-        marker = " [cyan](next)[/cyan]" if s.key == state.next_stage else ""
-        console.print(f"  {_glyph.get(s.status, '?')} [bold]{s.key}[/bold]{marker} — {s.detail}")
-    if state.cascade_offerable:
-        console.print("\n[green]The $0 cascade is offerable[/green] — "
-                      "run [cyan]startd8 generate backend[/cyan] (and scaffold/views).")
-    else:
-        console.print(f"\n[yellow]Cascade not offerable yet[/yellow] — unmet gates: "
-                      f"{', '.join(state.unmet_gates)}.")
+    if not agent:
+        _render_red_carpet_state(build_red_carpet_state(project))
+        return
+
+    # Agentic interview loop (FR-RCT) — propose-only; the human confirms every write.
+    import asyncio
+
+    from .kickoff_experience.chat import new_red_carpet_chat
+    from .kickoff_experience.proposals import apply_proposal
+    from .kickoff_experience.red_carpet import run_red_carpet_repl
+    from .utils.agent_resolution import resolve_agent_spec
+
+    try:
+        the_agent = resolve_agent_spec(agent)
+        chat = new_red_carpet_chat(the_agent, str(project))
+    except Exception as exc:   # missing key / no tool support → actionable, not a traceback
+        console.print(f"[red]could not start the Red Carpet agent {agent!r}:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL)
+
+    def _on_proposal(action) -> Optional[str]:
+        # Human-privilege confirm → apply (or discard). The loop never applies on its own.
+        console.print(f"[yellow]Proposed:[/yellow] {action.summary()}")
+        if typer.confirm("Apply this?", default=False):
+            outcome = apply_proposal(project, action)
+            chat.buffer.pop(action.id)
+            return f"  → [{'green' if outcome.ok else 'red'}]{outcome.code}[/] {outcome.detail}"
+        chat.buffer.pop(action.id)
+        return "  → discarded"
+
+    def _read(prompt: str) -> Optional[str]:
+        try:
+            return typer.prompt(prompt, default="", show_default=False)
+        except (EOFError, KeyboardInterrupt):
+            return None
+
+    console.print(f"[dim]agent: {agent}[/dim]")
+    run_red_carpet_repl(
+        banner=chat.banner(),
+        ask_sync=lambda m: asyncio.run(chat.ask(m)),
+        read_input=_read,
+        emit_line=lambda line: console.print(line),
+        pending=lambda: list(chat.buffer.pending()),
+        on_proposal=_on_proposal,
+        render_state=lambda: _render_red_carpet_state(build_red_carpet_state(project)),
+        cost_line=chat.cost_line,
+    )
 
 
 @kickoff_app.command("start")

@@ -121,9 +121,12 @@ increment).
     tree (the repo's multi-worktree/multi-agent reality) must not corrupt the cursor (advisory lock or
     last-writer-wins **with detection**). *Verify:* hand-edit an input mid-flow → resume reconciles;
     two sessions advance → no corrupt cursor.
-- **FR-RCT-3 — Discoverable entry.** Web: a prominent "Build my app" entry (a `/red-carpet` route
-  and/or a home-page CTA). CLI: `startd8 kickoff red-carpet`. Both bootstrap a from-scratch project
-  (scaffold the kickoff package via `instantiate` if absent).
+- **FR-RCT-3 — Discoverable entry** *(CLI ✅ DELIVERED — agentic interview loop)*. CLI:
+  `startd8 kickoff red-carpet` (read-only staged status) and `--agent <spec>` (the conversational
+  interview loop — stage-aware chat that proposes each input; the human confirms every write via
+  `apply_proposal`). Web: a "Build my app" stage-rail entry on `/concierge/chat` (OQ-4) — **pending**.
+  Bootstrap-instantiate-if-absent — pending (the loop currently assumes/scaffolds the package via the
+  `instantiate` proposal kind).
 
 ### B. Data model — the front human bookend
 
