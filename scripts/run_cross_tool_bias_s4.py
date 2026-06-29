@@ -12,6 +12,9 @@ import ast
 import csv
 import hashlib
 import json
+import os
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +28,14 @@ DEFAULT_RESULTS_ROOT = AUDIT_ROOT / "analysis/s4-results"
 DEFAULT_GATE = AUDIT_ROOT / "oracle/validation-gate.json"
 DEFAULT_MUTANTS = AUDIT_ROOT / "mutants/manifest.json"
 DEFAULT_PRE_REGISTRATION = AUDIT_ROOT / "analysis/s4-pre-registration.json"
+DEFAULT_BRIDGE_MANIFEST = AUDIT_ROOT / "analysis/s4-bridge-manifest.json"
+
+SECRET_ENV_MARKERS = (
+    "API_KEY", "_TOKEN", "TOKEN_", "_SECRET", "SECRET_", "PASSWORD",
+    "ANTHROPIC", "OPENAI", "GOOGLE", "GEMINI", "MISTRAL", "NVIDIA",
+    "AWS_", "DOPPLER", "_KEY", "CREDENTIAL",
+)
+SAFE_ENV_KEYS = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "SystemRoot")
 
 
 def sha256(path: Path) -> str:
@@ -41,12 +52,167 @@ def load_json(path: Path, label: str) -> dict:
     return value
 
 
+def scrub_bridge_env(workspace: Path, base: dict[str, str] | None = None) -> dict[str, str]:
+    source = dict(os.environ if base is None else base)
+    clean = {
+        key: value for key, value in source.items()
+        if key in SAFE_ENV_KEYS and not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
+    }
+    clean["HOME"] = str(workspace)
+    clean["TMPDIR"] = str(workspace)
+    clean["PYTHONDONTWRITEBYTECODE"] = "1"
+    clean["PYTHONUNBUFFERED"] = "1"
+    return clean
+
+
+def bridge_caps() -> dict[str, bool]:
+    return {
+        "sandbox_exec": sys.platform == "darwin" and shutil.which("sandbox-exec") is not None,
+        "unshare": sys.platform.startswith("linux") and shutil.which("unshare") is not None,
+    }
+
+
+def wrap_no_egress_command(cmd: list[str], caps: dict[str, bool]) -> tuple[list[str], str | None]:
+    if caps.get("sandbox_exec"):
+        profile = "(version 1)(allow default)(deny network*)"
+        return ["sandbox-exec", "-p", profile, *cmd], "seatbelt-no-egress"
+    if caps.get("unshare"):
+        return ["unshare", "-rn", *cmd], "linux-netns-no-egress"
+    return cmd, None
+
+
+def bridge_dry_run_gate(
+    bridge_manifest_path: Path, results_root: Path, *,
+    caps: dict[str, bool] | None = None,
+    runner=subprocess.run,
+) -> tuple[dict, list[str]]:
+    """Validate reviewed S4 bridge prerequisites without importing or running generated suites."""
+    errors: list[str] = []
+    if not bridge_manifest_path.is_file():
+        return {
+            "status": "not_installed",
+            "manifest_path": str(bridge_manifest_path),
+            "dry_run": "not_run",
+        }, [f"reviewed S4 bridge manifest is not installed:{bridge_manifest_path}"]
+
+    try:
+        manifest = load_json(bridge_manifest_path, "S4 bridge manifest")
+    except ValueError as exc:
+        return {
+            "status": "invalid_manifest",
+            "manifest_path": str(bridge_manifest_path),
+            "dry_run": "not_run",
+        }, [str(exc)]
+
+    if manifest.get("status") != "reviewed":
+        errors.append("reviewed S4 bridge manifest status is not reviewed")
+    if manifest.get("require_no_egress") is not True:
+        errors.append("reviewed S4 bridge manifest does not require no-egress isolation")
+    if manifest.get("require_scrubbed_env") is not True:
+        errors.append("reviewed S4 bridge manifest does not require scrubbed environment")
+    if manifest.get("require_identical_inventory") is not True:
+        errors.append("reviewed S4 bridge manifest does not require identical target inventory")
+
+    caps = bridge_caps() if caps is None else caps
+    dry_workspace = results_root / "bridge-dry-run-workspace"
+    dry_workspace.mkdir(parents=True, exist_ok=True)
+    command, isolation = wrap_no_egress_command(
+        [sys.executable, "-c", "print('s4-bridge-dry-run-ok')"], caps
+    )
+    if isolation is None:
+        errors.append("no real no-egress isolation capability available for S4 bridge dry-run")
+
+    timeout_s = float(manifest.get("timeout_seconds", 10))
+    max_output = int(manifest.get("max_output_bytes", 4096))
+    dry_run = {
+        "workspace": str(dry_workspace),
+        "isolation": isolation,
+        "timeout_seconds": timeout_s,
+        "max_output_bytes": max_output,
+    }
+    if isolation is not None and not errors:
+        try:
+            proc = runner(
+                command,
+                cwd=str(dry_workspace),
+                env=scrub_bridge_env(dry_workspace),
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                check=False,
+            )
+            dry_run.update({
+                "returncode": proc.returncode,
+                "stdout_tail": (proc.stdout or "")[-max_output:],
+                "stderr_tail": (proc.stderr or "")[-max_output:],
+            })
+            if proc.returncode != 0:
+                errors.append(f"S4 bridge dry-run failed:{proc.returncode}")
+        except subprocess.TimeoutExpired:
+            dry_run["timed_out"] = True
+            errors.append(f"S4 bridge dry-run timed out after {timeout_s}s")
+
+    return {
+        "status": "ready" if not errors else "blocked",
+        "manifest_path": str(bridge_manifest_path),
+        "manifest_sha256": sha256(bridge_manifest_path),
+        "capabilities": caps,
+        "dry_run": dry_run,
+    }, errors
+
+
 def accepted_suite_rows(ledger: dict) -> list[dict]:
     return [
         row
         for row in ledger.get("runs", [])
         if row.get("status") == "accepted" and row.get("experiment") == "suite_author"
     ]
+
+
+def suite_author_rows(ledger: dict) -> list[dict]:
+    return [row for row in ledger.get("runs", []) if row.get("experiment") == "suite_author"]
+
+
+def normalized_suite_record(batch_root: Path, row: dict) -> tuple[dict, list[str]]:
+    """Validate the promoted normalized suite artifact before any bridge inspection.
+
+    S4 must consume exactly the artifact admitted by intake. Missing files, missing hashes, or
+    checksum drift are input-gate failures, not bridge failures and never execution evidence.
+    """
+    errors: list[str] = []
+    run_id = row.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        return {
+            "run_id": run_id,
+            "status": "invalid_intake",
+            "detail": "accepted suite_author row has no run_id",
+        }, ["intake accepted suite_author row has no run_id"]
+
+    suite_path = batch_root / "normalized" / run_id / "suite.py"
+    manifest_path = batch_root / "normalized" / run_id / "suite_manifest.json"
+    expected_sha = row.get("normalized_sha256")
+    actual_sha = sha256(suite_path) if suite_path.is_file() else None
+
+    if not suite_path.is_file():
+        errors.append(f"accepted suite_author missing normalized suite.py:{run_id}")
+    if not manifest_path.is_file():
+        errors.append(f"accepted suite_author missing normalized suite_manifest.json:{run_id}")
+    if not isinstance(expected_sha, str) or not expected_sha:
+        errors.append(f"accepted suite_author missing normalized_sha256:{run_id}")
+    elif actual_sha is not None and actual_sha != expected_sha:
+        errors.append(f"accepted suite_author normalized_sha256 mismatch:{run_id}")
+
+    record = {
+        "run_id": run_id,
+        "author_vendor": row.get("author_vendor"),
+        "sample_index": row.get("sample_index"),
+        "normalized_sha256": expected_sha,
+        "normalized_sha256_actual": actual_sha,
+        "suite_path": str(suite_path),
+        "manifest_path": str(manifest_path),
+        "intake_status": row.get("status"),
+    }
+    return record, errors
 
 
 def declared_bridge_contract(suite_path: Path, manifest_path: Path) -> dict:
@@ -116,7 +282,7 @@ def write_matrices(results_root: Path, suite_rows: list[dict], targets: list[dic
 
 def run_preflight(
     *, store_root: Path, batch_id: str, results_root: Path, gate_path: Path,
-    mutants_path: Path, pre_registration_path: Path,
+    mutants_path: Path, pre_registration_path: Path, bridge_manifest_path: Path = DEFAULT_BRIDGE_MANIFEST,
 ) -> tuple[int, dict]:
     errors: list[str] = []
     try:
@@ -145,6 +311,11 @@ def run_preflight(
     if mutant_manifest.get("status") != "accepted":
         errors.append("mutant manifest is not accepted")
 
+    all_suite_rows = suite_author_rows(ledger)
+    rejected_suite_rows = [row for row in all_suite_rows if row.get("status") != "accepted"]
+    if rejected_suite_rows:
+        errors.append(f"intake ledger has rejected suite_author artifacts:{len(rejected_suite_rows)}")
+
     suite_rows = accepted_suite_rows(ledger)
     if not suite_rows:
         errors.append("intake ledger has no accepted suite_author artifacts")
@@ -154,21 +325,22 @@ def run_preflight(
 
     suites = []
     for row in suite_rows:
-        run_id = row.get("run_id")
-        suite_path = batch_root / "normalized" / run_id / "suite.py"
-        manifest_path = batch_root / "normalized" / run_id / "suite_manifest.json"
-        bridge = declared_bridge_contract(suite_path, manifest_path)
-        suites.append({
-            "run_id": run_id,
-            "author_vendor": row.get("author_vendor"),
-            "sample_index": row.get("sample_index"),
-            "normalized_sha256": row.get("normalized_sha256"),
-            "suite_path": str(suite_path),
-            "bridge": bridge,
-        })
+        suite_record, suite_errors = normalized_suite_record(batch_root, row)
+        errors.extend(suite_errors)
+        if suite_errors:
+            suite_record["bridge"] = {
+                "status": "invalid_intake",
+                "detail": "normalized suite artifact failed S4 intake invariants",
+            }
+        else:
+            suite_record["bridge"] = declared_bridge_contract(
+                Path(suite_record["suite_path"]), Path(suite_record["manifest_path"])
+            )
+        suites.append(suite_record)
 
-    bridge_block = "no reviewed isolated no-egress S4 execution bridge is installed"
-    errors.append(bridge_block)
+    bridge, bridge_errors = bridge_dry_run_gate(bridge_manifest_path, results_root)
+    errors.extend(bridge_errors)
+    errors.append("S4 bridge execution remains disabled until the reviewed executor consumes the dry-run gate")
     write_matrices(results_root, suite_rows, targets)
     output = {
         "schema_version": "1.0",
@@ -186,6 +358,7 @@ def run_preflight(
         },
         "targets": targets,
         "suites": suites,
+        "bridge": bridge,
         "matrix_cell_status": "not_executed",
         "errors": list(dict.fromkeys(errors)),
     }
@@ -201,11 +374,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gate-path", type=Path, default=DEFAULT_GATE)
     parser.add_argument("--mutants-path", type=Path, default=DEFAULT_MUTANTS)
     parser.add_argument("--pre-registration-path", type=Path, default=DEFAULT_PRE_REGISTRATION)
+    parser.add_argument("--bridge-manifest-path", type=Path, default=DEFAULT_BRIDGE_MANIFEST)
     args = parser.parse_args(argv)
     code, result = run_preflight(
         store_root=args.store_root, batch_id=args.batch_id, results_root=args.results_root,
         gate_path=args.gate_path, mutants_path=args.mutants_path,
-        pre_registration_path=args.pre_registration_path,
+        pre_registration_path=args.pre_registration_path, bridge_manifest_path=args.bridge_manifest_path,
     )
     print(json.dumps({"status": result["status"], "results_root": str(args.results_root), "errors": result["errors"]}, indent=2))
     return code
