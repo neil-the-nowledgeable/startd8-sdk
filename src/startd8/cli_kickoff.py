@@ -192,6 +192,39 @@ def inspect_cmd(
         console.print(f"[dim]preflight ok={payload['preflight']['ok']}[/dim]")
 
 
+@kickoff_app.command("red-carpet")
+def red_carpet_cmd(
+    project: Path = typer.Argument(Path("."), help="Project root to build (default: current directory)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the staged build state as JSON."),
+) -> None:
+    """Red Carpet Treatment — the staged, agentic build-from-scratch conductor (read-only status, $0).
+
+    Shows where the build stands (data model → manifests → value inputs → content → run), the next gap,
+    and whether the deterministic $0 cascade is offerable yet. (This increment is the read-only stage
+    view + entry point; the agentic interview loop that drives each stage lands next.)
+    """
+    import json as _json
+
+    from .kickoff_experience.red_carpet import build_red_carpet_state
+
+    state = build_red_carpet_state(project)
+    if json_out:
+        sys.stdout.write(_json.dumps(state.to_dict(), indent=2, ensure_ascii=False) + "\n")
+        return
+    pct = f"{int(round((state.readiness_score or 0.0) * 100))}%" if state.readiness_score is not None else "—"
+    console.print(f"[bold]🟥 Red Carpet[/bold] — readiness {pct}")
+    _glyph = {"done": "[green]✓[/green]", "pending": "[yellow]…[/yellow]"}
+    for s in state.stages:
+        marker = " [cyan](next)[/cyan]" if s.key == state.next_stage else ""
+        console.print(f"  {_glyph.get(s.status, '?')} [bold]{s.key}[/bold]{marker} — {s.detail}")
+    if state.cascade_offerable:
+        console.print("\n[green]The $0 cascade is offerable[/green] — "
+                      "run [cyan]startd8 generate backend[/cyan] (and scaffold/views).")
+    else:
+        console.print(f"\n[yellow]Cascade not offerable yet[/yellow] — unmet gates: "
+                      f"{', '.join(state.unmet_gates)}.")
+
+
 @kickoff_app.command("start")
 def start_cmd(
     project: Path = typer.Argument(Path("."), help="Project root to serve the kickoff UI for."),

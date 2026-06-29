@@ -115,7 +115,7 @@ increment).
   it is **resumable** and always advances the largest real gap. Stages (dependency-ordered): **DATA
   MODEL → manifests (pages/views/forms/flows/imports) → value inputs → placeholder content →
   readiness/run**.
-  - **Acceptance (CRP R1-F6 — cursor staleness & concurrency):** the `.startd8/` stage cursor (N3) is a
+  - **Acceptance (CRP R1-F6 — cursor staleness & concurrency) ✅ DELIVERED (N3):** the `.startd8/` stage cursor (N3) is a
     **hint, not a source of truth** — on resume it is **reconciled against live `build_assess`** (a
     hand-edit between stages must move RCT to the correct live gap). Concurrent RCT sessions on the same
     tree (the repo's multi-worktree/multi-agent reality) must not corrupt the cursor (advisory lock or
@@ -226,7 +226,7 @@ increment).
   backend`/`scaffold`/`views`/`frontend`). RCT **orchestrates the inputs**; the cascade is the separate
   deterministic `$0` step. RCT never claims to *generate content* (bucket-4) and never makes the build a
   loop-autonomous action.
-  - **Acceptance (CRP R1-F7 — testable offer predicate, resolves OQ-7):** the cascade offer is gated by
+  - **Acceptance (CRP R1-F7 — testable offer predicate, resolves OQ-7) ✅ DELIVERED (N3):** the cascade offer is gated by
     a **named, checkable readiness predicate** — `cascade_offerable = schema_confirmed AND
     app_manifest_present AND ≥1 page AND ≥1 view` (the minimal viable subset) — and when the offer is
     **withheld**, RCT names **which** gates are unmet. *Verify:* subset present → offer appears; remove
