@@ -141,6 +141,31 @@ def test_completeness_weighted_fraction_and_nudge_qty():
     assert r.nudges == ["Add at least 2 ProofPoint."]
 
 
+def test_completeness_custom_nudge_text_is_used():
+    """D7: an author-supplied `nudge` replaces the generated message for the unmet signal; an
+    entity without a nudge falls back to the generated "Add at least N <Entity>." text."""
+    manifest = {"entities": {
+        "Profile": {"min_rows": 2, "nudge": "Tell us who you are first."},
+        "ProofPoint": {"min_rows": 1},  # no custom nudge → generated message
+    }}
+    src = render_completeness(SCHEMA, manifest=manifest)
+    assert "_NUDGES" in src  # the map is emitted only when a custom nudge is present
+    ns = _exec(src)
+    r = ns["compute_completeness"]({"Profile": 0, "ProofPoint": 0})
+    assert r.nudges == ["Tell us who you are first.", "Add at least one ProofPoint."]
+    # met signals never nudge
+    assert ns["compute_completeness"]({"Profile": 2, "ProofPoint": 1}).nudges == []
+
+
+def test_completeness_without_nudge_is_byte_identical_to_prior():
+    """D7 byte-identical-when-absent: a weighted manifest with no `nudge` key emits no `_NUDGES`
+    map and the prior append line — the output must not drift for manifests that don't use it."""
+    manifest = {"entities": {"Profile": {"min_rows": 2, "weight": 3}}}
+    src = render_completeness(SCHEMA, manifest=manifest)
+    assert "_NUDGES" not in src
+    assert "nudges.append(f'Add at least {qty} {e}.')" in src
+
+
 def test_completeness_signals_are_opt_in_new_entity_is_inert():
     """F-13 regression: a signal is OPT-IN — an entity that is neither configured nor excluded
     is INERT (out of the denominator), so adding a model to the contract cannot silently change

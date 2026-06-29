@@ -129,8 +129,12 @@ def render_completeness(
 
         exclude: [AiCall, ProofPointCapability, ...]   # advisory override (opt-out a configured signal)
         entities:                                       # opt-in: each listed entity IS a signal
-          ProofPoint: {min_rows: 3, weight: 2}
+          ProofPoint: {min_rows: 3, weight: 2, nudge: "Add confirmed proof points."}
           Capability: {min_rows: 2}
+
+    ``nudge`` (D7, optional) is the author's custom message for the unmet signal — the §2.4
+    ` — nudge: "…"` suffix. When present it replaces the generated "Add at least N <Entity>."
+    text for that entity; absent, the generated message is used (byte-identical to prior output).
     """
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
@@ -168,6 +172,7 @@ def render_completeness(
     excluded = sorted(str(e) for e in (manifest.get("exclude") or []))
     cfg_in = manifest.get("entities") or {}
     cfg: Dict[str, Dict[str, float]] = {}
+    nudges_cfg: Dict[str, str] = {}  # D7: author-supplied nudge text (§2.4 `— nudge: "…"`)
     for ent in names:  # only known schema models; deterministic schema order
         spec = cfg_in.get(ent)
         if not isinstance(spec, dict):
@@ -179,6 +184,9 @@ def render_completeness(
             entry["weight"] = float(spec["weight"])
         if entry:
             cfg[ent] = entry
+            nud = spec.get("nudge")
+            if isinstance(nud, str) and nud.strip():
+                nudges_cfg[ent] = nud.strip()
 
     excluded_lit = _py_list(excluded)
     cfg_lit = "{\n" + "".join(
@@ -186,9 +194,24 @@ def render_completeness(
         for ent in names if ent in cfg
     ) + "}"
 
+    # D7: when the author supplied custom nudge text (the §2.4 ` — nudge: "…"` suffix), bake a
+    # ``_NUDGES`` map and have the unmet branch consult it, falling back to the generated
+    # threshold message. Absent any custom nudge, ``nudges_block`` is empty and the append line
+    # is the prior literal — output stays byte-identical for manifests that don't use the suffix.
+    if nudges_cfg:
+        nudges_lit = "{\n" + "".join(
+            f"    {ent!r}: {nudges_cfg[ent]!r},\n" for ent in names if ent in nudges_cfg
+        ) + "}"
+        nudges_block = f"_NUDGES: Dict[str, str] = {nudges_lit}\n"
+        nudge_append = "            nudges.append(_NUDGES.get(e) or f'Add at least {qty} {e}.')\n"
+    else:
+        nudges_block = ""
+        nudge_append = "            nudges.append(f'Add at least {qty} {e}.')\n"
+
     body = _preamble + (
         f"_EXCLUDED: List[str] = {excluded_lit}\n"
         f"_CONFIG: Dict[str, Dict[str, float]] = {cfg_lit}\n"
+        f"{nudges_block}"
         "_DEFAULT_MIN_ROWS = 1\n"
         "_DEFAULT_WEIGHT = 1.0\n\n\n"
         "def compute_completeness(present: Dict[str, int]) -> CompletenessResult:\n"
@@ -212,7 +235,7 @@ def render_completeness(
         "            met += weight\n"
         "        else:\n"
         "            qty = 'one' if min_rows == 1 else str(min_rows)\n"
-        "            nudges.append(f'Add at least {qty} {e}.')\n"
+        f"{nudge_append}"
         "    score = round(met / total, 4) if total else 1.0\n"
         "    return CompletenessResult(score=score, nudges=nudges)\n"
     )

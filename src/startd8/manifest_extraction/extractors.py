@@ -485,6 +485,9 @@ def _strip_quotes(value: str) -> str:
 
 _INTRO_RE = re.compile(r"is complete when it has", re.IGNORECASE)
 _SIGNAL_RE = re.compile(r"at least (\d+) ([A-Za-z]+)(?:\s*\(weight (\d+)\))?")
+# D7: the §2.4 ` — nudge: "…"` suffix — capture the author's message (straight or curly quotes,
+# or unquoted to end of line), terminated at the ` — ` dash per §2.4.
+_NUDGE_RE = re.compile(r'nudge:\s*["“]?(.+?)["”]?\s*$', re.IGNORECASE)
 _DONT_COUNT_RE = re.compile(r"Don'?t count:\s*([^)\n]+)", re.IGNORECASE)
 _CATEGORY_WORDS = {"connection records", "join tables"}
 
@@ -522,14 +525,20 @@ def extract_completeness(
             "completeness.yaml", f"/entities/{ent}", Status.EXTRACTED,
             value=str(spec), source=SourceRef(doc_label, sec.heading_path, line=line),
         ))
-        # Nudge suffix: tolerated, but the SDK manifest can't hold it — TWO rows per entry.
-        tail = sec.body[m.end():m.end() + 120].split("\n", 1)[0]
-        if "nudge:" in tail:
-            records.append(ExtractionRecord(
-                "completeness.yaml", f"/entities/{ent}/nudge", Status.NOT_EXTRACTED,
-                source=SourceRef(doc_label, sec.heading_path, line=line),
-                reason="generator-gap: SDK completeness manifest has no nudge-text field",
-            ))
+        # Nudge suffix (D7): now extractable — the author's message is carried into the manifest's
+        # per-entity `nudge` field and baked into compute_completeness. TWO rows per entry (R2-G5):
+        # the min_rows signal above + the nudge text here, both EXTRACTED.
+        tail = sec.body[m.end():m.end() + 300].split("\n", 1)[0]
+        nudge_m = _NUDGE_RE.search(tail)
+        if nudge_m:
+            nudge_text = nudge_m.group(1).strip()
+            if nudge_text:
+                spec["nudge"] = nudge_text
+                records.append(ExtractionRecord(
+                    "completeness.yaml", f"/entities/{ent}/nudge", Status.EXTRACTED,
+                    value=nudge_text,
+                    source=SourceRef(doc_label, sec.heading_path, line=line),
+                ))
     if not entities:
         return None
     out: dict = {"entities": entities}

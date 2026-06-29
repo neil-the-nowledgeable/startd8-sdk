@@ -108,13 +108,17 @@ def test_empty_state_routes_to_view_prose_not_a_dead_end(result) -> None:
 
 def test_completeness_category_expansion_and_nudges(result) -> None:
     data = yaml.safe_load(result.manifests["completeness.yaml"])
-    assert data["entities"]["Widget"] == {"min_rows": 2, "weight": 2}
+    # D7: the author's nudge text is now carried into the per-entity manifest spec.
+    assert data["entities"]["Widget"] == {"min_rows": 2, "weight": 2, "nudge": "Make more widgets."}
     assert data["entities"]["Tag"] == {"min_rows": 1}
     # "connection records" expands to the derived join models (F4/CRP R2 ordering).
     assert "WidgetTag" in data["exclude"] and "Profile" in data["exclude"]
-    nudge_rows = [r for r in result.by_status(Status.NOT_EXTRACTED)
+    # D7: the nudge suffix is now EXTRACTED (was NOT_EXTRACTED(generator-gap)) — two rows per entry
+    # (R2-G5), both extracted; the value is the author's message.
+    nudge_rows = [r for r in result.by_status(Status.EXTRACTED)
                   if r.manifest == "completeness.yaml" and "/nudge" in r.value_path]
     assert len(nudge_rows) == 1  # only the Widget entry carries a nudge suffix
+    assert nudge_rows[0].value == "Make more widgets."
 
 
 def test_ai_passes_policy_and_derived_routes(result) -> None:
