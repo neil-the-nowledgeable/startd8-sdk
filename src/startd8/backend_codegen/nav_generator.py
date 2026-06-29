@@ -419,18 +419,19 @@ def db_hidden_keys(session: Session) -> Set[str]:
         return set()  # fail-open: never break nav rendering on a store error
 
 
-def set_hidden(session: Session, key: str, hidden: bool) -> None:
-    """Hide (insert) or reveal (delete) a nav key. Portable upsert (sqlite 3.24+ / postgres)."""
-    if hidden:
+def apply_hidden(session: Session, hidden_keys: Set[str]) -> None:
+    """Make nav_hidden hold exactly *hidden_keys* — atomically, in one transaction/commit.
+
+    The admin form fully specifies the desired state, so we DELETE-all + re-INSERT rather than upsert
+    per key: a single commit (not one per nav entry), all-or-nothing on failure, and no dependency on
+    ``ON CONFLICT`` (so it works on older SQLite too)."""
+    session.execute(text("DELETE FROM nav_hidden"))
+    stamp = datetime.now(timezone.utc).isoformat()
+    for key in sorted(hidden_keys):
         session.execute(
-            text(
-                "INSERT INTO nav_hidden (key, updated_at) VALUES (:k, :t) "
-                "ON CONFLICT (key) DO NOTHING"
-            ),
-            {"k": key, "t": datetime.now(timezone.utc).isoformat()},
+            text("INSERT INTO nav_hidden (key, updated_at) VALUES (:k, :t)"),
+            {"k": key, "t": stamp},
         )
-    else:
-        session.execute(text("DELETE FROM nav_hidden WHERE key = :k"), {"k": key})
     session.commit()
 
 
@@ -459,7 +460,7 @@ from sqlmodel import Session
 
 from .db import get_session
 from .nav import DEFAULT_NAV
-from .nav_store import db_hidden_keys, resolve_visible, set_hidden
+from .nav_store import apply_hidden, db_hidden_keys, resolve_visible
 
 # Mode-aware auth, mode-invariant bytes: enforce when auth.py is present (deployed), else open
 # (installed — loopback-only). `_SECURED` drives the unauthenticated banner in the template.
@@ -492,8 +493,8 @@ async def nav_admin_save(request: Request, session: Session = Depends(get_sessio
     """Apply the form: checked = visible, unchecked = hidden. Writes the DB and refreshes app.state.nav."""
     form = await request.form()
     visible = set(form.getlist("visible"))
-    for item in DEFAULT_NAV:
-        set_hidden(session, item["key"], hidden=item["key"] not in visible)
+    hidden = {item["key"] for item in DEFAULT_NAV if item["key"] not in visible}
+    apply_hidden(session, hidden)  # one atomic transaction (not a commit per nav entry)
     request.app.state.nav = resolve_visible(session)  # live refresh (FR-29d)
     return RedirectResponse("/admin/nav", status_code=303)
 
