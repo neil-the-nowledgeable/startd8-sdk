@@ -270,10 +270,13 @@ implemented now; M items (FR-26/27) are specced but deferred.
     registry source of truth (FR-19). It `extends base.html` (so it also carries the top nav).
   - **FR-28c — Accessible.** A single `<h1>`, a `<section>`/`<h2>` per non-empty group, and a list of
     links — semantic and screen-reader navigable.
+  - **FR-28f — Per-entity record counts.** The index shall show a live row count next to each **entity**
+    surface (`Records → Widget (12)`). The handler counts only the **visible** entity items
+    (`request.app.state.nav`) with a `SELECT COUNT(*)` per entity, fail-open (a count that errors is
+    omitted, never breaking the index). Pages/views carry no count. Counts are runtime, not baked.
   - **FR-28d — Default-on, gated with the nav.** Emitted by default; suppressed by `--no-nav` (the
     index has nothing to list without the registry). Owned deterministic kinds
     (`nav-index-router` + `nav-index-page`), drift-tracked like the rest of the nav family.
-  - *Deferred:* per-entity record counts on the index (needs runtime queries).
 
 ### Deferred (M — specced, not built now)
 - **FR-26 — Entity nav-label override (M).** Override an entity's derived label (`Invoice`→"Invoices")

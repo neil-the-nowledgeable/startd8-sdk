@@ -146,3 +146,35 @@ def test_home_index_serves_at_root_and_lists_app(tmp_path, monkeypatch):
         assert "<h2" in r.text  # grouped section heading
     finally:
         _purge_app_modules()
+
+
+def test_index_shows_per_entity_record_counts(tmp_path, monkeypatch):
+    """FR-28f: the index shows a live row count next to each entity (Records → Widget (N))."""
+    for rel, content in render_backend(SCHEMA):  # no pages → index at `/`
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'app.db'}")
+    sys.path.insert(0, str(tmp_path))
+    _purge_app_modules()
+    try:
+        main = importlib.import_module("app.main")
+        db = importlib.import_module("app.db")
+        tables = importlib.import_module("app.tables")
+        from fastapi.testclient import TestClient
+        from sqlmodel import Session
+
+        with TestClient(main.app) as c:  # lifespan creates tables
+            with Session(db.engine) as s:
+                s.add(tables.Widget(id="w1", name="a"))
+                s.add(tables.Widget(id="w2", name="b"))
+                s.add(tables.Gadget(id="g1", label="x"))
+                s.commit()
+            html = c.get("/").text
+        # Two Widgets, one Gadget — counts render next to the entity labels.
+        assert ">Widget</a> <span" in html and "(2)" in html
+        assert "(1)" in html  # the single Gadget
+    finally:
+        _purge_app_modules()

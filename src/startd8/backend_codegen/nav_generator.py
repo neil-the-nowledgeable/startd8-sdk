@@ -264,6 +264,7 @@ def render_index_page(
         "{% block title %}Home{% endblock %}\n"
         "{% block content %}\n"
         "{% set _nav = request.app.state.nav if request and request.app.state.nav is defined else [] %}\n"
+        "{% set _counts = nav_counts | default({}) %}\n"
         "{% set _labels = {" + groups_map + "} %}\n"
         '<h1 style="font-family:system-ui,-apple-system,sans-serif">What’s in this app</h1>\n'
         "{%- for group in ['page', 'entity', 'view'] %}\n"
@@ -274,7 +275,9 @@ def render_index_page(
         "{{ _labels[group] }}</h2>\n"
         "    <ul>\n"
         "{%- for item in _items %}\n"
-        '      <li><a href="{{ item.href }}" style="color:#0a7d4b">{{ item.label }}</a></li>\n'
+        '      <li><a href="{{ item.href }}" style="color:#0a7d4b">{{ item.label }}</a>'
+        "{%- if item.key in _counts %} "
+        '<span style="color:#888">({{ _counts[item.key] }})</span>{% endif %}</li>\n'
         "{%- endfor %}\n"
         "    </ul>\n"
         "  </section>\n"
@@ -294,9 +297,10 @@ def render_index_router(
     """``app/index.py`` (kind ``nav-index-router``) — serves the home/index at ``/`` (FR-28a).
 
     Always serves the stable ``/_index`` sitemap; **additionally** serves ``/`` when no content page
-    owns it (FR-28a). ``main.py`` mounts it after ``pages_router`` as a belt-and-suspenders shadow
-    guard. The on-disk bytes therefore depend on ``pages.yaml`` (whether ``/`` is claimed) — covered by
-    the 3-sha header's ``pages-sha``."""
+    owns it (FR-28a). Each handler computes per-entity **row counts** (FR-28f) for the visible entity
+    surfaces and passes them to the template (``Records → Widget (12)``). ``main.py`` mounts it after
+    ``pages_router`` as a belt-and-suspenders shadow guard. The on-disk bytes depend on ``pages.yaml``
+    (whether ``/`` is claimed) — covered by the 3-sha header's ``pages-sha``."""
     head = header_nav(
         source_file,
         schema_sha256(schema_text),
@@ -307,24 +311,52 @@ def render_index_router(
     serves_root = not pages_owns_root(pages_text)
     root_route = (
         '@index_router.get("/", response_class=HTMLResponse)\n'
-        "def index(request: Request):\n"
+        "def index(request: Request, session: Session = Depends(get_session)):\n"
         '    """The home/index at ``/`` (no content page claims it) — same body as the sitemap."""\n'
-        '    return templates.TemplateResponse(request, "index.html", {})\n\n\n'
+        '    return templates.TemplateResponse(\n'
+        '        request, "index.html", {"nav_counts": _entity_counts(request, session)}\n'
+        "    )\n\n\n"
         if serves_root
         else ""
     )
     body = (
         "from __future__ import annotations\n\n"
         "from pathlib import Path\n\n"
-        "from fastapi import APIRouter, Request\n"
+        "from fastapi import APIRouter, Depends, Request\n"
         "from fastapi.responses import HTMLResponse\n"
-        "from fastapi.templating import Jinja2Templates\n\n"
+        "from fastapi.templating import Jinja2Templates\n"
+        "from sqlalchemy import func\n"
+        "from sqlmodel import Session, select\n\n"
+        "from . import tables\n"
+        "from .db import get_session\n"
+        "from .nav import DEFAULT_NAV  # noqa: F401  (kept importable for transparency)\n\n"
         'templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))\n'
         "index_router = APIRouter()\n\n\n"
+        "def _entity_counts(request, session):\n"
+        '    """Per-entity row counts for the VISIBLE entity nav items (FR-28f).\n\n'
+        "    Keyed by nav key (``entity:<Name>``). Fail-open: any count that errors (missing table, DB\n"
+        "    error) is simply omitted — the index must always render.\n"
+        '    """\n'
+        "    counts = {}\n"
+        '    for item in getattr(request.app.state, "nav", []) or []:\n'
+        '        if item.get("group") != "entity":\n'
+        "            continue\n"
+        '        model = getattr(tables, item["key"].split(":", 1)[1], None)\n'
+        "        if model is None:\n"
+        "            continue\n"
+        "        try:\n"
+        '            counts[item["key"]] = session.exec(\n'
+        "                select(func.count()).select_from(model)\n"
+        "            ).one()\n"
+        "        except Exception:\n"
+        "            pass  # fail-open: omit this count, never break the index\n"
+        "    return counts\n\n\n"
         '@index_router.get("/_index", response_class=HTMLResponse)\n'
-        "def sitemap(request: Request):\n"
-        '    """The always-reachable sitemap — lists what is in this app (FR-28/28e)."""\n'
-        '    return templates.TemplateResponse(request, "index.html", {})\n\n\n'
+        "def sitemap(request: Request, session: Session = Depends(get_session)):\n"
+        '    """The always-reachable sitemap — lists what is in this app, with row counts (FR-28/28e/28f)."""\n'
+        '    return templates.TemplateResponse(\n'
+        '        request, "index.html", {"nav_counts": _entity_counts(request, session)}\n'
+        "    )\n\n\n"
         + root_route
         + '__all__ = ["index_router"]\n'
     )
