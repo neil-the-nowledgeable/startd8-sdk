@@ -66,21 +66,24 @@ F. strtd8 follow-ups                 — pilot-adjacent contract items      [tea
    `Route:` override were already present in the templates from prior VIP/DMC syncs. Bumped the
    template header's `authoring-contract grammar v0.1` → `v0.3` (it teaches v0.3 constructs now).
 
-### C — Lint mode (contract OQ-2; natural follow-on after P2)
+### C — Lint mode (contract OQ-2) — ✅ ALREADY SHIPPED
 
-6. `--lint`-style extraction dry-run: run the extractor against a doc, print the report,
-   write nothing — the author's pre-flight. Cheapest realization: the extraction module's CLI
-   entry with `--no-write` semantics; surfaces in the BA/Architect docs-first kits.
+6. ✅ `startd8 kickoff check <doc>` is the extraction dry-run / write-nothing lint mode
+   (`cli_kickoff.py:check`) — renders the conformance report, writes nothing. OQ-2 satisfied.
 
 ### D — Generator-gap backlog (each closes a standing `not_extracted(generator-gap)` flag)
 
-7. **Completeness rich fields** — extend `backend_codegen/derived.py`'s manifest schema with
-   `nudge`/`predicate`/`confirmed`/`href` (the strtd8 file's own header predicted this
-   reconciliation); then the contract's §2.4 nudge rule flips from flag to extract.
-8. **`AppManifest` gaps** — `port`, `env keys`, `sqlite mode` have no home
-   (`scaffold_codegen/manifest.py:19–30`); extending the scaffold manifest makes §2.7 fully
-   extractable. (The env-keys ↔ `build-preferences.yaml` agreement check works today
-   regardless.)
+7. ✅ **Completeness authored nudge** (DONE 2026-06-29, `0bea4d89`) — the §2.4 ` — nudge: "…"`
+   suffix is now carried into the per-entity completeness manifest (`backend_codegen/derived.py`
+   `nudge` field) and baked into `compute_completeness`; the extractor flips the nudge row
+   NOT_EXTRACTED→EXTRACTED. Byte-identical when absent. (The broader `predicate`/`confirmed`/`href`
+   rich fields remain a future refinement; the nudge was the live flag.)
+8. ✅ **`AppManifest` gaps** (DONE 2026-06-29) — `port` and `env keys` gained homes
+   (`app.port` / `app.env_keys`, `scaffold_codegen/manifest.py`), consumed by the Dockerfile/
+   run.sh (port) and `.env.example` (env keys, deduped); the §2.7 extractor emits them.
+   **`sqlite mode` deliberately stays flagged** — WAL/journal-mode touches app `db.py`, not
+   scaffold plumbing (the renderers' own v1 scope note), so it's a backend-codegen backlog item,
+   not a scaffold gap. §2.7 mapping table + contract updated.
 9. **Views `Shows:` for detail-compose/workspace** (spike F3) — v1 ships shells; a
    `view_codegen` relations/panels enrichment pass later upgrades the prose lines from
    `not_extracted` to extracted. Track against REQ-VIEW.

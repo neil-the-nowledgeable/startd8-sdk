@@ -10,11 +10,12 @@ deliberate non-conformances the report must flag.
 | package name | demoapp | the Python package |
 | display name | Demo App | what users see |
 | python version | 3.12 | |
-| port | 8099 | NO MANIFEST HOME — must flag generator-gap |
+| port | 8099 | extracted to app.port (D8) |
 | database | sqlite:///./data/demo.db (override via DATABASE_URL) | |
 | migrations | alembic | |
 | container | yes — emit Dockerfile | |
-| env keys | ANTHROPIC_API_KEY (optional) | NO MANIFEST HOME — must flag |
+| env keys | ANTHROPIC_API_KEY (optional) | extracted to app.env_keys (D8) |
+| sqlite mode | wal | NO MANIFEST HOME — app-code concern, must flag generator-gap |
 
 ## Entities
 

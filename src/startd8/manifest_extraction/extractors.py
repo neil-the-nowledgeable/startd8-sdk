@@ -729,8 +729,12 @@ def extract_human_inputs(
 # §2.7 Scaffold & runtime → app.yaml (subset rule — sweep-2/F-gap)
 # --------------------------------------------------------------------------- #
 
-# Settings with no AppManifest home (sweep 2): flagged, never emitted as unknown keys.
-_NO_MANIFEST_HOME = {"port", "sqlite mode", "env keys"}
+# Settings with no AppManifest home: flagged, never emitted as unknown keys. D8 gave `port` and
+# `env keys` homes (`app.port` / `app.env_keys`); `sqlite mode` remains app-code (WAL/journal-mode
+# touches db.py), out of scaffold-plumbing scope per the scaffold renderers' v1 design note.
+_NO_MANIFEST_HOME = {"sqlite mode"}
+# §2.7 `env keys` cell grammar (D8): `·`-separated entries, each `KEY (qualifier…)`.
+_ENV_KEY_ENTRY_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\((.*)\))?\s*$")
 
 
 def extract_app(
@@ -757,7 +761,7 @@ def extract_app(
         if setting in _NO_MANIFEST_HOME:
             records.append(ExtractionRecord(
                 "app.yaml", f"/{setting.replace(' ', '_')}", Status.NOT_EXTRACTED, source=src,
-                reason="generator-gap: no AppManifest field (scaffold-codegen backlog)",
+                reason="generator-gap: app-code concern (db.py), not scaffold plumbing — backend-codegen backlog",
             ))
             continue
         if setting == "package name":
@@ -766,6 +770,36 @@ def extract_app(
             put("app", "name", value, src)
         elif setting == "python version":
             put("app", "python_version", value, src)
+        elif setting == "port":
+            # D8: leading integer (`8099`, `8099 (dev and prod)`); non-numeric ⇒ flag, never guess.
+            pm = re.search(r"\d+", value)
+            if pm:
+                put("app", "port", int(pm.group(0)), src)
+            else:
+                records.append(ExtractionRecord(
+                    "app.yaml", "/app/port", Status.NOT_EXTRACTED, source=src,
+                    reason=f"port cell has no integer: {value!r}",
+                ))
+        elif setting == "env keys":
+            # D8: `KEY (qualifier) · KEY (qualifier)` → [{name, qualifier?}, …].
+            entries: List[dict] = []
+            for part in value.split("·"):
+                part = part.strip()
+                if not part:
+                    continue
+                em = _ENV_KEY_ENTRY_RE.match(part)
+                if em:
+                    entry: dict = {"name": em.group(1)}
+                    if em.group(2):
+                        entry["qualifier"] = em.group(2).strip()
+                    entries.append(entry)
+            if entries:
+                put("app", "env_keys", entries, src)
+            else:
+                records.append(ExtractionRecord(
+                    "app.yaml", "/app/env_keys", Status.NOT_EXTRACTED, source=src,
+                    reason=f"env keys cell parsed no entries: {value!r}",
+                ))
         elif setting == "database":
             m = re.search(r"sqlite:///(\S+)", value)
             put("persistence", "path", m.group(1) if m else value, src)

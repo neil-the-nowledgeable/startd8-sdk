@@ -294,7 +294,9 @@ extraction flags disagreement).
 | logging | `logging.file` | first comma-segment = file path; rest is prose |
 | migrations | `migrations.enabled` | leading tool/yes ⇒ true |
 | container | `container.dockerfile` | leading `yes`/`no` |
-| port · sqlite mode · env keys | **`not_extracted(generator-gap)`** — no `AppManifest` home (scaffold-codegen backlog); env-key entries still parsed (`·`-separated, `KEY (qualifier…)`) for the build-preferences agreement check | |
+| port | `app.port` *(D8)* | leading integer (`8099`, `8099 (dev and prod)`); non-numeric ⇒ flag |
+| env keys | `app.env_keys` *(D8)* | `·`-separated, each `KEY (qualifier…)` → `[{name, qualifier?}, …]`; baked into `.env.example` (deduped against templated vars) and available for the build-preferences agreement check |
+| sqlite mode | **`not_extracted(generator-gap)`** — app-code concern (WAL/journal-mode touches `db.py`), not scaffold plumbing; backend-codegen backlog, out of scaffold v1 scope | |
 
 ### 2.9 Technology conventions → `conventions.yaml` *(value input — FR-VIP)*
 
