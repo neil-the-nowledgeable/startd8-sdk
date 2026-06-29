@@ -201,7 +201,7 @@ increment).
     **not** a whole-file write.
   Each proposal **re-validates on apply** (extractor/grammar/round-trip conformance), never trusting the
   loop's draft blindly; the human applies at human privilege.
-  - **Acceptance (CRP R1-F1 — the closed-allow-list floor, CRITICAL):** `apply_proposal` MUST **reject
+  - **Acceptance (CRP R1-F1 — the closed-allow-list floor, CRITICAL) ✅ DELIVERED 2026-06-29:** `apply_proposal` MUST **reject
     any `kind` not in the closed enumerated set** {`friction`,`instantiate`,`schema`,`manifest`,
     `value-input`}, and the agent-facing tool registry MUST expose **only read/propose tools — no
     apply/write tool is registered for the loop**. *Verify:* dispatching an unknown `kind` is rejected;

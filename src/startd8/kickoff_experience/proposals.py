@@ -191,6 +191,13 @@ def apply_proposal(
 
 
 def _apply_proposal_inner(root, action, cfg, build_instantiate_plan, build_friction_entry):
+    # R1-F1/S1 — the closed apply-side allow-list FLOOR (the security invariant every Red Carpet
+    # proposal kind rides): reject any kind outside PROPOSAL_KINDS *before* any write path. This is the
+    # single source of truth shared with the propose handler, so a future RCT kind (e.g. `schema`,
+    # `manifest`) cannot become a loop-reachable write until it is BOTH added here AND given an explicit
+    # apply branch below.
+    if action.kind not in PROPOSAL_KINDS:
+        return ProposalOutcome(action.kind, "unknown_kind", f"unknown proposal kind {action.kind!r}")
     # Explicit kind dispatch (a malformed/unknown ProposedAction returns a typed outcome, never a
     # KeyError — apply_proposal is a public entry point). Params accessed defensively.
     p = action.params or {}
