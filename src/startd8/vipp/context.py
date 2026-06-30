@@ -125,15 +125,28 @@ def record_processed(
     _atomic_write_json(path, cursor)
 
 
-def ground_truth_checksum(project_root: Path) -> Optional[str]:
-    """Idempotency key for the project ground truth the oracle is built from (FR-18 / A-S3).
+# The exact source set ``sapper.ground_truth.oracle_for_project`` reads to build the oracle
+# (``_GROUND_TRUTH_GLOBS`` + the Controlled Corpus). The idempotency checksum must cover the SAME
+# inputs — checksumming only ``*.prisma`` (and an unused friction report) would serve a stale no-op
+# when a TS interface or the corpus changed the oracle's verdicts (code-review M2).
+_ORACLE_SOURCE_GLOBS = ("**/*.prisma", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx")
 
-    Concretely the Prisma schema files (the schema/field authority) plus a persisted Sapper
-    friction report if present — not an abstract "ground-truth hash". ``None`` when neither exists.
+
+def ground_truth_checksum(project_root: Path) -> Optional[str]:
+    """Idempotency key over the SAME inputs the oracle is built from (FR-18 / A-S3 / M2).
+
+    Checksums the Prisma/TS/JS source globs plus the Controlled Corpus file — the actual inputs
+    ``oracle_for_project`` consumes — so a change that alters a verdict re-negotiates. ``None`` when
+    none are present.
     """
     root = Path(project_root)
-    schema = checksum_glob(root, "**/*.prisma")
-    report = checksum_file(root / "sapper-friction-report.json")
-    if schema is None and report is None:
+    parts = [checksum_glob(root, pattern) for pattern in _ORACLE_SOURCE_GLOBS]
+    try:
+        from ..paths import controlled_corpus_path
+
+        parts.append(checksum_file(controlled_corpus_path(root)))
+    except Exception:
+        pass
+    if all(p is None for p in parts):
         return None
-    return checksum_text(f"{schema or ''}|{report or ''}")
+    return checksum_text("|".join(p or "" for p in parts))

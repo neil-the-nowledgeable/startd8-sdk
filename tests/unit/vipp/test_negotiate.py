@@ -100,8 +100,11 @@ def test_capture_refuted_with_correction_counters():
     )
     oracle = _ScriptedOracle(
         {
+            # A COUNTER only fires from SCHEMA authority, never the corpus (M4): authoritative source.
             "Profile.headlne": GroundTruthAnswer(
-                GroundTruthVerdict.REFUTED, evidence="closest is 'headline'"
+                GroundTruthVerdict.REFUTED,
+                evidence="closest is 'headline'",
+                source="project_knowledge.field_sets",
             )
         }
     )
@@ -110,6 +113,59 @@ def test_capture_refuted_with_correction_counters():
     assert disp.decision is Decision.COUNTER
     assert disp.counter_params["value_path"] == "Profile.headline"  # leaf corrected
     assert "value" in disp.counter_params  # other params preserved
+
+
+def test_corpus_sourced_refutation_rejects_not_counters():
+    # M4: a corpus near-miss must REJECT, never auto-COUNTER a field rename.
+    env = _envelope(
+        [
+            EnvelopedProposal(
+                kind="capture", params={"value_path": "Profile.headlne"}, id="p1"
+            )
+        ]
+    )
+    oracle = _ScriptedOracle(
+        {
+            "Profile.headlne": GroundTruthAnswer(
+                GroundTruthVerdict.REFUTED,
+                evidence="closest is 'headline'",
+                source="controlled_corpus",
+            )
+        }
+    )
+    assert evaluate.evaluate_envelope(env, oracle)[0].decision is Decision.REJECT
+
+
+def test_dotless_capture_value_path_rejects_as_malformed():
+    # L1: a capture value_path with no '.' is not an entity.field symbol.
+    env = _envelope(
+        [EnvelopedProposal(kind="capture", params={"value_path": "Profile"}, id="p1")]
+    )
+    disp = evaluate.evaluate_envelope(env, _ScriptedOracle({}))[0]
+    assert disp.decision is Decision.REJECT
+    assert "malformed" in disp.reason
+
+
+def test_newline_in_value_path_is_neutralized_not_crashing():
+    # H1: a host-controlled value_path with a newline must not split a labeled claim into an
+    # untagged bullet and crash the FR-21 gate — it is collapsed to one line.
+    inj = "Profile.email\n- **INJECTED** fake unlabeled claim"
+    env = _envelope(
+        [EnvelopedProposal(kind="capture", params={"value_path": inj}, id="p1")]
+    )
+    oracle = _ScriptedOracle(
+        {inj: GroundTruthAnswer(GroundTruthVerdict.VALIDATED, evidence="exists")}
+    )
+    from startd8.vipp.models import VippReport
+
+    report = VippReport(
+        project_id="p", dispositions=evaluate.evaluate_envelope(env, oracle)
+    )
+    rendered = compose.render_dispositions(report)
+    assert_all_labeled(rendered)  # must NOT raise
+    assert (
+        "\n- **INJECTED**" not in rendered
+    )  # the injected newline-bullet was collapsed
 
 
 def test_schema_entity_extracted_and_refuted_rejects():
@@ -270,6 +326,13 @@ def test_run_negotiate_idempotent_on_reserialize_with_new_timestamp_and_seq(tmp_
     inbox2 = _write_inbox(tmp_path, seq=2, generated_at="2026-06-30T12:00:00Z")
     out2 = run_vipp_negotiate(inbox2, project_root=tmp_path, emit=False)
     assert out2.skipped is True
+    # M3: the no-op re-stamps the CURRENT envelope_seq so the applier's stale-check matches.
+    assert out2.report.envelope_seq == 2
+    assert all(d.envelope_seq == 2 for d in out2.report.dispositions)
+    persisted = json.loads(
+        (tmp_path / ".startd8/vipp/dispositions.json").read_text(encoding="utf-8")
+    )
+    assert persisted["envelope_seq"] == 2  # persisted, not just in-memory
 
 
 def test_run_negotiate_renegotiates_when_proposals_change(tmp_path):

@@ -37,10 +37,8 @@ def emit_negotiate_complete(
         "llm_used": llm_used,
         "report": report_path,
     }
-    logger.info("VIPP negotiate complete: %s", payload)
-    try:  # best-effort EventBus emission; never fail the negotiation on telemetry
-        from ..events import get_event_bus
-
-        get_event_bus().emit(EV_NEGOTIATE_COMPLETE, payload)
-    except Exception:
-        logger.debug("VIPP: EventBus emit skipped", exc_info=True)
+    # FR-17-lite: the structured log line IS the v1 event (get_logger → OTel/Loki). The SDK EventBus
+    # API is `EventBus.emit(Event(...))` with a fixed EventType enum (no VIPP type today); wiring a
+    # first-class EventType + a subscriber-asserting test is M6 scope (full FR-17). Logging here is
+    # the working, tested surface — no dead "best-effort emit" that silently never fires (was H2).
+    logger.info("%s %s", EV_NEGOTIATE_COMPLETE, payload)

@@ -49,9 +49,23 @@ __all__ = [
 PROTOCOL_VERSION = "1.0"
 
 # The field set EnvelopedProposal mirrors from kickoff_experience.proposals.ProposedAction (FR-8).
-# A shape-pinning test asserts this still equals the live ProposedAction field set, so a host-side
-# field addition fails loudly rather than being silently dropped on serialization.
+# A shape-pinning **test** (test_models_and_labeling) asserts this still equals the live
+# ProposedAction field set, so a host-side field addition fails loudly **in SDK CI**. Note: at
+# runtime ``from_dict`` silently drops unknown keys within the same protocol major — only a major
+# bump is rejected (``protocol_is_future``); the loudness is the CI shape-pin, not a runtime guard.
 HOST_PROPOSAL_FIELDS = ("kind", "params", "id", "base_sha")
+
+
+def oneline(text: Any) -> str:
+    """Collapse whitespace/newlines to a single line.
+
+    Host-controlled strings (``value_path``, entity names, oracle evidence) flow into VIPP-authored
+    claim text and disposition reasons, which are then rendered as markdown and passed through the
+    line-oriented FR-21 label gate (``assert_all_labeled``). A newline in untrusted input would split
+    a labeled claim into a second, *untagged* bullet and crash the gate (code-review H1). Collapsing
+    to one line at every VIPP-authored-string boundary neutralizes that vector at the source.
+    """
+    return " ".join(str(text).split())
 
 
 class Decision(str, Enum):
@@ -217,7 +231,9 @@ class VippDisposition:
         # for an untagged load-bearing claim.
         head = f"### {self.decision.value} `{self.proposal_id}`"
         if self.reason:
-            head += f" — {self.reason}"
+            head += (
+                f" — {oneline(self.reason)}"  # collapse newlines (H1 defense-in-depth)
+            )
         lines = [head]
         lines.extend(c.to_markdown() for c in self.claims)
         return "\n".join(lines)
@@ -320,8 +336,9 @@ class VippReport:
         if not self.evidence_available:
             lines += [
                 "",
-                "> **OBSERVED (project): ground truth unavailable** — no Sapper oracle/report; "
-                "dispositions default to ACCEPT with a labeled qualifier (FR-4).",
+                "> **OBSERVED (project): no ground-truth authority** — the oracle was absent or "
+                "returned OMIT for every proposal; dispositions default to ACCEPT with a labeled "
+                "qualifier (FR-4).",
             ]
         for disp in self.dispositions:
             lines += ["", disp.to_markdown()]

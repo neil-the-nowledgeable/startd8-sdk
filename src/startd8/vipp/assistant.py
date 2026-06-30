@@ -15,6 +15,7 @@ deterministic core + opt-in narrative (re-gated by ``assert_all_labeled``) → w
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +97,21 @@ def run_vipp_negotiate(
     ):
         logger.info("VIPP negotiate: inbox unchanged since last run — no-op")
         existing = VippReport.from_json(json_path.read_text(encoding="utf-8"))
+        # Content-identical re-serialize with a bumped envelope_seq: re-stamp the CURRENT seq (without
+        # re-evaluating) so a downstream applier's FR-18 stale-check matches the live inbox. The
+        # fingerprint excludes envelope_seq, so the decisions are unchanged — only the seq advances
+        # (code-review M3). Dispositions are frozen → rebuild via dataclasses.replace.
+        if existing.envelope_seq != envelope.envelope_seq:
+            existing.envelope_seq = envelope.envelope_seq
+            existing.dispositions = [
+                dataclasses.replace(d, envelope_seq=envelope.envelope_seq)
+                for d in existing.dispositions
+            ]
+            if write:
+                json_path.write_text(
+                    json.dumps(existing.to_dict(), indent=2), encoding="utf-8"
+                )
+                report_path.write_text(existing.to_markdown(), encoding="utf-8")
         return NegotiateOutcome(existing, report_path, skipped=True)
 
     # Deterministic core ($0, no LLM).

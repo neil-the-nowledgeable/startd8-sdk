@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from .models import ClaimLabel, LabeledClaim
+from .models import ClaimLabel, LabeledClaim, oneline
 
 try:  # Sapper may not be installed in every deployment; degrade gracefully (FR-8).
     from startd8.sapper.fde_bridge import to_observed_claims
@@ -59,10 +59,14 @@ def answer_to_observed_claim(question: Any, answer: Any) -> Optional[LabeledClai
     text = f"[{verdict_tag}] {question.claim}"
     if getattr(answer, "evidence", ""):
         text += f" — {answer.evidence}"
+    # Collapse newlines: question.claim/evidence carry host-controlled symbols; a newline would
+    # split this into a second untagged bullet and crash the FR-21 label gate (code-review H1).
     return LabeledClaim(
         label=ClaimLabel.OBSERVED,
-        text=text,
-        source=f"sapper:{getattr(answer, 'source', '') or question.kind.value}",
+        text=oneline(text),
+        source=oneline(
+            f"sapper:{getattr(answer, 'source', '') or question.kind.value}"
+        ),
         claim_id=question.fingerprint(),
         qualifier="conflict" if is_refuted else "",
     )

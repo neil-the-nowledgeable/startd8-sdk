@@ -33,6 +33,7 @@ from .models import (
     LabeledClaim,
     ProposalEnvelope,
     VippDisposition,
+    oneline,
 )
 
 if SAPPER_AVAILABLE:  # pragma: no branch
@@ -75,11 +76,17 @@ def _build_questions(proposal: Any, extract: EntityExtractor) -> List[Any]:
         value_path = params.get("value_path")
         if not value_path:
             raise ValueError("capture proposal missing 'value_path'")
+        if "." not in str(value_path):
+            # A capture value_path is an "entity.field" symbol by convention; a dotless one would
+            # partition to an empty field name and yield a bogus REFUTED (code-review L1).
+            raise ValueError(
+                f"capture 'value_path' is not an entity.field symbol: {value_path!r}"
+            )
         return [
             GroundTruthQuestion(
                 assumption_id=proposal.id,
                 kind=AssumptionKind.FIELD_AUTHORITY,
-                claim=f"{value_path} is a project field",
+                claim=oneline(f"{value_path} is a project field"),
                 symbol=str(value_path),
             )
         ]
@@ -89,7 +96,7 @@ def _build_questions(proposal: Any, extract: EntityExtractor) -> List[Any]:
             GroundTruthQuestion(
                 assumption_id=f"{proposal.id}:{entity}",
                 kind=AssumptionKind.IDENTITY_COLLISION,
-                claim=f"{entity} is a canonical entity",
+                claim=oneline(f"{entity} is a canonical entity"),
                 symbol=entity,
             )
             for entity in extract(prose)
@@ -106,7 +113,7 @@ def _accept(proposal_id, seq, *, text, source, qualifier="") -> VippDisposition:
         claims=[
             LabeledClaim(
                 label=ClaimLabel.OBSERVED,
-                text=text,
+                text=oneline(text),
                 source=source,
                 claim_id=proposal_id,
                 qualifier=qualifier,
@@ -153,7 +160,9 @@ def _evaluate_one(
 
     if refuted:
         _q, ans = refuted[0]
-        reason = getattr(ans, "evidence", "") or "refuted by project ground truth"
+        reason = oneline(
+            getattr(ans, "evidence", "") or "refuted by project ground truth"
+        )
         counter = _try_counter(proposal, ans)
         if counter is not None:
             return VippDisposition(
@@ -181,14 +190,26 @@ def _evaluate_one(
     )
 
 
-def _try_counter(proposal: Any, answer: Any) -> Optional[dict]:
-    """Best-effort deterministic COUNTER for ``capture`` when the oracle names a correction.
+# Oracle sources that carry real schema/field authority — a COUNTER (which actively proposes a
+# rename) must only be sourced from these, NOT from the Controlled Corpus. The CompositeOracle
+# consults the corpus FIRST and resolves on the value_path's bare leaf, so a corpus near-miss on a
+# field name could otherwise drive a confidently-wrong field rename (code-review M4). A corpus
+# REFUTED still REJECTs (with its evidence), but never auto-COUNTERs.
+_SCHEMA_AUTHORITY_SOURCES = ("project_knowledge", "field_sets", "interfaces")
 
-    Only ``capture`` (a structured ``value_path``) supports an amendment; the correction is parsed
-    from the oracle's own REFUTED evidence ("… use X" / "closest is 'X'"). ``base_sha``/``kind`` are
-    never amended (FR-5). Returns ``None`` (→ REJECT) when no correction is parseable.
+
+def _try_counter(proposal: Any, answer: Any) -> Optional[dict]:
+    """Best-effort deterministic COUNTER for ``capture`` when **schema authority** names a correction.
+
+    Only ``capture`` (a structured ``value_path``) supports an amendment, and only when the refuting
+    answer came from schema/field authority (not the corpus — M4). The correction is parsed from the
+    oracle's REFUTED evidence ("… use X" / "closest is 'X'"). ``base_sha``/``kind`` are never amended
+    (FR-5). Returns ``None`` (→ REJECT) when no correction is parseable or the source is not authoritative.
     """
     if proposal.kind != "capture":
+        return None
+    source = str(getattr(answer, "source", "") or "")
+    if not any(tag in source for tag in _SCHEMA_AUTHORITY_SOURCES):
         return None
     m = _CORRECTION.search(getattr(answer, "evidence", "") or "")
     if not m:
