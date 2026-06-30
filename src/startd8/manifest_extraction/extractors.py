@@ -92,6 +92,11 @@ _KINDS = {"dashboard", "board", "workspace", "detail-compose", "export-package",
 _CONTRACT_KINDS = {"import-flow", "computed-panel"}
 _ARROW_RE = re.compile(r"(\w+)\s*(?:→|->)\s*(\w+)")
 _COUNTS_RE = re.compile(r"counts of\s+(.+?)(?:\s+per\s+\w+)?$", re.IGNORECASE)
+# §2.3 Panel production (D9 / spike F3): `- Panel: <Name> = <field>, <field>, …` (detail-compose
+# only). Repeatable, so scanned from the block body directly (key_lines keeps only the first).
+_PANEL_LINE_RE = re.compile(r"^\s*-?\s*Panel:\s*(.+?)\s*=\s*(.+)$")
+# A field token may carry a trailing parenthetical (annotation tolerance, mirrors the arrow grammar).
+_FIELD_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 
 def extract_views(
@@ -275,6 +280,53 @@ def extract_views(
                     reason=f"`{key}:` line matches neither the arrow nor the counts grammar "
                            f"(prose): {text[:60]!r}",
                 ))
+
+        # Panel: <Name> = <field>, … (D9 / spike F3) → a `panels` entry surfacing Root fields,
+        # shown when any is set. Detail-compose only; repeatable (scan the body, not key_lines).
+        # The extractor is the SOLE field guard here — the round-trip gate doesn't pass known_fields.
+        field_by_lower = {f.name.lower(): f.name for f in graph.entities[root].fields} \
+            if root in graph.entities else {}
+        for line in sec.body.splitlines():
+            pm = _PANEL_LINE_RE.match(line.strip())
+            if not pm:
+                continue
+            panel_name = strip_annotations(pm.group(1)).strip()
+            if kind != "detail-compose":
+                records.append(ExtractionRecord(
+                    "views.yaml", f"/views/{vi}/panels/{nfkd_kebab(panel_name)}",
+                    Status.NOT_EXTRACTED, source=src,
+                    reason=f"`Panel:` is detail-compose-only (off-archetype on {kind!r})",
+                ))
+                continue
+            resolved: List[str] = []
+            for tok in pm.group(2).split(","):
+                tok = _FIELD_PAREN_RE.sub("", tok).strip()
+                if not tok:
+                    continue
+                canonical = field_by_lower.get(tok.lower())
+                if canonical is None:
+                    records.append(ExtractionRecord(
+                        "views.yaml", f"/views/{vi}/panels/{nfkd_kebab(panel_name)}/{nfkd_kebab(tok)}",
+                        Status.NOT_EXTRACTED, source=src,
+                        reason=f"field {tok!r} not on Root {root!r} (never a guessed field)",
+                    ))
+                    continue
+                if canonical not in resolved:
+                    resolved.append(canonical)
+            if not resolved:
+                records.append(ExtractionRecord(
+                    "views.yaml", f"/views/{vi}/panels/{nfkd_kebab(panel_name)}",
+                    Status.NOT_EXTRACTED, source=src,
+                    reason=f"panel {panel_name!r} has no resolvable Root field — dropped",
+                ))
+                continue
+            view.setdefault("panels", []).append(
+                {"name": panel_name, "fields": resolved, "show_when": "any_set"}
+            )
+            records.append(ExtractionRecord(
+                "views.yaml", f"/views/{vi}/panels/{nfkd_kebab(panel_name)}", Status.EXTRACTED,
+                value=f"fields={resolved} show_when=any_set", source=src,
+            ))
 
         # Gap callout: → gap.needs_from requires Root-field resolution — flag (F5 posture).
         if "Gap callout" in keys:

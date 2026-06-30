@@ -1,6 +1,6 @@
 # Kickoff Authoring Contract — the Happy-Path Language
 
-**Version:** 0.3 (post-CRP v0.2 + `money` plain type & data-model-conventions vocabulary growth — see Appendix A / DMC-G1)
+**Version:** 0.4 (v0.3 + the §2.3 `Panel:` line production — detail-compose root-field panels; see Appendix A / VSP-G1)
 **Date:** 2026-06-05
 **Status:** Draft
 **Audience:** Internal + the LLM/human co-work sessions that produce customer kickoff docs.
@@ -169,6 +169,14 @@ non-`- Key:` line.
   passes the YAML round-trip and fails only at generate time).
 - `Also shows:` → additional `relations`/`aggregates`; counts ("counts of X per Y") →
   `aggregates{name, of, fk}`.
+- `Panel: <Name> = <field>, <field>, …` *(VSP-G1 — detail-compose only)* → a `panels` entry
+  `{name, fields, show_when: any_set}`: a named group of **Root-entity fields**, rendered only when
+  ≥1 field is non-empty. **Repeatable** (a view may declare several). Each field token resolves
+  case-tolerant against the Root entity's §2.1 fields (a trailing parenthetical is tolerated display
+  prose); an unknown field ⇒ `not_extracted` (named, dropped — **never a guessed field**, since the
+  views round-trip gate doesn't field-check). A panel with no resolvable field is dropped whole. On
+  any non-detail-compose kind ⇒ `not_extracted(off-archetype)`. A free-prose `Shows:` that is neither
+  the arrow, counts, nor this Panel form stays `not_extracted(prose)` — flag-don't-guess preserved.
 - `Empty state:` → **`not_extracted(generator-gap)`** — `parse_views` has no home for it
   (recorded per entry, never silently dropped).
 - `Gap callout:` → `gap`.
@@ -506,6 +514,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 | VIP-G1 | Add **§2.9 Technology conventions → `conventions.yaml`** — the first prose-authored *value* input. Defines the section/subsection grammar (key-lines + stack/module-layout/naming tables + the FR-F6 `### Data-model conventions` enum block + architecture-invariant bullets), the controlled vocabularies, and flag-don't-guess handling. Implemented as `manifest_extraction.extract_conventions` + the strict round-trip authority `kickoff_inputs.parse_conventions` (`ConventionsManifest`). | FR-VIP slice (household-o11y kickoff, 2026-06-23); `SDK_VALUE_INPUT_AUTHORING_REQUIREMENTS.md` + `HOWTO_DATA_MODEL_CONVENTIONS_GRAMMAR.md` | §2.9 grammar + mapping/enum tables; `kickoff_inputs/conventions.py`; round-trip wired into `extract.py`; GRAMMAR_VERSION already `v0.3` | 2026-06-25 |
 | VIP-G2 | Add **§2.10 Business targets → `business-targets.yaml`** — the value-input fan-out (table-per-group grammar: Outcomes/Usage/Unit-economics `\| Metric \| Target \| Why \|` → `product_funnel`/`traction`/`unit_economics`; Per-role goals table; int-vs-string target literal; `not-applicable` monetization expansion; unknown-group flag). `extract_business_targets` + `parse_business_targets` (`BusinessTargetsManifest`). | FR-VIP fan-out (household-o11y, 2026-06-23) | §2.10 grammar + mapping table; `kickoff_inputs/business_targets.py`; round-trip wired into `extract.py` | 2026-06-25 |
 | VIP-G3 | Add **§2.11 Build preferences → `build-preferences.yaml`** — the value-input fan-out (key-line groups: Budgets/Model-routing/Generation/Unattended → snake_case scalar maps; `non_interactive` bool coercion; tier-names-never-versions). `extract_build_preferences` + `parse_build_preferences` (`BuildPreferencesManifest`). Closes the `cli_kickoff` "needs a `build_preferences_text` pass" backlog note. | FR-VIP fan-out (household-o11y, 2026-06-23) | §2.11 grammar + mapping table; `kickoff_inputs/build_preferences.py`; round-trip wired into `extract.py` | 2026-06-25 |
+| VSP-G1 | Add the **§2.3 `Panel: <Name> = <field>, …` line production** (detail-compose only) → a `panels` entry surfacing Root-entity fields, shown when any is set. Repeatable; case-tolerant field resolution against the §2.1 graph with flag-don't-guess on unknown fields (the views round-trip gate doesn't field-check, so the extractor is the sole guard); off-archetype on non-detail-compose; genuinely-unstructured prose `Shows:` still flagged. Closes lane D9 / spike F3 (the "constrained Relations/Panels line format" follow-up). **No `view_codegen` change** — the `Panel{name,fields,show_when}` schema + detail-compose renderer already existed; only `extract_views` + the contract gained the production. GRAMMAR_VERSION → v0.4. | D9 / spike-finding F3 (reflective-requirements pass, 2026-06-29); `VIEW_SHOWS_PANELS_GRAMMAR_REQUIREMENTS.md` v0.2 + `_PLAN.md` v1.0 | §2.3 Panel micro-grammar; `manifest_extraction/extractors.py` `extract_views`; `models.py` GRAMMAR_VERSION | 2026-06-29 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 

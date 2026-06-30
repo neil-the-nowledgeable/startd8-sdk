@@ -57,7 +57,7 @@ def test_observability_extracts_and_round_trips():
 
 def test_grammar_version_bumped():
     res = extract_manifests({"observability.md": GOOD})
-    assert res.grammar_version == "authoring-contract-v0.3"
+    assert res.grammar_version == "authoring-contract-v0.4"
 
 
 def test_bad_op_flagged_not_extracted():

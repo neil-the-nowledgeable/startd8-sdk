@@ -87,6 +87,20 @@ def test_views_all_five_kinds(result) -> None:
     assert by_name["widget_board"]["order"] == ["free", "pro"]
 
 
+def test_view_panels_extracted_with_field_flagged(result) -> None:
+    """VSP-G1 (D9): the `Panel:` line surfaces resolved Root fields; the unknown `ghostField` is
+    flagged not_extracted and dropped (never guessed); the parenthetical on `score` is tolerated."""
+    data = yaml.safe_load(result.manifests["views.yaml"])
+    by_name = {v["name"]: v for v in data["views"]}
+    assert by_name["widget_wall"]["panels"] == [
+        {"name": "Details", "fields": ["title", "score"], "show_when": "any_set"}
+    ]
+    panel_flags = [r.reason for r in result.by_status(Status.NOT_EXTRACTED)
+                   if r.manifest == "views.yaml" and "/panels/" in r.value_path]
+    assert any("ghostField" in (x or "") and "never a guessed field" in (x or "")
+               for x in panel_flags)
+
+
 def test_views_generator_gaps_flagged(result) -> None:
     reasons = [r.reason for r in result.by_status(Status.NOT_EXTRACTED)
                if r.manifest == "views.yaml"]

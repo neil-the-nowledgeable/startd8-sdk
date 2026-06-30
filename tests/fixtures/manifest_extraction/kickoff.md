@@ -77,6 +77,7 @@ Navigation *(order = display order)*:
 - Kind: detail-compose
 - Root: Widget
 - Shows: Widget→Tag (only confirmed)
+- Panel: Details = title, score (human-entered), ghostField
 - Empty state: "nothing yet"
 
 ### View: Profile Dashboard
