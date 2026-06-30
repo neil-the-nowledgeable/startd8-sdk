@@ -84,9 +84,14 @@ F. strtd8 follow-ups                 — pilot-adjacent contract items      [tea
    **`sqlite mode` deliberately stays flagged** — WAL/journal-mode touches app `db.py`, not
    scaffold plumbing (the renderers' own v1 scope note), so it's a backend-codegen backlog item,
    not a scaffold gap. §2.7 mapping table + contract updated.
-9. **Views `Shows:` for detail-compose/workspace** (spike F3) — v1 ships shells; a
-   `view_codegen` relations/panels enrichment pass later upgrades the prose lines from
-   `not_extracted` to extracted. Track against REQ-VIEW.
+9. ✅ **Views `Shows:` panels for detail-compose** (DONE 2026-06-29) — added the §2.3 `Panel: <Name>
+   = <field>, …` production (VSP-G1, GRAMMAR_VERSION → v0.4) so root-field panels are extractable;
+   `extract_views` emits `panels` with flag-don't-guess field resolution. **Scoped via a
+   reflective-requirements pass** (`VIEW_SHOWS_PANELS_GRAMMAR_REQUIREMENTS.md` v0.2 + `_PLAN.md` v1.0)
+   which found: (a) **no `view_codegen` change needed** (the `Panel` schema + renderer already
+   existed), and (b) **workspace is out** — its renderer is polymorphic-only, so workspace `Shows:`
+   prose correctly stays flagged. The broader relation-enrichment the spike imagined collapsed to a
+   contract + extractor change. (Genuinely-unstructured prose still flags — flag-don't-guess intact.)
 
 ### E — Versioning mechanics (contract OQ-1)
 
@@ -104,15 +109,17 @@ F. strtd8 follow-ups                 — pilot-adjacent contract items      [tea
 
 ## 3. Sequencing
 
-**Done:** A1–A3 (the build) **and** B4–B5 (teaching-surface alignment, 2026-06-29). **After P2:**
-C6. **Independent, schedule by appetite:** D7–D9. **Event-driven:** E10 (corpus ships), F11–F12
-(StartDate team cadence, pre-P2-derivation).
+**Done (2026-06-29):** A1–A3 (the build), B4–B5 (teaching-surface alignment), C6 (already shipped as
+`kickoff check`), and **D7–D9 (the generator-gap backlog — all closed)**. **Event-driven:** E10
+(corpus ships), F11–F12 (StartDate team cadence, pre-P2-derivation).
 
 | Step | Effort | Blocked by | Status |
 |------|--------|-----------|--------|
 | A1–A3 build | the main work | nothing — gate satisfied | ✅ done |
 | B4–B5 templates | trivial | nothing | ✅ done (2026-06-29) |
-| C6 lint | small | P2 | open |
-| D7–D9 generator gaps | small–medium each | nothing (independent) | open |
+| C6 lint | small | — | ✅ already shipped (`kickoff check`) |
+| D7 completeness nudge | small | nothing | ✅ done (2026-06-29) |
+| D8 port + env keys | medium | nothing | ✅ done (2026-06-29) |
+| D9 view panels grammar | reflective-reqs pass | nothing | ✅ done (2026-06-29) |
 | E10 versioning | trivial | corpus | open |
 | F11–F12 strtd8 | team | pre-P2-derivation only | open |
