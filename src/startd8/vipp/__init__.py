@@ -28,6 +28,13 @@ from .models import (
     VippReport,
     protocol_is_future,
 )
+from .ground_truth import (
+    SAPPER_AVAILABLE,
+    answer_to_observed_claim,
+    load_observed_claims,
+    observed_from_oracle,
+    observed_from_report,
+)
 
 __all__ = [
     "PROTOCOL_VERSION",
@@ -40,4 +47,10 @@ __all__ = [
     "VippDisposition",
     "VippReport",
     "protocol_is_future",
+    # M1 — ground-truth consumption
+    "SAPPER_AVAILABLE",
+    "load_observed_claims",
+    "observed_from_oracle",
+    "observed_from_report",
+    "answer_to_observed_claim",
 ]
