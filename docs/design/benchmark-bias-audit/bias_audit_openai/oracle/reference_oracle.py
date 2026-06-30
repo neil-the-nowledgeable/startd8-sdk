@@ -77,6 +77,8 @@ def _parse_decimal(value: object, *, field: str) -> Decimal:
     if any(mark in value for mark in forbidden):
         raise ValueError(f"{field} uses a forbidden representation")
     lowered = value.lower()
+    if "e" in lowered:
+        raise ValueError(f"{field} uses a forbidden exponent/float-literal representation")
     if lowered in {"nan", "+nan", "-nan", "inf", "+inf", "-inf", "infinity"}:
         raise ValueError(f"{field} must be finite")
     try:
