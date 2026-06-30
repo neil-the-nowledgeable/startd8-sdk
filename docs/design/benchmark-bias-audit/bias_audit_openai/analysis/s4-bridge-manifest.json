@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "status": "reviewed",
+  "reviewed_at_utc": "2026-06-30T04:15:00Z",
+  "reviewer": "codex",
+  "purpose": "S4 bridge dry-run admission manifest only; this does not authorize semantic execution of model-authored suites.",
+  "scope": {
+    "phase": "S4_suite_authoring",
+    "batch_id": "pricing-cross-tool-authoring-v1",
+    "allowed_action": "trusted sentinel dry-run for bridge isolation prerequisites",
+    "forbidden_action": "importing or executing generated suite.py artifacts"
+  },
+  "require_no_egress": true,
+  "require_scrubbed_env": true,
+  "require_identical_inventory": true,
+  "timeout_seconds": 10,
+  "max_output_bytes": 4096,
+  "review_notes": [
+    "The preflight runner must use an available no-egress isolation primitive before any bridge can be considered ready.",
+    "The preflight runner must scrub secret-bearing environment variables and redirect HOME/TMPDIR into the dry-run workspace.",
+    "The generated suites and target inventory must remain identical across reference-oracle and mutant runs.",
+    "This manifest is intentionally limited to the bridge dry-run gate; semantic S4 execution remains disabled until a reviewed executor consumes this gate."
+  ]
+}
