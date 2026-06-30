@@ -66,6 +66,10 @@ def run_vipp_negotiate(
     sdk_version = _sdk_version()
     context.ensure_posting(project_root, sdk_version=sdk_version)
 
+    # Symlink-reject the inbox read, matching the applier's confined read (code-review L1 / R3-F7):
+    # an attacker who plants a symlink at proposals-inbox.json could otherwise redirect the read.
+    if inbox_path.is_symlink():
+        raise ValueError(f"refusing to read the inbox through a symlink: {inbox_path}")
     envelope = ProposalEnvelope.from_json(inbox_path.read_text(encoding="utf-8"))
     if protocol_is_future(envelope.protocol_version):
         raise ValueError(

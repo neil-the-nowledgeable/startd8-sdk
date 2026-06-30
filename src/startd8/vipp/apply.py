@@ -132,9 +132,14 @@ def apply_dispositions(
         result.actionable += 1
         enveloped = inbox_by_id.get(disp.proposal_id)
         if enveloped is None:
+            # A disposition with no matching inbox entry can NEVER become applicable under this seq
+            # (a corrupted/hand-edited dispositions.json) — record it consumed so it does not wedge
+            # the shred forever (code-review M1). Defense-in-depth behind the stale-seq guard.
+            context.record_processed(
+                project_root, key, "consumed", {"code": "no_inbox_entry"}
+            )
             rec.update(code="no_inbox_entry", ok=False)
             result.outcomes.append(rec)
-            consumed_all = False
             continue
 
         action = _reconstruct(enveloped, disp)

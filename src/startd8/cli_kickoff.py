@@ -545,10 +545,17 @@ def concierge_chat_cmd(
     except Exception as exc:  # never break session exit on a hand-off hiccup
         handoff = None
         console.print(f"[dim]VIPP hand-off skipped: {exc}[/dim]")
-    if handoff is not None and handoff.ok:
+    # A pure no-clobber skip is WriteResult.ok==True but wrote nothing — gate the success message
+    # on an actual write, and surface the undrained-inbox case distinctly (code-review M2).
+    if handoff is not None and handoff.written:
         console.print(
             "[dim]VIPP: pending proposals serialized to .startd8/vipp/proposals-inbox.json — "
             "run `startd8 vipp negotiate`.[/dim]"
+        )
+    elif handoff is not None and handoff.skipped:
+        console.print(
+            "[yellow]VIPP: an undrained inbox already exists — run `startd8 vipp negotiate`/`apply` "
+            "to consume it before this session's proposals can be serialized.[/yellow]"
         )
 
 

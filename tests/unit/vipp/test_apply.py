@@ -238,6 +238,42 @@ def test_partial_failure_consumes_terminal_retains_retriable_then_resumes(
 # --- stale-seq refusal (FR-18) --------------------------------------------------------------------
 
 
+def test_ghost_disposition_is_consumed_not_wedging_shred(tmp_path, monkeypatch):
+    # code-review M1: a disposition whose proposal_id is not in the inbox must be consumed (terminal),
+    # not block the inbox shred forever.
+    proj = _proj(tmp_path)
+    buf = ProposalBuffer()
+    buf.add(
+        ProposedAction(kind="instantiate", params={"posture": "prototype"}, id="real")
+    )
+    seq = _serialize(proj, buf)
+    _write_dispositions(
+        proj,
+        seq,
+        [
+            VippDisposition(
+                proposal_id="real", decision=Decision.ACCEPT, envelope_seq=seq
+            ),
+            VippDisposition(
+                proposal_id="ghost", decision=Decision.ACCEPT, envelope_seq=seq
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        "startd8.vipp.apply.apply_proposal",
+        lambda pr, a, *, config=None: ProposalOutcome(
+            a.kind, ConciergeWriteCode.OK, "ok"
+        ),
+    )
+
+    res = apply_dispositions(proj, confirm=YES)
+
+    codes = {o["proposal_id"]: o["code"] for o in res.outcomes}
+    assert codes["ghost"] == "no_inbox_entry"
+    assert res.wrote == 1  # only the real one
+    assert res.inbox_shredded is True  # ghost was consumed → not wedged
+
+
 def test_stale_seq_is_refused(tmp_path):
     proj = _proj(tmp_path)
     buf = ProposalBuffer()

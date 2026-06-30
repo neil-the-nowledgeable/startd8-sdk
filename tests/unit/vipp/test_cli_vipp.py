@@ -107,6 +107,35 @@ def test_apply_without_dispositions_exits_2(tmp_path):
     assert "no dispositions" in result.output
 
 
+def test_negotiate_malformed_inbox_exits_2_not_traceback(tmp_path):
+    # code-review H1: a malformed inbox must map to exit 2, not a raw traceback (exit 1).
+    proj = _proj(tmp_path)
+    seam.inbox_path(proj).write_text("{ not valid json", encoding="utf-8")
+    result = runner.invoke(vipp_app, ["negotiate", "--project-root", proj])
+    assert result.exit_code == 2
+    assert "unreadable" in result.output.lower() or "invalid" in result.output.lower()
+
+
+def test_negotiate_future_protocol_exits_2(tmp_path):
+    # code-review H1: a future protocol major is refused with exit 2 (not a traceback).
+    import json
+
+    proj = _proj(tmp_path)
+    seam.inbox_path(proj).write_text(
+        json.dumps(
+            {
+                "kind": "vipp-proposal-envelope",
+                "protocol_version": "2.0",
+                "project_id": "p",
+                "proposals": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(vipp_app, ["negotiate", "--project-root", proj])
+    assert result.exit_code == 2
+
+
 def test_vipp_is_registered_on_the_root_cli():
     from startd8.cli import app
 

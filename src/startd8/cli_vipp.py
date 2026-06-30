@@ -94,6 +94,9 @@ def vipp_negotiate(
     ),
 ) -> None:
     """Adjudicate the host proposal inbox into a source-labeled dispositions report ($0, deterministic)."""
+    import json
+
+    from .concierge.safe_write import SafeWriteError
     from .kickoff_experience.vipp_seam import inbox_path
     from .vipp import run_vipp_negotiate
 
@@ -106,9 +109,20 @@ def vipp_negotiate(
         )
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
-    outcome = run_vipp_negotiate(
-        ip, project_root=root, narrative=narrative, write=not no_write, force=force
-    )
+    try:
+        outcome = run_vipp_negotiate(
+            ip, project_root=root, narrative=narrative, write=not no_write, force=force
+        )
+    except SafeWriteError as exc:  # confinement / symlink refusal
+        console.print(f"[red]VIPP negotiate blocked:[/red] {exc}")
+        raise typer.Exit(_EXIT_BLOCKED)
+    except (
+        ValueError,
+        KeyError,
+        json.JSONDecodeError,
+    ) as exc:  # future-protocol / malformed inbox
+        console.print(f"[red]VIPP negotiate: unreadable or invalid inbox —[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
     rep = outcome.report
     c = rep.counts()
     if outcome.skipped:
@@ -142,6 +156,9 @@ def vipp_apply(
     ),
 ) -> None:
     """Preview (default) or apply (``--apply``) the VIPP dispositions at project human privilege."""
+    import json
+
+    from .concierge.safe_write import SafeWriteError
     from .vipp import apply_dispositions, context
     from .vipp.assistant import DISPOSITIONS_JSON
     from .vipp.models import VippReport
@@ -155,7 +172,11 @@ def vipp_apply(
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     if not apply:
-        report = VippReport.from_json(disp_path.read_text(encoding="utf-8"))
+        try:
+            report = VippReport.from_json(disp_path.read_text(encoding="utf-8"))
+        except (ValueError, KeyError, json.JSONDecodeError) as exc:
+            console.print(f"[red]VIPP apply: unreadable dispositions —[/red] {exc}")
+            raise typer.Exit(_EXIT_FATAL_INPUTS)
         c = report.counts()
         console.print(
             f"[bold]VIPP apply — preview[/bold] (envelope_seq {report.envelope_seq}); "
@@ -170,7 +191,14 @@ def vipp_apply(
         )
         return
 
-    res = apply_dispositions(root, confirm=_make_confirm(yes), force=force)
+    try:
+        res = apply_dispositions(root, confirm=_make_confirm(yes), force=force)
+    except SafeWriteError as exc:  # confinement / symlink refusal
+        console.print(f"[red]VIPP apply blocked:[/red] {exc}")
+        raise typer.Exit(_EXIT_BLOCKED)
+    except (ValueError, KeyError, json.JSONDecodeError) as exc:
+        console.print(f"[red]VIPP apply: unreadable inbox/dispositions —[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
     if res.stale:
         console.print(f"[red]VIPP apply blocked (stale):[/red] {res.refused_reason}")
         raise typer.Exit(_EXIT_BLOCKED)

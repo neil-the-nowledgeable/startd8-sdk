@@ -196,12 +196,13 @@ def serialize_buffer(
     }
     _warn_if_secret(envelope)
 
+    inbox_rel = f"{VIPP_DIR}/{INBOX_NAME}"
     result = apply_write_plan(
         root,
         [
             PlannedWrite(f"{VIPP_DIR}/{GITIGNORE_NAME}", ACTION_NEW, "*\n", None),
             PlannedWrite(
-                f"{VIPP_DIR}/{INBOX_NAME}",
+                inbox_rel,
                 ACTION_NEW if not force else ACTION_OVERWRITE,
                 json.dumps(envelope, indent=2),
                 None,
@@ -209,7 +210,9 @@ def serialize_buffer(
         ],
         force=force,
     )
-    if any(INBOX_NAME in w for w in result.written):
+    if (
+        inbox_rel in result.written
+    ):  # exact match — not a brittle substring (code-review L2)
         _chmod_600(ip)
     return result
 
