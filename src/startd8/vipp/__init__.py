@@ -28,6 +28,7 @@ from .models import (
     VippReport,
     protocol_is_future,
 )
+from .apply import ApplyResult, apply_dispositions
 from .assistant import NegotiateOutcome, run_vipp_negotiate
 from .evaluate import evaluate_envelope
 from .ground_truth import (
@@ -61,4 +62,7 @@ __all__ = [
     "run_vipp_negotiate",
     "NegotiateOutcome",
     "evaluate_envelope",
+    # M4 — applier
+    "apply_dispositions",
+    "ApplyResult",
 ]
