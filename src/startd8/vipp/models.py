@@ -211,11 +211,15 @@ class VippDisposition:
         )
 
     def to_markdown(self) -> str:
-        head = f"- **{self.decision.value}** `{self.proposal_id}`"
+        # The decision is a SECTION HEADER (not a "- " bullet) so the FR-21 label gate
+        # (``fde.deterministic_compose.assert_all_labeled``) checks only the labeled claim
+        # bullets beneath it — the unlabeled "ACCEPT/REJECT/COUNTER" decision is not mistaken
+        # for an untagged load-bearing claim.
+        head = f"### {self.decision.value} `{self.proposal_id}`"
         if self.reason:
             head += f" — {self.reason}"
         lines = [head]
-        lines.extend("  " + c.to_markdown() for c in self.claims)
+        lines.extend(c.to_markdown() for c in self.claims)
         return "\n".join(lines)
 
 
@@ -298,14 +302,16 @@ class VippReport:
 
     def to_markdown(self) -> str:
         c = self.counts()
+        # Metadata is rendered as plain lines (NOT "- " bullets) so the FR-21 label gate only
+        # inspects the labeled claim bullets under each "### {decision}" header.
         lines = [
             "# VIPP Dispositions",
             "",
-            f"- project_id: `{self.project_id}` · envelope_seq: `{self.envelope_seq}`",
-            f"- generated_at: {self.generated_at}",
-            f"- protocol_version: `{self.protocol_version}` · sdk_version (provenance-only): "
+            f"project_id: `{self.project_id}` · envelope_seq: `{self.envelope_seq}`",
+            f"generated_at: {self.generated_at}",
+            f"protocol_version: `{self.protocol_version}` · sdk_version (provenance-only): "
             f"`{self.sdk_version}`",
-            f"- ACCEPT {c['ACCEPT']} · REJECT {c['REJECT']} · COUNTER {c['COUNTER']} · "
+            f"counts: ACCEPT {c['ACCEPT']} · REJECT {c['REJECT']} · COUNTER {c['COUNTER']} · "
             f"cost_usd {self.cost_usd:.4f} · llm_used {self.llm_used}",
             "",
             "> Derived view — `dispositions.json` is canonical. Each claim is labeled OBSERVED "

@@ -28,9 +28,12 @@ from .models import (
     VippReport,
     protocol_is_future,
 )
+from .assistant import NegotiateOutcome, run_vipp_negotiate
+from .evaluate import evaluate_envelope
 from .ground_truth import (
     SAPPER_AVAILABLE,
     answer_to_observed_claim,
+    build_oracle,
     load_observed_claims,
     observed_from_oracle,
     observed_from_report,
@@ -53,4 +56,9 @@ __all__ = [
     "observed_from_oracle",
     "observed_from_report",
     "answer_to_observed_claim",
+    "build_oracle",
+    # M2 — negotiation brain
+    "run_vipp_negotiate",
+    "NegotiateOutcome",
+    "evaluate_envelope",
 ]

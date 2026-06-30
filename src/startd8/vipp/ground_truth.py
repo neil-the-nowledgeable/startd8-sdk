@@ -98,6 +98,20 @@ def observed_from_report(report: Any) -> List[LabeledClaim]:
     return list(to_observed_claims(report))
 
 
+def build_oracle(project_root: Any) -> Optional[Any]:
+    """Build the live project ground-truth oracle, or ``None`` when Sapper is unavailable (FR-7/8).
+
+    Returned object satisfies the ``GroundTruthQuery`` contract (``.answer(question)``) — the
+    negotiation core (``evaluate.evaluate_envelope``) queries it per proposal. Never raises.
+    """
+    if not SAPPER_AVAILABLE or oracle_for_project is None:
+        return None
+    try:
+        return oracle_for_project(str(project_root))
+    except Exception:
+        return None
+
+
 def load_observed_claims(project_root: Any, questions: List[Any]) -> List[LabeledClaim]:
     """Top-level: build the live oracle for ``project_root`` and answer ``questions`` (FR-7).
 
