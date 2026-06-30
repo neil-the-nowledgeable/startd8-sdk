@@ -63,6 +63,7 @@ def test_preflight_refuses_to_execute_without_reviewed_bridge(tmp_path: Path) ->
         store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
         mutants_path=mutants, pre_registration_path=pre_registration,
         bridge_manifest_path=tmp_path / "missing-s4-bridge-manifest.json",
+        suite_disposition_path=tmp_path / "missing-s4-suite-dispositions.json",
     )
 
     assert code == 2
@@ -84,6 +85,7 @@ def test_preflight_blocks_when_normalized_suite_checksum_mismatches(tmp_path: Pa
     _, result = s4.run_preflight(
         store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
         mutants_path=mutants, pre_registration_path=pre_registration,
+        suite_disposition_path=tmp_path / "missing-s4-suite-dispositions.json",
     )
 
     assert "accepted suite_author normalized_sha256 mismatch:run_01" in result["errors"]
@@ -97,6 +99,7 @@ def test_preflight_blocks_when_normalized_suite_is_missing(tmp_path: Path) -> No
     _, result = s4.run_preflight(
         store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
         mutants_path=mutants, pre_registration_path=pre_registration,
+        suite_disposition_path=tmp_path / "missing-s4-suite-dispositions.json",
     )
 
     assert "accepted suite_author missing normalized suite.py:run_01" in result["errors"]
@@ -111,6 +114,7 @@ def test_preflight_blocks_when_suite_author_row_is_rejected(tmp_path: Path) -> N
     _, result = s4.run_preflight(
         store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
         mutants_path=mutants, pre_registration_path=pre_registration,
+        suite_disposition_path=tmp_path / "missing-s4-suite-dispositions.json",
     )
 
     assert "intake ledger has rejected suite_author artifacts:1" in result["errors"]
@@ -186,6 +190,7 @@ def test_preflight_does_not_suppress_rejected_suite_with_invalid_replacement(tmp
     _, result = s4.run_preflight(
         store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
         mutants_path=mutants, pre_registration_path=pre_registration,
+        suite_disposition_path=tmp_path / "missing-s4-suite-dispositions.json",
     )
 
     assert "suite replacement disposition references missing replacement run:missing-replacement" in result["errors"]
@@ -297,6 +302,66 @@ def test_bridge_executor_gate_accepts_reviewed_executor(tmp_path: Path) -> None:
     assert executor["status"] == "ready"
 
 
+def test_suite_disposition_gate_accepts_reviewed_exact_sha(tmp_path: Path) -> None:
+    disposition_path = tmp_path / "s4-suite-dispositions.json"
+    _write_json(
+        disposition_path,
+        {
+            "status": "reviewed",
+            "batch_id": "batch",
+            "exclusions": [
+                {
+                    "run_id": "suite-1",
+                    "normalized_sha256": "abc123",
+                    "disposition": "exclude_from_s4_evidence",
+                    "reason_class": "suite_over_specifies_canonical_output_shape",
+                    "reviewed_by": "codex",
+                    "rationale": "over-specified POA response shape",
+                }
+            ],
+        },
+    )
+
+    exclusions, summary, errors = s4.suite_disposition_gate(
+        disposition_path,
+        batch_id="batch",
+        suites=[{"run_id": "suite-1", "normalized_sha256": "abc123"}],
+    )
+
+    assert errors == []
+    assert summary["status"] == "reviewed"
+    assert exclusions["suite-1"]["reason_class"] == "suite_over_specifies_canonical_output_shape"
+
+
+def test_suite_disposition_gate_blocks_sha_mismatch(tmp_path: Path) -> None:
+    disposition_path = tmp_path / "s4-suite-dispositions.json"
+    _write_json(
+        disposition_path,
+        {
+            "status": "reviewed",
+            "batch_id": "batch",
+            "exclusions": [
+                {
+                    "run_id": "suite-1",
+                    "normalized_sha256": "wrong",
+                    "disposition": "exclude_from_s4_evidence",
+                    "reason_class": "suite_over_specifies_canonical_output_shape",
+                }
+            ],
+        },
+    )
+
+    exclusions, summary, errors = s4.suite_disposition_gate(
+        disposition_path,
+        batch_id="batch",
+        suites=[{"run_id": "suite-1", "normalized_sha256": "abc123"}],
+    )
+
+    assert exclusions == {}
+    assert summary["status"] == "blocked"
+    assert "S4 suite disposition normalized_sha256 mismatch:suite-1" in errors
+
+
 def test_execute_bridge_cell_copies_suite_and_target_under_isolation(tmp_path: Path) -> None:
     suite_path = tmp_path / "suite.py"
     suite_path.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
@@ -338,6 +403,28 @@ def test_execute_bridge_cell_copies_suite_and_target_under_isolation(tmp_path: P
     assert "suite.py" in captured["command"]
     assert "test_bridge_contract.py" in captured["command"]
     assert captured["env"]["HOME"] == str(workspace)
+
+
+def test_execute_bridge_cell_marks_reviewed_disposition_excluded(tmp_path: Path) -> None:
+    result = s4.execute_bridge_cell(
+        {
+            "run_id": "suite-1",
+            "suite_path": str(tmp_path / "suite.py"),
+            "bridge": {"status": "bridge_required"},
+            "s4_disposition": {
+                "run_id": "suite-1",
+                "reason_class": "suite_over_specifies_canonical_output_shape",
+            },
+        },
+        {"target_id": "reference_oracle"},
+        results_root=tmp_path / "results",
+        mutants_path=tmp_path / "manifest.json",
+        oracle_path=tmp_path / "reference_oracle.py",
+        bridge={},
+    )
+
+    assert result["status"] == "excluded"
+    assert result["detail"] == "suite_over_specifies_canonical_output_shape"
 
 
 def test_execute_reviewed_bridge_writes_cell_statuses_to_matrix(tmp_path: Path) -> None:

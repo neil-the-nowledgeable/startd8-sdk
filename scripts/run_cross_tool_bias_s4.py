@@ -30,6 +30,10 @@ DEFAULT_GATE = AUDIT_ROOT / "oracle/validation-gate.json"
 DEFAULT_MUTANTS = AUDIT_ROOT / "mutants/manifest.json"
 DEFAULT_PRE_REGISTRATION = AUDIT_ROOT / "analysis/s4-pre-registration.json"
 DEFAULT_BRIDGE_MANIFEST = AUDIT_ROOT / "analysis/s4-bridge-manifest.json"
+DEFAULT_SUITE_DISPOSITIONS = AUDIT_ROOT / "analysis/s4-suite-dispositions.json"
+ALLOWED_SUITE_DISPOSITION_REASONS = {
+    "suite_over_specifies_canonical_output_shape",
+}
 
 SECRET_ENV_MARKERS = (
     "API_KEY", "_TOKEN", "TOKEN_", "_SECRET", "SECRET_", "PASSWORD",
@@ -202,6 +206,78 @@ def bridge_executor_gate(manifest_path: Path) -> tuple[dict, list[str]]:
         "status": "ready" if not errors else "blocked",
         "manifest_path": str(manifest_path),
         "executor": executor,
+    }, errors
+
+
+def suite_disposition_gate(
+    disposition_path: Path,
+    *,
+    batch_id: str,
+    suites: list[dict],
+) -> tuple[dict[str, dict], dict, list[str]]:
+    """Load reviewed suite-level S4 exclusions without mutating generated suites."""
+    if not disposition_path.is_file():
+        return {}, {"status": "not_installed", "path": str(disposition_path), "exclusions": []}, []
+
+    errors: list[str] = []
+    try:
+        manifest = load_json(disposition_path, "S4 suite disposition manifest")
+    except ValueError as exc:
+        return {}, {"status": "invalid", "path": str(disposition_path), "exclusions": []}, [str(exc)]
+
+    if manifest.get("status") != "reviewed":
+        errors.append("S4 suite disposition manifest status is not reviewed")
+    if manifest.get("batch_id") != batch_id:
+        errors.append("S4 suite disposition manifest batch_id does not match requested batch")
+
+    suite_by_id = {suite["run_id"]: suite for suite in suites if suite.get("run_id")}
+    exclusions = manifest.get("exclusions")
+    if not isinstance(exclusions, list):
+        errors.append("S4 suite disposition manifest exclusions must be a list")
+        exclusions = []
+
+    accepted: dict[str, dict] = {}
+    normalized_exclusions = []
+    for index, exclusion in enumerate(exclusions):
+        if not isinstance(exclusion, dict):
+            errors.append(f"S4 suite disposition exclusion is not an object:{index}")
+            continue
+        run_id = exclusion.get("run_id")
+        reason_class = exclusion.get("reason_class")
+        normalized_sha = exclusion.get("normalized_sha256")
+        disposition = exclusion.get("disposition")
+        if not isinstance(run_id, str) or not run_id:
+            errors.append(f"S4 suite disposition exclusion missing run_id:{index}")
+            continue
+        suite = suite_by_id.get(run_id)
+        if suite is None:
+            errors.append(f"S4 suite disposition references unknown run_id:{run_id}")
+            continue
+        if normalized_sha != suite.get("normalized_sha256"):
+            errors.append(f"S4 suite disposition normalized_sha256 mismatch:{run_id}")
+        if reason_class not in ALLOWED_SUITE_DISPOSITION_REASONS:
+            errors.append(f"S4 suite disposition reason_class is not allowed:{run_id}:{reason_class}")
+        if disposition != "exclude_from_s4_evidence":
+            errors.append(f"S4 suite disposition action is not allowed:{run_id}:{disposition}")
+        record = {
+            "run_id": run_id,
+            "normalized_sha256": normalized_sha,
+            "reason_class": reason_class,
+            "disposition": disposition,
+            "reviewed_by": exclusion.get("reviewed_by", manifest.get("reviewer")),
+            "rationale": exclusion.get("rationale"),
+        }
+        normalized_exclusions.append(record)
+        accepted[run_id] = record
+
+    if errors:
+        accepted = {}
+
+    status = "reviewed" if not errors else "blocked"
+    return accepted, {
+        "status": status,
+        "path": str(disposition_path),
+        "exclusions": normalized_exclusions,
     }, errors
 
 
@@ -610,6 +686,15 @@ def execute_bridge_cell(
     """Execute one suite/target pair in an isolated copied workspace."""
     run_id = suite_record["run_id"]
     target_id = target["target_id"]
+    disposition = suite_record.get("s4_disposition")
+    if disposition:
+        return {
+            "suite_run_id": run_id,
+            "target_id": target_id,
+            "status": "excluded",
+            "detail": disposition.get("reason_class"),
+            "disposition": disposition,
+        }
     if suite_record.get("bridge", {}).get("status") != "bridge_required":
         return {
             "suite_run_id": run_id,
@@ -709,7 +794,7 @@ def execute_reviewed_bridge(
                 bridge=bridge,
                 runner=runner,
             ))
-    terminal = {"pass", "fail", "not_executable"}
+    terminal = {"pass", "fail", "not_executable", "excluded"}
     return {
         "status": "complete" if cells and all(cell["status"] in terminal for cell in cells) else "blocked",
         "cells": cells,
@@ -744,7 +829,10 @@ def write_matrices(results_root: Path, suite_rows: list[dict], targets: list[dic
         writer.writerow(["suite_run_id", "execution_status", *[target["target_id"] for target in targets]])
         for suite_id in ids:
             statuses = [by_cell.get((suite_id, target["target_id"]), "not_executed") for target in targets]
-            execution_status = "executed" if any(status != "not_executed" for status in statuses) else "not_executed"
+            if statuses and all(status == "excluded" for status in statuses):
+                execution_status = "excluded"
+            else:
+                execution_status = "executed" if any(status != "not_executed" for status in statuses) else "not_executed"
             writer.writerow([suite_id, execution_status, *statuses])
     with (results_root / "suite_equivalence_matrix.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -756,6 +844,7 @@ def write_matrices(results_root: Path, suite_rows: list[dict], targets: list[dic
 def run_preflight(
     *, store_root: Path, batch_id: str, results_root: Path, gate_path: Path,
     mutants_path: Path, pre_registration_path: Path, bridge_manifest_path: Path = DEFAULT_BRIDGE_MANIFEST,
+    suite_disposition_path: Path = DEFAULT_SUITE_DISPOSITIONS,
     execute_reviewed: bool = False,
 ) -> tuple[int, dict]:
     errors: list[str] = []
@@ -828,6 +917,17 @@ def run_preflight(
             )
         suites.append(suite_record)
 
+    suite_dispositions, suite_disposition_summary, suite_disposition_errors = suite_disposition_gate(
+        suite_disposition_path,
+        batch_id=batch_id,
+        suites=suites,
+    )
+    errors.extend(suite_disposition_errors)
+    for suite_record in suites:
+        disposition = suite_dispositions.get(suite_record.get("run_id"))
+        if disposition:
+            suite_record["s4_disposition"] = disposition
+
     bridge, bridge_errors = bridge_dry_run_gate(bridge_manifest_path, results_root)
     errors.extend(bridge_errors)
     execution = {"status": "not_requested", "cells": []}
@@ -846,7 +946,7 @@ def run_preflight(
             for cell in execution.get("cells", []):
                 if cell.get("target_id") == "reference_oracle" and cell.get("status") == "fail":
                     errors.append(f"S4 bridge reference oracle failed:{cell['suite_run_id']}")
-                elif cell.get("status") not in {"pass", "fail", "not_executable"}:
+                elif cell.get("status") not in {"pass", "fail", "not_executable", "excluded"}:
                     errors.append(
                         f"S4 bridge execution cell error:{cell['suite_run_id']}:{cell['target_id']}:{cell['status']}"
                     )
@@ -872,6 +972,7 @@ def run_preflight(
         "targets": targets,
         "suites": suites,
         "bridge": bridge,
+        "suite_dispositions": suite_disposition_summary,
         "execution": execution,
         "matrix_cell_status": "executed" if execution.get("cells") else "not_executed",
         "errors": list(dict.fromkeys(errors)),
@@ -889,6 +990,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mutants-path", type=Path, default=DEFAULT_MUTANTS)
     parser.add_argument("--pre-registration-path", type=Path, default=DEFAULT_PRE_REGISTRATION)
     parser.add_argument("--bridge-manifest-path", type=Path, default=DEFAULT_BRIDGE_MANIFEST)
+    parser.add_argument("--suite-disposition-path", type=Path, default=DEFAULT_SUITE_DISPOSITIONS)
     parser.add_argument("--execute-reviewed-bridge", action="store_true",
                         help="Opt in to reviewed isolated S4 bridge execution after all preflight gates pass.")
     args = parser.parse_args(argv)
@@ -896,6 +998,7 @@ def main(argv: list[str] | None = None) -> int:
         store_root=args.store_root, batch_id=args.batch_id, results_root=args.results_root,
         gate_path=args.gate_path, mutants_path=args.mutants_path,
         pre_registration_path=args.pre_registration_path, bridge_manifest_path=args.bridge_manifest_path,
+        suite_disposition_path=args.suite_disposition_path,
         execute_reviewed=args.execute_reviewed_bridge,
     )
     print(json.dumps({"status": result["status"], "results_root": str(args.results_root), "errors": result["errors"]}, indent=2))
