@@ -92,6 +92,11 @@ _KINDS = {"dashboard", "board", "workspace", "detail-compose", "export-package",
 _CONTRACT_KINDS = {"import-flow", "computed-panel"}
 _ARROW_RE = re.compile(r"(\w+)\s*(?:→|->)\s*(\w+)")
 _COUNTS_RE = re.compile(r"counts of\s+(.+?)(?:\s+per\s+\w+)?$", re.IGNORECASE)
+# §2.3 Panel production (D9 / spike F3): `- Panel: <Name> = <field>, <field>, …` (detail-compose
+# only). Repeatable, so scanned from the block body directly (key_lines keeps only the first).
+_PANEL_LINE_RE = re.compile(r"^\s*-?\s*Panel:\s*(.+?)\s*=\s*(.+)$")
+# A field token may carry a trailing parenthetical (annotation tolerance, mirrors the arrow grammar).
+_FIELD_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 
 def extract_views(
@@ -275,6 +280,53 @@ def extract_views(
                     reason=f"`{key}:` line matches neither the arrow nor the counts grammar "
                            f"(prose): {text[:60]!r}",
                 ))
+
+        # Panel: <Name> = <field>, … (D9 / spike F3) → a `panels` entry surfacing Root fields,
+        # shown when any is set. Detail-compose only; repeatable (scan the body, not key_lines).
+        # The extractor is the SOLE field guard here — the round-trip gate doesn't pass known_fields.
+        field_by_lower = {f.name.lower(): f.name for f in graph.entities[root].fields} \
+            if root in graph.entities else {}
+        for line in sec.body.splitlines():
+            pm = _PANEL_LINE_RE.match(line.strip())
+            if not pm:
+                continue
+            panel_name = strip_annotations(pm.group(1)).strip()
+            if kind != "detail-compose":
+                records.append(ExtractionRecord(
+                    "views.yaml", f"/views/{vi}/panels/{nfkd_kebab(panel_name)}",
+                    Status.NOT_EXTRACTED, source=src,
+                    reason=f"`Panel:` is detail-compose-only (off-archetype on {kind!r})",
+                ))
+                continue
+            resolved: List[str] = []
+            for tok in pm.group(2).split(","):
+                tok = _FIELD_PAREN_RE.sub("", tok).strip()
+                if not tok:
+                    continue
+                canonical = field_by_lower.get(tok.lower())
+                if canonical is None:
+                    records.append(ExtractionRecord(
+                        "views.yaml", f"/views/{vi}/panels/{nfkd_kebab(panel_name)}/{nfkd_kebab(tok)}",
+                        Status.NOT_EXTRACTED, source=src,
+                        reason=f"field {tok!r} not on Root {root!r} (never a guessed field)",
+                    ))
+                    continue
+                if canonical not in resolved:
+                    resolved.append(canonical)
+            if not resolved:
+                records.append(ExtractionRecord(
+                    "views.yaml", f"/views/{vi}/panels/{nfkd_kebab(panel_name)}",
+                    Status.NOT_EXTRACTED, source=src,
+                    reason=f"panel {panel_name!r} has no resolvable Root field — dropped",
+                ))
+                continue
+            view.setdefault("panels", []).append(
+                {"name": panel_name, "fields": resolved, "show_when": "any_set"}
+            )
+            records.append(ExtractionRecord(
+                "views.yaml", f"/views/{vi}/panels/{nfkd_kebab(panel_name)}", Status.EXTRACTED,
+                value=f"fields={resolved} show_when=any_set", source=src,
+            ))
 
         # Gap callout: → gap.needs_from requires Root-field resolution — flag (F5 posture).
         if "Gap callout" in keys:
@@ -485,6 +537,9 @@ def _strip_quotes(value: str) -> str:
 
 _INTRO_RE = re.compile(r"is complete when it has", re.IGNORECASE)
 _SIGNAL_RE = re.compile(r"at least (\d+) ([A-Za-z]+)(?:\s*\(weight (\d+)\))?")
+# D7: the §2.4 ` — nudge: "…"` suffix — capture the author's message (straight or curly quotes,
+# or unquoted to end of line), terminated at the ` — ` dash per §2.4.
+_NUDGE_RE = re.compile(r'nudge:\s*["“]?(.+?)["”]?\s*$', re.IGNORECASE)
 _DONT_COUNT_RE = re.compile(r"Don'?t count:\s*([^)\n]+)", re.IGNORECASE)
 _CATEGORY_WORDS = {"connection records", "join tables"}
 
@@ -522,14 +577,20 @@ def extract_completeness(
             "completeness.yaml", f"/entities/{ent}", Status.EXTRACTED,
             value=str(spec), source=SourceRef(doc_label, sec.heading_path, line=line),
         ))
-        # Nudge suffix: tolerated, but the SDK manifest can't hold it — TWO rows per entry.
-        tail = sec.body[m.end():m.end() + 120].split("\n", 1)[0]
-        if "nudge:" in tail:
-            records.append(ExtractionRecord(
-                "completeness.yaml", f"/entities/{ent}/nudge", Status.NOT_EXTRACTED,
-                source=SourceRef(doc_label, sec.heading_path, line=line),
-                reason="generator-gap: SDK completeness manifest has no nudge-text field",
-            ))
+        # Nudge suffix (D7): now extractable — the author's message is carried into the manifest's
+        # per-entity `nudge` field and baked into compute_completeness. TWO rows per entry (R2-G5):
+        # the min_rows signal above + the nudge text here, both EXTRACTED.
+        tail = sec.body[m.end():m.end() + 300].split("\n", 1)[0]
+        nudge_m = _NUDGE_RE.search(tail)
+        if nudge_m:
+            nudge_text = nudge_m.group(1).strip()
+            if nudge_text:
+                spec["nudge"] = nudge_text
+                records.append(ExtractionRecord(
+                    "completeness.yaml", f"/entities/{ent}/nudge", Status.EXTRACTED,
+                    value=nudge_text,
+                    source=SourceRef(doc_label, sec.heading_path, line=line),
+                ))
     if not entities:
         return None
     out: dict = {"entities": entities}
@@ -720,8 +781,12 @@ def extract_human_inputs(
 # §2.7 Scaffold & runtime → app.yaml (subset rule — sweep-2/F-gap)
 # --------------------------------------------------------------------------- #
 
-# Settings with no AppManifest home (sweep 2): flagged, never emitted as unknown keys.
-_NO_MANIFEST_HOME = {"port", "sqlite mode", "env keys"}
+# Settings with no AppManifest home: flagged, never emitted as unknown keys. D8 gave `port` and
+# `env keys` homes (`app.port` / `app.env_keys`); `sqlite mode` remains app-code (WAL/journal-mode
+# touches db.py), out of scaffold-plumbing scope per the scaffold renderers' v1 design note.
+_NO_MANIFEST_HOME = {"sqlite mode"}
+# §2.7 `env keys` cell grammar (D8): `·`-separated entries, each `KEY (qualifier…)`.
+_ENV_KEY_ENTRY_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\((.*)\))?\s*$")
 
 
 def extract_app(
@@ -748,7 +813,7 @@ def extract_app(
         if setting in _NO_MANIFEST_HOME:
             records.append(ExtractionRecord(
                 "app.yaml", f"/{setting.replace(' ', '_')}", Status.NOT_EXTRACTED, source=src,
-                reason="generator-gap: no AppManifest field (scaffold-codegen backlog)",
+                reason="generator-gap: app-code concern (db.py), not scaffold plumbing — backend-codegen backlog",
             ))
             continue
         if setting == "package name":
@@ -757,6 +822,36 @@ def extract_app(
             put("app", "name", value, src)
         elif setting == "python version":
             put("app", "python_version", value, src)
+        elif setting == "port":
+            # D8: leading integer (`8099`, `8099 (dev and prod)`); non-numeric ⇒ flag, never guess.
+            pm = re.search(r"\d+", value)
+            if pm:
+                put("app", "port", int(pm.group(0)), src)
+            else:
+                records.append(ExtractionRecord(
+                    "app.yaml", "/app/port", Status.NOT_EXTRACTED, source=src,
+                    reason=f"port cell has no integer: {value!r}",
+                ))
+        elif setting == "env keys":
+            # D8: `KEY (qualifier) · KEY (qualifier)` → [{name, qualifier?}, …].
+            entries: List[dict] = []
+            for part in value.split("·"):
+                part = part.strip()
+                if not part:
+                    continue
+                em = _ENV_KEY_ENTRY_RE.match(part)
+                if em:
+                    entry: dict = {"name": em.group(1)}
+                    if em.group(2):
+                        entry["qualifier"] = em.group(2).strip()
+                    entries.append(entry)
+            if entries:
+                put("app", "env_keys", entries, src)
+            else:
+                records.append(ExtractionRecord(
+                    "app.yaml", "/app/env_keys", Status.NOT_EXTRACTED, source=src,
+                    reason=f"env keys cell parsed no entries: {value!r}",
+                ))
         elif setting == "database":
             m = re.search(r"sqlite:///(\S+)", value)
             put("persistence", "path", m.group(1) if m else value, src)

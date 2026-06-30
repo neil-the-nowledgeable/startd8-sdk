@@ -87,6 +87,20 @@ def test_views_all_five_kinds(result) -> None:
     assert by_name["widget_board"]["order"] == ["free", "pro"]
 
 
+def test_view_panels_extracted_with_field_flagged(result) -> None:
+    """VSP-G1 (D9): the `Panel:` line surfaces resolved Root fields; the unknown `ghostField` is
+    flagged not_extracted and dropped (never guessed); the parenthetical on `score` is tolerated."""
+    data = yaml.safe_load(result.manifests["views.yaml"])
+    by_name = {v["name"]: v for v in data["views"]}
+    assert by_name["widget_wall"]["panels"] == [
+        {"name": "Details", "fields": ["title", "score"], "show_when": "any_set"}
+    ]
+    panel_flags = [r.reason for r in result.by_status(Status.NOT_EXTRACTED)
+                   if r.manifest == "views.yaml" and "/panels/" in r.value_path]
+    assert any("ghostField" in (x or "") and "never a guessed field" in (x or "")
+               for x in panel_flags)
+
+
 def test_views_generator_gaps_flagged(result) -> None:
     reasons = [r.reason for r in result.by_status(Status.NOT_EXTRACTED)
                if r.manifest == "views.yaml"]
@@ -108,13 +122,17 @@ def test_empty_state_routes_to_view_prose_not_a_dead_end(result) -> None:
 
 def test_completeness_category_expansion_and_nudges(result) -> None:
     data = yaml.safe_load(result.manifests["completeness.yaml"])
-    assert data["entities"]["Widget"] == {"min_rows": 2, "weight": 2}
+    # D7: the author's nudge text is now carried into the per-entity manifest spec.
+    assert data["entities"]["Widget"] == {"min_rows": 2, "weight": 2, "nudge": "Make more widgets."}
     assert data["entities"]["Tag"] == {"min_rows": 1}
     # "connection records" expands to the derived join models (F4/CRP R2 ordering).
     assert "WidgetTag" in data["exclude"] and "Profile" in data["exclude"]
-    nudge_rows = [r for r in result.by_status(Status.NOT_EXTRACTED)
+    # D7: the nudge suffix is now EXTRACTED (was NOT_EXTRACTED(generator-gap)) — two rows per entry
+    # (R2-G5), both extracted; the value is the author's message.
+    nudge_rows = [r for r in result.by_status(Status.EXTRACTED)
                   if r.manifest == "completeness.yaml" and "/nudge" in r.value_path]
     assert len(nudge_rows) == 1  # only the Widget entry carries a nudge suffix
+    assert nudge_rows[0].value == "Make more widgets."
 
 
 def test_ai_passes_policy_and_derived_routes(result) -> None:
@@ -138,9 +156,13 @@ def test_app_subset_rule(result) -> None:
     data = yaml.safe_load(result.manifests["app.yaml"])
     assert data["app"]["package"] == "demoapp"
     assert data["persistence"]["path"] == "./data/demo.db"
+    # D8: port + env keys now have AppManifest homes (app.port / app.env_keys).
+    assert data["app"]["port"] == 8099
+    assert data["app"]["env_keys"] == [{"name": "ANTHROPIC_API_KEY", "qualifier": "optional"}]
+    # `sqlite mode` remains the sole §2.7 generator-gap (app-code concern, not scaffold plumbing).
     gap_rows = [r for r in result.by_status(Status.NOT_EXTRACTED)
                 if r.manifest == "app.yaml" and "generator-gap" in (r.reason or "")]
-    assert {r.value_path for r in gap_rows} == {"/port", "/env_keys"}
+    assert {r.value_path for r in gap_rows} == {"/sqlite_mode"}
 
 
 def test_report_byte_stable_and_sorted(result) -> None:
