@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "status": "reviewed",
+  "reviewed_at_utc": "2026-06-30T05:30:00Z",
+  "reviewer": "codex",
+  "batch_id": "pricing-cross-tool-authoring-v1",
+  "scope": "S4 suite-authoring evidence admission only; generated suites are not modified.",
+  "exclusions": [
+    {
+      "run_id": "pricing-cross-tool-authoring-v1-run-24",
+      "normalized_sha256": "c28e243e3d863845e74cfd8b9a3cdf3acf662e26e58c9536bc55d94e10d63180",
+      "disposition": "exclude_from_s4_evidence",
+      "reason_class": "suite_over_specifies_canonical_output_shape",
+      "reviewed_by": "codex",
+      "rationale": "Run 24 expects price-on-request response lines to include numeric-line detail fields. Canonical cases and the promoted reference oracle require POA lines to echo line_key, quantity, and price_on_request while excluding them from numeric totals."
+    }
+  ]
+}

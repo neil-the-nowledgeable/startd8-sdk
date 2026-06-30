@@ -104,6 +104,23 @@ def test_invalid_argument_taxonomy(pytestconfig):
         _assess(case["request"], pytestconfig)
 
 
+@pytest.mark.parametrize("decimal_literal", ["1e3", "1E3", "+1e3", "-1e3"])
+def test_decimal_exponent_literals_rejected(decimal_literal, pytestconfig):
+    """OPEN-009 / FIXED-008 probe: exponent-form float literals are INVALID_ARGUMENT."""
+    request = {
+        "currency_code": "USD",
+        "lines": [
+            {
+                "line_key": "exponent-literal",
+                "quantity": "1",
+                "unit_amount": {"decimal": decimal_literal},
+            }
+        ],
+    }
+    with pytest.raises(ValueError):
+        _assess(request, pytestconfig)
+
+
 def test_multi_line_aggregation(pytestconfig):
     """OPEN-010 probe: request totals aggregate multiple numeric lines."""
     case = next(
