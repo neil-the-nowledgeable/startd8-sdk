@@ -62,6 +62,7 @@ def test_preflight_refuses_to_execute_without_reviewed_bridge(tmp_path: Path) ->
     code, result = s4.run_preflight(
         store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
         mutants_path=mutants, pre_registration_path=pre_registration,
+        bridge_manifest_path=tmp_path / "missing-s4-bridge-manifest.json",
     )
 
     assert code == 2
@@ -71,7 +72,7 @@ def test_preflight_refuses_to_execute_without_reviewed_bridge(tmp_path: Path) ->
     assert result["suites"][0]["bridge"]["status"] == "bridge_required"
     assert result["bridge"]["status"] == "not_installed"
     assert any(error.startswith("reviewed S4 bridge manifest is not installed:") for error in result["errors"])
-    assert "S4 bridge execution remains disabled until the reviewed executor consumes the dry-run gate" in result["errors"]
+    assert "S4 reviewed bridge execution not requested; rerun with --execute-reviewed-bridge" in result["errors"]
     assert (tmp_path / "results/mutant_kill_matrix.csv").is_file()
 
 
@@ -253,3 +254,101 @@ def test_bridge_dry_run_gate_runs_trusted_sentinel_with_real_isolation(tmp_path:
     assert captured["command"][:3] == ["sandbox-exec", "-p", "(version 1)(allow default)(deny network*)"]
     assert captured["env"]["HOME"] == str(tmp_path / "results/bridge-dry-run-workspace")
     assert "PYTHONPATH" not in captured["env"]
+
+
+def test_bridge_executor_gate_requires_reviewed_executor(tmp_path: Path) -> None:
+    manifest = tmp_path / "s4-bridge-manifest.json"
+    _write_json(
+        manifest,
+        {
+            "status": "reviewed",
+            "require_no_egress": True,
+            "require_scrubbed_env": True,
+            "require_identical_inventory": True,
+        },
+    )
+
+    executor, errors = s4.bridge_executor_gate(manifest)
+
+    assert executor["status"] == "blocked"
+    assert "reviewed S4 bridge manifest has no executor section" in errors
+    assert "reviewed S4 bridge manifest does not allow semantic execution" in errors
+
+
+def test_bridge_executor_gate_accepts_reviewed_executor(tmp_path: Path) -> None:
+    manifest = tmp_path / "s4-bridge-manifest.json"
+    _write_json(
+        manifest,
+        {
+            "status": "reviewed",
+            "allow_semantic_execution": True,
+            "executor": {
+                "status": "reviewed",
+                "require_opt_in_flag": True,
+                "suite_module_name": "suite",
+                "target_function": "assess_lines",
+            },
+        },
+    )
+
+    executor, errors = s4.bridge_executor_gate(manifest)
+
+    assert errors == []
+    assert executor["status"] == "ready"
+
+
+def test_execute_bridge_cell_copies_suite_and_target_under_isolation(tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.py"
+    suite_path.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    target_path = tmp_path / "target.py"
+    target_path.write_text("def assess_lines(request):\n    return {'ok': True}\n", encoding="utf-8")
+    oracle_path = tmp_path / "reference_oracle.py"
+    oracle_path.write_text("def assess_lines(request):\n    return {'ok': True}\n", encoding="utf-8")
+    captured = {}
+
+    def fake_runner(command, **kwargs):
+        captured["command"] = command
+        captured["cwd"] = kwargs["cwd"]
+        captured["env"] = kwargs["env"]
+        return s4.subprocess.CompletedProcess(command, 0, stdout="passed\n", stderr="")
+
+    result = s4.execute_bridge_cell(
+        {
+            "run_id": "suite-1",
+            "suite_path": str(suite_path),
+            "bridge": {"status": "bridge_required"},
+        },
+        {"target_id": "mutant-1", "source": str(target_path)},
+        results_root=tmp_path / "results",
+        mutants_path=tmp_path / "manifest.json",
+        oracle_path=oracle_path,
+        bridge={"capabilities": {"sandbox_exec": True, "unshare": False}, "dry_run": {"timeout_seconds": 3}},
+        runner=fake_runner,
+    )
+
+    assert result["status"] == "pass"
+    assert result["isolation"] == "seatbelt-no-egress"
+    workspace = Path(result["workspace"])
+    assert (workspace / "suite.py").is_file()
+    assert (workspace / "target_module.py").is_file()
+    assert (workspace / "reference_oracle.py").is_file()
+    assert (workspace / "conftest.py").is_file()
+    assert (workspace / "test_bridge_contract.py").is_file()
+    assert captured["command"][:3] == ["sandbox-exec", "-p", "(version 1)(allow default)(deny network*)"]
+    assert "suite.py" in captured["command"]
+    assert "test_bridge_contract.py" in captured["command"]
+    assert captured["env"]["HOME"] == str(workspace)
+
+
+def test_execute_reviewed_bridge_writes_cell_statuses_to_matrix(tmp_path: Path) -> None:
+    rows = [{"run_id": "suite-1"}]
+    targets = [{"target_id": "reference_oracle"}, {"target_id": "mutant-1"}]
+    cells = [
+        {"suite_run_id": "suite-1", "target_id": "reference_oracle", "status": "pass"},
+        {"suite_run_id": "suite-1", "target_id": "mutant-1", "status": "fail"},
+    ]
+
+    s4.write_matrices(tmp_path / "results", rows, targets, cells)
+
+    matrix = (tmp_path / "results/mutant_kill_matrix.csv").read_text(encoding="utf-8")
+    assert "suite-1,executed,pass,fail" in matrix

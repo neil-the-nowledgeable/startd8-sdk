@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -63,6 +64,21 @@ def scrub_bridge_env(workspace: Path, base: dict[str, str] | None = None) -> dic
     clean["PYTHONDONTWRITEBYTECODE"] = "1"
     clean["PYTHONUNBUFFERED"] = "1"
     return clean
+
+
+def bridge_pythonpath(workspace: Path) -> str:
+    """Return a narrow import path for isolated bridge execution.
+
+    The caller's PYTHONPATH can contain arbitrary project directories and is deliberately scrubbed.
+    Pytest may still need installed site-packages (for example terminal/color dependencies), so the
+    bridge reconstructs a minimal path from the isolated workspace plus current interpreter
+    site-packages entries only.
+    """
+    paths = [str(workspace)]
+    for value in sys.path:
+        if value and "site-packages" in value and value not in paths:
+            paths.append(value)
+    return os.pathsep.join(paths)
 
 
 def bridge_caps() -> dict[str, bool]:
@@ -158,6 +174,34 @@ def bridge_dry_run_gate(
         "manifest_sha256": sha256(bridge_manifest_path),
         "capabilities": caps,
         "dry_run": dry_run,
+    }, errors
+
+
+def bridge_executor_gate(manifest_path: Path) -> tuple[dict, list[str]]:
+    """Validate reviewed executor manifest fields before semantic suite execution."""
+    errors: list[str] = []
+    try:
+        manifest = load_json(manifest_path, "S4 bridge manifest")
+    except ValueError as exc:
+        return {"status": "invalid_manifest", "manifest_path": str(manifest_path)}, [str(exc)]
+    executor = manifest.get("executor")
+    if not isinstance(executor, dict):
+        errors.append("reviewed S4 bridge manifest has no executor section")
+        executor = {}
+    if manifest.get("allow_semantic_execution") is not True:
+        errors.append("reviewed S4 bridge manifest does not allow semantic execution")
+    if executor.get("status") != "reviewed":
+        errors.append("reviewed S4 bridge executor status is not reviewed")
+    if executor.get("require_opt_in_flag") is not True:
+        errors.append("reviewed S4 bridge executor does not require explicit opt-in flag")
+    if executor.get("suite_module_name") != "suite":
+        errors.append("reviewed S4 bridge executor must load generated suites as module 'suite'")
+    if executor.get("target_function") != "assess_lines":
+        errors.append("reviewed S4 bridge executor target function must be assess_lines")
+    return {
+        "status": "ready" if not errors else "blocked",
+        "manifest_path": str(manifest_path),
+        "executor": executor,
     }, errors
 
 
@@ -300,6 +344,378 @@ def declared_bridge_contract(suite_path: Path, manifest_path: Path) -> dict:
     }
 
 
+def bridge_adapter_source() -> str:
+    """Return the reviewed pytest bridge used inside each isolated execution workspace."""
+    return r'''
+import importlib
+
+import pytest
+
+import suite
+import target_module
+
+
+class BridgeInvalidArgument(Exception):
+    def __init__(self, message="INVALID_ARGUMENT"):
+        super().__init__(message)
+        self.code = "INVALID_ARGUMENT"
+
+
+DISCOUNT_STRATEGY = {
+    0: "DISCOUNT_STRATEGY_UNSPECIFIED",
+    1: "DISCOUNT_STRATEGY_CASCADE",
+    2: "DISCOUNT_STRATEGY_SUM",
+}
+ROUNDING_MODE = {
+    0: "ROUNDING_MODE_UNSPECIFIED",
+    1: "ROUNDING_MODE_HALF_EVEN",
+    2: "ROUNDING_MODE_HALF_UP",
+    3: "ROUNDING_MODE_DOWN",
+}
+REDUCTION_KIND = {
+    0: "REDUCTION_KIND_UNSPECIFIED",
+    1: "REDUCTION_KIND_PERCENT_LEVELS",
+    2: "REDUCTION_KIND_FIXED_AMOUNT",
+}
+MONEY_FIELDS = {
+    "unit_amount",
+    "comparison_unit_amount",
+    "candidate_unit_amount",
+    "selected_unit_amount",
+    "line_base_amount",
+    "line_due_amount",
+    "base_amount",
+    "reduction_amount",
+    "due_amount",
+    "amount",
+}
+
+
+def _amount_in(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        return {"decimal": value}
+    return value
+
+
+def _normalize_request(value, key=None):
+    if isinstance(value, list):
+        return [_normalize_request(item) for item in value]
+    if isinstance(value, dict):
+        normalized = {
+            k: _normalize_request(v, k)
+            for k, v in value.items()
+            if v is not None
+        }
+        if "lines" in normalized and "currency_code" not in normalized:
+            normalized["currency_code"] = ""
+        return normalized
+    if key in MONEY_FIELDS:
+        return _amount_in(value)
+    if key == "discount_strategy":
+        return DISCOUNT_STRATEGY.get(value, value)
+    if key == "rounding_mode":
+        return ROUNDING_MODE.get(value, value)
+    if key == "kind":
+        return REDUCTION_KIND.get(value, value)
+    return value
+
+
+def _money_out(value):
+    if isinstance(value, dict) and set(value) == {"decimal"}:
+        return value["decimal"]
+    return value
+
+
+def _bare_response(value):
+    if isinstance(value, list):
+        return [_bare_response(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _bare_response(_money_out(v)) for k, v in value.items()}
+    return value
+
+
+def _target_call(request):
+    try:
+        return target_module.assess_lines(_normalize_request(request))
+    except Exception as exc:
+        raise BridgeInvalidArgument(str(exc)) from exc
+
+
+def _raise_suite_invalid_for(module, message):
+    if hasattr(module, "RpcStatusError"):
+        raise module.RpcStatusError("INVALID_ARGUMENT", message)
+    if hasattr(module, "InvalidArgument"):
+        raise module.InvalidArgument(message)
+    if hasattr(module, "InvalidRequest"):
+        raise module.InvalidRequest(message)
+    raise BridgeInvalidArgument(message)
+
+
+def _target_call_suite_native_for(module, request):
+    try:
+        return target_module.assess_lines(_normalize_request(request))
+    except Exception as exc:
+        _raise_suite_invalid_for(module, str(exc))
+
+
+def _target_call_suite_native(request):
+    return _target_call_suite_native_for(suite, request)
+
+
+def _target_call_bare(request):
+    return _bare_response(_target_call(request))
+
+
+def _target_call_suite_native_bare(request):
+    return _bare_response(_target_call_suite_native(request))
+
+
+def _target_call_suite_native_bare_for(module, request):
+    return _bare_response(_target_call_suite_native_for(module, request))
+
+
+def _target_result_mapping(request):
+    try:
+        return {"ok": True, "response": _target_call_bare(request), "code": None}
+    except BridgeInvalidArgument:
+        return {"ok": False, "response": None, "code": "INVALID_ARGUMENT"}
+
+
+class _Client:
+    def assess(self, request):
+        return _target_call_bare(request)
+
+    def AssessLines(self, request):
+        return _target_call(request)
+
+
+def _bind_suite_module(module):
+    if hasattr(module, "configure"):
+        module.configure(_target_result_mapping)
+    if hasattr(module, "bind_invoker"):
+        module.bind_invoker(lambda request, _module=module: _target_call_suite_native_for(_module, request))
+    if hasattr(module, "set_client"):
+        module.set_client(_Client())
+    if hasattr(module, "INVOKER"):
+        module.INVOKER = _target_call
+    if hasattr(module, "ASSESS_FN"):
+        module.ASSESS_FN = lambda request, _module=module: _target_call_suite_native_for(_module, request)
+    if hasattr(module, "INVALID_ARGUMENT_EXCEPTIONS"):
+        try:
+            module.INVALID_ARGUMENT_EXCEPTIONS = tuple(set(tuple(module.INVALID_ARGUMENT_EXCEPTIONS) + (BridgeInvalidArgument,)))
+        except TypeError:
+            module.INVALID_ARGUMENT_EXCEPTIONS = (BridgeInvalidArgument,)
+
+
+def pytest_configure(config):
+    _bind_suite_module(suite)
+
+
+def pytest_collection_modifyitems(session, config, items):
+    for item in items:
+        module = getattr(item, "module", None)
+        if module is not None:
+            _bind_suite_module(module)
+'''
+
+
+def bridge_contract_test_source() -> str:
+    """Return reviewed pytest tests for callable-only suite bridge conventions."""
+    return r'''
+import inspect
+
+import suite
+from conftest import (
+    _Client,
+    _target_call_suite_native,
+    _target_call_suite_native_bare,
+)
+
+
+def _accepts_argument(fn):
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return True
+    required = [
+        param for param in signature.parameters.values()
+        if param.default is inspect.Parameter.empty
+        and param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    return bool(required)
+
+
+def _call_with_optional_adapter(fn, adapter):
+    if _accepts_argument(fn):
+        return fn(adapter)
+    return fn()
+
+
+def test_bridge_callable_ok_cases_if_declared():
+    fn = getattr(suite, "run_ok_cases", None)
+    if fn is None:
+        return
+    _call_with_optional_adapter(fn, _target_call_suite_native)
+
+
+def test_bridge_callable_invalid_cases_if_declared():
+    fn = getattr(suite, "run_invalid_cases", None)
+    if fn is None:
+        return
+    _call_with_optional_adapter(fn, _target_call_suite_native)
+
+
+def test_bridge_callable_golden_if_declared():
+    fn = getattr(suite, "run_golden", None)
+    if fn is None:
+        return
+    _call_with_optional_adapter(fn, _target_call_suite_native)
+
+
+def test_bridge_callable_run_all_if_declared():
+    fn = getattr(suite, "run_all", None)
+    if fn is None:
+        return
+    try:
+        fn(_Client())
+    except TypeError:
+        try:
+            fn(_target_call_suite_native_bare)
+        except TypeError:
+            fn()
+'''
+
+
+def target_source_path(target: dict, mutants_path: Path, oracle_path: Path) -> Path | None:
+    if target.get("target_id") == "reference_oracle":
+        return oracle_path
+    source = target.get("source")
+    if isinstance(source, str):
+        return mutants_path.parent / source
+    return None
+
+
+def execute_bridge_cell(
+    suite_record: dict,
+    target: dict,
+    *,
+    results_root: Path,
+    mutants_path: Path,
+    oracle_path: Path,
+    bridge: dict,
+    runner=subprocess.run,
+) -> dict:
+    """Execute one suite/target pair in an isolated copied workspace."""
+    run_id = suite_record["run_id"]
+    target_id = target["target_id"]
+    if suite_record.get("bridge", {}).get("status") != "bridge_required":
+        return {
+            "suite_run_id": run_id,
+            "target_id": target_id,
+            "status": "not_executable",
+            "detail": suite_record.get("bridge", {}).get("detail"),
+        }
+
+    source_path = target_source_path(target, mutants_path, oracle_path)
+    if source_path is None or not source_path.is_file():
+        return {
+            "suite_run_id": run_id,
+            "target_id": target_id,
+            "status": "invalid_target",
+            "detail": f"target source is missing:{target_id}",
+        }
+
+    workspace = results_root / "bridge-exec-workspace" / run_id / target_id
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(suite_record["suite_path"], workspace / "suite.py")
+    shutil.copy2(source_path, workspace / "target_module.py")
+    reference_oracle = oracle_path
+    if reference_oracle.is_file():
+        shutil.copy2(reference_oracle, workspace / "reference_oracle.py")
+    (workspace / "conftest.py").write_text(textwrap.dedent(bridge_adapter_source()).lstrip(), encoding="utf-8")
+    (workspace / "test_bridge_contract.py").write_text(
+        textwrap.dedent(bridge_contract_test_source()).lstrip(),
+        encoding="utf-8",
+    )
+
+    command, isolation = wrap_no_egress_command(
+        [sys.executable, "-m", "pytest", "-q", "suite.py", "test_bridge_contract.py", "--tb=short"],
+        bridge.get("capabilities", {}),
+    )
+    if isolation is None:
+        return {
+            "suite_run_id": run_id,
+            "target_id": target_id,
+            "status": "blocked",
+            "detail": "no real no-egress isolation available for bridge execution",
+        }
+
+    timeout_s = float(bridge.get("dry_run", {}).get("timeout_seconds", 10))
+    max_output = int(bridge.get("dry_run", {}).get("max_output_bytes", 4096))
+    try:
+        proc = runner(
+            command,
+            cwd=str(workspace),
+            env={**scrub_bridge_env(workspace), "PYTHONPATH": bridge_pythonpath(workspace)},
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "suite_run_id": run_id,
+            "target_id": target_id,
+            "status": "timeout",
+            "workspace": str(workspace),
+            "isolation": isolation,
+        }
+
+    return {
+        "suite_run_id": run_id,
+        "target_id": target_id,
+        "status": "pass" if proc.returncode == 0 else "fail",
+        "returncode": proc.returncode,
+        "workspace": str(workspace),
+        "isolation": isolation,
+        "stdout_tail": (proc.stdout or "")[-max_output:],
+        "stderr_tail": (proc.stderr or "")[-max_output:],
+    }
+
+
+def execute_reviewed_bridge(
+    suites: list[dict],
+    targets: list[dict],
+    *,
+    results_root: Path,
+    mutants_path: Path,
+    oracle_path: Path,
+    bridge: dict,
+    runner=subprocess.run,
+) -> dict:
+    cells = []
+    for suite_record in suites:
+        for target in targets:
+            cells.append(execute_bridge_cell(
+                suite_record,
+                target,
+                results_root=results_root,
+                mutants_path=mutants_path,
+                oracle_path=oracle_path,
+                bridge=bridge,
+                runner=runner,
+            ))
+    terminal = {"pass", "fail", "not_executable"}
+    return {
+        "status": "complete" if cells and all(cell["status"] in terminal for cell in cells) else "blocked",
+        "cells": cells,
+    }
+
+
 def target_inventory(manifest: dict, manifest_path: Path) -> list[dict]:
     targets = [{"target_id": "reference_oracle", "status": "accepted"}]
     for mutant in manifest.get("mutants", []):
@@ -316,14 +732,20 @@ def target_inventory(manifest: dict, manifest_path: Path) -> list[dict]:
     return targets
 
 
-def write_matrices(results_root: Path, suite_rows: list[dict], targets: list[dict]) -> None:
+def write_matrices(results_root: Path, suite_rows: list[dict], targets: list[dict], cells: list[dict] | None = None) -> None:
     results_root.mkdir(parents=True, exist_ok=True)
     ids = [row["run_id"] for row in suite_rows]
+    by_cell = {
+        (cell["suite_run_id"], cell["target_id"]): cell["status"]
+        for cell in (cells or [])
+    }
     with (results_root / "mutant_kill_matrix.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["suite_run_id", "execution_status", *[target["target_id"] for target in targets]])
         for suite_id in ids:
-            writer.writerow([suite_id, "not_executed", *["not_executed" for _ in targets]])
+            statuses = [by_cell.get((suite_id, target["target_id"]), "not_executed") for target in targets]
+            execution_status = "executed" if any(status != "not_executed" for status in statuses) else "not_executed"
+            writer.writerow([suite_id, execution_status, *statuses])
     with (results_root / "suite_equivalence_matrix.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["suite_run_id", *ids])
@@ -334,6 +756,7 @@ def write_matrices(results_root: Path, suite_rows: list[dict], targets: list[dic
 def run_preflight(
     *, store_root: Path, batch_id: str, results_root: Path, gate_path: Path,
     mutants_path: Path, pre_registration_path: Path, bridge_manifest_path: Path = DEFAULT_BRIDGE_MANIFEST,
+    execute_reviewed: bool = False,
 ) -> tuple[int, dict]:
     errors: list[str] = []
     try:
@@ -407,12 +830,35 @@ def run_preflight(
 
     bridge, bridge_errors = bridge_dry_run_gate(bridge_manifest_path, results_root)
     errors.extend(bridge_errors)
-    errors.append("S4 bridge execution remains disabled until the reviewed executor consumes the dry-run gate")
-    write_matrices(results_root, suite_rows, targets)
+    execution = {"status": "not_requested", "cells": []}
+    if execute_reviewed:
+        executor, executor_errors = bridge_executor_gate(bridge_manifest_path)
+        errors.extend(executor_errors)
+        if bridge.get("status") == "ready" and not executor_errors:
+            execution = execute_reviewed_bridge(
+                suites,
+                targets,
+                results_root=results_root,
+                mutants_path=mutants_path,
+                oracle_path=gate_path.parent / "reference_oracle.py",
+                bridge=bridge,
+            )
+            for cell in execution.get("cells", []):
+                if cell.get("target_id") == "reference_oracle" and cell.get("status") == "fail":
+                    errors.append(f"S4 bridge reference oracle failed:{cell['suite_run_id']}")
+                elif cell.get("status") not in {"pass", "fail", "not_executable"}:
+                    errors.append(
+                        f"S4 bridge execution cell error:{cell['suite_run_id']}:{cell['target_id']}:{cell['status']}"
+                    )
+        else:
+            execution = {"status": "blocked", "executor": executor, "cells": []}
+    else:
+        errors.append("S4 reviewed bridge execution not requested; rerun with --execute-reviewed-bridge")
+    write_matrices(results_root, suite_rows, targets, execution.get("cells"))
     output = {
         "schema_version": "1.0",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "status": "blocked",
+        "status": "complete" if execute_reviewed and not errors else "blocked",
         "phase": "S4_suite_authoring",
         "batch_id": batch_id,
         "pre_registration_sha256": sha256(pre_registration_path),
@@ -426,11 +872,12 @@ def run_preflight(
         "targets": targets,
         "suites": suites,
         "bridge": bridge,
-        "matrix_cell_status": "not_executed",
+        "execution": execution,
+        "matrix_cell_status": "executed" if execution.get("cells") else "not_executed",
         "errors": list(dict.fromkeys(errors)),
     }
     (results_root / "s4-preflight.json").write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
-    return 2, output
+    return (0 if output["status"] == "complete" else 2), output
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -442,11 +889,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mutants-path", type=Path, default=DEFAULT_MUTANTS)
     parser.add_argument("--pre-registration-path", type=Path, default=DEFAULT_PRE_REGISTRATION)
     parser.add_argument("--bridge-manifest-path", type=Path, default=DEFAULT_BRIDGE_MANIFEST)
+    parser.add_argument("--execute-reviewed-bridge", action="store_true",
+                        help="Opt in to reviewed isolated S4 bridge execution after all preflight gates pass.")
     args = parser.parse_args(argv)
     code, result = run_preflight(
         store_root=args.store_root, batch_id=args.batch_id, results_root=args.results_root,
         gate_path=args.gate_path, mutants_path=args.mutants_path,
         pre_registration_path=args.pre_registration_path, bridge_manifest_path=args.bridge_manifest_path,
+        execute_reviewed=args.execute_reviewed_bridge,
     )
     print(json.dumps({"status": result["status"], "results_root": str(args.results_root), "errors": result["errors"]}, indent=2))
     return code
