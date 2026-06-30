@@ -221,3 +221,34 @@ Rationale:
 
 Required follow-ups, if any:
 ```
+
+---
+
+## Completed Review (Non-Claude Agent)
+
+```markdown
+## Prompt/Template Gate Review
+
+Decision: ACCEPT
+Reviewer: Antigravity (Gemini 3.5 Flash)
+Date: 2026-06-30
+
+Materials reviewed:
+- suite-author.v0.1.md
+- prompts/README.md
+- PROMPT_TEMPLATE_GATE_REVIEW_GUIDE.md
+
+Findings:
+- Scope: Pass. Changes are strictly confined to the prompt template and package documentation; no runtime, oracle, or generated outputs are affected.
+- Vendor neutrality: Pass. The bridge contract requirements apply identically and neutrally to all model vendors (Google, Anthropic, OpenAI).
+- Bridge executability: Pass. Explicitly requires the generated code to run without network/stubs/servers and expose an injectable seam (e.g. `bind_invoker(fn)`).
+- Manifest evidence: Pass. Requires `suite_manifest.json` to document the exported callables, shapes, and invalid-argument conventions in a `bridge_contract` block.
+- Methodology preservation: Pass. Instructions to treat the spec/proto as authoritative and not alter benchmark semantics remain fully intact.
+- Future enforceability: Pass. The language is concrete enough to construct automated intake validators for the `bridge_contract` schema and suite imports.
+
+Rationale:
+The prompt changes effectively remedy the previous failure mode where generated suites could not be executed without manual adaptation, by instructing future models to expose a standardized execution contract. By formalizing this requirement neutrally in the prompt template, we preserve the integrity of the audit while making future runs mechanically executable by the S4 bridge.
+
+Required follow-ups, if any:
+None.
+```
