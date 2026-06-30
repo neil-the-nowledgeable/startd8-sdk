@@ -31,9 +31,28 @@ Renderers may substitute only these variables:
 Rendered prompts for all authoring tools must be diffed before execution. Differences must be limited
 to invocation mechanics and `RUN_METADATA`; task content must remain identical.
 
+## Suite Bridge Contract
+
+Suite-author prompts must include the bridge executability contract. This is a vendor-neutral output
+requirement, not a Codex-, OpenAI-, Claude-, or Gemini-specific instruction. The requirement exists so
+accepted suites from future batches can be executed by the reviewed S4 bridge without hand-editing the
+generated `suite.py`.
+
+Rendered suite-author prompts must require:
+
+- an importable `suite.py` with no live service, network, generated-stub, or repo-root dependency;
+- an injectable implementation seam such as `bind_invoker(fn)`, `configure(adapter)`, or
+  `run_*` helpers with an optional `call` argument;
+- JSON-compatible request and response dictionaries at that seam;
+- deterministic invalid-argument signaling; and
+- a `suite_manifest.json` `bridge_contract` entry that names the exported callables and documents the
+  request/response and invalid-case conventions.
+
+Do not vary this contract by authoring vendor. If a future suite-author template version changes the
+contract, record the rationale and run a cross-vendor prompt diff before execution.
+
 ## Ambient Instruction Policy
 
 Run authoring from `/private/tmp/startd8-openai-bias-clean-workspace`, not the repository root. Do not
 allow tool execution to discover repo-level `CLAUDE.md`, `AGENTS.md`, local MCP config, skills,
 plugins, memories, or user rules unless a later sensitivity stratum explicitly records them as inputs.
-
