@@ -1087,6 +1087,14 @@ class TaskRunInput(BaseModel):
         default=None,
         description="Agent name (default: DEFAULT_AGENT; validated against ALLOWED_AGENTS)",
     )
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Exact model to use (overrides the vendor flagship and DEFAULT_MODEL env). "
+            "Validated against the provider's supported_models. "
+            "Default (unset): the vendor's catalog flagship (newest stable)."
+        ),
+    )
     dry_run: bool = Field(
         default=True,
         description="If true, validate and return diffs without applying",
@@ -1096,6 +1104,80 @@ class TaskRunInput(BaseModel):
 # ═══════════════════════════════════════════════════════════════
 # SHARED UTILITY FUNCTIONS
 # ═══════════════════════════════════════════════════════════════
+
+def _resolve_agent_model(agent_name: str, per_call_model: Optional[str] = None) -> Dict[str, Any]:
+    """Resolve the model for a vendor/agent default-agent request.
+
+    Precedence (FR-6): per-call ``model`` > ``DEFAULT_MODEL`` env > catalog
+    flagship (newest stable). NOT ``provider.supported_models[0]`` (which is
+    list-ordering — preview/stale for several vendors).
+
+    Returns a dict: ``{provider, provider_obj, model, source, error}`` where
+    ``source`` ∈ {``per-call-override``, ``env-override``, ``flagship-default``}
+    and ``error`` is ``None`` on success (FR-4/FR-7: explicit errors, never a
+    silent fallback). Never raises.
+    """
+    result: Dict[str, Any] = {
+        "provider": None, "provider_obj": None, "model": None,
+        "source": None, "error": None,
+    }
+    try:
+        from startd8.model_catalog import get_flagship, canonical_provider
+    except Exception as e:  # SDK not importable in this context
+        result["error"] = f"model catalog unavailable: {e}"
+        return result
+
+    canon = canonical_provider(agent_name)
+    if canon is None:
+        result["error"] = f"Unknown agent/provider '{agent_name}' (no canonical provider)"
+        return result
+    result["provider"] = canon
+
+    # Provider object (for supported_models validation + downstream create_agent).
+    # Prefer the module-level registry (wired during SDK startup); fall back to a
+    # direct import so validation (FR-7) is robust even if the global isn't set.
+    _PR = globals().get("ProviderRegistry")
+    if _PR is None:
+        try:
+            from startd8.providers import ProviderRegistry as _PR
+        except Exception:
+            _PR = None
+    provider = None
+    try:
+        if _PR is not None:
+            _PR.discover()
+            provider = _PR.get_provider(canon)
+    except Exception:
+        provider = None
+    result["provider_obj"] = provider
+    supported = list(getattr(provider, "supported_models", []) or []) if provider else []
+
+    env_model = (os.getenv("DEFAULT_MODEL") or "").strip() or None
+    requested = per_call_model or env_model
+    if requested:
+        result["source"] = "per-call-override" if per_call_model else "env-override"
+        model = requested.split(":", 1)[1] if ":" in requested else requested
+        if supported and model not in supported:
+            result["error"] = (
+                f"Model '{model}' is not supported by provider '{canon}'. "
+                f"Allowed: {supported}"
+            )
+            return result
+        result["model"] = model
+        return result
+
+    # No override: vendor flagship (newest stable).
+    result["source"] = "flagship-default"
+    spec = get_flagship(canon)
+    if not spec:
+        result["error"] = (
+            f"No flagship model defined for provider '{canon}' "
+            f"(local-only or unsupported; specify an explicit model)"
+        )
+        return result
+    result["model"] = spec.split(":", 1)[1] if ":" in spec else spec
+    return result
+
 
 def _get_skill_directories() -> List[Path]:
     """
@@ -2888,6 +2970,18 @@ async def startd8_status(params: StatusInput) -> str:
 
         agent_cls = globals().get("SkillAgentConcrete") or globals().get("ClaudeSkillAgent")
 
+        # FR-8: what model the default agent resolves to, and why (never throws).
+        try:
+            _dm = _resolve_agent_model(DEFAULT_AGENT_NAME, None)
+            _default_model = {
+                "provider": _dm.get("provider"),
+                "model": _dm.get("model"),
+                "source": _dm.get("source"),
+                "error": _dm.get("error"),
+            }
+        except Exception as _e:  # pragma: no cover - defensive
+            _default_model = {"error": str(_e)}
+
         info: Dict[str, Any] = {
             "server": {"name": "startd8_mcp"},
             "meta": {"request_id": request_id, "run_id": RUN_ID},
@@ -2911,6 +3005,8 @@ async def startd8_status(params: StatusInput) -> str:
                 "STARTD8_SKILL_PATH_SECONDARY_ENABLED": _env_flag("STARTD8_SKILL_PATH_SECONDARY_ENABLED", default=False),
                 "ANTHROPIC_API_KEY_SET": bool(os.getenv("ANTHROPIC_API_KEY")),
                 "DEFAULT_AGENT": DEFAULT_AGENT_NAME,
+                "DEFAULT_MODEL": os.getenv("DEFAULT_MODEL", ""),
+                "default_model_resolution": _default_model,
                 "ALLOWED_AGENTS": sorted(ALLOWED_AGENTS),
                 "ALLOW_AUTO_DEPS": ALLOW_AUTO_DEPS,
                 "AUTO_MAX_DEPTH": AUTO_MAX_DEPTH,
@@ -2983,6 +3079,16 @@ async def startd8_status(params: StatusInput) -> str:
         lines.append(f"- **STARTD8_SKILL_PATH:** `{info['env']['STARTD8_SKILL_PATH']}`")
         lines.append(f"- **STARTD8_SDK_PATH:** `{info['env']['STARTD8_SDK_PATH']}`")
         lines.append(f"- **DEFAULT_AGENT:** `{info['env']['DEFAULT_AGENT']}`")
+        _dmr = info['env'].get('default_model_resolution') or {}
+        if _dmr.get('error'):
+            lines.append(f"- **Default model:** _unresolved_ ({_dmr.get('error')})")
+        else:
+            lines.append(
+                f"- **Default model:** `{_dmr.get('model')}` "
+                f"(provider `{_dmr.get('provider')}`, source `{_dmr.get('source')}`)"
+            )
+        if info['env'].get('DEFAULT_MODEL'):
+            lines.append(f"- **DEFAULT_MODEL override:** `{info['env']['DEFAULT_MODEL']}`")
         lines.append("")
         lines.append("## Skills")
         if not skills:
@@ -3314,23 +3420,34 @@ async def tasks_run(params: TaskRunInput) -> str:
         if ProviderRegistry is None:
             return _resp(error="internal", message="Provider registry unavailable")
 
-        try:
-            ProviderRegistry.discover()
-            provider = ProviderRegistry.get_provider(agent_name)
-        except Exception as e:
-            provider = None
+        # Resolve the vendor's model explicitly: per-call model > DEFAULT_MODEL env
+        # > catalog flagship (newest stable). NOT supported_models[0] — that is
+        # list-ordering, not a flagship designation (preview/stale for several
+        # vendors), and the default agent alias (e.g. "claude") must normalize to
+        # a provider first. See model_catalog.get_flagship / canonical_provider.
+        resolution = _resolve_agent_model(agent_name, getattr(params, "model", None))
+        if resolution.get("error"):
+            return _resp(
+                error="invalid_params",
+                message=resolution["error"],
+                data={"agent": agent_name, "provider": resolution.get("provider")},
+            )
+        provider = resolution.get("provider_obj")
         if provider is None:
             return _resp(
                 error="invalid_params",
                 message=f"Agent/provider '{agent_name}' not available",
             )
-
-        model = provider.supported_models[0] if getattr(provider, "supported_models", None) else None
+        model = resolution["model"]
         if not model:
             return _resp(
                 error="invalid_params",
-                message=f"No models configured for provider '{agent_name}'",
+                message=f"No model resolved for provider '{resolution.get('provider')}'",
             )
+        _log(
+            f"model.resolved agent={agent_name} provider={resolution.get('provider')} "
+            f"model={model} source={resolution.get('source')}"
+        )
 
         def build_plan(task, depth=0, order=None, visited=None):
             if order is None:

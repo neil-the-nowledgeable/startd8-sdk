@@ -575,6 +575,90 @@ def get_latest_model(
     return provider_map.get(tier)
 
 
+# ---------------------------------------------------------------------------
+# Flagship single source of truth — "what loads for a vendor, and why"
+# ---------------------------------------------------------------------------
+#
+# A "flagship" is a vendor's designated default model: the **newest STABLE**
+# (GA) model of that vendor. Previews/experimental builds are NEVER the
+# flagship, even when they are the highest-capability entry. The flagship is
+# curated by hand here (not computed) so it is explicit and reviewable:
+#
+#   vendor      flagship                 why
+#   --------    ---------------------    ---------------------------------------
+#   anthropic   claude-opus-4-8          newest stable Opus. NOTE: Fable-5 is a
+#                                        distinct higher "Mythos" class and is
+#                                        NOT the default flagship — reach it only
+#                                        by explicit override.
+#   openai      gpt-5.5                  newest stable flagship.
+#   gemini      gemini-2.5-pro           newest STABLE pro (NOT 3.x-*-preview).
+#   mistral     mistral-large-latest     newest stable large.
+#   deepseek    deepseek-chat            sole stable chat flagship.
+#   ollama      startd8-coder            local-only; exempt from the cloud
+#                                        flagship guarantee (callers treat the
+#                                        local default separately).
+#
+# Do NOT resolve a vendor default via `provider.supported_models[0]` — that is
+# list-ordering, not a flagship designation, and is preview/stale for several
+# vendors. Resolve via get_flagship() instead.
+
+# Agent/preset aliases that callers use which are NOT provider names.
+_PROVIDER_ALIASES = {
+    "claude": "anthropic",
+    "gpt": "openai",
+    "gpt4": "openai",
+    "gpt-4": "openai",
+    "gpt5": "openai",
+    "googleai": "gemini",
+    "google": "gemini",
+}
+
+# Known canonical provider names (those resolvable by the catalog tier map).
+_KNOWN_PROVIDERS = {
+    "anthropic", "openai", "gemini", "mistral",
+    "deepseek", "jetson", "ollama", "nim",
+}
+
+
+def canonical_provider(name: str) -> Optional[str]:
+    """Normalize an agent/preset name to a canonical provider name.
+
+    The MCP server and other callers accept agent aliases like ``claude`` or
+    ``gpt4`` that are NOT provider names; the provider registry and the catalog
+    only understand canonical names (``anthropic``, ``openai``, ``gemini`` …).
+    Without this mapping the *default* agent ``claude`` resolves to no provider
+    and no flagship at all.
+
+    Returns the canonical provider name, or ``None`` if unrecognized (callers
+    MUST handle ``None`` explicitly rather than guessing).
+    """
+    if not name:
+        return None
+    key = name.strip().lower()
+    if key in _KNOWN_PROVIDERS:
+        return key
+    return _PROVIDER_ALIASES.get(key)
+
+
+def get_flagship(provider: str) -> Optional[str]:
+    """Return a vendor's flagship ``"provider:model"`` spec (newest STABLE model).
+
+    This is the canonical single source of truth for default-agent model
+    selection. It is a thin, explicitly-named wrapper over
+    ``get_latest_model(provider, tier="flagship")`` so callers express intent
+    ("give me the flagship") rather than a tier string.
+
+    The ``provider`` argument may be a provider name or an agent alias
+    (``claude``/``gpt4`` …); it is normalized via :func:`canonical_provider`.
+    Returns ``None`` for an unknown provider — callers MUST handle ``None``
+    explicitly and MUST NOT fall back to ``supported_models[0]``.
+    """
+    canon = canonical_provider(provider)
+    if canon is None:
+        return None
+    return get_latest_model(canon, tier="flagship")
+
+
 def list_models_by_tier(tier: str) -> List[str]:
     """
     List all models of a given tier.
