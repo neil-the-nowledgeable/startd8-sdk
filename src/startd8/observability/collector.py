@@ -96,6 +96,8 @@ _EVENT_GROUPS = {
     # Forward Deployed Engineer (fde/)
     "FDE_EXPLAIN_COMPLETE": "fde",
     "FDE_PREFLIGHT_COMPLETE": "fde",
+    # VIPP — project-side negotiator/applier (vipp/)
+    "VIPP_NEGOTIATE_COMPLETE": "vipp",
     "SYSTEM_ERROR": "system",
     "SYSTEM_WARNING": "system",
     "FRAMEWORK_INITIALIZED": "system",

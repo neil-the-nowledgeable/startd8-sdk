@@ -761,6 +761,8 @@ event_types:
   event_group: fde
 - name: FDE_PREFLIGHT_COMPLETE
   event_group: fde
+- name: VIPP_NEGOTIATE_COMPLETE
+  event_group: vipp
 - name: SYSTEM_ERROR
   event_group: system
 - name: SYSTEM_WARNING

@@ -22,7 +22,7 @@ class EventType(Enum):
     AGENT_AUTO_PAUSED = auto()
     AGENT_MANUAL_RESUMED = auto()
     AGENT_AUTO_RESUMED = auto()
-    
+
     # Cost tracking events
     COST_RECORDED = auto()
     BUDGET_WARNING = auto()
@@ -35,7 +35,7 @@ class EventType(Enum):
     USAGE_LIMIT_WARNING = auto()
     USAGE_LIMIT_EXCEEDED = auto()
     USAGE_LIMIT_CRITICAL = auto()
-    
+
     # Pipeline events
     PIPELINE_START = auto()
     PIPELINE_STEP_START = auto()
@@ -43,26 +43,26 @@ class EventType(Enum):
     PIPELINE_COMPLETE = auto()
     PIPELINE_STEP_RETRY = auto()  # FR-410
     PIPELINE_ERROR = auto()
-    
+
     # Job Queue events
     JOB_QUEUED = auto()
     JOB_PROCESSING_START = auto()
     JOB_PROCESSING_COMPLETE = auto()
     JOB_FAILED = auto()
     JOB_ARCHIVED = auto()
-    
+
     # Document Enhancement events
     ENHANCEMENT_START = auto()
     ENHANCEMENT_STEP_START = auto()
     ENHANCEMENT_STEP_COMPLETE = auto()
     ENHANCEMENT_COMPLETE = auto()
-    
+
     # Storage events
     PROMPT_CREATED = auto()
     RESPONSE_RECORDED = auto()
     BENCHMARK_CREATED = auto()
     BENCHMARK_COMPLETED = auto()
-    
+
     # Truncation detection events
     TRUNCATION_DETECTED = auto()
     TRUNCATION_WARNING = auto()
@@ -83,10 +83,13 @@ class EventType(Enum):
     FDE_EXPLAIN_COMPLETE = auto()
     FDE_PREFLIGHT_COMPLETE = auto()
 
+    # VIPP (see vipp/) — project-side negotiator/applier (OBSERVED authority)
+    VIPP_NEGOTIATE_COMPLETE = auto()
+
     # System events
     SYSTEM_ERROR = auto()
     SYSTEM_WARNING = auto()
-    
+
     # Framework lifecycle
     FRAMEWORK_INITIALIZED = auto()
     CACHE_CLEARED = auto()
@@ -94,36 +97,42 @@ class EventType(Enum):
 
 class EventPriority(Enum):
     """Event priority levels for persistence"""
-    LOW = "low"           # Informational, don't persist
-    NORMAL = "normal"     # Standard events, optional persistence
-    HIGH = "high"         # Important events, should persist
-    CRITICAL = "critical" # Critical events, must persist
+
+    LOW = "low"  # Informational, don't persist
+    NORMAL = "normal"  # Standard events, optional persistence
+    HIGH = "high"  # Important events, should persist
+    CRITICAL = "critical"  # Critical events, must persist
 
 
 @dataclass
 class Event:
     """
     Base event class for all StartD8 events.
-    
+
     Events are immutable records of something that happened
     in the framework.
     """
+
     type: EventType
     source: str  # Component that emitted the event (e.g., "Pipeline", "JobQueue")
     data: Dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: Optional[str] = None  # For tracing related events
-    priority: EventPriority = field(default=EventPriority.NORMAL)  # Event priority for persistence
-    id: str = field(default_factory=lambda: f"event-{uuid.uuid4().hex[:12]}")  # Unique event ID
-    
+    priority: EventPriority = field(
+        default=EventPriority.NORMAL
+    )  # Event priority for persistence
+    id: str = field(
+        default_factory=lambda: f"event-{uuid.uuid4().hex[:12]}"
+    )  # Unique event ID
+
     def __post_init__(self):
         # Ensure data is immutable by creating a copy
         self.data = dict(self.data)
-    
+
     def should_persist(self) -> bool:
         """Determine if this event should be persisted"""
         return self.priority in (EventPriority.HIGH, EventPriority.CRITICAL)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert event to dictionary format"""
         return {
@@ -139,10 +148,10 @@ class Event:
 
 # Convenience event constructors
 def agent_call_start(
-    agent_name: str, 
-    model: str, 
+    agent_name: str,
+    model: str,
     prompt_preview: str,
-    correlation_id: Optional[str] = None
+    correlation_id: Optional[str] = None,
 ) -> Event:
     """Create an agent call start event"""
     return Event(
@@ -162,7 +171,7 @@ def agent_call_complete(
     model: str,
     response_time_ms: int,
     tokens: int,
-    correlation_id: Optional[str] = None
+    correlation_id: Optional[str] = None,
 ) -> Event:
     """Create an agent call complete event"""
     return Event(
@@ -179,10 +188,7 @@ def agent_call_complete(
 
 
 def agent_call_error(
-    agent_name: str,
-    model: str,
-    error: str,
-    correlation_id: Optional[str] = None
+    agent_name: str, model: str, error: str, correlation_id: Optional[str] = None
 ) -> Event:
     """Create an agent call error event"""
     return Event(
@@ -195,4 +201,3 @@ def agent_call_error(
         },
         correlation_id=correlation_id,
     )
-

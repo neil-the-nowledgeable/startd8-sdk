@@ -34,7 +34,9 @@ from .manifest_extraction.models import ExtractionRecord, ExtractionResult
 
 console = Console()
 
-kickoff_app = typer.Typer(help="Kickoff-package tooling (authoring contract, conformance).")
+kickoff_app = typer.Typer(
+    help="Kickoff-package tooling (authoring contract, conformance)."
+)
 
 _EXIT_CONFORMANCE = 1
 _EXIT_FATAL = 2
@@ -58,7 +60,8 @@ def _kickoff_callback() -> None:
 @kickoff_app.command("check")
 def check(
     docs: List[Path] = typer.Argument(
-        ..., help="Kickoff doc(s) in the authoring-contract format (REQUIREMENTS/PLAN markdown)."
+        ...,
+        help="Kickoff doc(s) in the authoring-contract format (REQUIREMENTS/PLAN markdown).",
     ),
     project: Optional[Path] = typer.Option(
         None,
@@ -73,7 +76,9 @@ def check(
         "(FR-CFE). Overrides --project's prisma/schema.prisma when both are given.",
     ),
     json_out: bool = typer.Option(
-        False, "--json", help="Emit the extraction report JSON to stdout (machine output)."
+        False,
+        "--json",
+        help="Emit the extraction report JSON to stdout (machine output).",
     ),
     strict: bool = typer.Option(
         False,
@@ -93,8 +98,10 @@ def check(
 
     live_schema_text = None
     # An explicit --contract wins over --project's conventional prisma/schema.prisma.
-    schema_path = contract if contract is not None else (
-        project / "prisma" / "schema.prisma" if project is not None else None
+    schema_path = (
+        contract
+        if contract is not None
+        else (project / "prisma" / "schema.prisma" if project is not None else None)
     )
     if schema_path is not None and schema_path.is_file():
         live_schema_text = schema_path.read_text(encoding="utf-8")
@@ -113,7 +120,8 @@ def check(
 def _render(result: ExtractionResult) -> None:
     worklist = [r for r in result.sorted_records() if _is_conformance_failure(r)]
     gaps = [
-        r for r in result.by_status(Status.NOT_EXTRACTED)
+        r
+        for r in result.by_status(Status.NOT_EXTRACTED)
         if _GENERATOR_GAP_MARKER in (r.reason or "")
     ]
     extracted = len(result.by_status(Status.EXTRACTED))
@@ -134,7 +142,9 @@ def _render(result: ExtractionResult) -> None:
     )
 
     if worklist:
-        table = Table(title="Co-work worklist (contract §3: reformat the prose, re-check)")
+        table = Table(
+            title="Co-work worklist (contract §3: reformat the prose, re-check)"
+        )
         table.add_column("Manifest")
         table.add_column("Value")
         table.add_column("Fix")
@@ -166,14 +176,20 @@ def lint_config_cmd() -> None:
         console.print("[green]kickoff config: clean[/green]")
         return
     for issue in issues:
-        console.print(f"[red]✗[/red] {issue.field_key}: [yellow]{issue.code}[/yellow] — {issue.message}")
+        console.print(
+            f"[red]✗[/red] {issue.field_key}: [yellow]{issue.code}[/yellow] — {issue.message}"
+        )
     raise typer.Exit(_EXIT_CONFORMANCE)
 
 
 @kickoff_app.command("inspect")
 def inspect_cmd(
-    project: Path = typer.Argument(Path("."), help="Project root (default: current directory)."),
-    json_out: bool = typer.Option(True, "--json/--no-json", help="Emit inspect JSON to stdout."),
+    project: Path = typer.Argument(
+        Path("."), help="Project root (default: current directory)."
+    ),
+    json_out: bool = typer.Option(
+        True, "--json/--no-json", help="Emit inspect JSON to stdout."
+    ),
 ) -> None:
     """Read-only kickoff state for CI/agents (R4-F3): no serve, no port, no write."""
     import json as _json
@@ -193,29 +209,48 @@ def inspect_cmd(
 
 
 def _render_red_carpet_state(state) -> None:
-    pct = f"{int(round((state.readiness_score or 0.0) * 100))}%" if state.readiness_score is not None else "—"
+    pct = (
+        f"{int(round((state.readiness_score or 0.0) * 100))}%"
+        if state.readiness_score is not None
+        else "—"
+    )
     console.print(f"[bold]🟥 Red Carpet[/bold] — readiness {pct}")
     glyph = {"done": "[green]✓[/green]", "pending": "[yellow]…[/yellow]"}
     for s in state.stages:
         marker = " [cyan](next)[/cyan]" if s.key == state.next_stage else ""
-        console.print(f"  {glyph.get(s.status, '?')} [bold]{s.key}[/bold]{marker} — {s.detail}")
+        console.print(
+            f"  {glyph.get(s.status, '?')} [bold]{s.key}[/bold]{marker} — {s.detail}"
+        )
     if state.cascade_offerable:
-        if state.preview:                          # FR-RCT-11 — "here's what we'll build" ($0)
-            console.print(f"[dim]Preview (wireframe): shape={state.preview.get('shape')} · "
-                          f"{state.preview.get('counts')}[/dim]")
-        console.print("[green]The $0 cascade is offerable[/green] — "
-                      "run [cyan]startd8 generate backend[/cyan] (and scaffold/views).")
+        if state.preview:  # FR-RCT-11 — "here's what we'll build" ($0)
+            console.print(
+                f"[dim]Preview (wireframe): shape={state.preview.get('shape')} · "
+                f"{state.preview.get('counts')}[/dim]"
+            )
+        console.print(
+            "[green]The $0 cascade is offerable[/green] — "
+            "run [cyan]startd8 generate backend[/cyan] (and scaffold/views)."
+        )
     else:
-        console.print(f"[yellow]Cascade not offerable yet[/yellow] — unmet gates: "
-                      f"{', '.join(state.unmet_gates)}.")
+        console.print(
+            f"[yellow]Cascade not offerable yet[/yellow] — unmet gates: "
+            f"{', '.join(state.unmet_gates)}."
+        )
 
 
 @kickoff_app.command("red-carpet")
 def red_carpet_cmd(
-    project: Path = typer.Argument(Path("."), help="Project root to build (default: current directory)."),
-    json_out: bool = typer.Option(False, "--json", help="Emit the staged build state as JSON."),
+    project: Path = typer.Argument(
+        Path("."), help="Project root to build (default: current directory)."
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the staged build state as JSON."
+    ),
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Run the agentic interview loop with this agent (spends tokens)."),
+        None,
+        "--agent",
+        help="Run the agentic interview loop with this agent (spends tokens).",
+    ),
 ) -> None:
     """Red Carpet Treatment — the staged, agentic build-from-scratch conductor.
 
@@ -230,7 +265,11 @@ def red_carpet_cmd(
 
     if json_out:
         sys.stdout.write(
-            _json.dumps(build_red_carpet_state(project).to_dict(), indent=2, ensure_ascii=False) + "\n")
+            _json.dumps(
+                build_red_carpet_state(project).to_dict(), indent=2, ensure_ascii=False
+            )
+            + "\n"
+        )
         return
     if not agent:
         _render_red_carpet_state(build_red_carpet_state(project))
@@ -252,8 +291,12 @@ def red_carpet_cmd(
     try:
         the_agent = resolve_agent_spec(agent)
         chat = new_red_carpet_chat(the_agent, str(project))
-    except Exception as exc:   # missing key / no tool support → actionable, not a traceback
-        console.print(f"[red]could not start the Red Carpet agent {agent!r}:[/red] {exc}")
+    except (
+        Exception
+    ) as exc:  # missing key / no tool support → actionable, not a traceback
+        console.print(
+            f"[red]could not start the Red Carpet agent {agent!r}:[/red] {exc}"
+        )
         raise typer.Exit(_EXIT_FATAL)
 
     def _on_proposal(action) -> Optional[str]:
@@ -280,7 +323,9 @@ def red_carpet_cmd(
         st = build_red_carpet_state(project)
         _render_red_carpet_state(st)
         record_red_carpet_progress(_prev["state"], st)
-        if _prev["state"] is not None:            # an increment just completed → reflect (advisory)
+        if (
+            _prev["state"] is not None
+        ):  # an increment just completed → reflect (advisory)
             console.print(f"[dim]{reflection_text(st)}[/dim]")
         _prev["state"] = st
 
@@ -300,14 +345,28 @@ def red_carpet_cmd(
 
 @kickoff_app.command("start")
 def start_cmd(
-    project: Path = typer.Argument(Path("."), help="Project root to serve the kickoff UI for."),
-    mode: str = typer.Option("write", "--mode", help="inspect | preview | write | demo (R4-F5)."),
-    theme: str = typer.Option("professional", "--theme", help="Presentation-polish theme."),
-    port: Optional[int] = typer.Option(None, "--port", help="Bind port (default: ephemeral)."),
+    project: Path = typer.Argument(
+        Path("."), help="Project root to serve the kickoff UI for."
+    ),
+    mode: str = typer.Option(
+        "write", "--mode", help="inspect | preview | write | demo (R4-F5)."
+    ),
+    theme: str = typer.Option(
+        "professional", "--theme", help="Presentation-polish theme."
+    ),
+    port: Optional[int] = typer.Option(
+        None, "--port", help="Bind port (default: ephemeral)."
+    ),
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Enable the web agentic chat panel with this agent (spends tokens)."),
+        None,
+        "--agent",
+        help="Enable the web agentic chat panel with this agent (spends tokens).",
+    ),
     red_carpet: bool = typer.Option(
-        False, "--red-carpet", help="Make the web chat the stage-aware Red Carpet build conductor."),
+        False,
+        "--red-carpet",
+        help="Make the web chat the stage-aware Red Carpet build conductor.",
+    ),
 ) -> None:
     """Serve the interactive kickoff web app on the loopback (preflight first; teardown on exit).
 
@@ -315,14 +374,23 @@ def start_cmd(
     to make that panel the stage-aware Red Carpet build conductor.
     """
     from .kickoff_experience.concierge_agent import resolve_concierge_agent_spec
-    from .kickoff_experience.serve import Mode, make_chat_factory, preflight, serve_kickoff
+    from .kickoff_experience.serve import (
+        Mode,
+        make_chat_factory,
+        preflight,
+        serve_kickoff,
+    )
 
     if mode not in Mode.ALL:
         console.print(f"[red]unknown mode {mode!r}[/red] (one of {Mode.ALL})")
         raise typer.Exit(_EXIT_FATAL)
     pf = preflight(project, mode=mode)
     for c in pf.checks:
-        mark = "[green]✓[/green]" if c.ok else ("[red]✗[/red]" if c.blocking else "[yellow]•[/yellow]")
+        mark = (
+            "[green]✓[/green]"
+            if c.ok
+            else ("[red]✗[/red]" if c.blocking else "[yellow]•[/yellow]")
+        )
         console.print(f"  {mark} {c.name}: {c.detail}")
     if not pf.ok:
         console.print("[red]preflight failed — not serving.[/red]")
@@ -332,20 +400,41 @@ def start_cmd(
     spec, source = resolve_concierge_agent_spec(project, agent)
     panel_spec = spec if source != "default" else None
     if panel_spec:
-        enabled = make_chat_factory(project, panel_spec, red_carpet=red_carpet) is not None
+        enabled = (
+            make_chat_factory(project, panel_spec, red_carpet=red_carpet) is not None
+        )
         flavor = "Red Carpet build conductor" if red_carpet else "Concierge"
-        console.print(f"  {'[green]✓[/green]' if enabled else '[yellow]•[/yellow]'} agentic chat ({flavor}): "
-                      + (f"enabled ({panel_spec}, source: {source})" if enabled
-                         else f"could not resolve {panel_spec!r} (source: {source}) — panel disabled"))
-    console.print(f"[green]serving kickoff[/green] (mode={mode}, theme={theme}) — Ctrl-C to stop")
-    serve_kickoff(project, mode=mode, theme=theme, port=port, agent_spec=panel_spec, red_carpet=red_carpet)
+        console.print(
+            f"  {'[green]✓[/green]' if enabled else '[yellow]•[/yellow]'} agentic chat ({flavor}): "
+            + (
+                f"enabled ({panel_spec}, source: {source})"
+                if enabled
+                else f"could not resolve {panel_spec!r} (source: {source}) — panel disabled"
+            )
+        )
+    console.print(
+        f"[green]serving kickoff[/green] (mode={mode}, theme={theme}) — Ctrl-C to stop"
+    )
+    serve_kickoff(
+        project,
+        mode=mode,
+        theme=theme,
+        port=port,
+        agent_spec=panel_spec,
+        red_carpet=red_carpet,
+    )
 
 
 @kickoff_app.command("chat")
 def chat_cmd(
-    project: Path = typer.Argument(Path("."), help="Project root to discuss (read-only)."),
+    project: Path = typer.Argument(
+        Path("."), help="Project root to discuss (read-only)."
+    ),
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Agent spec provider:model (default: balanced catalog model)."),
+        None,
+        "--agent",
+        help="Agent spec provider:model (default: balanced catalog model).",
+    ),
 ) -> None:
     """Conversational, READ-ONLY kickoff assistant (spends LLM tokens).
 
@@ -361,7 +450,9 @@ def chat_cmd(
     spec, source = resolve_concierge_agent_spec(project, agent)
     try:
         the_agent = resolve_agent_spec(spec)
-    except Exception as exc:  # missing key / unknown provider → actionable, not a traceback
+    except (
+        Exception
+    ) as exc:  # missing key / unknown provider → actionable, not a traceback
         console.print(f"[red]could not start agent {spec!r}:[/red] {exc}")
         raise typer.Exit(_EXIT_FATAL)
     try:
@@ -388,9 +479,14 @@ def chat_cmd(
 
 @kickoff_app.command("concierge-chat")
 def concierge_chat_cmd(
-    project: Path = typer.Argument(Path("."), help="Project root to onboard (agentic Concierge)."),
+    project: Path = typer.Argument(
+        Path("."), help="Project root to onboard (agentic Concierge)."
+    ),
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Agent spec provider:model (default: balanced catalog model)."),
+        None,
+        "--agent",
+        help="Agent spec provider:model (default: balanced catalog model).",
+    ),
 ) -> None:
     """Agentic Concierge — conversational onboarding that RECOMMENDS actions you confirm.
 
@@ -424,7 +520,9 @@ def concierge_chat_cmd(
         except (EOFError, KeyboardInterrupt):
             return None
 
-    console.print(f"[dim]agent: {spec} (source: {source}) · propose-only (you confirm every write)[/dim]")
+    console.print(
+        f"[dim]agent: {spec} (source: {source}) · propose-only (you confirm every write)[/dim]"
+    )
     run_kickoff_repl(
         banner=chat.banner(),
         ask_sync=lambda m: asyncio.run(chat.ask(m)),
@@ -437,11 +535,38 @@ def concierge_chat_cmd(
         consume=lambda a: chat.buffer.pop(a.id),
     )
 
+    # VIPP hand-off (opt-in; no-op when not enabled → byte-identical). On session end, serialize any
+    # proposals the human did not confirm to the .startd8/vipp/ inbox so the project-side VIPP can
+    # negotiate/apply them out-of-process (`startd8 vipp negotiate` → `apply`).
+    try:
+        from .kickoff_experience.vipp_seam import maybe_serialize_buffer
+
+        handoff = maybe_serialize_buffer(chat.buffer, str(project))
+    except Exception as exc:  # never break session exit on a hand-off hiccup
+        handoff = None
+        console.print(f"[dim]VIPP hand-off skipped: {exc}[/dim]")
+    # A pure no-clobber skip is WriteResult.ok==True but wrote nothing — gate the success message
+    # on an actual write, and surface the undrained-inbox case distinctly (code-review M2).
+    if handoff is not None and handoff.written:
+        console.print(
+            "[dim]VIPP: pending proposals serialized to .startd8/vipp/proposals-inbox.json — "
+            "run `startd8 vipp negotiate`.[/dim]"
+        )
+    elif handoff is not None and handoff.skipped:
+        console.print(
+            "[yellow]VIPP: an undrained inbox already exists — run `startd8 vipp negotiate`/`apply` "
+            "to consume it before this session's proposals can be serialized.[/yellow]"
+        )
+
 
 @kickoff_app.command("concierge")
 def concierge_cmd(
-    project: Path = typer.Argument(Path("."), help="Project root to onboard (Concierge mode)."),
-    posture: str = typer.Option("prototype", "--posture", help="prototype | production (instantiate)."),
+    project: Path = typer.Argument(
+        Path("."), help="Project root to onboard (Concierge mode)."
+    ),
+    posture: str = typer.Option(
+        "prototype", "--posture", help="prototype | production (instantiate)."
+    ),
 ) -> None:
     """Concierge mode in the terminal: survey, instantiate a kickoff package, log friction.
 

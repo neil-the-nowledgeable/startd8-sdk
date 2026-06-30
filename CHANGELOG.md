@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### VIPP — project-side negotiator/applier (new `startd8 vipp`)
+
+> The project-side counterpart to the Concierge / Welcome Mat / Red Carpet hosts — the
+> **OBSERVED(project)-authority dual of the FDE**. New package `src/startd8/vipp/` + host seam
+> `kickoff_experience/vipp_seam.py` + `startd8 vipp` CLI. Design + traceability:
+> `docs/design/vipp/` (`VIPP_REQUIREMENTS.md` v0.3 — reflective-requirements → 3-lens CRP;
+> `VIPP_PLAN.md` M0–M6).
+
+**New surfaces:**
+
+| Surface | What it does |
+|---------|--------------|
+| `startd8 vipp init` | Opt the project into VIPP (creates `.startd8/vipp/`; the host then serializes pending proposals there) |
+| `startd8 vipp negotiate` | Adjudicate the host proposal inbox against Sapper project ground truth → source-labeled dispositions (`$0`, deterministic) |
+| `startd8 vipp apply` | Preview by default; `--apply` writes accepted proposals at **project human privilege** through the `apply_proposal` floor |
+| `kickoff_experience/vipp_seam.py` | Host-side serialization seam — **additive & opt-in**; `proposals.py` is byte-for-byte unchanged |
+| `EventType.VIPP_NEGOTIATE_COMPLETE` | One structured EventBus/Loki event per negotiation (counts + `project.id`, no free-text) |
+
+**Design invariants:** file-protocol-first (Keiyaku contracts), out-of-process-only (the file seam is
+the trust boundary), provenance-pinned apply (`kind`/`base_sha` from the trusted inbox, human-confirm
+the sole content gate), VIPP mints only OBSERVED(project) claims (cannot forge SDK-mechanism
+authority), byte-identical-when-absent when VIPP is not opted in.
+
 ### RUN-007 empty-spec remediation
 
 > **Heads-up for anyone working in the code-generation path.** Lands via
