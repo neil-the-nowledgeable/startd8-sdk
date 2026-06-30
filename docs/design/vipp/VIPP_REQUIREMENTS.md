@@ -333,6 +333,27 @@ R3-S4; consolidates the concurrency/replay safety model the v0.2 draft under-spe
 
 ---
 
+## Build status (M0–M2 shipped + verified, 2026-06-30)
+
+`src/startd8/vipp/` on `feat/vipp-project-counterpart` (not merged): **M0** contracts (`ef22fcef`),
+**M1** ground-truth consumption (`9bf67829`), **M2** deterministic negotiation brain (`de7ca07a`),
+**code-review fixes** 2 HIGH + 6 lower (`432f94cb`). 34 unit tests green; ruff/black clean.
+
+**Verify-before-M3 gate (passed):**
+- **Reality check (resolves CRP A-F4 empirically):** the *real* `oracle_for_project` **discriminates**
+  on a Prisma project — `Profile.email`/`Order.total` → VALIDATED → ACCEPT, the `headlne` typo →
+  REFUTED ("'headlne' not in Profile fields ['email','headline','id']") → REJECT. The field-authority
+  (`capture`) negotiation is **not vacuous**. `schema`/`manifest` entity adjudication is
+  **corpus-dependent** and OMIT-defaults *honestly* (labeled) without a controlled corpus — correct.
+- **Code review:** see `432f94cb` — the load-bearing fix was H1 (a host-controlled newline could crash
+  the FR-21 label gate; now collapsed at every VIPP-authored-string boundary via `models.oneline`).
+- **OQ-11 resolved:** out-of-process-only (above).
+
+**Remaining:** M3 (host-side serialization seam — HIGH/CRP-gated), M4 (provenance-pinned applier —
+HIGH/CRP-gated + two-process live integration test), M5 (CLI), M6 (security/obs/docs).
+
+---
+
 ## 3. Non-Requirements
 
 - **NR-1.** Does not build A2A transport or a live multi-turn message bus (roadmap; v1 = files).
@@ -363,9 +384,13 @@ R3-S4; consolidates the concurrency/replay safety model the v0.2 draft under-spe
 - **OQ-10 → RESOLVED (CRP R1, 3-lens convergence).** Redaction is **display/defense-in-depth only**;
   `params` flow to apply **unredacted** (they are the bytes written + round-trip-gated). The real
   control is the FR-15 key-whitelist + confinement/0600/gitignore, not `fde/redaction.py`.
-- **OQ-11.** In-process fast path — may the host hand the live `ProposalBuffer` to an in-process VIPP
-  (skipping FR-15 serialization) for the single-agent case, or is out-of-process the only v1 topology?
-  *(Still open; leaning out-of-process-only for v1 to keep the trust boundary clean.)*
+- **OQ-11 → RESOLVED (verify-before-M3, 2026-06-30): out-of-process-only in v1.** An in-process
+  fast path (host hands the live `ProposalBuffer` to VIPP in the same address space, skipping FR-15
+  serialization) would **collapse the trust boundary** the whole design rests on — "VIPP untrusted to
+  the Concierge" (FR-9), the `safe_write` confinement, source-labeling, and the inbox-as-untrusted-
+  injection-surface all live *at the file seam*. The only benefit is skipping a trivial serialization
+  of a bounded (≤32) buffer. Not worth collapsing the boundary; **one topology = one code path to
+  secure and test.** A future in-process optimization needs an explicit ADR + a real perf trigger.
 - **OQ-12 (NEW — CRP R1).** Inbox **writer-provenance**: what host-written stamp (signature/checksum,
   or a host-only-creatable path) lets the VIPP safely promote an inbox claim to MECHANISM(sdk) (FR-6)?
   v1 trust boundary = filesystem confinement (no promotion); a provenance stamp is the FR-9/A2A roadmap.
