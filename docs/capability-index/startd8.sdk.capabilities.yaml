@@ -1243,6 +1243,33 @@ capabilities:
         description: "FR-C series (C3/C7/C10..C14); concierge_templates/ kickoff package"
     confidence: 0.85
 
+  - capability_id: startd8.vipp.negotiation
+    category: action
+    maturity: beta
+    summary: "VIPP (`startd8 vipp`): the project-side negotiator/applier counterpart to the Concierge — the OBSERVED(project)-authority dual of the FDE. Receives the host's serialized proposal inbox, adjudicates each proposal against project ground truth ($0, deterministic), and applies accepted ones at project human privilege (preview by default, --apply to write)"
+    audiences: [workflow_developer, integration_developer, ai_agent]
+    description: |
+      The project-side endpoint of a two-process, file-mediated handshake with the SDK-side onboarding
+      hosts (Concierge / Welcome Mat / Red Carpet). The host serializes its in-memory ProposalBuffer to
+      a confined `.startd8/vipp/proposals-inbox.json` (opt-in, byte-identical-when-absent); `vipp
+      negotiate` evaluates each proposal against Sapper project ground truth — capture value-paths via
+      field authority, schema/manifest entities via prose→entity extraction + the controlled corpus —
+      emitting a source-labeled disposition (ACCEPT / REJECT / COUNTER), OMIT-defaulting to a labeled
+      ACCEPT when ground truth is absent (never fabricating). `vipp apply` applies accepted proposals
+      through the host's `apply_proposal` floor at project human privilege, provenance-pinned to the
+      TRUSTED inbox (kind/base_sha never amendable by a disposition), the human-confirm being the sole
+      content gate. Deterministic and $0 (an opt-in LLM narrative is the only paid surface). VIPP mints
+      only OBSERVED(project) claims — it cannot forge SDK-mechanism authority.
+    triggers: ["vipp", "project counterpart", "negotiate proposals", "apply dispositions", "project-side onboarding", "VIPP"]
+    evidence:
+      - type: code
+        ref: src/startd8/vipp/
+        description: "models/ground_truth/evaluate/assistant/apply + cli_vipp.py; kickoff_experience/vipp_seam.py (host serialization seam)"
+      - type: docs
+        ref: docs/design/vipp/
+        description: "VIPP_REQUIREMENTS.md (v0.3, CRP R1) + VIPP_PLAN.md (M0–M6)"
+    confidence: 0.85
+
   # ============================================================================
   # AGENTIC LOOP — Multi-turn tool-use runtime (ported in pattern from ml-intern,
   # built on the SDK's own provider/cost/MCP layers; NOT a LiteLLM dependency)

@@ -1,12 +1,13 @@
 # Copyright 2026 StartD8 Contributors
 # SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
 
-"""VIPP negotiation events (FR-17 — lightweight observability).
+"""VIPP negotiation events (FR-17 observability).
 
 One structured event per negotiation: counts + label only, **no free-text** (matching the host
-privacy posture). Best-effort over the SDK EventBus when present; always logs via ``get_logger`` so
-an operator can reconstruct "what did the VIPP decide" from Loki + the durable ``dispositions.json``.
-The full FR-17 audit surface is fleshed out in M6.
+privacy posture, `proposals.py:208`). Emitted on the SDK ``EventBus`` (real
+``EventBus.emit(Event(...))`` — M6) AND logged via ``get_logger`` so an operator can reconstruct
+"what did the VIPP decide and why" from Loki + the durable, source-labeled ``dispositions.{json,md}``
+audit. ``project_id`` is the ``correlation_id`` (the join key, FR-14).
 """
 
 from __future__ import annotations
@@ -37,8 +38,17 @@ def emit_negotiate_complete(
         "llm_used": llm_used,
         "report": report_path,
     }
-    # FR-17-lite: the structured log line IS the v1 event (get_logger → OTel/Loki). The SDK EventBus
-    # API is `EventBus.emit(Event(...))` with a fixed EventType enum (no VIPP type today); wiring a
-    # first-class EventType + a subscriber-asserting test is M6 scope (full FR-17). Logging here is
-    # the working, tested surface — no dead "best-effort emit" that silently never fires (was H2).
     logger.info("%s %s", EV_NEGOTIATE_COMPLETE, payload)
+    try:  # real EventBus emission (FR-17); never fail the negotiation on telemetry
+        from ..events import Event, EventBus, EventType
+
+        EventBus.emit(
+            Event(
+                type=EventType.VIPP_NEGOTIATE_COMPLETE,
+                source="vipp",
+                data=payload,
+                correlation_id=project_id,  # the project.id join key (FR-14)
+            )
+        )
+    except Exception:  # pragma: no cover - EventBus optional/disabled
+        logger.debug("VIPP: EventBus emit skipped", exc_info=True)
