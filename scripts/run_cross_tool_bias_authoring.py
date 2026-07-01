@@ -3,6 +3,8 @@
 
 Dry-run emits the deterministic run plan. ``--run`` is intentionally fail-closed until every
 pre-registered authoring tool and the independent oracle/mutant admission gate are accepted.
+``--smoke`` invokes a bounded non-evidence subset for pipeline validation only; smoke artifacts are
+segregated and explicitly marked as non-evidence.
 """
 from __future__ import annotations
 
@@ -104,13 +106,47 @@ def oracle_gate_passes(path: Path = GATE_PATH) -> bool:
     )
 
 
-def build_authoring_plan(manifest: dict, output_dir: Path) -> dict:
+def select_smoke_schedule(schedule: list[dict], samples_per_cell: int) -> list[dict]:
+    if samples_per_cell < 1:
+        raise ValueError("samples_per_cell must be >= 1")
+
+    selected: list[dict] = []
+    counts: dict[tuple[str, str], int] = {}
+    for item in schedule:
+        key = (item["experiment"], item["tool_id"])
+        if counts.get(key, 0) >= samples_per_cell:
+            continue
+        copy = dict(item)
+        copy["scheduled_ordinal"] = item["ordinal"]
+        copy["ordinal"] = len(selected) + 1
+        selected.append(copy)
+        counts[key] = counts.get(key, 0) + 1
+    return selected
+
+
+def build_authoring_plan(
+    manifest: dict,
+    output_dir: Path,
+    *,
+    smoke: bool = False,
+    smoke_samples_per_cell: int = 1,
+) -> dict:
     schedule = prepare.build_schedule(manifest)
+    if smoke:
+        schedule = select_smoke_schedule(schedule, smoke_samples_per_cell)
+    artifact_root = output_dir / "smoke" if smoke else output_dir
     return {
         "experiment_id": manifest["experiment_id"],
         "run_count": len(schedule),
-        "raw_capture_root": str(output_dir / "raw"),
-        "normalized_artifact_root": str(output_dir / "normalized"),
+        "evidence_role": "non_evidence_smoke" if smoke else "audit_evidence_candidate",
+        "artifact_policy": (
+            "smoke artifacts are segregated and must not be reconciled, normalized, promoted, "
+            "scored, or used as S4 evidence"
+            if smoke
+            else "eligible for later reconciliation only after all admission gates pass"
+        ),
+        "raw_capture_root": str(artifact_root / "raw"),
+        "normalized_artifact_root": str(artifact_root / "normalized"),
         "retry_policy": manifest["authoring"]["retry_policy"],
         "runs": schedule,
     }
@@ -410,7 +446,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path,
                         default=Path("/private/tmp/startd8-cross-tool-bias/pricing-cross-tool-authoring-v1"))
     parser.add_argument("--run", action="store_true", help="Require every preflight gate before invoking any authoring tool.")
+    parser.add_argument("--smoke", action="store_true",
+                        help="Run a bounded non-evidence smoke subset. Artifacts are segregated under smoke/ and must not be promoted.")
+    parser.add_argument("--smoke-samples-per-cell", type=int, default=1,
+                        help="Number of samples per experiment/tool cell in --smoke mode (default: 1).")
     args = parser.parse_args(argv)
+    if args.run and args.smoke:
+        parser.error("--run and --smoke are mutually exclusive")
     try:
         manifest = prepare._load_manifest(args.manifest)
         prepare.validate_manifest(manifest)
@@ -421,18 +463,29 @@ def main(argv: list[str] | None = None) -> int:
 
     tools = prepare.preflight_tools(manifest)
     unavailable = [tool["tool_id"] for tool in tools if not tool["available"]]
-    if args.run and unavailable:
+    execute_authoring = args.run or args.smoke
+    if execute_authoring and unavailable:
         print(f"authoring blocked: required authoring tools unavailable: {', '.join(unavailable)}", file=sys.stderr)
         return 2
-    if args.run and not oracle_gate_passes():
+    if execute_authoring and not oracle_gate_passes():
         print("authoring blocked: independent oracle/mutant validation gate is not accepted", file=sys.stderr)
         return 2
 
-    plan = build_authoring_plan(manifest, args.output_dir)
-    print(json.dumps({"mode": "dry_run" if not args.run else "gated", "tools": tools,
+    try:
+        plan = build_authoring_plan(
+            manifest,
+            args.output_dir,
+            smoke=args.smoke,
+            smoke_samples_per_cell=args.smoke_samples_per_cell,
+        )
+    except ValueError as exc:
+        print(f"authoring blocked: {exc}", file=sys.stderr)
+        return 2
+    mode = "dry_run" if not execute_authoring else ("non_evidence_smoke" if args.smoke else "gated")
+    print(json.dumps({"mode": mode, "tools": tools,
                       "plan": plan}, indent=2))
     
-    if not args.run:
+    if not execute_authoring:
         return 0
 
     # Fetch ONLY the per-tool credentials the policy needs — never the full Doppler environment.
@@ -458,9 +511,12 @@ def main(argv: list[str] | None = None) -> int:
     runs = plan["runs"]
     total_runs = len(runs)
     retry_policy = plan["retry_policy"]
-    max_retries = retry_policy.get("max_automated_retries", 1)
+    max_retries = 0 if args.smoke else retry_policy.get("max_automated_retries", 1)
 
-    print(f"Starting execution of {total_runs} randomized authoring runs...")
+    if args.smoke:
+        print(f"Starting NON-EVIDENCE smoke execution of {total_runs} randomized authoring runs...")
+    else:
+        print(f"Starting execution of {total_runs} randomized authoring runs...")
     for item in runs:
         ordinal = item["ordinal"]
         experiment = item["experiment"]
@@ -468,10 +524,16 @@ def main(argv: list[str] | None = None) -> int:
         author_vendor = item["author_vendor"]
         sample_index = item["sample_index"]
         
-        run_id = f"{manifest['experiment_id']}-run-{ordinal:02d}"
-        run_dir_name = f"run_{ordinal:02d}_{experiment}_{tool_id}_sample_{sample_index}"
+        run_id = (
+            f"{manifest['experiment_id']}-smoke-run-{ordinal:02d}"
+            if args.smoke
+            else f"{manifest['experiment_id']}-run-{ordinal:02d}"
+        )
+        run_dir_prefix = "smoke_run" if args.smoke else "run"
+        run_dir_name = f"{run_dir_prefix}_{ordinal:02d}_{experiment}_{tool_id}_sample_{sample_index}"
         run_capture_dir = raw_root / run_dir_name
-        run_workspace = Path(f"/private/tmp/startd8-cross-tool-bias/workspaces/run_{ordinal:02d}")
+        workspace_prefix = "smoke" if args.smoke else "run"
+        run_workspace = Path(f"/private/tmp/startd8-cross-tool-bias/workspaces/{workspace_prefix}_{ordinal:02d}")
         
         print(f"[{ordinal}/{total_runs}] Running {experiment} using {tool_id} (sample {sample_index})...")
         
@@ -554,6 +616,10 @@ def main(argv: list[str] | None = None) -> int:
         metadata = {
             "run_id": run_id, "experiment": experiment, "tool_id": tool_id,
             "author_vendor": author_vendor, "sample_index": sample_index, "ordinal": ordinal,
+            "scheduled_ordinal": item.get("scheduled_ordinal", ordinal),
+            "mode": "non_evidence_smoke" if args.smoke else "gated",
+            "evidence_role": "non_evidence_smoke" if args.smoke else "audit_evidence_candidate",
+            "promote_to_evidence": not args.smoke,
             "status": "success" if success else "failed",
             "exit_code": attempt_records[-1]["exit_code"],
             "missing_files": attempt_records[-1]["missing_files"],

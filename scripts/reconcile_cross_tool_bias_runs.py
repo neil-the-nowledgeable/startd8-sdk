@@ -202,6 +202,12 @@ def reconcile(raw_root: Path, schedule_path: Path) -> dict:
                     errors.append(f"schedule_mismatch:{field}")
         if metadata.get("status") != "success" or metadata.get("exit_code") != 0:
             errors.append("unsuccessful_run")
+        if (
+            metadata.get("evidence_role") == "non_evidence_smoke"
+            or metadata.get("mode") == "non_evidence_smoke"
+            or metadata.get("promote_to_evidence") is False
+        ):
+            errors.append("non_evidence_smoke")
         if metadata.get("missing_files"):
             errors.append("reported_missing_files")
         required = COMMON_FILES | EXPERIMENT_FILES.get(metadata.get("experiment"), set())
