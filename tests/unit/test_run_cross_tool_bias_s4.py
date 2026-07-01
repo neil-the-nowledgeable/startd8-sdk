@@ -26,7 +26,16 @@ def _accepted_s4_store(tmp_path: Path, *, ledger_row: dict | None = None) -> tup
     suite_path.write_text("def configure(adapter):\n    return adapter\n", encoding="utf-8")
     _write_json(
         batch / "normalized/run_01/suite_manifest.json",
-        {"adapter_contract": {"configure": "suite.configure(adapter)"}},
+        {
+            "bridge_contract": {
+                "callable_names": ["configure"],
+                "request_shape": {"type": "object"},
+                "response_shape": {"type": "object"},
+                "invalid_argument_convention": {
+                    "code": "INVALID_ARGUMENT",
+                },
+            },
+        },
     )
     row = {
         "run_id": "run_01", "status": "accepted", "experiment": "suite_author",
@@ -104,6 +113,58 @@ def test_preflight_blocks_when_normalized_suite_is_missing(tmp_path: Path) -> No
 
     assert "accepted suite_author missing normalized suite.py:run_01" in result["errors"]
     assert result["suites"][0]["bridge"]["status"] == "invalid_intake"
+
+
+def test_preflight_blocks_when_bridge_contract_manifest_is_missing(tmp_path: Path) -> None:
+    store, gate, mutants, pre_registration = _accepted_s4_store(tmp_path)
+    _write_json(
+        store / "batch/normalized/run_01/suite_manifest.json",
+        {"adapter_contract": {"configure": "suite.configure(adapter)"}},
+    )
+
+    _, result = s4.run_preflight(
+        store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
+        mutants_path=mutants, pre_registration_path=pre_registration,
+        suite_disposition_path=tmp_path / "missing-s4-suite-dispositions.json",
+    )
+
+    assert result["suites"][0]["bridge"]["status"] == "not_executable"
+    assert result["suites"][0]["bridge"]["detail"] == "suite_manifest.json missing top-level bridge_contract object"
+    assert (
+        "S4 suite bridge contract invalid:run_01:"
+        "suite_manifest.json missing top-level bridge_contract object"
+    ) in result["errors"]
+
+
+def test_preflight_blocks_when_bridge_contract_callable_is_not_exported(tmp_path: Path) -> None:
+    store, gate, mutants, pre_registration = _accepted_s4_store(tmp_path)
+    _write_json(
+        store / "batch/normalized/run_01/suite_manifest.json",
+        {
+            "bridge_contract": {
+                "callable_names": ["bind_invoker"],
+                "request_shape": {"type": "object"},
+                "response_shape": {"type": "object"},
+                "invalid_argument_convention": {"code": "INVALID_ARGUMENT"},
+            },
+        },
+    )
+
+    _, result = s4.run_preflight(
+        store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
+        mutants_path=mutants, pre_registration_path=pre_registration,
+        suite_disposition_path=tmp_path / "missing-s4-suite-dispositions.json",
+    )
+
+    assert result["suites"][0]["bridge"]["status"] == "not_executable"
+    assert (
+        result["suites"][0]["bridge"]["detail"]
+        == "bridge_contract callable_names do not match exported suite.py bridge callables"
+    )
+    assert (
+        "S4 suite bridge contract invalid:run_01:"
+        "bridge_contract callable_names do not match exported suite.py bridge callables"
+    ) in result["errors"]
 
 
 def test_preflight_blocks_when_suite_author_row_is_rejected(tmp_path: Path) -> None:

@@ -399,23 +399,75 @@ def declared_bridge_contract(suite_path: Path, manifest_path: Path) -> dict:
     except ValueError as exc:
         return {"status": "invalid_execution", "detail": str(exc)}
 
-    declared = [key for key in ("adapter_contract", "invoker_contract", "harness_notes") if key in manifest]
     conventions = [
         name
         for name in ("configure", "bind_invoker", "run_all", "run_case", "run_ok_cases", "run_invalid_cases")
         if name in functions
     ]
-    if not declared and not conventions:
+    bridge_contract = manifest.get("bridge_contract")
+    if not isinstance(bridge_contract, dict):
         return {
             "status": "not_executable",
-            "detail": "no declared adapter/invoker contract; self-check-only suites cannot be S4 evidence",
-            "declared_manifest_fields": declared,
+            "detail": "suite_manifest.json missing top-level bridge_contract object",
+            "declared_manifest_fields": [key for key in ("adapter_contract", "invoker_contract", "harness_notes") if key in manifest],
             "conventions": conventions,
         }
+
+    declared_callable_names = bridge_contract.get("callable_names")
+    if declared_callable_names is None:
+        declared_callable_names = bridge_contract.get("callables")
+    if declared_callable_names is None:
+        declared_callable_names = bridge_contract.get("exported_callables")
+    if isinstance(declared_callable_names, str):
+        declared_callable_names = [declared_callable_names]
+    if not isinstance(declared_callable_names, list) or not all(isinstance(name, str) for name in declared_callable_names):
+        return {
+            "status": "not_executable",
+            "detail": "bridge_contract missing callable_names list",
+            "declared_manifest_fields": ["bridge_contract"],
+            "conventions": conventions,
+        }
+
+    declared_conventions = sorted(set(declared_callable_names).intersection(conventions))
+    if not declared_conventions:
+        return {
+            "status": "not_executable",
+            "detail": "bridge_contract callable_names do not match exported suite.py bridge callables",
+            "declared_manifest_fields": ["bridge_contract"],
+            "declared_callable_names": declared_callable_names,
+            "conventions": conventions,
+        }
+
+    missing_contract_fields = []
+    if not any(key in bridge_contract for key in ("request_shape", "request", "input_shape")):
+        missing_contract_fields.append("request_shape")
+    if not any(key in bridge_contract for key in ("response_shape", "response", "output_shape")):
+        missing_contract_fields.append("response_shape")
+    if not any(
+        key in bridge_contract
+        for key in (
+            "invalid_argument_convention",
+            "invalid_argument_signal",
+            "invalid_argument",
+            "invalid_case_convention",
+            "error_convention",
+        )
+    ):
+        missing_contract_fields.append("invalid_argument_convention")
+    if missing_contract_fields:
+        return {
+            "status": "not_executable",
+            "detail": f"bridge_contract missing required fields:{','.join(missing_contract_fields)}",
+            "declared_manifest_fields": ["bridge_contract"],
+            "declared_callable_names": declared_callable_names,
+            "conventions": conventions,
+        }
+
     return {
         "status": "bridge_required",
-        "detail": "declared contract found; no reviewed isolated S4 bridge is installed",
-        "declared_manifest_fields": declared,
+        "detail": "declared bridge_contract found; reviewed isolated S4 bridge required",
+        "declared_manifest_fields": ["bridge_contract"],
+        "declared_callable_names": declared_callable_names,
         "conventions": conventions,
     }
 
@@ -915,6 +967,10 @@ def run_preflight(
             suite_record["bridge"] = declared_bridge_contract(
                 Path(suite_record["suite_path"]), Path(suite_record["manifest_path"])
             )
+            if suite_record["bridge"].get("status") != "bridge_required":
+                errors.append(
+                    f"S4 suite bridge contract invalid:{run_id}:{suite_record['bridge'].get('detail')}"
+                )
         suites.append(suite_record)
 
     suite_dispositions, suite_disposition_summary, suite_disposition_errors = suite_disposition_gate(
