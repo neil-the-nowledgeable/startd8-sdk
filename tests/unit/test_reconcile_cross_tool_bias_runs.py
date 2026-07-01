@@ -115,6 +115,27 @@ def test_reconcile_blocks_duplicate_ordinal_without_disposition(tmp_path: Path) 
     ]
 
 
+def test_reconcile_quarantines_non_evidence_smoke_run(tmp_path: Path) -> None:
+    raw_root = tmp_path / "raw"
+    schedule = tmp_path / "authoring-schedule.json"
+    _write_schedule(schedule)
+    _write_suite_run(raw_root, "run_01_suite_author_gemini-cli_sample_2", run_id="smoke-run-01")
+    metadata_path = raw_root / "run_01_suite_author_gemini-cli_sample_2" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update({
+        "mode": "non_evidence_smoke",
+        "evidence_role": "non_evidence_smoke",
+        "promote_to_evidence": False,
+    })
+    _write_json(metadata_path, metadata)
+
+    report = mod.reconcile(raw_root, schedule)
+
+    assert report["status"] == "blocked"
+    assert report["runs"][0]["status"] == "quarantined"
+    assert "non_evidence_smoke" in report["runs"][0]["errors"]
+
+
 def test_reconcile_accepts_dispositioned_replacement_duplicate(tmp_path: Path) -> None:
     raw_root = tmp_path / "raw"
     schedule = tmp_path / "authoring-schedule.json"

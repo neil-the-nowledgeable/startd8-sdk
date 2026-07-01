@@ -106,6 +106,38 @@ def test_required_credentials_are_exactly_the_three_vendors():
     assert mod.required_credential_names() == set(VENDOR_CREDENTIAL.values())
 
 
+def test_smoke_plan_is_bounded_and_non_evidence(tmp_path):
+    manifest = mod.prepare._load_manifest(mod.prepare.DEFAULT_MANIFEST)
+
+    plan = mod.build_authoring_plan(manifest, tmp_path / "out", smoke=True)
+
+    assert plan["evidence_role"] == "non_evidence_smoke"
+    assert "must not be reconciled" in plan["artifact_policy"]
+    assert plan["raw_capture_root"] == str(tmp_path / "out" / "smoke" / "raw")
+    assert plan["normalized_artifact_root"] == str(tmp_path / "out" / "smoke" / "normalized")
+    assert plan["run_count"] == 6
+    assert {run["ordinal"] for run in plan["runs"]} == set(range(1, 7))
+    assert all(run["scheduled_ordinal"] >= run["ordinal"] for run in plan["runs"])
+    assert {
+        (run["experiment"], run["tool_id"])
+        for run in plan["runs"]
+    } == {
+        ("suite_author", "claude-code"),
+        ("suite_author", "codex-cli"),
+        ("suite_author", "gemini-cli"),
+        ("spec_author", "claude-code"),
+        ("spec_author", "codex-cli"),
+        ("spec_author", "gemini-cli"),
+    }
+
+
+def test_smoke_plan_rejects_zero_samples(tmp_path):
+    manifest = mod.prepare._load_manifest(mod.prepare.DEFAULT_MANIFEST)
+
+    with pytest.raises(ValueError, match="samples_per_cell must be >= 1"):
+        mod.build_authoring_plan(manifest, tmp_path / "out", smoke=True, smoke_samples_per_cell=0)
+
+
 def _render_suite_prompt(tmp_path: Path, *, tool_id: str, author_vendor: str) -> str:
     return mod.render_prompt(
         repo=REPO,
