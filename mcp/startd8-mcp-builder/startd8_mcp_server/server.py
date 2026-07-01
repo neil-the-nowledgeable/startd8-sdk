@@ -526,12 +526,16 @@ class StatusInput(BaseModel):
 
 
 class ConciergeAction(str, Enum):
-    """Concierge actions. Over MCP all are read/preview-only — the CLI is the only writer (OQ-7)."""
+    """Concierge actions. Over MCP all are read/preview-only — the CLI is the only writer (OQ-7).
+
+    ``derive-contract`` is intentionally CLI-only (spec-deferred from the v1 MCP surface,
+    CONCIERGE_MCP_REQUIREMENTS FR-C8) and is NOT exposed here — keeping the MCP action set a tight
+    read/preview floor (WM Concierge-mode M-CM6). Adding a write/apply action here would breach it.
+    """
     SURVEY = "survey"
     ASSESS = "assess"
     INSTANTIATE_KICKOFF = "instantiate-kickoff"
     LOG_FRICTION = "log-friction"
-    DERIVE_CONTRACT = "derive-contract"
 
 
 class ConciergeInput(BaseModel):
@@ -554,12 +558,8 @@ class ConciergeInput(BaseModel):
     friction: Optional[str] = Field(default=None, description="The friction encountered (log-friction)")
     what_happened: Optional[str] = Field(default=None, description="What happened (log-friction)")
     implication: Optional[str] = Field(default=None, description="Implication for the SDK/role (log-friction)")
-    # derive-contract (preview/check only over MCP — the CLI is the sole writer, OQ-7)
-    models: Optional[List[str]] = Field(default=None, description="Pydantic model module import path(s) (derive-contract)")
-    pythonpath: Optional[str] = Field(default=None, description="Where to import the models from (derive-contract)")
-    model_names: Optional[List[str]] = Field(default=None, description="Restrict to these class names (derive-contract)")
-    exclude_models: Optional[List[str]] = Field(default=None, description="Exclude these models, FQ or bare name (derive-contract)")
-    check: bool = Field(default=False, description="Report drift vs the live contract instead of a candidate (derive-contract)")
+    # NOTE: derive-contract is CLI-only (not an MCP action) — see ConciergeAction. Its fields
+    # (models/pythonpath/model_names/exclude_models/check) are deliberately absent here.
 
 
 class TaskListInput(BaseModel):
@@ -2286,9 +2286,8 @@ async def startd8_concierge(params: ConciergeInput) -> str:
         "event": "tool.start", "tool": "startd8_concierge", "request_id": request_id,
         "params": {"action": action, "project_root": project_root},
     })
-    extra = {"with_authoring": params.with_authoring, "check": params.check}
-    for _f in ("posture", "friction", "what_happened", "implication",
-               "models", "pythonpath", "model_names", "exclude_models"):
+    extra = {"with_authoring": params.with_authoring}
+    for _f in ("posture", "friction", "what_happened", "implication"):
         _v = getattr(params, _f, None)
         if _v is not None:
             extra[_f] = _v
