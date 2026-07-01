@@ -106,6 +106,46 @@ def test_required_credentials_are_exactly_the_three_vendors():
     assert mod.required_credential_names() == set(VENDOR_CREDENTIAL.values())
 
 
+def _render_suite_prompt(tmp_path: Path, *, tool_id: str, author_vendor: str) -> str:
+    return mod.render_prompt(
+        repo=REPO,
+        experiment="suite_author",
+        tool_id=tool_id,
+        author_vendor=author_vendor,
+        sample_index=1,
+        ordinal=1,
+        run_id=f"render-diff-{tool_id}",
+        working_directory=tmp_path / tool_id,
+        clean_workspace=tmp_path / tool_id,
+        executable_path=f"/opt/bin/{tool_id}",
+        executable_version="test",
+    )
+
+
+def _normalize_run_metadata(prompt: str) -> str:
+    before, after = prompt.split("\n## Run Metadata\n\n", 1)
+    _, rest = after.split("\n\n## Role\n", 1)
+    return f"{before}\n## Run Metadata\n\n<RUN_METADATA>\n\n## Role\n{rest}"
+
+
+def test_openai_and_gemini_suite_prompts_share_bridge_contract(tmp_path):
+    openai_prompt = _render_suite_prompt(tmp_path, tool_id="codex-cli", author_vendor="openai")
+    gemini_prompt = _render_suite_prompt(tmp_path, tool_id="gemini-cli", author_vendor="google")
+
+    assert _normalize_run_metadata(openai_prompt) == _normalize_run_metadata(gemini_prompt)
+    for required in (
+        "## Bridge Executability Contract",
+        "`suite_manifest.json` must declare the seam under a top-level `bridge_contract` object",
+        "bind_invoker(fn)",
+        "configure(adapter)",
+        "run_ok_cases(call=None)",
+        "JSON-compatible request and response dictionaries",
+        "INVALID_ARGUMENT",
+    ):
+        assert required in openai_prompt
+        assert required in gemini_prompt
+
+
 # --- immutable retry capture (R-Phase1-4) --------------------------------------------------------
 
 def _workspace(tmp_path: Path) -> Path:
