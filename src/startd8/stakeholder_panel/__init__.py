@@ -42,6 +42,12 @@ from startd8.stakeholder_panel.roster import (
     parse_roster,
     validate_roster,
 )
+from startd8.stakeholder_panel.adapters import (
+    Adapter,
+    AdapterError,
+    AdaptResult,
+    get_adapter,
+)
 from startd8.stakeholder_panel.grounding_guard import (
     check_grounding,
     unsupported_specifics,
@@ -105,6 +111,10 @@ __all__ = [
     "Consultation",
     "check_grounding",
     "unsupported_specifics",
+    "Adapter",
+    "AdapterError",
+    "AdaptResult",
+    "get_adapter",
     # lazy (via __getattr__):
     "StakeholderPanel",
     "PanelError",

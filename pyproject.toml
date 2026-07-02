@@ -164,6 +164,11 @@ prisma = "startd8.languages.prisma:PrismaLanguageProfile"
 local = "startd8.secrets.local:LocalSecretsProvider"
 doppler = "startd8.secrets.doppler:DopplerSecretsProvider"
 
+# Persona-format ingestion adapters (external persona format -> Roster). Third parties register here;
+# the built-in `role-rubric` is also a hardcoded built-in so it resolves without a reinstall.
+[project.entry-points."startd8.stakeholder_panel.roster_adapters"]
+role-rubric = "startd8.stakeholder_panel.adapters.role_rubric:RoleRubricAdapter"
+
 [project.entry-points."startd8.contractors.instrumentors"]
 logging = "startd8.contractors.adapters.standalone:LoggingInstrumentor"
 
