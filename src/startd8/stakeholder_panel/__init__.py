@@ -39,6 +39,7 @@ from startd8.stakeholder_panel.roster import (
     RosterError,
     assess_roster,
     load_roster,
+    parse_roster,
     validate_roster,
 )
 from startd8.stakeholder_panel.grounding_guard import (
@@ -92,6 +93,7 @@ __all__ = [
     "RosterError",
     "assess_roster",
     "load_roster",
+    "parse_roster",
     "validate_roster",
     "RatificationError",
     "assert_ratifiable",

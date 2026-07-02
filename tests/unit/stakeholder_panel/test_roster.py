@@ -88,6 +88,7 @@ def test_validate_flags_duplicate_role_id(tmp_path):
 
 def test_validate_flags_empty_brief(tmp_path):
     text = """\
+domain: stakeholders
 personas:
   - role_id: ghost
     display_name: Ghost
