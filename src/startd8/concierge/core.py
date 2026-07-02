@@ -191,7 +191,32 @@ def _assess_kickoff_inputs(root: Path) -> Dict[str, Any]:
             out["domains"][domain] = {"status": "invalid", "error": str(exc)}
             continue
         out["domains"][domain] = {"status": "present", "provenance_default": provenance}
+
+    # Stakeholder Panel roster (FR-4): structurally validated, not just present-checked. Also carries
+    # the authored-vs-consumable distinction (R2-S5) so an early adopter who authors a roster after
+    # M0 is not misled into expecting live-panel behavior that has not shipped yet.
+    out["domains"]["stakeholders"] = _assess_stakeholder_roster(inputs_dir)
     return out
+
+
+def _assess_stakeholder_roster(inputs_dir: Path) -> Dict[str, Any]:
+    """Roster readiness (absent/invalid/present) + whether the live panel can consume it yet.
+
+    Local import so a partial checkout without the ``stakeholder_panel`` package degrades to a
+    graceful "unavailable" rather than crashing the whole assess (parity with the wireframe import).
+    """
+    try:
+        from startd8.stakeholder_panel import PANEL_CONSUMABLE, assess_roster
+    except ImportError:  # pragma: no cover - defensive, package ships with the SDK
+        return {"status": "unavailable", "error": "stakeholder_panel package not importable"}
+
+    result = dict(assess_roster(inputs_dir / "stakeholders.yaml"))
+    # A validated roster is "authored"; "consumable" tracks whether the live panel exists to query it.
+    result["authored"] = result.get("status") == "present"
+    result["consumable"] = bool(PANEL_CONSUMABLE)
+    if result["authored"] and not result["consumable"]:
+        result["note"] = "roster authored; live Stakeholder Panel ships in a later increment"
+    return result
 
 
 def _assess_cascade(root: Path) -> Dict[str, Any]:

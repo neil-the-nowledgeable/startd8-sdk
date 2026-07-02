@@ -36,6 +36,9 @@ _KICKOFF_FILES = [
     ("inputs/observability.yaml", "docs/kickoff/inputs/observability.yaml"),
     ("inputs/conventions.yaml", "docs/kickoff/inputs/conventions.yaml"),
     ("inputs/build-preferences.yaml", "docs/kickoff/inputs/build-preferences.yaml"),
+    # Stakeholder Panel roster (FR-1/FR-3). Authoring surface only in M0; the live panel that
+    # queries these personas ships later. Manifest key auto-derives to "stakeholders".
+    ("inputs/stakeholders.yaml", "docs/kickoff/inputs/stakeholders.yaml"),
 ]
 # Optional authoring trio (--with-authoring): templates the team fills in.
 _AUTHORING_FILES = [
