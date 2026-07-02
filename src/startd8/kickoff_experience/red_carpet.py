@@ -254,6 +254,19 @@ def reflection_text(state: RedCarpetState) -> str:
     return "\n".join(lines)
 
 
+def playbook_top_subject(state: RedCarpetState) -> Optional[str]:
+    """The shared subject of the playbook's rank-1 step (FR-NU-4), via the ONE shared ``stage→subject``
+    table in ``ranking`` (CRP R1-S2). Returns ``None`` when there is no step or the rank-1 stage is not a
+    gate stage (e.g. the offerable ``run`` steps) — the agreement assert is then skipped, not falsely
+    matched (CRP R1-S5). The playbook does NOT call ``blocker_cta`` (CRP R1-F1)."""
+    from .ranking import subject_for_stage
+
+    steps = state.next_steps or ()
+    if not steps:
+        return None
+    return subject_for_stage(getattr(steps[0], "stage", None))
+
+
 def prescriptive_banner(base_banner: str, state: RedCarpetState) -> str:
     """FR-RCA-21 — seed the agent loop's turn-0 banner with the top insight + top next step, so the
     user sees prescriptive guidance before the model calls a tool. Pure/testable."""
