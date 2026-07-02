@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..backend_codegen.ai_layer import AiPass, parse_ai_passes, parse_human_inputs
@@ -984,9 +985,13 @@ def _readiness(states: Dict[str, _ManifestState]) -> Dict[str, str]:
     return out
 
 
-def _deployment_section(app_state: "_ManifestState") -> WireframeSection:
+def _deployment_section(app_state: "_ManifestState", project_root: Optional[Path] = None) -> WireframeSection:
     """FR-CFG-6 / A8: surface the declared deployment mode, per-dimension posture, and the FR-CFG-5
-    coherence findings (advisory here — `generate backend` is the gate). Read-only, $0."""
+    coherence findings (advisory here — `generate backend` is the gate). Read-only, $0.
+
+    FR-CDA-2: in deployed mode also surface declared environments, the `deploy/` artifact set that
+    the cascade will emit, on-disk readiness, and the unbound-operator-binding count. These are
+    additive and deployed-only, so an installed app's section stays byte-identical (SOTTO)."""
     manifest = app_state.parsed if app_state.parsed else parse_app_manifest(None)
     deployed = manifest.deployment_mode == "deployed"
     items = [
@@ -1013,6 +1018,39 @@ def _deployment_section(app_state: "_ManifestState") -> WireframeSection:
              if deployed else "single implicit owner (no auth)"),
         ),
     ]
+    # FR-CDA-2: deployed-only environment + deploy-tree + readiness surfacing (additive; installed
+    # unaffected → byte-identical). Ordering is stable: env items in the manifest's already-sorted
+    # `deploy_environments` order (R1-S7); the artifact/readiness/binding items are fixed-position.
+    if deployed:
+        if manifest.has_environments:
+            items.append(WireframeItem(
+                "environments", Status.PLANNED, ", ".join(manifest.deploy_environments)))
+        if app_state.text:
+            try:
+                from startd8.scaffold_codegen.deploy_renderer import render_deploy_tree
+                artifacts = render_deploy_tree(app_state.text)
+                items.append(WireframeItem(
+                    "deploy-artifacts", Status.PLANNED,
+                    f"{len(artifacts)} deploy/ files the cascade will emit"))
+            except Exception:  # renderer is advisory here; never break the wireframe
+                pass
+        if project_root is not None:
+            from startd8.scaffold_codegen.deploy_readiness import (
+                contract_environments,
+                count_unbound_bindings,
+                readiness_state,
+            )
+            readiness = readiness_state(project_root, mode=manifest.deployment_mode)
+            # `stale`: declared envs are not all represented in the generated contract (FR-CDA-8).
+            if readiness == "generated" and manifest.has_environments:
+                contract_envs = contract_environments(project_root)
+                if contract_envs is not None and not set(manifest.deploy_environments) <= contract_envs:
+                    readiness = "stale"
+            items.append(WireframeItem("readiness", Status.PLANNED, readiness))
+            unbound = count_unbound_bindings(project_root)
+            if unbound is not None:
+                items.append(WireframeItem("unbound-bindings", Status.PLANNED, str(unbound)))
+
     # M2 emits the auth seam; M3 tenancy (has_tenant) retires the authenticated-but-not-isolated WARN.
     findings = evaluate_coherence(manifest, has_auth_seam=deployed, has_tenant=manifest.has_tenant)
     for f in findings:
@@ -1095,7 +1133,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     content_section = _content_section(inputs, states["pages"], states["ai_passes"])
     sections = (
         _scaffold_section(states["app"]),
-        _deployment_section(states["app"]),
+        _deployment_section(states["app"], inputs.project_root),
         _services_section(schema_state, states["ai_passes"], states.get("contexts")),
         _entities_section(schema_state),
         _pages_section(states["pages"], authoring=authoring),

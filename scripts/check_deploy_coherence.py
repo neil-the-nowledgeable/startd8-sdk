@@ -29,78 +29,17 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Optional
 
-SCHEMA_VERSION = {"major": 1, "minor": 0}
-
-
-def _find_app_yaml(project_root: Path) -> Optional[Path]:
-    """Locate ``app.yaml`` (mirrors the ScaffoldFileProvider discovery order)."""
-    for candidate in (project_root / "app.yaml", project_root / "prisma" / "app.yaml"):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def _count_unbound_bindings(project_root: Path) -> Optional[int]:
-    """Best-effort: count operator bindings still unbound in ``deploy/infra-contract.yaml``.
-
-    Returns ``None`` when the contract is absent or unparseable (the cloud-native infra-contract,
-    FR-CND-26, may not exist yet) — the gate treats ``None`` as "unknown", never as zero.
-    """
-    contract = project_root / "deploy" / "infra-contract.yaml"
-    if not contract.is_file():
-        return None
-    try:
-        import yaml  # lazy: only needed when a contract exists
-
-        data = yaml.safe_load(contract.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return None
-    bindings = data.get("bindings") or data.get("operator_bindings") or []
-    if not isinstance(bindings, list):
-        return None
-    bound = {"bound", "satisfied", "provided", "provided-ok"}
-    return sum(1 for b in bindings if isinstance(b, dict) and str(b.get("status", "")).lower() not in bound)
+# The verdict logic lives in the SDK (single source, R1-F2) so the Concierge assess/wireframe
+# surfaces and this subprocess produce byte-identical payloads. This script is the subprocess
+# Keiyaku boundary: returncode + JSON, so a consumer (cap-dev-pipe orchestrator, the MCP tool)
+# never imports SDK code itself.
+from startd8.scaffold_codegen.deploy_readiness import SCHEMA_VERSION, evaluate_deploy_coherence
 
 
 def evaluate(project_root: Path) -> tuple[dict, int]:
-    """Produce the (verdict_payload, exit_code). Pure except for reading the project files."""
-    from startd8.scaffold_codegen.coherence import (
-        deploy_coherence_verdict,
-        evaluate_coherence,
-        finding_to_dict,
-    )
-    from startd8.scaffold_codegen.manifest import parse_app_manifest
-
-    app_yaml = _find_app_yaml(project_root)
-    if app_yaml is None:
-        # Nothing to evaluate — no app.yaml means no deployed posture to gate.
-        return ({"schemaVersion": SCHEMA_VERSION, "verdict": "skip", "mode": None,
-                 "findings": [], "unbound_bindings": None,
-                 "reason": "no app.yaml found"}, 2)
-
-    try:
-        manifest = parse_app_manifest(app_yaml.read_text(encoding="utf-8"))
-    except Exception as exc:  # malformed app.yaml ⇒ cannot certify a deployed posture ⇒ fail-closed
-        return ({"schemaVersion": SCHEMA_VERSION, "verdict": "hard", "mode": None,
-                 "findings": [], "unbound_bindings": None,
-                 "reason": f"app.yaml unparseable (fail-closed): {exc}"}, 3)
-
-    mode = manifest.deployment_mode
-    # The auth seam is emitted in deployed mode (FR-IDN-2); tenancy is declared in app.yaml.
-    findings = evaluate_coherence(
-        manifest, has_auth_seam=(mode == "deployed"), has_tenant=manifest.has_tenant
-    )
-    verdict, exit_code = deploy_coherence_verdict(findings, mode=mode)
-    payload = {
-        "schemaVersion": SCHEMA_VERSION,
-        "verdict": verdict,
-        "mode": mode,
-        "findings": [finding_to_dict(f) for f in findings],
-        "unbound_bindings": _count_unbound_bindings(project_root),
-    }
-    return payload, exit_code
+    """Delegate to the SDK single-source evaluator (kept as a name for existing callers/tests)."""
+    return evaluate_deploy_coherence(project_root)
 
 
 def _print_human(payload: dict) -> None:

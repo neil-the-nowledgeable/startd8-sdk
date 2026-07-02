@@ -1053,6 +1053,17 @@ class KickoffStateInput(BaseModel):
     )
 
 
+class CheckDeployCoherenceInput(BaseModel):
+    """Input for the read-only deploy-coherence gate (FR-CDA-5). Only a project path — the tool
+    invokes ``scripts/check_deploy_coherence.py --json`` in its read-only form; no mutating field
+    exists, so 'assist-not-operate' is structural (FR-CDA-6/R1-F1)."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    project_root: Optional[str] = Field(
+        default=None,
+        description="Path to the project to gate (default: server PROJECT_ROOT). Read-only.",
+    )
+
+
 class TaskListInput(BaseModel):
     """Input for tasks.list."""
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -3197,6 +3208,52 @@ async def startd8_concierge(params: ConciergeInput) -> str:
     except Exception as e:
         _emit_event({
             "event": "tool.end", "tool": "startd8_concierge", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "status": "error", "error_type": type(e).__name__, "error": str(e),
+        })
+        return _handle_error(e)
+
+
+@mcp.tool(
+    name="startd8_check_deploy_coherence",
+    annotations={
+        "title": "Startd8 deploy-coherence gate (read-only)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def startd8_check_deploy_coherence(params: CheckDeployCoherenceInput) -> str:
+    """Agent-callable 'is this project deployable?' gate (read-only, $0, no LLM).
+
+    Thin glue over the SDK's ``run_deploy_gate_subprocess`` — which invokes
+    ``scripts/check_deploy_coherence.py --json`` via **subprocess** (argv = project path + ``--json``
+    only; no mutating flag exists or is reachable, FR-CDA-6/R1-F1), maps the returncode
+    (0 ok / 1 soft / 2 skip / 3 hard), and fail-closes to a structured ``hard`` on a missing/
+    unstartable/timed-out gate (R1-S8) — never a crash, never a silent pass. The payload carries only
+    names/counts/status, never secret values (R1-S9)."""
+    request_id = _new_request_id()
+    started = time.perf_counter()
+    project_root = params.project_root or str(DEFAULT_PROJECT_ROOT)
+    _emit_event({
+        "event": "tool.start", "tool": "startd8_check_deploy_coherence",
+        "request_id": request_id, "params": {"project_root": project_root},
+    })
+    try:
+        with _redirect_stdout_to_stderr():
+            _ensure_sdk_available()
+            from startd8.scaffold_codegen.deploy_readiness import run_deploy_gate_subprocess
+            payload = run_deploy_gate_subprocess(project_root)
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_check_deploy_coherence", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "status": "ok", "verdict": payload.get("verdict"),
+        })
+        return json.dumps(payload, indent=2)
+    except Exception as e:  # defensive — the helper is already fail-closed, but never crash the tool
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_check_deploy_coherence", "request_id": request_id,
             "duration_ms": int((time.perf_counter() - started) * 1000),
             "status": "error", "error_type": type(e).__name__, "error": str(e),
         })

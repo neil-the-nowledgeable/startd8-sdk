@@ -170,6 +170,62 @@ def build_assess(project_root: str | Path) -> Dict[str, Any]:
         "project_root": str(root),
         "kickoff_inputs": _assess_kickoff_inputs(root),
         "cascade": _assess_cascade(root),
+        "deployment": _assess_deployment(root),
+    }
+
+
+def _assess_deployment(root: Path) -> Dict[str, Any]:
+    """FR-CDA-1: the deployment-readiness block — declared posture + coherence verdict + readiness.
+
+    Single source (R1-F2): the verdict + `unbound_bindings` come from the SAME in-process
+    `evaluate_deploy_coherence` the subprocess Keiyaku wraps — never a second reader of the contract.
+    Secret-safe (R1-S9): surfaces only names/counts/status, never secret VALUES from the manifest or
+    infra-contract. Degrades gracefully (never crashes assess) on any missing dependency.
+    """
+    try:
+        from startd8.scaffold_codegen.deploy_readiness import (
+            contract_environments,
+            evaluate_deploy_coherence,
+            find_app_yaml,
+        )
+        from startd8.scaffold_codegen.manifest import parse_app_manifest
+    except ImportError as exc:  # pragma: no cover - defensive, ships with the SDK
+        return {"status": "unavailable", "error": str(exc)}
+
+    app_yaml = find_app_yaml(root)
+    if app_yaml is None:
+        return {"status": "not-declared", "readiness": "not-declared", "reason": "no app.yaml"}
+
+    try:
+        manifest = parse_app_manifest(app_yaml.read_text(encoding="utf-8"))
+    except Exception as exc:  # malformed app.yaml → fail-closed hard, mirrors the gate
+        return {"status": "invalid", "readiness": "unknown", "verdict": "hard",
+                "reason": f"app.yaml unparseable (fail-closed): {exc}"}
+
+    payload, _exit = evaluate_deploy_coherence(root)
+    readiness = payload.get("readiness")
+    # FR-CDA-8 staleness: declared envs not all present in the generated contract → advisory `stale`.
+    if readiness == "generated" and manifest.has_environments:
+        contract_envs = contract_environments(root)
+        if contract_envs is not None and not set(manifest.deploy_environments) <= contract_envs:
+            readiness = "stale"
+
+    return {
+        "status": "ok",
+        "mode": manifest.deployment_mode,
+        "deploy": {  # posture — names/flags only, never secret values (R1-S9)
+            "target_cloud": manifest.deploy_target_cloud,
+            "secrets_backend": manifest.deploy_secrets_backend,
+            "trust_gateway": manifest.deploy_trust_gateway,
+        },
+        "environments": list(manifest.deploy_environments),
+        "readiness": readiness,
+        "unbound_bindings": payload.get("unbound_bindings"),
+        "verdict": payload.get("verdict"),
+        "findings": [  # code/severity/message only — no secret values
+            {"code": f.get("code"), "severity": f.get("severity"), "message": f.get("message")}
+            for f in payload.get("findings", [])
+        ],
     }
 
 

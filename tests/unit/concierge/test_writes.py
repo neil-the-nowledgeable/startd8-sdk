@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -60,6 +61,74 @@ def test_existing_file_marked_exists_not_new(tmp_path):
     plan = build_instantiate_plan(tmp_path, "prototype")
     intro = next(w for w in plan["writes"] if w["path"].endswith("KICKOFF_INTRO.md"))
     assert intro["status"] == "exists"
+
+
+# --- FR-CDA-3: posture seeds a deployment-mode default (never a force) ---------------------------
+
+def test_deployment_default_seeded_from_posture_when_unset(tmp_path):
+    # No app.yaml → the posture's implied mode is the seeded default.
+    assert build_instantiate_plan(tmp_path, "production")["deployment_default"] == {
+        "posture": "production", "implied_mode": "deployed", "declared_mode": None,
+        "effective_mode": "deployed", "source": "seeded-from-posture",
+    }
+    assert build_instantiate_plan(tmp_path, "prototype")["deployment_default"]["implied_mode"] == "installed"
+
+
+def test_deployment_default_declared_mode_wins_no_advisory(tmp_path):
+    # Declared mode agrees with the posture mapping → kept, no advisory.
+    (tmp_path / "app.yaml").write_text("deployment:\n  mode: deployed\n", encoding="utf-8")
+    dd = build_instantiate_plan(tmp_path, "production")["deployment_default"]
+    assert dd["declared_mode"] == "deployed" and dd["effective_mode"] == "deployed"
+    assert dd["source"] == "declared" and "advisory" not in dd
+
+
+def test_deployment_default_conflict_is_advisory_not_error(tmp_path):
+    # posture=prototype implies installed, but app.yaml declares deployed → keep declared + advisory.
+    (tmp_path / "app.yaml").write_text("deployment:\n  mode: deployed\n", encoding="utf-8")
+    plan = build_instantiate_plan(tmp_path, "prototype")
+    dd = plan["deployment_default"]
+    assert dd["effective_mode"] == "deployed"  # declared wins, never overridden
+    assert "advisory" in dd and any("advisory" in w for w in plan["warnings"])
+
+
+def test_deployment_default_production_installed_named_non_conflict(tmp_path):
+    # production + installed is a legitimate desktop/CLI case — advisory names it, not a plain conflict.
+    (tmp_path / "app.yaml").write_text("deployment:\n  mode: installed\n", encoding="utf-8")
+    dd = build_instantiate_plan(tmp_path, "production")["deployment_default"]
+    assert dd["effective_mode"] == "installed"
+    assert "desktop/CLI" in dd["advisory"]
+
+
+# --- FR-CDA-4: kickoff templates teach deployment inputs, grammar-coherent with the strict parser --
+
+def _yaml_blocks_with_deploy(text: str):
+    """Every fenced ```yaml block that teaches deployment/deploy keys."""
+    blocks = re.findall(r"```yaml\n(.*?)```", text, re.DOTALL)
+    return [b for b in blocks if "deployment:" in b or "deploy:" in b]
+
+
+def test_templates_teach_deployment_posture(tmp_path):
+    plan = build_instantiate_plan(tmp_path, "production")
+    contents = {w["path"]: w["content"] for w in plan["writes"]}
+    explained = contents["docs/kickoff/KICKOFF_INPUTS_EXPLAINED.md"]
+    intro = contents["docs/kickoff/KICKOFF_INTRO.md"]
+    assert "Deployment posture" in explained
+    assert "deployment.mode" in intro and "installed" in intro and "deployed" in intro
+
+
+def test_taught_deployment_keys_roundtrip_the_strict_parser(tmp_path):
+    """Grammar-coherence gate (R1-F7/S6): every deployment key the templates teach parses with zero
+    strict-key errors — a template teaching a rejected key would produce a fail-closed `hard`."""
+    from startd8.scaffold_codegen.manifest import parse_app_manifest
+
+    plan = build_instantiate_plan(tmp_path, "production")
+    taught = [w["content"] for w in plan["writes"]
+              if w["path"].endswith(("KICKOFF_INPUTS_EXPLAINED.md", "KICKOFF_INTRO.md"))]
+    blocks = [b for text in taught for b in _yaml_blocks_with_deploy(text)]
+    assert blocks, "templates must teach at least one deployment YAML example"
+    for block in blocks:
+        # Must not raise — a rejected key raises ValueError in the strict parser.
+        parse_app_manifest(block)
 
 
 # ── FR-C3a — disclosure bound (the live OQ-7 leak) ───────────────────────────

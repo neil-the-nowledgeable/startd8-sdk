@@ -58,6 +58,53 @@ _POSTURE_CONVENTIONS = {
     "production": "provenance_default: authored",
 }
 
+# FR-CDA-3: posture → the DEFAULT deployment.mode it implies. A default seed, NEVER a force: the
+# app.yaml's declared `deployment.mode` (derived later from the data model) always wins; a mismatch
+# is an ADVISORY, never an error. Mode and posture stay independent declared fields (deployment-mode
+# OQ-5). A production *desktop/CLI* tool legitimately running `installed` is a named non-conflict.
+_POSTURE_DEPLOYMENT_MODE = {
+    "prototype": "installed",
+    "production": "deployed",
+}
+
+
+def _deployment_default(project_root: Path, posture: str) -> Dict[str, Any]:
+    """Resolve the posture's deployment-mode default + any advisory (FR-CDA-3, the 3-step policy).
+
+    (1) read a declared `deployment.mode` from an existing app.yaml (if any); (2) the posture seeds a
+    default when unset; (3) a declared mode that disagrees with the posture mapping is KEPT, with an
+    advisory (never an error). Read-only, $0; degrades to "no declared mode" on any parse failure.
+    """
+    implied = _POSTURE_DEPLOYMENT_MODE[posture]
+    declared: Optional[str] = None
+    try:
+        from startd8.scaffold_codegen.deploy_readiness import find_app_yaml
+        from startd8.scaffold_codegen.manifest import parse_app_manifest
+
+        app_yaml = find_app_yaml(project_root)
+        if app_yaml is not None:
+            declared = parse_app_manifest(app_yaml.read_text(encoding="utf-8")).deployment_mode
+    except Exception:
+        declared = None  # no readable/declared mode → the default simply applies
+
+    out: Dict[str, Any] = {"posture": posture, "implied_mode": implied, "declared_mode": declared}
+    if declared is None:
+        out["effective_mode"] = implied
+        out["source"] = "seeded-from-posture"
+    else:
+        out["effective_mode"] = declared  # declared always wins
+        out["source"] = "declared"
+        if declared != implied:
+            if posture == "production" and declared == "installed":
+                out["advisory"] = (
+                    "production posture with `deployment.mode: installed` — legitimate for a "
+                    "desktop/CLI tool; keeping the declared mode (not a conflict).")
+            else:
+                out["advisory"] = (
+                    f"posture '{posture}' implies `deployment.mode: {implied}` but app.yaml declares "
+                    f"'{declared}' — keeping the declared value (advisory, not an error).")
+    return out
+
 
 class ConciergeWriteError(ValueError):
     """Caller error in a write builder (bad posture, missing field)."""
@@ -116,6 +163,11 @@ def build_instantiate_plan(
             "observability.yaml before any non-demo use (it ships .test-flagged)."
         )
 
+    # FR-CDA-3: surface the posture's deployment-mode default (+ advisory on any declared conflict).
+    deployment_default = _deployment_default(root, posture)
+    if deployment_default.get("advisory"):
+        warnings.append(deployment_default["advisory"])
+
     return {
         "schema_version": SCHEMA_VERSION,
         "action": "instantiate-kickoff",
@@ -124,6 +176,7 @@ def build_instantiate_plan(
         "with_authoring": with_authoring,
         "writes": writes,
         "warnings": warnings,
+        "deployment_default": deployment_default,
     }
 
 

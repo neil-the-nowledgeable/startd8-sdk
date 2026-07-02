@@ -105,3 +105,65 @@ def test_assess_kickoff_inputs_provenance(tmp_path):
     assert domains["observability"]["status"] == "absent"
     # cascade half always present (wraps wireframe); shape is env-dependent, status key is not.
     assert "status" in out["cascade"]
+
+
+_COHERENT_DEPLOYED = (
+    "app:\n  name: demo\n"
+    "deployment:\n  mode: deployed\n"
+    "persistence:\n  path: postgresql://db/app\n"
+    "deploy:\n  trust_gateway: true\n  target_cloud: gke\n"
+)
+
+
+def test_assess_deployment_not_declared(tmp_path):
+    """FR-CDA-1: no app.yaml → not-declared, never a crash."""
+    dep = handle_concierge_tool("assess", tmp_path)["deployment"]
+    assert dep["status"] == "not-declared" and dep["readiness"] == "not-declared"
+
+
+def test_assess_deployment_installed(tmp_path):
+    (tmp_path / "app.yaml").write_text("app:\n  name: d\n", encoding="utf-8")
+    dep = handle_concierge_tool("assess", tmp_path)["deployment"]
+    assert dep["mode"] == "installed" and dep["readiness"] == "not-declared"
+
+
+def test_assess_deployment_declared_not_generated(tmp_path):
+    (tmp_path / "app.yaml").write_text(
+        _COHERENT_DEPLOYED + "  environments:\n    prod: {}\n    staging: {}\n", encoding="utf-8")
+    dep = handle_concierge_tool("assess", tmp_path)["deployment"]
+    assert dep["mode"] == "deployed"
+    assert dep["deploy"]["target_cloud"] == "gke" and dep["deploy"]["trust_gateway"] is True
+    assert dep["environments"] == ["prod", "staging"]      # sorted
+    assert dep["readiness"] == "declared-not-generated"
+    assert dep["verdict"] in ("ok", "soft")               # coherent → not hard
+
+
+def test_assess_deployment_generated_and_stale(tmp_path):
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "infra-contract.yaml").write_text(
+        "environments:\n  prod: {}\nbindings:\n  - {name: db, status: bound}\n"
+        "  - {name: cache, status: pending}\n", encoding="utf-8")
+    # declares prod (present) + staging (absent from contract) → stale, and 1 unbound binding.
+    (tmp_path / "app.yaml").write_text(
+        _COHERENT_DEPLOYED + "  environments:\n    prod: {}\n    staging: {}\n", encoding="utf-8")
+    dep = handle_concierge_tool("assess", tmp_path)["deployment"]
+    assert dep["readiness"] == "stale"
+    assert dep["unbound_bindings"] == 1
+
+
+def test_assess_deployment_never_leaks_secret_values(tmp_path):
+    # A secret-looking value in the infra-contract must never appear in the assess JSON (R1-S9).
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "infra-contract.yaml").write_text(
+        "bindings:\n  - {name: db_password, status: bound, value: SUPER_SECRET_123}\n",
+        encoding="utf-8")
+    (tmp_path / "app.yaml").write_text(_COHERENT_DEPLOYED, encoding="utf-8")
+    import json
+    blob = json.dumps(handle_concierge_tool("assess", tmp_path)["deployment"])
+    assert "SUPER_SECRET_123" not in blob
+
+
+def test_assess_deployment_malformed_fail_closed(tmp_path):
+    (tmp_path / "app.yaml").write_text("app: [this: is, not: valid\n", encoding="utf-8")
+    dep = handle_concierge_tool("assess", tmp_path)["deployment"]
+    assert dep["status"] == "invalid" and dep["verdict"] == "hard"

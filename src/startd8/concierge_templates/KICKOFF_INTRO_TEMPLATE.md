@@ -28,11 +28,15 @@ default, an estimate?") so the build is always honest about what's real.
 **Production:** inputs come from named human roles — <Customer/PO name> states goals, the
 business analyst maintains requirements, the architect validates conventions, <ops owner>
 supplies real contacts and alert destinations. Pre-filled drafts are provided everywhere to
-react to, never to silently ship: a human decision flips each value to `authored`.
+react to, never to silently ship: a human decision flips each value to `authored`. *Deployment
+default:* production seeds `deployment.mode: deployed` (multi-user, shared DB, behind a gateway)
+— unless this is a desktop/CLI tool, which legitimately stays `installed`. You always decide.
 
 **Prototype/dogfood:** the <team name> team plays all roles (solo mode). **No humans are
 required to start** — every value ships pre-filled (industry defaults + LLM-drafted starters),
-adjusted at will. Provenance still records which decisions await a real owner.
+adjusted at will. Provenance still records which decisions await a real owner. *Deployment
+default:* prototype seeds `deployment.mode: installed` (single-user, local-first). See
+`KICKOFF_INPUTS_EXPLAINED.md` → "Deployment posture" for the `deploy:` block when you go live.
 
 ## 3. What's in this package
 

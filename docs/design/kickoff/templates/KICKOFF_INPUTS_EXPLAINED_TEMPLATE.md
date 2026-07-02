@@ -100,3 +100,36 @@ approval).
 | Conventions | `inputs/conventions.yaml` | architect | <generated+validated / authored> |
 | Build preferences | `inputs/build-preferences.yaml` | PM / budget owner | <estimate / authored> |
 | Contract + manifests + content | <ASSEMBLY_INPUTS.md path> | architect + team | <status> |
+
+---
+
+## Deployment posture (how this app runs)
+
+Your app runs in one of two **modes**, declared in `app.yaml`. This is a *default seeded from your
+kickoff posture* (`prototype` → `installed`, `production` → `deployed`), never forced — if you
+declare a mode, it always wins.
+
+- **`installed`** — single-user, local-first (SQLite, `127.0.0.1`, `create_all` on startup): a
+  desktop/CLI tool or a solo/dogfood run. A *production* desktop tool legitimately stays `installed`.
+- **`deployed`** — multi-user, shared compute + database, run behind a verifying gateway. Adds a
+  `deploy:` block describing where and how it runs.
+
+When you're ready to deploy, add a `deploy:` block. Every key below is understood by the strict
+manifest parser — **only these keys are valid** (an unknown key fails the build loud, never silently):
+
+```yaml
+deployment:
+  mode: deployed            # installed | deployed
+deploy:
+  target_cloud: gke         # where it runs
+  trust_gateway: true       # a verifying gateway/agentgateway fronts the app (clears the auth-bypass gate)
+  secrets:
+    backend: eso-doppler    # eso-doppler | doppler-operator | eso-aws | eso-gcp
+  environments:             # optional: per-environment overlays
+    prod: {}
+    staging: {}
+```
+
+You never author real secret *values* here — only the backend *name* that resolves them at deploy
+time (secrets are operator content). Run `startd8 concierge assess` (or the `check_deploy_coherence`
+gate) to see your deployment readiness and whether the config is coherent.
