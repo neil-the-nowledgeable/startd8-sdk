@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..logging_config import get_logger
-from ..security import sanitize_path
+from ..security import assert_writable_generated_target, sanitize_path
+from ..exceptions import ValidationError as _SecurityValidationError
 from .checkpoint import CheckpointResult, CheckpointStatus, IntegrationCheckpoint
 from .gate_contracts import GateEmitter
 from .protocols import (
@@ -45,6 +46,25 @@ _INTEGRATION_SIZE_REGRESSION_THRESHOLD = 0.60
 _INTEGRATION_MIN_LINES = 50
 
 logger = get_logger(__name__)
+
+
+def _guarded_write(path, content: str, project_root) -> bool:
+    """FR-A6a: write generated content to ``path`` unless it is a protected operator control file.
+
+    Returns True on write. On a protected target (e.g. a generated ``security_allowlist.yaml`` that
+    would suppress Anzen-gate findings), logs a security event and **skips** the write (the malicious
+    control file never lands) rather than aborting the whole integration run.
+    """
+    try:
+        assert_writable_generated_target(path, project_root)
+    except _SecurityValidationError as exc:
+        logger.warning(
+            "FR-A6a: refused generated write to protected control file: %s", exc,
+            extra={"event": "protected_control_file_write_refused", "path": str(path)},
+        )
+        return False
+    path.write_text(content, encoding="utf-8")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -893,7 +913,7 @@ class IntegrationEngine:
             if outcome.any_modified:
                 # Write repaired content back in-place (no staging needed)
                 for fpath, content in outcome.repaired_files.items():
-                    fpath.write_text(content, encoding="utf-8")
+                    _guarded_write(fpath, content, self.project_root)  # FR-A6a
 
                 # Gap-A: Update element registry for repaired files
                 if self._element_registry is not None:
@@ -1043,7 +1063,7 @@ class IntegrationEngine:
             kept: List[Path] = []
             if outcome.any_modified:
                 for fpath, content in outcome.repaired_files.items():
-                    fpath.write_text(content, encoding="utf-8")
+                    _guarded_write(fpath, content, self.project_root)  # FR-A6a
                     rel = self._rel_to_root(fpath)
                     # Strict-subset re-validation (R4-S2): roll back only on a NEW
                     # content violation introduced by the rewrite.
@@ -2479,7 +2499,7 @@ class IntegrationEngine:
 
             if outcome.any_modified:
                 for fpath, content in outcome.repaired_files.items():
-                    fpath.write_text(content, encoding="utf-8")
+                    _guarded_write(fpath, content, self.project_root)  # FR-A6a
 
                 # Gap-C: Update element registry for contract-violation-repaired files
                 if self._element_registry is not None:
@@ -3058,8 +3078,8 @@ class IntegrationEngine:
                                         source_content_text, target_content,
                                     )
                                     if merged is not None:
-                                        target_path.write_text(
-                                            merged, encoding="utf-8",
+                                        _guarded_write(  # FR-A6a
+                                            target_path, merged, self.project_root,
                                         )
                                         result_obj_metadata.setdefault(
                                             "merge_repair_advisory", [],

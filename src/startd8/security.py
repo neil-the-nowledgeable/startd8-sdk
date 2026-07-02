@@ -85,8 +85,58 @@ def sanitize_path(file_path: Union[str, Path], base_dir: Optional[Path] = None) 
                 field="file_path",
                 value=path_str
             )
-    
+
     return path
+
+
+# Operator control files the generation process must NEVER create or overwrite from
+# generated (untrusted-influenced) content (FR-A6a). ``security_allowlist.yaml`` is the
+# security-critical one — it suppresses Anzen-gate findings, so a generated copy could
+# silently mask injected-code findings. The others are operator-owned inputs/config that
+# generated content has no business rewriting. Matched by **case-folded basename** (defeats a
+# ``SECURITY_ALLOWLIST.YAML`` bypass on case-insensitive filesystems, where the gate would
+# still load it).
+PROTECTED_CONTROL_FILES: frozenset = frozenset({
+    "security_allowlist.yaml",
+    ".contextcore.yaml",
+})
+
+
+def is_protected_control_file(file_path: Union[str, Path], base_dir: Optional[Path] = None) -> bool:
+    """Return True if the canonicalized target is an operator control file (FR-A6a).
+
+    Canonicalizes the path (resolving ``..`` and symlinks) before comparing the case-folded
+    basename against :data:`PROTECTED_CONTROL_FILES`, so ``dir/../security_allowlist.yaml`` or a
+    symlink pointing at it is caught.
+    """
+    raw = Path(file_path).expanduser()
+    try:
+        resolved = (Path(base_dir).resolve() / raw if base_dir and not raw.is_absolute() else raw).resolve()
+    except (OSError, ValueError):
+        resolved = raw
+    name = resolved.name.casefold()
+    return name in {n.casefold() for n in PROTECTED_CONTROL_FILES}
+
+
+def assert_writable_generated_target(
+    file_path: Union[str, Path], base_dir: Optional[Path] = None
+) -> Path:
+    """Refuse to write an operator control file from generated content (FR-A6a).
+
+    Call at every file-write chokepoint that persists generated/model-influenced content. Raises
+    :class:`ValidationError` (logged by the caller) when the target is a protected control file, so
+    an injected instruction cannot make the generator emit a ``security_allowlist.yaml`` that
+    suppresses gate findings. Non-protected targets pass through unchanged.
+    """
+    if is_protected_control_file(file_path, base_dir):
+        raise ValidationError(
+            f"Refusing to write protected operator control file from generated content: "
+            f"{str(file_path)!r} (FR-A6a — a generated security_allowlist.yaml could suppress "
+            f"security-gate findings; generation must not author operator control files).",
+            field="file_path",
+            value=str(file_path),
+        )
+    return Path(file_path)
 
 
 def validate_api_key_format(api_key: str, provider: str) -> bool:
