@@ -16,6 +16,7 @@ a later increment; they are intentionally **not** defined here so M0 carries no 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List
 
 __all__ = [
@@ -23,6 +24,9 @@ __all__ = [
     "ROLE_ID_PATTERN",
     "PersonaBrief",
     "Roster",
+    "Grounding",
+    "PanelQuestion",
+    "PanelAnswer",
 ]
 
 # Bumped on a contract *shape* change, independent of the SDK version (VIPP/FDE parity).
@@ -134,3 +138,124 @@ class Roster:
 
     def persona(self, role_id: str) -> "PersonaBrief | None":
         return next((p for p in self.personas if p.role_id == role_id), None)
+
+
+# --------------------------------------------------------------------------- #
+# Query-time contracts (M1). A persona answers a PanelQuestion with a PanelAnswer; the answer
+# carries its own provenance (brief hash, grounding signal, cost) so it can be labeled synthetic
+# (FR-10) and audited (FR-12) without reaching back to the panel that produced it.
+# --------------------------------------------------------------------------- #
+
+
+class Grounding(str, Enum):
+    """How well an answer is grounded in the persona's brief (FR-7).
+
+    ``grounded``/``uncertain`` mean the persona *answered* (the brief supports it, or it hedged);
+    ``deferred`` means the persona declined as out-of-brief; ``unavailable`` means the agent call
+    failed (FR-16) — the panel never fabricates a fact in that case.
+    """
+
+    GROUNDED = "grounded"
+    UNCERTAIN = "uncertain"
+    DEFERRED = "deferred"
+    UNAVAILABLE = "unavailable"
+
+    @staticmethod
+    def coerce(value: Any) -> "Grounding":
+        """Best-effort parse of a model-emitted grounding token; unknown ⇒ ``uncertain``."""
+        try:
+            return Grounding(str(value).strip().lower())
+        except ValueError:
+            return Grounding.UNCERTAIN
+
+
+@dataclass(frozen=True)
+class PanelQuestion:
+    """One question posed to the panel. ``target_role_id`` names a persona; ``value_path`` is the
+    manifest symbol the question is about (threaded through to the answer for FR-10/R2-F4).
+    """
+
+    text: str
+    target_role_id: str = ""
+    value_path: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "text": self.text,
+            "target_role_id": self.target_role_id,
+            "value_path": self.value_path,
+        }
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "PanelQuestion":
+        return PanelQuestion(
+            text=str(d.get("text", "")),
+            target_role_id=str(d.get("target_role_id", "")).strip(),
+            value_path=str(d.get("value_path", "")).strip(),
+        )
+
+
+@dataclass(frozen=True)
+class PanelAnswer:
+    """A persona's answer plus its provenance (FR-10/FR-12).
+
+    ``brief_hash``+``roster_version`` pin the exact brief revision that produced the answer (R2-F3)
+    so a persisted answer stays traceable after ``stakeholders.yaml`` is edited. ``value_path`` rides
+    on the answer (R2-F4) so a non-VIPP consumer can read per-field provenance. The answer is
+    *synthetic, unratified* input — :mod:`startd8.stakeholder_panel.provenance` renders it as an
+    ``OBSERVED (project, synthetic)`` claim.
+    """
+
+    role_id: str
+    question: str
+    text: str
+    grounding: Grounding = Grounding.UNCERTAIN
+    value_path: str = ""
+    brief_hash: str = ""
+    roster_version: str = ""
+    session_id: str = ""
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    created_at: str = ""  # ISO-8601 UTC; stamped by the panel
+
+    @property
+    def available(self) -> bool:
+        """The persona actually responded (FR-16: an unavailable answer is never a fact)."""
+        return self.grounding is not Grounding.UNAVAILABLE
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "role_id": self.role_id,
+            "question": self.question,
+            "text": self.text,
+            "grounding": self.grounding.value,
+            "value_path": self.value_path,
+            "brief_hash": self.brief_hash,
+            "roster_version": self.roster_version,
+            "session_id": self.session_id,
+            "model": self.model,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cost_usd": self.cost_usd,
+            "created_at": self.created_at,
+        }
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "PanelAnswer":
+        return PanelAnswer(
+            role_id=str(d.get("role_id", "")),
+            question=str(d.get("question", "")),
+            text=str(d.get("text", "")),
+            grounding=Grounding.coerce(d.get("grounding")),
+            value_path=str(d.get("value_path", "")),
+            brief_hash=str(d.get("brief_hash", "")),
+            roster_version=str(d.get("roster_version", "")),
+            session_id=str(d.get("session_id", "")),
+            model=str(d.get("model", "")),
+            input_tokens=int(d.get("input_tokens", 0) or 0),
+            output_tokens=int(d.get("output_tokens", 0) or 0),
+            cost_usd=float(d.get("cost_usd", 0.0) or 0.0),
+            created_at=str(d.get("created_at", "")),
+        )

@@ -60,7 +60,7 @@ def test_assess_absent_when_not_instantiated(tmp_path):
     assert domains["stakeholders"]["status"] == "absent"
 
 
-def test_assess_reports_authored_not_consumable_for_valid_roster(tmp_path):
+def test_assess_reports_authored_and_consumable_for_valid_roster(tmp_path):
     inputs = tmp_path / "docs" / "kickoff" / "inputs"
     inputs.mkdir(parents=True)
     (inputs / "stakeholders.yaml").write_text(
@@ -74,9 +74,10 @@ def test_assess_reports_authored_not_consumable_for_valid_roster(tmp_path):
     got = _assess_kickoff_inputs(tmp_path)["domains"]["stakeholders"]
     assert got["status"] == "present"
     assert got["authored"] is True
-    # M0 ships authoring only — the panel is not consumable yet (R2-S5).
-    assert got["consumable"] is sp.PANEL_CONSUMABLE is False
-    assert "later increment" in got["note"]
+    # M1 ships the live panel, so a valid roster is now consumable (R2-S5).
+    assert got["consumable"] is sp.PANEL_CONSUMABLE is True
+    # The "later increment" note only appears while authored-but-not-consumable.
+    assert "note" not in got
 
 
 def test_assess_invalid_roster_surfaces_issues(tmp_path):
