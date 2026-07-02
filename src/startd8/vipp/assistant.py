@@ -59,6 +59,8 @@ def run_vipp_negotiate(
     emit: bool = True,
     write: bool = True,
     force: bool = False,
+    panel: Any = None,
+    panel_max_questions: Optional[int] = None,
 ) -> NegotiateOutcome:
     """Adjudicate a host proposal envelope into a source-labeled disposition report (FR-3/4/6/18)."""
     inbox_path = Path(inbox_path)
@@ -86,6 +88,16 @@ def run_vipp_negotiate(
         "ground_truth": context.ground_truth_checksum(project_root),
         "sdk_version": sdk_version,
         "narrative": str(bool(narrative and agent is not None)),
+        # The panel pass is an opt-in paid surface (like narrative); fold it into the idempotency
+        # key so a panel run and a non-panel run are distinct (stakeholder-panel M2 / FR-9). Key on
+        # the panel's *roster version* (not a bare bool) + the question cap, so editing
+        # stakeholders.yaml or changing --cap re-consults rather than returning cached advisories
+        # (the roster lives outside the inbox/ground-truth checksums).
+        "panel": (
+            f"{getattr(panel, 'roster_version', '')}:{panel_max_questions}"
+            if panel is not None
+            else ""
+        ),
     }
     fp = context.fingerprint(parts)
     key = f"negotiate:{envelope.project_id}"
@@ -135,12 +147,28 @@ def run_vipp_negotiate(
     md = compose.render_dispositions(report)
     deterministic_compose.assert_all_labeled(md)  # FR-21 gate
 
+    # Opt-in stakeholder-panel pass (paid), invoked AROUND the deterministic core (FR-9). It attaches
+    # synthetic, unratified advisories to the report in a SEPARATE section — verdicts are unchanged,
+    # and nothing enters ``dispositions`` (FR-18). Runs before narrative so the enhanced markdown
+    # includes the advisory section; ``$0`` and untouched when ``panel is None``.
+    if panel is not None:
+        from startd8.stakeholder_panel.vipp_bridge import consult_panel
+
+        consultation = consult_panel(report, panel, cap=panel_max_questions)
+        report.panel_advisories = consultation.advisories
+        report.cost_usd += consultation.cost_usd
+        report.llm_used = report.llm_used or consultation.llm_used
+        md = compose.render_dispositions(report)  # re-render WITH the advisory section
+        deterministic_compose.assert_all_labeled(
+            md
+        )  # re-gate (synthetic OBSERVED passes)
+
     if narrative and agent is not None:
         md, cost, used = compose.enhance_narrative(
             md, envelope, agent=agent, max_cost_usd=max_cost_usd
         )
-        report.cost_usd = cost
-        report.llm_used = used
+        report.cost_usd += cost  # += so a preceding panel pass's cost is not clobbered
+        report.llm_used = used or report.llm_used
         deterministic_compose.assert_all_labeled(md)  # re-gate the narrative
 
     if write:

@@ -433,7 +433,15 @@ def _render_chat_page(csrf: str, stylesheet: str) -> str:
         "  const pv=(j.cascade_offerable&&j.preview)?`<p class='muted'>preview: shape ${esc(j.preview.shape||'')}</p>`:'';\n"
         "  const foot=j.cascade_offerable?`<p><strong>The $0 cascade is offerable.</strong></p>${pv}`:\n"
         "    `<p class='muted'>cascade not offerable — unmet: ${esc((j.unmet_gates||[]).join(', '))}</p>`;\n"
-        "  rail.innerHTML=`<h3>Build progress</h3>${rows}${foot}`;}catch(e){}}\n"
+        # FR-RCA-11 — insights + ranked next steps; every field HTML-escaped via esc() (CRP R1-S4:
+        # advisory detail can carry an invalid-YAML error string read off disk).
+        "  const adv=(j.advisories||[]).map(a=>`<div>[${esc(a.severity)}] <strong>${esc(a.title)}</strong>`+\n"
+        "    ` — ${esc(a.detail)}${a.command?` <code>${esc(a.command)}</code>`:''}</div>`).join('');\n"
+        "  const advh=adv?`<h4>Insights</h4>${adv}`:'';\n"
+        "  const ns=(j.next_steps||[]).map(s=>`<div>${esc(String(s.rank))}. ${esc(s.title)}`+\n"
+        "    `${s.command?` <code>${esc(s.command)}</code>`:''}</div>`).join('');\n"
+        "  const nsh=ns?`<h4>Next steps</h4>${ns}`:'';\n"
+        "  rail.innerHTML=`<h3>Build progress</h3>${rows}${foot}${advh}${nsh}`;}catch(e){}}\n"
         "async function act(kind,id){const fd=new FormData();fd.append('proposal_id',id);fd.append('csrf',CSRF);\n"
         " const r=await fetch('/concierge/chat/'+kind,{...OPTS,body:fd});const j=await r.json();\n"
         " document.getElementById('r-'+id).innerHTML=esc(kind==='confirm'?(j.code+': '+(j.detail||'')):'discarded');\n"

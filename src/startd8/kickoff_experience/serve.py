@@ -21,13 +21,16 @@ import shutil
 import socket
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
+from ..logging_config import get_logger
 from .docs import load_kickoff_docs
 from .manifest import KickoffExperienceConfig, default_config
 from .ranking import next_action
 from .readiness import build_readiness
 from .web import app_fingerprint, load_state
+
+logger = get_logger(__name__)
 
 INSPECT_SCHEMA_VERSION = 1  # R4-F8: bump on a breaking change to the inspect JSON shape
 
@@ -210,23 +213,73 @@ def inspect_payload(
 # --- serve (loopback) --------------------------------------------------------------------------
 
 
-def make_chat_factory(project_root: str | Path, agent_spec: str, *, red_carpet: bool = False):
-    """Build a `chat_factory` for the web agentic panel, or None if the agent can't be resolved.
+@dataclass
+class ChatPanelResolution:
+    """Outcome of trying to build the web agentic-chat panel factory.
 
-    Returns a zero-arg callable yielding a fresh chat. When *red_carpet*, that is the **stage-aware
-    Red Carpet conductor** chat (FR-RCT, OQ-4) — same propose/confirm floor, but it drives the staged
-    build; otherwise the agentic Concierge chat. Returns ``None`` (panel disabled) on a missing key /
-    unknown provider so serving degrades gracefully.
+    Exactly one side is populated: ``factory`` (a zero-arg callable yielding a fresh chat) when the
+    panel can be enabled, or ``reason`` (a human-readable explanation) when it is disabled. The
+    reason lets callers tell the user *why* the panel is off instead of a blanket "could not
+    resolve" — the most common cause is a provider that does not support tool use (only Anthropic
+    and OpenAI do), which no amount of key-fixing will change.
     """
-    try:
-        from ..utils.agent_resolution import resolve_agent_spec
-        from .chat import new_agentic_kickoff_chat, new_red_carpet_chat
 
-        factory = new_red_carpet_chat if red_carpet else new_agentic_kickoff_chat
-        factory(resolve_agent_spec(agent_spec), project_root)  # validate up front
-    except Exception:
-        return None
-    return lambda: factory(resolve_agent_spec(agent_spec), project_root)
+    factory: Optional[Callable[[], object]]
+    reason: Optional[str]
+
+
+def resolve_chat_panel(
+    project_root: str | Path, agent_spec: str, *, red_carpet: bool = False
+) -> ChatPanelResolution:
+    """Resolve the web agentic-chat panel for *agent_spec*, reporting why if it can't be enabled.
+
+    When *red_carpet*, the panel is the **stage-aware Red Carpet conductor** chat (FR-RCT, OQ-4);
+    otherwise the agentic Concierge chat. Both are driven by an :class:`AgenticSession`, which
+    **requires tool use** — so a provider whose agent does not implement it (Gemini, Mistral,
+    Ollama, …) can never drive the panel, and we say so up front rather than after a swallowed
+    failure. Resolution/construction errors (bad spec, missing key) are surfaced verbatim.
+    """
+    from ..utils.agent_resolution import resolve_agent_spec
+    from .chat import new_agentic_kickoff_chat, new_red_carpet_chat
+
+    flavor = "Red Carpet" if red_carpet else "Concierge"
+    build = new_red_carpet_chat if red_carpet else new_agentic_kickoff_chat
+
+    try:
+        agent = resolve_agent_spec(agent_spec)
+    except Exception as exc:
+        return ChatPanelResolution(None, f"could not resolve agent {agent_spec!r}: {exc}")
+
+    # Pre-validate tool use (bug fix): the agentic panel needs an AgenticSession, which only
+    # tool-use-capable agents can drive. Fail with a targeted, actionable message.
+    if not agent.supports_tool_use():
+        provider = agent_spec.split(":", 1)[0] if ":" in agent_spec else "this provider"
+        return ChatPanelResolution(
+            None,
+            f"{type(agent).__name__} ({provider}) does not support tool use — the agentic "
+            f"{flavor} panel requires an Anthropic or OpenAI model "
+            f"(e.g. anthropic:claude-opus-4-8 or openai:gpt-5.5).",
+        )
+
+    try:
+        build(agent, project_root)  # validate full construction up front
+    except Exception as exc:
+        return ChatPanelResolution(
+            None, f"could not start the {flavor} chat for {agent_spec!r}: {exc}"
+        )
+    return ChatPanelResolution(
+        lambda: build(resolve_agent_spec(agent_spec), project_root), None
+    )
+
+
+def make_chat_factory(project_root: str | Path, agent_spec: str, *, red_carpet: bool = False):
+    """Build a `chat_factory` for the web agentic panel, or None if it can't be enabled.
+
+    Thin wrapper over :func:`resolve_chat_panel` that returns just the factory (or ``None``) so the
+    panel degrades gracefully. Use :func:`resolve_chat_panel` directly when you also need the
+    disabled *reason* for the user.
+    """
+    return resolve_chat_panel(project_root, agent_spec, red_carpet=red_carpet).factory
 
 
 def serve_kickoff(
@@ -257,8 +310,12 @@ def serve_kickoff(
         raise RuntimeError(f"kickoff preflight failed: {failed}")
 
     gc_stale_scratch(project_root, app_fingerprint(cfg, theme=theme))
-    chat_factory = (make_chat_factory(project_root, agent_spec, red_carpet=red_carpet)
-                    if agent_spec else None)
+    chat_factory = None
+    if agent_spec:
+        resolution = resolve_chat_panel(project_root, agent_spec, red_carpet=red_carpet)
+        chat_factory = resolution.factory
+        if chat_factory is None:
+            logger.warning("agentic chat panel disabled: %s", resolution.reason)
     app = build_kickoff_app(project_root, config=cfg, theme=theme, mode=mode,
                             chat_factory=chat_factory)
     bind_port = port or find_free_port(host)

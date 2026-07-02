@@ -85,8 +85,58 @@ def sanitize_path(file_path: Union[str, Path], base_dir: Optional[Path] = None) 
                 field="file_path",
                 value=path_str
             )
-    
+
     return path
+
+
+# Operator control files the generation process must NEVER create or overwrite from
+# generated (untrusted-influenced) content (FR-A6a). ``security_allowlist.yaml`` is the
+# security-critical one — it suppresses Anzen-gate findings, so a generated copy could
+# silently mask injected-code findings. The others are operator-owned inputs/config that
+# generated content has no business rewriting. Matched by **case-folded basename** (defeats a
+# ``SECURITY_ALLOWLIST.YAML`` bypass on case-insensitive filesystems, where the gate would
+# still load it).
+PROTECTED_CONTROL_FILES: frozenset = frozenset({
+    "security_allowlist.yaml",
+    ".contextcore.yaml",
+})
+
+
+def is_protected_control_file(file_path: Union[str, Path], base_dir: Optional[Path] = None) -> bool:
+    """Return True if the canonicalized target is an operator control file (FR-A6a).
+
+    Canonicalizes the path (resolving ``..`` and symlinks) before comparing the case-folded
+    basename against :data:`PROTECTED_CONTROL_FILES`, so ``dir/../security_allowlist.yaml`` or a
+    symlink pointing at it is caught.
+    """
+    raw = Path(file_path).expanduser()
+    try:
+        resolved = (Path(base_dir).resolve() / raw if base_dir and not raw.is_absolute() else raw).resolve()
+    except (OSError, ValueError):
+        resolved = raw
+    name = resolved.name.casefold()
+    return name in {n.casefold() for n in PROTECTED_CONTROL_FILES}
+
+
+def assert_writable_generated_target(
+    file_path: Union[str, Path], base_dir: Optional[Path] = None
+) -> Path:
+    """Refuse to write an operator control file from generated content (FR-A6a).
+
+    Call at every file-write chokepoint that persists generated/model-influenced content. Raises
+    :class:`ValidationError` (logged by the caller) when the target is a protected control file, so
+    an injected instruction cannot make the generator emit a ``security_allowlist.yaml`` that
+    suppresses gate findings. Non-protected targets pass through unchanged.
+    """
+    if is_protected_control_file(file_path, base_dir):
+        raise ValidationError(
+            f"Refusing to write protected operator control file from generated content: "
+            f"{str(file_path)!r} (FR-A6a — a generated security_allowlist.yaml could suppress "
+            f"security-gate findings; generation must not author operator control files).",
+            field="file_path",
+            value=str(file_path),
+        )
+    return Path(file_path)
 
 
 def validate_api_key_format(api_key: str, provider: str) -> bool:
@@ -653,12 +703,27 @@ def validate_file_size(file_path: Path) -> None:
         )
 
 
-# Untrusted-text cap policy (FR-A2a). Per-field input cap applied at the fence
-# boundary; distinct from MAX_PROMPT_LENGTH (reserved for a future outbound
-# full-prompt total guard). Generous so legitimate requirement/plan text is never
-# silently lost — it bounds pathological/DoS input, not normal content. Section
-# builders apply their own tighter display budgets.
+# ── Untrusted-text cap policy (FR-A2a) ─────────────────────────────────────────────────────
+# One documented home for the *security* caps that bound attacker-influenced text before it
+# crosses the prompt boundary. CRP R1-F5: do NOT fold generation-quality budgets into this policy —
+# classify first; changing a *functional* cap silently alters generation output, which is a
+# correctness change masquerading as a security one. So caps are split into two classes:
+#
+#   SECURITY caps (bound untrusted input to defend the prompt boundary — owned here):
+#     MAX_UNTRUSTED_FIELD_CHARS (200 KB) — per-field fence input cap (FR-A2 / FR-B2)
+#     MAX_PLAN_LOAD_BYTES       (16 KB)  — plan-document load cap before fencing
+#     MAX_PROMPT_LENGTH         (1 MB)   — outbound full-prompt total guard (throwing validator)
+#
+#   FUNCTIONAL caps (generation-quality / display budgets — deliberately EXCLUDED, left in place):
+#     requirements `[:2000]` summarization (derivation.py, reviewer.py, plan_ingestion, context_seed,
+#       prime_adapter, …) — a *summary* budget that shapes what the model is shown, not a security bound
+#     _MAX_INPUT_ROWS = 200 (ai_layer read passes) — a context *row* budget
+#   These MUST NOT be redirected to the security policy: doing so would change generation output.
+#
+# Security caps are generous so legitimate requirement/plan text is never silently lost — they bound
+# pathological / DoS input, not normal content. Section builders apply their own tighter display budgets.
 MAX_UNTRUSTED_FIELD_CHARS = 200_000
+MAX_PLAN_LOAD_BYTES = 16_384  # plan-document load cap (was scattered as _PLAN_LOAD_MAX_BYTES)
 
 # C0/C1 control characters except tab (\x09), newline (\x0a), carriage return (\x0d).
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")

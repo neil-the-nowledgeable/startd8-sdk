@@ -42,12 +42,16 @@ def client(tmp_path: Path) -> TestClient:
 
 # --- S1: manifest accessor — one inventory, no drift (FR-WM2-4/16) ------------------------------
 
+
 def test_manifest_bijects_with_instantiate_lists() -> None:
     entries = kickoff_template_manifest()
     # Exactly the instantiate inventory, no more, no fewer.
-    assert len(entries) == len(_KICKOFF_FILES) + len(_AUTHORING_FILES) == 11
+    # 12 = 7 kickoff-package files (incl. the stakeholder-panel roster, M0) + 5 authoring files.
+    assert len(entries) == len(_KICKOFF_FILES) + len(_AUTHORING_FILES) == 12
     manifest_rels = {e.template_rel for e in entries}
-    list_rels = {rel for rel, _ in _KICKOFF_FILES} | {rel for rel, _ in _AUTHORING_FILES}
+    list_rels = {rel for rel, _ in _KICKOFF_FILES} | {
+        rel for rel, _ in _AUTHORING_FILES
+    }
     assert manifest_rels == list_rels
 
 
@@ -75,15 +79,22 @@ def test_is_safe_template_dest_rejects_traversal() -> None:
 
 # --- S2: individual download (FR-WM2-2) ---------------------------------------------------------
 
+
 def test_download_individual_file_attachment(client: TestClient) -> None:
     with record_events() as events:
         r = client.get("/templates/file/conventions")
     assert r.status_code == 200
     assert r.headers["content-disposition"] == 'attachment; filename="conventions.yaml"'
     assert r.headers["content-type"].startswith("text/yaml")
-    assert r.text == render_template_content(get_template_entry("conventions"), "prototype")
+    assert r.text == render_template_content(
+        get_template_entry("conventions"), "prototype"
+    )
     assert [e.name for e in events] == [EV_TEMPLATE_DOWNLOADED]
-    assert events[0].attributes == {"key": "conventions", "group": "package", "posture": "prototype"}
+    assert events[0].attributes == {
+        "key": "conventions",
+        "group": "package",
+        "posture": "prototype",
+    }
 
 
 def test_download_markdown_content_type(client: TestClient) -> None:
@@ -119,8 +130,11 @@ def test_posture_substitution_matches_instantiate(client: TestClient) -> None:
         r = client.get(f"/templates/file/conventions?posture={posture}")
         assert r.status_code == 200
         plan = build_instantiate_plan("/tmp/x", posture, with_authoring=True)
-        want = next(w["content"] for w in plan["writes"]
-                    if w["path"] == "docs/kickoff/inputs/conventions.yaml")
+        want = next(
+            w["content"]
+            for w in plan["writes"]
+            if w["path"] == "docs/kickoff/inputs/conventions.yaml"
+        )
         assert r.text == want
     # prototype vs production actually differ for conventions.yaml (provenance substitution).
     proto = client.get("/templates/file/conventions?posture=prototype").text
@@ -129,6 +143,7 @@ def test_posture_substitution_matches_instantiate(client: TestClient) -> None:
 
 
 # --- S2: bundle (FR-WM2-3) ----------------------------------------------------------------------
+
 
 def _zip_names(data: bytes) -> set:
     return set(zipfile.ZipFile(io.BytesIO(data)).namelist())
@@ -142,7 +157,9 @@ def test_bundle_with_authoring_split(client: TestClient) -> None:
     full_names = _zip_names(full.content)
     pkg_names = _zip_names(pkg.content)
     assert pkg_names == {dest for _, dest in _KICKOFF_FILES}
-    assert full_names == {dest for _, dest in _KICKOFF_FILES} | {dest for _, dest in _AUTHORING_FILES}
+    assert full_names == {dest for _, dest in _KICKOFF_FILES} | {
+        dest for _, dest in _AUTHORING_FILES
+    }
 
 
 def test_bundle_emits_event(client: TestClient) -> None:
@@ -165,6 +182,7 @@ def test_bundle_size_ceiling_413(client: TestClient, monkeypatch) -> None:
 
 # --- triple-byte parity: single == bundle == instantiate, every key × posture (R2-S6) ----------
 
+
 @pytest.mark.parametrize("posture", ["prototype", "production"])
 def test_triple_byte_parity(client: TestClient, posture: str) -> None:
     bundle = client.get(f"/templates/bundle.zip?posture={posture}&with_authoring=true")
@@ -179,6 +197,7 @@ def test_triple_byte_parity(client: TestClient, posture: str) -> None:
 
 
 # --- index + discoverability --------------------------------------------------------------------
+
 
 def test_templates_index_renders_and_overview_links(client: TestClient) -> None:
     idx = client.get("/templates")
@@ -199,6 +218,7 @@ def test_download_events_registered_in_funnel() -> None:
 
 # --- home-page Concierge CTA (R2-S7 / FR-WM2-1) ------------------------------------------------
 
+
 def test_home_page_shows_concierge_cta_when_package_missing(client: TestClient) -> None:
     # The fixture serves a package-less tmp_path → instantiate_offer.needed → a prominent CTA card
     # (driven by build_concierge_view.next_action), not just the generic link.
@@ -213,11 +233,18 @@ def test_concierge_cta_helper_modes() -> None:
     # No view-model → degrade to the generic link (no CTA card).
     assert "/concierge" in _concierge_cta(None) and "card" not in _concierge_cta(None)
     # Package complete → generic link.
-    complete = _concierge_cta({"instantiate_offer": {"needed": False}, "next_action": {}})
+    complete = _concierge_cta(
+        {"instantiate_offer": {"needed": False}, "next_action": {}}
+    )
     assert "card" not in complete and "/concierge" in complete
     # Package needed → CTA card carrying the view-model's next_action.
-    needed = _concierge_cta({
-        "instantiate_offer": {"needed": True},
-        "next_action": {"title": "Create the kickoff package", "detail": "no inputs yet"},
-    })
+    needed = _concierge_cta(
+        {
+            "instantiate_offer": {"needed": True},
+            "next_action": {
+                "title": "Create the kickoff package",
+                "detail": "no inputs yet",
+            },
+        }
+    )
     assert "card" in needed and "Create the kickoff package" in needed

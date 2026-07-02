@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.9.1"
+version: "1.12.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -701,6 +701,39 @@ capabilities:
         description: "Grafana dashboard template for outbound context spans (D2)"
     confidence: 0.92
 
+  - capability_id: startd8.codegen.import_path
+    category: generate
+    maturity: beta
+    summary: "Deterministic ($0 LLM) generated-app IMPORT path — the inverse of export: an imports.yaml grammar (7th manifest) drives a from_json importer (app/importer.py) plus a paste/upload surface, with identity-key consolidation (one declaration, mode-specific application) and strict single-outer-transaction atomicity"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        Emitted by backend_codegen alongside the export path: an `imports.yaml` manifest grammar
+        (the 7th generated manifest) plus a `from_json` importer (`app/importer.py`, the byte-for-byte
+        inverse of the export renderer) and a paste/upload HTMX surface. FR-IMP-2 identity-key
+        consolidation ("one declaration, mode-specific application") gives byte-identical AI-persist
+        behavior; strict atomicity is one outer transaction (released savepoints survive a rollback).
+        All artifacts carry the `# startd8-artifact` header → GENERATED $0.00 skip + drift --check.
+        (Note the emitter is `importer.py`, not `import.py` — `import` is a Python keyword.)
+      agent: |
+        from startd8.backend_codegen import render_backend  # emits imports.yaml + app/importer.py
+        # generated app then exposes POST /import (from_json) + paste/upload UI
+    triggers: ["import path", "imports.yaml", "from_json", "importer", "paste import", "upload import", "round-trip import"]
+    evidence:
+      - type: code
+        ref: src/startd8/backend_codegen/import_codegen.py
+        description: "from_json importer emission (app/importer.py) + identity-key consolidation"
+      - type: code
+        ref: src/startd8/backend_codegen/imports_manifest.py
+        description: "imports.yaml grammar parse/validate (7th manifest)"
+      - type: code
+        ref: src/startd8/backend_codegen/import_surface.py
+        description: "paste/upload HTMX import surface"
+      - type: docs
+        ref: docs/design/GENERATED_IMPORT_PATH_REQUIREMENTS.md
+        description: "Requirements + PLAN (FR-IMP series); shipped to origin/main"
+    confidence: 0.85
+
   - capability_id: startd8.codegen.wireframe_summary
     category: query
     maturity: beta
@@ -1095,6 +1128,38 @@ capabilities:
         description: "FUNCTIONAL_CORRECTNESS_* incl. Track 2 v0.2"
     confidence: 0.8
 
+  - capability_id: startd8.benchmark.round3_system
+    category: validate
+    maturity: beta
+    summary: "Round-3 SYSTEM benchmark (`startd8 benchmark-round3`, benchmark_matrix/fleet/) — can a model build a WORKING, integrated 9-service polyglot Online Boutique, scored by a real user journey over the live fleet with honest per-service fault attribution (downstream breaks never charged to the entry orchestrator); distinct from the per-service Track-2 grid"
+    audiences: [workflow_developer, integration_developer, sdk_architect]
+    description:
+      developer: |
+        A system-level benchmark (M0→M6 + M4/M5 frontend bonus): compose.py generates an N-service
+        compose fleet on an `internal: true` net (network-layer egress-deny + service-DNS); containerize.py
+        builds per-language images with readiness-gated boot_and_probe ("ok" = published port accepts);
+        journey.py defines the 5-step transport-agnostic journey (browse→setCurrency→addToCart→viewCart→
+        checkout) weighted by the §1 locust mix; adapter_b.py = direct-gRPC driver, frontend_gate.run_journey_http
+        = Adapter A (HTTP). score.py → Scorecard: per-step coverage + per-service attribution
+        (model-fault / propagated / harness) + journey_completed + confidence. frontend_gate.py adds a
+        behavioral GATE with canonical-substitution and a capped, additive bonus (never rank-flips).
+        report.py ranks finalists by BACKEND score + emits the advisory decision gate. Behavioral-over-
+        structural: only executed journey behavior discriminates.
+      agent: |
+        startd8 benchmark-round3 --roster roster.yaml --out ./round3-out  # omit --roster = ref self-test
+    triggers: ["round 3", "round3", "system benchmark", "fleet benchmark", "online boutique", "user journey", "fault attribution", "frontend gate", "benchmark-round3"]
+    evidence:
+      - type: code
+        ref: src/startd8/benchmark_matrix/fleet/
+        description: "services/compose/containerize/journey/adapter_b/score/frontend_gate/report/roster/round3 + validate_m0..m6"
+      - type: code
+        ref: src/startd8/cli.py
+        description: "startd8 benchmark-round3 command (cli.py:1167)"
+      - type: docs
+        ref: docs/design/round3-full-app/BENCHMARK_METHODOLOGY.md
+        description: "How the shipped M0→M6 + frontend-bonus system works (the how-it-works reference)"
+    confidence: 0.8
+
   - capability_id: startd8.deploy.local_harness
     category: validate
     maturity: beta
@@ -1275,6 +1340,45 @@ capabilities:
         ref: docs/design/vipp/
         description: "VIPP_REQUIREMENTS.md (v0.3, CRP R1) + VIPP_PLAN.md (M0–M6)"
     confidence: 0.85
+
+  - capability_id: startd8.kickoff.red_carpet_advisor
+    category: observe
+    maturity: beta
+    summary: "Deterministic ($0, read-only, no-LLM) prescriptive advisor on the Red Carpet kickoff experience: derives schema-shape insights, per-input readiness diagnosis, cascade-blocker translation, and a ranked, command-bearing next-step playbook — surfaced on CLI (incl. `--check` exit-code + `--json` summary), the agent loop, the web `/red-carpet.json` rail, and a read-only MCP tool `startd8_red_carpet_state`"
+    audiences: [workflow_developer, integration_developer, ai_agent, gtm]
+    description: |
+      Turns the state the Red Carpet spine already computes into prescriptive guidance a greenfield
+      user (or the conducting agent) can act on — without any LLM cost. A pure projection of
+      `build_assess` + the on-disk `schema.prisma` (parsed by the existing `prisma_parser`) + the RCT
+      stage map yields two outputs, attached to `RedCarpetState.to_dict()` (the single source of truth
+      all surfaces read): (1) `advisories` — insights + per-input readiness diagnosis, each with a
+      *why*, a *what-to-do*, a stable `code`, and (where one exists) the exact CLI command; schema-shape
+      checks flag relation islands, missing primary keys, likely-foreign-keys-without-a-relation, and
+      empty enums; value-input gaps name the specific fields to fill; the stakeholder roster and cascade
+      blockers are diagnosed too. (2) `next_steps` — a ranked, command-bearing playbook (data model →
+      manifests → value inputs → run), weaving the wireframe preview into the run step. Delivered to
+      four surfaces from one `to_dict()`: the CLI panel (`startd8 kickoff red-carpet`, with a `--check`
+      advisory CI exit-code mode and a `--json` summary header), the agentic chat loop (a proactive
+      turn-0 banner + a stage-aware prompt that cites the advisories), the web build-progress rail
+      (`/red-carpet.json`, HTML-escaped), and a read-only `startd8_red_carpet_state` MCP tool. Advisory
+      only — never a gate (removing it does not change `cascade_offerable`); bounded/leak-free (no
+      absolute paths, capped strings) and safe over telemetry (a numeric-only `red_carpet_advice`
+      event). Built requirements-first (reflective-requirements → CRP R1 → 3 batches).
+    triggers: ["red carpet", "kickoff advisor", "next steps", "what should I do next", "readiness diagnosis", "schema insights", "missing foreign key", "red_carpet_state", "kickoff guidance", "red-carpet --check"]
+    evidence:
+      - type: code
+        ref: src/startd8/kickoff_experience/red_carpet_advisor.py
+        description: "Advisory/NextStep, derive_advisories/build_playbook/cap_advisories; schema-shape via prisma_parser; dedupe + byte-stable sort"
+      - type: code
+        ref: src/startd8/kickoff_experience/red_carpet.py
+        description: "build_red_carpet_state/to_dict (advisories+next_steps+summary+schema_version), reflection_text, prescriptive_banner, red_carpet_advice telemetry"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_red_carpet_advisor.py
+        description: "50 tests — schema diagnostics, dedupe/caps, --check exit codes, telemetry, cross-surface parity"
+      - type: docs
+        ref: docs/design/kickoff/RED_CARPET_PRESCRIPTIVE_ADVISOR_REQUIREMENTS.md
+        description: "v0.5, FR-RCA-1..23 + CRP R1; RED_CARPET_ADVISOR_BACKLOG.md tracks deferred items"
+    confidence: 0.9
 
   # ============================================================================
   # AGENTIC LOOP — Multi-turn tool-use runtime (ported in pattern from ml-intern,
@@ -1483,10 +1587,23 @@ summary:
 # ==============================================================================
 
 changelog:
-  - version: "1.9.1"
-    date: "2026-06-18"
+  - version: "1.12.0"
+    date: "2026-07-02"
     changes:
-      - "Updated startd8.codegen.openapi_role3_intercontext — deferred D1–D5 (auth hooks, TS/gRPC clients, context-graph.json, Grafana template); requirements v0.4 FR-15..FR-19; confidence 0.9→0.92; +4 evidence refs"
+      - "Updated startd8.codegen.openapi_role3_intercontext — deferred D1–D5 (auth hooks, TS/gRPC clients, context-graph.json, Grafana template); requirements v0.4 FR-15..FR-19; confidence 0.9→0.92; +4 evidence refs. (Originally drafted as v1.9.1 in PR #74; re-versioned above v1.11.0 on merge with main.)"
+  - version: "1.11.0"
+    date: "2026-07-02"
+    changes:
+      - "Added startd8.kickoff.red_carpet_advisor (observe, beta, 0.9) — deterministic ($0, read-only, no-LLM) prescriptive advisor on the Red Carpet kickoff experience: schema-shape insights (islands/no-PK/likely-FK-without-relation/empty-enum), per-input readiness diagnosis, cascade-blocker translation, and a ranked command-bearing next-step playbook. Surfaced on CLI (incl. `--check` exit-code + `--json` summary), the agent loop, the web `/red-carpet.json` rail, and a NEW read-only MCP tool `startd8_red_carpet_state`. Built requirements-first (reflective-requirements → CRP R1 → 3 batches, FR-RCA-1..23); on PR #79."
+      - "Registered the startd8_red_carpet_state MCP tool in mcp-tools.json (read-only)."
+      - "51 capabilities: 21 stable, 30 beta; observe 4→5."
+  - version: "1.10.0"
+    date: "2026-07-01"
+    changes:
+      - "Backfilled two shipped-but-unindexed capabilities surfaced during a docs/harbor-tour sync audit."
+      - "Added startd8.benchmark.round3_system (validate, beta, 0.8) — Round-3 SYSTEM benchmark (`startd8 benchmark-round3`, benchmark_matrix/fleet/): build a working 9-service polyglot Online Boutique, scored by a real user journey over the live fleet with honest per-service fault attribution + frontend gate/bonus (M0→M6). Distinct from the per-service Track-2 grid (startd8.benchmark.matrix). SHIPPED+MERGED 2026-06-25."
+      - "Added startd8.codegen.import_path (generate, beta, 0.85) — deterministic $0 generated-app IMPORT path (inverse of export): imports.yaml grammar (7th manifest) + from_json importer (app/importer.py) + paste/upload surface + FR-IMP-2 identity-key consolidation + strict single-outer-txn atomicity. SHIPPED to origin/main 2026-06-15."
+      - "50 capabilities: 21 stable, 29 beta (recount: file held 48 after v1.9.0's summary of 47; +2 = 50)."
   - version: "1.9.0"
     date: "2026-06-25"
     changes:

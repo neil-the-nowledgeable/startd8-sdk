@@ -5,7 +5,6 @@ The CLI/dispatch paths run the contained introspection subprocess against a tmp 
 
 from __future__ import annotations
 
-import json
 import textwrap
 from pathlib import Path
 
@@ -40,9 +39,12 @@ def project(tmp_path):
 
 # ── core dispatch ─────────────────────────────────────────────────────────────
 
+
 def test_dispatch_preview_returns_derivation(project):
     root, src = project
-    out = handle_concierge_tool("derive-contract", root, modules=["models_demo"], pythonpath=src)
+    out = handle_concierge_tool(
+        "derive-contract", root, modules=["models_demo"], pythonpath=src
+    )
     assert out["schema_version"] == 1
     assert "unratified" in out["contract_text"]
     assert out["shape"]["entities"] == 2 and out["errors"] == []
@@ -57,18 +59,37 @@ def test_dispatch_missing_modules_errors(project):
 
 def test_dispatch_check_returns_drift(project):
     root, src = project
-    derived = handle_concierge_tool("derive-contract", root, modules=["models_demo"], pythonpath=src)
-    body = derived["contract_text"].split("\n", 2)[2]   # strip 2 provenance lines
-    drift = handle_concierge_tool("derive-contract", root, modules=["models_demo"], pythonpath=src,
-                                  check=True, live_schema_text=body)
+    derived = handle_concierge_tool(
+        "derive-contract", root, modules=["models_demo"], pythonpath=src
+    )
+    body = derived["contract_text"].split("\n", 2)[2]  # strip 2 provenance lines
+    drift = handle_concierge_tool(
+        "derive-contract",
+        root,
+        modules=["models_demo"],
+        pythonpath=src,
+        check=True,
+        live_schema_text=body,
+    )
     assert drift["verdict"] == "in_sync" and drift["drift"] == []
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+
 def _cli(root, src, *extra):
-    return runner.invoke(concierge_app, ["derive-contract", str(root),
-                                         "--models", "models_demo", "--pythonpath", src, *extra])
+    return runner.invoke(
+        concierge_app,
+        [
+            "derive-contract",
+            str(root),
+            "--models",
+            "models_demo",
+            "--pythonpath",
+            src,
+            *extra,
+        ],
+    )
 
 
 def test_cli_preview_writes_nothing(project):
@@ -99,24 +120,40 @@ def test_cli_check_in_sync_then_drift(project):
     ok = _cli(root, src, "--check", "--out", "schema.prisma")
     assert ok.exit_code == 0 and "in_sync" in ok.stdout
     (root / "schema.prisma").write_text(
-        (root / "schema.prisma").read_text() + "\nmodel Ghost { id String @id }\n", encoding="utf-8")
+        (root / "schema.prisma").read_text() + "\nmodel Ghost { id String @id }\n",
+        encoding="utf-8",
+    )
     drifted = _cli(root, src, "--check", "--out", "schema.prisma")
     assert drifted.exit_code == 1 and "drift" in drifted.stdout.lower()
 
 
 # ── MCP conformance ───────────────────────────────────────────────────────────
 
-def test_derive_in_both_mcp_enums():
+
+def test_derive_contract_stays_out_of_the_mcp_surface():
+    # derive-contract is intentionally CLI-only — dropped from the MCP surface to keep the MCP
+    # Concierge read/preview-only (commit c75f1ba6; WM FR-WM2-13, RCT NR-3). This is the regression
+    # guard that it does not leak back into either MCP server's action enum. The read-only floor is
+    # additionally pinned by mcp/.../tests/test_15_concierge_readonly_floor.py.
     base = Path(__file__).resolve().parents[4] / "mcp" / "startd8-mcp-builder"
     for f in ("startd8_mcp.py", "startd8_mcp_server/server.py"):
-        assert 'DERIVE_CONTRACT = "derive-contract"' in (base / f).read_text(encoding="utf-8")
+        text = (base / f).read_text(encoding="utf-8")
+        assert 'DERIVE_CONTRACT = "derive-contract"' not in text
 
 
 def test_mcp_path_writes_nothing_for_derive(project):
     """The MCP-reachable path (handle_concierge_tool) writes nothing for derive-contract."""
     root, src = project
-    snap = lambda: sorted(str(p.relative_to(root)) for p in root.rglob("*")
-                          if "__pycache__" not in p.parts)  # ignore interpreter bytecode
+
+    def snap():  # snapshot of on-disk files, ignoring interpreter bytecode
+        return sorted(
+            str(p.relative_to(root))
+            for p in root.rglob("*")
+            if "__pycache__" not in p.parts
+        )
+
     before = snap()
-    handle_concierge_tool("derive-contract", root, modules=["models_demo"], pythonpath=src)
+    handle_concierge_tool(
+        "derive-contract", root, modules=["models_demo"], pythonpath=src
+    )
     assert snap() == before

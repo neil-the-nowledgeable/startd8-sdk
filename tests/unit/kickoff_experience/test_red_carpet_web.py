@@ -45,6 +45,28 @@ def test_chat_page_renders_the_stage_rail(tmp_path: Path) -> None:
     assert "refreshRail()" in html                          # refreshed on load + after each turn
 
 
+def test_chat_page_renders_advisor_insights_and_next_steps(tmp_path: Path) -> None:
+    """FR-RCA-11 regression guard: the build-progress rail must render the prescriptive advisor
+    (Insights + ranked Next steps), not just the stages. A refactor that drops the advisor render
+    from `refreshRail()` would leave only the stage list (the pre-advisor rail)."""
+    html = _client(tmp_path).get("/concierge/chat").text
+    assert "<h4>Insights</h4>" in html                       # advisories section
+    assert "<h4>Next steps</h4>" in html                     # ranked playbook section
+    assert "j.advisories" in html and "j.next_steps" in html  # sourced from /red-carpet.json
+    # Every advisory field is HTML-escaped before injection (CRP R1-S4 — invalid-YAML error strings).
+    assert "esc(a.title)" in html and "esc(a.detail)" in html
+
+
+def test_red_carpet_json_carries_advisor_payload(tmp_path: Path) -> None:
+    """The rail's data source exposes the advisor payload (advisories + ranked next_steps + summary),
+    so the client-side render has something to show."""
+    body = _client(tmp_path).get("/red-carpet.json").json()
+    for key in ("advisories", "next_steps", "summary", "schema_version"):
+        assert key in body
+    assert isinstance(body["advisories"], list) and body["advisories"]  # greenfield still advises
+    assert set(body["summary"]) == {"errors", "warns", "infos", "next_steps"}
+
+
 def test_red_carpet_json_available_without_chat(tmp_path: Path) -> None:
     # The stage map is $0/read-only and works even with the chat panel disabled.
     r = _client(tmp_path, chat=False).get("/red-carpet.json")
@@ -68,5 +90,50 @@ def test_make_chat_factory_red_carpet_builds_staged_chat(tmp_path: Path) -> None
         chat = factory()
         assert chat.red_carpet is True                      # the stage-aware conductor chat
         assert "red_carpet_state" in set(chat.session.registry._tools)
+    finally:
+        ar.resolve_agent_spec = orig
+
+
+def test_resolve_chat_panel_reports_no_tool_use(tmp_path: Path) -> None:
+    """A provider whose agent can't drive tool use disables the panel with a targeted reason,
+    not a swallowed generic failure (bug fix)."""
+    class _NoToolAgent:
+        def supports_tool_use(self) -> bool:
+            return False
+
+    import startd8.kickoff_experience.serve as serve_mod
+    import startd8.utils.agent_resolution as ar
+
+    orig = ar.resolve_agent_spec
+    ar.resolve_agent_spec = lambda _spec: _NoToolAgent()
+    try:
+        res = serve_mod.resolve_chat_panel(tmp_path, "gemini:gemini-2.5-pro", red_carpet=True)
+        assert res.factory is None
+        assert res.reason is not None
+        assert "does not support tool use" in res.reason
+        assert "gemini" in res.reason            # names the offending provider
+        assert "Anthropic or OpenAI" in res.reason  # actionable next step
+        # make_chat_factory keeps its None-on-failure contract.
+        assert serve_mod.make_chat_factory(tmp_path, "gemini:gemini-2.5-pro") is None
+    finally:
+        ar.resolve_agent_spec = orig
+
+
+def test_resolve_chat_panel_reports_bad_spec(tmp_path: Path) -> None:
+    """A spec that fails to resolve is surfaced verbatim, not hidden."""
+    import startd8.kickoff_experience.serve as serve_mod
+    import startd8.utils.agent_resolution as ar
+
+    def _boom(_spec):
+        raise ValueError("unknown provider 'nope'")
+
+    orig = ar.resolve_agent_spec
+    ar.resolve_agent_spec = _boom
+    try:
+        res = serve_mod.resolve_chat_panel(tmp_path, "nope:x")
+        assert res.factory is None
+        assert res.reason is not None
+        assert "could not resolve agent" in res.reason
+        assert "unknown provider" in res.reason
     finally:
         ar.resolve_agent_spec = orig

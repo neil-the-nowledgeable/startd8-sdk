@@ -221,6 +221,23 @@ def _render_red_carpet_state(state) -> None:
         console.print(
             f"  {glyph.get(s.status, '?')} [bold]{s.key}[/bold]{marker} — {s.detail}"
         )
+    # FR-RCA-9 — Insights (advisories, already severity-sorted: error → warn → info).
+    if state.advisories:
+        console.print("[bold]Insights[/bold]")
+        sev_style = {"error": "red", "warn": "yellow", "info": "dim"}
+        for a in state.advisories:
+            style = sev_style.get(a.severity, "dim")
+            console.print(f"  [{style}]•[/{style}] [bold]{a.title}[/bold] — {a.detail}")
+            console.print(f"      [dim]→ {a.action}[/dim]")
+            if a.command:
+                console.print(f"      [cyan]{a.command}[/cyan]")
+    # FR-RCA-9 — Next steps (the ranked, command-bearing playbook).
+    if state.next_steps:
+        console.print("[bold]Next steps[/bold]")
+        for step in state.next_steps:
+            cmd = f"  [cyan]{step.command}[/cyan]" if step.command else ""
+            console.print(f"  {step.rank}. {step.title}{cmd}")
+
     if state.cascade_offerable:
         if state.preview:  # FR-RCT-11 — "here's what we'll build" ($0)
             console.print(
@@ -246,6 +263,11 @@ def red_carpet_cmd(
     json_out: bool = typer.Option(
         False, "--json", help="Emit the staged build state as JSON."
     ),
+    check: bool = typer.Option(
+        False, "--check",
+        help="CI signal ($0, read-only): exit 1 if any error-severity advisory (hard readiness "
+             "problem) is present, else 0. warn/info never fail.",
+    ),
     agent: Optional[str] = typer.Option(
         None,
         "--agent",
@@ -258,10 +280,29 @@ def red_carpet_cmd(
     value inputs → content → run), the next gap, and whether the deterministic $0 cascade is offerable.
     With `--agent`: the conversational interview loop — the agent works the next gap and RECOMMENDS each
     input; you confirm every write.
+    With `--check`: an advisory CI signal — exit 1 iff an error-severity advisory is present.
     """
     import json as _json
 
     from .kickoff_experience.red_carpet import build_red_carpet_state
+
+    # FR-RCA-15 — advisory CI exit-code mode (not a build gate; warn/info never fail).
+    if check:
+        try:
+            state = build_red_carpet_state(project)
+        except Exception as exc:  # internal error → distinct exit code
+            console.print(f"[red]red-carpet --check:[/red] {exc}")
+            raise typer.Exit(_EXIT_FATAL)
+        errors = [a for a in state.advisories if a.severity == "error"]
+        if errors:
+            console.print(
+                f"[red]red-carpet --check: {len(errors)} error advisory(ies)[/red]"
+            )
+            for a in errors:
+                console.print(f"  [red]•[/red] {a.title} — {a.detail}")
+            raise typer.Exit(_EXIT_CONFORMANCE)
+        console.print("[green]red-carpet --check: no error advisories[/green]")
+        raise typer.Exit(0)
 
     if json_out:
         sys.stdout.write(
@@ -281,6 +322,7 @@ def red_carpet_cmd(
     from .kickoff_experience.chat import new_red_carpet_chat
     from .kickoff_experience.proposals import apply_proposal
     from .kickoff_experience.red_carpet import (
+        prescriptive_banner,
         record_red_carpet_progress,
         reflection_text,
         run_red_carpet_repl,
@@ -331,8 +373,11 @@ def red_carpet_cmd(
 
     console.print(f"[dim]agent: {agent}[/dim]")
     emit(EV_RED_CARPET_STARTED)
+    # FR-RCA-21 — seed the turn-0 banner with the top insight + top next step so the user sees
+    # prescriptive guidance before the model calls a tool.
+    _banner = prescriptive_banner(chat.banner(), build_red_carpet_state(project))
     run_red_carpet_repl(
-        banner=chat.banner(),
+        banner=_banner,
         ask_sync=lambda m: asyncio.run(chat.ask(m)),
         read_input=_read,
         emit_line=lambda line: console.print(line),
@@ -376,8 +421,8 @@ def start_cmd(
     from .kickoff_experience.concierge_agent import resolve_concierge_agent_spec
     from .kickoff_experience.serve import (
         Mode,
-        make_chat_factory,
         preflight,
+        resolve_chat_panel,
         serve_kickoff,
     )
 
@@ -400,18 +445,18 @@ def start_cmd(
     spec, source = resolve_concierge_agent_spec(project, agent)
     panel_spec = spec if source != "default" else None
     if panel_spec:
-        enabled = (
-            make_chat_factory(project, panel_spec, red_carpet=red_carpet) is not None
-        )
+        resolution = resolve_chat_panel(project, panel_spec, red_carpet=red_carpet)
         flavor = "Red Carpet build conductor" if red_carpet else "Concierge"
-        console.print(
-            f"  {'[green]✓[/green]' if enabled else '[yellow]•[/yellow]'} agentic chat ({flavor}): "
-            + (
+        if resolution.factory is not None:
+            console.print(
+                f"  [green]✓[/green] agentic chat ({flavor}): "
                 f"enabled ({panel_spec}, source: {source})"
-                if enabled
-                else f"could not resolve {panel_spec!r} (source: {source}) — panel disabled"
             )
-        )
+        else:
+            console.print(
+                f"  [yellow]•[/yellow] agentic chat ({flavor}) disabled "
+                f"(source: {source}) — {resolution.reason}"
+            )
     console.print(
         f"[green]serving kickoff[/green] (mode={mode}, theme={theme}) — Ctrl-C to stop"
     )

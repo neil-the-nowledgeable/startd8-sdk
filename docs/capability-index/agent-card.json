@@ -4,7 +4,7 @@
     "name": "StartD8 LLM Orchestration Capabilities",
     "description": "Multi-LLM provider abstraction framework with cost tracking, workflow\norchestration, multi-phase code generation, and OpenTelemetry observability.\nBeaver (Amik) in the ContextCore expansion pack ecosystem.\n",
     "url": "https://api.example.com/startd8.agent",
-    "version": "1.8.0",
+    "version": "2.0.0",
     "capabilities": {
       "streaming": false,
       "pushNotifications": false,
@@ -20,10 +20,8 @@
           "llm request",
           "send prompt",
           "agenerate",
-          "agent response",
-          "maturity:stable"
+          "agent response"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -39,10 +37,8 @@
           "provider registry",
           "discover providers",
           "list providers",
-          "add provider",
-          "maturity:stable"
+          "add provider"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -59,10 +55,8 @@
           "model constants",
           "latest model",
           "model tier",
-          "model selection",
-          "maturity:stable"
+          "model selection"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -78,10 +72,8 @@
           "resolve agent",
           "agent spec",
           "create agent",
-          "provider model string",
-          "maturity:stable"
+          "provider model string"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -98,10 +90,8 @@
           "token cost",
           "llm cost",
           "pricing",
-          "spending",
-          "maturity:stable"
+          "spending"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -117,10 +107,8 @@
           "budget limit",
           "spending limit",
           "usage quota",
-          "cost control",
-          "maturity:stable"
+          "cost control"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -136,10 +124,8 @@
           "cost analytics",
           "cost forecast",
           "spending analysis",
-          "cost by provider",
-          "maturity:stable"
+          "cost by provider"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -155,10 +141,8 @@
           "run workflow",
           "execute workflow",
           "workflow pipeline",
-          "multi-agent",
-          "maturity:stable"
+          "multi-agent"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -174,10 +158,8 @@
           "list workflows",
           "find workflow",
           "search workflows",
-          "workflow discovery",
-          "maturity:stable"
+          "workflow discovery"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -193,10 +175,8 @@
           "pipeline",
           "sequential agents",
           "chain agents",
-          "multi-step",
-          "maturity:stable"
+          "multi-step"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -212,10 +192,8 @@
           "code generation",
           "lead contractor",
           "lead drafter",
-          "generate code",
-          "maturity:beta"
+          "generate code"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -231,10 +209,8 @@
           "artisan workflow",
           "multi-phase generation",
           "code generation pipeline",
-          "structured code generation",
-          "maturity:beta"
+          "structured code generation"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -250,10 +226,8 @@
           "architectural review",
           "design review",
           "code review",
-          "convergent review",
-          "maturity:stable"
+          "convergent review"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -268,10 +242,8 @@
         "tags": [
           "iterative development",
           "dev review loop",
-          "code iteration",
-          "maturity:stable"
+          "code iteration"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -286,10 +258,8 @@
         "tags": [
           "document enhancement",
           "doc refinement",
-          "improve document",
-          "maturity:stable"
+          "improve document"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -304,10 +274,8 @@
         "tags": [
           "policy analysis",
           "document analysis",
-          "multi-criteria analysis",
-          "maturity:beta"
+          "multi-criteria analysis"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -323,10 +291,8 @@
           "plan ingestion",
           "import plan",
           "plan to workflow",
-          "convert plan",
-          "maturity:beta"
+          "convert plan"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -340,10 +306,8 @@
         "description": "3-stage design document refinement workflow",
         "tags": [
           "design polish",
-          "document refinement",
-          "maturity:stable"
+          "document refinement"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -358,10 +322,8 @@
         "tags": [
           "critical review",
           "document review",
-          "code review report",
-          "maturity:stable"
+          "code review report"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -376,10 +338,8 @@
         "tags": [
           "plain language",
           "simplify text",
-          "reading level",
-          "maturity:beta"
+          "reading level"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -395,10 +355,8 @@
           "truncation detection",
           "truncated response",
           "output size estimation",
-          "pre-flight check",
-          "maturity:stable"
+          "pre-flight check"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -414,10 +372,8 @@
           "extract code",
           "code block",
           "markdown fence",
-          "parse llm output",
-          "maturity:stable"
+          "parse llm output"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -432,10 +388,8 @@
         "tags": [
           "design handoff",
           "split execution",
-          "two-half workflow",
-          "maturity:beta"
+          "two-half workflow"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -451,10 +405,8 @@
           "domain constraints",
           "code validation",
           "preflight check",
-          "domain rules",
-          "maturity:beta"
+          "domain rules"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -471,10 +423,8 @@
           "error handling",
           "retry config",
           "circuit breaker",
-          "fault tolerance",
-          "maturity:stable"
+          "fault tolerance"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -491,10 +441,8 @@
           "token bucket",
           "backpressure",
           "throttle",
-          "requests per minute",
-          "maturity:stable"
+          "requests per minute"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -510,10 +458,8 @@
           "opentelemetry",
           "otel setup",
           "configure tracing",
-          "observability setup",
-          "maturity:stable"
+          "observability setup"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -529,10 +475,8 @@
           "tracked agent",
           "agent tracing",
           "gen_ai attributes",
-          "openllmetry",
-          "maturity:stable"
+          "openllmetry"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -548,10 +492,8 @@
           "session tracking",
           "session metrics",
           "active sessions",
-          "context usage",
-          "maturity:beta"
+          "context usage"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -567,10 +509,8 @@
           "workflow events",
           "event bus",
           "pipeline events",
-          "lifecycle events",
-          "maturity:stable"
+          "lifecycle events"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -586,10 +526,8 @@
           "mcp tool",
           "agent tool",
           "mcp gateway",
-          "workflow tool",
-          "maturity:stable"
+          "workflow tool"
         ],
-        "maturity": "stable",
         "inputModes": [
           "application/json"
         ],
@@ -605,10 +543,8 @@
           "contextcore",
           "task tracking",
           "project tracking",
-          "contextcore integration",
-          "maturity:beta"
+          "contextcore integration"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -624,10 +560,8 @@
           "skill agent",
           "code reviewer",
           "domain agent",
-          "specialized agent",
-          "maturity:beta"
+          "specialized agent"
         ],
-        "maturity": "beta",
         "inputModes": [
           "application/json"
         ],
@@ -643,10 +577,123 @@
           "rest api",
           "http server",
           "remote execution",
-          "api server",
-          "maturity:beta"
+          "api server"
         ],
-        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.generate_backend",
+        "name": "Generate Backend",
+        "description": "Deterministically ($0, no LLM) project one .prisma contract into a full runnable all-Python app",
+        "tags": [
+          "generate backend",
+          "prisma to python",
+          "deterministic codegen",
+          "contract codegen"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.import_path",
+        "name": "Import Path",
+        "description": "Deterministic ($0) generated-app import path \u2014 inverse of export (imports.yaml grammar + from_json importer + paste/upload surface)",
+        "tags": [
+          "import path",
+          "imports.yaml",
+          "from_json",
+          "round-trip import"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.wireframe",
+        "name": "Wireframe",
+        "description": "$0 read-only pre-generation summary of what the deterministic cascade will build",
+        "tags": [
+          "wireframe",
+          "pre-generation summary",
+          "cascade preview"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.presentation_polish",
+        "name": "Presentation Polish",
+        "description": "$0 deterministic Tier-1 design system \u2014 CSS-only accessible restyle of a generated app",
+        "tags": [
+          "polish",
+          "design system",
+          "accessible theme",
+          "restyle"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.composite_views",
+        "name": "Composite Views",
+        "description": "$0 composite/relational views (dashboard/board/workspace) from views.yaml",
+        "tags": [
+          "generate views",
+          "composite views",
+          "dashboard view"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.deployment_mode",
+        "name": "Deployment Mode",
+        "description": "Installed-vs-deployed $0 deterministic mode \u2014 bake only what security requires, bind the rest at runtime",
+        "tags": [
+          "deployment mode",
+          "installed vs deployed",
+          "tenancy"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.cloud_native_deploy",
+        "name": "Cloud Native Deploy",
+        "description": "Deployed apps emit a vendor-neutral K8s + Gateway API + ESO deploy/ tree + infra-contract",
+        "tags": [
+          "cloud native deploy",
+          "kubernetes manifests",
+          "gateway api"
+        ],
         "inputModes": [
           "application/json"
         ],
@@ -656,48 +703,213 @@
       },
       {
         "id": "startd8.deploy.coherence_check",
-        "name": "Deploy Coherence Check",
-        "description": "Fail-closed deployment-coherence verdict (security→HARD, operational→SOFT) for a generated project",
+        "name": "Coherence Check",
+        "description": "Fail-closed machine-readable deploy-coherence verdict consumed by the cap-dev-pipe gate",
         "tags": [
           "deploy coherence",
-          "is this deployable",
-          "fail closed",
-          "deploy gate"
+          "coherence gate",
+          "deploy verdict"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
         ]
       },
       {
-        "id": "startd8.codegen.cloud_native_deploy",
-        "name": "Cloud-Native Deploy",
-        "description": "Emit a deployed app's vendor-neutral K8s + Gateway API + ESO deploy/ tree + infra-contract for EKS/GKE behind agentgateway",
+        "id": "startd8.deploy.local_harness",
+        "name": "Local Harness",
+        "description": "Local deploy + graded-validation harness (startd8 deploy local|batch) for generated apps",
         "tags": [
-          "deploy to kubernetes",
-          "eks",
-          "gke",
-          "agentgateway",
-          "gateway api",
-          "external secrets"
+          "deploy local",
+          "graded validation",
+          "boot smoke"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
         ]
       },
       {
-        "id": "startd8.codegen.deploy_environments",
-        "name": "Deploy Environments",
-        "description": "dev/test/prod from one base via per-env kustomize overlays; environment orthogonal to mode",
+        "id": "startd8.codegen.polyglot_construction",
+        "name": "Polyglot Construction",
+        "description": "LLM-driven element-level code generation across 5 languages (Python, Go, Node.js, Java, C#) \u2014 polyglot microservice fleets",
         "tags": [
-          "dev test prod",
-          "environments",
-          "kustomize overlays",
-          "per-environment config"
+          "polyglot generation",
+          "multi-language codegen",
+          "microservice fleet",
+          "micro prime"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
         ]
       },
       {
-        "id": "startd8.concierge.onboarding",
-        "name": "Concierge Onboarding",
-        "description": "Project-side SDK-onboarding assist: survey, assess, instantiate-kickoff, log-friction",
+        "id": "startd8.contractors.prime",
+        "name": "Prime",
+        "description": "PrimeContractorWorkflow multi-feature construction orchestrator (create + edit mode, checkpoint/resume, post-mortem)",
+        "tags": [
+          "prime contractor",
+          "batch code generation",
+          "multi-feature implementation"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.repair.pipeline",
+        "name": "Pipeline",
+        "description": "~45 language-organized post-generation repair steps (syntax, lint, imports)",
+        "tags": [
+          "code repair",
+          "post-generation repair",
+          "syntax fix"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.complexity.tier_routing",
+        "name": "Tier Routing",
+        "description": "Cost-routing classifier (TRIVIAL/SIMPLE/MODERATE/COMPLEX) that routes tasks to the right generator",
+        "tags": [
+          "complexity classification",
+          "tier routing",
+          "cost routing"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.security_prime.gate",
+        "name": "Gate",
+        "description": "Security gate orchestration wired into the prime contractor pipeline",
+        "tags": [
+          "security gate",
+          "security scoring",
+          "injection check"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.query_prime.secure_generation",
+        "name": "Secure Generation",
+        "description": "Secure database query generation by tier (T1 template, T2 Haiku, T3 Sonnet)",
+        "tags": [
+          "secure query",
+          "query generation",
+          "sql injection prevention"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.agentic.loop",
+        "name": "Loop",
+        "description": "AgenticSession multi-turn tool-use loop with safety bounds and default-deny tool policy",
+        "tags": [
+          "agentic loop",
+          "tool use",
+          "multi-turn agent"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.benchmark.matrix",
+        "name": "Matrix",
+        "description": "Summer 2026 model benchmark matrix (service x model x repetition) measuring model SKILL",
+        "tags": [
+          "model benchmark",
+          "compare models",
+          "behavioral scoring"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.benchmark.round3_system",
+        "name": "Round3 System",
+        "description": "Round-3 SYSTEM benchmark \u2014 build a working integrated 9-service polyglot Online Boutique, scored by a real user journey with honest per-service fault attribution",
+        "tags": [
+          "round 3",
+          "system benchmark",
+          "fleet benchmark",
+          "user journey"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.concierge.assess",
+        "name": "Assess",
+        "description": "Project-side SDK-onboarding concierge (survey / assess / instantiate-kickoff / log-friction)",
         "tags": [
           "concierge",
-          "onboard project",
-          "kickoff",
-          "onboarding readiness"
+          "onboarding",
+          "project survey",
+          "kickoff"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.languages.profiles",
+        "name": "Profiles",
+        "description": "Multi-language profile registry (5 languages) with entry-point discovery and resolve_language()",
+        "tags": [
+          "language profile",
+          "multi-language",
+          "resolve language"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
         ]
       }
     ],
