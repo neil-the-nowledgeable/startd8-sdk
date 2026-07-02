@@ -1,0 +1,42 @@
+# <Project> — Kickoff inputs: STAKEHOLDER PANEL (roster)                       [TEMPLATE]
+# The people (personas) the Stakeholder Panel role-plays so VIPP can ask an absent stakeholder a
+# question during kickoff prep. See ../KICKOFF_INPUTS_EXPLAINED.md.
+#
+# HEADS-UP: this is the AUTHORING surface only. The LIVE panel that actually queries these personas
+# ships in a later SDK increment — authoring a roster now records intent; it does not yet enable
+# queries. `assess` will report the roster as "authored" but not yet "consumable".
+#
+# Authoring rules (they matter — the panel is bounded by exactly what you write here):
+#   * Each persona answers ONLY from its brief and DEFERS when asked outside it. The brief is the
+#     sole knowledge source, so make goals / constraints / known_positions concrete and specific.
+#   * `role_id` is a stable kebab-case address (lowercase, hyphens) — used to route a question to
+#     the persona. Keep it unique.
+#   * A persona needs at least one goal, constraint, or known_position (an empty brief is invalid).
+
+domain: stakeholders
+provenance_default: authored
+
+personas:
+  - role_id: product-owner            # stable kebab-case id; how a question is addressed
+    display_name: Product Owner
+    goals:
+      - <what this stakeholder is trying to achieve — the outcome they own>
+    constraints:
+      - <hard limits they enforce (budget ceiling, deadline, compliance regime)>
+    known_positions:
+      - <decisions/opinions already made that this persona will voice>
+    out_of_scope:
+      - <topics this persona must refuse / defer on (e.g. low-level infra choices)>
+    answers_for:                      # optional routing hint: value_path / entity prefixes
+      - <e.g. Order.*, pricing, checkout — leave empty to match by heuristic>
+
+  - role_id: end-user
+    display_name: Representative End User
+    goals:
+      - <the job the user hires the product to do>
+    constraints:
+      - <what the user will not tolerate (friction, wait, data they won't share)>
+    known_positions: []
+    out_of_scope:
+      - <business / infrastructure decisions the user has no view on>
+    answers_for: []
