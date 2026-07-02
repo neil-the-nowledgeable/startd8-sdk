@@ -1,6 +1,6 @@
 # Stakeholder Panel Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post-CRP — convergent review R1/R2 applied)
 **Date:** 2026-07-01
 **Status:** Draft
 **Codename (proposed):** *Kaigi* (会議, "council/meeting") — the synthetic stakeholder panel. Descriptive name used throughout: **Stakeholder Panel**.
@@ -110,7 +110,11 @@ replacement for ratified project ground truth.
 - **FR-7 — In-character, brief-bounded answering.** A persona answers **in character**, bounded to
   its brief. When asked something its brief does not support, it must **defer/refuse**
   ("out of my area" / "not something I've decided") rather than improvise a fact. No persona may
-  speak for another persona's domain.
+  speak for another persona's domain. **(v0.3, from R1-F3)** The bound addresses not only
+  *out-of-scope drift* but *in-scope fabrication*: a load-bearing answer must carry a
+  **grounding/uncertainty signal**, and the FR-11 ratification view must render the persona's brief
+  text **alongside** the answer so a human can check the answer against its declared source. Scope
+  bounding alone does not catch a confident in-scope fabrication.
 
 ### C. VIPP integration (the consumer)
 
@@ -131,13 +135,33 @@ replacement for ratified project ground truth.
 - **FR-9b — Routing context on OMIT dispositions.** OMIT-default dispositions currently record only
   `proposal.id`/`kind`, not the unanswered question. The evaluate step must thread the unanswered
   `GroundTruthQuestion`'s `symbol` (value_path) + `claim` onto the OMIT disposition so the FR-9 pass
-  can route it to the correct persona.
+  can route it to the correct persona. The threaded fields must be **strictly additive/optional**
+  (absent/null when there is no OMIT) so VIPP's deterministic `evaluate_envelope` output stays
+  back-compatible (**v0.3, from R2-S1**).
+- **FR-9c — Routing failure modes (resolves OQ-9).** Routing must define both failure modes: (a) if
+  **no persona matches** an OMIT question, the disposition **stays OMIT**, flagged
+  "no stakeholder available" — it is never routed to a non-matching persona; (b) an **ambiguous
+  match** resolves by a deterministic tie-break or an explicit multi-route, never an arbitrary pick.
+  A mis-route would produce an authoritative-sounding answer that violates FR-7's
+  "no persona speaks for another's domain." **(v0.3, from R1-F4)**
 - **FR-10 — Synthetic provenance labeling.** Every panel answer is emitted as
   `LabeledClaim(label=OBSERVED, qualifier="synthetic", source="panel:<role_id>")` — rendering
   `"OBSERVED (project, synthetic)"`. This reuses existing free-text fields, needs **no `LabeledClaim`
   schema change**, and passes the FR-21 label gate (prefix check). **OBSERVED, not PREDICTION** —
-  VIPP is architecturally constrained to mint OBSERVED(project) only. The qualifier makes a panel
-  answer always distinguishable from a ratified fact.
+  VIPP is architecturally constrained to mint OBSERVED(project) only.
+  **(v0.3, from R1-F2) The synthetic marker must be load-bearing, not cosmetic:** because the FR-21
+  gate checks only the label *prefix*, (a) any consumer making a load-bearing decision **must**
+  inspect the synthetic qualifier (a typed flag preferred over free-text matching), not just the
+  OBSERVED prefix; and (b) it is an **invariant** that a claim carrying the synthetic qualifier can
+  never be written into a ratified store without first passing the FR-11 / FR-18 handoff. Prefix-only
+  consumers are a laundering vector and must be enumerated and fixed.
+  **(v0.3, from R1-F6, accepted-in-part)** The `qualifier`/`source` markers must **survive
+  serialization round-trips byte-identically** — `from_dict` must not default a missing `qualifier`
+  to empty (which would silently upgrade a reloaded synthetic claim to an unqualified fact).
+  *(The reserved-`panel:`-prefix forgery-prevention half of R1-F6 is deferred — see Appendix B.)*
+  **(v0.3, from R2-F4)** A `PanelAnswer` also carries the `value_path`/`symbol` it answers (the same
+  field threaded onto the OMIT disposition per FR-9b), directly on the answer, so the deferred
+  interactive-kickoff consumer (NR-6/OQ-8) can read per-field provenance without a VIPP disposition.
 - **FR-11 — Ratification handoff.** Any panel answer that would become load-bearing (feed an ACCEPT
   disposition, fill a manifest `value_path`, alter a contract) is surfaced to the human for explicit
   ratification. Ratification is a human, at-human-privilege action — the panel never writes.
@@ -147,18 +171,61 @@ replacement for ratified project ground truth.
 - **FR-12 — Transcript persistence (Mottainai).** Panel Q&A is persisted per session (question,
   answering persona, answer, provenance label, cost, timestamp) so it is auditable and re-readable
   without re-spending. Location follows the VIPP session-file convention
-  (`.startd8/…`, `0600`, `.gitignore`'d).
-- **FR-13 — Cost tracking.** Every panel query is a tracked LLM call via the SDK `CostTracker`;
-  panel spend is attributable per persona and per kickoff-prep session.
+  (`.startd8/…`, `0600`, `.gitignore`'d). **(v0.3, from R1-F5)** Persisted transcripts define a
+  **retention/cleanup policy** for `.startd8/stakeholder-panel/` (`0600`-at-rest is confidentiality,
+  not lifecycle). **(v0.3, from R2-F3)** Each transcript entry records the **brief content hash +
+  roster version** that produced the answer, so a persisted answer is traceable to the exact brief
+  revision even after `stakeholders.yaml` is later edited.
+- **FR-13 — Cost tracking.** Every panel query is a tracked LLM call via the SDK `CostTracker`.
+  **(v0.3, from R2-F1)** Each cost record carries the persona `role_id` and the kickoff-prep
+  `session_id` as **explicit attribution dimensions** (not merely "a cost was recorded"), and a
+  per-session aggregate must reconcile to the report's total panel `cost_usd`.
 - **FR-14 — OTel instrumentation.** Panel instantiation and queries emit OTel spans consistent with
-  the SDK's logging/telemetry conventions (`get_logger`, `otel.py`).
+  the SDK's logging/telemetry conventions (`get_logger`, `otel.py`). **(v0.3, from R2-F2)** The span
+  contract is concrete and testable: one **instantiation span** (`project_id`, `session_id`, persona
+  count) and a **child query span per call** (`role_id`, `session_id`, model, prompt/completion token
+  counts, `cost_usd`, provenance label; **status ERROR on persona failure**). **(v0.3, from R1-F5)**
+  Span attributes **exclude raw question/answer/brief text** (counts/IDs/costs only) — spans flow to
+  Loki/Tempo where raw text would leak PII/secrets across the observability boundary.
 
 ### E. Framework
 
 - **FR-15 — Native agent abstraction.** The panel is built on the SDK's native primitives —
-  `BaseAgent` + per-call `system_prompt` personas + `AgenticSession` (per-persona multi-turn) +
-  `arun_parallel_agents` (whole-panel fan-out) + `ProviderRegistry`. **No LangChain** (see
-  Decision D-1 and Non-Requirement NR-4).
+  `BaseAgent` + `ProviderRegistry` + a **thin per-persona wrapper over `agenerate(prompt,
+  system_prompt=…)`** with manually threaded history, and a **panel-local `asyncio.gather` fan-out**
+  for whole-panel queries. It does **not** use `AgenticSession` (tool-use loop + `ToolRegistry` is
+  dead weight for bounded Q&A, per FR-5) and does **not** reuse `orchestration.arun_parallel_agents`
+  verbatim (it passes no per-agent `system_prompt`, per FR-8). **No LangChain** (see Decision D-1 and
+  Non-Requirement NR-4). *(v0.3, from R1-F1: v0.2 text wrongly named the two rejected constructs —
+  reconciled with §0/FR-5/FR-8.)*
+
+### F. Safety & degradation (v0.3 — from CRP R1/R2)
+
+- **FR-16 — Persona-failure degradation (from R2-F5/R2-S2).** A persona error, timeout,
+  rate-limit/infra failure, or refusal during the FR-9 pass must leave the corresponding OMIT
+  **unchanged** (stays OMIT, marked "stakeholder unavailable"), must **never fabricate** a fallback
+  answer, must **never abort** sibling personas or `run_vipp_negotiate`, and any partial spend must
+  still be cost-tracked (FR-13). The deterministic verdict for a failed OMIT is identical to the `$0`
+  run.
+- **FR-17 — Bounded paid fan-out (from R1-S1).** The FR-9 per-OMIT routing and the `panel ask-all`
+  surface must enforce a **configurable max-questions cap** and a **budget preflight** (reusing the
+  SDK CostTracker/budget infra) that aborts or degrades *before* spend. Beyond the cap, remaining
+  OMITs are marked "deferred (budget)". "`$0` unless opted in" must not become "unbounded once
+  opted in".
+- **FR-18 — Mechanized ratification boundary (from R1-S3, strengthening FR-11).** The
+  synthetic→ratified boundary is **enforced, not procedural**: a gate refuses to write a synthetic
+  claim into any ratified/load-bearing store unless a **human ratification token** accompanies it,
+  and after ratification the stored fact **retains provenance carry-through** (`panel:<role_id>`
+  synthetic origin + originating brief hash per FR-12) so the audit trail survives.
+- **FR-19 — Anti-anchoring in the ratification report (from R1-S5).** Even though a synthetic answer
+  never mutates the verdict, the report must render each synthetic answer with a persistent
+  "synthetic, unratified" banner, the persona brief adjacent (per FR-7), and the **original OMIT
+  question** — so the human ratifies against the *gap*, not against a persuasive fill. Presenting a
+  confident synthetic answer alone risks manufacturing consent.
+- **FR-20 — Session concurrency & lifecycle (from R1-S2).** The session-scoped panel must
+  **serialize concurrent `ask()` per persona** (or make per-persona history append atomic),
+  **cap/summarize** threaded history to bound token growth, and define **session teardown** that
+  releases live agents. "Kept-available" implies a lifecycle that must be closed.
 
 ---
 
@@ -207,18 +274,122 @@ replacement for ratified project ground truth.
 
 - **OQ-8 (deferred)** — How does the panel interact with the interactive kickoff experience's
   per-field provenance model? Design seam only; no v1 build (NR-6).
-- **OQ-9** — Should routing OMIT questions to a persona require an explicit persona↔proposal-kind
-  mapping in the roster, or is a heuristic (match `q.symbol` entity/field against a persona's
-  declared `goals`/scope) acceptable for v1? Leaning: explicit optional mapping, heuristic fallback.
-- **OQ-10** — Persona answer bounding (FR-7) is prompt-enforced plus an advisory post-gen scope
-  flag. Is that sufficient for v1, or does a load-bearing answer need a stricter refusal gate before
-  it reaches the ratification handoff?
+- **OQ-9 → Resolved (R1-F4 → FR-9c).** Roster carries an **explicit optional** persona↔domain
+  mapping with a heuristic fallback; **no-match stays OMIT**, ambiguous-match uses a deterministic
+  tie-break. Never an arbitrary route.
+- **OQ-10 → Resolved (R1-F3 → FR-7 + FR-18/FR-19).** Prompt bounding is *not* sufficient alone:
+  load-bearing answers carry a grounding signal, the ratification view shows the brief + original
+  OMIT question, and the FR-18 gate stops any synthetic claim reaching a ratified store without a
+  human token.
 
 ---
 
-*v0.2 — Post-planning self-reflective update. 6 requirements narrowed/rewritten (FR-1, FR-5, FR-8,
-FR-9, FR-10, plus FR-3/FR-4 firmed), 1 added (FR-9b), 1 non-requirement added (NR-7), 7 open
-questions resolved, 3 residual/deferred. Consumers/integration points: VIPP
-(`src/startd8/vipp/`, merged), Concierge (`src/startd8/concierge/`), Sapper oracle
-(`sapper/ground_truth.py`), FDE claim labels (`fde/models.py`). Companion plan:
-`STAKEHOLDER_PANEL_PLAN.md` v1.0.*
+*v0.3 — Post-CRP convergent review (R1+R2, dual-document). Applied 11 requirements suggestions:
+FR-15 corrected (R1-F1), FR-10 hardened (R1-F2/F6/R2-F4), FR-7 broadened to in-scope fabrication
+(R1-F3), FR-9c added for routing failure modes (R1-F4), FR-12/FR-14 given redaction + span content
+rules (R1-F5), FR-9b made additive (R2-S1), FR-13 given an attribution key (R2-F1), FR-14 given a
+span contract (R2-F2), FR-12 given brief-hash provenance (R2-F3); new §F safety FRs FR-16..FR-20
+(persona-failure, bounded fan-out, mechanized ratification gate, anti-anchoring, session lifecycle);
+OQ-9/OQ-10 resolved. One suggestion accepted-in-part (R1-F6 forgery half deferred — Appendix B). Full
+dispositions in Appendix A/B. Companion plan: `STAKEHOLDER_PANEL_PLAN.md` v1.1.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| R1-F1 | Reconcile FR-15 with FR-5/FR-8/§0 (stop naming AgenticSession/arun_parallel_agents as primitives) | R1 | Applied → FR-15 rewritten to name the chosen primitives; noted as a v0.2 correction | 2026-07-01 |
+| R1-F2 | Make the synthetic marker load-bearing (consumer must inspect qualifier; ratified-store invariant) | R1 | Applied → FR-10 consumer-obligation + invariant clauses; enforced by FR-18 gate | 2026-07-01 |
+| R1-F3 | FR-7 must address in-scope fabrication, not only out-of-scope drift (grounding signal + brief in ratification view) | R1 | Applied → FR-7 broadened; resolves OQ-10 with FR-18/FR-19 | 2026-07-01 |
+| R1-F4 | Define OMIT-routing failure modes (no-match stays OMIT; ambiguous tie-break) | R1 | Applied → new FR-9c; resolves OQ-9 | 2026-07-01 |
+| R1-F5 | Redaction + retention (FR-12) + telemetry-content exclusion (FR-14) | R1 | Applied → FR-12 retention/cleanup, FR-14 span attrs exclude raw text | 2026-07-01 |
+| R1-F6 (part) | Synthetic qualifier/source survive serialization byte-identically | R1 | Applied-in-part → FR-10 serialization invariant. Forgery half deferred (see B). | 2026-07-01 |
+| R2-F1 | FR-13 attribution key (`role_id`+`session_id`) + session aggregate reconciliation | R2 | Applied → FR-13 attribution dimensions | 2026-07-01 |
+| R2-F2 | FR-14 concrete testable span contract (instantiation + per-query child span, ERROR on failure) | R2 | Applied → FR-14 span contract | 2026-07-01 |
+| R2-F3 | Bind PanelAnswer/transcript/claim to brief content hash + roster version | R2 | Applied → FR-12 per-entry brief hash; FR-18 carry-through | 2026-07-01 |
+| R2-F4 | PanelAnswer carries answered `value_path`/`symbol` (forward-compat for NR-6 consumer) | R2 | Applied → FR-10 symbol-on-answer clause | 2026-07-01 |
+| R2-F5 | Persona-failure requirement (stays OMIT, no fabricate, no abort, track partial spend) | R2 | Applied → new FR-16 | 2026-07-01 |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| R1-F6 (part) | Reserved-prefix forgery prevention (non-panel producers cannot set a `panel:` source) | R1 | Deferred, not v1. Per R2's disagreement: forging a `panel:` source requires another *trusted* SDK component to act maliciously — a broader trust-boundary concern this feature does not own. The serialization-survival half (the real laundering risk) is applied (Appendix A). Revisit if a cross-component provenance-integrity effort is scoped. | 2026-07-01 |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-07-02 02:15:00 UTC
+- **Scope**: (Feature Requirements) Provenance integrity of synthetic OBSERVED claims, persona hallucination bound, OMIT-routing correctness, secret/PII in transcripts + telemetry, and an internal consistency sweep vs the self-reflective §0 update.
+
+**Executive summary (top risks / gaps):**
+
+- **Laundering vector (critical):** FR-10 makes a synthetic claim distinguishable from a ratified fact *only* by a free-text `qualifier`, yet the FR-21 gate it cites checks the label **prefix** only. Any consumer that filters on `label==OBSERVED` and ignores `qualifier` treats synthetic input as ratified fact.
+- **FR-15 is stale and self-contradictory:** it still names `AgenticSession` and `arun_parallel_agents` as the build primitives — the exact two constructs §0/FR-5/FR-8 explicitly reject. A reader trusting FR-15 builds the wrong thing.
+- **FR-7 bounds *scope*, not *truthfulness*:** the advisory guard flags out-of-brief answers, but an in-scope confident fabrication is uncaught and can reach the FR-11 ratification handoff (OQ-10 is really asking about this).
+- **Routing correctness (FR-9b/OQ-9) has undefined failure modes:** no-persona-match and wrong-domain-match behaviors are unspecified; a mis-route violates FR-7's "no persona speaks for another's domain."
+- **Transcript + telemetry are a PII/secret surface:** FR-12 persists raw Q&A and FR-14 emits spans, with no redaction, retention, or span-attribute-content requirement.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Interfaces | high | Reconcile FR-15 with FR-5/FR-8 and §0. FR-15 currently lists "AgenticSession (per-persona multi-turn) + arun_parallel_agents (whole-panel fan-out)" as the native primitives, but §0, FR-5, and FR-8 explicitly reject AgenticSession (dead weight, needs ToolRegistry) and reject reusing arun_parallel_agents verbatim (no per-agent system_prompt). Rewrite FR-15 to name the actually-chosen primitives (thin agenerate(system_prompt=…) wrapper + panel-local asyncio.gather fan-out). | An unrevised v0.1 requirement that names the two rejected constructs will mislead an implementer and directly contradicts the doc's own self-reflective update. This is a blocking internal inconsistency, not a nuance. | FR-15 (E. Framework) | Grep the requirements for "AgenticSession"/"arun_parallel_agents" and confirm every occurrence is in a *reject* context. |
+| R1-F2 | Security | critical | Strengthen FR-10 to make the synthetic marker load-bearing, not cosmetic. Require that (a) any consumer making a load-bearing decision MUST inspect `qualifier=="synthetic"` (or a typed flag), not just the OBSERVED prefix; and (b) an invariant that a claim carrying the synthetic qualifier can never be written into a ratified store without first passing the FR-11 handoff. | FR-10 states the answer "passes the FR-21 label gate (prefix check)" — the very gate that ignores the qualifier. Distinguishability that no code is required to honor is not distinguishability; a synthetic OBSERVED claim can be laundered into a ratified fact. | FR-10 (add explicit consumer-obligation + invariant clauses) | Unit test: a synthetic LabeledClaim is rejected by the ratified-fact write path unless a ratification token is present; assert prefix-only consumers are enumerated and fixed. |
+| R1-F3 | Risks | high | Tighten FR-7 to address in-scope fabrication, not only out-of-scope drift. Require that a load-bearing answer carry a grounding/uncertainty signal, and that the FR-11 ratification handoff present the persona brief alongside the answer so a human can check the answer against its declared source. | FR-7 says a persona must not "improvise a fact" when outside its brief, but the guard is scope-based; a persona can confidently assert a fabricated fact *within* its declared scope, which the advisory flag never catches. This is the substance of OQ-10 and D-3's "hallucination surface small" claim. | FR-7 (and cross-link to OQ-10, FR-11) | Test persona with a brief that omits a specific value; assert the answer either defers or is flagged low-grounding; assert ratification view renders the brief text. |
+| R1-F4 | Interfaces | medium | Specify OMIT-routing failure modes for FR-9b/OQ-9: define behavior when (a) no persona matches the OMIT question and (b) the match is ambiguous. Mandate that unmatched OMITs remain OMIT (flagged "no stakeholder available") and are never routed to a non-matching persona. | FR-9b threads `symbol`/`claim` so the pass "can route it to the correct persona," but "correct" is undefined under heuristic matching (OQ-9). A silent drop loses the gap; a wrong-domain route produces an authoritative-sounding answer that violates FR-7. | FR-9b (add no-match / ambiguous-match clause); resolve OQ-9 | Test OMIT with no matching persona → disposition stays OMIT with a "no stakeholder" marker; test ambiguous match → deterministic tie-break or explicit multi-route, never arbitrary. |
+| R1-F5 | Data | medium | Add a redaction + retention + telemetry-content requirement covering FR-12 and FR-14. Persona briefs and Q&A may contain sensitive stakeholder positions or project secrets; require that persisted transcripts define a retention/cleanup policy and that OTel spans (FR-14) exclude raw question/answer/brief text (attribute counts/IDs/costs only). | FR-12 relies on `0600`+gitignore (confidentiality at rest) but says nothing about span attributes; FR-14 spans flow to Loki/Tempo where raw Q&A/brief text would leak PII/secrets across the observability boundary. `0600` on disk does not protect telemetry. | FR-12 and FR-14 (add redaction/retention/span-content clauses) | Assert span attributes contain no raw Q&A/brief substrings (allow-list check); assert a documented retention/cleanup path exists for `.startd8/stakeholder-panel/`. |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F6 | Security | medium | Require that the synthetic `qualifier`/`source` survive serialization round-trips byte-identically and that reserved `source` prefixes (e.g. `panel:`) cannot be forged onto a claim that bypassed the panel. The `models.py` `to_dict`/`from_dict`/canonical-JSON path (plan §1) is an unguarded place for the synthetic marker to be dropped or spoofed. | If `from_dict` defaults a missing `qualifier` to empty, a persisted-then-reloaded synthetic claim silently upgrades to an unqualified OBSERVED fact — the laundering vector of R1-F2 reached via persistence rather than the gate. Conversely, free-text `source` lets any producer mint `panel:*`. | FR-10 (add serialization-invariant + reserved-prefix clause) | Round-trip test: synthetic claim → to_dict → from_dict preserves `qualifier=="synthetic"`; assert non-panel producers cannot set a `panel:` source. |
+
+#### Review Round R2
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-07-02 22:05:00 UTC
+- **Scope**: (Feature Requirements) Testability of the observability/cost requirements (FR-13/FR-14) as written; provenance rot from roster/persona versioning over a long project; the deferred interactive-kickoff secondary consumer seam (NR-6/OQ-8) as a forward-compat constraint; and persona-agent failure/timeout as an unspecified requirement. Deliberately avoids re-treading R1's laundering (R1-F2/F6), FR-15 staleness (R1-F1), in-scope fabrication (R1-F3), OMIT-routing (R1-F4), and redaction (R1-F5).
+
+**Executive summary (top risks / gaps):**
+
+- **FR-13 is not testable as written:** "attributable per persona and per kickoff-prep session" names no attribution key (what dimension on the CostTracker record identifies persona + session), so "cost tracked" is the only assertable outcome.
+- **FR-14 is not testable as written:** "emit OTel spans consistent with conventions" specifies no span tree, no required attributes, no error-status expectation — R1-F5 constrained span *content* but nothing constrains span *shape/existence*.
+- **Provenance rot (high):** a persisted answer / ratified fact is bound to a `role_id` but not to the **brief revision** that produced it; over a long project the brief changes and the answer's grounding silently becomes stale. R1-F2/F6 bind `qualifier`/`source`, not brief version.
+- **Deferred consumer may be blocked by a VIPP-shaped contract:** NR-6/OQ-8 defer the interactive-kickoff per-field consumer, but if `PanelAnswer`/provenance is designed only around VIPP now it may need rework later; a small forward-compat clause is cheap insurance.
+- **Persona failure/timeout is unspecified:** no requirement states that a persona error/timeout leaves the OMIT unchanged, never fabricates, and never crashes the negotiate — the `$0` core is protected but the *paid* pass's degradation contract is absent.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F1 | Validation | medium | Make FR-13 testable by naming the attribution key. Require each panel query's `CostTracker` entry to carry the persona `role_id` and the kickoff-prep `session_id` as explicit dimensions, and require a per-session aggregate that reconciles to the report's total panel spend. Today FR-13 only says spend is "attributable per persona and per kickoff-prep session" with no field named. | Without a named attribution dimension, "attributable" is aspirational — the only assertable behavior is "a cost was recorded." An implementer cannot write a test that a specific persona's spend is isolable, and the plan §6 test (d) reflects this by asserting only "cost tracked." | FR-13 (add the `role_id`+`session_id` attribution-key clause) | Unit/integration: after N queries across M personas, assert CostTracker records carry `role_id`+`session_id`; assert sum over a session equals the report's panel `cost_usd`. |
+| R2-F2 | Ops | medium | Give FR-14 a concrete, testable span contract: one span for panel instantiation (attrs: `project_id`, `session_id`, persona count) and a child span per query (attrs: `role_id`, `session_id`, model, prompt/completion token counts, `cost_usd`, provenance label; span status ERROR on persona failure). This is orthogonal to R1-F5 (which constrains span *content* — no raw text); this constrains span *shape/existence*. | "Emit OTel spans consistent with conventions" is unfalsifiable — an implementation emitting nothing, or a flat unparented span, both "comply." A named parent/child tree with required attributes is what lets a test assert instrumentation actually happened and errors are visible in Tempo. | FR-14 (add span-tree + required-attribute contract; cross-link R1-F5 for the content allow-list) | Assert an instantiation span with a child query span per call; assert required attrs present; assert a persona failure sets span status = ERROR. |
+| R2-F3 | Data | high | Bind every `PanelAnswer` / transcript entry / synthetic `LabeledClaim` to a content hash of the persona brief (and a roster version) that produced it. A `role_id` alone does not pin *which revision* of the brief answered; over a long project the brief is edited and prior answers — and any fact ratified from them — lose traceable grounding. | FR-2 makes the brief the "sole substantive knowledge source" and D-3 rests hallucination-honesty on that binding, yet nothing records the brief revision. R1-F2/F6 protect the `qualifier`/`source` marker but not the *content* the answer was grounded in; a stale-brief answer is a distinct provenance-rot failure. | FR-2 / FR-10 / FR-12 (add brief-hash + roster-version provenance field) | Edit a brief → new answers carry the new hash; a pre-edit transcript entry retains the old hash; a ratified fact retains its originating brief hash for audit. |
+| R2-F4 | Interfaces | medium | Add a forward-compat clause (scope trade-off, not a v1 build) so the deferred interactive-kickoff consumer (NR-6/OQ-8) is not blocked by a VIPP-only contract: require `PanelAnswer` to carry the `value_path`/`symbol` it answers (already threaded onto the OMIT disposition per FR-9b) directly on the answer, not only on the disposition. | NR-6 names interactive-kickoff a "plausible secondary consumer" whose need is per-field (`value_path`) provenance. If the v1 answer contract exposes the answered `symbol` only via VIPP's disposition, the deferred consumer must re-thread it — a rework the FR-9b data already makes free to avoid now. | FR-10 (or a new FR under §C) + note against NR-6/OQ-8 | Assert `PanelAnswer.symbol`/`value_path` is populated for routed answers; confirm a non-VIPP caller can read the answered field without a VIPP disposition. |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F5 | Risks | high | Add an explicit persona-failure requirement: a persona error, timeout, rate-limit/infra failure, or refusal during the FR-9 pass must leave the corresponding OMIT **unchanged** (stays OMIT, marked "stakeholder unavailable"), must never fabricate a fallback answer, must never abort sibling personas or the negotiate pass, and any partial spend must still be cost-tracked (FR-13). | The requirements protect VIPP's `$0` deterministic verdict but never state how the *paid* pass degrades when an LLM call fails mid-pass. Absent this, an implementer may crash the negotiate, drop the OMIT silently, or (worst) synthesize a placeholder — all of which violate NR-1/FR-7. This is the requirement-level counterpart to plan suggestion R2-S2. | New FR under §C (or extend FR-9) | Integration: a persona agent raising / timing out → that OMIT unchanged with "unavailable" marker, other personas answer, pass completes, successful-call cost tracked. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R1-F2: the synthetic marker must be load-bearing, not cosmetic — my R2-F3 (brief-version binding) presumes exactly this provenance-integrity posture.
+- R1-F4: unmatched/ambiguous OMIT routing must stay OMIT — my R2-F5 and R2-S2 both assume "stays OMIT" is the safe default and would be incoherent without it.
+- R1-F1: FR-15 naming the two rejected primitives is a blocking internal contradiction that must be reconciled before implementation reads it.
+
+**Disagreements** (untriaged prior items I would weigh down, for triage):
+- R1-F6 (partial): the *serialization-survival* half is essential (keep it), but the *reserved-prefix forgery* half ("non-panel producers cannot set a `panel:` source") is arguably out of scope for v1 — forging a `panel:` source requires another trusted SDK component to act maliciously, a broader trust-boundary concern than this feature owns. Consider splitting R1-F6 so the survival invariant lands now and forgery-prevention is deferred with a rationale, rather than gold-plating v1.
