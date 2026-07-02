@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.11.0"
+version: "1.12.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -650,50 +650,56 @@ capabilities:
   - capability_id: startd8.codegen.openapi_role3_intercontext
     category: generate
     maturity: beta
-    summary: "OpenAPI Role 3 inter-context seam — prisma/contexts.yaml drives typed outbound httpx clients, OTel spans, cross-context smoke, pinned cross-repo contracts, and Prime bucket-3 integration wiring ($0 LLM)"
+    summary: "OpenAPI Role 3 inter-context seam — contexts.yaml drives HTTP/gRPC/TS outbound clients, auth hooks, context graph, OTel, cross-context smoke, pinned contracts, Prime integration ($0 LLM)"
     audiences: [workflow_developer, integration_developer, sdk_architect]
     description:
       developer: |
         `startd8 generate backend --contexts prisma/contexts.yaml` emits per-producer
-        `clients/{id}_client.py` (contract-sha256 drift), `app/context_clients.py` factories,
-        `clients/_context_otel.py`, and `tests/test_cross_context_smoke.py`. Producer promotion:
-        `--export-openapi openapi/{id}.json`. Pinned `contract:` entries filter producer OpenAPI
-        without consumer Prisma entity overlap (M5). Prime Contractor threads
-        `collect_context_integration_prompt()` into spec/draft for bucket-3 integration (P2).
-        Deploy harness `context_smoke` stage + `STARTD8_CONTEXT_<ID>_BASE_URL` for remote smoke.
+        `clients/{id}_client.py` (HTTP), optional `clients/{id}_client.ts` (`emit_languages`),
+        `clients/{id}_grpc_client.py` (`protocol: grpc`), `openapi/context-graph.json`,
+        `app/context_clients.py` factories, `clients/_context_otel.py`, and cross-context smoke.
+        Optional `auth: {scheme, env, header}` injects env-sourced credentials. Producer promotion:
+        `--export-openapi openapi/{id}.json`. Pinned `contract:` filters without consumer Prisma overlap (M5).
+        Prime Contractor threads `collect_context_integration_prompt()` for bucket-3 integration (P2).
       agent: |
-        # Consumer with outbound catalog producer
+        # Consumer with outbound catalog producer + TS emit + auth
         startd8 generate backend --schema prisma/schema.prisma \
           --contexts prisma/contexts.yaml --out .
         # Producer contract publish
         ./scripts/openapi_role3_publish_contract.sh /path/to/producer catalog
-    triggers: ["inter-context", "contexts.yaml", "outbound client", "contract-sha256", "cross-context smoke", "export-openapi", "openapi role 3", "bounded context split"]
+    triggers: ["inter-context", "contexts.yaml", "outbound client", "contract-sha256", "cross-context smoke", "export-openapi", "openapi role 3", "bounded context split", "grpc inter-context", "context graph"]
     evidence:
       - type: code
         ref: src/startd8/backend_codegen/context_manifest.py
-        description: "parse contexts.yaml, filter_spec_for_context, contract_sha256"
+        description: "parse contexts.yaml, auth/grpc/emit_languages, filter_spec_for_context"
       - type: code
         ref: src/startd8/backend_codegen/context_client_renderer.py
-        description: "clients/{id}_client.py emission"
+        description: "HTTP clients/{id}_client.py + auth headers"
+      - type: code
+        ref: src/startd8/backend_codegen/context_ts_client_renderer.py
+        description: "TypeScript clients/{id}_client.ts (D3)"
+      - type: code
+        ref: src/startd8/backend_codegen/context_grpc_client_renderer.py
+        description: "gRPC clients/{id}_grpc_client.py (D5)"
+      - type: code
+        ref: src/startd8/backend_codegen/context_graph_renderer.py
+        description: "openapi/context-graph.json export (D4)"
       - type: code
         ref: src/startd8/contractors/context_integration.py
         description: "Prime bucket-3 context_integration prompt injection (P2)"
-      - type: code
-        ref: src/startd8/deploy_harness/context_smoke.py
-        description: "run_outbound_context_smokes, remote producer smoke"
       - type: test
-        ref: tests/unit/backend_codegen/test_openapi_role3_m4_fixture.py
-        description: "Two-app producer→export→consumer pin→drift→remote smoke"
+        ref: tests/unit/backend_codegen/test_openapi_role3_deferred.py
+        description: "D1–D5 deferred items — auth, TS, graph, gRPC"
       - type: test
         ref: tests/unit/backend_codegen/test_openapi_role3_m5_cross_repo.py
-        description: "Cross-repo divergent Prisma schemas with pinned contract"
+        description: "Cross-repo pinned contract + py_compile client"
       - type: docs
         ref: docs/design/deterministic-openapi/OPENAPI_ROLE3_REQUIREMENTS.md
-        description: "Requirements v0.3 (FR-1..FR-14)"
+        description: "Requirements v0.4 (FR-1..FR-19)"
       - type: docs
-        ref: docs/design/deterministic-openapi/fixtures/
-        description: "two-app-seam + cross-repo-seam fixtures and smoke scripts"
-    confidence: 0.9
+        ref: docs/observability/grafana/startd8-context-outbound.json
+        description: "Grafana dashboard template for outbound context spans (D2)"
+    confidence: 0.92
 
   - capability_id: startd8.codegen.import_path
     category: generate
@@ -1581,6 +1587,10 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.12.0"
+    date: "2026-07-02"
+    changes:
+      - "Updated startd8.codegen.openapi_role3_intercontext — deferred D1–D5 (auth hooks, TS/gRPC clients, context-graph.json, Grafana template); requirements v0.4 FR-15..FR-19; confidence 0.9→0.92; +4 evidence refs. (Originally drafted as v1.9.1 in PR #74; re-versioned above v1.11.0 on merge with main.)"
   - version: "1.11.0"
     date: "2026-07-02"
     changes:
