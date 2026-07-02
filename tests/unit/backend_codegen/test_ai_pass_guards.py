@@ -69,7 +69,7 @@ def test_guards_unknown_key_rejected():
 
 def test_guards_version_bumped_and_exports():
     ns = _guards_ns()
-    assert ns["__guards_version__"] == "3"
+    assert ns["__guards_version__"] == "4"
     assert "validate_output" in ns and "GuardViolation" in ns and "verify_provenance" in ns
 
 
@@ -167,3 +167,56 @@ def test_verify_provenance_reject_raises():
     r.drew_on = ["fake"]
     with pytest.raises(ns["GuardViolation"]):
         ns["verify_provenance"](r, "drew_on", ["real"], on_violation="reject")
+
+
+# ---- B6 auto-send refusal + stricter mode (2b-iii) ------------------------
+
+def test_b6_auto_send_without_stricter_refused():
+    with pytest.raises(ValueError, match="stricter"):
+        parse_ai_passes(_BASE + "    input_entities: [X]\n    guards:\n      auto_send: true")
+
+
+def test_b6_stricter_forces_strongest_gate():
+    m = (_BASE + "    input_entities: [X]\n    guards:\n"
+         "      auto_send: true\n      stricter: true\n      on_violation: flag\n      validate_output: false")
+    g = parse_ai_passes(m)[0].guards
+    assert g.auto_send and g.stricter
+    assert g.validate_output is True and g.on_violation == "reject"  # stricter overrides weaker settings
+
+
+def test_b6_default_not_auto_send():
+    g = parse_ai_passes(_BASE + "    input_entities: [X]")[0].guards
+    assert g.auto_send is False and g.stricter is False
+
+
+# ---- B7 app-side guard logging (2b-iii) -----------------------------------
+
+def test_b7_fence_logs_truncation():
+    import logging
+    ns = _guards_ns()
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, r):
+            recs.append(r)
+
+    ns["_log"].addHandler(_H())
+    ns["_log"].setLevel(logging.WARNING)
+    ns["fence_untrusted"]("y" * 500, "big", 100)
+    ev = [r for r in recs if getattr(r, "event", None) == "ai_input_truncated"]
+    assert ev and ev[0].orig_len == 500 and ev[0].max_chars == 100
+
+
+def test_b7_no_truncation_log_when_under_cap():
+    import logging
+    ns = _guards_ns()
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, r):
+            recs.append(r)
+
+    ns["_log"].addHandler(_H())
+    ns["_log"].setLevel(logging.WARNING)
+    ns["fence_untrusted"]("short", "small", 10_000)
+    assert not [r for r in recs if getattr(r, "event", None) == "ai_input_truncated"]

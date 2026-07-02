@@ -91,6 +91,9 @@ class Guards:
     (echo/exfil) check. ``on_violation`` = drop | reject | flag.
     ``verify_provenance`` (B5, opt-in, default None) names an AI-authored list field whose entries
     must be a subset of the supplied rows' stable ids — fabricated entries are dropped before persist.
+    ``auto_send`` (B6) declares the output goes outbound with no human curation; fencing only *reduces*
+    injection so an auto-send pass is **refused at build time** unless it also sets ``stricter``, which
+    forces the strongest gate (validate_output on, on_violation=reject).
     """
 
     max_untrusted_chars: int = 200_000
@@ -98,6 +101,8 @@ class Guards:
     field_max: Tuple[Tuple[str, int], ...] = ()   # (output field, max chars) overrides
     on_violation: str = "reject"
     verify_provenance: Optional[str] = None       # B5: name of the AI "what I used" list field
+    auto_send: bool = False                       # B6: output goes outbound w/o human curation
+    stricter: bool = False                        # B6: opt into stricter mode (required if auto_send)
 
 
 _ON_VIOLATION = {"drop", "reject", "flag"}
@@ -152,7 +157,8 @@ _PASS_KEYS = {"name", "output_entities", "route_path", "prompt", "input_entities
 _TRIGGER_KEYS = {"entity", "text_field", "label"}
 _SCOPE_REL_KEYS = {"via", "entity", "optional"}
 _GUARDS_KEYS = {"max_untrusted_chars", "validate_output", "field_max", "on_violation",
-                "verify_provenance"}   # FR-B5 (opt-in)
+                "verify_provenance",           # FR-B5 (opt-in)
+                "auto_send", "stricter"}       # FR-B6
 _HUMAN_FIELD_KEYS = {"target", "authored_by", "default", "test_default", "type"}
 _HUMAN_TOP_KEYS = {"config", "fields"}
 
@@ -197,12 +203,28 @@ def _parse_guards(spec: Any, i: int) -> Guards:
     vprov = spec.get("verify_provenance")
     if vprov is not None and not isinstance(vprov, str):
         raise ValueError(f"ai_passes.yaml: pass #{i} guards.verify_provenance must be a field name (str)")
+    auto_send = bool(spec.get("auto_send", False))
+    stricter = bool(spec.get("stricter", False))
+    # FR-B6: fencing only *reduces* injection; auto-send removes the human-curation trust boundary.
+    # Refuse at build time unless the pass explicitly opts into stricter mode.
+    if auto_send and not stricter:
+        raise ValueError(
+            f"ai_passes.yaml: pass #{i} guards.auto_send requires guards.stricter — an auto-send pass "
+            f"over untrusted input removes the human-curation trust boundary (FR-B6). Set stricter: true "
+            f"to opt into the strongest output gate, or persist a confirmed:false draft for human review."
+        )
+    validate = bool(spec.get("validate_output", True))
+    if stricter:                                    # stricter forces the strongest gate
+        validate = True
+        on_v = "reject"
     return Guards(
         max_untrusted_chars=int(spec.get("max_untrusted_chars", 200_000)),
-        validate_output=bool(spec.get("validate_output", True)),
+        validate_output=validate,
         field_max=tuple((str(k), int(v)) for k, v in fmax.items()),
         on_violation=on_v,
         verify_provenance=(str(vprov) if vprov is not None else None),
+        auto_send=auto_send,
+        stricter=stricter,
     )
 
 
@@ -1652,7 +1674,7 @@ from typing import Any, Iterable, Mapping
 
 import re as _re
 
-__guards_version__ = "3"
+__guards_version__ = "4"
 
 _log = _logging.getLogger("app.ai.guards")
 
@@ -1685,8 +1707,19 @@ def normalize_untrusted(text, max_chars: int = _MAX_UNTRUSTED_CHARS) -> str:
 
 
 def fence_untrusted(text, label: str, max_chars: int = _MAX_UNTRUSTED_CHARS) -> str:
-    """Wrap untrusted text as a DATA-not-instructions block. Idempotent; normalizes first (FR-B1/B2)."""
+    """Wrap untrusted text as a DATA-not-instructions block. Idempotent; normalizes first (FR-B1/B2).
+
+    Logs an ``ai_input_truncated`` event to the app runtime logger when the B2 cap truncates
+    the untrusted input (FR-B7 — guard actions are observable in the generated app)."""
+    orig_len = len(text) if isinstance(text, str) else (len(str(text)) if text else 0)
     t = normalize_untrusted(text, max_chars)
+    if max_chars and orig_len > max_chars:
+        _log.warning(
+            "AI-pass input truncated: %r from %s to %s chars (B2 cap)",
+            label, orig_len, max_chars,
+            extra={"event": "ai_input_truncated", "field": label,
+                   "orig_len": orig_len, "max_chars": max_chars},
+        )
     if not t or not t.strip():
         return ""
     if t.lstrip().startswith(_SYS):
