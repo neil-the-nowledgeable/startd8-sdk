@@ -31,10 +31,14 @@ _MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)\s?([kKmM])?")
 _PERCENT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s?%")
 _QUARTER = re.compile(r"\bQ([1-4])\b", re.IGNORECASE)
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
-_MONTHS = (
-    "january february march april may june july august september october november december "
-    "jan feb mar apr jun jul aug sep sept oct nov dec"
-).split()
+# A month is only a *date* specific when adjacent to a day/year number ("March 2027", "3 April").
+# Bare month words are NOT matched — "may"/"march" are common English verbs and would chronically
+# false-flag qualitative answers (and wrongly downgrade grounding). A month-with-year is still caught
+# via _YEAR anyway; this regex adds day-adjacent dates without the verb noise.
+_MONTH = "january|february|march|april|may|june|july|august|september|october|november|december"
+_MONTH_DATE = re.compile(
+    rf"\b(?:{_MONTH})\b\.?,?\s+\d{{1,4}}|\b\d{{1,2}}\s+(?:{_MONTH})\b", re.IGNORECASE
+)
 
 
 def _num(raw: str, suffix: str = "") -> float:
@@ -55,11 +59,11 @@ def _percent(text: str) -> Set[float]:
 
 
 def _temporal(text: str) -> Set[str]:
-    low = text.lower()
     out: Set[str] = set()
     out |= {f"q{m.group(1)}" for m in _QUARTER.finditer(text)}
     out |= {m.group(0) for m in _YEAR.finditer(text)}
-    out |= {word for word in _MONTHS if re.search(rf"\b{word}\b", low)}
+    # Normalize day-adjacent month dates to a lowercased, whitespace-collapsed token.
+    out |= {" ".join(m.group(0).lower().split()) for m in _MONTH_DATE.finditer(text)}
     return out
 
 

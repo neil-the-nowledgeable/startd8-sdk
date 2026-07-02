@@ -48,6 +48,19 @@ def test_bare_integers_are_not_flagged():
     assert unsupported_specifics(_BRIEF, "We have 3 main goals and 2 personas.") == []
 
 
+def test_month_words_used_as_verbs_are_not_flagged():
+    # Regression: "may"/"march" are common verbs — a bare month must NOT be a temporal specific.
+    assert (
+        unsupported_specifics(_BRIEF, "We may revisit this and march toward launch.")
+        == []
+    )
+
+
+def test_month_with_a_year_is_still_flagged():
+    got = unsupported_specifics(_BRIEF, "We ship in March 2027.")
+    assert "2027" in got  # caught via the year; the date is not lost
+
+
 # ── check_grounding: downgrade + flag ─────────────────────────────────────────────
 
 

@@ -42,6 +42,24 @@ def test_load_absent_is_empty(tmp_path):
     assert TranscriptStore(tmp_path, "nope").load() == []
 
 
+def test_load_survives_malformed_numeric_field(tmp_path):
+    # Regression: a corrupt/edited numeric field must not crash load() (which would brick appends).
+    import json
+
+    store = TranscriptStore(tmp_path, "sess-1")
+    store.dir.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(
+        json.dumps(
+            [{"role_id": "po", "text": "x", "cost_usd": "oops", "input_tokens": "NaNe"}]
+        ),
+        encoding="utf-8",
+    )
+    loaded = store.load()  # must not raise
+    assert loaded[0].cost_usd == 0.0 and loaded[0].input_tokens == 0
+    store.append(_answer(text="after"))  # append still works after a bad entry
+    assert store.load()[-1].text == "after"
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX perms")
 def test_transcript_file_is_0600(tmp_path):
     store = TranscriptStore(tmp_path, "sess-1")

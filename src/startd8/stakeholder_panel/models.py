@@ -57,6 +57,22 @@ def _str_list(value: Any) -> List[str]:
     return [str(item).strip() for item in items if str(item).strip()]
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    """Tolerant int coercion — a malformed persisted field must not crash a transcript load."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    """Tolerant float coercion (see :func:`_as_int`)."""
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class PersonaBrief:
     """One stakeholder persona (FR-2). The brief bounds what the persona may answer (FR-7)."""
@@ -258,9 +274,9 @@ class PanelAnswer:
             roster_version=str(d.get("roster_version", "")),
             session_id=str(d.get("session_id", "")),
             model=str(d.get("model", "")),
-            input_tokens=int(d.get("input_tokens", 0) or 0),
-            output_tokens=int(d.get("output_tokens", 0) or 0),
-            cost_usd=float(d.get("cost_usd", 0.0) or 0.0),
+            input_tokens=_as_int(d.get("input_tokens")),
+            output_tokens=_as_int(d.get("output_tokens")),
+            cost_usd=_as_float(d.get("cost_usd")),
             created_at=str(d.get("created_at", "")),
             flags=[str(f) for f in (d.get("flags") or [])],
         )

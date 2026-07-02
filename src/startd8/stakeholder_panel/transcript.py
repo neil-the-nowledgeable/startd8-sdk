@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -60,19 +61,27 @@ class TranscriptStore:
             pass
 
     def append(self, answer: PanelAnswer) -> None:
-        """Append one answer, rewriting the session file atomically with ``0600`` perms."""
+        """Append one answer, rewriting the session file atomically with ``0600`` perms.
+
+        The temp file is created via ``mkstemp`` (unique name, ``0600`` from birth — no
+        world-readable window, no fixed-name collision between concurrent writers).
+        """
         self._ensure_dir()
         entries = [a.to_dict() for a in self.load()]
         entries.append(answer.to_dict())
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        payload = json.dumps(entries, indent=2, ensure_ascii=False)
+        fd, tmp_name = tempfile.mkstemp(dir=str(self.dir), suffix=".json.tmp")
         try:
-            os.chmod(tmp, 0o600)
-        except OSError:  # pragma: no cover
-            pass
-        os.replace(tmp, self.path)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            os.replace(tmp_name, self.path)
+        except BaseException:
+            # Never leave a stray temp behind on failure (disk-full, interrupt).
+            try:
+                os.unlink(tmp_name)
+            except OSError:  # pragma: no cover
+                pass
+            raise
 
     def load(self) -> List[PanelAnswer]:
         """Load the session's answers (empty list if absent or unreadable)."""

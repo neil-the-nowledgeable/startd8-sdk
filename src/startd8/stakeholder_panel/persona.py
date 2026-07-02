@@ -99,8 +99,10 @@ class Persona:
         return "\n\n".join(parts)
 
     def _remember(self, question: str, answer: str) -> None:
+        if self._history_turns == 0:
+            return  # stateless persona: keep no history (never grow the prompt/cost)
         self._history.append((question, answer))
-        if self._history_turns and len(self._history) > self._history_turns:
+        if len(self._history) > self._history_turns:
             # Drop oldest turns beyond the cap (simple bound; summarization is a later refinement).
             self._history = self._history[-self._history_turns :]
 

@@ -193,7 +193,14 @@ class StakeholderPanel:
             _stamp_span(active_span, answer)
 
         if self._transcript is not None and answer.available:
-            self._transcript.append(answer)
+            try:
+                self._transcript.append(answer)
+            except (
+                OSError
+            ) as exc:  # persistence must never lose an already-paid answer (Mottainai)
+                logger.warning(
+                    "panel transcript append failed for %s: %s", answer.role_id, exc
+                )
         return answer
 
     async def ask_all(

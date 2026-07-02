@@ -117,6 +117,17 @@ def test_history_is_capped():
     assert "q3" in last_prompt
 
 
+def test_history_turns_zero_keeps_no_memory():
+    # Regression: history_turns=0 means STATELESS — it must not grow the prompt every turn.
+    agent = ScriptedAgent(reply="ok\nGROUNDING: grounded")
+    persona = Persona(_BRIEF, agent, history_turns=0)
+    for i in range(4):
+        asyncio.run(persona.ask(f"question {i}"))
+    assert persona._history == []
+    last_prompt, _ = agent.calls[-1]
+    assert "question 0" not in last_prompt  # no prior turns threaded
+
+
 def test_concurrent_asks_to_one_persona_are_serialized():
     # FR-20: the per-persona lock keeps concurrent asks from racing the shared history.
     agent = ScriptedAgent(reply="ok\nGROUNDING: grounded", delay=0.02)

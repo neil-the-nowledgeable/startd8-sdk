@@ -386,12 +386,17 @@ def _render_advisories(advisories: List[Dict[str, Any]]) -> List[str]:
     ]
     for a in advisories:
         symbol = oneline(a.get("symbol", ""))
-        out += ["", f"### `{a.get('proposal_id', '')}` — OMIT `{symbol}`", ""]
+        proposal_id = oneline(a.get("proposal_id", ""))
+        out += ["", f"### `{proposal_id}` — OMIT `{symbol}`", ""]
         out.append(f"original question: {oneline(a.get('claim', ''))}")
         status = a.get("status", "")
         if status == "answered":
             role_id = a.get("role_id", "")
-            goals = "; ".join(a.get("brief_goals", []) or []) or "(none stated)"
+            # oneline the joined goals: an authored newline inside a brief goal would otherwise emit a
+            # bare "- " line under this non-exempt section and crash the FR-21 gate AFTER paid spend.
+            goals = (
+                oneline("; ".join(a.get("brief_goals", []) or [])) or "(none stated)"
+            )
             grounding = a.get("grounding", "")
             out.append(f"persona brief ({role_id}): {goals}")
             out.append("")

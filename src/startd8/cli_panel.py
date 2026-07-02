@@ -26,6 +26,7 @@ panel_app = typer.Typer(
 )
 
 _EXIT_FATAL_INPUTS = 2
+_EXIT_RUNTIME = 1
 _ROSTER_REL = Path("docs") / "kickoff" / "inputs" / "stakeholders.yaml"
 
 
@@ -130,6 +131,11 @@ def panel_ask(
     except UnknownPersonaError as exc:
         console.print(f"[red]panel:[/red] {exc}")
         raise typer.Exit(_EXIT_FATAL_INPUTS)
+    except (
+        Exception
+    ) as exc:  # provider/auth/budget failure — clean message, not a traceback
+        console.print(f"[red]panel:[/red] query failed: {exc}")
+        raise typer.Exit(_EXIT_RUNTIME)
     finally:
         panel.close()
     _render_answer(answer)
@@ -155,6 +161,11 @@ def panel_ask_all(
     )
     try:
         answers = asyncio.run(panel.ask_all(question, cap=cap))
+    except (
+        Exception
+    ) as exc:  # provider/auth/budget failure — clean message, not a traceback
+        console.print(f"[red]panel:[/red] query failed: {exc}")
+        raise typer.Exit(_EXIT_RUNTIME)
     finally:
         panel.close()
     for answer in answers:

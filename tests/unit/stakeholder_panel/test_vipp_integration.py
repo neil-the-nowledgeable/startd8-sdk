@@ -144,6 +144,75 @@ def test_negotiate_advisory_surfaces_grounding_flag(tmp_path):
     assert "grounding check" in md
 
 
+def test_negotiate_advisory_with_newline_in_goal_does_not_crash_gate(tmp_path):
+    # Regression (review H1): a persona goal containing a newline must not emit an untagged "- "
+    # bullet that crashes assert_all_labeled AFTER the paid pass.
+    from startd8.stakeholder_panel.models import PersonaBrief, Roster
+    from startd8.stakeholder_panel.panel import StakeholderPanel
+
+    roster = Roster(
+        personas=[
+            PersonaBrief(
+                role_id="product-owner",
+                display_name="Product Owner",
+                goals=["ship the app\n- and also break the markdown gate"],
+                answers_for=["Order.*"],
+            )
+        ]
+    )
+    panel = StakeholderPanel(
+        roster,
+        agent_factory=lambda b: ScriptedAgent(reply="Yes.\nGROUNDING: grounded"),
+        project_root=tmp_path,
+        persist=False,
+    )
+    out = run_vipp_negotiate(  # must not raise
+        _write_inbox(tmp_path), project_root=tmp_path, emit=False, panel=panel
+    )
+    panel.close()
+    assert out.report.panel_advisories[0]["status"] == "answered"
+    md = (tmp_path / ".startd8/vipp/dispositions.md").read_text(encoding="utf-8")
+    assert "and also break the markdown gate" in md  # rendered on one line, gate passed
+
+
+def test_negotiate_reconsults_when_roster_changes(tmp_path):
+    # Regression (review H2): the idempotency key folds in the roster version, so editing the roster
+    # re-consults instead of returning cached (stale) advisories on an unchanged inbox.
+    from startd8.stakeholder_panel.models import PersonaBrief, Roster
+    from startd8.stakeholder_panel.panel import StakeholderPanel
+
+    def panel_with(answers_for):
+        roster = Roster(
+            personas=[
+                PersonaBrief(
+                    role_id="po",
+                    display_name="PO",
+                    goals=["ship"],
+                    answers_for=answers_for,
+                )
+            ]
+        )
+        return StakeholderPanel(
+            roster,
+            agent_factory=lambda b: ScriptedAgent(reply="Yes.\nGROUNDING: grounded"),
+            project_root=tmp_path,
+            persist=False,
+        )
+
+    inbox = _write_inbox(tmp_path)
+    p1 = panel_with(["infra"])  # does NOT match Order.total → no-stakeholder
+    run_vipp_negotiate(inbox, project_root=tmp_path, emit=False, panel=p1)
+    p1.close()
+
+    p2 = panel_with(
+        ["Order.*"]
+    )  # edited roster (different roster_version) → should re-consult
+    out2 = run_vipp_negotiate(inbox, project_root=tmp_path, emit=False, panel=p2)
+    p2.close()
+    # If the key were a bare bool, run 2 would be skipped and return the cached no-stakeholder.
+    assert out2.report.panel_advisories[0]["status"] == "answered"
+
+
 def test_negotiate_with_panel_no_match_stays_omit(tmp_path):
     # Persona answers_for does not cover Order.* → the question stays OMIT (FR-9c).
     from startd8.stakeholder_panel.models import PersonaBrief, Roster

@@ -89,8 +89,15 @@ def run_vipp_negotiate(
         "sdk_version": sdk_version,
         "narrative": str(bool(narrative and agent is not None)),
         # The panel pass is an opt-in paid surface (like narrative); fold it into the idempotency
-        # key so a panel run and a non-panel run are distinct (stakeholder-panel M2 / FR-9).
-        "panel": str(panel is not None),
+        # key so a panel run and a non-panel run are distinct (stakeholder-panel M2 / FR-9). Key on
+        # the panel's *roster version* (not a bare bool) + the question cap, so editing
+        # stakeholders.yaml or changing --cap re-consults rather than returning cached advisories
+        # (the roster lives outside the inbox/ground-truth checksums).
+        "panel": (
+            f"{getattr(panel, 'roster_version', '')}:{panel_max_questions}"
+            if panel is not None
+            else ""
+        ),
     }
     fp = context.fingerprint(parts)
     key = f"negotiate:{envelope.project_id}"
