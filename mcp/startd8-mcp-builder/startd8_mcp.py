@@ -3248,6 +3248,52 @@ async def startd8_kickoff_state(params: KickoffStateInput) -> str:
 
 
 @mcp.tool(
+    name="startd8_red_carpet_state",
+    annotations={
+        "title": "Startd8 Red Carpet State (read-only)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def startd8_red_carpet_state(params: KickoffStateInput) -> str:
+    """The Red Carpet staged build map + prescriptive advisor (read-only, $0, no LLM — FR-RCA-12).
+
+    Returns the staged build state (data model → manifests → value inputs → content → run), the next
+    gap, whether the deterministic $0 cascade is offerable and which gates are unmet, plus the
+    computed ``advisories`` (project insights + per-input readiness diagnosis) and ``next_steps`` (a
+    ranked, command-bearing playbook). Same payload as ``startd8 kickoff red-carpet --json`` and the
+    ``/red-carpet.json`` web endpoint. Serves no port and writes nothing — the read-only posture is
+    structural, not just annotated (NR-3).
+    """
+    request_id = _new_request_id()
+    started = time.perf_counter()
+    project_root = params.project_root or str(DEFAULT_PROJECT_ROOT)
+    _emit_event({
+        "event": "tool.start", "tool": "startd8_red_carpet_state", "request_id": request_id,
+        "params": {"project_root": project_root},
+    })
+    try:
+        with _redirect_stdout_to_stderr():
+            _ensure_sdk_available()
+            from startd8.kickoff_experience.red_carpet import build_red_carpet_state
+            result = build_red_carpet_state(project_root).to_dict()
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_red_carpet_state", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000), "status": "ok",
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_red_carpet_state", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "status": "error", "error_type": type(e).__name__, "error": str(e),
+        })
+        return _handle_error(e)
+
+
+@mcp.tool(
     name="startd8_tasks_list",
     annotations={
         "title": "List Tasks (Startd8-prefixed)",

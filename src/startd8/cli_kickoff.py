@@ -221,6 +221,23 @@ def _render_red_carpet_state(state) -> None:
         console.print(
             f"  {glyph.get(s.status, '?')} [bold]{s.key}[/bold]{marker} — {s.detail}"
         )
+    # FR-RCA-9 — Insights (advisories, already severity-sorted: error → warn → info).
+    if state.advisories:
+        console.print("[bold]Insights[/bold]")
+        sev_style = {"error": "red", "warn": "yellow", "info": "dim"}
+        for a in state.advisories:
+            style = sev_style.get(a.severity, "dim")
+            console.print(f"  [{style}]•[/{style}] [bold]{a.title}[/bold] — {a.detail}")
+            console.print(f"      [dim]→ {a.action}[/dim]")
+            if a.command:
+                console.print(f"      [cyan]{a.command}[/cyan]")
+    # FR-RCA-9 — Next steps (the ranked, command-bearing playbook).
+    if state.next_steps:
+        console.print("[bold]Next steps[/bold]")
+        for step in state.next_steps:
+            cmd = f"  [cyan]{step.command}[/cyan]" if step.command else ""
+            console.print(f"  {step.rank}. {step.title}{cmd}")
+
     if state.cascade_offerable:
         if state.preview:  # FR-RCT-11 — "here's what we'll build" ($0)
             console.print(

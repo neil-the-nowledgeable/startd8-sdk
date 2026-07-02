@@ -138,16 +138,21 @@ def build_readiness(
     project_root: str | Path,
     *,
     budget_ms: float = BUDGET_INITIAL_MS,
+    assess: Optional[Mapping[str, Any]] = None,
 ) -> ReadinessView:
     """Assess readiness for *project_root* (read-only, ``$0``), timed against a perf budget.
 
     Degrades gracefully: a missing/partial kickoff package surfaces as ``cascade_status`` rather
     than raising, so a brand-new project still renders a (low) readiness view.
+
+    *assess* (CRP R1-S1/R1-F2): a caller that has already fetched ``build_assess(project_root)`` may
+    thread it in so the tree is **not scanned twice** in one state build. When provided, the internal
+    fetch is skipped (the perf sample then reflects ~0ms — the scan happened at the caller).
     """
     # Imported here so a missing concierge/wireframe dep degrades at call time, not import time.
     from ..concierge import build_assess
 
     with _Timer() as timer:
-        assess = build_assess(project_root)
+        assessed = build_assess(project_root) if assess is None else assess
     perf = PerfSample(phase="readiness", elapsed_ms=timer.elapsed_ms, budget_ms=budget_ms)
-    return ReadinessView.from_assess(assess, perf=perf)
+    return ReadinessView.from_assess(assessed, perf=perf)
