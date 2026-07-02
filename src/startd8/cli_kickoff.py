@@ -263,6 +263,11 @@ def red_carpet_cmd(
     json_out: bool = typer.Option(
         False, "--json", help="Emit the staged build state as JSON."
     ),
+    check: bool = typer.Option(
+        False, "--check",
+        help="CI signal ($0, read-only): exit 1 if any error-severity advisory (hard readiness "
+             "problem) is present, else 0. warn/info never fail.",
+    ),
     agent: Optional[str] = typer.Option(
         None,
         "--agent",
@@ -275,10 +280,29 @@ def red_carpet_cmd(
     value inputs → content → run), the next gap, and whether the deterministic $0 cascade is offerable.
     With `--agent`: the conversational interview loop — the agent works the next gap and RECOMMENDS each
     input; you confirm every write.
+    With `--check`: an advisory CI signal — exit 1 iff an error-severity advisory is present.
     """
     import json as _json
 
     from .kickoff_experience.red_carpet import build_red_carpet_state
+
+    # FR-RCA-15 — advisory CI exit-code mode (not a build gate; warn/info never fail).
+    if check:
+        try:
+            state = build_red_carpet_state(project)
+        except Exception as exc:  # internal error → distinct exit code
+            console.print(f"[red]red-carpet --check:[/red] {exc}")
+            raise typer.Exit(_EXIT_FATAL)
+        errors = [a for a in state.advisories if a.severity == "error"]
+        if errors:
+            console.print(
+                f"[red]red-carpet --check: {len(errors)} error advisory(ies)[/red]"
+            )
+            for a in errors:
+                console.print(f"  [red]•[/red] {a.title} — {a.detail}")
+            raise typer.Exit(_EXIT_CONFORMANCE)
+        console.print("[green]red-carpet --check: no error advisories[/green]")
+        raise typer.Exit(0)
 
     if json_out:
         sys.stdout.write(

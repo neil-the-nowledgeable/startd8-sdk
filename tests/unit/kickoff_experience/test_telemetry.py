@@ -91,8 +91,9 @@ def test_funnel_event_names_are_stable() -> None:
         "template_downloaded", "template_bundle_downloaded",
         # Welcome Mat 2.0 — agentic chat (FR-WM2-14a)
         "chat_turn", "chat_refused",
-        # Red Carpet Treatment — stage funnel (FR-RCT-14)
+        # Red Carpet Treatment — stage funnel (FR-RCT-14) + advisory summary (FR-RCA-16)
         "red_carpet_started", "red_carpet_stage", "red_carpet_cascade_offered",
+        "red_carpet_advice",
     }
 
 

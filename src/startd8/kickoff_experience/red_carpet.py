@@ -27,6 +27,9 @@ STAGES: Tuple[str, ...] = ("data_model", "manifests", "value_inputs", "content",
 # a confirmed schema + an app manifest + at least one page + at least one view.
 _CASCADE_GATE_KEYS: Tuple[str, ...] = ("schema", "app", "pages", "views")
 
+# FR-RCA-17 — payload version for MCP/web consumers (parity with kickoff_state_tool).
+_RED_CARPET_SCHEMA_VERSION = 1
+
 
 @dataclass(frozen=True)
 class RedCarpetStage:
@@ -52,6 +55,7 @@ class RedCarpetState:
 
     def to_dict(self) -> dict:
         d = {
+            "schema_version": _RED_CARPET_SCHEMA_VERSION,
             "stages": [{"key": s.key, "status": s.status, "detail": s.detail} for s in self.stages],
             "next_stage": self.next_stage,
             "cascade_offerable": self.cascade_offerable,
@@ -181,7 +185,12 @@ def record_red_carpet_progress(
     """Emit the stage funnel on a transition (FR-RCT-14). Bounded attrs only (stage/status) — never
     interview text or paths. The per-input propose/apply is already covered by proposal_made/confirmed;
     this adds the conductor's stage-level progress + the cascade-offered moment."""
-    from .telemetry import EV_RED_CARPET_CASCADE_OFFERED, EV_RED_CARPET_STAGE, emit
+    from .telemetry import (
+        EV_RED_CARPET_ADVICE,
+        EV_RED_CARPET_CASCADE_OFFERED,
+        EV_RED_CARPET_STAGE,
+        emit,
+    )
 
     if prev is None or prev.next_stage != new.next_stage:
         emit(EV_RED_CARPET_STAGE,
@@ -189,6 +198,23 @@ def record_red_carpet_progress(
              status="done" if new.next_stage is None else "next")
     if new.cascade_offerable and (prev is None or not prev.cascade_offerable):
         emit(EV_RED_CARPET_CASCADE_OFFERED)
+    # FR-RCA-16 — bounded advisory summary (numeric counts only; never advisory text/values/paths).
+    advs = new.advisories or ()
+    by_sev = {"error": 0, "warn": 0, "info": 0}
+    by_kind = {"schema-shape": 0, "input-gap": 0, "input-invalid": 0,
+               "cascade-blocker": 0, "provenance-review": 0, "stakeholder": 0}
+    for a in advs:
+        if a.severity in by_sev:
+            by_sev[a.severity] += 1
+        if a.kind in by_kind:
+            by_kind[a.kind] += 1
+    emit(EV_RED_CARPET_ADVICE,
+         n_advisories=len(advs),
+         n_error=by_sev["error"], n_warn=by_sev["warn"], n_info=by_sev["info"],
+         n_next_steps=len(new.next_steps or ()),
+         n_schema_shape=by_kind["schema-shape"], n_input_gap=by_kind["input-gap"],
+         n_input_invalid=by_kind["input-invalid"], n_cascade_blocker=by_kind["cascade-blocker"],
+         n_provenance_review=by_kind["provenance-review"], n_stakeholder=by_kind["stakeholder"])
 
 
 def reflection_text(state: RedCarpetState) -> str:

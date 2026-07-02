@@ -361,3 +361,107 @@ def test_reflection_includes_insight_and_steps(tmp_path):
     assert "top insight" in text
     assert "next steps:" in text
     assert "startd8 " in text  # a command is cited
+
+
+# ── FR-RCA-14: expanded schema diagnostics ────────────────────────────────────────────────────────
+
+from startd8.kickoff_experience.red_carpet_advisor import _schema_advisories  # noqa: E402
+
+WELL_FORMED = (
+    "model User {\n id String @id\n name String\n posts Post[]\n}\n"
+    "model Post {\n id String @id\n author User @relation(fields: [authorId], references: [id])\n"
+    " authorId String\n}\n"
+    "enum Role {\n ADMIN\n USER\n}\n"
+)
+
+
+def _codes(advs):
+    return {a.code for a in advs}
+
+
+def test_no_pk_warn():
+    advs = _schema_advisories(_state(schema=True), "model A {\n name String\n}\n")
+    assert any(a.code == "schema-shape:no-pk:a" and a.severity == "warn" for a in advs)
+
+
+def test_likely_fk_warn_and_suppressed_when_relation_exists():
+    # userId with no relation → warn
+    a1 = _schema_advisories(_state(schema=True),
+                            "model Order {\n id String @id\n userId String\n}\n"
+                            "model User {\n id String @id\n}\n")
+    assert any(a.code.startswith("schema-shape:likely-fk") for a in a1)
+    # userId WITH a User relation → suppressed
+    a2 = _schema_advisories(_state(schema=True),
+                            "model Order {\n id String @id\n userId String\n"
+                            " user User @relation(fields: [userId], references: [id])\n}\n"
+                            "model User {\n id String @id\n}\n")
+    assert not any(a.code.startswith("schema-shape:likely-fk") for a in a2)
+
+
+def test_empty_enum_warn():
+    advs = _schema_advisories(_state(schema=True), "model A {\n id String @id\n}\nenum E {\n}\n")
+    assert any(a.code == "schema-shape:empty-enum:e" and a.severity == "warn" for a in advs)
+
+
+def test_wellformed_schema_no_new_warns():
+    advs = _schema_advisories(_state(schema=True), WELL_FORMED)
+    bad = {c for c in _codes(advs) if c.startswith(("schema-shape:no-pk", "schema-shape:likely-fk", "schema-shape:empty-enum", "schema-shape:islands"))}
+    assert not bad, f"a well-formed schema must raise none of these: {bad}"
+
+
+# ── FR-RCA-17: versioning + stable code ───────────────────────────────────────────────────────────
+
+def test_to_dict_has_schema_version(tmp_path):
+    d = build_red_carpet_state(tmp_path).to_dict()
+    assert d["schema_version"] == 1
+
+
+def test_every_advisory_has_stable_nonempty_code(tmp_path):
+    d1 = build_red_carpet_state(tmp_path).to_dict()
+    d2 = build_red_carpet_state(tmp_path).to_dict()
+    assert all(a["code"] for a in d1["advisories"])
+    assert [a["code"] for a in d1["advisories"]] == [a["code"] for a in d2["advisories"]]  # byte-stable
+
+
+def test_auto_derived_code():
+    a = Advisory(KIND_INPUT_GAP, "warn", "Value input missing: conventions", "x", "y")
+    assert a.code == "input-gap:conventions"
+
+
+# ── FR-RCA-16: advisory telemetry (numeric-only) ──────────────────────────────────────────────────
+
+def test_advice_telemetry_numeric_only(tmp_path):
+    from startd8.kickoff_experience.red_carpet import record_red_carpet_progress
+    from startd8.kickoff_experience.telemetry import (
+        EV_RED_CARPET_ADVICE,
+        WM2_EVENT_ATTR_ALLOWLIST,
+        record_events,
+    )
+    st = build_red_carpet_state(tmp_path)
+    with record_events() as evs:
+        record_red_carpet_progress(None, st)
+    advice = [e for e in evs if e.name == EV_RED_CARPET_ADVICE]
+    assert len(advice) == 1
+    attrs = advice[0].attributes
+    assert set(attrs) <= WM2_EVENT_ATTR_ALLOWLIST         # allow-listed keys only
+    assert all(isinstance(v, int) for v in attrs.values())  # numeric only — no text/paths
+    assert attrs["n_advisories"] == len(st.advisories)
+
+
+# ── FR-RCA-15: --check exit codes ─────────────────────────────────────────────────────────────────
+
+def test_check_exit_zero_when_no_error(tmp_path):
+    from typer.testing import CliRunner
+    from startd8.cli_kickoff import kickoff_app
+    res = CliRunner().invoke(kickoff_app, ["red-carpet", str(tmp_path), "--check"])
+    assert res.exit_code == 0  # greenfield has only warn/info
+
+
+def test_check_exit_one_on_error_advisory(tmp_path):
+    from typer.testing import CliRunner
+    from startd8.cli_kickoff import kickoff_app
+    inputs = tmp_path / "docs" / "kickoff" / "inputs"
+    inputs.mkdir(parents=True)
+    (inputs / "conventions.yaml").write_text("this: : : not valid yaml", encoding="utf-8")
+    res = CliRunner().invoke(kickoff_app, ["red-carpet", str(tmp_path), "--check"])
+    assert res.exit_code == 1  # invalid input YAML → input-invalid error advisory

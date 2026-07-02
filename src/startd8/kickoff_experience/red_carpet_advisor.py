@@ -22,6 +22,7 @@ Tier 1).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Mapping, Optional, Tuple
@@ -75,6 +76,14 @@ def _bound(text: Any, limit: int = _MAX_DETAIL) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
+def _slug(text: str) -> str:
+    """A stable, bounded slug for advisory codes / anchors (lowercase, hyphenated)."""
+    out = "".join(c if c.isalnum() else "-" for c in str(text).strip().lower())
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out.strip("-")[:48]
+
+
 @dataclass(frozen=True)
 class Advisory:
     """One derived insight / readiness diagnosis. Advisory only — never a gate (P3)."""
@@ -85,6 +94,13 @@ class Advisory:
     detail: str        # the *why*
     action: str        # the *what to do*
     command: Optional[str] = None  # the exact CLI invocation (relative paths only), where one exists
+    code: str = ""     # FR-RCA-17 — stable id for telemetry/anchoring; auto-derived from kind+subject
+
+    def __post_init__(self) -> None:
+        # Frozen-safe derive: `kind:slug(subject-after-the-colon)` when no explicit code was given.
+        if not self.code:
+            subject = self.title.split(":", 1)[-1]
+            object.__setattr__(self, "code", f"{self.kind}:{_slug(subject)}")
 
     def sort_key(self) -> Tuple[int, int, str, str]:
         # CRP R1-F4: byte-stable (severity, curated-kind-priority, kind, title) — no `stage` on Advisory.
@@ -92,7 +108,7 @@ class Advisory:
 
     def to_dict(self) -> dict:
         d = {"kind": self.kind, "severity": self.severity, "title": self.title,
-             "detail": self.detail, "action": self.action}
+             "detail": self.detail, "action": self.action, "code": self.code}
         if self.command is not None:
             d["command"] = self.command
         return d
@@ -122,6 +138,37 @@ def _stage_done(state: Any, key: str) -> bool:
 
 # ── Schema-shape insights (FR-RCA-5) ───────────────────────────────────────────────────────────────
 
+_FK_SUFFIX_RE = re.compile(r"^(?P<stem>.+?)(?:Id|_id|_fk)$")
+
+
+def _model_has_pk(model: Any) -> bool:
+    return (any(f.is_id for f in model.fields)
+            or any(str(a).startswith("@@id") for a in model.block_attributes))
+
+
+def _likely_fk_advisories(schema: Any) -> List[Advisory]:
+    """A scalar `<name>Id` whose `<name>` names a model, with no relation to it → probable missing FK."""
+    model_by_lower = {name.lower(): name for name in schema.models}
+    out: List[Advisory] = []
+    for mname, m in schema.models.items():
+        rel_types = {f.type for f in m.fields if schema.is_relation_field(f)}
+        for f in m.fields:
+            if f.is_id or schema.is_relation_field(f):
+                continue
+            match = _FK_SUFFIX_RE.match(f.name)
+            if not match:
+                continue
+            target = model_by_lower.get(match.group("stem").lower())
+            if target and target not in rel_types:
+                out.append(Advisory(
+                    KIND_SCHEMA_SHAPE, SEVERITY_WARN, f"Possible missing relation: {mname}.{f.name}",
+                    _bound(f"`{mname}.{f.name}` looks like a foreign key to `{target}` but no @relation links them."),
+                    f"Add a `{target}` relation field with @relation, then re-promote the contract.",
+                    CMD_GENERATE_CONTRACT_PROMOTE, code=f"schema-shape:likely-fk:{_slug(mname + '-' + f.name)}",
+                ))
+    return out
+
+
 def _schema_advisories(state: Any, schema_text: Optional[str]) -> List[Advisory]:
     # Emptiness (CRP R1-F5): "schema present" == the data-model gate (`_present`, size>0), surfaced as
     # the `data_model` stage being done. A zero-byte schema reads as "no schema yet", never "unparseable".
@@ -130,7 +177,7 @@ def _schema_advisories(state: Any, schema_text: Optional[str]) -> List[Advisory]
             KIND_SCHEMA_SHAPE, SEVERITY_INFO, "No data model yet",
             "The schema.prisma contract is the front bookend everything derives from; it is not present yet.",
             "Start with the data model: interview → requirements brief → promote the contract.",
-            CMD_RED_CARPET_AGENT,
+            CMD_RED_CARPET_AGENT, code="schema-shape:none",
         )]
     try:
         from ..languages.prisma_parser import parse_prisma_schema
@@ -140,6 +187,7 @@ def _schema_advisories(state: Any, schema_text: Optional[str]) -> List[Advisory]
             KIND_SCHEMA_SHAPE, SEVERITY_INFO, "Schema not parseable at $0",
             "The schema is present but the $0 parser could not read it; the cascade's own gate is authoritative.",
             "Review prisma/schema.prisma if the cascade later reports a schema error.",
+            code="schema-shape:unparseable",
         )]
     models = schema.models
     n = len(models)
@@ -148,12 +196,12 @@ def _schema_advisories(state: Any, schema_text: Optional[str]) -> List[Advisory]
             KIND_SCHEMA_SHAPE, SEVERITY_WARN, "Schema declares no models",
             "prisma/schema.prisma parsed but contains no `model` blocks.",
             "Add at least one entity, then re-promote the contract.",
-            CMD_GENERATE_CONTRACT_PROMOTE,
+            CMD_GENERATE_CONTRACT_PROMOTE, code="schema-shape:no-models",
         )]
     out: List[Advisory] = [Advisory(
         KIND_SCHEMA_SHAPE, SEVERITY_INFO, f"Data model: {n} {'entity' if n == 1 else 'entities'}",
         f"The contract declares {n} model(s) — a project-scale signal.",
-        "No action needed — informational.",
+        "No action needed — informational.", code="schema-shape:count",
     )]
     # Relation islands (OQ-D false-positive guard): only when >1 model AND ≥1 has zero relation fields.
     if n > 1:
@@ -167,7 +215,28 @@ def _schema_advisories(state: Any, schema_text: Optional[str]) -> List[Advisory]
                 KIND_SCHEMA_SHAPE, SEVERITY_WARN, f"{len(islands)} of {n} models are unlinked",
                 _bound(f"Models with no relation fields: {shown}. Likely missing foreign keys / relations."),
                 "Add relations (e.g. a foreign-key field + @relation) then re-promote the contract.",
-                CMD_GENERATE_CONTRACT_PROMOTE,
+                CMD_GENERATE_CONTRACT_PROMOTE, code="schema-shape:islands",
+            ))
+    # FR-RCA-14 — expanded diagnostics (all reuse the parsed schema; info/warn only, never a gate).
+    # No primary key (per model).
+    for mname, m in models.items():
+        if not _model_has_pk(m):
+            out.append(Advisory(
+                KIND_SCHEMA_SHAPE, SEVERITY_WARN, f"Model has no primary key: {mname}",
+                f"`{mname}` declares neither an @id field nor an @@id block key.",
+                "Add an @id (or @@id) so the cascade can generate CRUD + findUnique.",
+                CMD_GENERATE_CONTRACT_PROMOTE, code=f"schema-shape:no-pk:{_slug(mname)}",
+            ))
+    # Likely foreign key with no relation.
+    out.extend(_likely_fk_advisories(schema))
+    # Empty enum.
+    for ename, variants in (schema.enums or {}).items():
+        if not variants:
+            out.append(Advisory(
+                KIND_SCHEMA_SHAPE, SEVERITY_WARN, f"Empty enum: {ename}",
+                f"enum `{ename}` declares no variants.",
+                "Add variants or remove the enum, then re-promote the contract.",
+                CMD_GENERATE_CONTRACT_PROMOTE, code=f"schema-shape:empty-enum:{_slug(ename)}",
             ))
     return out
 

@@ -1,8 +1,8 @@
 # Red Carpet Prescriptive Advisor — Implementation Plan
 
-**Version:** 0.2 (Post-CRP R1)
+**Version:** 0.3 (Do-now enhancement batch)
 **Date:** 2026-07-02
-**Requirements:** `RED_CARPET_PRESCRIPTIVE_ADVISOR_REQUIREMENTS.md` (v0.3)
+**Requirements:** `RED_CARPET_PRESCRIPTIVE_ADVISOR_REQUIREMENTS.md` (v0.4)
 **Branch:** `feat/red-carpet-advisor` (worktree off `origin/main` at
 `~/Documents/dev/startd8-red-carpet-advisor` — the RCT spine lives on `origin/main`).
 
@@ -135,6 +135,44 @@
 - Extend `test_red_carpet_*` for `to_dict` additive keys + prescriptive `reflection_text`.
 - MCP tool read-only introspection test (no write hint; returns the staged map) — named server only (R1-F6).
 - **Web-rail escaping (R1-S4):** advisory `detail` with `<img onerror>` renders escaped.
+
+### Step 12 — Expanded schema diagnostics (FR-RCA-14)
+- In `red_carpet_advisor._schema_advisories`, after the island check, add (all reuse the parsed
+  `PrismaSchema`, no new parser):
+  - **no primary key** — `not any(f.is_id for f in m.fields) and not any(a.startswith("@@id") for a in
+    m.block_attributes)` → `warn` (code `schema-shape:no-pk`).
+  - **likely FK without relation** — for each scalar field whose name matches `(?i)^(.*)(?:Id|_id)$`,
+    title-case the stem; if it names a declared model AND the owning model has no relation field of that
+    type → `warn` (code `schema-shape:likely-fk`). Skip when a relation to that model already exists.
+  - **empty enum** — iterate `schema.enums`; a zero-variant enum → `warn` (code `schema-shape:empty-enum`).
+- Keep severities `info`/`warn` only. Cap already applies downstream; these are per-model so guard volume
+  by emitting at most one of each kind per model / one enum advisory (bounded).
+
+### Step 13 — `--check` exit mode (FR-RCA-15)
+- `cli_kickoff.py::red_carpet_cmd`: add `check: bool = typer.Option(False, "--check", …)`. When set,
+  build state (read-only), count `error`-severity advisories, print a one-line summary, and
+  `raise typer.Exit(0 if no errors else 1)`; wrap the build in try/except → `Exit(2)` on internal error.
+  Reuse the existing `_EXIT_*` constants if present, else literal codes. `--check` is exclusive of
+  `--agent` (read-only).
+
+### Step 14 — Advisory telemetry (FR-RCA-16)
+- `telemetry.py`: add `EV_RED_CARPET_ADVICE = "red_carpet_advice"`.
+- `red_carpet.py::record_red_carpet_progress`: after the stage/offer events, emit `EV_RED_CARPET_ADVICE`
+  with **numeric-only** attrs — `n_advisories`, `n_error`, `n_warn`, `n_info`, `n_next_steps`, and
+  `kind_<k>` counts. No titles/details/paths (bounded-attr discipline).
+
+### Step 15 — Payload version + advisory code (FR-RCA-17)
+- `red_carpet_advisor.Advisory`: add `code: str = ""` + a `__post_init__` (frozen-safe via
+  `object.__setattr__`) that derives `f"{kind}:{slug(subject-from-title)}"` when `code` is empty; the
+  schema-shape sites pass an explicit stable `code`. `to_dict` includes `code`.
+- `red_carpet.py`: add `_RED_CARPET_SCHEMA_VERSION = 1`; `RedCarpetState.to_dict` emits `schema_version`.
+
+### Step 16 — Tests (batch)
+- Extend `test_red_carpet_advisor.py`: no-PK / likely-FK / empty-enum fire on crafted fixtures and NOT
+  on a well-formed schema; likely-FK suppressed when a relation exists.
+- `--check` exit codes: invalid-input project → 1; clean → 0 (CliRunner).
+- Telemetry: `red_carpet_advice` emits numeric-only attrs (assert no str values / no paths).
+- `to_dict` carries `schema_version`; every advisory has a non-empty, byte-stable `code`.
 
 ---
 

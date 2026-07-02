@@ -1,6 +1,6 @@
 # Red Carpet Prescriptive Advisor — Requirements
 
-**Version:** 0.3 (Post-CRP R1)
+**Version:** 0.4 (Do-now enhancement batch)
 **Date:** 2026-07-02
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -216,6 +216,47 @@ loop citing it rather than re-deriving it.
   the **top 1–3 next steps** (with commands), so the per-increment RETROSPECTIVE (FR-RCT-12) is
   prescriptive, not just descriptive. Still advisory, never a gate.
 
+### H. Do-now enhancement batch (v0.4 — value + quick wins)
+
+> Post-implementation review surfaced four high-value-per-effort enhancements. All stay inside the
+> established boundaries: `$0`/read-only/no-LLM, advisory-only (P3), no new parser/readiness (NR-1),
+> pure projection (P1). Numbered FR-RCA-14..17.
+
+- **FR-RCA-14 — Expanded schema-shape diagnostics.** Beyond island detection + entity count (FR-RCA-5),
+  the advisor derives additional `$0` insights from the **existing** `parse_prisma_schema` (no new
+  parser), each `info`/`warn` (never `error`, never a gate — NR-2/P3):
+  - **no primary key** — a model with no `@id` field and no `@@id` block attribute → `warn`;
+  - **likely foreign key without a relation** — a scalar field named `<name>Id`/`<name>_id` whose
+    `<Name>` matches a declared model, when the owning model has **no** relation field to that model →
+    `warn` ("`X.userId` looks like a foreign key with no relation to `User`");
+  - **empty enum** — a declared enum with zero variants → `warn`.
+  - **Acceptance:** each fires on a crafted fixture and does **not** fire on a well-formed schema
+    (a model with an `@id`, a real `@relation`, and populated enums produces none of these). All reuse
+    the existing parser; a false positive is `warn` at worst, never blocking.
+- **FR-RCA-15 — `--check` exit-code mode (advisory CI signal).** `startd8 kickoff red-carpet --check`
+  runs the read-only advisor and **exits**: `0` = no `error`-severity advisories; `1` = ≥1 `error`
+  advisory (a hard readiness problem — invalid input YAML `input-invalid`, or unresolved assembly inputs
+  `inputs_error`); `2` = internal error. Mirrors the existing `kickoff check --strict`
+  (`_EXIT_CONFORMANCE`) and `polish check` exit-code precedent. Read-only, `$0`, no LLM.
+  - **Boundary (NR-2/NR-5):** `--check` is an **advisory CI convenience**, not a build gate — it never
+    changes what the cascade does, and `warn`/`info` advisories never fail it. It gates on advisor
+    **`error` severity** (operational readiness), not on schema-correctness (which stays the cascade's
+    own gate). *Verify:* a project with an invalid input YAML exits 1; a clean/greenfield project (only
+    `warn`/`info`) exits 0.
+- **FR-RCA-16 — Advisory telemetry.** Extend FR-RCT-14 with a bounded `red_carpet_advice` event carrying
+  **counts only** — `n_advisories`, `n_error`, `n_warn`, `n_info`, `n_next_steps` — plus a per-kind
+  count map. **No** titles, details, values, or paths (the bounded-attr allow-list, same discipline as
+  the stage funnel). Emitted by the conductor on the same transition hook as the stage funnel
+  (`record_red_carpet_progress`), so it rides the interactive loop without making the pure read model
+  emit side-effects. Feeds the kickoff-funnel dashboard. *Verify:* the event emits with only numeric
+  attrs; no advisory text appears in the trace.
+- **FR-RCA-17 — Payload versioning + stable advisory code.** `RedCarpetState.to_dict()` gains a
+  `schema_version` (parity with `kickoff_state_tool`, so MCP/web consumers can evolve safely), and each
+  `Advisory` gains a **stable `code`** (e.g. `schema-shape:islands`, `input-gap:conventions`,
+  `cascade-blocker:<section-slug>`) for telemetry aggregation, web anchoring, and cross-turn dedup.
+  Additive/backward-compatible: existing keys unchanged. *Verify:* `to_dict()` carries `schema_version`;
+  every advisory carries a non-empty `code`; codes are byte-stable across two builds on the same input.
+
 ---
 
 ## 4. Non-Requirements
@@ -256,6 +297,12 @@ distribution path; the only genuinely-new surface wiring is the `startd8_red_car
 confirmed feasible; the schema-island false-positive guard (OQ-D), the dedupe rule (OQ-C), and the
 payload caps (OQ-E) are now stated acceptance details. `NextStep` is a new sibling of `NextAction` (not
 an overload). Ready for CRP review before implementation.*
+
+*v0.4 — Do-now enhancement batch (post-implementation value review). Adds FR-RCA-14..17 within the
+established boundaries: expanded schema diagnostics (no-PK / likely-FK-without-relation / empty-enum,
+FR-RCA-14), a `--check` advisory CI exit-code mode (FR-RCA-15), bounded advisory telemetry
+(`red_carpet_advice`, FR-RCA-16), and payload `schema_version` + stable advisory `code` (FR-RCA-17). All
+$0/read-only/advisory-only; no new parser or readiness. Implemented alongside this doc update.*
 
 *v0.3 — Post-CRP R1 (reviewer claude-opus-4-8-1m; 6 F + 6 S suggestions, all code-grounded against the
 real `build_assess`/`RedCarpetState` shapes). Policy: **accept all; none rejected.** Merged: the
