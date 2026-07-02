@@ -101,7 +101,7 @@ def _prefill_actions(root: Path, domains_status: dict) -> List[WizardAction]:
             continue   # unseeded key / missing file / round-trip fail → skip (FR-WD-7 precondition)
         out.append(WizardAction(
             "value_inputs",
-            found=f"`{f.value_path}` seeded (provenance={f.provenance_default})",
+            found=f"{f.label} — currently a default",   # KICKOFF_UX FR-UX-10: plain, no value_path/provenance jargon
             needed="a confirmed value",
             action_kind="capture",
             proposal=ProposedAction("capture", {"value_path": f.value_path, "value": default_val},
@@ -124,8 +124,8 @@ def wizard_prepopulate(project_root: str | Path, inventory: dict, state: Any,
             shown = ", ".join(models[:4]) + ("…" if len(models) > 4 else "")
             out.append(WizardAction(
                 "data_model",
-                found=f"{len(models)} Pydantic model file(s): {shown}",
-                needed="a confirmed prisma/schema.prisma",
+                found=f"{len(models)} existing data file(s): {shown}",   # KICKOFF_UX FR-UX-10 — plain
+                needed="Your data",
                 action_kind="command",
                 command=_DERIVE_COMMAND,
             ))
@@ -141,7 +141,7 @@ def wizard_prepopulate(project_root: str | Path, inventory: dict, state: Any,
                     out.append(WizardAction(
                         "data_model",
                         found=f"a requirements doc: {prd}",
-                        needed="a confirmed requirements brief",
+                        needed="Your data",                 # KICKOFF_UX FR-UX-10 — plain
                         action_kind="brief",
                         proposal=ProposedAction("brief", {"source": text}, id=_new_id()),
                     ))
@@ -150,8 +150,8 @@ def wizard_prepopulate(project_root: str | Path, inventory: dict, state: Any,
     if not _package_present(root):
         out.append(WizardAction(
             "value_inputs",
-            found="no kickoff inputs package on disk",
-            needed="scaffold the inputs package",
+            found="no settings yet",                    # KICKOFF_UX FR-UX-10 — plain
+            needed="Your settings",
             action_kind="instantiate",
             proposal=_instantiate_proposal(),
         ))
