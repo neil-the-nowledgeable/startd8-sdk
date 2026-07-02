@@ -48,6 +48,7 @@ from startd8.stakeholder_panel.adapters import (
     AdaptResult,
     get_adapter,
 )
+from startd8.stakeholder_panel.budget import budget_preflight
 from startd8.stakeholder_panel.grounding_guard import (
     check_grounding,
     unsupported_specifics,
@@ -116,6 +117,7 @@ __all__ = [
     "Consultation",
     "check_grounding",
     "unsupported_specifics",
+    "budget_preflight",
     "Adapter",
     "AdapterError",
     "AdaptResult",

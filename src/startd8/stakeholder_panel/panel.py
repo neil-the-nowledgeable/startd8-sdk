@@ -158,6 +158,16 @@ class StakeholderPanel:
         if self._closed:
             raise PanelClosedError(f"panel session {self.session_id} is closed")
 
+    def preflight_budget(self, n_questions: int) -> None:
+        """Run the injected budget preflight for *n_questions* about-to-be-paid asks (FR-17).
+
+        No-op when no preflight was configured. Raises (e.g. ``BudgetExceededError``) to signal the
+        budget would be exceeded, so a caller can abort or degrade **before** any spend. Shared by
+        :meth:`ask_all` and the VIPP consult pass so both paid surfaces honor the same gate.
+        """
+        if self._budget_preflight is not None:
+            self._budget_preflight(n_questions)
+
     # ── queries ──────────────────────────────────────────────────────────────
     async def ask(
         self, role_id: str, question: str, *, value_path: str = ""
@@ -217,9 +227,8 @@ class StakeholderPanel:
         to_ask = personas[:effective_cap]
         deferred = personas[effective_cap:]
 
-        if self._budget_preflight is not None:
-            # Raises (e.g. BudgetExceededError) to abort BEFORE any spend (FR-17).
-            self._budget_preflight(len(to_ask))
+        # Raises (e.g. BudgetExceededError) to abort BEFORE any spend (FR-17).
+        self.preflight_budget(len(to_ask))
 
         answered = await asyncio.gather(
             *(self.ask(p.role_id, question, value_path=value_path) for p in to_ask)

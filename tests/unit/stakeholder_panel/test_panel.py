@@ -89,6 +89,24 @@ def test_ask_all_cap_bounds_paid_calls_and_defers_rest(
     panel.close()
 
 
+def test_preflight_budget_delegates_and_is_noop_without_a_gate(
+    two_persona_roster, scripted_factory
+):
+    seen = []
+    panel = _panel(
+        two_persona_roster,
+        scripted_factory(),
+        budget_preflight=lambda n: seen.append(n),
+    )
+    panel.preflight_budget(3)
+    assert seen == [3]
+    panel.close()
+    # No gate configured → no-op, no raise.
+    p2 = _panel(two_persona_roster, scripted_factory())
+    p2.preflight_budget(99)
+    p2.close()
+
+
 def test_ask_all_budget_preflight_aborts_before_spend(
     two_persona_roster, scripted_factory
 ):

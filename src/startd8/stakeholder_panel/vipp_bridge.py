@@ -75,8 +75,10 @@ def consult_panel(
     """Route every OMIT question in *report* to the panel and collect synthetic advisories.
 
     ``cap`` bounds the number of *paid* asks across the whole pass (FR-17); routed questions beyond
-    it are returned as ``deferred``. No-match questions stay OMIT (FR-9c); a persona failure yields
-    ``unavailable`` and never aborts the pass (FR-16).
+    it are returned as ``deferred``. Before any spend the pass runs the panel's **budget preflight**
+    (FR-17): if the budget would be exceeded it **degrades** — every routed question is deferred and
+    nothing is asked (the deterministic verdicts are unaffected). No-match questions stay OMIT
+    (FR-9c); a persona failure yields ``unavailable`` and never aborts the pass (FR-16).
     """
     # Flatten OMIT questions (with routing) in deterministic disposition/question order.
     routed: List[Dict[str, Any]] = []
@@ -94,6 +96,36 @@ def consult_panel(
 
     if not routed:
         return Consultation()
+
+    # FR-17 budget preflight over the whole paid pass, BEFORE any spend. The number about to be
+    # asked = routed questions with a matched persona, capped. On denial, degrade: defer everything.
+    matched = [it for it in routed if it["role_id"] is not None]
+    to_ask = matched if cap is None else matched[: max(0, cap)]
+    preflight = getattr(panel, "preflight_budget", None)
+    if to_ask and callable(preflight):
+        try:
+            preflight(len(to_ask))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the preflight signals a budget deny by raising
+            logger.warning(
+                "panel pass budget-denied (%d asks); deferring all, no spend: %s",
+                len(to_ask),
+                exc,
+            )
+            advisories = [
+                {
+                    "proposal_id": it["proposal_id"],
+                    "symbol": it["symbol"],
+                    "claim": it["claim"],
+                    "status": (
+                        "no-stakeholder" if it["role_id"] is None else "deferred"
+                    ),
+                    **({"role_id": it["role_id"]} if it["role_id"] else {}),
+                }
+                for it in routed
+            ]
+            return Consultation(advisories=advisories, cost_usd=0.0, llm_used=False)
 
     async def _run() -> List[Dict[str, Any]]:
         advisories: List[Dict[str, Any]] = []
