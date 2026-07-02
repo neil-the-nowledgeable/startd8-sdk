@@ -55,3 +55,35 @@ def test_gate_never_leaks_secret_values(tmp_path):
         encoding="utf-8")
     blob = json.dumps(run_deploy_gate_subprocess(tmp_path))
     assert "SUPER_SECRET_XYZ" not in blob
+
+
+# --- resolve_deployment_readiness: the single readiness+staleness derivation (review-fix) ----------
+
+def _manifest(app_yaml: str):
+    from startd8.scaffold_codegen.manifest import parse_app_manifest
+    return parse_app_manifest(app_yaml)
+
+
+def test_resolve_readiness_generated_and_stale(tmp_path):
+    from startd8.scaffold_codegen.deploy_readiness import resolve_deployment_readiness
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "infra-contract.yaml").write_text(
+        "environments:\n  prod: {}\nbindings:\n  - {name: db, status: pending}\n", encoding="utf-8")
+    # prod present in contract → generated; adding staging (absent) → stale.
+    r1, u1 = resolve_deployment_readiness(tmp_path, _manifest(
+        _COHERENT_DEPLOYED + "  environments:\n    prod: {}\n"))
+    assert r1 == "generated" and u1 == 1
+    r2, _ = resolve_deployment_readiness(tmp_path, _manifest(
+        _COHERENT_DEPLOYED + "  environments:\n    prod: {}\n    staging: {}\n"))
+    assert r2 == "stale"
+
+
+def test_resolve_readiness_no_false_stale_when_contract_untracked(tmp_path):
+    # A contract that does NOT track environments must NOT force `stale` (review-fix: empty→None).
+    from startd8.scaffold_codegen.deploy_readiness import resolve_deployment_readiness
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "infra-contract.yaml").write_text(
+        "bindings:\n  - {name: db, status: bound}\n", encoding="utf-8")  # no environments tracked
+    readiness, _ = resolve_deployment_readiness(tmp_path, _manifest(
+        _COHERENT_DEPLOYED + "  environments:\n    prod: {}\n    staging: {}\n"))
+    assert readiness == "generated"  # not "stale" — can't confirm envs, so no false alarm

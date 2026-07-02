@@ -98,20 +98,23 @@ def _contract_path(project_root: Path) -> Path:
     return project_root / "deploy" / "infra-contract.yaml"
 
 
-def count_unbound_bindings(project_root: Path) -> Optional[int]:
-    """Count operator bindings still unbound in ``deploy/infra-contract.yaml``.
-
-    Returns ``None`` when the contract is absent or unparseable (the cloud-native infra-contract,
-    FR-CND-26, may not exist yet) — callers treat ``None`` as "unknown", never as zero.
-    """
+def _load_contract(project_root: Path) -> Optional[dict]:
+    """Parse ``deploy/infra-contract.yaml`` once. ``None`` = absent / unparseable / non-mapping."""
     contract = _contract_path(project_root)
     if not contract.is_file():
         return None
     try:
         import yaml  # lazy: only needed when a contract exists
 
-        data = yaml.safe_load(contract.read_text(encoding="utf-8")) or {}
+        data = yaml.safe_load(contract.read_text(encoding="utf-8"))
     except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _unbound_from_data(data: Optional[dict]) -> Optional[int]:
+    """Unbound-binding count from an already-parsed contract. ``None`` = unknown."""
+    if data is None:
         return None
     bindings = data.get("bindings") or data.get("operator_bindings") or []
     if not isinstance(bindings, list):
@@ -122,23 +125,11 @@ def count_unbound_bindings(project_root: Path) -> Optional[int]:
     )
 
 
-def contract_environments(project_root: Path) -> Optional[set]:
-    """The set of environment names represented in ``deploy/infra-contract.yaml``.
-
-    Returns ``None`` when the contract is absent or unparseable (caller treats as "unknown", not
-    empty). Used for the FR-CDA-8 staleness check: declared envs ⊄ contract envs ⇒ ``stale``.
-    Tolerant of both a top-level ``environments:`` mapping/list and per-binding ``environment`` tags.
-    """
-    contract = _contract_path(project_root)
-    if not contract.is_file():
-        return None
-    try:
-        import yaml
-
-        data = yaml.safe_load(contract.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return None
-    if not isinstance(data, dict):
+def _envs_from_data(data: Optional[dict]) -> Optional[set]:
+    """Environment names an already-parsed contract represents. ``None`` = not tracked / unknown
+    (so staleness is *not* asserted when the contract simply doesn't model environments — avoids a
+    false-positive ``stale``)."""
+    if data is None:
         return None
     envs: set = set()
     raw = data.get("environments")
@@ -149,7 +140,44 @@ def contract_environments(project_root: Path) -> Optional[set]:
     for b in (data.get("bindings") or data.get("operator_bindings") or []):
         if isinstance(b, dict) and isinstance(b.get("environment"), str):
             envs.add(b["environment"])
-    return envs
+    return envs or None  # empty ⇒ "not tracked", not "zero envs"
+
+
+def count_unbound_bindings(project_root: Path) -> Optional[int]:
+    """Count operator bindings still unbound in ``deploy/infra-contract.yaml`` (``None`` = unknown)."""
+    return _unbound_from_data(_load_contract(project_root))
+
+
+def contract_environments(project_root: Path) -> Optional[set]:
+    """The environment names represented in the contract (``None`` = absent/unparseable/not tracked)."""
+    return _envs_from_data(_load_contract(project_root))
+
+
+def resolve_deployment_readiness(project_root, manifest) -> Tuple[str, Optional[int]]:
+    """The SINGLE derivation of ``(readiness, unbound_bindings)`` for a manifest — used by BOTH
+    ``concierge assess`` (FR-CDA-1) and the wireframe section (FR-CDA-2) so the FR-CDA-8 staleness
+    rule can't diverge between them. Reads the contract at most once.
+
+    ``installed`` → ``not-declared``. ``deployed`` → ``declared-not-generated`` (no ``deploy/`` tree)
+    / ``generated`` / ``unknown`` (tree but no/unparseable contract) / ``stale`` (declared envs ⊄
+    the contract's tracked envs, FR-CDA-8).
+    """
+    root = Path(project_root)
+    mode = getattr(manifest, "deployment_mode", None)
+    if mode != "deployed":
+        return READINESS_NOT_DECLARED, None
+    if not (root / "deploy").is_dir():
+        return READINESS_DECLARED_NOT_GENERATED, None
+    data = _load_contract(root)
+    if data is None:
+        return READINESS_UNKNOWN, None
+    unbound = _unbound_from_data(data)
+    readiness = READINESS_GENERATED
+    if getattr(manifest, "has_environments", False):
+        envs = _envs_from_data(data)
+        if envs is not None and not set(manifest.deploy_environments) <= envs:
+            readiness = "stale"
+    return readiness, unbound
 
 
 def readiness_state(project_root: Path, *, mode: Optional[str]) -> str:
@@ -169,14 +197,7 @@ def readiness_state(project_root: Path, *, mode: Optional[str]) -> str:
     deploy_dir = project_root / "deploy"
     if not deploy_dir.is_dir():
         return READINESS_DECLARED_NOT_GENERATED
-    contract = _contract_path(project_root)
-    if not contract.is_file():
-        return READINESS_UNKNOWN
-    try:
-        import yaml
-
-        yaml.safe_load(contract.read_text(encoding="utf-8"))
-    except Exception:
+    if not _contract_path(project_root).is_file() or _load_contract(project_root) is None:
         return READINESS_UNKNOWN
     return READINESS_GENERATED
 
@@ -224,12 +245,14 @@ def evaluate_deploy_coherence(project_root: Path) -> Tuple[dict, int]:
         manifest, has_auth_seam=(mode == "deployed"), has_tenant=manifest.has_tenant
     )
     verdict, exit_code = deploy_coherence_verdict(findings, mode=mode)
+    # Single derivation of readiness + unbound (staleness-aware), shared with assess/wireframe.
+    readiness, unbound = resolve_deployment_readiness(project_root, manifest)
     payload = {
         "schemaVersion": SCHEMA_VERSION,
         "verdict": verdict,
         "mode": mode,
         "findings": [finding_to_dict(f) for f in findings],
-        "unbound_bindings": count_unbound_bindings(project_root),
-        "readiness": readiness_state(project_root, mode=mode),
+        "unbound_bindings": unbound,
+        "readiness": readiness,
     }
     return payload, exit_code

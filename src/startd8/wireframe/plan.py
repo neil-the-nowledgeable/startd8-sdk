@@ -1035,19 +1035,10 @@ def _deployment_section(app_state: "_ManifestState", project_root: Optional[Path
             except Exception:  # renderer is advisory here; never break the wireframe
                 pass
         if project_root is not None:
-            from startd8.scaffold_codegen.deploy_readiness import (
-                contract_environments,
-                count_unbound_bindings,
-                readiness_state,
-            )
-            readiness = readiness_state(project_root, mode=manifest.deployment_mode)
-            # `stale`: declared envs are not all represented in the generated contract (FR-CDA-8).
-            if readiness == "generated" and manifest.has_environments:
-                contract_envs = contract_environments(project_root)
-                if contract_envs is not None and not set(manifest.deploy_environments) <= contract_envs:
-                    readiness = "stale"
+            from startd8.scaffold_codegen.deploy_readiness import resolve_deployment_readiness
+            # Single source shared with `concierge assess`: readiness + unbound + FR-CDA-8 staleness.
+            readiness, unbound = resolve_deployment_readiness(project_root, manifest)
             items.append(WireframeItem("readiness", Status.PLANNED, readiness))
-            unbound = count_unbound_bindings(project_root)
             if unbound is not None:
                 items.append(WireframeItem("unbound-bindings", Status.PLANNED, str(unbound)))
 

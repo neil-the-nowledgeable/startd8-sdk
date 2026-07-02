@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import yaml
 
@@ -184,7 +184,6 @@ def _assess_deployment(root: Path) -> Dict[str, Any]:
     """
     try:
         from startd8.scaffold_codegen.deploy_readiness import (
-            contract_environments,
             evaluate_deploy_coherence,
             find_app_yaml,
         )
@@ -202,13 +201,9 @@ def _assess_deployment(root: Path) -> Dict[str, Any]:
         return {"status": "invalid", "readiness": "unknown", "verdict": "hard",
                 "reason": f"app.yaml unparseable (fail-closed): {exc}"}
 
+    # Single source (R1-F2): verdict + unbound + staleness-aware readiness all come from the SAME
+    # `evaluate_deploy_coherence` the subprocess wraps — no second reader, no re-derived staleness.
     payload, _exit = evaluate_deploy_coherence(root)
-    readiness = payload.get("readiness")
-    # FR-CDA-8 staleness: declared envs not all present in the generated contract → advisory `stale`.
-    if readiness == "generated" and manifest.has_environments:
-        contract_envs = contract_environments(root)
-        if contract_envs is not None and not set(manifest.deploy_environments) <= contract_envs:
-            readiness = "stale"
 
     return {
         "status": "ok",
@@ -219,7 +214,7 @@ def _assess_deployment(root: Path) -> Dict[str, Any]:
             "trust_gateway": manifest.deploy_trust_gateway,
         },
         "environments": list(manifest.deploy_environments),
-        "readiness": readiness,
+        "readiness": payload.get("readiness"),
         "unbound_bindings": payload.get("unbound_bindings"),
         "verdict": payload.get("verdict"),
         "findings": [  # code/severity/message only — no secret values
