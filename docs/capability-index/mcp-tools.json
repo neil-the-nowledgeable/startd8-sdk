@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "startd8.agent.generate",
-      "description": "Send prompts to any LLM provider through a unified async interface\n\n\nAvoid:\n- Never call provider APIs directly \u2014 use resolve_agent_spec() for consistency\n- Don't assume response format differs by provider \u2014 GenerateResult normalizes all",
+      "description": "Send prompts to any LLM provider through a unified async interface\n\n\nAvoid:\n- Never call provider APIs directly — use resolve_agent_spec() for consistency\n- Don't assume response format differs by provider — GenerateResult normalizes all",
       "inputSchema": {
         "type": "object",
         "required": [
@@ -582,7 +582,7 @@
     },
     {
       "name": "startd8.codegen.import_path",
-      "description": "Deterministic ($0) generated-app import path \u2014 inverse of export (imports.yaml grammar + from_json importer + paste/upload surface)",
+      "description": "Deterministic ($0) generated-app import path — inverse of export (imports.yaml grammar + from_json importer + paste/upload surface)",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -610,7 +610,7 @@
     },
     {
       "name": "startd8.codegen.presentation_polish",
-      "description": "$0 deterministic Tier-1 design system \u2014 CSS-only accessible restyle of a generated app",
+      "description": "$0 deterministic Tier-1 design system — CSS-only accessible restyle of a generated app",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -638,7 +638,7 @@
     },
     {
       "name": "startd8.codegen.deployment_mode",
-      "description": "Installed-vs-deployed $0 deterministic mode \u2014 bake only what security requires, bind the rest at runtime",
+      "description": "Installed-vs-deployed $0 deterministic mode — bake only what security requires, bind the rest at runtime",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -694,7 +694,7 @@
     },
     {
       "name": "startd8.codegen.polyglot_construction",
-      "description": "LLM-driven element-level code generation across 5 languages (Python, Go, Node.js, Java, C#) \u2014 polyglot microservice fleets",
+      "description": "LLM-driven element-level code generation across 5 languages (Python, Go, Node.js, Java, C#) — polyglot microservice fleets",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -806,7 +806,7 @@
     },
     {
       "name": "startd8.benchmark.round3_system",
-      "description": "Round-3 SYSTEM benchmark \u2014 build a working integrated 9-service polyglot Online Boutique, scored by a real user journey with honest per-service fault attribution",
+      "description": "Round-3 SYSTEM benchmark — build a working integrated 9-service polyglot Online Boutique, scored by a real user journey with honest per-service fault attribution",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -833,6 +833,55 @@
       }
     },
     {
+      "name": "startd8.kickoff.red_carpet_state",
+      "description": "Red Carpet staged build map + prescriptive advisor (read-only, $0, no LLM). MCP tool: startd8_red_carpet_state. Returns stages, next gap, cascade-offerable + unmet gates, advisories (schema-shape insights + per-input readiness diagnosis + cascade blockers) and a ranked, command-bearing next-step playbook.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_root": {
+            "type": "string",
+            "description": "Project root to inspect (defaults to CWD)"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "type": "integer"
+          },
+          "stages": {
+            "type": "array"
+          },
+          "next_stage": {
+            "type": "string"
+          },
+          "cascade_offerable": {
+            "type": "boolean"
+          },
+          "unmet_gates": {
+            "type": "array"
+          },
+          "advisories": {
+            "type": "array"
+          },
+          "next_steps": {
+            "type": "array"
+          },
+          "summary": {
+            "type": "object"
+          }
+        }
+      },
+      "annotations": {
+        "manifest_id": "startd8.kickoff",
+        "category": "observe",
+        "maturity": "beta",
+        "confidence": 0.9,
+        "readOnlyHint": true
+      }
+    },
+    {
       "name": "startd8.languages.profiles",
       "description": "Multi-language profile registry (5 languages) with entry-point discovery and resolve_language()",
       "inputSchema": {
@@ -847,5 +896,5 @@
       }
     }
   ],
-  "tool_count": 54
+  "tool_count": 55
 }
