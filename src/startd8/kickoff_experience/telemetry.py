@@ -63,6 +63,7 @@ EV_CHAT_REFUSED = "chat_refused"
 EV_RED_CARPET_STARTED = "red_carpet_started"
 EV_RED_CARPET_STAGE = "red_carpet_stage"             # attrs: stage, status (next | done)
 EV_RED_CARPET_CASCADE_OFFERED = "red_carpet_cascade_offered"
+EV_RED_CARPET_ADVICE = "red_carpet_advice"           # FR-RCA-16 — numeric counts only, never text/paths
 
 FUNNEL_EVENTS = (
     EV_SESSION_STARTED,
@@ -85,6 +86,7 @@ FUNNEL_EVENTS = (
     EV_RED_CARPET_STARTED,
     EV_RED_CARPET_STAGE,
     EV_RED_CARPET_CASCADE_OFFERED,
+    EV_RED_CARPET_ADVICE,
 )
 
 # Attribute allowlist for Concierge events (R2-F4 privacy): NEVER emit free-text friction fields or
@@ -100,7 +102,12 @@ WM2_EVENT_ATTR_ALLOWLIST = frozenset(
      # chat_turn numeric telemetry (FR-WM2-14a) — never the user message text
      "turns", "tokens", "cost_usd", "stop_reason",
      # Red Carpet stage funnel (FR-RCT-14) — bounded stage slugs, never interview text or paths
-     "stage", "status"}
+     "stage", "status",
+     # Red Carpet advisory summary (FR-RCA-16) — NUMERIC COUNTS ONLY, never advisory text/values/paths.
+     # Severity counts + n_next_steps + a fixed per-kind count (kinds are a closed vocabulary).
+     "n_advisories", "n_error", "n_warn", "n_info", "n_next_steps",
+     "n_schema_shape", "n_input_gap", "n_input_invalid", "n_cascade_blocker",
+     "n_provenance_review", "n_stakeholder"}
 )
 
 

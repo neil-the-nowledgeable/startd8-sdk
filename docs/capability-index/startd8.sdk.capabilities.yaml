@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.10.0"
+version: "1.11.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1335,6 +1335,45 @@ capabilities:
         description: "VIPP_REQUIREMENTS.md (v0.3, CRP R1) + VIPP_PLAN.md (M0–M6)"
     confidence: 0.85
 
+  - capability_id: startd8.kickoff.red_carpet_advisor
+    category: observe
+    maturity: beta
+    summary: "Deterministic ($0, read-only, no-LLM) prescriptive advisor on the Red Carpet kickoff experience: derives schema-shape insights, per-input readiness diagnosis, cascade-blocker translation, and a ranked, command-bearing next-step playbook — surfaced on CLI (incl. `--check` exit-code + `--json` summary), the agent loop, the web `/red-carpet.json` rail, and a read-only MCP tool `startd8_red_carpet_state`"
+    audiences: [workflow_developer, integration_developer, ai_agent, gtm]
+    description: |
+      Turns the state the Red Carpet spine already computes into prescriptive guidance a greenfield
+      user (or the conducting agent) can act on — without any LLM cost. A pure projection of
+      `build_assess` + the on-disk `schema.prisma` (parsed by the existing `prisma_parser`) + the RCT
+      stage map yields two outputs, attached to `RedCarpetState.to_dict()` (the single source of truth
+      all surfaces read): (1) `advisories` — insights + per-input readiness diagnosis, each with a
+      *why*, a *what-to-do*, a stable `code`, and (where one exists) the exact CLI command; schema-shape
+      checks flag relation islands, missing primary keys, likely-foreign-keys-without-a-relation, and
+      empty enums; value-input gaps name the specific fields to fill; the stakeholder roster and cascade
+      blockers are diagnosed too. (2) `next_steps` — a ranked, command-bearing playbook (data model →
+      manifests → value inputs → run), weaving the wireframe preview into the run step. Delivered to
+      four surfaces from one `to_dict()`: the CLI panel (`startd8 kickoff red-carpet`, with a `--check`
+      advisory CI exit-code mode and a `--json` summary header), the agentic chat loop (a proactive
+      turn-0 banner + a stage-aware prompt that cites the advisories), the web build-progress rail
+      (`/red-carpet.json`, HTML-escaped), and a read-only `startd8_red_carpet_state` MCP tool. Advisory
+      only — never a gate (removing it does not change `cascade_offerable`); bounded/leak-free (no
+      absolute paths, capped strings) and safe over telemetry (a numeric-only `red_carpet_advice`
+      event). Built requirements-first (reflective-requirements → CRP R1 → 3 batches).
+    triggers: ["red carpet", "kickoff advisor", "next steps", "what should I do next", "readiness diagnosis", "schema insights", "missing foreign key", "red_carpet_state", "kickoff guidance", "red-carpet --check"]
+    evidence:
+      - type: code
+        ref: src/startd8/kickoff_experience/red_carpet_advisor.py
+        description: "Advisory/NextStep, derive_advisories/build_playbook/cap_advisories; schema-shape via prisma_parser; dedupe + byte-stable sort"
+      - type: code
+        ref: src/startd8/kickoff_experience/red_carpet.py
+        description: "build_red_carpet_state/to_dict (advisories+next_steps+summary+schema_version), reflection_text, prescriptive_banner, red_carpet_advice telemetry"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_red_carpet_advisor.py
+        description: "50 tests — schema diagnostics, dedupe/caps, --check exit codes, telemetry, cross-surface parity"
+      - type: docs
+        ref: docs/design/kickoff/RED_CARPET_PRESCRIPTIVE_ADVISOR_REQUIREMENTS.md
+        description: "v0.5, FR-RCA-1..23 + CRP R1; RED_CARPET_ADVISOR_BACKLOG.md tracks deferred items"
+    confidence: 0.9
+
   # ============================================================================
   # AGENTIC LOOP — Multi-turn tool-use runtime (ported in pattern from ml-intern,
   # built on the SDK's own provider/cost/MCP layers; NOT a LiteLLM dependency)
@@ -1542,6 +1581,12 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.11.0"
+    date: "2026-07-02"
+    changes:
+      - "Added startd8.kickoff.red_carpet_advisor (observe, beta, 0.9) — deterministic ($0, read-only, no-LLM) prescriptive advisor on the Red Carpet kickoff experience: schema-shape insights (islands/no-PK/likely-FK-without-relation/empty-enum), per-input readiness diagnosis, cascade-blocker translation, and a ranked command-bearing next-step playbook. Surfaced on CLI (incl. `--check` exit-code + `--json` summary), the agent loop, the web `/red-carpet.json` rail, and a NEW read-only MCP tool `startd8_red_carpet_state`. Built requirements-first (reflective-requirements → CRP R1 → 3 batches, FR-RCA-1..23); on PR #79."
+      - "Registered the startd8_red_carpet_state MCP tool in mcp-tools.json (read-only)."
+      - "51 capabilities: 21 stable, 30 beta; observe 4→5."
   - version: "1.10.0"
     date: "2026-07-01"
     changes:

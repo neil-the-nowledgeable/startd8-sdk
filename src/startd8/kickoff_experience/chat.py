@@ -87,7 +87,10 @@ KICKOFF_AGENTIC_SYSTEM_PROMPT = (
 RED_CARPET_SYSTEM_PROMPT = (
     "You are the StartD8 Red Carpet guide: you help a user build an app FROM SCRATCH by co-authoring "
     "every input the deterministic $0 cascade needs. Tools:\n"
-    "  • red_carpet_state — the staged build map: the next gap + whether the cascade is offerable\n"
+    "  • red_carpet_state — the staged build map: the next gap, whether the cascade is offerable, plus\n"
+    "        `advisories` (computed $0 insights + per-input diagnosis) and `next_steps` (a ranked,\n"
+    "        command-bearing playbook). PRESCRIBE from these: surface the top advisories and cite the\n"
+    "        top next step (with its command). They are already computed — do NOT re-derive guidance.\n"
     "  • survey / assess / field_states — read the project's current state\n"
     "  • propose_action — RECOMMEND a write the user confirms. Use the kind for the current stage:\n"
     "        brief    {source}                 — DATA MODEL step 1: interview the user about their domain\n"
