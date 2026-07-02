@@ -25,7 +25,12 @@ from typing import List, Set, Tuple
 
 from startd8.stakeholder_panel.models import Grounding, PersonaBrief
 
-__all__ = ["check_grounding", "unsupported_specifics"]
+__all__ = [
+    "check_grounding",
+    "unsupported_specifics",
+    "extract_money",
+    "extract_percent",
+]
 
 _MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)\s?([kKmM])?")
 _PERCENT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s?%")
@@ -56,6 +61,12 @@ def _money(text: str) -> Set[float]:
 
 def _percent(text: str) -> Set[float]:
     return {_num(m.group(1)) for m in _PERCENT.finditer(text)}
+
+
+# Public aliases: the money/percent extractors are reused by the Teian contradiction guard
+# (FR-KIR-6). Exposed under stable names so that guard need not import a private symbol.
+extract_money = _money
+extract_percent = _percent
 
 
 def _temporal(text: str) -> Set[str]:

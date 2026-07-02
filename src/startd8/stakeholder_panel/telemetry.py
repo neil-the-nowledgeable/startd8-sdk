@@ -19,7 +19,20 @@ from typing import Any
 
 from startd8.agents.agentic_otel import span
 
-__all__ = ["span", "mark_error"]
+__all__ = [
+    "span",
+    "mark_error",
+    "decision_event",
+    "EV_REVIEWED",
+    "EV_APPROVED",
+    "EV_REJECTED",
+]
+
+# The human decision funnel (R4-F3): distinct events so the *human* half of the funnel is visible in
+# dashboards, not just the LLM ``panel.ask``. Content-free (IDs only, per R1-F5).
+EV_REVIEWED = "stakeholder.recommendation_reviewed"
+EV_APPROVED = "stakeholder.recommendation_approved"
+EV_REJECTED = "stakeholder.recommendation_rejected"
 
 
 def mark_error(active_span: Any, message: str) -> None:
@@ -34,4 +47,26 @@ def mark_error(active_span: Any, message: str) -> None:
     except (
         Exception
     ):  # pragma: no cover - OTel absent or proxy quirk; telemetry must never throw
+        pass
+
+
+def decision_event(
+    event: str, *, domain: str = "", role_id: str = "", value_path: str = ""
+) -> None:
+    """Emit one human-decision funnel event as a short span (R4-F3). Never throws.
+
+    Content-free by contract (R1-F5): only ``domain`` / ``role_id`` / ``value_path`` — never the
+    drafted value, rationale, or brief text (spans flow to Tempo/Loki).
+    """
+    try:
+        with span(
+            event,
+            **{
+                "recommend.domain": domain or None,
+                "recommend.role_id": role_id or None,
+                "recommend.value_path": value_path or None,
+            },
+        ):
+            pass
+    except Exception:  # pragma: no cover - telemetry must never break a CLI action
         pass

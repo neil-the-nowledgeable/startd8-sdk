@@ -26,7 +26,27 @@ from startd8.stakeholder_panel.models import (
     PanelAnswer,
     PanelQuestion,
     PersonaBrief,
+    Recommendation,
     Roster,
+)
+from startd8.stakeholder_panel.input_domains import (
+    SUPPORTED_DOMAINS,
+    DomainSpec,
+    FieldSlot,
+    get_domain,
+    resolve_owner,
+    unfilled_fields,
+)
+from startd8.stakeholder_panel.proposals import (
+    ProposalStore,
+    gc_stale_proposals,
+    latest_session,
+)
+from startd8.stakeholder_panel.recommend_provenance import (
+    ESTIMATE_PROVENANCE,
+    assert_not_authored,
+    is_estimate,
+    panel_origin,
 )
 from startd8.stakeholder_panel.provenance import (
     RatificationError,
@@ -79,6 +99,8 @@ _LAZY_PANEL = {
     "PanelClosedError",
     "UnknownPersonaError",
 }
+# The proactive pass needs a live panel; keep it lazy so the light authoring path stays LLM-free.
+_LAZY_RECOMMEND = {"recommend_inputs", "RecommendationRun"}
 
 
 def __getattr__(name: str):
@@ -87,6 +109,10 @@ def __getattr__(name: str):
         from startd8.stakeholder_panel import panel as _panel
 
         return getattr(_panel, name)
+    if name in _LAZY_RECOMMEND:
+        from startd8.stakeholder_panel import recommend as _recommend
+
+        return getattr(_recommend, name)
     if name == "Persona":
         from startd8.stakeholder_panel.persona import Persona
 
@@ -125,10 +151,27 @@ __all__ = [
     "ingest",
     "IngestResult",
     "IngestGateError",
+    # Teian — proactive input recommendations (M0/M1 light types):
+    "Recommendation",
+    "SUPPORTED_DOMAINS",
+    "DomainSpec",
+    "FieldSlot",
+    "get_domain",
+    "resolve_owner",
+    "unfilled_fields",
+    "ProposalStore",
+    "latest_session",
+    "gc_stale_proposals",
+    "ESTIMATE_PROVENANCE",
+    "is_estimate",
+    "panel_origin",
+    "assert_not_authored",
     # lazy (via __getattr__):
     "StakeholderPanel",
     "PanelError",
     "PanelClosedError",
     "UnknownPersonaError",
     "Persona",
+    "recommend_inputs",
+    "RecommendationRun",
 ]
