@@ -208,29 +208,39 @@ def inspect_cmd(
         console.print(f"[dim]preflight ok={payload['preflight']['ok']}[/dim]")
 
 
-def _render_red_carpet_state(state) -> None:
-    pct = (
-        f"{int(round((state.readiness_score or 0.0) * 100))}%"
-        if state.readiness_score is not None
-        else "—"
-    )
-    # FR-WD-2 — the user-fillable completion meter (distinct from the coarse readiness above).
-    comp = getattr(state, "completion", None)
-    meter = ""
-    if comp:
-        parts = " · ".join(f"{s['stage']} {s['filled']}/{s['total']}" for s in comp.get("stages", []))
-        deflt = f" ({comp['n_defaulted']} defaulted — review)" if comp.get("n_defaulted") else ""
-        meter = f" · [bold]{comp['overall_pct']}% complete[/bold]{deflt}"
-    console.print(f"[bold]🟥 Red Carpet[/bold] — readiness {pct}{meter}")
-    if comp and meter:
-        console.print(f"  [dim]{parts}[/dim]")
-    glyph = {"done": "[green]✓[/green]", "pending": "[yellow]…[/yellow]"}
-    for s in state.stages:
-        marker = " [cyan](next)[/cyan]" if s.key == state.next_stage else ""
-        console.print(
-            f"  {glyph.get(s.status, '?')} [bold]{s.key}[/bold]{marker} — {s.detail}"
-        )
-    # FR-RCA-9 — Insights (advisories, already severity-sorted: error → warn → info).
+def _render_red_carpet_state(state, *, verbose: bool = False) -> None:
+    """KICKOFF_UX — the focused status view: one progress spine (rendered once), one honest '% filled'
+    headline, a never-hidden error banner, and THE single next action. Full advisories/playbook only
+    under --verbose. Plain language via the single-source GLOSSARY (no jargon in the default view)."""
+    from .kickoff_experience.presentation import build_spine, headline
+
+    hl = headline(state)
+    console.print(f"[bold]🟥 Red Carpet[/bold] · [bold]{hl['pct_label']}[/bold]")
+    # FR-UX-5/F4 — error advisories are NEVER hidden, even in the default view.
+    if hl["n_errors"]:
+        console.print(f"  [red]⚠ {hl['n_errors']} problem(s) need fixing[/red] → [cyan]--verbose[/cyan]")
+
+    # FR-UX-6 — the ONE progress spine (three things + Build), glossary-named, said once.
+    glyph = {"done": "[green]✓[/green]", "next": "[cyan]→[/cyan]", "todo": "[dim]·[/dim]",
+             "ready": "[green]◆[/green]", "later": "[dim]∘[/dim]"}
+    for n in build_spine(state):
+        meter = f"  [dim]{n.filled}/{n.total}[/dim]" if n.filled is not None and n.total else ""
+        style = "dim" if (n.optional or n.status in ("todo", "later")) else "bold"
+        console.print(f"  {glyph.get(n.status, '·')} [{style}]{n.plain_name}[/{style}]{meter}")
+
+    # FR-UX-4 — the single next action (plain, from the spine — never playbook jargon).
+    na = hl["next_action"]
+    console.print(f"[bold]▸ Do next:[/bold] {na['title']}")
+    if na.get("command"):
+        console.print(f"   [cyan]{na['command']}[/cyan]")
+
+    if not verbose:
+        extra = len(getattr(state, "advisories", ()) or ()) + len(getattr(state, "next_steps", ()) or ())
+        if extra:
+            console.print(f"  [dim]{extra} more details → --verbose[/dim]")
+        return
+
+    # --verbose — the full advisory list + ranked playbook (the prior detail), plain-labeled.
     if state.advisories:
         console.print("[bold]Insights[/bold]")
         sev_style = {"error": "red", "warn": "yellow", "info": "dim"}
@@ -240,28 +250,13 @@ def _render_red_carpet_state(state) -> None:
             console.print(f"      [dim]→ {a.action}[/dim]")
             if a.command:
                 console.print(f"      [cyan]{a.command}[/cyan]")
-    # FR-RCA-9 — Next steps (the ranked, command-bearing playbook).
     if state.next_steps:
-        console.print("[bold]Next steps[/bold]")
+        console.print("[bold]Playbook[/bold]")
         for step in state.next_steps:
             cmd = f"  [cyan]{step.command}[/cyan]" if step.command else ""
             console.print(f"  {step.rank}. {step.title}{cmd}")
-
-    if state.cascade_offerable:
-        if state.preview:  # FR-RCT-11 — "here's what we'll build" ($0)
-            console.print(
-                f"[dim]Preview (wireframe): shape={state.preview.get('shape')} · "
-                f"{state.preview.get('counts')}[/dim]"
-            )
-        console.print(
-            "[green]The $0 cascade is offerable[/green] — "
-            "run [cyan]startd8 generate backend[/cyan] (and scaffold/views)."
-        )
-    else:
-        console.print(
-            f"[yellow]Cascade not offerable yet[/yellow] — unmet gates: "
-            f"{', '.join(state.unmet_gates)}."
-        )
+    if state.readiness_score is not None:
+        console.print(f"[dim]cascade readiness: {int(round(state.readiness_score * 100))}%[/dim]")
 
 
 def _run_red_carpet_wizard(project: Path) -> None:
@@ -296,15 +291,23 @@ def _run_red_carpet_wizard(project: Path) -> None:
         except (EOFError, KeyboardInterrupt):
             return None
 
+    # KICKOFF_UX FR-UX-9 — the wizard shows ONE step, not the full status wall: render only the compact
+    # spine (from `state`), and let the driver emit the (glossary-translated) found/needed/action.
+    from .kickoff_experience.presentation import render_wizard_step
+
+    def _compact(state) -> None:
+        for line in render_wizard_step(state):
+            console.print(line)
+
     run_red_carpet_driver(
-        banner="🟥 Red Carpet — completion wizard ($0, no LLM). We'll leverage what your project "
-               "already has and lead you through the gaps.",
+        banner="🟥 Red Carpet — guided setup ($0, no LLM). We'll use what your project already has and "
+               "walk you through the rest, one step at a time.",
         build_state=lambda: build_red_carpet_state(project),
         prepopulate=_prepopulate,
         read_input=_read,
         emit_line=lambda line: console.print(line),
         on_proposal=_on_proposal,
-        render_state=_render_red_carpet_state,
+        render_state=_compact,
     )
 
 
@@ -315,6 +318,10 @@ def red_carpet_cmd(
     ),
     json_out: bool = typer.Option(
         False, "--json", help="Emit the staged build state as JSON."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose",
+        help="Show the full insights + playbook detail (default view is a focused summary).",
     ),
     check: bool = typer.Option(
         False, "--check",
@@ -376,7 +383,7 @@ def red_carpet_cmd(
         )
         return
     if not agent:
-        _render_red_carpet_state(build_red_carpet_state(project))
+        _render_red_carpet_state(build_red_carpet_state(project), verbose=verbose)
         return
 
     # Agentic interview loop (FR-RCT) — propose-only; the human confirms every write.
