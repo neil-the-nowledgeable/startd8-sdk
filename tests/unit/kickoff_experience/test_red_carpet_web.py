@@ -45,6 +45,28 @@ def test_chat_page_renders_the_stage_rail(tmp_path: Path) -> None:
     assert "refreshRail()" in html                          # refreshed on load + after each turn
 
 
+def test_chat_page_renders_advisor_insights_and_next_steps(tmp_path: Path) -> None:
+    """FR-RCA-11 regression guard: the build-progress rail must render the prescriptive advisor
+    (Insights + ranked Next steps), not just the stages. A refactor that drops the advisor render
+    from `refreshRail()` would leave only the stage list (the pre-advisor rail)."""
+    html = _client(tmp_path).get("/concierge/chat").text
+    assert "<h4>Insights</h4>" in html                       # advisories section
+    assert "<h4>Next steps</h4>" in html                     # ranked playbook section
+    assert "j.advisories" in html and "j.next_steps" in html  # sourced from /red-carpet.json
+    # Every advisory field is HTML-escaped before injection (CRP R1-S4 — invalid-YAML error strings).
+    assert "esc(a.title)" in html and "esc(a.detail)" in html
+
+
+def test_red_carpet_json_carries_advisor_payload(tmp_path: Path) -> None:
+    """The rail's data source exposes the advisor payload (advisories + ranked next_steps + summary),
+    so the client-side render has something to show."""
+    body = _client(tmp_path).get("/red-carpet.json").json()
+    for key in ("advisories", "next_steps", "summary", "schema_version"):
+        assert key in body
+    assert isinstance(body["advisories"], list) and body["advisories"]  # greenfield still advises
+    assert set(body["summary"]) == {"errors", "warns", "infos", "next_steps"}
+
+
 def test_red_carpet_json_available_without_chat(tmp_path: Path) -> None:
     # The stage map is $0/read-only and works even with the chat panel disabled.
     r = _client(tmp_path, chat=False).get("/red-carpet.json")
