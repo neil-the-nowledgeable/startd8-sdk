@@ -199,9 +199,14 @@ class VippDisposition:
     reason: str = ""
     counter_params: Optional[Dict[str, Any]] = None
     claims: List[LabeledClaim] = field(default_factory=list)
+    # FR-9b (stakeholder-panel M2): the unanswered (all-OMIT) questions' routing context —
+    # each {"symbol": value_path, "claim": text}. Strictly ADDITIVE/optional: empty (and omitted
+    # from ``to_dict``) for every disposition except an OMIT-default ACCEPT, so existing
+    # ``evaluate_envelope`` output is byte-identical (R2-S1).
+    unresolved: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out = {
             "proposal_id": self.proposal_id,
             "decision": self.decision.value,
             "envelope_seq": self.envelope_seq,
@@ -211,6 +216,11 @@ class VippDisposition:
             ),
             "claims": [c.to_dict() for c in self.claims],
         }
+        if (
+            self.unresolved
+        ):  # additive: absent when there is nothing to route (back-compat)
+            out["unresolved"] = [dict(u) for u in self.unresolved]
+        return out
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "VippDisposition":
@@ -222,6 +232,7 @@ class VippDisposition:
             reason=d.get("reason", ""),
             counter_params=(dict(cp) if cp is not None else None),
             claims=[LabeledClaim.from_dict(c) for c in d.get("claims", [])],
+            unresolved=[dict(u) for u in (d.get("unresolved") or [])],
         )
 
     def to_markdown(self) -> str:
@@ -259,6 +270,10 @@ class VippReport:
     cost_usd: float = 0.0
     llm_used: bool = False
     protocol_version: str = PROTOCOL_VERSION
+    # FR-9/FR-19 (stakeholder-panel M2): synthetic, unratified advisories from the panel pass — each
+    # a plain dict (see ``_render_advisories``). ADDITIVE/optional and rendered in a *separate*
+    # section: they never enter ``dispositions`` and never mutate a verdict (FR-9). Empty ⇒ omitted.
+    panel_advisories: List[Dict[str, Any]] = field(default_factory=list)
 
     def counts(self) -> Dict[str, int]:
         out = {d.value: 0 for d in Decision}
@@ -267,7 +282,7 @@ class VippReport:
         return out
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out = {
             "kind": "vipp-dispositions",
             "protocol_version": self.protocol_version,
             "project_id": self.project_id,
@@ -279,6 +294,11 @@ class VippReport:
             "llm_used": self.llm_used,
             "dispositions": [d.to_dict() for d in self.dispositions],
         }
+        if (
+            self.panel_advisories
+        ):  # additive: absent when the panel pass did not run (back-compat)
+            out["panel_advisories"] = [dict(a) for a in self.panel_advisories]
+        return out
 
     @staticmethod
     def from_json(data: Any) -> "VippReport":
@@ -295,6 +315,7 @@ class VippReport:
             cost_usd=float(d.get("cost_usd", 0.0)),
             llm_used=bool(d.get("llm_used", False)),
             protocol_version=d.get("protocol_version", PROTOCOL_VERSION),
+            panel_advisories=[dict(a) for a in (d.get("panel_advisories") or [])],
         )
 
     @staticmethod
@@ -342,4 +363,49 @@ class VippReport:
             ]
         for disp in self.dispositions:
             lines += ["", disp.to_markdown()]
+        lines += _render_advisories(self.panel_advisories)
         return "\n".join(lines) + "\n"
+
+
+def _render_advisories(advisories: List[Dict[str, Any]]) -> List[str]:
+    """Render the synthetic stakeholder-panel advisory section (FR-9/FR-19).
+
+    Anti-anchoring (FR-19): a persistent "synthetic, unratified" banner, the persona brief adjacent,
+    and the **original OMIT question** — so a human ratifies against the gap, not the persuasive
+    fill. Only the answer is a labeled ``- **OBSERVED (project, synthetic)**`` bullet (so the FR-21
+    gate passes); the banner / question / brief are plain or block-quoted lines (never claim bullets).
+    """
+    if not advisories:
+        return []
+    out: List[str] = [
+        "",
+        "## Stakeholder panel — synthetic, unratified advisories",
+        "",
+        "> ⚠ SYNTHETIC, UNRATIFIED — role-played stand-ins, not real stakeholders. The verdicts "
+        "above are UNCHANGED (FR-9); confirm any advisory with a human before ratifying (FR-18).",
+    ]
+    for a in advisories:
+        symbol = oneline(a.get("symbol", ""))
+        out += ["", f"### `{a.get('proposal_id', '')}` — OMIT `{symbol}`", ""]
+        out.append(f"original question: {oneline(a.get('claim', ''))}")
+        status = a.get("status", "")
+        if status == "answered":
+            role_id = a.get("role_id", "")
+            goals = "; ".join(a.get("brief_goals", []) or []) or "(none stated)"
+            grounding = a.get("grounding", "")
+            out.append(f"persona brief ({role_id}): {goals}")
+            out.append("")
+            out.append(
+                f"- **OBSERVED (project, synthetic)** {oneline(a.get('answer', ''))} "
+                f"— _panel:{role_id} ({grounding})_"
+            )
+        elif status == "unavailable":
+            out += [
+                "",
+                f"> stakeholder {a.get('role_id', '')!r} unavailable — stays OMIT (FR-16)",
+            ]
+        elif status == "deferred":
+            out += ["", "> deferred — panel query cap reached (FR-17); stays OMIT"]
+        else:  # no-stakeholder
+            out += ["", "> no stakeholder available to answer — stays OMIT (FR-9c)"]
+    return out

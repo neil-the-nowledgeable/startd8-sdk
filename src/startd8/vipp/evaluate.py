@@ -105,7 +105,9 @@ def _build_questions(proposal: Any, extract: EntityExtractor) -> List[Any]:
     return []
 
 
-def _accept(proposal_id, seq, *, text, source, qualifier="") -> VippDisposition:
+def _accept(
+    proposal_id, seq, *, text, source, qualifier="", unresolved=None
+) -> VippDisposition:
     return VippDisposition(
         proposal_id=proposal_id,
         decision=Decision.ACCEPT,
@@ -119,6 +121,9 @@ def _accept(proposal_id, seq, *, text, source, qualifier="") -> VippDisposition:
                 qualifier=qualifier,
             )
         ],
+        # FR-9b (stakeholder-panel M2): routing context for the all-OMIT case; None elsewhere so
+        # the disposition serializes byte-identically to before (R2-S1).
+        unresolved=list(unresolved) if unresolved else [],
     )
 
 
@@ -150,12 +155,22 @@ def _evaluate_one(
             refuted.append((q, ans))
 
     if not claims:
+        # All questions OMIT'd: carry each question's symbol (value_path) + claim so the opt-in
+        # stakeholder-panel pass can route it to a persona (FR-9b). Verdict is unchanged (ACCEPT).
+        unresolved = [
+            {
+                "symbol": oneline(getattr(q, "symbol", "")),
+                "claim": oneline(getattr(q, "claim", "")),
+            }
+            for q in questions
+        ]
         return _accept(
             proposal.id,
             seq,
             text=f"{proposal.kind}: no ground truth to adjudicate (all OMIT)",
             source="vipp:omit-default",
             qualifier="unavailable",
+            unresolved=unresolved,
         )
 
     if refuted:

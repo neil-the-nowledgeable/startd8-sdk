@@ -41,6 +41,8 @@ from startd8.stakeholder_panel.roster import (
     load_roster,
     validate_roster,
 )
+from startd8.stakeholder_panel.routing import route
+from startd8.stakeholder_panel.vipp_bridge import Consultation, consult_panel
 
 # M1 ships the live panel, so a validated roster is now consumable (R2-S5). ``assess`` reads this.
 PANEL_CONSUMABLE = True
@@ -92,6 +94,9 @@ __all__ = [
     "brief_hash",
     "is_synthetic",
     "synthetic_claim",
+    "route",
+    "consult_panel",
+    "Consultation",
     # lazy (via __getattr__):
     "StakeholderPanel",
     "PanelError",

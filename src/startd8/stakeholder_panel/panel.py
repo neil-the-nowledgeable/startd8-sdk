@@ -149,6 +149,11 @@ class StakeholderPanel:
     def role_ids(self) -> List[str]:
         return [p.role_id for p in self._personas]
 
+    @property
+    def briefs(self) -> List[PersonaBrief]:
+        """The pinned persona briefs (roster order) — used by routing (FR-9c)."""
+        return [p.brief for p in self._personas]
+
     def _check_open(self) -> None:
         if self._closed:
             raise PanelClosedError(f"panel session {self.session_id} is closed")
