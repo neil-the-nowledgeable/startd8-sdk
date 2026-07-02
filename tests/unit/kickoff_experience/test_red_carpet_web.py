@@ -70,3 +70,48 @@ def test_make_chat_factory_red_carpet_builds_staged_chat(tmp_path: Path) -> None
         assert "red_carpet_state" in set(chat.session.registry._tools)
     finally:
         ar.resolve_agent_spec = orig
+
+
+def test_resolve_chat_panel_reports_no_tool_use(tmp_path: Path) -> None:
+    """A provider whose agent can't drive tool use disables the panel with a targeted reason,
+    not a swallowed generic failure (bug fix)."""
+    class _NoToolAgent:
+        def supports_tool_use(self) -> bool:
+            return False
+
+    import startd8.kickoff_experience.serve as serve_mod
+    import startd8.utils.agent_resolution as ar
+
+    orig = ar.resolve_agent_spec
+    ar.resolve_agent_spec = lambda _spec: _NoToolAgent()
+    try:
+        res = serve_mod.resolve_chat_panel(tmp_path, "gemini:gemini-2.5-pro", red_carpet=True)
+        assert res.factory is None
+        assert res.reason is not None
+        assert "does not support tool use" in res.reason
+        assert "gemini" in res.reason            # names the offending provider
+        assert "Anthropic or OpenAI" in res.reason  # actionable next step
+        # make_chat_factory keeps its None-on-failure contract.
+        assert serve_mod.make_chat_factory(tmp_path, "gemini:gemini-2.5-pro") is None
+    finally:
+        ar.resolve_agent_spec = orig
+
+
+def test_resolve_chat_panel_reports_bad_spec(tmp_path: Path) -> None:
+    """A spec that fails to resolve is surfaced verbatim, not hidden."""
+    import startd8.kickoff_experience.serve as serve_mod
+    import startd8.utils.agent_resolution as ar
+
+    def _boom(_spec):
+        raise ValueError("unknown provider 'nope'")
+
+    orig = ar.resolve_agent_spec
+    ar.resolve_agent_spec = _boom
+    try:
+        res = serve_mod.resolve_chat_panel(tmp_path, "nope:x")
+        assert res.factory is None
+        assert res.reason is not None
+        assert "could not resolve agent" in res.reason
+        assert "unknown provider" in res.reason
+    finally:
+        ar.resolve_agent_spec = orig

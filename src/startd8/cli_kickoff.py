@@ -376,8 +376,8 @@ def start_cmd(
     from .kickoff_experience.concierge_agent import resolve_concierge_agent_spec
     from .kickoff_experience.serve import (
         Mode,
-        make_chat_factory,
         preflight,
+        resolve_chat_panel,
         serve_kickoff,
     )
 
@@ -400,18 +400,18 @@ def start_cmd(
     spec, source = resolve_concierge_agent_spec(project, agent)
     panel_spec = spec if source != "default" else None
     if panel_spec:
-        enabled = (
-            make_chat_factory(project, panel_spec, red_carpet=red_carpet) is not None
-        )
+        resolution = resolve_chat_panel(project, panel_spec, red_carpet=red_carpet)
         flavor = "Red Carpet build conductor" if red_carpet else "Concierge"
-        console.print(
-            f"  {'[green]✓[/green]' if enabled else '[yellow]•[/yellow]'} agentic chat ({flavor}): "
-            + (
+        if resolution.factory is not None:
+            console.print(
+                f"  [green]✓[/green] agentic chat ({flavor}): "
                 f"enabled ({panel_spec}, source: {source})"
-                if enabled
-                else f"could not resolve {panel_spec!r} (source: {source}) — panel disabled"
             )
-        )
+        else:
+            console.print(
+                f"  [yellow]•[/yellow] agentic chat ({flavor}) disabled "
+                f"(source: {source}) — {resolution.reason}"
+            )
     console.print(
         f"[green]serving kickoff[/green] (mode={mode}, theme={theme}) — Ctrl-C to stop"
     )
