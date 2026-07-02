@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "startd8.agent.generate",
-      "description": "Send prompts to any LLM provider through a unified async interface\n\n\nAvoid:\n- Never call provider APIs directly — use resolve_agent_spec() for consistency\n- Don't assume response format differs by provider — GenerateResult normalizes all",
+      "description": "Send prompts to any LLM provider through a unified async interface\n\n\nAvoid:\n- Never call provider APIs directly \u2014 use resolve_agent_spec() for consistency\n- Don't assume response format differs by provider \u2014 GenerateResult normalizes all",
       "inputSchema": {
         "type": "object",
         "required": [
@@ -567,81 +567,285 @@
       }
     },
     {
-      "name": "startd8.deploy.coherence_check",
-      "description": "Check whether a generated project is deployment-coherent (fail-closed). Returns {verdict: ok|soft|hard|skip, findings[], unbound_bindings}. A security-tier ERROR (e.g. deployed app not gateway-fronted) is HARD/non-overridable.\n\nAvoid:\n- Don't treat a missing/malformed verdict as pass — fail closed.",
+      "name": "startd8.codegen.generate_backend",
+      "description": "Deterministically ($0, no LLM) project one .prisma contract into a full runnable all-Python app",
       "inputSchema": {
         "type": "object",
-        "required": [
-          "project_root"
-        ],
-        "properties": {
-          "project_root": {
-            "type": "string",
-            "description": "Path to the generated project (contains app.yaml / deploy/)"
-          }
-        }
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "generate",
+        "maturity": "beta",
+        "confidence": 0.85
       }
     },
     {
-      "name": "startd8.codegen.generate_backend",
-      "description": "Deterministically ($0, no LLM) project one .prisma contract into a full all-Python app (Pydantic/SQLModel/FastAPI/HTMX). In deployed mode also emits settings/auth-seam/tenancy + the cloud-native deploy/ tree + per-env overlays.",
+      "name": "startd8.codegen.import_path",
+      "description": "Deterministic ($0) generated-app import path \u2014 inverse of export (imports.yaml grammar + from_json importer + paste/upload surface)",
       "inputSchema": {
         "type": "object",
-        "required": [
-          "schema_path"
-        ],
-        "properties": {
-          "schema_path": {
-            "type": "string",
-            "description": "Path to prisma/schema.prisma"
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "installed",
-              "deployed"
-            ],
-            "description": "Deployment mode (default: from app.yaml)"
-          },
-          "app_manifest": {
-            "type": "string",
-            "description": "Path to app.yaml (deploy posture, environments)"
-          }
-        }
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "generate",
+        "maturity": "beta",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.codegen.wireframe",
+      "description": "$0 read-only pre-generation summary of what the deterministic cascade will build",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "query",
+        "maturity": "beta",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.codegen.presentation_polish",
+      "description": "$0 deterministic Tier-1 design system \u2014 CSS-only accessible restyle of a generated app",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "generate",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.codegen.composite_views",
+      "description": "$0 composite/relational views (dashboard/board/workspace) from views.yaml",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "generate",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.codegen.deployment_mode",
+      "description": "Installed-vs-deployed $0 deterministic mode \u2014 bake only what security requires, bind the rest at runtime",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "generate",
+        "maturity": "beta",
+        "confidence": 0.8
       }
     },
     {
       "name": "startd8.codegen.cloud_native_deploy",
-      "description": "Render the vendor-neutral cloud-native deploy/ tree (Kubernetes + Gateway API + External Secrets + infra-contract) and per-env kustomize overlays (dev/test/prod) for a deployed app. Operator values bound at deploy, never baked.",
+      "description": "Deployed apps emit a vendor-neutral K8s + Gateway API + ESO deploy/ tree + infra-contract",
       "inputSchema": {
         "type": "object",
-        "required": [
-          "app_manifest"
-        ],
-        "properties": {
-          "app_manifest": {
-            "type": "string",
-            "description": "Path to app.yaml (deployment.mode: deployed + deploy: block)"
-          }
-        }
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "generate",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.deploy.coherence_check",
+      "description": "Fail-closed machine-readable deploy-coherence verdict consumed by the cap-dev-pipe gate",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "integration",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.deploy.local_harness",
+      "description": "Local deploy + graded-validation harness (startd8 deploy local|batch) for generated apps",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "validate",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.codegen.polyglot_construction",
+      "description": "LLM-driven element-level code generation across 5 languages (Python, Go, Node.js, Java, C#) \u2014 polyglot microservice fleets",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "generate",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.contractors.prime",
+      "description": "PrimeContractorWorkflow multi-feature construction orchestrator (create + edit mode, checkpoint/resume, post-mortem)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.repair.pipeline",
+      "description": "~45 language-organized post-generation repair steps (syntax, lint, imports)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "transform",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.complexity.tier_routing",
+      "description": "Cost-routing classifier (TRIVIAL/SIMPLE/MODERATE/COMPLEX) that routes tasks to the right generator",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.security_prime.gate",
+      "description": "Security gate orchestration wired into the prime contractor pipeline",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.query_prime.secure_generation",
+      "description": "Secure database query generation by tier (T1 template, T2 Haiku, T3 Sonnet)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "generate",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.agentic.loop",
+      "description": "AgenticSession multi-turn tool-use loop with safety bounds and default-deny tool policy",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.benchmark.matrix",
+      "description": "Summer 2026 model benchmark matrix (service x model x repetition) measuring model SKILL",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "validate",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.benchmark.round3_system",
+      "description": "Round-3 SYSTEM benchmark \u2014 build a working integrated 9-service polyglot Online Boutique, scored by a real user journey with honest per-service fault attribution",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "validate",
+        "maturity": "beta",
+        "confidence": 0.8
       }
     },
     {
       "name": "startd8.concierge.assess",
-      "description": "Onboarding-readiness assessment for a project: kickoff-input provenance + the $0 deterministic-cascade view (wraps wireframe). Read-only.",
+      "description": "Project-side SDK-onboarding concierge (survey / assess / instantiate-kickoff / log-friction)",
       "inputSchema": {
         "type": "object",
-        "required": [
-          "project_root"
-        ],
-        "properties": {
-          "project_root": {
-            "type": "string",
-            "description": "Path to the project to assess"
-          }
-        }
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.languages.profiles",
+      "description": "Multi-language profile registry (5 languages) with entry-point discovery and resolve_language()",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "integration",
+        "maturity": "stable",
+        "confidence": 0.9
       }
     }
   ],
-  "tool_count": 38
+  "tool_count": 54
 }

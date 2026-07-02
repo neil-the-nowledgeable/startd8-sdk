@@ -2,19 +2,19 @@
 # StartD8 Agent Capability Index
 # =============================================================================
 # Unified agent-discoverable manifest for the StartD8 SDK (Beaver/Amik).
-# Synthesized from 25,398 raw capabilities extracted 2026-02-18.
+# Synthesized 2026-02-18; caught up to the source manifests 2026-07-01.
 #
-# Source manifests consolidated:
-#   - startd8.sdk.capabilities.yaml (15 capabilities)
-#   - startd8.workflow.capabilities.yaml (34 capabilities)
-#   - startd8.observability.manifest.yaml (12 metrics, 15 spans)
+# Source manifests consolidated (re-synced 2026-07-01):
+#   - startd8.sdk.capabilities.yaml (v1.10.0, 50 capabilities)
+#   - startd8.workflow.capabilities.yaml (v2.8.0, 49 capabilities)
+#   - startd8.observability.manifest.yaml (metrics + spans)
 #
 # Schema: ContextCore Capability Index v1.13.0
 # =============================================================================
 
 manifest_id: startd8.agent
 name: StartD8 LLM Orchestration Capabilities
-version: "1.0.0"
+version: "2.0.0"
 description: |
   Multi-LLM provider abstraction framework with cost tracking, workflow
   orchestration, multi-phase code generation, and OpenTelemetry observability.
@@ -31,7 +31,7 @@ manifest_tokens: 600
 index_tokens: 5000
 
 # =============================================================================
-# CAPABILITIES (47 total)
+# CAPABILITIES (62 total)
 # =============================================================================
 
 capabilities:
@@ -1347,6 +1347,581 @@ capabilities:
         ref: src/startd8/server/
         description: Starlette-based REST API server
     confidence: 0.70
+
+  # ===========================================================================
+  # DETERMINISTIC CODEGEN ($0, no-LLM) — one .prisma contract -> all-Python app
+  # ===========================================================================
+
+  - capability_id: startd8.codegen.generate_backend
+    category: generate
+    maturity: beta
+    summary: Deterministically ($0, no LLM) project one .prisma contract into a full runnable all-Python app
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        startd8 generate backend --schema prisma/schema.prisma --out . [--check] [--gate].
+        render_backend(schema) yields (relpath, content) for the whole app/ package: Pydantic
+        models, SQLModel tables (FK, Relationship() pairing, @default, compound @@id), FastAPI
+        CRUD, HTMX UI, export/ai-schemas/completeness, requirements.txt. Every artifact is
+        $0.00-skippable + drift-checked.
+      human: |
+        Zero-LLM code generation. Turns a single Prisma schema contract into a working
+        server-rendered FastAPI + SQLModel + HTMX application with no API cost.
+    triggers:
+      - generate backend
+      - prisma to python
+      - deterministic codegen
+      - contract codegen
+    evidence:
+      - type: code
+        ref: src/startd8/backend_codegen/
+        description: render_backend + per-layer renderers + DeterministicFileProvider
+      - type: code
+        ref: src/startd8/cli_generate.py
+        description: startd8 generate backend command
+    confidence: 0.85
+
+  - capability_id: startd8.codegen.import_path
+    category: generate
+    maturity: beta
+    summary: Deterministic ($0) generated-app import path — inverse of export (imports.yaml grammar + from_json importer + paste/upload surface)
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        Emitted alongside export: imports.yaml manifest grammar (7th manifest) + a from_json
+        importer (app/importer.py, byte-for-byte inverse of export) + paste/upload HTMX surface.
+        FR-IMP-2 identity-key consolidation gives byte-identical AI-persist; strict atomicity =
+        one outer transaction. (File is importer.py — import is a Python keyword.)
+      human: |
+        Generated apps can round-trip data back in: users paste or upload the same JSON the
+        app exports, and it is validated and persisted atomically.
+    triggers:
+      - import path
+      - imports.yaml
+      - from_json
+      - round-trip import
+    evidence:
+      - type: code
+        ref: src/startd8/backend_codegen/import_codegen.py
+        description: from_json importer emission + identity-key consolidation
+      - type: code
+        ref: src/startd8/backend_codegen/imports_manifest.py
+        description: imports.yaml grammar parse/validate
+    confidence: 0.85
+
+  - capability_id: startd8.codegen.wireframe
+    category: query
+    maturity: beta
+    summary: $0 read-only pre-generation summary of what the deterministic cascade will build
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        startd8 wireframe [--inputs assembly-inputs.yaml] [--json]. Read-only, $0, advisory:
+        five-status model (incl. lenient-Prisma recoverability), cascade readiness, and a
+        machine-readable JSON summary for CI.
+      human: |
+        Preview the entities, routes, pages, and views the $0 cascade will generate before
+        running it — no cost, no writes.
+    triggers:
+      - wireframe
+      - pre-generation summary
+      - cascade preview
+    evidence:
+      - type: code
+        ref: src/startd8/wireframe/
+        description: wireframe summary engine
+      - type: code
+        ref: src/startd8/cli_wireframe.py
+        description: startd8 wireframe command
+    confidence: 0.85
+
+  - capability_id: startd8.codegen.presentation_polish
+    category: generate
+    maturity: beta
+    summary: $0 deterministic Tier-1 design system — CSS-only accessible restyle of a generated app
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        startd8 polish apply|check|themes. Writes a design-token stylesheet + static mount over
+        an already-generated all-Python app; idempotent, non-destructive, WCAG-AA themes.
+        check exits 0=in-sync / 1=drift / 2=error.
+      human: |
+        Restyle a bare generated app into an accessible, themed UI with zero LLM cost.
+    triggers:
+      - polish
+      - design system
+      - accessible theme
+      - restyle
+    evidence:
+      - type: code
+        ref: src/startd8/presentation_polish/
+        description: css/tokens/themes/engine + PresentationPolishFileProvider
+      - type: code
+        ref: src/startd8/cli_polish.py
+        description: startd8 polish command
+    confidence: 0.80
+
+  - capability_id: startd8.codegen.composite_views
+    category: generate
+    maturity: beta
+    summary: $0 composite/relational views (dashboard/board/workspace) from views.yaml
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        startd8 generate views. CompositeViewProvider projects views.yaml into relational
+        composite pages over the generated backend; owned/$0.00-skippable + drift-checked.
+      human: |
+        Generate dashboards, kanban boards, and workspace views over your data model
+        deterministically, no LLM.
+    triggers:
+      - generate views
+      - composite views
+      - dashboard view
+    evidence:
+      - type: code
+        ref: src/startd8/view_codegen/
+        description: CompositeViewProvider view generation
+    confidence: 0.80
+
+  - capability_id: startd8.codegen.deployment_mode
+    category: generate
+    maturity: beta
+    summary: Installed-vs-deployed $0 deterministic mode — bake only what security requires, bind the rest at runtime
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        Generated app carries a single mode-varying app/settings.py (deployed-only) with a
+        self-embedded # startd8-mode: header verified at $0 by the schema-only skip-hook.
+        Adds principal-scoped tenancy, owned run.sh, and a coherence matrix.
+      human: |
+        The same generated app can target local-installed or deployed (multi-tenant, auth)
+        operation, differing only where security demands it.
+    triggers:
+      - deployment mode
+      - installed vs deployed
+      - tenancy
+    evidence:
+      - type: code
+        ref: src/startd8/backend_codegen/settings_renderer.py
+        description: mode-varying settings emission
+      - type: docs
+        ref: docs/design/deployment-mode/
+        description: requirements + plan (M0-M3 shipped)
+    confidence: 0.80
+
+  - capability_id: startd8.codegen.cloud_native_deploy
+    category: generate
+    maturity: beta
+    summary: Deployed apps emit a vendor-neutral K8s + Gateway API + ESO deploy/ tree + infra-contract
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        Deployed-mode generation adds a deploy/ tree (Kubernetes manifests, Gateway API routes,
+        External Secrets Operator wiring) + an infra-contract targeting EKS/GKE behind
+        agentgateway. dev/test/prod via per-env kustomize overlays.
+      human: |
+        Generated apps come with cloud-native deployment scaffolding for Kubernetes.
+    triggers:
+      - cloud native deploy
+      - kubernetes manifests
+      - gateway api
+    evidence:
+      - type: code
+        ref: src/startd8/scaffold_codegen/deploy_renderer.py
+        description: deploy/ tree + infra-contract emission
+      - type: docs
+        ref: docs/design/cloud-native-deploy/
+        description: cloud-native deploy requirements
+    confidence: 0.80
+
+  # ===========================================================================
+  # DEPLOY & VALIDATION HARNESSES
+  # ===========================================================================
+
+  - capability_id: startd8.deploy.coherence_check
+    category: integration
+    maturity: beta
+    summary: Fail-closed machine-readable deploy-coherence verdict consumed by the cap-dev-pipe gate
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        check_deploy_coherence.py --json emits a security->HARD / operational->SOFT verdict
+        (FR-CND-30). HARD failures fail the build.
+      human: |
+        A pre-deploy gate that verifies the generated deploy configuration is coherent
+        before shipping.
+    triggers:
+      - deploy coherence
+      - coherence gate
+      - deploy verdict
+    evidence:
+      - type: code
+        ref: scripts/check_deploy_coherence.py
+        description: fail-closed coherence verdict
+      - type: docs
+        ref: docs/design/cloud-native-deploy/CLOUD_NATIVE_DEPLOY_REQUIREMENTS.md
+        description: FR-CND-30
+    confidence: 0.80
+
+  - capability_id: startd8.deploy.local_harness
+    category: validate
+    maturity: beta
+    summary: Local deploy + graded-validation harness (startd8 deploy local|batch) for generated apps
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        startd8 deploy local|batch. Graded ladder discover->install->boot->health->smoke against
+        a REAL local server; batch joins results to comparison-report.json by model id. Trust
+        boundary at pip install (venv + subprocess + loopback + rlimits + process-group teardown).
+      human: |
+        Actually boots a generated app locally and grades how far it gets — a code-quality
+        signal and SDK defect feedback loop.
+    triggers:
+      - deploy local
+      - graded validation
+      - boot smoke
+    evidence:
+      - type: docs
+        ref: docs/design/local-deploy-harness/
+        description: M0-M3 requirements + plan
+    confidence: 0.80
+
+  # ===========================================================================
+  # LLM-DRIVEN POLYGLOT CONSTRUCTION (path 2) — 5 languages, microservice fleets
+  # ===========================================================================
+
+  - capability_id: startd8.codegen.polyglot_construction
+    category: generate
+    maturity: stable
+    summary: LLM-driven element-level code generation across 5 languages (Python, Go, Node.js, Java, C#) — polyglot microservice fleets
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        Prime Contractor + Micro Prime construction path: per-language parsers, splicers, and
+        semantic checks produce polyglot microservice fleets (NOT the Python-only deterministic
+        path). micro_prime/engine.py branches per language.
+      human: |
+        The second generation path: builds real multi-language microservice systems (e.g. the
+        Online Boutique demo) using LLMs, distinct from the $0 Python-only codegen.
+    triggers:
+      - polyglot generation
+      - multi-language codegen
+      - microservice fleet
+      - micro prime
+    evidence:
+      - type: code
+        ref: src/startd8/micro_prime/engine.py
+        description: per-language element generation
+      - type: code
+        ref: src/startd8/languages/
+        description: 5 LanguageProfiles + parsers/splicers
+    confidence: 0.90
+
+  - capability_id: startd8.contractors.prime
+    category: action
+    maturity: stable
+    summary: PrimeContractorWorkflow multi-feature construction orchestrator (create + edit mode, checkpoint/resume, post-mortem)
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        PrimeContractorWorkflow orchestrates multi-feature batch code generation with
+        first-class edit mode (auto-detects on-disk targets), per-phase checkpoint/resume, and
+        Kaizen post-mortem disk-quality scoring.
+      human: |
+        The active construction path for LLM-driven code generation across many features.
+    triggers:
+      - prime contractor
+      - batch code generation
+      - multi-feature implementation
+    evidence:
+      - type: code
+        ref: src/startd8/contractors/prime_contractor.py
+        description: PrimeContractorWorkflow orchestrator
+      - type: docs
+        ref: docs/PRIME_CONTRACTOR_WORKFLOW_GUIDE.md
+        description: prime contractor guide
+    confidence: 0.85
+
+  - capability_id: startd8.repair.pipeline
+    category: transform
+    maturity: stable
+    summary: ~45 language-organized post-generation repair steps (syntax, lint, imports)
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        run_file_repair() / run_element_repair() orchestrate ~45 repair steps organized by
+        language; diagnostics parse checkpoints, routing dispatches, staging is atomic. Wired
+        into IntegrationEngine pre- and post-merge.
+      human: |
+        Automatically fixes common defects in generated code before it is merged.
+    triggers:
+      - code repair
+      - post-generation repair
+      - syntax fix
+    evidence:
+      - type: code
+        ref: src/startd8/repair/orchestrator.py
+        description: run_file_repair / run_element_repair
+      - type: code
+        ref: src/startd8/repair/steps/
+        description: per-language repair steps
+    confidence: 0.85
+
+  - capability_id: startd8.complexity.tier_routing
+    category: action
+    maturity: stable
+    summary: Cost-routing classifier (TRIVIAL/SIMPLE/MODERATE/COMPLEX) that routes tasks to the right generator
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        classify_tier() assigns a complexity tier; router.py routes to the appropriate
+        generator (local MicroPrime for SIMPLE/MODERATE, no LLM for TRIVIAL).
+      human: |
+        Routes generation work to the cheapest capable path to minimize LLM cost.
+    triggers:
+      - complexity classification
+      - tier routing
+      - cost routing
+    evidence:
+      - type: code
+        ref: src/startd8/complexity/classifier.py
+        description: classify_tier
+    confidence: 0.85
+
+  - capability_id: startd8.security_prime.gate
+    category: action
+    maturity: beta
+    summary: Security gate orchestration wired into the prime contractor pipeline
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        derive_security_contract() + enrich_security_fields() + compute_security_score() ->
+        SecurityScoreResult; GateVerdictReport drives the Anzen gate. Wires query_prime
+        verify_file() into the pipeline.
+      human: |
+        Generated code is checked for injection, credential leakage, and lifecycle issues
+        before it is accepted.
+    triggers:
+      - security gate
+      - security scoring
+      - injection check
+    evidence:
+      - type: code
+        ref: src/startd8/security_prime/
+        description: contract/enrichment/scorer/gate_models
+      - type: docs
+        ref: docs/design/security-prime/
+        description: security prime requirements
+    confidence: 0.80
+
+  - capability_id: startd8.query_prime.secure_generation
+    category: generate
+    maturity: beta
+    summary: Secure database query generation by tier (T1 template, T2 Haiku, T3 Sonnet)
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        QueryPrimeEngine generates DB queries routed by classify_query_tier(); security/
+        verify_file() checks injection/credential/lifecycle; patterns/ per DB (Redis, MySQL,
+        SQLite, Spanner, PostgreSQL).
+      human: |
+        Generates database queries that are secure by construction, using the cheapest
+        capable model per query.
+    triggers:
+      - secure query
+      - query generation
+      - sql injection prevention
+    evidence:
+      - type: code
+        ref: src/startd8/query_prime/
+        description: engine/classifier/security/patterns
+      - type: docs
+        ref: docs/design/query-prime/
+        description: query prime requirements
+    confidence: 0.80
+
+  # ===========================================================================
+  # AGENTIC LOOP — multi-turn tool-use runtime on the SDK's own provider layer
+  # ===========================================================================
+
+  - capability_id: startd8.agentic.loop
+    category: action
+    maturity: beta
+    summary: AgenticSession multi-turn tool-use loop with safety bounds and default-deny tool policy
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        AgenticSession runs a multi-turn tool-use loop with safety bounds (max_turns, per-turn
+        cap, repeated-call breaker, fail-closed budget), effect-class default-deny tool policy,
+        and typed errors. Built on the SDK's own provider/cost/MCP layers (not LiteLLM).
+      human: |
+        A built-in agent runtime that lets the SDK drive multi-step tool-using conversations
+        with safety guardrails.
+    triggers:
+      - agentic loop
+      - tool use
+      - multi-turn agent
+    evidence:
+      - type: code
+        ref: src/startd8/agents/agentic.py
+        description: AgenticSession loop
+      - type: test
+        ref: tests/unit/agents/test_agentic_session.py
+        description: agentic session tests
+    confidence: 0.85
+
+  # ===========================================================================
+  # BENCHMARKS — model-skill grid + system-level fleet benchmark
+  # ===========================================================================
+
+  - capability_id: startd8.benchmark.matrix
+    category: validate
+    maturity: beta
+    summary: Summer 2026 model benchmark matrix (service x model x repetition) measuring model SKILL
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        benchmark_matrix/: content-hashed run spec, fail-closed budget, infra-fail
+        classification (missing key is infra_fail, never 0), median/IQR/pass-rate aggregation,
+        compile-gated composite scoring + Track 2 executed behavioral correctness,
+        persist-then-rescore ($0 Mottainai).
+      human: |
+        Benchmarks how well models build code, isolating model skill from SDK leverage.
+    triggers:
+      - model benchmark
+      - compare models
+      - behavioral scoring
+    evidence:
+      - type: code
+        ref: src/startd8/benchmark_matrix/
+        description: run_spec/budget/runner/aggregate/scoring + behavioral (Track 2)
+      - type: code
+        ref: src/startd8/model_comparison.py
+        description: compare-models core
+    confidence: 0.80
+
+  - capability_id: startd8.benchmark.round3_system
+    category: validate
+    maturity: beta
+    summary: Round-3 SYSTEM benchmark — build a working integrated 9-service polyglot Online Boutique, scored by a real user journey with honest per-service fault attribution
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        startd8 benchmark-round3 (benchmark_matrix/fleet/): compose-fleet gen (egress-deny +
+        service-DNS), readiness-gated boot, 5-step weighted journey (Adapter B gRPC / Adapter A
+        HTTP), layered scoring + per-service attribution (downstream never charged to the
+        orchestrator), frontend gate + capped bonus, advisory decision gate.
+      human: |
+        A system-level benchmark: can a model build a whole working microservice app, judged
+        by driving a real user journey over the live fleet.
+    triggers:
+      - round 3
+      - system benchmark
+      - fleet benchmark
+      - user journey
+    evidence:
+      - type: code
+        ref: src/startd8/benchmark_matrix/fleet/
+        description: M0-M6 fleet benchmark + frontend bonus
+      - type: docs
+        ref: docs/design/round3-full-app/BENCHMARK_METHODOLOGY.md
+        description: how the shipped system works
+    confidence: 0.80
+
+  # ===========================================================================
+  # ONBOARDING & LANGUAGE SUPPORT
+  # ===========================================================================
+
+  - capability_id: startd8.concierge.assess
+    category: action
+    maturity: beta
+    summary: Project-side SDK-onboarding concierge (survey / assess / instantiate-kickoff / log-friction)
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        startd8 concierge + startd8_concierge MCP tool: survey/assess/instantiate-kickoff/
+        log-friction/derive-contract. Posture = assist (MCP read/preview-only, CLI sole writer).
+      human: |
+        Guides a project through adopting the SDK: surveys the repo, assesses fit, and
+        instantiates a kickoff.
+    triggers:
+      - concierge
+      - onboarding
+      - project survey
+      - kickoff
+    evidence:
+      - type: code
+        ref: src/startd8/concierge/core.py
+        description: concierge actions
+      - type: docs
+        ref: docs/design/kickoff/
+        description: concierge requirements + friction log
+    confidence: 0.80
+
+  - capability_id: startd8.languages.profiles
+    category: integration
+    maturity: stable
+    summary: Multi-language profile registry (5 languages) with entry-point discovery and resolve_language()
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        LanguageRegistry.discover() loads 5 LanguageProfiles (python/go/nodejs/java/csharp)
+        from entry points; resolve_language(files) returns the dominant profile. Each profile
+        covers syntax check, lint, test, stub detection, dependency-file gen, Docker images.
+      human: |
+        The SDK understands five programming languages for its LLM-driven generation path.
+    triggers:
+      - language profile
+      - multi-language
+      - resolve language
+    evidence:
+      - type: code
+        ref: src/startd8/languages/registry.py
+        description: LanguageRegistry + resolve_language
+      - type: code
+        ref: pyproject.toml
+        description: 5 language entry points
+    confidence: 0.90
 
 # =============================================================================
 # DESIGN PRINCIPLES (10 total)
