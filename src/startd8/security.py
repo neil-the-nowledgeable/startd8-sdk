@@ -703,12 +703,27 @@ def validate_file_size(file_path: Path) -> None:
         )
 
 
-# Untrusted-text cap policy (FR-A2a). Per-field input cap applied at the fence
-# boundary; distinct from MAX_PROMPT_LENGTH (reserved for a future outbound
-# full-prompt total guard). Generous so legitimate requirement/plan text is never
-# silently lost — it bounds pathological/DoS input, not normal content. Section
-# builders apply their own tighter display budgets.
+# ── Untrusted-text cap policy (FR-A2a) ─────────────────────────────────────────────────────
+# One documented home for the *security* caps that bound attacker-influenced text before it
+# crosses the prompt boundary. CRP R1-F5: do NOT fold generation-quality budgets into this policy —
+# classify first; changing a *functional* cap silently alters generation output, which is a
+# correctness change masquerading as a security one. So caps are split into two classes:
+#
+#   SECURITY caps (bound untrusted input to defend the prompt boundary — owned here):
+#     MAX_UNTRUSTED_FIELD_CHARS (200 KB) — per-field fence input cap (FR-A2 / FR-B2)
+#     MAX_PLAN_LOAD_BYTES       (16 KB)  — plan-document load cap before fencing
+#     MAX_PROMPT_LENGTH         (1 MB)   — outbound full-prompt total guard (throwing validator)
+#
+#   FUNCTIONAL caps (generation-quality / display budgets — deliberately EXCLUDED, left in place):
+#     requirements `[:2000]` summarization (derivation.py, reviewer.py, plan_ingestion, context_seed,
+#       prime_adapter, …) — a *summary* budget that shapes what the model is shown, not a security bound
+#     _MAX_INPUT_ROWS = 200 (ai_layer read passes) — a context *row* budget
+#   These MUST NOT be redirected to the security policy: doing so would change generation output.
+#
+# Security caps are generous so legitimate requirement/plan text is never silently lost — they bound
+# pathological / DoS input, not normal content. Section builders apply their own tighter display budgets.
 MAX_UNTRUSTED_FIELD_CHARS = 200_000
+MAX_PLAN_LOAD_BYTES = 16_384  # plan-document load cap (was scattered as _PLAN_LOAD_MAX_BYTES)
 
 # C0/C1 control characters except tab (\x09), newline (\x0a), carriage return (\x0d).
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
