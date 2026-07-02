@@ -27,6 +27,7 @@ __all__ = [
     "Grounding",
     "PanelQuestion",
     "PanelAnswer",
+    "Recommendation",
 ]
 
 # Bumped on a contract *shape* change, independent of the SDK version (VIPP/FDE parity).
@@ -277,6 +278,113 @@ class PanelAnswer:
             input_tokens=_as_int(d.get("input_tokens")),
             output_tokens=_as_int(d.get("output_tokens")),
             cost_usd=_as_float(d.get("cost_usd")),
+            created_at=str(d.get("created_at", "")),
+            flags=[str(f) for f in (d.get("flags") or [])],
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Proactive recommendation contract (Teian — FR-KIR-4/5). A ``Recommendation`` is a thin wrapper
+# over a persona's :class:`PanelAnswer` for a specific kickoff-input *field*: it carries the drafted
+# value(s), the answering persona, a grounding signal, and full provenance — but is an ``estimate``
+# starter (FR-KIR-5), never the synthetic-``OBSERVED`` claim the reactive OMIT path mints. It is the
+# unit staged out-of-band (FR-KIR-7) and promoted into the domain YAML on human approval.
+# --------------------------------------------------------------------------- #
+
+# Dispositions a staged recommendation can carry (FR-KIR-8, R1-F3).
+DISPOSITIONS = ("draft", "approved", "rejected", "invalid")
+
+
+@dataclass(frozen=True)
+class Recommendation:
+    """A persona's drafted starter for one kickoff-input field (FR-KIR-4).
+
+    ``recommended_value`` is a plain scalar string for a scalar field, or a ``{subkey: value}`` mapping
+    for a **composite** field (a ``business-targets`` metric row → ``{"target": …, "why": …}``);
+    ``composite_keys`` records which. :meth:`scalar_writes` expands it into concrete
+    ``(dotted_key, value)`` pairs for the approval splice (R4-S1). Provenance is always ``estimate``
+    (FR-KIR-5) with a ``panel:<role_id>`` origin; ``brief_hash`` + ``roster_version`` pin the producing
+    revision so a stale draft is detectable (R4-F2).
+    """
+
+    domain: str
+    value_path: str
+    recommended_value: Any  # str (scalar) | Dict[str, str] (composite)
+    rationale: str = ""
+    role_id: str = ""
+    grounding: Grounding = Grounding.UNCERTAIN
+    provenance: str = "estimate"
+    origin: str = ""  # "panel:<role_id>"
+    composite_keys: tuple = ()
+    brief_hash: str = ""
+    roster_version: str = ""
+    session_id: str = ""
+    model: str = ""
+    cost_usd: float = 0.0
+    disposition: str = "draft"
+    created_at: str = ""
+    flags: List[str] = field(default_factory=list)
+
+    @property
+    def is_composite(self) -> bool:
+        return bool(self.composite_keys)
+
+    def scalar_writes(self) -> List[tuple]:
+        """Concrete ``(dotted_key, value)`` pairs to splice into the domain YAML (R4-S1).
+
+        Scalar → one pair keyed by ``value_path``; composite → one pair per sub-key
+        (``value_path.target``, ``value_path.why`` …) in ``composite_keys`` order.
+        """
+        if not self.composite_keys:
+            return [(self.value_path, str(self.recommended_value))]
+        values = self.recommended_value if isinstance(self.recommended_value, dict) else {}
+        out: List[tuple] = []
+        for sub in self.composite_keys:
+            if sub in values and values[sub] is not None:
+                out.append((f"{self.value_path}.{sub}", str(values[sub])))
+        return out
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "domain": self.domain,
+            "value_path": self.value_path,
+            "recommended_value": self.recommended_value,
+            "rationale": self.rationale,
+            "role_id": self.role_id,
+            "grounding": self.grounding.value,
+            "provenance": self.provenance,
+            "origin": self.origin,
+            "composite_keys": list(self.composite_keys),
+            "brief_hash": self.brief_hash,
+            "roster_version": self.roster_version,
+            "session_id": self.session_id,
+            "model": self.model,
+            "cost_usd": self.cost_usd,
+            "disposition": self.disposition,
+            "created_at": self.created_at,
+            "flags": list(self.flags),
+        }
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "Recommendation":
+        return Recommendation(
+            domain=str(d.get("domain", "")),
+            value_path=str(d.get("value_path", "")),
+            recommended_value=d.get("recommended_value"),
+            rationale=str(d.get("rationale", "")),
+            role_id=str(d.get("role_id", "")),
+            grounding=Grounding.coerce(d.get("grounding")),
+            # from_dict must NOT default provenance to a filled value — a missing marker is still
+            # an estimate, never silently an authored fact (parity with FR-10's R1-F6 invariant).
+            provenance=str(d.get("provenance", "estimate")) or "estimate",
+            origin=str(d.get("origin", "")),
+            composite_keys=tuple(d.get("composite_keys") or ()),
+            brief_hash=str(d.get("brief_hash", "")),
+            roster_version=str(d.get("roster_version", "")),
+            session_id=str(d.get("session_id", "")),
+            model=str(d.get("model", "")),
+            cost_usd=_as_float(d.get("cost_usd")),
+            disposition=str(d.get("disposition", "draft")) or "draft",
             created_at=str(d.get("created_at", "")),
             flags=[str(f) for f in (d.get("flags") or [])],
         )
