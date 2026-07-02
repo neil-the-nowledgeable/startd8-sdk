@@ -2,7 +2,7 @@
 
 **Version:** 0.3 (post-CRP — 3-round panel triaged)
 **Date:** 2026-06-25
-**Status:** Design — CRP-reviewed (R1–R3 triaged; dispositions in Appendix A/B). Ready to build MVP-A.
+**Status:** IMPLEMENTED — MVP-A (`e051529e`, `d468c0d5`) + MVP-B (`2b86c2d3`) + Phase 2 ContextCore FR-CC1..4 (`8e44ca7b`, PR #48) all shipped to main. CRP-reviewed (R1–R3 triaged; dispositions in Appendix A/B). *(Marker updated 2026-07-02 — was "Ready to build MVP-A".)*
 **Author:** Neil Yashinsky
 **Depends on:** the agentic loop on `main` (FR-0/1/3/4/9/15/16/17/18/19, all merged PRs #36–#41 + span enrichment `fce92b6c`)
 

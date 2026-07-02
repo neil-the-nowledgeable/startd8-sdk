@@ -13,9 +13,11 @@ registered in the observability span manifest by FR-CC3 (`collect_span_descripto
 
 **Target Audience**: SDK operators and engineers running the agentic loop in production.
 
-> **RESOLVABILITY-PENDING:** no live `agentic.session` spans flow yet (new capability) and no
-> spanmetrics connector derives `agentic.*` metrics — queries must be re-verified to return non-zero
-> series once real runs land (the "100% coverage / 0 series" failure mode the lesson gates out).
+> **RESOLVABILITY-PARTIAL (updated 2026-07-02):** live `agentic.session` spans now flow — FR-CC3
+> registers the span descriptor and FR-CC4 dogfood emits real spans (ContextCore Phase 2, `8e44ca7b`).
+> STILL PENDING: no spanmetrics connector derives `agentic.*` metrics yet, so any metric-backed panel
+> must still be re-verified to return non-zero series against a live run (the "100% coverage / 0
+> series" failure mode the lesson gates out). TraceQL-metrics panels over the spans are now resolvable.
 
 ## 2. Data Sources & Metrics
 

@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.12.0"
+version: "1.13.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1301,9 +1301,9 @@ capabilities:
       cascade readiness (wraps wireframe); `instantiate-kickoff --posture prototype|production` projects
       the kickoff package (preview by default, --apply to write); `log-friction` records onboarding
       friction. The read-only survey/assess are exposed as the `startd8_concierge` MCP tool; write
-      actions go through a single safe-writer chokepoint (CLI is the sole writer). NOTE: assess/posture
-      do not yet surface this session's deployment posture (mode/deploy/environments/coherence) —
-      deployment-awareness is a tracked follow-on.
+      actions go through a single safe-writer chokepoint (the MCP path only previews, never writes).
+      Deployment-awareness (mode/deploy/environments/coherence readiness) now ships as a sibling
+      capability — see startd8.concierge.deployment_awareness.
     triggers: ["concierge", "onboard project", "kickoff", "survey project", "onboarding readiness", "instantiate kickoff"]
     evidence:
       - type: code
@@ -1312,6 +1312,35 @@ capabilities:
       - type: docs
         ref: docs/design/kickoff/
         description: "FR-C series (C3/C7/C10..C14); concierge_templates/ kickoff package"
+    confidence: 0.85
+
+  - capability_id: startd8.concierge.deployment_awareness
+    category: observe
+    maturity: beta
+    summary: "Deployment-literate onboarding ($0, read-only, no-LLM): `concierge assess` gains a deployment block (mode, deploy posture, environments, 4-state readiness incl. staleness, coherence verdict + unbound-binding count); the wireframe surfaces the same; posture seeds a deployment-mode DEFAULT (never a force); kickoff templates teach the `deploy:` block grammar-coherently; and a NEW read-only `startd8_check_deploy_coherence` MCP tool answers 'is this deployable?'"
+    audiences: [workflow_developer, integration_developer, ai_agent]
+    description: |
+      Makes the Concierge front door deployment-literate for humans + agents. `assess` surfaces a
+      `deployment` block — declared mode, `deploy:` posture (target_cloud/secrets_backend/trust_gateway),
+      environments, a 4-state readiness (`not-declared`/`declared-not-generated`/`generated`/`unknown`,
+      plus `stale` when declared envs ⊄ the generated contract, FR-CDA-8), the deploy-coherence verdict
+      and unbound-operator-binding count. The wireframe deployment section surfaces the same (deployed
+      -only, so installed stays byte-identical). `instantiate-kickoff --posture` seeds a deployment-mode
+      DEFAULT (prototype→installed, production→deployed) — declared mode always wins, conflict is an
+      advisory not an error (production-installed is a named non-conflict). Kickoff templates teach the
+      `deploy:` block using only strict-parser keys (grammar-coherence gate). A read-only
+      `startd8_check_deploy_coherence` MCP tool runs the gate script via subprocess (argv = project +
+      `--json`; returncode→verdict; missing/unstartable→structured `hard`). Single source of truth:
+      readiness + verdict + count come from one `evaluate_deploy_coherence`; secret VALUES are never
+      surfaced (names/counts/status only). Assist-not-operate: never runs the deploy or records a gate.
+    triggers: ["deployment readiness", "is this deployable", "check deploy coherence", "deployment posture", "deploy mode", "installed vs deployed"]
+    evidence:
+      - type: code
+        ref: src/startd8/scaffold_codegen/deploy_readiness.py
+        description: "single-source resolve_deployment_readiness/evaluate_deploy_coherence/run_deploy_gate_subprocess; assess block in concierge/core.py; wireframe/plan.py deployment section; startd8_check_deploy_coherence MCP tool"
+      - type: docs
+        ref: docs/design/kickoff/CONCIERGE_DEPLOYMENT_AWARENESS_REQUIREMENTS.md
+        description: "FR-CDA-1..8 (reqs v0.4 / plan v1.2, pressure-tested against code)"
     confidence: 0.85
 
   - capability_id: startd8.vipp.negotiation
@@ -1587,6 +1616,12 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.13.0"
+    date: "2026-07-02"
+    changes:
+      - "Added startd8.concierge.deployment_awareness (observe, beta, 0.85) — deployment-literate onboarding: `concierge assess` deployment block (mode/posture/environments/4-state readiness+staleness/coherence verdict/unbound count), matching wireframe surfacing, posture→deployment-mode default-seed, grammar-coherent kickoff templates, and a NEW read-only `startd8_check_deploy_coherence` MCP tool. Single-source verdict/count/readiness; secret-safe; assist-not-operate. Requirements pressure-tested against code (FR-CDA-1..8, reqs v0.4 / plan v1.2)."
+      - "Registered the startd8_check_deploy_coherence MCP tool (read-only, subprocess gate, fail-closed)."
+      - "Updated startd8.concierge.onboarding — dropped the stale 'deployment-awareness is a tracked follow-on' note (now shipped as the sibling capability)."
   - version: "1.12.0"
     date: "2026-07-02"
     changes:

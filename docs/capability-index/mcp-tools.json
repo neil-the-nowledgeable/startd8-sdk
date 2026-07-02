@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "startd8.agent.generate",
-      "description": "Send prompts to any LLM provider through a unified async interface\n\n\nAvoid:\n- Never call provider APIs directly — use resolve_agent_spec() for consistency\n- Don't assume response format differs by provider — GenerateResult normalizes all",
+      "description": "Send prompts to any LLM provider through a unified async interface\n\n\nAvoid:\n- Never call provider APIs directly \u2014 use resolve_agent_spec() for consistency\n- Don't assume response format differs by provider \u2014 GenerateResult normalizes all",
       "inputSchema": {
         "type": "object",
         "required": [
@@ -582,7 +582,7 @@
     },
     {
       "name": "startd8.codegen.import_path",
-      "description": "Deterministic ($0) generated-app import path — inverse of export (imports.yaml grammar + from_json importer + paste/upload surface)",
+      "description": "Deterministic ($0) generated-app import path \u2014 inverse of export (imports.yaml grammar + from_json importer + paste/upload surface)",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -610,7 +610,7 @@
     },
     {
       "name": "startd8.codegen.presentation_polish",
-      "description": "$0 deterministic Tier-1 design system — CSS-only accessible restyle of a generated app",
+      "description": "$0 deterministic Tier-1 design system \u2014 CSS-only accessible restyle of a generated app",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -638,7 +638,7 @@
     },
     {
       "name": "startd8.codegen.deployment_mode",
-      "description": "Installed-vs-deployed $0 deterministic mode — bake only what security requires, bind the rest at runtime",
+      "description": "Installed-vs-deployed $0 deterministic mode \u2014 bake only what security requires, bind the rest at runtime",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -666,7 +666,7 @@
     },
     {
       "name": "startd8.deploy.coherence_check",
-      "description": "Fail-closed machine-readable deploy-coherence verdict consumed by the cap-dev-pipe gate",
+      "description": "Fail-closed machine-readable deploy-coherence verdict \u2014 consumed by the cap-dev-pipe gate AND exposed as the read-only agent-callable startd8_check_deploy_coherence MCP tool (subprocess; argv=project+--json; returncode\u2192verdict; missing/unstartable\u2192structured hard)",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -675,7 +675,9 @@
         "manifest_id": "startd8.agent",
         "category": "integration",
         "maturity": "beta",
-        "confidence": 0.8
+        "confidence": 0.8,
+        "readOnlyHint": true,
+        "destructiveHint": false
       }
     },
     {
@@ -694,7 +696,7 @@
     },
     {
       "name": "startd8.codegen.polyglot_construction",
-      "description": "LLM-driven element-level code generation across 5 languages (Python, Go, Node.js, Java, C#) — polyglot microservice fleets",
+      "description": "LLM-driven element-level code generation across 5 languages (Python, Go, Node.js, Java, C#) \u2014 polyglot microservice fleets",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -806,7 +808,7 @@
     },
     {
       "name": "startd8.benchmark.round3_system",
-      "description": "Round-3 SYSTEM benchmark — build a working integrated 9-service polyglot Online Boutique, scored by a real user journey with honest per-service fault attribution",
+      "description": "Round-3 SYSTEM benchmark \u2014 build a working integrated 9-service polyglot Online Boutique, scored by a real user journey with honest per-service fault attribution",
       "inputSchema": {
         "type": "object",
         "properties": {}
