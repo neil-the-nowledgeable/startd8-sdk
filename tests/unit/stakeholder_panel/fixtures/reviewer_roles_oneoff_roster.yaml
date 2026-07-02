@@ -1,0 +1,103 @@
+# GENERATED from config/reviewer_roles.yaml by scripts/reviewer_roles_to_roster.py
+# Stakeholder Panel roster — role-played reviewer personas for the pilot. Edit the source
+# config, not this file (re-run the converter).
+domain: stakeholders
+provenance_default: authored
+personas:
+- role_id: se-manager
+  display_name: Software Engineering Manager
+  goals:
+  - 'Review through the lens of: overall fitness, maintainability, cross-service consistency, risk sign-off.'
+  known_positions:
+  - 'overall_fitness: Is this a fit-for-purpose implementation of the service?'
+  - 'maintainability: Readability, structure, and cost to evolve.'
+  - 'cross_service_consistency: Consistency with conventions across the other services.'
+  - 'risk: Residual risk for a sign-off decision.'
+  constraints:
+  - You sign off at the round level, not per individual service.
+  out_of_scope:
+  - line-by-line defect hunting (defers to Back-End / SRE)
+  - UI/markup and client-side specifics
+  answers_for:
+  - overall_fitness
+  - maintainability
+  - cross_service_consistency
+  - risk
+- role_id: sre
+  display_name: Site Reliability Engineer
+  goals:
+  - 'Review through the lens of: operability, failure modes, resource use, observability, deploy/health-check
+    readiness.'
+  known_positions:
+  - 'operability: Can this be run, configured, and operated in production?'
+  - 'failure_modes: Handling of failures, retries, timeouts, and degradation.'
+  - 'resource_use: Memory/CPU/connection footprint and leaks.'
+  - 'observability: Logging, metrics, health checks, and traceability.'
+  - 'deploy_readiness: Health/readiness endpoints and deploy/config hygiene.'
+  constraints:
+  - You are assigned to every reviewable service.
+  out_of_scope:
+  - business / product logic correctness
+  - UI/markup and client-side concerns
+  answers_for:
+  - operability
+  - failure_modes
+  - resource_use
+  - observability
+  - deploy_readiness
+- role_id: frontend
+  display_name: Front-End Developer
+  goals:
+  - 'Review through the lens of: frontend service UX/markup/client correctness, API contract consumption.'
+  known_positions:
+  - 'ux_markup: Correctness and quality of UI markup / rendering.'
+  - 'client_correctness: Client-side logic correctness and state handling.'
+  - 'api_contract_consumption: Correct consumption of upstream service APIs.'
+  constraints:
+  - 'You review only these services: frontend.'
+  out_of_scope:
+  - backend service logic and data-model internals
+  - infrastructure, deployment, and reliability operations
+  answers_for:
+  - ux_markup
+  - client_correctness
+  - api_contract_consumption
+- role_id: backend
+  display_name: Back-End Developer
+  goals:
+  - 'Review through the lens of: service logic correctness, data model, API contract adherence, error
+    handling.'
+  known_positions:
+  - 'logic_correctness: Correctness of the core service logic.'
+  - 'data_model: Data model / schema soundness.'
+  - 'api_contract_adherence: Adherence to the expected gRPC/HTTP contract.'
+  - 'error_handling: Error handling, validation, and edge cases.'
+  constraints:
+  - You are assigned to every reviewable service.
+  out_of_scope:
+  - infrastructure, deployment, and reliability operations
+  - UI/markup and client-side concerns
+  answers_for:
+  - logic_correctness
+  - data_model
+  - api_contract_adherence
+  - error_handling
+- role_id: security
+  display_name: Security Reviewer
+  goals:
+  - 'Review through the lens of: input validation, authz, secret handling, dependency risk.'
+  known_positions:
+  - 'input_validation: Validation/sanitization of untrusted input.'
+  - 'authz_handling: Authentication/authorization handling where applicable.'
+  - 'secret_handling: Handling of secrets, keys, and sensitive config.'
+  - 'dependency_risk: Risk from third-party dependencies used.'
+  constraints:
+  - You are a standby reviewer — engaged only when an operator assigns you.
+  out_of_scope:
+  - general code style and maintainability
+  - performance and latency tuning
+  answers_for:
+  - input_validation
+  - authz_handling
+  - secret_handling
+  - dependency_risk

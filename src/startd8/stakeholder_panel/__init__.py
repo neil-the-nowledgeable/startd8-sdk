@@ -39,11 +39,23 @@ from startd8.stakeholder_panel.roster import (
     RosterError,
     assess_roster,
     load_roster,
+    parse_roster,
     validate_roster,
+)
+from startd8.stakeholder_panel.adapters import (
+    Adapter,
+    AdapterError,
+    AdaptResult,
+    get_adapter,
 )
 from startd8.stakeholder_panel.grounding_guard import (
     check_grounding,
     unsupported_specifics,
+)
+from startd8.stakeholder_panel.ingest import (
+    IngestGateError,
+    IngestResult,
+    ingest,
 )
 from startd8.stakeholder_panel.routing import route
 from startd8.stakeholder_panel.vipp_bridge import Consultation, consult_panel
@@ -92,6 +104,7 @@ __all__ = [
     "RosterError",
     "assess_roster",
     "load_roster",
+    "parse_roster",
     "validate_roster",
     "RatificationError",
     "assert_ratifiable",
@@ -103,6 +116,13 @@ __all__ = [
     "Consultation",
     "check_grounding",
     "unsupported_specifics",
+    "Adapter",
+    "AdapterError",
+    "AdaptResult",
+    "get_adapter",
+    "ingest",
+    "IngestResult",
+    "IngestGateError",
     # lazy (via __getattr__):
     "StakeholderPanel",
     "PanelError",
