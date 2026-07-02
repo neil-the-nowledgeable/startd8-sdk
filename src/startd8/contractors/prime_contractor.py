@@ -127,8 +127,10 @@ VALID_EXECUTION_MODES: frozenset = VALID_MODES
 #: required to trigger pipeline mode during auto-detection.
 _DETECTION_THRESHOLD: int = 1
 
-#: Plan document load cap (PC-B5). Reduces from 60KB to 16KB for token savings.
-_PLAN_LOAD_MAX_BYTES: int = 16_384
+#: Plan document load cap (PC-B5) — the untrusted plan doc is bounded before fencing.
+#: FR-A2a: single source of truth is ``security.MAX_PLAN_LOAD_BYTES`` (a SECURITY cap); this
+#: module-local alias is kept for existing references.
+from ..security import MAX_PLAN_LOAD_BYTES as _PLAN_LOAD_MAX_BYTES  # noqa: E402
 
 #: CR-C1: Minimum quality score for accepting generation results from
 #: generators that lack an internal review loop.  Results below this

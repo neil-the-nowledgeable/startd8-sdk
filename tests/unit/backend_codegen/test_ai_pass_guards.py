@@ -1,0 +1,302 @@
+"""FR-B2/B3 (2b-i): declarative per-pass guards — grammar, guards.py validate_output, emission.
+
+- Grammar: `guards:` block parses into a Guards (default-on when absent); bad on_violation rejected.
+- guards.py v2: validate_output strips control chars, caps field length, rejects a verbatim
+  untrusted-input dump (echo/exfil), honoring on_violation drop|reject|flag.
+- Emission: untrusted-input passes get the capped fence (B2) + a post-call validate_output
+  guarded by GuardViolation (B3); the request cap is threaded from guards.max_untrusted_chars.
+
+See `docs/design/prompt-injection-prevention/REQUIREMENTS.md` FR-B2/B3.
+"""
+
+import ast
+
+import pytest
+
+from startd8.backend_codegen.ai_layer import (
+    Guards,
+    parse_ai_passes,
+    render_ai_guards,
+    render_ai_layer,
+)
+
+_BASE = """passes:
+  - name: p
+    output_entities: [X]
+    route_path: /p
+    prompt: pr
+"""
+
+
+def _guards_ns():
+    ns = {}
+    exec(compile(render_ai_guards(), "guards.py", "exec"), ns)
+    return ns
+
+
+# ---- grammar --------------------------------------------------------------
+
+def test_guards_default_on_when_absent():
+    g = parse_ai_passes(_BASE + "    input_entities: [X]")[0].guards
+    assert g == Guards()  # default-on
+    assert g.validate_output is True and g.max_untrusted_chars == 200_000 and g.on_violation == "reject"
+
+
+def test_guards_explicit_block_parsed():
+    m = _BASE + (
+        "    input_entities: [X]\n"
+        "    guards:\n"
+        "      max_untrusted_chars: 8000\n"
+        "      on_violation: flag\n"
+        "      field_max: {body: 4000}\n"
+    )
+    g = parse_ai_passes(m)[0].guards
+    assert g.max_untrusted_chars == 8000 and g.on_violation == "flag"
+    assert g.field_max == (("body", 4000),)
+
+
+def test_guards_bad_on_violation_rejected():
+    with pytest.raises(ValueError):
+        parse_ai_passes(_BASE + "    input_entities: [X]\n    guards:\n      on_violation: nuke")
+
+
+def test_guards_unknown_key_rejected():
+    with pytest.raises(ValueError):
+        parse_ai_passes(_BASE + "    input_entities: [X]\n    guards:\n      bogus: 1")
+
+
+# ---- guards.py v2 validate_output -----------------------------------------
+
+def test_guards_version_bumped_and_exports():
+    ns = _guards_ns()
+    assert ns["__guards_version__"] == "5"
+    assert "validate_output" in ns and "GuardViolation" in ns and "verify_provenance" in ns
+    assert "in_flight_claim" in ns
+
+
+def test_validate_output_strips_control_and_caps():
+    ns = _guards_ns()
+    r = type("E", (), {})()
+    r.body = "hi\x00there" + "x" * 10
+    ns["validate_output"](r, [], field_max={"body": 5}, on_violation="drop", pass_name="p")
+    assert "\x00" not in r.body and len(r.body) <= 5
+
+
+def test_validate_output_rejects_verbatim_dump():
+    ns = _guards_ns()
+    secret = "S" * 300  # >= min_verbatim_dump (200)
+    r = type("E", (), {})()
+    r.body = "prefix " + secret + " suffix"
+    with pytest.raises(ns["GuardViolation"]):
+        ns["validate_output"](r, [secret], on_violation="reject", pass_name="p")
+
+
+def test_validate_output_flag_keeps_but_reports():
+    ns = _guards_ns()
+    secret = "Z" * 300
+    r = type("E", (), {})()
+    r.body = secret
+    violations = ns["validate_output"](r, [secret], on_violation="flag", pass_name="p")
+    assert violations and r.body == secret  # kept, but reported
+
+
+# ---- emission -------------------------------------------------------------
+
+_SCHEMA = """
+model Note { id String @id  text String  sourceId String?  source String?  confirmed Boolean @default(false) }
+"""
+_SRC_BOUND = """passes:
+  - name: suggest_note
+    output_entities: [Note]
+    route_path: /ai/suggest-note
+    prompt: prompts/suggest_note.md
+    request_field: text
+    source_binding: sourceId
+"""
+
+
+def test_source_bound_emits_cap_and_validate():
+    files = dict(render_ai_layer(_SCHEMA, _SRC_BOUND, None))
+    src = files["app/ai/suggest_note.py"]
+    ast.parse(src)
+    assert "validate_output, GuardViolation" in src
+    assert "fence_untrusted(text, 'text', 200000)" in src            # B2 cap threaded
+    assert "validate_output(result, [text]" in src                    # B3 validate
+    assert "except GuardViolation" in src                             # reject → not persisted
+
+
+def test_all_emitted_python_parses():
+    for path, src in dict(render_ai_layer(_SCHEMA, _SRC_BOUND, None)).items():
+        if path.endswith(".py"):
+            ast.parse(src)
+
+
+# ---- B5 verify_provenance (2b-ii) -----------------------------------------
+
+def test_verify_provenance_grammar_and_default_off():
+    assert parse_ai_passes(_BASE + "    input_entities: [X]")[0].guards.verify_provenance is None
+    m = _BASE + "    input_entities: [X]\n    guards:\n      verify_provenance: drew_on"
+    assert parse_ai_passes(m)[0].guards.verify_provenance == "drew_on"
+
+
+def test_verify_provenance_rejects_non_string():
+    with pytest.raises(ValueError):
+        parse_ai_passes(_BASE + "    input_entities: [X]\n    guards:\n      verify_provenance: [a, b]")
+
+
+def test_verify_provenance_helper_drops_fabricated_id_keyed():
+    ns = _guards_ns()
+    r = type("E", (), {})()
+    r.drew_on = ["id-1", "id-FAKE", "id-2"]
+    dropped = ns["verify_provenance"](r, "drew_on", ["id-1", "id-2", "id-3"], on_violation="drop")
+    assert dropped == ["id-FAKE"] and r.drew_on == ["id-1", "id-2"]
+
+
+def test_verify_provenance_id_keyed_not_title():
+    """Two rows sharing a title stay distinct — keyed on id (R1-F2)."""
+    ns = _guards_ns()
+    r = type("E", (), {})()
+    r.drew_on = ["pk-1", "pk-2"]
+    # supplied has only pk-1; pk-2 (a same-title-but-different-row) must be dropped.
+    dropped = ns["verify_provenance"](r, "drew_on", ["pk-1"], on_violation="drop")
+    assert dropped == ["pk-2"]
+
+
+def test_verify_provenance_reject_raises():
+    ns = _guards_ns()
+    r = type("E", (), {})()
+    r.drew_on = ["fake"]
+    with pytest.raises(ns["GuardViolation"]):
+        ns["verify_provenance"](r, "drew_on", ["real"], on_violation="reject")
+
+
+# ---- B6 auto-send refusal + stricter mode (2b-iii) ------------------------
+
+def test_b6_auto_send_without_stricter_refused():
+    with pytest.raises(ValueError, match="stricter"):
+        parse_ai_passes(_BASE + "    input_entities: [X]\n    guards:\n      auto_send: true")
+
+
+def test_b6_stricter_forces_strongest_gate():
+    m = (_BASE + "    input_entities: [X]\n    guards:\n"
+         "      auto_send: true\n      stricter: true\n      on_violation: flag\n      validate_output: false")
+    g = parse_ai_passes(m)[0].guards
+    assert g.auto_send and g.stricter
+    assert g.validate_output is True and g.on_violation == "reject"  # stricter overrides weaker settings
+
+
+def test_b6_default_not_auto_send():
+    g = parse_ai_passes(_BASE + "    input_entities: [X]")[0].guards
+    assert g.auto_send is False and g.stricter is False
+
+
+# ---- B7 app-side guard logging (2b-iii) -----------------------------------
+
+def test_b7_fence_logs_truncation():
+    import logging
+    ns = _guards_ns()
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, r):
+            recs.append(r)
+
+    ns["_log"].addHandler(_H())
+    ns["_log"].setLevel(logging.WARNING)
+    ns["fence_untrusted"]("y" * 500, "big", 100)
+    ev = [r for r in recs if getattr(r, "event", None) == "ai_input_truncated"]
+    assert ev and ev[0].orig_len == 500 and ev[0].max_chars == 100
+
+
+def test_b7_no_truncation_log_when_under_cap():
+    import logging
+    ns = _guards_ns()
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, r):
+            recs.append(r)
+
+    ns["_log"].addHandler(_H())
+    ns["_log"].setLevel(logging.WARNING)
+    ns["fence_untrusted"]("short", "small", 10_000)
+    assert not [r for r in recs if getattr(r, "event", None) == "ai_input_truncated"]
+
+
+# ---- B4 single_in_flight_by (own slice) -----------------------------------
+
+def test_b4_grammar_default_off_and_parsed():
+    assert parse_ai_passes(_BASE + "    input_entities: [X]")[0].guards.single_in_flight_by == ()
+    m = _BASE + "    input_entities: [X]\n    guards:\n      single_in_flight_by: [source_id]"
+    assert parse_ai_passes(m)[0].guards.single_in_flight_by == ("source_id",)
+
+
+def test_b4_grammar_rejects_non_list():
+    with pytest.raises(ValueError):
+        parse_ai_passes(_BASE + "    input_entities: [X]\n    guards:\n      single_in_flight_by: source_id")
+
+
+def test_b4_render_rejects_key_not_a_param():
+    # source-bound pass params are (text, source_id); 'bogus' is neither.
+    m = _SRC_BOUND.replace(
+        "source_binding: sourceId",
+        "source_binding: sourceId\n    guards:\n      single_in_flight_by: [bogus]",
+    )
+    with pytest.raises(ValueError, match="not pass parameters"):
+        render_ai_layer(_SCHEMA, m, None)
+
+
+def test_b4_claim_acquire_reject_release():
+    ns = _guards_ns()
+    ic = ns["in_flight_claim"]
+    with ic("k1") as a:
+        assert a is True
+        with ic("k1") as b:
+            assert b is False          # held → fail-fast reject
+        with ic("k2") as c:
+            assert c is True           # different key acquires
+    with ic("k1") as d:
+        assert d is True               # released after block
+
+
+def test_b4_claim_auto_released_on_holder_death_cross_process():
+    """FR-B4-3/4: a claim held by a dead process is auto-released by the OS (no TTL)."""
+    import subprocess
+    import sys
+    import textwrap
+
+    ns = _guards_ns()
+    # Render the guards module to a temp path so a child can import it identically.
+    import tempfile
+    import os as _os
+    d = tempfile.mkdtemp()
+    gp = _os.path.join(d, "guards_mod.py")
+    with open(gp, "w") as f:
+        f.write(render_ai_guards())
+    key = "cross-proc-key"
+    # Child acquires the claim and exits WITHOUT releasing (simulated crash).
+    child = textwrap.dedent(f"""
+        import importlib.util, sys
+        spec = importlib.util.spec_from_file_location("g", {gp!r})
+        g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+        cm = g.in_flight_claim({key!r}); ok = cm.__enter__()
+        assert ok is True
+        sys.exit(0)   # exit holding the claim -> OS must release the flock
+    """)
+    subprocess.run([sys.executable, "-c", child], check=True, cwd=d)
+    # Parent acquires the same key -> must succeed (child's claim auto-released on death).
+    with ns["in_flight_claim"](key) as ok:
+        assert ok is True
+
+
+def test_b4_emitted_pass_wraps_and_rejects():
+    m = _SRC_BOUND.replace(
+        "source_binding: sourceId",
+        "source_binding: sourceId\n    guards:\n      single_in_flight_by: [source_id]",
+    )
+    src = dict(render_ai_layer(_SCHEMA, m, None))["app/ai/suggest_note.py"]
+    ast.parse(src)
+    assert "from app.ai.guards import" in src and "in_flight_claim" in src
+    assert "with in_flight_claim(_if_key)" in src
+    assert '"status": "in_flight"' in src
+    assert "ai_in_flight_rejected" in src
