@@ -49,7 +49,9 @@ def is_estimate(rec: Recommendation) -> bool:
     Any consumer must treat an estimate as *unratified draft*, never an authored fact — parity with
     the synthetic-claim ``is_synthetic`` obligation, on the estimate tier.
     """
-    return rec.provenance == ESTIMATE_PROVENANCE and rec.origin.startswith(ORIGIN_PREFIX)
+    return rec.provenance == ESTIMATE_PROVENANCE and rec.origin.startswith(
+        ORIGIN_PREFIX
+    )
 
 
 def assert_not_authored(rec: Recommendation) -> None:

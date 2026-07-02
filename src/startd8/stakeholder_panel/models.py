@@ -169,13 +169,17 @@ class Grounding(str, Enum):
 
     ``grounded``/``uncertain`` mean the persona *answered* (the brief supports it, or it hedged);
     ``deferred`` means the persona declined as out-of-brief; ``unavailable`` means the agent call
-    failed (FR-16) — the panel never fabricates a fact in that case.
+    failed (FR-16) — the panel never fabricates a fact in that case. ``estimate`` is the Teian
+    signal (FR-KIR-6): a proactive *starter* for a blank field is not grounded in a project fact by
+    construction, so a drafted recommendation carries ``estimate`` rather than ``grounded`` — the only
+    guard that fires on it is a *contradiction* with the brief, never "unsupported specifics".
     """
 
     GROUNDED = "grounded"
     UNCERTAIN = "uncertain"
     DEFERRED = "deferred"
     UNAVAILABLE = "unavailable"
+    ESTIMATE = "estimate"
 
     @staticmethod
     def coerce(value: Any) -> "Grounding":
@@ -337,7 +341,9 @@ class Recommendation:
         """
         if not self.composite_keys:
             return [(self.value_path, str(self.recommended_value))]
-        values = self.recommended_value if isinstance(self.recommended_value, dict) else {}
+        values = (
+            self.recommended_value if isinstance(self.recommended_value, dict) else {}
+        )
         out: List[tuple] = []
         for sub in self.composite_keys:
             if sub in values and values[sub] is not None:

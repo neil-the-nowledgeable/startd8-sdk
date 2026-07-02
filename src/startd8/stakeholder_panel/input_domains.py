@@ -27,7 +27,7 @@ domain is **skipped** — never assigned to a non-owning persona by a loose matc
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 import yaml
@@ -305,9 +305,7 @@ def _answers_for_names_domain(brief: PersonaBrief, domain_name: str) -> bool:
     return False
 
 
-def resolve_owner(
-    domain_name: str, briefs: List[PersonaBrief]
-) -> Optional[str]:
+def resolve_owner(domain_name: str, briefs: List[PersonaBrief]) -> Optional[str]:
     """Return the ``role_id`` that owns *domain_name*, or ``None`` to **skip** the domain (FR-KIR-3).
 
     Resolution order (bounded, R3-F1):

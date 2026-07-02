@@ -70,11 +70,15 @@ def apply_recommendation(
     root = Path(package_root).expanduser()
     spec = get_domain(rec.domain)
     if spec is None:
-        return ApplyResult(False, "unsupported", rec.value_path, "", f"unknown domain {rec.domain!r}")
+        return ApplyResult(
+            False, "unsupported", rec.value_path, "", f"unknown domain {rec.domain!r}"
+        )
     rel = spec.rel_path()
     path = root / rel
     if not path.is_file():
-        return ApplyResult(False, "target_file_missing", rec.value_path, rel, f"missing {rel}")
+        return ApplyResult(
+            False, "target_file_missing", rec.value_path, rel, f"missing {rel}"
+        )
 
     original = path.read_text(encoding="utf-8")
 
@@ -116,7 +120,9 @@ def apply_recommendation(
 
     try:
         result = apply_write_plan(
-            root, [PlannedWrite(path=rel, content=text, action=ACTION_OVERWRITE)], force=True
+            root,
+            [PlannedWrite(path=rel, content=text, action=ACTION_OVERWRITE)],
+            force=True,
         )
     except SafeWriteError as exc:
         return ApplyResult(False, "write_refused", rec.value_path, rel, str(exc))
@@ -131,9 +137,7 @@ def approvable(recs: List[Recommendation]) -> List[Recommendation]:
     return [r for r in recs if r.disposition == "draft"]
 
 
-def domain_fully_resolved(
-    package_root: Path | str, domain: str
-) -> Optional[bool]:
+def domain_fully_resolved(package_root: Path | str, domain: str) -> Optional[bool]:
     """True iff the domain YAML now has **no unfilled fields** — the cue for the manual-flip hint (R4-S2).
 
     Returns ``None`` if the domain file is absent/unsupported.

@@ -44,6 +44,7 @@ from startd8.stakeholder_panel.input_domains import (
     resolve_owner,
     unfilled_fields,
 )
+from startd8.stakeholder_panel.contradiction_guard import check_contradiction
 from startd8.stakeholder_panel.models import Grounding, Recommendation
 from startd8.stakeholder_panel.proposals import ProposalStore
 from startd8.stakeholder_panel.recommend_provenance import (
@@ -111,9 +112,12 @@ def _build_recommendation(
     owner: str,
     answer: Any,
     session_id: str,
+    brief: Any,
 ) -> Recommendation:
     markers = _parse_markers(answer.text)
-    primary = markers.get("TARGET") or markers.get("VALUE") or (answer.text or "").strip()
+    primary = (
+        markers.get("TARGET") or markers.get("VALUE") or (answer.text or "").strip()
+    )
     if slot.composite_keys == ("target", "why"):
         value: Any = {"target": primary, "why": markers.get("WHY", "")}
         rationale = markers.get("WHY", "")
@@ -123,13 +127,17 @@ def _build_recommendation(
     else:
         value = primary
         rationale = markers.get("WHY", "")
+    # FR-KIR-6: a drafted starter is an ESTIMATE (not grounded in a project fact by construction).
+    # Do NOT carry the reactive "unsupported-specifics" flags — an estimate is expected to introduce
+    # a value the brief never stated. The only guard that fires is a CONTRADICTION with the brief.
+    flags = check_contradiction(brief, value) if brief is not None else []
     return Recommendation(
         domain=spec.name,
         value_path=slot.value_path,
         recommended_value=value,
         rationale=rationale,
         role_id=owner,
-        grounding=answer.grounding,
+        grounding=Grounding.ESTIMATE,
         provenance=ESTIMATE_PROVENANCE,
         origin=panel_origin(owner),
         composite_keys=slot.composite_keys,
@@ -140,7 +148,7 @@ def _build_recommendation(
         cost_usd=answer.cost_usd,
         disposition="draft",
         created_at=answer.created_at,
-        flags=list(answer.flags),
+        flags=flags,
     )
 
 
@@ -173,6 +181,7 @@ async def recommend_inputs(
     store = ProposalStore(root, session_id)
     existing = {(r.domain, r.value_path): r for r in store.load()}
     briefs = list(getattr(panel, "briefs", []))
+    briefs_by_id = {b.role_id: b for b in briefs}
 
     run = RecommendationRun(session_id=session_id)
     domain_names = domains if domains is not None else _default_domains(root)
@@ -200,7 +209,11 @@ async def recommend_inputs(
             prior = existing.get(key)
             if not redraft and prior is not None and prior.disposition == "draft":
                 run.skipped.append(
-                    {"domain": dname, "value_path": slot.value_path, "status": "already-drafted"}
+                    {
+                        "domain": dname,
+                        "value_path": slot.value_path,
+                        "status": "already-drafted",
+                    }
                 )
                 continue
             plan_items.append((spec, slot, owner))
@@ -210,7 +223,11 @@ async def recommend_inputs(
     deferred = [] if cap is None else plan_items[max(0, cap) :]
     for spec, slot, _owner in deferred:
         run.skipped.append(
-            {"domain": spec.name, "value_path": slot.value_path, "status": "deferred-cap"}
+            {
+                "domain": spec.name,
+                "value_path": slot.value_path,
+                "status": "deferred-cap",
+            }
         )
 
     preflight = getattr(panel, "preflight_budget", None)
@@ -225,7 +242,11 @@ async def recommend_inputs(
             )
             for spec, slot, _owner in to_ask:
                 run.skipped.append(
-                    {"domain": spec.name, "value_path": slot.value_path, "status": "deferred-budget"}
+                    {
+                        "domain": spec.name,
+                        "value_path": slot.value_path,
+                        "status": "deferred-budget",
+                    }
                 )
             return run
 
@@ -243,17 +264,27 @@ async def recommend_inputs(
             answer = await panel.ask(
                 owner, _drafting_prompt(spec, slot), value_path=slot.value_path
             )  # never raises (FR-KIR-13)
-            if answer.grounding is Grounding.UNAVAILABLE:
+            # A failed call (unavailable) or an in-character DEFERRAL both leave the field unchanged
+            # and never fabricate a value (FR-KIR-13 / FR-7): a persona declining "outside my remit"
+            # must not be turned into a drafted starter.
+            if answer.grounding in (Grounding.UNAVAILABLE, Grounding.DEFERRED):
+                status = (
+                    "unavailable"
+                    if answer.grounding is Grounding.UNAVAILABLE
+                    else "deferred-persona"
+                )
                 run.skipped.append(
                     {
                         "domain": spec.name,
                         "value_path": slot.value_path,
-                        "status": "unavailable",
+                        "status": status,
                         "role_id": owner,
                     }
                 )
                 continue
-            rec = _build_recommendation(spec, slot, owner, answer, session_id)
+            rec = _build_recommendation(
+                spec, slot, owner, answer, session_id, briefs_by_id.get(owner)
+            )
             new_recs.append(rec)
             run.total_cost_usd += rec.cost_usd
 
