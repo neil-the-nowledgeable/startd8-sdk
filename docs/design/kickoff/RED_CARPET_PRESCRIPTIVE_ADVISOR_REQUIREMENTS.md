@@ -1,6 +1,6 @@
 # Red Carpet Prescriptive Advisor — Requirements
 
-**Version:** 0.4 (Do-now enhancement batch)
+**Version:** 0.5 (Batch 2 — sharper, consistent guidance)
 **Date:** 2026-07-02
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -257,6 +257,41 @@ loop citing it rather than re-deriving it.
   Additive/backward-compatible: existing keys unchanged. *Verify:* `to_dict()` carries `schema_version`;
   every advisory carries a non-empty `code`; codes are byte-stable across two builds on the same input.
 
+### I. Batch 2 — sharper, consistent guidance (v0.5)
+
+> The end-user-value cluster + a parity guard. All stay `$0`/read-only/advisory-only (P1/P3). Numbered
+> FR-RCA-18..23. The M-effort `next_action`↔`next_steps` unification is **deferred to its own cycle**
+> (see `RED_CARPET_ADVISOR_BACKLOG.md`); Batch 2 adds the parity test that guards the `to_dict()` surfaces.
+
+- **FR-RCA-18 — Specific remediation for value-input gaps.** When a value-input domain is `absent`, the
+  `input-gap` advisory **names the specific fields** the user must fill — derived from the kickoff
+  experience config's `writable_fields()` grouped by their `value_path` file (`<domain>.yaml#/<key>`) —
+  rather than only "author it". Bounded (top ~4 field keys + "+N more"). Degrades to the current
+  domain-level message if the config is unavailable. The command is unchanged (`--agent` drives capture).
+  *Verify:* an absent domain with a known config lists its field keys; a missing config degrades without
+  raising.
+- **FR-RCA-19 — Never cap out the headline schema insight.** The top-N advisory cap (OQ-E) must **not**
+  drop the single most important schema-shape advisory (no-schema / islands / no-PK) when a wall of
+  cascade-blockers fills the cap. Reserve one slot for the highest-severity `schema-shape` advisory.
+  *Verify:* a greenfield project (schema absent) with ≥7 `warn` advisories still carries the
+  `schema-shape` "no data model yet" advisory in `to_dict().advisories`.
+- **FR-RCA-20 — Weave the wireframe preview into the run step.** When `cascade_offerable`, the
+  "Run the $0 cascade" `NextStep.detail` includes the preview counts (entity/page/view from the
+  already-fetched `preview.shape`/`status_counts`), so the go/no-go is concrete. `$0` (reuses the existing
+  preview; no extra scan). *Verify:* an offerable project's run step detail includes the counts.
+- **FR-RCA-21 — Proactive REPL banner.** The agentic loop's turn-0 banner is seeded with the top insight +
+  top next step (via `reflection_text` or a compact one-liner), so the user sees prescriptive guidance
+  **before** the model calls a tool. CLI-loop only; no new writes; the loop stays propose-only. *Verify:*
+  the banner passed to `run_red_carpet_repl` contains the top insight/next-step text.
+- **FR-RCA-22 — `--json` summary header.** `to_dict()` gains a bounded `summary` block —
+  `{errors, warns, infos, next_steps}` counts — for scripting/CI (complements `--check`). Additive;
+  existing keys unchanged. *Verify:* `to_dict()["summary"]` counts match the advisory severities.
+- **FR-RCA-23 — Cross-surface parity test.** A test asserts the CLI panel data, `/red-carpet.json`, the
+  `red_carpet_state` chat read tool, and the `startd8_red_carpet_state` MCP tool all derive from the
+  **same** `build_red_carpet_state().to_dict()` — guarding the "one source of truth" claim (FR-RCA-4).
+  Test-only; no runtime change. *Verify:* the surface-backing calls return byte-identical payloads for a
+  fixture root.
+
 ---
 
 ## 4. Non-Requirements
@@ -297,6 +332,13 @@ distribution path; the only genuinely-new surface wiring is the `startd8_red_car
 confirmed feasible; the schema-island false-positive guard (OQ-D), the dedupe rule (OQ-C), and the
 payload caps (OQ-E) are now stated acceptance details. `NextStep` is a new sibling of `NextAction` (not
 an overload). Ready for CRP review before implementation.*
+
+*v0.5 — Batch 2 (sharper, consistent guidance). Adds FR-RCA-18..23: specific per-field remediation for
+value-input gaps (FR-RCA-18), a reserved top-N slot so the headline schema insight is never capped out
+(FR-RCA-19), wireframe preview counts woven into the run step (FR-RCA-20), a proactive REPL banner
+(FR-RCA-21), a `--json` summary header (FR-RCA-22), and a cross-surface parity test (FR-RCA-23). The
+M-effort `next_action`↔`next_steps` unification is deferred to its own reflective+CRP cycle (see
+`RED_CARPET_ADVISOR_BACKLOG.md`). All $0/read-only/advisory-only.*
 
 *v0.4 — Do-now enhancement batch (post-implementation value review). Adds FR-RCA-14..17 within the
 established boundaries: expanded schema diagnostics (no-PK / likely-FK-without-relation / empty-enum,

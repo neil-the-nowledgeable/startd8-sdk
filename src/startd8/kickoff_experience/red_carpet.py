@@ -64,6 +64,13 @@ class RedCarpetState:
             "preview": self.preview,
             "advisories": [a.to_dict() for a in self.advisories],
             "next_steps": [s.to_dict() for s in self.next_steps],
+            # FR-RCA-22 — bounded summary header for scripting/CI (complements --check).
+            "summary": {
+                "errors": sum(1 for a in self.advisories if a.severity == "error"),
+                "warns": sum(1 for a in self.advisories if a.severity == "warn"),
+                "infos": sum(1 for a in self.advisories if a.severity == "info"),
+                "next_steps": len(self.next_steps),
+            },
         }
         if self.perf is not None:
             d["perf"] = self.perf
@@ -163,11 +170,13 @@ def build_red_carpet_state(project_root: str | Path) -> RedCarpetState:
         # single `assess` + the on-disk schema; degrades to no advice on any error.
         try:
             from .docs import live_schema_text
-            from .red_carpet_advisor import build_playbook, derive_advisories
+            from .red_carpet_advisor import build_playbook, cap_advisories, derive_advisories
 
             schema_text = live_schema_text(root)
-            advisories = derive_advisories(root, base, assess, schema_text)[:_ADVISORY_CAP]
-            next_steps = build_playbook(root, base, advisories, cap=_NEXTSTEP_CAP)
+            # FR-RCA-19 — cap to top-N but never drop the headline schema insight.
+            advisories = cap_advisories(derive_advisories(root, base, assess, schema_text), _ADVISORY_CAP)
+            # FR-RCA-20 — thread the already-fetched preview into the run step.
+            next_steps = build_playbook(root, base, advisories, cap=_NEXTSTEP_CAP, preview=base.preview)
         except Exception:
             advisories, next_steps = (), ()
 
@@ -242,6 +251,19 @@ def reflection_text(state: RedCarpetState) -> str:
             lines.append(f"    {step.rank}. {step.title}{cmd}")
     lines.append("  if the kickoff grammar rejected something, you can log friction "
                  "(`startd8 kickoff concierge`).")
+    return "\n".join(lines)
+
+
+def prescriptive_banner(base_banner: str, state: RedCarpetState) -> str:
+    """FR-RCA-21 — seed the agent loop's turn-0 banner with the top insight + top next step, so the
+    user sees prescriptive guidance before the model calls a tool. Pure/testable."""
+    lines = [base_banner]
+    if state.advisories:
+        a = state.advisories[0]
+        lines.append(f"Top insight [{a.severity}]: {a.title} — {a.detail}")
+    if state.next_steps:
+        s = state.next_steps[0]
+        lines.append(f"Start here: {s.title}" + (f"  ⟶  {s.command}" if s.command else ""))
     return "\n".join(lines)
 
 

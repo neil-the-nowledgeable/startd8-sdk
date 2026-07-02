@@ -465,3 +465,96 @@ def test_check_exit_one_on_error_advisory(tmp_path):
     (inputs / "conventions.yaml").write_text("this: : : not valid yaml", encoding="utf-8")
     res = CliRunner().invoke(kickoff_app, ["red-carpet", str(tmp_path), "--check"])
     assert res.exit_code == 1  # invalid input YAML → input-invalid error advisory
+
+
+# ══ Batch 2 (FR-RCA-18..23) ═══════════════════════════════════════════════════════════════════════
+
+# ── FR-RCA-18: specific value-input remediation ───────────────────────────────────────────────────
+
+def test_absent_input_names_specific_fields():
+    advs = derive_advisories(".", _state(schema=True),
+                             _assess(domains={"conventions": {"status": "absent"}}), ONE_MODEL)
+    gap = [a for a in advs if a.kind == KIND_INPUT_GAP][0]
+    assert "fill:" in gap.action.lower()  # names specific fields, not just "author it"
+
+
+def test_absent_input_degrades_without_config(monkeypatch):
+    import startd8.kickoff_experience.red_carpet_advisor as adv
+    adv._domain_fields.cache_clear()
+    monkeypatch.setattr("startd8.kickoff_experience.manifest.default_config",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    advs = derive_advisories(".", _state(schema=True),
+                             _assess(domains={"observability": {"status": "absent"}}), ONE_MODEL)
+    gap = [a for a in advs if a.kind == KIND_INPUT_GAP]
+    assert gap and "not authored yet" in gap[0].detail  # degrades, no raise
+    adv._domain_fields.cache_clear()
+
+
+# ── FR-RCA-19: reserve the headline schema slot ───────────────────────────────────────────────────
+
+def test_cap_reserves_schema_slot():
+    from startd8.kickoff_experience.red_carpet_advisor import cap_advisories
+    warns = [Advisory(KIND_CASCADE_BLOCKER, "warn", f"Cascade blocker: S{i}", "d", "a") for i in range(10)]
+    schema = Advisory(KIND_SCHEMA_SHAPE, "info", "No data model yet", "d", "a")
+    capped = cap_advisories(tuple(warns + [schema]), 7)
+    assert len(capped) == 7
+    assert any(a.kind == KIND_SCHEMA_SHAPE for a in capped)  # headline never dropped
+
+
+def test_greenfield_keeps_schema_shape_in_capped_set(tmp_path):
+    advs = build_red_carpet_state(tmp_path).to_dict()["advisories"]
+    assert any(a["kind"] == "schema-shape" for a in advs)
+
+
+# ── FR-RCA-20: preview woven into run step ────────────────────────────────────────────────────────
+
+def test_run_step_includes_preview():
+    st = _state(schema=True, app=True, pages=True, views=True)  # offerable
+    steps = build_playbook(".", st, (), preview={"shape": "modular-monolith", "counts": {"ready": 5}})
+    run = [s for s in steps if s.title == "Run the $0 cascade"][0]
+    assert "modular-monolith" in run.detail
+
+
+# ── FR-RCA-21: proactive banner ───────────────────────────────────────────────────────────────────
+
+def test_prescriptive_banner_has_insight_and_step(tmp_path):
+    from startd8.kickoff_experience.red_carpet import prescriptive_banner
+    st = build_red_carpet_state(tmp_path)
+    banner = prescriptive_banner("WELCOME", st)
+    assert "WELCOME" in banner
+    assert "Top insight" in banner
+    assert "Start here" in banner
+
+
+# ── FR-RCA-22: --json summary header ──────────────────────────────────────────────────────────────
+
+def test_summary_matches_severities(tmp_path):
+    d = build_red_carpet_state(tmp_path).to_dict()
+    advs = d["advisories"]
+    assert d["summary"]["errors"] == sum(1 for a in advs if a["severity"] == "error")
+    assert d["summary"]["warns"] == sum(1 for a in advs if a["severity"] == "warn")
+    assert d["summary"]["infos"] == sum(1 for a in advs if a["severity"] == "info")
+    assert d["summary"]["next_steps"] == len(d["next_steps"])
+
+
+# ── FR-RCA-23: cross-surface parity ───────────────────────────────────────────────────────────────
+
+def _without_perf(d):
+    # `perf.elapsed_ms` is a live per-call measurement (legitimately volatile); parity is about the
+    # derived logical content, so compare with the timing sample removed.
+    return {k: v for k, v in d.items() if k != "perf"}
+
+
+def test_cross_surface_parity(tmp_path):
+    import pytest
+    from startd8.kickoff_experience.chat import handle_kickoff_read
+
+    canonical = _without_perf(build_red_carpet_state(tmp_path).to_dict())
+    # chat read tool (handle_kickoff_read → build_red_carpet_state().to_dict())
+    assert _without_perf(handle_kickoff_read("red_carpet_state", tmp_path)) == canonical
+    # web /red-carpet.json route
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    from startd8.kickoff_experience.web import build_kickoff_app
+    client = TestClient(build_kickoff_app(tmp_path, chat_factory=None), headers={"host": "127.0.0.1:8000"})
+    assert _without_perf(client.get("/red-carpet.json").json()) == canonical

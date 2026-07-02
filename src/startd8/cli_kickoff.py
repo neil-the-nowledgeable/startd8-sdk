@@ -322,6 +322,7 @@ def red_carpet_cmd(
     from .kickoff_experience.chat import new_red_carpet_chat
     from .kickoff_experience.proposals import apply_proposal
     from .kickoff_experience.red_carpet import (
+        prescriptive_banner,
         record_red_carpet_progress,
         reflection_text,
         run_red_carpet_repl,
@@ -372,8 +373,11 @@ def red_carpet_cmd(
 
     console.print(f"[dim]agent: {agent}[/dim]")
     emit(EV_RED_CARPET_STARTED)
+    # FR-RCA-21 — seed the turn-0 banner with the top insight + top next step so the user sees
+    # prescriptive guidance before the model calls a tool.
+    _banner = prescriptive_banner(chat.banner(), build_red_carpet_state(project))
     run_red_carpet_repl(
-        banner=chat.banner(),
+        banner=_banner,
         ask_sync=lambda m: asyncio.run(chat.ask(m)),
         read_input=_read,
         emit_line=lambda line: console.print(line),

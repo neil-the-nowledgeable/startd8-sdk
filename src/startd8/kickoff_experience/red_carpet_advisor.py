@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 # ── Severity ─────────────────────────────────────────────────────────────────────────────────────
 SEVERITY_INFO = "info"
@@ -243,8 +244,30 @@ def _schema_advisories(state: Any, schema_text: Optional[str]) -> List[Advisory]
 
 # ── Per-input readiness diagnosis (FR-RCA-6) ──────────────────────────────────────────────────────
 
+@lru_cache(maxsize=1)
+def _domain_fields() -> Dict[str, Tuple[str, ...]]:
+    """FR-RCA-18 — the writable value-input field keys per domain, from the seeded kickoff config.
+
+    Grouped by the file stem of each field's ``value_path`` (``<domain>.yaml#/<key>``). Degrades to
+    ``{}`` if the config is unavailable so remediation falls back to the domain-level message.
+    """
+    try:
+        from .manifest import default_config
+
+        grouped: Dict[str, List[str]] = {}
+        for f in default_config().writable_fields():
+            vp = str(getattr(f, "value_path", "") or "")
+            file = vp.split("#", 1)[0]
+            domain = file[:-5] if file.endswith(".yaml") else file
+            grouped.setdefault(domain, []).append(str(getattr(f, "key", "") or getattr(f, "label", "")))
+        return {k: tuple(v) for k, v in grouped.items()}
+    except Exception:
+        return {}
+
+
 def _input_advisories(assess: Mapping[str, Any]) -> List[Advisory]:
     domains = dict(((assess.get("kickoff_inputs") or {}).get("domains")) or {})
+    domain_fields = _domain_fields()
     out: List[Advisory] = []
     for name in _VALUE_DOMAINS:
         d = domains.get(name)
@@ -252,11 +275,18 @@ def _input_advisories(assess: Mapping[str, Any]) -> List[Advisory]:
             continue  # domain not assessed at all
         status = d.get("status")
         if status == "absent":
+            # FR-RCA-18 — name the specific fields to fill, not just "author it".
+            fields = domain_fields.get(name) or ()
+            if fields:
+                shown = ", ".join(fields[:4]) + (f" +{len(fields) - 4} more" if len(fields) > 4 else "")
+                detail = _bound(f"The '{name}' value input is not authored yet. Fields to fill: {shown}.")
+                action = _bound(f"Author {name} — fill: {shown}.")
+            else:
+                detail = f"The '{name}' value input is not authored yet."
+                action = f"Author {name} — drive the Red Carpet interview to capture it."
             out.append(Advisory(
                 KIND_INPUT_GAP, SEVERITY_WARN, f"Value input missing: {name}",
-                f"The '{name}' value input is not authored yet.",
-                f"Author {name} — drive the Red Carpet interview to capture it.",
-                CMD_RED_CARPET_AGENT,
+                detail, action, CMD_RED_CARPET_AGENT,
             ))
         elif status == "invalid":
             out.append(Advisory(
@@ -386,6 +416,24 @@ def derive_advisories(
     return tuple(advs)
 
 
+def cap_advisories(advisories: Tuple[Advisory, ...], cap: int) -> Tuple[Advisory, ...]:
+    """Cap to top-N (OQ-E) but **reserve one slot for the headline schema insight** (FR-RCA-19).
+
+    Input must be pre-sorted. If the cap would drop every `schema-shape` advisory (e.g. a greenfield
+    wall of cascade-blockers), swap the top schema-shape advisory into the last kept slot so the
+    front-bookend insight is never buried. Deterministic / byte-stable.
+    """
+    advs = list(advisories)
+    if len(advs) <= cap or cap <= 0:
+        return tuple(advs[:cap] if cap >= 0 else advs)
+    kept = advs[:cap]
+    if not any(a.kind == KIND_SCHEMA_SHAPE for a in kept):
+        top_schema = next((a for a in advs if a.kind == KIND_SCHEMA_SHAPE), None)
+        if top_schema is not None:
+            kept = kept[: cap - 1] + [top_schema]
+    return tuple(kept)
+
+
 # ── Ranked playbook (FR-RCA-8) ────────────────────────────────────────────────────────────────────
 
 _GATE_LABEL = {"app": "app manifest", "pages": "at least one page", "views": "at least one view"}
@@ -397,6 +445,7 @@ def build_playbook(
     advisories: Tuple[Advisory, ...],
     *,
     cap: int = 7,
+    preview: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[NextStep, ...]:
     """Assemble the ranked, command-bearing playbook in canonical dependency order (FR-RCA-8)."""
     steps: List[NextStep] = []
@@ -428,6 +477,14 @@ def build_playbook(
     if getattr(state, "cascade_offerable", False):
         add("run", "Review the wireframe",
             "Preview what the $0 cascade will build before running it.", CMD_WIREFRAME)
-        add("run", "Run the $0 cascade",
-            "Generate the app deterministically (no LLM).", CMD_GENERATE_BACKEND)
+        # FR-RCA-20 — weave the (already-fetched) wireframe preview into the run step for a concrete go/no-go.
+        run_detail = "Generate the app deterministically (no LLM)."
+        if preview:
+            shape = preview.get("shape")
+            counts = preview.get("counts")
+            if shape:
+                run_detail += f" Planned shape: {shape}."
+            if counts:
+                run_detail += f" Sections: {counts}."
+        add("run", "Run the $0 cascade", run_detail, CMD_GENERATE_BACKEND)
     return tuple(steps[:cap])

@@ -1,8 +1,8 @@
 # Red Carpet Prescriptive Advisor — Implementation Plan
 
-**Version:** 0.3 (Do-now enhancement batch)
+**Version:** 0.4 (Batch 2 — sharper, consistent guidance)
 **Date:** 2026-07-02
-**Requirements:** `RED_CARPET_PRESCRIPTIVE_ADVISOR_REQUIREMENTS.md` (v0.4)
+**Requirements:** `RED_CARPET_PRESCRIPTIVE_ADVISOR_REQUIREMENTS.md` (v0.5)
 **Branch:** `feat/red-carpet-advisor` (worktree off `origin/main` at
 `~/Documents/dev/startd8-red-carpet-advisor` — the RCT spine lives on `origin/main`).
 
@@ -173,6 +173,44 @@
 - `--check` exit codes: invalid-input project → 1; clean → 0 (CliRunner).
 - Telemetry: `red_carpet_advice` emits numeric-only attrs (assert no str values / no paths).
 - `to_dict` carries `schema_version`; every advisory has a non-empty, byte-stable `code`.
+
+### Step 17 — Specific value-input remediation (FR-RCA-18)
+- New helper in `red_carpet_advisor.py`: `_domain_fields(root) -> dict[domain, list[key]]`, loading the
+  kickoff experience config (`manifest.KickoffExperienceConfig` via its loader) and grouping
+  `writable_fields()` by the file stem of each field's `value_path` (`<domain>.yaml#/<key>` → domain
+  `<domain>`). Wrap in try/except → `{}` on any failure (degrade).
+- `_input_advisories` takes the map; for an `absent` domain, the `input-gap` `detail`/`action` lists the
+  top ~4 keys (`+N more`). Bounded via `_bound`. `derive_advisories`/`build_red_carpet_state` thread the
+  map (computed once).
+
+### Step 18 — Reserve the headline schema slot (FR-RCA-19)
+- In `build_red_carpet_state`, after sorting + before the `[:_ADVISORY_CAP]` slice: if the top
+  `schema-shape` advisory is not within the first `_ADVISORY_CAP`, swap it into the **last** kept slot
+  (guarantee ≥1 schema-shape survives the cap when one exists). Keep byte-stable (deterministic swap).
+- Alternatively centralize as `red_carpet_advisor.cap_advisories(advs, cap)` for unit-testing.
+
+### Step 19 — Weave preview into the run step (FR-RCA-20)
+- `build_playbook` gains an optional `preview` param; when offerable and preview present, the "Run the $0
+  cascade" `NextStep.detail` appends the counts (e.g. "N entities · P pages · V views" from
+  `preview.status_counts`/`shape`). `build_red_carpet_state` passes `base.preview`.
+
+### Step 20 — Proactive REPL banner (FR-RCA-21)
+- `cli_kickoff.py` agent-loop: build the initial state, and pass `banner = f"{DEFAULT_BANNER}\n" +
+  reflection_text(state)` (or a compact top-insight/top-step line) into `run_red_carpet_repl`, so turn 0
+  is prescriptive. No behavior change beyond the banner string.
+
+### Step 21 — `--json` summary header (FR-RCA-22)
+- `RedCarpetState.to_dict`: add `summary = {"errors": n, "warns": n, "infos": n, "next_steps": n}`
+  computed from `self.advisories`/`self.next_steps`. Additive.
+
+### Step 22 — Tests (batch 2) + cross-surface parity (FR-RCA-23)
+- Extend `test_red_carpet_advisor.py`: absent-domain lists field keys (+ config-missing degrade); a
+  reserved schema slot survives a ≥7-warn greenfield (FR-RCA-19); offerable run-step detail includes
+  counts; `to_dict()["summary"]` matches severities; banner contains the top insight (assert the string
+  the CLI builds).
+- **Parity test:** assert `build_red_carpet_state(root).to_dict()` == the payload behind `/red-carpet.json`
+  (`web.red_carpet_json` body), == the chat tool (`handle_kickoff_read("red_carpet_state", root)`), == the
+  MCP tool body (call the underlying `build_red_carpet_state(root).to_dict()` the tool wraps). Byte-identical.
 
 ---
 
