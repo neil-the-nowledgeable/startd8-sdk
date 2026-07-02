@@ -103,6 +103,7 @@ class Guards:
     verify_provenance: Optional[str] = None       # B5: name of the AI "what I used" list field
     auto_send: bool = False                       # B6: output goes outbound w/o human curation
     stricter: bool = False                        # B6: opt into stricter mode (required if auto_send)
+    single_in_flight_by: Tuple[str, ...] = ()     # B4: reject concurrent dup runs keyed by these params
 
 
 _ON_VIOLATION = {"drop", "reject", "flag"}
@@ -158,7 +159,8 @@ _TRIGGER_KEYS = {"entity", "text_field", "label"}
 _SCOPE_REL_KEYS = {"via", "entity", "optional"}
 _GUARDS_KEYS = {"max_untrusted_chars", "validate_output", "field_max", "on_violation",
                 "verify_provenance",           # FR-B5 (opt-in)
-                "auto_send", "stricter"}       # FR-B6
+                "auto_send", "stricter",       # FR-B6
+                "single_in_flight_by"}         # FR-B4 (opt-in)
 _HUMAN_FIELD_KEYS = {"target", "authored_by", "default", "test_default", "type"}
 _HUMAN_TOP_KEYS = {"config", "fields"}
 
@@ -203,6 +205,9 @@ def _parse_guards(spec: Any, i: int) -> Guards:
     vprov = spec.get("verify_provenance")
     if vprov is not None and not isinstance(vprov, str):
         raise ValueError(f"ai_passes.yaml: pass #{i} guards.verify_provenance must be a field name (str)")
+    sif = spec.get("single_in_flight_by") or []
+    if not isinstance(sif, list) or any(not isinstance(k, str) for k in sif):
+        raise ValueError(f"ai_passes.yaml: pass #{i} guards.single_in_flight_by must be a list of param names")
     auto_send = bool(spec.get("auto_send", False))
     stricter = bool(spec.get("stricter", False))
     # FR-B6: fencing only *reduces* injection; auto-send removes the human-curation trust boundary.
@@ -225,6 +230,7 @@ def _parse_guards(spec: Any, i: int) -> Guards:
         verify_provenance=(str(vprov) if vprov is not None else None),
         auto_send=auto_send,
         stricter=stricter,
+        single_in_flight_by=tuple(str(k) for k in sif),
     )
 
 
@@ -753,7 +759,7 @@ _PERSIST_SOURCE_HELPER = '''def _persist_source(session: Session, model: Any, ed
 
 def _guard_import_line(ps: AiPass) -> str:
     """Guard-helper import for a pass: fence always; validate_output + GuardViolation when on (FR-B3);
-    verify_provenance when opted in (FR-B5). GuardViolation is imported if either gate can raise."""
+    verify_provenance when opted in (FR-B5); in_flight_claim when opted in (FR-B4)."""
     names = ["fence_untrusted"]
     if ps.guards.validate_output:
         names.append("validate_output")
@@ -761,7 +767,36 @@ def _guard_import_line(ps: AiPass) -> str:
         names.append("verify_provenance")
     if ps.guards.validate_output or ps.guards.verify_provenance:
         names.append("GuardViolation")
+    if ps.guards.single_in_flight_by:
+        names.append("in_flight_claim")
     return f"from app.ai.guards import {', '.join(names)}"
+
+
+def _wrap_in_flight(ps: AiPass, body_lines: List[str], out: str) -> List[str]:
+    """FR-B4: wrap a pass's runtime body in a non-blocking in_flight_claim, or return it unchanged.
+
+    Keys MUST be the pass's signature params (source_id / request_field). A concurrent run whose claim
+    is held fails fast → returns an `in_flight` status without calling the LLM."""
+    if not ps.guards.single_in_flight_by:
+        return body_lines
+    params = {ps.request_field, "source_id"}
+    bad = [k for k in ps.guards.single_in_flight_by if k not in params]
+    if bad:
+        raise ValueError(
+            f"ai_passes.yaml: pass {ps.name!r} guards.single_in_flight_by keys {bad} are not pass "
+            f"parameters {sorted(params)} — key by source_id and/or {ps.request_field!r}."
+        )
+    key_expr = ' + "|" + '.join([f"{ps.name!r}"] + [f"str({k})" for k in ps.guards.single_in_flight_by])
+    guard = [
+        f"    _if_key = {key_expr}",
+        "    with in_flight_claim(_if_key) as _if_ok:",
+        "        if not _if_ok:",
+        f'            logger.warning("in-flight rejected %s", {ps.name!r}, '
+        f'extra={{"event": "ai_in_flight_rejected", "pass": {ps.name!r}}})',
+        f'            return {{"status": "in_flight", "created": {{{out!r}: 0}}}}',
+    ]
+    # Indent the runtime body under the `with` (blank lines stay blank).
+    return guard + [("    " + ln) if ln.strip() else ln for ln in body_lines]
 
 
 def _provenance_block(ps: AiPass, supplied_ids_expr: str, out: str) -> List[str]:
@@ -841,29 +876,31 @@ def _render_pass_text_bound(ps: AiPass, prov: str) -> str:
         "",
         f"def {ps.module}({ps.request_field}: str, session: Session, source_id: str) -> dict[str, Any]:",
         f'    """Free-text from a stored source → {out}s (source=ai), stamped + idempotent by source."""',
-        '    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""',
-        # FR-B1/B2: fence + cap the untrusted request text as DATA-not-instructions before the prompt.
-        f'    full_prompt = (prompt + "\\n\\n" + {_fence_call(ps, ps.request_field)}).strip()',
-        f"    result = call_ai_service({ps.name!r}, full_prompt, {out}Edge, session)",
-        *_guard_validate_block(ps, f"[{ps.request_field}]", out),
-        "    # Source-scope idempotency (FR-IMP-2): clear this source's prior UNCONFIRMED rows so a",
-        "    # re-run replaces rather than appends; CONFIRMED rows are never touched. Done only AFTER",
-        "    # a successful call — a keyless/failed call raises first, so prior rows are never lost.",
-        f"    prior = session.exec(",
-        f"        select({out}).where(",
-        f"            getattr({out}, _PROVENANCE_FIELD) == source_id, {out}.confirmed.is_(False)",
-        "        )",
-        "    ).all()",
-        "    for stale in prior:",
-        "        session.delete(stale)",
-        "    created = 0",
-        "    try:",
-        "        with session.begin_nested():  # isolate the row (M1)",
-        f"            created = _persist_source(session, {out}, result, source_id)",
-        "    except Exception as exc:  # noqa: BLE001",
-        f'        logger.warning("skipping {out} row: %s", exc)',
-        "    session.commit()",
-        f'    return {{"created": {{{out!r}: created}}}}',
+        *_wrap_in_flight(ps, [
+            '    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""',
+            # FR-B1/B2: fence + cap the untrusted request text as DATA-not-instructions before the prompt.
+            f'    full_prompt = (prompt + "\\n\\n" + {_fence_call(ps, ps.request_field)}).strip()',
+            f"    result = call_ai_service({ps.name!r}, full_prompt, {out}Edge, session)",
+            *_guard_validate_block(ps, f"[{ps.request_field}]", out),
+            "    # Source-scope idempotency (FR-IMP-2): clear this source's prior UNCONFIRMED rows so a",
+            "    # re-run replaces rather than appends; CONFIRMED rows are never touched. Done only AFTER",
+            "    # a successful call — a keyless/failed call raises first, so prior rows are never lost.",
+            f"    prior = session.exec(",
+            f"        select({out}).where(",
+            f"            getattr({out}, _PROVENANCE_FIELD) == source_id, {out}.confirmed.is_(False)",
+            "        )",
+            "    ).all()",
+            "    for stale in prior:",
+            "        session.delete(stale)",
+            "    created = 0",
+            "    try:",
+            "        with session.begin_nested():  # isolate the row (M1)",
+            f"            created = _persist_source(session, {out}, result, source_id)",
+            "    except Exception as exc:  # noqa: BLE001",
+            f'        logger.warning("skipping {out} row: %s", exc)',
+            "    session.commit()",
+            f'    return {{"created": {{{out!r}: created}}}}',
+        ], out),
         "",
         "",
         _PERSIST_SOURCE_HELPER,
@@ -979,7 +1016,7 @@ def _render_pass_scoped(ps: AiPass, schema, source_binding: Optional[str]) -> st
     ctx_untrusted += [f'"{r.entity.lower()}": {_var(r.entity)}.model_dump() if {_var(r.entity)} else None'
                       for r in ps.scope_relations]
     ctx_trusted = [f'"{_plural_field(e)}": [r.model_dump() for r in {v}]' for v, e in conf_vars]
-    lines += [
+    lines += _wrap_in_flight(ps, [
         "    untrusted_context = {",
         *(f"        {c}," for c in ctx_untrusted),
         "    }",
@@ -1021,6 +1058,7 @@ def _render_pass_scoped(ps: AiPass, schema, source_binding: Optional[str]) -> st
         f'        logger.warning("skipping {out} row: %s", exc)',
         "    session.commit()",
         f'    return {{"status": "ok", "created": {{{out!r}: created}}}}',
+    ], out) + [
         "", "",
         _PERSIST_SCOPED_HELPER, "",
         f"__all__ = [{ps.module!r}]", "",
@@ -1669,12 +1707,17 @@ trust boundary; a clean denylist is never relied upon.
 """
 from __future__ import annotations
 
+import contextlib as _contextlib
+import hashlib as _hashlib
 import logging as _logging
+import sys as _sys
+import tempfile as _tempfile
+from pathlib import Path as _Path
 from typing import Any, Iterable, Mapping
 
 import re as _re
 
-__guards_version__ = "4"
+__guards_version__ = "5"
 
 _log = _logging.getLogger("app.ai.guards")
 
@@ -1824,6 +1867,72 @@ def verify_provenance(result, field: str, supplied_ids, *, on_violation: str = "
             except Exception:
                 pass
     return dropped
+
+
+# --- FR-B4: single-in-flight claim (non-blocking, cross-process, same-host) ----------------
+if _sys.platform == "win32":
+    import msvcrt as _msvcrt
+
+    def _try_lock(f) -> bool:
+        try:
+            _msvcrt.locking(f.fileno(), _msvcrt.LK_NBLCK, 1)   # non-blocking exclusive
+            return True
+        except OSError:
+            return False
+
+    def _unlock(f) -> None:
+        try:
+            _msvcrt.locking(f.fileno(), _msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+else:
+    import fcntl as _fcntl
+
+    def _try_lock(f) -> bool:
+        try:
+            _fcntl.flock(f.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)  # non-blocking exclusive
+            return True
+        except (BlockingIOError, OSError):
+            return False
+
+    def _unlock(f) -> None:
+        try:
+            _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+        except OSError:
+            pass
+
+
+def _inflight_dir() -> "_Path":
+    """App-writable dir for 0-byte in-flight lock files (never the source tree)."""
+    d = _Path(_tempfile.gettempdir()) / "startd8-ai-inflight"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    except OSError:
+        d = _Path(_tempfile.mkdtemp(prefix="startd8-ai-inflight-"))
+        return d
+
+
+@_contextlib.contextmanager
+def in_flight_claim(key: str):
+    """FR-B4: non-blocking, cross-process (same-host) exclusive claim over ``key``, held for the block.
+
+    Yields True if acquired, False if a live holder already holds it (fail-fast — never waits). The
+    flock is held for the whole ``with`` body (the AI call + persist); a crashed/killed/timed-out holder's
+    claim is auto-released by the OS when its fd closes, so no TTL/lease is needed. Node-local (same host):
+    a k8s multi-replica deployment needs a shared-DB lease upgrade (documented boundary)."""
+    p = _inflight_dir() / (_hashlib.sha256(key.encode("utf-8")).hexdigest()[:32] + ".lock")
+    f = open(p, "w")
+    try:
+        if not _try_lock(f):
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            _unlock(f)
+    finally:
+        f.close()
 '''
 
 

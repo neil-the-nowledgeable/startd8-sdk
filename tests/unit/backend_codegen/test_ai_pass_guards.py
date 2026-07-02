@@ -69,8 +69,9 @@ def test_guards_unknown_key_rejected():
 
 def test_guards_version_bumped_and_exports():
     ns = _guards_ns()
-    assert ns["__guards_version__"] == "4"
+    assert ns["__guards_version__"] == "5"
     assert "validate_output" in ns and "GuardViolation" in ns and "verify_provenance" in ns
+    assert "in_flight_claim" in ns
 
 
 def test_validate_output_strips_control_and_caps():
@@ -220,3 +221,82 @@ def test_b7_no_truncation_log_when_under_cap():
     ns["_log"].setLevel(logging.WARNING)
     ns["fence_untrusted"]("short", "small", 10_000)
     assert not [r for r in recs if getattr(r, "event", None) == "ai_input_truncated"]
+
+
+# ---- B4 single_in_flight_by (own slice) -----------------------------------
+
+def test_b4_grammar_default_off_and_parsed():
+    assert parse_ai_passes(_BASE + "    input_entities: [X]")[0].guards.single_in_flight_by == ()
+    m = _BASE + "    input_entities: [X]\n    guards:\n      single_in_flight_by: [source_id]"
+    assert parse_ai_passes(m)[0].guards.single_in_flight_by == ("source_id",)
+
+
+def test_b4_grammar_rejects_non_list():
+    with pytest.raises(ValueError):
+        parse_ai_passes(_BASE + "    input_entities: [X]\n    guards:\n      single_in_flight_by: source_id")
+
+
+def test_b4_render_rejects_key_not_a_param():
+    # source-bound pass params are (text, source_id); 'bogus' is neither.
+    m = _SRC_BOUND.replace(
+        "source_binding: sourceId",
+        "source_binding: sourceId\n    guards:\n      single_in_flight_by: [bogus]",
+    )
+    with pytest.raises(ValueError, match="not pass parameters"):
+        render_ai_layer(_SCHEMA, m, None)
+
+
+def test_b4_claim_acquire_reject_release():
+    ns = _guards_ns()
+    ic = ns["in_flight_claim"]
+    with ic("k1") as a:
+        assert a is True
+        with ic("k1") as b:
+            assert b is False          # held → fail-fast reject
+        with ic("k2") as c:
+            assert c is True           # different key acquires
+    with ic("k1") as d:
+        assert d is True               # released after block
+
+
+def test_b4_claim_auto_released_on_holder_death_cross_process():
+    """FR-B4-3/4: a claim held by a dead process is auto-released by the OS (no TTL)."""
+    import subprocess
+    import sys
+    import textwrap
+
+    ns = _guards_ns()
+    # Render the guards module to a temp path so a child can import it identically.
+    import tempfile
+    import os as _os
+    d = tempfile.mkdtemp()
+    gp = _os.path.join(d, "guards_mod.py")
+    with open(gp, "w") as f:
+        f.write(render_ai_guards())
+    key = "cross-proc-key"
+    # Child acquires the claim and exits WITHOUT releasing (simulated crash).
+    child = textwrap.dedent(f"""
+        import importlib.util, sys
+        spec = importlib.util.spec_from_file_location("g", {gp!r})
+        g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+        cm = g.in_flight_claim({key!r}); ok = cm.__enter__()
+        assert ok is True
+        sys.exit(0)   # exit holding the claim -> OS must release the flock
+    """)
+    subprocess.run([sys.executable, "-c", child], check=True, cwd=d)
+    # Parent acquires the same key -> must succeed (child's claim auto-released on death).
+    with ns["in_flight_claim"](key) as ok:
+        assert ok is True
+
+
+def test_b4_emitted_pass_wraps_and_rejects():
+    m = _SRC_BOUND.replace(
+        "source_binding: sourceId",
+        "source_binding: sourceId\n    guards:\n      single_in_flight_by: [source_id]",
+    )
+    src = dict(render_ai_layer(_SCHEMA, m, None))["app/ai/suggest_note.py"]
+    ast.parse(src)
+    assert "from app.ai.guards import" in src and "in_flight_claim" in src
+    assert "with in_flight_claim(_if_key)" in src
+    assert '"status": "in_flight"' in src
+    assert "ai_in_flight_rejected" in src
