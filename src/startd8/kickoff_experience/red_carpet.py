@@ -52,6 +52,7 @@ class RedCarpetState:
     advisories: Tuple[Any, ...] = ()     # Tuple[Advisory, ...] — insights + per-input diagnosis
     next_steps: Tuple[Any, ...] = ()     # Tuple[NextStep, ...] — the ranked, command-bearing playbook
     perf: Optional[dict] = None          # CRP R1-S3 — {elapsed_ms, budget_ms, over_budget} for the build
+    completion: Optional[dict] = None    # FR-WD-2 — user-fillable completion meter {overall_pct, ...}
 
     def to_dict(self) -> dict:
         d = {
@@ -74,6 +75,8 @@ class RedCarpetState:
         }
         if self.perf is not None:
             d["perf"] = self.perf
+        if self.completion is not None:
+            d["completion"] = self.completion   # FR-WD-2
         return d
 
 
@@ -180,12 +183,21 @@ def build_red_carpet_state(project_root: str | Path) -> RedCarpetState:
         except Exception:
             advisories, next_steps = (), ()
 
+        # FR-WD-2 — the user-fillable completion meter (reuses the single `assess`; degrades to None).
+        try:
+            from .red_carpet_completion import build_completion
+
+            completion = build_completion(root, base, assess).to_dict()
+        except Exception:
+            completion = None
+
     # CRP R1-S3 — the whole build (assess + readiness + advisor) is timed against the readiness budget,
     # so a large schema parsed per turn cannot silently blow the "live surface must not freeze" budget.
     perf = PerfSample(
         phase="red_carpet", elapsed_ms=timer.elapsed_ms, budget_ms=BUDGET_INITIAL_MS
     ).to_dict()
-    return replace(base, advisories=tuple(advisories), next_steps=tuple(next_steps), perf=perf)
+    return replace(base, advisories=tuple(advisories), next_steps=tuple(next_steps),
+                   perf=perf, completion=completion)
 
 
 def record_red_carpet_progress(
