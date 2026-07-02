@@ -1,14 +1,31 @@
 {
-  "description": "",
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
+  "id": null,
   "links": [],
+  "liveNow": false,
   "panels": [
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "description": "Total agentic runs over the range.",
       "fieldConfig": {
@@ -22,7 +39,7 @@
             "steps": [
               {
                 "color": "blue",
-                "value": 0.0
+                "value": 0
               }
             ]
           },
@@ -38,21 +55,28 @@
       },
       "id": 1,
       "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "count"
           ],
           "fields": "",
           "values": false
-        }
+        },
+        "textMode": "auto"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
+            "type": "tempo",
+            "uid": "${tempo}"
           },
-          "expr": "{ name = \"agentic.session\" } | count_over_time()",
+          "limit": 1000,
+          "query": "{ name = \"agentic.session\" } | count_over_time()",
+          "queryType": "traceql",
           "refId": "A"
         }
       ],
@@ -61,8 +85,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "description": "Share of runs that reached the `completed` stop_reason.",
       "fieldConfig": {
@@ -71,14 +95,14 @@
             "mode": "thresholds"
           },
           "mappings": [],
-          "max": 1.0,
-          "min": 0.0,
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "red",
-                "value": 0.0
+                "value": 0
               }
             ]
           },
@@ -94,21 +118,29 @@
       },
       "id": 2,
       "options": {
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "count"
           ],
           "fields": "",
           "values": false
-        }
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
+            "type": "tempo",
+            "uid": "${tempo}"
           },
-          "expr": "{ name = \"agentic.session\" && span.agentic.stop_reason = \"completed\" } | count_over_time()",
+          "limit": 100,
+          "query": "{ name = \"agentic.session\" && span.agentic.stop_reason = \"completed\" } | count_over_time()",
+          "queryType": "traceql",
           "refId": "A"
         }
       ],
@@ -117,13 +149,25 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
           },
           "mappings": [],
           "thresholds": {
@@ -141,43 +185,57 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 6,
+        "w": 12,
         "x": 10,
         "y": 0
       },
       "id": 3,
       "options": {
-        "reduceOptions": {
+        "legend": {
           "calcs": [
-            "lastNotNull"
+            "mean",
+            "max"
           ],
-          "fields": "",
-          "values": false
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
         }
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.session\" } | count_over_time() by (span.agentic.stop_reason)",
           "legendFormat": "`{{span.agentic.stop_reason}}`",
           "refId": "A"
         }
       ],
-      "title": "Outcome breakdown",
-      "type": "piechart"
+      "title": "Outcome breakdown (count by stop_reason)",
+      "type": "timeseries"
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
           },
           "mappings": [],
           "thresholds": {
@@ -200,13 +258,23 @@
         "y": 8
       },
       "id": 4,
-      "options": {},
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.session\" } | rate() by (span.agentic.stop_reason)",
           "legendFormat": "`{{span.agentic.stop_reason}}`",
           "refId": "A"
@@ -217,8 +285,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "fieldConfig": {
         "defaults": {
@@ -231,7 +299,7 @@
             "steps": [
               {
                 "color": "blue",
-                "value": 0.0
+                "value": 0
               }
             ]
           },
@@ -247,21 +315,28 @@
       },
       "id": 5,
       "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "count"
           ],
           "fields": "",
           "values": false
-        }
+        },
+        "textMode": "auto"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
+            "type": "tempo",
+            "uid": "${tempo}"
           },
-          "expr": "{ name = \"agentic.session\" } | sum_over_time(span.agentic.total_cost_usd)",
+          "limit": 1000,
+          "query": "{ name = \"agentic.session\" } | sum_over_time(span.agentic.total_cost_usd)",
+          "queryType": "traceql",
           "refId": "A"
         }
       ],
@@ -270,13 +345,25 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
           },
           "mappings": [],
           "thresholds": {
@@ -299,13 +386,23 @@
         "y": 16
       },
       "id": 6,
-      "options": {},
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.session\" } | sum_over_time(span.agentic.total_cost_usd) by (span.gen_ai.request.model)",
           "legendFormat": "`{{span.gen_ai.request.model}}`",
           "refId": "A"
@@ -316,13 +413,25 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
           },
           "mappings": [],
           "thresholds": {
@@ -345,22 +454,28 @@
         "y": 16
       },
       "id": 7,
-      "options": {},
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.session\" } | sum_over_time(span.gen_ai.usage.input_tokens)",
           "legendFormat": "`input`",
           "refId": "A"
         },
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.session\" } | sum_over_time(span.gen_ai.usage.output_tokens)",
           "legendFormat": "`output`",
           "refId": "B"
@@ -371,13 +486,25 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
           },
           "mappings": [],
           "thresholds": {
@@ -400,22 +527,28 @@
         "y": 24
       },
       "id": 8,
-      "options": {},
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.session\" } | quantile_over_time(span.agentic.turns, 0.5)",
           "legendFormat": "`p50`",
           "refId": "A"
         },
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.session\" } | quantile_over_time(span.agentic.turns, 0.95)",
           "legendFormat": "`p95`",
           "refId": "B"
@@ -426,13 +559,25 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
           },
           "mappings": [],
           "thresholds": {
@@ -455,22 +600,28 @@
         "y": 24
       },
       "id": 9,
-      "options": {},
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.tool_call\" } | rate()",
           "legendFormat": "`tool calls`",
           "refId": "A"
         },
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.tool_call\" && span.agentic.tool_ok = false } | rate()",
           "legendFormat": "`failures`",
           "refId": "B"
@@ -481,13 +632,25 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
           },
           "mappings": [],
           "thresholds": {
@@ -510,13 +673,23 @@
         "y": 32
       },
       "id": 10,
-      "options": {},
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.compaction\" } | rate()",
           "legendFormat": "`compactions`",
           "refId": "A"
@@ -527,13 +700,25 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "tempo"
+        "type": "tempo",
+        "uid": "${tempo}"
       },
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
           },
           "mappings": [],
           "thresholds": {
@@ -556,13 +741,23 @@
         "y": 32
       },
       "id": 11,
-      "options": {},
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "tempo"
-          },
           "expr": "{ name = \"agentic.session\" && span.agentic.stop_reason =~ \"budget|repeated_calls|context_overflow\" } | rate() by (span.agentic.stop_reason)",
           "legendFormat": "`{{span.agentic.stop_reason}}`",
           "refId": "A"
@@ -572,31 +767,36 @@
       "type": "timeseries"
     }
   ],
+  "refresh": "",
   "schemaVersion": 39,
   "tags": [
-    "government",
-    "budget",
-    "michigan",
+    "startd8",
+    "sdk",
+    "agentic-loop",
+    "observability",
+    "tempo",
     "cc"
   ],
   "templating": {
     "list": [
       {
-        "hide": 0,
-        "label": "Data Source",
-        "name": "datasource",
-        "query": "prometheus",
-        "skipUrlSync": false,
+        "current": {
+          "text": "Tempo",
+          "value": "tempo"
+        },
+        "label": "Trace Source",
+        "name": "tempo",
+        "query": "tempo",
+        "refresh": 1,
         "type": "datasource"
       }
     ]
   },
   "time": {
-    "from": "now-24h",
+    "from": "now-6h",
     "to": "now"
   },
-  "timepicker": {},
   "title": "Agentic Loop Observability",
   "uid": "cc-agentic-loop-observability",
-  "version": 0
+  "version": 1
 }

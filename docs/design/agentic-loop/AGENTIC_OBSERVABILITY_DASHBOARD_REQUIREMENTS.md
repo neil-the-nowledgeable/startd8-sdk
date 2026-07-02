@@ -13,11 +13,23 @@ registered in the observability span manifest by FR-CC3 (`collect_span_descripto
 
 **Target Audience**: SDK operators and engineers running the agentic loop in production.
 
-> **RESOLVABILITY-PARTIAL (updated 2026-07-02):** live `agentic.session` spans now flow — FR-CC3
-> registers the span descriptor and FR-CC4 dogfood emits real spans (ContextCore Phase 2, `8e44ca7b`).
-> STILL PENDING: no spanmetrics connector derives `agentic.*` metrics yet, so any metric-backed panel
-> must still be re-verified to return non-zero series against a live run (the "100% coverage / 0
-> series" failure mode the lesson gates out). TraceQL-metrics panels over the spans are now resolvable.
+> **RESOLVABLE (updated 2026-07-02):** all 14 panels are **Tempo TraceQL-metrics** queries (`{ name =
+> "agentic.session" } | count_over_time()` etc.), computed natively by Tempo — **no Prometheus
+> spanmetrics connector is involved** (an earlier note calling one the blocker was mistaken). Two
+> things had to be true, and both now are: (1) the `agentic.session`/`agentic.tool_call`/
+> `agentic.compaction` spans flow with the queried attributes — FR-CC3 registers the descriptors,
+> FR-CC4 dogfood emits real spans (ContextCore Phase 2, `8e44ca7b`); (2) the dashboard targets a
+> **Tempo** datasource. A generation defect had wired every panel to a `prometheus`-typed datasource
+> (the DashboardSpec declared `prometheusDatasource`, and `dashboard_creator` picks a panel's
+> datasource by panel *type* — plain `stat/gauge/timeseries` default to Mimir, not the `traceql*`
+> variants). Fixed 2026-07-02: the spec now uses a `tempoDatasource` variable + `traceql*` panel
+> types, regenerated via `startd8 dashboard create` → all panels `type: tempo`, 0 prometheus. Panels
+> still want an eyeball against a live run, but the "100% coverage / 0 series" wiring trap is closed.
+>
+> **Pipeline follow-up (not blocking this dashboard):** `_datasource_for_panel` routes by panel type,
+> not by query language — a plain `stat` with a TraceQL query silently gets Mimir. A durable fix
+> would route by query language (or honor an explicit per-panel datasource); until then, TraceQL
+> panels must use the `traceql*` panel types.
 
 ## 2. Data Sources & Metrics
 

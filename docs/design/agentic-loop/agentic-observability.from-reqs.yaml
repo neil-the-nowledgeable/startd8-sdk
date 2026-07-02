@@ -1,17 +1,17 @@
 title: Agentic Loop Observability
 uid: cc-agentic-loop-observability
 tags:
-- government
-- budget
-- michigan
+- agentic-loop
+- observability
+- tempo
 - cc
 variables:
-- type: prometheusDatasource
-  name: datasource
-  label: Data Source
+- type: tempoDatasource
+  name: tempo
+  label: Trace Source
   hide: 0
 panels:
-- type: stat
+- type: traceqlStat
   title: Runs (total)
   description: Total agentic runs over the range.
   targets:
@@ -21,7 +21,7 @@ panels:
   thresholds:
   - value: 0.0
     color: blue
-- type: gauge
+- type: traceqlGauge
   title: Success rate (completed)
   description: Share of runs that reached the `completed` stop_reason.
   targets:
@@ -36,21 +36,21 @@ panels:
   thresholds:
   - value: 0.0
     color: red
-- type: piechart
-  title: Outcome breakdown
+- type: traceqlTimeseries
+  title: Outcome breakdown (count by stop_reason)
   targets:
   - expr: '{ name = "agentic.session" } | count_over_time() by (span.agentic.stop_reason)'
     refId: A
     legendFormat: '`{{span.agentic.stop_reason}}`'
   unit: short
-- type: timeseries
+- type: traceqlTimeseries
   title: Runs over time (by outcome)
   targets:
   - expr: '{ name = "agentic.session" } | rate() by (span.agentic.stop_reason)'
     refId: A
     legendFormat: '`{{span.agentic.stop_reason}}`'
   unit: short
-- type: stat
+- type: traceqlStat
   title: Total cost (USD)
   targets:
   - expr: '{ name = "agentic.session" } | sum_over_time(span.agentic.total_cost_usd)'
@@ -59,7 +59,7 @@ panels:
   thresholds:
   - value: 0.0
     color: blue
-- type: timeseries
+- type: traceqlTimeseries
   title: Cost over time (by model)
   targets:
   - expr: '{ name = "agentic.session" } | sum_over_time(span.agentic.total_cost_usd)
@@ -67,7 +67,7 @@ panels:
     refId: A
     legendFormat: '`{{span.gen_ai.request.model}}`'
   unit: currencyUSD
-- type: timeseries
+- type: traceqlTimeseries
   title: Tokens in / out
   targets:
   - expr: '{ name = "agentic.session" } | sum_over_time(span.gen_ai.usage.input_tokens)'
@@ -77,7 +77,7 @@ panels:
     refId: B
     legendFormat: '`output`'
   unit: short
-- type: timeseries
+- type: traceqlTimeseries
   title: Turns per run (p50 / p95)
   targets:
   - expr: '{ name = "agentic.session" } | quantile_over_time(span.agentic.turns, 0.5)'
@@ -87,7 +87,7 @@ panels:
     refId: B
     legendFormat: '`p95`'
   unit: short
-- type: timeseries
+- type: traceqlTimeseries
   title: Tool calls (rate + failures)
   targets:
   - expr: '{ name = "agentic.tool_call" } | rate()'
@@ -97,14 +97,14 @@ panels:
     refId: B
     legendFormat: '`failures`'
   unit: short
-- type: timeseries
+- type: traceqlTimeseries
   title: Compaction events (overflow recovery)
   targets:
   - expr: '{ name = "agentic.compaction" } | rate()'
     refId: A
     legendFormat: '`compactions`'
   unit: short
-- type: timeseries
+- type: traceqlTimeseries
   title: Safety-bound stops (budget / repeated / overflow)
   targets:
   - expr: '{ name = "agentic.session" && span.agentic.stop_reason =~ "budget|repeated_calls|context_overflow"
