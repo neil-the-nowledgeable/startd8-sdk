@@ -1,6 +1,6 @@
 # Red Carpet Prescriptive Advisor — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post-CRP R1)
 **Date:** 2026-07-02
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -106,11 +106,15 @@ loop citing it rather than re-deriving it.
   `(advisories, next_steps)`. No I/O beyond reading files the RCT spine already reads.
 - **FR-RCA-2 — Insight/advisory data model.** Define a frozen `Advisory{kind, severity, title, detail,
   action, command?}`:
-  - `kind ∈ {schema-shape, input-gap, input-invalid, cascade-blocker, provenance-review, stakeholder,
-    bucket-boundary}` (closed set),
+  - `kind ∈ {schema-shape, input-gap, input-invalid, cascade-blocker, provenance-review, stakeholder}`
+    (closed set — **CRP R1-F3:** `bucket-boundary` removed; no derivation emits it, so it would be dead
+    spec. If a bucket-4-drift detector is added later, it re-enters the set *with* its derivation),
   - `severity ∈ {info, warn, error}` (advisory only — `error` still never blocks, per P3),
   - `title` (short), `detail` (the *why*), `action` (the *what to do*), optional `command` (the exact CLI
     invocation, relative paths only).
+  - **Advisory ordering (CRP R1-F4, P5):** `Advisory` has **no `stage` field**; advisories sort by the
+    byte-stable key **`(severity_rank, kind, title)`** — not by stage (only `NextStep` carries a stage).
+    A coverage test asserts every `kind` in the closed set is produced by ≥1 derivation.
 - **FR-RCA-3 — Ranked next-step playbook data model.** Define a frozen `NextStep{rank, stage, title,
   detail, command?}` and return an **ordered** tuple (rank 1..N). This generalizes `ranking.next_action`
   (one action) into the RCT stage playbook; each step names its stage and, where one exists, the command
@@ -118,17 +122,29 @@ loop citing it rather than re-deriving it.
 - **FR-RCA-4 — Attach to `RedCarpetState`.** `build_red_carpet_state()` computes and attaches
   `advisories` and `next_steps`; `to_dict()` serializes them. This is the single distribution point — all
   four surfaces read the same computed output. Backward compatible: existing keys unchanged; new keys
-  additive. `build_assess(root)` is fetched **once** and passed to both the `preview` computation and the
-  advisor (no double scan). **Top-N caps (OQ-E):** advisories and `next_steps` are each capped (N≈7) in
-  the state builder so the per-turn chat tool result stays bounded.
+  additive.
+  - **Single-fetch refactor (CRP R1-F2/R1-S1 — required, not already-true):** today `build_red_carpet_state`
+    calls `build_readiness` (which itself calls `build_assess` and discards the raw dict) **and**
+    separately calls `build_assess` only inside `if offerable:` — so the non-offerable greenfield path
+    (where advisories matter most) has no fetched result to reuse. The acceptance is: `build_assess(root)`
+    is fetched **once at the top** of `build_red_carpet_state` and threaded into (a) `build_readiness(root,
+    assess=…)` (new optional param), (b) the `preview` computation, and (c) the advisor. *Verify:* a test
+    asserts `build_assess` is invoked **exactly once** per state build, on both offerable and
+    non-offerable roots.
+  - **Top-N caps (OQ-E):** advisories and `next_steps` are each capped (N≈7) in the state builder so the
+    per-turn chat tool result stays bounded.
 
 ### B. The insight derivations (what the advisor knows how to see)
 
 - **FR-RCA-5 — Schema-shape insights.** Read the on-disk `schema.prisma` via the **existing**
   `live_schema_text` (OQ-F) and parse it with the **existing** `parse_prisma_schema` (OQ-A). Wrap the
   parse in try/except → an unparseable schema yields one bounded `schema-shape` `info` ("the cascade's own
-  gate is authoritative"), never raises. Derive at least:
-  - **no schema yet** → `info`, action "start with the data model" + the `brief`/`schema` path;
+  gate is authoritative"), never raises. **Emptiness rule (CRP R1-F5):** "schema present" uses the **same
+  non-empty test as the data-model gate** — `_present` (exists **AND** `size > 0`), not `live_schema_text`'s
+  exists-only read — so a zero-byte/whitespace-only `schema.prisma` reads as "no schema yet" (consistent
+  with `data_model: pending`), never as "present-but-unparseable". Derive at least:
+  - **no schema yet** (absent or empty per `_present`) → `info`, action "start with the data model" + the
+    `brief`/`schema` path;
   - **relation islands** — when >1 model exists and one or more models have **zero relation fields**
     (`is_relation_field` over the model's fields) → `warn`, "N models are unlinked; likely missing
     foreign keys/relations", action "add relations then re-promote the contract";
@@ -136,16 +152,29 @@ loop citing it rather than re-deriving it.
   - **Acceptance:** a single-entity app produces **no** relation-island `warn` (a legitimately relationless
     schema is not flagged as broken — P3/false-positive guard); a 15-entity/0-relation schema produces the
     island `warn` naming the count. *Verify:* unit tests over fixture schemas.
-- **FR-RCA-6 — Per-input readiness diagnosis.** From `assess.kickoff_inputs.domains`, per value-input
-  domain emit a diagnosis:
+- **FR-RCA-6 — Per-input readiness diagnosis.** From `assess.kickoff_inputs.domains`, per **value-input**
+  domain (`business-targets`/`observability`/`conventions`/`build-preferences`) emit a diagnosis:
   - `absent` → `input-gap` `warn`: "author `<domain>`", command = the authoring/capture path;
   - `invalid` → `input-invalid` `error`: surface the **bounded** YAML error + "fix the file";
   - `present` with `provenance_default ∈ {estimate, config-default}` → `provenance-review` `info`:
     "value is defaulted — confirm or change" (mirrors `ranking.next_action` Tier 3);
-  - stakeholders `authored` but not `consumable` → `stakeholder` `info` (carry the existing note).
+  - **Stakeholders carve-out (CRP R1-F1):** `_assess_kickoff_inputs` injects `domains["stakeholders"]`
+    with a **different shape** (`authored`/`consumable`/`note`, no `provenance_default`) and a wider status
+    set (`absent`/`invalid`/`present`/`unavailable`). The generic `{absent,invalid,present}` loop above
+    **must exclude `stakeholders`**; a **dedicated stakeholder clause** is its only handler — `authored`
+    but not `consumable` → `stakeholder` `info` (carry the existing note); `unavailable`/`invalid` →
+    `stakeholder` `info`/`warn`, **never** an `input-invalid` `error`. *Verify:* fixtures for roster states
+    {absent, invalid, unavailable, authored-not-consumable} each yield the intended `stakeholder` advisory
+    (or none) and never an `input-invalid` error.
 - **FR-RCA-7 — Cascade-blocker translation.** From `assess.cascade.blockers` (each `{section, status,
   consequence}`), emit one `cascade-blocker` advisory per blocker with the section title, the consequence
-  as `detail`, and the command that resolves that section where determinable. **Dedupe rule (OQ-C):**
+  as `detail`, and the command that resolves that section where determinable. **Degraded-state handling
+  (CRP R1-S2):** when the assembly inputs fail to resolve, `_assess_cascade` returns `{status:
+  "inputs_error", error}` with **no `blockers` key** — the advisor must read blockers via
+  `.get("blockers", [])` and, on `cascade.status == "inputs_error"`, emit **one** bounded advisory
+  carrying the truncated `error` (the most-broken state must still produce prescriptive output, not an
+  exception or silence). *Verify:* a malformed-inputs fixture yields exactly one bounded advisory, no
+  raise. **Dedupe rule (OQ-C):**
   advisories are keyed by `(kind-family, subject)`; when a cascade blocker and a value-input gap
   (FR-RCA-6) name the same subject, keep the **cascade-blocker** (higher leverage, matches `ranking`
   Tier 1) and drop the duplicate.
@@ -168,9 +197,18 @@ loop citing it rather than re-deriving it.
 - **FR-RCA-11 — Web stage rail.** `/red-carpet.json` already serializes `to_dict()`; the
   `/concierge/chat` build-progress rail (`web.py`) renders the advisories + next steps alongside the
   stages (read-only, refreshed per turn).
-- **FR-RCA-12 — New read-only MCP tool.** Add `startd8_red_carpet_state` (`readOnlyHint: true`) to the
-  MCP server(s), wrapping `build_red_carpet_state().to_dict()` — the staged map + advisories + next steps.
-  Inherits NR-3: **read-only, never a write**, not a loop-reachable apply.
+  - **HTML-escaping (CRP R1-S4 — security):** the rail renders client-side via `innerHTML`
+    (`refreshRail()`), and an advisory `title`/`detail` can carry the **invalid-YAML error string**
+    (FR-RCA-6 `input-invalid`) — attacker-influenceable on-disk content. Every advisory/next-step field
+    **must be HTML-escaped** before injection. P4's "bounded/leak-free" covers length/paths but **not**
+    markup injection. *Verify:* an advisory whose `detail` contains `<img onerror=…>`/`<script>` renders
+    escaped (render-fn unit test or DOM assertion).
+- **FR-RCA-12 — New read-only MCP tool.** Add `startd8_red_carpet_state` (`readOnlyHint: true`, no
+  write/destructive/idempotent hints) to **`mcp/startd8-mcp-builder/startd8_mcp.py`** (the sole server
+  registering `startd8_kickoff_state`; **CRP R1-F6** — named exactly, not "server(s)"), wrapping
+  `build_red_carpet_state(project_root).to_dict()` — the staged map + advisories + next steps. Inherits
+  NR-3: **read-only, never a write**, not a loop-reachable apply. *Verify:* introspection test asserts the
+  named server registers the tool with `readOnlyHint: true` and no write hint.
 
 ### D. Retrospective integration
 
@@ -218,3 +256,76 @@ distribution path; the only genuinely-new surface wiring is the `startd8_red_car
 confirmed feasible; the schema-island false-positive guard (OQ-D), the dedupe rule (OQ-C), and the
 payload caps (OQ-E) are now stated acceptance details. `NextStep` is a new sibling of `NextAction` (not
 an overload). Ready for CRP review before implementation.*
+
+*v0.3 — Post-CRP R1 (reviewer claude-opus-4-8-1m; 6 F + 6 S suggestions, all code-grounded against the
+real `build_assess`/`RedCarpetState` shapes). Policy: **accept all; none rejected.** Merged: the
+stakeholders carve-out (R1-F1 — the generic loop excludes the differently-shaped `stakeholders` entry),
+the single-fetch refactor stated as acceptance rather than an already-true claim (R1-F2/R1-S1 —
+`build_readiness` gains an `assess=` param; `build_assess` fetched once at the top), removal of the dead
+`bucket-boundary` kind (R1-F3), the `(severity, kind, title)` advisory sort key since `Advisory` has no
+`stage` (R1-F4), the `_present` non-empty emptiness rule for "no schema yet" (R1-F5), the exact MCP file
+name (R1-F6), `inputs_error` degraded-state handling (R1-S2), and web-rail HTML-escaping (R1-S4).
+Dispositions in Appendix A; R1 verbatim in Appendix C. Ready for implementation.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+> Triage R1 (orchestrator, 2026-07-02). **All 6 requirements suggestions accepted; none rejected** —
+> each was grounded in the real `build_assess`/`RedCarpetState`/`core.py` shapes and mutually consistent.
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| R1-F1 | `stakeholders` differently-shaped in `domains` — exclude from generic loop; dedicated clause | CRP R1 | FR-RCA-6 stakeholders carve-out (never `input-invalid` error) | 2026-07-02 |
+| R1-F2 | "fetch once" contradicts call graph — state the refactor as acceptance | CRP R1 | FR-RCA-4 single-fetch refactor (`build_readiness(assess=…)`, once-at-top; count test) | 2026-07-02 |
+| R1-F3 | `bucket-boundary` kind is dead spec | CRP R1 | FR-RCA-2 closed set trimmed; kind-coverage test | 2026-07-02 |
+| R1-F4 | Advisory sort references a non-existent `stage` field | CRP R1 | FR-RCA-2 ordering = `(severity, kind, title)`; `Advisory` has no `stage` | 2026-07-02 |
+| R1-F5 | "no schema yet" emptiness ≠ data-model gate emptiness | CRP R1 | FR-RCA-5 pinned to `_present` (size>0); zero-byte fixture | 2026-07-02 |
+| R1-F6 | FR-RCA-12 "server(s)" under-specified | CRP R1 | FR-RCA-12 names `startd8-mcp-builder/startd8_mcp.py` exactly | 2026-07-02 |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| *None.* All R1 requirements suggestions were code-grounded and accepted. |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-07-02
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-07-02 18:10:00 UTC
+- **Scope**: Requirements-quality review (ambiguity, missing acceptance criteria, testability) grounded in the real `build_assess`/`RedCarpetState` shapes. Feature Requirements suggestions only (F-prefix).
+
+**Executive summary (top gaps):**
+- FR-RCA-6 treats `assess.kickoff_inputs.domains` as uniform value-input domains, but `stakeholders` is mixed into that same dict with a different shape and a fourth status (`unavailable`) — the generic loop will mis-diagnose it.
+- FR-RCA-4's "fetched once … no double scan" is not true of the current call graph (`build_readiness` itself calls `build_assess`); the requirement should state the required refactor as acceptance.
+- FR-RCA-2's `kind` closed set includes `bucket-boundary`, which no derivation emits — a dead enum value.
+- FR-RCA-2's Advisory has no `stage`, yet the ordering rule sorts advisories by stage — an unsatisfiable spec.
+- "no schema yet" (FR-RCA-5) and the data-model gate use different emptiness rules and can contradict.
+- FR-RCA-12 targets "MCP server(s)" without naming the file(s) — under-specified/untestable.
+
+#### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Data | high | FR-RCA-6 says "per value-input domain emit a diagnosis" over `assess.kickoff_inputs.domains`, but `_assess_kickoff_inputs` injects `domains["stakeholders"]` with a **different shape** (`authored`/`consumable`/`note`, no `provenance_default`) and a status set that includes `unavailable`/`present`/`invalid`/`absent` (`core.py:198,202-219`). Specify that the generic `{absent,invalid,present}` loop **excludes** `stakeholders` and that the dedicated stakeholder clause is the only handler for it. | Without the carve-out, an `invalid` or `unavailable` roster would be mapped to an `input-invalid` `error` advisory, and a `present` roster would be treated as a value input it is not. | FR-RCA-6 (4th bullet) | Fixtures for roster states {absent, invalid, unavailable, authored-not-consumable}; assert each yields the intended `stakeholder` advisory (or none) and never an `input-invalid` error. |
+| R1-F2 | Risks | high | FR-RCA-4 states `build_assess(root)` is "fetched **once** and passed to both the `preview` computation and the advisor (no double scan)". The code contradicts this: `build_red_carpet_state` calls `build_readiness` (`red_carpet.py:79`), which itself calls `build_assess` (`readiness.py:151`) and discards the raw dict; and the preview `build_assess` runs only under `if offerable`. State the required refactor (single top-level fetch threaded into readiness + preview + advisor) as an acceptance criterion, or soften the "no double scan" claim. | An unqualified "no double scan" claim will be read as already-true and the refactor will be skipped, producing 2–3 tree scans per chat turn. | FR-RCA-4 (last two sentences) | Acceptance: a test counting `build_assess` invocations == 1 per state build (see plan R1-S1). |
+| R1-F3 | Interfaces | medium | FR-RCA-2's closed `kind` set lists `bucket-boundary`, but none of FR-RCA-5/6/7 (the derivations) ever emit it. Either add a derivation that produces `bucket-boundary` (e.g. flag when value/content inputs stray toward bucket-4 real content — cf. NR-6) with its own acceptance, or remove it from the closed set. | A closed enum with an unreachable member is dead spec and invites an implementer to guess its trigger. | FR-RCA-2 (`kind ∈ {…}`) | Coverage test: every `kind` in the closed set is produced by at least one advisor code path (or is explicitly documented as reserved). |
+| R1-F4 | Interfaces | medium | Plan Step 1 defines the advisory sort key as "severity rank → **canonical stage order** → title", but the FR-RCA-2 `Advisory` model has **no `stage` field** (only FR-RCA-3 `NextStep` does). Reconcile: either add an optional `stage`/order field to `Advisory` (P5 byte-stable ordering needs a stable secondary key) or define the advisory ordering purely on (severity, kind, title). | P5 requires a deterministic, testable order; a sort referencing a non-existent field is ambiguous and will produce implementer-dependent ordering. | FR-RCA-2 (or a new ordering acceptance bullet under P5) | Golden-fixture test asserting a fixed advisory byte-order; fails if the sort key is under-specified. |
+| R1-F5 | Validation | medium | FR-RCA-5's "no schema yet → info" reads via `live_schema_text`, which returns the text whenever `prisma/schema.prisma` **exists** (including an empty file → `""`), whereas the data-model gate uses `_present` = exists **AND size > 0** (`red_carpet.py:60-65`). Pin FR-RCA-5 to the same non-empty rule so a zero-byte schema cannot simultaneously read as "data_model: pending" and *not* emit "no schema yet". | Two different emptiness definitions across the same feature produce a contradictory surface (stage says pending, advisor says schema present-but-unparseable/empty). | FR-RCA-5 (first sub-bullet + Acceptance) | Zero-byte and whitespace-only `schema.prisma` fixtures: assert the data-model stage and the schema advisory agree. |
+| R1-F6 | Interfaces | low | FR-RCA-12 says "Add `startd8_red_carpet_state` … to the MCP server(s)" but only `mcp/startd8-mcp-builder/startd8_mcp.py` registers `startd8_kickoff_state`. Name the exact target file(s); if a second server exists, require a parity test asserting both expose the tool with identical `readOnlyHint`. | "server(s)" is ambiguous and untestable as written; the plan (Step 10) targets exactly one file. | FR-RCA-12 | Introspection test: the named server(s) register `startd8_red_carpet_state` with `readOnlyHint: true` and no write hint. |
+
+**Endorsements / Disagreements:** none — first round, no prior untriaged items in Appendix C.
