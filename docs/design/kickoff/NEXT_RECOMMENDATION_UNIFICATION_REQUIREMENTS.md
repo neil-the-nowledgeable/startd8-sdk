@@ -1,6 +1,6 @@
 # Next-Recommendation Unification — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Post-CRP R1)
 **Date:** 2026-07-02
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -67,22 +67,38 @@ surfaces agree on the top recommendation for the same project.
   **distinct** — they serve different `to_dict()` wire shapes with different consumers (merging would
   churn both for no gain). What is shared is the *logic that turns a readiness blocker into a CTA*.
 - **FR-NU-2 — One shared Tier-1 formatter.** A single function turns the top `readiness.blockers` entry
-  into a CTA (title + detail + kind). `ranking.next_action` (Tier-1), `concierge_view._next_action`, and
-  the advisor's playbook rank-1 all call it, so a readiness blocker is phrased **identically** on every
-  surface. One place to change the wording.
+  into a CTA (title + detail + kind). **The two CTA recommenders — `ranking.next_action` (Tier-1) and the
+  `concierge_view._next_action` blocker branch — call it** (CRP R1-F1: the advisor's playbook does **not**
+  call it; it agrees at the *subject* level per FR-NU-4, preserving its build-action wording). A readiness
+  blocker is thus phrased **identically** across the `field_states`/serve/CLI CTA and the Concierge
+  blocker CTA — one place to change the wording. Concierge imports it **module-qualified**
+  (`ranking.blocker_cta`), not by name, so the single-source parity monkeypatch is effective (CRP R1-S1).
 - **FR-NU-3 — Concierge blocker branch uses the shared formatter** *(narrowed by planning)*. The
-  `blockers` branch of `concierge_view._next_action` produces its CTA via the shared formatter (so a
-  readiness blocker reads identically in the Concierge view and the `field_states`/serve CTA). Its
-  package-level branches (`instantiate`/`ready`, kinds outside `NextAction`'s set) and its
-  `{kind,title,detail}` dict shape are **unchanged**.
-- **FR-NU-4 — Cross-recommender agreement at the SUBJECT level** *(corrected by planning)*. When both a
-  `KickoffState` and a `RedCarpetState` are computable and the top gap is a **readiness blocker**,
-  `next_action` and the playbook's rank-1 reference the **same subject** (e.g. both the data model) —
-  verified via a normalization helper, **not** byte-identical titles (the CTA uses *resolve* wording, the
-  playbook uses *build-action* wording — legitimately different registers). Below Tier-1 they may differ.
-- **FR-NU-5 — Parity / consistency test.** A test proves: (a) the shared formatter is the sole producer
-  of the readiness-blocker CTA; (b) `next_action` and playbook rank-1 agree on the top blocker for a
-  fixture project; (c) no surface emits a contradictory top recommendation.
+  `blockers` branch of `concierge_view._next_action` produces its CTA via the shared formatter. Only the
+  **dict shape** (`{kind,title,detail}`) is unchanged; the blocker **`detail` TEXT changes** from the
+  fixed `"Fill the kickoff inputs the cascade still needs."` to the blocker's `consequence|status`
+  (CRP R1-F3/S3 — a user-visible copy change, note it in the changelog), with a **non-empty fallback**
+  guaranteed (FR/plan). Package-level branches (`instantiate`/`ready`) are unchanged. **Precondition
+  (CRP R1-F4):** concierge shows the shared blocker CTA only when `package_state == complete`; when the
+  package is missing/partial it (correctly) shows `instantiate` and diverges from the ungated
+  `field_states`/serve CTA — an expected divergence, so "identical" means *when the same Tier-1 blocker is
+  the active recommendation*, not unconditionally.
+- **FR-NU-4 — Cross-recommender agreement at the SUBJECT level** *(corrected by planning)*. When the top
+  gap is a **readiness blocker AND the schema gate is the top unmet gate** (CRP R1-S5 — the only case they
+  coincide), `next_action` and the playbook's rank-1 reference the **same subject** (`data_model`),
+  verified via a **shared subject vocabulary** (CRP R1-S2 — one `section→subject` + `stage→subject` table
+  both helpers consume, no second hand-rolled map), **not** byte-identical titles (resolve vs
+  build-action registers). When rank-1 is not a blocker / there is no unmet gate, the subject helper
+  returns `None` and the equality assert is skipped (not falsely matched). A schema-present +
+  downstream-blocker fixture legitimately yields **different** subjects.
+- **FR-NU-5 — Parity / consistency test.** A test proves: (a) `blocker_cta` is the **sole producer** of
+  the readiness-blocker CTA — a monkeypatch of `ranking.blocker_cta` changes **both** surfaces (negative
+  control: an un-routed branch must FAIL the test, CRP R1-S1), **plus** a source-scan asserting the literal
+  `"Resolve readiness blocker:"` occurs **exactly once** in `kickoff_experience/` (CRP R1-S4); (b) on a
+  **schema-absent** fixture, `blocker_subject(next_action) == playbook_top_subject` (both `data_model`);
+  (c) *(operationalized, CRP R1-F2 — replaces "no contradictory recommendation")* the concierge blocker
+  CTA equals `next_action`'s `{kind,title,detail}` on a package-complete-with-blocker fixture, and a
+  schema-present-downstream-blocker fixture yields distinct-but-valid subjects.
 - **FR-NU-6 — Backward-compatible serialization.** The `to_dict()` payloads consumed by `serve.py`,
   the `field_states` chat tool, the CLI, and the TUI must not break. New fields are additive; existing
   keys (`kind`/`title`/`detail`/`value_path`) keep their meaning.
@@ -125,3 +141,82 @@ identical-title (FR-NU-4 corrected). FR-NU-3 narrowed to the concierge blocker b
 low-risk surgical change: `blocker_cta` in `ranking.py`, consumed by `next_action` (Tier-1) + the
 concierge blocker branch, with a subject-level agreement test vs the playbook. All 5 OQs resolved; the
 existing suites stay green (backward compat). Ready for CRP review before implementation.*
+
+*v0.3 — Post-CRP R1 (reviewer claude-opus-4-8-1m; 4 F + 6 S, all code-grounded). **Accept all; none
+rejected.** Key fixes: the FR-NU-2↔FR-NU-4 contradiction resolved (only the two CTA recommenders call the
+formatter; the playbook agrees at subject level — R1-F1); FR-NU-5(c) operationalized (R1-F2); the
+concierge blocker `detail` TEXT change + non-empty fallback + `package_state==complete` precondition made
+explicit (R1-F3/F4/S3); module-qualified `ranking.blocker_cta` so the monkeypatch bites + a source-scan
+sole-producer guard (R1-S1/S4); ONE shared subject vocabulary for both helpers (R1-S2); the agreement
+precondition pinned to schema-absent with `None` handling for the non-coincident case (R1-S5); and
+`blocker_cta`'s `ReadinessView|Mapping|None` normalization contract incl. the concierge `readiness==None`
+path (R1-S6). Dispositions in Appendix A; R1 verbatim in Appendix C. Ready for implementation.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+> Triage R1 (orchestrator, 2026-07-02). **All 4 F + 6 S accepted; none rejected** — each grounded in the
+> real `ranking.py`/`concierge_view.py`/`red_carpet_advisor.py` + pinned tests.
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| R1-F1 | FR-NU-2 wrongly says the playbook calls the formatter | CRP R1 | FR-NU-2 reworded: only next_action + concierge call it; playbook = subject-level | 2026-07-02 |
+| R1-F2 | FR-NU-5(c) "contradictory" untestable | CRP R1 | FR-NU-5(c) replaced with an operational predicate | 2026-07-02 |
+| R1-F3 | Concierge blocker detail TEXT changes / can go empty | CRP R1 | FR-NU-3 states shape-only unchanged + non-empty fallback + changelog note | 2026-07-02 |
+| R1-F4 | `package_state==complete` precondition unstated | CRP R1 | FR-NU-3 states the precondition + expected divergence | 2026-07-02 |
+| R1-S1 | Module-qualified `ranking.blocker_cta` for monkeypatch | CRP R1 | FR-NU-2/5 + plan Step 3/5; negative control | 2026-07-02 |
+| R1-S2 | ONE shared subject vocabulary for both helpers | CRP R1 | FR-NU-4 + plan Step 1/4 (shared table) | 2026-07-02 |
+| R1-S3 | Non-empty detail fallback + unify missing-section default | CRP R1 | plan Step 1; FR-NU-3 | 2026-07-02 |
+| R1-S4 | Source-scan: blocker wording occurs exactly once | CRP R1 | FR-NU-5(a) + plan Step 5 | 2026-07-02 |
+| R1-S5 | Pin schema-absent agreement precondition + None handling | CRP R1 | FR-NU-4 + plan Step 4/5 (two fixtures) | 2026-07-02 |
+| R1-S6 | `blocker_cta` normalization contract incl None→ready | CRP R1 | plan Step 1/3 | 2026-07-02 |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| *None.* All R1 suggestions were code-grounded and accepted. |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-07-02
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-07-02 20:45:00 UTC
+- **Scope**: Requirements-side review (Feature Requirements) of the shared blocker→CTA formatter — internal consistency of FR-NU-2/3/4/5, testability, and the concierge behavior delta. Grounded in `ranking.py`, `concierge_view.py`, `red_carpet_advisor.py`, and the pinned tests.
+
+**Executive summary**
+
+- FR-NU-2 overclaims: it says the playbook rank-1 "calls" the shared formatter, but FR-NU-4 and plan Step 4 keep the playbook out of it (subject-agreement only). Internal + plan inconsistency.
+- FR-NU-5(c) is untestable as worded — "contradictory" is undefined across legitimately different registers.
+- FR-NU-3 reads as a pure no-op for concierge, but the concierge blocker `detail` text actually changes (and can go empty).
+- "Reads identically in the Concierge view and the `field_states`/serve CTA" omits the `package_state == complete` precondition.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Interfaces | high | Reconcile FR-NU-2 with FR-NU-4 and plan Step 4. FR-NU-2 lists `ranking.next_action`, `concierge_view._next_action`, AND "the advisor's playbook rank-1 all call it"; the playbook does NOT call `blocker_cta` (FR-NU-4 + plan Step 4 = subject-agreement only). Reword to: "the two CTA recommenders (`next_action` Tier-1 + concierge blocker branch) call the shared formatter; the playbook agrees at the subject level (FR-NU-4)." | As written FR-NU-2 contradicts FR-NU-4 and the plan. An implementer could route `build_playbook` rank-1 through the formatter, destroying its "Author the data-model contract" build-action wording — the exact register FR-NU-4 protects. | FR-NU-2, sentence "…and the advisor's playbook rank-1 all call it…" | Assert no import of `blocker_cta` in `red_carpet_advisor.py`; playbook rank-1 title stays `"Author the data-model contract"` in `test_red_carpet_advisor`. |
+| R1-F2 | Validation | medium | Replace FR-NU-5(c) "no surface emits a contradictory top recommendation" with an operational predicate, e.g. "for a schema-absent fixture, `blocker_subject(next_action) == playbook_top_subject`, and the concierge blocker CTA equals `next_action`'s `{kind,title,detail}`." | "Contradictory" is undefined across a resolve-CTA vs a build-action step (legitimately different registers), so 5(c) is untestable and would be skipped or asserted arbitrarily. | FR-NU-5, bullet (c) | Each clause of the predicate maps to a concrete assertion in the parity test. |
+
+### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F3 | Risks | medium | FR-NU-3 says the concierge branch "reads identically" with its "`{kind,title,detail}` dict shape … unchanged". State explicitly that only the SHAPE is unchanged; the `detail` TEXT changes from the fixed `"Fill the kickoff inputs the cascade still needs."` to `consequence\|status`, and require a non-empty guarantee (see plan R1-S3). | The requirement reads as a silent refactor; in fact concierge's Tier-1 detail changes for every project and can become empty (`concierge_view.py:83-87` vs `ranking.py:55`). This is a user-visible copy change and belongs in the changelog. | FR-NU-3 ("its `{kind,title,detail}` dict shape are **unchanged**") | Snapshot concierge `next_action.detail` before/after on a package-complete-with-blocker fixture; assert it now equals `next_action`'s and is non-empty. |
+| R1-F4 | Architecture | medium | Add the precondition to FR-NU-2/FR-NU-3 that concierge shows the shared blocker CTA only when `package_state == complete`; when missing/partial it (correctly) shows the `instantiate` CTA. Clarify "identical on every surface" means "identical when the same Tier-1 blocker is the active recommendation," not unconditionally. | `concierge_view._next_action` checks `PACKAGE_MISSING`/`PARTIAL` before `blockers`, so serve/`field_states` (no package gate) and concierge diverge whenever the package is incomplete — an expected divergence the requirement should acknowledge so the parity test doesn't over-assert. | FR-NU-2 / FR-NU-3 ("reads identically in the Concierge view and the `field_states`/serve CTA") | package-missing → concierge `kind=="instantiate"` while `next_action kind=="resolve_blocker"`; package-complete-with-blocker → both identical. |
+
+**Endorsements**: none (R1 — no prior untriaged suggestions).
+
+**Disagreements**: none (R1).
