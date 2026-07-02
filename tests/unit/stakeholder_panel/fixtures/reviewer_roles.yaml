@@ -1,0 +1,97 @@
+# Reviewer personas / roles — canonical, reusable definition.
+#
+# Single source of truth for the review roles: their labels, review lens, per-role rubric
+# dimensions, and coverage policy. Consumed by the Benchmark Portal (scripts/seed_reference.py
+# seeds Role + RubricDimension rows; scripts/make_assignments.py reads the coverage policy) and
+# reusable by any other tool that needs the same persona definitions — just parse this YAML.
+#
+# Derived from docs/BENCHMARK_PORTAL_REQUIREMENTS_v0.2.md §2 (personas) and decisions D-3/D-4.
+# Schema: see config/README.md. Edit here, not in code.
+
+version: 1
+
+# How coverage.scope / mandatory / applies_to_services are interpreted by an assignment engine:
+#   scope: per_cell    -> the role reviews individual cells
+#          round_level  -> the role signs off at the round level (no per-cell assignment)
+#   mandatory: true     -> (per_cell, no applies_to_services) assigned to EVERY reviewable cell
+#   applies_to_services -> (per_cell) assigned only to cells whose service is in this list
+#   auto_assign: false  -> available but not placed by the default assignment engine
+# A role that is per_cell with neither `mandatory: true` nor `applies_to_services` and
+# `auto_assign: false` is a standby role (e.g. Security) an operator can assign manually.
+
+# Which services count as "frontend" for applies_to_services (the frontend is the M4 bonus lane,
+# a Go UI service, absent from the scored 9-backend inventory — so 0 targets until such a run
+# is ingested, at which point FRONTEND auto-applies).
+frontend_services: [frontend]
+
+# Optional per-role `out_of_scope:` — topics/lanes the persona should decline. Additive and
+# ignored by the portal; consumed by the startd8 Stakeholder Panel (panel-pilot/) to make a
+# persona defer politely instead of overreaching outside its lens.
+# NOTE: `rubric[].name` values are CANONICAL, stable routing keys — downstream tools (the panel)
+# route by them, so rename deliberately.
+
+roles:
+  - key: SE_MANAGER
+    label: Software Engineering Manager
+    lens: overall fitness, maintainability, cross-service consistency, risk sign-off
+    out_of_scope:                       # topics this persona declines (panel "defer" behavior)
+      - line-by-line defect hunting (defers to Back-End / SRE)
+      - UI/markup and client-side specifics
+    coverage: { scope: round_level }
+    rubric:
+      - { name: overall_fitness, description: "Is this a fit-for-purpose implementation of the service?" }
+      - { name: maintainability, description: "Readability, structure, and cost to evolve." }
+      - { name: cross_service_consistency, description: "Consistency with conventions across the other services." }
+      - { name: risk, description: "Residual risk for a sign-off decision." }
+
+  - key: SRE
+    label: Site Reliability Engineer
+    lens: operability, failure modes, resource use, observability, deploy/health-check readiness
+    out_of_scope:
+      - business / product logic correctness
+      - UI/markup and client-side concerns
+    coverage: { scope: per_cell, mandatory: true }
+    rubric:
+      - { name: operability, description: "Can this be run, configured, and operated in production?" }
+      - { name: failure_modes, description: "Handling of failures, retries, timeouts, and degradation." }
+      - { name: resource_use, description: "Memory/CPU/connection footprint and leaks." }
+      - { name: observability, description: "Logging, metrics, health checks, and traceability." }
+      - { name: deploy_readiness, description: "Health/readiness endpoints and deploy/config hygiene." }
+
+  - key: FRONTEND
+    label: Front-End Developer
+    lens: frontend service UX/markup/client correctness, API contract consumption
+    out_of_scope:
+      - backend service logic and data-model internals
+      - infrastructure, deployment, and reliability operations
+    coverage: { scope: per_cell, applies_to_services: [frontend] }
+    rubric:
+      - { name: ux_markup, description: "Correctness and quality of UI markup / rendering." }
+      - { name: client_correctness, description: "Client-side logic correctness and state handling." }
+      - { name: api_contract_consumption, description: "Correct consumption of upstream service APIs." }
+
+  - key: BACKEND
+    label: Back-End Developer
+    lens: service logic correctness, data model, API contract adherence, error handling
+    out_of_scope:
+      - infrastructure, deployment, and reliability operations
+      - UI/markup and client-side concerns
+    coverage: { scope: per_cell, mandatory: true }
+    rubric:
+      - { name: logic_correctness, description: "Correctness of the core service logic." }
+      - { name: data_model, description: "Data model / schema soundness." }
+      - { name: api_contract_adherence, description: "Adherence to the expected gRPC/HTTP contract." }
+      - { name: error_handling, description: "Error handling, validation, and edge cases." }
+
+  - key: SECURITY
+    label: Security Reviewer
+    lens: input validation, authz, secret handling, dependency risk
+    out_of_scope:
+      - general code style and maintainability
+      - performance and latency tuning
+    coverage: { scope: per_cell, auto_assign: false }   # standby: operator-assigned
+    rubric:
+      - { name: input_validation, description: "Validation/sanitization of untrusted input." }
+      - { name: authz_handling, description: "Authentication/authorization handling where applicable." }
+      - { name: secret_handling, description: "Handling of secrets, keys, and sensitive config." }
+      - { name: dependency_risk, description: "Risk from third-party dependencies used." }
