@@ -80,11 +80,16 @@ def _next_action(package_state: str, readiness: Optional[dict]) -> Dict[str, str
     if package_state == PACKAGE_PARTIAL:
         return {"kind": "instantiate", "title": "Complete the kickoff package",
                 "detail": "Some kickoff files are missing — re-run instantiate to fill them in."}
-    blockers = (readiness or {}).get("blockers") or []
-    if blockers:
-        section = str(dict(blockers[0]).get("section", ""))
-        return {"kind": "resolve_blocker", "title": f"Resolve readiness blocker: {section}",
-                "detail": "Fill the kickoff inputs the cascade still needs."}
+    # FR-NU-3: the readiness-blocker CTA via the SHARED formatter (module-qualified so the parity
+    # monkeypatch of `ranking.blocker_cta` is effective — CRP R1-S1). `readiness` is a dict here (or
+    # None on the build_readiness exception path); `blocker_cta` normalizes both and returns None → the
+    # "ready" branch (R1-S6). NOTE: the blocker `detail` is now the consequence|status (was a fixed
+    # string) — a user-visible copy change (CRP R1-F3).
+    from . import ranking
+
+    cta = ranking.blocker_cta(readiness)
+    if cta is not None:
+        return cta.to_dict()
     return {"kind": "ready", "title": "Kickoff is build-ready", "detail": "No blocking gaps remain."}
 
 

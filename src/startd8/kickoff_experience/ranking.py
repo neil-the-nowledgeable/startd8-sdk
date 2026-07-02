@@ -15,7 +15,7 @@ arrive pre-ordered by the wireframe's section order).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from .readiness import ReadinessView
 from .state import Attention, KickoffState
@@ -24,6 +24,75 @@ KIND_BLOCKER = "resolve_blocker"
 KIND_FILL = "fill_field"
 KIND_REVIEW = "review_default"
 KIND_DONE = "done"
+
+# ── Shared subject vocabulary (FR-NU-4 / CRP R1-S2) ────────────────────────────────────────────────
+# ONE set of subject constants that both `blocker_subject` (readiness sections) and `subject_for_stage`
+# (RedCarpet gates/stages) resolve to, so the two crosswalks cannot drift apart in vocabulary.
+SUBJECT_DATA_MODEL = "data_model"
+SUBJECT_MANIFESTS = "manifests"
+SUBJECT_VALUE_INPUTS = "value_inputs"
+SUBJECTS = (SUBJECT_DATA_MODEL, SUBJECT_MANIFESTS, SUBJECT_VALUE_INPUTS)
+
+# RedCarpet stage / cascade-gate → subject (the playbook side of the crosswalk).
+_STAGE_SUBJECT: dict = {
+    "schema": SUBJECT_DATA_MODEL, "data_model": SUBJECT_DATA_MODEL,
+    "app": SUBJECT_MANIFESTS, "pages": SUBJECT_MANIFESTS, "views": SUBJECT_MANIFESTS,
+    "manifests": SUBJECT_MANIFESTS,
+    "value_inputs": SUBJECT_VALUE_INPUTS,
+}
+
+# The generic non-empty detail fallback (was concierge's fixed blocker copy) — CRP R1-S3.
+_BLOCKER_DETAIL_FALLBACK = "Fill the kickoff inputs the cascade still needs."
+
+
+def _normalize_blockers(readiness: Any) -> tuple:
+    """Accept a ``ReadinessView`` (``.blockers``), a raw ``{"blockers": [...]}`` Mapping, or ``None``
+    (CRP R1-S6). Returns the blockers tuple, or ``()`` — never raises."""
+    if readiness is None:
+        return ()
+    blockers = getattr(readiness, "blockers", None)
+    if blockers is None and isinstance(readiness, Mapping):
+        blockers = readiness.get("blockers")
+    return tuple(blockers or ())
+
+
+def blocker_cta(readiness: Any) -> Optional[NextAction]:
+    """The single Tier-1 readiness-blocker → CTA formatter (FR-NU-2). The two CTA recommenders
+    (`next_action` Tier-1 and the concierge blocker branch) call this so a blocker reads identically.
+    Returns ``None`` when there are no blockers (callers fall through to their no-blocker branch)."""
+    blockers = _normalize_blockers(readiness)
+    if not blockers:
+        return None
+    b = dict(blockers[0])
+    section = str(b.get("section") or "unknown")
+    detail = str(b.get("consequence") or b.get("status") or "") or _BLOCKER_DETAIL_FALLBACK
+    return NextAction(kind=KIND_BLOCKER, title=f"Resolve readiness blocker: {section}", detail=detail)
+
+
+def blocker_subject(cta_or_section: Any) -> Optional[str]:
+    """Normalize a blocker to a shared subject (FR-NU-4), keying on the **root cause** — a schema-absent
+    project fans out into Services/Entities/Forms/Views blockers whose consequence is "no contract → …",
+    so those resolve to ``data_model`` (matching the playbook), not to their section name. Accepts a
+    ``NextAction`` (blocker CTA — reads title+detail) or a raw section string. Returns a `SUBJECTS` value
+    or ``None``."""
+    if isinstance(cta_or_section, NextAction):
+        section = cta_or_section.title.split(":", 1)[-1]
+        text = f"{section} {cta_or_section.detail}"
+    else:
+        text = str(cta_or_section or "")
+    t = text.lower()
+    if any(k in t for k in ("no contract", "no schema", "data model", "schema", "entit")):
+        return SUBJECT_DATA_MODEL
+    if any(k in t for k in ("page", "nav", "view", "form", "manifest", "service")):
+        return SUBJECT_MANIFESTS
+    if any(k in t for k in ("content", "value input", "convention", "observability", "target")):
+        return SUBJECT_VALUE_INPUTS
+    return None
+
+
+def subject_for_stage(stage: Optional[str]) -> Optional[str]:
+    """RedCarpet stage/gate → shared subject (the playbook side, FR-NU-4). ``None`` if not a gate stage."""
+    return _STAGE_SUBJECT.get(stage or "")
 
 
 @dataclass(frozen=True)
@@ -45,15 +114,11 @@ def next_action(
     readiness: Optional[ReadinessView] = None,
 ) -> NextAction:
     """The single deterministic recommendation both surfaces render (R2-S3)."""
-    # Tier 1 — readiness blockers (cascade-level gaps).
-    if readiness is not None and readiness.blockers:
-        b = dict(readiness.blockers[0])
-        section = str(b.get("section", "unknown"))
-        return NextAction(
-            kind=KIND_BLOCKER,
-            title=f"Resolve readiness blocker: {section}",
-            detail=str(b.get("consequence") or b.get("status") or ""),
-        )
+    # Tier 1 — readiness blockers (cascade-level gaps). FR-NU-2: via the shared formatter, so the
+    # concierge blocker branch phrases this identically.
+    cta = blocker_cta(readiness)
+    if cta is not None:
+        return cta
 
     # Tier 2 — author-actionable extraction gaps (already identity-sorted).
     blocked = state.blocked_fields()
