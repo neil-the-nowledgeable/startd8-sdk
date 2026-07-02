@@ -20,7 +20,10 @@ from __future__ import annotations
 
 from typing import List
 
-from startd8.stakeholder_panel.grounding_guard import _money, _percent
+from startd8.stakeholder_panel.grounding_guard import (
+    extract_money as _money,
+    extract_percent as _percent,
+)
 from startd8.stakeholder_panel.models import PersonaBrief
 
 __all__ = ["check_contradiction", "CEILING_CUES"]

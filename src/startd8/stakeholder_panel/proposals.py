@@ -24,7 +24,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from startd8.logging_config import get_logger
 from startd8.stakeholder_panel.models import Recommendation
@@ -118,20 +118,30 @@ class ProposalStore:
         The audit trail must not desync from an ``approve`` (R1-S4): the CLI calls this after a
         successful splice so the staging file reflects the promoted state.
         """
+        return self.update_dispositions({(domain, value_path): disposition}) == 1
+
+    def update_dispositions(self, updates: Dict[tuple, str]) -> int:
+        """Batch-re-disposition many fields in a **single** load+save. Returns the count matched.
+
+        ``approve --all`` promotes N fields; doing one file rewrite per field is O(N²) I/O on the
+        audit trail. Keyed by ``(domain, value_path)`` → new disposition; unknown keys are ignored.
+        """
         import dataclasses
 
-        recs = self.load()
-        found = False
+        if not updates:
+            return 0
+        matched = 0
         out: List[Recommendation] = []
-        for rec in recs:
-            if rec.domain == domain and rec.value_path == value_path:
-                out.append(dataclasses.replace(rec, disposition=disposition))
-                found = True
+        for rec in self.load():
+            new = updates.get((rec.domain, rec.value_path))
+            if new is not None:
+                out.append(dataclasses.replace(rec, disposition=new))
+                matched += 1
             else:
                 out.append(rec)
-        if found:
+        if matched:
             self.save(out)
-        return found
+        return matched
 
 
 def _session_files(project_root: Path | str) -> List[Path]:

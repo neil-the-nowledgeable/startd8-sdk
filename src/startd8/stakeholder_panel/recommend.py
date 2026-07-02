@@ -293,12 +293,22 @@ async def recommend_inputs(
         run.llm_used = bool(new_recs)
         _stamp_span(active_span, run)
 
-    # Merge new drafts over any prior session record and persist the full set.
+    # Merge new drafts over any prior session record and persist the full set. A persist failure must
+    # not crash the pass or lose the already-paid drafts — they are returned on the run and each
+    # answer is already in the panel transcript (Mottainai); log and continue.
     if new_recs:
         merged = dict(existing)
         for rec in new_recs:
             merged[(rec.domain, rec.value_path)] = rec
-        store.save(list(merged.values()))
+        try:
+            store.save(list(merged.values()))
+        except OSError as exc:
+            logger.warning(
+                "recommend pass could not persist %d drafts to staging (%s); "
+                "results are on the returned run + panel transcript",
+                len(new_recs),
+                exc,
+            )
     return run
 
 

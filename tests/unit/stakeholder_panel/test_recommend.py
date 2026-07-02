@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from startd8.stakeholder_panel.models import Grounding, PersonaBrief, Recommendation, Roster
+from startd8.stakeholder_panel.models import (
+    Grounding,
+    PersonaBrief,
+    Recommendation,
+    Roster,
+)
 from startd8.stakeholder_panel.panel import StakeholderPanel
 from startd8.stakeholder_panel.proposals import (
     ProposalStore,
@@ -75,12 +80,12 @@ def _write_package(root: Path):
     )
     (inputs / "conventions.yaml").write_text(
         "domain: conventions\nprovenance_default: estimate\n"
-        "language: python\nstack:\n  web: \"<framework>\"\n",
+        'language: python\nstack:\n  web: "<framework>"\n',
         encoding="utf-8",
     )
     (inputs / "build-preferences.yaml").write_text(
         "domain: build-preferences\nprovenance_default: estimate\n"
-        "budgets:\n  llm_monthly_ceiling_usd: \"<N>\"\n",
+        'budgets:\n  llm_monthly_ceiling_usd: "<N>"\n',
         encoding="utf-8",
     )
 
@@ -119,7 +124,9 @@ async def test_pass_drafts_unfilled_skips_filled_and_stages(tmp_path):
     assert run.llm_used is True
 
     # composite metric row → dict value + two scalar writes (R4-F1)
-    sig = next(r for r in run.recommendations if r.value_path == "product_funnel.signup_rate")
+    sig = next(
+        r for r in run.recommendations if r.value_path == "product_funnel.signup_rate"
+    )
     assert sig.is_composite
     assert sig.recommended_value == {"target": "FORTY", "why": "draft rationale"}
     assert sig.scalar_writes() == [
@@ -181,7 +188,9 @@ async def test_budget_denial_defers_all_spends_nothing(tmp_path):
         panel.close()
     assert run.fields_drafted == 0
     assert counter["calls"] == 0  # nothing asked → $0
-    assert all(s["status"] == "deferred-budget" for s in run.skipped if "value_path" in s)
+    assert all(
+        s["status"] == "deferred-budget" for s in run.skipped if "value_path" in s
+    )
     # nothing staged
     assert ProposalStore(tmp_path, panel.session_id).load() == []
 
@@ -255,14 +264,18 @@ def test_recommendation_roundtrip_preserves_estimate():
 def test_assert_not_authored_guard():
     ok = Recommendation(domain="d", value_path="v", recommended_value="x")
     assert_not_authored(ok)  # no raise
-    bad = Recommendation(domain="d", value_path="v", recommended_value="x", provenance="authored")
+    bad = Recommendation(
+        domain="d", value_path="v", recommended_value="x", provenance="authored"
+    )
     with pytest.raises(ValueError):
         assert_not_authored(bad)
 
 
 def test_proposal_store_disposition_and_session_helpers(tmp_path):
     store = ProposalStore(tmp_path, "sess-a")
-    rec = Recommendation(domain="conventions", value_path="stack.web", recommended_value="fastapi")
+    rec = Recommendation(
+        domain="conventions", value_path="stack.web", recommended_value="fastapi"
+    )
     store.save([rec])
     assert store.get("conventions", "stack.web").disposition == "draft"
     assert store.update_disposition("conventions", "stack.web", "approved") is True
@@ -277,6 +290,45 @@ def test_proposal_store_disposition_and_session_helpers(tmp_path):
     assert latest_session(tmp_path) == "sess-a"
 
 
+def test_update_dispositions_batch(tmp_path):
+    store = ProposalStore(tmp_path, "s")
+    r1 = Recommendation(
+        domain="conventions", value_path="stack.web", recommended_value="x"
+    )
+    r2 = Recommendation(
+        domain="build-preferences", value_path="budgets.cap", recommended_value="y"
+    )
+    store.save([r1, r2])
+    n = store.update_dispositions(
+        {
+            ("conventions", "stack.web"): "approved",
+            ("build-preferences", "budgets.cap"): "rejected",
+            ("nope", "nope"): "approved",  # unknown key ignored
+        }
+    )
+    assert n == 2
+    assert store.get("conventions", "stack.web").disposition == "approved"
+    assert store.get("build-preferences", "budgets.cap").disposition == "rejected"
+
+
+def test_roster_version_of_matches_live_panel(tmp_path):
+    # The review/approve drift check compares a staged roster_version to roster_version_of(roster);
+    # it must equal what a live panel pins, or every draft would spuriously look "drifted".
+    from startd8.stakeholder_panel.recommend_apply import roster_version_of
+
+    roster = _roster(["product-owner", "architect"])
+    panel = StakeholderPanel(
+        roster,
+        project_root=tmp_path,
+        agent_factory=lambda brief: FakeAgent({"calls": 0}),
+        persist=False,
+    )
+    try:
+        assert roster_version_of(roster) == panel.roster_version
+    finally:
+        panel.close()
+
+
 def test_gc_stale_proposals_keeps_recent(tmp_path):
     import os
     import time
@@ -284,7 +336,9 @@ def test_gc_stale_proposals_keeps_recent(tmp_path):
     for i in range(3):
         s = ProposalStore(tmp_path, f"sess-{i}")
         s.save([Recommendation(domain="d", value_path=f"v{i}", recommended_value="x")])
-        os.utime(s.path, (time.time() + i, time.time() + i))  # deterministic mtime order
+        os.utime(
+            s.path, (time.time() + i, time.time() + i)
+        )  # deterministic mtime order
     deleted = gc_stale_proposals(tmp_path, keep=2)
     assert len(deleted) == 1
     assert deleted[0].name == "proposals-sess-0.json"  # oldest removed

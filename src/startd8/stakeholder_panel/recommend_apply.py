@@ -111,6 +111,19 @@ def apply_recommendation(
     if text == original:
         return ApplyResult(True, "noop", rec.value_path, rel)
 
+    # Concurrency precondition (R2-S1 stale-read clobber protection): overwrite is a full-file write
+    # of the text we spliced from `original`; if a concurrent writer changed the file since we read
+    # it, refuse rather than silently discard their edit. The window is tiny (in-memory splice + gate
+    # only) but the guard makes the write safe under concurrent tools.
+    if path.read_text(encoding="utf-8") != original:
+        return ApplyResult(
+            False,
+            "stale",
+            rec.value_path,
+            rel,
+            "target file changed on disk during approve; re-run",
+        )
+
     from startd8.concierge.safe_write import (
         ACTION_OVERWRITE,
         PlannedWrite,

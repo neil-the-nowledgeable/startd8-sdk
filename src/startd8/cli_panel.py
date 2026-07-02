@@ -515,10 +515,13 @@ def panel_approve(
 
     gate_failed = False
     applied_domains = set()
+    disposition_updates: dict = (
+        {}
+    )  # batched into one staging write (avoid O(N^2) rewrites)
     for rec in targets:
         res = apply_recommendation(project_root, rec, force=force)
         if res.ok:
-            store.update_disposition(rec.domain, rec.value_path, "approved")
+            disposition_updates[(rec.domain, rec.value_path)] = "approved"
             applied_domains.add(rec.domain)
             decision_event(
                 EV_APPROVED,
@@ -528,13 +531,16 @@ def panel_approve(
             )
             console.print(f"[green]✓ approved[/green] {rec.domain}:{rec.value_path}")
         elif res.code == "round_trip_failed":
-            store.update_disposition(rec.domain, rec.value_path, "invalid")
+            disposition_updates[(rec.domain, rec.value_path)] = "invalid"
             console.print(f"[red]✗ gate rejected[/red] {rec.value_path}: {res.error}")
             gate_failed = True
         else:
             console.print(
                 f"[yellow]✗ {res.code}[/yellow] {rec.value_path}: {res.error}"
             )
+    store.update_dispositions(
+        disposition_updates
+    )  # one write for the whole batch (R1-S4)
 
     # Manual-flip reminder when a domain is fully resolved (R4-S2 / FR-KIR-7 — SDK never auto-flips).
     for dname in sorted(applied_domains):
