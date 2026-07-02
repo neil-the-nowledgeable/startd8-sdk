@@ -128,6 +128,22 @@ def test_negotiate_with_panel_attaches_synthetic_advisory(tmp_path):
     assert "panel_advisories" in out.report.to_dict()
 
 
+def test_negotiate_advisory_surfaces_grounding_flag(tmp_path):
+    # FR-7 (M3): a persona fabricating an unsupported figure is flagged in the advisory section.
+    panel = _panel_for(tmp_path, reply="It should be $99,000.\nGROUNDING: grounded")
+    out = run_vipp_negotiate(
+        _write_inbox(tmp_path), project_root=tmp_path, emit=False, panel=panel
+    )
+    panel.close()
+    adv = out.report.panel_advisories[0]
+    assert (
+        adv["grounding"] == "uncertain"
+    )  # downgraded from the self-reported "grounded"
+    assert any("$99000" in f for f in adv["flags"])
+    md = (tmp_path / ".startd8/vipp/dispositions.md").read_text(encoding="utf-8")
+    assert "grounding check" in md
+
+
 def test_negotiate_with_panel_no_match_stays_omit(tmp_path):
     # Persona answers_for does not cover Order.* → the question stays OMIT (FR-9c).
     from startd8.stakeholder_panel.models import PersonaBrief, Roster

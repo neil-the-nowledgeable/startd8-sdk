@@ -219,6 +219,9 @@ class PanelAnswer:
     output_tokens: int = 0
     cost_usd: float = 0.0
     created_at: str = ""  # ISO-8601 UTC; stamped by the panel
+    # Advisory guard flags (FR-7 / M3): e.g. "unsupported-specifics: $10000, q4" — an independent
+    # deterministic check that the answer's asserted specifics trace to the brief. Advisory only.
+    flags: List[str] = field(default_factory=list)
 
     @property
     def available(self) -> bool:
@@ -240,6 +243,7 @@ class PanelAnswer:
             "output_tokens": self.output_tokens,
             "cost_usd": self.cost_usd,
             "created_at": self.created_at,
+            "flags": list(self.flags),
         }
 
     @staticmethod
@@ -258,4 +262,5 @@ class PanelAnswer:
             output_tokens=int(d.get("output_tokens", 0) or 0),
             cost_usd=float(d.get("cost_usd", 0.0) or 0.0),
             created_at=str(d.get("created_at", "")),
+            flags=[str(f) for f in (d.get("flags") or [])],
         )

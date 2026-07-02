@@ -61,6 +61,23 @@ def test_ask_returns_grounded_answer_with_provenance():
     assert ans.available is True
 
 
+def test_ask_guard_downgrades_grounded_fabrication_and_flags():
+    # FR-7 (M3): the persona claims "grounded" but asserts a $ figure absent from the brief.
+    agent = ScriptedAgent(reply="The budget is $12,000.\nGROUNDING: grounded")
+    persona = Persona(_BRIEF, agent)
+    ans = asyncio.run(persona.ask("How much can we spend?"))
+    assert ans.grounding is Grounding.UNCERTAIN  # downgraded, not trusted
+    assert ans.flags and "$12000" in ans.flags[0]
+
+
+def test_ask_grounded_answer_within_brief_keeps_no_flags():
+    agent = ScriptedAgent(reply="We ship the MVP by Q3.\nGROUNDING: grounded")
+    persona = Persona(_BRIEF, agent)  # brief goal mentions "by Q3"
+    ans = asyncio.run(persona.ask("When do we ship?"))
+    assert ans.grounding is Grounding.GROUNDED
+    assert ans.flags == []
+
+
 def test_ask_passes_system_prompt_to_agent():
     agent = ScriptedAgent()
     persona = Persona(_BRIEF, agent)

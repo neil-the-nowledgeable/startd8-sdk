@@ -79,6 +79,8 @@ def _render_answer(answer) -> None:
             "  [yellow]⚠ SYNTHETIC, UNRATIFIED[/yellow] — a role-played stand-in, not a real "
             "stakeholder. Confirm with a human before relying on it."
         )
+    for flag in answer.flags:  # FR-7 (M3): grounding-guard advisories
+        console.print(f"  [yellow]⚠ grounding check:[/yellow] {flag}")
     if answer.cost_usd:
         console.print(f"  [dim]cost ${answer.cost_usd:.5f} · {answer.model}[/dim]")
 

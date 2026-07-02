@@ -399,6 +399,11 @@ def _render_advisories(advisories: List[Dict[str, Any]]) -> List[str]:
                 f"- **OBSERVED (project, synthetic)** {oneline(a.get('answer', ''))} "
                 f"— _panel:{role_id} ({grounding})_"
             )
+            flags = a.get("flags") or []
+            if (
+                flags
+            ):  # FR-7 (M3): surface the grounding-guard advisory next to the answer
+                out.append(f"> ⚠ grounding check: {oneline('; '.join(flags))}")
         elif status == "unavailable":
             out += [
                 "",

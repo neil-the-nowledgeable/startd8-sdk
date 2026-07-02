@@ -17,6 +17,7 @@ from typing import List, Tuple
 
 from startd8.agents.base import BaseAgent
 from startd8.logging_config import get_logger
+from startd8.stakeholder_panel.grounding_guard import check_grounding
 from startd8.stakeholder_panel.models import Grounding, PanelAnswer, PersonaBrief
 from startd8.stakeholder_panel.provenance import brief_hash
 
@@ -127,7 +128,10 @@ class Persona:
                     created_at=now,
                 )
 
-            visible, grounding = parse_grounding(text)
+            visible, reported = parse_grounding(text)
+            # FR-7 (M3): independent guard — downgrade a self-reported "grounded" that asserts
+            # specifics the brief does not support, and attach the advisory flags.
+            grounding, flags = check_grounding(self.brief, visible, reported)
             self._remember(question, visible)
             return PanelAnswer(
                 role_id=self.role_id,
@@ -142,4 +146,5 @@ class Persona:
                 input_tokens=int(getattr(usage, "input", 0) or 0),
                 output_tokens=int(getattr(usage, "output", 0) or 0),
                 created_at=now,
+                flags=flags,
             )

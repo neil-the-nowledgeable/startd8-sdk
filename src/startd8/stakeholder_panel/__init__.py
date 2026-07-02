@@ -41,6 +41,10 @@ from startd8.stakeholder_panel.roster import (
     load_roster,
     validate_roster,
 )
+from startd8.stakeholder_panel.grounding_guard import (
+    check_grounding,
+    unsupported_specifics,
+)
 from startd8.stakeholder_panel.routing import route
 from startd8.stakeholder_panel.vipp_bridge import Consultation, consult_panel
 
@@ -97,6 +101,8 @@ __all__ = [
     "route",
     "consult_panel",
     "Consultation",
+    "check_grounding",
+    "unsupported_specifics",
     # lazy (via __getattr__):
     "StakeholderPanel",
     "PanelError",

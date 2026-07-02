@@ -107,6 +107,7 @@ def consult_panel(
                     "grounding": answer.grounding.value,
                     "brief_goals": _brief_goals(panel, role_id),
                     "cost_usd": answer.cost_usd,
+                    "flags": list(answer.flags),  # FR-7 (M3) advisory grounding flags
                 }
             )
         return advisories
