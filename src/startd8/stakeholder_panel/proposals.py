@@ -33,6 +33,7 @@ __all__ = [
     "PROPOSALS_DIR",
     "ProposalStore",
     "latest_session",
+    "session_ids",
     "gc_stale_proposals",
 ]
 
@@ -138,6 +139,14 @@ def _session_files(project_root: Path | str) -> List[Path]:
     if not directory.is_dir():
         return []
     return [p for p in directory.glob(f"{_FILE_PREFIX}*.json") if p.is_file()]
+
+
+def session_ids(project_root: Path | str) -> List[str]:
+    """All staged session ids, most-recent first (for the ambiguous ``--session`` check, R1-F2)."""
+    files = sorted(
+        _session_files(project_root), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    return [p.name[len(_FILE_PREFIX) : -len(".json")] for p in files]
 
 
 def latest_session(project_root: Path | str) -> Optional[str]:

@@ -17,7 +17,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 
@@ -269,3 +269,242 @@ def panel_import(
     )
     for warning in result.warnings:
         console.print(f"  [yellow]⚠[/yellow] {warning}")
+
+
+# --------------------------------------------------------------------------- #
+# Teian — proactive input recommendations (FR-KIR-8/9/10/11).
+# recommend = paid drafting pass; review = $0 render; approve/reject = the human decision surface.
+# --------------------------------------------------------------------------- #
+
+_DRAFT_BANNER = (
+    "[yellow]⚠ DRAFTED STARTERS, UNRATIFIED[/yellow] — role-played estimates, not real values. "
+    "Review, then approve (or edit the YAML) before relying on them."
+)
+
+
+def _try_load_roster(project_root: Path):
+    """Load the roster, returning ``None`` (not exiting) if absent/invalid — for review/approve."""
+    from .stakeholder_panel import RosterError, load_roster, validate_roster
+
+    path = _roster_path(project_root)
+    if not path.is_file():
+        return None
+    try:
+        roster = load_roster(path)
+    except RosterError:
+        return None
+    return roster if not validate_roster(roster) else None
+
+
+def _resolve_session(project_root: Path, session: Optional[str]) -> str:
+    """Resolve the staging session: the named one, the only one, or exit(2) on absent/ambiguous (R1-F2)."""
+    from .stakeholder_panel.proposals import session_ids
+
+    ids = session_ids(project_root)
+    if session:
+        if session not in ids:
+            console.print(f"[red]panel:[/red] no staged session {session!r} (have: {', '.join(ids) or 'none'})")
+            raise typer.Exit(_EXIT_FATAL_INPUTS)
+        return session
+    if not ids:
+        console.print("[red]panel:[/red] no staged proposals — run `startd8 panel recommend` first.")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    if len(ids) > 1:
+        console.print(f"[red]panel:[/red] multiple sessions ({', '.join(ids)}); pass --session <id>.")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    return ids[0]
+
+
+def _split_field(field: str) -> tuple:
+    """Split a ``<domain>:<value_path>`` selector; exit(2) if malformed."""
+    if ":" not in field:
+        console.print(f"[red]panel:[/red] --field must be <domain>:<value_path>, got {field!r}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    domain, value_path = field.split(":", 1)
+    return domain.strip(), value_path.strip()
+
+
+def _field_now_filled(project_root: Path, rec) -> bool:
+    """True iff the rec's field is no longer unfilled in the live YAML (stale draft, R3-S3)."""
+    from .stakeholder_panel.input_domains import get_domain, unfilled_fields
+
+    spec = get_domain(rec.domain)
+    path = project_root / spec.rel_path() if spec else None
+    if spec is None or path is None or not path.is_file():
+        return False
+    unfilled = {s.value_path for s in unfilled_fields(spec, path.read_text(encoding="utf-8"))}
+    return rec.value_path not in unfilled
+
+
+def _fmt_value(rec) -> str:
+    if rec.is_composite and isinstance(rec.recommended_value, dict):
+        return ", ".join(f"{k}={v!r}" for k, v in rec.recommended_value.items())
+    return repr(rec.recommended_value)
+
+
+@panel_app.command("recommend")
+def panel_recommend(
+    domain: Optional[List[str]] = typer.Option(
+        None, "--domain", help="Restrict to these value domains (repeatable)."
+    ),
+    cap: Optional[int] = typer.Option(None, "--cap", help="Max fields to draft (FR-KIR-12)."),
+    redraft: bool = typer.Option(
+        False, "--redraft", help="Re-draft fields that already have a pending draft."
+    ),
+    model: Optional[str] = typer.Option(None, "--model", help="Agent spec (default: cheap model)."),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
+) -> None:
+    """Draft starter values for unfilled kickoff-input fields (paid). Estimates, staged for review."""
+    roster = _load_or_exit(project_root)
+    from .stakeholder_panel import recommend_inputs
+    from .stakeholder_panel.panel import DEFAULT_MODEL_SPEC, StakeholderPanel
+    from .stakeholder_panel.proposals import gc_stale_proposals
+
+    panel = StakeholderPanel(
+        roster, project_root=project_root, model_spec=model or DEFAULT_MODEL_SPEC
+    )
+    try:
+        run = asyncio.run(
+            recommend_inputs(
+                project_root, panel, domains=domain or None, cap=cap, redraft=redraft
+            )
+        )
+    except Exception as exc:  # provider/auth failure — clean message, not a traceback
+        console.print(f"[red]panel:[/red] recommend failed: {exc}")
+        raise typer.Exit(_EXIT_RUNTIME)
+    finally:
+        panel.close()
+    gc_stale_proposals(project_root)
+
+    console.print(
+        f"[bold]drafted {run.fields_drafted} field(s)[/bold] "
+        f"(session {run.session_id}, ${run.total_cost_usd:.5f})"
+    )
+    for rec in run.recommendations:
+        console.print(f"  [bold]{rec.domain}:{rec.value_path}[/bold] → {_fmt_value(rec)}")
+    skipped = {}
+    for s in run.skipped:
+        skipped[s["status"]] = skipped.get(s["status"], 0) + 1
+    if skipped:
+        summary = ", ".join(f"{n} {k}" for k, n in sorted(skipped.items()))
+        console.print(f"  [dim]skipped: {summary}[/dim]")
+    if run.fields_drafted:
+        console.print(_DRAFT_BANNER)
+        console.print("  next: [bold]startd8 panel review[/bold] then [bold]panel approve[/bold]")
+
+
+@panel_app.command("review")
+def panel_review(
+    session: Optional[str] = typer.Option(None, "--session", help="Staging session (default: the only/latest)."),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
+) -> None:
+    """Render pending drafts with their persona brief + the gap they fill ($0, anti-anchoring)."""
+    from .stakeholder_panel.proposals import ProposalStore
+    from .stakeholder_panel.recommend_apply import roster_version_of
+
+    sess = _resolve_session(project_root, session)
+    recs = [r for r in ProposalStore(project_root, sess).load() if r.disposition == "draft"]
+    roster = _try_load_roster(project_root)
+    briefs = {p.role_id: p for p in roster.personas} if roster else {}
+    live_ver = roster_version_of(roster) if roster else ""
+
+    shown = 0
+    for rec in recs:
+        if _field_now_filled(project_root, rec):
+            continue  # stale draft — the human filled it directly (R3-S3)
+        shown += 1
+        console.print(f"\n[bold]{rec.domain}:{rec.value_path}[/bold]  [dim]({rec.grounding.value})[/dim]")
+        console.print(f"  recommended: {_fmt_value(rec)}")
+        if rec.rationale:
+            console.print(f"  why: {rec.rationale}")
+        console.print(f"  drafted by: [bold]{rec.role_id}[/bold] ({rec.origin})")
+        brief = briefs.get(rec.role_id)
+        if brief and brief.goals:
+            console.print(f"  brief goals: {'; '.join(brief.goals)}")  # brief adjacent (FR-KIR-9)
+        if live_ver and rec.roster_version and rec.roster_version != live_ver:
+            console.print("  [yellow]⚠ roster context has changed since this draft (R4-F2)[/yellow]")
+        for flag in rec.flags:
+            console.print(f"  [yellow]⚠ grounding check:[/yellow] {flag}")
+    if not shown:
+        console.print(f"[dim]no pending drafts in session {sess}.[/dim]")
+        return
+    console.print(f"\n{_DRAFT_BANNER}")
+    console.print("  approve: [bold]startd8 panel approve --field <domain>:<value_path>[/bold] (or --all)")
+
+
+@panel_app.command("approve")
+def panel_approve(
+    field: Optional[str] = typer.Option(None, "--field", help="<domain>:<value_path> to approve."),
+    all_: bool = typer.Option(False, "--all", help="Approve every pending draft (R1-S2)."),
+    session: Optional[str] = typer.Option(None, "--session", help="Staging session (default: the only/latest)."),
+    force: bool = typer.Option(False, "--force", help="Apply even if the field was edited in the YAML."),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
+) -> None:
+    """Promote approved drafts into the domain YAML via a comment-preserving splice (CLI-as-writer)."""
+    if not field and not all_:
+        console.print("[red]panel:[/red] pass --field <domain>:<value_path> or --all.")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    from .stakeholder_panel.input_domains import get_domain
+    from .stakeholder_panel.proposals import ProposalStore
+    from .stakeholder_panel.recommend_apply import (
+        apply_recommendation,
+        approvable,
+        domain_fully_resolved,
+    )
+
+    sess = _resolve_session(project_root, session)
+    store = ProposalStore(project_root, sess)
+    recs = store.load()
+    if all_:
+        targets = approvable(recs)
+    else:
+        domain, value_path = _split_field(field)
+        rec = store.get(domain, value_path)
+        if rec is None:
+            console.print(f"[red]panel:[/red] no staged draft {domain}:{value_path} in session {sess}.")
+            raise typer.Exit(_EXIT_FATAL_INPUTS)
+        targets = [rec]
+
+    gate_failed = False
+    applied_domains = set()
+    for rec in targets:
+        res = apply_recommendation(project_root, rec, force=force)
+        if res.ok:
+            store.update_disposition(rec.domain, rec.value_path, "approved")
+            applied_domains.add(rec.domain)
+            console.print(f"[green]✓ approved[/green] {rec.domain}:{rec.value_path}")
+        elif res.code == "round_trip_failed":
+            store.update_disposition(rec.domain, rec.value_path, "invalid")
+            console.print(f"[red]✗ gate rejected[/red] {rec.value_path}: {res.error}")
+            gate_failed = True
+        else:
+            console.print(f"[yellow]✗ {res.code}[/yellow] {rec.value_path}: {res.error}")
+
+    # Manual-flip reminder when a domain is fully resolved (R4-S2 / FR-KIR-7 — SDK never auto-flips).
+    for dname in sorted(applied_domains):
+        if domain_fully_resolved(project_root, dname):
+            spec = get_domain(dname)
+            console.print(
+                f"[dim]all drafts for {dname} approved — to count toward readiness, set "
+                f"`provenance_default: authored` in {spec.rel_path()}.[/dim]"
+            )
+    if gate_failed:
+        raise typer.Exit(_EXIT_GATE)
+
+
+@panel_app.command("reject")
+def panel_reject(
+    field: str = typer.Option(..., "--field", help="<domain>:<value_path> to reject."),
+    session: Optional[str] = typer.Option(None, "--session", help="Staging session (default: the only/latest)."),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
+) -> None:
+    """Mark a staged draft rejected (no write); it drops out of review."""
+    from .stakeholder_panel.proposals import ProposalStore
+
+    sess = _resolve_session(project_root, session)
+    domain, value_path = _split_field(field)
+    if ProposalStore(project_root, sess).update_disposition(domain, value_path, "rejected"):
+        console.print(f"[green]panel:[/green] rejected {domain}:{value_path}")
+    else:
+        console.print(f"[red]panel:[/red] no staged draft {domain}:{value_path} in session {sess}.")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
