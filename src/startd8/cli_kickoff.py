@@ -214,7 +214,16 @@ def _render_red_carpet_state(state) -> None:
         if state.readiness_score is not None
         else "—"
     )
-    console.print(f"[bold]🟥 Red Carpet[/bold] — readiness {pct}")
+    # FR-WD-2 — the user-fillable completion meter (distinct from the coarse readiness above).
+    comp = getattr(state, "completion", None)
+    meter = ""
+    if comp:
+        parts = " · ".join(f"{s['stage']} {s['filled']}/{s['total']}" for s in comp.get("stages", []))
+        deflt = f" ({comp['n_defaulted']} defaulted — review)" if comp.get("n_defaulted") else ""
+        meter = f" · [bold]{comp['overall_pct']}% complete[/bold]{deflt}"
+    console.print(f"[bold]🟥 Red Carpet[/bold] — readiness {pct}{meter}")
+    if comp and meter:
+        console.print(f"  [dim]{parts}[/dim]")
     glyph = {"done": "[green]✓[/green]", "pending": "[yellow]…[/yellow]"}
     for s in state.stages:
         marker = " [cyan](next)[/cyan]" if s.key == state.next_stage else ""
@@ -255,6 +264,50 @@ def _render_red_carpet_state(state) -> None:
         )
 
 
+def _run_red_carpet_wizard(project: Path) -> None:
+    """FR-WD-1 — the deterministic $0 completion-driver (no LLM). Leads over the live state, proposes
+    pre-populated inputs from assets, confirms each at human privilege."""
+    from .kickoff_experience.proposals import apply_proposal
+    from .kickoff_experience.red_carpet import build_red_carpet_state
+    from .kickoff_experience.wizard import (
+        run_red_carpet_driver,
+        wizard_inventory,
+        wizard_prepopulate,
+    )
+
+    def _prepopulate(state):
+        assess = None
+        try:
+            from .kickoff_experience.concierge import build_assess  # type: ignore
+            assess = build_assess(project)
+        except Exception:
+            assess = None
+        return wizard_prepopulate(project, wizard_inventory(project), state, assess=assess)
+
+    def _on_proposal(action):
+        console.print(f"[yellow]Proposed:[/yellow] {action.summary()}")
+        if typer.confirm("Apply this?", default=False):
+            return apply_proposal(project, action)
+        return None   # declined
+
+    def _read(prompt: str) -> Optional[str]:
+        try:
+            return typer.prompt(prompt, default="", show_default=False)
+        except (EOFError, KeyboardInterrupt):
+            return None
+
+    run_red_carpet_driver(
+        banner="🟥 Red Carpet — completion wizard ($0, no LLM). We'll leverage what your project "
+               "already has and lead you through the gaps.",
+        build_state=lambda: build_red_carpet_state(project),
+        prepopulate=_prepopulate,
+        read_input=_read,
+        emit_line=lambda line: console.print(line),
+        on_proposal=_on_proposal,
+        render_state=_render_red_carpet_state,
+    )
+
+
 @kickoff_app.command("red-carpet")
 def red_carpet_cmd(
     project: Path = typer.Argument(
@@ -268,6 +321,11 @@ def red_carpet_cmd(
         help="CI signal ($0, read-only): exit 1 if any error-severity advisory (hard readiness "
              "problem) is present, else 0. warn/info never fail.",
     ),
+    wizard: bool = typer.Option(
+        False, "--wizard",
+        help="Deterministic $0 completion-driver: inventories project assets, proposes pre-populated "
+             "inputs, and leads you through the remaining gaps (you confirm each). No LLM.",
+    ),
     agent: Optional[str] = typer.Option(
         None,
         "--agent",
@@ -276,8 +334,9 @@ def red_carpet_cmd(
 ) -> None:
     """Red Carpet Treatment — the staged, agentic build-from-scratch conductor.
 
-    Without `--agent`: read-only staged status ($0) — where the build stands (data model → manifests →
-    value inputs → content → run), the next gap, and whether the deterministic $0 cascade is offerable.
+    Without a flag: read-only staged status ($0) — where the build stands, the next gap, completion %.
+    With `--wizard`: the deterministic $0 completion-driver — leverages existing assets to pre-populate,
+    leads you through each gap; you confirm every write. No LLM.
     With `--agent`: the conversational interview loop — the agent works the next gap and RECOMMENDS each
     input; you confirm every write.
     With `--check`: an advisory CI signal — exit 1 iff an error-severity advisory is present.
@@ -285,6 +344,10 @@ def red_carpet_cmd(
     import json as _json
 
     from .kickoff_experience.red_carpet import build_red_carpet_state
+
+    if wizard:
+        _run_red_carpet_wizard(project)
+        return
 
     # FR-RCA-15 — advisory CI exit-code mode (not a build gate; warn/info never fail).
     if check:
