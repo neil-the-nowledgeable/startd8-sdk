@@ -1,8 +1,29 @@
 # Concierge Deployment-Awareness — Implementation Plan
 
-**Version:** 1.1 (Post-CRP R1 — deltas folded)
-**Tracks:** `CONCIERGE_DEPLOYMENT_AWARENESS_REQUIREMENTS.md` (v0.3)
-**Date:** 2026-06-21
+**Version:** 1.2 (Post pressure-test against code — anchors corrected)
+**Tracks:** `CONCIERGE_DEPLOYMENT_AWARENESS_REQUIREMENTS.md` (v0.4)
+**Date:** 2026-07-02
+
+---
+
+## 0. Pressure-Test Corrections (v1.2)
+
+> A phantom-reference audit @ origin/main `177fb61f` (see requirements §0.2) corrected the code
+> anchors below. Milestone deltas folded into §2/§2A; nothing new in scope.
+
+- **M1/M2 single source:** the `unbound_bindings` count comes from the **subprocess
+  `check_deploy_coherence.py --json` payload**, NOT `deploy_coherence_verdict` (which returns only
+  `(verdict, exit_code)` — no count). The M5 "…or `deploy_coherence_verdict`" alternative is **removed**.
+- **M2 readiness:** 4-state (`not-declared`/`declared-not-generated`/`generated`/`unknown`) derived
+  from `(declared) × (deploy/ tree present) × (contract parseable)` — `unbound_bindings is None` alone
+  is too broad (it also fires on unparseable/malformed contracts).
+- **M2 wiring:** `_assess_cascade` extracts only `{status, readiness, blockers}` and **discards
+  `_deployment_section`**; `build_assess` must explicitly extract the deployment section + payload.
+- **M1 reuse:** `render_deploy_tree`/`render_deploy_overlays` already exist in
+  `scaffold_codegen/deploy_renderer.py:538/503` — presence-check, don't re-render.
+- **M1 tests:** **1 failing assertion test** (`test_deployment_section_deployed_posture`), not 3
+  goldens — no golden files exist.
+- **M4 constant:** `_DEPLOY_KEYS` (not the phantom `_VALID_DEPLOY_KEYS`).
 
 ---
 
@@ -22,14 +43,21 @@
 
 ## 2. Approach (milestones)
 
-**M1 — Wireframe deployment section extension (FR-CDA-2).** In `_deployment_section`, append items for
-declared environments (names), the `deploy/` artifact set (from `render_deploy_tree`/overlays
-presence), and per-env unbound-binding counts (read from `deploy/infra-contract.yaml`). Update the 3
-deployment-section golden tests.
+**M1 — Wireframe deployment section extension (FR-CDA-2).** In `_deployment_section`
+(`wireframe/plan.py:987`), append items for declared environments (names), the `deploy/` artifact set
+(presence check via the EXISTING `render_deploy_tree`/`render_deploy_overlays` in
+`scaffold_codegen/deploy_renderer.py:538/503` — do not re-render), and per-env unbound-binding counts
+(from the subprocess payload — see M2/M5, single source). Fix the **1 failing assertion test**
+(`test_deployment_section_deployed_posture`); no golden files exist.
 
 **M2 — assess deployment block (FR-CDA-1).** `build_assess` surfaces the wireframe deployment
-section's data under a `deployment` key (delegated, not recomputed — FR-C10). Add the coherence
-verdict (via `deploy_coherence_verdict`).
+section's data under a `deployment` key — but note `_assess_cascade` currently extracts only
+`{status, readiness, blockers}` and **discards `_deployment_section`**, so `build_assess` MUST
+explicitly pull the section (and the coherence payload) out of `build_wireframe_plan`'s output (still
+no recompute — FR-C10). Add the coherence verdict + `unbound_bindings` from the **subprocess
+`check_deploy_coherence.py --json` payload** (NOT `deploy_coherence_verdict`, which has no count).
+Derive the 4-state readiness (`not-declared`/`declared-not-generated`/`generated`/`unknown`) from
+`(declared) × (deploy/ present) × (contract parseable)`.
 
 **M3 — posture → deployment defaults (FR-CDA-3).** `writes.build_instantiate_plan`: posture seeds a
 default `deployment.mode` + minimal `deploy:` block in the projected app.yaml (production→deployed +
@@ -41,8 +69,12 @@ fields; an advisory notes the relationship.
 environments, secrets, trust_gateway), keyed to posture.
 
 **M5 — check_deploy_coherence MCP tool (FR-CDA-5).** Add a read-only tool to the concierge FastMCP
-wrapper delegating to `scripts/check_deploy_coherence.py` (subprocess) or `deploy_coherence_verdict`;
-returns `{verdict, findings, unbound_bindings}`.
+wrapper (`mcp/startd8-mcp-builder/startd8_mcp.py`, following the `startd8_concierge` @3151 read-only
+pattern) delegating to `scripts/check_deploy_coherence.py --json` **via subprocess** (argv = project
+path + `--json` only; map returncode 0/1/2/3 → verdict; missing/unstartable → structured `hard`). It
+returns the `evaluate()` payload `{verdict, findings, unbound_bindings}`. **Not** `deploy_coherence_verdict`
+in-process — that returns only `(verdict, exit_code)` and cannot supply `unbound_bindings`, and the
+subprocess is the single source that M1/M2 also consume.
 
 ## 2A. CRP R1 Deltas (v1.1 — dispositions in requirements Appendix A)
 
@@ -77,7 +109,10 @@ returns `{verdict, findings, unbound_bindings}`.
 | assess recomputes provisioning (violates FR-C10) | delegate to the wireframe section; never recompute |
 | posture silently overrides an explicit mode | seed only when mode unset; explicit `deployment.mode` wins; advisory on conflict |
 | MCP tool reimplements coherence (NR) | delegate to the existing SDK verdict; tool is a thin wrapper |
-| Wireframe section golden churn | update the 3 existing tests; byte-stable additions |
+| Wireframe section test churn | fix the 1 failing assertion test (`test_deployment_section_deployed_posture`); byte-stable sorted additions (no goldens) |
+| Two divergent `unbound_bindings` readers (v0.4) | single source = subprocess `--json` payload; `deploy_coherence_verdict` carries no count and is NOT a source |
+| Readiness mis-reports malformed contract as `generated` (v0.4) | 4-state readiness from declared×tree×parseable; malformed → `unknown` advisory |
+| assess silently drops the deployment section (v0.4) | `_assess_cascade` discards it today — `build_assess` must explicitly extract the section from the plan |
 
 ## 5. Out of scope
 - Running/applying the deploy; the cap-dev-pipe gate; real per-env values.

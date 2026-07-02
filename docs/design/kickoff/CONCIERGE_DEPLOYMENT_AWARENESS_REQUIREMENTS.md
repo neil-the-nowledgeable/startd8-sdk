@@ -1,11 +1,51 @@
 # Concierge Deployment-Awareness (items 4–6) — Requirements
 
-**Version:** 0.3 (Post-CRP R1 — triage applied)
-**Date:** 2026-06-21
+**Version:** 0.4 (Post pressure-test against code — anchors corrected)
+**Date:** 2026-07-02
 **Status:** Ready for implementation
 **Owner:** StartD8 SDK / concierge + wireframe + mcp
 **Extends:** `CONCIERGE_MCP_REQUIREMENTS.md` (v0.3); builds on `cloud-native-deploy`,
 `deploy-environments`, `deployment-mode`.
+
+---
+
+## 0.2 Pressure-Test Against Current Code (v0.4)
+
+> v0.3 was frozen 2026-06-21; the codebase moved ~250 commits since. A phantom-reference audit of
+> every code symbol this spec names (3 parallel read-only audits @ origin/main `177fb61f`) found the
+> effort is **still fully unbuilt and valid** (deployment-awareness in concierge is net-new — not
+> moot), but that **two anchors were factually wrong and one requirement carried an internal
+> contradiction the CRP round did not catch.** All corrections are folded below; no scope added.
+
+| v0.3 claim | Code reality (audited) | Correction |
+|---|---|---|
+| `deploy_coherence_verdict` is the single source of `unbound_bindings` (FR-CDA-1/2) | `deploy_coherence_verdict(findings, *, mode) -> (verdict, exit_code)` — takes findings as **input**, returns a 2-tuple, has **no `unbound_bindings`**. Only the subprocess `scripts/check_deploy_coherence.py:evaluate()` **payload** carries it. | **Single source = the subprocess `--json` payload** (FR-CDA-1/5 rewritten). Makes FR-CDA-5's subprocess load-bearing for FR-CDA-1, not merely preferred. |
+| Tri-state readiness keys off `unbound_bindings is None` = "declared-not-generated" | `None` = generic **"unknown"** (contract absent **OR** unparseable **OR** malformed bindings). Cannot alone separate "declared-not-generated" from "generated-but-broken-contract". | **FR-CDA-1** readiness now derives from `(deployment declared) × (deploy/ tree present) × (contract parseable)`; malformed contract → distinct `unknown` advisory, never silent `generated`. |
+| `_VALID_DEPLOY_KEYS` gates deploy keys (FR-CDA-4) | Phantom name. Real constant is **`_DEPLOY_KEYS`** (`manifest.py:24`). `_VALID_DEPLOYMENT_MODES` correct. | FR-CDA-4 symbol corrected. |
+| "3 pre-existing broken **golden** tests" (FR-CDA-2) | No golden files. 3 **assertion** tests; **1 fails, 2 pass** (`test_deployment_section_deployed_posture`: asserts `PLANNED`, deployed now → coherence ERROR → `INVALID`). | FR-CDA-2 scope corrected to the 1 failing assertion test. |
+| assess "surfaces the wireframe deployment section (delegated)" (plan M2) | `_assess_cascade` delegates to `build_wireframe_plan` but extracts only `{status, readiness, blockers}` — it **discards** `_deployment_section`. | FR-CDA-1 gains an explicit "extract the deployment section from the plan" clause; plan M2 updated. |
+| FR-CDA-6 safe because writes are "CLI-only via the chokepoint" | `apply_write_plan` now has **non-CLI callers** (`kickoff_experience/web.py`, seam, proposals). MCP path still only **previews** (never writes) — the real guarantee holds. | FR-CDA-6 rationale re-grounded on "the MCP `handle_concierge_tool` instantiate path returns a plan, never applies," not "CLI is the only writer." |
+| M1 `render_deploy_tree` near coherence | Lives in `deploy_renderer.py:538`; `render_deploy_overlays:538/503` **already exist** — reusable. | Anchor corrected; M1 reuses existing renderers. |
+
+**Verified clean (no change):** `build_assess` (core.py:158), `_assess_cascade`→`build_wireframe_plan`
+(core.py:222), `READ_ACTIONS=("survey","assess")`, `handle_concierge_tool` (core.py:255),
+`VALID_POSTURES=("prototype","production")`, `parse_app_manifest` strict/no-LLM (manifest.py:142),
+`deploy_environments` sorted-at-parse (manifest.py:128), the script's `--json` + exit-codes 0/1/2/3 +
+fail-closed→3, the MCP wrapper path (`mcp/startd8-mcp-builder/startd8_mcp.py`, tool `startd8_concierge`
+@ 3151), both kickoff templates (`src/startd8/concierge_templates/`) + confirmed absence of deploy content.
+
+### Reference Audit (symbols this spec depends on)
+
+| Symbol | Verdict | Location |
+|---|---|---|
+| `deploy_coherence_verdict` return shape carries `unbound_bindings` | **PHANTOM** — returns `(verdict, exit_code)` | `scaffold_codegen/coherence.py:161` |
+| `_VALID_DEPLOY_KEYS` | **PHANTOM name** → `_DEPLOY_KEYS` | `scaffold_codegen/manifest.py:24` |
+| `unbound_bindings is None` = "declared-not-generated" | **DRIFTED** — means generic "unknown" | `scripts/check_deploy_coherence.py:45` |
+| "3 broken golden tests" | **DRIFTED** — 1 failing assertion test, no goldens | `tests/unit/wireframe/test_deployment_section.py` |
+| `_assess_cascade` surfaces `_deployment_section` | **GAP** — discards it (extracts summary only) | `concierge/core.py:222` |
+| safe-writer "CLI-only" | **DRIFTED** — non-CLI callers exist; MCP-preview guarantee still holds | `concierge/safe_write.py` / `kickoff_experience/*` |
+| `render_deploy_tree` / overlays | **EXISTS** (reuse) | `scaffold_codegen/deploy_renderer.py:538/503` |
+| `evaluate` / `_count_unbound_bindings` / `--json` / exits 0-3 / fail-closed | **EXISTS** as specified | `scripts/check_deploy_coherence.py` |
 
 ---
 
@@ -57,21 +97,39 @@ deployment posture through the Concierge.
 
 ## 2. Requirements
 
-- **FR-CDA-1 (assess surfaces deployment readiness — hardened v0.3).** `concierge assess` SHALL
-  include a `deployment` block: declared mode, `deploy:` posture (target cloud, secrets backend,
-  trust_gateway), declared environments, a **tri-state readiness** per env/overall —
-  `not-declared` / `declared-not-generated` / `generated` (reusing the `unbound_bindings is None` =
-  no-contract signal, R1-F3/OQ-6) — the unbound operator-binding count, and the deploy-coherence
-  verdict. **Single source (R1-F2):** the unbound count + verdict SHALL be the values the coherence
-  check already returns — assess/wireframe surface them, never re-derive (FR-C10). assess/the tool
-  SHALL surface only names/counts/status, **never secret values** from the infra-contract (R1-S9).
-- **FR-CDA-2 (wireframe deployment section extended — narrowed v0.2).** The EXISTING
-  `_deployment_section` (already surfaces mode/persistence/bind/schema-init/secrets/observability/
-  identity + coherence) SHALL be extended with: declared environments, the emitted `deploy/` artifact
-  set, and per-env unbound bindings — **surfacing the coherence verdict's value, not an independent
-  re-read** (R1-F2/S1). New per-env items SHALL be emitted in the manifest's already-sorted
-  `deploy_environments` order so the section stays byte-stable/idempotent (R1-S7). Its 3
-  pre-existing-broken golden tests SHALL be fixed in passing.
+- **FR-CDA-1 (assess surfaces deployment readiness — hardened v0.3, anchors corrected v0.4).**
+  `concierge assess` SHALL include a `deployment` block: declared mode, `deploy:` posture (target
+  cloud, secrets backend, trust_gateway), declared environments, a **four-state readiness** per
+  env/overall, the unbound operator-binding count, and the deploy-coherence verdict.
+  **Readiness derivation (corrected v0.4 — the `None` sentinel is broader than v0.3 assumed):**
+  `unbound_bindings is None` means generic *unknown* (contract absent **OR** unparseable), so readiness
+  SHALL be derived from three signals, not the sentinel alone:
+    - `not-declared` — no `deployment`/`deploy` block in app.yaml.
+    - `declared-not-generated` — declared, but no `deploy/` tree on disk.
+    - `generated` — declared, `deploy/` tree present, `deploy/infra-contract.yaml` parseable (count known).
+    - `unknown` — declared and `deploy/` present but the contract is **absent-yet-tree-exists or
+      unparseable/malformed** (advisory; MUST NOT be silently reported as `generated`).
+  (`stale` from FR-CDA-8 is orthogonal and layered on top of `generated`.)
+  **Single source (R1-F2, corrected v0.4):** the unbound count + verdict SHALL be the values the
+  **subprocess `check_deploy_coherence.py --json` payload** returns (`evaluate()` → `unbound_bindings`
+  + `verdict`) — NOT the in-process `deploy_coherence_verdict`, which returns only `(verdict,
+  exit_code)` and carries no binding count. assess/wireframe surface the payload, never re-derive
+  (FR-C10). Because `_assess_cascade` currently extracts only `{status, readiness, blockers}` from the
+  wireframe plan and **discards `_deployment_section`**, `build_assess` SHALL explicitly extract the
+  deployment section (and the coherence payload) into the `deployment` block. assess/the tool SHALL
+  surface only names/counts/status, **never secret values** from the infra-contract (R1-S9).
+- **FR-CDA-2 (wireframe deployment section extended — narrowed v0.2, anchors corrected v0.4).** The
+  EXISTING `_deployment_section` (`wireframe/plan.py:987` — already surfaces mode/persistence/bind/
+  schema-init/`secrets-default`/observability/identity + `evaluate_coherence` findings) SHALL be
+  extended with: declared environments, the emitted `deploy/` artifact set (reusing the EXISTING
+  `render_deploy_tree`/`render_deploy_overlays` in `scaffold_codegen/deploy_renderer.py:538/503` —
+  presence check only, no re-render), and per-env unbound bindings — **surfacing the subprocess
+  payload's value, not an independent re-read** (R1-F2/S1, corrected v0.4 per FR-CDA-1). New per-env
+  items SHALL be emitted in the manifest's already-sorted `deploy_environments` order so the section
+  stays byte-stable/idempotent (R1-S7). Its **one currently-failing assertion test**
+  (`test_deployment_section_deployed_posture` — asserts `Status.PLANNED` but a deployed manifest now
+  yields a coherence ERROR → `Status.INVALID`; the other two pass) SHALL be fixed in passing. (There
+  are **no golden files** — the v0.3 "3 broken golden tests" was inaccurate.)
 - **FR-CDA-3 (posture → deployment DEFAULT, not force — clarified v0.2).** Posture currently drives
   *convention provenance* only (`writes.py`). `instantiate-kickoff --posture prototype|production`
   SHALL additionally **seed a default** `deployment.mode` (prototype→installed, production→deployed) +
@@ -79,25 +137,34 @@ deployment posture through the Concierge.
   `deployment.mode`; (2) if unset, seed from posture; (3) if set and it disagrees with the posture
   mapping, **keep the declared value and emit an ADVISORY, never an error**. A **production *desktop/CLI*
   tool legitimately running `installed`** is a named non-conflict, not a warning. Mode/deploy stay
-  independent declared fields (mirrors deployment-mode OQ-5).
+  independent declared fields (mirrors deployment-mode OQ-5). Any seeded `deploy:` keys SHALL be drawn
+  only from `_DEPLOY_KEYS` (see FR-CDA-4) so the projected manifest round-trips `parse_app_manifest`.
 - **FR-CDA-4 (kickoff templates deployment inputs — gated v0.3).** The concierge kickoff templates
   SHALL explain the deployment-posture inputs (mode, `deploy:` block, environments, secrets backend,
   trust_gateway) in commissioner-friendly terms, using ONLY keys the strict `parse_app_manifest`
-  accepts (`_VALID_DEPLOY_KEYS`/`_VALID_DEPLOYMENT_MODES`). A grammar-coherence gate SHALL round-trip
-  every taught deployment key through `parse_app_manifest` with zero strict-key errors (R1-F7/S6) —
-  a template teaching a rejected key produces an unparseable manifest → fail-closed `hard`.
+  accepts (**`_DEPLOY_KEYS`** — corrected v0.4, the v0.3 `_VALID_DEPLOY_KEYS` was a phantom name — and
+  `_VALID_DEPLOYMENT_MODES`). A grammar-coherence gate SHALL round-trip every taught deployment key
+  through `parse_app_manifest` with zero strict-key errors (R1-F7/S6) — a template teaching a rejected
+  key produces an unparseable manifest → fail-closed `hard`.
 - **FR-CDA-5 (check_deploy_coherence MCP tool — subprocess, normative v0.3).** Add an agent-callable,
   read-only `check_deploy_coherence` MCP tool that invokes **`scripts/check_deploy_coherence.py
   --json` via subprocess** (NOT in-process), mapping returncode (0/1/2/3) → verdict + surfacing the
   payload (R1-F4/S2/OQ-7). This inherits the script's fail-closed exits (malformed app.yaml → `hard`)
   and matches cap-dev-pipe's returncode+JSON Keiyaku; no reimplementation. A missing script / unstartable
   subprocess / import error SHALL degrade to a structured `hard` verdict with a reason — never a tool
-  crash, never a silent pass (R1-S8). The interpreter/venv + cwd SHALL be specified.
-- **FR-CDA-6 (assist-not-operate preserved — tightened v0.3).** All additions SHALL be read-only over
-  MCP (Concierge never runs the deploy, applies manifests, or records a gate). The subprocess in
-  FR-CDA-5 MAY be invoked ONLY in its read-only `--json` form — **no flag that writes, binds, resolves
-  provenance, or renders `deploy/` may be passed or reachable** (R1-F1). Surfaced JSON carries only
-  names/counts/status, never secret values (R1-S9).
+  crash, never a silent pass (R1-S8). The interpreter/venv + cwd SHALL be specified. **This subprocess
+  payload is the SINGLE source of `unbound_bindings` for FR-CDA-1/FR-CDA-2 (corrected v0.4):** the
+  in-process `deploy_coherence_verdict` returns only `(verdict, exit_code)` and cannot supply the
+  count, so the `--json` payload is load-bearing, not merely the preferred coupling.
+- **FR-CDA-6 (assist-not-operate preserved — tightened v0.3, rationale re-grounded v0.4).** All
+  additions SHALL be read-only over MCP (Concierge never runs the deploy, applies manifests, or
+  records a gate). **The load-bearing guarantee (corrected v0.4) is that the MCP path only *previews*:
+  `handle_concierge_tool` returns a plan for `instantiate-kickoff` and never calls the writer** — NOT
+  the v0.3 rationale "the CLI is the only writer," which has drifted (`apply_write_plan` now has
+  non-CLI callers in `kickoff_experience/`). The subprocess in FR-CDA-5 MAY be invoked ONLY in its
+  read-only `--json` form — **no flag that writes, binds, resolves provenance, or renders `deploy/`
+  may be passed or reachable** (R1-F1). Surfaced JSON carries only names/counts/status, never secret
+  values (R1-S9).
 - **FR-CDA-7 (deterministic, $0).** No LLM; all surfaces derive from the manifest + the deterministic
   cascade + the coherence verdict.
 - **FR-CDA-8 (Staleness guard — added v0.3 R1-F6/S4).** `assess`/wireframe read the live `app.yaml`
@@ -131,6 +198,14 @@ deployment posture through the Concierge.
 single-source unbound bindings (FR-C10 no-recompute), subprocess+fail-closed MCP tool (OQ-7),
 tri-state readiness (OQ-6), staleness guard (new FR-CDA-8), posture conflict policy + production-installed
 exception, grammar-coherence gate, argv-safety + secret-value redaction. Dispositions in Appendix A.*
+
+*v0.4 — Post pressure-test against code (3 parallel phantom-reference audits @ origin/main 177fb61f).
+Effort confirmed still-unbuilt/valid. 2 phantom anchors corrected (`_VALID_DEPLOY_KEYS`→`_DEPLOY_KEYS`;
+`deploy_coherence_verdict` carries NO `unbound_bindings` — single source is the subprocess `--json`
+payload), 1 internal contradiction resolved (FR-CDA-1↔FR-CDA-5 unbound-binding source), 1 under-spec
+fixed (readiness is 4-state derived from declared×tree×parseable, not the broad `None` sentinel), 3
+descriptions corrected (1 failing assertion test not 3 goldens; `_assess_cascade` discards the section;
+FR-CDA-6 rationale re-grounded on MCP-preview). See §0.2 + Reference Audit. No scope added.*
 
 ---
 
