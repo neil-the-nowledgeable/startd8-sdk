@@ -154,11 +154,12 @@ def render_wizard_step(state: Any) -> List[str]:
     Consumes ``state`` (the action is computed by the driver after this call). Just the spine header +
     'you are here' — the found/needed/action lines are emitted by the driver from the (now
     glossary-translated) WizardAction."""
-    spine = build_spine(state)
-    real = [n for n in spine if not n.optional and n.key != "run"]
+    # The three things the user provides (exclude the `content` add-on and the `run`/Build destination),
+    # so the dot row and the "N/M done" count are over the SAME set.
+    real = [n for n in build_spine(state) if not n.optional and n.key != "run"]
     done = sum(1 for n in real if n.status == "done")
     hl = headline(state)
-    dots = "".join("●" if n.status == "done" else ("◉" if n.status == "next" else "◌") for n in spine if not n.optional)
+    dots = "".join("●" if n.status == "done" else ("◉" if n.status == "next" else "◌") for n in real)
     return [
         f"  {dots}   {done}/{len(real)} done · {hl['pct_label']}",
         f"  → {hl['you_are_here']}",
