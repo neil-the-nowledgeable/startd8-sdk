@@ -1,6 +1,6 @@
 # Kickoff UX / Information Architecture — Requirements
 
-**Version:** 0.3 (Post lessons-learned hardening)
+**Version:** 0.4 (Post-CRP R1)
 **Date:** 2026-07-02
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -137,48 +137,74 @@ the CLI (and later the web surface) present the existing mechanisms coherently a
 
 ### A. The mental model & vocabulary (surface-neutral)
 
-- **FR-UX-1 — The four-things mental model.** The kickoff is presented as **four things the user provides**,
-  plain-named, in dependency order, with a one-line "what it is":
+- **FR-UX-1 — The mental model: three things to provide + Build** *(corrected by CRP R1-F1)*. The kickoff
+  is presented as **three things the user provides**, plain-named, in dependency order, then **Build** as
+  the destination — **plus** an *optional* add-on:
   1. **Your data** — the things your app stores (→ the schema).
   2. **Your screens** — the pages & views built from your data.
   3. **Your settings** — a few choices (language, money format, budget…) — *small, mostly defaults*.
-  4. **Placeholder content** — starter copy/test data (optional, later).
-  Plus **Build** — the `$0` generate step, shown as the destination, not a "thing to author".
-- **FR-UX-2 — A single plain-language glossary (owned here).** One table maps every internal term to its
-  user-facing name, and is the **single source** all surfaces cite: `data_model`→"Your data",
+  Then **Build** — the `$0` generate step. **Build never renders as a completed "✓ done" thing:** the
+  underlying `run` stage becomes `"done"` when merely **offerable, not built** (`red_carpet.py`), so the
+  spine must use a distinct terminal status (e.g. `ready`) so ✓ is never shown for a never-generated app.
+  **Placeholder content** is an **optional add-on**, *not* an equal fourth item — it is always-pending and
+  excluded from completion; it renders de-emphasized, like the FR-UX-3 right-sizing of settings.
+- **FR-UX-2 — A single plain-language glossary (owned here), applied to free text too** *(hardened, CRP
+  R1-F2)*. One `GLOSSARY` is the **single source** for user-facing names: `data_model`→"Your data",
   `manifests`→"Your screens", `value_inputs`→"Your settings", `cascade`→"Build", `content`→"Placeholder
-  content"; drop metaphors ("front bookend", "buckets 2/4") from user-facing copy. Internal names remain
-  in `--json`/`--verbose` for scripting.
-- **FR-UX-3 — Right-size the "settings" bucket.** The presentation must convey that *settings* is small
-  (≈8 fields, mostly dropdowns with sane defaults) and not equal-weight with data/screens, so the user
-  isn't scared by it. (The real work is data → screens.)
+  content". But jargon also leaks through **free text the render passes verbatim** — advisory/playbook
+  `detail`/`action` ("the front bookend…", "@relation", "prisma/schema.prisma", "CRUD"), the wizard
+  found/needed strings, and the per-stage **completion meter** which today prints raw keys
+  (`data_model 0/1`). So: **any user-facing string derived from advisory/playbook/wizard text is
+  glossary-translated**, not just the stage names; and the no-jargon test (a) also scans `--verbose`
+  output and any `next_steps[0]` text the headline consumes, and (b) uses an expanded token list —
+  `{cascade, manifest, value_path, prisma, schema, @relation, @@id, provenance, gate, bookend, buckets}`.
+  Internal names remain only in `--json`.
+- **FR-UX-3 — Right-size the "settings" bucket (with a render rule).** *Settings* is small (≈8 fields,
+  mostly dropdowns with sane defaults) and not equal-weight with data/screens. **Acceptance (CRP R1-F5):**
+  it renders as **a single collapsed line** (name + field count, e.g. "Your settings · 2 of 8"), visually
+  **subordinate** to data/screens — testable via a snapshot, not just asserted.
 
 ### B. The status view (`startd8 kickoff red-carpet`, read-only)
 
 - **FR-UX-4 — Focused summary + one next action.** The default status view shows: a one-line progress
   header (spine + one headline %), the four-things map with a clear "**you are here**", and **the single
   highest-value next action** (plain language + its command). Nothing else by default.
-- **FR-UX-5 — Progressive disclosure.** The full advisory list and the ranked playbook move behind
-  `--verbose`; the machine payload stays on `--json` (unchanged shape). The default view ends with a
-  one-line pointer ("N more details → `--verbose`").
+- **FR-UX-5 — Progressive disclosure — but never hide errors** *(hardened, CRP R1-F4)*. The full advisory
+  list and the ranked playbook move behind `--verbose`; the machine payload stays on `--json` (unchanged).
+  **Exception:** `severity == "error"` advisories (invalid input YAML, unresolved assembly inputs — the
+  exact set `--check` exits 1 on) are **NOT hidden** — the default view surfaces at least a count/banner
+  ("⚠ 1 problem needs fixing → `--verbose`"), so the human view and CI (`--check`) never disagree. (The
+  "one next action" is dependency-ordered, so an error below an unmet gate would otherwise surface
+  nowhere.) The default view ends with a one-line "N more details → `--verbose`" pointer.
 - **FR-UX-6 — One progress spine, no triple redundancy (UX-P3).** The stage map, advisories, and playbook
   are rendered as **one** progress spine (the four things + Build, each with a compact status), not three
   parallel lists. A gap is named once.
-- **FR-UX-7 — Reconcile the two percentages.** Exactly **one** headline number is shown by default (the
-  user-fillable **completion %**, FR-WD-2 — the one that answers "how done am I"). The coarse
-  `readiness_score` is either dropped from the headline or shown only under `--verbose` with a label.
-- **FR-UX-8 — Calm greenfield (UX-P4).** A blank project reads as "not started — begin with **Your data**",
-  not as red "Cascade blocker" errors. Severity/color maps to user urgency: a fresh project's headline is
-  informational, not error-colored.
+- **FR-UX-7 — Reconcile the two percentages; be honest about "filled ≠ buildable"** *(hardened, CRP
+  R1-F3)*. Exactly **one** headline number is shown by default — the user-fillable **completion %**
+  (FR-WD-2). But `overall_pct` is **presence-based, not validity-based** (`_present` = file exists & size
+  > 0, not parse-valid), and counts `defaulted` values as filled — so it can read **100%** for an
+  unbuildable project. FR-UX-7 defines the headline as **"% filled," not "buildable,"** and requires it to
+  **annotate the gap**: "100% filled · not yet buildable" when an error advisory / unmet gate persists, and
+  "· N defaulted — review" when filled units are all defaulted. `readiness_score` → `--verbose` (labeled).
+- **FR-UX-8 — Calm greenfield (UX-P4) — but not by suppressing errors** *(scoped, CRP R1-F4)*. A blank
+  project reads "not started — begin with **Your data**", not red "Cascade blocker" noise (those are
+  dependency-fanout `warn`s → `--verbose`). "Calm" applies to **greenfield / warn-level** state only; it
+  **never** suppresses `error`-severity advisories (FR-UX-5 exception).
 
 ### C. The wizard (`--wizard`)
 
 - **FR-UX-9 — One step at a time (no status wall).** The wizard does **not** print the full status view.
   It opens with a one-line framing, then renders **one step**: a compact spine (Step N of M · plain name),
   the **found / needed / action** triple in plain language, and the confirm prompt. On advance, the next
-  step — never the whole wall.
-- **FR-UX-10 — Plain-language step copy.** The wizard's found/needed/action uses the glossary (FR-UX-2):
-  "Found 3 model files… → I can build **Your data** from them. Apply? [y/N]", not "propose schema kind".
+  step — never the whole wall. **Correction (CRP R1-S1):** the compact renderer consumes the driver's
+  `state` (the driver calls `render_state(state)` *before* the step action exists), not `(action, spine)`.
+- **FR-UX-10 — Plain-language step copy** *(scope corrected — not a pure render swap, CRP R1-S2)*. The
+  wizard's found/needed/action uses the glossary. **Planning error corrected:** the found/needed lines are
+  emitted by the **driver** (`run_red_carpet_driver`) with raw stage keys, so plain copy is achieved by
+  **glossary-translating `found`/`needed` at `WizardAction` construction in `wizard.py`** (still
+  presentation-only — the wizard module, no proposal/behavior change), *not* by swapping the render
+  callback alone. (§0's "no driver change" claim was too strong; the change stays inside the wizard
+  module's presentation surface.)
 - **FR-UX-11 — Status vs wizard split (clear roles).** `red-carpet` (no flag) = **glance** (where am I,
   what's next); `--wizard` = **do** (guided, step-by-step); `--agent` = **talk** (LLM interview);
   `--json`/`--verbose` = **detail/scripting**. Each mode's purpose is stated in help and honored in output.
@@ -225,7 +251,115 @@ model is the existing 5 stages **renamed** (not restructured), so the whole thin
 `presentation.py` (glossary + spine + headline) + a `--verbose` flag + two render swaps — **zero mechanism
 change**. All 6 OQs resolved. Next: lessons-learned hardening, then CRP.*
 
+*v0.4 — Post-CRP R1 (reviewer claude-opus-4-8-1m, focus-steered; 6 F + 6 S, all code-grounded).
+**Accept all; none rejected.** Material corrections: Build never renders "✓ done" (offerable ≠ built) +
+content demoted to an optional add-on (R1-F1); the glossary applies to **free text** (advisory/playbook/
+wizard/meter), and the no-jargon test scans `--verbose` + `next_steps[0]` with an expanded token list —
+non-gameable (R1-F2); `overall_pct` = "% filled" not "buildable", headline annotates not-yet-buildable /
+all-defaulted (R1-F3); `--verbose` **never hides `error`-severity advisories** — default shows an error
+banner, reconciling with `--check` (R1-F4); FR-UX-3 settings right-sizing gets a concrete render rule +
+snapshot (R1-F5); and the biggest — **"no driver change" was false:** the wizard found/needed jargon is
+emitted by the driver, so plain copy is done at `WizardAction` construction (still presentation-only), and
+`render_wizard_step` consumes `state` not `(action,spine)` (R1-S1/S2). Version pointers synced (R1-F6/S6).
+Dispositions in Appendix A; R1 verbatim in Appendix C. Ready for implementation.*
+
 *v0.3 — Post lessons-learned hardening. Applied 3 SDK design-docs lessons: Leg-1 #5 (single-source
 `GLOSSARY` ownership + no-jargon enforcement — directly on point for a vocabulary spec), phantom-reference
 audit (all symbols verified; new ones marked to-be-created), CRP steering (named the target + settled
 items). No scope pruned. Ready for CRP.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+> Triage R1 (orchestrator, 2026-07-02). **All 6 F + 6 S accepted; none rejected** — grounded in
+> `red_carpet*.py`/`wizard.py`/`cli_kickoff.py`.
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| R1-F1 | Build never "✓done" (offerable≠built); content = optional add-on | CRP R1 | FR-UX-1; plan Step 1 (spine terminal `ready`) | 2026-07-02 |
+| R1-F2 | Glossary applies to free text; no-jargon test non-gameable | CRP R1 | FR-UX-2; plan Step 2/6 (expanded tokens, --verbose scan) | 2026-07-02 |
+| R1-F3 | overall_pct = "% filled" not "buildable"; annotate | CRP R1 | FR-UX-7; plan Step 1 | 2026-07-02 |
+| R1-F4 | --verbose never hides error advisories; default banner | CRP R1 | FR-UX-5/8; plan Step 2/R1-S4 | 2026-07-02 |
+| R1-F5 | FR-UX-3 settings right-sizing render rule + snapshot | CRP R1 | FR-UX-3; plan Step 2/R1-S5 | 2026-07-02 |
+| R1-F6 | Sync version pointers | CRP R1 | plan header → reqs v0.4 | 2026-07-02 |
+| R1-S1 | render_wizard_step consumes `state`, not `(action,spine)` | CRP R1 | plan Step 3; FR-UX-9 | 2026-07-02 |
+| R1-S2 | "no driver change" false — translate at WizardAction | CRP R1 | plan Step 3 + discovery row; FR-UX-10 | 2026-07-02 |
+| R1-S3 | Glossary-translate the completion meter (raw keys today) | CRP R1 | plan Step 2 | 2026-07-02 |
+| R1-S4 | Error advisories stay in default (banner) | CRP R1 | plan Step 2 + Risk R1 | 2026-07-02 |
+| R1-S5 | Operationalize FR-UX-3 (plan step + test) | CRP R1 | plan Step 2/6 | 2026-07-02 |
+| R1-S6 | Sync plan front-matter to reqs v0.4 | CRP R1 | plan header | 2026-07-02 |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| *None.* All R1 suggestions were code-grounded and accepted. |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-07-02
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-07-02 23:45:00 UTC
+- **Scope**: Presentation/IA spec review, weighted per the sponsor focus file (mental-model→stages mapping, single glossary + no-jargon guard, progressive disclosure vs hiding, headline honesty, wizard render swap). Grounded in `kickoff_experience/{red_carpet,red_carpet_advisor,red_carpet_completion,wizard,ranking}.py` and `cli_kickoff.py`.
+
+##### Sponsor focus asks (answered first)
+
+**Ask 1 — Is "four things + Build = the 5 stages renamed" clean, or does a stage carry two meanings?**
+- **Summary answer:** Mostly clean, but **`run`→"Build" carries two meanings** and `content` is a false peer.
+- **Rationale:** In `red_carpet.py:154-158` the `run` stage status becomes `"done"` when `cascade_offerable` is true — i.e. **offerable, not built**. `build_spine` derives node status from `state.stages` (Plan Step 1), so a project that has never generated anything would render **Build ✓ done**, which reads as "already built." Separately, `content` is hardcoded `"pending"` forever (`red_carpet.py:153`) and is **excluded from `build_completion`** (`red_carpet_completion.py:92-115` counts only data_model/manifests/value_inputs), so presenting "Placeholder content" as one of the *four things the user provides* (FR-UX-1) overstates it — it is a no-op stage, unlike `settings` which FR-UX-3 explicitly right-sizes.
+- **Assumptions / conditions:** `build_spine` maps `run.status=="done"` to a ✓/done glyph.
+- **Suggested improvements:** In FR-UX-1, state that **Build is a destination that never renders as "done"** — use a distinct terminal status (e.g. `ready`/`built`) so ✓ is never shown for merely-offerable; and mark `content` as an *optional add-on*, not an equal fourth "thing" (parallel to the FR-UX-3 right-sizing of settings). See R1-F1.
+
+**Ask 2 — Is one `GLOSSARY` sufficient, and is the no-jargon test a real guard or gameable?**
+- **Summary answer:** One glossary is necessary but **not sufficient**, and the no-jargon test as specified is **gameable**.
+- **Rationale:** The glossary only renames the 5 stage keys. Jargon lives in *free-text* the render passes through verbatim: advisory `detail`/`action` ("the front bookend everything derives from", `red_carpet_advisor.py:179`; "@relation", "@@id", "CRUD + findUnique", "prisma/schema.prisma"), the playbook rank-1 detail "promote prisma/schema.prisma (the front bookend)" (`red_carpet_advisor.py:460` — the very `next_steps[0]` FR-UX-4 feeds the headline), and the wizard's `found/needed` strings (`wizard.py:104,128`). Because FR-UX-5/8 move advisories behind `--verbose`, a no-jargon test that scans only the **default** view (Plan §6/Step 6) **passes trivially by hiding, not translating** — and its token set `{cascade, manifest, value_path, front bookend, buckets}` misses `schema`, `prisma`, `@relation`, `@@id`, `provenance`, `gate`, `bookend` (only the bigram "front bookend" is listed).
+- **Assumptions / conditions:** advisory/playbook `detail` text is rendered unmodified (it is today).
+- **Suggested improvements:** Require the no-jargon guard to also run over `--verbose` output and over `next_steps[0].detail`/`.command` whenever the headline consumes them; expand the token list; add a rule that any user-facing string derived from advisory/playbook text is glossary-translated, not just the stage names. See R1-F2.
+
+**Ask 3 — Does moving advisories/cascade-blockers behind `--verbose` ever hide something the user must see?**
+- **Summary answer:** **Yes** — it hides **error-severity** advisories.
+- **Rationale:** `KIND_INPUT_INVALID` and "Assembly inputs did not resolve" are `SEVERITY_ERROR` (`red_carpet_advisor.py:293,354`) — the exact set `--check` exits 1 on (`cli_kickoff.py:359`). FR-UX-5 ("full advisory list → `--verbose`") and FR-UX-8 (cascade-blockers → `--verbose`) would make the human default view read *calm* while CI is *red*. Worse, the "one next action" is `next_steps[0]`, which is **dependency-ordered** (schema→app→pages→views, `build_playbook:457-467`), not severity-ordered — so an invalid `conventions.yaml` is ranked below any unmet gate and, being an advisory, is also hidden. It surfaces **nowhere** by default.
+- **Assumptions / conditions:** a project can have an error advisory while an earlier gate is unmet.
+- **Suggested improvements:** Carve `severity == "error"` advisories out of the `--verbose` hide rule: the default view must show at least a count/banner ("⚠ 1 problem needs fixing → `--verbose`"), reconciling the human view with `--check`. See R1-F4 / plan R1-S4.
+
+**Ask 4 — Is `completion.overall_pct` always the honest "how done" number?**
+- **Summary answer:** **No** — it can read 100% for an unbuildable project.
+- **Rationale:** `data_model` completion keys off `"schema" in unmet` (`red_carpet_completion.py:92`), and `unmet` is `_present` = *file exists & size>0* (`red_carpet.py:83-88`), **not parse validity**. A present-but-unparseable `schema.prisma` + all manifests + all fields present ⇒ `overall_pct == 100` while the advisor emits "Schema not parseable" and the real cascade gate may reject it — exactly the focus's "all fields filled but schema invalid" case. Also `build_completion:110-112` counts **defaulted** values as filled, so "100% complete (8 defaulted — review)" reads done when nothing was user-confirmed.
+- **Assumptions / conditions:** none — both paths are reachable today.
+- **Suggested improvements:** FR-UX-7 should define overall_pct as "% filled," **not** "buildable," and require the headline to annotate the gap ("100% filled · not yet buildable" when errors/unmet gates persist, or when `n_defaulted == filled`). See R1-F3.
+
+**Ask 5 — Does the wizard render swap lose signal needed for the per-step confirm?**
+- **Summary answer:** The *local* confirm signal survives, but the swap as specified is **not wireable** and **cannot deliver FR-UX-10** without a driver change.
+- **Rationale:** `run_red_carpet_driver` calls `render_state(state)` (`wizard.py:194`) **before** it computes the step action (`wizard.py:198`), and the found/needed/action lines are emitted by the **driver itself** via `emit_line` (`wizard.py:210-213`) using raw stage keys — not by the swappable `render_state`. So (a) Plan Step 3's `render_wizard_step(action, spine)` cannot be passed as the `render_state(state)` callback (arg mismatch), and (b) glossary-translated step copy (FR-UX-10) requires touching the driver's emit lines — contradicting the "swap the render callback, no driver change" premise (§0 / FR-UX-9). The confirm decision itself reads `action.summary()` in `_on_proposal` (`cli_kickoff.py:288`), which the swap does not touch, so the local decision is safe.
+- **Assumptions / conditions:** the found/needed emit lines stay in the driver.
+- **Suggested improvements:** Either translate `found`/`needed` at `WizardAction` construction (in `wizard.py`, still presentation-only) or acknowledge a small driver change; fix the `render_wizard_step` signature to consume `state`. See plan R1-S1 / R1-S2.
+
+##### Feature Requirements Suggestions (first pass)
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Interfaces | high | In FR-UX-1, specify that **Build never renders as a completed "thing"** (use a terminal `ready`/`built` status distinct from ✓done) and demote **Placeholder content** to an optional add-on, not an equal fourth item. | `run.status=="done"` means *offerable* not *built* (`red_carpet.py:154-158`); `content` is always `pending` and excluded from completion (`red_carpet_completion.py:92-115`), so a spine deriving status from `state.stages` mis-signals both. | FR-UX-1 (the four-things list + "Plus Build") | Snapshot: an offerable-but-never-generated project shows Build as "ready", not ✓; content is visually de-emphasized. |
+| R1-F2 | Validation | high | Make FR-UX-2's no-jargon test non-gameable: run it over `--verbose` output and over any `next_steps[0]` text the headline consumes, expand the token list (`schema`, `prisma`, `@relation`, `@@id`, `provenance`, `gate`, `bookend`), and require advisory/playbook `detail`/`action` to be glossary-translated — not just stage names. | Jargon leaks via passed-through free text (`red_carpet_advisor.py:179,460`); hiding advisories behind `--verbose` lets a default-only test pass without translating (Plan §6). | FR-UX-2 + a new acceptance clause | A jargon token planted in an advisory `detail` fails the test even when advisories are behind `--verbose`. |
+| R1-F3 | Data | high | FR-UX-7 must state overall_pct = "% of fillable units present," **not** "buildable," and require the headline to flag (a) present-but-invalid schema and (b) all-defaulted completion. | `overall_pct` keys off `_present` (size>0), not validity (`red_carpet_completion.py:92` / `red_carpet.py:83-88`); defaulted values count as filled (`:110-112`) → 100% can mislead. | FR-UX-7 | Unit: a present-unparseable schema (or all-defaulted inputs) yields a headline that is not an unqualified "100% complete". |
+| R1-F4 | Risks | high | FR-UX-5/FR-UX-8 must exempt `severity=="error"` advisories from the `--verbose` hide rule; the default view surfaces at least an error count/banner. | Error advisories (`INPUT_INVALID`, inputs-not-resolved) are what `--check` fails on (`red_carpet_advisor.py:293,354`; `cli_kickoff.py:359`); hiding them makes the human view disagree with CI, and dependency-ordered `next_steps[0]` won't surface them either. | FR-UX-5 and FR-UX-8 | Test: a project with one invalid input shows a non-hidden "1 problem" signal by default; `--check` and default view agree. |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F5 | Validation | medium | FR-UX-3 ("right-size settings") has no acceptance criterion or render mechanism — add one (e.g. settings shown as a single collapsed line with field count, visually lighter than data/screens). | The plan flags `content` as `later` but never operationalizes settings right-sizing; an untestable requirement will silently not ship. | FR-UX-3 | Snapshot: settings occupies ≤1 default line and is visually subordinate to data/screens. |
+| R1-F6 | Interfaces | low | Reconcile the header ("**Plan:** `KICKOFF_UX_PLAN.md`") with the plan, which cites "Requirements … (v0.1)" while this doc is v0.3 — pin a matching version so reviewers know the pair is in sync. | Plan header says v0.1; requirements are v0.3 — a stale cross-reference risks review against the wrong baseline. | Requirements front-matter / Plan front-matter | Grep: both docs cite the same requirements version. |
