@@ -6,7 +6,9 @@
 ``list`` is ``$0``/read-only (just reads the roster). ``ask`` / ``ask-all`` are the **paid** surface
 and, per OQ-7/NR-7, live here on the CLI (the only spend-authorized path) — never on the ``$0``
 Concierge read floor. Every synthetic answer is rendered with an "unratified" banner so it is never
-mistaken for a ratified fact (FR-19). Exit codes: 0 advisory; 2 unreadable/invalid roster.
+mistaken for a ratified fact (FR-19). ``import`` ingests an external persona format into a roster
+($0, one-way). Exit codes: 0 ok; 1 runtime; 2 unreadable/invalid roster or unknown --format;
+3 unreadable/malformed source; 4 round-trip-gate rejection; 5 clobber refused.
 """
 
 from __future__ import annotations
@@ -27,6 +29,10 @@ panel_app = typer.Typer(
 
 _EXIT_FATAL_INPUTS = 2
 _EXIT_RUNTIME = 1
+# Distinct exit codes for `panel import` (FR-6/R2-F5), so a CI job can branch on WHY it failed.
+_EXIT_SOURCE = 3  # source unreadable / malformed (adapter error during adapt)
+_EXIT_GATE = 4  # adapter emitted a roster that failed the round-trip gate
+_EXIT_CLOBBER = 5  # refused to overwrite an existing roster
 _ROSTER_REL = Path("docs") / "kickoff" / "inputs" / "stakeholders.yaml"
 
 
@@ -175,3 +181,77 @@ def panel_ask_all(
         console.print(
             f"[dim]total cost ${total:.5f} across {len(answers)} personas[/dim]"
         )
+
+
+@panel_app.command("import")
+def panel_import(
+    source: Path = typer.Argument(
+        ..., help="External persona-format file to ingest (e.g. a reviewer_roles.yaml)."
+    ),
+    fmt: str = typer.Option(
+        ...,
+        "--format",
+        help="Adapter name (see the roster-adapter registry, e.g. role-rubric).",
+    ),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
+    out: Optional[Path] = typer.Option(
+        None,
+        "--out",
+        help="Roster output path (default: the project's stakeholders.yaml).",
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing roster."),
+) -> None:
+    """Ingest an external persona format into a validated roster ($0, one-way, CLI-only writer)."""
+    from .stakeholder_panel import AdapterError
+    from .stakeholder_panel.adapters import available
+    from .stakeholder_panel.ingest import IngestGateError, ingest, looks_generated
+
+    # 1. Unknown format → exit 2, listing what is registered.
+    if fmt not in available():
+        console.print(
+            f"[red]panel:[/red] unknown --format {fmt!r}. "
+            f"Available: {', '.join(available()) or 'none'}"
+        )
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    # 2. Read the source (CLI owns file I/O; adapters take text).
+    try:
+        source_text = source.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]panel:[/red] cannot read source {source}: {exc}")
+        raise typer.Exit(_EXIT_SOURCE)
+
+    # 3. Adapt + round-trip gate.
+    try:
+        result = ingest(fmt, source_text, source=str(source))
+    except IngestGateError as exc:  # adapter emitted a bad roster
+        console.print(f"[red]panel:[/red] {exc}")
+        raise typer.Exit(_EXIT_GATE)
+    except AdapterError as exc:  # malformed source
+        console.print(f"[red]panel:[/red] {exc}")
+        raise typer.Exit(_EXIT_SOURCE)
+
+    # 4. Resolve destination + clobber guard (R1-S8).
+    dest = out if out is not None else (project_root / _ROSTER_REL)
+    if dest.exists():
+        existing = dest.read_text(encoding="utf-8") if dest.is_file() else ""
+        if not force:
+            hint = "" if looks_generated(existing) else "looks hand-authored — "
+            console.print(
+                f"[red]panel:[/red] {dest} already exists ({hint}pass --force to overwrite)."
+            )
+            raise typer.Exit(_EXIT_CLOBBER)
+        if not looks_generated(existing):
+            console.print(
+                f"[yellow]panel:[/yellow] ⚠ overwriting a hand-authored roster at {dest} (--force)."
+            )
+
+    # 5. Write.
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(result.yaml_text, encoding="utf-8")
+    console.print(
+        f"[green]panel:[/green] imported {len(result.roster.personas)} personas "
+        f"via {fmt} → {dest}"
+    )
+    for warning in result.warnings:
+        console.print(f"  [yellow]⚠[/yellow] {warning}")

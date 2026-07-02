@@ -52,6 +52,11 @@ from startd8.stakeholder_panel.grounding_guard import (
     check_grounding,
     unsupported_specifics,
 )
+from startd8.stakeholder_panel.ingest import (
+    IngestGateError,
+    IngestResult,
+    ingest,
+)
 from startd8.stakeholder_panel.routing import route
 from startd8.stakeholder_panel.vipp_bridge import Consultation, consult_panel
 
@@ -115,6 +120,9 @@ __all__ = [
     "AdapterError",
     "AdaptResult",
     "get_adapter",
+    "ingest",
+    "IngestResult",
+    "IngestGateError",
     # lazy (via __getattr__):
     "StakeholderPanel",
     "PanelError",
