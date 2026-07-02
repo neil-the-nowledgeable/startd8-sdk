@@ -90,6 +90,40 @@ def test_malformed_source_raises_adapter_error(bad):
         _adapt(bad)
 
 
+def test_malformed_coverage_and_scalars_do_not_crash():
+    # Regression (review HIGH/MED): non-dict coverage, string applies_to_services / out_of_scope, and
+    # a dim missing a name must NOT raise a raw AttributeError/TypeError — they coerce or drop.
+    src = """\
+roles:
+  - key: k
+    label: L
+    lens: quality
+    coverage: round_level          # scalar, not a mapping
+    out_of_scope: pricing          # scalar, not a list
+    rubric:
+      - {name: good, description: solid}
+      - {description: nameless}     # missing name → dropped
+"""
+    persona = _adapt(src).roster.personas[0]
+    assert persona.constraints == []  # unusable coverage → no constraint, no crash
+    assert persona.out_of_scope == ["pricing"]  # coerced to a 1-element list, not chars
+    assert persona.known_positions == ["good: solid"]  # nameless dim dropped
+    assert persona.answers_for == ["good"]
+
+
+def test_string_applies_to_services_is_not_char_split():
+    src = """\
+roles:
+  - key: fe
+    label: FE
+    lens: ui
+    coverage: {applies_to_services: frontend}
+    rubric: [{name: ux, description: markup}]
+"""
+    persona = _adapt(src).roster.personas[0]
+    assert persona.constraints == ["You review only these services: frontend."]
+
+
 def test_duplicate_keys_produce_an_adapter_error():
     # A well-formed source that yields a dup role_id is a source defect (defense-in-depth, R2-S1).
     dup = """\

@@ -55,7 +55,8 @@ def looks_generated(text: str) -> bool:
 
 def _provenance_header(source: str, format_name: str) -> str:
     # Basename only (R1-S5): the roster *body* stays byte-identical across machines / working dirs.
-    token = Path(source).name if source else "<input>"
+    # ``or "<input>"`` also covers a root-ish source ("/", ".") whose basename is empty.
+    token = Path(source).name or "<input>"
     return (
         f"{GENERATED_MARKER} from {token} via {format_name} adapter "
         f"— edit the source, re-run import\n"
@@ -69,7 +70,14 @@ def ingest(format_name: str, source_text: str, *, source: str = "") -> IngestRes
     :class:`IngestGateError` if the adapter emits a roster that fails strict parse / validation.
     """
     adapter = get_adapter(format_name)  # AdapterError if the format is unknown
-    result = adapter.adapt(source_text)  # AdapterError on a malformed source
+    try:
+        result = adapter.adapt(source_text)  # AdapterError on a malformed source
+    except (
+        RosterError
+    ) as exc:  # a misbehaving adapter must not leak a user-facing RosterError
+        raise AdapterError(
+            f"adapter {format_name!r} failed on the source: {exc}"
+        ) from exc
 
     body = yaml.safe_dump(
         result.roster.to_dict(),

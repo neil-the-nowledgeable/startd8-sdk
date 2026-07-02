@@ -81,8 +81,14 @@ def _instantiate(loaded) -> Adapter:
 
 
 def register(adapter: Adapter) -> None:
-    """Register an adapter instance (used by third parties in code and by tests)."""
-    _registered[adapter.name] = adapter
+    """Register an adapter instance (used by third parties in code and by tests).
+
+    Note: an explicit ``register()`` is an intentional override and *does* shadow a same-named
+    built-in — the built-in-wins rule (R1-S2) governs *entry-point* discovery, not deliberate
+    in-code registration.
+    """
+    with _lock:
+        _registered[adapter.name] = adapter
 
 
 def discover(force: bool = False) -> None:
@@ -113,18 +119,32 @@ def discover(force: bool = False) -> None:
 def available() -> List[str]:
     """The names of all resolvable adapters (built-ins + discovered), sorted."""
     discover()
-    return sorted(set(_BUILTINS) | set(_registered))
+    with _lock:  # snapshot under the lock — the loop may be registering concurrently
+        registered = set(_registered)
+    return sorted(set(_BUILTINS) | registered)
 
 
 def get_adapter(name: str) -> Adapter:
     """Resolve an adapter by name. Raises :class:`AdapterError` (listing ``available()``) on miss."""
     discover()
-    if name in _registered:  # explicit registration / third-party entry point
-        return _registered[name]
-    if name in _BUILTINS:  # lazy import of the built-in (R2-F4)
-        module_name, _, class_name = _BUILTINS[name].partition(":")
-        adapter = getattr(importlib.import_module(module_name), class_name)()
-        _registered[name] = adapter
+    with _lock:
+        adapter = _registered.get(
+            name
+        )  # explicit registration / third-party entry point
+    if adapter is not None:
+        return adapter
+    dotted = _BUILTINS.get(name)
+    if dotted is not None:  # lazy import of the built-in (R2-F4), off the lock
+        module_name, _, class_name = dotted.partition(":")
+        try:
+            adapter = getattr(importlib.import_module(module_name), class_name)()
+        except (
+            Exception
+        ) as exc:  # a listed-but-unimportable built-in → clean AdapterError
+            raise AdapterError(
+                f"built-in adapter {name!r} failed to load: {exc}"
+            ) from exc
+        register(adapter)
         return adapter
     raise AdapterError(
         f"unknown persona format {name!r}; available: {', '.join(available()) or 'none'}"

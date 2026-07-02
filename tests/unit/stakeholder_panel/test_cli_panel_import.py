@@ -107,6 +107,20 @@ def test_clobber_generated_file_needs_force(tmp_path):
     assert forced.exit_code == 0
 
 
+def test_dest_is_a_directory_exits_5_not_traceback(tmp_path):
+    # Regression (review MED): a directory at the out path must exit cleanly, not raise IsADirectoryError.
+    src = _src_file(tmp_path)
+    out_dir = tmp_path / "a-directory"
+    out_dir.mkdir()
+    result = runner.invoke(
+        panel_app,
+        ["import", str(src), "--format", "role-rubric", "--out", str(out_dir)],
+    )
+    # Normalize Rich's word-wrap before matching the message.
+    assert result.exit_code == 5
+    assert "not a regular file" in " ".join(result.stdout.split())
+
+
 def test_clobber_hand_authored_warns_under_force(tmp_path):
     src = _src_file(tmp_path)
     out = tmp_path / "hand.yaml"

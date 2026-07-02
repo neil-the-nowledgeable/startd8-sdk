@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -207,10 +208,10 @@ def panel_import(
     from .stakeholder_panel.ingest import IngestGateError, ingest, looks_generated
 
     # 1. Unknown format → exit 2, listing what is registered.
-    if fmt not in available():
+    known = available()
+    if fmt not in known:
         console.print(
-            f"[red]panel:[/red] unknown --format {fmt!r}. "
-            f"Available: {', '.join(available()) or 'none'}"
+            f"[red]panel:[/red] unknown --format {fmt!r}. Available: {', '.join(known) or 'none'}"
         )
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
@@ -234,7 +235,18 @@ def panel_import(
     # 4. Resolve destination + clobber guard (R1-S8).
     dest = out if out is not None else (project_root / _ROSTER_REL)
     if dest.exists():
-        existing = dest.read_text(encoding="utf-8") if dest.is_file() else ""
+        if (
+            not dest.is_file()
+        ):  # a directory (or socket/etc.) at the path — never overwrite
+            console.print(f"[red]panel:[/red] {dest} exists but is not a regular file.")
+            raise typer.Exit(_EXIT_CLOBBER)
+        try:
+            existing = dest.read_text(encoding="utf-8")
+        except OSError as exc:
+            console.print(
+                f"[red]panel:[/red] cannot read existing roster {dest}: {exc}"
+            )
+            raise typer.Exit(_EXIT_CLOBBER)
         if not force:
             hint = "" if looks_generated(existing) else "looks hand-authored — "
             console.print(
@@ -246,9 +258,11 @@ def panel_import(
                 f"[yellow]panel:[/yellow] ⚠ overwriting a hand-authored roster at {dest} (--force)."
             )
 
-    # 5. Write.
+    # 5. Write atomically (tmp + rename) so an interrupted write can't corrupt the prior roster.
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(result.yaml_text, encoding="utf-8")
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(result.yaml_text, encoding="utf-8")
+    os.replace(tmp, dest)
     console.print(
         f"[green]panel:[/green] imported {len(result.roster.personas)} personas "
         f"via {fmt} → {dest}"

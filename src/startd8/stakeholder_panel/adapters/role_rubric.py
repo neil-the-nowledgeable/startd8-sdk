@@ -23,12 +23,12 @@ converter so the N3 retirement parity check holds:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, List
 
 import yaml
 
 from startd8.stakeholder_panel.adapters.base import AdaptResult, AdapterError
-from startd8.stakeholder_panel.models import PersonaBrief, Roster
+from startd8.stakeholder_panel.models import PersonaBrief, Roster, _str_list
 from startd8.stakeholder_panel.roster import validate_roster
 
 __all__ = ["RoleRubricAdapter"]
@@ -38,12 +38,19 @@ def _kebab(key: str) -> str:
     return str(key).strip().lower().replace("_", "-")
 
 
-def _constraints(coverage: Dict[str, Any]) -> List[str]:
-    """Turn the coverage policy into human-readable persona constraints (matches the pilot converter)."""
+def _constraints(coverage: Any) -> List[str]:
+    """Turn the coverage policy into human-readable persona constraints (matches the pilot converter).
+
+    Tolerant of a malformed ``coverage`` (a non-dict, or a scalar/list where a list of services was
+    expected) — a bad source must never crash with a raw ``AttributeError``/``TypeError``; it just
+    yields no constraint from that key.
+    """
+    if not isinstance(coverage, dict):
+        return []
     out: List[str] = []
     if coverage.get("scope") == "round_level":
         out.append("You sign off at the round level, not per individual service.")
-    services = coverage.get("applies_to_services")
+    services = _str_list(coverage.get("applies_to_services"))
     if services:
         out.append(f"You review only these services: {', '.join(services)}.")
     if coverage.get("mandatory"):
@@ -53,6 +60,13 @@ def _constraints(coverage: Dict[str, Any]) -> List[str]:
             "You are a standby reviewer — engaged only when an operator assigns you."
         )
     return out
+
+
+def _lens_text(lens: Any) -> str:
+    """A single lens phrase; a list is joined so a list never leaks a Python repr into a goal."""
+    if isinstance(lens, (list, tuple)):
+        return ", ".join(str(x).strip() for x in lens if str(x).strip())
+    return str(lens).strip()
 
 
 class RoleRubricAdapter:
@@ -85,17 +99,21 @@ class RoleRubricAdapter:
             if not isinstance(rubric, list):
                 raise AdapterError(f"role {key!r}: 'rubric' must be a list")
             dims = [d for d in rubric if isinstance(d, dict)]
-            lens = role.get("lens")
+            lens = _lens_text(role.get("lens"))
             personas.append(
                 PersonaBrief(
                     role_id=_kebab(key),
                     display_name=str(label),
                     goals=([f"Review through the lens of: {lens}."] if lens else []),
+                    # Filter dims missing a name (parity with answers_for), and default a missing
+                    # description to "" so a bad dim never emits a literal "None: None".
                     known_positions=[
-                        f"{d.get('name')}: {d.get('description')}" for d in dims
+                        f"{d['name']}: {d.get('description', '')}"
+                        for d in dims
+                        if d.get("name")
                     ],
-                    constraints=_constraints(role.get("coverage") or {}),
-                    out_of_scope=list(role.get("out_of_scope") or []),
+                    constraints=_constraints(role.get("coverage")),
+                    out_of_scope=_str_list(role.get("out_of_scope")),
                     answers_for=[d.get("name") for d in dims if d.get("name")],
                 )
             )

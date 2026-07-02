@@ -86,6 +86,34 @@ def test_header_basename_keeps_body_deterministic():
     assert a.yaml_text.split("\n", 1)[1] == c.yaml_text.split("\n", 1)[1]
 
 
+class _RosterErrorAdapter:
+    """A misbehaving adapter that raises RosterError from adapt() (must be translated)."""
+
+    name = "raises-roster-error"
+
+    def adapt(self, text):
+        from startd8.stakeholder_panel.roster import RosterError
+
+        raise RosterError("boom from inside the adapter")
+
+
+def test_stray_roster_error_from_adapter_is_translated_to_adapter_error():
+    # Regression (review LOW): a RosterError leaking from adapt() must not reach the user as a
+    # RosterError — ingest wraps it as AdapterError (the FR-9 taxonomy: not a user-roster fault).
+    reg.register(_RosterErrorAdapter())
+    with pytest.raises(AdapterError):
+        ingest("raises-roster-error", "anything")
+
+
+def test_broken_builtin_surfaces_as_adapter_error(monkeypatch):
+    # Regression (review LOW): a listed-but-unimportable built-in → clean AdapterError, not a raw
+    # ImportError escaping the taxonomy.
+    monkeypatch.setitem(reg._BUILTINS, "role-rubric", "startd8.does.not.exist:Nope")
+    reg._registered.pop("role-rubric", None)
+    with pytest.raises(AdapterError, match="failed to load"):
+        ingest("role-rubric", _ROLE_RUBRIC)
+
+
 def test_looks_generated_helper():
     assert looks_generated(
         GENERATED_MARKER + " from x via role-rubric\ndomain: stakeholders\n"
