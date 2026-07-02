@@ -16,6 +16,12 @@ per-manifest grammars this format embeds) ·
 > as the baseline from which more capable inference is later allowed to relax the format.
 > Each section is annotated **[consumed by: …]** so the backwards-design is auditable.
 
+> **Vocabulary ownership (contract §5).** The per-section `contract §2.x` callouts below are
+> **non-normative citations**, not redefinitions: `../KICKOFF_AUTHORING_CONTRACT.md` is the single
+> source of every controlled vocabulary and grammar (types, relationship verbs, view archetypes +
+> keys + route derivation, completeness sentences, scaffold settings). Where this format and the
+> contract disagree, the contract wins.
+
 ---
 
 ## Part A — Requirements document format (`REQUIREMENTS.md`)
