@@ -69,8 +69,8 @@ def test_guards_unknown_key_rejected():
 
 def test_guards_version_bumped_and_exports():
     ns = _guards_ns()
-    assert ns["__guards_version__"] == "2"
-    assert "validate_output" in ns and "GuardViolation" in ns
+    assert ns["__guards_version__"] == "3"
+    assert "validate_output" in ns and "GuardViolation" in ns and "verify_provenance" in ns
 
 
 def test_validate_output_strips_control_and_caps():
@@ -128,3 +128,42 @@ def test_all_emitted_python_parses():
     for path, src in dict(render_ai_layer(_SCHEMA, _SRC_BOUND, None)).items():
         if path.endswith(".py"):
             ast.parse(src)
+
+
+# ---- B5 verify_provenance (2b-ii) -----------------------------------------
+
+def test_verify_provenance_grammar_and_default_off():
+    assert parse_ai_passes(_BASE + "    input_entities: [X]")[0].guards.verify_provenance is None
+    m = _BASE + "    input_entities: [X]\n    guards:\n      verify_provenance: drew_on"
+    assert parse_ai_passes(m)[0].guards.verify_provenance == "drew_on"
+
+
+def test_verify_provenance_rejects_non_string():
+    with pytest.raises(ValueError):
+        parse_ai_passes(_BASE + "    input_entities: [X]\n    guards:\n      verify_provenance: [a, b]")
+
+
+def test_verify_provenance_helper_drops_fabricated_id_keyed():
+    ns = _guards_ns()
+    r = type("E", (), {})()
+    r.drew_on = ["id-1", "id-FAKE", "id-2"]
+    dropped = ns["verify_provenance"](r, "drew_on", ["id-1", "id-2", "id-3"], on_violation="drop")
+    assert dropped == ["id-FAKE"] and r.drew_on == ["id-1", "id-2"]
+
+
+def test_verify_provenance_id_keyed_not_title():
+    """Two rows sharing a title stay distinct — keyed on id (R1-F2)."""
+    ns = _guards_ns()
+    r = type("E", (), {})()
+    r.drew_on = ["pk-1", "pk-2"]
+    # supplied has only pk-1; pk-2 (a same-title-but-different-row) must be dropped.
+    dropped = ns["verify_provenance"](r, "drew_on", ["pk-1"], on_violation="drop")
+    assert dropped == ["pk-2"]
+
+
+def test_verify_provenance_reject_raises():
+    ns = _guards_ns()
+    r = type("E", (), {})()
+    r.drew_on = ["fake"]
+    with pytest.raises(ns["GuardViolation"]):
+        ns["verify_provenance"](r, "drew_on", ["real"], on_violation="reject")

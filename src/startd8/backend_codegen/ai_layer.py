@@ -89,12 +89,15 @@ class Guards:
     ``validate_output`` enables the pre-persist output gate (B3): control-char strip,
     per-field length caps (``field_max`` overrides the default), and a no-verbatim-input-dump
     (echo/exfil) check. ``on_violation`` = drop | reject | flag.
+    ``verify_provenance`` (B5, opt-in, default None) names an AI-authored list field whose entries
+    must be a subset of the supplied rows' stable ids — fabricated entries are dropped before persist.
     """
 
     max_untrusted_chars: int = 200_000
     validate_output: bool = True
     field_max: Tuple[Tuple[str, int], ...] = ()   # (output field, max chars) overrides
     on_violation: str = "reject"
+    verify_provenance: Optional[str] = None       # B5: name of the AI "what I used" list field
 
 
 _ON_VIOLATION = {"drop", "reject", "flag"}
@@ -148,7 +151,8 @@ _PASS_KEYS = {"name", "output_entities", "route_path", "prompt", "input_entities
               "guards"}                                                      # FR-B2/B3
 _TRIGGER_KEYS = {"entity", "text_field", "label"}
 _SCOPE_REL_KEYS = {"via", "entity", "optional"}
-_GUARDS_KEYS = {"max_untrusted_chars", "validate_output", "field_max", "on_violation"}
+_GUARDS_KEYS = {"max_untrusted_chars", "validate_output", "field_max", "on_violation",
+                "verify_provenance"}   # FR-B5 (opt-in)
 _HUMAN_FIELD_KEYS = {"target", "authored_by", "default", "test_default", "type"}
 _HUMAN_TOP_KEYS = {"config", "fields"}
 
@@ -190,11 +194,15 @@ def _parse_guards(spec: Any, i: int) -> Guards:
     fmax = spec.get("field_max") or {}
     if not isinstance(fmax, dict):
         raise ValueError(f"ai_passes.yaml: pass #{i} guards.field_max must be a mapping field->int")
+    vprov = spec.get("verify_provenance")
+    if vprov is not None and not isinstance(vprov, str):
+        raise ValueError(f"ai_passes.yaml: pass #{i} guards.verify_provenance must be a field name (str)")
     return Guards(
         max_untrusted_chars=int(spec.get("max_untrusted_chars", 200_000)),
         validate_output=bool(spec.get("validate_output", True)),
         field_max=tuple((str(k), int(v)) for k, v in fmax.items()),
         on_violation=on_v,
+        verify_provenance=(str(vprov) if vprov is not None else None),
     )
 
 
@@ -722,11 +730,44 @@ _PERSIST_SOURCE_HELPER = '''def _persist_source(session: Session, model: Any, ed
 
 
 def _guard_import_line(ps: AiPass) -> str:
-    """Guard-helper import for a pass: fence always; validate_output + GuardViolation when on (FR-B3)."""
-    names = "fence_untrusted"
+    """Guard-helper import for a pass: fence always; validate_output + GuardViolation when on (FR-B3);
+    verify_provenance when opted in (FR-B5). GuardViolation is imported if either gate can raise."""
+    names = ["fence_untrusted"]
     if ps.guards.validate_output:
-        names += ", validate_output, GuardViolation"
-    return f"from app.ai.guards import {names}"
+        names.append("validate_output")
+    if ps.guards.verify_provenance:
+        names.append("verify_provenance")
+    if ps.guards.validate_output or ps.guards.verify_provenance:
+        names.append("GuardViolation")
+    return f"from app.ai.guards import {', '.join(names)}"
+
+
+def _provenance_block(ps: AiPass, supplied_ids_expr: str, out: str) -> List[str]:
+    """Post-call provenance-verification lines (FR-B5), or [] when not opted in.
+
+    Drops AI-authored entries in the declared field that don't match a supplied row id; a
+    ``reject``-mode violation is caught and the pass returns a ``rejected`` status (not persisted)."""
+    if not ps.guards.verify_provenance:
+        return []
+    field = ps.guards.verify_provenance
+    lines = [
+        f"    _supplied_ids = {supplied_ids_expr}",
+    ]
+    if ps.guards.on_violation == "reject":
+        lines += [
+            "    try:",
+            f"        verify_provenance(result, {field!r}, _supplied_ids, "
+            f"on_violation={ps.guards.on_violation!r}, pass_name={ps.name!r})",
+            "    except GuardViolation as exc:  # FR-B5: fabricated provenance → do not persist",
+            f'        logger.warning("provenance guard rejected %s: %s", {ps.name!r}, exc)',
+            f'        return {{"status": "rejected", "created": {{{out!r}: 0}}}}',
+        ]
+    else:
+        lines += [
+            f"    verify_provenance(result, {field!r}, _supplied_ids, "
+            f"on_violation={ps.guards.on_violation!r}, pass_name={ps.name!r})",
+        ]
+    return lines
 
 
 def _fence_call(ps: AiPass, expr: str) -> str:
@@ -932,6 +973,19 @@ def _render_pass_scoped(ps: AiPass, schema, source_binding: Optional[str]) -> st
         "    ).strip()",
         f"    result = call_ai_service({ps.name!r}, full_prompt, {out}Edge, session)",
         *_guard_validate_block(ps, f"[{ps.request_field}, json.dumps(untrusted_context, default=str)]", out),
+        *_provenance_block(
+            ps,
+            (
+                '[str(getattr(scope, "id", ""))]'
+                + " + [str(getattr(_x, \"id\", \"\")) for _x in ("
+                + "".join(f"{_var(r.entity)}, " for r in ps.scope_relations)
+                + ") if _x is not None]"
+                + " + [str(getattr(_r, \"id\", \"\")) for _rows in ("
+                + "".join(f"{v}, " for v, _e in conf_vars)
+                + ") for _r in _rows]"
+            ),
+            out,
+        ),
         "    # Source-scope idempotency (FR-IMP-2): replace this scope's prior UNCONFIRMED rows.",
         f"    prior = session.exec(select({out}).where(",
         f"        getattr({out}, _PROVENANCE_FIELD) == source_id, {out}.confirmed.is_(False))).all()",
@@ -1598,7 +1652,7 @@ from typing import Any, Iterable, Mapping
 
 import re as _re
 
-__guards_version__ = "2"
+__guards_version__ = "3"
 
 _log = _logging.getLogger("app.ai.guards")
 
@@ -1705,6 +1759,38 @@ def validate_output(
         if on_violation == "reject":
             raise GuardViolation(f"{pass_name}: output guard failed: {'; '.join(violations)}")
     return violations
+
+
+def verify_provenance(result, field: str, supplied_ids, *, on_violation: str = "drop", pass_name: str = ""):
+    """FR-B5: drop AI-authored provenance entries not backed by a supplied row.
+
+    ``result.<field>`` is an AI-authored "what I used" list; each entry must match a supplied
+    row's **stable id** (keyed on id, not title — two same-title rows stay distinct). Fabricated
+    entries are dropped (default), or raise (reject) / kept+logged (flag). Logs to the app runtime
+    logger (FR-B7). Returns the dropped entries.
+    """
+    vals = getattr(result, field, None)
+    if not isinstance(vals, (list, tuple)):
+        return []
+    supplied = {str(s) for s in supplied_ids}
+    kept, dropped = [], []
+    for v in vals:
+        (kept if str(v) in supplied else dropped).append(v)
+    if dropped:
+        _log.warning(
+            "AI-pass provenance guard: %s fabricated %r entr(y/ies) on %r dropped: %s",
+            len(dropped), field, pass_name or "pass", dropped,
+            extra={"event": "ai_provenance_guard", "pass": pass_name, "field": field,
+                   "dropped": [str(d) for d in dropped], "on_violation": on_violation},
+        )
+        if on_violation == "reject":
+            raise GuardViolation(f"{pass_name}: {field} cites unsupplied rows: {dropped}")
+        if on_violation != "flag":
+            try:
+                setattr(result, field, type(vals)(kept))
+            except Exception:
+                pass
+    return dropped
 '''
 
 
