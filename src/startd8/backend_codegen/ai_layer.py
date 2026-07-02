@@ -1770,12 +1770,19 @@ def fence_untrusted(text, label: str, max_chars: int = _MAX_UNTRUSTED_CHARS) -> 
     return f'{_SYS}\n<context type="{label}">\n{t}\n</context>'
 
 
-def _has_verbatim_dump(untrusted: str, out: str, n: int) -> bool:
-    """True if `out` contains a contiguous >=n-char span present verbatim in `untrusted`."""
-    if not untrusted or not out or len(untrusted) < n or len(out) < n:
+def _build_gram_sets(untrusted, n: int):
+    """Pre-build each untrusted input's set of n-length substrings ONCE (perf: not once per field)."""
+    return [
+        {u[i:i + n] for i in range(len(u) - n + 1)}
+        for u in untrusted if u and len(u) >= n
+    ]
+
+
+def _out_has_dump(out: str, gram_sets, n: int) -> bool:
+    """True if `out` contains a contiguous >=n-char span present in any pre-built gram set."""
+    if not out or len(out) < n or not gram_sets:
         return False
-    grams = {untrusted[i:i + n] for i in range(len(untrusted) - n + 1)}
-    return any(out[i:i + n] in grams for i in range(len(out) - n + 1))
+    return any(out[i:i + n] in gs for gs in gram_sets for i in range(len(out) - n + 1))
 
 
 def validate_output(
@@ -1798,9 +1805,10 @@ def validate_output(
     """
     fmax = dict(field_max or {})
     untrusted = [u for u in untrusted_inputs if u]
+    gram_sets = _build_gram_sets(untrusted, min_verbatim_dump)  # once, not per field
     violations: list[str] = []
-    # Discover string fields on a pydantic-v2 model, a dataclass-ish, or a plain object.
-    fields = getattr(result, "model_fields", None)
+    # Discover string fields on a pydantic-v2 model (class attr), a dataclass-ish, or a plain object.
+    fields = getattr(type(result), "model_fields", None)
     names = list(fields) if fields else [k for k in vars(result)] if hasattr(result, "__dict__") else []
     for name in names:
         val = getattr(result, name, None)
@@ -1809,7 +1817,7 @@ def validate_output(
         cleaned = _CONTROL.sub("", val)
         cap = fmax.get(name, max_field_chars)
         over = len(cleaned) > cap
-        dumped = any(_has_verbatim_dump(u, cleaned, min_verbatim_dump) for u in untrusted)
+        dumped = _out_has_dump(cleaned, gram_sets, min_verbatim_dump)
         if cleaned != val:
             violations.append(f"{name}: stripped control chars")
         if over:
