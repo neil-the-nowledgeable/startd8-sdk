@@ -395,6 +395,7 @@ class BaseAgent(ABC):
         tags: Optional[list] = None,
         pipeline_id: Optional[str] = None,
         job_id: Optional[str] = None,
+        images: Optional[list] = None,
     ) -> GenerateResult:
         """
         Execute API call with cost tracking and budget enforcement.
@@ -452,8 +453,11 @@ class BaseAgent(ABC):
                     estimated_cost=estimated_cost
                 )
 
-        # STEP 2: Execute API call
-        result = await self.agenerate(prompt)
+        # STEP 2: Execute API call (FR-MMC-2: images ride the tracked path so
+        # consultation image-token cost is attributed like any other call). Only pass
+        # images when present, so agents whose agenerate has no images param keep the
+        # exact ``agenerate(prompt)`` call (byte-identical text-only behavior).
+        result = await self.agenerate(prompt, **({"images": images} if images else {}))
         response_text, response_time_ms, token_usage = result
 
         # STEP 3: Post-call cost recording
@@ -577,6 +581,7 @@ class BaseAgent(ABC):
         tags: Optional[list] = None,
         pipeline_id: Optional[str] = None,
         job_id: Optional[str] = None,
+        images: Optional[list] = None,
     ) -> AgentResponse:
         """
         Async generate and create an AgentResponse object
@@ -613,10 +618,14 @@ class BaseAgent(ABC):
                 tags=tags,
                 pipeline_id=pipeline_id,
                 job_id=job_id,
+                images=images,
             )
         else:
-            # Direct call without cost tracking
-            response_text, response_time_ms, token_usage = await self.agenerate(prompt)
+            # Direct call without cost tracking. Only pass images when present so agents
+            # without an images param keep the exact ``agenerate(prompt)`` call.
+            response_text, response_time_ms, token_usage = await self.agenerate(
+                prompt, **({"images": images} if images else {})
+            )
 
         response_obj = AgentResponse(
             id=response_id,

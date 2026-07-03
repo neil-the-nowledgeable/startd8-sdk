@@ -244,7 +244,8 @@ def model_supports_vision(model: str) -> bool:
     image (per-variant/entitlement), which is recorded as a per-model error, not a crash.
     Conservative: unknown models return ``False``.
     """
-    m = (model or "").lower()
+    # Tolerate a ``provider:model`` spec (e.g. "openai:gpt-4o") — gate on the model part.
+    m = (model or "").lower().split(":")[-1]
     # Anthropic: all Claude 3+ / 4.x are vision-capable.
     if "claude" in m:
         return any(t in m for t in ("claude-3", "opus", "sonnet", "haiku"))
