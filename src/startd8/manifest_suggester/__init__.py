@@ -21,6 +21,13 @@ from startd8.manifest_suggester.baseline import (
     build_graph,
     pick_root,
 )
+from startd8.manifest_suggester.apply import (
+    ApplyOutcome,
+    accumulate,
+    all_existing_slugs,
+    apply_screen,
+    read_authoring,
+)
 from startd8.manifest_suggester.grounding import GroundResult, ground
 from startd8.manifest_suggester.models import (
     KIND_PAGE,
@@ -47,6 +54,12 @@ __all__ = [
     "GroundResult",
     "ScreenCandidateStore",
     "dedupe_missing",
+    # apply seam (FR-MS-5/7)
+    "apply_screen",
+    "ApplyOutcome",
+    "accumulate",
+    "read_authoring",
+    "all_existing_slugs",
     # paid role pass (lazy)
     "suggest_screens",
     "SuggestRun",
