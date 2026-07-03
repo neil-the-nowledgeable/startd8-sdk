@@ -93,6 +93,20 @@ def test_apply_duplicate_is_idempotent(tmp_path):
     assert again.applied is False and again.code == "duplicate"
 
 
+def test_apply_degrades_cleanly_when_apply_proposal_raises(tmp_path, monkeypatch):
+    # A hard failure (e.g. safe-write on a symlinked root) must become a typed refusal, not a crash,
+    # and must NOT persist the running authoring doc.
+    proj = _project(tmp_path)
+
+    def _boom(*a, **k):
+        raise RuntimeError("safe-write refused")
+
+    monkeypatch.setattr("startd8.kickoff_experience.proposals.apply_proposal", _boom)
+    r = apply_screen(proj, baseline_views(SCHEMA)[0])
+    assert r.applied is False and r.code == "apply_error" and "safe-write" in r.reason
+    assert not (proj / "docs" / "kickoff" / "inputs" / "screens-authoring.md").exists()
+
+
 def test_apply_refuses_to_clobber_hand_authored_manifest(tmp_path):
     proj = _project(tmp_path)
     # a pre-existing, non-suggester views.yaml (no running authoring doc) → first apply must not clobber.

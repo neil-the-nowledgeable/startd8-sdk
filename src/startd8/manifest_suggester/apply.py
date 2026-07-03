@@ -115,7 +115,15 @@ def apply_screen(
         },
         id=uuid.uuid4().hex,
     )
-    outcome = apply_proposal(root, action, config=config)
+    # apply_proposal returns typed outcomes for the expected paths, but the safe-write layer can raise
+    # (e.g. a symlinked/`..` project root → SafeWriteError). Convert any raise into a clean failed
+    # outcome so the CLI never shows a traceback and the running authoring doc is never persisted.
+    try:
+        outcome = apply_proposal(root, action, config=config)
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - a hard failure must degrade to a typed refusal, not a crash
+        return ApplyOutcome(applied=False, code="apply_error", reason=str(exc))
 
     if not outcome.ok:
         if outcome.code == "would_clobber":
@@ -156,9 +164,12 @@ def existing_manifest_slugs(project_root: Path | str) -> Set[str]:
             continue
         items = data.get(key) if isinstance(data, dict) else None
         for item in items or []:
-            name = item.get("name") if isinstance(item, dict) else None
-            if name:
-                slugs.add(nfkd_kebab(str(name)))
+            if not isinstance(item, dict):
+                continue
+            # views key on `name`; pages may key on `slug` — tolerate either so dedupe never misses.
+            ident = item.get("name") or item.get("slug")
+            if ident:
+                slugs.add(nfkd_kebab(str(ident)))
     return slugs
 
 

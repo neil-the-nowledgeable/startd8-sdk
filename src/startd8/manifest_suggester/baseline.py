@@ -48,7 +48,9 @@ def pick_root(graph: EntityGraph) -> Optional[str]:
     names = list(graph.entities.keys())
     if not names:
         return None
-    return max(names, key=lambda e: (_degree(graph, e), -names.index(e)))
+    # Precompute declaration order so the tie-break is O(1) per entity (not O(n) via list.index).
+    order = {name: i for i, name in enumerate(names)}
+    return max(names, key=lambda e: (_degree(graph, e), -order[e]))
 
 
 def _joined_partners(graph: EntityGraph, root: str) -> List[str]:
