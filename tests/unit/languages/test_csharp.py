@@ -11,6 +11,19 @@ from __future__ import annotations
 
 import pytest
 
+from startd8.languages.csharp_parser import is_tree_sitter_available
+
+# Skip tree-sitter-specific assertions when the installed tree_sitter binding and
+# tree_sitter_c_sharp grammar are ABI/version-incompatible (e.g. Python 3.14): the C# parser then
+# falls back to regex, so `parser_used == "tree_sitter"` / precise element extraction don't hold.
+# Capability-based (not a raw version check) so it covers 3.14 AND any other broken env, and does
+# NOT skip where tree-sitter works.
+requires_tree_sitter = pytest.mark.skipif(
+    not is_tree_sitter_available(),
+    reason="tree-sitter-c-sharp grammar/ABI incompatible with the installed tree_sitter binding "
+    "(e.g. Python 3.14) — the C# parser falls back to regex",
+)
+
 
 # ---------------------------------------------------------------------------
 # Extension bypass tests (REQ-CS-100, REQ-CS-101)
@@ -199,11 +212,13 @@ class TestCSharpLanguageProfile:
 class TestCSharpParser:
     """Test csharp_parser.py structure extraction."""
 
+    @requires_tree_sitter
     def test_is_tree_sitter_available(self):
         from startd8.languages.csharp_parser import is_tree_sitter_available
-        # Should be True since we installed it
+        # When the grammar/ABI is compatible, the availability probe reports True.
         assert is_tree_sitter_available() is True
 
+    @requires_tree_sitter
     def test_parse_simple_class(self):
         from startd8.languages.csharp_parser import parse_csharp
         code = """
@@ -272,6 +287,7 @@ namespace X
         assert "async" in method.modifiers
         assert method.parent == "Svc"
 
+    @requires_tree_sitter
     def test_parse_constructor(self):
         from startd8.languages.csharp_parser import parse_csharp
         code = """
@@ -296,6 +312,7 @@ namespace X
         assert ctor.name == "CartService"
         assert ctor.parent == "CartService"
 
+    @requires_tree_sitter
     def test_parse_property(self):
         from startd8.languages.csharp_parser import parse_csharp
         code = """
@@ -343,12 +360,14 @@ public class CartService {}
         names = {e.name for e in result.elements}
         assert "CartService" in names
 
+    @requires_tree_sitter
     def test_parse_syntax_error_detected(self):
         from startd8.languages.csharp_parser import parse_csharp
         code = "public class { this is broken"
         result = parse_csharp(code)
         assert result.has_error is True
 
+    @requires_tree_sitter
     def test_body_byte_offsets_present(self):
         from startd8.languages.csharp_parser import parse_csharp
         code = """namespace X {

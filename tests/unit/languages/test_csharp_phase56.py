@@ -17,6 +17,16 @@ from __future__ import annotations
 
 import pytest
 
+from startd8.languages.csharp_parser import is_tree_sitter_available
+
+# Body extraction + splicing use tree-sitter byte offsets; skip when the grammar/ABI is incompatible
+# (e.g. Python 3.14), where the parser falls back to regex and cannot supply byte offsets.
+requires_tree_sitter = pytest.mark.skipif(
+    not is_tree_sitter_available(),
+    reason="tree-sitter-c-sharp grammar/ABI incompatible with the installed tree_sitter binding "
+    "(e.g. Python 3.14) — no byte offsets, so body extraction/splice fall back to regex",
+)
+
 
 # ---------------------------------------------------------------------------
 # Phase 5: Post-generation cleanup (REQ-CS-300)
@@ -158,6 +168,7 @@ class TestCSharpStubDetection:
 # Phase 6: Splicer — body extraction
 # ---------------------------------------------------------------------------
 
+@requires_tree_sitter
 class TestBodyExtraction:
 
     def test_extract_method_bodies(self):
@@ -202,6 +213,7 @@ namespace X
 
 class TestCSharpSplice:
 
+    @requires_tree_sitter
     def test_splice_single_method(self):
         from startd8.languages.csharp_splicer import splice_csharp_bodies
         skeleton = """namespace X
@@ -234,6 +246,7 @@ class TestCSharpSplice:
         assert "Console.WriteLine" in result.code
         assert "NotImplementedException" not in result.code
 
+    @requires_tree_sitter
     def test_splice_multiple_methods(self):
         from startd8.languages.csharp_splicer import splice_csharp_bodies
         skeleton = """namespace X
@@ -262,6 +275,7 @@ class TestCSharpSplice:
         assert "return 42" in result.code
         assert "NotImplementedException" not in result.code
 
+    @requires_tree_sitter
     def test_splice_skips_non_stub(self):
         from startd8.languages.csharp_splicer import splice_csharp_bodies
         skeleton = """namespace X
@@ -281,6 +295,7 @@ class TestCSharpSplice:
         assert result.methods_skipped == 1
         assert "already implemented" in result.code
 
+    @requires_tree_sitter
     def test_splice_warns_on_missing_method(self):
         from startd8.languages.csharp_splicer import splice_csharp_bodies
         skeleton = """namespace X { public class Svc { public void Foo() { throw new NotImplementedException(); } } }"""

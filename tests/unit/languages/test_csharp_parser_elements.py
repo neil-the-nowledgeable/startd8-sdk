@@ -9,9 +9,17 @@ from __future__ import annotations
 import pytest
 
 from startd8.languages.csharp_parser import (
-    CSharpElement,
+    is_tree_sitter_available,
     parse_csharp,
     parse_csharp_source,
+)
+
+# Skip precise-extraction assertions when tree-sitter's grammar/ABI is incompatible (e.g. Python
+# 3.14): the regex fallback extracts a coarser element set, so exact-membership checks won't hold.
+requires_tree_sitter = pytest.mark.skipif(
+    not is_tree_sitter_available(),
+    reason="tree-sitter-c-sharp grammar/ABI incompatible with the installed tree_sitter binding "
+    "(e.g. Python 3.14) — the C# parser falls back to regex",
 )
 
 
@@ -244,7 +252,6 @@ class TestParseMethodExtraction:
 
     def test_constructor(self):
         elements = parse_csharp_source(SIMPLE_CLASS)
-        constructors = [e for e in elements if e.kind == "constructor"]
         # tree-sitter detects constructors; regex may classify as method
         # Either way, "UserService" should appear as a method or constructor name
         all_names = {e.name for e in elements if e.kind in ("method", "constructor")}
@@ -254,6 +261,7 @@ class TestParseMethodExtraction:
 class TestParsePropertyExtraction:
     """Test property declaration extraction."""
 
+    @requires_tree_sitter
     def test_properties(self):
         elements = parse_csharp_source(PROPERTY_VARIANTS)
         props = [e for e in elements if e.kind == "property"]
