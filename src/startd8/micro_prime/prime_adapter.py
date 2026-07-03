@@ -2521,20 +2521,23 @@ class MicroPrimeCodeGenerator:
         if isinstance(seed_deps, list):
             dependencies = [str(d) for d in seed_deps if d]
 
-        # Extract metadata (target_framework, sdk_type, protobuf_items)
-        metadata: Dict[str, Any] = {}
+        # Extract metadata (target_framework, sdk_type, protobuf_items) with precedence
+        # context > file_spec.metadata (REQ-CS-103). "context" is read at BOTH the top level
+        # (`context["target_framework"]`) and the nested `context["service_metadata"]`, with the
+        # explicit top-level value winning; file_spec.metadata is the fallback when context omits it.
         svc_meta = context.get("service_metadata")
-        if isinstance(svc_meta, dict):
-            for key in ("target_framework", "sdk_type", "protobuf_items"):
-                if key in svc_meta:
-                    metadata[key] = svc_meta[key]
+        svc_meta = svc_meta if isinstance(svc_meta, dict) else {}
+        spec_meta = getattr(file_spec, "metadata", None) if file_spec is not None else None
+        spec_meta = spec_meta if isinstance(spec_meta, dict) else {}
 
-        if file_spec is not None:
-            spec_meta = getattr(file_spec, "metadata", None) or {}
-            if isinstance(spec_meta, dict):
-                for key in ("target_framework", "sdk_type", "protobuf_items"):
-                    if key in spec_meta and key not in metadata:
-                        metadata[key] = spec_meta[key]
+        metadata: Dict[str, Any] = {}
+        for key in ("target_framework", "sdk_type", "protobuf_items"):
+            if key in context:
+                metadata[key] = context[key]
+            elif key in svc_meta:
+                metadata[key] = svc_meta[key]
+            elif key in spec_meta:
+                metadata[key] = spec_meta[key]
 
         content = profile.generate_dependency_file(
             project_root=self._output_dir,
