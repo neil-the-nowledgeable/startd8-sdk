@@ -43,6 +43,7 @@ from .cli_secrets import secrets_app
 from .cli_kickoff import kickoff_app
 from .cli_concierge import concierge_app
 from .cli_panel import panel_app
+from .cli_requirements import requirements_app
 from .cli_vipp import vipp_app
 from .cli_deploy import deploy_app
 from .cli_wireframe import wireframe as _wireframe_command
@@ -1254,6 +1255,7 @@ app.add_typer(deploy_app, name="deploy")
 app.add_typer(kickoff_app, name="kickoff")
 app.add_typer(concierge_app, name="concierge")
 app.add_typer(panel_app, name="panel")
+app.add_typer(requirements_app, name="requirements")
 app.add_typer(vipp_app, name="vipp")
 
 
