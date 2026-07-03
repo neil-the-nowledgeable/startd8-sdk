@@ -47,4 +47,16 @@ __all__ = [
     "GroundResult",
     "ScreenCandidateStore",
     "dedupe_missing",
+    # paid role pass (lazy)
+    "suggest_screens",
+    "SuggestRun",
 ]
+
+
+def __getattr__(name: str):
+    """Lazy-load the paid role pass (keeps the deterministic surface import-cheap)."""
+    if name in ("suggest_screens", "SuggestRun"):
+        from startd8.manifest_suggester import suggest
+
+        return getattr(suggest, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
