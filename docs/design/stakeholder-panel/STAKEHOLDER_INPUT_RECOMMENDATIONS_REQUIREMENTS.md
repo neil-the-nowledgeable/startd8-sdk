@@ -451,3 +451,74 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 - R3-F1: Bounding the heuristic fallback prevents drafting useless, off-domain starters.
 - R3-F2: Editing large blocks of text in a YAML file is always superior to `--edit "long string"`.
 - R3-F3: Hiding stale drafts prevents clobbering manual user edits.
+
+#### Review Round R5 — claude-sonnet-5 — 2026-07-03 01:50:00 UTC
+
+- **Reviewer**: claude-sonnet-5
+- **Date**: 2026-07-03 01:50:00 UTC
+- **Scope**: Gap-hunting pass against the **shipped implementation** (verified `src/startd8/stakeholder_panel/*.py` and `src/startd8/cli_panel.py` against the requirements text) — all 7 areas are already substantially addressed, so this round checks whether the acceptance criteria as literally written are actually satisfied by the code, not just plausible in the abstract.
+
+#### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R5-F1 | Validation | medium | **FR-KIR-9** states "`panel review`/`approve` compare the staged `roster_version` + `brief_hash` against the live roster; if they differ, a '⚠ roster context has changed' warning is shown." Verified against `src/startd8/cli_panel.py`: this check exists only in `panel_review` (compares `rec.roster_version` to `roster_version_of(roster)`); `panel_approve` never performs it. As written, this acceptance criterion is **not fully testable/true** for the `approve` half of the sentence. | An untestable-as-written requirement is exactly what FR-KIR-9's own "review renders the gap, not just the fill" discipline is meant to prevent elsewhere — the doc should either scope the sentence to `review` only (matching the code) or the criterion should drive a follow-on build increment for `approve`. | Section 3.C (FR-KIR-9) | Either: (a) narrow the sentence to "`panel review` compares…", or (b) add an explicit acceptance test asserting `panel approve` also warns on drift before applying. |
+| R5-F2 | Validation | medium | **FR-KIR-10** states "the `--edit "<value>"` flag is for short scalars only, and a bare `--edit` may open `$EDITOR` rather than force a hostile shell-quoted string." Verified: `src/startd8/cli_panel.py:panel_approve`'s Typer signature (`field`, `all_`, `session`, `force`, `project_root`) has **no `--edit` option at all** — not a stub, not a partial implementation. The requirement describes a flag that does not exist in the shipped CLI. | A requirement whose acceptance criterion names a concrete flag that was never built will keep confusing future readers into thinking `--edit` is available; either build it or retire the sentence so the requirement matches the "manual YAML edit is the intended UX for complex values" posture the rest of FR-KIR-10 already establishes. | Section 3.C (FR-KIR-10) | `startd8 panel approve --help` is diffed against the documented flag set as a regression check. |
+| R5-F3 | Data | low | **FR-KIR-9**'s "compare... `roster_version` **and** `brief_hash`" language implies a *per-recommendation, per-persona* `brief_hash` check distinct from the aggregate `roster_version`. The shipped `panel_review` only compares `roster_version` (an aggregate hash over *all* persona brief hashes) — so editing an unrelated persona's brief triggers a drift warning on every *other* persona's pending drafts too, which is safe (no false negatives) but noisier than the literal wording suggests. Clarify whether per-persona `brief_hash` comparison (via `roster.persona(role_id)`) is required v1 scope or whether the aggregate check is the accepted interpretation. | Ambiguous wording here makes "compare... brief_hash" an untestable half-sentence today — either drop "and brief_hash" (aggregate-only is deliberate and sufficient — no false negatives) or add the finer-grained check as a follow-on. | Section 3.C (FR-KIR-9) | A test with 2 personas: change only persona B's brief, and assert whether persona A's pending draft is (or is intentionally not) flagged, per whichever interpretation is chosen. |
+| R5-F4 | Architecture | low | §6's Reference-Audit row for `cli_panel` ("clobber guard, exit codes; imports `looks_generated`") should state the module's real path — `src/startd8/cli_panel.py`, a **top-level** module, not a member of the `stakeholder_panel/` package — since the companion plan's §1 module table implies the opposite location (R5-S3 in the plan's Appendix C). | The reference-audit table exists precisely to prevent a phantom-location assumption from surviving into implementation (per this doc's own §0.1 "phantom-reference audit" lesson); leaving the path implicit lets the plan's inaccurate placement go unchallenged. | Section 6 "Pre-Implementation Reference Audit" | The table row explicitly states `src/startd8/cli_panel.py` (not `stakeholder_panel/cli_panel.py`). |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- None — all R1-R4 suggestions are already triaged into Appendix A/B; there are no untriaged items left in Appendix C.
+
+#### Review Round R6 — claude-sonnet-5 — 2026-07-03 02:00:00 UTC
+
+- **Reviewer**: claude-sonnet-5
+- **Date**: 2026-07-03 02:00:00 UTC
+- **Scope**: Second, adversarial pass — traced the shared `Persona.ask()` call path underneath both the
+  reactive (FR-7) and proactive (FR-KIR-6) surfaces to check whether FR-KIR-6's guarantee actually holds
+  end-to-end, not just at the `Recommendation` object boundary.
+
+#### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R6-F1 | Risks | high | **FR-KIR-6** states "the guard must not treat a drafted starter as a fabrication" and that the recommendation instead "carries an explicit 'estimate — not grounded in a project fact' grounding." Verified: this is true of the final `Recommendation` object (`recommend.py:_build_recommendation` force-sets `grounding=Grounding.ESTIMATE` and rebuilds `flags` from `check_contradiction` only) — but the **shared** `Persona.ask()` (in `stakeholder_panel/persona.py`, used by both the reactive and proactive paths) still runs the reactive `check_grounding()`/`unsupported_specifics()` check unconditionally first, and that check's downgrade/flags land in the underlying `PanelAnswer`, the `panel.ask` OTel span (`panel.grounding` attribute), and the **persisted panel transcript entry** (FR-12) — none of which FR-KIR-6 currently mentions. As written, FR-KIR-6 guarantees the wrong layer: the audit trail, not just the recommendation. | A future auditor reading the transcript (the FR-12/FR-KIR-14 audit trail this requirement explicitly leans on for traceability) would see a Teian estimate marked "uncertain" with "unsupported-specifics" flags attached — which looks exactly like a reactive answer the persona itself was unsure about, when in fact it is the FR-KIR-6-sanctioned, *expected* behavior of an honest starter estimate. | Section 3.B (FR-KIR-6) | Extend FR-KIR-6's acceptance criterion to name the `PanelAnswer`/transcript/span layer explicitly (not just `Recommendation`), and require that a Teian-originated answer's persisted grounding read the persona's true self-report — verified with a transcript-read test after a `panel recommend` call with an intentionally "unsupported" numeric draft. |
+| R6-F2 | Validation | medium | Add an explicit negative-space acceptance criterion to **FR-KIR-6**: "`Recommendation.flags` must never contain an `unsupported-specifics:`-prefixed entry" (the reactive guard's flag format), to pin the invariant `recommend.py` currently satisfies only incidentally (by not threading `answer.flags` through). | Without a named negative invariant, a future refactor of `_build_recommendation` that starts forwarding `answer.flags` "for completeness" would silently reintroduce exactly the FR-KIR-6 violation R6-F1 found one layer down, and nothing in the test suite would catch it. | Section 3.B (FR-KIR-6) | A unit test asserting the flag-format invariant, as described in the companion plan's R6-S2. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R5-F1: still stands — the approve-time drift-check gap is orthogonal to this round's grounding-pollution finding and remains unresolved.
+
+#### Review Round R7 — claude-sonnet-5 — 2026-07-03 02:15:00 UTC
+
+- **Reviewer**: claude-sonnet-5
+- **Date**: 2026-07-03 02:15:00 UTC
+- **Scope**: Third pass. See the companion plan review's R7 for a live, reproduced repro of the crash
+  behind R7-F1 (`splice_yaml_value` → `parse_conventions` → uncaught `yaml.scanner.ScannerError`).
+
+#### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R7-F1 | Validation | critical | **FR-KIR-11** states a rejection at the round-trip gate is "**surfaced, never silently swallowed**." Verified (reproduced live): when `_build_recommendation`'s fallback path (`(answer.text or "").strip()`, used whenever a persona reply lacks a recognized `TARGET`/`VALUE` marker) yields a multi-line string with no colon and no leading/trailing whitespace, `capture.py:_format_scalar` emits it **unquoted**, the embedded newline splits it across two physical YAML lines, and the domain's strict parser (`yaml.safe_load` inside `parse_conventions`/etc.) raises `yaml.scanner.ScannerError` — confirmed **not** a `ValueError` subclass — which propagates **uncaught** past `apply_recommendation`'s `except ValueError`, crashing `panel approve` with a raw traceback. This is the opposite of "surfaced, never silently swallowed": it's an unhandled crash, not a clean, typed rejection. | The acceptance criterion as written implies every rejection path returns a clean, renderable outcome; this repro shows at least one realistic path (an LLM reply that doesn't follow the one-line format instruction) does not. | Section 3.D (FR-KIR-11) | Add an acceptance criterion requiring the round-trip gate to catch `yaml.YAMLError` (not just `ValueError`) and convert it to the same typed rejection outcome; validate with the plan's R7-S1 regression test. |
+| R7-F2 | Risks | medium | **FR-KIR-12**'s "no wasted re-spend" guarantee should explicitly cover a **rejected** field, not just a pending **draft**. As written and as implemented (`recommend_inputs`'s staging-aware skip checks `disposition == "draft"` only), a field a human explicitly rejected via `panel reject` is silently re-drafted (and re-paid for) on the very next `panel recommend` invocation without `--redraft`. | FR-KIR-8 frames rejection as a real outcome ("a third implicit outcome — reject/skip — leaves the field blank/estimate"), but FR-KIR-12's re-spend guard doesn't currently treat that outcome as "already decided" the way it treats a pending draft — an inconsistency between the two requirements' treatment of disposition state. | Section 3.D (FR-KIR-12) | Test: `panel reject` a field, then `panel recommend` without `--redraft`; assert 0 personas are queried for that field (mirrors the existing "already-drafted, 0 spend" test for pending drafts). |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R6-F1: still stands — orthogonal to this round's splice-crash and rejected-redraft findings.
+
+#### Review Round R8 — claude-sonnet-5 — 2026-07-03 02:20:00 UTC
+
+- **Reviewer**: claude-sonnet-5
+- **Date**: 2026-07-03 02:20:00 UTC
+- **Scope**: Fourth pass. Only one new, low-severity finding surfaced this round — see the companion
+  plan review's R8 executive summary for the explicit convergence assessment.
+
+#### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R8-F1 | Data | low | **FR-KIR-7** calls the staging artifact "the sole per-field audit trail" — add a criterion that a malformed/unrecognized `disposition` value in that artifact must be **surfaced** (warning, or coerced to a visible error state), not silently treated as invisible to every consumer. Verified: `Recommendation.from_dict`'s `disposition` field is an unvalidated raw string; a hand-edited typo (the artifact is deliberately human-diffable per R2-F3/FR-KIR-7) silently drops a record from both `review` and `approve --all`. | An audit trail that can silently lose entries to a typo without any surfaced signal undermines the "sole audit trail" guarantee FR-KIR-7 makes — the requirement should say what happens on malformed data, not just on well-formed data. | Section 3.B (FR-KIR-7) | Test per the companion plan's R8-S1 validation approach. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R7-F1/R7-F2: both still stand, unaffected by this round's minor finding.
+
+**Convergence note:** matches the companion plan review's R8 assessment — this document is approaching convergence on the requirements side too; most remaining low-hanging findings are implementation-detail-level (like R8-F1) rather than requirement-shape gaps.

@@ -159,9 +159,13 @@ applied via the existing `manifest` proposal kind — never authoring the screen
   shape but uses the suggester's **own** manifest-shaped recommend/apply/grounding (the panel's
   `recommend`/`recommend_apply`/`grounding_guard` are value-scalar-coupled and are **not** reused). Staged
   out-of-band; a stale suggestion (the screen was added meanwhile) is detected and skipped.
-- **FR-MS-8 — Surfaces the Red Carpet "screens" gap.** When the advisor/wizard reports the screens gap,
+- **FR-MS-8 — Surfaces the Red Carpet "screens" gap. [DONE]** When the advisor reports the screens gap,
   it points at this suggester as the guided way to fill it (a next-step/command), so the capability is
-  discoverable at the moment of need.
+  discoverable at the moment of need. **Implemented** in `kickoff_experience/red_carpet_advisor.py`:
+  the `CMD_SCREENS_SUGGEST = "startd8 screens suggest"` command is now what `_blocker_command` returns
+  for a page/view/screen section and what `build_playbook` attaches to the `pages`/`views` cascade
+  gates (the `app`/`manifest`/`form`/`flow` gaps stay the interview) — so a project sitting at the
+  "add at least one page/view" gate is pointed straight at the suggester.
 
 ---
 

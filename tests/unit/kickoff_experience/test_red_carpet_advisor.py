@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest import mock
 
@@ -19,6 +18,7 @@ from startd8.kickoff_experience.red_carpet_advisor import (
     ADVISORY_KINDS,
     CMD_GENERATE_CONTRACT_PROMOTE,
     CMD_RED_CARPET_AGENT,
+    CMD_SCREENS_SUGGEST,
     KIND_CASCADE_BLOCKER,
     KIND_INPUT_GAP,
     KIND_INPUT_INVALID,
@@ -26,7 +26,6 @@ from startd8.kickoff_experience.red_carpet_advisor import (
     KIND_SCHEMA_SHAPE,
     KIND_STAKEHOLDER,
     Advisory,
-    NextStep,
     build_playbook,
     derive_advisories,
 )
@@ -198,12 +197,22 @@ def test_stakeholders_authored_consumable_no_advisory():
 # ── FR-RCA-7 + CRP R1-S2: cascade translation + inputs_error ──────────────────────────────────────
 
 def test_cascade_blocker_translation():
+    # FR-MS-8: the screens gap (pages/views) points at the Manifest Suggester, not the generic interview.
     cascade = {"status": "ok", "blockers": [
         {"section": "Pages & Nav", "status": "not_defined", "consequence": "no pages"}]}
     advs = derive_advisories(".", _state(schema=True), _assess(cascade=cascade), ONE_MODEL)
     cb = [a for a in advs if a.kind == KIND_CASCADE_BLOCKER]
     assert cb and cb[0].title == "Cascade blocker: Pages & Nav"
-    assert cb[0].command == CMD_RED_CARPET_AGENT
+    assert cb[0].command == CMD_SCREENS_SUGGEST
+
+
+def test_cascade_blocker_non_screens_stays_interview():
+    # A non-screens manifest gap (app) is NOT a screens gap — stays the red-carpet interview (FR-MS-8 split).
+    cascade = {"status": "ok", "blockers": [
+        {"section": "App manifest", "status": "not_defined", "consequence": "no app.yaml"}]}
+    advs = derive_advisories(".", _state(schema=True), _assess(cascade=cascade), ONE_MODEL)
+    cb = [a for a in advs if a.kind == KIND_CASCADE_BLOCKER]
+    assert cb and cb[0].command == CMD_RED_CARPET_AGENT
 
 
 def test_inputs_error_one_bounded_advisory_no_keyerror():
@@ -280,8 +289,14 @@ def test_playbook_ranked_and_ordered():
     assert [s.rank for s in steps] == list(range(1, len(steps) + 1))
     assert steps[0].stage == "data_model" and steps[0].command == CMD_RED_CARPET_AGENT
     # cascade gates follow, in app → pages → views order
-    manifest_titles = [s.title for s in steps if s.stage == "manifests"]
-    assert manifest_titles == ["Add app manifest", "Add at least one page", "Add at least one view"]
+    manifest_steps = [s for s in steps if s.stage == "manifests"]
+    assert [s.title for s in manifest_steps] == [
+        "Add app manifest", "Add at least one page", "Add at least one view"]
+    # FR-MS-8: the page/view (screens) gates point at the Manifest Suggester; the app manifest does not.
+    by_title = {s.title: s.command for s in manifest_steps}
+    assert by_title["Add app manifest"] == CMD_RED_CARPET_AGENT
+    assert by_title["Add at least one page"] == CMD_SCREENS_SUGGEST
+    assert by_title["Add at least one view"] == CMD_SCREENS_SUGGEST
 
 
 def test_playbook_offerable_ends_with_wireframe_then_backend():

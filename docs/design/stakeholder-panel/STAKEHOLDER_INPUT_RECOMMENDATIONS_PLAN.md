@@ -329,3 +329,174 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | FR-KIR-13 (Persona-failure degradation) | Section 3, 6 | Full | — |
 | FR-KIR-14 (Cost/telemetry reuse) | Section 3 | Partial | Human decision funnel events missing (R4-F3). |
 
+#### Review Round R5 — claude-sonnet-5 — 2026-07-03 01:50:00 UTC
+
+- **Reviewer**: claude-sonnet-5
+- **Date**: 2026-07-03 01:50:00 UTC
+- **Scope**: Gap-hunting pass against the **shipped implementation** (`recommend.py`, `input_domains.py`,
+  `proposals.py`, `recommend_apply.py`, `recommend_provenance.py`, `contradiction_guard.py`,
+  `cli_panel.py`) — all 7 areas are already substantially addressed (13/14 plan suggestions applied
+  across 4 rounds), so this round verifies the *as-built* code against the plan/requirements text
+  rather than re-reviewing the design in the abstract.
+
+**Executive summary**
+- The implementation is unusually faithful to the CRP-hardened plan — nearly every R1–R4 suggestion
+  (budget-preflight ordering, staging-aware skip, `capture.py`-based scalar splices, GC, stale-draft
+  filtering, parent span) is present in the code exactly as specified.
+- Two concrete **plan-vs-code drift points** surfaced: (1) the roster/brief-drift warning is wired only
+  into `panel review`, never `panel approve` — the actual write boundary; (2) the `--edit` flag the plan
+  says was kept "for short scalars" does not exist anywhere in the shipped `panel approve` signature.
+- One low-effort **platform-leverage** opportunity: the now-proven `ProposalStore` staging pattern
+  (atomic write, sorted/indented JSON, session GC) is about to be re-invented from scratch by the sibling
+  Manifest Suggester project — worth promoting to a documented, reusable shape.
+- One documentation-accuracy nit: the plan's own module table places `cli_panel.py` under
+  `stakeholder_panel/`, but it lives at the top-level `src/startd8/cli_panel.py`.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R5-S1 | Risks | high | Add the roster/brief-drift check (R4-F2) to `panel approve`, not only `panel review`. Verified in `src/startd8/cli_panel.py`: `panel_review` (lines ~426-462) compares `rec.roster_version` to `roster_version_of(roster)` and prints the "⚠ roster context has changed" warning, but `panel_approve` (lines ~472-554) calls `apply_recommendation` directly with no drift check at all. | A user who runs `panel approve --all` (or `--field`) without first running `panel review` — a fully supported, common CLI path — gets zero warning that the draft was produced under a stale roster before it is spliced into the domain YAML. The write path, not the render path, is where a stale draft actually does damage. | Plan §4 "Provenance & approval" (the `panel approve` bullet) | Unit test: mutate `stakeholders.yaml` after `recommend`, then call `panel approve --field ...` directly (no prior `review`) and assert the CLI prints the drift warning before/around the splice. |
+| R5-S2 | Interfaces | medium | Reconcile plan §5's CLI surface with the shipped code: the plan documents `--edit` as "applied-in-part" ("`--edit` is for short scalars only, bare `--edit` opens `$EDITOR`"), but `cli_panel.py:panel_approve`'s signature is `field / all_ / session / force / project_root` — **no `--edit` parameter exists**. Either implement the flag or update §5 to state the manual-YAML-edit path is the *sole* v1 mechanism for revising a draft (no CLI edit flag shipped). | As written, plan §5 overstates the shipped CLI contract; a reader implementing against the plan would expect `--edit` to exist. | Plan §5 "CLI surface" (`panel approve` line) | `startd8 panel approve --help` output is diffed against the documented flags; either the flag appears or the plan text is corrected. |
+| R5-S3 | Architecture | low | Fix the module-location claim: plan §1's table header says "Extend `src/startd8/stakeholder_panel/` (keep the panel the single home; no new package)" and then lists `cli_panel.py (extend)` as a row — but `cli_panel.py` is verified to live at the **top level**, `src/startd8/cli_panel.py`, a sibling of `cli_dashboard.py`/`cli_kickoff.py`, not inside the `stakeholder_panel/` package. | A future reader following §1 literally could create a duplicate/misplaced `stakeholder_panel/cli_panel.py`. Minor but a real phantom-location risk the Leg-6 audit discipline this project already applies (§0 point 5) is meant to catch. | Plan §1 "Module layout" table | `git grep -n "^src/startd8/cli_panel.py$"` (or an ls) confirms the path in the doc matches the tree. |
+| R5-S4 | Architecture | medium | Promote the now-proven `ProposalStore` shape (`src/startd8/stakeholder_panel/proposals.py`: own subdir under `.startd8/`, atomic `mkstemp`+`os.replace`, `sort_keys=True, indent=2`, `latest_session`/`session_ids`/`gc_stale_proposals`) to a documented reusable pattern rather than letting it be reinvented. The sibling **Manifest Suggester** plan (`MANIFEST_SUGGESTER_PLAN.md` Step 5, `store.py`) is about to build an almost-identical session-staging store for `ScreenCandidate`s from scratch. | Low-effort/high-value (Lens 1): the hard parts here — atomicity, diffability, session GC, ambiguous-session handling (R1-F2) — are already solved and battle-tested through 4 CRP rounds. Documenting the shape (even as a short "staging store contract" note) lets the sibling project mirror it instead of re-discovering the same edge cases (stale writes, GC, `--session` ambiguity). | Plan §1, a new short subsection ("Staging store shape — reusable pattern") | Cross-reference check: `manifest_suggester/store.py` (once built) matches the same atomic-write + sort_keys + GC contract; a shared test helper could assert both stores' on-disk shape. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- None — all R1-R4 suggestions are already triaged into Appendix A/B; there are no untriaged items left in Appendix C to endorse or dispute.
+
+## Requirements Coverage Matrix — R5
+
+| Requirement Section | Plan Step(s) | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| FR-KIR-1 (Proactive recommendation) | Section 3 (`recommend_inputs`, verified in `recommend.py`) | Full | — |
+| FR-KIR-2 (Supported input domains) | Section 1, 2 (`input_domains.py` `DOMAINS`) | Full | — |
+| FR-KIR-3 (Persona↔domain routing) | Section 2, 3 (`input_domains.resolve_owner`) | Full | — (R3-F1 bound fallback verified in code) |
+| FR-KIR-4 (Field-level recommendations) | Section 1, 3 (`FieldSlot`/`Recommendation`, `scalar_writes`) | Full | — |
+| FR-KIR-5 (Estimate vs OBSERVED) | Section 1, 3, 4 (`recommend_provenance.py`) | Full | — |
+| FR-KIR-6 (Grounding-guard semantics) | Section 3, 6 (`contradiction_guard.py`) | Full | — |
+| FR-KIR-7 (Provenance carry-through) | Section 4 (`proposals.py`) | Full | — |
+| FR-KIR-8 (Two dispositions) | Section 4 (stale-draft filter verified in `recommend_apply.apply_recommendation`) | Full | — |
+| FR-KIR-9 (Review renders the gap / drift) | Section 4 (`panel_review`) | Partial | Drift check verified only in `panel review`, not `panel approve` (R5-S1). |
+| FR-KIR-10 (CLI is the writer) | Section 5 | Partial | `--edit` documented but not shipped (R5-S2). |
+| FR-KIR-11 (Strict round-trip gate) | Section 4, 6 (`recommend_apply.py`) | Full | — |
+| FR-KIR-12 (Bounded paid fan-out) | Section 3, 6 (post-resolution preflight + staging-aware skip, both verified) | Full | — |
+| FR-KIR-13 (Persona-failure degradation) | Section 3, 6 | Full | — |
+| FR-KIR-14 (Cost/telemetry reuse) | Section 3 (`stakeholder.recommend_pass` span + `EV_REVIEWED/APPROVED/REJECTED`) | Full | — |
+
+#### Review Round R6 — claude-sonnet-5 — 2026-07-03 02:00:00 UTC
+
+- **Reviewer**: claude-sonnet-5
+- **Date**: 2026-07-03 02:00:00 UTC
+- **Scope**: Second, adversarial pass (per the orchestrator's "run once for breadth, again for
+  adversarial" workflow). Traced the **full call chain** underneath `recommend.py` (not just its own
+  module) — `panel.ask` → `persona.ask` → `check_grounding`/`grounding_guard.py` — looking for
+  second-order effects of already-accepted machinery that R1–R5 didn't examine.
+
+**Executive summary**
+- Found a genuine, previously-unflagged **cross-module leak**: the reactive "unsupported-specifics"
+  grounding guard (built for the OMIT-consult path, FR-7) fires unconditionally inside
+  `Persona.ask()` for **every** call, including Teian drafting calls — so a Teian `PanelAnswer`'s
+  `grounding` can be downgraded and `flags` populated by machinery FR-KIR-6 explicitly says must not
+  apply to a proactive draft.
+- `recommend.py`'s `_build_recommendation` correctly rebuilds `Recommendation.grounding`/`flags` from
+  scratch (overriding to `ESTIMATE` + only `check_contradiction`'s flags), so the **final staged
+  Recommendation is unaffected** — but the underlying `PanelAnswer` object, its OTel span attribute
+  (`panel.grounding`), and its **persisted transcript entry** all still carry the reactive downgrade,
+  silently mischaracterizing a legitimate estimate as an "uncertain" reactive answer in the audit trail.
+- This is exactly the kind of interaction-between-already-accepted-pieces gap the gap-hunting lens looks
+  for: R1–R4 each independently verified their own slice (drafting pass, staging, apply, telemetry) but
+  none traced the shared `Persona.ask()` choke point both the reactive and proactive callers pass through.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R6-S1 | Risks | high | Give `Persona.ask`/`StakeholderPanel.ask` an opt-out for the reactive `check_grounding` pass (e.g. `skip_reactive_guard: bool = False`), and have `recommend_inputs`'s `panel.ask(owner, _drafting_prompt(...), value_path=..., skip_reactive_guard=True)` call set it. Verified: `persona.py:Persona.ask` calls `check_grounding(self.brief, visible, reported)` unconditionally (line ~136), with no caller-side way to suppress it; `recommend.py`'s `_build_recommendation` only patches the *derived* `Recommendation`, not the underlying `PanelAnswer` the span/transcript already captured. | Without this, the panel transcript (FR-12, the audit trail FR-KIR-14 explicitly reuses) and the `panel.ask` OTel span both misrepresent every Teian draft whose estimate happens to name a dollar figure, percentage, or date the brief doesn't literally contain — which is the *expected*, common case for a starter estimate, not the exception. | Plan §3 "The drafting pass" (step 3, the `panel.ask` call) and §0 point 5 (grounding guard) | Test: a persona's drafted answer contains a `$` figure absent from its brief; assert the *transcript entry* and the `panel.ask` span attribute `panel.grounding` both read the persona's true self-reported grounding (not downgraded to `uncertain`) when called from `recommend_inputs`, while a reactive `vipp_bridge`/`panel ask` call to the same persona with the same text is still downgraded as before. |
+| R6-S2 | Validation | medium | Add an explicit test asserting `Recommendation.flags` never contains an `"unsupported-specifics:"`-prefixed string (the reactive guard's flag format) — only `check_contradiction`'s `"contradicts constraint..."` format. This is currently true by construction (`_build_recommendation` discards `answer.flags`) but there is no regression test pinning it, so a future refactor that threads `answer.flags` through by accident would silently reintroduce the FR-KIR-6 violation this round found at the `PanelAnswer` layer. | A negative-space invariant ("this flag format must never appear here") is exactly the kind of thing that survives a refactor only if it's asserted, not just true today by how the code happens to be written. | Plan §6 "Testing" (Unit bullet) | `test_recommend.py`: mock a persona reply with an unsupported `$` figure; assert the resulting `Recommendation.flags` is empty (no contradiction) and contains no `"unsupported-specifics"` substring. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R5-S1: still stands after this deeper pass — the approve-time drift gap is real and independent of the grounding-pollution finding above.
+
+## Requirements Coverage Matrix — R6
+
+| Requirement Section | Plan Step(s) | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| FR-KIR-6 (Grounding-guard semantics) | Section 3, 6 (`contradiction_guard.py`) | Partial | Satisfied at the `Recommendation` layer only; the shared `Persona.ask()` choke point still runs the reactive guard and leaks its result into the `PanelAnswer`/span/transcript (R6-S1). |
+| (all other sections) | — | Full | Unchanged from R5's matrix — see the R5 row-by-row above; this round's finding is scoped entirely to FR-KIR-6. |
+
+#### Review Round R7 — claude-sonnet-5 — 2026-07-03 02:15:00 UTC
+
+- **Reviewer**: claude-sonnet-5
+- **Date**: 2026-07-03 02:15:00 UTC
+- **Scope**: Third pass (explicit user request for depth beyond the breadth/adversarial pair in R5/R6).
+  Reproduced a concrete crash end-to-end against the live code (`capture.splice_yaml_value` →
+  `kickoff_inputs.parse_conventions`) rather than reasoning abstractly, and traced a second-order effect
+  of the already-accepted R2-S2 staging-skip mechanism against the `rejected`/`invalid` disposition space.
+
+**Executive summary**
+- **Reproduced a real crash**: when the drafting pass's marker parser fails to find a `TARGET`/`VALUE`
+  marker in a persona's reply (the model didn't follow the "reply in ONE line" instruction),
+  `_build_recommendation` falls back to `(answer.text or "").strip()` — the **entire raw, potentially
+  multi-line** reply. If that text has no leading/trailing whitespace, no `:`, and doesn't start with a
+  YAML special character, `capture.py:_format_scalar` returns it **unquoted**, and its embedded newline
+  becomes a literal line break in the target YAML. `panel approve` then calls `spec.parse(text)`, which
+  raises `yaml.scanner.ScannerError` (**not** a `ValueError` subclass, confirmed via
+  `yaml.YAMLError.__mro__`) — uncaught by `apply_recommendation`'s `except ValueError`, crashing the CLI
+  with a raw traceback instead of the intended clean `round_trip_failed` outcome.
+- **Second-order gap in the staging-skip guard (R2-S2)**: the skip condition
+  `prior.disposition == "draft"` protects only *pending* drafts from wasted re-spend; a field the human
+  explicitly **rejected** has disposition `"rejected"` (≠ `"draft"`), so it is **not** protected and gets
+  silently redrafted (and re-paid) on the very next `panel recommend` — without `--redraft` ever being
+  passed. An explicit human "no" should stick at least as firmly as an unresolved pending draft does.
+- Both findings sit in areas (Risks/Security, Validation) that had **zero** suggestions across R1–R6.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R7-S1 | Risks | critical | Two-part fix: (1) `kickoff_experience/capture.py:_format_scalar` must also quote when `"\n" in value` (currently only checks `value != value.strip()`, which misses internal-only newlines); (2) `stakeholder_panel/recommend_apply.py:apply_recommendation`'s round-trip gate (`spec.parse(text)`) must catch `yaml.YAMLError` in addition to `ValueError`, converting it to `ApplyResult(False, "round_trip_failed", ...)` as defense-in-depth against any future quoting-heuristic gap. **Reproduced live**: splicing the fallback value `"Python 3.12.\nWe should also containerize everything..."` into `language` produces `language: Python 3.12.\nWe should also containerize...` (two physical lines), and `parse_conventions` raises an **uncaught** `yaml.scanner.ScannerError` ("could not find expected ':'"). | `FR-KIR-11` promises a rejection is "surfaced, never silently swallowed" — an unhandled exception is the opposite of surfaced: it's a traceback, not the typed `ApplyResult` the CLI knows how to render cleanly. The entry point is the `_build_recommendation` fallback path (`(answer.text or "").strip()`), which is reachable whenever a persona doesn't follow the one-line/marker-format instruction — a realistic, not contrived, LLM failure mode. | Plan §4 "Provenance & approval" (the round-trip gate bullet) and §0 point 5 (the `capture.py` reuse note) | The exact repro above, added as a regression test: a `Recommendation` whose `recommended_value` is a two-line string with no colon; `apply_recommendation` must return `ApplyResult(ok=False, code="round_trip_failed", ...)`, never raise. |
+| R7-S2 | Risks | medium | Extend the staging-skip guard in `recommend_inputs` (Step 1/2) from `prior.disposition == "draft"` to `prior.disposition in ("draft", "rejected")` — an explicitly rejected field should require `--redraft` to be revisited, exactly like a pending draft does, rather than being silently redrafted (and re-paid) on the very next `recommend` call. `disposition == "invalid"` (a system-side gate failure, not a human decision) can remain auto-retriable as-is. | This is a direct Mottainai violation the R2-S2 fix didn't anticipate: `--redraft`'s whole purpose (per FR-KIR-12/R2-F2) is "don't silently re-spend on something already decided" — a human rejection is a decision, but the current guard only recognizes "already drafted" as a reason to skip, not "already rejected." | Plan §3 "The drafting pass" (step 1, the staging-aware skip) | Test: reject a field via `panel reject`, then run `panel recommend` again without `--redraft`; assert the field appears in `run.skipped` (e.g. status `already-rejected`) and zero personas are queried for it, while the same field WITH `--redraft` is queried as before. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R6-S1: still stands — orthogonal to both findings here (one is a splice/parse-layer crash, the other a staging-skip gap; R6-S1 is a telemetry/transcript leak).
+
+## Requirements Coverage Matrix — R7
+
+| Requirement Section | Plan Step(s) | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| FR-KIR-11 (Strict round-trip gate) | Section 4, 6 | Partial | "Surfaced, never silently swallowed" is violated by an uncaught `yaml.YAMLError` on a malformed-YAML-producing splice (R7-S1) — this was marked Full through R5's matrix; revised here after a live repro. |
+| FR-KIR-12 (Bounded paid fan-out) | Section 3, 6 | Partial | The staging-aware skip protects `draft` but not `rejected` dispositions from silent re-spend (R7-S2). |
+| (all other sections) | — | Unchanged | See R6's matrix; this round's findings are scoped to FR-KIR-11 and FR-KIR-12. |
+
+#### Review Round R8 — claude-sonnet-5 — 2026-07-03 02:20:00 UTC
+
+- **Reviewer**: claude-sonnet-5
+- **Date**: 2026-07-03 02:20:00 UTC
+- **Scope**: Fourth pass. Checked the remaining unexamined corners of the stack (`Grounding.coerce`,
+  `Recommendation.from_dict`'s `disposition` handling, `concierge/safe_write.py`'s confinement/TOCTOU
+  posture) for anything R1–R7 missed.
+
+**Executive summary**
+- **Convergence signal**: this pass found only one genuinely new issue, and it is **low** severity —
+  a marked drop from R7's critical/high findings. Per the CRP guide's convergence criteria ("new
+  suggestions are increasingly low-severity"), this document appears close to converged for the plan
+  side; the remaining candidate issues I checked (write-path symlink/traversal confinement, the
+  stale-read TOCTOU window in `apply_recommendation`) are already deliberately, explicitly accepted
+  trade-offs in the code's own comments (e.g. "the window is tiny... but the guard makes the write
+  safe under concurrent tools") rather than unflagged gaps.
+- The one new finding: `Recommendation.from_dict`'s `disposition` field is an **unvalidated raw
+  string** (`str(d.get("disposition", "draft")) or "draft"`) — a hand-edited or corrupted staging JSON
+  entry with a typo'd or garbled disposition (e.g. `"Approved"`, `"aproved"`) silently becomes a
+  permanent ghost record: invisible to `panel review` (filtered on `disposition == "draft"`) and
+  invisible to `approve --all` (filtered by `approvable()` the same way), with no warning anywhere.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R8-S1 | Data | low | Validate `disposition` in `ProposalStore.load()` (or `Recommendation.from_dict`) against the known set `{"draft", "approved", "rejected", "invalid"}`; log a warning and coerce unknown values to a safe, visible state (e.g. `"invalid"`, which already renders in `review`/`approve` error paths) rather than silently accepting an arbitrary string. | The staging JSON is deliberately human-readable/diffable (R2-S4) specifically so a human *can* hand-edit it — but nothing currently protects against a typo turning a record permanently invisible to every consumer (`review`, `approve --all`) without any surfaced error. | Plan §4 "Provenance & approval" (the staging artifact bullet) | Test: load a proposals file with `"disposition": "Aproved"` (typo); assert a warning is logged and the record is either coerced to `"invalid"` (visible in error paths) or otherwise surfaced, never silently dropped. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R7-S1/R7-S2: both still stand, unaffected by this round's minor finding.
+
+**Convergence note:** Architecture, Interfaces, Data, Validation, Ops are all substantially covered across R1–R8 (many with 3+ suggestions already accepted in R1–R4). Risks and Security have real, high-severity findings (R5-S1, R6-S1, R7-S1, R7-S2) but nothing left pending discovery of comparable weight found this round — a 5th pass should expect further gap-hunting to yield low-severity or no new findings unless the underlying code changes.
+
+## Requirements Coverage Matrix — R8
+
+| Requirement Section | Plan Step(s) | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| FR-KIR-7 (Provenance carry-through) | Section 4 (`proposals.py`) | Partial | Malformed/unrecognized `disposition` values in the staging artifact are silently invisible to every consumer (R8-S1). |
+| (all other sections) | — | Unchanged | See R7's matrix; this round's finding is scoped to FR-KIR-7's audit-trail integrity, a narrow addendum to the otherwise-stable R7 state. |
+
