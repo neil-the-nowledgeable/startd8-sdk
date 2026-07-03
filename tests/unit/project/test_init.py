@@ -243,6 +243,16 @@ def test_proposals_file_malformed_shape_rejected(tmp_path):
         run_project_init(root, proposals_file=pf, sdk_version="9.9.9")
 
 
+def test_proposals_and_instantiate_are_mutually_exclusive(tmp_path):
+    """Both producer sources at once is an input error (exit 2), not a silent one-wins."""
+    root = _proj(tmp_path)
+    pf = root / "p.yaml"
+    pf.write_text("- kind: instantiate\n  posture: prototype\n", encoding="utf-8")
+    with pytest.raises(ProposalsFileError):
+        run_project_init(root, proposals_file=pf, instantiate=True, sdk_version="9.9.9")
+    assert not (root / ".startd8" / "vipp" / "proposals-inbox.json").exists()
+
+
 def test_undrained_inbox_is_skip_not_error(tmp_path):
     """FR-13 — re-producing over an undrained inbox is a clean skip (exit 0), not a failure."""
     root = _proj(tmp_path)
@@ -299,9 +309,10 @@ def test_sotto_project_content_byte_identical_across_double_init(tmp_path):
     assert before == after  # byte-identical project content
 
 
-def test_fr7_content_writes_are_confined_symlinked_root_refused(tmp_path):
-    """FR-7 — project-content writes ride the confined ``apply_write_plan``; a symlinked root is
-    refused by ``ensure_inbox_scaffold`` (``resolve_confined_root``) before any inbox scaffold lands."""
+def test_fr7_symlinked_root_refused_before_any_write(tmp_path):
+    """FR-7 — a symlinked root is refused up front (``resolve_confined_root``) before init writes
+    *anything*: not the inbox scaffold, and not even the SDK-owned posting metadata (which
+    ``ensure_posting`` would otherwise write through the symlink, since it has no guard of its own)."""
     from startd8.concierge.safe_write import SafeWriteError
 
     target = _proj(tmp_path) / "real"
@@ -311,8 +322,8 @@ def test_fr7_content_writes_are_confined_symlinked_root_refused(tmp_path):
 
     with pytest.raises(SafeWriteError):
         run_project_init(link, sdk_version="9.9.9")
-    # No inbox scaffold was written into the real target through the symlink.
-    assert not (target / ".startd8" / "vipp" / ".gitignore").exists()
+    # Nothing was written into the real target through the symlink — no scaffold, no posting metadata.
+    assert not (target / ".startd8").exists()
 
 
 # --- CLI surface (FR-1/FR-9) ----------------------------------------------------------------------

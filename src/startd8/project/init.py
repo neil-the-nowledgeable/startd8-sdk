@@ -338,14 +338,30 @@ def run_project_init(
     Deterministic, ``$0``, no LLM. In ``check`` mode it is read-only. Otherwise: establish postings →
     ready the inbox → (optionally) produce an inbox from a declared gap → summarize. Idempotent: a
     re-run on an init'd project writes nothing (FR-6).
-    """
-    root = Path(project_root)
-    shape = detect_shape(root)
 
+    FR-7: the confined root is validated **up front** (before ``establish_postings``), so a
+    symlinked / escaping root fails fast with ``SafeWriteError`` and init never writes *anything* —
+    not even the SDK-owned posting metadata — outside the confined project root.
+    """
     if check:
-        audit = check_init(root)
-        audit["shape"] = shape.to_dict()
+        audit = check_init(project_root)
+        audit["shape"] = detect_shape(project_root).to_dict()
         return audit
+
+    # Validate confinement before the first write (FR-7). Downstream writes operate on the resolved
+    # real path; ``ensure_posting`` (which has no guard of its own) can no longer write through a
+    # symlinked root because we would have raised here first.
+    from ..concierge.safe_write import resolve_confined_root
+
+    root = resolve_confined_root(project_root)
+
+    # The two producer sources are mutually exclusive — fail loudly rather than silently ignore one.
+    if proposals_file is not None and instantiate:
+        raise ProposalsFileError(
+            "choose one producer source: --proposals FILE or --instantiate, not both"
+        )
+
+    shape = detect_shape(root)
 
     summary: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,

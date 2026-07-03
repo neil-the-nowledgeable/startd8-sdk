@@ -111,8 +111,8 @@ def project_init(
             check=check,
             sdk_version=_sdk_version(),
         )
-    except ProposalsFileError as exc:  # FR-12 — bad authored input, nothing written
-        console.print(f"[red]project init: bad --proposals input:[/red] {exc}")
+    except ProposalsFileError as exc:  # FR-12 — bad producer input (bad file or flag conflict)
+        console.print(f"[red]project init: bad input:[/red] {exc}")
         raise typer.Exit(_EXIT_BAD_INPUT)
     except Exception as exc:  # confinement / symlink refusal and the like
         from .concierge.safe_write import SafeWriteError
