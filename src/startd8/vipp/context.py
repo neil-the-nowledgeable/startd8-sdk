@@ -66,7 +66,17 @@ def ensure_posting(project_root: Path, *, sdk_version: str) -> Path:
 
     Refreshes the SDK-version stamp each invocation so the FR-18 staleness key reflects the current
     SDK. Returns the context file path.
+
+    FR-QW-3: the project root is confined **before** any write via ``resolve_confined_root`` — a
+    symlinked / ``..``-escaping / non-directory root raises ``SafeWriteError`` rather than letting the
+    posting write through the symlink. This makes the posting write consistent with VIPP's already-
+    confined serialize/apply paths (which reject symlinked roots), closing the leak at the source
+    instead of relying on each caller to guard first. (FDE has no confined-write system and is
+    intentionally left untouched.)
     """
+    from ..concierge.safe_write import resolve_confined_root
+
+    project_root = resolve_confined_root(project_root)
     d = vipp_dir(project_root)
     d.mkdir(parents=True, exist_ok=True)
     ctx_path = d / CONTEXT_FILENAME

@@ -897,6 +897,23 @@
         ]
       },
       {
+        "id": "startd8.project.init",
+        "name": "Project Init",
+        "description": "Deterministic ($0, no-LLM) project onboarding: detect greenfield/brownfield, establish the .startd8/ role postings, make the project VIPP-inbox-ready, and a $0 non-interactive inbox producer seam (--proposals / greenfield --instantiate); --check drift audit",
+        "tags": [
+          "project init",
+          "onboarding",
+          "vipp inbox",
+          "inbox ready"
+        ],
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
         "id": "startd8.languages.profiles",
         "name": "Profiles",
         "description": "Multi-language profile registry (5 languages) with entry-point discovery and resolve_language()",
