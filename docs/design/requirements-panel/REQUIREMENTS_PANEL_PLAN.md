@@ -1,8 +1,8 @@
 # Requirements Panel — Implementation Plan
 
-**Version:** 0.1
+**Version:** 0.2 (Post-CRP — R1+R2 triage integrated)
 **Date:** 2026-07-02
-**Requirements:** `REQUIREMENTS_PANEL_REQUIREMENTS.md` (v0.3)
+**Requirements:** `REQUIREMENTS_PANEL_REQUIREMENTS.md` (v0.4)
 **Branch:** `feat/requirements-panel-spec` (design-only; code lands on a later `feat/requirements-panel`).
 
 ---
@@ -14,7 +14,7 @@
 | `grounding_guard.unsupported_specifics` grounds against the project brief | `grounding_guard.py:81-89` — `_brief_corpus` is `goals+constraints+known_positions+display_name` of **the persona's own brief**. It grounds a persona's answer against *that persona's* stated positions, not the project. | **FR-RP-4 owns `ground_requirement`** with a **project corpus** (problem-statement brief + schema entity/field names), reusing only the guard's `extract_money`/`extract_percent` (publicly exported at `grounding_guard.py:68-69`) + a temporal extractor. |
 | A drafted requirement, being an estimate, should suppress the specifics check like values do | `recommend.py:130-133` — comment: *"Do NOT carry the reactive unsupported-specifics flags — an estimate is expected to introduce a value the brief never stated."* Only `check_contradiction` runs on value drafts. | **Requirements invert this**: a fabricated `"40% faster"` **is** the failure. FR-RP-4 **runs** the specifics check; the estimate-suppression rationale does not apply to intent prose. |
 | Approve reuses the `manifest` proposal kind (Manifest-Suggester template) | No requirements shape in `kickoff_experience/proposals.py:PROPOSAL_KINDS`; requirements are markdown in `docs/design/`, not a `CONVENTION_PATHS`-mapped manifest. | **FR-RP-6 apply = CLI markdown file-write** at human privilege; **CRP is the second gate**. No `PROPOSAL_KINDS` change (NR-RP-3). |
-| `input_domains.py` is the "what to draft" layer to reuse | `input_domains.py:79-101,208-248` models **scalar YAML `FieldSlot`s** (dotted keys, composite `{target,why}`); requirements units are prose sections/FR-classes. | **FR-RP-1 owns `RequirementDomain`** — the *structural analogue* of `DomainSpec` (area name, owning role, prompt template, grounding hooks), not a reuse. `resolve_owner`/`route` **are** reusable as-is (they key on a symbol string). |
+| `input_domains.py` is the "what to draft" layer to reuse; `resolve_owner`/`route` reusable as-is | `input_domains.py:79-101,208-248` models **scalar YAML `FieldSlot`s**; requirements units are prose sections/FR-classes. **CRP R1-S1/R1-F1 + R2-S1 falsified the reuse twice:** `resolve_owner:308-325` calls `get_domain()` → `None` off the 3 value domains, and `recommend._default_domains:162-168` enumerates by `rel_path().is_file()` → **zero** requirements domains. | **FR-RP-1 owns `RequirementDomain`**; **`route()` IS reusable** (keys on a symbol string) but **owner-resolution AND domain-enumeration are OWNED** — a verbatim "mirror `recommend_inputs`" would draft nothing. |
 | Personas draft, then each draft is applied one at a time | The Manifest-Suggester's just-triaged **R2-S1** proved a per-item apply against a shared artifact clobbers prior entries. A requirements doc has the same property. | **FR-RP-3 owns a synthesis pass** that assembles the whole doc once; approve writes the assembled doc, not N incremental splices. |
 
 **Net:** the loop killed the "reuse the guard + reuse an apply kind" shortcuts (both architecturally
@@ -31,108 +31,181 @@ persona/routing/roster/store/`panel.ask`/telemetry.
   - `RequirementDomain{area, owning_role, prompt_template, grounds_on: {brief, schema}}` — the
     section/FR-class → owning-role map (structural analogue of `input_domains.DomainSpec`).
   - A default registry: `problem`, `data` (entity-touching FRs), `ux`, `ops`, `security`, `compliance`.
+  - **Owned enumerator** `requirement_domains() -> list[RequirementDomain]` — returns the in-code
+    registry; do **NOT** call `recommend._default_domains` (file-driven → zero domains, R2-S1).
 - `baseline.py`: `scaffold(brief, schema_text) -> RequirementDoc` — deterministic (`$0`) Problem gap
-  table + one entity-touching FR **stub** per primary entity (via `languages/prisma_parser`), standard
-  `## Non-Requirements` / `## Open Questions` headings, unfilled areas marked `<needs-owner>`. **No LLM.**
+  table + one entity-touching FR **stub per primary entity**, where **"primary entity" = a parsed
+  `PrismaModel` excluding compound-`@@id` join tables via `PrismaModel.compound_unique_keys()**`
+  (`prisma_parser.py:100-111`, R2-F5). Standard `## Non-Requirements` / `## Open Questions` headings;
+  unfilled areas marked `<needs-owner>`. **No LLM.**
 
 ### Step 2 — Project-grounding guard (FR-RP-4, owned — NOT the panel's)
 - `grounding.py`: `ground_requirement(candidate, project_corpus, schema) -> Ok|Flag(reasons)`.
   - `project_corpus` = brief text + declared entity/field names.
-  - Reuse `grounding_guard.extract_money`/`extract_percent`; add `extract_temporal`; flag any
-    money/percent/date specific not in the corpus, and any entity/field reference absent from the schema.
-  - Advisory (flag + soften), never a hard block (P3); CRP is authoritative.
+  - Reuse `grounding_guard.extract_money`/`extract_percent` (the only public extractors). **Own
+    `extract_temporal`, which MUST port the private `_MONTH_DATE` bare-month exclusion + day-adjacency**
+    (R2-S2 — the guard's conservative behavior is private, not reused, so replicate it or the cited
+    prose-safety property is unfounded).
+  - **Two severities (R2-F2 / R1-S3 Ask 2):** a **schema entity/field absence** = **deterministic, high**
+    flag; **money/percent/explicit-date** unsupported specifics = **advisory**; a **bare year** (`_YEAR`
+    matches every `19xx`/`20xx`, floods prose) = **advisory-low** or suppressed by priming the corpus
+    with brief/schema temporal tokens.
+  - **"Soften" (R1-F2):** candidate **text byte-unchanged**; only a **`flags` list** is populated (no
+    `check_grounding` enum-hedge — a `RequirementCandidate` has no self-reported `Grounding` enum).
 
-### Step 3 — Role-informed drafting (FR-RP-2, reuse `panel.ask`/`routing`)
+### Step 3 — Role-informed drafting (FR-RP-2) — reuse-vs-own (R2-S1)
 - `elicit.py`: `async elicit_requirements(package_root, panel, brief, schema, *, domains=None, cap=None,
-  session_id=None) -> ElicitationRun` — **mirror `recommend_inputs`'s signature/flow**
-  (`recommend.py:164`): enumerate domains → `routing.route(briefs, area)` / bounded `resolve_owner`
-  → budget-preflight the resolved+capped set → `await panel.ask(owner, drafting_prompt, value_path=area)`
-  → skip `UNAVAILABLE`/`DEFERRED` (never fabricate) → run Step 2 grounding → stage `RequirementCandidate`s
-  (`estimate` provenance). Prompt carries **brief + literal declared entity names** (Manifest-Suggester
-  R2-S3/R2-F3). Under a parent span `requirements.elicit_pass` (reuse `telemetry.span`, mirror
-  `stakeholder.recommend_pass`). Paid; the Step-1 `$0` baseline runs without it.
+  session_id=None) -> ElicitationRun`. **Reuse-vs-own is explicit — do NOT verbatim-mirror
+  `recommend_inputs`:**
+
+  | Reuse as-is | Own (value-domain-bound in the panel) |
+  |-------------|----------------------------------------|
+  | `panel.ask` · `panel.preflight_budget` · `telemetry.span` · `routing.route(briefs, area)` | domain **enumeration** (`_default_domains` is file-driven) · **owner resolution** (`resolve_owner` → `None` off value domains) · **grounding** (Step 2) |
+
+  Flow: `requirement_domains()` → `route(briefs, area)` + owned bounded resolver (default `owning_role`
+  → high-confidence `answers_for` → skip) → budget-preflight the resolved+capped set → `await
+  panel.ask(owner, drafting_prompt, value_path=area)` → skip `UNAVAILABLE`/`DEFERRED` (never fabricate)
+  → Step 2 grounding → stage `RequirementCandidate`s (per-FR provenance, Step 5/R2-S3). Prompt carries
+  **brief + literal declared entity names**. Parent span `requirements.elicit_pass`. Paid; the `$0`
+  baseline runs without it.
 
 ### Step 4 — Sanitization (FR-RP-7, before synthesis)
 - `sanitize.py`: `neutralize_headings(text) -> text | Reject` — scan every candidate free-text field for
-  `^#{2,4}\s`; reject the candidate (preferred) or demote the line to a blockquote, so no injected
-  section reaches the assembled doc or the later CRP appendix. (Manifest-Suggester R3-S1.)
+  **`^#{1,6}\s` (h1–h6) AND setext underlines** (`^=+$` / `^-+$` under a text line) — the original
+  `#{2,4}` missed h1/h5/h6 + setext (R1-F5). **Neutralize primitive = blockquote-demotion** (`> ## x`),
+  safe for `^`-anchored CRP `####` parsing; a **surviving un-demoted line-start heading** is what the
+  readiness gate (Step 6.5) fails on (R2-S5 reconciles neutralize-vs-gate). (Manifest-Suggester R3-S1.)
 
-### Step 5 — Synthesis pass (FR-RP-3, owned)
-- `synthesis.py`: `synthesize(baseline, candidates) -> RequirementDoc` — dedupe near-identical FRs
-  across roles (slug/normalized text), assign stable `FR-<AREA>-<n>` IDs, order by area, lift cross-role
-  conflicts into `## Open Questions` (never drop silently). Emits the **whole** doc (R2-S1 discipline).
+### Step 5 — Synthesis pass (FR-RP-3, owned, **fully `$0`/deterministic** — R1-S6)
+- `synthesis.py`: `synthesize(baseline, candidates) -> RequirementDoc` — **no LLM**. (a) **dedupe by
+  normalized-slug equality**; near-but-not-equal normalizations are **kept as distinct** (or lifted to an
+  Open Question), never merged → dedupe can never silently drop a distinct FR (R1-F3). (b) **stable
+  `FR-<AREA>-<n>` IDs persisted in the store / content-hash-derived, NOT re-ordinal-assigned** — a
+  re-elicit must not renumber (CRP anchors on FR-IDs, R1-F4). (c) order by area. (d) **lift cross-role
+  conflicts verbatim** into `## Open Questions` from the already-sanitized+grounded candidate text —
+  generating **no new LLM prose** (so nothing bypasses Step 4/Step 2 — this satisfies R2-S6 by
+  construction). Emits the **whole** doc (R2-S1 discipline).
 
-### Step 6 — draft → review → approve loop + store (FR-RP-8, mirror the panel)
+### Step 6 — review → approve loop + store (FR-RP-8, mirror the panel)
 - `store.py` stages the run out-of-band — **mirror `ProposalStore`'s shape** (atomic `mkstemp`+`os.replace`,
   `sort_keys`+`indent=2`, session GC, `_safe_session_component` traversal guard). CLI
-  `cli_requirements.py` (`startd8 requirements`): `elicit` (`$0` baseline + optional `--roles`) ·
-  `synthesize` (`$0`) · `review` (`$0` render of the **literal** doc bytes that approve would write —
-  Manifest-Suggester R3-S2) · `approve`/`reject` → `apply.py` writes the markdown file at human
-  privilege + prints the CRP hand-off command (FR-RP-6). Stale-session refuse (no clobber).
+  `cli_requirements.py` (`startd8 requirements`): `elicit` · `synthesize` · `review` (`$0` render of the
+  **literal** doc bytes that approve would write, Manifest-Suggester R3-S2; **advisory grounding flags
+  surfaced out-of-band, not in the bytes** — R2-F4) · `approve`/`reject`.
+- **Lifecycle (R2-S4):** once a versioned `*_REQUIREMENTS.md` exists (prior approve, or CRP/human edits),
+  `elicit`/`approve` **refuse permanently** with an edit-in-place pointer — never regenerate over a
+  CRP/human-owned doc.
+
+### Step 6.5 — Pre-CRP readiness gate (FR-RP-6, R1-S2 — **blocking, `$0`, deterministic**)
+- Between `approve` and the file-write, a `$0` gate **blocks** (never auto-approves) when: any
+  non-`<needs-owner>` candidate carries an unresolved grounding flag on a `MUST`/`SHALL` (the P1 boundary
+  invariant); any `<needs-owner>` stub was promoted; or a **surviving line-start `^#{1,6}`/setext heading**
+  remains (a blockquote-demoted `> ## x` **passes**, R2-S5). Resolves **OQ-RP-8** toward a blocking gate,
+  breaking the FR-RP-6/P6 circularity. `apply.py` then writes the markdown **atomically / `O_EXCL`** so a
+  concurrent create cannot be clobbered (R1-S3, TOCTOU).
 
 ### Step 7 — CRP hand-off + reflective-loop discoverability (FR-RP-6/9)
 - `approve` emits the ready-to-run `/new-cnvrg-rvw-prmpt --plan … --requirements …` invocation (dual-doc)
   and a one-line pointer from the `reflective-requirements` entry point / Concierge "no reqs doc" gap.
 
 ### Step 8 — Tests
-- `$0` baseline: brief+schema → a scaffold with an entity-touching FR stub per primary entity, no
-  invented intent (all `<needs-owner>`), **no LLM call**.
-- Grounding: a candidate asserting `"$2M ARR"` unsupported by the brief is flagged; an FR naming a
-  non-existent entity is flagged; a supported specific passes.
+- `$0` baseline: brief+schema → a stub per **primary entity**; a 2-domain + 1 compound-`@@id` join-model
+  schema yields stubs for the **2 domain models only** (R2-F5); no invented intent (all `<needs-owner>`),
+  **no LLM call**.
+- Owner-resolution (R1-S1/R1-S4a): `input_domains.resolve_owner("security", briefs) is None` (proves
+  non-reuse); the **owned** resolver returns the owning role for a requirements roster; un-owned area →
+  skip, never a loose match. Assert no code path calls `recommend._default_domains` (R2-S1).
+- Grounding: an FR naming a non-existent entity is a **high** flag; `"$2M ARR"` unsupported → advisory;
+  `"deliver by 2027"` (brief silent) → **advisory-low**, never high (R2-F2); `"may improve latency"` →
+  **no** temporal flag, `"March 2027"` → flag (R2-S2/R2-F1); a flagged candidate's **text is byte-unchanged**
+  (R1-F2).
 - Panel reuse: `elicit_requirements` goes through `panel.ask` (cost/transcript/span recorded), never a
-  bare `Persona`; un-owned area → skipped, never a loose match.
-- Sanitization: a candidate whose rationale contains `### Non-Requirement:` is rejected/neutralized
-  before synthesis; the assembled doc has only intended headings.
-- Synthesis: two roles drafting the same FR → one deduped entry; a cross-role conflict → an Open
-  Question, never a silent drop; approving assembles the **whole** doc (both roles' FRs present).
-- Apply: approve writes the markdown at the target path at human privilege; a pre-existing target →
-  stale-refuse, no clobber; the CRP hand-off command is printed.
+  bare `Persona`.
+- Provenance (R2-S3/R2-F3): `is_estimate(baseline_stub)` is **False**; a synthesized doc round-trips
+  three distinguishable **per-FR** markers (`baseline`/`estimate`/`human`).
+- Sanitization: `# x`, `###### x`, and a setext `Title\n---` in a persona field are all neutralized
+  (R1-F5); a `> ## x` blockquote **passes** the readiness gate, a bare `^## x` **fails** (R2-S5).
+- Synthesis (`$0`): two roles' identical FRs → one entry; two **distinct** similar-normalizing FRs → both
+  survive (or → OQ), never merged (R1-F3); re-synthesize with one added candidate → pre-existing FR IDs
+  unchanged (R1-F4); `synthesize` makes **no LLM call** (R1-S6); a synthesis-emitted OQ contains no
+  un-sanitized heading (R2-S6).
+- Readiness gate (R1-S2/R1-S4c): a run with an ungrounded `$2M ARR` **intent** FR refuses `approve` until
+  resolved.
+- Apply + lifecycle: approve writes atomically (`O_EXCL`); a pre-existing target → refuse byte-unchanged,
+  concurrent-create race → no clobber (R1-S3); `elicit` against an existing v0.2 doc → permanent
+  edit-in-place refuse (R2-S4).
+- Discoverability (R1-S4b): the FR-RP-9 pointer is emitted from the reflective-loop / Concierge "no reqs
+  doc" gap.
 
 ---
 
 ## §7 Validation Strategy
-- **Bucket boundary (P1):** a test asserts every drafted candidate + the synthesized doc carry
-  `estimate`/`$0`-baseline provenance and that approve requires an explicit human action (no
-  auto-approve path exists).
-- **Dual grounding (P3):** brief-only and schema-only fixtures each catch their class of fabrication;
-  a doubly-supported specific passes both.
-- **No-silent-overwrite (R2-S1):** synthesizing/approving N role contributions yields all N in the
-  final doc, never just the last.
-- **Sanitization (R3-S1):** injected `##`/`####` lines never survive into the assembled doc or the CRP
-  appendix scaffold.
+- **Bucket boundary (P1):** every candidate + **every FR** in the synthesized doc carries a **per-FR**
+  provenance marker (`baseline`/`estimate`/`human`); approve requires an explicit human action and passes
+  the readiness gate (no auto-approve path exists); a `MUST`/`SHALL` neither grounded nor `<needs-owner>`
+  blocks approve (the P1 boundary invariant).
+- **Dual grounding (P3), two severities:** a schema-absence is a **high/deterministic** flag; unsupported
+  money/percent/date is **advisory**; bare-year is **advisory-low**; a doubly-supported specific passes;
+  flagging never mutates candidate text.
+- **No-silent-overwrite (R2-S1) + `$0` synthesis (R1-S6):** synthesizing N role contributions yields all
+  N; distinct similar FRs are never merged; `synthesize` makes no LLM call.
+- **Sanitization (R3-S1/R1-S5):** injected `^#{1,6}`/setext lines never survive un-demoted into the
+  assembled doc or the CRP appendix scaffold; a demoted `> ## x` passes the readiness gate.
 - **Reuse-not-fork:** `elicit_requirements` imports `panel`/`routing`/`ProposalStore` but adds no value
-  domain and no proposal kind; `PROPOSAL_KINDS` unchanged.
+  domain and no proposal kind; **no path calls `recommend._default_domains`/`input_domains.resolve_owner`**
+  for requirements; `PROPOSAL_KINDS` unchanged.
 - **Panel-isolation (NR-RP-1):** the stakeholder-panel value pass is untouched.
 
 ## Risks
-- **R1 — Grounding false-positives/negatives on prose.** The specifics extractors were tuned for scalar
-  value answers; requirement prose is longer. Mitigation: advisory-only (P3) + CRP as authoritative
-  gate; tune the temporal extractor conservatively (the guard already drops bare month words for this
-  reason — `grounding_guard.py:39-46`).
-- **R2 — Synthesis quality (the hard LLM step).** Merging multi-role drafts into a coherent doc is the
-  least-deterministic step. Mitigation: keep synthesis mechanical where possible (dedupe/ID/order are
-  `$0`); only conflict-framing needs judgment, and unresolved conflicts degrade to Open Questions, not
-  silent choices.
-- **R3 — Scope creep past bucket-4.** The capability could drift toward "writing the real requirements."
-  Mitigation: P1 scope lock + provenance on every unit + human-approve-only + CRP second gate.
+- **R1 — Grounding false-positives on prose.** The specifics extractors were tuned for scalar value
+  answers; requirement prose is longer and cites years/percents freely. Mitigation: advisory severities
+  (bare-year → advisory-low, R2-F2) + CRP as authoritative gate; the owned `extract_temporal` **ports**
+  the guard's private bare-month exclusion (R2-S2) rather than merely citing it (`grounding_guard.py:39-46`
+  is private and not reused).
+- **R2 — Synthesis is `$0`/deterministic (R1-S6).** Synthesis makes **no LLM call**: dedupe/ID/order are
+  mechanical and cross-role conflicts are **lifted verbatim** into Open Questions (no generated prose).
+  This removes the earlier "hard LLM step" framing and the R2-S6 leak (nothing enters the doc after the
+  Step-4 sanitize / Step-2 ground). *If a future increment makes conflict-framing spend, Steps 4/2 must
+  re-run on synthesis output — re-opening R2-S6.*
+- **R3 — Scope creep past bucket-4.** Mitigation: P1 scope lock + **per-FR** provenance + human-approve-only
+  + the blocking readiness gate (MUST/SHALL grounding) + CRP second gate.
 - **R4 — Roster coupling.** Mitigation: reuse `persona`/`routing`/`roster` only (generic); ship a
   default requirements roster (OQ-RP-7) keyed on FR-area `answers_for`, no new roster grammar.
+- **R5 — Target-file clobber / TOCTOU (R1-S3).** A check-then-write race could overwrite an existing
+  `*_REQUIREMENTS.md`. Mitigation: atomic `O_EXCL` write; stale-session detection (target exists /
+  content-hash mismatch).
+- **R6 — Post-CRP re-elicit (R2-S4).** A later `elicit`/`approve` must not regenerate over a CRP/human-owned
+  doc. Mitigation: one-shot lifecycle — once a versioned doc exists, refuse permanently with an
+  edit-in-place pointer.
 
 ---
 
-## Requirements Coverage (self-check, pre-CRP)
+## Requirements Coverage (self-check, post-CRP v0.2)
 
-| Requirement | Plan Step(s) | Coverage |
-|-------------|-------------|----------|
-| FR-RP-1 (`$0` baseline) | Step 1 | Full |
-| FR-RP-2 (role drafting via `panel.ask`) | Step 3 | Full |
-| FR-RP-3 (synthesis, no overwrite) | Step 5 | Full |
-| FR-RP-4 (project-grounding guard) | Step 2 | Full |
-| FR-RP-5 (provenance) | Steps 3, 5 | Full |
-| FR-RP-6 (file-write apply + CRP gate) | Steps 6, 7 | Full |
-| FR-RP-7 (heading sanitization) | Step 4 | Full |
-| FR-RP-8 (elicit→synthesize→review→approve loop) | Step 6 | Full |
-| FR-RP-9 (discoverable from reflective loop) | Step 7 | Full |
+| Requirement | Plan Step(s) | Coverage | Post-CRP note |
+|-------------|-------------|----------|---------------|
+| FR-RP-1 (`$0` baseline) | Step 1 | Full | "primary entity" now deterministic via `compound_unique_keys()` (R2-F5). |
+| FR-RP-2 (role drafting via `panel.ask`) | Step 3 | Full | Owner-resolution + enumeration **owned** (reuse-vs-own table); `route()` reused (R1-S1/R2-S1). |
+| FR-RP-3 (synthesis, no overwrite) | Step 5 | Full | Fully `$0`; keep-both dedupe + hash-stable FR-IDs (R1-F3/R1-F4/R1-S6). |
+| FR-RP-4 (project-grounding guard) | Step 2 | Full | Owned `extract_temporal` ports bare-month exclusion; two severities; "soften"=flags-only (R2-S2/R2-F2/R1-F2). |
+| FR-RP-5 (provenance) | Steps 3, 5 | Full | **Per-FR** + distinct `$0`-baseline constant (R2-S3/R2-F3). |
+| FR-RP-6 (readiness-gated write + CRP + lifecycle) | Steps 6, 6.5, 7 | Full | Blocking readiness gate + atomic write + one-shot lifecycle (R1-S2/R1-S3/R2-S4). |
+| FR-RP-7 (heading sanitization) | Step 4 | Full | `^#{1,6}`+setext; blockquote-demotion reconciled with the gate (R1-F5/R2-S5). |
+| FR-RP-8 (loop + surface) | Steps 6, 6.5 | Full | `review` surfaces flags out-of-band (R2-F4). |
+| FR-RP-9 (discoverable from reflective loop) | Step 7 | Full | Now validated (R1-S4b). |
+
+---
+
+*v0.2 — Post-CRP (R1 breadth + R2 adversarial, `claude-opus-4-8-1m`; all 12 S-suggestions accepted).
+Integrated: the "mirror `recommend_inputs`" claim corrected (own enumeration **and** owner-resolution;
+`route()` reused) — Step 3 now a reuse-vs-own table (R1-S1/R2-S1); Step 2 owns `extract_temporal`
+(ports the private bare-month exclusion) with two grounding severities (R2-S2); synthesis declared
+fully `$0`/deterministic → R2-S6 satisfied by construction (R1-S6); new Step 6.5 blocking readiness
+gate + atomic `O_EXCL` write (R1-S2/R1-S3); one-shot post-CRP lifecycle refuse (R2-S4); Step 4 scan
+broadened to `^#{1,6}`+setext with blockquote-demotion reconciled against the gate (R1-F5/R2-S5); Step 1
+"primary entity" via `compound_unique_keys()` (R2-F5); per-FR provenance + distinct baseline constant
+(R2-S3); Risks R5/R6 added; §7 + Step-8 tests expanded. Matches the requirements v0.4 and the Appendix
+A triage notes.*
 
 ---
 

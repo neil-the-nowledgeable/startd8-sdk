@@ -1,6 +1,6 @@
 # Requirements Panel — Requirements
 
-**Version:** 0.3 (Post lessons-learned hardening)
+**Version:** 0.4 (Post-CRP — R1+R2 triage integrated)
 **Date:** 2026-07-02
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -89,7 +89,10 @@ synthesis pass's job (§ FR-RP-3).
 |--------|----------------------------------|
 | `Persona` / `Persona.ask(question, *, value_path="")` | `stakeholder_panel/persona.py` |
 | `StakeholderPanel.ask(role_id, question, *, value_path="")` / `.ask_all` / `.preflight_budget` / `.briefs` / `span`/`_record_cost`/transcript | `stakeholder_panel/panel.py` |
-| `route(briefs, value_path, claim="")` / `persona_matches` | `stakeholder_panel/routing.py` |
+| `route(briefs, value_path, claim="")` / `persona_matches` (**reusable** — keys on a symbol string) | `stakeholder_panel/routing.py` |
+| `resolve_owner(domain_name, briefs)` / `_default_domains` — **NOT reusable**: both are value-domain-bound (`get_domain()` / `rel_path().is_file()`), return `None`/`[]` for requirements areas → own the resolver + enumerator | `stakeholder_panel/input_domains.py:308-325`, `recommend.py:162-168` |
+| `PrismaModel.compound_unique_keys()` (`@@id`/`@@unique` composites → join-table discriminator for "primary entity") | `languages/prisma_parser.py:100-111` |
+| `ESTIMATE_PROVENANCE` / `is_estimate` / `panel_origin` (**`is_estimate` requires a `panel:<role>` origin** — a `$0` baseline stub needs a distinct constant) | `stakeholder_panel/recommend_provenance.py:44-46` |
 | `parse_roster` / `load_roster` / `validate_roster` (`domain: stakeholders`) | `stakeholder_panel/roster.py` |
 | `PersonaBrief` (`role_id`,`goals`,`constraints`,`known_positions`,`out_of_scope`,`answers_for`) / `Recommendation` / `Grounding` | `stakeholder_panel/models.py` |
 | `ProposalStore(project_root, session_id)` (atomic write, `sort_keys`+`indent=2`, `latest_session`/`session_ids`/`gc_stale_proposals`, `_safe_session_component`) | `stakeholder_panel/proposals.py` |
@@ -138,16 +141,21 @@ It never authors the *real* product intent (bucket-4); it produces a **starting 
   candidate requirements** the human **owns and approves**; it is an **elicitation simulator / starting
   draft generator**, never the source of truth for what the product must do. "High enough quality to
   accept as-generated" changes the **edit burden**, never whether the human approval gate exists. Every
-  candidate carries a provenance marker; no requirement is silently promoted.
+  candidate carries a **per-FR** provenance marker (FR-RP-5); no requirement is silently promoted.
+  **Boundary invariant (R1 Ask 1):** a candidate asserting a `MUST`/`SHALL` that is **neither
+  brief-traceable (grounded) nor marked `<needs-owner>`** is a **grounding failure, not a draft** — it
+  cannot pass the pre-CRP readiness gate (FR-RP-6). This is what keeps persona-asserted *intent* on the
+  draft side of bucket-4.
 - **P2 — Mirror the panel *pattern*, own the engine.** Same role-based *draft → synthesize → review →
   approve* loop and provenance discipline, but a **separate** capability/CLI and a **different artifact**
   (a requirements markdown doc, grounded by brief+schema, gated by **CRP** — not a scalar splice, not an
   extractor round-trip).
-- **P3 — Dual grounding (brief + schema).** Every drafted requirement is grounded **twice**: intent
-  against the **problem-statement brief**, and any data-touching specific against the **parsed schema**.
-  A requirement asserting an unsupported money/percent/date specific, or naming a non-existent entity,
-  is **flagged/softened** before synthesis (P3 is advisory-then-CRP, not a hard block — CRP is the
-  authoritative gate).
+- **P3 — Dual grounding (brief + schema), two severities.** Every drafted requirement is grounded
+  **twice**: intent against the **problem-statement brief**, and any data-touching specific against the
+  **parsed schema**. Two severity classes (R2-F2 / R1 Ask 2): (a) a **schema-entity/field absence** is a
+  **deterministic, high** flag (it is checkable exactly); (b) an **unsupported money/percent/explicit-date
+  specific** is an **advisory** flag; a **bare year** is **advisory-low** (the `_YEAR` matcher floods prose
+  — see FR-RP-4). "Flagged" never mutates the candidate text (FR-RP-4). CRP is the authoritative gate.
 - **P4 — Propose, then human-apply (inherited floor).** The loop drafts and synthesizes; the human
   approves; the durable write is a plain markdown file at human privilege. The loop never writes a
   final doc unprompted; MCP read/preview-only (CLI is the sole writer, per the Concierge precedent).
@@ -166,58 +174,89 @@ It never authors the *real* product intent (bucket-4); it produces a **starting 
 
 - **FR-RP-1 — `$0` deterministic baseline (persona-less, schema+brief grounded).** From the brief +
   on-disk schema, deterministically scaffold a **requirements baseline**: a Problem-Statement gap table,
-  an **entity-touching FR stub per primary entity** (grounded in `prisma_parser`), and the standard
-  `## Non-Requirements` / `## Open Questions` headings. This is the **"manifest suggester without a
-  designated persona"** alternative the sponsor raised — always cheap, always safe, lower value; it runs
-  with **no LLM**. It never invents intent — stubs are marked `<needs-owner>` placeholders.
-- **FR-RP-2 — Role-informed drafting (paid, opt-in), via `StakeholderPanel.ask`.** For each requirement
-  **domain** (§FR-RP-1's areas + roster-owned areas), route to the owning persona via `routing.route`
-  and draft candidate requirements through **`StakeholderPanel.ask(role_id, prompt, value_path=area)`**
-  — **not** a bare `Persona.ask` (which bypasses cost tracking, transcript, budget preflight, and OTel
-  spans; verified `panel.py` vs `persona.py`). Routing is **bounded** like the panel: the owning role
-  for the area if present, else a high-confidence `answers_for` match, else **skip the area** — never a
-  loose assignment. The drafting prompt carries the **brief + the literal declared entity names** (so a
-  data-touching FR references real entities verbatim).
-- **FR-RP-3 — Synthesis pass (assemble one coherent doc; no silent overwrite).** A dedicated
-  **synthesis** step merges every approved-for-synthesis candidate into **one** requirements document:
-  dedupe near-identical FRs across roles, assign stable `FR-<AREA>-<n>` IDs, order by area, and resolve
-  cross-role conflicts into an **Open Question** (never by dropping one silently). This is the analogue
-  of the Manifest-Suggester's accepted **R2-S1 accumulation finding** — the artifact is assembled whole,
-  not clobbered one candidate at a time.
+  an **entity-touching FR stub per primary entity**, and the standard `## Non-Requirements` /
+  `## Open Questions` headings. **"Primary entity" is defined deterministically (R2-F5):** a parsed
+  `PrismaModel` **excluding** any model whose PK is a compound key over relation FKs — detected via
+  `PrismaModel.compound_unique_keys()` (`prisma_parser.py:100-111`), which exposes `@@id`/`@@unique`
+  composites, so a join table (compound `@@id` over FKs) is dropped with no LLM. This is the **"manifest
+  suggester without a designated persona"** alternative the sponsor raised — always cheap, always safe,
+  lower value; it runs with **no LLM**. It never invents intent — stubs are marked `<needs-owner>`.
+- **FR-RP-2 — Role-informed drafting (paid, opt-in), via `StakeholderPanel.ask`; owner-resolution is
+  owned.** For each requirement **domain**, route to the owning persona and draft candidate requirements
+  through **`StakeholderPanel.ask(role_id, prompt, value_path=area)`** — **not** a bare `Persona.ask`
+  (which bypasses cost tracking, transcript, budget preflight, and OTel spans; verified `panel.py` vs
+  `persona.py`). **`routing.route(briefs, area)` is reusable, but `input_domains.resolve_owner` is NOT
+  (R1-F1):** it calls `get_domain()` and returns `None` for any name outside the 3 value domains
+  (`input_domains.py:308-325`), which would skip **every** requirements area. The suggester **owns** a
+  `RequirementDomain`-aware resolver (default `owning_role` on roster → high-confidence `answers_for` →
+  skip), bounded like the panel — never a loose assignment. The drafting prompt carries the **brief + the
+  literal declared entity names** (so a data-touching FR references real entities verbatim).
+- **FR-RP-3 — Synthesis pass (assemble one coherent doc; no silent overwrite).** A dedicated,
+  **fully `$0`/deterministic** synthesis step (R1-S6) merges every approved-for-synthesis candidate into
+  **one** requirements document. It is **mechanical**: (a) **dedupe** by normalized-slug equality —
+  **near-but-not-equal** normalizations are treated as *distinct and both kept* (or lifted to an Open
+  Question), never merged, so dedupe can never silently drop a distinct FR (R1-F3); (b) assign
+  **stable `FR-<AREA>-<n>` IDs** that are **persisted in the store / content-hash-derived, not
+  re-ordinal-assigned** — a re-elicit must not renumber existing FRs (they are the anchors CRP later
+  depends on, R1-F4); (c) order by area; (d) **lift cross-role conflicts verbatim into an Open Question**
+  from the two candidates' already-sanitized+grounded text — **generating no new LLM prose** (so nothing
+  bypasses FR-RP-7/FR-RP-4). The artifact is assembled whole (Manifest-Suggester **R2-S1**), never
+  clobbered one candidate at a time.
 
 ### B. Grounding & safety
 
 - **FR-RP-4 — Project-grounding guard (brief + schema; owned, not the panel's).** A **`ground_requirement`**
   check grounds each candidate against **the project brief corpus + the parsed schema** (not the
-  persona's own brief). It **reuses** `grounding_guard.extract_money`/`extract_percent` (+ a temporal
-  extractor) but with a **project corpus**, and — unlike `recommend.py` — it **runs** the
-  unsupported-specifics check (a fabricated `"40% faster"`/`"$2M ARR"` with no brief/schema support is
-  flagged). A data-touching FR naming an entity/field absent from the schema is flagged. Effects are
-  **advisory** (flag + soften), with CRP as the authoritative gate (P3).
-- **FR-RP-5 — Provenance, never silently promoted.** Every candidate and the synthesized doc carry a
-  **provenance** marker (`$0`-baseline vs `estimate`-role-drafted, with role_id + model + session), so an
-  AI/role-drafted requirement is never indistinguishable from a human-authored one; human approval is the
-  sole promotion gate (P1/P4). Reuse the panel's `ESTIMATE_PROVENANCE`/`panel_origin` stamping shape.
-- **FR-RP-6 — Approve = markdown file-write at human privilege + CRP hand-off (no new proposal kind).**
-  An approved synthesized draft is written to `docs/design/<feature>/<FEATURE>_REQUIREMENTS.md` (v0.1)
-  by the **CLI** (sole writer), then the loop **offers CRP** (`/new-cnvrg-rvw-prmpt` dual-doc) as the
-  external second gate. There is **no** requirements proposal/grammar kind (unlike the Manifest
-  Suggester); the durable write is a plain file, the gate is CRP.
+  persona's own brief). It **reuses** `grounding_guard.extract_money`/`extract_percent` (the only public
+  extractors, `grounding_guard.py:68-69`) and adds an **owned `extract_temporal`** that **must port** the
+  guard's private conservative behavior (R2-F1): the `_MONTH_DATE` **bare-month exclusion + day-adjacency**
+  (so `"may improve latency"` produces **no** temporal flag while `"March 2027"` does). Unlike
+  `recommend.py`, it **runs** the unsupported-specifics check. Two severities (P3): a **schema-entity/field
+  absence** is a **deterministic, high** flag; **money/percent/explicit-date** unsupported specifics are
+  **advisory**; a **bare year** (`_YEAR` matches every `19xx`/`20xx`, `grounding_guard.py:44` — floods
+  requirement prose like "ship by 2027") is **advisory-low**, or suppressed by priming the corpus with
+  brief/schema temporal tokens (R2-F2). **"Soften" is defined (R1-F2):** the candidate **text is
+  byte-unchanged**; only a **`flags` list is populated** on the candidate. (It does **not** import
+  `check_grounding`'s enum-hedge — a `RequirementCandidate` has no self-reported `Grounding` enum.)
+- **FR-RP-5 — Per-FR provenance, never silently promoted.** Every candidate **and every FR in the
+  synthesized doc** carries an **individual** provenance marker (R2-F3) — inline or a manifest keyed by
+  `FR-<AREA>-<n>` — because one doc mixes `$0`-baseline stubs, paid role FRs, and post-approve human
+  edits; a **doc-level** stamp cannot say *which FR is which* and would defeat P1's "never
+  indistinguishable". Three distinguishable values: **`baseline`** (a **distinct `$0`-baseline provenance
+  constant** — NOT `ESTIMATE_PROVENANCE`, whose `is_estimate` requires a `panel:<role>` origin a no-LLM
+  stub lacks, `recommend_provenance.py:44-46`), **`estimate`** (role-drafted; reuse `panel_origin`), and
+  **`human`** (post-approve edits). Markers survive the `review` render and re-parse. Human approval is
+  the sole promotion gate (P1/P4).
+- **FR-RP-6 — Approve = readiness-gated markdown file-write + CRP hand-off + one-shot lifecycle (no new
+  proposal kind).** Before write, a **`$0` deterministic pre-CRP readiness gate** (breaks the P6/CRP
+  circularity — R1 Ask 4) **blocks** `approve` (never auto-approves) when: any non-`<needs-owner>`
+  candidate carries an unresolved grounding flag on a `MUST`/`SHALL` (the P1 boundary invariant), any
+  `<needs-owner>` stub was promoted, or any injected heading survived (a **line-start** `^#{1,6}`/setext
+  heading remains — a blockquote-demoted `> ## x` **passes**, R2-S5). A passing draft is written to
+  `docs/design/<feature>/<FEATURE>_REQUIREMENTS.md` (v0.1) by the **CLI** (sole writer, atomically /
+  `O_EXCL` so a concurrent create cannot be clobbered — R1-S3), then the loop **offers CRP**
+  (`/new-cnvrg-rvw-prmpt` dual-doc). **One-shot lifecycle (R2-S4):** once a versioned
+  `*_REQUIREMENTS.md` exists (from a prior approve, or CRP/human edits), `elicit`/`approve` **refuse
+  permanently** and point to edit-in-place — the capability never regenerates over a CRP/human-owned doc.
+  There is **no** requirements proposal/grammar kind (unlike the Manifest Suggester); the gate is CRP.
 - **FR-RP-7 — Heading-injection sanitization (before synthesis and write).** Every persona free-text
-  field is scanned for a line matching `^#{2,4}\s` (a markdown heading) before it enters the synthesized
-  document; such lines are **rejected or neutralized** so a persona cannot smuggle an unreviewed
-  `## Non-Requirement` / `#### Review Round` / `## Appendix` section into the doc (which would corrupt
-  both the requirements structure and the **CRP appendix scaffold** the doc is later handed to). This is
-  the Manifest-Suggester's accepted **R3-S1** finding applied to this project's markdown surface.
+  field is scanned for a line matching **`^#{1,6}\s`** (h1–h6) **and setext underlines** (`^=+$` / `^-+$`
+  under a text line) before it enters the synthesized document (R1-F5 — the original `#{2,4}` missed
+  h1/h5/h6 + setext, which still corrupt the `####`-keyed CRP appendix). The **neutralize primitive is
+  blockquote-demotion** (`> ## x`), which is safe for `^`-anchored CRP parsing and **passes** the FR-RP-6
+  readiness gate; a **surviving un-demoted line-start heading fails** the gate (R2-S5 reconciles this with
+  FR-RP-6). This is the Manifest-Suggester's accepted **R3-S1** finding on this project's markdown surface.
 
 ### C. The loop & surface
 
 - **FR-RP-8 — draft → synthesize → review → approve (mirror the panel *pattern*, own the engine).** A
   **separate** CLI surface (`startd8 requirements`): `elicit` (`$0` baseline + optional `--roles` paid
-  pass), `synthesize` (`$0` assemble), `review` (`$0` render of the **literal** doc that would be
-  written), `approve`/`reject` (→ file-write + CRP offer). Staged out-of-band in `store.py` (mirror
-  `ProposalStore`'s shape). A stale session (the target doc was created meanwhile) is detected and the
-  approve refuses rather than clobbering.
+  pass), `synthesize` (`$0` assemble), `review`, `approve`/`reject` (→ readiness-gated file-write + CRP
+  offer, FR-RP-6). **`review` renders the `$0` *literal doc bytes* that `approve` would write** (not a
+  summary), and surfaces the FR-RP-4 advisory grounding flags **out-of-band, alongside the bytes — not
+  inside them** (R2-F4), so the human sees every ungrounded specific while the doc bytes stay clean for
+  CRP's `####`-anchored parse. The same flags are **machine-readable** so the FR-RP-6 readiness gate
+  consumes them. Staged out-of-band in `store.py` (mirror `ProposalStore`'s shape).
 - **FR-RP-9 — Discoverable from the `reflective-requirements` entry point.** When a user invokes the
   reflective loop (or the Concierge surfaces a "no requirements doc yet" gap), point at
   `startd8 requirements elicit` as the guided way to produce v0.1 — so the capability is discoverable at
@@ -261,10 +300,12 @@ It never authors the *real* product intent (bucket-4); it produces a **starting 
 - **OQ-RP-7 — OPEN (for CRP)** → the **roster for elicitation**: reuse the shipped reviewer-roles
   roster fixture shape, or ship a curated `requirements-stakeholders.yaml` (end-user/PM/ops/security/
   compliance/sponsor) as a default? (Leaning: ship a default, `answers_for`-keyed on FR areas.)
-- **OQ-RP-8 — OPEN (for CRP)** → **acceptance quality signal**: is "accept as-generated" purely human
-  judgment, or does the loop attach a *readiness score* (e.g. coverage of the 7 CRP areas + grounding
-  flag count) to inform the human — without ever auto-approving? (Leaning: advisory readiness score,
-  never a gate.)
+- **OQ-RP-8 — RESOLVED (CRP R1 Ask 4 / R1-S2)** → the acceptance signal is a **`$0` deterministic
+  *blocking* pre-CRP readiness gate** (FR-RP-6), **not** merely an advisory score: it blocks `approve` on
+  unresolved grounding flags on a `MUST`/`SHALL`, a promoted `<needs-owner>` stub, or a surviving injected
+  heading. It gates *readiness* (deterministic), never *quality* (CRP's job), and never auto-approves.
+  An **advisory** readiness/coverage view (per-area baseline→paid coverage delta, grounding-flag count —
+  R1 Ask 5) may accompany it to make the paid pass's value observable, but does not gate.
 
 ---
 
@@ -281,6 +322,18 @@ grounding-guard corrections), prune-phantom-scope (dropped the apply-kind → NR
 (own package + `elicit`, not `recommend`/`suggest`), single-source vocabulary ownership, and carried
 three just-accepted Manifest-Suggester CRP findings forward (R2-S1 synthesis, R3-S1 sanitization, R1-S1
 `panel.ask`). CRP steering → focus file. Ready for CRP.*
+
+*v0.4 — Post-CRP (R1 breadth + R2 adversarial, `claude-opus-4-8-1m`; all 11 F-suggestions accepted).
+Integrated: FR-RP-2 owns owner-resolution (`resolve_owner`/`_default_domains` are value-domain-bound,
+NOT reusable — the "mirror `recommend_inputs`" claim failed twice); FR-RP-4 owns `extract_temporal`
+(ports the private bare-month exclusion), splits grounding into deterministic-schema-absence vs
+advisory-specifics, demotes bare-year (`_YEAR` prose flooding), and defines "soften" as text-unchanged +
+flags-only; FR-RP-5 carries **per-FR** provenance with a distinct `$0`-baseline constant (P1 needs it on
+a mixed doc); FR-RP-1 defines "primary entity" via `compound_unique_keys()`; FR-RP-3 makes synthesis
+fully `$0` with a keep-both dedupe rule + persisted/hash-stable FR-IDs; FR-RP-6 adds the blocking pre-CRP
+readiness gate + atomic write + one-shot post-CRP lifecycle refuse; FR-RP-7 broadens the scan to
+`^#{1,6}`+setext with blockquote-demotion reconciled against the gate; FR-RP-8 surfaces flags out-of-band.
+P1 boundary invariant added; OQ-RP-8 resolved. Bodies now match the Appendix A triage notes.*
 
 ---
 
