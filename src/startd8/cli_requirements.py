@@ -10,7 +10,6 @@ The elicit → synthesize → review → approve loop. The `$0` baseline (``elic
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from typing import List, Optional
@@ -134,6 +133,7 @@ def requirements_elicit(
             raise typer.Exit(exc.code)
 
     CandidateStore(project_root, session_id).save(candidates)
+    CandidateStore.gc(project_root)  # FR-KO-2: bound leaked sessions to the keep-limit
 
     if as_json:
         console.print_json(
@@ -166,43 +166,26 @@ class _ElicitError(Exception):
 def _run_paid_pass(
     project_root, brief, schema_text, session_id, cap, model, summary
 ) -> List:
-    roster_path = project_root / _ROSTER_REL
-    if not roster_path.is_file():
-        raise _ElicitError(
-            f"no roster at {roster_path} — run `startd8 requirements init-roster` to write a default",
-            _EXIT_FATAL_INPUTS,
-        )
-    from .stakeholder_panel import RosterError, load_roster, validate_roster
-    from .stakeholder_panel.panel import DEFAULT_MODEL_SPEC, StakeholderPanel
+    from .persona_drafting import PaidPassError, run_paid_pass
     from .requirements_panel import elicit_requirements
 
-    try:
-        roster = load_roster(roster_path)
-    except RosterError as exc:
-        raise _ElicitError(str(exc), _EXIT_FATAL_INPUTS)
-    if validate_roster(roster):
-        raise _ElicitError(
-            "roster is invalid (run `startd8 panel` to inspect)", _EXIT_FATAL_INPUTS
+    async def _pass(panel):
+        return await elicit_requirements(
+            project_root,
+            panel,
+            brief=brief,
+            schema_text=schema_text,
+            cap=cap,
+            session_id=session_id,
         )
 
-    panel = StakeholderPanel(
-        roster, project_root=project_root, model_spec=model or DEFAULT_MODEL_SPEC
-    )
     try:
-        run = asyncio.run(
-            elicit_requirements(
-                project_root,
-                panel,
-                brief=brief,
-                schema_text=schema_text,
-                cap=cap,
-                session_id=session_id,
-            )
+        run = run_paid_pass(
+            project_root, roster_rel=_ROSTER_REL, run=_pass, model=model
         )
-    except Exception as exc:  # provider/auth/budget failure — clean message
-        raise _ElicitError(f"paid pass failed: {exc}", _EXIT_RUNTIME)
-    finally:
-        panel.close()
+    except PaidPassError as exc:
+        code = _EXIT_RUNTIME if exc.kind == "failed" else _EXIT_FATAL_INPUTS
+        raise _ElicitError(str(exc), code)
     summary["areas_drafted"] = run.areas_drafted
     summary["cost"] = run.total_cost_usd
     summary["skipped"] = run.skipped
@@ -218,6 +201,7 @@ def requirements_synthesize(
     brief_file: Optional[Path] = typer.Option(
         None, "--brief", help="Problem-statement brief."
     ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the result as JSON."),
 ) -> None:
     """Assemble the staged candidates into one coherent doc ($0, deterministic)."""
     from .requirements_panel import RequirementDoc, synthesize
@@ -232,6 +216,17 @@ def requirements_synthesize(
     brief = _read(brief_file) if brief_file else ""
     empty = RequirementDoc(title="Requirements (draft)", problem=brief)
     doc = synthesize(empty, candidates)
+    if as_json:
+        console.print_json(
+            json.dumps(
+                {
+                    "session_id": sid,
+                    "frs": len(doc.candidates),
+                    "open_questions": len(doc.open_questions),
+                }
+            )
+        )
+        return
     console.print(
         f"[green]requirements:[/green] synthesized {len(doc.candidates)} FRs from session {sid}"
     )
@@ -248,6 +243,9 @@ def requirements_review(
     ),
     brief_file: Optional[Path] = typer.Option(
         None, "--brief", help="Problem-statement brief."
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the doc + flags + readiness as JSON."
     ),
 ) -> None:
     """Render the LITERAL doc bytes that approve would write; surface grounding flags out-of-band."""
@@ -268,6 +266,24 @@ def requirements_review(
     doc = synthesize(
         RequirementDoc(title="Requirements (draft)", problem=brief), candidates
     )
+
+    if as_json:
+        readiness = check_readiness(doc)
+        console.print_json(
+            json.dumps(
+                {
+                    "session_id": sid,
+                    "doc": doc.render(),
+                    "provenance": doc.provenance_manifest(),
+                    "grounding_flags": {
+                        c.fr_id: c.flags for c in doc.candidates if c.flags
+                    },
+                    "readiness_ok": readiness.ok,
+                    "readiness_blockers": readiness.blockers,
+                }
+            )
+        )
+        return
 
     # The literal bytes (FR-RP-8) — printed verbatim, no summary.
     console.print(doc.render(), markup=False, highlight=False)
@@ -305,6 +321,9 @@ def requirements_approve(
     brief_file: Optional[Path] = typer.Option(
         None, "--brief", help="Problem-statement brief."
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the apply result as JSON."
+    ),
 ) -> None:
     """Readiness-gate, then atomically write v0.1 (one-shot; never regenerates over an existing doc)."""
     from .requirements_panel import RequirementDoc, apply_requirements, synthesize
@@ -321,6 +340,21 @@ def requirements_approve(
     )
 
     result = apply_requirements(doc, out)
+    if as_json:
+        console.print_json(
+            json.dumps(
+                {
+                    "written": result.written,
+                    "path": str(result.path) if result.path else None,
+                    "blockers": result.blockers,
+                    "reason": result.reason,
+                    "crp_handoff": result.crp_handoff if result.written else "",
+                }
+            )
+        )
+        if result.written:
+            return
+        raise typer.Exit(_EXIT_BLOCKED if result.blockers else _EXIT_CLOBBER)
     if result.written:
         console.print(f"[green]requirements:[/green] wrote {result.path}")
         console.print(f"  next (external second gate): {result.crp_handoff}")
