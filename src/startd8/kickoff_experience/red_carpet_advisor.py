@@ -60,8 +60,12 @@ CMD_GENERATE_CONTRACT_PROMOTE = "startd8 generate contract --promote"
 CMD_RED_CARPET_AGENT = "startd8 kickoff red-carpet --agent"
 CMD_WIREFRAME = "startd8 wireframe"
 CMD_GENERATE_BACKEND = "startd8 generate backend"
+# FR-MS-8 — the Manifest Suggester is the guided way to fill the "which screens?" gap (pages/views),
+# so the advisor points at it at the moment of need rather than the generic interview.
+CMD_SCREENS_SUGGEST = "startd8 screens suggest"
 ADVISOR_COMMANDS: Tuple[str, ...] = (
     CMD_GENERATE_CONTRACT_PROMOTE, CMD_RED_CARPET_AGENT, CMD_WIREFRAME, CMD_GENERATE_BACKEND,
+    CMD_SCREENS_SUGGEST,
 )
 
 # The value-input domains diagnosed by the generic loop — EXCLUDES `stakeholders` (CRP R1-F1: it has a
@@ -341,7 +345,11 @@ def _blocker_command(section: str) -> Optional[str]:
     s = section.lower()
     if any(k in s for k in ("schema", "data model", "contract")):
         return CMD_GENERATE_CONTRACT_PROMOTE
-    if any(k in s for k in ("page", "view", "app", "manifest", "form", "flow")):
+    # FR-MS-8 — the "screens" gap (pages/views) routes to the Manifest Suggester, the guided way to
+    # decide *which* screens the product needs. Broader app/manifest/form/flow gaps stay the interview.
+    if any(k in s for k in ("page", "view", "screen")):
+        return CMD_SCREENS_SUGGEST
+    if any(k in s for k in ("app", "manifest", "form", "flow")):
         return CMD_RED_CARPET_AGENT
     return None
 
@@ -459,12 +467,14 @@ def build_playbook(
         add("data_model", "Author the data-model contract",
             "Interview → requirements brief → promote prisma/schema.prisma (the front bookend).",
             CMD_RED_CARPET_AGENT)
-    # 2 — unmet cascade gates in canonical app → pages → views order.
+    # 2 — unmet cascade gates in canonical app → pages → views order. The screens gaps (pages/views)
+    #     point at the Manifest Suggester (FR-MS-8); the app manifest stays the interview.
     for g in ("app", "pages", "views"):
         if g in unmet:
+            cmd = CMD_SCREENS_SUGGEST if g in ("pages", "views") else CMD_RED_CARPET_AGENT
             add("manifests", f"Add {_GATE_LABEL[g]}",
                 f"The '{g}' cascade gate is unmet; author it from the schema.",
-                CMD_RED_CARPET_AGENT)
+                cmd)
     # 3 — value-input gaps / invalidity.
     for a in advisories:
         if a.kind in (KIND_INPUT_GAP, KIND_INPUT_INVALID):
