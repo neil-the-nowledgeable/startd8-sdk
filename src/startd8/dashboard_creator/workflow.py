@@ -5,6 +5,7 @@ DashboardCreatorWorkflow — WorkflowBase subclass for dashboard generation (DC-
 import json
 import os
 import time
+import uuid
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -41,8 +42,6 @@ from startd8.workflows.models import (
 )
 
 logger = get_logger(__name__)
-
-_OVERLAY_FILENAME = "_dc_config_overlay.libsonnet"
 
 # Graceful OTel import — child spans under WorkflowBase's root span (DC-205)
 try:
@@ -296,13 +295,15 @@ class DashboardCreatorWorkflow(WorkflowBase):
 
         spec = hydrate_spec_defaults(spec, merged_config)
 
-        # 4.5 Write config overlay for the compiler (DC-005 AC3)
+        # 4.5 Write config overlay for the compiler (DC-005 AC3). Per-run unique filename so
+        # concurrent runs against the shared mixin dir can't clobber each other's overlay or unlink
+        # one mid-compile (the import path + cleanup both use this name).
         config_overlay_filename = None
         if spec.config_overrides:
             try:
-                overlay_path = mixin.mixin_dir / _OVERLAY_FILENAME
+                config_overlay_filename = f"_dc_config_overlay_{uuid.uuid4().hex}.libsonnet"
+                overlay_path = mixin.mixin_dir / config_overlay_filename
                 write_config_overlay(merged_config, overlay_path)
-                config_overlay_filename = _OVERLAY_FILENAME
             except OSError as exc:
                 return WorkflowResult.from_error(
                     self.metadata.workflow_id,

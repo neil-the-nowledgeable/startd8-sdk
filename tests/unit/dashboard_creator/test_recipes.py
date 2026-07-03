@@ -148,7 +148,7 @@ class TestRenderWithRecipe:
     def test_recipe_values_appear_in_render(self):
         result = _render_panel(
             PanelSpec(type=PanelType.STAT, title="S", expr="up", recipe="stat.kpi"))
-        # options+: merge block, _to_jsonnet form (unquoted key, JSON value)
+        # options+: merge block, _to_jsonnet form (quoted key for injection-safety, JSON value)
         assert "options+: {" in result
-        assert 'colorMode: "value"' in result
+        assert '"colorMode": "value"' in result
         assert "unit='short'" in result

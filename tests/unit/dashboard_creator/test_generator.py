@@ -642,9 +642,9 @@ class TestRenderPanelExtensions:
         # Both dataLinks and fieldConfig.defaults content present
         assert "links:" in result
         assert "title: 'Drill'" in result
-        assert "decimals: 0" in result
-        # fieldConfig data leaves: merge-block key stays unquoted, value is JSON (RCP-024).
-        assert 'unit: "currencyUSD"' in result
+        assert '"decimals": 0' in result
+        # fieldConfig data leaves: merge-block keys are quoted for injection-safety, value is JSON.
+        assert '"unit": "currencyUSD"' in result
 
 
 # ---------------------------------------------------------------------------
@@ -766,3 +766,58 @@ class TestDatasourceResolution:
 
     def test_plain_stat_no_query_defaults_mimir(self):
         assert _panel_datasource(PanelSpec(type="stat", title="X", expr="up")) == "mimirDatasource"
+
+
+# ---------------------------------------------------------------------------
+# Code-review fixes: DC-112 correctness + Jsonnet escaping
+# ---------------------------------------------------------------------------
+
+class TestDatasourceResolutionFixes:
+    def test_target_query_field_routes_tempo_without_markers(self):
+        # DC-112 #1: a TraceQL query in the target `query` field (no span./pipe markers) must still
+        # route to Tempo on a generic panel type — the multi-target asymmetry that reopened the trap.
+        panel = PanelSpec(type="timeseries", title="X",
+                          targets=[TargetSpec(query='{ .foo = "bar" }')])
+        assert _panel_datasource(panel) == "tempoDatasource"
+
+    def test_promql_name_label_selector_stays_mimir(self):
+        # DC-112 #3: PromQL bare-vector selector on a `name` label (cAdvisor-style) is NOT TraceQL.
+        assert not _query_is_traceql('{name="mycontainer"}')
+        panel = PanelSpec(type="timeseries", title="X",
+                          targets=[TargetSpec(expr='{name="mycontainer"}')])
+        assert _panel_datasource(panel) == "mimirDatasource"
+
+    def test_logql_spacing_insensitive_excluded(self):
+        # DC-112 #4: `|json` (no space) is still recognized as LogQL, not TraceQL.
+        assert not _query_is_traceql('{app="x"} |json')
+
+    def test_unknown_datasource_selector_rejected(self):
+        import pytest as _pytest
+        with _pytest.raises(Exception):
+            PanelSpec(type="stat", title="X", expr="up", datasource="banana")
+
+    def test_datasource_selector_case_insensitive(self):
+        assert _panel_datasource(PanelSpec(type="stat", title="X", expr="up", datasource="Tempo")) \
+            == "tempoDatasource"
+
+
+class TestJsonnetEscaping:
+    def test_quote_in_tag_does_not_break(self):
+        # A single quote in a user field must be escaped, not emitted raw into a '...' literal.
+        result = generate_dashboard_jsonnet(
+            DashboardSpec(title="T", uid="cc-x-y", tags=["team's"],
+                          panels=[PanelSpec(type="stat", title="P", expr="up")]))
+        assert "team's" not in result.replace("\\'", "")  # raw unescaped quote absent
+        assert "team\\'s" in result
+
+    def test_quote_in_unit_and_color_escaped(self):
+        panel = PanelSpec(type="stat", title="P", expr="up", unit="x'y",
+                          thresholds=[ThresholdStep(value=0.0, color="re'd")])
+        result = _render_panel(panel)
+        assert "x\\'y" in result and "re\\'d" in result
+
+    def test_dotted_fieldconfig_key_is_quoted(self):
+        # Grafana fieldConfig keys with dots must be quoted to stay valid Jsonnet.
+        panel = PanelSpec(type="timeseries", title="P", targets=[TargetSpec(expr="up")],
+                          fieldConfig={"custom.axisLabel": "ms"})
+        assert '"custom.axisLabel"' in _render_panel(panel)

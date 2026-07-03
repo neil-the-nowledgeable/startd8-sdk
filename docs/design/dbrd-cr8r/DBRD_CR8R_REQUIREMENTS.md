@@ -644,12 +644,21 @@ panels emitted against a `prometheus` datasource.)
    heuristic — a `logs` panel is never re-routed to Tempo because its LogQL selector happens to
    contain a `name`-like label (a false-positive the testing pass caught).
 3. **Query language (the fix, for generic types).** Else, if any of the panel's targets is a
-   **TraceQL** query (a target `queryType == "traceql"`, or an expression with the TraceQL-metrics
-   shape — a `{ … }` selector piped into a TraceQL metrics function such as `count_over_time()`/
-   `rate()`/`sum_over_time()`/`quantile_over_time()`, or referencing `span.`/`resource.` attributes
-   or the `name` intrinsic matched on a **word boundary** so `service_name=` etc. do not false-fire),
-   route to `tempoDatasource`.
+   **TraceQL** query, route to `tempoDatasource`. A target is TraceQL when: its `queryType` is
+   `traceql`; OR it is carried in a `query` field (`PanelSpec.query`/`TargetSpec.query` are TraceQL
+   by model contract) — a `query`-field value is treated as TraceQL even without textual markers;
+   OR its `expr` has the TraceQL shape — a `{ … }` selector referencing `span.`/`resource.`
+   attributes or piped into a TraceQL metrics function (`count_over_time()`/`rate()`/`sum_over_time()`/
+   `quantile_over_time()`/…). The bare `name` intrinsic is deliberately **not** a textual signal — it
+   collides with a PromQL bare-vector selector on a `name` label (e.g. cAdvisor `{name="ctr"}`), so
+   such TraceQL queries must arrive via an explicit `queryType`/`query` field. LogQL queries
+   (log-filter operators `|=`/`|~` or stages `| json`/`| logfmt`/…, matched space-insensitively) are
+   excluded so Loki queries are not misrouted.
 4. **Default** → Mimir.
+
+**`PanelSpec.datasource` validation.** The selector is constrained to `{tempo, mimir, prometheus,
+loki}` (case-insensitive) by a field validator — an unknown/typo value raises at spec-load time
+rather than being silently dropped through to inference.
 
 **Acceptance criteria:**
 1. A `timeseries`/`stat`/`gauge`/`piechart`/`table` panel whose target is a TraceQL query is emitted

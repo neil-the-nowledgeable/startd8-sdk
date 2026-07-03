@@ -77,8 +77,6 @@ def update_mixin_imports(
         logger.warning("No grafanaDashboards block found in %s", mixin_libsonnet_path)
         return False
 
-    block_start = match.start()
-    block_end = match.end()
     block_content = match.group(2)
     closing_brace_pos = match.start(3)
 

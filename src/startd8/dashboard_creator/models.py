@@ -123,6 +123,18 @@ class PanelSpec(BaseModel):
     dataLinks: List["DataLink"] = Field(default_factory=list)
     transformations: List["TransformSpec"] = Field(default_factory=list)
 
+    @field_validator("datasource")
+    @classmethod
+    def validate_datasource(cls, v: Optional[str]) -> Optional[str]:
+        """DC-112: reject an unknown datasource selector loudly rather than silently ignoring it
+        (an explicit override that is dropped is worse than no override)."""
+        if v is None:
+            return v
+        allowed = {"tempo", "mimir", "prometheus", "loki"}
+        if v.strip().lower() not in allowed:
+            raise ValueError(f"datasource must be one of {sorted(allowed)}, got {v!r}")
+        return v
+
     @model_validator(mode="after")
     def validate_target_source(self) -> "PanelSpec":
         """Panels need either expr, query, targets, or content (text)."""

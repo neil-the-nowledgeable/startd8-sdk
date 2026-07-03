@@ -103,13 +103,13 @@ def generate_dashboard_jsonnet(
     lines.append("")
 
     # Base dashboard
-    tags_str = ", ".join(f"'{t}'" for t in spec.tags)
+    tags_str = ", ".join(f"'{_escape_jsonnet_string(t)}'" for t in spec.tags)
     desc_arg = ""
     if spec.description:
         desc_arg = f"\n  description='{_escape_jsonnet_string(spec.description)}',"
     lines.append("local baseDashboard = dashboards.dashboard(")
     lines.append(f"  '{_escape_jsonnet_string(spec.title)}',")
-    lines.append(f"  '{spec.uid}',{desc_arg}")
+    lines.append(f"  '{_escape_jsonnet_string(spec.uid)}',{desc_arg}")
     lines.append(f"  tags=[{tags_str}],")
 
     # AES-041: shared crosshair (graphTooltip: 1) when the dashboard has >= 2
@@ -212,14 +212,14 @@ def _render_panel(panel: PanelSpec) -> str:
 
     # Unit
     if panel.unit:
-        args.append(f"unit='{panel.unit}'")
+        args.append(f"unit='{_escape_jsonnet_string(panel.unit)}'")
 
     # Thresholds
     if panel.thresholds:
         th_items = []
         for step in panel.thresholds:
             val = "null" if step.value is None else str(step.value)
-            th_items.append(f"{{ color: '{step.color}', value: {val} }}")
+            th_items.append(f"{{ color: '{_escape_jsonnet_string(step.color)}', value: {val} }}")
         args.append(f"thresholds=[{', '.join(th_items)}]")
 
     # Overrides
@@ -244,7 +244,8 @@ def _render_variable(variable: VariableSpec) -> str:
 
     # Constant takes (name, value) positionally — separate path
     if vtype == VariableType.CONSTANT:
-        return f"variables.{builder}('{variable.name}', '{_escape_jsonnet_string(variable.value or '')}')"
+        return (f"variables.{builder}('{_escape_jsonnet_string(variable.name)}', "
+                f"'{_escape_jsonnet_string(variable.value or '')}')")
 
     args: List[str] = []
 
@@ -255,7 +256,7 @@ def _render_variable(variable: VariableSpec) -> str:
 
     # Name and label
     if variable.name:
-        args.append(f"name='{variable.name}'")
+        args.append(f"name='{_escape_jsonnet_string(variable.name)}'")
     if variable.label:
         args.append(f"label='{_escape_jsonnet_string(variable.label)}'")
 
@@ -272,7 +273,8 @@ def _render_variable(variable: VariableSpec) -> str:
         args.insert(0, _render_expression(variable.query or ""))
         if variable.datasource_var:
             args.append(
-                f"datasource={{ type: 'prometheus', uid: '{variable.datasource_var}' }}"
+                f"datasource={{ type: 'prometheus', uid: "
+                f"'{_escape_jsonnet_string(variable.datasource_var)}' }}"
             )
         if variable.multi:
             args.append("multi=true")
@@ -385,11 +387,11 @@ def _render_targets(targets: List[TargetSpec]) -> str:
             fields.append(f"legendFormat: '{_escape_jsonnet_string(target.legendFormat)}'")
         # A, B, ..., Z for first 26 targets; fallback for >26
         ref_id = target.refId or (chr(65 + i) if i < 26 else f"REF_{i}")
-        fields.append(f"refId: '{ref_id}'")
+        fields.append(f"refId: '{_escape_jsonnet_string(ref_id)}'")
         if target.datasource:
             fields.append(f"datasource: {_to_jsonnet(target.datasource)}")
         if target.queryType:
-            fields.append(f"queryType: '{target.queryType}'")
+            fields.append(f"queryType: '{_escape_jsonnet_string(target.queryType)}'")
         if target.instant:
             fields.append("instant: true")
         if target.format:
@@ -440,10 +442,10 @@ def _render_merge_block(panel: PanelSpec) -> str:
                     if k == "links" and panel.dataLinks:
                         continue  # dataLinks takes precedence
                     defaults_inner.append(
-                        f"{k}: {_to_jsonnet(v)}"
+                        f"{json.dumps(str(k))}: {_to_jsonnet(v)}"
                     )
             else:
-                fc_fields.append(f"{key}: {_to_jsonnet(value)}")
+                fc_fields.append(f"{json.dumps(str(key))}: {_to_jsonnet(value)}")
 
     if defaults_inner:
         fc_fields.insert(0, "defaults+: { " + ", ".join(defaults_inner) + " }")
@@ -455,7 +457,7 @@ def _render_merge_block(panel: PanelSpec) -> str:
     # constructor's options (REQ-DCR-RCP-020). ROW/TEXT consume options specially
     # (collapsed / content) and are excluded.
     if panel.type not in (PanelType.ROW, PanelType.TEXT) and panel.options:
-        opt_fields = [f"{k}: {_to_jsonnet(v)}" for k, v in panel.options.items()]
+        opt_fields = [f"{json.dumps(str(k))}: {_to_jsonnet(v)}" for k, v in panel.options.items()]
         fields.append("options+: { " + ", ".join(opt_fields) + " }")
 
     # Single-target panels: emit instant/format via targets array in merge block
@@ -510,7 +512,7 @@ def _render_dashboard_link(link: DashboardLink) -> str:
     if link.url:
         fields.append(f"url: '{_escape_jsonnet_string(link.url)}'")
     if link.type != "link":
-        fields.append(f"type: '{link.type}'")
+        fields.append(f"type: '{_escape_jsonnet_string(link.type)}'")
     if link.icon != "external link":
         fields.append(f"icon: '{_escape_jsonnet_string(link.icon)}'")
     if link.tooltip:
@@ -575,13 +577,23 @@ _TRACEQL_METRIC_FUNCS = (
 )
 
 
+# LogQL log-pipe stages (Loki) — matched space-insensitively; a `{ … }` selector carrying any of
+# these (or a log-filter operator) is a Loki query, never TraceQL.
+_LOGQL_STAGE_RE = re.compile(
+    r"\|\s*(json|logfmt|pattern|regexp|unwrap|line_format|label_format|keep|drop|decolorize)\b"
+)
+
+
 def _query_is_traceql(text: Optional[str], query_type: Optional[str] = None) -> bool:
     """True if a target query is a TraceQL (Tempo) query, so a plain panel type still routes to Tempo.
 
-    Detects: an explicit ``queryType == "traceql"``; or a ``{ … }`` selector that either pipes into a
-    TraceQL metrics function, or references ``span.``/``resource.`` attributes or a ``name =``
-    intrinsic. Does not fire on PromQL (which never starts with ``{``); LogQL log pipes
-    (``|=``/``|~``/``| json``/``| logfmt``) are excluded so Loki queries are not misrouted.
+    Detects: an explicit ``queryType == "traceql"``; or a ``{ … }`` selector that references
+    ``span.``/``resource.`` attributes or pipes into a TraceQL metrics function
+    (``count_over_time()``/``rate()``/…). PromQL never starts with ``{``; LogQL log queries
+    (``|=``/``|~`` filters or ``| json``/``| logfmt``/… stages) are excluded so Loki queries are not
+    misrouted. The bare ``name`` intrinsic is deliberately NOT a signal — it collides with a PromQL
+    bare-vector selector on a ``name`` label (e.g. cAdvisor ``{name="ctr"}``); rely on an explicit
+    ``queryType``/``target.query`` for those TraceQL cases (DC-112).
     """
     if query_type and query_type.strip().lower() == "traceql":
         return True
@@ -590,11 +602,10 @@ def _query_is_traceql(text: Optional[str], query_type: Optional[str] = None) -> 
     s = text.strip()
     if not s.startswith("{"):
         return False
-    # Exclude LogQL log-pipe stages (Loki), which also use `{ … }` selectors.
-    if any(stage in s for stage in ("|=", "|~", "!=", "!~", "| json", "| logfmt", "| pattern")):
+    # Exclude LogQL (Loki), which also uses `{ … }` selectors.
+    if any(op in s for op in ("|=", "|~", "!=", "!~")) or _LOGQL_STAGE_RE.search(s):
         return False
-    # `name` intrinsic matched on a word boundary so `service_name=`/`hostname=` do NOT false-fire.
-    if "span." in s or "resource." in s or re.search(r"\bname\s*=", s):
+    if "span." in s or "resource." in s:
         return True
     return any(fn in s for fn in _TRACEQL_METRIC_FUNCS)
 
@@ -624,14 +635,16 @@ def _panel_datasource(panel: "PanelSpec") -> str:
         return "tempoDatasource"
     if panel.type == PanelType.LOGS:
         return "lokiDatasource"
-    # Rung 3 — generic panel type: infer from the query language.
-    queries = []
-    if panel.expr:
-        queries.append((panel.expr, None))
-    if panel.query:  # PanelSpec.query is the TraceQL single-query field
+    # Rung 3 — generic panel type: infer from the query language. `query`-field values (single or
+    # per-target) are TraceQL by model contract (PanelSpec.query / TargetSpec.query), so tag them
+    # accordingly — otherwise a TraceQL intrinsic query on the multi-target path (e.g.
+    # `{ .foo = "bar" }`) would miss the text heuristic and re-open the trap (DC-112).
+    queries = [(panel.expr, None)] if panel.expr else []
+    if panel.query:
         queries.append((panel.query, "traceql"))
     for t in panel.targets or []:
-        queries.append((t.expr or t.query, getattr(t, "queryType", None)))
+        qt = getattr(t, "queryType", None) or ("traceql" if (t.query and not t.expr) else None)
+        queries.append((t.expr or t.query, qt))
     if any(_query_is_traceql(text, qt) for text, qt in queries):
         return "tempoDatasource"
     return "mimirDatasource"

@@ -5,6 +5,7 @@ Deterministic JSON output: json.dumps(sort_keys=True, indent=2) + trailing newli
 """
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -41,7 +42,10 @@ def persist_dashboard(
 
     json_path = resolved_output / f"{uid}.json"
     json_content = json.dumps(dashboard_json, sort_keys=True, indent=2) + "\n"
-    json_path.write_text(json_content, encoding="utf-8")
+    # Atomic write: a crash/SIGINT mid-write must not truncate the previously-valid dashboard.
+    _tmp = json_path.with_name(json_path.name + ".tmp")
+    _tmp.write_text(json_content, encoding="utf-8")
+    os.replace(_tmp, json_path)
 
     libsonnet_path = None
     if libsonnet_source is not None and libsonnet_dir is not None:

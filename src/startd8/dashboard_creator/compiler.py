@@ -95,6 +95,7 @@ def compile_jsonnet_string(
         suffix=".libsonnet",
         dir=str(mixin.dashboards_dir),
         delete=True,
+        encoding="utf-8",
     ) as f:
         f.write(source)
         f.flush()
@@ -122,6 +123,7 @@ def _compile_binary(
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired:

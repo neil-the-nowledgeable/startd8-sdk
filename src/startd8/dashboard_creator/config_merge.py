@@ -3,6 +3,7 @@ Config override merge + default hydration (DC-005).
 """
 
 import copy
+import json
 from pathlib import Path
 from typing import Any, Dict
 
@@ -163,7 +164,9 @@ def _dict_to_jsonnet(obj: Any, indent: int = 2) -> str:
         inner_pad = " " * (indent + 2)
         items = []
         for k, v in obj.items():
-            items.append(f"{inner_pad}{k}: {_dict_to_jsonnet(v, indent + 2)}")
+            # Quote keys so nested override keys with dots/spaces/hyphens stay valid Jsonnet
+            # (matches generator._to_jsonnet); a raw identifier would break compilation.
+            items.append(f"{inner_pad}{json.dumps(str(k))}: {_dict_to_jsonnet(v, indent + 2)}")
         return "{\n" + ",\n".join(items) + f",\n{pad}}}"
     elif isinstance(obj, str):
         # Escape single quotes for Jsonnet
