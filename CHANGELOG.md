@@ -30,6 +30,34 @@ the trust boundary), provenance-pinned apply (`kind`/`base_sha` from the trusted
 the sole content gate), VIPP mints only OBSERVED(project) claims (cannot forge SDK-mechanism
 authority), byte-identical-when-absent when VIPP is not opted in.
 
+### Deterministic project onboarding (new `startd8 project init`) — closes #76
+
+> A single **deterministic (`$0`, no-LLM)** command that turns a directory into a set-up StartD8
+> project: detects greenfield/brownfield, establishes the `.startd8/` role postings, makes the
+> project **VIPP-inbox-*ready***, and provides a **`$0` non-interactive inbox producer seam** — the
+> honest fix for #76 (previously the only inbox producers were the paid Concierge chat or a TTY-gated
+> command). New module `src/startd8/project/init.py` (a thin orchestrator composing already-shipped,
+> already-confined seams — no new write primitive). Design + traceability:
+> `docs/design/project-init/` (`PROJECT_INIT_REQUIREMENTS.md` v0.2 — reflective-requirements loop;
+> `PROJECT_INIT_PLAN.md` M0–M4).
+
+**New surfaces:**
+
+| Surface | What it does |
+|---------|--------------|
+| `startd8 project init [ROOT]` | Detect shape → establish VIPP posting (FDE via `--with-fde`) → make the project inbox-*ready*. Re-runnable as a clean no-op |
+| `startd8 project init --proposals FILE` | Serialize an **authored** proposal set (YAML/JSON `{kind, …params}`); each entry validated per-kind before write (bad entry → exit 2, nothing written) |
+| `startd8 project init --instantiate` | Greenfield-only: produce a single `instantiate` proposal (the one deterministic ground-truth→proposal mapping) |
+| `startd8 project init --check` | Read-only drift audit of the init structure. Exit `0`=in-sync / `1`=drift / `2`=error |
+| `startd8 project init --json` | Machine-readable summary for CI |
+| `vipp_seam.ensure_inbox_scaffold()` | Extracted (FR-11) so the producer path and the inbox-ready path share one source and can't drift |
+
+**Design invariants:** ground truth *adjudicates*, it never *originates* — a healthy brownfield
+project is inbox-*ready*, not inbox-*produced*; the producer **never invents content**; production is
+always gated on a real, declared gap. Every project-content write rides the confined `apply_write_plan`
+(the SDK-owned `.startd8/*-context.json` posting metadata is a documented, sanctioned exception).
+Idempotent + byte-identical-when-absent (SOTTO). Posture-encoding exit codes (`0`/`1`/`2`/`3`).
+
 ### RUN-007 empty-spec remediation
 
 > **Heads-up for anyone working in the code-generation path.** Lands via

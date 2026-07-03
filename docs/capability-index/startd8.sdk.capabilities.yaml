@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.13.0"
+version: "1.14.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1368,6 +1368,41 @@ capabilities:
       - type: docs
         ref: docs/design/vipp/
         description: "VIPP_REQUIREMENTS.md (v0.3, CRP R1) + VIPP_PLAN.md (M0–M6)"
+    confidence: 0.85
+
+  - capability_id: startd8.project.init
+    category: action
+    maturity: beta
+    summary: "Deterministic ($0, no-LLM) project onboarding (`startd8 project init [ROOT]`): detects greenfield/brownfield, establishes the .startd8/ role postings (VIPP always, FDE via --with-fde), makes the project VIPP-inbox-*ready*, and provides a $0 non-interactive inbox producer seam (--proposals FILE / greenfield --instantiate) — the honest fix for #76. Never invents content; --check drift audit; idempotent + byte-identical-when-absent"
+    audiences: [workflow_developer, integration_developer, ai_agent]
+    description: |
+      A single deterministic command that turns a directory into a set-up StartD8 project — a thin
+      orchestrator (`project/init.py`) composing already-shipped, already-confined seams, no new write
+      primitive. Detects shape (greenfield / brownfield_ready / brownfield_partial) from on-disk signals
+      folded in with the read-only concierge survey/assess; establishes the `.startd8/` postings via the
+      existing idempotent `ensure_posting` (VIPP always, FDE opt-in — no Concierge posting exists); and
+      stands up the inbox *mechanism* (`.gitignore` + monotonic `inbox-seq`) via the shared
+      `vipp_seam.ensure_inbox_scaffold` (extracted so the producer path and the inbox-ready path can't
+      drift). The `$0` non-interactive producer seam closes #76 (previously only the paid Concierge chat
+      or a TTY-gated command could seed a VIPP inbox): `--proposals FILE` serializes an operator/agent-
+      authored proposal set (each entry validated per-kind through the SAME propose-handler validators
+      before write — bad entry → exit 2, nothing written); greenfield `--instantiate` produces the one
+      deterministic ground-truth→proposal mapping (a single `instantiate` proposal). Both build
+      `ProposedAction`s and serialize through `serialize_buffer`, so the envelope stays compatible with
+      `vipp negotiate`; an undrained inbox is a clean exit-0 skip. Ground truth *adjudicates*, it never
+      *originates* — a healthy brownfield project is inbox-*ready*, not inbox-*produced*, and the producer
+      never invents content. `--check` is a read-only drift audit (0=in-sync/1=drift/2=error). Every
+      project-content write rides the confined `apply_write_plan`; idempotent + byte-identical-when-absent
+      (SOTTO); posture-encoding exit codes (0/1/2/3). Assist-not-operate: never runs the cascade, records
+      a gate, or auto-applies.
+    triggers: ["project init", "onboard directory", "make this an SDK project", "produce vipp inbox", "non-interactive inbox", "inbox ready", "issue 76"]
+    evidence:
+      - type: code
+        ref: src/startd8/project/init.py
+        description: "detect_shape/establish_postings/ready_inbox/produce_inbox/check_init/run_project_init; cli_project.py `project init`; vipp_seam.ensure_inbox_scaffold (FR-11)"
+      - type: docs
+        ref: docs/design/project-init/
+        description: "PROJECT_INIT_REQUIREMENTS.md (v0.2, reflective-requirements) + PROJECT_INIT_PLAN.md (M0–M4)"
     confidence: 0.85
 
   - capability_id: startd8.kickoff.red_carpet_advisor

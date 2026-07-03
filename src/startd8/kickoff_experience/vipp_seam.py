@@ -58,6 +58,7 @@ VIPP_DIR = ".startd8/vipp"
 INBOX_NAME = "proposals-inbox.json"
 SEQ_NAME = "inbox-seq"
 GITIGNORE_NAME = ".gitignore"
+GITIGNORE_CONTENT = "*\n"  # the inbox tree is a runtime store — never tracked
 
 # The key whitelist (Lesson L11-#41): serialize exactly these per-proposal fields — never a whole
 # object dump. Equals ProposedAction's field set (and vipp.models.HOST_PROPOSAL_FIELDS).
@@ -103,6 +104,31 @@ def _read_confined(root: Path, name: str) -> Optional[bytes]:
             return fh.read()
     except OSError as exc:  # e.g. ELOOP if it raced into a symlink
         raise SafeWriteError(f"refusing to read {target}: {exc}") from exc
+
+
+# --- inbox scaffold (the mechanism, not the file) -------------------------------------------------
+
+
+def ensure_inbox_scaffold(project_root: Any, *, force: bool = False) -> WriteResult:
+    """Stand up the inbox *mechanism* — the ``.gitignore`` (``*``) and an initialized monotonic
+    ``inbox-seq`` counter — without producing an inbox file. Idempotent / no-clobber (re-run writes
+    nothing).
+
+    Extracted (VIPP project-init FR-11) so the two paths that bootstrap the inbox tree — a producer's
+    :func:`serialize_buffer` and ``startd8 project init``'s inbox-*ready* step — share one source and
+    cannot drift. Both the ``.gitignore`` and the seed ``inbox-seq`` are ``ACTION_NEW``: an existing
+    (possibly advanced) counter is never clobbered, so standing up the scaffold on a mid-loop project
+    does not reset its monotonic sequence.
+    """
+    root = resolve_confined_root(project_root)
+    return apply_write_plan(
+        root,
+        [
+            PlannedWrite(f"{VIPP_DIR}/{GITIGNORE_NAME}", ACTION_NEW, GITIGNORE_CONTENT, None),
+            PlannedWrite(f"{VIPP_DIR}/{SEQ_NAME}", ACTION_NEW, "0", None),
+        ],
+        force=force,
+    )
 
 
 # --- monotonic sequence (survives inbox shred) ----------------------------------------------------
@@ -177,6 +203,10 @@ def serialize_buffer(
             ]
         )
 
+    # Bootstrap the inbox tree (.gitignore + inbox-seq) via the shared scaffold so this producer path
+    # and project-init's inbox-ready path cannot drift (FR-11). No-clobber, so an advanced seq is kept.
+    ensure_inbox_scaffold(root)
+
     proposals: List[Dict[str, Any]] = []
     for p in buffer.pending():
         d = {k: getattr(p, k, None) for k in _PROPOSAL_FIELDS}
@@ -200,7 +230,7 @@ def serialize_buffer(
     result = apply_write_plan(
         root,
         [
-            PlannedWrite(f"{VIPP_DIR}/{GITIGNORE_NAME}", ACTION_NEW, "*\n", None),
+            # .gitignore is ensured by ensure_inbox_scaffold above (FR-11); only the inbox here.
             PlannedWrite(
                 inbox_rel,
                 ACTION_NEW if not force else ACTION_OVERWRITE,
