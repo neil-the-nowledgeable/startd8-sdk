@@ -1,9 +1,7 @@
 """Tests for dashboard_creator.provisioning — DC-203, DC-208."""
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 import yaml
 
 from startd8.dashboard_creator.grafana_client import GrafanaResponse

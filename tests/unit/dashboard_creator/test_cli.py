@@ -1,6 +1,5 @@
 """Tests for dashboard CLI commands (DC-206, DC-208)."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -129,7 +128,7 @@ class TestDashboardDelete:
         mock_prov_result = MagicMock()
         mock_prov_result.success = True
 
-        with patch("startd8.dashboard_creator.grafana_client.GrafanaClient") as MockClient, \
+        with patch("startd8.dashboard_creator.grafana_client.GrafanaClient"), \
              patch("startd8.dashboard_creator.provisioning.deprovision_dashboard", return_value=mock_prov_result), \
              patch("startd8.dashboard_creator.provisioning.delete_local_artifacts", return_value={"json": True}):
             result = runner.invoke(app, [

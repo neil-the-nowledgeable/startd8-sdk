@@ -1,6 +1,5 @@
 """Tests for dashboard_creator.mixin_update — DC-204."""
 
-import pytest
 
 from startd8.dashboard_creator.mixin_update import (
     derive_mixin_entry,

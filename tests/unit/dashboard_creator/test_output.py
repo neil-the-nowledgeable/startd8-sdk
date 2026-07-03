@@ -1,11 +1,9 @@
 """Tests for dashboard_creator.output — output persistence."""
 
 import json
-from pathlib import Path
 
-import pytest
 
-from startd8.dashboard_creator.output import PersistenceResult, persist_dashboard
+from startd8.dashboard_creator.output import persist_dashboard
 
 
 class TestPersistDashboard:

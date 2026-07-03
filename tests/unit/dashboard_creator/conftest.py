@@ -1,7 +1,6 @@
 """Shared fixtures for dashboard_creator unit tests."""
 
 import pytest
-from pathlib import Path
 
 
 @pytest.fixture

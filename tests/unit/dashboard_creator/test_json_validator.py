@@ -2,10 +2,8 @@
 
 import json
 
-import pytest
 
 from startd8.dashboard_creator.json_validator import (
-    JsonValidationResult,
     validate_dashboard_json,
 )
 

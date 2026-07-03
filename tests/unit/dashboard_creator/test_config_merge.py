@@ -7,7 +7,7 @@ from startd8.dashboard_creator.config_merge import (
     hydrate_spec_defaults,
     merge_config_overrides,
 )
-from startd8.dashboard_creator.models import DashboardSpec, PanelSpec
+from startd8.dashboard_creator.models import DashboardSpec
 from startd8.exceptions import ValidationError
 
 

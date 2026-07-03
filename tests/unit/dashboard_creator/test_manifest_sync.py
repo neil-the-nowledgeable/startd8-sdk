@@ -1,8 +1,6 @@
 """Tests for dashboard_creator.manifest_sync — DC-201."""
 
-from pathlib import Path
 
-import pytest
 import yaml
 
 from startd8.dashboard_creator.manifest_sync import (

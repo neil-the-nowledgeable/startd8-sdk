@@ -21,7 +21,6 @@ from startd8.dashboard_creator.requirements_parser import (
     _parse_data_link,
     _parse_field_config,
     _parse_grid,
-    _parse_panels,
     _parse_promql,
     _parse_thresholds,
     _parse_transformations,

@@ -204,7 +204,6 @@ class TestDensityAndBanner:
         assert result.panels[0].type == PanelType.STAT  # no banner prepended
 
     def test_invalid_density_rejected(self):
-        import pytest
         with pytest.raises(Exception):
             DashboardSpec(title="T", density="huge",
                           panels=[PanelSpec(type=PanelType.STAT, title="A", expr="up")])

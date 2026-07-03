@@ -2,14 +2,12 @@
 
 import json
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from startd8.dashboard_creator.compiler import (
     CompilationError,
-    CompilationResult,
     compile_jsonnet,
     compile_jsonnet_string,
 )

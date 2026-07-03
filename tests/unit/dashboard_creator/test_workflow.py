@@ -247,7 +247,7 @@ class TestWorkflowProvisioning:
         with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
              patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain), \
              patch("startd8.dashboard_creator.workflow.compile_jsonnet_string") as mock_compile, \
-             patch("startd8.dashboard_creator.grafana_client.GrafanaClient") as MockClient, \
+             patch("startd8.dashboard_creator.grafana_client.GrafanaClient"), \
              patch("startd8.dashboard_creator.provisioning.provision_dashboard", return_value=mock_prov_result):
             mock_compile.return_value = MagicMock(
                 json_str=compiled_json, duration_ms=10, backend="binary",
@@ -275,7 +275,7 @@ class TestWorkflowProvisioning:
         with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
              patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain), \
              patch("startd8.dashboard_creator.workflow.compile_jsonnet_string") as mock_compile, \
-             patch("startd8.dashboard_creator.grafana_client.GrafanaClient") as MockClient, \
+             patch("startd8.dashboard_creator.grafana_client.GrafanaClient"), \
              patch("startd8.dashboard_creator.provisioning.provision_dashboard", return_value=mock_prov_result):
             mock_compile.return_value = MagicMock(
                 json_str=compiled_json, duration_ms=10, backend="binary",

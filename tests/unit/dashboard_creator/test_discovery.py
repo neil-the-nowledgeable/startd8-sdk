@@ -1,14 +1,12 @@
 """Tests for dashboard_creator.discovery — mixin discovery + toolchain detection."""
 
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from startd8.dashboard_creator.discovery import (
     MixinContext,
-    ToolchainInfo,
     detect_toolchain,
     discover_mixin,
 )

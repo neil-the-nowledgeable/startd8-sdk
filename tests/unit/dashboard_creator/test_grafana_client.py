@@ -9,7 +9,6 @@ import respx
 from startd8.dashboard_creator.grafana_client import (
     GrafanaClient,
     GrafanaResponse,
-    _MIN_GRAFANA_MAJOR,
     _TOKEN_ENV_VAR,
 )
 from startd8.exceptions import APIError, ConfigurationError

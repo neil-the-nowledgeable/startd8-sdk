@@ -1,15 +1,12 @@
 """Tests for dashboard_creator.batch — DC-111."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 import yaml
 
 from startd8.dashboard_creator.batch import (
     BatchReport,
-    DashboardReport,
     load_specs_from_directory,
     run_batch,
 )
