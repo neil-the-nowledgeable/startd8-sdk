@@ -42,11 +42,20 @@ def test_init_creates_posting(tmp_path):
     assert (Path(proj) / ".startd8/vipp/vipp-context.json").exists()
 
 
-def test_negotiate_without_inbox_exits_2(tmp_path):
-    proj = _proj(tmp_path)
+def test_negotiate_opted_in_no_inbox_is_clean_exit0(tmp_path):
+    # OQ-8: an opted-in project (posting exists) with no inbox is inbox-ready, not an error.
+    proj = _proj(tmp_path)  # _proj creates .startd8/vipp (opted in)
+    result = runner.invoke(vipp_app, ["negotiate", "--project-root", proj])
+    assert result.exit_code == 0
+    assert "inbox-ready" in result.output
+
+
+def test_negotiate_not_opted_in_exits_2(tmp_path):
+    # A project that never opted in (no posting) is a genuine mis-use → exit 2 with guidance.
+    proj = str(Path(os.path.realpath(tmp_path)))  # no .startd8/vipp
     result = runner.invoke(vipp_app, ["negotiate", "--project-root", proj])
     assert result.exit_code == 2
-    assert "no proposals-inbox" in result.output
+    assert "not opted in" in result.output
 
 
 def test_negotiate_writes_dispositions(tmp_path):

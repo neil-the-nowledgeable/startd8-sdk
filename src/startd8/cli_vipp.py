@@ -97,15 +97,24 @@ def vipp_negotiate(
     import json
 
     from .concierge.safe_write import SafeWriteError
-    from .kickoff_experience.vipp_seam import inbox_path
+    from .kickoff_experience.vipp_seam import inbox_path, vipp_opted_in
     from .vipp import run_vipp_negotiate
 
     root = project_root or Path.cwd()
     ip = inbox_path(root)
     if not ip.exists():
+        # OQ-8: a missing inbox is NOT an error for an already-opted-in project — that is the normal
+        # "inbox-ready" state after `startd8 project init`. Only a project that never opted in is a
+        # mis-use worth exit 2.
+        if vipp_opted_in(root):
+            console.print(
+                "[green]VIPP: inbox-ready[/green] — no proposals to negotiate yet. A producer must "
+                "serialize proposals first (`startd8 project init --proposals FILE`, or the host)."
+            )
+            raise typer.Exit(0)
         console.print(
-            "[red]VIPP negotiate: no proposals-inbox.json[/red] — opt in with `startd8 vipp init`, "
-            "then have the host serialize its pending proposals."
+            "[red]VIPP negotiate: not opted in[/red] — run `startd8 project init` "
+            "(or `startd8 vipp init`) first, then serialize proposals."
         )
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
