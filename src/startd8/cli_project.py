@@ -130,6 +130,8 @@ def project_init(
 
     # Exit-code mapping (FR-9/FR-10).
     if check:
+        if summary.get("error"):
+            raise typer.Exit(_EXIT_BAD_INPUT)  # exit 2 = error (unreadable / non-dir root)
         raise typer.Exit(0 if summary.get("in_sync") else _EXIT_DRIFT)
     producer_status = (summary.get("producer") or {}).get("status")
     if producer_status == "blocked":
@@ -142,6 +144,9 @@ def project_init(
 def _render_summary(summary: dict) -> None:
     """Human-readable render of the init/check summary (deterministic ordering)."""
     if summary.get("action") == "init-check":
+        if summary.get("error"):
+            console.print(f"[red]project init --check error:[/red] {summary['error']}")
+            return
         shape = summary.get("shape", {})
         console.print(f"[bold]project init --check[/bold] ({shape.get('verdict', '?')})")
         console.print(f"  initialized: {summary.get('initialized')}  in-sync: {summary.get('in_sync')}")

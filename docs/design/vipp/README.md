@@ -27,6 +27,29 @@ HOST (Concierge / Red Carpet chat)            PROJECT (VIPP, out-of-process)
 - **`startd8 vipp apply`** — preview by default; `--apply` writes accepted proposals at project human
   privilege through the host's `apply_proposal` floor, **provenance-pinned** to the trusted inbox.
 
+### Producing an inbox non-interactively — `startd8 project init` (closes #76)
+
+The VIPP loop needs a `proposals-inbox.json` to negotiate against. Historically the only producers
+were the **paid** Concierge chat or a **TTY-gated** terminal command (issue **#76**). Deterministic
+project onboarding now supplies a **`$0`, non-interactive producer seam**:
+
+- **`startd8 project init`** — establishes the VIPP posting and makes the project **inbox-*ready***
+  (stands up `.startd8/vipp/` + `.gitignore` + the `inbox-seq` counter via the shared
+  `vipp_seam.ensure_inbox_scaffold`). A healthy project stops here — it is inbox-*ready*, not
+  inbox-*produced* (ground truth *adjudicates*, it never *originates* proposals).
+- **`startd8 project init --proposals FILE`** — serialize an operator/agent-**authored** proposal set
+  (a YAML/JSON list of `{kind, …params}`). Each entry is validated through the **same per-kind
+  validators the propose handler uses** before anything is written; a bad entry fails with exit 2 and
+  no half-written inbox.
+- **`startd8 project init --instantiate`** — greenfield only: the one deterministic
+  ground-truth→proposal mapping — a single `instantiate` proposal (bytes = the packaged kickoff
+  templates).
+
+Both producer paths build `ProposedAction`s and serialize through `vipp_seam.serialize_buffer`, so
+the envelope stays byte-for-byte compatible with `vipp negotiate`. An undrained inbox is a clean
+exit-0 skip ("consume it first"), never a clobber. It **never invents content**. See
+[`docs/design/project-init/`](../project-init/) for the full design.
+
 ## Design invariants
 
 - **File-protocol first** (Keiyaku contracts; JSON canonical, markdown derived); A2A is a roadmap.

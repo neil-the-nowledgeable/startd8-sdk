@@ -271,6 +271,50 @@ def test_check_reports_drift_on_bare_dir(tmp_path):
     assert "vipp_posting" in audit["drift"]
 
 
+def test_check_nonexistent_root_is_error(tmp_path):
+    """FR-10 — an unreadable / non-directory root is an error (exit 2), not drift."""
+    missing = _proj(tmp_path) / "does-not-exist"
+    audit = run_project_init(missing, check=True, sdk_version="9.9.9")
+    assert "error" in audit
+    assert audit["in_sync"] is False
+
+
+# --- M3: FR-6 SOTTO + FR-7 confined writes --------------------------------------------------------
+
+
+def test_sotto_project_content_byte_identical_across_double_init(tmp_path):
+    """FR-6/FR-7 — a second init leaves *project content* (the inbox scaffold) byte-identical.
+
+    The SDK-owned posting metadata (``vipp-context.json``) legitimately restamps each run — that is
+    the documented FR-7 boundary — so the SOTTO claim is about the confined content writes.
+    """
+    root = _proj(tmp_path)
+    run_project_init(root, sdk_version="9.9.9")
+    vipp = root / ".startd8" / "vipp"
+    before = {name: (vipp / name).read_bytes() for name in (".gitignore", "inbox-seq")}
+
+    second = run_project_init(root, sdk_version="9.9.9")
+    assert second["inbox_ready"]["written"] == []  # no content write on the re-run
+    after = {name: (vipp / name).read_bytes() for name in (".gitignore", "inbox-seq")}
+    assert before == after  # byte-identical project content
+
+
+def test_fr7_content_writes_are_confined_symlinked_root_refused(tmp_path):
+    """FR-7 — project-content writes ride the confined ``apply_write_plan``; a symlinked root is
+    refused by ``ensure_inbox_scaffold`` (``resolve_confined_root``) before any inbox scaffold lands."""
+    from startd8.concierge.safe_write import SafeWriteError
+
+    target = _proj(tmp_path) / "real"
+    target.mkdir()
+    link = _proj(tmp_path) / "link"
+    os.symlink(target, link)
+
+    with pytest.raises(SafeWriteError):
+        run_project_init(link, sdk_version="9.9.9")
+    # No inbox scaffold was written into the real target through the symlink.
+    assert not (target / ".startd8" / "vipp" / ".gitignore").exists()
+
+
 # --- CLI surface (FR-1/FR-9) ----------------------------------------------------------------------
 
 

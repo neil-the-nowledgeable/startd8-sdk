@@ -125,6 +125,12 @@ def establish_postings(
 
     VIPP always; FDE only when ``with_fde`` (requirements OQ-2 — no Concierge posting exists, D4).
     Returns ``{role: context-file-path}``.
+
+    FR-7 boundary: ``ensure_posting`` writes the SDK-owned ``.startd8/<role>/<role>-context.json``
+    via its own atomic-metadata path (not ``apply_write_plan``). This is a *sanctioned* exception —
+    that file is SDK state (it restamps ``updated_at`` / the SDK version each call), **not project
+    content**. All *project-content* writes (the inbox scaffold, the produced inbox) ride
+    ``apply_write_plan`` (via ``ensure_inbox_scaffold`` / ``serialize_buffer``).
     """
     from ..vipp import context as vipp_context
 
@@ -283,8 +289,18 @@ def produce_inbox(
 
 def check_init(project_root: Any) -> Dict[str, Any]:
     """Read-only audit (FR-10): is the project init'd + in-sync? Writes nothing. The caller maps
-    ``in_sync`` → exit 0, drift → 1. A never-init'd project reports as drift (not initialized)."""
+    ``error`` → exit 2, ``in_sync`` → exit 0, drift → 1. A never-init'd project reports as drift
+    (not initialized). An unreadable / non-directory root is an ``error`` (exit 2), mirroring
+    ``cli_generate``'s cannot-read path."""
     root = Path(project_root)
+    if not root.is_dir():
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "action": "init-check",
+            "project_root": str(root),
+            "error": f"project root is not a directory: {root}",
+            "in_sync": False,
+        }
     vipp_dir = root / ".startd8" / "vipp"
     checks = {
         "vipp_posting": (vipp_dir / "vipp-context.json").is_file(),

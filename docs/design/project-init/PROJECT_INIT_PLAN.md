@@ -9,6 +9,25 @@
 > functions — no new write primitive. The one substantive design decision (FR-5) is settled: it's an
 > inbox *producer seam*, never a ground-truth *generator*.
 
+## Build status
+
+**M0–M4 SHIPPED** on branch `feat/project-init-impl` (worktree off `origin/main`).
+- **M0** (FR-1/2/9) — `project/init.py` + `detect_shape`/`ProjectShape`; `startd8 project init` CLI with
+  0/1/2/3 exit codes + `--json`.
+- **M1** (FR-3/4/11) — `establish_postings` (VIPP always, FDE opt-in) + `ready_inbox`; FR-11 refactor
+  extracted `vipp_seam.ensure_inbox_scaffold` (behavior-preserving; 9/9 seam tests green).
+- **M2** (FR-5/12/13/14) — the `$0` producer seam: `--proposals FILE` (per-kind validated) + greenfield
+  `--instantiate`, built via `ProposedAction` + `serialize_buffer`; undrained → clean exit-0 skip.
+- **M3** (FR-6/7/10) — `--check` drift audit (0/1/2 incl. error path); SOTTO byte-identical-when-absent
+  + project-content-byte-identical-across-double-init; FR-7 confined-write test + documented
+  `ensure_posting` metadata boundary.
+- **M4** — VIPP README producer section + this CHANGELOG entry + capability-index `startd8.project.init`
+  (manifest v1.14.0). #76 documented as closed by the producer seam.
+
+28 tests in `tests/unit/project/test_init.py`; no regressions across vipp/kickoff/concierge.
+The plan's nominal `--serialize` flag was folded into the presence of `--proposals`/`--instantiate`
+(no redundant flag). Residual OQ-7 settled (minimal `kind + params`); OQ-8/9 left as scope decisions.
+
 ## Architecture
 
 ```
