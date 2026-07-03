@@ -95,11 +95,26 @@ def requirements_elicit(
     model: Optional[str] = typer.Option(
         None, "--model", help="Agent spec (paid pass)."
     ),
+    target: Optional[Path] = typer.Option(
+        None,
+        "--target",
+        help="The eventual approve target; if it already exists, refuse BEFORE any paid spend (FR-RP-6).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit the run as JSON."),
 ) -> None:
     """Elicit candidate requirements: the $0 schema+brief baseline, plus an optional paid role pass."""
     from .requirements_panel import scaffold
     from .requirements_panel.store import CandidateStore
+
+    # FR-RP-6 lifecycle (R2-S4), elicit half: once a versioned doc exists it is never regenerated over —
+    # short-circuit here, BEFORE the paid pass, so `--roles` never spends against a doc approve will
+    # refuse anyway. (Without --target the guarantee is still enforced at approve via O_EXCL.)
+    if target is not None and Path(target).expanduser().exists():
+        console.print(
+            f"[yellow]requirements:[/yellow] {target} already exists — a versioned requirements doc "
+            "is never regenerated over (edit it in place / take it through CRP). No spend."
+        )
+        raise typer.Exit(_EXIT_CLOBBER)
 
     brief = _read(brief_file) if brief_file else ""
     schema_text = _read(project_root / _SCHEMA_REL)

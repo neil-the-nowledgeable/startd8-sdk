@@ -8,7 +8,9 @@ deterministic gate that **blocks** ``approve`` — it never auto-approves and ne
 (CRP's job), only *readiness*. It blocks when (R1-S2, refined by R2-S5):
 
 * a **non-baseline** candidate that **asserts a mandate** (MUST/SHALL) carries an unresolved **high**
-  grounding flag — the P1 boundary invariant (intent must be brief/schema-traceable or ``<needs-owner>``);
+  grounding flag — the **checkable subset** of the P1 boundary invariant. (Positive brief-traceability of
+  vague intent is not ``$0``-verifiable; CRP is the authoritative gate for that — P3. This gate enforces
+  the computable part: a phantom-entity / schema-absence mandate, and hands the rest to CRP.);
 * a ``<needs-owner>`` stub is being promoted (its unowned intent placeholder still present);
 * a **surviving line-start heading** remains in any candidate text — a blockquote-demoted ``> ## x``
   passes; a bare ``^## x`` fails (R2-S5, reconciles FR-RP-7's neutralize-by-demote with this gate).

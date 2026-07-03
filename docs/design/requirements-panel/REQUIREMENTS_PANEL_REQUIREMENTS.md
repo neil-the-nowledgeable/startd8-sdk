@@ -143,9 +143,14 @@ It never authors the *real* product intent (bucket-4); it produces a **starting 
   accept as-generated" changes the **edit burden**, never whether the human approval gate exists. Every
   candidate carries a **per-FR** provenance marker (FR-RP-5); no requirement is silently promoted.
   **Boundary invariant (R1 Ask 1):** a candidate asserting a `MUST`/`SHALL` that is **neither
-  brief-traceable (grounded) nor marked `<needs-owner>`** is a **grounding failure, not a draft** — it
-  cannot pass the pre-CRP readiness gate (FR-RP-6). This is what keeps persona-asserted *intent* on the
-  draft side of bucket-4.
+  brief-traceable (grounded) nor marked `<needs-owner>`** should not be promoted as a draft. **What the
+  deterministic pre-CRP readiness gate (FR-RP-6) actually enforces is the *checkable subset*** of this:
+  it blocks a mandate carrying a **high grounding flag** (a phantom entity / schema-absence) or an
+  unresolved `<needs-owner>`. It **cannot** deterministically verify positive brief-traceability of vague
+  intent (e.g. "the system MUST be fast" against an unrelated brief) — that is not `$0`-checkable, so
+  **CRP is the authoritative gate for it** (P3, advisory-then-CRP). The invariant is the *aspiration*;
+  the readiness gate enforces its computable part and hands the rest to CRP. This keeps persona-asserted
+  *intent* on the draft side of bucket-4 without over-claiming what a `$0` check can prove.
 - **P2 — Mirror the panel *pattern*, own the engine.** Same role-based *draft → synthesize → review →
   approve* loop and provenance discipline, but a **separate** capability/CLI and a **different artifact**
   (a requirements markdown doc, grounded by brief+schema, gated by **CRP** — not a scalar splice, not an
