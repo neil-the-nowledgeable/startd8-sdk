@@ -40,7 +40,13 @@ from startd8.requirements_panel.models import (
     RequirementDoc,
     fr_id,
 )
+from startd8.requirements_panel.coverage import CoverageReport, coverage_report
 from startd8.requirements_panel.readiness import ReadinessResult, check_readiness
+from startd8.requirements_panel.roster import (
+    InstallResult,
+    default_roster_text,
+    install_default_roster,
+)
 from startd8.requirements_panel.sanitize import (
     has_unsafe_heading,
     neutralize_headings,
@@ -73,6 +79,11 @@ __all__ = [
     "synthesize",
     "check_readiness",
     "ReadinessResult",
+    "coverage_report",
+    "CoverageReport",
+    "install_default_roster",
+    "default_roster_text",
+    "InstallResult",
     "apply_requirements",
     "ApplyResult",
     "CandidateStore",

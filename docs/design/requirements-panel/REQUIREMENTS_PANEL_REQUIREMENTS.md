@@ -1,7 +1,7 @@
 # Requirements Panel — Requirements
 
-**Version:** 0.4 (Post-CRP — R1+R2 triage integrated)
-**Date:** 2026-07-02
+**Version:** 0.5 (M-series enhancements — default roster + coverage score)
+**Date:** 2026-07-03
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
 **Plan:** `REQUIREMENTS_PANEL_PLAN.md`
@@ -262,6 +262,25 @@ It never authors the *real* product intent (bucket-4); it produces a **starting 
   `startd8 requirements elicit` as the guided way to produce v0.1 — so the capability is discoverable at
   the moment of need. Presentation-only.
 
+### D. Onboarding & progress legibility (M-series enhancements — backlog #1/#4)
+
+- **FR-RP-10 — Ship a default requirements roster + `init-roster` (resolves OQ-RP-7).** The paid pass
+  (`elicit --roles`) requires a `docs/kickoff/inputs/stakeholders.yaml` roster; a greenfield user has
+  none, so `--roles` fails for exactly the people it should help. Ship a **curated default roster** whose
+  personas are `answers_for`-keyed on the `RequirementDomain` areas (product-owner→problem, architect→
+  data, designer→ux, ops→ops, security→security, compliance→compliance — matching `domains.py`'s owning
+  roles), and a **`startd8 requirements init-roster`** command that writes it (refusing to clobber an
+  existing roster). The roster is a valid Stakeholder-Panel `domain: stakeholders` roster (reuses
+  `parse_roster`/`validate_roster`); no new grammar (NR-RP-3 preserved). `elicit --roles` with no roster
+  points the user at `init-roster`.
+- **FR-RP-11 — Advisory readiness / coverage score in `review` (resolves OQ-RP-8).** Alongside the
+  blocking readiness gate (FR-RP-6), `review` surfaces an **advisory** coverage view — **never a gate,
+  never auto-approve** — computed `$0` from the assembled doc: per-area FR counts (baseline vs role-
+  drafted), unresolved grounding-flag count by severity, unowned-`<needs-owner>`-stub count, and
+  **near-duplicate-title count** (exact-slug survivors the human may want to merge — the honest
+  counterpart to synthesis's keep-both dedupe, R1-F3). It makes the paid pass's value observable (Ask-5:
+  areas a role pass added over the baseline) and answers "how done am I?" without ever promoting anything.
+
 ---
 
 ## 4. Non-Requirements
@@ -334,6 +353,12 @@ fully `$0` with a keep-both dedupe rule + persisted/hash-stable FR-IDs; FR-RP-6 
 readiness gate + atomic write + one-shot post-CRP lifecycle refuse; FR-RP-7 broadens the scan to
 `^#{1,6}`+setext with blockquote-demotion reconciled against the gate; FR-RP-8 surfaces flags out-of-band.
 P1 boundary invariant added; OQ-RP-8 resolved. Bodies now match the Appendix A triage notes.*
+
+*v0.5 — M-series enhancements (backlog #1/#4, `ENHANCEMENT_BACKLOG.md`). Added FR-RP-10 (default
+requirements roster + `init-roster`, resolves OQ-RP-7) and FR-RP-11 (advisory readiness/coverage score
+in `review`, resolves OQ-RP-8) to remove first-run friction and make progress legible. The shared
+`persona_drafting` toolkit (backlog #10/#11) is specced separately in
+`../persona-drafting/PERSONA_DRAFTING_TOOLKIT_REQUIREMENTS.md`.*
 
 ---
 

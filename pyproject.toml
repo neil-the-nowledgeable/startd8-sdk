@@ -207,6 +207,7 @@ startd8 = [
     "implementation_engine/prompts/*.yaml",
     "concierge_templates/*.md",
     "concierge_templates/inputs/*.yaml",
+    "requirements_panel/templates/*.yaml",
 ]
 
 

@@ -22,7 +22,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
-from startd8.stakeholder_panel.models import PersonaBrief
+from startd8.persona_drafting.owner_resolution import resolve_bounded_owner
+from startd8.stakeholder_panel.models import (
+    PersonaBrief,
+)  # noqa: F401 (public type in signatures)
 
 __all__ = [
     "RequirementDomain",
@@ -104,30 +107,18 @@ def get_domain(area: str) -> Optional[RequirementDomain]:
     return None
 
 
-def _answers_for_names_area(brief: PersonaBrief, domain: RequirementDomain) -> bool:
-    """High-confidence signal: an ``answers_for`` entry explicitly names this area or an alias."""
-    candidates = {domain.area, *domain.aliases}
-    for raw in brief.answers_for:
-        norm = raw.strip().rstrip("*").rstrip(".").lower()
-        if norm in candidates:
-            return True
-    return False
-
-
 def resolve_requirement_owner(
     domain: RequirementDomain, briefs: Sequence[PersonaBrief]
 ) -> Optional[str]:
     """Return the ``role_id`` that owns *domain*, or ``None`` to **skip** the area (FR-RP-2, bounded).
 
-    Resolution order (mirrors the panel's bounded discipline, but owned — R1-F1):
-      1. the domain's **default owning role** if present on the roster;
-      2. else a persona whose ``answers_for`` **explicitly names the area/alias** (high-confidence);
-      3. else ``None`` — the area is skipped, never drafted by a non-owning persona (no loose match).
+    Delegates to the shared, generic ``persona_drafting.resolve_bounded_owner`` (FR-PD-4) — owned, not
+    the value-domain-bound ``input_domains.resolve_owner`` (R1-F1): default owning role → high-confidence
+    ``answers_for`` (area/alias) → skip; never a loose match.
     """
-    by_id = {b.role_id: b for b in briefs}
-    if domain.owning_role in by_id:
-        return domain.owning_role
-    for brief in briefs:  # roster order = deterministic tie-break
-        if _answers_for_names_area(brief, domain):
-            return brief.role_id
-    return None
+    return resolve_bounded_owner(
+        owning_role=domain.owning_role,
+        aliases=domain.aliases,
+        symbol=domain.area,
+        briefs=briefs,
+    )

@@ -60,6 +60,26 @@ def _load_staged(project_root: Path, session_id: Optional[str]):
     return sid, CandidateStore(project_root, sid).load()
 
 
+@requirements_app.command("init-roster")
+def requirements_init_roster(
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing roster."),
+) -> None:
+    """Write the default requirements-elicitation roster (FR-RP-10) so `elicit --roles` works."""
+    from .requirements_panel import install_default_roster
+
+    result = install_default_roster(project_root, force=force)
+    if result.written:
+        console.print(
+            f"[green]requirements:[/green] wrote default roster {result.path}"
+        )
+        console.print("  edit the persona goals/constraints to your project, then:")
+        console.print("  startd8 requirements elicit --roles")
+        return
+    console.print(f"[yellow]requirements:[/yellow] {result.reason}")
+    raise typer.Exit(_EXIT_CLOBBER)
+
+
 @requirements_app.command("elicit")
 def requirements_elicit(
     project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
@@ -134,7 +154,7 @@ def _run_paid_pass(
     roster_path = project_root / _ROSTER_REL
     if not roster_path.is_file():
         raise _ElicitError(
-            f"no roster at {roster_path} — run `startd8 concierge instantiate-kickoff` first",
+            f"no roster at {roster_path} — run `startd8 requirements init-roster` to write a default",
             _EXIT_FATAL_INPUTS,
         )
     from .stakeholder_panel import RosterError, load_roster, validate_roster
@@ -216,7 +236,12 @@ def requirements_review(
     ),
 ) -> None:
     """Render the LITERAL doc bytes that approve would write; surface grounding flags out-of-band."""
-    from .requirements_panel import RequirementDoc, check_readiness, synthesize
+    from .requirements_panel import (
+        RequirementDoc,
+        check_readiness,
+        coverage_report,
+        synthesize,
+    )
 
     sid, candidates = _load_staged(project_root, session)
     if sid is None or not candidates:
@@ -240,6 +265,10 @@ def requirements_review(
         console.print("grounding flags:", markup=False)
         for fid, flags in flagged:
             console.print(f"  {fid}: {'; '.join(flags)}", markup=False)
+    # Advisory coverage / "how done am I?" score (FR-RP-11) — never a gate.
+    console.print("\n[dim]— coverage (advisory) —[/dim]")
+    console.print(coverage_report(doc).render(), markup=False)
+
     readiness = check_readiness(doc)
     if readiness.ok:
         console.print("[green]readiness: OK[/green] — approve may proceed")
