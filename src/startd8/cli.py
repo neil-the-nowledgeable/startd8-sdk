@@ -34,6 +34,7 @@ from .cli_manifest import manifest_app
 from .cli_dashboard import dashboard_app
 from .cli_element_registry import element_registry_app
 from .cli_generate import generate_app
+from .cli_consult import consult_app
 from .cli_assist import assist_app
 from .cli_nav import nav_app
 from .cli_polish import polish_app
@@ -1234,6 +1235,7 @@ app.add_typer(manifest_app, name="manifest")
 # Deterministic frontend code generation (no LLM)
 # ──────────────────────────────────────────────────────────────────────────
 app.add_typer(generate_app, name="generate")
+app.add_typer(consult_app, name="consult")
 
 
 # ──────────────────────────────────────────────────────────────────────────
