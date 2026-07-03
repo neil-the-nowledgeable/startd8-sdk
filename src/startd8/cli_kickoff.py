@@ -211,22 +211,36 @@ def inspect_cmd(
 def _render_red_carpet_state(state, *, verbose: bool = False) -> None:
     """KICKOFF_UX — the focused status view: one progress spine (rendered once), one honest '% filled'
     headline, a never-hidden error banner, and THE single next action. Full advisories/playbook only
-    under --verbose. Plain language via the single-source GLOSSARY (no jargon in the default view)."""
+    under --verbose. Plain language via the single-source GLOSSARY (no jargon in the default view).
+    """
     from .kickoff_experience.presentation import build_spine, headline
 
     hl = headline(state)
     console.print(f"[bold]🟥 Red Carpet[/bold] · [bold]{hl['pct_label']}[/bold]")
     # FR-UX-5/F4 — error advisories are NEVER hidden, even in the default view.
     if hl["n_errors"]:
-        console.print(f"  [red]⚠ {hl['n_errors']} problem(s) need fixing[/red] → [cyan]--verbose[/cyan]")
+        console.print(
+            f"  [red]⚠ {hl['n_errors']} problem(s) need fixing[/red] → [cyan]--verbose[/cyan]"
+        )
 
     # FR-UX-6 — the ONE progress spine (three things + Build), glossary-named, said once.
-    glyph = {"done": "[green]✓[/green]", "next": "[cyan]→[/cyan]", "todo": "[dim]·[/dim]",
-             "ready": "[green]◆[/green]", "later": "[dim]∘[/dim]"}
+    glyph = {
+        "done": "[green]✓[/green]",
+        "next": "[cyan]→[/cyan]",
+        "todo": "[dim]·[/dim]",
+        "ready": "[green]◆[/green]",
+        "later": "[dim]∘[/dim]",
+    }
     for n in build_spine(state):
-        meter = f"  [dim]{n.filled}/{n.total}[/dim]" if n.filled is not None and n.total else ""
+        meter = (
+            f"  [dim]{n.filled}/{n.total}[/dim]"
+            if n.filled is not None and n.total
+            else ""
+        )
         style = "dim" if (n.optional or n.status in ("todo", "later")) else "bold"
-        console.print(f"  {glyph.get(n.status, '·')} [{style}]{n.plain_name}[/{style}]{meter}")
+        console.print(
+            f"  {glyph.get(n.status, '·')} [{style}]{n.plain_name}[/{style}]{meter}"
+        )
 
     # FR-UX-4 — the single next action (plain, from the spine — never playbook jargon).
     na = hl["next_action"]
@@ -235,7 +249,9 @@ def _render_red_carpet_state(state, *, verbose: bool = False) -> None:
         console.print(f"   [cyan]{na['command']}[/cyan]")
 
     if not verbose:
-        extra = len(getattr(state, "advisories", ()) or ()) + len(getattr(state, "next_steps", ()) or ())
+        extra = len(getattr(state, "advisories", ()) or ()) + len(
+            getattr(state, "next_steps", ()) or ()
+        )
         if extra:
             console.print(f"  [dim]{extra} more details → --verbose[/dim]")
         return
@@ -256,7 +272,9 @@ def _render_red_carpet_state(state, *, verbose: bool = False) -> None:
             cmd = f"  [cyan]{step.command}[/cyan]" if step.command else ""
             console.print(f"  {step.rank}. {step.title}{cmd}")
     if state.readiness_score is not None:
-        console.print(f"[dim]cascade readiness: {int(round(state.readiness_score * 100))}%[/dim]")
+        console.print(
+            f"[dim]cascade readiness: {int(round(state.readiness_score * 100))}%[/dim]"
+        )
 
 
 def _run_red_carpet_wizard(project: Path) -> None:
@@ -274,16 +292,19 @@ def _run_red_carpet_wizard(project: Path) -> None:
         assess = None
         try:
             from .kickoff_experience.concierge import build_assess  # type: ignore
+
             assess = build_assess(project)
         except Exception:
             assess = None
-        return wizard_prepopulate(project, wizard_inventory(project), state, assess=assess)
+        return wizard_prepopulate(
+            project, wizard_inventory(project), state, assess=assess
+        )
 
     def _on_proposal(action):
         console.print(f"[yellow]Proposed:[/yellow] {action.summary()}")
         if typer.confirm("Apply this?", default=False):
             return apply_proposal(project, action)
-        return None   # declined
+        return None  # declined
 
     def _read(prompt: str) -> Optional[str]:
         try:
@@ -301,7 +322,7 @@ def _run_red_carpet_wizard(project: Path) -> None:
 
     run_red_carpet_driver(
         banner="🟥 Red Carpet — guided setup ($0, no LLM). We'll use what your project already has and "
-               "walk you through the rest, one step at a time.",
+        "walk you through the rest, one step at a time.",
         build_state=lambda: build_red_carpet_state(project),
         prepopulate=_prepopulate,
         read_input=_read,
@@ -320,18 +341,21 @@ def red_carpet_cmd(
         False, "--json", help="Emit the staged build state as JSON."
     ),
     verbose: bool = typer.Option(
-        False, "--verbose",
+        False,
+        "--verbose",
         help="Show the full insights + playbook detail (default view is a focused summary).",
     ),
     check: bool = typer.Option(
-        False, "--check",
+        False,
+        "--check",
         help="CI signal ($0, read-only): exit 1 if any error-severity advisory (hard readiness "
-             "problem) is present, else 0. warn/info never fail.",
+        "problem) is present, else 0. warn/info never fail.",
     ),
     wizard: bool = typer.Option(
-        False, "--wizard",
+        False,
+        "--wizard",
         help="Deterministic $0 completion-driver: inventories project assets, proposes pre-populated "
-             "inputs, and leads you through the remaining gaps (you confirm each). No LLM.",
+        "inputs, and leads you through the remaining gaps (you confirm each). No LLM.",
     ),
     agent: Optional[str] = typer.Option(
         None,
@@ -701,3 +725,49 @@ def concierge_cmd(
         emit_line=lambda line: console.print(line),
         posture=posture,
     )
+
+
+@kickoff_app.command("plan")
+def kickoff_plan(
+    project: Path = typer.Option(Path("."), "--project", help="Project root."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the plan as JSON."),
+) -> None:
+    """Show the guided greenfield path — the advisor's ranked playbook, cost-labeled (FR-KO-1).
+
+    Read-only: it spends/writes nothing; run each command yourself at its gate.
+    """
+    import json as _json
+
+    from .kickoff_experience.orchestrator import build_kickoff_plan
+
+    plan = build_kickoff_plan(project)
+    if as_json:
+        console.print_json(_json.dumps(plan.to_dict()))
+        return
+    console.print(plan.render(), markup=False, highlight=False)
+
+
+@kickoff_app.command("next")
+def kickoff_next(
+    project: Path = typer.Option(Path("."), "--project", help="Project root."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the next step as JSON."),
+) -> None:
+    """Show the single immediate next action in the greenfield path (FR-KO-1)."""
+    import json as _json
+
+    from .kickoff_experience.orchestrator import build_kickoff_plan
+
+    step = build_kickoff_plan(project).next_step
+    if as_json:
+        console.print_json(_json.dumps(step.to_dict() if step else None))
+        return
+    if step is None:
+        console.print(
+            "kickoff: no next step — build-ready or nothing to do.", markup=False
+        )
+        return
+    console.print(f"next: [{step.cost}] {step.title}  ({step.stage})", markup=False)
+    if step.detail:
+        console.print(f"  {step.detail}", markup=False)
+    if step.command:
+        console.print(f"  $ {step.command}", markup=False)

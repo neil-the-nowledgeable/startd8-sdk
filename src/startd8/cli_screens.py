@@ -12,7 +12,6 @@ floor). It reuses the requirements-elicitation roster (``docs/kickoff/inputs/sta
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from typing import List, Optional
@@ -97,6 +96,9 @@ def screens_suggest(
     # FR-MS-3: only suggest what is missing (dedupe against the running doc + live views/pages manifests).
     fresh = dedupe_missing(candidates, all_existing_slugs(project_root))
     ScreenCandidateStore(project_root, session_id).save(fresh)
+    ScreenCandidateStore.gc(
+        project_root
+    )  # FR-KO-2: bound leaked sessions to the keep-limit
 
     if as_json:
         console.print_json(
@@ -122,43 +124,25 @@ def screens_suggest(
 
 
 def _run_paid_pass(project_root, schema_text, session_id, cap, model, summary) -> List:
-    roster_path = project_root / _ROSTER_REL
-    if not roster_path.is_file():
-        raise _SuggestError(
-            f"no roster at {roster_path} — run `startd8 requirements init-roster` to write a default",
-            _EXIT_FATAL_INPUTS,
-        )
-    from .stakeholder_panel import RosterError, load_roster, validate_roster
-    from .stakeholder_panel.panel import DEFAULT_MODEL_SPEC, StakeholderPanel
-
     from .manifest_suggester import suggest_screens
+    from .persona_drafting import PaidPassError, run_paid_pass
 
-    try:
-        roster = load_roster(roster_path)
-    except RosterError as exc:
-        raise _SuggestError(str(exc), _EXIT_FATAL_INPUTS)
-    if validate_roster(roster):
-        raise _SuggestError(
-            "roster is invalid (run `startd8 panel` to inspect)", _EXIT_FATAL_INPUTS
+    async def _pass(panel):
+        return await suggest_screens(
+            project_root,
+            panel,
+            schema_text=schema_text,
+            cap=cap,
+            session_id=session_id,
         )
 
-    panel = StakeholderPanel(
-        roster, project_root=project_root, model_spec=model or DEFAULT_MODEL_SPEC
-    )
     try:
-        run = asyncio.run(
-            suggest_screens(
-                project_root,
-                panel,
-                schema_text=schema_text,
-                cap=cap,
-                session_id=session_id,
-            )
+        run = run_paid_pass(
+            project_root, roster_rel=_ROSTER_REL, run=_pass, model=model
         )
-    except Exception as exc:  # provider/auth/budget failure — clean message
-        raise _SuggestError(f"paid pass failed: {exc}", _EXIT_RUNTIME)
-    finally:
-        panel.close()
+    except PaidPassError as exc:
+        code = _EXIT_RUNTIME if exc.kind == "failed" else _EXIT_FATAL_INPUTS
+        raise _SuggestError(str(exc), code)
     summary["drafted"] = len(run.candidates)
     summary["cost"] = run.total_cost_usd
     summary["skipped"] = run.skipped
@@ -171,6 +155,9 @@ def screens_review(
     session: Optional[str] = typer.Option(
         None, "--session", help="Suggestion session id."
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the staged screens + flags as JSON."
+    ),
 ) -> None:
     """Render the literal authoring prose of each staged screen; grounding flags out-of-band."""
     from .manifest_suggester import PROV_BASELINE
@@ -179,6 +166,26 @@ def screens_review(
     if sid is None or not candidates:
         console.print("[red]screens:[/red] no staged screens — run `suggest` first.")
         raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    if as_json:
+        console.print_json(
+            json.dumps(
+                {
+                    "session_id": sid,
+                    "screens": [
+                        {
+                            "name": c.name,
+                            "kind": c.kind,
+                            "provenance": c.provenance,
+                            "prose": c.prose,
+                            "flags": c.flags,
+                        }
+                        for c in candidates
+                    ],
+                }
+            )
+        )
+        return
 
     for c in candidates:
         tag = "$0 baseline" if c.provenance == PROV_BASELINE else f"role:{c.role_id}"
@@ -210,11 +217,14 @@ def screens_approve(
     approve_all: bool = typer.Option(
         False, "--all", help="Approve every staged screen."
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the apply results as JSON."
+    ),
 ) -> None:
     """Apply approved screen(s) via the manifest proposal kind (accumulation-aware, FR-MS-5/7)."""
-    from .manifest_suggester.apply import apply_screen
-    from .manifest_suggester.models import ScreenCandidate  # noqa: F401 (type clarity)
     from startd8.manifest_extraction.grammar import nfkd_kebab
+
+    from .manifest_suggester.apply import apply_screen
 
     sid, candidates = _load_staged(project_root, session)
     if sid is None or not candidates:
@@ -235,19 +245,38 @@ def screens_approve(
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     applied = 0
+    results = []
+    clobbered = False
     for c in targets:
         result = apply_screen(project_root, c)
+        results.append({"name": c.name, "applied": result.applied, "code": result.code})
         if result.applied:
             applied += 1
-            console.print(f"[green]screens:[/green] applied {c.name}")
+            if not as_json:
+                console.print(f"[green]screens:[/green] applied {c.name}")
         elif result.code == "duplicate":
-            console.print(f"[dim]screens: {c.name} already applied[/dim]", markup=False)
+            if not as_json:
+                console.print(
+                    f"[dim]screens: {c.name} already applied[/dim]", markup=False
+                )
         else:
-            console.print(
-                f"[red]screens:[/red] {c.name}: {result.reason}", markup=False
-            )
+            if not as_json:
+                console.print(
+                    f"[red]screens:[/red] {c.name}: {result.reason}", markup=False
+                )
             if result.code == "would_clobber":
-                raise typer.Exit(_EXIT_CLOBBER)
+                clobbered = True
+                break
+
+    if as_json:
+        console.print_json(
+            json.dumps({"session_id": sid, "applied": applied, "results": results})
+        )
+        if clobbered:
+            raise typer.Exit(_EXIT_CLOBBER)
+        return
+    if clobbered:
+        raise typer.Exit(_EXIT_CLOBBER)
     console.print(
         f"  {applied}/{len(targets)} applied → prisma/views.yaml (via the manifest proposal)"
     )

@@ -1625,6 +1625,82 @@ capabilities:
         description: "span tree + gen_ai/contextcore attrs via in-memory exporter"
     confidence: 0.8
 
+  # ============================================================================
+  # PERSONA-DRAFTING FAMILY — role-based agents draft an artifact for human approval
+  # ============================================================================
+
+  - capability_id: startd8.persona_drafting.requirements_panel
+    category: action
+    maturity: beta
+    summary: "Persona-driven requirements drafting — role agents elicit + synthesize a requirements doc for human approval ($0 baseline + optional paid role pass)"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        `startd8 requirements` (elicit/synthesize/review/approve + init-roster): a $0 schema+brief
+        baseline (entity-touching FR stubs) plus an optional paid persona pass (StakeholderPanel.ask)
+        that drafts per-area FRs, synthesized into one doc with a blocking pre-CRP readiness gate,
+        per-FR provenance, and a one-shot atomic apply. Estimate-provenance drafts for human approval,
+        never an authority on product intent (bucket-4 boundary). Built on the persona_drafting toolkit.
+      agent: |
+        startd8 requirements elicit [--roles] --brief brief.md ; synthesize ; review [--json] ; approve OUT.md.
+    triggers: ["requirements panel", "elicit requirements", "startd8 requirements", "requirements drafting"]
+    evidence:
+      - type: code
+        ref: src/startd8/requirements_panel/
+        description: "baseline/elicit/synthesis/grounding/readiness/apply + startd8 requirements CLI"
+      - type: test
+        ref: tests/unit/requirements_panel/
+        description: "deterministic + mock-panel elicit + CLI + enhancement tests (46+)"
+    confidence: 0.85
+
+  - capability_id: startd8.persona_drafting.manifest_suggester
+    category: action
+    maturity: beta
+    summary: "Persona-driven screen suggestion — role agents propose composite views + non-entity pages, applied via the manifest kind ($0 baseline + optional paid role pass)"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        `startd8 screens` (suggest/review/approve/reject): a $0 schema-grounded starter dashboard
+        (single-root, join-gated, built on the extractor's own EntityGraph) plus an optional paid persona
+        pass that drafts non-obvious composite views + non-entity pages, schema-anchored grounded
+        (necessary-not-sufficient; the extract_views/extract_pages round-trip is authoritative). Approved
+        screens apply through the existing `manifest` proposal kind with an accumulation-aware running
+        authoring doc (a 2nd screen never clobbers the 1st). Bucket-1 structure only. persona_drafting toolkit.
+      agent: |
+        startd8 screens suggest [--roles] ; review [--json] ; approve --all|--name X ; reject --name X.
+    triggers: ["manifest suggester", "suggest screens", "startd8 screens", "which screens", "composite views"]
+    evidence:
+      - type: code
+        ref: src/startd8/manifest_suggester/
+        description: "baseline/suggest/grounding/apply/store + startd8 screens CLI"
+      - type: test
+        ref: tests/unit/manifest_suggester/
+        description: "deterministic + round-trip + apply/CLI + pages tests (35+)"
+    confidence: 0.85
+
+  - capability_id: startd8.persona_drafting.toolkit
+    category: action
+    maturity: beta
+    summary: "Shared persona-drafting primitives — heading sanitization, atomic JSON session store, bounded owner-resolution, paid-pass runner + a $0 kickoff orchestrator"
+    audiences: [workflow_developer]
+    description:
+      developer: |
+        `persona_drafting/`: neutralize_headings/has_unsafe_heading (injection safety), JsonSessionStore
+        (atomic write + GC + traversal guard), resolve_bounded_owner (generic routing), run_paid_pass
+        (roster→panel→async pass→close, typed PaidPassError). `startd8 kickoff plan`/`next` renders the
+        advisor's ranked playbook as a cost-labeled ($0/paid/gate) guided greenfield walkthrough (read-only).
+      agent: |
+        startd8 kickoff plan [--json] ; startd8 kickoff next [--json].
+    triggers: ["persona drafting toolkit", "kickoff plan", "kickoff orchestrator", "run_paid_pass"]
+    evidence:
+      - type: code
+        ref: src/startd8/persona_drafting/
+        description: "sanitize/staging/owner_resolution/paid_pass"
+      - type: code
+        ref: src/startd8/kickoff_experience/orchestrator.py
+        description: "startd8 kickoff plan/next — cost-labeled guided path"
+    confidence: 0.85
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -1632,10 +1708,10 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 47   # v1.9.0: +agentic.{loop,tool_use_primitive,streaming,compaction,contextcore_integration,observability}
+  total_capabilities: 56   # reconciled to the actual entry count (+persona_drafting.{requirements_panel,manifest_suggester,toolkit})
   by_maturity:
     stable: 21
-    beta: 26       # v1.9.0: +6 agentic.* (all beta)
+    beta: 35       # reconciled to actual (prior summary undercounted)
   by_category:
     action: 11     # v1.9.0: +agentic.{loop,tool_use_primitive,streaming,compaction}
     observe: 4     # +agentic.observability (v1.9.0)

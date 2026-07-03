@@ -12,6 +12,7 @@ mechanics-only — grounding, synthesis, and readiness stay feature-owned (NR-PD
 from __future__ import annotations
 
 from startd8.persona_drafting.owner_resolution import resolve_bounded_owner
+from startd8.persona_drafting.paid_pass import PaidPassError, run_paid_pass
 from startd8.persona_drafting.sanitize import (
     has_unsafe_heading,
     neutralize_headings,
@@ -24,4 +25,6 @@ __all__ = [
     "JsonSessionStore",
     "safe_session_component",
     "resolve_bounded_owner",
+    "run_paid_pass",
+    "PaidPassError",
 ]
