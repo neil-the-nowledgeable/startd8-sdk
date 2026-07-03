@@ -103,6 +103,9 @@ class PanelSpec(BaseModel):
     query: Optional[str] = None  # TraceQL
     # Multi-target panels (timeseries, table, barchart, piechart, histogram, etc.)
     targets: Optional[List[TargetSpec]] = None
+    # Explicit datasource override (DC-112): `tempo`|`mimir`|`prometheus`|`loki`. Wins over the
+    # query-language + panel-type inference. `None` = infer.
+    datasource: Optional[str] = None
     # Layout
     gridPos: Optional[GridPos] = None
     group: Optional[str] = None  # Row grouping (DC-108)

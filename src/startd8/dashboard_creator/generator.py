@@ -205,8 +205,8 @@ def _render_panel(panel: PanelSpec) -> str:
                 f"[{{ expr: {_render_expression(panel.expr)}, refId: 'A' }}]"
             )
 
-    # Datasource
-    ds = _datasource_for_panel(ptype)
+    # Datasource (DC-112): explicit selector → query language → panel-type default.
+    ds = _panel_datasource(panel)
     if ds:
         args.append(f"datasource={ds}")
 
@@ -560,18 +560,80 @@ def _variable_builder_name(vtype: VariableType) -> str:
     return vtype.value
 
 
-def _datasource_for_panel(ptype: PanelType) -> str:
-    """Return the default datasource variable for a panel type."""
-    if ptype in {
-        PanelType.TRACEQL_STAT,
-        PanelType.TRACEQL_TABLE,
-        PanelType.TRACEQL_TIMESERIES,
-        PanelType.TRACEQL_GAUGE,
-        PanelType.TRACES,
-    }:
+# DC-112: friendly datasource selector → the jsonnet datasource local defined in the template head.
+_DATASOURCE_LOCALS = {
+    "tempo": "tempoDatasource",
+    "mimir": "mimirDatasource",
+    "prometheus": "mimirDatasource",  # the mimir local is the prometheus-typed datasource
+    "loki": "lokiDatasource",
+}
+
+# TraceQL-metrics functions that only Tempo evaluates (piped after a `{ … }` selector).
+_TRACEQL_METRIC_FUNCS = (
+    "count_over_time", "rate(", "sum_over_time", "quantile_over_time",
+    "histogram_over_time", "min_over_time", "max_over_time", "avg_over_time",
+)
+
+
+def _query_is_traceql(text: Optional[str], query_type: Optional[str] = None) -> bool:
+    """True if a target query is a TraceQL (Tempo) query, so a plain panel type still routes to Tempo.
+
+    Detects: an explicit ``queryType == "traceql"``; or a ``{ … }`` selector that either pipes into a
+    TraceQL metrics function, or references ``span.``/``resource.`` attributes or a ``name =``
+    intrinsic. Does not fire on PromQL (which never starts with ``{``); LogQL log pipes
+    (``|=``/``|~``/``| json``/``| logfmt``) are excluded so Loki queries are not misrouted.
+    """
+    if query_type and query_type.strip().lower() == "traceql":
+        return True
+    if not text:
+        return False
+    s = text.strip()
+    if not s.startswith("{"):
+        return False
+    # Exclude LogQL log-pipe stages (Loki), which also use `{ … }` selectors.
+    if any(stage in s for stage in ("|=", "|~", "!=", "!~", "| json", "| logfmt", "| pattern")):
+        return False
+    # `name` intrinsic matched on a word boundary so `service_name=`/`hostname=` do NOT false-fire.
+    if "span." in s or "resource." in s or re.search(r"\bname\s*=", s):
+        return True
+    return any(fn in s for fn in _TRACEQL_METRIC_FUNCS)
+
+
+_TEMPO_PANEL_TYPES = {
+    PanelType.TRACEQL_STAT,
+    PanelType.TRACEQL_TABLE,
+    PanelType.TRACEQL_TIMESERIES,
+    PanelType.TRACEQL_GAUGE,
+    PanelType.TRACES,
+}
+
+
+def _panel_datasource(panel: "PanelSpec") -> str:
+    """Resolve a panel's datasource by priority (DC-112): explicit selector → typed panel → query.
+
+    Rung 1 — an explicit ``panel.datasource`` selector wins. Rung 2 — an explicit datasource-bound
+    panel TYPE (traceql*/traces→Tempo, logs→Loki) is the author's intent and beats the query
+    heuristic (so a ``logs`` panel is never re-routed by a name-like label). Rung 3 — for a generic
+    type, any TraceQL target routes to Tempo (the trap this fixes). Rung 4 — default Mimir.
+    """
+    if panel.datasource:
+        local = _DATASOURCE_LOCALS.get(panel.datasource.strip().lower())
+        if local:
+            return local
+    if panel.type in _TEMPO_PANEL_TYPES:
         return "tempoDatasource"
-    if ptype == PanelType.LOGS:
+    if panel.type == PanelType.LOGS:
         return "lokiDatasource"
+    # Rung 3 — generic panel type: infer from the query language.
+    queries = []
+    if panel.expr:
+        queries.append((panel.expr, None))
+    if panel.query:  # PanelSpec.query is the TraceQL single-query field
+        queries.append((panel.query, "traceql"))
+    for t in panel.targets or []:
+        queries.append((t.expr or t.query, getattr(t, "queryType", None)))
+    if any(_query_is_traceql(text, qt) for text, qt in queries):
+        return "tempoDatasource"
     return "mimirDatasource"
 
 

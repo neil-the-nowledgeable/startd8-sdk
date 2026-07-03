@@ -612,6 +612,62 @@ Process a list of `DashboardSpec` objects with per-dashboard error isolation.
 4. Exit-code contract: `0` = all succeeded, `2` = partial success, `1` = all failed.
 5. Progress callback emits per-dashboard progress (`current/total`).
 
+---
+
+### DC-112: Query-Language-Aware Datasource Resolution
+
+**Status:** planned
+**Priority:** P1
+**Depends on:** DC-101
+
+**Problem.** Panel-to-datasource assignment (`_datasource_for_panel`) currently routes solely by
+**panel type**: only the explicit `traceql*`/`traces` types map to Tempo, `logs` maps to Loki, and
+everything else defaults to Mimir/Prometheus. So a panel authored with a plain `stat`/`gauge`/
+`timeseries`/`piechart` **type** but a **TraceQL-metrics query** is silently wired to a
+Prometheus-typed datasource, which cannot execute TraceQL — the panel renders no data. This is a
+latent trap for every TraceQL dashboard: the author must know to use the `traceql*` panel types, and
+nothing warns them otherwise. (Observed on the Agentic Loop Observability dashboard — 14 TraceQL
+panels emitted against a `prometheus` datasource.)
+
+> **Planning insight (pre-implementation).** `PanelSpec` has **no** `datasource` field today (only
+> `TargetSpec.datasource` exists, and it is already rendered per-target). So the explicit-override
+> rung below is a **new, optional** `PanelSpec.datasource` field — a friendly datasource selector
+> (`tempo` | `mimir` | `prometheus` | `loki`) mapped to the corresponding jsonnet datasource local —
+> not the honoring of an existing-but-ignored field.
+
+**Requirement.** Resolve a panel's datasource by a **priority ladder**, not panel type alone:
+
+1. **Explicit override wins.** If the new optional `PanelSpec.datasource` selector is set
+   (`tempo`/`mimir`/`prometheus`/`loki`), use the corresponding datasource; it overrides all inference.
+2. **Explicit datasource-bound panel type wins next.** `traceql*`/`traces` → Tempo, `logs` → Loki.
+   These types *are* the author's datasource intent, so they take precedence over the query
+   heuristic — a `logs` panel is never re-routed to Tempo because its LogQL selector happens to
+   contain a `name`-like label (a false-positive the testing pass caught).
+3. **Query language (the fix, for generic types).** Else, if any of the panel's targets is a
+   **TraceQL** query (a target `queryType == "traceql"`, or an expression with the TraceQL-metrics
+   shape — a `{ … }` selector piped into a TraceQL metrics function such as `count_over_time()`/
+   `rate()`/`sum_over_time()`/`quantile_over_time()`, or referencing `span.`/`resource.` attributes
+   or the `name` intrinsic matched on a **word boundary** so `service_name=` etc. do not false-fire),
+   route to `tempoDatasource`.
+4. **Default** → Mimir.
+
+**Acceptance criteria:**
+1. A `timeseries`/`stat`/`gauge`/`piechart`/`table` panel whose target is a TraceQL query is emitted
+   with a **Tempo** datasource (`type: tempo`, uid `${tempo}`); no `prometheus`-typed datasource
+   appears on a TraceQL panel.
+2. A panel with the new `PanelSpec.datasource` selector (`tempo`/`mimir`/`prometheus`/`loki`) is
+   emitted with exactly that datasource, overriding both query-language and panel-type inference.
+3. **Backward compatibility (byte-identical):** a panel with a PromQL query and a non-traceql type
+   keeps the Mimir datasource — existing PromQL specs regenerate unchanged.
+4. Panels with `traceql*`/`traces`/`logs` types keep their current Tempo/Loki mapping regardless of
+   query text.
+5. TraceQL detection does not false-positive on PromQL (which does not start with `{`); LogQL log
+   queries (`|=`/`|~`/`| json`/`| logfmt`) are not misrouted to Tempo.
+
+**Non-goals.** LogQL-vs-PromQL auto-routing for `{ … }` log queries (Loki panels use the `logs`
+type); a `traceqlPiechart` panel type (a piechart with a TraceQL query is handled by rule 2, keeping
+the piechart visualization on a Tempo datasource).
+
 ## 5. Layer 2: Integration (DC-2xx)
 
 Integration requirements wire the generation pipeline into the SDK's workflow system, CLI, observability, and Grafana API.

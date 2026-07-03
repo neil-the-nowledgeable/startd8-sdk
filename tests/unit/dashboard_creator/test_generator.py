@@ -5,6 +5,8 @@ import pytest
 from startd8.dashboard_creator.generator import (
     generate_dashboard_jsonnet,
     _escape_jsonnet_string,
+    _panel_datasource,
+    _query_is_traceql,
     _render_expression,
     _render_panel,
     _render_variable,
@@ -696,3 +698,71 @@ class TestSerializerHardening:
         # No silent repr() fallback (the old bug).
         with pytest.raises(TypeError):
             _to_jsonnet(("a", "b"))
+
+
+# ---------------------------------------------------------------------------
+# DC-112: query-language-aware datasource resolution
+# ---------------------------------------------------------------------------
+
+
+class TestQueryIsTraceQL:
+    def test_traceql_metrics_pipe(self):
+        assert _query_is_traceql('{ name = "agentic.session" } | count_over_time()')
+
+    def test_traceql_span_attribute(self):
+        assert _query_is_traceql('{ span.agentic.tool_ok = false } | rate()')
+
+    def test_explicit_query_type(self):
+        assert _query_is_traceql("anything", query_type="traceql")
+
+    def test_promql_is_not_traceql(self):
+        assert not _query_is_traceql("rate(http_requests_total[5m])")
+        assert not _query_is_traceql("sum(up) by (job)")
+
+    def test_logql_is_not_traceql(self):
+        # Loki log query — starts with { but uses log-pipe stages.
+        assert not _query_is_traceql('{job="api"} |= "error" | json')
+
+    def test_empty(self):
+        assert not _query_is_traceql(None) and not _query_is_traceql("")
+
+
+class TestDatasourceResolution:
+    def test_traceql_query_on_plain_type_routes_tempo(self):
+        # THE FIX: a plain timeseries type with a TraceQL query gets Tempo, not Mimir.
+        panel = PanelSpec(
+            type="timeseries", title="Runs",
+            targets=[TargetSpec(expr='{ name = "agentic.session" } | rate()')],
+        )
+        assert _panel_datasource(panel) == "tempoDatasource"
+        assert "datasource=tempoDatasource" in _render_panel(panel)
+
+    def test_promql_on_plain_type_stays_mimir(self):
+        # Backward compat: PromQL keeps Mimir.
+        panel = PanelSpec(type="timeseries", title="QPS",
+                          targets=[TargetSpec(expr="rate(http_requests_total[5m])")])
+        assert _panel_datasource(panel) == "mimirDatasource"
+
+    def test_explicit_selector_overrides_inference(self):
+        # promql query + explicit tempo selector → tempo wins.
+        panel = PanelSpec(type="stat", title="X", expr="up", datasource="tempo")
+        assert _panel_datasource(panel) == "tempoDatasource"
+        # and mimir selector forces mimir even on a traceql query
+        panel2 = PanelSpec(type="stat", title="Y", datasource="mimir",
+                           query='{ name = "s" } | count_over_time()')
+        assert _panel_datasource(panel2) == "mimirDatasource"
+
+    def test_prometheus_selector_maps_to_mimir_local(self):
+        panel = PanelSpec(type="stat", title="X", expr="up", datasource="prometheus")
+        assert _panel_datasource(panel) == "mimirDatasource"
+
+    def test_traceql_panel_type_still_tempo(self):
+        panel = PanelSpec(type="traceqlStat", title="X", query='{ name = "s" } | count_over_time()')
+        assert _panel_datasource(panel) == "tempoDatasource"
+
+    def test_logs_panel_routes_loki(self):
+        panel = PanelSpec(type="logs", title="Logs", expr='{job="api"} |= "error"')
+        assert _panel_datasource(panel) == "lokiDatasource"
+
+    def test_plain_stat_no_query_defaults_mimir(self):
+        assert _panel_datasource(PanelSpec(type="stat", title="X", expr="up")) == "mimirDatasource"
