@@ -319,3 +319,88 @@ stops later reviewers from re-proposing settled or rejected ideas.
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
 *(No review rounds yet.)*
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-07-02
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-07-02 00:00:00 UTC
+- **Scope**: Requirements (F-prefix) — code-grounded against live `stakeholder_panel/` + `languages/prisma_parser.py`. Focus-file asks addressed first.
+
+##### Focus-file asks (sponsor)
+
+**Ask 1 — Is "estimate-provenance candidate requirements for approval" a real bucket-4 boundary?**
+- **Summary answer:** Yes, the boundary is real *given* one added invariant the docs do not yet state.
+- **Rationale:** P1/NR-RP-2 + FR-RP-5 provenance + human-only promotion make the *artifact* bucket-3-ish (a draft), not bucket-4 authorship, consistent with `recommend.py`'s `ESTIMATE_PROVENANCE`/`disposition="draft"` precedent (recommend.py:141,149). The residual leak is that a persona-drafted FR *asserting intent* ("the system MUST support SSO") is qualitatively closer to product authorship than a scalar estimate ("$2M ARR"). The boundary holds only if every non-`<needs-owner>` candidate is provably traceable to the brief (grounding) AND no candidate is promoted without an explicit human act.
+- **Assumptions / conditions:** FR-RP-4 grounding actually runs on prose (see Ask 2) and the readiness gate (R1-S2) blocks approve on ungrounded intent FRs.
+- **Suggested improvements:** State a new invariant in P1: "a candidate asserting a MUST/SHALL that is neither brief-traceable nor marked `<needs-owner>` is a grounding failure, not a draft." Add to §7.
+
+**Ask 2 — Is the owned brief+schema grounding variant (FR-RP-4) sound for requirement prose?**
+- **Summary answer:** Partial — the *extractor reuse* is sound; the *corpus half* and the "soften" effect are underspecified for prose.
+- **Rationale:** `extract_money`/`extract_percent` are public (grounding_guard.py:68-69) and value-normalized, and `_MONTH_DATE`/`_temporal` already drop bare month words (grounding_guard.py:39-46,72-78) — good for prose false-positive control. But `unsupported_specifics` does **exact-set** membership (grounding_guard.py:96-104): a brief "≈$2M" vs candidate "$2M" both normalize to 2000000.0 → matches, but "under 200ms"/"99.9% uptime" style specifics will flag unless the brief states the identical number. The schema half of the project corpus only helps *entity-name* checks; it contributes nothing to money/percent/temporal (schema field names carry no `$`/`%`/dates). "Advisory-then-CRP" is the right severity for the specifics extractor (it is heuristic); an *entity/field that does not exist in the parsed schema* is deterministic and should be a harder flag than a fuzzy percent.
+- **Assumptions / conditions:** the paid drafting prompt actually injects the literal entity names (FR-RP-2) so the schema-reference check has ground truth.
+- **Suggested improvements:** Split FR-RP-4 into two severities: (a) schema-entity/field absence = **high/deterministic** flag; (b) unsupported money/percent/temporal = **advisory**. Define "soften" concretely (see R1-F2).
+
+**Ask 3 — Is FR-RP-3 synthesis ("dedupe + stable IDs + order + conflicts→OQ") enough?**
+- **Summary answer:** No — dedupe and ID-stability are under-defined and are the two places multi-role→one-doc can silently lose or corrupt content.
+- **Rationale:** "dedupe near-identical FRs (slug/normalized text)" (plan Step 5) has no similarity rule: exact-normalized match under-dedupes (two phrasings of one FR survive as duplicates), fuzzy match over-dedupes (drops a distinct FR — the exact R2-S1 failure the doc claims to prevent). "Stable `FR-<AREA>-<n>` IDs" has no cross-run definition; ordinal assignment renumbers on any re-elicit, breaking the FR-ID anchors CRP later depends on. The R2-S1 "assemble whole, never per-item overwrite" discipline *does* hold structurally (synthesis emits one doc), but only if dedupe never drops silently.
+- **Assumptions / conditions:** none.
+- **Suggested improvements:** R1-F3 (dedupe rule + keep-both-on-uncertainty→OQ), R1-F4 (ID stability definition).
+
+**Ask 4 — Is CRP-as-second-gate a clean gate or a circularity risk?**
+- **Summary answer:** Mild circularity; mitigated by a deterministic pre-CRP readiness gate (OQ-RP-8 should resolve to a *blocking* $0 check, not merely an advisory score).
+- **Rationale:** The generator's only correctness signal is the CRP it feeds, and both can share the same model family (self-review blind spots). A $0 deterministic readiness check breaks the loop: it does not judge *quality* (CRP's job) but *readiness* (no unresolved grounding flags on intent FRs, no silently-promoted `<needs-owner>`, no injected headings survived). This is not auto-approval — it gates whether approve is even offered.
+- **Assumptions / conditions:** the readiness check is deterministic and human still approves.
+- **Suggested improvements:** Resolve OQ-RP-8 toward a blocking pre-CRP readiness gate; see plan R1-S2.
+
+**Ask 5 — Value vs cost: is the `$0` baseline worth it; is paid elicitation better than single-author+CRP?**
+- **Summary answer:** The `$0` baseline is worth it (it is the safe floor and the discoverability hook); the paid pass earns its cost only for the *multi-perspective coverage* a single author misses — which is unmeasured today.
+- **Rationale:** The `$0` scaffold (FR-RP-1) is cheap, always-safe, and is exactly what FR-RP-9 points reflective-loop users at; keep it. The paid role pass's differentiator over "single author + CRP" is parallel missing-perspective elicitation (security/compliance/ops), but nothing in the spec *measures* whether the paid pass surfaces perspectives the baseline+CRP would not — so its value is asserted, not demonstrated.
+- **Assumptions / conditions:** none.
+- **Suggested improvements:** Add an OQ (or fold into OQ-RP-8's readiness score) tracking per-area coverage delta baseline→paid, so the paid pass's value is observable rather than assumed.
+
+##### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Interfaces | high | FR-RP-2 must **own owner-resolution**; do not rely on `stakeholder_panel.input_domains.resolve_owner`. State that `route()` (answers_for-vs-value_path) is reusable but owner resolution is new. Add `resolve_owner`'s real location to §Reference-Audit with a "not reusable" note. | `resolve_owner(domain_name, briefs)` lives in `input_domains.py:308-325` (NOT `routing.py`) and calls `get_domain(domain_name)` (line 316) — for any name outside the 3 value DOMAINS (`business-targets`/`conventions`/`build-preferences`) it returns `None`, so **every** RequirementDomain (`problem`/`data`/`ux`/`ops`/`security`/`compliance`) would be skipped and no persona would ever draft. It also keys on `spec.owning_role`, which no RequirementDomain has. The §Reference-Audit table omits `resolve_owner` entirely. | §Reference-Audit table + FR-RP-2 | Unit test: an owned requirements domain resolves to its role via a `RequirementDomain`-aware resolver; assert `input_domains.resolve_owner("security", briefs)` returns `None` (proving non-reuse). |
+| R1-F2 | Validation | medium | Define what "soften" does in FR-RP-4 ("flag + soften"), or reduce to flag-only. As written the mutation is untestable. | FR-RP-4/P3 say effects are "advisory (flag + soften)" but never define whether "soften" edits the candidate text, hedges a grounding enum (as `check_grounding` downgrades GROUNDED→UNCERTAIN, grounding_guard.py:122), or annotates only. An undefined text mutation on a bucket-boundary artifact is a silent-authorship risk. | FR-RP-4, P3 | AC: "a flagged candidate's text is unchanged; only its `flags`/grounding marker is set" (mirror `check_grounding`'s return shape) — testable by byte-comparing candidate text pre/post grounding. |
+| R1-F3 | Data | high | FR-RP-3 must state the dedupe similarity rule and a **keep-both-on-uncertainty → Open Question** tie-break, so dedupe can never silently drop a distinct FR. | "dedupe near-identical FRs" with no rule either under-dedupes (duplicates survive) or over-dedupes (drops a real FR — the very R2-S1 clobber the doc claims to prevent). | FR-RP-3 | Test: two roles' *distinct* FRs that normalize similarly are NOT merged (both survive, or a conflict OQ is emitted); two *identical* FRs merge to one. |
+| R1-F4 | Data | medium | FR-RP-3 must define what "stable `FR-<AREA>-<n>` IDs" means across re-runs (e.g. IDs persisted in the store / content-hash-derived, not re-ordinal-assigned). | Requirements are handed to CRP, which anchors suggestions on FR-IDs. If a re-elicit renumbers FRs, every prior CRP anchor breaks. | FR-RP-3 | Test: re-synthesize with one added candidate; assert pre-existing FR IDs are unchanged. |
+| R1-F5 | Security | high | Broaden FR-RP-7's `^#{2,4}\s` scan to `^#{1,6}\s` **and** setext underlines (`^=+$`/`^-+$` under a text line), and prefer neutralize-on-write over reject-only. | An injected `# ` (h1), `##### ` (h5/h6), or setext heading escapes `#{2,4}` yet still corrupts the doc structure and the CRP `####`-keyed appendix scaffold FR-RP-7 exists to protect. | FR-RP-7 | Test fixtures: `# x`, `###### x`, and a setext `Title\n---` in a persona field are all neutralized before synthesis. |
+| R1-F6 | Interfaces | medium | FR-RP-1 must define "primary entity" for the per-entity FR stub, and how join/compound-`@@id` models are treated. | `prisma_parser` exposes `PrismaModel` with no "primary" notion; "one stub per primary entity" is ambiguous — emitting a stub per join table (compound `@@id`) produces noise, per-model may over-generate. | FR-RP-1 | Test: a schema with 2 domain models + 1 join model yields stubs only for the intended set per the stated rule. |
+
+**Endorsements**: none (no prior rounds).
+**Disagreements**: none (no prior rounds).
+
+#### Review Round R2 — claude-opus-4-8-1m — 2026-07-02
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-07-02 00:00:00 UTC
+- **Scope**: Requirements (F-prefix) — adversarial second pass. Goes deeper than R1: second-order effects, symbol-reuse falsification against live `stakeholder_panel/grounding_guard.py`, `recommend_provenance.py`, `languages/prisma_parser.py`, and interactions *between* untriaged R1 items. Does not restate R1.
+
+##### Executive summary (R2)
+
+- **Falsified-reuse #2**: the docs' prose false-positive *control* leans on the guard's conservative temporal handling, but `_temporal`/`_MONTH_DATE`/`_QUARTER`/`_YEAR` are **private** (only `extract_money`/`extract_percent` are in `__all__`, grounding_guard.py:26-31) — FR-RP-4 writes a **new** `extract_temporal`, so the cited control does not exist unless replicated (R2-F1).
+- **Deterministic prose false-positive**: `_YEAR` = `\b(19|20)\d{2}\b` (grounding_guard.py:44) flags **every** year token in requirement prose ("by 2027", roadmap dates) not verbatim in the brief — the largest, most certain false-positive vector, unaddressed by R1's Ask 2 (R2-F2).
+- **Provenance is doc-level but the artifact is mixed**: FR-RP-5 stamps "the synthesized doc" (singular marker), yet one doc mixes `$0`-baseline stubs + paid role FRs + human edits — a doc-level marker cannot say *which FR is which*, defeating P1's "never indistinguishable" (R2-F3).
+- **Advisory flags have no surface**: FR-RP-8 `review` renders "literal doc bytes"; FR-RP-4 flags are advisory metadata — if flags are not in the bytes the approver never sees them; if they are, they pollute the doc CRP parses (R2-F4).
+- **`compound_unique_keys()` gives R1-F6 a concrete rule**: prisma_parser.py:100-111 already exposes `@@id` composites — "primary entity" is definable deterministically (R2-F5).
+
+##### Feature Requirements Suggestions (R2)
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F1 | Validation | high | FR-RP-4 must specify that the **owned** `extract_temporal` replicates the guard's bare-month exclusion + day-adjacency (`_MONTH_DATE`) and year handling — the false-positive control the docs cite is otherwise absent. | Plan Risk R1 mitigation ("the guard already drops bare month words — grounding_guard.py:39-46") references `_temporal`/`_MONTH_DATE`, which are **private** (not in `__all__`, grounding_guard.py:26-31). FR-RP-4/plan Step 2 write a *new* `extract_temporal`; nothing forces it to inherit the conservative behavior, so the cited prose-safety property is unfounded. | FR-RP-4 (§3B); cross-ref plan Risk R1 | AC: a candidate containing a bare month verb ("may improve latency") produces **no** temporal flag; "March 2027" does. Byte-compare against the private `_temporal` on a fixture corpus. |
+| R2-F2 | Data | high | FR-RP-4 must handle the `_YEAR` prose-flooding case: either prime the project corpus with brief/schema-derived temporal tokens **or** demote bare-year specifics to advisory-low (keep money/percent/explicit-date as the flagging class). | `_YEAR` (`\b(19\|20)\d{2}\b`, grounding_guard.py:44) matches any year; requirement prose routinely cites years ("ship by 2027", "the 2026 roadmap", model IDs embedding 2025). Every year not verbatim in the brief becomes an "unsupported-specific" → the grounding guard chronically false-flags on exactly the prose it is meant to protect. R1's Ask 2 covered percent/ms but not the year vector. | FR-RP-4; P3 | AC: candidate "deliver by 2027" with brief silent on 2027 yields at most an advisory-low flag, never a hard/high flag; a fabricated "$2M ARR" still flags. |
+| R2-F3 | Data | high | FR-RP-5 must carry provenance **per-FR** (inline marker or a provenance manifest keyed by `FR-<AREA>-<n>`), not one doc-level stamp — a synthesized doc mixes `$0`-baseline stubs, paid role FRs, and post-approve human edits. | FR-RP-5 says "the synthesized doc carry a provenance marker" (singular). But P1/FR-RP-5's own promise is "an AI/role-drafted requirement is never indistinguishable from a human-authored one" — a doc-level marker cannot express mixed provenance, so a reader cannot tell which FR is `$0` vs paid vs human. This directly weakens the load-bearing P1 boundary the focus file asks us to pressure-test. | FR-RP-5 | AC: a doc with 1 baseline stub + 1 role FR + 1 human-edited FR carries three distinguishable per-FR provenance markers that survive `review` render and re-parse. |
+| R2-F4 | Interfaces | medium | FR-RP-8 `review` must state **where** advisory grounding flags surface: out-of-band alongside the literal doc bytes (not inside them), and machine-readable so the pre-CRP readiness gate (R1-S2) can consume them. | FR-RP-8 defines `review` as "$0 render of the **literal** doc that would be written"; FR-RP-4 flags are advisory metadata. If flags live only outside the bytes, the human approving via `review` never sees the ungrounded specifics; if inline, they corrupt the doc CRP parses. The seam is unspecified and is exactly the P1 approval surface. | FR-RP-8; FR-RP-4 | AC: `review` output shows N grounding flags while the literal doc bytes contain zero flag text; the same flags are readable by the readiness gate. |
+| R2-F5 | Data | medium | FR-RP-1 should define "primary entity" via the available deterministic API: exclude models whose PK is a compound key over relation FKs (join tables), using `PrismaModel.compound_unique_keys()`. | R1-F6 flagged "primary entity" undefined; the parser already exposes the discriminator — `compound_unique_keys()` returns `@@id`/`@@unique` composites (prisma_parser.py:100-111), so a join model (compound `@@id` over FKs) is detectable with no LLM. FR-RP-1 can cite this rule directly instead of leaving it open. | FR-RP-1 | Test: a schema with 2 domain models + 1 compound-`@@id` join model yields entity-touching stubs only for the 2 domain models. |
+
+**Endorsements** (prior untriaged R1 items this reviewer agrees with):
+- R1-F3: dedupe with no similarity rule is the exact R2-S1 clobber risk; keep-both-on-uncertainty→OQ is the right floor.
+- R1-F4: FR-ID stability is load-bearing because CRP anchors on FR-IDs; a re-elicit renumber silently breaks every prior anchor.
+- R1-F5: broadening the heading scan to `^#{1,6}` + setext is necessary — but see R2 Disagreements for its tension with the R1-S2 readiness gate.
+
+**Disagreements / refinements** (untriaged R1 items to weigh at triage):
+- R1-F2 (refine, not reject): "mirror `check_grounding`'s return shape" is a partial mismatch — a `RequirementCandidate` has **no** self-reported `Grounding` enum to downgrade GROUNDED→UNCERTAIN (that path is persona-answer-specific, grounding_guard.py:118-124). The AC should be "candidate text byte-unchanged; a `flags` list is populated" **without** importing the enum-hedge semantics, else it implies a state the artifact does not have.
+- R1-F5 (tension flag): "prefer neutralize-on-write (demote to blockquote)" conflicts with R1-S2's readiness-gate criterion "any injected heading only demoted (not removed) ⇒ fail approve". A `> ## x` blockquote is safe for `^`-anchored CRP `####` parsing, so demotion *should* pass — the two items must be reconciled (see plan R2-S5).
