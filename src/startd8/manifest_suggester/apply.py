@@ -31,7 +31,7 @@ from typing import Set, Tuple
 
 from startd8.manifest_extraction.grammar import nfkd_kebab
 
-from startd8.manifest_suggester.models import ScreenCandidate
+from startd8.manifest_suggester.models import KIND_PAGE, ScreenCandidate
 
 __all__ = [
     "AUTHORING_REL",
@@ -46,6 +46,35 @@ AUTHORING_REL = Path("docs") / "kickoff" / "inputs" / "screens-authoring.md"
 
 # A `### view: <Name>` section header (level 2-4), from which the extractor derives a view.
 _VIEW_HEADER = re.compile(r"^#{2,4}\s+view:\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+# The `## Pages` section (up to the next heading or EOF) — pages share ONE table (extract_pages reads
+# only the first `## Pages`), so accumulation must MERGE rows into it, not append a second section.
+_PAGES_SECTION = re.compile(
+    r"^##\s+Pages\s*$.*?(?=\n#{1,4}\s|\Z)", re.MULTILINE | re.DOTALL | re.IGNORECASE
+)
+_TABLE_ROW = re.compile(r"^\|(.+)\|\s*$", re.MULTILINE)
+
+
+def _page_rows(text: str) -> list:
+    """(page-name, content-file) rows from the doc's ``## Pages`` table (header/separator skipped)."""
+    m = _PAGES_SECTION.search(text or "")
+    if not m:
+        return []
+    rows = []
+    for rm in _TABLE_ROW.finditer(m.group(0)):
+        cells = [c.strip() for c in rm.group(1).split("|")]
+        if len(cells) < 2:
+            continue
+        name, content = cells[0], cells[1]
+        if not name or name.lower() == "page" or set(name) <= set("- "):
+            continue  # header row or `---` separator
+        rows.append((name, content))
+    return rows
+
+
+def _render_pages_section(rows: list) -> str:
+    lines = ["## Pages", "", "| Page | Content file |", "| ---- | ---- |"]
+    lines += [f"| {name} | {content} |" for name, content in rows]
+    return "\n".join(lines) + "\n"
 
 
 @dataclass
@@ -65,19 +94,38 @@ def read_authoring(project_root: Path | str) -> str:
 
 
 def authored_slugs(authoring_text: str) -> Set[str]:
-    """The view slugs already present in the running authoring doc (dedupe input, FR-MS-3)."""
-    return {nfkd_kebab(m.group(1)) for m in _VIEW_HEADER.finditer(authoring_text or "")}
+    """Slugs already present in the running authoring doc — view headers **and** page rows (FR-MS-3)."""
+    slugs = {
+        nfkd_kebab(m.group(1)) for m in _VIEW_HEADER.finditer(authoring_text or "")
+    }
+    slugs |= {nfkd_kebab(name) for name, _ in _page_rows(authoring_text or "")}
+    return slugs
 
 
 def accumulate(existing: str, candidate: ScreenCandidate) -> Tuple[str, bool]:
-    """Append *candidate*'s prose to *existing* iff its slug is new. Returns (doc, added).
+    """Merge *candidate*'s prose into *existing* iff its slug is new. Returns (doc, added).
 
-    The candidate's prose is **structural** (its ``### view:`` heading is intentional and must survive
-    round-trip) — sanitization (FR-MS-6) is applied to the persona *free-text fields* at draft time
-    (``suggest._build_candidate``), NEVER to the whole prose here, which would demote the real heading.
+    The candidate's prose is **structural** (its ``### view:`` heading / ``## Pages`` table are intentional
+    and must survive round-trip) — sanitization (FR-MS-6) is applied to the persona *free-text fields* at
+    draft time (``suggest._build_candidate``), NEVER to the whole prose here.
+
+    * **View** → appended as its own ``### view:`` section (views are independent sections).
+    * **Page** → its row is merged into the single shared ``## Pages`` table (``extract_pages`` reads only
+      the first such section, so a second ``## Pages`` block would be silently dropped — R2-S1 for pages).
     """
     if candidate.slug in authored_slugs(existing):
         return existing, False
+
+    if candidate.kind == KIND_PAGE:
+        rows = _page_rows(existing)
+        # the candidate's own prose carries its (name, content-file) row — take it, or default the file.
+        own = _page_rows(candidate.prose)
+        rows.append(own[0] if own else (candidate.name, f"{candidate.slug}.md"))
+        body = _PAGES_SECTION.sub("", existing).rstrip("\n")
+        section = _render_pages_section(rows)
+        doc = (body + "\n\n" + section) if body.strip() else section
+        return doc, True
+
     block = candidate.prose.rstrip("\n") + "\n"
     if existing.strip():
         return existing.rstrip("\n") + "\n\n" + block, True

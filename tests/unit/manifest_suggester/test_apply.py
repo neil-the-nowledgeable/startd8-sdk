@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from startd8.cli_screens import screens_app
 from startd8.manifest_suggester import (
+    KIND_PAGE,
     KIND_VIEW,
     ScreenCandidate,
     accumulate,
@@ -61,12 +62,39 @@ def _workspace(name):
 # ── accumulate() unit ─────────────────────────────────────────────────────────
 
 
+def _page(name):
+    slug = name.lower().replace(" ", "-")
+    return ScreenCandidate(
+        kind=KIND_PAGE,
+        name=name,
+        prose=f"## Pages\n\n| Page | Content file |\n| ---- | ---- |\n| {name} | {slug}.md |\n",
+    )
+
+
 def test_accumulate_adds_new_and_skips_duplicate():
     c = _workspace("Ops Console")
     doc, added = accumulate("", c)
     assert added and "### view: Ops Console" in doc
     doc2, added2 = accumulate(doc, c)  # same slug → not added
     assert added2 is False and doc2 == doc
+
+
+def test_accumulate_merges_pages_into_one_table(tmp_path):
+    # Pages share ONE `## Pages` table (extract_pages reads only the first) — accumulation MERGES rows.
+    doc, _ = accumulate("", _page("Settings"))
+    doc2, added = accumulate(doc, _page("About"))
+    assert added
+    assert doc2.count("## Pages") == 1  # one table, not two
+    assert "| Settings | settings.md |" in doc2 and "| About | about.md |" in doc2
+    # a duplicate page slug is not re-added
+    doc3, added3 = accumulate(doc2, _page("Settings"))
+    assert added3 is False and doc3 == doc2
+
+
+def test_accumulate_mixes_views_and_pages(tmp_path):
+    doc, _ = accumulate("", _workspace("Ops Console"))  # a view
+    doc2, _ = accumulate(doc, _page("Settings"))  # a page merges into its own table
+    assert "### view: Ops Console" in doc2 and "## Pages" in doc2
 
 
 # ── apply_screen: first write, then R2-S1 accumulation ───────────────────────
@@ -83,6 +111,15 @@ def test_apply_writes_then_accumulates_without_clobber(tmp_path):
     # R2-S1: the second approve preserves the first — BOTH views present.
     assert sorted(v["name"] for v in _views(proj)) == ["ops_console", "order_dashboard"]
     assert read_authoring(proj).count("### view:") == 2
+
+
+def test_apply_pages_accumulate_into_pages_yaml(tmp_path):
+    # FR-MS-2 + R2-S1 for pages: two approved pages both land in prisma/pages.yaml.
+    proj = _project(tmp_path)
+    assert apply_screen(proj, _page("Settings")).applied
+    assert apply_screen(proj, _page("About")).applied
+    pages = yaml.safe_load((proj / "prisma" / "pages.yaml").read_text())["pages"]
+    assert sorted(p["title"] for p in pages) == ["About", "Settings"]
 
 
 def test_apply_duplicate_is_idempotent(tmp_path):
@@ -175,3 +212,39 @@ def test_cli_approve_requires_name_or_all(tmp_path):
         screens_app, ["approve", "--project", str(proj), "--session", sid]
     )
     assert r.exit_code == 2 and "--name" in r.stdout
+
+
+def test_cli_reject_drops_staged_screen(tmp_path):
+    # FR-MS-7: reject drops a staged screen (never applied) and writes nothing to the app.
+    proj = _project(tmp_path)
+    runner.invoke(screens_app, ["suggest", "--project", str(proj)])
+    sid = _sid(proj)
+    r = runner.invoke(
+        screens_app,
+        [
+            "reject",
+            "--project",
+            str(proj),
+            "--session",
+            sid,
+            "--name",
+            "Order Dashboard",
+        ],
+    )
+    assert r.exit_code == 0 and "rejected" in r.stdout
+    # the session is now empty; review reports nothing staged; nothing was written to the app
+    from startd8.manifest_suggester.store import ScreenCandidateStore
+
+    assert ScreenCandidateStore(proj, sid).load() == []
+    assert not (proj / "prisma" / "views.yaml").exists()
+
+
+def test_cli_reject_unknown_name_errors(tmp_path):
+    proj = _project(tmp_path)
+    runner.invoke(screens_app, ["suggest", "--project", str(proj)])
+    sid = _sid(proj)
+    r = runner.invoke(
+        screens_app,
+        ["reject", "--project", str(proj), "--session", sid, "--name", "Nope"],
+    )
+    assert r.exit_code == 2 and "no staged screen matches" in r.stdout

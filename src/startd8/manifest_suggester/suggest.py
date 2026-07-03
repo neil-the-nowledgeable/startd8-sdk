@@ -25,13 +25,19 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from startd8.logging_config import get_logger
+from startd8.manifest_extraction.grammar import nfkd_kebab
 from startd8.persona_drafting import neutralize_headings, resolve_bounded_owner
 from startd8.stakeholder_panel.models import Grounding
 from startd8.stakeholder_panel.telemetry import span
 
 from startd8.manifest_suggester.baseline import build_graph
 from startd8.manifest_suggester.grounding import ground
-from startd8.manifest_suggester.models import KIND_VIEW, PROV_ESTIMATE, ScreenCandidate
+from startd8.manifest_suggester.models import (
+    KIND_PAGE,
+    KIND_VIEW,
+    PROV_ESTIMATE,
+    ScreenCandidate,
+)
 
 __all__ = [
     "SCREEN_SYMBOL",
@@ -77,13 +83,39 @@ def _parse_markers(text: str) -> Dict[str, str]:
 def _drafting_prompt(entities: List[str]) -> str:
     ent = ", ".join(entities) if entities else "(no declared entities)"
     return (
-        "Propose ONE non-obvious composite SCREEN (a dashboard/board/workspace over the data) that this "
-        "product needs beyond basic entity CRUD — e.g. an overview dashboard, a status board, an admin "
-        f"workspace. Use ONLY these EXACT declared entity names: {ent}.\n"
+        "Propose ONE non-obvious SCREEN this product needs beyond basic entity CRUD — either a composite "
+        "VIEW over the data (a dashboard/board/workspace) OR a non-entity PAGE (e.g. a settings or about "
+        f"page). Use ONLY these EXACT declared entity names in a view: {ent}.\n"
         "It is a DRAFT a human will approve, not a decision — or DEFER if nothing non-obvious is needed.\n"
         "Reply in ONE line, exactly:\n"
-        "NAME: <short screen name> || KIND: <dashboard|board|workspace> || ROOT: <one entity> || "
-        "SHOWS: <comma-separated related entities, or none>"
+        "NAME: <short screen name> || KIND: <dashboard|board|workspace|page> || ROOT: <one entity, or "
+        "none for a page> || SHOWS: <comma-separated related entities, or none>"
+    )
+
+
+def _build_page_candidate(
+    name: str, owner: str, answer: Any, session_id: str
+) -> ScreenCandidate:
+    """A non-entity page shell (FR-MS-2): the structural `## Pages` row; the content file is the human's."""
+    name = (
+        name.replace("|", "/").strip() or "Page"
+    )  # a `|` would break the markdown table cell
+    slug = nfkd_kebab(name)
+    prose = (
+        "## Pages\n\n| Page | Content file |\n| ---- | ---- |\n"
+        f"| {name} | {slug}.md |\n"
+    )
+    return ScreenCandidate(
+        kind=KIND_PAGE,
+        name=name,
+        prose=prose,
+        entities_referenced=(),  # a non-entity page grounds trivially (no entity to resolve)
+        provenance=PROV_ESTIMATE,
+        role_id=owner,
+        model=getattr(answer, "model", ""),
+        cost_usd=getattr(answer, "cost_usd", 0.0),
+        session_id=session_id,
+        created_at=getattr(answer, "created_at", ""),
     )
 
 
@@ -91,9 +123,11 @@ def _build_candidate(
     graph, owner: str, answer: Any, session_id: str
 ) -> Optional[ScreenCandidate]:
     markers = _parse_markers(answer.text)
-    # FR-MS-6: sanitize the persona free-text (name) BEFORE it becomes a `### view:` heading.
+    # FR-MS-6: sanitize the persona free-text (name) BEFORE it becomes a `### view:` heading / page row.
     name = neutralize_headings(markers.get("NAME", "").strip()) or "Overview"
     kind = markers.get("KIND", "dashboard").strip().lower()
+    if kind == "page":
+        return _build_page_candidate(name, owner, answer, session_id)
     if kind not in _V1_KINDS:
         kind = "dashboard"
     root = (

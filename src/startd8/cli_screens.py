@@ -251,3 +251,35 @@ def screens_approve(
     console.print(
         f"  {applied}/{len(targets)} applied → prisma/views.yaml (via the manifest proposal)"
     )
+
+
+@screens_app.command("reject")
+def screens_reject(
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
+    session: Optional[str] = typer.Option(
+        None, "--session", help="Suggestion session id."
+    ),
+    name: str = typer.Option(
+        ..., "--name", help="Reject (drop) one staged screen by name/slug."
+    ),
+) -> None:
+    """Drop a staged screen so it is never proposed for approval (FR-MS-7). Writes nothing to the app."""
+    from startd8.manifest_extraction.grammar import nfkd_kebab
+
+    from .manifest_suggester.store import ScreenCandidateStore
+
+    sid, candidates = _load_staged(project_root, session)
+    if sid is None or not candidates:
+        console.print("[red]screens:[/red] no staged screens — run `suggest` first.")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    slug = nfkd_kebab(name)
+    kept = [c for c in candidates if c.slug != slug]
+    if len(kept) == len(candidates):
+        console.print(f"[red]screens:[/red] no staged screen matches {name!r}.")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    ScreenCandidateStore(project_root, sid).save(kept)
+    console.print(
+        f"[green]screens:[/green] rejected {name} ({len(candidates) - len(kept)} dropped, "
+        f"{len(kept)} remain in session {sid})"
+    )
