@@ -32,9 +32,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..logging_config import get_logger
+
+if TYPE_CHECKING:  # type-only; the runtime import stays lazy to keep this module import-light
+    from ..kickoff_experience.proposals import ProposalBuffer
 
 logger = get_logger(__name__)
 
@@ -160,6 +163,13 @@ class ProposalsFileError(ValueError):
     """The ``--proposals`` file is unreadable or structurally malformed (exit 2, nothing written)."""
 
 
+def _rejection_detail(ack: str) -> str:
+    """Pretty the propose-handler ack for an error message — used only for the *message*, never as
+    the accept/reject decision (that comes from the buffer-length delta, so a change to the handler's
+    ack wording can never silently turn a rejection into an acceptance)."""
+    return ack[len("error:"):].strip() if ack.startswith("error:") else ack.strip()
+
+
 def _load_proposals_file(path: Path) -> List[Dict[str, Any]]:
     """Parse an authored ``--proposals`` file into a list of ``{kind, ...params}`` entries (OQ-7).
 
@@ -201,19 +211,26 @@ def _load_proposals_file(path: Path) -> List[Dict[str, Any]]:
 
 def _buffer_from_entries(
     project_root: Any, entries: List[Dict[str, Any]]
-) -> "Any":
+) -> "ProposalBuffer":
     """Validate each authored entry through the **same per-kind validators the propose handler uses**
     (FR-12) and record it into a :class:`ProposalBuffer` — building each as a ``ProposedAction`` so the
     downstream ``serialize_buffer`` keeps envelope parity (FR-14). A rejected entry raises
-    :class:`ProposalsFileError` before anything is serialized (exit 2, no half-written inbox)."""
+    :class:`ProposalsFileError` before anything is serialized (exit 2, no half-written inbox).
+
+    Accept/reject is decided by whether the handler **recorded into the buffer** (its actual contract),
+    not by sniffing the ack string — so a reworded handler message can never silently admit a bad
+    proposal."""
     from ..kickoff_experience.proposals import ProposalBuffer, make_propose_handler
 
     buffer = ProposalBuffer()
     handler = make_propose_handler(str(project_root), buffer)
     for i, entry in enumerate(entries):
+        before = len(buffer)
         ack = handler(dict(entry))
-        if ack.startswith("error:"):
-            raise ProposalsFileError(f"proposal #{i} ({entry.get('kind')!r}) rejected — {ack[7:].strip()}")
+        if len(buffer) == before:  # the handler records only on success — nothing recorded ⇒ rejected
+            raise ProposalsFileError(
+                f"proposal #{i} ({entry.get('kind')!r}) rejected — {_rejection_detail(ack)}"
+            )
     return buffer
 
 
@@ -259,8 +276,8 @@ def produce_inbox(
         buffer = ProposalBuffer()
         handler = make_propose_handler(str(root), buffer)
         ack = handler({"kind": "instantiate", "posture": posture})
-        if ack.startswith("error:"):
-            return {"status": "rejected", "detail": ack[7:].strip()}
+        if len(buffer) == 0:  # not recorded ⇒ rejected (buffer-delta, not string-sniffing)
+            return {"status": "rejected", "detail": _rejection_detail(ack)}
         source = {"kind": "instantiate", "posture": posture}
     else:
         return {"status": "no_gap", "detail": "inbox-ready; no deterministic gap to propose against"}

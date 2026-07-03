@@ -98,6 +98,7 @@ def project_init(
     """
     import json as _json
 
+    from .concierge.safe_write import SafeWriteError
     from .project.init import ProposalsFileError, run_project_init
 
     root = project_root or Path.cwd()
@@ -114,13 +115,9 @@ def project_init(
     except ProposalsFileError as exc:  # FR-12 — bad producer input (bad file or flag conflict)
         console.print(f"[red]project init: bad input:[/red] {exc}")
         raise typer.Exit(_EXIT_BAD_INPUT)
-    except Exception as exc:  # confinement / symlink refusal and the like
-        from .concierge.safe_write import SafeWriteError
-
-        if isinstance(exc, SafeWriteError):
-            console.print(f"[red]project init blocked:[/red] {exc}")
-            raise typer.Exit(_EXIT_BLOCKED)
-        raise
+    except SafeWriteError as exc:  # confinement / symlink refusal (FR-7)
+        console.print(f"[red]project init blocked:[/red] {exc}")
+        raise typer.Exit(_EXIT_BLOCKED)
 
     if json_out:
         # Plain stdout (not Rich console) so CI gets unwrapped, parseable JSON.
