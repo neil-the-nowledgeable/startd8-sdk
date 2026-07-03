@@ -43,6 +43,21 @@ def _cached_input_tokens(usage) -> int:
     return max(0, int(cached)) if cached is not None else 0
 
 
+def _build_user_content(prompt: str, images: Optional[list]):
+    """Build the OpenAI user-message ``content`` (FR-MMC-2, shared by both agent classes).
+
+    Returns the bare ``prompt`` string when there are no images — keeping the request
+    payload byte-identical to the text-only path (byte-identity invariant). With images,
+    returns a content-parts list: a text part followed by one ``image_url`` part each.
+    """
+    if not images:
+        return prompt
+    from .multimodal import to_openai_part
+    parts = [{"type": "text", "text": prompt}]
+    parts.extend(to_openai_part(img) for img in images)
+    return parts
+
+
 def _build_chat_kwargs(
     model: str,
     messages: list,
@@ -190,6 +205,7 @@ class GPT4Agent(BaseAgent):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         stop: Optional[list] = None,
+        images: Optional[list] = None,
     ):
         """
         Make the raw API call to OpenAI.
@@ -207,11 +223,14 @@ class GPT4Agent(BaseAgent):
                 passed to the API call. If None, the API default is used.
             stop: Optional list of stop sequences. When provided, the API will
                 stop generating when any of these sequences is encountered.
+            images: Optional list of ``multimodal.ImageInput`` (FR-MMC-2). When present
+                the user message becomes a content-parts list (text + ``image_url``
+                parts); when absent the payload is byte-identical to the text-only path.
         """
         messages = []
         if system_prompt is not None:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "user", "content": _build_user_content(prompt, images)})
 
         token_limit = max_tokens if max_tokens is not None else self.max_tokens
         # GPT4Agent always targets the real OpenAI endpoint → enforce next-gen params.
@@ -227,9 +246,13 @@ class GPT4Agent(BaseAgent):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         stop: Optional[list] = None,
+        images: Optional[list] = None,
     ) -> GenerateResult:
         """
         Generate response using GPT-4 async API.
+
+        ``images`` (optional, FR-MMC-2): list of ``multimodal.ImageInput`` sent as
+        ``image_url`` content parts. Omitted/empty ⇒ byte-identical text-only path.
 
         If retry_config is set, transient failures (rate limits, server errors)
         will be automatically retried with exponential backoff.
@@ -267,13 +290,13 @@ class GPT4Agent(BaseAgent):
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
-                    stop=stop,
+                    stop=stop, images=images,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
-                    stop=stop,
+                    stop=stop, images=images,
                 )
 
         except RetryError as e:
@@ -872,6 +895,7 @@ class OpenAICompatibleAgent(BaseAgent):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         stop: Optional[list] = None,
+        images: Optional[list] = None,
     ):
         """
         Make the raw API call to the OpenAI-compatible endpoint.
@@ -889,11 +913,13 @@ class OpenAICompatibleAgent(BaseAgent):
                 passed to the API call. If None, the API default is used.
             stop: Optional list of stop sequences. When provided, the API will
                 stop generating when any of these sequences is encountered.
+            images: Optional list of ``multimodal.ImageInput`` (FR-MMC-2). Rendered as
+                ``image_url`` content parts; absent ⇒ byte-identical text-only payload.
         """
         messages = []
         if system_prompt is not None:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "user", "content": _build_user_content(prompt, images)})
 
         token_limit = max_tokens if max_tokens is not None else self.max_tokens
         # Only enforce next-gen params against the real OpenAI endpoint (M3).
@@ -910,6 +936,7 @@ class OpenAICompatibleAgent(BaseAgent):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         stop: Optional[list] = None,
+        images: Optional[list] = None,
     ) -> GenerateResult:
         """
         Generate response using OpenAI-compatible API (async).
@@ -949,13 +976,13 @@ class OpenAICompatibleAgent(BaseAgent):
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
-                    stop=stop,
+                    stop=stop, images=images,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
-                    stop=stop,
+                    stop=stop, images=images,
                 )
 
             end_time = time.time()

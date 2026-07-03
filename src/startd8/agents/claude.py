@@ -279,6 +279,7 @@ class ClaudeAgent(BaseAgent):
         tools: Optional[list] = None,
         tool_choice: Optional[dict] = None,
         messages: Optional[list] = None,
+        images: Optional[list] = None,
     ):
         """
         Make the raw API call to Anthropic.
@@ -306,14 +307,23 @@ class ClaudeAgent(BaseAgent):
                 effective_max_tokens, NONSTREAMING_MAX_TOKENS_CEILING, self.name, self.model,
             )
             effective_max_tokens = NONSTREAMING_MAX_TOKENS_CEILING
+        # FR-MMC-2: when images are supplied, the single user message becomes a content
+        # block list (text + image blocks). When absent, the payload is byte-identical to
+        # the text-only path (byte-identity invariant). A full canonical message list
+        # (multi-turn tool loop) still takes precedence over both.
+        if messages is not None:
+            resolved_messages = messages
+        elif images:
+            from .multimodal import to_anthropic_block
+            content = [{"type": "text", "text": prompt}]
+            content.extend(to_anthropic_block(img) for img in images)
+            resolved_messages = [{"role": "user", "content": content}]
+        else:
+            resolved_messages = [{"role": "user", "content": prompt}]
         kwargs = {
             "model": self.model,
             "max_tokens": effective_max_tokens,
-            # FR-0: a full canonical message list (multi-turn tool loop) takes precedence; a single
-            # prompt string is the legacy single-message convenience path.
-            "messages": messages if messages is not None else [
-                {"role": "user", "content": prompt}
-            ],
+            "messages": resolved_messages,
         }
         if system_prompt is not None:
             if self.enable_prompt_caching:
@@ -340,9 +350,14 @@ class ClaudeAgent(BaseAgent):
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        images: Optional[list] = None,
     ) -> GenerateResult:
         """
         Generate response using Claude async API.
+
+        ``images`` (optional, FR-MMC-2): a list of ``multimodal.ImageInput`` sent
+        alongside the prompt as Anthropic image blocks. Omitted/empty ⇒ text-only path
+        (byte-identical request payload).
 
         If retry_config is set, transient failures (rate limits, server errors)
         will be automatically retried with exponential backoff.
@@ -376,12 +391,12 @@ class ClaudeAgent(BaseAgent):
                 make_call = with_retry(self.retry_config)(self._make_api_call)
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
-                    temperature=temperature,
+                    temperature=temperature, images=images,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
-                    temperature=temperature,
+                    temperature=temperature, images=images,
                 )
 
         except RetryError as e:
