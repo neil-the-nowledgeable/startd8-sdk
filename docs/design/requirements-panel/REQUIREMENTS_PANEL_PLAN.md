@@ -152,17 +152,48 @@ Appendix B (rejected with rationale). **Do not delete A/B** — cross-model memo
 - **When validating (orchestrator)**: append a row to Appendix A (applied) or Appendix B (rejected).
 - **If rejecting**: record **why** (specific rationale).
 
+### Areas Substantially Addressed (>= 3 accepted)
+
+- **Validation**: 4 accepted (R1-S2, R1-S4, R1-S5, R2-S5)
+
+### Areas Needing Further Review (below threshold of 3)
+
+- **Interfaces**: 2/3 accepted (R1-S1, R2-S1)
+- **Risks**: 2/3 accepted (R1-S3, R2-S4)
+- **Data**: 2/3 accepted (R2-S2, R2-S3)
+- **Architecture**: 1/3 accepted (R1-S6)
+- **Ops**: 1/3 accepted (R2-S6)
+- **Security**: 0/3 accepted (covered on the requirements side; R1-F5/R2-S5 heading-injection)
+
+> Triage disposition: **all 12 R1+R2 S-suggestions ACCEPTED**; Appendix B empty. Bodies not yet
+> rewritten — these notes are the v0.4 delta. Two cross-item reconciliations resolved at triage:
+> **R1-S6 → synthesis is fully deterministic `$0`** (conflict-framing lifts existing sanitized+grounded
+> candidate text into an Open Question, generating no new LLM prose), which makes **R2-S6 satisfied by
+> construction**; and **R1-S2 ↔ R1-F5** reconciled via **R2-S5** (blockquote-demotion is the neutralize
+> primitive; the readiness gate fails only on a surviving line-start `^#{1,6}`/setext heading).
+
 ### Appendix A: Applied Suggestions
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-S1 | `resolve_owner` is **not** reusable — own a `RequirementDomain`-aware owner resolver; fix "reusable as-is" + the `routing.route` co-location error | claude-opus-4-8-1m (R1) | ACCEPT — **high, blocking**. Verified `input_domains.resolve_owner:308-325` calls `get_domain()` → returns `None` for any non-value-domain name (would skip every requirements area). v0.4: correct Planning-discoveries row 4 + Step 3; add `resolve_owner` to §Reference-Audit marked **not reusable**; own `resolve_requirement_owner`. Test: `resolve_owner("security", briefs) is None`. | 2026-07-02 |
+| R2-S1 | The "mirror `recommend_inputs`" claim fails a **second** time — `_default_domains` is YAML-file-driven; own the enumerator too. Replace with an explicit reuse-vs-own table | claude-opus-4-8-1m (R2) | ACCEPT — **high**. Verified `recommend.py:162-168` gates on `rel_path().is_file()`; requirements domains are an in-code registry with no YAML → verbatim mirror enumerates zero. v0.4: Step 3 gets a **Reuse** (`panel.ask`/`preflight_budget`/`telemetry.span`/`routing.route`) vs **Own** (enumeration + owner-resolution + grounding) table. Test: no path calls `recommend._default_domains`. | 2026-07-02 |
+| R1-S3 | Define stale-session detection **and** make existence-check + write atomic (`O_EXCL`), not check-then-`os.replace` (TOCTOU) | claude-opus-4-8-1m (R1) | ACCEPT — **high**. `ProposalStore`'s atomic staging doesn't protect the target `*_REQUIREMENTS.md`. v0.4: Step 6 + new Risk R5. Test: pre-existing target → refuse byte-unchanged; concurrent-create race → no clobber. Pairs with R2-S4 (the lifecycle half). | 2026-07-02 |
+| R2-S4 | Add a post-CRP re-elicit **lifecycle**: once a versioned doc exists, `elicit`/`approve` **refuse permanently** and point to edit-in-place | claude-opus-4-8-1m (R2) | ACCEPT — **high**. R1-S3 fixes the race; this fixes the lifecycle. The doc's purpose is to evolve via CRP/human → re-elicit must never regenerate over it. v0.4: Step 6 clause + new Risk R6. Test: `elicit` against a v0.2 doc refuses with an edit-in-place pointer, no bytes change. | 2026-07-02 |
+| R1-S2 | Add Step 6.5 — a **`$0` deterministic pre-CRP readiness gate** that blocks (never auto-approves) `approve` on unresolved grounding flags on MUST/SHALL, promoted `<needs-owner>` stubs, or surviving injected headings | claude-opus-4-8-1m (R1) | ACCEPT — **high**. Breaks the FR-RP-6/P6 circularity (focus ask 4) with a deterministic gate, resolving **OQ-RP-8 toward a blocking readiness gate** (not merely an advisory score). Gate criterion refined by R2-S5 (line-start heading survives ⇒ fail). Test: an ungrounded `$2M ARR` intent FR refuses approve until resolved. | 2026-07-02 |
+| R2-S2 | The owned `extract_temporal` must **port** the guard's private `_MONTH_DATE` bare-month exclusion + day-adjacency, or strike the Risk-R1 mitigation clause citing `grounding_guard.py:39-46` | claude-opus-4-8-1m (R2) | ACCEPT — **high**. Verified `_temporal`/`_MONTH_DATE` are private (`__all__` at :26-31 exports only money/percent). The cited prose-safety property is unfounded unless replicated. v0.4: Step 2 states the port; ties requirements R2-F1. Test: bare month verb → no flag; "March 2027" → flag. | 2026-07-02 |
+| R1-S6 | Reconcile the synthesis determinism boundary — CLI Step 6 says `synthesize` `$0`, Risk R2 calls it "the hard LLM step" | claude-opus-4-8-1m (R1) | ACCEPT — **medium**, **resolved toward fully `$0`/deterministic synthesis**: dedupe/ID/order **and** conflict-lifting are mechanical (a conflict lifts the two candidates' already-sanitized+grounded text verbatim into an Open Question; no new LLM prose). v0.4: rewrite Risk R2 to drop the "hard LLM step" framing; FR-RP-3/Step 5 state synthesis spends `$0`. This resolution makes **R2-S6 moot by construction**. Test: `synthesize` makes no LLM call. | 2026-07-02 |
+| R2-S6 | If synthesis conflict-framing spends, run sanitize+ground **on synthesis output** (Step 4 currently precedes Step 5) | claude-opus-4-8-1m (R2) | ACCEPT — **medium**, **satisfied by the R1-S6 resolution**. Because synthesis is now fully `$0` and emits only already-sanitized+grounded candidate text (no post-synthesis LLM prose), nothing bypasses Step 4/Step 2. v0.4: add a §7 assertion that synthesis introduces no un-sanitized text (guards the invariant even if a future increment makes conflict-framing spend — at which point this re-opens). | 2026-07-02 |
+| R2-S3 | Specify (a) a **distinct** `$0`-baseline provenance value (not `ESTIMATE_PROVENANCE`) and (b) a **per-FR** provenance carrier on `RequirementDoc` | claude-opus-4-8-1m (R2) | ACCEPT — **medium/high**. Verified `is_estimate` requires `origin.startswith("panel:")` (`recommend_provenance.py:44-46`); a no-LLM baseline stub has no persona origin. Extends R1-S5; supplies the granularity requirements R2-F3 needs for P1. v0.4: Steps 3/5 + FR-RP-5. Test: `is_estimate(baseline_stub)` is False; per-FR provenance round-trips. | 2026-07-02 |
+| R1-S5 | Downgrade the self-check's FR-RP-2 (→ Partial until owner-resolution owned) and FR-RP-5 (→ Partial until a distinct baseline provenance constant) | claude-opus-4-8-1m (R1) | ACCEPT — **medium**. Honest coverage correction. v0.4: update the self-check matrix; the FR-RP-5 fix is the **two-part** R2-S3 change (distinct value **and** per-FR granularity), not just avoiding `ESTIMATE_PROVENANCE`. | 2026-07-02 |
+| R2-S5 | Reconcile R1-F5 ↔ R1-S2: adopt blockquote-demotion as the neutralize primitive **and** redefine the gate criterion to "a **line-start** `^#{1,6}`/setext heading survives ⇒ fail" | claude-opus-4-8-1m (R2) | ACCEPT — **medium**. Resolves the internal contradiction (a `> ## x` blockquote is safe for `^`-anchored CRP `####` parsing → demotion passes; a bare `^## x` fails). v0.4: Step 4 + Step 6.5. Test: demoted `> ## x` passes the gate; bare `^## x` fails; CRP `####` parse sees no injected section. | 2026-07-02 |
+| R1-S4 | §7 add three tests: (a) owner-resolution vs a requirements roster, (b) FR-RP-9 discoverability pointer, (c) the readiness gate | claude-opus-4-8-1m (R1) | ACCEPT — **medium**. Closes the validation gaps R1-S1/R1-S2/FR-RP-9 opened. v0.4: §7 Validation Strategy. The three named tests pass. | 2026-07-02 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| (none yet — all R1–R2 S-suggestions accepted; see Appendix A) |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 

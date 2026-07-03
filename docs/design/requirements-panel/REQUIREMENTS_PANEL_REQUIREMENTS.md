@@ -304,17 +304,44 @@ stops later reviewers from re-proposing settled or rejected ideas.
 - **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same
   idea.
 
+### Areas Substantially Addressed (>= 3 accepted)
+
+- **Data**: 5 accepted (R1-F3, R1-F4, R2-F2, R2-F3, R2-F5)
+- **Interfaces**: 3 accepted (R1-F1, R1-F6, R2-F4)
+
+### Areas Needing Further Review (below threshold of 3)
+
+- **Validation**: 2/3 accepted (R1-F2, R2-F1)
+- **Security**: 1/3 accepted (R1-F5)
+
+> Triage disposition: **all 11 R1+R2 F-suggestions ACCEPTED**; Appendix B empty. Bodies not yet
+> rewritten — these notes are the v0.4 delta. Two accepted **as-refined** by R2's disagreement block:
+> **R1-F2** (drop the "mirror `check_grounding`'s enum-hedge" AC — a `RequirementCandidate` has no
+> self-reported `Grounding` enum; AC becomes "candidate text byte-unchanged; a `flags` list is
+> populated") and **R1-F5** (broaden the scan, but the neutralize-vs-gate tension with plan R1-S2 is
+> reconciled by plan R2-S5: blockquote-demotion passes, a surviving line-start heading fails).
+
 ### Appendix A: Applied Suggestions
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F1 | FR-RP-2 must **own** owner-resolution; state `route()` reusable but `resolve_owner` not; add it to §Reference-Audit as "not reusable" | claude-opus-4-8-1m (R1) | ACCEPT — **high**. Requirements-side mirror of plan R1-S1 (`input_domains.resolve_owner:308-325` returns `None` off the 3 value domains). v0.4: FR-RP-2 + §Reference-Audit row. Test: `resolve_owner("security", briefs) is None`; the owned resolver returns the role. | 2026-07-02 |
+| R1-F3 | FR-RP-3 must state the dedupe **similarity rule** + a **keep-both-on-uncertainty → Open Question** tie-break, so dedupe never silently drops a distinct FR | claude-opus-4-8-1m (R1) | ACCEPT — **high** (endorsed R2). Under-defined dedupe is the exact R2-S1-class clobber. v0.4: FR-RP-3. Test: two roles' *distinct* similar-normalizing FRs both survive (or → OQ); two *identical* FRs merge to one. | 2026-07-02 |
+| R1-F5 | Broaden FR-RP-7's heading scan to `^#{1,6}\s` **and** setext underlines (`^=+$`/`^-+$`); neutralize-on-write | claude-opus-4-8-1m (R1) | ACCEPT — **high, as-reconciled by plan R2-S5**. Scan broadening accepted outright (`#{2,4}` misses h1/h5/h6 + setext). The "neutralize-on-write" half is reconciled with the readiness gate (plan R1-S2) via **plan R2-S5**: blockquote-demotion is the primitive; the gate fails only on a surviving line-start heading. v0.4: FR-RP-7. Test fixtures: `# x`, `###### x`, setext `Title\n---` all neutralized. | 2026-07-02 |
+| R2-F2 | FR-RP-4 must handle `_YEAR` prose-flooding — prime the corpus with brief/schema temporal tokens **or** demote bare-year specifics to advisory-low | claude-opus-4-8-1m (R2) | ACCEPT — **high**. Verified `_YEAR = \b(19\|20)\d{2}\b` (`grounding_guard.py:44`) matches every year in prose ("by 2027", model IDs) → chronic false flags. v0.4: split FR-RP-4 severities — money/percent/explicit-date flag; bare year advisory-low. Test: "deliver by 2027" (brief silent) → advisory-low; "$2M ARR" still flags. | 2026-07-02 |
+| R2-F3 | FR-RP-5 must carry provenance **per-FR** (inline marker or manifest keyed by `FR-<AREA>-<n>`), not one doc-level stamp | claude-opus-4-8-1m (R2) | ACCEPT — **high**. Load-bearing for P1's "never indistinguishable" — a mixed doc ($0 stub + role FR + human edit) can't be expressed doc-level. Pairs with plan R2-S3. v0.4: FR-RP-5. Test: 1 baseline + 1 role + 1 human FR carry three distinguishable per-FR markers surviving `review` + re-parse. | 2026-07-02 |
+| R2-F5 | Define "primary entity" (FR-RP-1) via `PrismaModel.compound_unique_keys()` — exclude compound-`@@id` join tables | claude-opus-4-8-1m (R2) | ACCEPT — **medium**. Supplies R1-F6's concrete deterministic rule (`prisma_parser.py:100-111`). v0.4: FR-RP-1 cites it. Test: 2 domain models + 1 compound-`@@id` join model → stubs for the 2 only. | 2026-07-02 |
+| R1-F4 | FR-RP-3 must define what "stable `FR-<AREA>-<n>` IDs" means across re-runs (persisted/content-hash, not re-ordinal) | claude-opus-4-8-1m (R1) | ACCEPT — **medium** (endorsed R2). CRP anchors on FR-IDs; a re-elicit renumber breaks every prior anchor. v0.4: FR-RP-3. Test: re-synthesize with one added candidate → pre-existing FR IDs unchanged. | 2026-07-02 |
+| R2-F1 | FR-RP-4's owned `extract_temporal` must replicate the guard's bare-month exclusion + day-adjacency (`_MONTH_DATE`) | claude-opus-4-8-1m (R2) | ACCEPT — **high**. Requirements-side of plan R2-S2; the cited prose-safety control is private/non-reused. v0.4: FR-RP-4. Test: bare month verb → no temporal flag; "March 2027" → flag. | 2026-07-02 |
+| R1-F6 | FR-RP-1 must define "primary entity" and join/compound-`@@id` handling | claude-opus-4-8-1m (R1) | ACCEPT — **medium**, **implemented via R2-F5** (`compound_unique_keys()` is the discriminator). v0.4: FR-RP-1. Test: schema with 2 domain + 1 join model yields stubs for the intended set. | 2026-07-02 |
+| R2-F4 | FR-RP-8 `review` must state **where** advisory grounding flags surface — out-of-band alongside the literal bytes, machine-readable for the readiness gate (R1-S2) | claude-opus-4-8-1m (R2) | ACCEPT — **medium**. Resolves the FR-RP-7/R3-S2 vs FR-RP-4 seam: flags out-of-band (approver sees them; doc bytes stay clean for CRP). v0.4: FR-RP-8 + FR-RP-4. Test: `review` shows N flags while doc bytes contain zero flag text; the gate reads the same flags. | 2026-07-02 |
+| R1-F2 | Define what "soften" does in FR-RP-4, or reduce to flag-only | claude-opus-4-8-1m (R1) | ACCEPT — **medium, as-refined by R2**. Drop the original "mirror `check_grounding`'s return shape" AC — a `RequirementCandidate` has **no** self-reported `Grounding` enum to downgrade (that path is persona-answer-specific, `grounding_guard.py:118-124`). Refined AC: **candidate text is byte-unchanged; only a `flags` list is populated** (no enum-hedge). v0.4: FR-RP-4, P3. Test: byte-compare candidate text pre/post grounding. | 2026-07-02 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| (none yet — all R1–R2 F-suggestions accepted; see Appendix A) |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
