@@ -28,6 +28,7 @@ GATE_PATH = REPO / "docs/design/benchmark-bias-audit/bias_audit_openai/oracle/va
 # env, and a documented rationale for every privilege-bearing flag. Recorded into run metadata as
 # NAMES + flags only — never secret values.
 TOOL_POLICY_VERSION = "tool-policy/1"
+DEFAULT_SMOKE_TIMEOUT_SECONDS = 600.0
 TOOL_POLICY: dict[str, dict] = {
     "claude-code": {
         "vendor": "anthropic",
@@ -421,7 +422,9 @@ def execute_run(
     executable_path: str,
     prompt_text: str,
     working_directory: Path,
-    env: dict[str, str]
+    env: dict[str, str],
+    *,
+    timeout_s: float | None = None,
 ) -> tuple[int, str, str]:
     if tool_id not in TOOL_POLICY:
         raise ValueError(f"unknown tool_id: {tool_id}")
@@ -434,8 +437,14 @@ def execute_run(
             text=True,
             cwd=working_directory,
             env=env,
+            timeout=timeout_s,
         )
         return res.returncode, res.stdout, res.stderr
+    except subprocess.TimeoutExpired as e:
+        stdout = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        stderr = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        detail = f"timed out after {timeout_s:g} seconds" if timeout_s is not None else "timed out"
+        return 124, stdout, (stderr + ("\n" if stderr else "") + detail)
     except Exception as e:  # noqa: BLE001
         return -1, "", str(e)
 
@@ -450,9 +459,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="Run a bounded non-evidence smoke subset. Artifacts are segregated under smoke/ and must not be promoted.")
     parser.add_argument("--smoke-samples-per-cell", type=int, default=1,
                         help="Number of samples per experiment/tool cell in --smoke mode (default: 1).")
+    parser.add_argument("--smoke-timeout-seconds", type=float, default=DEFAULT_SMOKE_TIMEOUT_SECONDS,
+                        help="Per-run timeout in --smoke mode (default: 600).")
+    parser.add_argument("--run-timeout-seconds", type=float, default=None,
+                        help="Optional per-run timeout in full --run mode. Unbounded when omitted.")
     args = parser.parse_args(argv)
     if args.run and args.smoke:
         parser.error("--run and --smoke are mutually exclusive")
+    if args.smoke and args.smoke_timeout_seconds <= 0:
+        parser.error("--smoke-timeout-seconds must be > 0")
+    if args.run_timeout_seconds is not None and args.run_timeout_seconds <= 0:
+        parser.error("--run-timeout-seconds must be > 0")
     try:
         manifest = prepare._load_manifest(args.manifest)
         prepare.validate_manifest(manifest)
@@ -512,9 +529,13 @@ def main(argv: list[str] | None = None) -> int:
     total_runs = len(runs)
     retry_policy = plan["retry_policy"]
     max_retries = 0 if args.smoke else retry_policy.get("max_automated_retries", 1)
+    timeout_s = args.smoke_timeout_seconds if args.smoke else args.run_timeout_seconds
 
     if args.smoke:
-        print(f"Starting NON-EVIDENCE smoke execution of {total_runs} randomized authoring runs...")
+        print(
+            f"Starting NON-EVIDENCE smoke execution of {total_runs} randomized authoring runs "
+            f"(timeout {timeout_s:g}s per run)..."
+        )
     else:
         print(f"Starting execution of {total_runs} randomized authoring runs...")
     for item in runs:
@@ -571,8 +592,16 @@ def main(argv: list[str] | None = None) -> int:
             provision_workspace(REPO, run_workspace, experiment)
 
             start_time = datetime.now(timezone.utc).isoformat()
-            code, stdout, stderr = execute_run(tool_id, executable_path, prompt_text, run_workspace, tool_env)
+            code, stdout, stderr = execute_run(
+                tool_id,
+                executable_path,
+                prompt_text,
+                run_workspace,
+                tool_env,
+                timeout_s=timeout_s,
+            )
             end_time = datetime.now(timezone.utc).isoformat()
+            timed_out = code == 124
 
             if experiment == "spec_author":
                 required_files = ["spec.md", "authoring_manifest.json"]
@@ -593,6 +622,8 @@ def main(argv: list[str] | None = None) -> int:
             attempt_meta = {
                 "attempt": attempts, "status": status_str, "exit_code": code,
                 "missing_files": missing_files,
+                "timed_out": timed_out,
+                "timeout_seconds": timeout_s,
                 "started_at_utc": start_time, "finished_at_utc": end_time,
             }
             record_attempt(run_capture_dir, attempts, prompt_text=prompt_text, stdout=stdout,
@@ -623,6 +654,8 @@ def main(argv: list[str] | None = None) -> int:
             "status": "success" if success else "failed",
             "exit_code": attempt_records[-1]["exit_code"],
             "missing_files": attempt_records[-1]["missing_files"],
+            "timed_out": attempt_records[-1]["timed_out"],
+            "timeout_seconds": timeout_s,
             "started_at_utc": attempt_records[0]["started_at_utc"],
             "finished_at_utc": attempt_records[-1]["finished_at_utc"],
             "attempts": attempts,
