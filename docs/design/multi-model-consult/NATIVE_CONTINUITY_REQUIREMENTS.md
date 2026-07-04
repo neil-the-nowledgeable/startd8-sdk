@@ -94,9 +94,12 @@ the model saw in turn 1. The result is a real answer-quality ceiling on multi-tu
   golden test also guards the **`messages=`-present system composition** (FR-NC-1a) per provider, not
   only the `messages=None` path (R1-S3).
 - **FR-NC-4 — Cost-hook threading + share observability.** `acreate_response`/`_run_with_cost_tracking`
-  accept an optional `messages=` and pass it to `agenerate`, keeping per-turn cost attribution. The
-  **re-sent-context token share is recorded distinctly from the new-turn tokens** (R2-F5), so a thread's
-  O(n²) token growth is observable rather than hidden.
+  accept an optional `messages=` and pass it to `agenerate`, keeping per-turn cost attribution.
+  > **Implementation status (2026-07-04):** threading + per-turn attribution **DONE**. The
+  > **re-sent-context token-share split (R2-F5) is DEFERRED to v2** — providers report a single
+  > `input_tokens` total per call and do not break out re-sent-context vs new-turn tokens, so the split
+  > isn't derivable without a local re-tokenizer. The O(n²) growth is still *visible* via the rising
+  > per-turn `input_tokens` (surfaced by QW-1 cost display); only the *attribution split* is deferred.
 - **FR-NC-5 — Engine builds native messages.** The engine builds the canonical message list from a
   model's **valid history** (`valid_history`, ok-turns only) plus the new user turn, and sends it via
   `messages=`. The built user messages are assembled **from the turn's own fields** (text + image refs),

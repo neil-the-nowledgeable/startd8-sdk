@@ -71,14 +71,17 @@ def validate(messages: "list[Message]") -> None:
 
 # ── per-provider renderers (turns only; agents route system to their own sink) ──
 def render_anthropic(messages: "list[Message]") -> "list[dict]":
-    """Anthropic content-block messages."""
+    """Anthropic content-block messages (assistant text-only, FR-NC-8)."""
     validate(messages)
     out = []
     for m in messages:
+        if m.role == "assistant":
+            out.append({"role": "assistant", "content": _text_only(m.content)})
+            continue
         content = []
         for kind, val in _parts(m.content):
             content.append({"type": "text", "text": val} if kind == "text" else to_anthropic_block(val))
-        out.append({"role": m.role, "content": content})
+        out.append({"role": "user", "content": content})
     return out
 
 
@@ -100,13 +103,15 @@ def render_openai_turns(messages: "list[Message]") -> "list[dict]":
 
 
 def render_gemini(messages: "list[Message]") -> "list[dict]":
-    """Gemini ``contents`` — role is ``model`` for assistant (NOT ``assistant``) — FR-NC-2."""
+    """Gemini ``contents`` — assistant → role ``model`` (NOT ``assistant``), text-only (FR-NC-2/8)."""
     validate(messages)
     out = []
     for m in messages:
-        role = "model" if m.role == "assistant" else "user"
+        if m.role == "assistant":
+            out.append({"role": "model", "parts": [{"text": _text_only(m.content)}]})
+            continue
         parts = []
         for kind, val in _parts(m.content):
             parts.append({"text": val} if kind == "text" else to_gemini_part(val))
-        out.append({"role": role, "parts": parts})
+        out.append({"role": "user", "parts": parts})
     return out

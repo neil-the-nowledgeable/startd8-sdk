@@ -151,6 +151,28 @@ class TestImageResend:
         assert reload_image(SessionImageRef(sha256="x", mime_type="image/png", source_path=None)) is None
 
 
+# ── FR-NC-8a: context-window truncation ───────────────────────────────────────
+class TestTruncation:
+    def test_long_thread_truncated_keeping_new_turn_and_invariant(self):
+        from startd8.agents.messages import validate
+        from startd8.consultation import build_messages
+        from startd8.consultation.models import ConsultationSession, Turn, TurnRole, TurnStatus
+
+        s = ConsultationSession(id="s", prompt="p", roster=["m"], continuity_mode="native")
+        turns = []
+        for i in range(20):
+            turns.append(Turn(role=TurnRole.user, text="Q" * 5000))
+            turns.append(Turn(role=TurnRole.assistant, text="A" * 5000, status=TurnStatus.ok))
+        s.turns_by_model = {"m": turns}
+
+        msgs = build_messages(s, "m", "new question", char_budget=30_000)
+        # bounded, still valid (alternating, starts user, ends with the new turn)
+        assert sum(len(m.content) for m in msgs if isinstance(m.content, str)) <= 30_000 + 5000
+        validate(msgs)
+        assert msgs[-1].content == "new question"
+        assert msgs[0].role == "user"
+
+
 # ── FR-NC-5/5a/9: engine native vs transcript ─────────────────────────────────
 class _Fake(__import__("startd8.agents.base", fromlist=["BaseAgent"]).BaseAgent):
     def __init__(self, name, model, native):
