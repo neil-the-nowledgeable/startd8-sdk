@@ -92,6 +92,32 @@ def test_missing_credential_fails_closed():
         mod.build_tool_env("gemini-cli", {})  # no GOOGLE_API_KEY available
 
 
+def test_execute_run_converts_timeout_to_failed_result(monkeypatch, tmp_path):
+    def fake_run(*args, **kwargs):
+        raise mod.subprocess.TimeoutExpired(
+            cmd=kwargs.get("args", args[0]),
+            timeout=kwargs["timeout"],
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    code, stdout, stderr = mod.execute_run(
+        "codex-cli",
+        "/opt/bin/codex",
+        "prompt",
+        tmp_path,
+        {},
+        timeout_s=0.5,
+    )
+
+    assert code == 124
+    assert stdout == "partial stdout"
+    assert "partial stderr" in stderr
+    assert "timed out after 0.5 seconds" in stderr
+
+
 def test_metadata_records_names_not_secret_values():
     meta = mod.command_policy_metadata("claude-code", "/opt/bin/claude", "1.2.3")
     blob = json.dumps(meta)
@@ -136,6 +162,17 @@ def test_smoke_plan_rejects_zero_samples(tmp_path):
 
     with pytest.raises(ValueError, match="samples_per_cell must be >= 1"):
         mod.build_authoring_plan(manifest, tmp_path / "out", smoke=True, smoke_samples_per_cell=0)
+
+
+def test_smoke_timeout_must_be_positive(tmp_path):
+    with pytest.raises(SystemExit):
+        mod.main([
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--smoke",
+            "--smoke-timeout-seconds",
+            "0",
+        ])
 
 
 def _render_suite_prompt(tmp_path: Path, *, tool_id: str, author_vendor: str) -> str:
