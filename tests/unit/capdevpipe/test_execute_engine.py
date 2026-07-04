@@ -25,6 +25,7 @@ from startd8.capdevpipe_installer import (
     ProfileSpec,
 )
 from startd8.exceptions import ConfigurationError, FileOperationError, ValidationError
+from tests.unit.capdevpipe.conftest import seed_capdevpipe_manifest
 
 pytestmark = pytest.mark.unit
 
@@ -45,6 +46,7 @@ def fake_source(tmp_path):
     )
     (src / "design").mkdir()
     (src / "prompts").mkdir()
+    seed_capdevpipe_manifest(src)
     return src
 
 
@@ -90,6 +92,7 @@ class TestLocateSource:
         with pytest.raises(ConfigurationError) as exc:
             installer.locate_source(bare)
         msg = str(exc.value)
+        assert "embed-manifest.yaml" in msg
         assert "install-cap-dev-pipe.sh" in msg and "design" in msg and "prompts" in msg
 
 

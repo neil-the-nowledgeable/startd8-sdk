@@ -10,10 +10,9 @@ import sys
 
 import pytest
 
+from startd8.capdevpipe_embed_manifest import DEFAULT_EMBED_PROFILE, resolve_embed_inventory
 from startd8.capdevpipe_installer import (
-    EMBED_ALIASES,
     EMBED_DIR_NAME,
-    EMBED_SCRIPTS,
     InstallMethod,
     ProfileSpec,
     ReRunMode,
@@ -35,9 +34,10 @@ class TestFullInstallSymlink:
         result = installer.execute(cfg)
         assert result.success, result.error
         embed = target / EMBED_DIR_NAME
-        # All 17 embed entries present as symlinks.
-        for name in (*EMBED_SCRIPTS, *EMBED_ALIASES):
+        inv = resolve_embed_inventory(cfg.source_path, DEFAULT_EMBED_PROFILE)
+        for name in (*inv.scripts, *inv.python_aliases):
             assert (embed / name).is_symlink()
+        assert (embed / "pipeline").is_symlink()
         assert (embed / "pipeline.env").is_file()
         assert (embed / "proj-cap-dlv-pipe.sh").is_file()
         assert (embed / "python" / "python-plan.md").is_symlink()

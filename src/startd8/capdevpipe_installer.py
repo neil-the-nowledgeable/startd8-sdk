@@ -29,6 +29,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from .capdevpipe_embed_manifest import (
+    DEFAULT_EMBED_PROFILE,
+    resolve_embed_inventory,
+)
 from .config import get_config_manager
 from .exceptions import ConfigurationError, FileOperationError, ValidationError
 from .logging_config import get_logger
@@ -63,45 +67,15 @@ SUBPROCESS_TIMEOUT_VERIFY = 120.0  # run.sh --list-langs
 #: ``pipeline.env`` is preserved across reconcile / replace-env / upgrade (FR-7, R3-F5).
 MANAGED_ENV_KEYS = ("CONTEXTCORE_ROOT", "SDK_ROOT", "PROJECT_ROOT", "PROJECT_NAME")
 
-#: Curated embed set (FR-5, corrected per discovery D-10). This is a *curated subset* of
-#: the canonical checkout, NOT a glob — the source has more top-level scripts
-#: (``run-compare.sh``, ``run-clean-*.sh``, ``run-kaizen-*.sh``, ``create-project-wrapper.sh``,
-#: ``prime-show-postmortem.py``, ``resolve-questions.py`` …) than are embedded. The single
-#: source of truth is the ``ln -s`` block in cap-dev-pipe's ``CLAUDE.md`` "Embedding in a
-#: Project" section. The golden-fixture test (task #2) asserts this constant equals that
-#: canonical list and fails if a non-embedded source script leaks in.
-EMBED_SCRIPTS = (
-    "run.sh",
-    "run-atomic.sh",
-    "run-cap-delivery.sh",
-    "run-plan-ingestion.sh",
-    "run-prime-contractor.sh",
-    "run-artisan.sh",
-    "clean-prior-run.sh",
-    "resolve-provenance.py",
-    "resolve-project-root.py",
-    "enrich-seed.py",
-    "prime-list-tasks.py",
-    "prime-post-run.py",
-    "explain-pipeline.py",
-    "explain-content.yaml",
-)
-
-#: Underscore Python aliases that the pipeline imports as modules (verified: imported by
-#: cap-dev-pipe ``pipeline/stages/ingestion.py``). Hyphenated names cannot be imported, so
-#: embedding these is a correctness requirement (FR-5 / S-3). Each symlinks to the
-#: canonical underscore file in source with the same absolute-target rule as scripts.
-EMBED_ALIASES = (
-    "resolve_provenance.py",
-    "enrich_seed.py",
-    "prime_post_run.py",
-)
-
-#: Static resource trees copied (not symlinked) into the embed dir — read from SCRIPT_DIR.
-EMBED_RESOURCE_DIRS = ("design", "prompts")
-
 #: Files that mark a directory as a genuine cap-dev-pipe checkout (FR-2 validation).
-SOURCE_MARKERS = ("run.sh", "install-cap-dev-pipe.sh", "design", "prompts")
+#: The embed inventory itself comes from ``embed-manifest.yaml`` (Increment A6 / FR-16).
+SOURCE_MARKERS = (
+    "embed-manifest.yaml",
+    "install-cap-dev-pipe.sh",
+    "run.sh",
+    "design",
+    "prompts",
+)
 
 #: Wrapper template in the source checkout; placeholders are substituted (FR-8).
 WRAPPER_TEMPLATE_NAME = "project-cap-dlv-pipe.sh.template"
@@ -128,9 +102,9 @@ def parse_canonical_embed_scripts(claude_md_text: str) -> List[str]:
     The single source of truth for the embed set is the ``ln -s $CAP_DEV_PIPE/<name>`` block
     under "Embedding in a Project". Returns the script names in document order. The profile
     example's ``ln -sf "../../PLAN.md"`` lines do not reference ``$CAP_DEV_PIPE`` and so are
-    not matched. Underscore aliases (:data:`EMBED_ALIASES`) are intentionally absent from this
-    block — they are a separate correctness addition (imported as modules). Used by the
-    golden-fixture drift test and the ``regen`` helper.
+    not matched. Underscore aliases are intentionally absent from this block — they are a
+    separate correctness addition (imported as modules). Legacy helper retained for tests
+    that parse CLAUDE.md directly; the installer consumes ``embed-manifest.yaml`` instead.
     """
     return _LN_S_EMBED_RE.findall(claude_md_text)
 
@@ -222,6 +196,8 @@ class InstallConfig:
     #: The TUI sets this after surfacing/confirming the script path; a default-location source
     #: is trusted without it.
     trust_source: bool = False
+    #: Embed profile passed to ``embed-manifest.yaml`` resolution (FR-16). Default ``full``.
+    embed_profile: str = DEFAULT_EMBED_PROFILE
 
 
 @dataclass
@@ -508,6 +484,11 @@ class CapDevPipeInstaller:
             raise ConfigurationError(
                 f"{source} is not a valid cap-dev-pipe checkout (missing: "
                 f"{', '.join(missing)}). Point to the cap-dev-pipe repository root."
+            )
+        if not (source / "pipeline" / "embed_manifest.py").is_file():
+            raise ConfigurationError(
+                f"{source} is missing pipeline/embed_manifest.py. Point to a cap-dev-pipe "
+                f"checkout with modular embed support (Increment A+)."
             )
         return source.resolve()
 
@@ -870,26 +851,38 @@ class CapDevPipeInstaller:
     # -- embedding (FR-5, FR-6) -------------------------------------------- #
 
     def embed_symlink(self, cfg: InstallConfig) -> List[Action]:
-        """Actions to symlink the curated embed set with absolute targets + copy resource
-        dirs (FR-5). Script symlinks use **absolute** ``source`` paths so ``dirname "$0"``
-        resolves to the embedded dir (single source of truth, NFR-3). The 3 underscore
-        aliases are symlinked alongside the 14 scripts (imported as modules); ``design/`` and
-        ``prompts/`` are copied locally (read from SCRIPT_DIR)."""
+        """Actions to symlink the manifest-resolved embed set with absolute targets (FR-5).
+
+        Inventory is resolved from ``embed-manifest.yaml`` via the shared cap-dev-pipe
+        planner (FR-16). Script and package symlinks use **absolute** ``source`` paths so
+        ``dirname "$0"`` resolves to the embedded dir (NFR-3). Resource trees are copied
+        locally (read from SCRIPT_DIR). ``copy_files`` entries (e.g. the wrapper template)
+        are copied as files when listed in the profile.
+        """
         source = Path(cfg.source_path).resolve()
+        inventory = resolve_embed_inventory(source, cfg.embed_profile)
         embed = Path(cfg.target_root) / EMBED_DIR_NAME
         actions: List[Action] = [Action(type=ActionType.MKDIR, target=embed)]
-        for name in (*EMBED_SCRIPTS, *EMBED_ALIASES):
+        for name in (*inventory.scripts, *inventory.python_aliases, *inventory.packages):
             actions.append(
                 Action(
                     type=ActionType.SYMLINK, target=embed / name, source=source / name
                 )
             )
-        for resource in EMBED_RESOURCE_DIRS:
+        for resource in inventory.resource_trees:
             actions.append(
                 Action(
                     type=ActionType.COPY_TREE,
                     target=embed / resource,
                     source=source / resource,
+                )
+            )
+        for copy_name in inventory.copy_files:
+            actions.append(
+                Action(
+                    type=ActionType.COPY_FILE,
+                    target=embed / copy_name,
+                    source=source / copy_name,
                 )
             )
         return actions
@@ -930,6 +923,8 @@ class CapDevPipeInstaller:
                 cwd=source,
                 argv=[
                     str(installer_script),
+                    "--embed-profile",
+                    cfg.embed_profile,
                     "--force-pipeline-env",
                     str(cfg.target_root),
                 ],
@@ -1320,7 +1315,8 @@ class CapDevPipeInstaller:
     def _prune_orphan_symlinks(self, target: Path, cfg: InstallConfig) -> None:
         """Remove embed symlinks whose script was deleted upstream so embed == source (R2-F6)."""
         embed = Path(target) / EMBED_DIR_NAME
-        valid = set(EMBED_SCRIPTS) | set(EMBED_ALIASES)
+        inventory = resolve_embed_inventory(cfg.source_path, cfg.embed_profile)
+        valid = inventory.symlink_top_level_names()
         for entry in sorted(embed.iterdir()) if embed.is_dir() else []:
             if entry.is_symlink() and entry.name not in valid:
                 entry.unlink()

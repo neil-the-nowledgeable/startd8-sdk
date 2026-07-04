@@ -1,0 +1,75 @@
+# Canonical embed inventory for cap-dev-pipe (FR-1).
+# Consumed by pipeline/embed_manifest.py, install-cap-dev-pipe.sh, and startd8-sdk installer.
+schema_version: 1
+
+# Curated script pool — profiles select subsets; order preserved within each profile merge.
+scripts:
+  - run.sh
+  - run-atomic.sh
+  - run-cap-delivery.sh
+  - run-plan-ingestion.sh
+  - run-prime-contractor.sh
+  - run-artisan.sh
+  - clean-prior-run.sh
+  - resolve-provenance.py
+  - resolve-project-root.py
+  - enrich-seed.py
+  - prime-list-tasks.py
+  - prime-post-run.py
+  - explain-pipeline.py
+  - explain-content.yaml
+
+python_aliases:
+  - resolve_provenance.py
+  - enrich_seed.py
+  - prime_post_run.py
+
+resource_trees:
+  - design
+  - prompts
+
+packages:
+  - pipeline
+
+copy_files:
+  - project-cap-dlv-pipe.sh.template
+
+profiles:
+  minimal:
+    description: ContextCore MVP, CI library smoke — Python orchestrator + innate requirements
+    packages:
+      - pipeline
+    resource_trees:
+      - design
+
+  orchestrator:
+    description: Export + ingestion shell path; no contractor scripts
+    extends: minimal
+    scripts:
+      - run-cap-delivery.sh
+      - run-plan-ingestion.sh
+      - clean-prior-run.sh
+      - resolve-provenance.py
+      - resolve-project-root.py
+      - enrich-seed.py
+    python_aliases:
+      - resolve_provenance.py
+      - enrich_seed.py
+      - prime_post_run.py
+    resource_trees:
+      - prompts
+
+  full:
+    description: Application projects with code generation + explain tooling
+    extends: orchestrator
+    scripts:
+      - run.sh
+      - run-atomic.sh
+      - run-prime-contractor.sh
+      - run-artisan.sh
+      - prime-list-tasks.py
+      - prime-post-run.py
+      - explain-pipeline.py
+      - explain-content.yaml
+    copy_files:
+      - project-cap-dlv-pipe.sh.template
