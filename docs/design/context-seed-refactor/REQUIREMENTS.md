@@ -1,8 +1,8 @@
 # Context Seed Phase-Handler Extraction & Method Decomposition — Requirements
 
-**Version:** 0.4 (Essential/accidental-complexity hardening — ready for CRP)
+**Version:** 0.5 (Post-CRP triage — R1 applied)
 **Date:** 2026-07-04
-**Status:** Ready for review
+**Status:** Ready for implementation
 **Owner:** SDK maintainers
 **Type:** Structural refactor (behavior-preserving)
 
@@ -25,7 +25,7 @@
 **Resolved open questions:**
 - **OQ-1 → Resolved.** `integrate` is `IntegrationEngine.integrate` (different file); descoped to NR-6 / Plan Part C.
 - **OQ-2 → Interleave.** Extract handler, prove green, then decompose *that* handler's methods — isolates move-regressions from decomposition-regressions.
-- **OQ-3 → No.** Wrapper-re-exported helpers (`_format_review_prompt`, `_get_review_template`) are col-0 module-level in `core`, not handler-internal; they stay in `core`.
+- **OQ-3 → They MOVE (corrected v0.5, per CRP R1-F1).** `_format_review_prompt` / `_get_review_template` are col-0 in `core` but used *only* inside `ReviewPhaseHandler` (L6827–7796). If left in `core`, `review.py` would import them back → cycle persists. They move to `handler_support.py` with the rest (FR-6). *(The v0.4 "stay in core" answer contradicted FR-6.)*
 - **OQ-4 → Lazy/local.** Aggregator local-imports handlers to avoid the load-time cycle.
 - **OQ-5 → 20 sites.** Enumerated; the `_ensure_context_loaded` (11) and `subprocess` (5) clusters are the exposure. Some may already be vacuous — the Protocol proves each binds.
 
@@ -108,8 +108,16 @@ symbols" rule — all workarounds that exist *because* the file is oversized.
   `_dict_to_gen_result`, `_capture_task_span_context`, `_build_provenance_links`, `_log_task_timing`,
   `_log_task_boundary_start`, `_log_task_boundary_complete`, `_coerce_optional_float`,
   `_compute_gen_file_hash`, `_compute_design_results_hash`, `_format_review_prompt`,
-  `_get_review_template`). It imports only external deps + `shared.py` + `tracing.py` — never `core`.
-  It is a distinct concern from `shared.py` (which owns seed-task parsing), so it is its own module.
+  `_get_review_template`). It imports only external deps + `shared.py` + `tracing.py` (one-way,
+  layering above them) — never `core`. It is a distinct concern from `shared.py` (which owns
+  seed-task parsing), so it is its own module.
+- **FR-6a (dependency-closure rule, per CRP R1-F2/S3).** Moving a helper means moving its **transitive
+  dependency closure**, not just the named symbol. The module-level *constants* the moved helpers/
+  handlers read must move to `handler_support.py` in the same commit: `_CACHE_SCHEMA_VERSION` (14 uses
+  across Implement/Test/Review), `_PHASE_RESULT_KEYS` (read inside moved `_build_provenance_links`,
+  core L223), `_MAX_GEN_FILE_HASH_BYTES` (default of moved `_compute_gen_file_hash`, core L328),
+  `_SIZE_REGRESSION_THRESHOLD`, `_SIZE_REGRESSION_MIN_LINES`. Leaving any in `core` re-creates the
+  cycle. Acceptance: `handler_support.py` and every `phases/*.py` have **zero** `import …context_seed.core`.
 - **FR-7.** Each extracted phase module imports its shared symbols from `handler_support`/`shared` —
   **never from `core`**. This severs the cycle. `phases/design.py`'s existing
   `from …context_seed.core import (…)` is **repointed** to `handler_support` in the same pass
@@ -119,8 +127,14 @@ symbols" rule — all workarounds that exist *because* the file is oversized.
   imports, no lazy resolution. `core.py.__getattr__` shim and the `TYPE_CHECKING` design-handler
   guard are **deleted** (they existed only to break the self-inflicted cycle).
 - **FR-9.** `context_seed_handlers.py` compat wrapper keeps its public `__all__` **unchanged**, but
-  its *import lines* are repointed to the symbols' real homes (handlers from `phases`, helpers from
-  `handler_support`/`shared`). Assert public surface via an `__all__` equality test, not a byte diff.
+  its *import lines* are repointed to the symbols' real homes (handlers from `phases`; helpers from
+  `handler_support`/`shared`; **and `design_support` for the ~8 symbols it currently re-exports via
+  `core`** — `_detect_cross_file_edges`, `_extract_complexity_signals`, `_compute_ccd_task_metadata`,
+  `build_shared_file_manifest`, `compute_critical_path_tasks`, `compute_lane_to_file_mapping`, etc.,
+  per CRP R1-S1, since the pure-aggregator `core` no longer re-imports them). Assert the public
+  surface via **`__all__` equality AND single-definition identity** (each exported name resolves to
+  exactly one `inspect.getsourcefile` / one object — a pure move must not silently become a copy that
+  passes name-equality but breaks `mock.patch` binding; per CRP R1-F4).
 - **FR-10.** `context_seed/__init__.py` keeps its public `__all__` unchanged; its `__getattr__`
   design-handler shim is deleted (handlers now import eagerly with no cycle).
 - **FR-11.** `phases/__init__.py.__all__` gains the five new module names.
@@ -138,10 +152,17 @@ symbols" rule — all workarounds that exist *because* the file is oversized.
 - **FR-14.** No public behavior change. Full `pytest` suite passes with `PYTHONPATH=src` pin.
 - **FR-15.** Migrate every `mock.patch` target referencing a symbol a moved handler *calls*
   to the handler's new module path (patch where looked up, not where re-exported), per the
-  **Patch-Migration Protocol** (PLAN.md). Each migrated patch must be proven to bind (mock
-  asserted-called), because some current wrapper-targeted patches may already be vacuous and a
-  naive path-swap would silently preserve the vacuity. 20 sites enumerated; the exposure is the
-  `_ensure_context_loaded` (11) and `subprocess` (5) clusters.
+  **Patch-Migration Protocol** (PLAN.md). Each migrated patch must be proven to **fully intercept**,
+  not merely touched: use a **raising sentinel** (a patch replacement that raises if the *real* callee
+  is also reached) — `assert mock.called` catches "never invoked" but not "real function also ran"
+  (per CRP R1-F5). Some current wrapper-targeted patches may already be vacuous; a naive path-swap
+  would preserve the vacuity. **21 sites** enumerated; exposure is `_ensure_context_loaded` (11) and
+  `subprocess` (**6**, not 5 — recount per CRP R1-S4) clusters.
+- **FR-16 (acyclicity acceptance gate, per CRP R1-F3/S2).** The central claim "cycle eliminated, shim
+  deleted" must be **automatably proven**, not asserted: (a) `python -c "import …context_seed.core"`
+  succeeds in a fresh interpreter; (b) a grep/import-linter gate asserts **0** `__getattr__` in the
+  package and **0** `phases/* → core` imports. A green test suite alone is insufficient — the lazy
+  shim could be re-added and tests would still pass. This gate is a Step-6 precondition and a CI check.
 
 ## 3. Non-Requirements
 
@@ -188,7 +209,14 @@ Every code symbol named in this document was verified against the tree on 2026-0
 v0.4 eliminates it: extract stranded helpers to a leaf `handler_support.py` (FR-6), phases import
 from the leaf not `core` (FR-7), delete the `__getattr__` shim (FR-8/FR-10). Net: `core.py`
 9,952 → ~200 LOC, and 3 accidental-complexity mechanisms deleted rather than grown.
-Prior: v0.3 lessons hardening (3 lessons); v0.1→v0.2: 6 corrections, 5 OQs resolved. Ready for CRP.*
+Prior: v0.3 lessons hardening (3 lessons); v0.1→v0.2: 6 corrections, 5 OQs resolved.*
+
+*v0.5 — Post-CRP triage. Applied all 5 R1 F-suggestions (see Appendix A): the CRP found the
+cycle-elimination was **incomplete** — moving the named helpers without their transitive dependency
+closure (constants, the two review-template helpers, design_support re-exports) would leave the
+cycle intact. Added FR-6a (closure rule), FR-16 (acyclicity gate); strengthened FR-9 (identity) and
+FR-15 (raising sentinel). Corrected OQ-3 self-contradiction. Net: the plan now *provably* eliminates
+the cycle rather than claiming to. Ready for implementation.*
 
 ---
 
@@ -208,7 +236,11 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F1 | OQ-3 contradicts FR-6 (review-template helpers) | CRP R1 | ACCEPTED — rewrote OQ-3: helpers MOVE to `handler_support`. Verified used only in ReviewPhaseHandler (L6827–7796). | 2026-07-04 |
+| R1-F2 | FR-6 omits consumed constants → cycle persists | CRP R1 | ACCEPTED — added **FR-6a dependency-closure rule** (constants move too). Verified `_PHASE_RESULT_KEYS`@L223, `_MAX_GEN_FILE_HASH_BYTES`@L328, `_CACHE_SCHEMA_VERSION`×14. | 2026-07-04 |
+| R1-F3 | No automatable no-cycle acceptance gate | CRP R1 | ACCEPTED — added **FR-16** (fresh-interpreter import + import-linter/grep acyclicity gate). | 2026-07-04 |
+| R1-F4 | `__all__` equality ≠ single-definition identity | CRP R1 | ACCEPTED — FR-9 strengthened to require identity/unique-source assertion. | 2026-07-04 |
+| R1-F5 | Bind-proof gate insufficient; need raising sentinel | CRP R1 | ACCEPTED — FR-15 now mandates a raising sentinel; count corrected 20→21 (subprocess 5→6). | 2026-07-04 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -217,3 +249,59 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | (none yet) |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8[1m] — 2026-07-04
+
+- **Reviewer**: claude-opus-4-8[1m]
+- **Date**: 2026-07-04 18:20:00 UTC
+- **Scope**: Essential vs accidental complexity boundary (sponsor focus); code-grounded against `core.py`, `shared.py`, `phases/design.py`, `context_seed_handlers.py`.
+
+##### Focus-file ask answers
+
+**Ask 1 — Is the dependency-inversion diagnosis correct and complete?**
+- **Summary answer:** Directionally correct but *incomplete* — the diagnosis names the right root (helpers cohabiting the aggregator file force the back-import + shim) but under-enumerates what must move to fully sever the cycle.
+- **Rationale:** Verified `phases/design.py` L50–59 imports 8 symbols back from `core` (`HandlerConfig`, `_build_provenance_links`, `_capture_task_span_context`, `_coerce_optional_float`, `_compute_design_results_hash`, `_log_task_boundary_*`, `_log_task_timing`) — all in the FR-6 move set, so the leaf-relocation thesis holds. But moved helpers also read module-level **constants** still slated to stay in `core` (`_PHASE_RESULT_KEYS` inside `_build_provenance_links` @ core.py L223; `_MAX_GEN_FILE_HASH_BYTES` as the default of `_compute_gen_file_hash` @ L328), so the cycle is not fully cut by FR-6 as written (see R1-F2).
+- **Assumptions / conditions:** none — grep-verified 2026-07-04.
+- **Suggested improvements:** Fold the consumed constants into the leaf (R1-F2); reconcile OQ-3 (R1-F1). No simpler essential shape exists — leaf ← phases ← aggregator is already minimal.
+
+**Ask 2 — `handler_support.py` vs folding into `shared.py`.**
+- **Summary answer:** New module is the right call; do **not** over-split into `telemetry_support` + `config_types`.
+- **Rationale:** `shared.py` genuinely owns seed-task parsing (`SeedTask`, `_parse_tasks`, `_ensure_context_loaded`, `_load_enriched_seed`, `_topological_sort`) — a coherent concern distinct from phase plumbing (config/listeners/telemetry/hash/provenance). ~15 symbols in one leaf is not large enough to warrant a further split; two more modules would multiply import lines across 5 phases for no cohesion gain.
+- **Assumptions / conditions:** `handler_support` layers cleanly above `shared`+`tracing` (acyclic) — holds, both are leaves.
+- **Suggested improvements:** State in FR-6 that `handler_support` may import `shared`/`tracing` (one-way) so a later reviewer doesn't read it as a second peer-leaf that must be import-free.
+
+**Ask 3 — Shim deletion / import-order risk.**
+- **Summary answer:** Probably safe, but **not proven** — eager import must be gated on a clean-interpreter import + acyclicity check before Step 6 deletes the shim.
+- **Rationale:** The obvious transitive cycle (`artisan_contractor` → wrapper → `core` → `phases/*` → `artisan_contractor`) does **not** fire at module load because `artisan_contractor` imports the wrapper only lazily (verified L60 is function/TYPE_CHECKING-indented, not module-top). But the plan asserts eager import works by construction; it should demonstrate it (see R1-S2).
+- **Assumptions / conditions:** No phase transitively imports `core` other than through the deleted back-imports.
+- **Suggested improvements:** Add import-linter/`python -c` clean-import gate as a Step-6 precondition.
+
+**Ask 4 — Wrapper-repoint blast radius.**
+- **Summary answer:** `__all__` equality is necessary but **insufficient**; the load-bearing invariant is single-definition identity.
+- **Rationale:** A pure move preserves object identity (consumers + `mock.patch` see the same object); the failure mode is a move silently becoming a **copy** (symbol defined in two homes), which passes `__all__` name-equality yet breaks patch binding. Also, the wrapper re-exports ~8 `design_support`-owned symbols *via* `core` today — repoint homes omit `design_support` (see R1-S1).
+- **Assumptions / conditions:** none.
+- **Suggested improvements:** Add a no-duplicate-definition assertion (R1-F4).
+
+**Ask 5 — Patch-Migration Protocol adequacy.**
+- **Summary answer:** `assert mock.called` is not enough; add a raising sentinel.
+- **Rationale:** A pre-existing vacuous patch can stay green *and* the mock still not be called for the right reason; `assert called` catches "never invoked" but not "real function also invoked." A sentinel that raises if the real callee executes while mocked is the stronger gate (see R1-F5 / R1-S4).
+- **Assumptions / conditions:** none.
+- **Suggested improvements:** Bake the sentinel into the Protocol step 3.
+
+**Ask 6 — Un-removed accidental complexity (AbstractPhaseHandler template method).**
+- **Summary answer:** Correctly left alone — a template method absorbing `_log_task_boundary_*`/provenance/span-capture would change control flow and violates the behavior-preserving boundary (NR-3).
+- **Rationale:** The boilerplate is *already* centralized as free functions (`_log_task_boundary_start/_complete` called 28× but they are shared calls, not duplicated bodies). Hoisting them into an `AbstractPhaseHandler` template is a Tier-2 behavioral refactor, not in scope.
+- **Assumptions / conditions:** none.
+- **Suggested improvements:** Add an explicit one-line deferral note so a later reviewer doesn't re-propose it (see R1-S5).
+
+##### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Architecture | high | Reconcile OQ-3 with the v0.4 pivot: OQ-3 ("`_format_review_prompt`, `_get_review_template` … stay in `core`") directly contradicts FR-6 (which lists both in the `handler_support` move set) and the PLAN import-contract (review.py/test_phase.py import them from `handler_support`). Strike or rewrite OQ-3 to say they MOVE. | Verified: both are defined in core.py (L6709, L6730) and used only inside the ReviewPhaseHandler region (L6827–7796). If they "stay in core," review.py/test_phase.py must import them back from `core` → the cycle the v0.4 pivot claims to eliminate persists. This is the single most load-bearing inconsistency in the doc set. | §0 OQ-3 line and FR-6 | grep confirms 0 remaining `from …core import _format_review_prompt` after the move; no-cycle import test passes |
+| R1-F2 | Data | high | FR-6's helper enumeration omits the module-level CONSTANTS that moved helpers/handlers consume: `_CACHE_SCHEMA_VERSION`, `_PHASE_RESULT_KEYS`, `_MAX_GEN_FILE_HASH_BYTES`, `_SIZE_REGRESSION_THRESHOLD`, `_SIZE_REGRESSION_MIN_LINES`. Add them to the FR-6 move set (natural home: `handler_support`). | Verified: `_PHASE_RESULT_KEYS` is read inside the moved `_build_provenance_links` (core.py L223); `_MAX_GEN_FILE_HASH_BYTES` is the default of the moved `_compute_gen_file_hash` (L328); `_CACHE_SCHEMA_VERSION` has 14 uses spanning Implement/Test/Review handlers. If left in `core`, those handlers + moved helpers import them back from `core` → cycle NOT eliminated. | FR-6 helper list | grep: no `phases/*` or `handler_support` reference to `context_seed.core` after move |
+| R1-F3 | Validation | medium | FR-14's "full pytest suite passes" is the only stated acceptance for behavior preservation. Add an explicit, automatable acceptance criterion: (a) `python -c "import …context_seed.core"` succeeds in a fresh interpreter; (b) grep/import-linter gate asserts 0 `__getattr__` in the package and 0 `phases/* → core` imports. | The DoD (PLAN) mentions these greps but the REQUIREMENTS give no acceptance test for the central claim ("cycle eliminated, shim deleted"). A passing suite does not by itself prove acyclicity — the old lazy shim could be re-added and tests would still pass. | New FR under Cross-cutting (FR-16) | CI gate runs the import + acyclicity check; fails if any phase imports core |
+| R1-F4 | Interfaces | medium | Strengthen FR-9: replace "assert public surface via `__all__` equality" with "assert `__all__` equality AND that every exported name resolves to exactly one definition site (no duplicate definition)". | `__all__` name-equality passes even if a symbol is accidentally re-defined in two homes; identity/singleton is what src consumers and `mock.patch` actually rely on. A pure move must not silently become a copy. | FR-9 | Test enumerates each `__all__` entry and asserts `inspect.getsourcefile` is unique / object identity matches the real home |
+| R1-F5 | Risks | medium | FR-15's bind-proof gate ("mock asserted-called") is necessary but insufficient. Require a raising sentinel: patch the target with a callable that raises if the real function is also reached, to prove the patch fully intercepts (not just that the mock was touched). | A pre-existing vacuous `context_seed_handlers._ensure_context_loaded` patch (11×) can stay green while the real function still runs; `assert called` does not detect double-execution. The sentinel is the only gate that catches "silently-broken but green." | FR-15 acceptance text | For one representative site, prove the sentinel raises pre-migration and does not post-migration |
+
+**Endorsements:** none — first round (Appendix C empty).
