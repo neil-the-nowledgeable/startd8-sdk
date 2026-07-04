@@ -1,111 +1,117 @@
 # Project-Start Distillation — Implementation Plan
 
-**Version:** 1.2 (CRP R1–R3 triaged — local fixes applied; **full rewrite to reqs
-v0.16 is the tracked next work item**, see the CRP-triage banner below)
+**Version:** 2.0 (Rewritten to reqs v0.17 — kernel + consolidation; guided experience delegated)
 **Date:** 2026-07-04
-**Tracks:** `PROJECT_START_REQUIREMENTS.md` v0.16 (⚠️ **milestones still reflect reqs
-v0.4** — FR-13b/FR-13c, OQ-8/OQ-9/OQ-10/OQ-11/OQ-12 resolutions, the panel
-facilitation/hardening body, and the R3 contract-stability fixes have **no milestone
-yet**; the milestone body below is KNOWN-STALE pending the rewrite. Accepted-but-not-
-yet-applied plan suggestions are recorded in Appendix A with resolution = "full plan
-rewrite to reqs v0.16 — tracked next work item.")
-**Posture:** Phased, additive-first, nothing deleted until the kernel ships and
+**Tracks:** `PROJECT_START_REQUIREMENTS.md` v0.17 (+ CRP R1–R3 triage applied).
+**Companion plan:** `GUIDED_EXPERIENCE_PLAN.md` (the optional guided-experience build).
+**Posture:** Phased, additive-first; **retirement → CONSOLIDATION** (v0.17 — Welcome
+Mat / Red Carpet are consolidated into the guided experience, not deleted; only the
+Teian point-value ghost is dropped). Nothing deleted until the kernel ships and
 consumers migrate (NR-5, FR-9/FR-12).
+
+> **v2.0 rewrite.** Catches the plan up to reqs v0.17 + the CRP triage. Changes vs
+> v1.2: the essential model is now a spectrum (kernel + *optional* guided experience,
+> §0.4); OQ-8 resolved → `project init` **scope-out**; OQ-9 resolved → `derive`
+> **stays on-surface**; retirement → **consolidation**; the panel facilitation +
+> FR-13c hardening moved to the **guided-experience plan**; CRP fixes folded (FR-12
+> gate scope, FR-10 MCP-alias, FR-1a alias-window). This plan now owns the **kernel**
+> + cross-cutting (scope-out, consolidation-delegation, removal); the guided layer is
+> in the companion plan.
 
 ---
 
-## Guiding constraints (from the planning pass)
+## Guiding constraints
 
 1. **The `kickoff` name is taken.** `kickoff_app` (the metaphor group) holds it
-   (`cli.py:1256`). The kernel rename is *blocked* until that group is
-   renamed/retired. This orders M1 after the metaphor group is demoted.
-2. **Three greenfield verbs, not four.** `derive` is brownfield (`core.py:352`);
-   greenfield schema comes from `generate contract --promote` (`cli_generate.py:734`).
+   (`cli.py:1260`). The kernel rename is *blocked* until that group is demoted —
+   orders M0a (demote) before M0b (rename).
+2. **Three greenfield verbs + a brownfield on-ramp.** `derive` is brownfield
+   (`core.py:352`) and **stays on the `kickoff` surface** (OQ-9); greenfield schema
+   comes from `generate contract --promote` (`cli_generate.py:734`).
 3. **The two kernel edges are code, not docs.** (a) `assess`'s unconditional panel
-   injection (`core.py:256,267`) → make the coverage core kernel-owned + discovery
-   opt-in-loaded (M3, not an un-bundle — v0.4 reclassification). (b) `project
-   init`'s always-on VIPP posting (`project/init.py:138,142`) → opt-in (M4,
-   un-bundle).
-4. **Absorb the command map, reject the playbook.** ~40-60 LOC, not ~650.
+   injection (`core.py:256,267`, + `PANEL_CONSUMABLE`) → kernel-own the coverage
+   core, discovery opt-in-loaded (M2). (b) `project init`'s always-on VIPP posting
+   (`project/init.py:138,142`) → **scope-out** to the VIPP capability, VIPP opt-in
+   (M3, OQ-8).
+4. **Absorb the command map, reject the playbook.** ~40-60 LOC, not ~650 (M1).
+5. **The guided experience is a companion, not this plan.** The panel facilitation +
+   FR-13c hardening + the Welcome-Mat/Red-Carpet consolidation live in
+   `GUIDED_EXPERIENCE_PLAN.md`; this plan delegates to it (M4).
+6. **CRP-fixed removal gate.** Removal criteria check **CLI subcommands + MCP
+   `action` enum values + documented consumers** resolve to zero — NOT the
+   `deterministic-provider` entry-point group (which passes vacuously; R1-F1/R2-F1).
 
 ---
 
 ## Milestones
 
-### M0 — Reconcile the surface inventory (doc + spike; no behavior change)
-- Inventory all four onboarding surfaces: `concierge`, `kickoff` (metaphor),
-  `project init`, and the MCP tool. Diff the greenfield instantiate path of
-  `project init` (`project/init.py:121-156`) against `instantiate-kickoff`
-  (`writes.build_instantiate_plan`) to answer OQ-8: same package or divergent?
-- **Exit:** FR-1a disposition decided (fold vs. scope-out); OQ-5 answered by
-  reading `~/Documents/dev/navig8/` for its actual consumption.
-- **Satisfies:** corrected FR-1 scope, OQ-5, OQ-8.
+### M0 — Kernel surface: rename to `startd8 kickoff` (three verbs + on-ramp)
+- **M0a (demote first).** Rename `kickoff_app` (metaphor group) → `kickoff-legacy`
+  under a deprecation notice (`cli.py:1260`, `cli_kickoff.py`), freeing the `kickoff`
+  name. **Must precede M0b** (R1-S2: the name must be free before the kernel claims
+  it; dry-run verifies `kickoff` unregistered — acyclic).
+- **M0b (rename kernel).** `concierge_app` `name="concierge"` → `"kickoff"`
+  (`cli_concierge.py:24`); subcommands `instantiate-kickoff`→`instantiate`,
+  `derive-contract`→`derive`. `derive` stays on-surface as the labeled brownfield
+  on-ramp (OQ-9); `assess`/`survey` surface `kickoff derive` only when `survey`
+  detected existing models (`core.py:120`).
+- **Alias window (R1-F2 fix).** Hidden aliases for one release covering **both** the
+  old CLI subcommand names **and** the MCP `ConciergeInput.action` enum values
+  (`core.py:313-366`; scripts/MCP key on `action` strings).
+- **Satisfies:** FR-1, FR-9, FR-10, OQ-9.
 
-### M1 — Rename the kernel group to the plain verbs
-- Demote the metaphor group: rename `kickoff_app` → a deprecated name
-  (e.g. `kickoff-legacy`) under a deprecation notice (`cli.py:1256`, `cli_kickoff.py`).
-- Rename `concierge_app` `name="concierge"` → `"kickoff"` (`cli_concierge.py:24`);
-  rename subcommands `instantiate-kickoff`→`instantiate`, `derive-contract`→`derive`.
-- Keep old action strings as hidden aliases in `handle_concierge_tool`
-  (`core.py:313-366`) and old CLI subcommand names as hidden aliases for one
-  release (MCP `ConciergeInput.action` enum + scripts depend on them).
-- **Satisfies:** FR-1, FR-9, FR-10. **Intra-milestone ordering (R1-S2 fix — was a
-  self-referential "blocked by itself"):** step 1 (demote `kickoff_app` →
-  `kickoff-legacy`) MUST complete before step 2 (rename `concierge` → `kickoff`), so
-  the `kickoff` name is free before the kernel claims it. Treat as M1a (demote) → M1b
-  (rename) if a split is cleaner. A dry-run rename must verify `kickoff` is
-  unregistered before `concierge` claims it — acyclic, no self-block.
-
-### M2 — `assess` emits the next command
-- Port `_blocker_command` + command constants (`red_carpet_advisor.py:63-73,348-358`)
-  into `concierge/core.py`; attach `next_command` to each blocker in
-  `_assess_cascade` (`core.py:298-310`) and a headline `next_command` on
-  `build_assess` (`core.py:175`). Update CLI render (`cli_concierge.py:135`) + MCP
-  docstring.
-- **Optional (FR-5a):** port `_schema_advisories` (`red_carpet_advisor.py:181-250`,
-  ~90 LOC) for FK/PK/island/enum diagnostics, or record the loss in the migration note.
+### M1 — `assess` emits the next command
+- Port `_blocker_command` + constants (`red_carpet_advisor.py:63-73,348-358`) into
+  `concierge/core.py`; attach `next_command` to each blocker (`core.py:298-310`) +
+  a headline on `build_assess` (`core.py:175`). Update CLI render + MCP docstring.
+- **Optional (FR-5a):** port `_schema_advisories` (~90 LOC) or record the loss.
 - **Satisfies:** FR-5 (+ FR-5a optional). **Rejects:** the ranked playbook.
 
-### M3 — Reclassify the Panel: kernel-owned coverage, opt-in discovery (v0.4)
+### M2 — Kernel-owned coverage; cut the panel-in-assess edge
 - **Kernel-own the coverage core.** Move the "which inputs count" domain list into
   the kernel so `build_assess` reports unfilled fields **without importing
-  `stakeholder_panel`** (`core.py:38-41,256,267`). This is the $0 essential act:
-  *identify* what needs populating.
-- **Make discovery an opt-in-loaded offer.** `survey`/`assess` compute cheap
-  project-shape signals (OQ-10) and *offer* discovery; the persona layer loads
-  only on accept. Byte-identical `assess` when discovery is not accepted (FR-15).
-- **Drop Teian.** Remove the point-value drafter (`panel recommend` /
-  `Recommendation`), keeping its $0 coverage signal as the discovery trigger
-  (NR-7). Enforce shaping-ranges-not-point-values (FR-13a) in the surviving
-  discovery path.
-- **Owed:** a distillation pass on the ~20-module discovery implementation
-  (OQ-11) — keeping the *purpose* did not bless the current module count.
-- **Satisfies:** FR-13, FR-13a, FR-15 (panel half), NR-3, NR-7.
+  `stakeholder_panel`** and **removes `PANEL_CONSUMABLE`** from kernel `core.py`
+  (`core.py:38-41,256,267,274`; R1-F4). Specify the import-error semantics: absence
+  ⇒ byte-identical, not a silently-degrading try/except (R2-F2). The $0 essential
+  act: *identify* what needs populating.
+- **Drop Teian.** Remove the point-value drafter (`panel recommend`/`Recommendation`),
+  keeping its $0 coverage signal as the discovery trigger (NR-7); enforce
+  shaping-ranges-not-point-values (FR-13a, `shaping-range` provenance).
+- **Discovery/facilitation itself → the guided experience (M4 / companion plan).**
+- **Satisfies:** FR-13 (coverage half), FR-13a, FR-15 (panel half), NR-3, NR-7.
 
-### M4 — De-couple VIPP from `project init`
-- Make the VIPP posting opt-in in `establish_postings` (`project/init.py:129,138-142`);
-  add `--with-vipp` for brownfield. Default path must not `import vipp`.
-- Confirm the seam stays no-op (`vipp_seam.py:250-256`).
-- **Satisfies:** FR-14, FR-15 (VIPP half).
+### M3 — `project init` scope-out (OQ-8)
+- Re-file `project init` as the **setup entrypoint of the un-bundled VIPP /
+  ground-truth-adjudication capability** (FR-1a/FR-14). Make the VIPP posting
+  **opt-in** (`establish_postings`, `project/init.py:138-142`); default kernel path
+  must not `import vipp`.
+- **Consumer-safe alias window (R1-F7/FR-1a):** the *old* `project init` invocation
+  keeps posting VIPP **by default until the alias window closes**, so household-o11y
+  + benchmark portal do not double-break (scope-out + opt-in-flip at once).
+- **Satisfies:** FR-1a, FR-14, FR-15 (VIPP half).
 
-### M5 — Deprecation, migration, removal criteria (no deletions)
-- Deprecation notices on the metaphor surfaces (Welcome Mat `serve.py`/`web.py`,
-  Red Carpet `cli_kickoff.py:335,485,567`), each pointing to the `kickoff` verb
-  that replaces it.
-- Write the **navig8 migration note** (FR-11): what it consumed, the verb it now
-  uses, and whether FR-5a diagnostics were load-bearing for it.
-- Codify **removal criteria** (FR-12): kernel verbs shipped + consumer(s) migrated
-  + no external caller in the deterministic-provider entry points ⇒ eligible for
-  a later, separate deletion PR.
+### M4 — Consolidation → the guided experience (delegated)
+- Welcome Mat + Red Carpet + the panel are **consolidated** into one optional guided
+  experience (v0.17 retirement→consolidation) — **built per `GUIDED_EXPERIENCE_PLAN.md`**
+  (its M0–M5: routing, single entry point, concierge/conductor detangle, facilitation
+  promotion+hardening, surface parity, cloud-read). Only the Teian ghost is deleted.
+- **Satisfies:** parent FR-9 (as consolidation), the guided-experience FR-GE-* set.
+
+### M5 — Migration + removal criteria (no deletions)
+- Deprecation notices on the consolidated-away surfaces, each pointing to the
+  `kickoff` guided verb that replaces it.
+- Write the **navig8 migration note** (FR-11): navig8 = kernel-only (`instantiate` +
+  `derive`), zero impact (OQ-5 resolved).
+- Codify **removal criteria** (FR-12, CRP-fixed): kernel/guided shipped + consumers
+  migrated + **no CLI subcommand / MCP `action` value / documented consumer resolves
+  to the retiring code** (grep-verified; NOT the deterministic-provider group) ⇒
+  eligible for a later deletion PR. Add a **detection trigger** (R2-F1) so the gate's
+  satisfaction is noticed, not passive.
 - **Satisfies:** FR-9, FR-10, FR-11, FR-12, NR-5.
 
-### M6 (separate specs, not this doc) — Un-bundled capabilities
-- ~~Stakeholder Panel → content-review spec~~ **Reclassified in v0.4:** the panel's
-  *discovery* function is kept in-kernel (conditionally offered, M3); it is **not**
-  un-bundled. Only Teian's value-drafting is dropped (NR-7). A separate discovery
-  *distillation* pass (OQ-11) is owed but stays on the kickoff surface.
-- VIPP → its own "brownfield migration / auto-adjudication" requirements
-  (paired with `derive`).
+### M6 (separate spec) — Un-bundled VIPP capability
+- VIPP → its own "ground-truth proposal adjudication / brownfield" requirements,
+  paired with `derive` and with `project init` as its setup entrypoint (from M3).
 
 ---
 
@@ -113,23 +119,23 @@ consumers migrate (NR-5, FR-9/FR-12).
 
 | FR | Milestone |
 |----|-----------|
-| FR-1, FR-9, FR-10 | M1 |
-| FR-1a | M0 (decide) → M4 (execute if fold) |
-| FR-2, FR-3, FR-4, FR-7, FR-8 | already implemented; M1 renames + M2 MCP nit |
-| FR-5, FR-5a | M2 |
+| FR-1, FR-9, FR-10, OQ-9 | M0 |
+| FR-2, FR-3, FR-4, FR-7, FR-8 | already implemented; M0 renames + M1 MCP nit |
+| FR-5, FR-5a | M1 |
+| FR-13 (coverage), FR-13a, FR-15 (panel), NR-3, NR-7 | M2 |
+| FR-1a, FR-14, FR-15 (VIPP), OQ-8 | M3 |
+| FR-13b, FR-13c, FR-6/NR-2 guided layer, FR-GE-* | M4 → `GUIDED_EXPERIENCE_PLAN.md` |
 | FR-11, FR-12 | M5 |
-| FR-13, FR-13a, FR-15 (panel), NR-7 | M3 |
-| FR-14, FR-15 (VIPP) | M4 |
+| VIPP capability | M6 (separate spec) |
 | NR-5 | all (no deletion) |
 
 ---
 
-*Plan v1.2 — sequenced so the kernel becomes the documented surface (M1-M2)
-before any COMPENSATORY layer is cut (M3-M4) and before anything is deleted (M5,
-deferred). NOTE: the milestone body above is KNOWN-STALE against reqs v0.16 — the
-full rewrite (adding milestones for the panel facilitation/hardening body + R3
-contract-stability fixes) is the tracked next work item; see the header banner and
-Appendix A.*
+*Plan v2.0 — rewritten to reqs v0.17 + CRP triage. Sequenced so the kernel becomes
+the documented surface (M0–M2) before `project init` scope-out (M3), before the
+guided-experience consolidation (M4 → companion plan), and before any deletion (M5,
+deferred; retirement→consolidation means only the Teian ghost is deleted). The
+guided-experience build is `GUIDED_EXPERIENCE_PLAN.md`. No longer stale.*
 
 ---
 
