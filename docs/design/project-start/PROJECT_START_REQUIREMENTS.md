@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.10 (Fifth experiment — mixed-model de-correlation → trustworthy convergence)
+**Version:** 0.11 (Sixth experiment — full multi-round process → decision-grade artifact)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -635,6 +635,31 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
     - **Design implication:** assign personas across model families — especially to
       get believable, model-independent risk signals. Mixed-model is a first-class
       facilitation lever (FR-13b).
+  - **Sixth run — FULL MULTI-ROUND process (2026-07-04, orchestrator
+    `scripts/run_kickoff_panel.py`, mixed-model).** R1 means-ends → R2
+    cross-pollination → R3 pre-mortem → R4 synthesis, 10 personas across
+    Claude/GPT/Gemini, 31 flagship calls. **Material step-change over the single
+    round — and the value came from the ROUNDS, not just the framing:**
+    - **R2 produced genuine cross-role TENSIONS** (7 named, T1–T7) — impossible in a
+      single round; verified real (personas explicitly name + react to each other).
+    - **R4 produced an EMERGENT insight no single persona stated: the ownership gap**
+      — the #1 cross-family risk (multi-currency bundle correctness) has *no owner*
+      because multiple roles disclaim it as "outside my remit." Emerged only from
+      colliding personas' `out_of_scope` — the kind of thing a facilitator catches
+      and a solo founder misses.
+    - **Corroboration grading** operationalized (risk register labels cross-family
+      vs single-model; top-3 cross-family = deployment-truth, multi-currency
+      correctness, PCI scope creep).
+    - **Anti-smoothing safeguard WORKED** — synthesis kept T1/T3/T6 explicitly OPEN
+      and flagged single-model risks for human verification, not deprioritization.
+    - Output is decision-grade (risk register + tensions + prioritized recs +
+      open-questions-for-the-human), not a list of role opinions.
+    - **Limits intact:** competent-generalist grade; the synthesizer is itself an
+      LLM (which is why the preserved raw rounds matter — human validates synthesis
+      against them). **Orchestrator gap:** per-call cost tracking reads $0.0
+      (untracked, not free — ~55k in / 9k out tokens actually spent); wire cost.
+    - **Verdict: the full facilitated + de-correlated multi-round process is the
+      real capability.** FR-13b confirmed end-to-end.
 - **OQ-11 — Where does the retained discovery capability live?** The persona/agent
   machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
   *conditionally-offered discovery* a thin caller the kernel owns that invokes a
@@ -733,3 +758,18 @@ leverage roles echo on every family; generalist ceiling held; strength/family
 confounded — but the convergence finding is immune to that). Mixed-model added as a
 first-class facilitation lever (FR-13b). Untested: the full multi-round process
 (cross-pollination + pre-mortem + synthesis) on the mixed-model base = next.*
+
+*v0.11 — Sixth experiment: FULL multi-round process via `scripts/run_kickoff_panel.py`
+(R1→R2→R3→synthesis, 10 personas across Claude/GPT/Gemini, 31 flagship calls).
+**Material step-change, driven by the ROUNDS not the framing:** R2 cross-
+pollination produced 7 genuine cross-role tensions (impossible single-round,
+verified real); R4 synthesis produced an emergent ownership-gap insight no single
+persona stated (top risk has no owner — from colliding `out_of_scope`); corroboration
+grading + anti-smoothing safeguard both worked (OPEN tensions kept, single-model
+risks flagged for verification). Output is decision-grade. Ceiling intact
+(generalist; synthesizer is an LLM → preserved raw rounds enable human validation).
+Orchestrator TODO: wire per-call cost tracking (reads $0.0, ~55k/9k tokens actually
+spent). **FR-13b confirmed end-to-end — the full facilitated + de-correlated
+multi-round process is the real capability.** Spec: `KICKOFF_PANEL_FACILITATION_DESIGN.md`.
+Next: user authors end-user observability UX reqs against the §6 transcript contract
+(the run's `.startd8/kickoff-panel/<session>.json` is now a real fixture).*
