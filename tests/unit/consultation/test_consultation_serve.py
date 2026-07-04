@@ -172,6 +172,69 @@ class TestReplyExecutor:
         assert self._post(c, st, target="all").status_code == 402
 
 
+# ── golden-hash static regression (FR-SRV-10 / R1-S7) ─────────────────────────
+# Pins render_html(serve=None) so the static view's read-only guarantee cannot silently
+# regress when the template is touched. If the template changes intentionally, recompute
+# and update this constant in the same commit.
+GOLDEN_STATIC_SHA256 = "664625e9f6298af85532e896a4a49066dd7fc68c5c17f0a901609e19d7f22bc0"
+
+
+def _golden_session():
+    s = ConsultationSession(
+        id="GOLDEN-0000", prompt="golden fixture prompt", roster=["m1"],
+        created_at="2026-01-01T00:00:00+00:00", updated_at="2026-01-01T00:00:00+00:00",
+    )
+    s.turns_by_model = {"m1": [
+        Turn(role=TurnRole.user, text="q", created_at="2026-01-01T00:00:00+00:00"),
+        Turn(role=TurnRole.assistant, text="**a** `code`", status=TurnStatus.ok,
+             input_tokens=1, output_tokens=2, time_ms=3, created_at="2026-01-01T00:00:00+00:00"),
+    ]}
+    return s
+
+
+class TestGoldenStatic:
+    def test_serve_none_matches_committed_golden_hash(self):
+        import hashlib
+        from startd8.consultation import render_html
+
+        html = render_html(_golden_session())  # serve=None
+        assert hashlib.sha256(html.encode("utf-8")).hexdigest() == GOLDEN_STATIC_SHA256
+
+    def test_serve_none_leaks_no_serve_artifacts(self):
+        from startd8.consultation import render_html
+
+        html = render_html(_golden_session())
+        # The real injection markers must be absent (a token VALUE or the config data block).
+        # Note: the template JS legitimately *names* "X-Consult-Token"/"serve-config" for its inert
+        # serve branch — those strings are code, not leaked data, and the golden hash pins exact bytes.
+        assert 'id="serve-config"' not in html          # no injected config data block
+        assert "<script nonce=" not in html             # executable script un-nonced (static)
+
+
+# ── idle-shutdown watchdog (FR-SRV-7) ─────────────────────────────────────────
+class TestIdleWatchdog:
+    def test_watchdog_triggers_shutdown_when_idle(self, tmp_path):
+        import asyncio
+
+        st = _state(tmp_path, idle_timeout_s=0.02)
+        st.last_activity -= 1.0  # already idle
+        server = SimpleNamespace(should_exit=False)
+
+        async def run():
+            await asyncio.wait_for(srv._idle_watchdog(server, st, emit=lambda *_: None), timeout=2.0)
+
+        asyncio.run(run())
+        assert server.should_exit is True
+
+    def test_watchdog_disabled_when_zero(self, tmp_path):
+        import asyncio
+
+        st = _state(tmp_path, idle_timeout_s=0)
+        server = SimpleNamespace(should_exit=False)
+        asyncio.run(srv._idle_watchdog(server, st, emit=lambda *_: None))  # returns immediately
+        assert server.should_exit is False
+
+
 # ── cross-process lock (FR-SRV-6) ─────────────────────────────────────────────
 class TestCrossProcessLock:
     def test_second_serve_refused(self, tmp_path):

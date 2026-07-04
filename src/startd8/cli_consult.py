@@ -170,6 +170,7 @@ def consult_web(
     max_turns: int = typer.Option(20, "--max-turns", help="Serve: cap on follow-up turns (cost guard)."),
     max_calls: int = typer.Option(60, "--max-calls", help="Serve: hard ceiling on total model-calls."),
     timeout: float = typer.Option(180.0, "--timeout", help="Serve: per-follow-up timeout (seconds)."),
+    idle_timeout: float = typer.Option(1800.0, "--idle-timeout", help="Serve: auto-shutdown after N idle seconds (0=off)."),
 ) -> None:
     """Render a consultation as a web view; with --serve, run a loopback server for live follow-ups."""
     from .consultation import ConsultationService, render_html
@@ -220,7 +221,7 @@ def consult_web(
         _serve.run_serve(
             session_id=session_id, store=service.store, roster=roster,
             port=port, max_turns=max_turns, max_calls=max_calls, timeout=timeout,
-            open_browser=open_browser, emit=console.print,
+            idle_timeout=idle_timeout, open_browser=open_browser, emit=console.print,
         )
     except _serve.SessionAlreadyServed as e:
         console.print(f"[red]consult:[/red] {e}")

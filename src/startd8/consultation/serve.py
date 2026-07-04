@@ -26,6 +26,7 @@ import asyncio
 import ipaddress
 import secrets
 import socket
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -116,8 +117,10 @@ class ServeState:
     max_turns: int = 20
     max_calls: int = 60               # hard fan-out/spend ceiling (model-calls)
     reply_timeout_s: float = 180.0
+    idle_timeout_s: float = 1800.0    # auto-shutdown after inactivity (0 = disabled) — FR-SRV-7
     engine: ConsultationEngine = field(init=False)
     lock: "asyncio.Lock" = field(init=False)
+    last_activity: float = field(init=False)
     _turns: int = 0
     _calls: int = 0
     _nonces: set = field(default_factory=set)
@@ -125,6 +128,10 @@ class ServeState:
     def __post_init__(self):
         self.engine = ConsultationEngine(self.store)
         self.lock = asyncio.Lock()
+        self.last_activity = time.monotonic()
+
+    def touch(self) -> None:
+        self.last_activity = time.monotonic()
 
     def mint_nonce(self) -> str:
         n = secrets.token_urlsafe(12)
@@ -183,6 +190,9 @@ class _SecurityMiddleware:
             origin = headers.get("origin")
             if not origin or origin != self.state.origin:
                 return await _uniform(403)(scope, receive, send)
+
+        # request passed the guards → count it as activity (idle-shutdown, FR-SRV-7)
+        self.state.touch()
 
         # (e) per-response CSP nonce; route reads it from scope to stamp inline tags.
         nonce = secrets.token_urlsafe(16)
@@ -335,6 +345,23 @@ def acquire_serve_lock(store: ConsultationStore, session_id: str) -> Path:
     return marker
 
 
+# ── idle-shutdown watchdog (FR-SRV-7) ─────────────────────────────────────────
+async def _idle_watchdog(server, state: ServeState, emit=print) -> None:
+    """Set ``server.should_exit`` after ``idle_timeout_s`` of no requests (0 = disabled)."""
+    if state.idle_timeout_s <= 0:
+        return
+    poll = min(5.0, state.idle_timeout_s)
+    try:
+        while not getattr(server, "should_exit", False):
+            await asyncio.sleep(poll)
+            if time.monotonic() - state.last_activity > state.idle_timeout_s:
+                emit(f"[serve] idle for {int(state.idle_timeout_s)}s — shutting down.")
+                server.should_exit = True
+                return
+    except asyncio.CancelledError:  # normal on server exit
+        pass
+
+
 # ── orchestrated startup (FR-SRV-1/7/8) ───────────────────────────────────────
 def run_serve(
     *,
@@ -345,6 +372,7 @@ def run_serve(
     max_turns: int = 20,
     max_calls: int = 60,
     timeout: float = 180.0,
+    idle_timeout: float = 1800.0,
     open_browser: bool = False,
     emit=print,
 ) -> None:
@@ -378,11 +406,22 @@ def run_serve(
             emit(f"[serve] opened {origin}/  (token in the opened URL — not printed). Ctrl-C to stop.")
         else:
             emit(f"[serve] open this URL (contains a secret token — treat like a password):\n  {url}")
-        emit(f"[serve] caps: max_turns={max_turns} max_calls={max_calls}. Ctrl-C to stop.")
+        idle_note = f" idle-shutdown={int(idle_timeout)}s" if idle_timeout else ""
+        emit(f"[serve] caps: max_turns={max_turns} max_calls={max_calls}{idle_note}. Ctrl-C to stop.")
 
         # access_log=False keeps the token-bearing GET / URL out of the access log (FR-SRV-4b).
         config = uvicorn.Config(app, log_level="warning", access_log=False)
-        uvicorn.Server(config).run(sockets=[sock])
+        server = uvicorn.Server(config)
+        state.idle_timeout_s = idle_timeout
+
+        async def _main():
+            watchdog = asyncio.create_task(_idle_watchdog(server, state, emit))
+            try:
+                await server.serve(sockets=[sock])
+            finally:
+                watchdog.cancel()
+
+        asyncio.run(_main())
     finally:
         try:
             marker.unlink(missing_ok=True)
