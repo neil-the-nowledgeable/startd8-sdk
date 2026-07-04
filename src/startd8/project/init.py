@@ -7,8 +7,11 @@ A thin orchestrator (bucket-1 applicational-completion) that turns a directory i
 project by **composing already-shipped, already-confined functions** — it defines no new write
 primitive. It:
 
-1. **detects** the project shape (greenfield / brownfield_ready / brownfield_partial) from
-   deterministic on-disk signals, folding in the read-only ``concierge`` survey/assess (FR-1/FR-2);
+1. **detects** the project shape (greenfield / brownfield_ready / brownfield_partial) from cheap,
+   deterministic on-disk **presence checks** — the contract file, an ``app/`` package, and the shared
+   ``KICKOFF_INPUT_DOMAINS`` yaml files. It deliberately does **not** invoke the heavier ``concierge``
+   survey/assess: shape triage stays a fast filesystem read (a richer readiness view, if ever wanted
+   in the report, would be a separate explicit ``build_assess`` call, not smuggled in here) (FR-1/FR-2);
 2. **establishes** the ``.startd8/`` role postings — VIPP always, FDE opt-in (FR-3);
 3. makes the project **VIPP-inbox-*ready*** by standing up the inbox *mechanism* (``.gitignore`` +
    monotonic ``inbox-seq``) via the shared ``vipp_seam.ensure_inbox_scaffold`` (FR-4/FR-11);
@@ -34,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from ..concierge.core import KICKOFF_INPUT_DOMAINS  # single source of truth (dedup); cheap import
 from ..logging_config import get_logger
 
 if TYPE_CHECKING:  # type-only; the runtime import stays lazy to keep this module import-light
@@ -47,10 +51,6 @@ SCHEMA_VERSION = 1
 SHAPE_GREENFIELD = "greenfield"
 SHAPE_BROWNFIELD_READY = "brownfield_ready"
 SHAPE_BROWNFIELD_PARTIAL = "brownfield_partial"
-
-# The four kickoff input domains a complete brownfield project declares (mirrors
-# concierge.core._assess_kickoff_inputs so the "ready vs partial" boundary stays aligned).
-_KICKOFF_INPUT_DOMAINS = ("business-targets", "observability", "conventions", "build-preferences")
 
 _CONTRACT_REL = "prisma/schema.prisma"
 
@@ -77,7 +77,7 @@ class ProjectShape:
             "has_contract": self.has_contract,
             "has_app": self.has_app,
             "kickoff_inputs_present": sorted(self.kickoff_inputs_present),
-            "kickoff_inputs_expected": list(_KICKOFF_INPUT_DOMAINS),
+            "kickoff_inputs_expected": list(KICKOFF_INPUT_DOMAINS),
             "has_vipp_posting": self.has_vipp_posting,
             "has_fde_posting": self.has_fde_posting,
         }
@@ -96,14 +96,14 @@ def detect_shape(project_root: Any) -> ProjectShape:
     has_contract = (root / _CONTRACT_REL).is_file()
     has_app = (root / "app").is_dir()
     inputs_dir = root / "docs" / "kickoff" / "inputs"
-    present = [d for d in _KICKOFF_INPUT_DOMAINS if (inputs_dir / f"{d}.yaml").is_file()]
+    present = [d for d in KICKOFF_INPUT_DOMAINS if (inputs_dir / f"{d}.yaml").is_file()]
     has_vipp = (root / ".startd8" / "vipp").is_dir()
     has_fde = (root / ".startd8" / "fde").is_dir()
 
     is_brownfield = has_contract or has_app or bool(present)
     if not is_brownfield:
         verdict = SHAPE_GREENFIELD
-    elif has_contract and len(present) == len(_KICKOFF_INPUT_DOMAINS):
+    elif has_contract and len(present) == len(KICKOFF_INPUT_DOMAINS):
         verdict = SHAPE_BROWNFIELD_READY
     else:
         verdict = SHAPE_BROWNFIELD_PARTIAL

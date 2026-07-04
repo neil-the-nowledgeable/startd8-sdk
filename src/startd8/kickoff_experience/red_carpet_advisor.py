@@ -28,6 +28,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+# The canonical kickoff/value-input domain set (single source of truth; kept under the local
+# `_VALUE_DOMAINS` name below so this module's vocabulary is unchanged).
+from ..concierge.core import KICKOFF_INPUT_DOMAINS
+
 # ── Severity ─────────────────────────────────────────────────────────────────────────────────────
 SEVERITY_INFO = "info"
 SEVERITY_WARN = "warn"
@@ -70,7 +74,7 @@ ADVISOR_COMMANDS: Tuple[str, ...] = (
 
 # The value-input domains diagnosed by the generic loop — EXCLUDES `stakeholders` (CRP R1-F1: it has a
 # different shape/status set and is handled by a dedicated clause).
-_VALUE_DOMAINS: Tuple[str, ...] = ("business-targets", "observability", "conventions", "build-preferences")
+_VALUE_DOMAINS: Tuple[str, ...] = KICKOFF_INPUT_DOMAINS
 
 _MAX_DETAIL = 200
 
