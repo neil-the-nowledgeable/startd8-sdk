@@ -173,7 +173,7 @@ def test_test_phase_uses_arg_list_without_shell(tmp_path: Path):
         "generation_results": {"T1": _generation_result(code_path)},
     }
 
-    with patch("startd8.contractors.context_seed_handlers.subprocess.run") as mock_run:
+    with patch("startd8.contractors.context_seed.phases.test_phase.subprocess.run") as mock_run:
         mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
         handler = ContextSeedTestPhaseHandler(handler_config=HandlerConfig(test_timeout_seconds=5))
         handler.execute(WorkflowPhase.TEST, context, dry_run=False)

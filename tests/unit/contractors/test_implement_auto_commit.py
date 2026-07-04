@@ -76,7 +76,7 @@ class TestCommitFeatures:
         }
 
         with patch(
-            "startd8.contractors.context_seed_handlers.subprocess.run"
+            "startd8.contractors.context_seed.phases.implement.subprocess.run"
         ) as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             handler._commit_features(gen_results, tasks, project_root)
@@ -111,7 +111,7 @@ class TestCommitFeatures:
         }
 
         with patch(
-            "startd8.contractors.context_seed_handlers.subprocess.run"
+            "startd8.contractors.context_seed.phases.implement.subprocess.run"
         ) as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             handler._commit_features(gen_results, tasks, Path("/p"))
@@ -130,7 +130,7 @@ class TestCommitFeatures:
         }
 
         with patch(
-            "startd8.contractors.context_seed_handlers.subprocess.run"
+            "startd8.contractors.context_seed.phases.implement.subprocess.run"
         ) as mock_run:
             handler._commit_features(gen_results, tasks, Path("/p"))
 
@@ -145,7 +145,7 @@ class TestCommitFeatures:
         gen_results = {"T1": _gen_result(["src/oops.py"])}
 
         with patch(
-            "startd8.contractors.context_seed_handlers.subprocess.run"
+            "startd8.contractors.context_seed.phases.implement.subprocess.run"
         ) as mock_run:
             # git add succeeds, git commit fails
             mock_run.side_effect = [
@@ -166,7 +166,7 @@ class TestCommitFeatures:
         gen_results = {"T42": _gen_result(["src/login.py"])}
 
         with patch(
-            "startd8.contractors.context_seed_handlers.subprocess.run"
+            "startd8.contractors.context_seed.phases.implement.subprocess.run"
         ) as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             handler._commit_features(gen_results, tasks, Path("/p"))

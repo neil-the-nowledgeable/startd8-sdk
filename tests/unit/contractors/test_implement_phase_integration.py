@@ -2651,7 +2651,7 @@ class TestCacheWriteFailureNonFatal:
             ImplementPhaseHandler, "_run_development_phase",
             return_value=dev_result,
         ), patch(
-            "startd8.contractors.context_seed_handlers.atomic_write_json",
+            "startd8.contractors.context_seed.phases.implement.atomic_write_json",
             side_effect=OSError("disk full"),
         ):
             result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)

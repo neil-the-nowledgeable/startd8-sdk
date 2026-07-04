@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from startd8.contractors.context_seed.core import (  # noqa: F401
-    ContextSeedHandlers,
+from startd8.contractors.context_seed.core import ContextSeedHandlers  # noqa: F401
+from startd8.contractors.context_seed.phases.design import DesignPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.finalize import FinalizePhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.implement import ImplementPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.integrate import IntegratePhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.plan import PlanPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.review import ReviewPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.scaffold import ScaffoldPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.test_phase import TestPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.handler_support import (  # noqa: F401
     EditModeClassification,
-    FinalizePhaseHandler,
     HandlerConfig,
-    ImplementPhaseHandler,
-    IntegratePhaseHandler,
     OTelIntegrationListener,
     PerFileMode,
-    PlanPhaseHandler,
-    ReviewPhaseHandler,
-    ScaffoldPhaseHandler,
-    SeedTask,
     SeedTaskUnit,
-    TestPhaseHandler,
 )
+from startd8.contractors.context_seed.shared import SeedTask  # noqa: F401
 
 __all__ = [
     "ContextSeedHandlers",
@@ -38,14 +37,3 @@ __all__ = [
     "SeedTaskUnit",
     "TestPhaseHandler",
 ]
-
-
-if TYPE_CHECKING:  # pragma: no cover - typing-only imports
-    from startd8.contractors.context_seed.phases.design import DesignPhaseHandler
-
-
-def __getattr__(name: str):
-    if name == "DesignPhaseHandler":
-        from startd8.contractors.context_seed.phases.design import DesignPhaseHandler
-        return DesignPhaseHandler
-    raise AttributeError(name)

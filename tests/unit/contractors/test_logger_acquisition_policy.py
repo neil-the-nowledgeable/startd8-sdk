@@ -13,7 +13,9 @@ CONTRACTORS_ROOT = PROJECT_ROOT / "src/startd8/contractors"
 # AL-101 exception allowlist (must match docs/design/artisan/ARTISAN_LOGGING_REQUIREMENTS.md).
 ALLOWED_STRING_LOGGER_NAMES: dict[str, set[str]] = {
     "src/startd8/contractors/registry.py": {"startd8.contractors.registry"},
-    "src/startd8/contractors/context_seed/core.py": {
+    # core.py is now the pure aggregator and does no logging (no get_logger call),
+    # so it needs no allowlist entry.
+    "src/startd8/contractors/context_seed/handler_support.py": {
         "startd8.contractors.context_seed_handlers",
     },
     "src/startd8/contractors/context_seed/design_support.py": {
@@ -29,6 +31,21 @@ ALLOWED_STRING_LOGGER_NAMES: dict[str, set[str]] = {
         "startd8.contractors.context_seed_handlers",
     },
     "src/startd8/contractors/context_seed/phases/scaffold.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/phases/finalize.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/phases/integrate.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/phases/test_phase.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/phases/review.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/phases/implement.py": {
         "startd8.contractors.context_seed_handlers",
     },
 }
