@@ -1,8 +1,7 @@
-"""Standalone HTML template for the consultation web view (FR-WUI).
+"""Standalone HTML template for the consultation web view (FR-WUI + FR-SRV).
 
 Generated from docs/design/multi-model-consult/webui-prototype.html (verified prototype).
 Do not hand-edit the markup here — edit the prototype, re-verify, and regenerate.
-``render_html`` in ``view.py`` fills ``__SESSION_JSON__`` with the escaped session payload.
 """
 
 WEBVIEW_TEMPLATE = r'''<!DOCTYPE html>
@@ -356,8 +355,10 @@ __SESSION_JSON__
   var tupd=el("div"); tupd.textContent="updated  "+(data.updated_at||"—");
   document.getElementById("times").append(tcreated,tupd);
 
-  // channels
+  // channels (reusable: serve-mode re-renders after a follow-up)
   var grid=document.getElementById("grid");
+  function renderChannels(){
+  grid.innerHTML="";
   var roster2=data.roster||Object.keys(data.turns_by_model||{});
   document.getElementById("chcount").textContent=roster2.length+" model"+(roster2.length===1?"":"s")+" · all expanded";
 
@@ -416,6 +417,8 @@ __SESSION_JSON__
     det.appendChild(body);
     grid.appendChild(det);
   });
+  }
+  renderChannels();
 
   // toolbar: expand/collapse all
   function setAll(open){ document.querySelectorAll("details.channel").forEach(function(d){ d.open=open; }); }
@@ -451,15 +454,50 @@ __SESSION_JSON__
   function update(){ cmdEl.textContent=buildCmd(); }   // textContent = never executes
   fq.addEventListener("input",update); update();
 
-  copyBtn.addEventListener("click",function(){
-    var text=buildCmd();
-    function ok(){ copyBtn.textContent="Copied ✓"; copyBtn.classList.add("copied");
-      setTimeout(function(){ copyBtn.textContent="Copy"; copyBtn.classList.remove("copied"); },1400); }
-    function fallback(){ var ta=document.createElement("textarea"); ta.value=text; ta.style.position="fixed"; ta.style.opacity="0";
-      document.body.appendChild(ta); ta.select(); try{ document.execCommand("copy"); ok(); }catch(e){} document.body.removeChild(ta); }
-    if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(ok,fallback); }
-    else { fallback(); }
-  });
+  // Serve mode (FR-SRV-2): if a #serve-config is present, the composer SENDS via the local
+  // server instead of building a copy-command. Detected here; otherwise the copy path above stays.
+  var serveCfg=null;
+  try{ var sc=document.getElementById("serve-config"); if(sc) serveCfg=JSON.parse(sc.textContent); }catch(e){}
+
+  if(serveCfg){
+    // Repurpose the composer for interactive Send.
+    document.querySelector(".composer .chint").textContent="interactive · runs on your local server (spends tokens)";
+    cmdEl.parentNode.parentNode.querySelector(".lbl").textContent="Send to the local server";
+    copyBtn.textContent="Send ▸";
+    function costNote(){ var n = target==="all" ? (data.roster||[]).length : 1; cmdEl.textContent="Sending to "+n+" model"+(n===1?"":"s")+" — this spends tokens."; }
+    var origUpdate=update; update=function(){ costNote(); }; update();
+    fq.removeEventListener("input",origUpdate);
+
+    copyBtn.addEventListener("click",function(){
+      var p=(fq.value||"").trim(); if(!p) return;
+      copyBtn.disabled=true; copyBtn.textContent="Sending…";
+      fetch(serveCfg.reply_url,{
+        method:"POST",
+        headers:{"Content-Type":"application/json","X-Consult-Token":serveCfg.token},
+        body:JSON.stringify({prompt:p, target:target, nonce:serveCfg.nonce})
+      }).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+        .then(function(js){
+          data.turns_by_model = js.session.turns_by_model;
+          data.roster = js.session.roster;
+          serveCfg.nonce = js.next_nonce;   // rotate single-use nonce (replay defense)
+          renderChannels();
+          fq.value=""; costNote();
+          copyBtn.textContent="Sent ✓"; copyBtn.classList.add("copied");
+          setTimeout(function(){ copyBtn.textContent="Send ▸"; copyBtn.classList.remove("copied"); copyBtn.disabled=false; },1400);
+        })
+        .catch(function(e){ cmdEl.textContent="Send failed: "+e.message; copyBtn.textContent="Send ▸"; copyBtn.disabled=false; });
+    });
+  } else {
+    copyBtn.addEventListener("click",function(){
+      var text=buildCmd();
+      function ok(){ copyBtn.textContent="Copied ✓"; copyBtn.classList.add("copied");
+        setTimeout(function(){ copyBtn.textContent="Copy"; copyBtn.classList.remove("copied"); },1400); }
+      function fallback(){ var ta=document.createElement("textarea"); ta.value=text; ta.style.position="fixed"; ta.style.opacity="0";
+        document.body.appendChild(ta); ta.select(); try{ document.execCommand("copy"); ok(); }catch(e){} document.body.removeChild(ta); }
+      if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(ok,fallback); }
+      else { fallback(); }
+    });
+  }
 })();
 </script>
 </body>

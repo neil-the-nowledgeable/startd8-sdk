@@ -133,18 +133,42 @@ def _session_payload(session: ConsultationSession) -> dict:
     }
 
 
-def render_html(session: ConsultationSession) -> str:
-    """Render a standalone, offline HTML view of a consultation (FR-WUI-1/2/4/5/6/7/9).
+def _embed_json(obj) -> str:
+    """JSON safe to embed in a ``<script type=application/json>`` block (escape ``<``)."""
+    return json.dumps(obj, ensure_ascii=True).replace("<", "\\u003c")
+
+
+def render_html(session: ConsultationSession, serve: Optional[dict] = None, csp_nonce: str = "") -> str:
+    """Render a standalone HTML view of a consultation (FR-WUI + FR-SRV-2/10).
 
     A sibling of :func:`comparison_text`/:func:`comparison_table` (same data, third surface).
     The client-side template escapes untrusted model text before rendering markdown (FR-WUI-9);
     here we additionally neutralize ``<`` in the **embedded JSON** so a ``</script>`` inside any
-    answer cannot terminate the ``<script type="application/json">`` container (an XSS/breakage
-    vector caught during prototype verification). Image refs carry basename only, never the
-    absolute source path.
+    answer cannot terminate the ``<script type="application/json">`` container. Image refs carry
+    basename only, never the absolute source path.
+
+    ``serve`` (FR-SRV): when a serve-config dict is passed (token + endpoints + nonce), an interactive
+    ``#serve-config`` block is injected and the CSP nonce is stamped onto the executable ``<script>``
+    so the served page can run under a strict `script-src 'nonce-…'` policy. When ``serve is None`` the
+    output is **byte-identical** to the static file (FR-SRV-10) — no token, endpoint, or nonce leaks in.
     """
-    payload = json.dumps(_session_payload(session), ensure_ascii=True)
-    # ensure_ascii already escapes non-ASCII (incl. U+2028/2029); only ASCII '<' can come from
-    # data text — turn it into < so '</script>' / '<!--' cannot appear in the markup.
-    payload = payload.replace("<", "\\u003c")
-    return WEBVIEW_TEMPLATE.replace("__SESSION_JSON__", payload)
+    html = WEBVIEW_TEMPLATE.replace("__SESSION_JSON__", _embed_json(_session_payload(session)))
+    if serve is None:
+        return html  # static path — unchanged (byte-identity guarantee)
+
+    # Interactive: inject the serve-config data block just before the session data.
+    cfg_block = (
+        '<script type="application/json" id="serve-config">\n'
+        + _embed_json(serve)
+        + "\n</script>\n"
+    )
+    html = html.replace(
+        '<script type="application/json" id="session-data">',
+        cfg_block + '<script type="application/json" id="session-data">',
+        1,
+    )
+    # Stamp the CSP nonce onto the executable script (the JSON data blocks are non-executable and
+    # need no nonce under script-src). Leaves everything else untouched.
+    if csp_nonce:
+        html = html.replace("<script>\n(function(){", f'<script nonce="{csp_nonce}">\n(function(){{', 1)
+    return html

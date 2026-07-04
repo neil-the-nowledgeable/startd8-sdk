@@ -162,9 +162,16 @@ def consult_web(
     out: Optional[Path] = typer.Option(
         None, "--out", help="Output HTML path (default: the session dir's view.html)."
     ),
-    open_browser: bool = typer.Option(False, "--open", help="Open the generated page in a browser."),
+    open_browser: bool = typer.Option(False, "--open", help="Open the page in a browser."),
+    serve: bool = typer.Option(
+        False, "--serve", help="Interactive mode: run a loopback server so follow-ups Send from the page."
+    ),
+    port: int = typer.Option(0, "--port", help="Serve port (default: ephemeral). Loopback only."),
+    max_turns: int = typer.Option(20, "--max-turns", help="Serve: cap on follow-up turns (cost guard)."),
+    max_calls: int = typer.Option(60, "--max-calls", help="Serve: hard ceiling on total model-calls."),
+    timeout: float = typer.Option(180.0, "--timeout", help="Serve: per-follow-up timeout (seconds)."),
 ) -> None:
-    """Generate a standalone, offline HTML view of a consultation (all models side-by-side)."""
+    """Render a consultation as a web view; with --serve, run a loopback server for live follow-ups."""
     from .consultation import ConsultationService, render_html
 
     service = ConsultationService(base_dir=_base_dir())
@@ -174,15 +181,52 @@ def consult_web(
         console.print(f"[red]consult:[/red] no such session: {session_id}")
         raise typer.Exit(_EXIT_BAD_INPUT)
 
-    target = out or (service.store.session_dir(session_id) / "view.html")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render_html(session), encoding="utf-8")
-    console.print(f"[green]web view:[/green] {target}")
+    if not serve:
+        target = out or (service.store.session_dir(session_id) / "view.html")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(render_html(session), encoding="utf-8")
+        console.print(f"[green]web view:[/green] {target}")
+        if open_browser:
+            import webbrowser
 
-    if open_browser:
-        import webbrowser
+            webbrowser.open(target.resolve().as_uri())
+        return
 
-        webbrowser.open(target.resolve().as_uri())
+    # --serve: ordered, token-free-on-failure startup (FR-SRV-8).
+    # (1) import extras → if missing, degrade to the static file, never a crash.
+    try:
+        from .consultation import serve as _serve
+        if not _serve._SERVER_OK:
+            raise _serve.ServerExtrasMissing("")
+    except Exception:
+        console.print("[yellow]consult:[/yellow] server extras missing (pip install startd8[server]); "
+                      "writing the static view instead.")
+        target = out or (service.store.session_dir(session_id) / "view.html")
+        target.write_text(render_html(session), encoding="utf-8")
+        console.print(f"[green]web view:[/green] {target}")
+        return
+
+    # (2) roster (needs provider keys in env — run under doppler).
+    from .consultation import build_roster
+
+    roster, unavailable = build_roster(list(session.roster), require_vision=False)
+    for spec, reason in unavailable:
+        console.print(f"[yellow]skipping {spec}[/yellow] — {reason}")
+    if not roster:
+        console.print("[red]consult:[/red] no available models for serve (check keys).")
+        raise typer.Exit(_EXIT_BAD_INPUT)
+
+    try:
+        _serve.run_serve(
+            session_id=session_id, store=service.store, roster=roster,
+            port=port, max_turns=max_turns, max_calls=max_calls, timeout=timeout,
+            open_browser=open_browser, emit=console.print,
+        )
+    except _serve.SessionAlreadyServed as e:
+        console.print(f"[red]consult:[/red] {e}")
+        raise typer.Exit(_EXIT_BAD_INPUT)
+    except KeyboardInterrupt:
+        console.print("\n[dim]consult: server stopped.[/dim]")
 
 
 @consult_app.command("list")
