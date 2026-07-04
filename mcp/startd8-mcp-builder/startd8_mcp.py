@@ -3183,7 +3183,9 @@ async def startd8_concierge(params: ConciergeInput) -> str:
       - ``survey``: brownfield triage of a project — requirement/PRD docs (+ extraction-format
         match), Pydantic model files, test-fixture candidates, personal/PII risk flags.
       - ``assess``: onboarding-readiness report — kickoff-input provenance per domain + the
-        $0-cascade view (entities/CRUD/readiness), wrapping ``startd8 wireframe``.
+        $0-cascade view (entities/CRUD/readiness), wrapping ``startd8 wireframe``. Each cascade
+        blocker carries a ``next_command`` (the exact CLI step that advances it), and the report
+        carries a headline ``next_command`` — the single most-actionable next step (FR-5).
 
     Posture: assists, never operates. It never runs the cascade, records a gate, or writes to
     disk — writes are the CLI's job (``startd8 concierge … --apply``), run at human privilege.

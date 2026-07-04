@@ -166,6 +166,14 @@ def concierge_assess(
             console.print("\n[bold]Blocking next step[/bold]:")
             for b in blockers:
                 console.print(f"  • {b['section']} ([yellow]{b['status']}[/yellow]): {b['consequence']}")
+                cmd = b.get("next_command")
+                if cmd:
+                    console.print(f"      → next: [cyan]{cmd}[/cyan]")
+
+    # FR-5: the handoff surface — the single exact next command to move forward.
+    headline = result.get("next_command")
+    if headline:
+        console.print(f"\n[bold]Next command[/bold]: [cyan]{headline}[/cyan]")
 
 
 def _render_write_result(res) -> None:
