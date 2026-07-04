@@ -45,7 +45,7 @@ FAMILY_ORDER = ["claude", "gpt", "gemini"]
 FACILITATOR_SPEC = FAMILIES["claude"]  # facilitator / synthesizer / grounding / assumptions
 OUTSIDE_VIEW_SPEC = FAMILIES["gpt"]    # de-correlate the base-rate estimate
 
-ADVERSARY_IDS = {"adversary-fraud", "adversary-competitor"}
+ADVERSARY_IDS = {"adversary-exploit", "adversary-discredit"}
 
 # --- default Blue Planet Adventures context (overridable via flags) -----------
 DEFAULT_DESC = (
@@ -64,7 +64,7 @@ DEFAULT_STRATEGY = (
     "(2) improve product discovery and trust so browsers convert; "
     "(3) keep the funnel fast and reliable at seasonal peak."
 )
-PROJECT_NAME = "an outdoor-gear retailer"
+PROJECT_NAME = "the project described above"  # overridable via --project-name (bug fix: was retail-hardcoded)
 _NEUTRAL_SYS = (
     "You are a neutral kickoff analyst. No domain stake, no cheerleading. Be "
     "candid and specific. Do not invent facts, numbers, or dates."
@@ -182,31 +182,33 @@ def _synth_prompt(transcript_text, family_map, prep):
 
 # ============================ adversary briefs ================================
 def _adversary_briefs():
+    # Domain-NEUTRAL adversaries: the injected context (objective/strategy/grounding)
+    # makes their attacks domain-appropriate, so they work for any kickoff.
     from startd8.stakeholder_panel.models import PersonaBrief
     return [
         PersonaBrief(
-            role_id="adversary-fraud",
-            display_name="Fraud / Threat Actor (ADVERSARY)",
-            goals=["Exploit the checkout, payment, currency, and promo/bundle flows for gain or data theft."],
+            role_id="adversary-exploit",
+            display_name="Exploiter / Bad Actor (ADVERSARY)",
+            goals=["Exploit this initiative's weakest technical or process seam for gain, disruption, or harm."],
             known_positions=[
-                "abuse-surface: every new discount/bundle/promo path is a new abuse surface",
-                "seams: multi-currency + bundling math is where exploitable rounding/logic bugs hide",
+                "seams: the exploitable weakness is where two systems or steps each assume the other is correct and nobody validates the join",
+                "new-surface: every new capability, integration, or automation is a new attack/abuse surface",
             ],
             constraints=["You are an attacker, not a team member — you probe for weakness, you do not help."],
             out_of_scope=[],
-            answers_for=["fraud", "abuse", "exploit", "attack-surface"],
+            answers_for=["exploit", "abuse", "attack-surface", "integrity"],
         ),
         PersonaBrief(
-            role_id="adversary-competitor",
-            display_name="Rival Retailer (ADVERSARY)",
-            goals=["Win the same outdoor-gear customers; undercut or out-position this initiative."],
+            role_id="adversary-discredit",
+            display_name="Rival / Discreditor (ADVERSARY)",
+            goals=["Undermine, discredit, dispute, or out-compete this initiative and take its standing, users, or trust."],
             known_positions=[
-                "speed: a slow/complex bundling rollout is your window to undercut on price/UX",
-                "trust: any pricing/currency error they ship becomes your marketing",
+                "trust: any error, inconsistency, or unfairness they ship becomes your ammunition",
+                "timing: their slowness, complexity, or blind spots are your opening",
             ],
-            constraints=["You are a competitor, not a team member — you reason about how to beat them."],
+            constraints=["You are an adversary, not a team member — you reason about how to beat or delegitimize them."],
             out_of_scope=[],
-            answers_for=["competition", "market", "positioning"],
+            answers_for=["competition", "dispute", "legitimacy", "trust-attack"],
         ),
     ]
 
@@ -273,6 +275,9 @@ async def orchestrate(args):
     from startd8.utils.agent_resolution import resolve_agent_spec
 
     hydrate()
+    global PROJECT_NAME
+    if getattr(args, "project_name", None):
+        PROJECT_NAME = args.project_name  # keep prompts in the right domain (bug fix from #8)
     roster_path = Path(args.project).expanduser() / "docs" / "kickoff" / "inputs" / "stakeholders.yaml"
     roster = load_roster(roster_path)
     briefs_all = list(roster.personas)
@@ -409,6 +414,9 @@ def main(argv=None):
     ap.add_argument("--objective", default=DEFAULT_OBJECTIVE)
     ap.add_argument("--strategy", default=DEFAULT_STRATEGY)
     ap.add_argument("--desc", default=DEFAULT_DESC)
+    ap.add_argument("--project-name", dest="project_name", default="",
+                    help="Short domain noun used in prompts (e.g. 'a benchmark portal'). "
+                         "Prevents the default-domain leaking into a re-purposed run (bug fix from #8).")
     ap.add_argument("--cap", type=int, default=0, help="Limit roster to first N personas (0 = all)")
     ap.add_argument("--run", action="store_true", help="Actually call models (spends money). Default: dry-run.")
     # Tier-1 additions (default ON; use --no-<flag> to disable)

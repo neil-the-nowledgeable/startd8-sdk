@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.12 (Seventh experiment — Tier-1 additions caught a FALSE PREMISE)
+**Version:** 0.13 (Eighth experiment — Tier-1 LIFTS a valid kickoff, on the real portal)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -690,6 +690,34 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
       low-confidence assumptions ⇒ halt and validate the premise before spending the
       panel rounds (we analyzed a phantom for 48 calls); (c) cost tracking still
       unwired (real spend ~few $, field reads 0.0).
+  - **Eighth run — TIER-1 on a VALID kickoff (2026-07-04, the benchmark portal — a
+    real app w/ a real 13-entity schema + a genuine objective: run the scored round
+    & publish credibly; 16 participants incl. 2 domain-neutral adversaries, 68 calls).**
+    **DECISIVE: Tier-1 LIFTS a valid kickoff** (answers the #7 caveat). Grounding
+    *confirmed* a real system (not a phantom) and the panel produced a sharp,
+    portal-specific, cross-family risk register of genuinely non-obvious credibility
+    gaps: **vendor identities in plaintext contradict the vendor-BLIND review goal**
+    (the standout — 9 roles); **embargo is a mutable flag not an enforced/audited
+    transition**; **no immutable published-result entity binding specHash→cleared
+    cells** (reproducibility has no home); **no pre-registration lock** (moved-
+    goalposts attack); **reviewer-UI XSS** from unsanitized generated markup;
+    **auto-score vs human adjudication not structurally separated**. The
+    **domain-neutral adversaries excelled** — the Discreditor produced a precise
+    "how a hostile vendor discredits your benchmark" analysis the internal roster
+    wouldn't frame as sharply (validates the generalization: context makes generic
+    adversaries domain-appropriate).
+    - **Two real orchestrator bugs surfaced (one self-detected):** (1) `PROJECT_NAME`
+      was hardcoded "outdoor-gear retailer", NOT overridden by `--objective/--desc`,
+      leaking the wrong domain into prompts — **the synthesis flagged the mismatch
+      itself**; grounded personas rejected it, generic ones got confused. **FIXED**
+      (`--project-name` flag). (2) The artifact-gatherer is **too thin** (feeds only
+      `schema.prisma` + truncated files, not the running `app/`), so grounding said
+      "a schema, not a running system" (wrong) and the assumptions check rated
+      everything LOW-confidence *for lack of evidence it wasn't shown* — the gaps are
+      real, the confidence ratings unfair. **TODO:** feed the real running artifact
+      (app code) or wire Sapper/`survey`. (3) cost tracking still unwired.
+    - **Net across #7+#8: Tier-1 both catches a false premise AND lifts a valid one.**
+      FR-13b + the gap-analysis Tier-1 additions validated end-to-end.
 - **OQ-11 — Where does the retained discovery capability live?** The persona/agent
   machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
   *conditionally-offered discovery* a thin caller the kernel owns that invokes a
