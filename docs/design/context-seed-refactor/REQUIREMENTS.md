@@ -1,6 +1,6 @@
 # Context Seed Phase-Handler Extraction & Method Decomposition — Requirements
 
-**Version:** 0.3 (Post lessons-learned hardening — ready for CRP)
+**Version:** 0.4 (Essential/accidental-complexity hardening — ready for CRP)
 **Date:** 2026-07-04
 **Status:** Ready for review
 **Owner:** SDK maintainers
@@ -41,6 +41,34 @@
 - **[CRP steering memory]** — least-reviewed artifact is this brand-new PLAN; settled/do-not-relitigate:
   the `design.py` precedent (proven) and the "behavior-preserving, no algorithm change" boundary.
 
+### 0.2 Essential vs. Accidental Complexity Ledger (v0.4 — the pivot)
+
+> External-lens review (2026-07-04) rejected the v0.3 direction as *relocating* accidental
+> complexity rather than eliminating it. v0.3 proposed **extending** `core.__getattr__` with 5 new
+> entries and mandating the wrapper stay byte-identical — both of which **lock in** the accidental
+> complexity. v0.4 reverses this: distill to essential complexity.
+
+**Root accidental complexity: a dependency inversion.** `core.py` conflates three roles — (a) the
+shared-helper library, (b) the composition root (`ContextSeedHandlers` aggregator), and (c) the
+handler home. Because the shared helpers live in the *same file* as the aggregator, extracted phases
+must import *back* from `core`, but `core` (as aggregator) must import the phases → a cycle, papered
+over with a lazy `__getattr__` shim and `TYPE_CHECKING` guards. The `design.py` "core-dependent phase"
+flavor I proposed to mirror **is itself the accidental-complexity artifact**, not a precedent to copy.
+
+| Complexity | Essential or Accidental? | Verdict |
+|---|---|---|
+| Multi-phase orchestration, retry, telemetry, checkpointing logic | **Essential** | Preserve verbatim |
+| Phases importing shared symbols *back from* `core` | **Accidental** (dependency inversion) | **Eliminate** — phases import from a leaf |
+| `core.__getattr__` lazy shim + `TYPE_CHECKING` design guard | **Accidental** (exists only to break the self-inflicted cycle) | **Delete** |
+| `_ensure_context_loaded` traveling shared→core→wrapper→patched (3 hops) | **Accidental** (stranded re-export) | **Collapse** — patch at the leaf/phase |
+| `HandlerConfig` + 15 helpers/listeners stranded in the aggregator file | **Accidental** (wrong home) | **Move** to a leaf support module |
+| Compat wrapper existing at all | **Accidental**, but load-bearing (5 active + 4 on-hold src consumers, 44 test files) | **Keep working**, do NOT byte-freeze; retirement is NR-7 |
+
+**Verified enablers (grep, 2026-07-04):** `shared.py` imports nothing from `core` (clean leaf);
+`_ensure_context_loaded` is *already* in `shared.py`; the stranded helpers + both listeners are leaf
+(no `*PhaseHandler`/aggregator refs in their bodies); only `prime_review.py` imports `core` directly.
+∴ moving the stranded helpers to a leaf module breaks the cycle with **no** new cycle introduced.
+
 ---
 
 ## 1. Problem Statement
@@ -74,14 +102,27 @@ symbols" rule — all workarounds that exist *because* the file is oversized.
   (NOT `test.py` — pytest would collect it).
 - **FR-4.** Move `ReviewPhaseHandler` (core.py L6748–8929) to `phases/review.py`.
 - **FR-5.** Move `FinalizePhaseHandler` (core.py L8929–9769) to `phases/finalize.py`.
-- **FR-6.** Each extracted module imports its required shared symbols back from `core.py`,
-  mirroring `design.py`'s existing `from …context_seed.core import (…)` contract.
-- **FR-7.** Extend `core.py`'s module-level `__getattr__` (L404) to lazily resolve all five
-  moved handler names, so existing `from …context_seed.core import <Handler>` sites keep working.
-- **FR-8.** Update `ContextSeedHandlers.create_handlers` (the aggregator, L9769) to local-import
-  each moved handler, mirroring the existing `DesignPhaseHandler as _DesignPhaseHandler` local import.
-- **FR-9.** `context_seed_handlers.py` compat wrapper is byte-unchanged (assert via `git diff --exit-code`).
-- **FR-10.** `context_seed/__init__.py` is byte-unchanged (assert via `git diff --exit-code`).
+- **FR-6.** Create a leaf support module `context_seed/handler_support.py` holding the ~15 shared
+  helpers/classes currently stranded in `core.py` (`HandlerConfig`, `PerFileMode`,
+  `EditModeClassification`, `SeedTaskUnit`, `ArtisanIntegrationListener`, `OTelIntegrationListener`,
+  `_dict_to_gen_result`, `_capture_task_span_context`, `_build_provenance_links`, `_log_task_timing`,
+  `_log_task_boundary_start`, `_log_task_boundary_complete`, `_coerce_optional_float`,
+  `_compute_gen_file_hash`, `_compute_design_results_hash`, `_format_review_prompt`,
+  `_get_review_template`). It imports only external deps + `shared.py` + `tracing.py` — never `core`.
+  It is a distinct concern from `shared.py` (which owns seed-task parsing), so it is its own module.
+- **FR-7.** Each extracted phase module imports its shared symbols from `handler_support`/`shared` —
+  **never from `core`**. This severs the cycle. `phases/design.py`'s existing
+  `from …context_seed.core import (…)` is **repointed** to `handler_support` in the same pass
+  (opportunistic elimination of the pre-existing inversion).
+- **FR-8.** With phases no longer importing `core`, `core.py` becomes a **pure aggregator**
+  (the `ContextSeedHandlers` class) that imports all handlers **eagerly at module top** — no local
+  imports, no lazy resolution. `core.py.__getattr__` shim and the `TYPE_CHECKING` design-handler
+  guard are **deleted** (they existed only to break the self-inflicted cycle).
+- **FR-9.** `context_seed_handlers.py` compat wrapper keeps its public `__all__` **unchanged**, but
+  its *import lines* are repointed to the symbols' real homes (handlers from `phases`, helpers from
+  `handler_support`/`shared`). Assert public surface via an `__all__` equality test, not a byte diff.
+- **FR-10.** `context_seed/__init__.py` keeps its public `__all__` unchanged; its `__getattr__`
+  design-handler shim is deleted (handlers now import eagerly with no cycle).
 - **FR-11.** `phases/__init__.py.__all__` gains the five new module names.
 
 ### Part B — Method Decomposition
@@ -104,16 +145,21 @@ symbols" rule — all workarounds that exist *because* the file is oversized.
 
 ## 3. Non-Requirements
 
-- **NR-1.** Does NOT extract shared helpers (`HandlerConfig`, listeners, `_log_task_*`, etc.)
-  out of `core.py` into a separate support module — they remain in `core.py` as the shared
-  substrate. (Deferred; would fully sever the residual cycle but is a larger diff.)
-- **NR-2.** Does NOT touch the ON-HOLD Artisan handlers (`artisan_phases/`).
+- **NR-1.** ~~Does NOT extract shared helpers into a separate module.~~ **REVERSED in v0.4** —
+  extracting the stranded helpers to `handler_support.py` (FR-6) is now the *central* move; it is
+  what makes the cycle-elimination possible. Kept here as a visible record of the v0.3→v0.4 pivot.
+- **NR-2.** Does NOT touch the ON-HOLD Artisan handlers (`artisan_phases/`), except to repoint their
+  *import lines* if a symbol they consume moves home (mechanical, no logic change).
 - **NR-3.** Does NOT change any handler's algorithm, prompts, or scoring.
 - **NR-4.** Does NOT rename `core.py` or the compat wrapper.
 - **NR-5.** Does NOT decompose methods in files other than the five extracted handlers.
 - **NR-6.** Does NOT refactor `IntegrationEngine.integrate` (~947 LOC) — it is a different class
   in a different file (`integration_engine.py`), unrelated to `IntegratePhaseHandler`. Tracked
   separately as PLAN.md Part C (its own branch/PR). *(Was OQ-1; resolved during planning.)*
+- **NR-7.** Does NOT retire the `context_seed_handlers.py` compat wrapper. Its ~5 active src
+  consumers, 4 on-hold Artisan consumers, and 44 test files make deletion a separate migration
+  (Tier 2). This refactor keeps the wrapper working with its public surface intact; only its
+  internal import lines are repointed (FR-9).
 
 ## 4. Open Questions
 
@@ -137,6 +183,9 @@ Every code symbol named in this document was verified against the tree on 2026-0
 
 ---
 
-*v0.3 — Post lessons-learned hardening. Applied 3 lessons (Import-Path Duplication,
-Phantom-Reference Audit, CRP Steering Memory). v0.1→v0.2: 6 corrections, 5 OQs resolved,
-1 requirement descoped (NR-6). Ready for CRP review.*
+*v0.4 — Essential/accidental-complexity hardening (external-lens pivot). Reversed the v0.3
+"extend the shim / byte-freeze the wrapper" direction, which relocated accidental complexity;
+v0.4 eliminates it: extract stranded helpers to a leaf `handler_support.py` (FR-6), phases import
+from the leaf not `core` (FR-7), delete the `__getattr__` shim (FR-8/FR-10). Net: `core.py`
+9,952 → ~200 LOC, and 3 accidental-complexity mechanisms deleted rather than grown.
+Prior: v0.3 lessons hardening (3 lessons); v0.1→v0.2: 6 corrections, 5 OQs resolved. Ready for CRP.*
