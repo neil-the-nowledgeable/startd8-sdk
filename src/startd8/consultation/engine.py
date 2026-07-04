@@ -188,6 +188,8 @@ class ConsultationEngine:
                 images=images or None,
             )
             in_tok, out_tok = _tokens(getattr(response, "token_usage", None))
+            from .cost import turn_cost_usd
+
             turns.append(
                 Turn(
                     role=TurnRole.assistant,
@@ -195,6 +197,7 @@ class ConsultationEngine:
                     status=TurnStatus.ok,
                     input_tokens=in_tok,
                     output_tokens=out_tok,
+                    cost_usd=turn_cost_usd(model_id, in_tok, out_tok),  # QW-1
                     time_ms=getattr(response, "response_time_ms", None),
                 )
             )

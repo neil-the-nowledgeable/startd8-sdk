@@ -34,7 +34,15 @@ class ConsultationMixin:
             title="🗣️  Consultation",
             border_style="cyan",
         ))
-        if not questionary.confirm("Start a consultation?", default=True, style=custom_style).ask():
+        mode = questionary.select(
+            "Start a new consultation, or open a saved one?",
+            choices=["New consultation", "Open a saved consultation", "Cancel"],
+            style=custom_style,
+        ).ask()
+        if mode in (None, "Cancel"):
+            return
+        if mode == "Open a saved consultation":
+            self._consultation_open_saved()
             return
 
         # Step 1 — prompt
@@ -78,6 +86,33 @@ class ConsultationMixin:
 
         # Follow-up loop
         self._consultation_followup_loop(service, session, roster)
+
+    # ── open a saved session (QW-3 / FR-MMC-12) ───────────────────────────────
+    def _consultation_open_saved(self):
+        """List saved sessions, reopen one, rebuild its roster, and resume the follow-up loop."""
+        from ..consultation import build_roster
+
+        service = ConsultationService(base_dir=str(self._consultation_base_dir()))
+        ids = service.list_sessions()
+        if not ids:
+            self.console.print("[yellow]No saved consultations yet.[/yellow]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        sid = questionary.select(
+            "Open which session?", choices=list(reversed(ids)), style=custom_style
+        ).ask()
+        if not sid:
+            return
+        session = service.load(sid)
+        roster, unavailable = build_roster(list(session.roster), require_vision=False)
+        for spec, reason in unavailable:
+            self.console.print(f"[yellow]skipping {spec}[/yellow] — {reason}")
+        self._consultation_show(session)
+        if roster:
+            self._consultation_followup_loop(service, session, roster)
+        else:
+            self.console.print("[yellow]No available models to continue (check keys) — view only.[/yellow]")
+            questionary.press_any_key_to_continue().ask()
 
     # ── steps (delegating to the tested core) ─────────────────────────────────
     def _consultation_pick_images(self):

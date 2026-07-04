@@ -66,10 +66,12 @@ def consult_run(
     image: Optional[List[Path]] = typer.Option(None, "--image", help="Image path (repeatable, max 2)."),
     image_dir: Optional[Path] = typer.Option(None, "--image-dir", help="Folder to auto-select up to 2 images from."),
     models: Optional[List[str]] = typer.Option(None, "--models", "-m", help="Model spec (repeatable); default = cross-vendor council."),
+    preset: Optional[str] = typer.Option(None, "--preset", help="Use a saved roster preset (see `consult roster`)."),
+    save_preset: Optional[str] = typer.Option(None, "--save-preset", help="Save the roster used under this preset name."),
     json_out: bool = typer.Option(False, "--json", help="Emit the session JSON to stdout."),
 ) -> None:
     """Start a consultation: fan the prompt (+ images) out to the roster in parallel."""
-    from .consultation import ConsultationService, comparison_text
+    from .consultation import ConsultationService, PresetStore, comparison_text
 
     if prompt_file:
         prompt = prompt_file.read_text(encoding="utf-8")
@@ -79,9 +81,22 @@ def consult_run(
     if image and image_dir:
         console.print("[red]consult:[/red] use --image OR --image-dir, not both.")
         raise typer.Exit(_EXIT_BAD_INPUT)
+    if preset and models:
+        console.print("[red]consult:[/red] use --preset OR --models, not both.")
+        raise typer.Exit(_EXIT_BAD_INPUT)
+
+    presets = PresetStore(base_dir=_base_dir())
+    if preset:  # QW-4: resolve a saved roster
+        models = presets.load(preset)
+        if not models:
+            console.print(f"[red]consult:[/red] no such preset: {preset}")
+            raise typer.Exit(_EXIT_BAD_INPUT)
 
     imgs = _resolve_images_or_exit(image, image_dir)
     roster = _build_roster_or_exit(models, require_vision=bool(imgs))
+    if save_preset:
+        presets.save(save_preset, list(roster))
+        console.print(f"[green]saved preset[/green] {save_preset}: {', '.join(roster)}")
 
     service = ConsultationService(base_dir=_base_dir())
     console.print(f"[dim]consulting {len(roster)} model(s)"
@@ -242,3 +257,63 @@ def consult_list() -> None:
         return
     for sid in ids:
         console.print(sid)
+
+
+@consult_app.command("cost")
+def consult_cost(
+    session_id: str = typer.Argument(..., help="Session id to price."),
+) -> None:
+    """Show per-model and total USD cost of a consultation (QW-1)."""
+    from .consultation import ConsultationService, session_cost
+
+    service = ConsultationService(base_dir=_base_dir())
+    try:
+        session = service.load(session_id)
+    except FileNotFoundError:
+        console.print(f"[red]consult:[/red] no such session: {session_id}")
+        raise typer.Exit(_EXIT_BAD_INPUT)
+    per, total = session_cost(session)
+    for model_id in session.roster:
+        console.print(f"  {model_id:<32} ${per.get(model_id, 0.0):.4f}")
+    console.print(f"[green]total[/green] ${total:.4f}")
+
+
+# ── roster presets (QW-4) ─────────────────────────────────────────────────────
+roster_app = typer.Typer(name="roster", help="Manage saved roster presets (named councils).")
+consult_app.add_typer(roster_app, name="roster")
+
+
+@roster_app.command("list")
+def roster_list() -> None:
+    """List saved roster presets."""
+    from .consultation import PresetStore
+
+    presets = PresetStore(base_dir=_base_dir()).list()
+    if not presets:
+        console.print("[dim]no presets yet. Save one: consult run … --save-preset <name>[/dim]")
+        return
+    for name, models in presets.items():
+        console.print(f"[cyan]{name}[/cyan]: {', '.join(models)}")
+
+
+@roster_app.command("save")
+def roster_save(
+    name: str = typer.Argument(..., help="Preset name."),
+    models: List[str] = typer.Option(..., "--models", "-m", help="Model spec (repeatable)."),
+) -> None:
+    """Save a named roster preset."""
+    from .consultation import PresetStore
+
+    PresetStore(base_dir=_base_dir()).save(name, list(models))
+    console.print(f"[green]saved[/green] {name}: {', '.join(models)}")
+
+
+@roster_app.command("delete")
+def roster_delete(name: str = typer.Argument(..., help="Preset name to delete.")) -> None:
+    """Delete a roster preset."""
+    from .consultation import PresetStore
+
+    if PresetStore(base_dir=_base_dir()).delete(name):
+        console.print(f"[green]deleted[/green] {name}")
+    else:
+        console.print(f"[yellow]no such preset:[/yellow] {name}")

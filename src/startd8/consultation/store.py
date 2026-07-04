@@ -14,8 +14,10 @@ session. Concurrency contract from the CRP:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,9 +26,19 @@ from .models import ConsultationSession, TurnRole, TurnStatus
 
 logger = get_logger(__name__)
 
+try:
+    import fcntl  # Unix advisory locks — auto-released on process death (no stale marker)
+    _HAS_FCNTL = True
+except ImportError:  # pragma: no cover - Windows
+    _HAS_FCNTL = False
+
 
 class SessionCollisionError(RuntimeError):
     """Raised when a session id directory already exists (fail-loud, R2-S6)."""
+
+
+class SessionBusyError(RuntimeError):
+    """Raised when a session's write lock can't be acquired in time (QW-2)."""
 
 
 def new_session_id() -> str:
@@ -74,6 +86,41 @@ class ConsultationStore:
     def load(self, session_id: str) -> ConsultationSession:
         path = self.session_dir(session_id) / "session.json"
         return ConsultationSession.model_validate_json(path.read_text(encoding="utf-8"))
+
+    @contextlib.contextmanager
+    def session_write_lock(self, session_id: str, *, timeout: float = 30.0):
+        """Cross-process advisory write lock for a session (QW-2).
+
+        Serializes mutating ops (follow-up/retry) on one session so two concurrent CLI writers
+        cannot lost-update ``session.json``. Uses ``fcntl.flock`` (auto-released on process death —
+        no stale marker to clean up, unlike the serve lock). Blocks up to ``timeout`` then raises
+        :class:`SessionBusyError`. Where ``fcntl`` is unavailable (Windows) this is a no-op.
+        """
+        d = self.session_dir(session_id)
+        d.mkdir(parents=True, exist_ok=True)
+        if not _HAS_FCNTL:
+            yield
+            return
+        f = open(d / ".write.lock", "w")
+        try:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise SessionBusyError(
+                            f"session {session_id} is locked by another writer (timeout {timeout}s)"
+                        )
+                    time.sleep(0.1)
+            yield
+        finally:
+            try:
+                fcntl.flock(f, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            f.close()
 
     def list_sessions(self) -> list[str]:
         if not self.root.exists():

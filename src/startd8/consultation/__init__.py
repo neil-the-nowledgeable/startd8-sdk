@@ -14,12 +14,14 @@ from .models import (
     TurnRole,
     TurnStatus,
 )
-from .store import ConsultationStore, new_session_id
+from .store import ConsultationStore, SessionBusyError, new_session_id
 from .engine import ALL, ConsultationEngine
 from .facade import ConsultationService
 from .roster import DEFAULT_COUNCIL, build_roster
 from .selection import resolve_images, select_from_dir, load_paths
 from .view import comparison_table, comparison_text, render_html
+from .cost import session_cost, turn_cost_usd
+from .presets import PresetStore
 
 __all__ = [
     "ConsultationSession",
@@ -41,4 +43,8 @@ __all__ = [
     "comparison_table",
     "comparison_text",
     "render_html",
+    "session_cost",
+    "turn_cost_usd",
+    "PresetStore",
+    "SessionBusyError",
 ]

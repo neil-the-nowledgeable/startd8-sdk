@@ -76,9 +76,10 @@ class Turn(BaseModel):
     images: list[SessionImageRef] = Field(default_factory=list)
     status: TurnStatus = TurnStatus.ok
     error: Optional[TurnError] = None
-    # Cost/usage signal recorded per assistant turn (M2.5 / R1-S9).
+    # Cost/usage signal recorded per assistant turn (M2.5 / R1-S9 / QW-1).
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
     time_ms: Optional[int] = None
     created_at: str = Field(default_factory=_utcnow_iso)
 

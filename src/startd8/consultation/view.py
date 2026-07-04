@@ -35,6 +35,8 @@ def _usage(turn: Optional[Turn]) -> str:
         bits.append(f"out={turn.output_tokens}")
     if turn.time_ms is not None:
         bits.append(f"{turn.time_ms}ms")
+    if turn.cost_usd is not None:  # QW-1
+        bits.append(f"${turn.cost_usd:.4f}")
     return " ".join(bits)
 
 
@@ -52,7 +54,11 @@ def _answer(turn: Optional[Turn]) -> str:
 
 def comparison_text(session: ConsultationSession, *, max_chars: int = 2000) -> str:
     """Plain-text side-by-side of the latest answer per model."""
-    lines = [f"Consultation {session.id} — {len(session.roster)} model(s)", ""]
+    from .cost import session_cost
+
+    _per, total = session_cost(session)
+    total_note = f" — total ${total:.4f}" if total else ""
+    lines = [f"Consultation {session.id} — {len(session.roster)} model(s){total_note}", ""]
     for model_id in session.roster:
         turn = _latest_assistant(session, model_id)
         status = turn.status.value if turn else "untried"
@@ -111,7 +117,7 @@ def _turn_payload(turn: Turn) -> dict:
         d["images"] = len(turn.images)
     if turn.error is not None:
         d["error"] = {"type": turn.error.type, "code": turn.error.code, "message": turn.error.message}
-    for field in ("input_tokens", "output_tokens", "time_ms"):
+    for field in ("input_tokens", "output_tokens", "time_ms", "cost_usd"):
         val = getattr(turn, field, None)
         if val is not None:
             d[field] = val

@@ -176,7 +176,7 @@ class TestReplyExecutor:
 # Pins render_html(serve=None) so the static view's read-only guarantee cannot silently
 # regress when the template is touched. If the template changes intentionally, recompute
 # and update this constant in the same commit.
-GOLDEN_STATIC_SHA256 = "664625e9f6298af85532e896a4a49066dd7fc68c5c17f0a901609e19d7f22bc0"
+GOLDEN_STATIC_SHA256 = "d8727eae1e0fa9675aa3383fb5403e96d3779bffb68f2ab2dbb8a10217d52aca"
 
 
 def _golden_session():
