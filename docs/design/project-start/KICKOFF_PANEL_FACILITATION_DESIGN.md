@@ -1,9 +1,20 @@
 # Kickoff Panel — Facilitated Multi-Round Process (Design Spec)
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Gap-analysis additions folded in)
 **Date:** 2026-07-04
-**Status:** Design — orchestrator to be built against this; end-user UX reqs authored separately by the user.
-**Tracks:** `PROJECT_START_REQUIREMENTS.md` FR-13 / FR-13b, §0.2 experiment log (runs 1–5).
+**Status:** Design — orchestrator built (`scripts/run_kickoff_panel.py`), Tier-1 additions prototyped.
+**Tracks:** `PROJECT_START_REQUIREMENTS.md` FR-13 / FR-13b, §0.2 experiment log (runs 1–6).
+**Companion:** `KICKOFF_PANEL_GAP_ANALYSIS.md` (the audit this version folds in).
+
+> **v0.2 changes (from the gap analysis).** Audited the v0.1 process against the
+> workshop canon + adjacent fields. Folded in **Tier-1** additions (§10): (1) a
+> **Key Assumptions Check + Outside-View** prep pass; (2) **artifact grounding** so
+> the panel reasons about the real system; (3) **adversary personas**; (4) a
+> **re-sequence for independence** — pre-mortem *before* cross-pollination + a
+> **final private judgment** after the collision (per the diversity-prediction
+> theorem: collision costs independence, so rebuild it before aggregating). The
+> canonical round order in §3 is updated accordingly; Tier-2 additions are logged
+> in §10 as future work.
 
 ---
 
@@ -36,6 +47,7 @@ Three empirical anchors this design is built on (§0.2):
 |-------|-------|-------|-------------------------------|-----|
 | **Facilitator** | 1 | strong, fixed | **Yes** (schema/manifests/current-state) | Runs the process: frames objective→strategy, prepares personas, ladders, extracts tensions, drives synthesis. **No domain stake.** |
 | **Persona** | N (roster) | **mixed families** (de-correlation) | No — brief only | Bring a role-lens; reason from the objective into their domain. |
+| **Adversary persona** | 1–2 (v0.2) | distinct family | No — adversary brief | Attack/undercut the initiative (fraudster, competitor) — surfaces abuse cases the internal roster can't (Gap 4). |
 | **Skeptic / Red-team** | 1 (optional) | strong, distinct family | Yes | Pre-mortem author + attacks the emerging plan. |
 | **Synthesizer** | 1 (may = Facilitator) | strong | Yes (reads all rounds) | Integrate into a risk register + tensions + **open-questions-for-the-human**; preserve unresolved disagreement (anti-smoothing). |
 
@@ -49,6 +61,21 @@ the facilitator grounds the process in reality; the personas supply lenses.
 
 Each round does a *distinct cognitive job*; collapsing them is what makes a
 workshop mediocre. Rounds are sequential; personas run in parallel *within* a round.
+
+> **v0.2 canonical sequence (re-sequenced for independence).** The diversity-
+> prediction theorem says cross-pollination *spends* independence, so we do the
+> uncontaminated critical work first and rebuild independence before aggregating:
+>
+> **R0 prep** (ground on artifact + Key Assumptions Check + Outside View) →
+> **R1 individual means-ends** (private) →
+> **R2 pre-mortem** (private — MOVED before the collision) →
+> **R3 cross-pollination** (generative collision) →
+> **R4 final private judgment** (re-independent-ize after the collision) →
+> **R5 synthesis**.
+>
+> The prose subsections below describe each round's *job*; the order above is
+> authoritative for v0.2. Adversary personas (§2) participate in R1–R4 with an
+> attack-framed prompt.
 
 ### R0 — Preparation & framing (Facilitator, $-light)
 - Facilitator ingests the real artifact (schema, manifests, current state) + the
@@ -152,7 +179,13 @@ Flagship specs (2026-07): `anthropic:claude-opus-4-8`, `openai:gpt-5.5`,
   "project": "<slug>",
   "objective": "<text>",
   "strategy": "<text>",
+  "prep": {                                    // v0.2 R0 passes (each a top-level card in the UX)
+    "grounded_context": "<facilitator current-state summary from the real artifact>",
+    "key_assumptions": "<load-bearing assumptions + confidence×impact>",
+    "outside_view": "<base rate + typical failure modes for the reference class>"
+  },
   "model_assignment": { "<role_id>": "<provider:model>", "...": "..." },
+  "adversaries": [ "<role_id>", "..." ],       // v0.2 — which roles are attack personas
   "facilitator_model": "<provider:model>",
   "rounds": [
     {
@@ -253,6 +286,45 @@ Built on existing panel APIs (no new persona machinery):
 
 ---
 
-*Draft 0.1 — build the orchestrator against §3/§4/§6, then the user authors the
-end-user observability UX reqs (expand/collapse by round & role, live-follow) over
-the §6 transcript contract.*
+---
+
+## 10. Known gaps & cross-domain additions
+
+Full audit: `KICKOFF_PANEL_GAP_ANALYSIS.md`. Summary of what v0.2 folds in and
+what remains.
+
+### Tier 1 — prototyped in v0.2 (orchestrator flags, default on)
+1. **Key Assumptions Check + Outside View** (`--assumptions`, `--outside-view`) —
+   R0 prep passes. Surfaces the plan's load-bearing assumptions (confidence ×
+   impact) and the reference-class base rate / typical failure modes. Fills the
+   biggest gap (we optimized a solution without examining the problem). *IC
+   tradecraft (Heuer) + reference-class forecasting (Kahneman/Flyvbjerg).*
+2. **Artifact grounding** (`--ground`) — the facilitator reads the real project
+   artifact and emits a current-state summary injected into the shared context, so
+   personas reason about the system, not a description. *Toyota genchi genbutsu.*
+3. **Adversary personas** (`--adversary`) — 1–2 attack personas (fraud, competitor)
+   with an attack-framed prompt. Surfaces abuse cases the internal roster can't.
+   *STRIDE threat modeling.*
+4. **Re-sequence for independence** (default) — pre-mortem *before* cross-
+   pollination + a **final private judgment** after. *Diversity-prediction theorem
+   (Page): collision spends independence; rebuild it before aggregating.*
+
+### Tier 2 — future (higher machinery, high payoff)
+5. **Tensions → experiments** — decompose each open tension to interests; the two
+   parties jointly propose the test that resolves it. *Fisher & Ury; adversarial
+   collaboration (Kahneman).*
+6. **Scenario planning** — react to 2–3 divergent futures; find robust tactics. *Wack/Shell.*
+7. **Group convergence** — anonymous ranking / prioritization round. *Delphi/NGT.*
+8. **Journey/process model** — shared temporal map; find seam-gaps + hotspots. *Event Storming.*
+9. **Second-order effects + the binding constraint.** *Theory of Constraints; Meadows.*
+
+### Structurally out of reach (do not pretend)
+Test-with-real-users, tacit/proprietary knowledge, real accountability, true
+independence. Nearest proxy for "validate against reality" = artifact grounding
+(#2) + a future fact-check pass against the Sapper oracle.
+
+---
+
+*Draft 0.2 — Tier-1 additions prototyped in `scripts/run_kickoff_panel.py`. The
+user authors the end-user observability UX reqs (expand/collapse by round & role,
+live-follow, the §6 `prep` cards) over the §6 transcript contract.*
