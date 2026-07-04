@@ -29,7 +29,7 @@ Default experiment instruction for this template:
 
 ## Output Contract
 
-Write exactly these files:
+Write exactly these files in the current working directory:
 
 - `spec.md`
 - `authoring_manifest.json`
@@ -54,4 +54,3 @@ Write exactly these files:
 ## Forbidden Inputs
 
 {{FORBIDDEN_INPUTS}}
-

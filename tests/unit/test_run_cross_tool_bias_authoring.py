@@ -118,6 +118,11 @@ def test_execute_run_converts_timeout_to_failed_result(monkeypatch, tmp_path):
     assert "timed out after 0.5 seconds" in stderr
 
 
+def test_failure_output_preview_falls_back_to_stdout():
+    assert mod.failure_output_preview("Credit balance is too low\n", "") == "Credit balance is too low"
+    assert mod.failure_output_preview("stdout detail", "stderr detail") == "stderr detail"
+
+
 def test_metadata_records_names_not_secret_values():
     meta = mod.command_policy_metadata("claude-code", "/opt/bin/claude", "1.2.3")
     blob = json.dumps(meta)
@@ -213,6 +218,27 @@ def test_openai_and_gemini_suite_prompts_share_bridge_contract(tmp_path):
     ):
         assert required in openai_prompt
         assert required in gemini_prompt
+
+
+def test_rendered_prompt_uses_current_working_directory_not_ephemeral_path(tmp_path):
+    prompt = _render_suite_prompt(tmp_path, tool_id="claude-code", author_vendor="anthropic")
+
+    assert "- working_directory: current working directory" in prompt
+    assert "- clean_workspace: current working directory, freshly provisioned for this run" in prompt
+    assert "Write exactly these files in the current working directory" in prompt
+    assert str(tmp_path) not in prompt
+
+
+def test_suite_author_prompt_orders_manifests_before_suite(tmp_path):
+    prompt = _render_suite_prompt(tmp_path, tool_id="claude-code", author_vendor="anthropic")
+
+    assert "Write the two manifest files before writing `suite.py`" in prompt
+    suite_manifest_index = prompt.index("- `suite_manifest.json`")
+    authoring_manifest_index = prompt.index("- `authoring_manifest.json`")
+    suite_py_index = prompt.index("- `suite.py`")
+
+    assert suite_manifest_index < suite_py_index
+    assert authoring_manifest_index < suite_py_index
 
 
 # --- immutable retry capture (R-Phase1-4) --------------------------------------------------------

@@ -284,8 +284,8 @@ def render_prompt(
 - model_id: {tool_id}-{executable_version or 'unknown'}
 - prompt_template_version: {template_name.replace('.md', '')}
 - artifact_type: {"suite" if experiment == "suite_author" else "spec"}
-- working_directory: {working_directory}
-- clean_workspace: {clean_workspace}
+- working_directory: current working directory
+- clean_workspace: current working directory, freshly provisioned for this run
 - {tool_name}_binary: {binary_path}
 - {tool_name}_flags: {flags}
 - source_inputs: {source_inputs}"""
@@ -447,6 +447,16 @@ def execute_run(
         return 124, stdout, (stderr + ("\n" if stderr else "") + detail)
     except Exception as e:  # noqa: BLE001
         return -1, "", str(e)
+
+
+def failure_output_preview(stdout: str, stderr: str, *, limit: int = 200) -> str:
+    """Return a short diagnostic for failed child processes.
+
+    Some CLIs report provider/account failures on stdout rather than stderr, so stderr-only
+    previews hide the actionable reason.
+    """
+    output = stderr.strip() or stdout.strip()
+    return output[:limit]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -616,7 +626,9 @@ def main(argv: list[str] | None = None) -> int:
                 status_str = "failed"
                 print(f"  Failed: exit_code={code}, missing_files={missing_files}")
                 if code != 0:
-                    print(f"  Stderr: {stderr[:200]}")
+                    preview = failure_output_preview(stdout, stderr)
+                    if preview:
+                        print(f"  Output: {preview}")
 
             # IMMUTABLE per-attempt record (R-Phase1-4): written once, never overwritten.
             attempt_meta = {

@@ -27,14 +27,16 @@ Default experiment instruction for this template:
 - Include a manifest entry mapping each test to the FIXED/OPEN item it exercises.
 - Make the suite bridge-executable by exposing a deterministic adapter seam that a future
   runner can bind to an implementation under test without editing `suite.py`.
+- Write the two manifest files before writing `suite.py` so a timeout still leaves the run's
+  declared artifact intent and bridge contract available for diagnostics.
 
 ## Output Contract
 
-Write exactly these files:
+Write exactly these files in the current working directory, in this order:
 
-- `suite.py`
 - `suite_manifest.json`
 - `authoring_manifest.json`
+- `suite.py`
 
 `suite_manifest.json` must include:
 
