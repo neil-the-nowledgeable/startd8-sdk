@@ -460,6 +460,8 @@ __SESSION_JSON__
   try{ var sc=document.getElementById("serve-config"); if(sc) serveCfg=JSON.parse(sc.textContent); }catch(e){}
 
   if(serveCfg){
+    // Strip the token from the address bar so it doesn't persist in browser history (FR-SRV-4b).
+    try{ if(location.search.indexOf("t=")>=0) history.replaceState(null,"",location.pathname); }catch(e){}
     // Repurpose the composer for interactive Send.
     document.querySelector(".composer .chint").textContent="interactive · runs on your local server (spends tokens)";
     cmdEl.parentNode.parentNode.querySelector(".lbl").textContent="Send to the local server";
