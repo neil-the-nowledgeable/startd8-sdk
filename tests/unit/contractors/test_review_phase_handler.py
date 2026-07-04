@@ -1037,7 +1037,7 @@ class TestReviewCacheGateEmitterInteraction:
         tasks = [_make_seed_task(task_id="T1"), _make_seed_task(task_id="T2")]
 
         with patch(
-            "startd8.contractors.context_seed.core.GateEmitter"
+            "startd8.contractors.context_seed.phases.review.GateEmitter"
         ) as mock_gate_cls:
             result, handler = _run_review_execute_with_cache(
                 tmp_path, tasks, {"T1": gr1, "T2": gr2},
@@ -1191,7 +1191,7 @@ class TestReviewCacheWriteFailureNonFatal:
         tasks = [_make_seed_task(task_id="T1")]
 
         with patch(
-            "startd8.contractors.context_seed_handlers.atomic_write_json",
+            "startd8.contractors.context_seed.phases.review.atomic_write_json",
             side_effect=OSError("disk full"),
         ):
             result, handler = _run_review_execute_with_cache(
