@@ -364,3 +364,109 @@ def test_cli_bad_proposals_exit2(tmp_path):
     pf.write_text("- kind: nonsense\n", encoding="utf-8")
     result = runner.invoke(project_app, ["init", str(root), "--proposals", str(pf)])
     assert result.exit_code == 2
+
+
+# --- M3: VIPP scope-out (opt-in) + consumer-safe alias window (FR-1a/FR-14/FR-15/OQ-8) -------------
+
+
+def test_m3_default_still_posts_vipp_consumer_safe(tmp_path):
+    """FR-1a alias window — the *default* `project init` still posts VIPP (consumer break = zero).
+
+    household-o11y + benchmark portal reach VIPP through this always-on posting; scoping out AND
+    flipping the default off at once would double-break them. Default must keep the full flow.
+    """
+    root = _proj(tmp_path)
+    summary = run_project_init(root, sdk_version="9.9.9")  # no with_vipp → default alias behavior
+    assert "vipp" in summary["postings"]
+    assert (root / ".startd8" / "vipp" / "vipp-context.json").is_file()
+    assert (root / ".startd8" / "vipp" / "inbox-seq").is_file()
+    assert summary["producer"]["status"] == "no_gap"  # inbox-ready, same flow as before M3
+
+
+def test_m3_cli_default_emits_deprecation_notice(tmp_path):
+    """The default (aliased) CLI path posts VIPP AND emits the scope-out deprecation notice."""
+    root = str(_proj(tmp_path))
+    result = runner.invoke(project_app, ["init", root])
+    assert result.exit_code == 0
+    # Notice reaches the user (stderr console is mixed into CliRunner output).
+    assert "deprecation:" in result.output
+    assert "kickoff instantiate" in result.output
+    # VIPP was still posted (consumer-safe).
+    assert (Path(root) / ".startd8" / "vipp" / "vipp-context.json").is_file()
+
+
+def test_m3_cli_json_default_still_parseable_notice_on_stderr(tmp_path):
+    """The default-path deprecation notice must not pollute `--json` stdout (it goes to stderr)."""
+    root = str(_proj(tmp_path))
+    r = runner.invoke(project_app, ["init", root, "--json"])
+    assert r.exit_code == 0
+    payload = json.loads(r.stdout)  # would raise if the notice leaked into stdout
+    assert payload["action"] == "init"
+    assert "vipp" in payload["postings"]
+
+
+def test_m3_explicit_with_vipp_posts_without_notice(tmp_path):
+    """`--with-vipp` = explicit opt-in: VIPP posted, no deprecation notice."""
+    root = str(_proj(tmp_path))
+    result = runner.invoke(project_app, ["init", root, "--with-vipp"])
+    assert result.exit_code == 0
+    assert "deprecation:" not in result.output
+    assert (Path(root) / ".startd8" / "vipp" / "vipp-context.json").is_file()
+
+
+def test_m3_no_vipp_opt_out_writes_no_vipp(tmp_path):
+    """`with_vipp=False` (--no-vipp): no VIPP posting, no inbox — byte-identical to a build without VIPP."""
+    root = _proj(tmp_path)
+    (root / "keep.txt").write_text("hi\n", encoding="utf-8")
+    before = {p.name for p in root.iterdir()}
+    summary = run_project_init(root, with_vipp=False, sdk_version="9.9.9")
+    after = {p.name for p in root.iterdir()}
+    assert before == after  # SOTTO: no `.startd8/` appears at all
+    assert not (root / ".startd8").exists()
+    assert summary["postings"] == {}
+    assert summary["vipp"] == "opted-out"
+    assert "producer" not in summary and "inbox_ready" not in summary
+
+
+def test_m3_no_vipp_opt_out_does_not_import_vipp(tmp_path):
+    """FR-15 VIPP-seam invariant — the opt-out path never `import startd8.vipp` (no degrading except)."""
+    import sys
+
+    root = _proj(tmp_path)
+    # Drop any already-imported vipp modules so a fresh import would be observable.
+    dropped = [m for m in list(sys.modules) if m == "startd8.vipp" or m.startswith("startd8.vipp.")]
+    for m in dropped:
+        del sys.modules[m]
+    try:
+        run_project_init(root, with_vipp=False, sdk_version="9.9.9")
+        assert "startd8.vipp" not in sys.modules, "opt-out path must not import startd8.vipp"
+        assert not any(m.startswith("startd8.vipp.") for m in sys.modules)
+    finally:
+        # Leave the interpreter as we found it for later tests that DO need vipp.
+        pass
+
+
+def test_m3_cli_no_vipp_opt_out(tmp_path):
+    """CLI `--no-vipp` is a clean exit 0 with no VIPP posting and no deprecation notice."""
+    root = str(_proj(tmp_path))
+    result = runner.invoke(project_app, ["init", root, "--no-vipp"])
+    assert result.exit_code == 0
+    assert "deprecation:" not in result.output
+    assert not (Path(root) / ".startd8").exists()
+
+
+def test_m3_no_vipp_with_producer_is_input_error(tmp_path):
+    """Opting out of VIPP while asking for its inbox producer is an input error (exit 2), not silent."""
+    root = _proj(tmp_path)
+    with pytest.raises(ProposalsFileError):
+        run_project_init(root, with_vipp=False, instantiate=True, sdk_version="9.9.9")
+    assert not (root / ".startd8").exists()
+
+
+def test_m3_establish_postings_opt_out_returns_empty(tmp_path):
+    """`establish_postings(with_vipp=False)` posts nothing and never imports vipp."""
+    from startd8.project.init import establish_postings
+
+    root = _proj(tmp_path)
+    assert establish_postings(root, with_vipp=False, sdk_version="9.9.9") == {}
+    assert not (root / ".startd8" / "vipp").exists()

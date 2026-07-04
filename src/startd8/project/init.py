@@ -1,18 +1,22 @@
 # Copyright 2026 StartD8 Contributors
 # SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
 
-"""Deterministic ($0, no-LLM) project onboarding — ``startd8 project init``.
+"""Deterministic ($0, no-LLM) setup entrypoint for the un-bundled VIPP / ground-truth-adjudication
+capability — ``startd8 project init`` (FR-1a/FR-14 scope-out, OQ-8 RESOLVED).
 
-A thin orchestrator (bucket-1 applicational-completion) that turns a directory into a set-up StartD8
-project by **composing already-shipped, already-confined functions** — it defines no new write
-primitive. It:
+**Re-filed (M3):** this command is no longer classified as *kernel onboarding* — greenfield onboarding
+for all users is ``startd8 kickoff instantiate`` (writes the 7 files directly). ``project init`` now
+stands up the **VIPP posting + inbox seam**, which is why the VIPP coupling is opt-in but default-on
+during a consumer-safe alias window (see below). It is a thin orchestrator (bucket-1) that composes
+already-shipped, already-confined functions — it defines no new write primitive. It:
 
 1. **detects** the project shape (greenfield / brownfield_ready / brownfield_partial) from cheap,
    deterministic on-disk **presence checks** — the contract file, an ``app/`` package, and the shared
-   ``KICKOFF_INPUT_DOMAINS`` yaml files. It deliberately does **not** invoke the heavier ``concierge``
+   ``KICKOFF_INPUT_DOMAINS`` yaml files. It deliberately does **not** invoke the heavier ``kickoff``
    survey/assess: shape triage stays a fast filesystem read (a richer readiness view, if ever wanted
    in the report, would be a separate explicit ``build_assess`` call, not smuggled in here) (FR-1/FR-2);
-2. **establishes** the ``.startd8/`` role postings — VIPP always, FDE opt-in (FR-3);
+2. **establishes** the ``.startd8/`` role postings — VIPP **opt-in (default-on during the alias
+   window)**, FDE opt-in (FR-3/FR-1a/FR-14);
 3. makes the project **VIPP-inbox-*ready*** by standing up the inbox *mechanism* (``.gitignore`` +
    monotonic ``inbox-seq``) via the shared ``vipp_seam.ensure_inbox_scaffold`` (FR-4/FR-11);
 4. optionally runs a **``$0`` non-interactive inbox *producer seam*** (closes issue #76) over
@@ -20,6 +24,12 @@ primitive. It:
    it **never invents content** (FR-5/FR-12/FR-13/FR-14);
 5. **reports** what it did + the next command (FR-9), and supports a read-only ``--check`` drift
    audit (FR-10).
+
+**Consumer-safe alias window (FR-1a).** The two live consumers (household-o11y, benchmark portal)
+reach VIPP *through* this command's always-on posting. Scoping VIPP out **and** flipping the posting
+default off at once would double-break them, so the default stays ``with_vipp=True`` (VIPP posted, a
+deprecation notice emitted) until the window closes; only ``--no-vipp`` (or a future window-close)
+makes it truly opt-out — a path that does **not** ``import vipp`` at all (FR-15 VIPP-seam invariant).
 
 The central design fact (requirements §0): **project ground-truth adjudicates, it does not
 originate** proposals — so a healthy brownfield project is inbox-*ready*, not inbox-*produced*.
@@ -122,12 +132,20 @@ def detect_shape(project_root: Any) -> ProjectShape:
 
 
 def establish_postings(
-    project_root: Any, *, with_fde: bool = False, sdk_version: str
+    project_root: Any, *, with_vipp: bool = True, with_fde: bool = False, sdk_version: str
 ) -> Dict[str, str]:
     """Create the ``.startd8/`` role postings via the existing idempotent ``ensure_posting`` (FR-3).
 
-    VIPP always; FDE only when ``with_fde`` (requirements OQ-2 — no Concierge posting exists, D4).
+    VIPP only when ``with_vipp`` (FR-1a/FR-14 scope-out — the VIPP posting is opt-in; ``project init``
+    is now the *setup entrypoint of the un-bundled VIPP / ground-truth-adjudication capability*, not
+    kernel onboarding). FDE only when ``with_fde`` (requirements OQ-2 — no Concierge posting exists, D4).
     Returns ``{role: context-file-path}``.
+
+    **Byte-identical-when-absent (FR-15 VIPP seam, same discipline as M2).** ``from ..vipp import
+    context`` is a **lazy import inside the ``with_vipp`` branch only** — with VIPP opted *out*, this
+    function does **not** ``import vipp`` at all (no degrading ``try/except``: the import only happens
+    when the caller asked for it), so the default-opt-out path is byte-identical to a build that never
+    knew VIPP existed.
 
     FR-7 boundary: ``ensure_posting`` writes the SDK-owned ``.startd8/<role>/<role>-context.json``
     via its own atomic-metadata path (not ``apply_write_plan``). This is a *sanctioned* exception —
@@ -135,11 +153,13 @@ def establish_postings(
     content**. All *project-content* writes (the inbox scaffold, the produced inbox) ride
     ``apply_write_plan`` (via ``ensure_inbox_scaffold`` / ``serialize_buffer``).
     """
-    from ..vipp import context as vipp_context
-
     root = Path(project_root)
     postings: Dict[str, str] = {}
-    postings["vipp"] = str(vipp_context.ensure_posting(root, sdk_version=sdk_version))
+    if with_vipp:
+        # Lazy, branch-local import: the ONLY `import vipp` in this module. Opt-out never reaches it.
+        from ..vipp import context as vipp_context
+
+        postings["vipp"] = str(vipp_context.ensure_posting(root, sdk_version=sdk_version))
     if with_fde:
         from ..fde import context as fde_context
 
@@ -345,6 +365,7 @@ def check_init(project_root: Any) -> Dict[str, Any]:
 def run_project_init(
     project_root: Any,
     *,
+    with_vipp: bool = True,
     with_fde: bool = False,
     instantiate: bool = False,
     proposals_file: Optional[Path] = None,
@@ -357,6 +378,16 @@ def run_project_init(
     Deterministic, ``$0``, no LLM. In ``check`` mode it is read-only. Otherwise: establish postings →
     ready the inbox → (optionally) produce an inbox from a declared gap → summarize. Idempotent: a
     re-run on an init'd project writes nothing (FR-6).
+
+    **VIPP is opt-in (FR-1a/FR-14 scope-out, OQ-8).** ``project init`` is now the setup entrypoint of
+    the un-bundled VIPP / ground-truth-adjudication capability, not kernel onboarding. The default
+    (``with_vipp=True``) keeps posting VIPP + readying/producing its inbox — the **consumer-safe alias
+    window** (FR-1a): the two live consumers (household-o11y, benchmark portal) reach VIPP *through*
+    this command's always-on posting, so flipping the default off simultaneously with the scope-out
+    would double-break them. Until the alias window closes the default stays on (the CLI emits a
+    deprecation notice pointing at ``--with-vipp`` / the VIPP-capability home). With ``with_vipp=False``
+    the whole VIPP seam is skipped and this function does **not** ``import vipp`` — byte-identical to a
+    build that never knew VIPP existed (FR-15 VIPP-seam invariant).
 
     FR-7: the confined root is validated **up front** (before ``establish_postings``), so a
     symlinked / escaping root fails fast with ``SafeWriteError`` and init never writes *anything* —
@@ -380,6 +411,13 @@ def run_project_init(
             "choose one producer source: --proposals FILE or --instantiate, not both"
         )
 
+    # VIPP opt-out is a producer input error, not a silent one-wins (mirrors the mutual-exclusion
+    # guard above): you cannot ask for an inbox producer while opting out of the VIPP seam it feeds.
+    if not with_vipp and (proposals_file is not None or instantiate):
+        raise ProposalsFileError(
+            "--proposals / --instantiate require the VIPP seam; they are incompatible with --no-vipp"
+        )
+
     shape = detect_shape(root)
 
     summary: Dict[str, Any] = {
@@ -389,21 +427,27 @@ def run_project_init(
         "shape": shape.to_dict(),
     }
 
-    postings = establish_postings(root, with_fde=with_fde, sdk_version=sdk_version)
+    postings = establish_postings(
+        root, with_vipp=with_vipp, with_fde=with_fde, sdk_version=sdk_version
+    )
     summary["postings"] = postings
 
-    inbox_result = ready_inbox(root)
-    summary["inbox_ready"] = {
-        "written": sorted(inbox_result.written),
-        "already_present": [s.get("path") for s in inbox_result.skipped],
-    }
-
-    summary["producer"] = produce_inbox(
-        root,
-        shape,
-        proposals_file=proposals_file,
-        instantiate=instantiate,
-        posture=posture,
-    )
-    summary["next"] = "startd8 vipp negotiate"
+    if with_vipp:
+        inbox_result = ready_inbox(root)
+        summary["inbox_ready"] = {
+            "written": sorted(inbox_result.written),
+            "already_present": [s.get("path") for s in inbox_result.skipped],
+        }
+        summary["producer"] = produce_inbox(
+            root,
+            shape,
+            proposals_file=proposals_file,
+            instantiate=instantiate,
+            posture=posture,
+        )
+        summary["next"] = "startd8 vipp negotiate"
+    else:
+        # Opt-out (FR-15 VIPP seam): no VIPP posting, no inbox, no producer — byte-identical to a
+        # build that never knew VIPP existed. `establish_postings` did not `import vipp` above.
+        summary["vipp"] = "opted-out"
     return summary
