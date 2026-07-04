@@ -526,11 +526,23 @@ def start_cmd(
         "--red-carpet",
         help="Make the web chat the stage-aware Red Carpet build conductor.",
     ),
+    cloud: bool = typer.Option(
+        False,
+        "--cloud",
+        help="Cloud read/preview-only posture (GE-M5, FR-GE-8): all writes + the paid "
+        "facilitation/chat panel are refused (cloud-write deferred to OQ-GE-7). Reads only.",
+    ),
+    api_key: Optional[str] = typer.Option(
+        None,
+        "--api-key",
+        help="Static X-API-Key gating POSTs when serving --cloud (coarse cloud auth, not tenancy).",
+    ),
 ) -> None:
     """Serve the interactive kickoff web app on the loopback (preflight first; teardown on exit).
 
     Pass --agent to enable the conversational Concierge chat panel at /concierge/chat; add --red-carpet
-    to make that panel the stage-aware Red Carpet build conductor.
+    to make that panel the stage-aware Red Carpet build conductor. Pass --cloud for a read/preview-only
+    surface (no writes, no paid facilitation; cloud-write deferred to OQ-GE-7).
     """
     from .kickoff_experience.concierge_agent import resolve_concierge_agent_spec
     from .kickoff_experience.serve import (
@@ -556,8 +568,14 @@ def start_cmd(
         raise typer.Exit(_EXIT_FATAL)
     # The agentic panel spends tokens, so it stays opt-in: enable it only on an EXPLICIT agent choice
     # — the --agent flag or a configured `concierge_agent` (project/global) — never the bare default.
+    # GE-M5: a --cloud serve is read/preview-only, so the LLM panel is force-disabled regardless.
     spec, source = resolve_concierge_agent_spec(project, agent)
-    panel_spec = spec if source != "default" else None
+    panel_spec = None if cloud else (spec if source != "default" else None)
+    if cloud:
+        console.print(
+            "  [yellow]•[/yellow] cloud read/preview-only: writes + paid facilitation refused "
+            "(cloud-write deferred, OQ-GE-7)"
+        )
     if panel_spec:
         resolution = resolve_chat_panel(project, panel_spec, red_carpet=red_carpet)
         flavor = "Red Carpet build conductor" if red_carpet else "Concierge"
@@ -581,6 +599,8 @@ def start_cmd(
         port=port,
         agent_spec=panel_spec,
         red_carpet=red_carpet,
+        cloud=cloud,
+        api_key=api_key,
     )
 
 
