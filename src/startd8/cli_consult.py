@@ -156,6 +156,35 @@ def consult_show(
     console.print(session.model_dump_json(indent=2) if json_out else comparison_text(session))
 
 
+@consult_app.command("web")
+def consult_web(
+    session_id: str = typer.Argument(..., help="Session id to render as a web view."),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Output HTML path (default: the session dir's view.html)."
+    ),
+    open_browser: bool = typer.Option(False, "--open", help="Open the generated page in a browser."),
+) -> None:
+    """Generate a standalone, offline HTML view of a consultation (all models side-by-side)."""
+    from .consultation import ConsultationService, render_html
+
+    service = ConsultationService(base_dir=_base_dir())
+    try:
+        session = service.load(session_id)
+    except FileNotFoundError:
+        console.print(f"[red]consult:[/red] no such session: {session_id}")
+        raise typer.Exit(_EXIT_BAD_INPUT)
+
+    target = out or (service.store.session_dir(session_id) / "view.html")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render_html(session), encoding="utf-8")
+    console.print(f"[green]web view:[/green] {target}")
+
+    if open_browser:
+        import webbrowser
+
+        webbrowser.open(target.resolve().as_uri())
+
+
 @consult_app.command("list")
 def consult_list() -> None:
     """List saved consultation session ids."""

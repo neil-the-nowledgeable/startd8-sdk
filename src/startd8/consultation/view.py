@@ -10,9 +10,12 @@ signal (image-token cost is included since it flows the cost hook, M2.5).
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Optional
 
 from .models import ConsultationSession, Turn, TurnRole, TurnStatus
+from ._webview_template import WEBVIEW_TEMPLATE
 
 
 def _latest_assistant(session: ConsultationSession, model_id: str) -> Optional[Turn]:
@@ -90,3 +93,58 @@ def comparison_table(session: ConsultationSession, *, max_chars: int = 600):
             body = body[:max_chars] + " …"
         table.add_row(model_id, f"[{style}]{status_label}[/{style}]", _usage(turn), body)
     return table
+
+
+# ── Web view (FR-WUI) ─────────────────────────────────────────────────────────
+def _safe_image(ref) -> dict:
+    """Persist-safe image indicator: **basename only** (never the absolute path, FR-WUI-9)."""
+    filename = Path(ref.source_path).name if ref.source_path else "(pasted image)"
+    return {"filename": filename, "sha256_short": (ref.sha256 or "")[:8], "mime_type": ref.mime_type}
+
+
+def _turn_payload(turn: Turn) -> dict:
+    """Serialize one Turn to the client renderer's shape (only the fields it reads)."""
+    d: dict = {"role": turn.role.value, "status": turn.status.value}
+    if turn.text:
+        d["text"] = turn.text
+    if turn.images:
+        d["images"] = len(turn.images)
+    if turn.error is not None:
+        d["error"] = {"type": turn.error.type, "code": turn.error.code, "message": turn.error.message}
+    for field in ("input_tokens", "output_tokens", "time_ms"):
+        val = getattr(turn, field, None)
+        if val is not None:
+            d[field] = val
+    return d
+
+
+def _session_payload(session: ConsultationSession) -> dict:
+    return {
+        "id": session.id,
+        "prompt": session.prompt,
+        "roster": list(session.roster),
+        "images": [_safe_image(i) for i in session.images],
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "turns_by_model": {
+            model_id: [_turn_payload(t) for t in session.turns_by_model.get(model_id, [])]
+            for model_id in session.roster
+        },
+    }
+
+
+def render_html(session: ConsultationSession) -> str:
+    """Render a standalone, offline HTML view of a consultation (FR-WUI-1/2/4/5/6/7/9).
+
+    A sibling of :func:`comparison_text`/:func:`comparison_table` (same data, third surface).
+    The client-side template escapes untrusted model text before rendering markdown (FR-WUI-9);
+    here we additionally neutralize ``<`` in the **embedded JSON** so a ``</script>`` inside any
+    answer cannot terminate the ``<script type="application/json">`` container (an XSS/breakage
+    vector caught during prototype verification). Image refs carry basename only, never the
+    absolute source path.
+    """
+    payload = json.dumps(_session_payload(session), ensure_ascii=True)
+    # ensure_ascii already escapes non-ASCII (incl. U+2028/2029); only ASCII '<' can come from
+    # data text — turn it into < so '</script>' / '<!--' cannot appear in the markup.
+    payload = payload.replace("<", "\\u003c")
+    return WEBVIEW_TEMPLATE.replace("__SESSION_JSON__", payload)

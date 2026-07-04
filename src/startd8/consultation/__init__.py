@@ -19,7 +19,7 @@ from .engine import ALL, ConsultationEngine
 from .facade import ConsultationService
 from .roster import DEFAULT_COUNCIL, build_roster
 from .selection import resolve_images, select_from_dir, load_paths
-from .view import comparison_table, comparison_text
+from .view import comparison_table, comparison_text, render_html
 
 __all__ = [
     "ConsultationSession",
@@ -40,4 +40,5 @@ __all__ = [
     "load_paths",
     "comparison_table",
     "comparison_text",
+    "render_html",
 ]

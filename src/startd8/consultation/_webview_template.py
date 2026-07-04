@@ -1,0 +1,381 @@
+"""Standalone HTML template for the consultation web view (FR-WUI, M2).
+
+Generated from docs/design/multi-model-consult/webui-prototype.html (verified prototype).
+Do not hand-edit the markup here — edit the prototype, re-verify, and regenerate.
+``render_html`` in ``view.py`` fills ``__SESSION_JSON__`` with the escaped session payload.
+"""
+
+WEBVIEW_TEMPLATE = r'''<!DOCTYPE html>
+<html lang="en" data-theme="lab">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Consultation · signal comparison</title>
+<!--
+  Consultation Web View — standalone prototype (FR-WUI-1..9).
+  Self-contained, dependency-free, offline (file://). No CDN, no build.
+  Session data is embedded below as application/json and rendered client-side.
+  SECURITY: all model text is UNTRUSTED. renderMarkdown() escapes FIRST, then applies a
+  whitelist of block/inline formatting — no raw innerHTML from data can execute (FR-WUI-9).
+-->
+<style>
+:root{
+  --ink:#100e0c;            /* warm near-black */
+  --ink-2:#171411;          /* panel */
+  --ink-3:#1f1b17;          /* raised */
+  --line:#332c24;           /* hairline */
+  --line-2:#241f1a;
+  --paper:#efe7db;          /* warm off-white text */
+  --paper-dim:#b8ab97;
+  --paper-faint:#7d7161;
+  --amber:#e8a33d;          /* signature accent */
+  --amber-deep:#b9781f;
+  --ok:#7fce6b;             /* phosphor */
+  --fail:#f0685f;           /* coral */
+  --skip:#89a0b8;           /* slate */
+  --serif: "Iowan Old Style", "Palatino Linotype", "Charter", Georgia, Cambria, "Times New Roman", serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Cascadia Code", "Consolas", monospace;
+  --r:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--ink);
+  color:var(--paper);
+  font-family:var(--serif);
+  font-size:16px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  /* atmosphere: warm vignette + faint grid */
+  background-image:
+    radial-gradient(1200px 600px at 12% -8%, rgba(232,163,61,.09), transparent 60%),
+    radial-gradient(900px 500px at 108% 0%, rgba(127,206,107,.05), transparent 55%),
+    linear-gradient(var(--line-2) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-2) 1px, transparent 1px);
+  background-size:auto,auto,42px 42px,42px 42px;
+  background-position:0 0,0 0,-1px -1px,-1px -1px;
+}
+/* fine grain overlay */
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:60;opacity:.35;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/></svg>");
+}
+.wrap{max-width:1600px;margin:0 auto;padding:34px clamp(16px,4vw,48px) 96px}
+
+/* ---- masthead ---- */
+.masthead{display:flex;align-items:baseline;justify-content:space-between;gap:20px;flex-wrap:wrap;
+  border-bottom:1px solid var(--line);padding-bottom:16px}
+.brand{display:flex;align-items:baseline;gap:14px}
+.brand .mark{font-family:var(--mono);font-weight:700;letter-spacing:.36em;font-size:12px;color:var(--amber);
+  text-transform:uppercase}
+.brand .sub{font-family:var(--mono);font-size:11px;color:var(--paper-faint);letter-spacing:.2em;text-transform:uppercase}
+.sid{font-family:var(--mono);font-size:11.5px;color:var(--paper-dim);letter-spacing:.02em}
+.sid b{color:var(--amber);font-weight:600}
+
+/* ---- session header ---- */
+.session{margin:30px 0 22px;position:relative}
+.session .kicker{font-family:var(--mono);font-size:10.5px;letter-spacing:.32em;text-transform:uppercase;
+  color:var(--paper-faint);margin-bottom:10px}
+.prompt{font-size:clamp(20px,2.5vw,30px);line-height:1.32;font-weight:500;max-width:60ch;
+  color:var(--paper);text-wrap:balance}
+.prompt::first-letter{color:var(--amber)}
+.meta{display:flex;gap:26px;flex-wrap:wrap;margin-top:20px;align-items:flex-start}
+.meta-block .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--paper-faint);display:block;margin-bottom:7px}
+.chips{display:flex;gap:7px;flex-wrap:wrap}
+.chip{font-family:var(--mono);font-size:11px;padding:4px 9px;border:1px solid var(--line);border-radius:100px;
+  color:var(--paper-dim);background:var(--ink-2);white-space:nowrap}
+.chip .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;vertical-align:1px;
+  background:var(--ch,var(--amber))}
+.chip.img{color:var(--paper);border-color:var(--line)}
+.chip.img .hash{color:var(--paper-faint)}
+.times{font-family:var(--mono);font-size:11px;color:var(--paper-faint);line-height:1.9}
+
+/* ---- toolbar ---- */
+.toolbar{display:flex;align-items:center;gap:10px;margin:26px 0 14px;
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:11px 0}
+.toolbar .count{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--paper-faint)}
+.toolbar .spacer{flex:1}
+.btn{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;
+  background:var(--ink-2);color:var(--paper-dim);border:1px solid var(--line);border-radius:7px;padding:7px 12px;
+  transition:.16s ease}
+.btn:hover{color:var(--ink);background:var(--amber);border-color:var(--amber)}
+.btn:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+
+/* ---- channel grid ---- */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;align-items:start}
+.channel{background:linear-gradient(180deg,var(--ink-2),var(--ink-2)),var(--ink);
+  border:1px solid var(--line);border-radius:var(--r);overflow:hidden;position:relative;
+  box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 18px 40px -30px rgba(0,0,0,.9);
+  opacity:0;transform:translateY(10px);animation:rise .5s cubic-bezier(.2,.7,.2,1) forwards}
+@keyframes rise{to{opacity:1;transform:none}}
+.channel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--ch,var(--amber));opacity:.9}
+.channel[data-status="failed"]::before{background:var(--fail)}
+.channel[data-status="skipped-non-vision"]::before{background:var(--skip)}
+
+summary.head{list-style:none;cursor:pointer;display:flex;align-items:center;gap:12px;
+  padding:15px 16px 15px 20px;user-select:none;transition:background .15s}
+summary.head::-webkit-details-marker{display:none}
+summary.head:hover{background:var(--ink-3)}
+summary.head:focus-visible{outline:2px solid var(--amber);outline-offset:-3px}
+.fold{font-family:var(--mono);color:var(--paper-faint);font-size:13px;width:14px;flex:none;transition:transform .22s ease}
+details[open] .fold{transform:rotate(90deg);color:var(--ch,var(--amber))}
+.mid{min-width:0;flex:1}
+.model{font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:.01em;color:var(--paper);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.turncount{font-family:var(--mono);font-size:10.5px;color:var(--paper-faint);letter-spacing:.1em;margin-top:2px}
+.status{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  padding:4px 9px;border-radius:100px;flex:none;border:1px solid transparent;display:flex;align-items:center;gap:6px}
+.status .sd{width:6px;height:6px;border-radius:50%}
+.status.ok{color:var(--ok);border-color:rgba(127,206,107,.35);background:rgba(127,206,107,.08)}
+.status.ok .sd{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.status.failed{color:var(--fail);border-color:rgba(240,104,95,.35);background:rgba(240,104,95,.08)}
+.status.failed .sd{background:var(--fail);box-shadow:0 0 8px var(--fail)}
+.status.skipped-non-vision{color:var(--skip);border-color:rgba(137,160,184,.3);background:rgba(137,160,184,.07)}
+.status.skipped-non-vision .sd{background:var(--skip)}
+
+.body{border-top:1px solid var(--line-2);padding:6px 16px 16px 20px}
+
+/* ---- turns ---- */
+.turn{padding:14px 0;border-bottom:1px dashed var(--line-2)}
+.turn:last-child{border-bottom:0}
+.role{font-family:var(--mono);font-size:9.5px;letter-spacing:.24em;text-transform:uppercase;margin-bottom:7px;
+  display:flex;align-items:center;gap:8px}
+.turn.user .role{color:var(--amber)}
+.turn.assistant .role{color:var(--paper-faint)}
+.role::before{content:"";height:1px;width:16px;background:currentColor;opacity:.6}
+.ask{font-family:var(--mono);font-size:13px;color:var(--paper-dim);line-height:1.55;
+  background:var(--ink);border:1px solid var(--line-2);border-left:2px solid var(--amber-deep);
+  padding:9px 12px;border-radius:0 7px 7px 0;white-space:pre-wrap;word-break:break-word}
+.answer{color:var(--paper);font-size:15.5px}
+.answer>*:first-child{margin-top:0}
+.answer>*:last-child{margin-bottom:0}
+.answer h1,.answer h2,.answer h3{font-family:var(--mono);letter-spacing:.01em;line-height:1.3;
+  color:var(--paper);margin:18px 0 8px}
+.answer h1{font-size:16px}.answer h2{font-size:15px}.answer h3{font-size:13px;color:var(--amber);text-transform:uppercase;letter-spacing:.08em}
+.answer p{margin:9px 0}
+.answer ul,.answer ol{margin:9px 0;padding-left:22px}
+.answer li{margin:4px 0}
+.answer code{font-family:var(--mono);font-size:.86em;background:var(--ink);border:1px solid var(--line-2);
+  padding:1px 5px;border-radius:4px;color:var(--amber)}
+.answer pre{background:var(--ink);border:1px solid var(--line-2);border-radius:7px;padding:12px;overflow:auto;margin:11px 0}
+.answer pre code{border:0;background:none;padding:0;color:var(--paper-dim)}
+.answer strong{color:#fff;font-weight:600}
+.answer em{color:var(--paper-dim)}
+
+.badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px}
+.badge{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--paper-faint);
+  border:1px solid var(--line-2);border-radius:5px;padding:3px 7px;background:var(--ink)}
+.badge b{color:var(--paper-dim);font-weight:600}
+
+.errbox{border:1px solid rgba(240,104,95,.4);background:rgba(240,104,95,.06);border-radius:8px;padding:12px 13px}
+.errbox .et{font-family:var(--mono);font-size:11px;color:var(--fail);letter-spacing:.06em;margin-bottom:5px}
+.errbox .em{font-family:var(--mono);font-size:12px;color:var(--paper-dim);line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.skipnote{font-family:var(--mono);font-size:12px;color:var(--skip);font-style:normal;opacity:.85}
+
+.foot{margin-top:40px;border-top:1px solid var(--line);padding-top:14px;
+  font-family:var(--mono);font-size:10.5px;color:var(--paper-faint);letter-spacing:.06em;display:flex;
+  justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+@media (prefers-reduced-motion:reduce){.channel{animation:none;opacity:1;transform:none}.fold{transition:none}}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <div class="brand">
+      <span class="mark">Consult</span>
+      <span class="sub">signal comparison</span>
+    </div>
+    <div class="sid" id="sid"></div>
+  </header>
+
+  <section class="session" aria-label="Consultation summary">
+    <div class="kicker">The question put to every model</div>
+    <div class="prompt" id="prompt"></div>
+    <div class="meta">
+      <div class="meta-block">
+        <span class="lbl">Roster</span>
+        <div class="chips" id="roster"></div>
+      </div>
+      <div class="meta-block" id="images-block">
+        <span class="lbl">Images</span>
+        <div class="chips" id="images"></div>
+      </div>
+      <div class="meta-block">
+        <span class="lbl">Timing</span>
+        <div class="times" id="times"></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="toolbar">
+    <span class="count" id="chcount"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="expand-all">Expand all</button>
+    <button class="btn" id="collapse-all">Collapse all</button>
+  </div>
+
+  <main class="grid" id="grid" aria-label="Model conversations, side by side"></main>
+
+  <footer class="foot">
+    <span>startd8 · multi-model consultation · read-only snapshot</span>
+    <span id="foot-id"></span>
+  </footer>
+</div>
+
+<!-- Embedded session (application/json is never executed; Python render_html escapes "<" on embed). -->
+<script type="application/json" id="session-data">
+__SESSION_JSON__
+</script>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---- security: escape-first, then a whitelist markdown renderer (FR-WUI-9) ----
+  function esc(s){
+    return String(s==null?"":s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+  // inline formatting applied to ALREADY-ESCAPED text (so no raw tags from data survive)
+  function inline(escaped){
+    return escaped
+      .replace(/`([^`]+)`/g,'<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>')
+      .replace(/_([^_\n]+)_/g,'<em>$1</em>');
+  }
+  // block renderer: headings, ol/ul, fenced code, paragraphs. Input is raw (untrusted) text.
+  function renderMarkdown(raw){
+    var src = String(raw==null?"":raw);
+    var lines = src.replace(/\r\n?/g,"\n").split("\n");
+    var out=[], i=0;
+    function flushList(tag, items){ if(items.length){ out.push("<"+tag+">"+items.map(function(x){return "<li>"+inline(x)+"</li>";}).join("")+"</"+tag+">"); } }
+    while(i<lines.length){
+      var ln=lines[i];
+      // fenced code
+      if(/^```/.test(ln)){ var buf=[]; i++; while(i<lines.length && !/^```/.test(lines[i])){ buf.push(esc(lines[i])); i++; } i++; out.push("<pre><code>"+buf.join("\n")+"</code></pre>"); continue; }
+      // heading
+      var h=/^(#{1,3})\s+(.*)$/.exec(ln);
+      if(h){ var lvl=h[1].length; out.push("<h"+lvl+">"+inline(esc(h[2]))+"</h"+lvl+">"); i++; continue; }
+      // ordered list
+      if(/^\s*\d+\.\s+/.test(ln)){ var oi=[]; while(i<lines.length && /^\s*\d+\.\s+/.test(lines[i])){ oi.push(esc(lines[i].replace(/^\s*\d+\.\s+/,""))); i++; } flushList("ol",oi); continue; }
+      // unordered list
+      if(/^\s*[-*]\s+/.test(ln)){ var ui=[]; while(i<lines.length && /^\s*[-*]\s+/.test(lines[i])){ ui.push(esc(lines[i].replace(/^\s*[-*]\s+/,""))); i++; } flushList("ul",ui); continue; }
+      // blank
+      if(/^\s*$/.test(ln)){ i++; continue; }
+      // paragraph (gather until blank)
+      var para=[]; while(i<lines.length && !/^\s*$/.test(lines[i]) && !/^(#{1,3}\s|```|\s*[-*]\s|\s*\d+\.\s)/.test(lines[i])){ para.push(esc(lines[i])); i++; }
+      out.push("<p>"+inline(para.join(" "))+"</p>");
+    }
+    return out.join("");
+  }
+
+  // deterministic accent hue per model id (spine color)
+  function hue(s){ var h=0; for(var i=0;i<s.length;i++){ h=(h*31 + s.charCodeAt(i))>>>0; } return h%360; }
+  function el(tag, cls){ var e=document.createElement(tag); if(cls) e.className=cls; return e; }
+
+  var data;
+  try{ data = JSON.parse(document.getElementById("session-data").textContent); }
+  catch(e){ document.getElementById("grid").textContent="Could not parse session data."; return; }
+
+  // header (all via textContent / escaped — never raw innerHTML from data)
+  document.getElementById("sid").innerHTML = "session <b></b>";
+  document.querySelector("#sid b").textContent = data.id||"";
+  document.getElementById("foot-id").textContent = data.id||"";
+  document.getElementById("prompt").textContent = data.prompt||"";
+
+  var roster = document.getElementById("roster");
+  (data.roster||[]).forEach(function(m){
+    var c=el("span","chip"); c.style.setProperty("--ch","hsl("+hue(m)+" 55% 58%)");
+    var d=el("span","dot"); c.appendChild(d);
+    c.appendChild(document.createTextNode(m));
+    roster.appendChild(c);
+  });
+
+  var imgs=document.getElementById("images");
+  if((data.images||[]).length===0){ document.getElementById("images-block").style.display="none"; }
+  (data.images||[]).forEach(function(im){
+    var c=el("span","chip img");
+    c.appendChild(document.createTextNode((im.filename||"image")+" "));
+    var h=el("span","hash"); h.textContent="#"+(im.sha256_short||""); c.appendChild(h);
+    imgs.appendChild(c);
+  });
+  document.getElementById("times").innerHTML="";
+  var tcreated=el("div"); tcreated.textContent="created  "+(data.created_at||"—");
+  var tupd=el("div"); tupd.textContent="updated  "+(data.updated_at||"—");
+  document.getElementById("times").append(tcreated,tupd);
+
+  // channels
+  var grid=document.getElementById("grid");
+  var roster2=data.roster||Object.keys(data.turns_by_model||{});
+  document.getElementById("chcount").textContent=roster2.length+" model"+(roster2.length===1?"":"s")+" · all expanded";
+
+  roster2.forEach(function(model, idx){
+    var turns=(data.turns_by_model||{})[model]||[];
+    var lastA=null; for(var k=turns.length-1;k>=0;k--){ if(turns[k].role==="assistant"){ lastA=turns[k]; break; } }
+    var status=(lastA&&lastA.status)||"ok";
+
+    var det=el("details","channel"); det.open=true; det.setAttribute("data-status",status);
+    det.style.setProperty("--ch","hsl("+hue(model)+" 55% 58%)");
+    det.style.animationDelay=(idx*70)+"ms";
+
+    var sum=el("summary","head");
+    sum.setAttribute("aria-label",model+", status "+status+", "+turns.length+" turns");
+    var fold=el("span","fold"); fold.textContent="▸"; fold.setAttribute("aria-hidden","true");
+    var mid=el("div","mid");
+    var mn=el("div","model"); mn.textContent=model;
+    var tc=el("div","turncount"); tc.textContent=turns.length+" turn"+(turns.length===1?"":"s");
+    mid.append(mn,tc);
+    var st=el("span","status "+status);
+    var sd=el("span","sd"); st.appendChild(sd);
+    st.appendChild(document.createTextNode(status==="skipped-non-vision"?"skipped":status));
+    sum.append(fold,mid,st);
+    det.appendChild(sum);
+
+    var body=el("div","body");
+    turns.forEach(function(t){
+      var turn=el("div","turn "+(t.role==="user"?"user":"assistant"));
+      var role=el("div","role"); role.textContent=(t.role==="user"?"ask":"reply"); turn.appendChild(role);
+
+      if(t.role==="user"){
+        var ask=el("div","ask");
+        ask.textContent=t.text||""; // textContent = inert
+        if(t.images){ var im=el("div"); im.style.cssText="margin-top:7px;color:var(--paper-faint);font-size:11px"; im.textContent="+ "+t.images+" image(s)"; turn.append(ask,im); }
+        else turn.appendChild(ask);
+      } else if(t.status==="failed"){
+        var eb=el("div","errbox");
+        var et=el("div","et"); var er=t.error||{}; et.textContent=(er.type||"Error")+(er.code?" · "+er.code:"");
+        var em=el("div","em"); em.textContent=er.message||"(no detail)";
+        eb.append(et,em); turn.appendChild(eb);
+      } else if(t.status==="skipped-non-vision"){
+        var sk=el("div","skipnote"); sk.textContent="skipped — model is not vision-capable"; turn.appendChild(sk);
+      } else {
+        var ans=el("div","answer");
+        ans.innerHTML=renderMarkdown(t.text||""); // safe: renderMarkdown escapes first
+        turn.appendChild(ans);
+        var badges=el("div","badges");
+        function badge(label,val){ if(val==null) return; var b=el("span","badge"); b.innerHTML="<b></b> "+esc(label); b.querySelector("b").textContent=val; badges.prepend(b); }
+        if(t.time_ms!=null){ var bt=el("span","badge"); bt.innerHTML="<b></b> ms"; bt.querySelector("b").textContent=t.time_ms; badges.appendChild(bt);}
+        var bi=el("span","badge"); bi.innerHTML="in <b></b>"; bi.querySelector("b").textContent=(t.input_tokens!=null?t.input_tokens:"—"); badges.appendChild(bi);
+        var bo=el("span","badge"); bo.innerHTML="out <b></b>"; bo.querySelector("b").textContent=(t.output_tokens!=null?t.output_tokens:"—"); badges.appendChild(bo);
+        turn.appendChild(badges);
+      }
+      body.appendChild(turn);
+    });
+    det.appendChild(body);
+    grid.appendChild(det);
+  });
+
+  // toolbar: expand/collapse all
+  function setAll(open){ document.querySelectorAll("details.channel").forEach(function(d){ d.open=open; }); }
+  document.getElementById("expand-all").addEventListener("click",function(){ setAll(true); });
+  document.getElementById("collapse-all").addEventListener("click",function(){ setAll(false); });
+})();
+</script>
+</body>
+</html>
+'''
