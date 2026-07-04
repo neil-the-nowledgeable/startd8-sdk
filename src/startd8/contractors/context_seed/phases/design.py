@@ -47,7 +47,7 @@ from startd8.contractors.artisan_phases.self_consistency import (
     validate_dockerfile_coherence,
     validate_protocol_fidelity,
 )
-from startd8.contractors.context_seed.core import (
+from startd8.contractors.context_seed.handler_support import (
     _build_provenance_links,
     _capture_task_span_context,
     _coerce_optional_float,
