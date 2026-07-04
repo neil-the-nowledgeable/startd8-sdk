@@ -38,6 +38,7 @@ from .cli_consult import consult_app
 from .cli_assist import assist_app
 from .cli_nav import nav_app
 from .cli_polish import polish_app
+from .cli_capdevpipe import capdevpipe_app
 from .cli_fde import fde_app
 from .cli_sapper import sapper_app
 from .cli_secrets import secrets_app
@@ -1251,6 +1252,7 @@ app.command("wireframe")(_wireframe_command)
 app.add_typer(assist_app, name="assist")
 app.add_typer(nav_app, name="nav")
 app.add_typer(polish_app, name="polish")
+app.add_typer(capdevpipe_app, name="capdevpipe")
 app.add_typer(fde_app, name="fde")
 app.add_typer(sapper_app, name="sapper")
 app.add_typer(secrets_app, name="secrets")
