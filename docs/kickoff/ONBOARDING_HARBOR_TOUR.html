@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Onboarding &amp; Kickoff | StartD8 Harbor Tour</title>
+    <style>
+        :root {
+            --water-dark: #0a1628;
+            --water-mid: #0d2137;
+            --water-light: #1a3a5c;
+            --sunset-orange: #f97316;
+            --sunset-gold: #fbbf24;
+            --sunset-pink: #f472b6;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --ok: #22c55e;
+            --warn: #eab308;
+            --gap: #ef4444;
+            /* per-capability berth colors */
+            --c-init: #06b6d4;      /* project init */
+            --c-vipp: #8b5cf6;      /* VIPP */
+            --c-concierge: #3b82f6; /* Concierge */
+            --c-redcarpet: #ec4899; /* Red Carpet */
+            --c-kickoff: #eab308;   /* kickoff experience */
+            --c-manifest: #f97316;  /* Manifest Suggester */
+            --card: #0f2033;
+            --card-edge: #1e3a5c;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: linear-gradient(180deg, var(--water-dark) 0%, var(--water-mid) 55%, var(--water-light) 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.65;
+        }
+        code, .mono { font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace; }
+
+        /* Header */
+        .harbor-header {
+            background: linear-gradient(180deg, #1e1b4b 0%, #312e81 20%, #4c1d95 40%, #7c2d12 62%, var(--sunset-orange) 82%, var(--sunset-gold) 100%);
+            padding: 4rem 2rem 6rem; text-align: center; position: relative; overflow: hidden;
+        }
+        .harbor-header::after {
+            content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 110px;
+            background: linear-gradient(180deg, transparent, var(--water-dark));
+        }
+        .harbor-title { font-size: 3.2rem; font-weight: 300; letter-spacing: 0.09em; margin-bottom: 0.4rem; text-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+        .harbor-subtitle { font-size: 1.2rem; color: var(--sunset-gold); font-style: italic; }
+        .harbor-badges { margin-top: 1.2rem; display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
+        .harbor-badge { display: inline-block; background: rgba(0,0,0,0.35); padding: 0.3rem 0.85rem; border-radius: 20px; font-size: 0.82rem; color: var(--text-secondary); }
+
+        .wrap { max-width: 1080px; margin: -60px auto 0; padding: 0 1.5rem 5rem; position: relative; z-index: 2; }
+
+        .lead {
+            background: rgba(15,32,51,0.85); border: 1px solid var(--card-edge); border-radius: 16px;
+            padding: 1.75rem 2rem; margin-bottom: 2.5rem; backdrop-filter: blur(6px);
+        }
+        .lead p { color: var(--text-secondary); margin-bottom: 0.6rem; }
+        .lead strong { color: var(--text-primary); }
+        .tag { display:inline-block; padding: 0.1rem 0.55rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em; }
+        .tag.zero { background: rgba(34,197,94,0.15); color: var(--ok); border: 1px solid rgba(34,197,94,0.4); }
+
+        h2.section { font-size: 1.05rem; text-transform: uppercase; letter-spacing: 0.16em; color: var(--sunset-gold); margin: 3rem 0 1.25rem; font-weight: 600; }
+
+        /* Voyage flow */
+        .voyage { display: grid; grid-template-columns: 1fr; gap: 0.75rem; margin-bottom: 1rem; }
+        .leg {
+            display: grid; grid-template-columns: 46px 1fr; gap: 1rem; align-items: start;
+            background: var(--card); border: 1px solid var(--card-edge); border-left: 4px solid var(--c-init);
+            border-radius: 12px; padding: 1rem 1.25rem;
+        }
+        .leg .num { width: 46px; height: 46px; border-radius: 50%; background: rgba(6,182,212,0.15); color: var(--c-init); display:flex; align-items:center; justify-content:center; font-weight: 700; font-size: 1.1rem; border: 1px solid rgba(6,182,212,0.35); }
+        .leg h3 { font-size: 1.05rem; margin-bottom: 0.25rem; }
+        .leg p { color: var(--text-secondary); font-size: 0.94rem; }
+        .leg .cmd { margin-top: 0.5rem; background: #071320; border: 1px solid #12283f; border-radius: 8px; padding: 0.5rem 0.75rem; font-size: 0.85rem; color: #8be9fd; overflow-x: auto; white-space: nowrap; }
+        .leg .cmd .c { color: var(--text-muted); }
+
+        /* Berth cards */
+        .berths { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.1rem; }
+        .berth { background: var(--card); border: 1px solid var(--card-edge); border-top: 3px solid var(--edge, var(--c-init)); border-radius: 14px; padding: 1.25rem 1.4rem; }
+        .berth h3 { font-size: 1.15rem; display:flex; align-items:center; gap: 0.5rem; margin-bottom: 0.15rem; }
+        .berth .role { font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.09em; margin-bottom: 0.7rem; }
+        .berth p { color: var(--text-secondary); font-size: 0.92rem; margin-bottom: 0.6rem; }
+        .berth ul { list-style: none; margin: 0.3rem 0 0.6rem; }
+        .berth li { color: var(--text-secondary); font-size: 0.88rem; padding-left: 1.1rem; position: relative; margin-bottom: 0.25rem; }
+        .berth li::before { content: '⚓'; position: absolute; left: 0; font-size: 0.7rem; opacity: 0.6; }
+        .berth .file { font-size: 0.8rem; color: var(--text-muted); }
+        .berth .file code { color: #7dd3fc; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display:inline-block; }
+
+        /* Integration table */
+        .integ { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.9rem; }
+        .integ th, .integ td { text-align: left; padding: 0.7rem 0.85rem; border-bottom: 1px solid var(--card-edge); vertical-align: top; }
+        .integ th { color: var(--sunset-gold); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.09em; }
+        .integ td:first-child { font-weight: 600; color: var(--text-primary); white-space: nowrap; }
+        .verdict { font-weight: 700; font-size: 0.82rem; padding: 0.12rem 0.5rem; border-radius: 6px; white-space: nowrap; }
+        .v-ok { background: rgba(34,197,94,0.14); color: var(--ok); }
+        .v-warn { background: rgba(234,179,8,0.14); color: var(--warn); }
+        .v-gap { background: rgba(239,68,68,0.14); color: var(--gap); }
+        .v-na { background: rgba(100,116,139,0.14); color: var(--text-muted); }
+
+        .callout { background: linear-gradient(120deg, rgba(139,92,246,0.10), rgba(6,182,212,0.06)); border: 1px solid var(--card-edge); border-left: 4px solid var(--c-vipp); border-radius: 12px; padding: 1.2rem 1.4rem; margin-top: 1rem; }
+        .callout h3 { color: var(--sunset-gold); font-size: 1rem; margin-bottom: 0.4rem; }
+        .callout p { color: var(--text-secondary); font-size: 0.92rem; }
+        .callout code { background: #071320; padding: 0.05rem 0.35rem; border-radius: 4px; color: #8be9fd; font-size: 0.85rem; }
+
+        footer { text-align: center; color: var(--text-muted); font-size: 0.82rem; margin-top: 3.5rem; padding-top: 1.5rem; border-top: 1px solid var(--card-edge); }
+        a { color: var(--sunset-gold); }
+    </style>
+</head>
+<body>
+    <header class="harbor-header">
+        <div class="harbor-title">⚓ Onboarding &amp; Kickoff</div>
+        <div class="harbor-subtitle">A harbor tour of how a directory becomes a StartD8 project</div>
+        <div class="harbor-badges">
+            <span class="harbor-badge">StartD8 SDK · main</span>
+            <span class="harbor-badge">deterministic · $0 · no-LLM core</span>
+            <span class="harbor-badge">generated 2026-07-03</span>
+        </div>
+    </header>
+
+    <main class="wrap">
+        <section class="lead">
+            <p><strong>Where a project comes ashore.</strong> This tour walks the onboarding harbor: the deterministic
+            <span class="tag zero">$0</span> path that turns any directory into a set-up StartD8 project, opts it into the
+            <strong>VIPP</strong> proposal loop, and hands it off to the interactive kickoff surfaces. Every berth below is a
+            real capability on <code>main</code>; the arrows between them are the seams that actually connect.</p>
+            <p>The organizing idea (requirements §0): <strong>project ground-truth <em>adjudicates</em>, it never
+            <em>originates</em></strong>. So onboarding never invents content — a healthy project is left <em>inbox-ready</em>,
+            and production is always gated on a real, declared gap.</p>
+        </section>
+
+        <!-- ============ THE VOYAGE ============ -->
+        <h2 class="section">The voyage — one directory, end to end</h2>
+        <div class="voyage">
+            <div class="leg">
+                <div class="num">1</div>
+                <div>
+                    <h3>Make it a StartD8 project</h3>
+                    <p><code>project init</code> detects the shape (greenfield / brownfield_ready / brownfield_partial) from cheap
+                    on-disk presence checks, establishes the <code>.startd8/vipp</code> posting, and stands up the inbox
+                    <em>mechanism</em> — leaving the project <strong>inbox-ready</strong>. Re-runnable as a clean no-op.</p>
+                    <div class="cmd"><span class="c"># deterministic, $0</span> startd8 project init .</div>
+                </div>
+            </div>
+            <div class="leg" style="border-left-color: var(--c-init)">
+                <div class="num">2</div>
+                <div>
+                    <h3>Produce an inbox — only on a real gap</h3>
+                    <p>The <strong>$0 non-interactive producer seam</strong> (closes #76): serialize an authored proposal set, or,
+                    on a greenfield dir, the one deterministic <code>instantiate</code> proposal. Every entry is validated per-kind
+                    <em>before</em> anything is written — a bad entry fails with exit 2 and no half-written inbox.</p>
+                    <div class="cmd">startd8 project init . --proposals proposals.yaml <span class="c"># or:</span> --instantiate</div>
+                </div>
+            </div>
+            <div class="leg" style="border-left-color: var(--c-vipp)">
+                <div class="num" style="background:rgba(139,92,246,0.15); color:var(--c-vipp); border-color:rgba(139,92,246,0.35)">3</div>
+                <div>
+                    <h3>Negotiate the inbox against ground truth</h3>
+                    <p><strong>VIPP</strong> adjudicates each proposal against the project's Sapper ground truth ($0, deterministic)
+                    into source-labeled dispositions. On a healthy project with no pending inbox this is now a clean
+                    <em>exit 0</em> — "inbox-ready; nothing to negotiate yet" (the OQ-8 fix).</p>
+                    <div class="cmd">startd8 vipp negotiate --project-root .</div>
+                </div>
+            </div>
+            <div class="leg" style="border-left-color: var(--c-vipp)">
+                <div class="num" style="background:rgba(139,92,246,0.15); color:var(--c-vipp); border-color:rgba(139,92,246,0.35)">4</div>
+                <div>
+                    <h3>Apply the accepted proposals — at your privilege</h3>
+                    <p>Preview by default; <code>--apply</code> writes accepted proposals through the human-confirm floor,
+                    provenance-pinned to the trusted inbox, then shreds the inbox once consumed.</p>
+                    <div class="cmd">startd8 vipp apply --project-root . <span class="c"># --apply to write</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="callout">
+            <h3>⚓ The trust boundary is a file</h3>
+            <p>Producers and the negotiator never share memory — the inbox <code>.startd8/vipp/proposals-inbox.json</code>
+            <em>is</em> the boundary (out-of-process only). Its scaffold (<code>.gitignore</code> + monotonic
+            <code>inbox-seq</code>) is stood up by the single shared <code>vipp_seam.ensure_inbox_scaffold</code>, so the
+            producer path and the inbox-ready path can never drift. A symlinked project root is rejected at the source
+            (<code>vipp.context.ensure_posting</code> confinement).</p>
+        </div>
+
+        <!-- ============ THE BERTHS ============ -->
+        <h2 class="section">The berths — who's docked in the harbor</h2>
+        <div class="berths">
+            <div class="berth" style="--edge: var(--c-init)">
+                <h3><span class="dot" style="background:var(--c-init)"></span> project&nbsp;init</h3>
+                <div class="role">Deterministic onboarding · $0 · CLI</div>
+                <p>A thin orchestrator composing already-confined seams — no new write primitive. The front door.</p>
+                <ul>
+                    <li><code>detect_shape</code> — cheap on-disk triage (contract, <code>app/</code>, the shared kickoff domains)</li>
+                    <li><code>establish_postings</code> — VIPP always, FDE opt-in</li>
+                    <li><code>ready_inbox</code> / <code>produce_inbox</code> — mechanism, then gated production</li>
+                    <li><code>--check</code> drift audit (0=in-sync / 1=drift / 2=error)</li>
+                </ul>
+                <div class="file">📄 <code>src/startd8/project/init.py</code></div>
+            </div>
+
+            <div class="berth" style="--edge: var(--c-vipp)">
+                <h3><span class="dot" style="background:var(--c-vipp)"></span> VIPP</h3>
+                <div class="role">Project-side negotiator / applier</div>
+                <p>The OBSERVED(project)-authority dual of the FDE. Receives the inbox, adjudicates against ground truth,
+                applies accepted proposals at project privilege.</p>
+                <ul>
+                    <li><code>negotiate</code> → source-labeled dispositions ($0)</li>
+                    <li><code>apply</code> → provenance-pinned, human-confirm floor, shred-on-done</li>
+                    <li>mints only OBSERVED(project) claims — cannot forge SDK authority</li>
+                </ul>
+                <div class="file">📄 <code>src/startd8/vipp/</code> · <code>kickoff_experience/vipp_seam.py</code></div>
+            </div>
+
+            <div class="berth" style="--edge: var(--c-concierge)">
+                <h3><span class="dot" style="background:var(--c-concierge)"></span> Concierge</h3>
+                <div class="role">Onboarding host · assist, not operate</div>
+                <p>The human + agent front door to onboarding. Read-only survey / assess; CLI-gated writes; an agentic chat
+                whose leftovers can serialize to the same VIPP inbox.</p>
+                <ul>
+                    <li><code>survey</code> / <code>assess</code> — brownfield triage + $0-cascade readiness</li>
+                    <li><code>instantiate-kickoff</code> / <code>log-friction</code></li>
+                    <li>chat session-end → <code>maybe_serialize_buffer</code> (the one host inbox producer)</li>
+                </ul>
+                <div class="file">📄 <code>src/startd8/concierge/</code> · <code>cli_kickoff.py</code></div>
+            </div>
+
+            <div class="berth" style="--edge: var(--c-redcarpet)">
+                <h3><span class="dot" style="background:var(--c-redcarpet)"></span> Red Carpet</h3>
+                <div class="role">Prescriptive conductor · pure, read-only</div>
+                <p>Projects assessment + on-disk manifests into a staged-build playbook (advisories + ranked next-steps).
+                Applies proposals directly at human privilege — never a gate.</p>
+                <ul>
+                    <li>stages: data_model → manifests → value_inputs → content → run</li>
+                    <li>points at the Manifest Suggester at the "which screens?" moment</li>
+                    <li>note: applies in-process; does <em>not</em> serialize to the VIPP inbox</li>
+                </ul>
+                <div class="file">📄 <code>src/startd8/kickoff_experience/red_carpet*.py</code></div>
+            </div>
+
+            <div class="berth" style="--edge: var(--c-kickoff)">
+                <h3><span class="dot" style="background:var(--c-kickoff)"></span> Kickoff Experience</h3>
+                <div class="role">Interactive surfaces · web + TUI + MCP</div>
+                <p>A deterministic front-end over the manifest-extraction grammar, sharing one canonical view-model across
+                surfaces. Writes the four kickoff input YAMLs the rest of the harbor reads.</p>
+                <ul>
+                    <li>canonical view-model (<code>state.py</code>) + readiness (<code>readiness.py</code>)</li>
+                    <li>SDK-internal step/field config (<code>manifest.py</code> — WriteTargets)</li>
+                    <li>web app, TUI Concierge, read-only <code>kickoff-state</code> MCP tool</li>
+                </ul>
+                <div class="file">📄 <code>src/startd8/kickoff_experience/</code></div>
+            </div>
+
+            <div class="berth" style="--edge: var(--c-manifest)">
+                <h3><span class="dot" style="background:var(--c-manifest)"></span> Manifest Suggester</h3>
+                <div class="role">Screen drafting · $0 core + opt-in persona pass</div>
+                <p>Drafts candidate <em>screens</em> (composite views + non-entity pages) grounded in the schema + stakeholder
+                roster — the "which screens?" gap. Human approves; the CLI is the sole writer.</p>
+                <ul>
+                    <li><code>startd8 screens suggest / review / approve / reject</code></li>
+                    <li>$0 baseline dashboard + opt-in <code>designer</code>-persona drafts</li>
+                    <li>writes <code>views.yaml</code> / <code>pages.yaml</code> via the <code>manifest</code> proposal kind</li>
+                </ul>
+                <div class="file">📄 <code>src/startd8/manifest_suggester/</code> · <code>cli_screens.py</code></div>
+            </div>
+        </div>
+
+        <!-- ============ THE HARBOR MASTER: build_proposal ============ -->
+        <h2 class="section">The harbor master — one validation channel</h2>
+        <div class="callout" style="border-left-color: var(--c-kickoff)">
+            <h3>⚓ build_proposal — every producer validates through one seam</h3>
+            <p>Producing a VIPP inbox is irreducibly: <strong>validate</strong> a proposal per its kind → <strong>construct</strong>
+            a typed action → <strong>serialize</strong> the confined, parity-guarded envelope. Serialization was already one
+            function (<code>serialize_buffer</code>); validation is now one too — <code>build_proposal(args) →
+            ProposedAction</code>, a pure primitive that raises a typed error and has no buffer / telemetry / message side
+            effects. The agentic <code>make_propose_handler</code> and the deterministic <code>project init</code> producer both
+            validate through it — so the three producers (agentic · deterministic · authored) stay distinct at the entry, but
+            share exactly two primitives underneath.</p>
+        </div>
+
+        <!-- ============ INTEGRATION MAP ============ -->
+        <h2 class="section">The channel map — what actually connects</h2>
+        <p style="color:var(--text-secondary); font-size:0.92rem; margin-bottom:0.5rem;">From the integration audit. The mechanical
+        seams are clean; a few orchestration seams between capabilities that grew up in parallel are still open (by design, not bug).</p>
+        <table class="integ">
+            <thead><tr><th>Seam</th><th>How it connects</th><th>Verdict</th></tr></thead>
+            <tbody>
+                <tr>
+                    <td>project init → VIPP</td>
+                    <td>inbox-ready → <code>negotiate</code>; shared <code>ensure_inbox_scaffold</code> + <code>serialize_buffer</code> (envelope parity); OQ-8 closes the negotiate UX cliff; confinement lives in <code>ensure_posting</code> itself.</td>
+                    <td><span class="verdict v-ok">CLEAN</span></td>
+                </tr>
+                <tr>
+                    <td>project init ↔ Concierge</td>
+                    <td>shares the one canonical <code>KICKOFF_INPUT_DOMAINS</code> constant + the confined safe-writer. Detection <em>mirrors</em> Concierge; it does not call the heavier <code>assess</code>.</td>
+                    <td><span class="verdict v-ok">CLEAN</span></td>
+                </tr>
+                <tr>
+                    <td>Concierge chat → inbox</td>
+                    <td>a <em>second</em> inbox producer (session-end <code>maybe_serialize_buffer</code>). Same <code>build_proposal</code> + <code>serialize_buffer</code>; entry points not unified (coexist via no-clobber-of-undrained).</td>
+                    <td><span class="verdict v-warn">OVERLAP</span></td>
+                </tr>
+                <tr>
+                    <td>Red Carpet → inbox</td>
+                    <td>applies proposals directly at human privilege; <strong>no</strong> VIPP handoff at REPL exit (asymmetric with Concierge chat). A feature decision, not complexity to remove.</td>
+                    <td><span class="verdict v-gap">GAP</span></td>
+                </tr>
+                <tr>
+                    <td>Manifest Suggester → inbox</td>
+                    <td>shares only the <code>manifest</code> <em>apply</em> primitive; applies straight to disk, bypassing the inbox. Its outputs aren't in <code>detect_shape</code>'s signal set. <code>build_proposal</code> makes the seam trivial when wanted.</td>
+                    <td><span class="verdict v-gap">GAP</span></td>
+                </tr>
+                <tr>
+                    <td>Kickoff inputs contract</td>
+                    <td>the kickoff experience <em>writes</em> <code>docs/kickoff/inputs/*.yaml</code>; project init only <em>reads</em> them for shape. No shared "populate the inputs" call — a partial project drops back into the interactive surface.</td>
+                    <td><span class="verdict v-gap">GAP</span></td>
+                </tr>
+                <tr>
+                    <td>Welcome Mat</td>
+                    <td>design-doc only — superseded by Red Carpet; not implemented in code.</td>
+                    <td><span class="verdict v-na">N/A</span></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="callout" style="border-left-color: var(--c-init)">
+            <h3>⚓ Verdict</h3>
+            <p>Onboarding plugs into <strong>VIPP</strong> cleanly and composes with <strong>Concierge</strong> at the mechanism
+            level. It sits <em>alongside</em> Red Carpet, the Manifest Suggester, and the interactive kickoff rather than being
+            woven into them — none of the open seams are bugs; they're missing connections between capabilities that grew up in
+            parallel, and <code>build_proposal</code> now makes closing them cheap.</p>
+        </div>
+
+        <footer>
+            ⚓ StartD8 Harbor Tour · Onboarding &amp; Kickoff · generated from <code>main</code> 2026-07-03 ·
+            companion to <a href="../capability-index/harbor-tour.html">the SDK capability harbor tour</a>
+        </footer>
+    </main>
+</body>
+</html>
