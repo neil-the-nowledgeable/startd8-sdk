@@ -3392,6 +3392,70 @@ class Test{class_name}:
         )
         return True
 
+    def _execute_dry_run(
+        self,
+        tasks: list[SeedTask],
+        context: dict[str, Any],
+        start: float,
+    ) -> dict[str, Any]:
+        """Dry-run path of ``execute``: report per-task plans without generating."""
+        task_reports: list[dict[str, Any]] = []
+        for task in tasks:
+            _log_task_boundary_start(task, phase="implement")
+            env_checks = self._check_environment(task)
+            task_report: dict[str, Any] = {
+                "task_id": task.task_id,
+                "feature_id": task.feature_id,
+                "title": task.title,
+                "domain": task.domain,
+                "complexity_tier": "tier_2",
+                "target_files": task.target_files,
+                "estimated_loc": task.estimated_loc,
+                "depends_on": task.depends_on,
+                "prompt_constraints_count": len(task.prompt_constraints),
+                "validators": task.post_generation_validators,
+                "status": "dry_run_skipped",
+            }
+            if env_checks:
+                task_report["environment_issues"] = env_checks
+            task_reports.append(task_report)
+            _log_task_boundary_complete(
+                task.task_id,
+                status=str(task_report["status"]),
+                phase="implement",
+            )
+
+        domain_tasks: dict[str, list[str]] = defaultdict(list)
+        for task in tasks:
+            domain_tasks[task.domain].append(task.task_id)
+
+        output = {
+            "task_reports": task_reports,
+            "tasks_processed": len(task_reports),
+            "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
+            "total_estimated_loc": sum(t.estimated_loc for t in tasks),
+            "total_cost": 0.0,
+            "generation_results": {},
+        }
+        context["implementation"] = output
+        output["metadata"] = self._build_implementation_metadata(context)
+        context["generation_results"] = {}
+        context["truncation_flags"] = {}
+
+        # Context contract: validate IMPLEMENT output model (dry-run path)
+        ImplementPhaseOutput(
+            implementation=context["implementation"],
+            generation_results=context["generation_results"],
+            truncation_flags=context["truncation_flags"],
+        )
+
+        duration = time.monotonic() - start
+        logger.info(
+            "IMPLEMENT phase complete (dry-run): %d tasks (%.2fs)",
+            len(task_reports), duration,
+        )
+        return {"output": output, "cost": 0.0, "metadata": {"duration": duration, "resumed": False}}
+
     def execute(
         self,
         phase: WorkflowPhase,
@@ -3419,62 +3483,7 @@ class Test{class_name}:
 
         # --- Dry-run path (unchanged) ---
         if dry_run:
-            task_reports: list[dict[str, Any]] = []
-            for task in tasks:
-                _log_task_boundary_start(task, phase="implement")
-                env_checks = self._check_environment(task)
-                task_report: dict[str, Any] = {
-                    "task_id": task.task_id,
-                    "feature_id": task.feature_id,
-                    "title": task.title,
-                    "domain": task.domain,
-                    "complexity_tier": "tier_2",
-                    "target_files": task.target_files,
-                    "estimated_loc": task.estimated_loc,
-                    "depends_on": task.depends_on,
-                    "prompt_constraints_count": len(task.prompt_constraints),
-                    "validators": task.post_generation_validators,
-                    "status": "dry_run_skipped",
-                }
-                if env_checks:
-                    task_report["environment_issues"] = env_checks
-                task_reports.append(task_report)
-                _log_task_boundary_complete(
-                    task.task_id,
-                    status=str(task_report["status"]),
-                    phase="implement",
-                )
-
-            domain_tasks: dict[str, list[str]] = defaultdict(list)
-            for task in tasks:
-                domain_tasks[task.domain].append(task.task_id)
-
-            output = {
-                "task_reports": task_reports,
-                "tasks_processed": len(task_reports),
-                "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
-                "total_estimated_loc": sum(t.estimated_loc for t in tasks),
-                "total_cost": 0.0,
-                "generation_results": {},
-            }
-            context["implementation"] = output
-            output["metadata"] = self._build_implementation_metadata(context)
-            context["generation_results"] = {}
-            context["truncation_flags"] = {}
-
-            # Context contract: validate IMPLEMENT output model (dry-run path)
-            ImplementPhaseOutput(
-                implementation=context["implementation"],
-                generation_results=context["generation_results"],
-                truncation_flags=context["truncation_flags"],
-            )
-
-            duration = time.monotonic() - start
-            logger.info(
-                "IMPLEMENT phase complete (dry-run): %d tasks (%.2fs)",
-                len(task_reports), duration,
-            )
-            return {"output": output, "cost": 0.0, "metadata": {"duration": duration, "resumed": False}}
+            return self._execute_dry_run(tasks, context, start)
 
         # --- REQ-MP-503: Micro Prime pre-pass (opt-in) ---
         if self.config.micro_prime_enabled:
