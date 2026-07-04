@@ -443,6 +443,7 @@ def kickoff_guided(
     this command spends/writes nothing; each Guide step is a command the human runs at its gate.
     """
     from .concierge import ConciergeError, build_assess
+    from .kickoff_experience.concierge_view import build_guided_view, render_deepen_lines
     from .kickoff_experience.orchestrator import build_kickoff_plan
 
     # ── Orient — the readiness surface (reuse `build_assess`; NO recompute — FR-GE-6). ──
@@ -455,26 +456,19 @@ def kickoff_guided(
     # ── Guide — the deterministic $0 conductor (reuse the advisor's ranked playbook). ──
     plan = build_kickoff_plan(project_root)
 
+    # GE-M4: the ONE guided view-model (parity oracle) — the CLI is now a pure function of it. Reuse
+    # the already-computed Orient/Guide (no recompute); Deepen reads any persisted facilitation
+    # session so its GE-M3b halted/cost states surface identically to the TUI and served surfaces.
+    view = build_guided_view(project_root, assess=assess, plan=plan, load_deepen=True)
+
     if json_out:
-        _emit_json(
-            {
-                "schema": "kickoff.guided.v1",
-                "project_root": assess["project_root"],
-                "orient": assess,
-                "guide": plan.to_dict(),
-                "deepen": {
-                    "available": True,
-                    "engaged": False,  # GE-M1 never engages Deepen — GE-M3 promotes the panel
-                    "surface": "startd8 panel ask-all",
-                },
-            }
-        )
+        _emit_json(view)
         return
 
     console.print("[bold]Guided kickoff[/bold] — one experience, three phases (Orient → Guide → Deepen)\n")
 
     console.print("[bold cyan]1. Orient[/bold cyan] — where you are (readiness)\n")
-    _render_assess(assess)
+    _render_assess(view["orient"])
 
     console.print("\n[bold cyan]2. Guide[/bold cyan] — the $0 conductor (deterministic, no LLM)\n")
     console.print(plan.render(), markup=False, highlight=False)
@@ -486,19 +480,11 @@ def kickoff_guided(
             "[cyan]startd8 kickoff-legacy red-carpet --agent[/cyan] (paid, propose-only).[/dim]"
         )
 
-    # ── Deepen — OPTIONAL facilitation pointer (GE-M1 stub; GE-M3 promotes the panel). ──
+    # ── Deepen — the shared projection (render_deepen_lines): a persisted session's status/halt/cost
+    #    when engaged (GE-M3b), else the GE-M1 optional pointer. Same text the TUI emits (parity). ──
     console.print("\n[bold cyan]3. Deepen[/bold cyan] — optional multi-perspective facilitation")
-    if deepen:
-        console.print(
-            "  [dim]The facilitation panel (a multi-round risk/gap discovery pass) is coming as a "
-            "first-class phase in a later step. For now, drive it via[/dim] "
-            "[cyan]startd8 panel ask-all[/cyan] [dim](paid, synthetic — unratified input).[/dim]"
-        )
-    else:
-        console.print(
-            "  [dim]optional — pass [cyan]--deepen[/cyan] to surface the facilitation panel pointer. "
-            "Skipped by default; nothing is spent or written.[/dim]"
-        )
+    for line in render_deepen_lines(view["deepen"], deepen_flag=deepen):
+        console.print(line, markup=False, highlight=False)
 
     # The guided flow itself writes nothing and calls no LLM (FR-GE-1 byte-identical residue).
 

@@ -512,6 +512,79 @@ def _render_concierge(view: dict, csrf: str, intents: dict, stylesheet: str) -> 
     return _page("Concierge", "".join(parts), stylesheet)
 
 
+def _render_guided(view: dict, stylesheet: str) -> str:
+    """Render the shared guided view-model (GE-M4) as HTML — the SAME payload the CLI and TUI render.
+
+    The served leg is read/preview-only: it presents Orient → Guide → Deepen (incl. GE-M3b's
+    halted-session + per-round/total-cost states) but invokes no LLM and writes nothing. Parity is a
+    property of `build_guided_view`; this function differs from the CLI/TUI only in *rendering*.
+    """
+    from .concierge_view import format_cost
+
+    orient = view.get("orient") or {}
+    guide = view.get("guide") or {}
+    deepen = view.get("deepen") or {}
+    parts = [
+        "<p><a href='/'>← overview</a></p><h1>Guided kickoff</h1>",
+        "<p class='muted'>One experience, three phases — Orient → Guide → Deepen "
+        "(read-only, $0, no LLM).</p>",
+        # Orient
+        "<h2>1. Orient — where you are (readiness)</h2>",
+    ]
+    score = guide.get("readiness_score")
+    if score is not None:
+        parts.append(f"<p>Readiness score: <strong>{_esc(score)}</strong></p>")
+    domains = ((orient.get("kickoff_inputs") or {}).get("domains")) or {}
+    if domains:
+        parts.append("<ul>")
+        for name, info in domains.items():
+            parts.append(f"<li><code>{_esc(name)}</code>: {_esc(info.get('status'))}</li>")
+        parts.append("</ul>")
+    unmet = guide.get("unmet_gates") or []
+    parts.append(f"<p>Unmet gates: {_esc(', '.join(unmet) if unmet else '(none)')}</p>")
+    # Guide
+    parts.append("<h2>2. Guide — the $0 conductor (deterministic, no LLM)</h2>")
+    steps = guide.get("steps") or []
+    if steps:
+        parts.append("<ol>")
+        for s in steps:
+            cmd = s.get("command")
+            cmd_html = f" <code>{_esc(cmd)}</code>" if cmd else ""
+            parts.append(
+                f"<li>[{_esc(s.get('cost'))}] {_esc(s.get('title'))} "
+                f"({_esc(s.get('stage'))}){cmd_html}</li>"
+            )
+        parts.append("</ol>")
+    else:
+        parts.append("<p class='muted'>No next steps — the $0 cascade is build-ready.</p>")
+    # Deepen — the same halt/cost projection every surface shows
+    parts.append("<h2>3. Deepen — optional multi-perspective facilitation</h2>")
+    if deepen.get("engaged"):
+        parts.append(
+            f"<p>Session <code>{_esc(deepen.get('session_id'))}</code> — "
+            f"status: <strong>{_esc(deepen.get('status'))}</strong></p>"
+        )
+        if deepen.get("halted") and deepen.get("halt"):
+            parts.append(
+                "<div class='card'><h3>⛔ HALTED "
+                f"({_esc(deepen['halt'].get('reason'))})</h3>"
+                f"<p>{_esc(deepen['halt'].get('message'))}</p></div>"
+            )
+        cap = deepen.get("budget_usd") or 0.0
+        cap_str = f" of {format_cost(cap)} cap" if cap else ""
+        parts.append(
+            f"<p>Cost: <strong>{_esc(format_cost(deepen.get('cost_total_usd')))}</strong>"
+            f"{_esc(cap_str)} over {_esc(deepen.get('n_rounds'))} round(s)</p>"
+        )
+    else:
+        parts.append(
+            "<p class='muted'>Optional — drive the facilitation panel via "
+            f"<code>{_esc(deepen.get('surface'))}</code> (paid, synthetic — unratified input). "
+            "Nothing is spent or written here.</p>"
+        )
+    return _page("Guided kickoff", "".join(parts), stylesheet)
+
+
 # --- the app factory ----------------------------------------------------------------------------
 
 
@@ -787,6 +860,35 @@ def build_kickoff_app(
     def concierge_json() -> JSONResponse:
         # Shared view-model payload (parity oracle; the TUI renders the same dict).
         return JSONResponse(build_concierge_view(root), headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.get("/guided", response_class=HTMLResponse)
+    def guided() -> HTMLResponse:
+        # GE-M4 served leg — read/preview-only render of the ONE guided view-model (Orient → Guide →
+        # Deepen, incl. the GE-M3b halt/cost states). Degrades to an error page if the kernel `assess`
+        # cannot read the project; never 500s the surface.
+        from .concierge_view import build_guided_view
+
+        try:
+            view = build_guided_view(root, load_deepen=True)
+        except Exception as exc:
+            return HTMLResponse(
+                _page("Guided kickoff", f"<h1>Guided kickoff</h1><p>could not read project: "
+                                        f"{_esc(exc)}</p>", stylesheet),
+                status_code=200, headers=dict(_FRAME_DENY_HEADERS),
+            )
+        return HTMLResponse(_render_guided(view, stylesheet), headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.get("/guided.json")
+    def guided_json() -> JSONResponse:
+        # Same guided view-model payload the CLI `kickoff guided --json` emits and the TUI renders.
+        from .concierge_view import build_guided_view
+
+        try:
+            view = build_guided_view(root, load_deepen=True)
+        except Exception as exc:
+            return JSONResponse({"ok": False, "code": "assess_failed", "message": str(exc)},
+                                status_code=400, headers=dict(_FRAME_DENY_HEADERS))
+        return JSONResponse(view, headers=dict(_FRAME_DENY_HEADERS))
 
     @app.get("/red-carpet.json")
     def red_carpet_json() -> JSONResponse:

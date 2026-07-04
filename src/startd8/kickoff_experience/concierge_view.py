@@ -526,3 +526,248 @@ def _questionary_prompt(message: str) -> Optional[str]:
     import questionary
 
     return questionary.text(message).ask()
+
+
+# ================================================================================================
+# 5. The guided-experience view-model (GE-M4 — the ONE Orient→Guide→Deepen parity oracle)
+# ================================================================================================
+#
+# `build_guided_view` is the single canonical view-model for the guided experience (FR-GE-9). It was
+# promoted here (out of the `kickoff guided` CLI body, where it lived inline as `kickoff.guided.v1`)
+# so all three surfaces — CLI, TUI, and the local served web UI — render from ONE payload and differ
+# only in *rendering*, not in *content*. It is **pure composition** of existing read-only producers
+# (no new engine — FR-GE-6): Orient = the kernel `build_assess`; Guide = `orchestrator.build_kickoff_plan`
+# (the advisor's no-LLM ranked playbook); Deepen = a read-only projection of a *persisted* facilitation
+# session (GE-M3b's halted-session + per-round/total-cost transcript states). It calls no LLM and
+# writes nothing.
+#
+# Parity is a property of this single fold: `guided_parity_digest` extracts the surface-independent
+# semantic content every surface must present (phases, Guide blockers/next-commands, the Deepen halt
+# banner, the session cost figure); `render_guided_lines` is the shared text projection both the CLI
+# (Deepen block) and the TUI render; `render_deepen_lines` renders the Deepen phase; the web surface's
+# `_render_guided` renders the same payload as HTML. `format_cost` is shared so the "same cost figure"
+# is a byte-identical substring across surfaces.
+
+GUIDED_SCHEMA = "kickoff.guided.v1"
+GUIDED_SCHEMA_VERSION = 1
+# The optional Deepen surface a user drives to run the facilitation panel (named, not invoked here).
+DEEPEN_SURFACE = "startd8 kickoff panel ask-all"
+
+
+def format_cost(usd: float | int | None) -> str:
+    """The one cost-figure format every surface uses, so parity is a literal shared substring."""
+    return f"${float(usd or 0.0):.4f}"
+
+
+def project_deepen_state(session: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Project a persisted facilitation session → the Deepen phase's semantic summary (read-only).
+
+    ``None`` (no session yet) → the available-but-not-engaged pointer (GE-M1 behaviour preserved:
+    ``engaged is False``). A session carries GE-M3b's first-class ``status="halted"`` state, the
+    ``halt`` banner, and the per-round/session-total ``cost_total_usd`` — surfaced identically on
+    every surface. Never re-derives anything; a pure read of the transcript dict.
+    """
+    if not session:
+        return {
+            "available": True,
+            "engaged": False,
+            "surface": DEEPEN_SURFACE,
+            "session_id": None,
+            "status": None,
+            "halted": False,
+            "halt": None,
+            "cost_total_usd": 0.0,
+            "budget_usd": 0.0,
+            "n_rounds": 0,
+        }
+    halt = session.get("halt") or None
+    status = session.get("status")
+    return {
+        "available": True,
+        "engaged": True,
+        "surface": DEEPEN_SURFACE,
+        "session_id": session.get("session_id"),
+        "status": status,
+        "halted": status == "halted",
+        # Only the human-facing reason+message travel to the surfaces (the full detail stays in the
+        # transcript the observability-UX viewer renders).
+        "halt": ({"reason": halt.get("reason"), "message": halt.get("message")} if halt else None),
+        "cost_total_usd": float(session.get("cost_total_usd") or 0.0),
+        "budget_usd": float(session.get("budget_usd") or 0.0),
+        "n_rounds": len(session.get("rounds") or ()),
+    }
+
+
+def load_latest_deepen_session(project_root: str | Path) -> Optional[Dict[str, Any]]:
+    """Read the most-recently-written persisted facilitation session, or ``None`` (read-only, ``$0``).
+
+    Reads the transcript contract path the facilitator writes (``.startd8/kickoff-panel/*.json``);
+    any IO/parse error degrades to ``None`` (the Deepen phase falls back to the pointer, never crashes
+    the guided view). Does NOT import the facilitator (avoids pulling the LLM stack into a $0 read).
+    """
+    d = Path(project_root).expanduser() / ".startd8" / "kickoff-panel"
+    if not d.is_dir():
+        return None
+    try:
+        files = [p for p in d.glob("*.json") if p.is_file()]
+        if not files:
+            return None
+        newest = max(files, key=lambda p: p.stat().st_mtime)
+        import json
+
+        data = json.loads(newest.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def build_guided_view(
+    project_root: str | Path,
+    *,
+    assess: Optional[Mapping[str, Any]] = None,
+    plan: Optional[Any] = None,
+    deepen_session: Optional[Mapping[str, Any]] = None,
+    load_deepen: bool = True,
+) -> Dict[str, Any]:
+    """The ONE guided-experience view-model — Orient → Guide → Deepen (read-only, ``$0``, no LLM).
+
+    Composition only (FR-GE-6, no new engine):
+      * **Orient** = ``build_assess`` (the kernel readiness surface).
+      * **Guide**  = ``build_kickoff_plan`` (the advisor's deterministic ranked playbook).
+      * **Deepen** = ``project_deepen_state`` over a *persisted* facilitation session.
+
+    ``assess``/``plan`` may be supplied by a caller that already computed them (the CLI does) to avoid
+    a recompute; otherwise they are built here. ``deepen_session`` may be injected (tests / a live
+    run); otherwise, when ``load_deepen`` is set, the latest persisted session is read from disk.
+    """
+    from ..concierge import build_assess as _build_assess
+    from .orchestrator import build_kickoff_plan
+
+    orient = dict(assess) if assess is not None else _build_assess(project_root)
+    guide = plan if plan is not None else build_kickoff_plan(project_root)
+    guide_dict = guide.to_dict() if hasattr(guide, "to_dict") else dict(guide)
+
+    session = deepen_session
+    if session is None and load_deepen:
+        session = load_latest_deepen_session(project_root)
+
+    return {
+        "schema": GUIDED_SCHEMA,
+        "schema_version": GUIDED_SCHEMA_VERSION,
+        "action": "guided_view",
+        "project_root": orient.get("project_root", str(project_root)),
+        "orient": orient,
+        "guide": guide_dict,
+        "deepen": project_deepen_state(session),
+    }
+
+
+def guided_parity_digest(view: Mapping[str, Any]) -> Dict[str, Any]:
+    """The surface-independent semantic content every surface MUST present (the FR-GE-9 oracle).
+
+    A structural/content contract, not a pixel contract: the three phases, the Guide readiness +
+    blockers/next-commands, and the Deepen halt banner + session cost figure. The parity test asserts
+    each surface's rendering carries exactly these.
+    """
+    guide = view.get("guide") or {}
+    deepen = view.get("deepen") or {}
+    steps = guide.get("steps") or []
+    halt = deepen.get("halt") or None
+    return {
+        "phases": ("Orient", "Guide", "Deepen"),
+        "readiness_score": guide.get("readiness_score"),
+        "unmet_gates": tuple(guide.get("unmet_gates") or ()),
+        "next_commands": tuple(s["command"] for s in steps if s.get("command")),
+        "deepen_engaged": bool(deepen.get("engaged")),
+        "deepen_status": deepen.get("status"),
+        "deepen_halted": bool(deepen.get("halted")),
+        "deepen_halt_message": (halt.get("message") if halt else None),
+        "deepen_cost_figure": format_cost(deepen.get("cost_total_usd")),
+    }
+
+
+def render_deepen_lines(deepen: Mapping[str, Any], *, deepen_flag: bool = False) -> List[str]:
+    """Render the Deepen phase as text — the SHARED projection the CLI and TUI both emit.
+
+    Engaged (a persisted session exists) → its status, the halt banner (if halted), and the
+    per-round/session-total cost. Not engaged → the optional pointer (GE-M1 wording preserved so the
+    default/``--deepen`` hints are byte-stable): ``--deepen`` names the surface; ``later step`` marks
+    the not-yet-live stub.
+    """
+    if deepen.get("engaged"):
+        lines = [f"  session {deepen.get('session_id')} — status: {deepen.get('status')}"]
+        if deepen.get("halted") and deepen.get("halt"):
+            lines.append(f"  ⛔ HALTED ({deepen['halt'].get('reason')}): {deepen['halt'].get('message')}")
+        cap = deepen.get("budget_usd") or 0.0
+        cap_str = f" of {format_cost(cap)} cap" if cap else ""
+        lines.append(
+            f"  cost: {format_cost(deepen.get('cost_total_usd'))}{cap_str} "
+            f"over {deepen.get('n_rounds')} round(s)"
+        )
+        return lines
+    if deepen_flag:
+        return [
+            "  The facilitation panel (a multi-round risk/gap discovery pass) is coming as a "
+            "first-class phase in a later step. For now, drive it via "
+            f"{DEEPEN_SURFACE} (paid, synthetic — unratified input).",
+        ]
+    return [
+        "  optional — pass --deepen to surface the facilitation panel pointer. "
+        "Skipped by default; nothing is spent or written.",
+    ]
+
+
+def render_guided_lines(view: Mapping[str, Any], *, deepen_flag: bool = True) -> List[str]:
+    """The shared plain-text projection of the guided view (the TUI surface; the CLI Deepen block).
+
+    All three phases in order, each with the same semantic content the served surface carries, so a
+    parity assertion over the tokens holds across surfaces (FR-GE-9). Pure; no IO.
+    """
+    orient = view.get("orient") or {}
+    guide = view.get("guide") or {}
+    deepen = view.get("deepen") or {}
+    lines: List[str] = [
+        "Guided kickoff — one experience, three phases (Orient → Guide → Deepen)",
+        "",
+        "1. Orient — where you are (readiness)",
+    ]
+    score = guide.get("readiness_score")
+    if score is not None:
+        lines.append(f"  readiness score: {score}")
+    domains = ((orient.get("kickoff_inputs") or {}).get("domains")) or {}
+    for name, info in domains.items():
+        lines.append(f"  • {name}: {info.get('status')}")
+    unmet = guide.get("unmet_gates") or []
+    lines.append(f"  unmet gates: {', '.join(unmet) if unmet else '(none)'}")
+
+    lines += ["", "2. Guide — the $0 conductor (deterministic, no LLM)"]
+    for s in guide.get("steps") or []:
+        lines.append(f"  {s.get('rank')}. [{s.get('cost')}] {s.get('title')} ({s.get('stage')})")
+        if s.get("command"):
+            lines.append(f"     $ {s['command']}")
+
+    lines += ["", "3. Deepen — optional multi-perspective facilitation"]
+    lines += render_deepen_lines(deepen, deepen_flag=deepen_flag)
+    return lines
+
+
+def run_guided(
+    project_root: str | Path,
+    *,
+    emit_line: PrintFn,
+    deepen_session: Optional[Mapping[str, Any]] = None,
+    load_deepen: bool = True,
+    deepen_flag: bool = True,
+) -> Dict[str, Any]:
+    """The TUI leg of the guided experience (GE-M4, the surviving TUI surface — R3-S6).
+
+    Builds the ONE ``build_guided_view`` payload and emits ``render_guided_lines`` of it — so the TUI
+    is, byte-for-byte, the shared text projection of the same view-model the CLI and web render.
+    Returns the view for tests / a caller that wants the payload.
+    """
+    view = build_guided_view(
+        project_root, deepen_session=deepen_session, load_deepen=load_deepen
+    )
+    for line in render_guided_lines(view, deepen_flag=deepen_flag):
+        emit_line(line)
+    return view
