@@ -252,7 +252,7 @@ class TestIntegratePhaseHandler:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_success_path(
         self,
         mock_ensure_ctx,
@@ -302,7 +302,7 @@ class TestIntegratePhaseHandler:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_partial_failure(
         self,
         mock_ensure_ctx,
@@ -372,7 +372,7 @@ class TestIntegratePhaseHandler:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_all_fail(
         self,
         mock_ensure_ctx,
@@ -414,7 +414,7 @@ class TestIntegratePhaseHandler:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_dry_run(
         self,
         mock_ensure_ctx,
@@ -463,7 +463,7 @@ class TestIntegratePhaseHandler:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_skips_failed_generation_results(
         self,
         mock_ensure_ctx,
@@ -501,7 +501,7 @@ class TestIntegratePhaseHandler:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_skips_unknown_task_ids(
         self,
         mock_ensure_ctx,
@@ -559,7 +559,7 @@ class TestContextPropagation:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_generation_results_paths_updated(
         self,
         mock_ensure_ctx,
@@ -609,7 +609,7 @@ class TestContextPropagation:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_integration_results_written_to_context(
         self,
         mock_ensure_ctx,
@@ -655,7 +655,7 @@ class TestContextPropagation:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_failed_task_paths_not_updated(
         self,
         mock_ensure_ctx,
@@ -724,7 +724,7 @@ class TestResumeCompat:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_resume_after_implement(
         self,
         mock_ensure_ctx,
@@ -779,7 +779,7 @@ class TestResumeCompat:
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
-    @patch("startd8.contractors.context_seed_handlers._ensure_context_loaded")
+    @patch("startd8.contractors.context_seed.phases.integrate._ensure_context_loaded")
     def test_empty_generation_results_produces_empty_output(
         self,
         mock_ensure_ctx,
