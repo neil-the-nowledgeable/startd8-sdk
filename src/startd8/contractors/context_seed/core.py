@@ -66,9 +66,6 @@ from startd8.contractors.context_seed.phases.integrate import IntegratePhaseHand
 from startd8.contractors.context_seed.phases.test_phase import TestPhaseHandler
 from startd8.contractors.context_seed.phases.review import ReviewPhaseHandler
 from startd8.contractors.context_seed.phases.implement import ImplementPhaseHandler
-from startd8.logging_config import get_logger
-
-logger = get_logger("startd8.contractors.context_seed_handlers")
 
 # This module is the pure composition root: it wires the extracted phase handlers
 # (plan/scaffold/design/implement/integrate/test/review/finalize) into a handler set.
