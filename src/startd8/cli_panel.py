@@ -28,6 +28,33 @@ panel_app = typer.Typer(
     help="Query the synthetic stakeholder panel: list (read-only), ask/ask-all (paid, synthetic).",
 )
 
+# GE-M1 (FR-GE-7): the panel group is folded under `startd8 kickoff panel …`. The old top-level
+# `startd8 panel …` stays reachable (hidden) for one release as a deprecated alias — its callback
+# emits the deprecation notice. `panel_app` (above) is the clean group nested under `kickoff`; the
+# same command bodies are re-registered on `panel_deprecated_app` at the bottom of this module.
+panel_deprecated_app = typer.Typer(
+    name="panel",
+    help="[DEPRECATED — use `startd8 kickoff panel`] Stakeholder-panel alias (works for one release).",
+)
+
+
+@panel_deprecated_app.callback()
+def _panel_deprecated() -> None:
+    """[DEPRECATED] Renamed to `startd8 kickoff panel`. This alias works for one release (FR-GE-7/FR-10)."""
+    import warnings
+    from rich.console import Console as _Console
+
+    warnings.warn(
+        "`startd8 panel` is deprecated; use `startd8 kickoff panel`. "
+        "This alias will be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _Console(stderr=True).print(
+        "[yellow]deprecation:[/yellow] `startd8 panel` is folded under `startd8 kickoff panel`; "
+        "this alias works for one release."
+    )
+
 _EXIT_FATAL_INPUTS = 2
 _EXIT_RUNTIME = 1
 # Distinct exit codes for `panel import` (FR-6/R2-F5), so a CI job can branch on WHY it failed.
@@ -269,3 +296,12 @@ def panel_import(
     )
     for warning in result.warnings:
         console.print(f"  [yellow]⚠[/yellow] {warning}")
+
+
+# --- GE-M1: deprecated top-level `startd8 panel …` alias (folded under `startd8 kickoff panel`) ---
+# Re-register the exact command bodies above under the deprecated alias group. Its callback emits the
+# one-release FR-GE-7/FR-10 deprecation notice; the commands themselves are byte-identical.
+panel_deprecated_app.command("list")(panel_list)
+panel_deprecated_app.command("ask")(panel_ask)
+panel_deprecated_app.command("ask-all")(panel_ask_all)
+panel_deprecated_app.command("import")(panel_import)

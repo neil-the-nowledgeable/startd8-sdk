@@ -116,26 +116,9 @@ def concierge_survey(
         console.print("\n[green]No personal/PII-material flagged[/green] (name/extension heuristic).")
 
 
-@concierge_app.command("assess")
-def concierge_assess(
-    project_root: Path = typer.Argument(
-        Path("."), help="Project to assess (default: current dir). Read-only."
-    ),
-    json_out: bool = typer.Option(False, "--json", help="Emit the schema-versioned JSON to stdout."),
-) -> None:
-    """Onboarding-readiness report: kickoff-input provenance + the $0-cascade view (wraps wireframe)."""
-    from .concierge import ConciergeError, handle_concierge_tool
-
-    try:
-        result = handle_concierge_tool("assess", project_root)
-    except ConciergeError as exc:
-        console.print(f"[red]concierge:[/red] {exc}")
-        raise typer.Exit(_EXIT_FATAL_INPUTS)
-
-    if json_out:
-        _emit_json(result)
-        return
-
+def _render_assess(result: dict) -> None:
+    """Render the readiness surface (the Orient view). Extracted so the guided experience's
+    Orient phase reuses THIS exact projection — no second readiness render (FR-GE-6)."""
     console.print(f"[bold]Concierge assess[/bold] — {result['project_root']}")
 
     console.print("\n[bold]Kickoff inputs[/bold] (provenance, honest — not graded):")
@@ -175,13 +158,40 @@ def concierge_assess(
     if headline:
         console.print(f"\n[bold]Next command[/bold]: [cyan]{headline}[/cyan]")
 
-    # GE-M0 (FR-GE-1/3): the guided-experience routing seam. One ignorable line on *stderr*, never a
+
+@concierge_app.command("assess")
+def concierge_assess(
+    project_root: Path = typer.Argument(
+        Path("."), help="Project to assess (default: current dir). Read-only."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the schema-versioned JSON to stdout."),
+    guided: Optional[bool] = typer.Option(
+        None, "--guided/--no-guided",
+        help="Offer (or silence) the guided kickoff experience. Overrides the project/global preference.",
+    ),
+) -> None:
+    """Onboarding-readiness report: kickoff-input provenance + the $0-cascade view (wraps wireframe)."""
+    from .concierge import ConciergeError, handle_concierge_tool
+
+    try:
+        result = handle_concierge_tool("assess", project_root)
+    except ConciergeError as exc:
+        console.print(f"[red]concierge:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    if json_out:
+        _emit_json(result)
+        return
+
+    _render_assess(result)
+
+    # GE-M0/M1 (FR-GE-1/3): the guided-experience routing seam. One ignorable line on *stderr*, never a
     # gate, $0/no-LLM. Suppressed on `--json` (already returned above) and on a non-interactive stdout
-    # so the kernel path stays byte-identical.
-    _maybe_offer_guided(project_root, assess=result)
+    # so the kernel path stays byte-identical. GE-M1 wires the real tri-state `--guided/--no-guided`.
+    _maybe_offer_guided(project_root, assess=result, flag=guided)
 
 
-def _maybe_offer_guided(project_root: Path, *, assess: dict) -> None:
+def _maybe_offer_guided(project_root: Path, *, assess: dict, flag: Optional[bool] = None) -> None:
     """Emit the single ignorable guided-experience offer line on stderr, if routing says so (GE-M0).
 
     Read-only, $0, defensive: any failure here must never perturb the kernel `assess` output.
@@ -191,7 +201,7 @@ def _maybe_offer_guided(project_root: Path, *, assess: dict) -> None:
 
         decision = decide_guided_routing(
             project_root,
-            flag=None,               # GE-M0: no --guided/--no-guided flag on the kernel yet (GE-M1+)
+            flag=flag,               # GE-M1: the real tri-state --guided/--no-guided (None ⇒ fall through)
             served_surface=False,    # a CLI invocation is not a served/TUI surface
             assess=assess,           # project-shape signal (reuse the payload we already computed)
             interactive=console.is_terminal,  # non-TTY (piped/CI) ⇒ suppressed, never blocking
@@ -400,6 +410,118 @@ def concierge_derive_contract(
         raise typer.Exit(_EXIT_BLOCKED)
 
 
+# --- GE-M1: the single guided entry point — Orient → Guide → Deepen ------------------------------
+# `startd8 kickoff guided` sequences the three *functions* of the onboarding experience as *phases
+# of one flow* over the existing kernel spine (FR-GE-5). It introduces NO new engine (FR-GE-6):
+#   • Orient = the readiness surface — reuses `build_assess` + the same `_render_assess` projection.
+#   • Guide  = the DETERMINISTIC $0 conductor — reuses `orchestrator.build_kickoff_plan`, which
+#              itself renders `red_carpet_advisor`'s no-LLM ranked playbook. No LLM by default
+#              (FR-GE-5): a no-agent user is walked to build-ready at ZERO LLM cost.
+#   • Deepen = an OPTIONAL, clearly-marked hook to the facilitation panel — a thin pointer only
+#              here (GE-M3 promotes/hardens the panel). `--deepen` names the existing surface; it
+#              never invokes an LLM in GE-M1.
+
+
+def kickoff_guided(
+    project_root: Path = typer.Argument(
+        Path("."), help="Project to guide (default: current dir). Orient + Guide are read-only, $0."
+    ),
+    deepen: bool = typer.Option(
+        False, "--deepen",
+        help="Surface the optional Deepen phase (facilitation panel) pointer. GE-M1: pointer only, no LLM.",
+    ),
+    agent: bool = typer.Option(
+        False, "--agent",
+        help="Opt in to the LLM-assisted interview during Guide (paid). OFF by default — Guide is $0/no-LLM.",
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the combined guided view as JSON."),
+) -> None:
+    """The single guided kickoff experience: Orient → Guide → Deepen, over the existing kernel.
+
+    Deterministic-first (FR-GE-5): Orient and Guide are **$0 / no-LLM**. The `--agent` LLM interview
+    is strictly opt-in and never required — "guided for a no-agent user" costs zero LLM. Read-only:
+    this command spends/writes nothing; each Guide step is a command the human runs at its gate.
+    """
+    from .concierge import ConciergeError, build_assess
+    from .kickoff_experience.orchestrator import build_kickoff_plan
+
+    # ── Orient — the readiness surface (reuse `build_assess`; NO recompute — FR-GE-6). ──
+    try:
+        assess = build_assess(project_root)
+    except ConciergeError as exc:
+        console.print(f"[red]kickoff guided:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    # ── Guide — the deterministic $0 conductor (reuse the advisor's ranked playbook). ──
+    plan = build_kickoff_plan(project_root)
+
+    if json_out:
+        _emit_json(
+            {
+                "schema": "kickoff.guided.v1",
+                "project_root": assess["project_root"],
+                "orient": assess,
+                "guide": plan.to_dict(),
+                "deepen": {
+                    "available": True,
+                    "engaged": False,  # GE-M1 never engages Deepen — GE-M3 promotes the panel
+                    "surface": "startd8 panel ask-all",
+                },
+            }
+        )
+        return
+
+    console.print("[bold]Guided kickoff[/bold] — one experience, three phases (Orient → Guide → Deepen)\n")
+
+    console.print("[bold cyan]1. Orient[/bold cyan] — where you are (readiness)\n")
+    _render_assess(assess)
+
+    console.print("\n[bold cyan]2. Guide[/bold cyan] — the $0 conductor (deterministic, no LLM)\n")
+    console.print(plan.render(), markup=False, highlight=False)
+    if agent:
+        # `--agent` is the strictly opt-in, propose-only LLM interview (FR-GE-5). Guide's *default*
+        # remains $0; the interview lives on the existing red-carpet surface, run by the human.
+        console.print(
+            "\n  [dim]--agent: the optional LLM interview is available at "
+            "[cyan]startd8 kickoff-legacy red-carpet --agent[/cyan] (paid, propose-only).[/dim]"
+        )
+
+    # ── Deepen — OPTIONAL facilitation pointer (GE-M1 stub; GE-M3 promotes the panel). ──
+    console.print("\n[bold cyan]3. Deepen[/bold cyan] — optional multi-perspective facilitation")
+    if deepen:
+        console.print(
+            "  [dim]The facilitation panel (a multi-round risk/gap discovery pass) is coming as a "
+            "first-class phase in a later step. For now, drive it via[/dim] "
+            "[cyan]startd8 panel ask-all[/cyan] [dim](paid, synthetic — unratified input).[/dim]"
+        )
+    else:
+        console.print(
+            "  [dim]optional — pass [cyan]--deepen[/cyan] to surface the facilitation panel pointer. "
+            "Skipped by default; nothing is spent or written.[/dim]"
+        )
+
+    # The guided flow itself writes nothing and calls no LLM (FR-GE-1 byte-identical residue).
+
+
+def kickoff_deepen(
+    project_root: Path = typer.Argument(
+        Path("."), help="Project to deepen (default: current dir)."
+    ),
+) -> None:
+    """The optional Deepen phase — the multi-perspective facilitation panel (GE-M1: pointer only).
+
+    GE-M1 leaves this as a clearly-marked thin entry: it names the existing panel surface but does
+    NOT invoke an LLM or promote the panel (GE-M3 promotes/hardens facilitation as a first-class
+    phase). Read-only, $0.
+    """
+    console.print("[bold]Deepen[/bold] — optional multi-perspective facilitation (the discovery pass)")
+    console.print(
+        "  [dim]This first-class facilitation phase is coming in a later step (GE-M3). For now, drive "
+        "the stakeholder panel directly via[/dim] [cyan]startd8 kickoff panel ask-all[/cyan] "
+        "[dim](paid, synthetic — every answer is unratified input).[/dim]"
+    )
+
+
 # --- M0b: the `startd8 kickoff` kernel surface ---------------------------------------------------
 # The kernel reuses the exact command bodies above under function-named verbs. `survey`/`assess`/
 # `log-friction` keep their names; `instantiate-kickoff`→`instantiate` and `derive-contract`→`derive`
@@ -411,3 +533,7 @@ kickoff_kernel_app.command("assess")(concierge_assess)
 kickoff_kernel_app.command("instantiate")(concierge_instantiate)
 kickoff_kernel_app.command("log-friction")(concierge_log_friction)
 kickoff_kernel_app.command("derive")(concierge_derive_contract)
+# GE-M1: the single guided entry point (Orient → Guide → Deepen). Lives under `kickoff` only.
+kickoff_kernel_app.command("guided")(kickoff_guided)
+# GE-M1: the optional Deepen phase as a standalone verb under `kickoff` (pointer only in GE-M1).
+kickoff_kernel_app.command("deepen")(kickoff_deepen)
