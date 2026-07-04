@@ -344,6 +344,9 @@ class ClaudeAgent(BaseAgent):
             kwargs["tool_choice"] = tool_choice
         return await self.async_client.messages.create(**kwargs)
 
+    def supports_messages(self) -> bool:
+        return True  # FR-NC-2: native multi-turn message array
+
     async def agenerate(
         self,
         prompt: str,
@@ -351,6 +354,7 @@ class ClaudeAgent(BaseAgent):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         images: Optional[list] = None,
+        messages: Optional[list] = None,
     ) -> GenerateResult:
         """
         Generate response using Claude async API.
@@ -358,6 +362,10 @@ class ClaudeAgent(BaseAgent):
         ``images`` (optional, FR-MMC-2): a list of ``multimodal.ImageInput`` sent
         alongside the prompt as Anthropic image blocks. Omitted/empty ⇒ text-only path
         (byte-identical request payload).
+
+        ``messages`` (optional, FR-NC-2): a canonical ``messages.Message`` list for native
+        multi-turn continuity. When given it takes precedence over ``prompt``/``images`` and is
+        rendered to Anthropic content-block messages. ``None`` ⇒ single-shot path unchanged.
 
         If retry_config is set, transient failures (rate limits, server errors)
         will be automatically retried with exponential backoff.
@@ -383,6 +391,14 @@ class ClaudeAgent(BaseAgent):
         # Resolve system prompt: call-level overrides instance-level
         effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
 
+        # FR-NC-2: native multi-turn — render canonical messages to Anthropic content-block
+        # messages and feed the existing `messages=` branch of _make_api_call (system stays a
+        # separate param — FR-NC-1a). `None` ⇒ the single-shot path is untouched.
+        native_messages = None
+        if messages is not None:
+            from .messages import render_anthropic
+            native_messages = render_anthropic(messages)
+
         start_time = time.time()
 
         try:
@@ -391,12 +407,12 @@ class ClaudeAgent(BaseAgent):
                 make_call = with_retry(self.retry_config)(self._make_api_call)
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
-                    temperature=temperature, images=images,
+                    temperature=temperature, images=images, messages=native_messages,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
-                    temperature=temperature, images=images,
+                    temperature=temperature, images=images, messages=native_messages,
                 )
 
         except RetryError as e:
