@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.14.0"
+version: "1.15.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1701,6 +1701,56 @@ capabilities:
         description: "startd8 kickoff plan/next — cost-labeled guided path"
     confidence: 0.85
 
+  # ============================================================================
+  # CONSULTATION — parallel multi-model second-opinion (TUI/CLI/web/serve)
+  # ============================================================================
+
+  - capability_id: startd8.consult.multi_model
+    category: action
+    maturity: stable
+    summary: "Ask one prompt (+ up to 2 images) of N models in parallel, compare side-by-side, and follow up all-or-one — via TUI, CLI, offline web view, or an interactive loopback server"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        `startd8 consult run --prompt … [--image/--image-dir] [--models|--preset]` fans one prompt to
+        a vision-gated roster in parallel (asyncio.gather; per-model failure isolation) and persists a
+        ConsultationSession under .startd8/consultations/<id>/. `reply <id> --to all|<model>` continues
+        each model's thread with NATIVE per-provider message arrays (real conversation memory; prior
+        images re-sent with reload+hash-revalidate integrity). Surfaces: `show`/`cost`/`list` (CLI),
+        `web` (self-contained offline HTML, XSS-safe, collapsible, $-cost badges), `web --serve` (opt-in
+        loopback interactive server: per-run token/CSP/Origin/replay/spend-caps), `roster` presets, and
+        the TUI "Multi-Model Consultation" workflow. Cost priced per-turn in USD via PricingService.
+        All four surfaces share one core (consultation/ package); evaluation is human (no auto-judge).
+      agent: |
+        startd8 consult run --prompt "Compare these approaches" --models anthropic:claude-opus-4-8 --models openai:gpt-5.5
+        startd8 consult reply <id> --to all --prompt "Which is safest?"
+        startd8 consult web <id> --open        # offline HTML comparison with dollar-cost badges
+        startd8 consult cost <id>              # per-model + total USD
+    triggers: ["consult", "multi-model", "compare models", "second opinion", "ask several models", "model panel", "council"]
+    evidence:
+      - type: code
+        ref: src/startd8/consultation/engine.py
+        description: "parallel fan-out + per-model failure isolation + native/transcript continuity dispatch"
+      - type: code
+        ref: src/startd8/consultation/serve.py
+        description: "loopback interactive server + security model (token/CSP/Origin/replay/caps)"
+      - type: code
+        ref: src/startd8/consultation/view.py
+        description: "render_html offline web view (XSS-safe, collapsible, $-cost badges)"
+      - type: code
+        ref: src/startd8/agents/messages.py
+        description: "canonical multi-turn message contract + 3 per-provider renderers (native continuity)"
+      - type: code
+        ref: src/startd8/cli_consult.py
+        description: "consult run/reply/show/list/cost/web/roster CLI"
+      - type: test
+        ref: tests/unit/consultation/
+        description: "~90 tests: fan-out, security, cost, presets, native continuity, web render, byte-identity"
+      - type: doc
+        ref: docs/MULTI_MODEL_CONSULTATION_GUIDE.md
+        description: "user guide (markdown + styled offline HTML twin)"
+    confidence: 0.9
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -1708,12 +1758,12 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 56   # reconciled to the actual entry count (+persona_drafting.{requirements_panel,manifest_suggester,toolkit})
+  total_capabilities: 57   # v1.15.0: +consult.multi_model
   by_maturity:
-    stable: 21
+    stable: 22     # v1.15.0: +consult.multi_model
     beta: 35       # reconciled to actual (prior summary undercounted)
   by_category:
-    action: 11     # v1.9.0: +agentic.{loop,tool_use_primitive,streaming,compaction}
+    action: 12     # v1.15.0: +consult.multi_model
     observe: 4     # +agentic.observability (v1.9.0)
     validate: 6    # +benchmark.matrix, +deploy.local_harness
     generate: 14   # +cloud_native_deploy, +deploy_environments (v1.8.0)
@@ -1727,6 +1777,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.15.0"
+    date: "2026-07-04"
+    changes:
+      - "Added startd8.consult.multi_model (action, stable, 0.9) — parallel multi-model consultation: one prompt (+≤2 images) → N models in parallel with per-model failure isolation; side-by-side comparison; all-or-one follow-ups with NATIVE per-provider message-array continuity + integrity-checked prior-image re-send; four surfaces over one core (TUI, CLI run/reply/show/list/cost/web/roster, self-contained offline web view with $-cost badges, opt-in loopback interactive server with token/CSP/Origin/replay/spend-caps). Human evaluation (no auto-judge). ~90 tests; merged to origin/main; user guide shipped."
+      - "57 capabilities: 22 stable; action 11→12."
   - version: "1.13.0"
     date: "2026-07-02"
     changes:
