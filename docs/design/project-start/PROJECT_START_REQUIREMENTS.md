@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.13 (Eighth experiment — Tier-1 LIFTS a valid kickoff, on the real portal)
+**Version:** 0.15 (FR-13c hardening + OQ-8/OQ-9 structural decisions RESOLVED)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -246,14 +246,31 @@ might be missing* (breadth, real value); it may not *estimate the specific value
   `concierge`→`kickoff` is blocked until `kickoff_app` is renamed/retired
   (FR-9/FR-12).*
 
-- **FR-1a — Reconcile the third surface (`project init`).** `startd8 project
-  init` (`cli_project.py:65`) is a fourth accidental onboarding surface the v0.1
-  inventory omitted, and it **always establishes a VIPP posting via a hard import**
-  (`project/init.py:138,142`). Its disposition must be decided: either (a) fold
-  its greenfield instantiate path into `kickoff instantiate` and make its VIPP
-  posting opt-in (FR-14), or (b) explicitly scope it out of the kernel. It may
-  not remain an always-on, VIPP-coupled second onboarding entrypoint while FR-1
-  claims "one surface."
+- **FR-1a — `project init` → SCOPE OUT of the kernel (OQ-8 RESOLVED).** `startd8
+  project init` (`cli_project.py:65`) always establishes a VIPP posting via a hard
+  import (`project/init.py:138,142`). The v0.2 lean was "fold"; the code evidence
+  reverses it to **scope-out**:
+  - **Nothing greenfield-unique to fold.** `project init --instantiate` produces
+    **byte-identical** template output to `concierge instantiate-kickoff` — both
+    call the same `build_instantiate_plan` (`writes.py:132`; apply-time
+    `proposals.py:281`); `project init` merely wraps it in a VIPP inbox envelope
+    requiring a `vipp negotiate`/`apply` round-trip. On greenfield that round-trip
+    is pure ceremony (no ground truth to adjudicate).
+  - **"Opt-in VIPP" would gut the command.** Unlike the panel-in-`assess` seam
+    (coverage core survives without the panel), `project init` minus VIPP is a
+    near-empty shell — its shape-detection duplicates `survey` and everything else
+    is VIPP plumbing (~7 sites; `--check`'s "initialized" *is* "has a VIPP
+    posting", `init.py:330`). There is no residual kernel job to host.
+  - **Correlates 1:1 with VIPP adoption (§0.3):** the 2/3 apps that used
+    `project init` (household-o11y, benchmark portal) are exactly the two that
+    adopted VIPP; navig8 (VIPP-free) used `concierge instantiate` directly.
+  - **Resolution:** `project init` is **re-filed as the setup entrypoint of the
+    un-bundled ground-truth-adjudication (VIPP) capability (FR-14)** — it keeps its
+    VIPP coupling, which is now its declared home. Greenfield onboarding for all
+    users is `kickoff instantiate` (writes the 7 files directly, as navig8 already
+    did). **Consumer break = zero** (the 2 VIPP apps keep the same flow under the
+    relocated name). FR-1's "one surface" now holds honestly — `project init` is no
+    longer classified as kernel onboarding.
 
 - **FR-2 — `survey` (discover).** Read-only, $0, no LLM. Reports what the project
   already has that is relevant to the input contract: requirement/PRD docs (and
@@ -428,6 +445,28 @@ might be missing* (breadth, real value); it may not *estimate the specific value
   uncertainty and invites blind acceptance. This is the breadth/precision line
   (§0.2) made enforceable. See NR-7 for the dropped point-value drafter.
 
+- **FR-13c — Facilitation-orchestrator hardening (required before the panel is
+  more than a prototype).** Experiments #7/#8 validated the capability *and*
+  exposed three gaps the prototype orchestrator (`scripts/run_kickoff_panel.py`)
+  must close before productization. In priority order:
+  1. **Artifact-grounding fidelity (biggest lever).** R0 grounding currently reads
+     only `schema.prisma` + a few truncated files, so it under-reads a running
+     system (#8: said "a schema, not a running system" of a live app) and the
+     assumptions check rates real capabilities LOW-confidence for lack of evidence
+     it was never shown. Grounding must read the **actual system** — the running
+     `app/` code and/or the SDK's own `survey`/Sapper project oracle — so the
+     current-state and the assumptions confidence reflect reality, not the schema
+     alone. Until fixed, grounding output is schema-blind.
+  2. **Assumptions check as a GATE, not just a card** (spec v0.2.1). If R0's Key
+     Assumptions Check returns **≥2 high-impact / low-confidence** assumptions,
+     the orchestrator must **halt and surface "validate the premise first"** rather
+     than spending the full panel rounds. Catching a false premise (#7) is the
+     highest-value output; it should short-circuit, not footnote.
+  3. **Cost tracking.** Per-call `cost_usd` reads `0.0` (untracked, not free). Wire
+     real cost attribution so runs report spend and the budget gate is honest.
+  *(Bug already fixed post-#8: `PROJECT_NAME` is now the `--project-name` flag, so
+  the default domain no longer leaks into a re-purposed run.)*
+
 ### Un-bundling (out of the project-start story)
 
 - **FR-14 — VIPP → separate *opt-in* capability (requires de-coupling `project
@@ -508,15 +547,23 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
   Its friction is routed to an SDK-side markdown log (doc-only reference that goes
   stale if the friction path moves). FR-5a schema-diagnostics: no evidence navig8
   depends on them.
-- **OQ-8 — `project init` disposition (FR-1a).** Fold-and-opt-out-VIPP vs.
-  scope-out. Leaning fold (single surface), but the greenfield instantiate paths
-  of `project init` vs. `instantiate-kickoff` must be diffed first to know if
-  they are the same package or two divergent ones.
-- **OQ-9 — Does `derive` stay on the `kickoff` surface or move entirely to the
-  brownfield capability?** It is on-surface today (`concierge derive-contract`).
-  Keeping it there preserves one surface but blurs the "greenfield kernel = 3
-  verbs" story; moving it fully to the brownfield capability sharpens the story
-  but splits the surface. Decide during CRP.
+- **OQ-8 — RESOLVED → SCOPE-OUT (see FR-1a).** The diff settled it: `project init
+  --instantiate` is byte-identical to `concierge instantiate-kickoff` (same
+  `build_instantiate_plan`), just VIPP-enveloped; VIPP coupling is the command's
+  spine (~7 sites), so opt-in VIPP would gut it. Re-filed as VIPP-capability setup;
+  greenfield users use `kickoff instantiate`; consumer break = zero.
+- **OQ-9 — RESOLVED → STAY on the `kickoff` surface** as the labeled brownfield
+  on-ramp. `derive` self-rejects on greenfield (`core.py:352`), so on-surface
+  placement can't dilute the greenfield path (a greenfield user gets a clean error,
+  not a wrong result). **Moving it out would REGRESS navig8** — the sole proven
+  `derive` consumer (§0.3), which is VIPP-free and used kernel-only; relocating
+  `derive` into the VIPP capability would force navig8 to adopt an unrelated opt-in
+  just to reach a verb it depends on. "One surface" (FR-1) outweighs the cosmetic
+  "3 clean verbs" narrative. `derive` and VIPP are different jobs (produce a
+  candidate schema vs. adjudicate proposals against one) — companion, not merged.
+  *Refinement:* `assess`/`survey` should only surface `next_command: kickoff derive`
+  when `survey` detected existing Pydantic models (`build_survey` model_files,
+  `core.py:120`).
 - **OQ-10 — The discovery-offer trigger (FR-13).** What exact, cheap signals make
   `survey`/`assess` offer discovery? **Refined by §0.3:** the discriminator is
   **domain viewpoint-multiplicity, NOT team size** — all three live apps are

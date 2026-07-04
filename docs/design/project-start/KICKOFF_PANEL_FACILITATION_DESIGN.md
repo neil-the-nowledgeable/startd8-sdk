@@ -318,6 +318,16 @@ what remains.
 > rather than proceeding. Catching a false premise is the single highest-value
 > output a discovery can produce; it should short-circuit, not footnote.
 
+### Tier 1 — hardening (REQUIRED before productization; experiments #7/#8, FR-13c)
+- **H1. Artifact-grounding fidelity (biggest lever).** R0 grounding reads only
+  `schema.prisma` + truncated files → under-reads a running system (#8) and rates
+  real capabilities LOW-confidence for want of evidence. Read the actual `app/` +
+  wire `survey`/Sapper so grounding reflects reality, not the schema alone.
+- **H2. Assumptions check as a GATE** (v0.2.1): ≥2 high-impact/low-confidence
+  assumptions ⇒ halt, surface "validate the premise first", don't spend the rounds.
+- **H3. Cost tracking** — per-call `cost_usd` reads `0.0`; wire real attribution.
+- *(Fixed post-#8: `--project-name` flag — default domain no longer leaks.)*
+
 ### Tier 2 — future (higher machinery, high payoff)
 5. **Tensions → experiments** — decompose each open tension to interests; the two
    parties jointly propose the test that resolves it. *Fisher & Ury; adversarial
