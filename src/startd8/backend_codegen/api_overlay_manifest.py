@@ -47,10 +47,12 @@ def normalize_overlay_path(path: str) -> str:
     return path
 
 
-def normalize_overlay_paths(
+def rewrite_overlay_path_keys(
     paths: Dict[str, Any],
+    *,
+    on_duplicate: str = "raise",
 ) -> Tuple[Dict[str, Any], List[str]]:
-    """Rewrite overlay path keys; raise on trailing-slash duplicates (OQ-7)."""
+    """Rewrite overlay path keys; raise or warn on trailing-slash duplicates (OQ-7)."""
     warnings: List[str] = []
     normalized: Dict[str, Any] = {}
     canonical_sources: Dict[str, str] = {}
@@ -61,17 +63,30 @@ def normalize_overlay_paths(
         norm_path = normalize_overlay_path(raw_path)
         prior = canonical_sources.get(norm_path)
         if prior is not None and prior != raw_path:
-            raise ReconcileError(
+            msg = (
                 f"trailing-slash duplicate: {raw_path!r} and {prior!r} "
                 f"both normalize to {norm_path!r}"
             )
+            if on_duplicate == "raise":
+                raise ReconcileError(msg)
+            warnings.append(msg)
+            continue
         canonical_sources.setdefault(norm_path, raw_path)
         if norm_path in normalized and raw_path != norm_path:
-            raise ReconcileError(
-                f"trailing-slash duplicate: {raw_path!r} collides with {norm_path!r}"
-            )
-        normalized[norm_path] = path_item
+            msg = f"trailing-slash duplicate: {raw_path!r} collides with {norm_path!r}"
+            if on_duplicate == "raise":
+                raise ReconcileError(msg)
+            warnings.append(msg)
+            continue
+        normalized[norm_path] = copy.deepcopy(path_item)
     return normalized, warnings
+
+
+def normalize_overlay_paths(
+    paths: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Strict trailing-slash rewrite for ``parse_api_overlay`` (raises on duplicates)."""
+    return rewrite_overlay_path_keys(paths, on_duplicate="raise")
 
 
 def parse_api_overlay(text: str) -> Dict[str, Any]:
@@ -251,7 +266,7 @@ def _validate_path_parameters(overlay: Dict[str, Any]) -> None:
 def _validate_overlay_refs(
     overlay: Dict[str, Any],
     base_schemas: Dict[str, Any],
-    model_names: List[str],
+    entity_names: List[str],
 ) -> None:
     overlay_schemas = overlay.get("components", {}).get("schemas", {})
     refs: Set[str] = set()
@@ -265,7 +280,7 @@ def _validate_overlay_refs(
         for suffix in _DTO_SUFFIXES:
             if name.endswith(suffix):
                 entity = name[: -len(suffix)]
-                if entity in model_names:
+                if entity in entity_names:
                     break
         else:
             raise ReconcileError(f"unresolved $ref in overlay: {ref}")

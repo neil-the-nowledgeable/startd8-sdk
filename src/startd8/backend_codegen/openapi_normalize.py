@@ -17,8 +17,7 @@ import yaml
 
 from ..schema_contract.prisma_json_schema import model_names
 from ..languages.prisma_parser import parse_prisma_schema
-from .api_overlay_manifest import normalize_overlay_path
-from .openapi_contract_renderer import _project_openapi
+from .api_overlay_manifest import normalize_overlay_path, rewrite_overlay_path_keys
 
 _HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
 _DTO_SUFFIXES = ("Create", "Read", "Update")
@@ -43,15 +42,22 @@ def load_openapi_document(path: Path) -> Dict[str, Any]:
     """Load an OpenAPI 3.0 JSON or YAML document from *path*."""
     text = path.read_text(encoding="utf-8")
     suffix = path.suffix.lower()
-    if suffix == ".json":
-        data = json.loads(text)
-    elif suffix in {".yaml", ".yml"}:
-        data = yaml.safe_load(text)
-    else:
-        try:
+    try:
+        if suffix == ".json":
             data = json.loads(text)
-        except json.JSONDecodeError:
+        elif suffix in {".yaml", ".yml"}:
             data = yaml.safe_load(text)
+        else:
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                data = yaml.safe_load(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{path}: invalid YAML: {exc}") from exc
+    if data is None:
+        raise ValueError(f"{path}: OpenAPI document is empty")
     if not isinstance(data, dict):
         raise ValueError(f"{path}: OpenAPI document must be a mapping")
     openapi = data.get("openapi", "")
@@ -61,8 +67,9 @@ def load_openapi_document(path: Path) -> Dict[str, Any]:
 
 
 def _prisma_dto_names(schema_text: str) -> Set[str]:
+    schema = parse_prisma_schema(schema_text)
     names: Set[str] = set()
-    for entity in model_names(parse_prisma_schema(schema_text), schema_text):
+    for entity in model_names(schema, schema_text):
         names.update(f"{entity}{suffix}" for suffix in _DTO_SUFFIXES)
     return names
 
@@ -104,31 +111,14 @@ def _strip_path_item(path_item: Dict[str, Any]) -> Dict[str, Any]:
 def _normalize_paths(
     paths: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], List[str]]:
-    """Rewrite path keys via :func:`normalize_overlay_path`; warn on slash duplicates."""
-    warnings: List[str] = []
-    normalized: Dict[str, Any] = {}
-    seen_canonical: Dict[str, str] = {}
-
-    for raw_path, path_item in paths.items():
-        if not isinstance(path_item, dict):
-            continue
-        norm_path = normalize_overlay_path(raw_path)
-        if norm_path in seen_canonical and seen_canonical[norm_path] != raw_path:
-            warnings.append(
-                f"trailing-slash duplicate: {raw_path!r} and {seen_canonical[norm_path]!r} "
-                f"both normalize to {norm_path!r}"
-            )
-        seen_canonical.setdefault(norm_path, raw_path)
-        if norm_path in normalized and raw_path != norm_path:
-            warnings.append(
-                f"trailing-slash duplicate: {raw_path!r} collides with existing {norm_path!r}"
-            )
-            continue
-        normalized[norm_path] = _strip_path_item(path_item)
-    return normalized, warnings
+    """Rewrite path keys (warn-only duplicates) and strip framework noise per path item."""
+    rewritten, warnings = rewrite_overlay_path_keys(paths, on_duplicate="warn")
+    return {path: _strip_path_item(item) for path, item in rewritten.items()}, warnings
 
 
 def _base_spec_from_schema(schema_text: str) -> Dict[str, Any]:
+    from .openapi_contract_renderer import _project_openapi
+
     _, spec = _project_openapi(schema_text)
     return spec
 

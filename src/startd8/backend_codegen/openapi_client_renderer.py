@@ -50,15 +50,14 @@ def _op_json_ref(op: Dict[str, Any], *, response: bool) -> Optional[str]:
         responses = op.get("responses", {})
         if isinstance(responses, dict):
             for code in ("200", "201"):
-                content = (
-                    responses.get(code, {})
-                    .get("content", {})
-                    .get("application/json", {})
-                )
+                body = responses.get(code) or responses.get(int(code))  # type: ignore[arg-type]
+                if not isinstance(body, dict):
+                    continue
+                content = body.get("content", {}).get("application/json", {})
                 ref = _ref_name(content.get("schema", {}).get("$ref"))
                 if ref:
                     return ref
-            for code, response_body in sorted(responses.items()):
+            for code, response_body in sorted(responses.items(), key=lambda kv: str(kv[0])):
                 if not str(code).startswith("2") or not isinstance(response_body, dict):
                     continue
                 content = response_body.get("content", {}).get("application/json", {})
@@ -67,6 +66,8 @@ def _op_json_ref(op: Dict[str, Any], *, response: bool) -> Optional[str]:
                     return ref
         return None
     body = op.get("requestBody", {})
+    if not isinstance(body, dict):
+        return None
     content = body.get("content", {}).get("application/json", {})
     return _ref_name(content.get("schema", {}).get("$ref"))
 
@@ -91,7 +92,10 @@ def _path_param_py_types(
             if not isinstance(name, str) or name not in types:
                 continue
             schema = param.get("schema") if isinstance(param.get("schema"), dict) else {}
-            if schema.get("type") == "integer":
+            if schema.get("type") == "integer" or schema.get("format") in {
+                "int32",
+                "int64",
+            }:
                 types[name] = "int"
     return types
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import json
 import typer
 import yaml
 from rich.console import Console
@@ -55,7 +56,7 @@ def normalize(
     """Strip framework noise from external OpenAPI → ``api.yaml`` overlay subset (FR-D1)."""
     try:
         spec = load_openapi_document(input_path)
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
         console.print(f"[red]error[/red]: {exc}")
         raise typer.Exit(_EXIT_ERROR) from exc
 

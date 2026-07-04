@@ -136,3 +136,10 @@ def test_load_openapi_document_json(tmp_path: Path) -> None:
     path.write_text(json.dumps({"openapi": "3.0.3", "paths": {}}), encoding="utf-8")
     spec = load_openapi_document(path)
     assert spec["openapi"] == "3.0.3"
+
+
+def test_load_openapi_document_rejects_empty_yaml(tmp_path: Path) -> None:
+    path = tmp_path / "spec.yaml"
+    path.write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="empty"):
+        load_openapi_document(path)
