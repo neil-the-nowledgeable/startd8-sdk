@@ -262,3 +262,184 @@ promote-then-harden), 6 OQs resolved, 2 new (cloud-write, promotion scope). The
 consolidation survives — but "net-reduce modules" was the wrong headline; the real
 win is one entry point / one vocabulary / one write path, and the detection signal I
 assumed (SDK deployment-mode self-awareness) does not exist.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R3 — claude-fable-5 — 2026-07-04
+
+- **Reviewer**: claude-fable-5
+- **Date**: 2026-07-04 21:05:00 UTC
+- **Scope**: Third-pass review (F-prefix). R1 covered routing edges, promotion equivalence, cloud cost/abuse, version drift, ratification; R2 covered operationalization/testability. R3 lens: **cross-document consistency** (parent v0.17 as amended by its own CRP, the KICKOFF_PANEL_* siblings, and the code the doc cites), **identifier hygiene**, and **empirical verifiability of the consolidation claims**. All load-bearing numbers were re-verified against the worktree (24 modules on disk in `kickoff_experience/`; `run_kickoff_panel.py` = 438 LOC; 23 command registrations across the three groups; `concierge`/`panel` registered at `cli.py:1259-1260`). Settled items (focus §SETTLED 1–6) not relitigated.
+
+##### Sponsor focus asks (R3 deltas only — R1's full ask answers stand)
+
+**Ask 1 — Consolidation soundness (FR-GE-5/6/7).**
+- **Summary answer:** Partial — the merge targets are real (verified on disk), but the "one entry point / one vocabulary" metric silently omits the **MCP surface**, and the gap table still carries stale v0.1 text that contradicts the doc's own planning discoveries.
+- **Rationale:** The parent's FR-10 was amended by its own CRP (parent Appendix A, R1-F2) to require the alias window to cover **both** CLI names **and** the MCP `ConciergeInput.action` enum; the `startd8_concierge` MCP tool is a live vocabulary surface (`concierge/__init__.py:8`), yet FR-GE-7's metric counts only CLI groups/verbs.
+- **Assumptions / conditions:** The MCP tool remains shipped in v-next.
+- **Suggested improvements:** R3-F3 (stale gap-table rows), R3-F5 (extend the metric's surface enumeration).
+
+**Ask 2 — FR-GE-11a facilitation promotion.**
+- **Summary answer:** One binding interface is unstated: the promoted module must preserve the **transcript contract** the sibling observability-UX doc consumes, or FR-UX-1/FR-UX-17 break the moment persistence is re-routed. See R3-F4.
+
+**Ask 3 — Routing (FR-GE-3/4).**
+- **Summary answer:** The "reused **verbatim**" claim is empirically unsound for a tri-state preference — the cited ladder resolves *non-empty agent-spec strings* and **skips falsy/unusable layers** (`_usable()`), so verbatim reuse turns an explicit force-**off** into fall-through to a lower layer. This is a concrete defect in FR-GE-4's "explicit override always wins," not just the copy-dependency R2-F3 named. See R3-F2.
+
+**Ask 4 — Safe-write (FR-GE-13/14).**
+- **Summary answer:** Sound as amended by R1-F6; R3 adds only that the floor's **atomicity granularity** (per-round vs end-of-session) is load-bearing for the sibling doc's live-follow (folded into R3-F4; plan-side R3-S1).
+
+**Ask 5 — Cloud read-only (FR-GE-8).**
+- **Summary answer:** Coherent as a deferral; nothing beyond R1-F8/R2-F5, both endorsed below. No new suggestion.
+
+**Ask 6 — Requirements↔plan / parent contradictions.**
+- **Summary answer:** Two new cross-doc defects: **un-namespaced parent review-ID citations** in FR-GE-11/12/13 now collide with this doc's own Appendix C IDs (R3-F1 — note this very round mints an `R3-F4` that collides with the `R3-F4` cited in FR-GE-13), and the plan re-imports the **module-count metric** the requirements explicitly retired (plan-side R3-S4).
+
+##### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R3-F1 | Data | high | Namespace the cross-document review-ID citations: FR-GE-11 "(R1-F6)", FR-GE-12 "(R2-F7)", and FR-GE-13 "(FR-7 / R3-F4)" cite the **parent** doc's CRP round IDs (parent Appendix A rows R1-F6/R2-F7/R3-F4), but this doc's own Appendix C now contains a *different* R1-F6 (config writes) and R2-F7 (vocabulary scope) — and this round mints a third colliding `R3-F4`. Rewrite as `parent-CRP R1-F6` / `PS-R1-F6` (pick one convention) at all three sites. | Un-namespaced IDs are ambiguous provenance: a triager resolving "(R1-F6)" inside this doc will land on the *wrong* suggestion. The collision is not hypothetical — all three cited IDs now have same-named counterparts in this doc's own review log. | §2 FR-GE-11, FR-GE-12, FR-GE-13 provenance parentheticals | Grep: every `R{n}-[SF]{k}` citation in the doc body resolves unambiguously to exactly one appendix (this doc's or an explicitly named external doc's). |
+| R3-F2 | Interfaces | high | FR-GE-3/FR-GE-4: drop "reused **verbatim**" and specify **tri-state semantics per layer** (force-on / force-off / unset). The cited ladder (`concierge_agent.py:59-75`) resolves a *non-empty string* and its `_usable()` guard **skips falsy layers** — verbatim reuse of that shape makes an explicit `guided: false` in `build-preferences.yaml` fall through to a global `guided: true`, violating FR-GE-4. Each layer must distinguish "explicitly off" from "unset", and explicit-off at a higher layer must terminate resolution. | The existing ladder answers "which model spec?" (never falsy); the guided preference answers "on/off/unset" (falsy is meaningful). Same precedence *shape*, incompatible value domain — the strongest word in the requirement ("verbatim") is exactly the part that cannot be true. Extends R2-F3 (semantic contract) with a concrete, testable fall-through defect. | §2 FR-GE-3 precedence clause + FR-GE-4 | Contract test: project-level `guided: false` + global `guided: true` ⇒ no offer; `--no-guided` + project `guided: true` ⇒ no offer. Both must pass without importing `concierge_agent.py`. |
+| R3-F3 | Architecture | medium | Fix the stale v0.1 rows in the §1 gap table: row 6 says "Deployment-mode capability **exists**" — directly contradicting §0 planning row 1 ("It **does not exist**") and FR-GE-8's own note; row 5 says routing is on "deployment/**agent**/project signals" — contradicting FR-GE-3's re-keyed preference>surface>shape with agent-presence *never* a signal. (Also reconcile the §0.1 line-ref `cli.py:1260-1262` with the verified `1258-1260`.) | The gap table is the first thing an implementer reads after the problem statement; two of its six rows assert the exact claims the planning pass falsified. Neither R1 nor R2 caught the internal contradiction. | §1 Gap table, rows 5–6; §0.1 phantom-audit bullet | Doc lint: no body sentence asserts a deployment-mode/agent-detection capability; grep "capability exists" and "agent" in §1 against §0 D1. |
+| R3-F4 | Interfaces | medium | FR-GE-11/11a: state that the promoted module's transcript persistence **preserves the transcript contract** the observability UX consumes — path convention (`.startd8/kickoff-panel/<session_id>.json`, FR-UX-1), schema (`KICKOFF_PANEL_FACILITATION_DESIGN.md` §6), and **round-by-round incremental write cadence** (FR-UX-17 live-follow polls-and-diffs the file as rounds land) — or explicitly version the contract and update the UX doc in the same change. | FR-GE-11 references the UX doc for *rendering*, but the re-route through the safe-write floor (FR-GE-11a/13) can silently change path, atomicity granularity, or write cadence; an end-of-session atomic write would kill FR-UX-17 live-follow even though every stated requirement here still passes. Cross-doc interface, unowned by either doc. | §2 FR-GE-11 (contract clause) + FR-GE-11a | Test: during a promoted-module run, the transcript file exists at the contract path and gains rounds incrementally; the UX viewer's FR-UX-3/FR-UX-17 fixtures pass against floor-written output. |
+| R3-F5 | Architecture | medium | FR-GE-7: enumerate the **surfaces the metric covers** — CLI groups/verbs, the MCP `startd8_concierge` action enum, TUI, and the served UI — and state the retirement/alias story for the MCP action vocabulary (parent FR-10 *as amended* requires the alias window to cover the MCP action enum, not just CLI names). If MCP is deliberately out of scope for v-next, say so with rationale. | "One entry point / one vocabulary" measured only at the CLI leaves a second live vocabulary (MCP actions named after the retired metaphors) that the metric cannot see; the parent already learned this lesson (parent Appendix A, R1-F2). | §2 FR-GE-7, after the "honest success metric" sentence | Audit: the five retired metaphor names appear in no user-facing vocabulary across CLI help, MCP tool/action names+descriptions, TUI labels, and served-UI text at the M1/M2 exit gate. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R2-F1: the tension tagging schema is the only way FR-GE-12's test escapes prose-matching; strongly endorse.
+- R2-F3: correct that the ladder needs a semantic contract — R3-F2 extends it with the falsy-fall-through defect that makes the contract urgent.
+- R2-F5: the cloud download format question is real; note it should resolve to "byte-identical to the local safe-write output" to keep FR-GE-2's same-input guarantee.
+- R1-F9: version drift; still unfixed as of this round (header v0.3, footer narrates v0.2, plan Tracks v0.2).
+- R1-F11: the engaged-then-disengaged residue case is the SOTTO test that matters.
+
+---
+
+#### Review Round R2 — claude-sonnet-4-6 — 2026-07-04
+
+- **Reviewer**: claude-sonnet-4-6
+- **Date**: 2026-07-04 18:30:00 UTC
+- **Scope**: Second-pass requirements review (F-prefix); focused on operationalization gaps, acceptance-criterion completeness, and cross-cutting issues R1 missed. R1 covered routing edges, safe-write coverage, cloud cost/abuse, version drift, and FR-GE-14 ratification well. R2 lens: what makes the stated requirements untestable or ambiguous once implementation begins.
+
+##### Executive summary
+
+- FR-GE-12's anti-smoothing test is currently untestable: "named tensions" has no naming/tagging schema; prose-match cannot distinguish a preserved tension from one paraphrased away.
+- FR-GE-6's "no new engine" invariant has no enforcement mechanism stated in the requirements.
+- FR-GE-3's "reused verbatim" routing ladder is a hidden copy dependency; the requirement should pin the semantics, not the source reference.
+- FR-GE-5's "Deepen is optional" has no stated early-exit / skip guarantee for a user who enters Deepen then abandons.
+- FR-GE-8's cloud "download-and-write-locally" path is underspecified: what format are downloaded inputs, and how does local write honor FR-GE-13 when the SDK is not the writer?
+- H3 cost tracking in FR-GE-10 is asserted but the scope (per-round, session total, budget gate behavior on exceed) is not bounded.
+
+##### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F1 | Validation | high | FR-GE-12: add a **tension naming/tagging schema** requirement — the anti-smoothing test ("named raw-round tensions must be present in the synthesis") requires a machine-checkable tag or structured field in the raw-round output so the assertion is not prose-matching. Without it, the test cannot distinguish a tension preserved from one paraphrased away. | "Named raw-round tensions" implies each tension has an identity that survives into the synthesis; without a schema, the test is subjective and will not pass CI. | §2 FR-GE-12, add an acceptance-criteria clause | Test: a facilitation run with a tagged tension (`tension_id: T1`) produces a synthesis where `T1` appears as an explicit open item, not resolved; CI asserts this structurally, not by prose search. |
+| R2-F2 | Architecture | high | FR-GE-6 ("no new extractor/generator/writer/readiness computation"): add a **CI-enforceable criterion** — a static check that no new class or function matching the prohibited patterns is introduced in the guided layer. The anti-principle is currently an assertion, not a constraint. | FR-GE-6 is the key anti-sprawl backstop for the kernel; "no new engine" stated without enforcement is a soft intention, not a hard requirement. The M2 detangle is the riskiest window for accidental introduction. | §2 FR-GE-6, add an enforcement clause | CI gate: a AST/grep check on the guided-layer modules fails if a new extractor/generator/writer/readiness pattern appears; the check is part of the M2 exit gate. |
+| R2-F3 | Interfaces | medium | FR-GE-3: replace "reused verbatim from `concierge_agent.py:59-75`" with a **semantic contract** for the routing ladder (enumerate the four levels: explicit-flag > project-config > global-config > default-quiet; enumerate what each level means for the offer decision). The source reference is a copy dependency, not a specification. | If `concierge_agent.py` changes, FR-GE-3 changes silently. The routing logic is a user-visible guarantee; it should be expressed as a requirement, with the current implementation as the reference, not the definition. | §2 FR-GE-3, precedence list | Test: the four-level ladder semantics are verified by a contract test that does not import `concierge_agent.py`; the test is owned by the guided-experience routing seam. |
+| R2-F4 | Interfaces | medium | FR-GE-5: add an explicit **"Deepen skip / early-exit" guarantee** — a user who enters the Deepen phase and abandons before completion exits cleanly with Guide-phase outputs intact, no partial transcript committed, and no kernel-visible residue. | FR-GE-5 marks Deepen as optional but does not address the mid-flow abandonment case; FR-GE-1 (byte-identical) and FR-GE-13 (atomic writes) imply this, but the implication is not stated, leaving implementers without a clear contract for the error/cancel path. | §2 FR-GE-5 'Deepen (optional)' clause | Test: a Deepen session interrupted (user Ctrl-C or explicit skip) leaves Guide outputs unchanged and the safe-write store in a clean state; kernel outputs after abort are byte-identical to Guide-only run. |
+| R2-F5 | Data | medium | FR-GE-8: specify the **cloud "download" artifact format** — what does a cloud user download when they "download produced inputs and write locally"? The requirement must state the format (e.g. the same YAML/JSON files the local safe-write floor would produce) so the local write path is unambiguous. | "Human downloads produced inputs, writes locally" presupposes a download format; if it is not the same files as the local write path, a user cannot feed them to the kernel without conversion, violating the "same input a BYO-agent user would author" guarantee in FR-GE-2. | §2 FR-GE-8 'cloud deployment' clause | Test: a file downloaded from the cloud Deepen-view, written to the local `.startd8/` directory, passes kernel `assess` with the same result as a locally produced file. |
+| R2-F6 | Validation | medium | FR-GE-10 H3: scope the cost-tracking requirement — state what "wired end-to-end" means: (a) per-round cost is logged, (b) session total is surfaced in the Deepen output, (c) a configured budget cap halts the session (vs. warns vs. is advisory-only), and (d) the budget gate is checked before each LLM call, not after. | H3 is currently "real per-call spend, budget-gated" — this does not specify what "gated" means (hard halt? warning? advisory?) or at what granularity cost is tracked and surfaced. Implementers will produce different interpretations. | §2 FR-GE-10 H3 bullet | Test: (a) a session with budget cap N is halted before call K+1 when cumulative cost exceeds N; (b) the session transcript includes per-round and total cost; (c) the halt is hard (no LLM call is made after cap breach). |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F7 | Risks | low | FR-GE-7: the "five metaphor names retired from user-facing vocabulary" claim needs an explicit scope boundary — does it cover only CLI help text and documentation, or also internal module names, log output, and error messages? Internal vocabulary leaks become user-visible in stack traces, `--verbose` output, and error messages. | 'User-facing vocabulary' is undefined; if it means only `--help` and docs, the old names survive in logs and errors and will re-emerge as a second vocabulary in practice. | §2 FR-GE-7 | Acceptance: a vocabulary audit enumerates each of the five old names; the audit passes only if none appear in CLI output (including errors, verbose, tracebacks) at the M1/M2 exit gate. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R1-F2: Behavioral-equivalence requirement for FR-GE-11a is the single most important acceptance criterion missing from the requirements; strongly endorse.
+- R1-F3: FR-GE-11a blocked-on OQ-GE-8 is correct — the requirement as written depends on an unresolved design question; endorse.
+- R1-F7: Scoping H2 halt to Deepen phase only is essential to avoid contradiction with FR-GE-3's no-gate guarantee; endorse.
+- R1-F8: Cloud Deepen LLM spend under a static API key is a real security/cost gap; endorse adding a cost/abuse OQ parallel to OQ-GE-7.
+- R1-F10: FR-GE-14 provenance-marking + ratification-state acceptance criterion is well-specified; endorse.
+- R1-F11: SOTTO residue test (engaged-then-disengaged) is the dangerous case for FR-GE-1; endorse.
+
+---
+
+#### Review Round R1 — claude-opus-4-8 — 2026-07-04
+
+- **Reviewer**: claude-opus-4-8
+- **Date**: 2026-07-04 17:40:00 UTC
+- **Scope**: Independent architectural review of the requirements doc (F-prefix). Weighted per the sponsor focus file: consolidation soundness, FR-GE-11a facilitation promotion, routing/offer-not-force edges, safe-write coverage, cloud read-only scoping, and requirements↔plan / parent-v0.17 consistency. Settled items (§SETTLED 1–6 in the focus file) were NOT relitigated.
+
+##### Sponsor focus asks (addressed first)
+
+**Ask 1 — Consolidation soundness (FR-GE-5/6/7): does the detangle genuinely reduce sprawl, or risk re-accreting it?**
+- **Summary answer:** Partial — the *surface/vocabulary/write-path* reduction is real and defensible, but the requirement under-specifies the "one write path" leg and leaves a re-accretion vector open (nothing forbids a future capability from re-adding a top-level CLI group).
+- **Rationale:** FR-GE-7 credibly reduces 3 groups→1 and 5 names→1 (verified against the plan's M1/M2 merge targets). But "one write path (→1 via the safe-write floor)" is asserted as a metric without an *enforcement* clause — FR-GE-13 requires writes to ride the floor, yet nothing in the requirements makes a *new* write path a spec violation. The un-packaged script that bypasses the floor (planning row 3) is exactly how the "one write path" invariant eroded the first time; without a gate it can erode again.
+- **Assumptions / conditions:** The M2 merges (concierge-UI quartet, three "what's next" projections, three chat constructors) are real and land as planned.
+- **Suggested improvements:** Add a *conformance* clause to FR-GE-7/FR-GE-13 (see R1-F1) making "any write not through the safe-write floor" and "any new top-level CLI group in the kickoff domain" testable violations, so the metric is enforced, not just declared.
+
+**Ask 2 — FR-GE-11a facilitation promotion (biggest lift): fully specified? Ordering/hardening gaps?**
+- **Summary answer:** No — the promotion is specified as intent but not as an *acceptance-testable* contract; two ordering hazards and one behavior-parity gap are unaddressed.
+- **Rationale:** FR-GE-11a says "promote before harden" and "route persistence through the floor," but (a) does not require **behavioral equivalence** between the promoted module and the current script (a promotion that silently changes rounds/synthesis is a regression no criterion catches); (b) OQ-GE-8 (does it need an abstraction above `StakeholderPanel.ask_all`?) is *open* yet FR-GE-11a is stated as buildable — the requirement depends on an unresolved OQ; (c) H2 "assumptions-as-gate" halts the flow, which collides with FR-GE-3's "never a gate" offer guarantee for the *guided* flow unless the gate is scoped strictly to the Deepen phase.
+- **Assumptions / conditions:** `stakeholder_panel/facilitation.py` is confirmed absent (stated in §0.1) and `run_kickoff_panel.py` is the sole source of the process.
+- **Suggested improvements:** See R1-F2 (behavioral-equivalence acceptance criterion + golden transcript), R1-F3 (make FR-GE-11a explicitly blocked-on OQ-GE-8 with a decision date), and R1-F7 (scope H2's halt to Deepen so it never contradicts FR-GE-3's no-gate guarantee).
+
+**Ask 3 — Routing / offer-not-force (FR-GE-3/4) edge cases.**
+- **Summary answer:** Partial — the precedence ladder is sound but two edges are unspecified: (i) a served surface *driven by an agent*, and (ii) non-interactive/CI where "one ignorable line" has no human to ignore it.
+- **Rationale:** FR-GE-3 maps "served ⇒ offer" on the premise that served implies no-agent, but the focus file itself notes a served surface can be agent-driven; the requirement resolves this only via the (2) surface heuristic, which would wrongly offer. And "a wrong offer is one ignorable line, never a gate" is a human-facing guarantee that is undefined for non-interactive/CI/piped stdout invocations.
+- **Assumptions / conditions:** Agent-presence remains preference-only (SETTLED-2, not relitigated).
+- **Suggested improvements:** R1-F4 (define behavior when `stdout`/`stdin` is non-interactive: suppress the offer, never block); R1-F5 (state that the served-⇒-offer heuristic is *overridable* by an agent-set `--no-guided`/config, and that a served-agent context is expected to set it).
+
+**Ask 4 — Safe-write + safety (FR-GE-13/14).**
+- **Summary answer:** Mostly sound; one coverage gap — FR-GE-13 names "input files AND facilitation transcripts" but not the routing/preference writes (`build-preferences.yaml`, `~/.startd8/config.json`) the guided layer itself sets.
+- **Rationale:** FR-GE-3 has the guided layer *write* preference/config files to persist `--guided`. Those writes are not enumerated under FR-GE-13's "every byte the guided experience writes," creating an ambiguity about whether config writes must also ride the floor.
+- **Suggested improvements:** R1-F6 (enumerate config/preference writes explicitly under FR-GE-13, or explicitly exempt them with rationale).
+
+**Ask 5 — Cloud read-only (FR-GE-8) + OQ-GE-7: is "download-and-write-locally" coherent?**
+- **Summary answer:** Coherent as a deferral, but the *read* scope is under-bounded — "read/preview-only" cloud still serves whatever the Deepen panel produces, and Deepen can invoke an LLM with real per-call spend (FR-GE-10 H3) on a multi-tenant cloud with only a static API key.
+- **Rationale:** FR-GE-8 blocks cloud-*write* but permits "Deepen-view" on cloud; FR-GE-10 H3 says the panel does real budget-gated LLM spend. On cloud with only `server/auth.py`'s static `X-API-Key` (no principal/tenancy), a read-only surface that triggers paid LLM calls is an un-metered-per-tenant cost/abuse surface, distinct from the write-trust problem OQ-GE-7 defers.
+- **Suggested improvements:** R1-F8 (clarify whether cloud read-only permits *LLM-invoking* Deepen or only static preview of already-produced transcripts; if the former, add a cost/abuse OQ parallel to OQ-GE-7).
+
+**Ask 6 — Requirements↔plan gaps / parent-v0.17 contradictions.**
+- **Summary answer:** One documentation-integrity defect (version drift) and one traceability gap (FR-GE-14 has no dedicated milestone).
+- **Rationale:** The requirements header is **v0.3** but its own footer, the parent-ref line, and the plan's `Tracks:` line all say **v0.2** — a reviewer cannot tell which is authoritative (see R1-F9). Separately, FR-GE-14 (never authors/decides) is mapped to "all" milestones in the plan but has no acceptance test anywhere, making the safety invariant unverifiable.
+- **Suggested improvements:** R1-F9 (reconcile version to v0.3 everywhere), R1-F10 (add a provenance-marking + human-ratification acceptance criterion to FR-GE-14).
+
+##### Numbered suggestions (F-prefix)
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Architecture | high | Add an anti-re-accretion conformance clause to FR-GE-7: "It is a spec violation to introduce a new top-level CLI group in the kickoff domain, or a second user-facing vocabulary for these functions, after M1." | The 'one entry point / one vocabulary' metric is declared but not defended; without a testable prohibition the sprawl re-accretes exactly as it did before. | §2 FR-GE-7, after the 'honest success metric' sentence | Static check / test: assert `startd8 --help` exposes exactly one kickoff-domain group post-M1; CI lint fails on a new group registration. |
+| R1-F2 | Validation | high | FR-GE-11a must require **behavioral equivalence** between the promoted `facilitation.py` and the current `run_kickoff_panel.py`: capture a golden transcript (fixed seed/personas) from the script and assert the promoted module reproduces round structure and named tensions. | 'Promote before harden' has no criterion that the promotion preserved behavior; a silent regression in rounds/synthesis would pass every stated check. | §2 FR-GE-11a, add an acceptance-criteria bullet | Golden-file test: run script vs promoted module on a fixed fixture; diff round count, persona outputs, and FR-GE-12 tensions. |
+| R1-F3 | Risks | high | State FR-GE-11a as **blocked on OQ-GE-8** and give OQ-GE-8 a resolution owner/date; a requirement whose build shape depends on an open question is not yet buildable. | FR-GE-11a asserts the promotion target (`facilitation.py` over `StakeholderPanel`) while OQ-GE-8 openly asks whether that very abstraction is sufficient. The dependency is circular as written. | §2 FR-GE-11a and §4 OQ-GE-8 | Traceability check: FR-GE-11a's 'Depends-on' names OQ-GE-8; plan M3 does not start until OQ-GE-8 is RESOLVED. |
+| R1-F4 | Interfaces | medium | FR-GE-3: specify offer behavior when the invocation is **non-interactive** (piped stdout, no TTY, CI): the offer line is *suppressed*, never blocking, and `--guided` in non-interactive mode runs without the offer prose. | 'One ignorable line, never a gate' is a human guarantee undefined for CI/pipes, where an emitted offer line becomes noise or (worse) a prompt with no responder. | §2 FR-GE-3, add a non-interactive clause | Test: run kickoff with stdin closed / stdout piped; assert no offer prose, exit unchanged, kernel bytes identical. |
+| R1-F5 | Interfaces | medium | FR-GE-3: make the 'served ⇒ offer' heuristic explicitly **overridable** and document the expected agent-driven-served contract (an agent serving the UI sets `--no-guided`/config to suppress). | The focus file flags that served can be agent-driven; as written, surface-heuristic (2) wrongly offers to an agent. Precedence already lets preference win — the requirement should say so for this case. | §2 FR-GE-3, in the 'surface' clause | Test: served invocation with `--no-guided` (or config) yields no offer; precedence table documents agent-served as preference-suppressed. |
+| R1-F6 | Data | medium | FR-GE-13: enumerate the guided layer's **own config/preference writes** (`build-preferences.yaml`, `~/.startd8/config.json` from FR-GE-3) — either route them through the safe-write floor or explicitly exempt them with rationale. | FR-GE-13 says 'every byte the guided experience writes' rides the floor, but the routing feature writes config files not covered by 'inputs AND transcripts'; ambiguous whether the floor applies. | §2 FR-GE-13 | Test: assert preference/config writes use the safe-write API (or a documented exemption exists and is tested for traversal safety). |
+| R1-F7 | Risks | medium | FR-GE-10 H2 (assumptions-as-gate halts the flow) must be **scoped to the Deepen phase only**, so it never contradicts FR-GE-3's 'never a gate' offer guarantee for Orient/Guide. | H2 introduces a halt; FR-GE-3 guarantees the *offer* is never a gate. Without scoping, a reviewer cannot tell whether a halted assumptions-check violates the no-gate invariant. | §2 FR-GE-10, H2 clause | Test: Orient/Guide never halt on assumptions; only an explicitly-entered Deepen pass can halt, and only after the human opted in. |
+| R1-F8 | Security | high | FR-GE-8: disambiguate whether cloud 'read/preview-only' permits **LLM-invoking Deepen** (real per-call spend under FR-GE-10 H3) or only static preview of already-produced transcripts. If the former, add a per-tenant cost/abuse OQ parallel to OQ-GE-7. | Cloud has only a static API key (no principal/tenancy). A read-only surface that triggers paid LLM calls is an un-metered abuse/cost surface distinct from the write-trust deferral. | §2 FR-GE-8, 'Deepen-view' clause; §4 new OQ | Test: on cloud, Deepen either (a) serves only persisted transcripts (no LLM call), or (b) is gated by a documented per-tenant budget/auth control. |
+| R1-F9 | Architecture | medium | Reconcile the version: header says **v0.3**, but the footer, the parent-ref line ('tracks v0.2'), and the plan's `Tracks:` line say **v0.2**. Pick one (presumably v0.3) and update all four sites. | Version drift makes it impossible to tell which requirement set the plan tracks; the plan claims to track v0.2 while the doc is v0.3. | Header (line 3), footer (line 258+), plan `Tracks:` line | Grep for 'v0.2'/'v0.3' across both docs; assert a single authoritative version. |
+| R1-F10 | Validation | medium | FR-GE-14 needs an acceptance criterion: every synthetic output carries a machine-checkable **provenance marker** and a **ratification state** (unratified by default), and the kernel refuses to consume an unratified synthetic input without explicit human confirmation. | 'Never authors or decides / human ratifies' is currently an unverifiable assertion; provenance-marked is stated but not testable. | §2 FR-GE-14 | Test: a synthetic input written by the guided layer is tagged unratified; feeding it to the kernel without ratification is refused or warned. |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F11 | Risks | medium | FR-GE-1 (byte-identical-when-absent / SOTTO): add a criterion that engaging *then disengaging* the guided layer (e.g. running guided once, then `--no-guided`) leaves the kernel outputs byte-identical to never having engaged it — not just 'absent from the start'. | 'Leaves no trace when subsequently absent' is asserted but the test only obviously covers never-engaged. The dangerous case is residue (config, cached transcripts, preference files) from a prior guided run that perturbs a later kernel-only run. | §2 FR-GE-1 | Golden test: kernel-only run A; guided-then-kernel-only run B; assert A and B kernel outputs are byte-identical. |
+| R1-F12 | Interfaces | low | FR-GE-9 (surface parity) should define what 'parity' means when a surface *cannot* render a phase (e.g. served UI cannot run an interactive TTY wizard step) — parity of *outcome/inputs produced*, not of interaction modality. | 'Differing only in rendering' is too strong: some phases are modality-bound. Without scoping, the parity test is either impossible or vacuous. | §2 FR-GE-9 | Test asserts the same produced inputs/artifacts across surfaces, not identical interaction steps. |
