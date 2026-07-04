@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-Model Consultation — User Guide</title>
+<!-- Self-contained, offline. Matches the consultation web view's "signal-lab" aesthetic. -->
+<style>
+:root{
+  --ink:#100e0c; --ink-2:#171411; --ink-3:#1f1b17; --line:#332c24; --line-2:#241f1a;
+  --paper:#efe7db; --paper-dim:#b8ab97; --paper-faint:#7d7161;
+  --amber:#e8a33d; --amber-deep:#b9781f; --ok:#7fce6b; --fail:#f0685f; --blue:#89a0b8;
+  --serif:"Iowan Old Style","Palatino Linotype","Charter",Georgia,Cambria,"Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Menlo","Cascadia Code","Consolas",monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--ink);color:var(--paper);font-family:var(--serif);font-size:17px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(1100px 520px at 10% -6%, rgba(232,163,61,.08), transparent 60%),
+    linear-gradient(var(--line-2) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-2) 1px, transparent 1px);
+  background-size:auto,44px 44px,44px 44px;background-position:0 0,-1px -1px,-1px -1px;}
+.wrap{max-width:900px;margin:0 auto;padding:44px clamp(18px,5vw,40px) 120px}
+
+.mast{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:8px}
+.kick{font-family:var(--mono);font-size:11px;letter-spacing:.34em;text-transform:uppercase;color:var(--amber)}
+h1{font-size:clamp(30px,5vw,46px);line-height:1.08;margin:.35em 0 .15em;font-weight:600;letter-spacing:-.01em}
+h1::first-letter{color:var(--amber)}
+.lede{font-size:19px;color:var(--paper-dim);max-width:60ch}
+.oneline{margin:22px 0 0;font-family:var(--mono);font-size:13px;color:var(--paper-dim);
+  border-left:2px solid var(--amber-deep);background:var(--ink-2);padding:12px 15px;border-radius:0 8px 8px 0}
+.oneline b{color:var(--amber);font-weight:600}
+
+h2{font-family:var(--mono);font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--amber);
+  margin:52px 0 4px;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:baseline;gap:12px}
+h2 .n{color:var(--paper-faint);font-size:12px}
+h3{font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--paper);margin:26px 0 6px}
+p{margin:12px 0}
+a{color:var(--amber);text-decoration:none;border-bottom:1px solid transparent}
+a:hover{border-bottom-color:var(--amber)}
+strong{color:#fff;font-weight:600}
+code{font-family:var(--mono);font-size:.84em;background:var(--ink);border:1px solid var(--line-2);
+  padding:1px 6px;border-radius:5px;color:var(--amber)}
+pre{background:var(--ink);border:1px solid var(--line);border-left:3px solid var(--amber-deep);
+  border-radius:8px;padding:15px 16px;overflow:auto;margin:16px 0}
+pre code{border:0;background:none;padding:0;color:var(--paper-dim);font-size:13px;line-height:1.7}
+pre code .c{color:var(--paper-faint)}  /* comments */
+pre code .k{color:var(--amber)}        /* the command keyword */
+
+table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
+th,td{border:1px solid var(--line-2);padding:9px 12px;text-align:left;vertical-align:top}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--paper-faint);
+  background:var(--ink-2)}
+td code{white-space:nowrap}
+ul{margin:12px 0;padding-left:22px}
+li{margin:6px 0}
+.callout{border:1px solid var(--line);background:var(--ink-2);border-radius:10px;padding:14px 16px;margin:18px 0}
+.callout.warn{border-color:rgba(240,104,95,.35)}
+.callout .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--amber);display:block;margin-bottom:6px}
+.callout.warn .lbl{color:var(--fail)}
+
+.toc{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px 22px;margin:26px 0 8px;
+  font-family:var(--mono);font-size:12.5px}
+.toc a{color:var(--paper-dim);border-bottom:0}
+.toc a:hover{color:var(--amber)}
+.toc .num{color:var(--paper-faint)}
+
+.pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:100px;
+  border:1px solid var(--line);color:var(--paper-dim);background:var(--ink-2);margin:2px 4px 2px 0}
+.foot{margin-top:60px;border-top:1px solid var(--line);padding-top:16px;font-family:var(--mono);
+  font-size:11px;color:var(--paper-faint);letter-spacing:.04em}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <div class="kick">startd8 sdk · capability guide</div>
+    <h1>Multi-Model Consultation</h1>
+    <p class="lede">Ask one question of several AI models at once, compare their answers side-by-side,
+    and follow up with the whole panel or a single model — from the terminal, an offline web view, or a
+    live interactive page.</p>
+    <div class="oneline">$ <b>startd8 consult run</b> --prompt "…" --image-dir ./photos
+      &nbsp;→&nbsp; every model answers in parallel &nbsp;→&nbsp; <b>startd8 consult web &lt;id&gt; --open</b></div>
+  </header>
+
+  <nav class="toc">
+    <a href="#what"><span class="num">01</span> What it does</a>
+    <a href="#setup"><span class="num">02</span> Setup</a>
+    <a href="#quick"><span class="num">03</span> Quick start</a>
+    <a href="#cli"><span class="num">04</span> The CLI</a>
+    <a href="#web"><span class="num">05</span> The web view</a>
+    <a href="#serve"><span class="num">06</span> Interactive serve mode</a>
+    <a href="#tui"><span class="num">07</span> The TUI</a>
+    <a href="#presets"><span class="num">08</span> Roster presets</a>
+    <a href="#cost"><span class="num">09</span> Cost</a>
+    <a href="#how"><span class="num">10</span> How it works</a>
+    <a href="#trouble"><span class="num">11</span> Troubleshooting</a>
+  </nav>
+
+  <h2 id="what"><span class="n">01</span> What it does</h2>
+  <ul>
+    <li><strong>Parallel fan-out</strong> — one prompt (and up to <strong>2 images</strong>) goes to N models at once.</li>
+    <li><strong>Side-by-side comparison</strong> — every answer is saved and shown together for you to judge.</li>
+    <li><strong>Follow-ups</strong> — reply to <strong>all</strong> models or <strong>one</strong>, with each
+      model's conversation remembered (real provider memory; prior images re-sent).</li>
+    <li><strong>Four surfaces</strong> over one core:
+      <span class="pill">TUI</span><span class="pill">CLI</span><span class="pill">offline HTML</span><span class="pill">interactive server</span></li>
+    <li><strong>Cost in dollars</strong>, per model and per session.</li>
+  </ul>
+  <p>The <strong>default roster</strong> ("the council") is a cross-vendor trio — one Anthropic, one OpenAI,
+  one Google model. Only vision-capable models are used when you attach images. It is <em>not</em> a
+  benchmark or an automated judge — you compare the answers yourself.</p>
+
+  <h2 id="setup"><span class="n">02</span> Setup</h2>
+  <h3>Keys</h3>
+  <p>Model calls need provider API keys in the environment. This project uses Doppler:</p>
+  <pre><code><span class="k">doppler</span> run -p startd8 -c dev -- startd8 consult run …</code></pre>
+  <p>(or export <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code> / <code>GOOGLE_API_KEY</code> yourself).</p>
+  <h3>Install</h3>
+  <p>With the SDK installed (<code>pip install -e .</code>) the command is just <code>startd8 consult …</code>.
+  Interactive serve mode also needs <code>pip install startd8[server]</code>.</p>
+  <div class="callout"><span class="lbl">Running from the feature worktree (pre-install)</span>
+    <pre style="margin:0"><code><span class="k">source</span> ~/Documents/dev/startd8-sdk/.venv/bin/activate
+<span class="k">export</span> PYTHONPATH=~/Documents/dev/startd8-consult/src
+<span class="k">alias</span> consult='python3 -m startd8.cli consult'</code></pre>
+    Then use <code>consult …</code> in place of <code>startd8 consult …</code>.</div>
+  <p>Sessions live under <code>.startd8/consultations/&lt;id&gt;/</code> relative to your
+  <strong>current directory</strong> — run <code>run</code>, then <code>show</code>/<code>web</code>/<code>cost</code>
+  from the same folder.</p>
+
+  <h2 id="quick"><span class="n">03</span> Quick start</h2>
+  <pre><code><span class="c"># 1) ask 3 models one question + two photos (parallel, ~a few cents)</span>
+<span class="k">doppler</span> run -p startd8 -c dev -- startd8 consult run \
+  --prompt "My front door won't open even when unlocked. Help me open it." \
+  --image-dir ./door-photos
+<span class="c"># → prints "session: 20260704T…"</span>
+
+<span class="c"># 2) compare the answers in a browser (free, offline)</span>
+<span class="k">startd8</span> consult web 20260704T… --open
+
+<span class="c"># 3) follow up with one model</span>
+<span class="k">doppler</span> run -p startd8 -c dev -- startd8 consult reply 20260704T… \
+  --to gemini:gemini-2.5-pro --prompt "The latch is seized — what tool do I need?"
+
+<span class="c"># 4) re-render to see the new turn</span>
+<span class="k">startd8</span> consult web 20260704T… --open</code></pre>
+
+  <h2 id="cli"><span class="n">04</span> The CLI</h2>
+  <table>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>run</code></td><td>Start a consultation (fan the prompt + images to the roster).</td></tr>
+    <tr><td><code>reply &lt;id&gt; --to all|&lt;model&gt;</code></td><td>Follow up, routed to all models or one.</td></tr>
+    <tr><td><code>show &lt;id&gt;</code></td><td>Side-by-side comparison in the terminal.</td></tr>
+    <tr><td><code>list</code></td><td>List saved session ids.</td></tr>
+    <tr><td><code>cost &lt;id&gt;</code></td><td>Per-model and total USD for a session.</td></tr>
+    <tr><td><code>web &lt;id&gt;</code></td><td>Generate the HTML view (add <code>--serve</code> for interactive).</td></tr>
+    <tr><td><code>roster list|save|delete</code></td><td>Manage saved roster presets.</td></tr>
+  </table>
+  <h3>run options</h3>
+  <table>
+    <tr><th>Option</th><th>Meaning</th></tr>
+    <tr><td><code>--prompt</code> / <code>--prompt-file</code></td><td>The prompt text, or read it from a file.</td></tr>
+    <tr><td><code>--image &lt;path&gt;</code> (≤2) <em>or</em> <code>--image-dir</code></td><td>Attach images (mutually exclusive). A folder auto-selects the first 2 valid images by name.</td></tr>
+    <tr><td><code>--models &lt;spec&gt;</code> (repeatable)</td><td>Roster, e.g. <code>--models anthropic:claude-opus-4-8</code>. Default = the council.</td></tr>
+    <tr><td><code>--preset &lt;name&gt;</code></td><td>Use a saved roster. Mutually exclusive with <code>--models</code>.</td></tr>
+    <tr><td><code>--save-preset &lt;name&gt;</code></td><td>Save the roster you used under a name.</td></tr>
+    <tr><td><code>--json</code></td><td>Print the raw session JSON.</td></tr>
+  </table>
+  <p>Images must be <strong>PNG/JPEG/WebP/GIF</strong>, ≤ 5 MB, single-frame (validated by content, not
+  extension). Non-vision models are skipped with a warning when images are attached. In <code>reply</code>,
+  each targeted model continues <strong>its own</strong> conversation; a follow-up to <code>all</code> fans
+  out in parallel.</p>
+
+  <h2 id="web"><span class="n">05</span> The web view</h2>
+  <pre><code><span class="k">startd8</span> consult web &lt;id&gt; [--out path.html] [--open]</code></pre>
+  <p>Generates a <strong>single self-contained, offline HTML file</strong> (default <code>view.html</code> in
+  the session dir). No server, no network — copy it anywhere and it still opens. You get:</p>
+  <ul>
+    <li><strong>All models side-by-side</strong>, each panel independently <strong>collapsible</strong>
+      (keyboard-operable), plus Collapse-all / Expand-all.</li>
+    <li>Each answer rendered as <strong>markdown</strong>, with per-turn badges:
+      <span class="pill" style="color:var(--ok);border-color:rgba(127,206,107,.35)">$cost</span> latency · in/out tokens.</li>
+    <li>A header with the prompt, roster, image indicators (filename + short hash), and timestamps.</li>
+    <li>An <strong>"Ask a follow-up"</strong> composer that builds the exact <code>consult reply</code> command
+      to copy-paste (the static page never runs anything).</li>
+  </ul>
+  <div class="callout"><span class="lbl">Safe by construction</span> Model output is untrusted, so it's
+  <strong>escaped before rendering</strong> — a <code>&lt;script&gt;</code> in an answer shows as inert text,
+  never executes.</div>
+
+  <h2 id="serve"><span class="n">06</span> Interactive serve mode</h2>
+  <p>Turn the read-only page into a live one — follow-ups <strong>Send from the page</strong>:</p>
+  <pre><code><span class="k">doppler</span> run -p startd8 -c dev -- startd8 consult web &lt;id&gt; --serve --open</code></pre>
+  <ul>
+    <li>Runs a <strong>loopback-only</strong> local server (<code>127.0.0.1</code>). Opens a browser URL with a
+      one-time token (auto-stripped from the address bar on load).</li>
+    <li>Type a follow-up, choose <strong>all</strong> or <strong>one</strong> model, click <strong>Send ▸</strong>
+      → the answer appears in place, with a fresh cost badge.</li>
+    <li><strong>Ctrl-C</strong> to stop; auto-shuts down after idle.</li>
+  </ul>
+  <table>
+    <tr><th>Option</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>--port</code></td><td>ephemeral</td><td>Loopback port.</td></tr>
+    <tr><td><code>--max-turns</code></td><td>20</td><td>Cap on follow-up turns (cost guard).</td></tr>
+    <tr><td><code>--max-calls</code></td><td>60</td><td>Hard ceiling on total model-calls.</td></tr>
+    <tr><td><code>--timeout</code></td><td>180</td><td>Per-follow-up timeout (seconds).</td></tr>
+    <tr><td><code>--idle-timeout</code></td><td>1800</td><td>Auto-shutdown after N idle seconds (<code>0</code> = off).</td></tr>
+  </table>
+  <div class="callout warn"><span class="lbl">Security, by design</span> Binds loopback only (never
+  <code>0.0.0.0</code>); requires the per-run token on every request (constant-time checked); enforces a
+  Host/Origin allowlist (blocks CSRF / DNS-rebinding); sets a strict Content-Security-Policy so a page-XSS
+  can't steal the token; rejects replayed requests; and caps spend. Missing server extras → it degrades to
+  the static file.</div>
+
+  <h2 id="tui"><span class="n">07</span> The TUI</h2>
+  <pre><code><span class="k">doppler</span> run -p startd8 -c dev -- startd8 tui
+<span class="c"># → choose "🗣️  Multi-Model Consultation"</span></code></pre>
+  <p>Menu-driven over the same engine: <strong>New</strong> consultation or <strong>Open a saved one</strong>
+  → prompt → image pick → vision-only roster → run under a spinner → comparison table → follow-up loop
+  (All / One / Retry failed / View / Done).</p>
+
+  <h2 id="presets"><span class="n">08</span> Roster presets</h2>
+  <p>Save a named "council" so you don't retype <code>--models</code>:</p>
+  <pre><code><span class="k">startd8</span> consult roster save myteam -m anthropic:claude-opus-4-8 -m openai:gpt-5.5 -m gemini:gemini-2.5-pro
+<span class="k">startd8</span> consult roster list
+<span class="k">startd8</span> consult run --prompt "…" --preset myteam
+<span class="k">startd8</span> consult roster delete myteam</code></pre>
+  <p>Presets live in <code>.startd8/consult-presets.json</code>. You can also save on the fly:
+  <code>consult run … --models … --save-preset myteam</code>.</p>
+
+  <h2 id="cost"><span class="n">09</span> Cost</h2>
+  <p>Every model call is priced in dollars from its token usage:</p>
+  <pre><code><span class="k">startd8</span> consult cost &lt;id&gt;
+<span class="c">#   anthropic:claude-opus-4-8        $0.0683</span>
+<span class="c">#   openai:gpt-5.5                   $0.0807</span>
+<span class="c">#   gemini:gemini-2.5-pro            $0.0155</span>
+<span class="c"># total $0.1646</span></code></pre>
+  <p>The same <code>$cost</code> shows per-turn in the web view and CLI comparison, with a session total.
+  <strong>Tip:</strong> images can dominate cost and providers count image tokens very differently — watch
+  the per-model split.</p>
+
+  <h2 id="how"><span class="n">10</span> How it works</h2>
+  <ul>
+    <li>Models run <strong>in parallel</strong>; one model failing never sinks the others (its error is recorded).</li>
+    <li>Answers persist to <code>session.json</code> (+ a human <code>summary.md</code>); images are referenced by
+      path + hash, <strong>never</strong> stored as bytes.</li>
+    <li><strong>Follow-up memory is native</strong> — each model gets a real provider message array (not a text
+      transcript), and prior images are re-sent after re-validating their hash (a moved/changed file degrades to
+      an <code>[image unavailable]</code> note, never wrong bytes).</li>
+    <li>Cost flows through the SDK's cost tracker; the continuity mode is pinned per session for consistency.</li>
+  </ul>
+
+  <h2 id="trouble"><span class="n">11</span> Troubleshooting</h2>
+  <table>
+    <tr><th>Symptom</th><th>Fix</th></tr>
+    <tr><td><code>no such command 'consult'</code></td><td>Install the SDK, or set <code>PYTHONPATH</code> to the worktree src (Setup).</td></tr>
+    <tr><td><code>no available models</code></td><td>Provider keys missing — run under <code>doppler run -p startd8 -c dev --</code>.</td></tr>
+    <tr><td>session "not found" on show/web/cost</td><td>Run from the folder where you ran <code>run</code>, or <code>startd8 consult list</code>.</td></tr>
+    <tr><td>Serve: "already being served"</td><td>Stale lock from a hard-killed server — self-heals if that PID is dead, else <code>rm .startd8/consultations/&lt;id&gt;/.serve.lock</code>.</td></tr>
+    <tr><td>Serve: "server extras missing"</td><td><code>pip install startd8[server]</code> (writes the static view until then).</td></tr>
+    <tr><td>An image is rejected</td><td>Must be PNG/JPEG/WebP/GIF, ≤ 5 MB, single-frame; a renamed/animated file is refused.</td></tr>
+  </table>
+
+  <div class="foot">Multi-Model Consultation · startd8 SDK · this guide has a Markdown twin:
+  MULTI_MODEL_CONSULTATION_GUIDE.md</div>
+</div>
+</body>
+</html>
