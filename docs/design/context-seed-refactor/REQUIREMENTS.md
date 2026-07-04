@@ -189,3 +189,31 @@ v0.4 eliminates it: extract stranded helpers to a leaf `handler_support.py` (FR-
 from the leaf not `core` (FR-7), delete the `__getattr__` shim (FR-8/FR-10). Net: `core.py`
 9,952 → ~200 LOC, and 3 accidental-complexity mechanisms deleted rather than grown.
 Prior: v0.3 lessons hardening (3 lessons); v0.1→v0.2: 6 corrections, 5 OQs resolved. Ready for CRP.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
