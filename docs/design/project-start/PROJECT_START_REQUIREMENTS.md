@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.16 (CRP R1–R3 triaged — correctness fixes + gap-closures applied)
+**Version:** 0.17 (Essential-model revision — guided experience available-not-required; R1-F3 resolved)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -179,6 +179,52 @@ survives as the discovery trigger.
   surface is live, and the fold-vs-scope-out call affects the path most apps
   took (OQ-8).
 
+### 0.4 Essential-Model Revision — the guided experience is available, not required (v0.17)
+
+> **Operator correction (2026-07-04), resolving CRP R1-F3.** v0.1–v0.16 rested on
+> an unstated assumption: *the user always has a capable agent (Claude Code /
+> Cursor).* From it, the distillation concluded the SDK's guided/agentic experience
+> "duplicates the harness" and eliminated it (old NR-2 forbade an embedded agentic
+> loop). **That assumption is false in the general case** — the SDK may be deployed
+> to the cloud, installed standalone, or used by someone who has no other agent or
+> does not want to bring one. For those users the SDK's guided experience is not a
+> duplicate of their harness; it **is** their only harness — essential, not
+> accidental.
+
+**What the distillation got right (kept):** the **$0 deterministic kernel** is the
+essential floor (works for everyone, standalone included); **five overlapping
+metaphors was real sprawl**; the **point-value drafting ghost** (Teian) was real;
+and **conflating the guided experience with the kernel — or forcing it on everyone —
+was wrong.**
+
+**What was wrong (corrected):** concluding "therefore *eliminate* the guided
+experience." The fix was never *remove it* — it is *consolidate it and make it
+optional.* The accidental complexity was the **sprawl** and the **conflation/
+forcing**, never the *existence* of guidance.
+
+**The revised essential model — a spectrum, "meet the user where they are":**
+| The user is… | gets… |
+|---|---|
+| **bring-your-own-agent / power user** | the $0 deterministic **kernel** (survey/instantiate/assess/derive); their own agent fills the blanks. Minimal SDK hosting. |
+| **standalone / no agent / wants guidance** | the SDK's **own guided experience** (a consolidated Welcome-Mat-style visual surface + Red-Carpet-style conductor + the optional facilitation panel) over the *same* kernel/contract. The SDK provides the harness. |
+
+**Governing rule (revised NR-2 / FR-6):** the guided/agentic experience is
+**available but NOT required** — a **complement, not a substitute**; never forced on
+a user who has their own agent, never absent for a user who does not. It sits
+*optionally on top of* the kernel; the kernel works fully without it (byte-identical
+when the guided layer is absent).
+
+**Cascade (tracked, not all applied here):** this **reverses the retirement of
+Welcome Mat / Red Carpet** (FR-9–12) — they are no longer accidental complexity to
+delete but the raw material for the **one consolidated optional guided experience**
+(the sprawl-reduction win survives as *consolidation*, not *elimination*). It
+**resolves CRP R1-F3** (the facilitation orchestrator is a legitimate part of the
+optional guided layer, exempt from the revised NR-2) and unblocks its dependents
+(R1-F6 transcript persistence, R2-F7 anti-smoothing, R3-F4 transcript-store-under-
+safe-write → now real requirements of the guided-experience capability). NR-2, FR-6,
+and §1's root-cause are revised below; the full retirement→consolidation re-spec and
+the guided-experience requirements are the next work items (with the plan rewrite).
+
 ---
 
 ## 1. Problem Statement
@@ -194,14 +240,18 @@ Applying the **Rube Goldberg Test** (*"does this layer solve the problem, or
 compensate for a decision made by a previous layer?"*) to the stack finds one
 shared upstream decision (L3) driving all the accidental layers:
 
-> **"The SDK should *host* project setup as an interactive, agentic,
-> multi-surface experience"** — rather than *define the input contract cleanly
-> and let the human's own agent fill it in.*
+> **"The SDK should host a *sprawl* of overlapping metaphors and *force/conflate*
+> the hosted experience with the kernel"** — five surfaces (chat panel, conductor,
+> persona council, …) doing overlapping jobs, presented as the mandatory path.
 
-The user already has an agent (Claude Code / Cursor). The SDK built its own chat
-panel, conductor, and persona council — re-implementing, inside the SDK, the
-conversational surface the user already has open. That is the deepest accidental
-complexity: **the SDK duplicating the harness.**
+The accidental complexity is the **sprawl** (five overlapping metaphors) and the
+**conflation/forcing** (the hosted experience treated as *the* path, inseparable
+from the kernel) — **not** the existence of a guided experience. *(v0.1–v0.16
+mis-stated this root cause as "the SDK duplicating the harness," on the false
+assumption that every user has their own agent. Corrected in §0.4: for
+standalone/cloud/no-agent users the SDK's guided experience is essential, not a
+duplicate. The real fixes are **consolidate the sprawl** and **make the guided
+layer optional over the kernel** — see §0.4.)*
 
 ### The essential problem, restated
 
@@ -340,11 +390,17 @@ might be missing* (breadth, real value); it may not *estimate the specific value
   requirement is optional: either port it, or accept the loss and name it
   explicitly in the navig8 migration note (FR-11).
 
-- **FR-6 — The handoff, not the host.** The SDK's job ends at "here are honest
-  input files and here is exactly what is still blank + the command to address
-  it." The human's own agent fills the blanks by editing the input files
-  directly. The SDK does **not** serve a web app, embed a chat loop, run an
-  agentic conductor, or role-play stakeholders as part of project-start.
+- **FR-6 — Two entry points onto one kernel; the guided layer is optional
+  (revised v0.17, §0.4).** The kernel (`survey`/`instantiate`/`assess`/`derive`) is
+  $0/deterministic and complete on its own. **For a bring-your-own-agent user**,
+  the SDK's job ends at the handoff — "here are honest input files, here is what is
+  blank + the command to address it" — and the user's own agent fills the blanks;
+  the SDK does **not** force a web app, chat loop, or conductor on them. **For a
+  standalone/cloud/no-agent user**, the SDK **offers** a guided experience (the
+  consolidated visual surface + conductor + optional facilitation panel) over the
+  *same* kernel/contract. The guided layer is **available but not required, a
+  complement not a substitute** — never forced on the first user, never absent for
+  the second; the kernel is byte-identical whether or not it is engaged.
 
 ### The safe-write floor
 
@@ -381,9 +437,20 @@ might be missing* (breadth, real value); it may not *estimate the specific value
 
 ### Phased retirement of the COMPENSATORY layers
 
+> **REFRAMED by §0.4 (v0.17) — retirement → CONSOLIDATION.** Welcome Mat and Red
+> Carpet are **no longer slated for deletion.** They are the raw material for the
+> **one consolidated, optional guided experience** (FR-6). This section still
+> governs (a) collapsing the *sprawl* (five overlapping metaphors → one coherent
+> guided surface) and (b) dropping the true ghost (Teian point-value drafting,
+> NR-7). What changes: FR-9–12 below are re-read as "consolidate + make optional +
+> drop the ghost," not "delete Welcome Mat / Red Carpet." The full re-spec of this
+> section (and the guided-experience requirements) is a tracked next work item.
+
 - **FR-9 — Nothing deleted until the kernel spec lands.** Welcome Mat GUI, Red
   Carpet, and Teira/Teian code remain in the tree during the transition. This
   requirement gates removal on the kernel being the documented, shipped surface.
+  *(v0.17: for Welcome Mat / Red Carpet this is now permanent — they are retained
+  and consolidated, not removed; only Teian's point-value drafter is dropped.)*
 
 - **FR-10 — Deprecation markers.** Each retiring surface (Welcome Mat serve/web,
   Red Carpet CLI commands, Teian `panel recommend`) emits a deprecation notice
@@ -618,10 +685,19 @@ might be missing* (breadth, real value); it may not *estimate the specific value
 
 ## 3. Non-Requirements
 
-- **NR-1 — No served web/TUI onboarding app.** Project-start does not ship or
-  serve an interactive GUI. Readiness is a CLI report.
-- **NR-2 — No embedded agentic loop for project-start.** The kernel does not run
-  an LLM chat/conductor. The user's own agent is the interactive surface.
+- **NR-1 — No web/TUI GUI *required*; the KERNEL is CLI-only (revised v0.17).** The
+  *kernel* (survey/instantiate/assess/derive) ships no interactive GUI — readiness
+  is a CLI report. *(The optional guided experience (§0.4/FR-6) MAY serve a GUI; NR-1
+  bounds the kernel, not the opt-in guided layer.)*
+- **NR-2 — The kernel runs no agentic loop; the guided layer MAY, opt-in (revised
+  v0.17, §0.4 — resolves CRP R1-F3).** The **kernel** does not run an LLM
+  chat/conductor and is byte-identical without one. The **optional guided
+  experience** (Welcome-Mat-style surface + conductor + facilitation panel) *is* an
+  agentic experience — **available but not required, a complement not a
+  substitute.** It is never forced on a user with their own agent, never withheld
+  from one without. *(Prior NR-2 "no embedded agentic loop, the user's own agent is
+  the interactive surface" was over-broad — it assumed every user has an agent;
+  corrected in §0.4.)*
 - **NR-3 — No *mandatory* stakeholder role-play, no point-value drafting.** The
   kernel does not force stakeholder role-play on every project and never
   auto-drafts specific field *values*. *(Nuanced in §0.2: discovery — surfacing
@@ -1049,6 +1125,10 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
+| R1-F3 | FR-6/NR-2 vs facilitation-conductor contradiction | R1 | **RESOLVED by operator decision (§0.4, v0.17):** revised NR-2 + FR-6 — the guided/agentic experience is *available but not required* (complement not substitute; kernel non-agentic, guided layer opt-in). Not a violation; a legitimate optional layer. | 2026-07-04 |
+| R1-F6 | Persist raw per-round transcripts as a requirement | R1 | **Accepted (unblocked by R1-F3).** Becomes a real requirement of the guided-experience/facilitation capability (already relied on in §4 + the observability UX reqs). To be written into the guided-experience re-spec (next work item). | 2026-07-04 |
+| R2-F7 | Anti-smoothing (keep open tensions) as a requirement | R2 | **Accepted (unblocked by R1-F3).** Becomes a synthesis requirement of the guided-experience capability. Applied into the guided-experience re-spec (next work item). | 2026-07-04 |
+| R3-F4 | Transcript store under the safe-write floor | R3 | **Accepted (unblocked by R1-F3).** Guided-experience transcript writes ride FR-7's confined safe-write floor. Applied in the guided-experience re-spec (next work item). | 2026-07-04 |
 | R1-F1 | FR-12 cites wrong entry-point group | R1 | Applied — FR-12 rewritten to check CLI subcommands + MCP `action` enum + documented consumers; called out the vacuous deterministic-provider gate. | 2026-07-04 |
 | R1-F2 | Alias window must cover MCP `action` enum | R1 | Applied — FR-10 now requires hidden aliases for BOTH CLI names AND MCP `ConciergeInput.action` enum for the one-release window, with non-error+deprecation-warning acceptance. | 2026-07-04 |
 | R1-F4 | Name PANEL_CONSUMABLE in FR-15 invariant | R1 | Applied — FR-15 panel bullet adds a `PANEL_CONSUMABLE` disposition sub-bullet (no reference remains in kernel `core.py`; byte-identity test). | 2026-07-04 |
