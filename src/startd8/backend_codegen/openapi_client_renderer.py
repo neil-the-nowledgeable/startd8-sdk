@@ -15,9 +15,9 @@ from ..frontend_codegen.schema_renderer import schema_sha256
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 from ._headers import header_api_overlay, header_standard as _header
 from .crud_generator import _pk_field
+from ..schema_contract.prisma_json_schema import model_names
 from .openapi_contract_renderer import (
     _crud_routes,
-    _model_names,
     _project_openapi,
 )
 
@@ -34,7 +34,7 @@ def _pk_py_type(schema: PrismaSchema, name: str) -> str:
 
 def _prisma_dto_names(schema: PrismaSchema, schema_text: str) -> Set[str]:
     names: Set[str] = set()
-    for entity in _model_names(schema, schema_text):
+    for entity in model_names(schema, schema_text):
         names.update(f"{entity}{suffix}" for suffix in _DTO_SUFFIXES)
     return names
 
@@ -47,16 +47,57 @@ def _ref_name(ref: Any) -> Optional[str]:
 
 def _op_json_ref(op: Dict[str, Any], *, response: bool) -> Optional[str]:
     if response:
-        content = (
-            op.get("responses", {})
-            .get("200", {})
-            .get("content", {})
-            .get("application/json", {})
-        )
-        return _ref_name(content.get("schema", {}).get("$ref"))
+        responses = op.get("responses", {})
+        if isinstance(responses, dict):
+            for code in ("200", "201"):
+                body = responses.get(code) or responses.get(int(code))  # type: ignore[arg-type]
+                if not isinstance(body, dict):
+                    continue
+                content = body.get("content", {}).get("application/json", {})
+                ref = _ref_name(content.get("schema", {}).get("$ref"))
+                if ref:
+                    return ref
+            for code, response_body in sorted(responses.items(), key=lambda kv: str(kv[0])):
+                if not str(code).startswith("2") or not isinstance(response_body, dict):
+                    continue
+                content = response_body.get("content", {}).get("application/json", {})
+                ref = _ref_name(content.get("schema", {}).get("$ref"))
+                if ref:
+                    return ref
+        return None
     body = op.get("requestBody", {})
+    if not isinstance(body, dict):
+        return None
     content = body.get("content", {}).get("application/json", {})
     return _ref_name(content.get("schema", {}).get("$ref"))
+
+
+def _path_param_py_types(
+    path_item: Dict[str, Any],
+    operation: Dict[str, Any],
+    param_names: List[str],
+) -> Dict[str, str]:
+    """Map path template names to Python param types from OpenAPI parameters."""
+    types = {name: "str" for name in param_names}
+    for params in (
+        path_item.get("parameters") or [],
+        operation.get("parameters") or [],
+    ):
+        if not isinstance(params, list):
+            continue
+        for param in params:
+            if not isinstance(param, dict) or param.get("in") != "path":
+                continue
+            name = param.get("name")
+            if not isinstance(name, str) or name not in types:
+                continue
+            schema = param.get("schema") if isinstance(param.get("schema"), dict) else {}
+            if schema.get("type") == "integer" or schema.get("format") in {
+                "int32",
+                "int64",
+            }:
+                types[name] = "int"
+    return types
 
 
 def _overlay_method_name(method: str, path: str) -> str:
@@ -114,7 +155,8 @@ def _overlay_client_methods(
 
             fn = _overlay_method_name(http_method, path)
             params = _path_param_names(path)
-            sig_parts = [f"{name}: str" for name in params]
+            param_types = _path_param_py_types(path_item, op, params)
+            sig_parts = [f"{name}: {param_types[name]}" for name in params]
             if req_dto and req_dto in dto_names:
                 sig_parts.append(f"body: {req_dto}")
             signature = ", ".join(sig_parts)
@@ -338,7 +380,7 @@ def render_http_client(
     """Render ``clients/http_client.py`` — typed httpx CRUD client for schema-derived routes."""
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
-    names = _model_names(schema, schema_text)
+    names = model_names(schema, schema_text)
 
     _, spec = _project_openapi(
         schema_text,

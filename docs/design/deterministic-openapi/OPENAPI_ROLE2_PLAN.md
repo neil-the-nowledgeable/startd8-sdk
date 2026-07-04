@@ -83,7 +83,7 @@
 | FR-10 | M3: scan merged spec for overlay ops with `{Entity}{Create,Read,Update}` refs |
 | FR-11 | `--export-openapi` already reads contract module — merged spec exports for free (FR-11) |
 | FR-12 | Regression: `render_openapi_contract(schema)` == `render_openapi_contract(schema, api_text=None)` |
-| FR-D1 | **Deferred Phase 2** — `startd8 openapi normalize` |
+| FR-D1 | **Shipped** — `startd8 openapi normalize` (M4) |
 | FR-O1 | M2 optional: validation-only declared paths + warn-not-error |
 
 ---
@@ -116,7 +116,7 @@
 - `_conditional_routes()` in `openapi_contract_renderer` mirrors `assembler` manifest guards
 - Manifest kwargs threaded through contract/client renderers + drift + contract tests
 
-### M4 — Brownfield normalize (deferred)
+### M4 — Brownfield normalize ✅
 - `startd8 openapi normalize` — human-in-the-loop ingest
 
 ---

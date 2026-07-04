@@ -20,16 +20,21 @@ _OAS_SCALAR: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _model_names(schema: PrismaSchema, schema_text: str) -> List[str]:
+def model_names(schema: PrismaSchema, schema_text: str) -> List[str]:
+    """Entity model names excluding composite types."""
     composites = composite_type_names(schema_text)
     return [n for n in schema.models if n not in composites]
+
+
+def _model_names(schema: PrismaSchema, schema_text: str) -> List[str]:
+    return model_names(schema, schema_text)
 
 
 def _field_schema(field: PrismaField, schema: PrismaSchema) -> Dict[str, Any]:
     if field.type in schema.enums:
         base: Dict[str, Any] = {"type": "string", "enum": list(schema.enums[field.type])}
     else:
-        base = dict(_OAS_SCALAR.get(field.type, {"type": "string"}))
+        base = dict(_OAS_SCALAR.get(field.type, {}))
     if field.is_list:
         return {"type": "array", "items": base}
     return base

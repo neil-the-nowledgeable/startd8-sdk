@@ -1,0 +1,41 @@
+# api.yaml — Role 2 overlay authoring example (OQ-6)
+# Freeform OpenAPI 3.0 subset validated by parse_api_overlay + reconcile_overlay.
+# Review after `startd8 openapi normalize` brownfield ingest (FR-D1).
+
+openapi: 3.0.3
+info:
+  title: API overlay
+  version: 0.0.0
+
+paths:
+  /webhooks/stripe:
+    post:
+      summary: Stripe webhook (handler in user_routers.py)
+      responses:
+        "200":
+          description: OK
+
+  /custom/note:
+    post:
+      summary: Custom create using Prisma DTO refs (typed httpx client method)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NoteCreate"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoteRead"
+
+  /ai/extract:
+    x-startd8-validation-only: true
+    post:
+      summary: Declared for contract completeness until manifest projection emits /ai/*
+      responses:
+        "200":
+          description: OK

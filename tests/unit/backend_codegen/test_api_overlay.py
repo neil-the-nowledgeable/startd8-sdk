@@ -196,6 +196,39 @@ paths:
     assert "/notes/summary" in merged["paths"]
 
 
+def test_parse_api_overlay_normalizes_single_segment_path() -> None:
+    overlay = parse_api_overlay(
+        """\
+paths:
+  /webhooks/stripe:
+    post:
+      responses:
+        "200":
+          description: OK
+"""
+    )
+    assert "/webhooks/stripe" in overlay["paths"]
+
+
+def test_parse_api_overlay_rejects_trailing_slash_duplicates() -> None:
+    with pytest.raises(ReconcileError, match="trailing-slash duplicate"):
+        parse_api_overlay(
+            """\
+paths:
+  /note:
+    post:
+      responses:
+        "200":
+          description: OK
+  /note/:
+    get:
+      responses:
+        "200":
+          description: OK
+"""
+        )
+
+
 def test_merged_spec_passes_validator_when_installed() -> None:
     pytest.importorskip("openapi_spec_validator")
     from startd8.validators.openapi_spec_gate import validate_openapi_spec_dict

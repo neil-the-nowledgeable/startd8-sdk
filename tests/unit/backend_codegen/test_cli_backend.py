@@ -336,6 +336,50 @@ def test_generate_with_api_overlay_merges_contract(tmp_path):
     assert chk.exit_code == 0, chk.output
 
 
+def test_generate_with_prisma_ref_overlay_emits_client_method(tmp_path):
+    schema = _schema(tmp_path)
+    api = tmp_path / "prisma" / "api.yaml"
+    api.write_text(
+        "paths:\n  /custom/proofpoint:\n    post:\n      requestBody:\n        required: true\n"
+        "        content:\n          application/json:\n            schema:\n"
+        "              $ref: '#/components/schemas/ProofPointCreate'\n      responses:\n"
+        "        '200':\n          description: OK\n          content:\n"
+        "            application/json:\n              schema:\n"
+        "                $ref: '#/components/schemas/ProofPointRead'\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    client = (tmp_path / "clients" / "http_client.py").read_text(encoding="utf-8")
+    assert "def post_custom_proofpoint(" in client
+    assert "# api-sha256:" in client
+    chk = runner.invoke(
+        generate_app,
+        [
+            "backend",
+            "--schema",
+            str(schema),
+            "--out",
+            str(tmp_path),
+            "--api",
+            str(api),
+            "--check",
+        ],
+    )
+    assert chk.exit_code == 0, chk.output
+
+
 def test_generate_with_validation_only_overlay_warns(tmp_path):
     schema = _schema(tmp_path)
     api = tmp_path / "prisma" / "api.yaml"
