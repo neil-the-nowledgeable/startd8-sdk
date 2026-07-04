@@ -3392,6 +3392,57 @@ class Test{class_name}:
         )
         return True
 
+    def _build_existing_file_sizes(
+        self,
+        chunks: list,
+        project_root: Path,
+    ) -> dict[str, dict[str, int]]:
+        """PCA-603: line counts of edit-mode files per chunk, for Gate 4 size regression.
+
+        Uses ``_existing_file_contents`` populated by PCA-502 disk reads; for edit-mode
+        files missing from cache (PCA-603 AC 6), attempts a fresh disk read as fallback.
+        """
+        existing_file_sizes: dict[str, dict[str, int]] = {}
+        for chunk in chunks:
+            _efc = chunk.metadata.get("_existing_file_contents", {})
+            _edit_mode_dict = chunk.metadata.get("_edit_mode")
+            task_sizes: dict[str, int] = {}
+
+            if _efc:
+                for epath, econtent in _efc.items():
+                    task_sizes[epath] = len(econtent.splitlines())
+
+            # Fallback: check for edit-mode files missing from cache
+            if _edit_mode_dict and _edit_mode_dict.get("mode") == "edit":
+                per_file_modes = _edit_mode_dict.get("per_file", {})
+                for fpath, finfo in per_file_modes.items():
+                    if finfo.get("mode") == "edit" and fpath not in task_sizes:
+                        logger.warning(
+                            "Edit-mode file %s has no cached content for "
+                            "size regression check — attempting fresh disk "
+                            "read as fallback.",
+                            fpath,
+                        )
+                        try:
+                            fallback_path = project_root / fpath
+                            fallback_content = fallback_path.read_text(
+                                encoding="utf-8",
+                            )
+                            task_sizes[fpath] = len(
+                                fallback_content.splitlines(),
+                            )
+                        except (OSError, UnicodeDecodeError) as exc:
+                            logger.warning(
+                                "Edit-mode file %s: fallback disk read "
+                                "failed (%s) — size regression guard "
+                                "bypassed for this file.",
+                                fpath, exc,
+                            )
+
+            if task_sizes:
+                existing_file_sizes[chunk.chunk_id] = task_sizes
+        return existing_file_sizes
+
     def _execute_dry_run(
         self,
         tasks: list[SeedTask],
@@ -4201,48 +4252,7 @@ class Test{class_name}:
                 )
 
             # ── PCA-603: Build existing file sizes for Gate 4 size regression ──
-            # Uses _existing_file_contents populated by PCA-502 disk reads.
-            # PCA-603 AC 6: When edit-mode file has no cached content,
-            # attempt fresh disk read as fallback before skipping.
-            existing_file_sizes: dict[str, dict[str, int]] = {}
-            for chunk in chunks:
-                _efc = chunk.metadata.get("_existing_file_contents", {})
-                _edit_mode_dict = chunk.metadata.get("_edit_mode")
-                task_sizes: dict[str, int] = {}
-
-                if _efc:
-                    for epath, econtent in _efc.items():
-                        task_sizes[epath] = len(econtent.splitlines())
-
-                # Fallback: check for edit-mode files missing from cache
-                if _edit_mode_dict and _edit_mode_dict.get("mode") == "edit":
-                    per_file_modes = _edit_mode_dict.get("per_file", {})
-                    for fpath, finfo in per_file_modes.items():
-                        if finfo.get("mode") == "edit" and fpath not in task_sizes:
-                            logger.warning(
-                                "Edit-mode file %s has no cached content for "
-                                "size regression check — attempting fresh disk "
-                                "read as fallback.",
-                                fpath,
-                            )
-                            try:
-                                fallback_path = project_root / fpath
-                                fallback_content = fallback_path.read_text(
-                                    encoding="utf-8",
-                                )
-                                task_sizes[fpath] = len(
-                                    fallback_content.splitlines(),
-                                )
-                            except (OSError, UnicodeDecodeError) as exc:
-                                logger.warning(
-                                    "Edit-mode file %s: fallback disk read "
-                                    "failed (%s) — size regression guard "
-                                    "bypassed for this file.",
-                                    fpath, exc,
-                                )
-
-                if task_sizes:
-                    existing_file_sizes[chunk.chunk_id] = task_sizes
+            existing_file_sizes = self._build_existing_file_sizes(chunks, project_root)
 
             # ── Gate 4: post-IMPLEMENT truncation detection ─────────
             # Per Context Correctness by Construction: detect truncated
