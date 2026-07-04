@@ -1,0 +1,627 @@
+{
+  ".startd8/plan_ingestion_state.json": {
+    "complexity_composite": 24,
+    "complexity_route": "prime",
+    "context_seed_path": "<OUTDIR>/prime-context-seed.json",
+    "current_phase": "completed",
+    "error": null,
+    "parsed_plan_feature_count": 3,
+    "parsed_plan_title": "Deterministic Parse Test Plan",
+    "plan_document_path": "<OUTDIR>/plan-ingestion-tasks.yaml",
+    "review_config_path": "<OUTDIR>/review-config.json",
+    "route": "prime",
+    "total_cost": 0.0
+  },
+  "ingestion-traceability.json": {
+    "artifact_mappings": [],
+    "checksum_evidence": "<VOLATILE>",
+    "generated_at": "<VOLATILE>",
+    "plan_title": "Deterministic Parse Test Plan",
+    "requirement_mappings": [],
+    "route": "prime",
+    "translation_quality": {
+      "artifact_mapping_percent": 100.0,
+      "conflict_count": 0,
+      "requirements_coverage_percent": 100.0
+    },
+    "unresolved": []
+  },
+  "manifest-extraction-report.json": {
+    "contract_diff": [],
+    "counts": {
+      "defaulted": 0,
+      "extracted": 0,
+      "not_extracted": 0
+    },
+    "grammar_version": "authoring-contract-v0.4",
+    "manifests_emitted": [],
+    "records": [],
+    "source_docs": {
+      "<OUTDIR>/plan-ingestion-tasks.yaml": "4f5642693db5fa08b1525c59e8fdc12fe39e5121266d28a8f63b839d3239efc3"
+    }
+  },
+  "plan-ingestion-diagnostic.json": {
+    "enrichment": {
+      "after": {
+        "total_tasks": 3,
+        "with_code_examples": 0,
+        "with_negative_scope": 0,
+        "with_requirement_refs": 0,
+        "with_review_guidance": 0,
+        "with_target_files": 3
+      },
+      "api_signatures_added": 0,
+      "before": {
+        "total_tasks": 3,
+        "with_code_examples": 0,
+        "with_negative_scope": 0,
+        "with_requirement_refs": 0,
+        "with_review_guidance": 0,
+        "with_target_files": 3
+      },
+      "coding_standards_injected": 3,
+      "copy_source_detected": 0,
+      "descriptions_sanitized": 0,
+      "enabled": true,
+      "negative_scope_added": 0,
+      "refine_suggestions_mapped": 0,
+      "requirement_refs_added": 0,
+      "target_files_inferred": 0,
+      "tasks_enriched": 0,
+      "tasks_skipped": 3,
+      "time_ms": "<VOLATILE>"
+    },
+    "overall_success": true,
+    "phases": {
+      "assess": {
+        "code_extraction_fallback": false,
+        "cost_usd": 0.0,
+        "deterministic": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "phase": "assess",
+        "quality_signals": {
+          "composite_score": 24,
+          "dimension_spread": 35,
+          "route_decision": "prime",
+          "route_margin": 16
+        },
+        "success": true,
+        "time_ms": "<VOLATILE>"
+      },
+      "emit": {
+        "code_extraction_fallback": false,
+        "cost_usd": 0.0,
+        "deterministic": false,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "phase": "emit",
+        "quality_signals": {},
+        "success": true,
+        "time_ms": "<VOLATILE>"
+      },
+      "parse": {
+        "code_extraction_fallback": false,
+        "cost_usd": 0.0,
+        "deterministic": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "phase": "parse",
+        "quality_signals": {
+          "dep_graph_coverage": 0.333,
+          "features_extracted": 3,
+          "features_with_deps": 1,
+          "features_with_signatures": 0,
+          "features_with_targets": 3,
+          "files_mentioned": 3,
+          "multi_file_features": 0
+        },
+        "success": true,
+        "time_ms": "<VOLATILE>"
+      },
+      "preflight": {
+        "code_extraction_fallback": false,
+        "cost_usd": 0.0,
+        "deterministic": false,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "phase": "preflight",
+        "quality_signals": {},
+        "success": true,
+        "time_ms": "<VOLATILE>"
+      },
+      "transform": {
+        "code_extraction_fallback": false,
+        "cost_usd": 0.0,
+        "deterministic": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "phase": "transform",
+        "quality_signals": {},
+        "success": true,
+        "time_ms": "<VOLATILE>"
+      }
+    },
+    "plan_checksum": "<VOLATILE>",
+    "plan_source": "<OUTDIR>/plan.md",
+    "quality_warnings": [
+      "no context_files",
+      "3/3 task(s) missing structured context field 'api_signatures'",
+      "3/3 task(s) missing structured context field 'negative_scope'",
+      "3/3 task(s) have descriptions < 500 chars",
+      "no tasks have code examples in descriptions",
+      "3/3 task(s) missing requirements references"
+    ],
+    "route": "prime",
+    "run_timestamp": "<VOLATILE>",
+    "schema_version": "1.0.0",
+    "seed_quality_score": 0.5485,
+    "task_density": [
+      {
+        "description_chars": 33,
+        "description_lines": 1,
+        "has_code_examples": false,
+        "has_negative_scope": false,
+        "has_requirements_refs": false,
+        "task_id": "PI-001"
+      },
+      {
+        "description_chars": 32,
+        "description_lines": 1,
+        "has_code_examples": false,
+        "has_negative_scope": false,
+        "has_requirements_refs": false,
+        "task_id": "PI-002"
+      },
+      {
+        "description_chars": 33,
+        "description_lines": 1,
+        "has_code_examples": false,
+        "has_negative_scope": false,
+        "has_requirements_refs": false,
+        "task_id": "PI-003"
+      }
+    ],
+    "totals": {
+      "cost_usd": 0.0,
+      "input_tokens": 0,
+      "llm_calls": 3,
+      "output_tokens": 0,
+      "time_ms": "<VOLATILE>"
+    }
+  },
+  "plan-ingestion-tasks.yaml": "tasks:\n- task_id: PI-001\n  title: alpha module\n  task_type: task\n  priority: medium\n  story_points: 3\n  labels:\n  - implementation\n  depends_on: []\n  config:\n    task_description: \"alpha module \\u2014 requirements: FR-1\"\n    context:\n      feature_id: F-001\n      target_files:\n      - src/alpha.py\n- task_id: PI-002\n  title: beta module\n  task_type: task\n  priority: medium\n  story_points: 3\n  labels:\n  - implementation\n  depends_on:\n  - PI-001\n  config:\n    task_description: \"beta module \\u2014 requirements: FR-2\"\n    context:\n      feature_id: F-002\n      target_files:\n      - src/beta.py\n- task_id: PI-003\n  title: gamma module\n  task_type: task\n  priority: medium\n  story_points: 3\n  labels:\n  - implementation\n  depends_on: []\n  config:\n    task_description: \"gamma module \\u2014 requirements: FR-3\"\n    context:\n      feature_id: F-003\n      target_files:\n      - src/gamma.py\n",
+  "prime-context-seed.json": {
+    "_ingestion_quality": {
+      "density_warnings": [
+        "3/3 task(s) have descriptions < 500 chars",
+        "no tasks have code examples in descriptions",
+        "3/3 task(s) missing requirements references"
+      ],
+      "diagnostic_report_path": "plan-ingestion-diagnostic.json",
+      "features_extracted": 3,
+      "field_coverage_warnings": [
+        "no context_files",
+        "3/3 task(s) missing structured context field 'api_signatures'",
+        "3/3 task(s) missing structured context field 'negative_scope'",
+        "3/3 task(s) have descriptions < 500 chars",
+        "no tasks have code examples in descriptions",
+        "3/3 task(s) missing requirements references"
+      ],
+      "multi_file_features": 0,
+      "route_margin": 16,
+      "seed_quality_score": 0.5485
+    },
+    "architectural_context": {
+      "constraints": [
+        {
+          "rule": "No breaking API changes without a version bump and migration guide",
+          "scope": [
+            "src/startd8/agents/",
+            "src/startd8/providers/"
+          ],
+          "severity": "blocking"
+        },
+        {
+          "rule": "LLM provider dependencies must be lazy-loaded at first use, not at import time",
+          "scope": [
+            "src/startd8/providers/"
+          ],
+          "severity": "blocking"
+        },
+        {
+          "rule": "All new agent classes must inherit TrackedAgentMixin for telemetry",
+          "scope": [
+            "src/startd8/agents/"
+          ],
+          "severity": "warning"
+        }
+      ],
+      "dependency_clusters": [
+        {
+          "dependents": [
+            "F-002"
+          ],
+          "root": "F-001"
+        }
+      ],
+      "domain_concepts": [],
+      "focus_areas": [
+        "stability",
+        "cost tracking accuracy",
+        "OTel alignment"
+      ],
+      "import_conventions": [
+        "src"
+      ],
+      "objectives": [
+        {
+          "key_results": [
+            {
+              "baseline": 99.5,
+              "data_source": null,
+              "metric_key": "availability",
+              "operator": "gte",
+              "target": 99.9,
+              "unit": "%",
+              "window": "30d"
+            }
+          ],
+          "name": "Ensure 99.9% success rate across all LLM providers"
+        },
+        {
+          "key_results": [
+            {
+              "baseline": 5.0,
+              "data_source": null,
+              "metric_key": "cost_variance",
+              "operator": "lte",
+              "target": 1.0,
+              "unit": "%",
+              "window": "30d"
+            }
+          ],
+          "name": "Maintain less than 1% cost tracking variance vs provider invoices"
+        },
+        {
+          "key_results": [
+            {
+              "baseline": 85.0,
+              "data_source": null,
+              "metric_key": "availability",
+              "operator": "gte",
+              "target": 100.0,
+              "unit": "%",
+              "window": "7d"
+            }
+          ],
+          "name": "100% of agent interactions emit telemetry spans"
+        }
+      ],
+      "preferences": [
+        "Use Pydantic v2 BaseModel for all data models",
+        "Prefer async interfaces; provide sync wrappers where needed",
+        "Follow OTel GenAI semantic conventions for all span attributes"
+      ],
+      "project_goals": [],
+      "shared_modules": []
+    },
+    "artifacts": {
+      "extraction_report_path": "<OUTDIR>/manifest-extraction-report.json",
+      "extraction_report_sha256": "<VOLATILE>",
+      "manifest_sha256s": "<VOLATILE>",
+      "manifests_dir": "<OUTDIR>/manifests",
+      "plan_document_path": "<OUTDIR>/plan-ingestion-tasks.yaml",
+      "refine_provenance": {
+        "apply_enabled": false,
+        "origin_phase": "ingestion.refine"
+      },
+      "review_config_path": "<OUTDIR>/review-config.json"
+    },
+    "authoring_mode": "pipeline",
+    "complexity": {
+      "composite": 24,
+      "dimensions": {
+        "ambiguity": 45,
+        "api_surface": 24,
+        "call_graph_impact": 0,
+        "cross_file_deps": 10,
+        "domain_novelty": 40,
+        "feature_count": 21,
+        "integration_depth": 10,
+        "test_complexity": 18
+      },
+      "reasoning": "Heuristic fallback complexity used after assess failure",
+      "route": "prime"
+    },
+    "design_calibration": {
+      "PI-001": {
+        "complexity": "medium",
+        "depth_guidance": "Standard design doc. Include data model and error handling but keep depth proportional to the feature's scope.",
+        "depth_tier": "standard",
+        "implement_max_output_tokens": 32768,
+        "max_output_tokens": 8192,
+        "sections": [
+          "Overview",
+          "Architecture",
+          "Data Model",
+          "Error Handling",
+          "Testing Strategy"
+        ]
+      },
+      "PI-002": {
+        "complexity": "medium",
+        "depth_guidance": "Standard design doc. Include data model and error handling but keep depth proportional to the feature's scope.",
+        "depth_tier": "standard",
+        "implement_max_output_tokens": 32768,
+        "max_output_tokens": 8192,
+        "sections": [
+          "Overview",
+          "Architecture",
+          "Data Model",
+          "Error Handling",
+          "Testing Strategy"
+        ]
+      },
+      "PI-003": {
+        "complexity": "medium",
+        "depth_guidance": "Standard design doc. Include data model and error handling but keep depth proportional to the feature's scope.",
+        "depth_tier": "standard",
+        "implement_max_output_tokens": 32768,
+        "max_output_tokens": 8192,
+        "sections": [
+          "Overview",
+          "Architecture",
+          "Data Model",
+          "Error Handling",
+          "Testing Strategy"
+        ]
+      }
+    },
+    "forward_manifest": {
+      "contracts": [],
+      "file_specs": {},
+      "generated_at": "<VOLATILE>",
+      "metadata": {},
+      "pipeline_run_id": null,
+      "schema_version": "1.0.0",
+      "source_checksum": "<VOLATILE>",
+      "stages_completed": []
+    },
+    "generated_at": "<VOLATILE>",
+    "generator": "plan-ingestion",
+    "ingestion_metrics": {
+      "assess_cost": 0.0,
+      "parse_cost": 0.0,
+      "refine_cost": 0.0,
+      "total_cost": 0.0,
+      "transform_cost": 0.0
+    },
+    "onboarding": {
+      "refine_suggestions": []
+    },
+    "plan": {
+      "approach": "",
+      "dependency_graph": {
+        "F-002": [
+          "F-001"
+        ]
+      },
+      "design_snapshot": "",
+      "features": [
+        {
+          "affected_callers": [],
+          "api_signatures": [],
+          "artifact_types_addressed": [],
+          "dependencies": [],
+          "description": "alpha module \u2014 requirements: FR-1",
+          "design_doc_sections": [],
+          "estimated_loc": 50,
+          "feature_id": "F-001",
+          "high_impact": false,
+          "labels": [],
+          "name": "alpha module",
+          "negative_scope": [],
+          "protocol": "",
+          "runtime_dependencies": [],
+          "target_files": [
+            "src/alpha.py"
+          ],
+          "targets_dead_code": false
+        },
+        {
+          "affected_callers": [],
+          "api_signatures": [],
+          "artifact_types_addressed": [],
+          "dependencies": [
+            "F-001"
+          ],
+          "description": "beta module \u2014 requirements: FR-2",
+          "design_doc_sections": [],
+          "estimated_loc": 60,
+          "feature_id": "F-002",
+          "high_impact": false,
+          "labels": [],
+          "name": "beta module",
+          "negative_scope": [],
+          "protocol": "",
+          "runtime_dependencies": [],
+          "target_files": [
+            "src/beta.py"
+          ],
+          "targets_dead_code": false
+        },
+        {
+          "affected_callers": [],
+          "api_signatures": [],
+          "artifact_types_addressed": [],
+          "dependencies": [],
+          "description": "gamma module \u2014 requirements: FR-3",
+          "design_doc_sections": [],
+          "estimated_loc": 70,
+          "feature_id": "F-003",
+          "high_impact": false,
+          "labels": [],
+          "name": "gamma module",
+          "negative_scope": [],
+          "protocol": "",
+          "runtime_dependencies": [],
+          "target_files": [
+            "src/gamma.py"
+          ],
+          "targets_dead_code": false
+        }
+      ],
+      "goals": [],
+      "intent": "",
+      "mentioned_files": [
+        "src/alpha.py",
+        "src/beta.py",
+        "src/gamma.py"
+      ],
+      "scope_boundary": "",
+      "title": "Deterministic Parse Test Plan"
+    },
+    "project_metadata": {
+      "business_owner": "platform-engineering",
+      "business_value": "BusinessValue.ENABLER",
+      "criticality": "high",
+      "observability": {
+        "log_level": "info",
+        "metrics_interval": "30s",
+        "trace_sampling": 1.0
+      },
+      "requirements": {
+        "availability": "99.9",
+        "latency_p99": "<VOLATILE>",
+        "throughput": "100rps"
+      },
+      "risks": [
+        {
+          "description": "LLM provider API failure cascades to all dependent agents",
+          "mitigation": "Provider fallback chain with configurable retry and circuit breaker",
+          "priority": "P1",
+          "type": "availability"
+        },
+        {
+          "description": "Cost tracking drift between SDK estimates and provider invoices",
+          "mitigation": "Reconciliation job compares tracked costs with billing API data",
+          "priority": "P2",
+          "type": "financial"
+        },
+        {
+          "description": "OTLP exporter failure silently drops agent telemetry spans",
+          "mitigation": "Graceful degradation \u2014 TrackedAgentMixin logs warning and continues without telemetry",
+          "priority": "P2",
+          "type": "availability"
+        },
+        {
+          "description": "Token count normalization varies across providers (tiktoken vs provider-native)",
+          "mitigation": "Standardize on tiktoken for estimation, record provider-reported tokens as ground truth",
+          "priority": "P3",
+          "type": "data-integrity"
+        }
+      ]
+    },
+    "schema_version": "1.0",
+    "service_metadata": {
+      "primary_language": "python"
+    },
+    "tasks": [
+      {
+        "config": {
+          "context": {
+            "artifact_types_addressed": [
+              "source_module"
+            ],
+            "coding_standards": "Python coding standards:\n- PEP 8 naming: snake_case functions/variables, PascalCase classes, UPPER_SNAKE constants.\n- Type hints on all public function signatures (parameters and return types).\n- Use specific exception types: `except (ValueError, TypeError):` \u2014 NEVER use bare `except:` or `except: pass`.\n- Use `from __future__ import annotations` for forward references.\n- LOGGING: Use `logging.getLogger(__name__)` \u2014 NEVER use `print()` for diagnostic output in library/service code.\n- IMPORTS: stdlib first, third-party second, local third (isort convention). No single-letter variable names (l, O, I). Define helpers before use.\n- Use context managers (`with`) for file I/O and resource management.\n- Prefer `pathlib.Path` over `os.path` for file operations.",
+            "estimated_loc": 50,
+            "feature_id": "F-001",
+            "language_id": "python",
+            "language_role": "an expert Python engineer",
+            "target_files": [
+              "src/alpha.py"
+            ]
+          },
+          "requirements_text": "",
+          "task_description": "alpha module \u2014 requirements: FR-1"
+        },
+        "depends_on": [],
+        "labels": [],
+        "priority": "medium",
+        "story_points": 2,
+        "task_id": "PI-001",
+        "task_type": "task",
+        "title": "alpha module"
+      },
+      {
+        "config": {
+          "context": {
+            "artifact_types_addressed": [
+              "source_module"
+            ],
+            "coding_standards": "Python coding standards:\n- PEP 8 naming: snake_case functions/variables, PascalCase classes, UPPER_SNAKE constants.\n- Type hints on all public function signatures (parameters and return types).\n- Use specific exception types: `except (ValueError, TypeError):` \u2014 NEVER use bare `except:` or `except: pass`.\n- Use `from __future__ import annotations` for forward references.\n- LOGGING: Use `logging.getLogger(__name__)` \u2014 NEVER use `print()` for diagnostic output in library/service code.\n- IMPORTS: stdlib first, third-party second, local third (isort convention). No single-letter variable names (l, O, I). Define helpers before use.\n- Use context managers (`with`) for file I/O and resource management.\n- Prefer `pathlib.Path` over `os.path` for file operations.",
+            "estimated_loc": 60,
+            "feature_id": "F-002",
+            "language_id": "python",
+            "language_role": "an expert Python engineer",
+            "target_files": [
+              "src/beta.py"
+            ]
+          },
+          "requirements_text": "",
+          "task_description": "beta module \u2014 requirements: FR-2"
+        },
+        "depends_on": [
+          "PI-001"
+        ],
+        "labels": [],
+        "priority": "low",
+        "story_points": 3,
+        "task_id": "PI-002",
+        "task_type": "task",
+        "title": "beta module"
+      },
+      {
+        "config": {
+          "context": {
+            "artifact_types_addressed": [
+              "source_module"
+            ],
+            "coding_standards": "Python coding standards:\n- PEP 8 naming: snake_case functions/variables, PascalCase classes, UPPER_SNAKE constants.\n- Type hints on all public function signatures (parameters and return types).\n- Use specific exception types: `except (ValueError, TypeError):` \u2014 NEVER use bare `except:` or `except: pass`.\n- Use `from __future__ import annotations` for forward references.\n- LOGGING: Use `logging.getLogger(__name__)` \u2014 NEVER use `print()` for diagnostic output in library/service code.\n- IMPORTS: stdlib first, third-party second, local third (isort convention). No single-letter variable names (l, O, I). Define helpers before use.\n- Use context managers (`with`) for file I/O and resource management.\n- Prefer `pathlib.Path` over `os.path` for file operations.",
+            "estimated_loc": 70,
+            "feature_id": "F-003",
+            "language_id": "python",
+            "language_role": "an expert Python engineer",
+            "target_files": [
+              "src/gamma.py"
+            ]
+          },
+          "requirements_text": "",
+          "task_description": "gamma module \u2014 requirements: FR-3"
+        },
+        "depends_on": [],
+        "labels": [],
+        "priority": "low",
+        "story_points": 3,
+        "task_id": "PI-003",
+        "task_type": "task",
+        "title": "gamma module"
+      }
+    ],
+    "version": "1.0.0"
+  },
+  "review-config.json": {
+    "_ingestion_metadata": {
+      "complexity_reasoning": "Heuristic fallback complexity used after assess failure",
+      "complexity_score": 24,
+      "route": "prime"
+    },
+    "document_path": "<OUTDIR>/plan-ingestion-tasks.yaml",
+    "init_if_missing": true,
+    "max_suggestions": 10,
+    "quality_tier": "flagship",
+    "reviewer_count": 0,
+    "scope": ""
+  }
+}
