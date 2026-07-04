@@ -459,6 +459,19 @@ def failure_output_preview(stdout: str, stderr: str, *, limit: int = 200) -> str
     return output[:limit]
 
 
+def classify_attempt_status(exit_code: int, missing_files: list[str]) -> str:
+    """Classify a child authoring attempt after required-file inspection."""
+    if exit_code == 0 and not missing_files:
+        return "success"
+    if exit_code == 124 and not missing_files:
+        return "completed_with_timeout"
+    return "failed"
+
+
+def attempt_has_required_artifacts(status: str) -> bool:
+    return status in {"success", "completed_with_timeout"}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=prepare.DEFAULT_MANIFEST)
@@ -590,10 +603,10 @@ def main(argv: list[str] | None = None) -> int:
         tool_env, env_exposure = build_tool_env(tool_id, credentials)
         command_policy = command_policy_metadata(tool_id, executable_path, executable_version)
 
-        success = False
+        terminal_artifacts = False
         attempts = 0
         attempt_records: list[dict] = []
-        while not success and attempts <= max_retries:
+        while not terminal_artifacts and attempts <= max_retries:
             attempts += 1
             if attempts > 1:
                 print(f"  Attempt {attempts} (retry) for [{ordinal}/{total_runs}]...")
@@ -619,11 +632,17 @@ def main(argv: list[str] | None = None) -> int:
                 required_files = ["suite.py", "suite_manifest.json", "authoring_manifest.json"]
             missing_files = [f for f in required_files if not (run_workspace / f).is_file()]
 
-            if code == 0 and not missing_files:
-                success = True
-                status_str = "success"
-            else:
-                status_str = "failed"
+            status_str = classify_attempt_status(code, missing_files)
+            terminal_artifacts = attempt_has_required_artifacts(status_str)
+            if status_str == "completed_with_timeout":
+                print(
+                    f"  Completed required files but timed out: "
+                    f"exit_code={code}, missing_files={missing_files}"
+                )
+                preview = failure_output_preview(stdout, stderr)
+                if preview:
+                    print(f"  Output: {preview}")
+            elif status_str == "failed":
                 print(f"  Failed: exit_code={code}, missing_files={missing_files}")
                 if code != 0:
                     preview = failure_output_preview(stdout, stderr)
@@ -636,6 +655,7 @@ def main(argv: list[str] | None = None) -> int:
                 "missing_files": missing_files,
                 "timed_out": timed_out,
                 "timeout_seconds": timeout_s,
+                "required_files_complete": not missing_files,
                 "started_at_utc": start_time, "finished_at_utc": end_time,
             }
             record_attempt(run_capture_dir, attempts, prompt_text=prompt_text, stdout=stdout,
@@ -663,11 +683,12 @@ def main(argv: list[str] | None = None) -> int:
             "mode": "non_evidence_smoke" if args.smoke else "gated",
             "evidence_role": "non_evidence_smoke" if args.smoke else "audit_evidence_candidate",
             "promote_to_evidence": not args.smoke,
-            "status": "success" if success else "failed",
+            "status": attempt_records[-1]["status"],
             "exit_code": attempt_records[-1]["exit_code"],
             "missing_files": attempt_records[-1]["missing_files"],
             "timed_out": attempt_records[-1]["timed_out"],
             "timeout_seconds": timeout_s,
+            "required_files_complete": attempt_records[-1]["required_files_complete"],
             "started_at_utc": attempt_records[0]["started_at_utc"],
             "finished_at_utc": attempt_records[-1]["finished_at_utc"],
             "attempts": attempts,

@@ -123,6 +123,19 @@ def test_failure_output_preview_falls_back_to_stdout():
     assert mod.failure_output_preview("stdout detail", "stderr detail") == "stderr detail"
 
 
+def test_classify_attempt_status_distinguishes_timeout_with_complete_files():
+    assert mod.classify_attempt_status(0, []) == "success"
+    assert mod.classify_attempt_status(124, []) == "completed_with_timeout"
+    assert mod.classify_attempt_status(124, ["suite_manifest.json"]) == "failed"
+    assert mod.classify_attempt_status(1, []) == "failed"
+
+
+def test_attempt_has_required_artifacts_for_success_and_completed_timeout():
+    assert mod.attempt_has_required_artifacts("success")
+    assert mod.attempt_has_required_artifacts("completed_with_timeout")
+    assert not mod.attempt_has_required_artifacts("failed")
+
+
 def test_metadata_records_names_not_secret_values():
     meta = mod.command_policy_metadata("claude-code", "/opt/bin/claude", "1.2.3")
     blob = json.dumps(meta)
