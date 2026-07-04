@@ -1,6 +1,6 @@
 # Guided Experience — Requirements
 
-**Version:** 0.3 (Post lessons-learned hardening — ready for CRP)
+**Version:** 0.4 (Post-CRP triage — R1/R2/R3 applied)
 **Date:** 2026-07-04
 **Status:** Draft
 **Parent:** `PROJECT_START_REQUIREMENTS.md` v0.17 (§0.4 essential-model revision, FR-6, NR-1/NR-2)
@@ -31,7 +31,7 @@
 - **[Phantom-reference audit]** — verified every load-bearing symbol directly:
   the reused routing ladder is *verbatim* flag→project→global→default
   (`concierge_agent.py:5-8`); `build_kickoff_plan` exists (`orchestrator.py:123`);
-  the three CLI groups are exactly `kickoff`/`concierge`/`panel` (`cli.py:1260-1262`,
+  the three CLI groups are exactly `kickoff`/`concierge`/`panel` (`cli.py:1258-1260`,
   confirming the retire-two-into-one target); `stakeholder_panel/facilitation.py` is
   **confirmed absent** (the promotion target, D2); the advisor is **confirmed no-LLM/$0**
   (`red_carpet_advisor.py:1,3`). **All pass** — the plan rests on real code.
@@ -75,8 +75,8 @@ document specifies it. Two forces shape it:
 | Red Carpet (`red_carpet*.py`) | Agentic "from-nothing" conductor + advisor + wizard | Keep the *conductor* value (walk a no-agent user to build-ready); fold in; drop the separate metaphor |
 | Facilitation panel (`run_kickoff_panel.py` + `stakeholder_panel/`) | Validated multi-perspective discovery (mirror→lens→convergence); prototype orchestrator | Keep as the *optional discovery pass* within the experience; apply FR-13c hardening |
 | Teian point-value drafter | The dropped ghost | Stays dropped (NR-7) |
-| Routing / "which experience" | Ad-hoc; no detection of agent-present vs. standalone/cloud | New: offer-not-force routing on deployment/agent/project signals |
-| Deployment (cloud/standalone) | Deployment-mode capability exists; guided experience not wired as the no-agent surface | New: the guided experience is the primary surface when no agent is present |
+| Routing / "which experience" | Ad-hoc; no detection of agent-present vs. standalone/cloud | New: offer-not-force routing on **explicit-preference > surface > project-shape** signals (agent-presence is **never detected** — §0 D1) |
+| Deployment (cloud/standalone) | **No SDK self-hosting-context capability exists** (§0 D1); the only "deployment mode" grades the *generated app's* posture, not the SDK's own hosting context; guided experience not wired as the no-agent surface | New: the guided experience is the primary surface when no agent is present |
 
 ---
 
@@ -88,6 +88,11 @@ document specifies it. Two forces shape it:
   **additive, opt-in layer** over the kernel. The kernel works fully and
   **byte-identically without it**; engaging it leaves no trace in the kernel's
   outputs when subsequently absent. The kernel never depends on the guided layer.
+  **Residue acceptance (R1-F11):** engaging *then disengaging* the layer (a guided
+  run, then a `--no-guided` run) must leave kernel outputs **byte-identical to a
+  never-engaged run** — residue (config, cached transcripts, preference files) from a
+  prior guided run must not perturb a later kernel-only run. Golden test: kernel-only
+  run A vs guided-then-kernel-only run B ⇒ identical kernel bytes.
 
 - **FR-GE-2 — Available but not required; complement not substitute.** The guided
   experience is **offered, never forced**. A BYO-agent user is never pushed into it;
@@ -96,22 +101,45 @@ document specifies it. Two forces shape it:
 
 ### Routing — "meet the user where they are"
 
-- **FR-GE-3 — Offer-not-force routing (re-keyed, v0.2).** The SDK decides *whether to
-  offer* the guided experience from cheap signals, in this precedence (the
-  `concierge_agent.py:59-75` ladder reused verbatim): **(1) explicit preference** —
-  `--guided/--no-guided` flag > per-project `build-preferences.yaml` > global
-  `~/.startd8/config.json` > default; **(2) surface** — a served/TUI invocation
-  implies no-agent ⇒ offer; **(3) project-shape** — `build_assess` greenfield-blank
-  ⇒ stronger offer, rich-brownfield ⇒ quieter. The result is an *offer*, never a
-  forced path; default bias quiet (a wrong offer is one ignorable line, never a
-  gate). **Not a signal:** "presence of a driving agent" is **not detected** — a CLI
-  human with their own agent and a standalone human are byte-identical to the
-  process (planning D1). Agent-presence is expressed only through the explicit
-  preference, never inferred.
+- **FR-GE-3 — Offer-not-force routing (re-keyed, v0.2; semantic contract v0.4).** The
+  SDK decides *whether to offer* the guided experience from cheap signals, in this
+  precedence — expressed as a **semantic contract**, using the same precedence
+  *pattern* as the `concierge_agent.py:59-75` ladder but **not reused verbatim**
+  (R2-F3): the source ladder is the reference, not the definition; a contract test
+  owns these semantics and does not import `concierge_agent.py`. Precedence: **(1)
+  explicit preference** — `--guided/--no-guided` flag > per-project
+  `build-preferences.yaml` > global `~/.startd8/config.json` > default; **(2)
+  surface** — a served/TUI invocation implies no-agent ⇒ offer; **(3) project-shape**
+  — `build_assess` greenfield-blank ⇒ stronger offer, rich-brownfield ⇒ quieter. The
+  result is an *offer*, never a forced path; default bias quiet (a wrong offer is one
+  ignorable line, never a gate).
+  - **Tri-state semantics (R3-F2).** Each preference layer is **tri-state** — `on` /
+    `off` / `unset`. The guided preference's value domain is **not** the agent-spec
+    ladder's (which resolves a *non-empty string* and skips falsy/unusable layers via
+    `_usable()`): here an explicit **`off`** at a higher layer (`--no-guided`, or
+    project `guided: false`) **terminates resolution** and must **never fall through**
+    to a lower layer's `on`. A falsy/`None` fall-through here would silently violate
+    FR-GE-4 — so "verbatim" is exactly the property that cannot hold.
+  - **Non-interactive (R1-F4).** When stdout/stdin is non-interactive (piped, no TTY,
+    CI), the offer line is **suppressed, never blocking**; `--guided` still runs
+    without the offer prose; kernel bytes unchanged.
+  - **Served-agent (R1-F5).** The surface heuristic (2) is **overridable**: an agent
+    serving the UI is expected to set `--no-guided`/config to suppress the offer;
+    explicit preference always beats the surface heuristic (a served surface *can* be
+    agent-driven).
+  - **Not a signal:** "presence of a driving agent" is **not detected** — a CLI human
+    with their own agent and a standalone human are byte-identical to the process
+    (planning D1). Agent-presence is expressed only through the explicit preference,
+    never inferred.
 
 - **FR-GE-4 — Explicit override always wins.** A user can always force-on
   (`--guided`) or force-off (`--no-guided`) regardless of the detected signals.
-  Detection is a convenience, not an authority.
+  Detection is a convenience, not an authority. **Force-off must not be lost to a
+  falsy fall-through (R3-F2):** because the preference is tri-state (FR-GE-3), an
+  explicit force-**off** must terminate ladder resolution and must **not** be dropped
+  to a lower layer's `on` by a falsy/`None` skip in the reused precedence. Contract
+  test: project `guided: false` + global `guided: true` ⇒ **no offer**; `--no-guided`
+  beats any config `true` — both must pass without importing `concierge_agent.py`.
 
 ### One consolidated experience (anti-sprawl)
 
@@ -131,12 +159,23 @@ document specifies it. Two forces shape it:
   + wizard already walk a no-agent user to build-ready. The LLM `--agent` loop stays
   **strictly opt-in and propose-only**; it is NOT required for "guided", so
   FR-GE-2's "never left without it" is satisfied at **zero LLM cost** (planning D5).
+  **Deepen skip / early-exit (R2-F4):** Deepen is optional *mid-flow* too — a user who
+  enters it and abandons before completion exits **cleanly**: Guide-phase outputs
+  intact, **no partial transcript committed**, no kernel-visible residue (atomic per
+  FR-GE-13). Test: a Deepen session interrupted (Ctrl-C / explicit skip) leaves Guide
+  outputs unchanged and the safe-write store clean or atomically rolled back; kernel
+  outputs after abort are byte-identical to a Guide-only run.
 
 - **FR-GE-6 — Over the SAME kernel; no new engine.** The guided experience adds
   **sequencing, presentation, and prompts only**. It reuses the kernel verbs
   (`survey`/`instantiate`/`assess`/`derive`) and the safe-write floor; it introduces
   **no new extractor, generator, writer, or readiness computation**. (Anti-principle:
-  the guided layer is orchestration, not a second implementation.)
+  the guided layer is orchestration, not a second implementation.) **Enforcement
+  (R2-F2):** this is a **CI-enforceable gate**, not an assertion — an AST/grep check
+  over the guided-layer modules **fails** if a new class or function matching the
+  prohibited extractor/generator/writer/readiness-computation patterns is introduced;
+  the check is part of the M2 exit gate (the M2 detangle is the riskiest window for
+  accidental engine introduction).
 
 - **FR-GE-7 — Consolidate; success metric = one entry point / one vocabulary / one
   write path (reframed v0.2).** The user-facing surface uses **one name** and **one
@@ -148,6 +187,22 @@ document specifies it. Two forces shape it:
   paths (→1 via the safe-write floor)** — NOT in raw LOC. This is a *detangling*, and
   facilitation promotion (FR-GE-11a) *adds* a module; the anti-sprawl claim is
   "one entry point, one vocabulary, one write path," not "fewer lines."
+  - **Anti-re-accretion conformance (R1-F1).** After M1 it is a **spec violation** to
+    introduce a new top-level CLI group in the kickoff domain, or a second
+    user-facing vocabulary for these functions. CI asserts `startd8 --help` exposes
+    **exactly one** kickoff-domain group post-M1; a new group registration fails lint.
+    Without a testable prohibition the sprawl re-accretes exactly as it did before.
+  - **Vocabulary scope (R2-F7).** "User-facing vocabulary" covers not only `--help`
+    and docs but CLI **error, `--verbose`, and traceback output** — internal names
+    leak there and re-emerge as a second vocabulary. The five retired metaphor names
+    must appear in none of these at the M1/M2 exit gate.
+  - **Surfaces the metric covers (R3-F5).** The one-vocabulary metric enumerates CLI
+    groups/verbs, TUI labels, served-UI text, **and the MCP `startd8_concierge` action
+    enum** (a live vocabulary surface). Retiring the MCP action vocabulary rides the
+    **parent's amended FR-10 alias window** (which the parent CRP extended to cover
+    both CLI names *and* the MCP `ConciergeInput.action` enum) — cited, not forked
+    (§0.1 single-source ownership); if MCP is scoped out of v-next, that is stated
+    with rationale.
 
 ### Deployment contexts (first-class)
 
@@ -163,10 +218,27 @@ document specifies it. Two forces shape it:
   design (OQ-GE-7). Note: there is **no SDK self-hosting-context capability** to tie
   into (planning D1); "cloud vs standalone" is known only from how the SDK is
   invoked/served, not detected.
+  - **Cloud Deepen cost/abuse (R1-F8).** Cloud read/preview-only serves **only
+    already-persisted transcripts** — a static preview with **no LLM call**.
+    **LLM-invoking Deepen is disabled on cloud** for v-next, because cloud has only a
+    static `X-API-Key` (no principal/tenancy) and a read-only surface that triggers
+    paid LLM calls (FR-GE-10 H3) is an un-metered per-tenant cost/abuse surface,
+    *distinct* from the write-trust problem OQ-GE-7 defers. Any future cloud
+    LLM-invoking Deepen is folded into OQ-GE-7's net-new auth/tenancy design and gated
+    by a per-tenant budget control.
+  - **Download format (R2-F5).** What a cloud user downloads is **byte-identical to
+    the local safe-write output** (the same YAML/JSON files the local floor would
+    produce), so it feeds the kernel with no conversion and preserves FR-GE-2's
+    same-input guarantee. Test: a file downloaded from cloud, written to local
+    `.startd8/`, passes kernel `assess` identically to a locally produced file.
 
 - **FR-GE-9 — Surface parity across CLI / TUI / served.** The same guided experience
-  is reachable from CLI, TUI, and a served (web) surface, differing only in
-  rendering. Cross-surface parity is a test requirement.
+  is reachable from CLI, TUI, and a served (web) surface. **Parity is of *produced
+  inputs/artifacts*, not of interaction modality (R1-F12):** some phases are
+  modality-bound (a served UI cannot run an interactive TTY wizard step), so
+  "differing only in rendering" is scoped to *outcome* — each surface must produce the
+  same inputs, and the parity test asserts identical produced artifacts, **not**
+  identical interaction steps. Cross-surface parity is a test requirement.
 
 ### The facilitation panel (hardened)
 
@@ -175,6 +247,14 @@ document specifies it. Two forces shape it:
   the real system, not just a schema/description), **H2** assumptions-check-as-gate
   (halt + surface "validate the premise" on ≥N high-impact/low-confidence
   assumptions), **H3** cost tracking (real per-call spend, budget-gated).
+  - **H2 is scoped to the Deepen phase only (R1-F7).** The halt fires **only** after
+    the human has opted into Deepen; Orient/Guide **never** halt on assumptions, so H2
+    never contradicts FR-GE-3's "never a gate" offer guarantee. Test: Orient/Guide
+    never halt; only an explicitly-entered Deepen pass can.
+  - **H3 scope (R2-F6).** "Budget-gated" is bounded: **per-round** cost is logged, the
+    **session total** is surfaced in the Deepen output, and the budget cap is a **hard
+    halt** checked **before** each LLM call — **no** call is made after the cap is
+    breached (not a warning, not advisory).
 
 - **FR-GE-11a — Promote the facilitation process into the package, then harden
   (v0.2, planning D2/D8).** The facilitated multi-round process currently exists
@@ -185,31 +265,69 @@ document specifies it. Two forces shape it:
   persistence routed through `concierge/safe_write.py` — so it is importable,
   testable, and confined. Hardening (H1/H2/H3, transcript persistence, anti-smoothing)
   applies to the *promoted* module, not the script.
+  - **Behavioral equivalence, promote-before-harden (R1-F2).** The promotion must
+    **preserve behavior**: capture a **golden transcript** (fixed seed/personas) from
+    `run_kickoff_panel.py` and assert the promoted module reproduces round structure,
+    per-persona outputs, and FR-GE-12 named tensions **before any hardening begins**.
+    A promotion that silently changes rounds/synthesis is a regression no other
+    criterion catches.
+  - **Depends-on OQ-GE-8 (R1-F3; now RESOLVED, §4).** The promoted module **reuses
+    `StakeholderPanel.ask_all`** for each round's mirror and adds a **thin multi-round /
+    cross-pollination / synthesis orchestration layer above it** — no new engine
+    (FR-GE-6). This resolution unblocks the build; M3a (promote + equivalence gate)
+    precedes M3b (harden).
+  - **Transcript contract preservation (R3-F4).** Re-routing persistence through the
+    safe-write floor must **preserve the transcript contract** the sibling
+    observability-UX doc consumes: the path (`.startd8/kickoff-panel/<session_id>.json`,
+    `KICKOFF_PANEL_OBSERVABILITY_UX_REQUIREMENTS.md` FR-UX-1), the
+    `KICKOFF_PANEL_FACILITATION_DESIGN.md` §6 schema, and the **round-by-round
+    incremental write cadence** (FR-UX-17 live-follow polls the file as rounds land).
+    An end-of-session-only atomic write **breaks** live-follow even though every other
+    FR-GE-11a bullet still passes; require **per-round atomic-replace**, or version the
+    contract and update the UX doc in the same change.
 
-- **FR-GE-11 — Persist raw per-round transcripts (R1-F6).** The facilitation phase
+- **FR-GE-11 — Persist raw per-round transcripts (parent-CRP R1-F6 — transcript
+  persistence).** The facilitation phase
   **persists the raw per-round persona outputs** as the human-validation substrate
   for the LLM synthesizer, distinct from the synthesized register. This is a
   requirement (the value case relies on it), rendered by the observability UX
   (`KICKOFF_PANEL_OBSERVABILITY_UX_REQUIREMENTS.md` — reference, not duplicated here).
 
-- **FR-GE-12 — Anti-smoothing is a requirement, not a behavior (R2-F7).** The
-  synthesizer **must preserve open tensions** — a cross-role disagreement present in
-  the raw rounds must appear in the synthesis as an explicit open item, never
-  resolved into false consensus. Testable: named raw-round tensions must be present
-  in the synthesis output.
+- **FR-GE-12 — Anti-smoothing is a requirement, not a behavior (parent-CRP R2-F7 —
+  anti-smoothing).** The synthesizer **must preserve open tensions** — a cross-role
+  disagreement present in the raw rounds must appear in the synthesis as an explicit
+  open item, never resolved into false consensus. Testable: named raw-round tensions
+  must be present in the synthesis output. **Tension-naming schema (R2-F1):** each
+  raw-round tension carries a **machine-checkable identity** (`tension_id`, e.g. `T1`)
+  in a structured field, so the anti-smoothing assertion is checked **structurally** —
+  a synthesis run must surface each `tension_id` as an explicit open item, never
+  resolved — **not** by prose-matching (which cannot distinguish a tension preserved
+  from one paraphrased away). CI asserts this on a tagged fixture.
 
 ### Safety
 
-- **FR-GE-13 — All writes ride the kernel safe-write floor (FR-7 / R3-F4).** Every
-  byte the guided experience writes — input files AND facilitation transcripts —
-  goes through the kernel's **confined, human-privilege safe-write floor** (no
-  traversal/symlink escape, atomic). Over any LLM-invoked surface it is
-  read/preview-only; the human/CLI is the sole writer.
+- **FR-GE-13 — All writes ride the kernel safe-write floor (parent FR-7 / parent-CRP
+  R3-F4 — safe-write store).** Every byte the guided experience writes — input files
+  AND facilitation transcripts — goes through the kernel's **confined, human-privilege
+  safe-write floor** (no traversal/symlink escape, atomic). Over any LLM-invoked
+  surface it is read/preview-only; the human/CLI is the sole writer.
+  **Config/preference writes are not exempt (R1-F6):** the guided layer's own routing
+  writes — `build-preferences.yaml`, `~/.startd8/config.json` (FR-GE-3) — **also** ride
+  the floor (confined, atomic, traversal-safe); "every byte the guided experience
+  writes" includes them. **Atomicity granularity (R3-F4)** is load-bearing for the
+  observability-UX live-follow consumer: transcript writes are **per-round
+  atomic-replace**, not end-of-session-only, so FR-UX-17 polling still sees rounds
+  land incrementally.
 
 - **FR-GE-14 — Produces inputs for human ratification; never authors or decides.**
   The guided experience helps a human *produce and judge* inputs. It never authors
   real value content (bucket 4) and never makes a decision the human should make;
-  every synthetic output is provenance-marked and human-ratified.
+  every synthetic output is provenance-marked and human-ratified. **Acceptance
+  (R1-F10):** every synthetic output carries a **machine-checkable provenance marker**
+  and a **ratification state** (unratified by default); the kernel **refuses (or warns
+  on) an unratified synthetic input** until the human explicitly ratifies it. Test: a
+  synthetic input written by the guided layer is tagged unratified; feeding it to the
+  kernel without ratification is refused/warned.
 
 ---
 
@@ -228,7 +346,8 @@ document specifies it. Two forces shape it:
 
 ## 4. Open Questions
 
-_OQ-GE-1 through GE-6 resolved by the planning pass (§0). Remaining:_
+_OQ-GE-1 through GE-6 resolved by the planning pass (§0); OQ-GE-8 resolved by CRP
+triage (v0.4). Only OQ-GE-7 (cloud-write trust model) remains open._
 
 - **OQ-GE-1 — RESOLVED.** No SDK self-hosting-context capability exists (D1). Route on
   explicit-preference > surface > project-shape; agent-presence is preference-only,
@@ -247,11 +366,14 @@ _OQ-GE-1 through GE-6 resolved by the planning pass (§0). Remaining:_
   (`server/auth.py` is a static API-key on POST only, D6). What principal + tenancy +
   CSRF model does cloud-write require, and does it belong to the guided experience or
   to a broader SDK deployment-auth capability? Deferred; blocks FR-GE-8 cloud-write.
-- **OQ-GE-8 (NEW) — Facilitation promotion scope.** Promoting `run_kickoff_panel.py`
-  (438 LOC) into `stakeholder_panel/facilitation.py` (FR-GE-11a): does the promoted
-  module reuse `StakeholderPanel.ask_all` directly, or does the multi-round/
-  cross-pollination/synthesis logic need its own abstraction above it? Sizing the
-  biggest lift.
+- **OQ-GE-8 — RESOLVED (v0.4, R1-F3).** Promoting `run_kickoff_panel.py` (438 LOC)
+  into `stakeholder_panel/facilitation.py` (FR-GE-11a): the promoted module **reuses
+  `StakeholderPanel.ask_all` directly** for each round's mirror and adds a **thin
+  multi-round / cross-pollination / synthesis orchestration layer above it**
+  (sequencing + per-round persistence + synthesis prompt) — orchestration only, **no
+  new engine** (FR-GE-6). This is enough to unblock M3a; any deeper abstraction is an
+  implementation detail, not a blocker. The build shape no longer depends on an open
+  question (the prior circular dependency R1-F3 flagged is dissolved).
 
 ---
 
@@ -262,6 +384,15 @@ promote-then-harden), 6 OQs resolved, 2 new (cloud-write, promotion scope). The
 consolidation survives — but "net-reduce modules" was the wrong headline; the real
 win is one entry point / one vocabulary / one write path, and the detection signal I
 assumed (SDK deployment-mode self-awareness) does not exist.*
+
+*v0.4 — Post-CRP triage (R1 claude-opus-4-8, R2 claude-sonnet-4-6, R3 claude-fable-5).
+24 F-suggestions accepted and merged into prose: routing tri-state + non-interactive +
+served-agent + semantic-contract (FR-GE-3/4), FR-GE-11a behavioral-equivalence +
+transcript-contract + OQ-GE-8 resolution, FR-GE-12 tension-naming schema, FR-GE-6 CI
+gate, FR-GE-7 anti-re-accretion + vocab-scope + MCP-surface, FR-GE-8 cloud-Deepen
+cost/abuse + download format, safety acceptance criteria (FR-GE-1/13/14), gap-table
+stale-row fix, and cross-doc review-ID namespacing (parent-CRP citations). Version
+reconciled to v0.4 across header/footer; plan tracks v0.4. See Appendix A.*
 
 ---
 
@@ -281,13 +412,36 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F1 | Anti-re-accretion conformance clause | R1 | Merged into FR-GE-7 (spec-violation to add new kickoff group/vocab post-M1) | 2026-07-04 |
+| R1-F2 | Behavioral-equivalence golden transcript | R1 | Merged into FR-GE-11a (promote-before-harden gate) | 2026-07-04 |
+| R1-F3 | Block FR-GE-11a on OQ-GE-8 | R1 | Resolved OQ-GE-8 in §4; FR-GE-11a Depends-on clause added | 2026-07-04 |
+| R1-F4 | Non-interactive offer suppression | R1 | Merged into FR-GE-3 (non-interactive clause) | 2026-07-04 |
+| R1-F5 | Served-agent overridable heuristic | R1 | Merged into FR-GE-3 (served-agent clause) | 2026-07-04 |
+| R1-F6 | Enumerate config/preference writes | R1 | Merged into FR-GE-13 (not-exempt clause) | 2026-07-04 |
+| R1-F7 | Scope H2 halt to Deepen only | R1 | Merged into FR-GE-10 (H2 scope bullet) | 2026-07-04 |
+| R1-F8 | Cloud Deepen cost/abuse gating | R1 | Merged into FR-GE-8 (LLM-Deepen disabled on cloud; fold to OQ-GE-7) | 2026-07-04 |
+| R1-F9 | Reconcile version drift | R1 | Header/footer → v0.4; plan Tracks → v0.4 | 2026-07-04 |
+| R1-F10 | FR-GE-14 provenance/ratification test | R1 | Merged into FR-GE-14 (acceptance criterion) | 2026-07-04 |
+| R1-F11 | SOTTO engaged-then-disengaged residue | R1 | Merged into FR-GE-1 (residue acceptance) | 2026-07-04 |
+| R1-F12 | Parity of outcome, not modality | R1 | Merged into FR-GE-9 | 2026-07-04 |
+| R2-F1 | Tension-naming/tagging schema | R2 | Merged into FR-GE-12 (`tension_id` structural check) | 2026-07-04 |
+| R2-F2 | FR-GE-6 CI-enforceable criterion | R2 | Merged into FR-GE-6 (AST/grep M2 gate) | 2026-07-04 |
+| R2-F3 | Routing semantic contract (not verbatim) | R2 | Merged into FR-GE-3 (semantic-contract framing) | 2026-07-04 |
+| R2-F4 | Deepen skip / early-exit guarantee | R2 | Merged into FR-GE-5 | 2026-07-04 |
+| R2-F5 | Cloud download artifact format | R2 | Merged into FR-GE-8 (byte-identical to local safe-write) | 2026-07-04 |
+| R2-F6 | Scope H3 cost tracking | R2 | Merged into FR-GE-10 (H3 scope bullet) | 2026-07-04 |
+| R2-F7 | Vocabulary-retirement scope boundary | R2 | Merged into FR-GE-7 (covers errors/verbose/tracebacks) | 2026-07-04 |
+| R3-F1 | Namespace cross-doc review-ID citations | R3 | Re-cited FR-GE-11/12/13 as `parent-CRP …` | 2026-07-04 |
+| R3-F2 | Tri-state / force-off falsy fall-through | R3 | Merged into FR-GE-3 tri-state + FR-GE-4 | 2026-07-04 |
+| R3-F3 | Fix stale v0.1 gap-table rows | R3 | Gap-table rows 5–6 + §0.1 line-ref corrected | 2026-07-04 |
+| R3-F4 | Preserve transcript contract on re-route | R3 | Merged into FR-GE-11a + FR-GE-13 (per-round atomic cadence) | 2026-07-04 |
+| R3-F5 | Enumerate surfaces incl. MCP action enum | R3 | Merged into FR-GE-7 (MCP rides parent FR-10 alias window) | 2026-07-04 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| (none — all R1/R2/R3 F-suggestions accepted; reviewers avoided SETTLED items and used Endorsements for overlaps) |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 

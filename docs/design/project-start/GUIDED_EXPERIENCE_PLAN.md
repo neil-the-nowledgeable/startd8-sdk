@@ -1,8 +1,8 @@
 # Guided Experience — Implementation Plan
 
-**Version:** 1.0 (Post-planning)
+**Version:** 1.1 (Post-CRP triage — R1/R2/R3 applied)
 **Date:** 2026-07-04
-**Tracks:** `GUIDED_EXPERIENCE_REQUIREMENTS.md` v0.2
+**Tracks:** `GUIDED_EXPERIENCE_REQUIREMENTS.md` v0.4
 **Posture:** Detangle + consolidate + promote; deterministic-first; nothing forced; kernel byte-identical when absent.
 
 ---
@@ -17,25 +17,62 @@
    route its writes through the safe-write floor (D2/D8).
 4. **The win is surface/vocab/write-path reduction, not LOC** (D3/D7).
 5. **Cloud is read-only for now** — cloud-write has no trust substrate (D6).
+6. **SOTTO regression gate (R1-S11).** A golden test runs the kernel, then a guided
+   pass, then the kernel again, asserting **byte-identical** kernel outputs — catching
+   residue (config/preference/transcript writes) from a guided run (the
+   engaged-then-disengaged case, where the invariant historically breaks; FR-GE-1).
 
 ---
 
 ## Milestones
 
 ### M0 — Routing seam (small, safe)
-- Add a `guided` preference reusing the `concierge_agent.py:59-75` precedence ladder
-  (`--guided/--no-guided` → project `build-preferences.yaml` → global
-  `~/.startd8/config.json` → default-quiet). Route on: explicit > served-surface >
+- Add a `guided` preference reusing the `concierge_agent.py:59-75` precedence
+  **pattern** (**not** a verbatim copy — R2-S7/R3-S5): express it as a **semantic
+  contract** owned by the guided-experience routing seam, with a contract test that
+  does not import `concierge_agent.py` and **detects upstream drift** if that source
+  changes ladder semantics. Layers: `--guided/--no-guided` → project
+  `docs/kickoff/inputs/build-preferences.yaml` (key `guided:`) → global
+  `~/.startd8/config.json` → default-quiet. Route on: explicit > served-surface >
   `build_assess` project-shape. **No agent-presence detection.**
+- **Tri-state semantics (R3-S5).** Each layer is `on`/`off`/`unset`; the agent-spec
+  ladder resolves non-empty strings and *skips falsy layers*, so naive reuse makes an
+  explicit `guided: false` at project level **fall through** to a global
+  `guided: true` — violating FR-GE-4. Explicit `off` at a higher layer **terminates
+  resolution**. Contract test: project `guided: false` + global `guided: true` ⇒ no
+  offer; `--no-guided` beats any config `true`.
+- **Non-interactive + served-agent (R1-S5).** Piped/CI (no TTY) ⇒ offer line
+  **suppressed, never blocking**, kernel bytes identical; a served surface an agent
+  drives ⇒ agent sets `--no-guided`/config, which (precedence) suppresses the offer.
+- **Route M0's own writes through the floor (R1-S7).** The preference/config writes
+  (`build-preferences.yaml`, `~/.startd8/config.json`) use the `concierge/safe_write.py`
+  API (confined, atomic, traversal-tested) — they are the first new write path since
+  the detangle and are **not** exempt (FR-GE-13); any exemption is documented + tested.
 - One ignorable offer line; `--no-guided` ⇒ kernel byte-identical (FR-GE-1/2/3).
 - **Satisfies:** FR-GE-1, FR-GE-2, FR-GE-3, FR-GE-4.
 
 ### M1 — Single entry point + vocabulary retirement
 - Introduce `startd8 kickoff guided` (or no-subcommand ⇒ guided offer) sequencing
   Orient→Guide→Deepen over `orchestrator.py:build_kickoff_plan`.
-- Retire `concierge_app`/`panel_app` as top-level groups (`cli.py:1259-1260`); alias
+- Retire `concierge_app`/`panel_app` as top-level groups (`cli.py:1258-1260`); alias
   their verbs under `kickoff` (hidden aliases for one release — parent FR-10).
-- **Net:** 3 groups → 1, 23 verbs → ~12.
+- **MCP vocabulary retirement (R3-S2).** Parent FR-10 (cited here) was **amended by
+  the parent's own CRP** (parent Appendix A, R1-F2) to require the alias window to
+  cover **both** CLI names **and** the MCP `ConciergeInput.action` enum. Add MCP
+  action aliases + deprecation warnings for the same one-release window (the
+  `startd8_concierge` tool is a live retired-vocabulary surface), or explicitly scope
+  MCP out with rationale. Gate: the five retired names absent from MCP tool/action
+  names+descriptions at the alias-window close.
+- **M1↔M2 coupling + rollback (R1-S1/R1-S2).** M1's hidden aliases carry a **removal
+  deadline tied to M2 completion**; "consolidation" is **not claimed done** until M2's
+  detangle lands (M1 alone hides sprawl behind aliases). Contingency if M2 slips:
+  either hold group-retirement until M2 is ready, or ship aliases with a tested
+  fallback so **every retired verb still resolves** even if M2 code is not yet merged.
+- **Verb-disposition table (R3-S3), M1 exit artifact.** Publish each of the verified
+  23 verbs → kept / renamed-under-kickoff / hidden-alias / retired; the `--help` verb
+  census must equal the table at the M1 exit gate (the "~12" number is otherwise
+  underivable).
+- **Net (tracking signal, not the gate):** 3 groups → 1, 23 verbs → ~12.
 - **Satisfies:** FR-GE-5, FR-GE-7, OQ-GE-2.
 
 ### M2 — Concierge/conductor detangle (the real reduction)
@@ -44,30 +81,101 @@
 - Merge `red_carpet_completion` + `wizard` + `orchestrator` (three overlapping
   "what's next" projections over the same advisor output) → one conductor module.
 - Collapse `chat.py`'s three constructors (`new_kickoff_chat`/`new_agentic_kickoff_chat`/
-  `new_red_carpet_chat`) → one parametrized constructor.
-- Verify all writes ride `concierge/safe_write.py` (FR-GE-13).
-- **Target:** 24 → ~16 modules. **Satisfies:** FR-GE-6, FR-GE-7, FR-GE-13, OQ-GE-3/6.
+  `new_red_carpet_chat`) → one parametrized constructor. **Name the parameter surface
+  (R2-S2):** state what varies (agent-presence, surface type, script mode) and the
+  parametrization contract; a call-site analysis must show **no flag combination is
+  dead code** — an omnibus constructor with N=3 boolean flags is three constructors
+  under one name (sprawl internalized, not removed).
+- **Write-audit CI gate (R1-S6), not a manual claim.** A repo-wide grep/AST gate fails
+  on any direct `open(..., 'w')`/`Path.write_*` in the kickoff/guided domain outside
+  `concierge/safe_write.py` — the only durable enforcement of the "one write path"
+  invariant (FR-GE-13).
+- **No-new-engine audit (R2-S6), parallel to the write audit.** An explicit CI check
+  asserts the merged conductor introduces no new extractor/generator/writer/
+  readiness-computation class or entry-point vs baseline (FR-GE-6) — the 3→1 merge is
+  the highest-risk window for accidental engine introduction.
+- **Metric framing (R3-S4).** The **M2 exit gate is the surface/vocab/write-path
+  assertions** (FR-GE-7's reframed metric), NOT the module count. "24 → ~16 modules"
+  is an **internal tracking signal**, reported but not gating (a landing at 18 modules
+  with a perfect surface/vocab/write-path outcome is still a pass). **Measurement scope
+  (R3-S3):** the module census is over `kickoff_experience/`; M3's `+1`
+  `facilitation.py` in `stakeholder_panel/` is out of that scope (it *adds* a module by
+  design — FR-GE-7).
+- **Target (tracking signal):** 24 → ~16 modules in `kickoff_experience/`.
+  **Satisfies:** FR-GE-6, FR-GE-7, FR-GE-13, FR-GE-14 (conductor-output provenance),
+  OQ-GE-3/6.
 
-### M3 — Promote & harden facilitation (biggest lift)
+### M3 — Promote & harden facilitation (biggest lift; split M3a/M3b — R1-S3)
+> **OQ-GE-8 is RESOLVED (R1-S4 / reqs R1-F3):** the promoted module reuses
+> `StakeholderPanel.ask_all` directly and adds a thin multi-round/synthesis
+> orchestration layer above it (no new engine). M3 is unblocked; the abstraction shape
+> is no longer an open question.
+
+**M3a — Promote + behavioral-equivalence gate (does NOT harden yet):**
 - **Promote** `run_kickoff_panel.py` orchestration → `stakeholder_panel/facilitation.py`,
-  built over the existing `StakeholderPanel`/roster/guards (OQ-GE-8 sizes the
-  abstraction). Route transcript persistence through the safe-write floor (fixes D8).
-- Then harden: **H1** artifact-grounding fidelity (read the running app / `survey`,
-  not just schema); **H2** assumptions-as-gate (halt on ≥N high-impact/low-confidence);
-  **H3** cost tracking (panel already tracks `cost_usd` — wire it end-to-end).
-- **FR-GE-11** raw-round persistence; **FR-GE-12** anti-smoothing as a *test* (assert
-  named raw-round tensions survive the synthesis; `_SYNTH_SYS` already instructs it —
-  make it verifiable).
-- **Satisfies:** FR-GE-10, FR-GE-11, FR-GE-11a, FR-GE-12, FR-GE-13.
+  built over the existing `StakeholderPanel`/roster/guards. Route transcript
+  persistence through the safe-write floor (fixes D8).
+- **Behavioral-equivalence gate (R1-S3), the M3a exit criterion.** A golden-file test
+  (script vs promoted module, fixed seed/personas) asserts identical round count,
+  per-persona outputs, and FR-GE-12 tensions. **M3b does not begin until this passes**
+  — so a promotion regression and a hardening change stay distinguishable.
+- **Transcript contract preservation (R3-S1).** The re-route through the floor must
+  preserve the contract the observability-UX doc consumes: path
+  (`.startd8/kickoff-panel/<session_id>.json`, FR-UX-1), §6 schema, and **per-round
+  incremental writes** (FR-UX-17 live-follow polls as rounds land). Require **per-round
+  atomic-replace** — an end-of-session atomic write kills live-follow while every other
+  M3 bullet still passes — or version the contract and update the UX doc in the same
+  milestone. Test: transcript exists at the contract path mid-run and gains rounds
+  incrementally; UX-doc FR-UX-3/FR-UX-17 fixtures pass against floor-written output.
+
+**M3b — Harden (only after the M3a gate):**
+- **H1** artifact-grounding fidelity: read the running app / `survey`, not just schema.
+  **Operationalized (R2-S3):** grounded mode uses a **live `survey` artifact distinct
+  from the schema**; if the live app is unavailable it either **hard-fails with a clear
+  message** or **degrades to schema-only with an explicit warning surfaced to the
+  human** (not silently). Test asserts one of those two paths.
+- **H2** assumptions-as-gate (halt on ≥N high-impact/low-confidence) — **scoped to the
+  Deepen phase only** (reqs R1-F7), never contradicting FR-GE-3's no-gate offer.
+- **H3** cost tracking — **"end-to-end" is bounded (R2-S1):** per-round cost logged,
+  session total surfaced (CLI output / transcript header), budget cap is a **hard
+  halt** checked **before** each LLM call. Test: a run with cap N is refused before
+  call K+1 when cumulative cost exceeds N; per-session spend appears in the transcript.
+- **FR-GE-11** raw-round persistence; **FR-GE-12** anti-smoothing as a *test* — assert
+  named raw-round **`tension_id`s** survive the synthesis (reqs R2-F1 schema;
+  `_SYNTH_SYS` already instructs it — make it structurally verifiable, not prose-match).
+- **FR-GE-14 provenance (R1-S10, M3-owned for transcripts):** facilitation synthetic
+  outputs are provenance-tagged **unratified**; the kernel refuses/warns on an
+  unratified synthetic input.
+- **Deepen skip / early-exit (R2-S5).** A user who opts into Deepen but abandons
+  mid-round exits cleanly: Guide outputs unchanged, **no partial transcript committed**,
+  safe-write store clean or atomically rolled back (FR-GE-1 byte-identical).
+- **Satisfies:** FR-GE-10, FR-GE-11, FR-GE-11a, FR-GE-12, FR-GE-13, FR-GE-14 (transcripts).
 
 ### M4 — Surface parity (CLI / TUI / served)
 - One view-model (`concierge_view.py` is already the parity oracle) feeds CLI, TUI,
   and the local served UI. Cross-surface parity test.
+- **Parity oracle scope (R1-S12).** Parity is of **produced inputs/artifacts, not
+  interaction modality** — a served UI cannot run a TTY wizard step, so the parity test
+  asserts identical produced artifacts across surfaces, not identical interaction steps.
+- **Name the surviving TUI surface (R3-S6).** M2 merges `tui_concierge` into the one
+  view+apply, so M4 must name the TUI surface it tests (main-TUI mixin or a new kickoff
+  screen over the shared view-model) or drop the TUI leg with rationale. The parity test
+  enumerates its three concrete surfaces by module/entry point, all extant post-M2.
 - **Satisfies:** FR-GE-9.
 
 ### M5 — Cloud scoping (read-only)
+> **Cross-milestone dependency note (R2-S4):** M5's decision on "LLM-invoking vs
+> static-transcript-only Deepen on cloud" can **scope-affect M3**. Per reqs R1-F8 the
+> decision is **fixed now, before M3 lands**: cloud Deepen is **static-transcript-only**
+> (no LLM call). M3 therefore builds the transcript in a **cloud-readable form from the
+> start**; M5 does not retroactively redefine M3 artifacts.
 - Ship cloud as **read/preview-only** (Orient + Deepen-view); local write uses the
-  existing loopback+token model. Human downloads produced inputs, writes locally.
+  existing loopback+token model. Human downloads produced inputs, writes locally
+  (download is **byte-identical to local safe-write output** — reqs R2-F5).
+- **Cloud Deepen is static-transcript-only (R1-S8).** Cloud serves **only persisted
+  transcripts** — **no LLM-invoking Deepen** under the static `X-API-Key` (no
+  principal/tenancy = un-metered per-tenant cost/abuse surface). Any future cloud
+  LLM-invoking Deepen is gated by a per-tenant budget/auth control folded into OQ-GE-7.
 - Cloud-**write** deferred (OQ-GE-7 — net-new auth/tenancy).
 - **Satisfies:** FR-GE-8 (standalone + cloud-read), NR (no cloud-write yet).
 
@@ -80,16 +188,27 @@
 | FR-GE-1/2/3/4 | M0 |
 | FR-GE-5, FR-GE-7 | M1 (+ M2 detangle) |
 | FR-GE-6, FR-GE-13 | M2 |
-| FR-GE-10/11/11a/12 | M3 |
+| FR-GE-10/11/11a/12 | M3 (M3a promote+equivalence-gate → M3b harden) |
 | FR-GE-9 | M4 |
 | FR-GE-8 | M5 |
-| FR-GE-14 | all (human ratifies; never authors/decides) |
+| FR-GE-14 | M2 (conductor-output provenance) + M3b (transcript provenance) — owning milestones, not "all" (R1-S10) |
 
 ---
 
 *Plan v1.0 — sequenced so routing (M0) and the single entry point (M1) land before
 the detangle (M2), the facilitation promotion+hardening (M3) is isolated as the big
 lift, and cloud stays read-only (M5) until the OQ-GE-7 auth design exists.*
+
+*Plan v1.1 — Post-CRP triage (R1 opus / R2 sonnet / R3 fable). 25 S-suggestions
+accepted and merged: M0 ladder-as-pattern + tri-state + non-interactive/served-agent +
+preference-writes-through-floor + drift contract test; M1↔M2 coupling + rollback + MCP
+alias window + verb-disposition table; M2 write-audit + no-new-engine CI gates +
+chat-param surface + module-count demoted to a tracking signal (gate on
+surface/vocab/write-path); M3 split into M3a (promote + behavioral-equivalence gate) /
+M3b (harden) with OQ-GE-8 resolved, H1/H3 operationalized, transcript-contract +
+Deepen-early-exit; M4 parity-oracle scope + surviving-TUI-surface; M5 cloud
+static-transcript-only + M3-scoping note; SOTTO regression gate; FR-GE-14 given owning
+milestones; version reconciled to track requirements v0.4. See Appendix A.*
 
 ---
 
@@ -109,13 +228,37 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-S1 | Couple M1↔M2 (alias removal deadline) | R1 | Merged into M1 (coupling note; consolidation not done until M2) | 2026-07-04 |
+| R1-S2 | Rollback if M2 slips | R1 | Merged into M1 (contingency: hold retirement or tested fallback) | 2026-07-04 |
+| R1-S3 | Split M3 into M3a/M3b | R1 | M3 restructured; behavioral-equivalence gate = M3a exit | 2026-07-04 |
+| R1-S4 | Block M3 on OQ-GE-8 | R1 | OQ-GE-8 resolved (reqs §4); M3 preamble notes it unblocked | 2026-07-04 |
+| R1-S5 | M0 non-interactive + agent-served | R1 | Merged into M0 (suppress offer clauses) | 2026-07-04 |
+| R1-S6 | M2 write-audit CI gate | R1 | Merged into M2 (grep/AST gate on non-safe-write) | 2026-07-04 |
+| R1-S7 | Route M0 preference/config writes | R1 | Merged into M0 (safe-write API, not exempt) | 2026-07-04 |
+| R1-S8 | Cloud Deepen static-only or budget gate | R1 | Merged into M5 (static-transcript-only) | 2026-07-04 |
+| R1-S9 | Fix version Tracks v0.2→v0.4 | R1 | Plan header Tracks → v0.4; plan → v1.1 | 2026-07-04 |
+| R1-S10 | FR-GE-14 owning milestone | R1 | FR→Milestone table: M2 + M3b own it | 2026-07-04 |
+| R1-S11 | SOTTO regression gate | R1 | Merged into Guiding constraints (#6) | 2026-07-04 |
+| R1-S12 | M4 parity oracle = produced artifacts | R1 | Merged into M4 | 2026-07-04 |
+| R2-S1 | M3 H3 end-to-end cost scope | R2 | Merged into M3b H3 (per-round/total/hard-halt) | 2026-07-04 |
+| R2-S2 | Name chat-constructor parameter surface | R2 | Merged into M2 (no dead flag combos) | 2026-07-04 |
+| R2-S3 | M3 H1 grounding criterion + fallback | R2 | Merged into M3b H1 (live survey / hard-fail or warn) | 2026-07-04 |
+| R2-S4 | Cross-milestone M5→M3 dependency note | R2 | Merged into M5 preamble (decision fixed pre-M3) | 2026-07-04 |
+| R2-S5 | M3 Deepen skip / early-exit | R2 | Merged into M3b | 2026-07-04 |
+| R2-S6 | M2 no-new-engine audit criterion | R2 | Merged into M2 (parallel CI check) | 2026-07-04 |
+| R2-S7 | Ladder drift contract test | R2 | Merged into M0 (pattern not verbatim + drift test) | 2026-07-04 |
+| R3-S1 | M3 transcript-contract preservation | R3 | Merged into M3a (per-round atomic cadence) | 2026-07-04 |
+| R3-S2 | M1 MCP-surface vocabulary retirement | R3 | Merged into M1 (parent FR-10 amended alias window) | 2026-07-04 |
+| R3-S3 | Verb-disposition table + module-count scope | R3 | Merged into M1 (exit artifact) + M2 (census scope) | 2026-07-04 |
+| R3-S4 | Demote module count to tracking signal | R3 | Merged into M2 (gate on surface/vocab/write-path) | 2026-07-04 |
+| R3-S5 | M0 tri-state + concrete path/key | R3 | Merged into M0 (tri-state semantics; `build-preferences.yaml` `guided:`) | 2026-07-04 |
+| R3-S6 | Name surviving TUI surface post-M2 | R3 | Merged into M4 | 2026-07-04 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| (none — all R1/R2/R3 S-suggestions accepted; reviewers avoided SETTLED items and used Endorsements/Disagreements for overlaps, e.g. R3 qualified R1-S1 which was applied per R3-S4) |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
