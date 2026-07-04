@@ -49,9 +49,11 @@ break them; that needs a separate "introduce confinement to FDE" design.
   into a negotiate *preview*.
 - **`--proposals -` (stdin):** let agents pipe an authored proposal set instead of writing a temp
   file. `_load_proposals_file` already parses YAML/JSON text; accepting `-` is a few lines.
-- **Surface cascade readiness in the init report:** `detect_shape` already folds in `concierge.assess`
-  (which computes the `$0`-cascade readiness). Print "inbox-ready; cascade 3/4 ready (missing:
-  conventions)" to turn a bare verdict into a next step.
+- **Surface cascade readiness in the init report:** `detect_shape` is a cheap on-disk *presence*
+  triage — it does **not** call `concierge.build_assess` (which computes the `$0`-cascade readiness).
+  To print "inbox-ready; cascade 3/4 ready (missing: conventions)" the report layer (`run_project_init`)
+  would make one **explicit** `build_assess` call — kept out of `detect_shape` so shape triage stays a
+  fast filesystem read.
 - **Reconsider `not_greenfield` exit code:** `project init --instantiate` on a brownfield produces
   nothing and exits 0 — a user who explicitly asked to instantiate gets silent success. Consider exit
   2 or a louder hint.

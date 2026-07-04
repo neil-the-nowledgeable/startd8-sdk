@@ -29,7 +29,13 @@ from .chat import (
     new_kickoff_chat,
     run_kickoff_repl,
 )
-from .proposals import ProposalBuffer, ProposedAction, apply_proposal, make_propose_handler
+from .proposals import (
+    ProposalBuffer,
+    ProposedAction,
+    apply_proposal,
+    build_proposal,
+    make_propose_handler,
+)
 from .manifest import (
     FieldDef,
     KickoffExperienceConfig,
@@ -109,6 +115,7 @@ __all__ = [
     "ProposalBuffer",
     "ProposedAction",
     "apply_proposal",
+    "build_proposal",
     "make_propose_handler",
     "NextAction",
     "build_kickoff_registry",

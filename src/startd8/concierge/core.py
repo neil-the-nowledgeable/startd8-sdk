@@ -33,6 +33,14 @@ WRITE_ACTIONS = ("instantiate-kickoff", "log-friction")
 DERIVE_ACTIONS = ("derive-contract",)
 DEFERRED_ACTIONS = ()
 
+# The four kickoff input *value* domains — the YAML files under ``docs/kickoff/inputs/``. This is the
+# single source of truth shared by concierge assessment (below), project-init shape triage, and the
+# red-carpet advisor, so "which inputs count" cannot drift across them. ``stakeholders`` is
+# deliberately NOT in this set: it carries a different shape/status set and each consumer handles it
+# as a dedicated special case (do not fold it in). The 3-domain stakeholder-authoring set in
+# ``stakeholder_panel.input_domains`` is a *different* concept (it excludes ``observability``).
+KICKOFF_INPUT_DOMAINS = ("business-targets", "observability", "conventions", "build-preferences")
+
 # --- survey heuristics (all path/name-based; never reads flagged file contents — OQ-8 lean) ---
 
 _REQ_DOC_GLOBS = ("**/*REQUIREMENT*.md", "**/*PRD*.md", "**/*PLAN*.md", "**/*REQUIREMENTS*.md")
@@ -227,9 +235,8 @@ def _assess_deployment(root: Path) -> Dict[str, Any]:
 def _assess_kickoff_inputs(root: Path) -> Dict[str, Any]:
     """Per kickoff input domain: present? and its declared provenance (honest, not graded)."""
     inputs_dir = root / "docs" / "kickoff" / "inputs"
-    domains = ("business-targets", "observability", "conventions", "build-preferences")
     out: Dict[str, Any] = {"inputs_dir": _rel(inputs_dir, root), "domains": {}}
-    for domain in domains:
+    for domain in KICKOFF_INPUT_DOMAINS:
         f = inputs_dir / f"{domain}.yaml"
         if not f.is_file():
             out["domains"][domain] = {"status": "absent"}
