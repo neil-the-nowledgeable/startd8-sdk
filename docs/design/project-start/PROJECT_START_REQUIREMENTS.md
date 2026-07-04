@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.4 (Design-conversation update — panel reclassified)
+**Version:** 0.5 (Consumer-validated against 3 real apps)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -121,6 +121,49 @@ already deterministic.
 **What did NOT change:** VIPP is still un-bundled (FR-14). Welcome Mat / Red Carpet
 still retire (FR-9–12). Teian's *drafting* dies (NR-7); its *coverage signal*
 survives as the discovery trigger.
+
+### 0.3 Consumer Validation — 3 real apps (natural experiment)
+
+> Checked the three apps mid-kickoff against the distilled model. They form a
+> near-perfect natural experiment (2 solo, 1 multi-stakeholder-domain). Evidence
+> is on-disk artifacts, not assumptions.
+
+| App | Shape | Consumed | Retiring surfaces used |
+|-----|-------|----------|------------------------|
+| **navig8** | solo, brownfield (legal) | kernel only: `instantiate` + `derive` (load-bearing), survey/assess → wireframe/generate | **none** — no roster, no `.startd8/vipp/` |
+| **household-o11y** | solo, brownfield_ready | kernel: survey/assess/instantiate + **VIPP** ($0, ACCEPT 2/REJECT 1) | **none** — no roster, no Panel/Teian/RC/WM |
+| **benchmark portal** | solo-operated, **multi-stakeholder domain** | kernel: instantiate + `generate contract` + **VIPP** ($0) + **Panel** (14-persona roster) + `project init` | Red Carpet doc-referenced only; WM/Teian none |
+
+**Validated:**
+- **Kernel is real** — all three consumed only kernel verbs (+ VIPP). `derive` is
+  confirmed load-bearing for brownfield (navig8's whole contract came from it).
+- **"Solo → silence" holds 2/2** — navig8 + household-o11y are solo, authored no
+  roster, never touched the Panel. Confirms FR-13's conditional-offer default.
+- **Retirement is de-risked** — Welcome Mat / Red Carpet / Teian used by **none**
+  of the three (Red Carpet only as doc guidance). **OQ-5 resolved: navig8
+  migration impact = zero.**
+
+**Challenged / refined:**
+- **VIPP is actively used (2/3 apps), always $0, doing real schema-adjudication**
+  (household caught a typo'd field; portal adjudicated `Run.name` vs `Run.naem`).
+  Un-bundle-as-opt-in is *confirmed correct* (apps **opted in** and got value;
+  opt-in ≠ deleted), but the "brownfield migration" framing undersells it —
+  VIPP's real job is *adjudicate proposals against existing ground-truth*, used
+  continuously **once a schema exists**. "Greenfield near-pure pass-through" is
+  still true; it's just that none of the live apps are *at* the greenfield moment
+  anymore. FR-14 reframed.
+- **Discovery value NOT proven end-to-end.** The portal's 14-persona roster is
+  rich + partly adversarial, but was **provisioned, not exercised** (no `ask-all`
+  output). Only the 5-role reviewer *pilot* is proven — and it *did* discriminate
+  (frontend persona correctly *deferred* a Go question). **Wrinkle:** the human
+  *authored* the 14 personas himself — so *"discover which stakeholders matter"*
+  was done by the human, not the panel; only *"given personas, they answer
+  discriminatingly"* is proven. Sharpens OQ-10 (trigger = domain viewpoint-
+  multiplicity, not team size) and adds OQ-12 (discovery-proof gap).
+- **`project init` is the actual onboarding path for 2/3 apps** (household +
+  portal); navig8 used `concierge instantiate` directly. Confirms FR-1a's third
+  surface is live, and the fold-vs-scope-out call affects the path most apps
+  took (OQ-8).
 
 ---
 
@@ -325,7 +368,12 @@ might be missing* (breadth, real value); it may not *estimate the specific value
   - **Discovery output is breadth, human-judged.** A persona surfaces *what might
     be missing*; the human decides. Every surfaced item is provenance-marked
     non-authored and requires human ratification — that ratification is the
-    guardrail (§0.2), not a weakness.
+    guardrail (§0.2), not a weakness. *Evidence status (§0.3, OQ-12): the
+    **capability-discovery** half ("given personas, they answer discriminatingly")
+    is pilot-proven; the **roster-discovery** half ("the panel surfaces viewpoints
+    you'd have missed") is a **hypothesis** — on the one multi-stakeholder app the
+    human authored the roster himself. Prove or shrink via OQ-12 before over-
+    scoping this.*
   - **Preserve the single-source (`core.py:38-41`).** The "which inputs count"
     domain list is deliberately shared so `assess` and any advisor can't drift.
     Ownership of that list moves **into the kernel**; discovery reads it. The
@@ -344,15 +392,23 @@ might be missing* (breadth, real value); it may not *estimate the specific value
 
 ### Un-bundling (out of the project-start story)
 
-- **FR-14 — VIPP → separate capability (requires de-coupling `project init`).**
-  VIPP is removed from the project-start narrative and re-filed as an independent
-  "brownfield migration / auto-adjudication" capability. Its value is concentrated
-  in brownfield (real Sapper ground truth); greenfield start is near-pure
-  pass-through. **Correction:** VIPP coupling does not live in the kernel
-  (`concierge/` has zero `vipp` imports) — it lives in `project init`, which
-  **hard-imports `startd8.vipp` and always posts it** (`project/init.py:138,142`).
-  Un-bundling requires making that VIPP posting **opt-in** (`--with-vipp` for
-  brownfield), so the default onboarding path is byte-identical without VIPP.
+- **FR-14 — VIPP → separate *opt-in* capability (requires de-coupling `project
+  init`).** VIPP is removed from the project-start *kernel* and re-filed as an
+  independent, **opt-in** capability. **Framing corrected by consumer evidence
+  (§0.3):** VIPP is *actively used* — 2/3 live apps ran it, always at $0, doing
+  real *proposal-adjudication against existing ground-truth* (catching a typo'd
+  schema field; adjudicating `Run.name` vs `Run.naem`). So the earlier
+  "brownfield migration" label is too narrow — VIPP's real job is *validate
+  proposals against the project's ground-truth, once that ground-truth (a schema)
+  exists*, and it is used continuously, not just at migration. The key variable is
+  **"does the project have ground-truth yet,"** not solo-vs-team. **Un-bundle
+  stays correct — as opt-in, not deletion:** the apps *opted in* and got value;
+  the requirement is only that VIPP is not *mandatory kernel*. Coupling lives in
+  `project init`, which **hard-imports `startd8.vipp` and always posts it**
+  (`project/init.py:138,142`); make that posting **opt-in** (`--with-vipp`) so the
+  default start path is byte-identical without VIPP. Rename the destination
+  capability from "brownfield migration" → **"ground-truth proposal adjudication"**
+  (brownfield migration is one use, not the definition).
 
 - **FR-15 — Per-seam SOTTO invariant (split claim).** The v0.1 blanket "byte-
   identical when absent — already satisfied" is **half wrong**:
@@ -407,12 +463,13 @@ might be missing* (breadth, real value); it may not *estimate the specific value
 
 _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
 
-- **OQ-5 — Retirement blast radius (navig8).** What exactly does navig8 consume
-  today — which verbs / which surfaces? Planning verified navig8 uses
-  `derive-contract` (`derive/mapper.py`, `introspect.py`) but could not read the
-  navig8 repo to confirm whether it touches Welcome Mat / Red Carpet. Determines
-  the migration note's contents (FR-11) and whether FR-5a (schema diagnostics) is
-  load-bearing for them. **Needs a look at `~/Documents/dev/navig8/`.**
+- **OQ-5 — Retirement blast radius (navig8). RESOLVED (§0.3).** navig8 consumed
+  **kernel only** — `instantiate` + `derive` (load-bearing, brownfield), survey/
+  assess → wireframe/generate. **No** Welcome Mat / Red Carpet / Teian / Panel /
+  VIPP; no `stakeholders.yaml`; no `.startd8/vipp/`. **Migration impact = zero.**
+  Its friction is routed to an SDK-side markdown log (doc-only reference that goes
+  stale if the friction path moves). FR-5a schema-diagnostics: no evidence navig8
+  depends on them.
 - **OQ-8 — `project init` disposition (FR-1a).** Fold-and-opt-out-VIPP vs.
   scope-out. Leaning fold (single surface), but the greenfield instantiate paths
   of `project init` vs. `instantiate-kickoff` must be diffed first to know if
@@ -423,12 +480,25 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
   verbs" story; moving it fully to the brownfield capability sharpens the story
   but splits the surface. Decide during CRP.
 - **OQ-10 — The discovery-offer trigger (FR-13).** What exact, cheap signals make
-  `survey`/`assess` offer discovery? Candidates: count of distinct stakeholder
-  roles in the roster, count of high-value blank fields, presence of a
-  regulatory/compliance domain, solo-vs-team, greenfield-vs-brownfield. Must be
-  $0/deterministic (the trigger can't itself spend). Needs a concrete rule + a
-  default-off bias so a false trigger is a quiet, ignorable one-line offer, never
-  a gate. Decide during CRP.
+  `survey`/`assess` offer discovery? **Refined by §0.3:** the discriminator is
+  **domain viewpoint-multiplicity, NOT team size** — all three live apps are
+  solo-*operated*, yet only the benchmark portal has many distinct *viewpoints*
+  (14, partly adversarial). So key on: an authored roster with N≥threshold
+  distinct roles, presence of competing/external viewpoints (vendors, press,
+  regulators), regulatory/compliance domain — not "is there a team." Must be
+  $0/deterministic; default-off bias so a false trigger is a quiet one-line offer,
+  never a gate. Decide during CRP.
+- **OQ-12 — Prove discovery end-to-end (the gap §0.3 exposed).** No live app has
+  yet run multi-stakeholder discovery end-to-end and shown it *changed a
+  decision*. The 5-role reviewer pilot discriminated (correct deferral), but the
+  benchmark portal's 14-persona roster was **provisioned, not exercised**, and the
+  human *authored* those personas himself — so *"panel surfaces viewpoints you'd
+  have missed"* (roster discovery) is unproven; only *"given personas, they answer
+  discriminatingly"* (capability discovery) is. **Action:** run `panel ask-all`
+  on the benchmark-portal roster and capture whether it surfaces a capability/gap
+  the human hadn't already listed. This is the missing data point that would
+  either confirm FR-13's value or shrink it to capability-discovery-only. Until
+  then, FR-13's roster-discovery claim is a hypothesis, flagged as such.
 - **OQ-11 — Where does the retained discovery capability live?** The persona/agent
   machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
   *conditionally-offered discovery* a thin caller the kernel owns that invokes a
@@ -463,3 +533,13 @@ reframed the panel half of FR-15 (opt-in-loaded, kernel-owned coverage core),
 added OQ-10 (offer trigger) + OQ-11 (discovery still owes a distillation pass).
 Governing rule: meet the user where they are; offer tools where needed. VIPP
 un-bundling and Welcome Mat / Red Carpet retirement unchanged.*
+
+*v0.5 — Consumer-validated against 3 mid-kickoff apps (§0.3: navig8, household-
+o11y, benchmark portal). **Validated:** kernel-only consumption, "solo → silence"
+(2/2), retirement de-risked (OQ-5 resolved: navig8 = zero impact). **Refined:**
+FR-14 (VIPP actively used at $0 — un-bundle-as-opt-in confirmed, "brownfield
+migration" → "ground-truth proposal adjudication"); OQ-10 trigger = domain
+viewpoint-multiplicity, not team size. **Exposed:** FR-13 roster-discovery is
+unproven (human authored the one rich roster himself) → new OQ-12 (run `panel
+ask-all` on the portal to get the missing data point). Distillation still holds;
+one value claim is now honestly marked a hypothesis.*
