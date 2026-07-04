@@ -46,11 +46,17 @@ _ACTION_ALIASES = {
 }
 
 # The four kickoff input *value* domains — the YAML files under ``docs/kickoff/inputs/``. This is the
-# single source of truth shared by concierge assessment (below), project-init shape triage, and the
-# red-carpet advisor, so "which inputs count" cannot drift across them. ``stakeholders`` is
-# deliberately NOT in this set: it carries a different shape/status set and each consumer handles it
-# as a dedicated special case (do not fold it in). The 3-domain stakeholder-authoring set in
-# ``stakeholder_panel.input_domains`` is a *different* concept (it excludes ``observability``).
+# kernel-owned single source of truth for "which inputs count," shared by concierge assessment
+# (below), project-init shape triage, and the red-carpet advisor, so the coverage core cannot drift
+# across them (FR-13, M2). It is deliberately owned HERE, in the kernel, and imports nothing from
+# ``stakeholder_panel``: the coverage signal ("which inputs are unfilled") is the $0 essential act,
+# independent of the (optional, later) persona/discovery layer.
+#
+# ``stakeholders`` is deliberately NOT in this set. The Stakeholder Panel is a project-shape-triggered
+# discovery *offer*, not a kernel input domain; its readiness is assessed only when that offer is
+# accepted (the guided experience, M4) — never unconditionally injected into kernel ``assess`` output.
+# The 3-domain stakeholder-authoring set in ``stakeholder_panel.input_domains`` is a *different*
+# concept (it excludes ``observability``) and lives with the panel, not the kernel.
 KICKOFF_INPUT_DOMAINS = ("business-targets", "observability", "conventions", "build-preferences")
 
 # --- next-command map (FR-5) -------------------------------------------------------------------
@@ -306,31 +312,14 @@ def _assess_kickoff_inputs(root: Path) -> Dict[str, Any]:
             continue
         out["domains"][domain] = {"status": "present", "provenance_default": provenance}
 
-    # Stakeholder Panel roster (FR-4): structurally validated, not just present-checked. Also carries
-    # the authored-vs-consumable distinction (R2-S5) so an early adopter who authors a roster after
-    # M0 is not misled into expecting live-panel behavior that has not shipped yet.
-    out["domains"]["stakeholders"] = _assess_stakeholder_roster(inputs_dir)
+    # M2 (FR-13/FR-15, R1-F4/R2-F2): the coverage core is kernel-owned and imports NOTHING from
+    # ``stakeholder_panel``. The old unconditional ``stakeholders`` domain injection (which pulled in
+    # ``PANEL_CONSUMABLE`` and coupled kernel ``assess`` to the panel's ship-state) is removed. The
+    # persona/discovery layer loads only when a conditional discovery offer is accepted — a LATER
+    # milestone (M4 / the guided experience). Absence of ``stakeholder_panel`` from the import graph
+    # is now true byte-identity: this path never references the package, so there is no degrading
+    # ``try/except ImportError`` branch that could emit different output on a partial checkout.
     return out
-
-
-def _assess_stakeholder_roster(inputs_dir: Path) -> Dict[str, Any]:
-    """Roster readiness (absent/invalid/present) + whether the live panel can consume it yet.
-
-    Local import so a partial checkout without the ``stakeholder_panel`` package degrades to a
-    graceful "unavailable" rather than crashing the whole assess (parity with the wireframe import).
-    """
-    try:
-        from startd8.stakeholder_panel import PANEL_CONSUMABLE, assess_roster
-    except ImportError:  # pragma: no cover - defensive, package ships with the SDK
-        return {"status": "unavailable", "error": "stakeholder_panel package not importable"}
-
-    result = dict(assess_roster(inputs_dir / "stakeholders.yaml"))
-    # A validated roster is "authored"; "consumable" tracks whether the live panel exists to query it.
-    result["authored"] = result.get("status") == "present"
-    result["consumable"] = bool(PANEL_CONSUMABLE)
-    if result["authored"] and not result["consumable"]:
-        result["note"] = "roster authored; live Stakeholder Panel ships in a later increment"
-    return result
 
 
 def _assess_cascade(root: Path) -> Dict[str, Any]:

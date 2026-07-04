@@ -13,6 +13,13 @@ is not just *authored* but *consumable*.
 The heavy query-time classes (``StakeholderPanel``, ``Persona``) are exposed lazily so importing this
 package for the light authoring/assess path (or for ``PANEL_CONSUMABLE``) pulls no agent/LLM deps.
 
+The Teian **point-value drafter** (``panel recommend`` → ``recommend_inputs``) was **dropped** in
+project-start M2 (NR-7): an LLM cannot ground specific field values, so its "8%" starters were
+industry-generic filler. Its one worth-keeping byproduct — the $0 "which fields are unfilled"
+coverage signal (:func:`~startd8.stakeholder_panel.input_domains.unfilled_fields`) — survives as the
+FR-13 discovery *trigger*. The passive ``Recommendation`` model / provenance / proposal-store types
+remain (reused by ``requirements_panel`` / ``manifest_suggester``).
+
 See ``docs/design/stakeholder-panel/`` for requirements (v0.3) and plan (v1.1).
 """
 
@@ -99,8 +106,6 @@ _LAZY_PANEL = {
     "PanelClosedError",
     "UnknownPersonaError",
 }
-# The proactive pass needs a live panel; keep it lazy so the light authoring path stays LLM-free.
-_LAZY_RECOMMEND = {"recommend_inputs", "RecommendationRun"}
 
 
 def __getattr__(name: str):
@@ -109,10 +114,6 @@ def __getattr__(name: str):
         from startd8.stakeholder_panel import panel as _panel
 
         return getattr(_panel, name)
-    if name in _LAZY_RECOMMEND:
-        from startd8.stakeholder_panel import recommend as _recommend
-
-        return getattr(_recommend, name)
     if name == "Persona":
         from startd8.stakeholder_panel.persona import Persona
 
@@ -151,7 +152,11 @@ __all__ = [
     "ingest",
     "IngestResult",
     "IngestGateError",
-    # Teian — proactive input recommendations (M0/M1 light types):
+    # Coverage-signal + staging types retained after the Teian drafter was dropped (project-start M2,
+    # NR-7): the $0 "which fields are unfilled" enumeration is kept as the FR-13 discovery trigger,
+    # and the passive data/provenance types (``Recommendation``, provenance, proposal store) are reused
+    # by requirements_panel / manifest_suggester. The point-value *drafting pass* (``recommend_inputs``)
+    # and its apply path are removed — no LLM estimates specific field values.
     "Recommendation",
     "SUPPORTED_DOMAINS",
     "DomainSpec",
@@ -172,6 +177,4 @@ __all__ = [
     "PanelClosedError",
     "UnknownPersonaError",
     "Persona",
-    "recommend_inputs",
-    "RecommendationRun",
 ]
