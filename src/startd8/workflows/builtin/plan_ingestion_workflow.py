@@ -3897,6 +3897,99 @@ class PlanIngestionWorkflow(WorkflowBase):
             self.metadata.workflow_id, error_msg, steps=run.steps,
         )
 
+    def _resolve_kaizen_threshold(self, cfg, output_dir: Path, threshold: int) -> int:
+        """Load kaizen config (auto-discover) + apply a complexity-threshold override.
+        Sets self._kaizen_config/_complexity_threshold; returns the (maybe overridden) threshold.
+        Extracted from _execute setup (Stage 3).
+        """
+        # Kaizen config: prompt suffixes + threshold override (REQ-KPI-500)
+        self._kaizen_config: Optional[PlanIngestionKaizenConfig] = None
+        _kaizen_config_path = cfg.kaizen_config_path
+        if not _kaizen_config_path:
+            # Auto-discover kaizen-config.json in output or ancestor dirs
+            # (mirrors run-atomic.sh which places it at pipeline-output/$NAME/)
+            for _candidate in [output_dir, output_dir.parent, output_dir.parent.parent]:
+                _auto = _candidate / "kaizen-config.json"
+                if _auto.is_file():
+                    _kaizen_config_path = str(_auto)
+                    logger.info("Kaizen config auto-discovered at %s", _auto)
+                    break
+        if _kaizen_config_path:
+            _kp = Path(str(_kaizen_config_path)).expanduser()
+            if _kp.is_file():
+                try:
+                    self._kaizen_config = load_kaizen_config(_kp)
+                    logger.info("Kaizen config loaded from %s", _kp)
+                except (OSError, json.JSONDecodeError, TypeError) as _kc_err:
+                    logger.warning("Kaizen config load failed: %s", _kc_err)
+
+        if self._kaizen_config and self._kaizen_config.complexity_threshold_override is not None:
+            threshold = self._kaizen_config.complexity_threshold_override
+            logger.info("Kaizen: complexity threshold overridden to %d", threshold)
+        self._complexity_threshold = threshold
+        return threshold
+
+    def _load_mottainai_capabilities(self, config: Dict[str, Any], output_dir: Path) -> None:
+        """Mottainai Layer 1: load _cc_capabilities from the artifact inventory into `config`
+        (in-place) to avoid re-generating them. Non-fatal on any failure. Stage 3.
+        """
+        # Mottainai (Layer 1): Attempt to load onboarding from inventory to prevent waste
+        try:
+            from startd8.utils import artifact_inventory
+            inventory = artifact_inventory.load_inventory(output_dir)
+            onboarding_entry, outcome = artifact_inventory.lookup_artifact(inventory, "onboarding")
+            
+            if outcome == "hit" and onboarding_entry:
+                onboarding_raw = artifact_inventory.load_artifact_content(onboarding_entry, output_dir)
+                if isinstance(onboarding_raw, dict) and "_cc_capabilities" in onboarding_raw:
+                    config["_cc_capabilities"] = onboarding_raw["_cc_capabilities"]
+                    logger.info("Mottainai: loaded _cc_capabilities from artifact_inventory")
+        except ImportError:
+            pass
+        except Exception as exc:
+            logger.warning(
+                "Mottainai Layer 1: inventory lookup failed (non-fatal): %s",
+                exc,
+            )
+
+    def _validate_entry_capabilities(self, config: Dict[str, Any]) -> Optional[str]:
+        """Layer-5 capability validation — returns a blocking-violation error string, or None.
+
+        Extracted from `_execute` setup (Stage 3). The `_fail` early-exit that consumes this
+        result stays in `_execute`, *before* the root span opens (R1-S5): moving the span ahead
+        of it would make the cap-error path newly emit a root span (a telemetry regression).
+        """
+        _cap_validation_error: Optional[str] = None
+        try:
+            from contextcore.contracts.capability.validator import CapabilityValidator
+            from contextcore.contracts.propagation.loader import ContractLoader
+
+            contract_path = Path(__file__).parent.parent.parent / "contractors" / "contracts" / "plan-ingestion.contract.yaml"
+            if contract_path.exists():
+                logger.info("Loading CapabilityContract from %s", contract_path)
+                # We load the contract and initiate the CapabilityValidator.
+                # NOTE: ContractLoader.load is an instance method taking a Path — the
+                # old ContractLoader.load_contract(str) did not exist (AttributeError
+                # silently swallowed below, so Layer-5 was dead). This is the correct call.
+                contract = ContractLoader().load(contract_path)
+                validator = CapabilityValidator(contract)
+
+                # We validate entry capabilities
+                cap_result = validator.validate_entry("plan-ingestion", config)
+                if hasattr(cap_result, 'has_blocking_violations') and cap_result.has_blocking_violations():
+                    _cap_validation_error = (
+                        f"Capability validation failed (Layer 5): {cap_result}"
+                    )
+        except ImportError as e:
+            logger.warning("ContextCore Layer 5 validation unavailable: %s", e)
+        except Exception as e:
+            logger.warning(
+                "Capability validation unavailable (Layer 5 internal error, non-fatal): %s",
+                e,
+                exc_info=True,
+            )
+        return _cap_validation_error
+
     def _finalize_success(
         self,
         *,
@@ -4104,80 +4197,15 @@ class PlanIngestionWorkflow(WorkflowBase):
         self._kaizen_output_dir = output_dir
 
         # Kaizen config: prompt suffixes + threshold override (REQ-KPI-500)
-        self._kaizen_config: Optional[PlanIngestionKaizenConfig] = None
-        _kaizen_config_path = cfg.kaizen_config_path
-        if not _kaizen_config_path:
-            # Auto-discover kaizen-config.json in output or ancestor dirs
-            # (mirrors run-atomic.sh which places it at pipeline-output/$NAME/)
-            for _candidate in [output_dir, output_dir.parent, output_dir.parent.parent]:
-                _auto = _candidate / "kaizen-config.json"
-                if _auto.is_file():
-                    _kaizen_config_path = str(_auto)
-                    logger.info("Kaizen config auto-discovered at %s", _auto)
-                    break
-        if _kaizen_config_path:
-            _kp = Path(str(_kaizen_config_path)).expanduser()
-            if _kp.is_file():
-                try:
-                    self._kaizen_config = load_kaizen_config(_kp)
-                    logger.info("Kaizen config loaded from %s", _kp)
-                except (OSError, json.JSONDecodeError, TypeError) as _kc_err:
-                    logger.warning("Kaizen config load failed: %s", _kc_err)
+        threshold = self._resolve_kaizen_threshold(cfg, output_dir, threshold)
 
-        if self._kaizen_config and self._kaizen_config.complexity_threshold_override is not None:
-            threshold = self._kaizen_config.complexity_threshold_override
-            logger.info("Kaizen: complexity threshold overridden to %d", threshold)
-        self._complexity_threshold = threshold
+        # Mottainai (Layer 1): load onboarding capabilities from inventory (prevent waste)
+        self._load_mottainai_capabilities(config, output_dir)
 
-        # Mottainai (Layer 1): Attempt to load onboarding from inventory to prevent waste
-        try:
-            from startd8.utils import artifact_inventory
-            inventory = artifact_inventory.load_inventory(output_dir)
-            onboarding_entry, outcome = artifact_inventory.lookup_artifact(inventory, "onboarding")
-            
-            if outcome == "hit" and onboarding_entry:
-                onboarding_raw = artifact_inventory.load_artifact_content(onboarding_entry, output_dir)
-                if isinstance(onboarding_raw, dict) and "_cc_capabilities" in onboarding_raw:
-                    config["_cc_capabilities"] = onboarding_raw["_cc_capabilities"]
-                    logger.info("Mottainai: loaded _cc_capabilities from artifact_inventory")
-        except ImportError:
-            pass
-        except Exception as exc:
-            logger.warning(
-                "Mottainai Layer 1: inventory lookup failed (non-fatal): %s",
-                exc,
-            )
-
-        # Capability Propagation (Layer 5)
-        _cap_validation_error: Optional[str] = None
-        try:
-            from contextcore.contracts.capability.validator import CapabilityValidator
-            from contextcore.contracts.propagation.loader import ContractLoader
-
-            contract_path = Path(__file__).parent.parent.parent / "contractors" / "contracts" / "plan-ingestion.contract.yaml"
-            if contract_path.exists():
-                logger.info("Loading CapabilityContract from %s", contract_path)
-                # We load the contract and initiate the CapabilityValidator.
-                # NOTE: ContractLoader.load is an instance method taking a Path — the
-                # old ContractLoader.load_contract(str) did not exist (AttributeError
-                # silently swallowed below, so Layer-5 was dead). This is the correct call.
-                contract = ContractLoader().load(contract_path)
-                validator = CapabilityValidator(contract)
-
-                # We validate entry capabilities
-                cap_result = validator.validate_entry("plan-ingestion", config)
-                if hasattr(cap_result, 'has_blocking_violations') and cap_result.has_blocking_violations():
-                    _cap_validation_error = (
-                        f"Capability validation failed (Layer 5): {cap_result}"
-                    )
-        except ImportError as e:
-            logger.warning("ContextCore Layer 5 validation unavailable: %s", e)
-        except Exception as e:
-            logger.warning(
-                "Capability validation unavailable (Layer 5 internal error, non-fatal): %s",
-                e,
-                exc_info=True,
-            )
+        # Capability Propagation (Layer 5). NOTE (R1-S5): the deferred `_fail` that
+        # consumes this fires BEFORE the root span opens and stays in _execute — do
+        # not move it or the span into this helper.
+        _cap_validation_error = self._validate_entry_capabilities(config)
 
         # Task tracking (opt-in)
         tracking_config = None
