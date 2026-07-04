@@ -22,7 +22,7 @@ the `__getattr__` shims are deleted, and an automated acyclicity gate now guards
 | 3 | `micro_prime/engine.py` | 5,087 | **Active**. Per-language branching → strategy-pattern candidate. |
 | 4 | `workflows/builtin/plan_ingestion_workflow.py` | 4,987 | **Active**. Has a 1,176-line `_execute`. |
 | 5 | `contractors/context_seed/phases/implement.py` | 4,722 | **Just isolated** (this refactor). Part B target. |
-| 6 | `contractors/artisan_contractor.py` | 3,922 | **ON HOLD** (Artisan). Quarantine candidate. |
+| 6 | `contractors/artisan_contractor.py` | 3,922 | **ON HOLD** but **entangled** — houses shared primitives (`AbstractPhaseHandler`, `WorkflowPhase`, …) the active path imports. Extract those first, *then* quarantine (see §4.1). |
 | 7 | `contractors/prime_postmortem.py` | 3,744 | Active. Watch-list. |
 | 8 | `contractors/integration_engine.py` | 3,557 | Active. Has the 947-line `integrate` (NR-6 / Part C). |
 | — | `forward_manifest_validator.py` | 3,023 | 56 flat module-level validators → per-layer package. |
@@ -105,12 +105,27 @@ the next god file, and safely deferrable/incremental.
 
 Ordered by value × tractability. The recipe transfers directly to any of these.
 
-1. **Quarantine ON-HOLD Artisan code (highest value, near-zero risk).** `artisan_phases/development.py`
-   (5,678) + `artisan_contractor.py` (3,922) + `artisan_phases/test_construction.py` (2,309) are frozen
-   (CLAUDE.md: don't invest, don't delete) yet dominate the `contractors/` package and every structural
-   audit. Move them under `contractors/_artisan_onhold/` (pure relocation, import-path update). Shrinks
-   the active-code surface by ~16K LOC with no behavior change. **Do this first** — it's the cheapest
-   large win and makes every subsequent audit cleaner.
+1. **Quarantine ON-HOLD Artisan code (highest value).** Quarantine = *relocate* the frozen Artisan code
+   into a clearly-marked `contractors/_artisan_onhold/` subpackage (import-path update, **no** deletion,
+   **no** behavior change) so it stops dominating the `contractors/` package and every structural audit
+   (CLAUDE.md: don't invest, don't delete). But it is **not** uniformly a "pure relocation" — a
+   dependency check (2026-07-04) splits it into two buckets:
+   - **Cleanly quarantinable (~low risk):** the Artisan-only orchestrator bodies —
+     `artisan_phases/development.py` (5,678), `test_construction.py` (2,309), `preflight.py` (1,613),
+     `retrospective.py` (1,459), `final_testing.py` (1,313). Move as-is; only Artisan-internal imports change.
+   - **Entangled — `artisan_contractor.py` (3,922) needs an extraction first.** It is *not* purely frozen:
+     it houses **shared primitives the active Prime path imports** — `AbstractPhaseHandler`, `WorkflowPhase`,
+     `compute_lanes`, `HAS_OTEL`, `_NoOpSpan`, `_SAFE_TASK_ID_PATTERN` — used by **~15 active files** (the
+     extracted context_seed phases, `prime_contractor.py`, `plan_ingestion_*`, `seeds/models.py`,
+     `observability/collector.py`, …). Naively moving it would break the live path. Sequence: (a) extract
+     those primitives into a neutral module (e.g. `contractors/phase_protocol.py`) and repoint the ~15
+     importers — the same "sever the inversion" pattern this refactor used (an active layer must not depend
+     on a frozen file for its base classes); (b) *then* quarantine the residual Artisan-orchestration part.
+
+   Net: the clean bucket (~11K LOC) is a genuinely cheap win; `artisan_contractor.py` is a small extraction
+   job first, then quarantine. Still high-value and mostly low-risk — but **not** the uniformly-trivial
+   relocation an earlier draft of this doc claimed. Do the clean bucket **first**; treat `artisan_contractor.py`
+   as its own scoped step.
 
 2. **`plan_ingestion_workflow.py` (4,987).** Has a **1,176-line `_execute`** with a nested ~1,000-line
    `_fail`. A sibling `plan_ingestion_emitter.py` already exists, so the split pattern is established.
@@ -169,7 +184,8 @@ Ordered by value × tractability. The recipe transfers directly to any of these.
 
 ## 7. Recommended next sequence
 
-1. **Quarantine ON-HOLD Artisan** (§4.1) — cheapest large win, unblocks cleaner audits.
+1. **Quarantine the clean-bucket ON-HOLD Artisan files** (§4.1) — cheapest large win, unblocks cleaner
+   audits. (`artisan_contractor.py` is a separate, scoped extraction-then-quarantine step.)
 2. **Finish Part B incrementally** (§3) — or defer; it's isolated polish.
 3. **`plan_ingestion_workflow._execute`** (§4.2) — next real god-method, established split pattern.
 4. **Retire the compat wrapper** (§5) — closes out this refactor's Tier-2 tail.
