@@ -309,6 +309,15 @@ what remains.
    pollination + a **final private judgment** after. *Diversity-prediction theorem
    (Page): collision spends independence; rebuild it before aggregating.*
 
+> **Experiment-#7 refinement — the assumptions check must GATE, not just inform.**
+> In the first Tier-1 run the grounding + assumptions passes discovered the *entire
+> premise was false* (the objective targeted a system that doesn't exist) — yet the
+> orchestrator still spent 48 persona calls analyzing the phantom. **v0.2.1: after
+> R0, if the Key Assumptions Check returns ≥2 high-impact / low-confidence
+> assumptions, HALT and surface "validate the premise before running the panel"**
+> rather than proceeding. Catching a false premise is the single highest-value
+> output a discovery can produce; it should short-circuit, not footnote.
+
 ### Tier 2 — future (higher machinery, high payoff)
 5. **Tensions → experiments** — decompose each open tension to interests; the two
    parties jointly propose the test that resolves it. *Fisher & Ury; adversarial

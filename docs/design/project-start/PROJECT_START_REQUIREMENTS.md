@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.11 (Sixth experiment — full multi-round process → decision-grade artifact)
+**Version:** 0.12 (Seventh experiment — Tier-1 additions caught a FALSE PREMISE)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -660,6 +660,36 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
       (untracked, not free — ~55k in / 9k out tokens actually spent); wire cost.
     - **Verdict: the full facilitated + de-correlated multi-round process is the
       real capability.** FR-13b confirmed end-to-end.
+  - **Seventh run — TIER-1 additions (2026-07-04, orchestrator v0.2: artifact
+    grounding + Key Assumptions Check + Outside View + adversary personas +
+    independence re-sequence; 12 participants, 52 calls).** Strongest run of the
+    series — validated the gap analysis dramatically:
+    - **Grounding + assumptions caught that the ENTIRE PREMISE WAS FALSE.** The
+      grounded read of the real repo found `contextcore-demo-retail` is *not an
+      e-commerce system* (a ContextCore demo-authoring workspace; Blue Planet is a
+      skin over Online Boutique the repo doesn't own/deploy/modify); the assumptions
+      check rated 5 load-bearing assumptions LOW-confidence/HIGH-impact ("the entire
+      objective collapses; there is nothing to optimize"). **All six prior
+      (ungrounded) runs produced sophisticated tactics for a business that doesn't
+      exist.** This is the gap analysis's #1 thesis (problem-diamond > solution-
+      diamond) demonstrated live — and it caught the *facilitator's own* phantom
+      framing, exactly the real-onboarding failure mode (stated goal ≠ actual system).
+    - **Adversary personas earned their place** — distinct + sharper: fraud surfaced
+      "no single authoritative server-side price validated at payment" + "ad/taxonomy
+      links as alternate bundle-entry paths bypassing checkout" (an abuse surface no
+      internal role raised); competitor reframed the slow-rollout risk as a
+      competitive-timing threat. In synthesis the adversaries *strengthened*
+      corroboration (top risk now flagged by all 4 families incl. both adversaries)
+      and crystallized it into a checkable claim ("cart≠checkout≠payment total").
+    - **Outside View** added an honest reference-class corrective (~20-35% clear
+      success; "these initiatives often disappoint").
+    - **Caveats:** (a) the retail demo was a *flawed test bed* — this proved "Tier-1
+      catches a false premise" (decisively) but not "Tier-1 lifts a *valid* kickoff"
+      (needs a real app + genuine objective, e.g. the benchmark portal); (b) **design
+      insight → the assumptions check should GATE, not just inform**: N high-impact/
+      low-confidence assumptions ⇒ halt and validate the premise before spending the
+      panel rounds (we analyzed a phantom for 48 calls); (c) cost tracking still
+      unwired (real spend ~few $, field reads 0.0).
 - **OQ-11 — Where does the retained discovery capability live?** The persona/agent
   machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
   *conditionally-offered discovery* a thin caller the kernel owns that invokes a
