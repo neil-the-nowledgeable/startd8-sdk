@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.9 (Fourth experiment — facilitated process; mirror becomes a lens)
+**Version:** 0.10 (Fifth experiment — mixed-model de-correlation → trustworthy convergence)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -364,7 +364,12 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     derivation rather than recall; (3) **cross-role tension/convergence** surfacing;
     (4) **synthesis**. This is the load-bearing requirement — a persona roster
     without this facilitation scaffold reverts to a mirror. The high-leverage
-    implementation work is the scaffold, not the personas. (Note: the current
+    implementation work is the scaffold, not the personas. **(5) mixed-model
+    personas** — assign personas across independent model families (Claude / GPT /
+    Gemini) so that cross-role *convergence* becomes model-independent evidence
+    rather than a shared-model artifact (fifth-run finding); this is the concrete
+    mitigation for the correlated-blind-spot limit and a first-class facilitation
+    lever. (Note: the current
     `persona.py` "answer only from the brief" prompt did NOT block facilitated mode
     — personas engaged with context supplied in the question — but doing it *well/
     repeatably* wants first-class support for a shared-context/objective block,
@@ -605,6 +610,31 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
     (context + objective→strategy→tactics + means-ends probing + cross-role tension
     + synthesis), NOT the roster. This substantially revives FR-13's value case and
     gives it a concrete design direction — see FR-13 + the reclassification decision.
+  - **Fifth run — MIXED-MODEL de-correlation (2026-07-04).** Re-ran the facilitated
+    probe with personas spread across **three independent model families** (Claude
+    Opus 4.8 / GPT-5.5 / Gemini 3 Pro), the four high-signal roles deliberately moved
+    OFF Gemini to compare same-role-different-model vs. the all-Gemini v0.9 run. Two
+    effects, one of them important:
+    - **Trustworthy convergence (the key win).** The top risk (bundling × 6-currency
+      → FX-correctness + per-bundle margin, unowned) was independently flagged by
+      payments (GPT), finance (Claude), merchandising (Claude), and eng-director
+      (Claude) — **across two model families**. Cross-family agreement can't be a
+      single-model artifact, so it upgrades convergence from "plausible" to
+      "model-independent → real." This directly mitigates the correlated-blind-spot
+      limit: de-correlation converts model-agreement into *evidence*.
+    - **Modest coverage broadening.** Each family surfaced sharper facets the
+      all-Gemini run missed (GPT-payments: duplicate-charge on bundled carts;
+      GPT-compliance: the *data-flow mechanism* of PCI scope creep via personalization;
+      Claude-finance: per-SKU bundle margin, high-volume≠profitable; Claude-product:
+      "coordination is the bottleneck, not the 15-SKU bundle logic").
+    - **Limits intact:** low-leverage roles (marketing, support, frontend, sre)
+      echoed on every family; the generalist ceiling held (no proprietary knowledge
+      appeared); strength/family are confounded (Opus/GPT-5.5 are strong) — but the
+      cross-family-convergence finding is immune to that confound (it's about prior
+      independence, not raw strength).
+    - **Design implication:** assign personas across model families — especially to
+      get believable, model-independent risk signals. Mixed-model is a first-class
+      facilitation lever (FR-13b).
 - **OQ-11 — Where does the retained discovery capability live?** The persona/agent
   machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
   *conditionally-offered discovery* a thin caller the kernel owns that invokes a
@@ -692,3 +722,14 @@ strategy→tactics + means-ends + cross-role tension + synthesis), NOT the roste
 specific strategy; bounds = competent-generalist grade, synthetic/ratify. Revives
 FR-13's value case with a concrete design direction; reframes the reclassification
 decision from "keep-thin/demote/retire" toward "keep as a facilitation capability."*
+
+*v0.10 — Fifth experiment: MIXED-MODEL de-correlation (personas across Claude Opus
+4.8 / GPT-5.5 / Gemini 3 Pro; high-signal roles moved off Gemini vs v0.9). Key
+finding: **de-correlation makes convergence trustworthy** — the top risk (bundling
+× 6-currency → FX-correctness + per-bundle margin) was corroborated across TWO
+model families, so it's model-independent, not a shared-model artifact. Also modest
+coverage broadening (each family surfaced sharper facets). Limits intact (low-
+leverage roles echo on every family; generalist ceiling held; strength/family
+confounded — but the convergence finding is immune to that). Mixed-model added as a
+first-class facilitation lever (FR-13b). Untested: the full multi-round process
+(cross-pollination + pre-mortem + synthesis) on the mixed-model base = next.*
