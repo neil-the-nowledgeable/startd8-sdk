@@ -166,6 +166,28 @@ details[open] .fold{transform:rotate(90deg);color:var(--ch,var(--amber))}
 .errbox .em{font-family:var(--mono);font-size:12px;color:var(--paper-dim);line-height:1.5;white-space:pre-wrap;word-break:break-word}
 .skipnote{font-family:var(--mono);font-size:12px;color:var(--skip);font-style:normal;opacity:.85}
 
+/* ---- follow-up composer (page stays read-only; it only COMPOSES a CLI command) ---- */
+.composer{margin:0 0 20px;border:1px solid var(--line);border-radius:var(--r);background:var(--ink-2);overflow:hidden}
+.composer .ctop{display:flex;align-items:baseline;gap:10px;padding:11px 15px;border-bottom:1px solid var(--line-2)}
+.composer .ctitle{font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--amber)}
+.composer .chint{font-family:var(--mono);font-size:10px;color:var(--paper-faint);margin-left:auto;letter-spacing:.04em}
+.composer .cbody{padding:14px 15px;display:grid;gap:13px}
+.composer label.lbl{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--paper-faint);display:block;margin-bottom:7px}
+.targets{display:flex;gap:6px;flex-wrap:wrap}
+.tgt{font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--line);border-radius:100px;color:var(--paper-dim);background:var(--ink);cursor:pointer;transition:.14s}
+.tgt:hover{border-color:var(--amber);color:var(--paper)}
+.tgt[aria-pressed="true"]{background:var(--amber);color:var(--ink);border-color:var(--amber);font-weight:600}
+.tgt:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.composer textarea{width:100%;min-height:60px;resize:vertical;background:var(--ink);color:var(--paper);
+  border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-family:var(--serif);font-size:15px;line-height:1.5}
+.composer textarea:focus{outline:2px solid var(--amber);outline-offset:1px;border-color:var(--amber)}
+.cmdrow{display:flex;gap:10px;align-items:stretch}
+.cmdbox{flex:1;min-width:0;font-family:var(--mono);font-size:12px;color:var(--paper-dim);background:var(--ink);
+  border:1px dashed var(--line);border-radius:8px;padding:11px 12px;white-space:pre-wrap;word-break:break-all;
+  user-select:all;line-height:1.55}
+.copybtn{flex:none;align-self:flex-start}
+.btn.copied{color:var(--ink);background:var(--ok);border-color:var(--ok)}
+
 .foot{margin-top:40px;border-top:1px solid var(--line);padding-top:14px;
   font-family:var(--mono);font-size:10.5px;color:var(--paper-faint);letter-spacing:.06em;display:flex;
   justify-content:space-between;gap:16px;flex-wrap:wrap}
@@ -209,6 +231,31 @@ details[open] .fold{transform:rotate(90deg);color:var(--ch,var(--amber))}
     <button class="btn" id="expand-all">Expand all</button>
     <button class="btn" id="collapse-all">Collapse all</button>
   </div>
+
+  <section class="composer" aria-label="Compose a follow-up command">
+    <div class="ctop">
+      <span class="ctitle">Ask a follow-up</span>
+      <span class="chint">read-only view · builds a CLI command to run in your terminal</span>
+    </div>
+    <div class="cbody">
+      <div>
+        <label class="lbl" id="tgt-lbl">Send to</label>
+        <div class="targets" id="targets" role="group" aria-labelledby="tgt-lbl"></div>
+      </div>
+      <div>
+        <label class="lbl" for="fq">Follow-up prompt</label>
+        <textarea id="fq" placeholder="e.g. The latch is seized — what specific tool should I buy?"></textarea>
+      </div>
+      <div>
+        <label class="lbl" for="cmd">Command (select-all to copy)</label>
+        <div class="cmdrow">
+          <code class="cmdbox" id="cmd" tabindex="0" aria-live="polite"></code>
+          <button class="btn copybtn" id="copy" type="button">Copy</button>
+        </div>
+        <div class="chint" style="margin:8px 0 0">then re-render this page: <code>startd8 consult web &lt;id&gt; --open</code></div>
+      </div>
+    </div>
+  </section>
 
   <main class="grid" id="grid" aria-label="Model conversations, side by side"></main>
 
@@ -396,6 +443,45 @@ details[open] .fold{transform:rotate(90deg);color:var(--ch,var(--amber))}
   function setAll(open){ document.querySelectorAll("details.channel").forEach(function(d){ d.open=open; }); }
   document.getElementById("expand-all").addEventListener("click",function(){ setAll(true); });
   document.getElementById("collapse-all").addEventListener("click",function(){ setAll(false); });
+
+  // ---- follow-up command composer: the page never executes anything; it builds a
+  //      shell-safe `startd8 consult reply` command for the user to run (FR-WUI-10). ----
+  var target="all";
+  var targetsEl=document.getElementById("targets");
+  function mkTgt(id,label){
+    var b=el("button","tgt"); b.type="button"; b.textContent=label; b.dataset.id=id;
+    b.setAttribute("aria-pressed", id===target?"true":"false");
+    b.addEventListener("click",function(){
+      target=id;
+      Array.prototype.forEach.call(targetsEl.children,function(c){ c.setAttribute("aria-pressed", c.dataset.id===target?"true":"false"); });
+      update();
+    });
+    return b;
+  }
+  targetsEl.appendChild(mkTgt("all","all models"));
+  (data.roster||[]).forEach(function(m){ targetsEl.appendChild(mkTgt(m,m)); });
+
+  var fq=document.getElementById("fq"), cmdEl=document.getElementById("cmd"), copyBtn=document.getElementById("copy");
+  // POSIX shell single-quote escaping: wrap in '...'; embedded ' becomes '\'' .
+  function shq(s){ return "'"+String(s).replace(/'/g,"'\\''")+"'"; }
+  function buildCmd(){
+    var p=(fq.value||"").trim();
+    var promptArg = p ? shq(p) : "'<your follow-up>'";
+    // session id and model ids contain no shell metacharacters; only the free-text prompt is quoted.
+    return "startd8 consult reply "+(data.id||"")+" --to "+target+" --prompt "+promptArg;
+  }
+  function update(){ cmdEl.textContent=buildCmd(); }   // textContent = never executes
+  fq.addEventListener("input",update); update();
+
+  copyBtn.addEventListener("click",function(){
+    var text=buildCmd();
+    function ok(){ copyBtn.textContent="Copied ✓"; copyBtn.classList.add("copied");
+      setTimeout(function(){ copyBtn.textContent="Copy"; copyBtn.classList.remove("copied"); },1400); }
+    function fallback(){ var ta=document.createElement("textarea"); ta.value=text; ta.style.position="fixed"; ta.style.opacity="0";
+      document.body.appendChild(ta); ta.select(); try{ document.execCommand("copy"); ok(); }catch(e){} document.body.removeChild(ta); }
+    if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(ok,fallback); }
+    else { fallback(); }
+  });
 })();
 </script>
 </body>

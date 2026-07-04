@@ -95,6 +95,13 @@ models you're not focused on so you can compare two threads without the others' 
 - **FR-WUI-9 — Safe embedding (security).** All model-generated text is **escaped/sanitized** before
   embedding (untrusted output → no XSS); image references show **filename + short hash only**, never
   the absolute `source_path` (inherits FR-MMC-5/6a redaction posture).
+- **FR-WUI-10 — Follow-up command composer (leverage the CLI).** The page includes a composer — a
+  follow-up textarea + a target selector (**all models** or one model) — that generates the exact
+  `startd8 consult reply <id> --to <target> --prompt <…>` command for the user to copy and run. The
+  page **never executes** it (a `file://` page is sandboxed and cannot; NR-2 holds): it only *builds*
+  the command via `textContent`. The free-text prompt is **POSIX shell-quoted** (single-quote wrap;
+  `'` → `'\''`) so any characters (`$( )`, backticks, `;`, quotes, newlines) round-trip byte-identical
+  with no command substitution/injection. After running it, the user re-renders via `consult web`.
 
 ---
 
@@ -102,8 +109,10 @@ models you're not focused on so you can compare two threads without the others' 
 
 - **NR-1 — Not a live/refreshing server.** A static point-in-time snapshot; re-run `web` after new
   turns. No websocket, no polling, no `startd8 serve` dependency.
-- **NR-2 — Read-only.** The page cannot send prompts, run follow-ups, retry, or mutate the session.
-  All writes stay in the CLI/TUI (consistent with the consultation feature's single-writer posture).
+- **NR-2 — Read-only (does not execute or mutate).** The page cannot itself send prompts, run
+  follow-ups, retry, or mutate the session — a `file://` page is browser-sandboxed. It **may compose**
+  a `consult reply` command for the user to run in their terminal (FR-WUI-10), but execution and all
+  writes stay in the CLI/TUI (the single-writer posture holds). No server, no eval, no shell-out.
 - **NR-3 — No hosting / auth / sharing.** A local file the user opens; not served or access-controlled.
 - **NR-4 — No image pixels in v1.** Bytes aren't persisted (FR-MMC-6a); indicators only. Optional
   `--embed-images` is deferred.

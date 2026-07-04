@@ -94,6 +94,14 @@ class TestRenderHtml:
         assert '"skipped-non-vision"' in block
         assert '"input_tokens": 9638' in block
 
+    def test_includes_followup_command_composer(self):
+        # FR-WUI-10: page composes a `consult reply` command (read-only; never executes).
+        html = render_html(_session())
+        assert "Ask a follow-up" in html
+        assert 'id="targets"' in html
+        assert "startd8 consult reply " in html
+        assert "cmdEl.textContent=buildCmd()" in html  # inert: textContent, not eval/exec
+
     def test_embedded_json_parses_after_unescaping(self):
         # Simulate the browser: < decodes back to '<'; the doc must still be valid JSON.
         import json
