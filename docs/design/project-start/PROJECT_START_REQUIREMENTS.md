@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.6 (Discovery experiment run — FR-13 scoped to evidence)
+**Version:** 0.7 (Second discovery experiment — content question)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -376,7 +376,12 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     the operator; generic role-labels echoed or refused). FR-13's value is "an
     occasional real gap worth sifting for," NOT "systematic coverage of what you'd
     miss." This further raises the bar on OQ-11 (does a low-yield aid justify ~20
-    modules?) and OQ-10 (offer only where operationally-specific personas exist).*
+    modules?) and OQ-10 (offer only where operationally-specific personas exist).
+    A second run (CONTENT question) yielded **0 novel items** but showed a distinct
+    **consensus/prioritization** value (cross-audience agreement on load-bearing
+    content) and confirmed the panel **stays out of bucket-4** even aimed at
+    content (names requirements, never writes copy). Combined 28-call discovery
+    rate = 1/28 → whatever survives must be thin.*
   - **Preserve the single-source (`core.py:38-41`).** The "which inputs count"
     domain list is deliberately shared so `assess` and any advisor can't drift.
     Ownership of that list moves **into the kernel**; discovery reads it. The
@@ -516,6 +521,28 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
     hit came from the persona with a hands-on operational relationship to the
     artifact (the operator); generic role-labels echoed or refused. Refines OQ-10:
     the trigger/roster should favor operationally-specific personas.
+  - **Second run — CONTENT question (same roster, 2026-07-04).** Asked "what
+    content should the portal present." Result: 1 refusal (security correctly
+    deferred content as out-of-remit — lens integrity), 3 off-question (dev/ops
+    artifacts), 10 echoes, **0 genuinely novel content.** Two decisive findings:
+    (i) **content-discovery yield is zero — even lower than capability (1/14)**;
+    convergent publication content (provenance + methodology) leaves little to
+    "discover." (ii) **The panel behaved as a CONSENSUS/prioritization
+    instrument, not a discovery one** — ~6 personas independently converged on
+    "spec-hash beside every result," ~4 on "methodology-first framing," telling
+    you what content is load-bearing *across* audiences (soft validation value,
+    changed nothing here). (iii) **The bucket-4 boundary HELD unprompted** — every
+    persona named a content *requirement* ("display the spec-hash," "a methodology
+    section"), **none wrote actual copy.** Direct evidence for §0.2: aimed straight
+    at content, the panel still produces *what should exist*, not *the real
+    words* — breadth-not-precision holds under pressure, so this is not a bucket-4
+    breach.
+  - **Combined verdict (28 paid calls, 2 questions): the panel is NOT a discovery
+    engine** — 1 capability gap + 0 content ideas. Its demonstrated values are
+    modest: (a) an *occasional* real gap from operationally-specific personas, and
+    (b) cross-audience *consensus* on load-bearing priorities — never crossing into
+    authoring content. A 1-in-28 discovery rate hardens OQ-11: whatever discovery
+    implementation survives must be **thin**.
 - **OQ-11 — Where does the retained discovery capability live?** The persona/agent
   machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
   *conditionally-offered discovery* a thin caller the kernel owns that invokes a
@@ -569,3 +596,13 @@ retained but scoped honestly: low-yield (1/14), best from operationally-specific
 personas.** Updated FR-13 evidence note, OQ-10 (favor operational personas), OQ-11
 (low yield sharpens the ~20-module justification). The panel earns a place — as an
 occasional-gap-finder worth sifting, not a coverage engine.*
+
+*v0.7 — Second discovery experiment (CONTENT question, same 14-persona roster).
+Result: 0 genuinely novel content (even lower yield than capability's 1/14),
+1 refusal, 3 off-question, 10 echoes. Three findings folded into OQ-12 + FR-13:
+(i) content-discovery yield ≈ zero; (ii) the panel behaves as a CONSENSUS/
+prioritization instrument, not discovery — strong cross-audience convergence on
+"provenance beside results" + "methodology-first"; (iii) the **bucket-4 boundary
+held unprompted** — aimed straight at content, personas named requirements, never
+wrote copy (direct §0.2 evidence). Combined 28-call rate = 1/28 novel → the panel
+is NOT a discovery engine; whatever survives OQ-11 must be thin.*
