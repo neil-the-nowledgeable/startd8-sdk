@@ -1,8 +1,14 @@
 # Project-Start Distillation — Implementation Plan
 
-**Version:** 1.1 (Panel reclassified — tracks reqs v0.4)
+**Version:** 1.2 (CRP R1–R3 triaged — local fixes applied; **full rewrite to reqs
+v0.16 is the tracked next work item**, see the CRP-triage banner below)
 **Date:** 2026-07-04
-**Tracks:** `PROJECT_START_REQUIREMENTS.md` v0.4
+**Tracks:** `PROJECT_START_REQUIREMENTS.md` v0.16 (⚠️ **milestones still reflect reqs
+v0.4** — FR-13b/FR-13c, OQ-8/OQ-9/OQ-10/OQ-11/OQ-12 resolutions, the panel
+facilitation/hardening body, and the R3 contract-stability fixes have **no milestone
+yet**; the milestone body below is KNOWN-STALE pending the rewrite. Accepted-but-not-
+yet-applied plan suggestions are recorded in Appendix A with resolution = "full plan
+rewrite to reqs v0.16 — tracked next work item.")
 **Posture:** Phased, additive-first, nothing deleted until the kernel ships and
 consumers migrate (NR-5, FR-9/FR-12).
 
@@ -43,7 +49,12 @@ consumers migrate (NR-5, FR-9/FR-12).
 - Keep old action strings as hidden aliases in `handle_concierge_tool`
   (`core.py:313-366`) and old CLI subcommand names as hidden aliases for one
   release (MCP `ConciergeInput.action` enum + scripts depend on them).
-- **Satisfies:** FR-1, FR-9, FR-10. **Blocked-by:** M1's metaphor-group demotion.
+- **Satisfies:** FR-1, FR-9, FR-10. **Intra-milestone ordering (R1-S2 fix — was a
+  self-referential "blocked by itself"):** step 1 (demote `kickoff_app` →
+  `kickoff-legacy`) MUST complete before step 2 (rename `concierge` → `kickoff`), so
+  the `kickoff` name is free before the kernel claims it. Treat as M1a (demote) → M1b
+  (rename) if a split is cleaner. A dry-run rename must verify `kickoff` is
+  unregistered before `concierge` claims it — acyclic, no self-block.
 
 ### M2 — `assess` emits the next command
 - Port `_blocker_command` + command constants (`red_carpet_advisor.py:63-73,348-358`)
@@ -113,9 +124,12 @@ consumers migrate (NR-5, FR-9/FR-12).
 
 ---
 
-*Plan v1.0 — sequenced so the kernel becomes the documented surface (M1-M2)
+*Plan v1.2 — sequenced so the kernel becomes the documented surface (M1-M2)
 before any COMPENSATORY layer is cut (M3-M4) and before anything is deleted (M5,
-deferred).*
+deferred). NOTE: the milestone body above is KNOWN-STALE against reqs v0.16 — the
+full rewrite (adding milestones for the panel facilitation/hardening body + R3
+contract-stability fixes) is the tracked next work item; see the header banner and
+Appendix A.*
 
 ---
 
@@ -135,13 +149,31 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-S1 | Bump version + add milestones for FR-13b/13c/OQ resolutions | R1 | Applied (partial): version banner bumped to v1.2 with a KNOWN-STALE warning; the milestone additions themselves are the **full plan rewrite to reqs v0.16 — tracked next work item**, not applied in this triage pass. | 2026-07-04 |
+| R1-S2 | Fix circular M1 "blocked by itself" | R1 | Applied inline — M1 now states acyclic intra-milestone ordering (demote `kickoff_app` before renaming `concierge`; M1a→M1b option; dry-run name-free check). | 2026-07-04 |
+| R1-S3 | Make MCP read-only structural (concrete M-task + test) | R1 | Accepted — reqs FR-7 now carries the structural MCP-floor acceptance test (this pass); the plan M-task/exit lands in the **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R1-S4 | Correct M5 removal-criteria scope | R1 | Accepted — reqs FR-12 scope corrected (R1-F1, applied); M5's task text update rides the **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R1-S5 | Add per-milestone acceptance/exit criteria + SOTTO byte-identity tests | R1 | Accepted — belongs in the **full plan rewrite (tracked next item)**; the FR-15 byte-identity tests are now specified reqs-side. | 2026-07-04 |
+| R1-S6 | Sequence-guard the consumer double-break (alias window) | R1 | Accepted — reqs FR-1a now states the alias-window condition (R1-F7, applied); the M4 sequence-guard task rides the **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R1-S7 | Schedule + gate the OQ-11 distillation debt | R1 | Accepted — needs an M-slot or dated deferral; **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R1-S8 | State PANEL_CONSUMABLE disposition in M3 | R1 | Accepted — reqs FR-15 now names the PANEL_CONSUMABLE disposition (R1-F4, applied); M3 task wording rides the **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R2-S1 | Make M0's "fold" branch concrete or remove it | R2 | Accepted — code evidence favors scope-out-only (reqs FR-1a/OQ-8 RESOLVED); collapse M0 to a single disposition in the **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R2-S2 | Bind a plan task to KICKOFF_PANEL_FACILITATION_DESIGN.md (FR-13b) | R2 | Accepted — new FR-13b milestone gating against the design doc; **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R2-S3 | M2 gate: FR-5a decision recorded before M5 migration note | R2 | Accepted — add the M2-exit forcing function; **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R2-S4 | Add activation gate to M5 removal-criteria | R2 | Accepted — reqs FR-12 now requires a detection trigger (R2-F1, applied); the plan-side activation mechanism rides the **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R2-S5 | Verify safe-write chokepoint intact after M1–M3 renames | R2 | Accepted — reqs FR-7 now requires confinement tests to survive the renames (R2-F3, applied); the M1/M3 exit check rides the **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R2-S6 | Resolve OQ-10 in a plan milestone, not just CRP | R2 | Accepted — reqs OQ-10 now a hard M3-exit gate (R2-F5, applied); the M3 codification task rides the **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R2-S7 | Closing-note version mismatch (v1.0 vs header v1.1) | R2 | Applied inline — closing note updated to v1.2 to match the header. | 2026-07-04 |
+| R3-S1 | M2: re-target ported command map (drops CMD_RED_CARPET_AGENT) + M1↔M2 ordering | R3 | Accepted — M2 must re-target the retiring-surface command + a command-drift test + post-M1 name resolution; **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R3-S2 | M1 name-REUSE: kernel `kickoff` must forward old metaphor subcommands | R3 | Accepted — add M1 forwarding task ("moved to `kickoff-legacy`") so repurposed-name callers get guidance not a bare Typer error; **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R3-S3 | M3 `assess` output-schema break (removed `stakeholders` block) needs a migration owner | R3 | Accepted — reqs FR-15 now names this as a scheduled plan-side migration item (this pass); the M3 consumer-survey + deprecation-marker task rides the **full plan rewrite (tracked next item)**. | 2026-07-04 |
+| R3-S4 | Re-scope M0: its exits are already RESOLVED/SETTLED | R3 | Accepted — M0 must become a verification (not re-decide) milestone or be marked satisfied-by-reqs-v0.16; **full plan rewrite (tracked next item)**. | 2026-07-04 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| (none) | — | — | No plan-side suggestion was rejected; all S-items are correct. The bulk are ACCEPTED-but-deferred-to-the-full-rewrite (recorded in Appendix A with that resolution), not applied inline, because they require re-milestoning the stale plan against reqs v0.16 rather than a local edit. | 2026-07-04 |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 

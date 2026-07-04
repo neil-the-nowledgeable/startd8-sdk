@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.15 (FR-13c hardening + OQ-8/OQ-9 structural decisions RESOLVED)
+**Version:** 0.16 (CRP R1–R3 triaged — correctness fixes + gap-closures applied)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -118,6 +118,20 @@ essential act is **identifying a value that needs populating — never the
 population itself**; and that identification is the cheapest thing in the stack,
 already deterministic.
 
+> **Two modes, not one — reconciliation (R3-F1).** The chain just described is the
+> **COLD, single-persona, field-triggered** flow. The experiments (runs 1–3) measured
+> that mode at **1 novel / 38 cold calls = a MIRROR** — it is NOT the validated
+> product. The capability runs 4–8 validated (and FR-13b specifies as "the
+> load-bearing requirement") is a **different product**: a *kickoff-time,
+> project-shape-triggered, FACILITATED multi-round* panel (shared objective/strategy →
+> means-ends → cross-role tension → synthesis, mixed-model). Different trigger
+> (project shape, not a blank field), different granularity (a session, not a single
+> persona call), different unit of invocation. **When implementing, build the
+> facilitated multi-round process of FR-13b — not the cold blank-field→persona
+> pipeline this chain sketches.** The cold chain is retained only as the honest
+> low-water-mark description of the *coverage-signal → shaping-range* mechanics; the
+> facilitated process is the actual capability. (See FR-13's evidence note + FR-13b.)
+
 **What did NOT change:** VIPP is still un-bundled (FR-14). Welcome Mat / Red Carpet
 still retire (FR-9–12). Teian's *drafting* dies (NR-7); its *coverage signal*
 survives as the discovery trigger.
@@ -233,7 +247,7 @@ might be missing* (breadth, real value); it may not *estimate the specific value
 
 ## 2. Requirements
 
-### The kernel — `startd8 kickoff` (four plain verbs, zero metaphor)
+### The kernel — `startd8 kickoff` (three greenfield verbs + a brownfield on-ramp, zero metaphor)
 
 - **FR-1 — Single surface, three greenfield verbs.** The project-start process is
   exactly one CLI surface, `startd8 kickoff`, whose **kernel** is three
@@ -271,6 +285,14 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     did). **Consumer break = zero** (the 2 VIPP apps keep the same flow under the
     relocated name). FR-1's "one surface" now holds honestly — `project init` is no
     longer classified as kernel onboarding.
+  - **Consumer-break = zero — stated condition (R1-F7/R2-F6).** "Zero" holds **only
+    if the pre-change `project init` invocation keeps posting VIPP by default during
+    the alias window.** The two apps that reach VIPP through `project init`'s always-on
+    posting (household-o11y, benchmark portal, §0.3) break on **both** axes at once —
+    the rename/relocation (FR-1a) *and* the VIPP opt-in flip (FR-14) — if both land in
+    the same release with no alias window. The requirement: until the alias window
+    closes, the old `project init` command still yields a VIPP posting (default-on),
+    so neither the name nor the default changes under the two apps simultaneously.
 
 - **FR-2 — `survey` (discover).** Read-only, $0, no LLM. Reports what the project
   already has that is relevant to the input contract: requirement/PRD docs (and
@@ -336,12 +358,26 @@ might be missing* (breadth, real value); it may not *estimate the specific value
   not the `handle_concierge_read` allow-list floor (`startd8_mcp.py:3200`), so
   read-only is incidental (write branches happen to return previews) rather than
   structural. Make it structural — route the MCP path through the read floor.*
+  - **Acceptance — MCP floor (structural, not preview-incidental):** an MCP `action`
+    naming a write verb cannot reach a write branch even if the preview return is
+    removed — the read floor rejects it before dispatch.
+  - **Acceptance — CLI write confinement (R2-F3):** a CLI write to a path outside the
+    project root (`../../etc/passwd`) is rejected at the chokepoint, and a symlink
+    pointing outside root is followed-and-rejected, not silently followed-and-written.
+    Both tests must still pass **after** the M1–M3 renames move the chokepoint.
 
 - **FR-8 — Honest inputs (provenance discipline).** Every value the kernel writes
   carries provenance (`default` / `config-default` / `unratified` /
-  `estimate` / `authored`). The kernel never writes a value labeled as `authored`
-  that it did not receive from a human. It leaves blanks as clearly-marked TODOs
-  rather than synthesizing content to fill them.
+  `estimate` / `authored` / `shaping-range`). The kernel never writes a value labeled
+  as `authored` that it did not receive from a human. It leaves blanks as
+  clearly-marked TODOs rather than synthesizing content to fill them.
+  - **`shaping-range` (R1-F5) is the distinct provenance for FR-13a discovery ranges**
+    — an envelope + reasoning, never a point value. It must **not** reuse `estimate`:
+    a `shaping-range` payload is a range (two bounds), so a scalar (single value)
+    carrying `shaping-range` provenance is invalid and fails lint (this is what makes
+    FR-13a's "envelope not point" and the NR-7 point-value prohibition enforceable at
+    the data layer — a zero-width range `5–5%` is a point value and fails the
+    width-floor check).
 
 ### Phased retirement of the COMPENSATORY layers
 
@@ -352,7 +388,13 @@ might be missing* (breadth, real value); it may not *estimate the specific value
 - **FR-10 — Deprecation markers.** Each retiring surface (Welcome Mat serve/web,
   Red Carpet CLI commands, Teian `panel recommend`) emits a deprecation notice
   pointing to the `startd8 kickoff` verb that replaces it, and is documented as
-  `[COMPENSATORY]` debt in this doc's retirement table.
+  `[COMPENSATORY]` debt in this doc's retirement table. **Hidden aliases must cover
+  BOTH surfaces for the same one-release window (R1-F2):** the retired **CLI
+  subcommand names** *and* the **MCP `ConciergeInput.action` enum values** (scripted/
+  MCP callers key on the `action` strings, `startd8_mcp.py:3200`). A CLI-only alias
+  window silently breaks programmatic MCP callers at rename. *Acceptance:* each old
+  `action` enum value still dispatches (returns non-error) for one release and emits
+  a deprecation warning.
 
 - **FR-11 — Consumer migration (navig8).** The one known live consumer of the
   onboarding surface is `navig8`. Retirement must include a migration note /
@@ -361,8 +403,17 @@ might be missing* (breadth, real value); it may not *estimate the specific value
 
 - **FR-12 — Removal criteria.** Define the objective condition under which the
   retired code is deleted (not just deprecated): kernel verbs shipped +
-  consumer(s) migrated + no external caller in the deterministic-provider entry
-  points. Removal is a later, separate change.
+  consumer(s) migrated + **no external caller resolving to the retiring code paths
+  across the CLI subcommand set, the MCP `ConciergeInput.action` enum, and the
+  documented consumers** (R1-F1 — *not* the `startd8.contractors.deterministic_providers`
+  entry-point group; the retiring surfaces are CLI/MCP commands, not deterministic-
+  provider plugins, so that gate would pass vacuously while a live caller still
+  exists). Removal is a later, separate change. **Detection/notification (R2-F1):**
+  the criteria must carry a named trigger that fires when all three are jointly met —
+  a dated review issue, a CI staleness lint on the deprecated modules, or a named
+  responsibility — so eligible code does not sit in the tree indefinitely (the
+  accidental-complexity-accretes pattern the lens targets); a passive checklist with
+  no trigger is a "delete when you feel like it" policy.
 
 ### Discovery (conditionally offered — the reclassified panel)
 
@@ -386,7 +437,15 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     Gemini) so that cross-role *convergence* becomes model-independent evidence
     rather than a shared-model artifact (fifth-run finding); this is the concrete
     mitigation for the correlated-blind-spot limit and a first-class facilitation
-    lever. (Note: the current
+    lever. **Degraded-mode contract (R3-F5):** when fewer than 2 independent model
+    families are available (missing keys, budget), the run must **degrade honestly** —
+    every risk-register item carries per-item **model-family provenance**, and any
+    convergence produced by a single family is labeled `single-model` (never
+    "trustworthy"/cross-family). A silent single-family fallback (the default failure
+    mode of a multi-provider script when keys are absent) would fabricate exactly the
+    cross-family evidence class the fifth run says is the whole value — the
+    benchmark-matrix `is_infra_error` lesson applied to the panel: a missing key must
+    degrade or refuse, never masquerade as signal. (Note: the current
     `persona.py` "answer only from the brief" prompt did NOT block facilitated mode
     — personas engaged with context supplied in the question — but doing it *well/
     repeatably* wants first-class support for a shared-context/objective block,
@@ -435,6 +494,14 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     kernel must not hard-import `stakeholder_panel` for its coverage core — the
     persona/discovery layer loads only when the offer is accepted (SOTTO,
     FR-15).
+  - **External-validity caveat (R1-F9).** The "lens when facilitated" evidence
+    (runs #4–#8) all probes variants of the **same two projects** (retail bundling /
+    benchmark portal), and the doc itself notes value concentrates in roles with
+    leverage against *the specific strategy probed*. The claim is therefore
+    **domain-scoped as of v0.16**: before productizing, either re-run the facilitated
+    probe on a **structurally different domain** (must reproduce ≥1 non-obvious
+    cross-role derivation), or keep the "competent-generalist grade" claim explicitly
+    marked single-strategy-family until that second-domain run exists.
 
 - **FR-13a — Shaping ranges, never point values (the "no-8%" rule).** When a
   persona speaks to a *specific* field value, it may offer an **estimated range +
@@ -444,6 +511,17 @@ might be missing* (breadth, real value); it may not *estimate the specific value
   human an envelope to place the real value in; a point value hides its
   uncertainty and invites blind acceptance. This is the breadth/precision line
   (§0.2) made enforceable. See NR-7 for the dropped point-value drafter.
+  - **Evidence status — HYPOTHESIS, untested as of v0.16 (R3-F2).** Across all eight
+    runs no persona ever emitted a shaping range — run #4's bounds record "numeric
+    guard never fired (grounded means-ends, not invention)," i.e. only the
+    *prohibition* side (no point values appeared) was exercised, never the
+    range-*offering* side FR-13a regulates. Unlike every other FR-13 claim (each
+    carries a dropped/retained/low-yield/confirmed status), FR-13a rides on the Teian
+    reversal narrative, not evidence. **Before FR-13a ships:** a ninth run must
+    demonstrate a persona producing a well-formed range + reasoning a human found
+    placeable, AND a width-floor/degenerate-range check must be specified (a range
+    that collapses to a point — `5–5%` — fails validation; this is where a point-value
+    drafter could quietly re-enter). Until then, FR-13a is a marked hypothesis.
 
 - **FR-13c — Facilitation-orchestrator hardening (required before the panel is
   more than a prototype).** Experiments #7/#8 validated the capability *and*
@@ -461,9 +539,23 @@ might be missing* (breadth, real value); it may not *estimate the specific value
      Assumptions Check returns **≥2 high-impact / low-confidence** assumptions,
      the orchestrator must **halt and surface "validate the premise first"** rather
      than spending the full panel rounds. Catching a false premise (#7) is the
-     highest-value output; it should short-circuit, not footnote.
-  3. **Cost tracking.** Per-call `cost_usd` reads `0.0` (untracked, not free). Wire
-     real cost attribution so runs report spend and the budget gate is honest.
+     highest-value output; it should short-circuit, not footnote. **Threshold (R2-F4):
+     the default is `≥2` high-impact/low-confidence assumptions and it is
+     configurable** via a named flag/config key (e.g. `--assumptions-halt-threshold`);
+     too low (≥1) halts on noise, too high (≥5) lets false premises through (#7 fired
+     at N=5). The failure mode on trip is a **prominent halt** ("validate the premise
+     first"), never a silent warn.
+  3. **Cost tracking + budget gate (R3-F6).** Per-call `cost_usd` reads `0.0`
+     (untracked, not free — run #8 spent ~68 flagship calls). Wire real cost
+     attribution so runs report spend, and **consume the SDK's existing `startd8.costs`
+     (CostTracker/budget) + the benchmark-matrix fail-closed preflight** rather than
+     growing orchestrator-local tracking (Mottainai — don't duplicate shipped
+     capability). Define the **budget gate** H3 references, which is otherwise a
+     dangling term: a named cap (config key/flag), an **exceeded behavior = halt**
+     (mirroring the H2 gate), and — because FR-13's "offering costs $0; only accepting
+     spends" must be honest — the offer/acceptance prompt must **disclose an estimated
+     call-count + cost band** so acceptance is informed spend authorization (an offer
+     that hides its price is the monetary analogue of the FR-8 honesty violation).
   *(Bug already fixed post-#8: `PROJECT_NAME` is now the `--project-name` flag, so
   the default domain no longer leaks into a re-purposed run.)*
 
@@ -501,6 +593,24 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     conditional offer is accepted**. Target invariant: with no discovery accepted,
     `assess` output is byte-identical to a build that never knew the panel
     existed — the offer is additive, the acceptance is where cost/effect begin.
+    - **`PANEL_CONSUMABLE` disposition (R1-F4).** The invariant is not just the
+      domain-list move: `PANEL_CONSUMABLE=True` (`core.py:267,274`) couples kernel
+      `assess` to the panel's ship-state. The kernel-owned coverage core must carry
+      **no reference to `PANEL_CONSUMABLE`** — its removal from kernel `core.py` is
+      part of the acceptance (test: with `stakeholder_panel` absent from the import
+      graph, `assess` output is byte-identical AND no `PANEL_CONSUMABLE` reference
+      remains in kernel `core.py`).
+    - **Import-error semantics (R2-F2).** A `try/except ImportError` that degrades
+      silently is **NOT** "opt-in-loaded" — a partial/half-loaded checkout can produce
+      non-identical output. The coverage core must **lazy-import** the persona layer
+      only on accept; a degrading `except` branch is disallowed. Acceptance: with
+      `stakeholder_panel` *removed from the environment* (not merely caught by a
+      try/except), `assess` output is byte-identical to the never-present baseline.
+    - **Baseline is today's output, not a counterfactual (R3-F3 note).** Meeting this
+      invariant *removes* the always-present `stakeholders` domain block from every
+      current consumer's `assess` output — a visible output-schema change. That break
+      has an owner: it is scheduled as a plan-side migration item (see plan R3-S3),
+      not silently absorbed here.
   Only assert byte-identical-when-absent **per seam, with evidence** — never as a
   blanket claim.
 
@@ -576,7 +686,13 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
   (concrete hands-on relationship to the artifact — operator, SRE, security) over
   generic role-labels (SE-manager, backend), which echoed or refused. A roster of
   abstract role-labels is a weak trigger; a roster with real operational owners is
-  a strong one. Decide during CRP.
+  a strong one. **Resolution path (R2-F5):** OQ-10's trigger signal set is the
+  implementation input for M3's "compute cheap project-shape signals" — three CRP
+  rounds ran and no reviewer could resolve it *for* the author, so "Decide during CRP"
+  has failed its own mechanism. **The resolution must be recorded as a concrete,
+  testable trigger spec (a resolved OQ-10 entry like OQ-5/OQ-8/OQ-9, or a named spec)
+  BEFORE M3 exits** — M3 must not ship with placeholder/undefined trigger logic. Until
+  then this is a hard M3 gate, not a CRP-deferred note.
 - **OQ-12 — Prove discovery end-to-end. RESOLVED — experiment run 2026-07-04.**
   Ran `panel ask-all` (Haiku, $0.00x) on the benchmark-portal 14-persona roster,
   one gap-elicitation question, judged against the portal's schema + FRs + known-
@@ -879,6 +995,42 @@ multi-round process is the real capability.** Spec: `KICKOFF_PANEL_FACILITATION_
 Next: user authors end-user observability UX reqs against the §6 transcript contract
 (the run's `.startd8/kickoff-panel/<session>.json` is now a real fixture).*
 
+*v0.12 — Seventh experiment (Tier-1 orchestrator v0.2: artifact grounding + Key
+Assumptions Check + Outside View + adversary personas + independence re-sequence).
+Strongest run of the series: grounding + assumptions caught that the ENTIRE PREMISE
+was false (all six prior ungrounded runs optimized a business that doesn't exist) —
+the problem-diamond > solution-diamond thesis demonstrated live. Adversary personas
+earned their place; Outside View added a reference-class corrective. Design insight:
+the assumptions check should GATE, not just inform. Fed FR-13c H1/H2.*
+
+*v0.13 — Eighth experiment (Tier-1 on a VALID kickoff: the benchmark portal, real
+13-entity schema + genuine objective). DECISIVE — Tier-1 LIFTS a valid kickoff (not
+just catches a false premise): sharp portal-specific cross-family credibility-gap
+register (plaintext vendor identities vs vendor-BLIND goal; mutable embargo flag; no
+immutable published-result binding; XSS). Surfaced two orchestrator bugs (PROJECT_NAME
+leak — FIXED; thin artifact-gatherer — TODO). Net #7+#8: catches false premises AND
+lifts valid ones — FR-13b + Tier-1 additions validated end-to-end. Fed FR-13c.*
+
+*v0.14 — FR-13c authored (facilitation-orchestrator hardening H1 artifact-grounding
+fidelity / H2 assumptions-as-gate / H3 cost tracking), distilled from the #7/#8
+caveats. Added as a hard pre-productization gate.*
+
+*v0.15 — OQ-8 and OQ-9 RESOLVED as structural decisions: `project init` scoped OUT to
+the VIPP/ground-truth-adjudication capability (OQ-8 → FR-1a); `derive` STAYS on the
+`kickoff` surface as the labeled brownfield on-ramp (OQ-9). Header advanced to 0.15.*
+
+*v0.16 — CRP R1–R3 triaged (this pass, 2026-07-04). Applied correctness fixes + gap
+closures: FR-1 heading (three greenfield verbs + on-ramp), FR-1a consumer-break-zero
+condition, FR-7 MCP-floor + CLI-confinement acceptance tests, FR-8 `shaping-range`
+provenance, FR-10 MCP action-enum alias window, FR-12 corrected removal scope +
+detection trigger, FR-13 external-validity caveat, FR-13a marked HYPOTHESIS/untested,
+FR-13b(5) mixed-model degraded-mode contract, FR-13c H2 threshold default + H3 budget
+gate wired to `startd8.costs`, FR-15 PANEL_CONSUMABLE + import-error semantics,
+OQ-10 named resolution path, §0.2 cold-vs-facilitated two-mode reconciliation. Deferred
+(human deciding): R1-F3 (FR-6/NR-2 vs facilitation-orchestrator conductor) and its
+dependents R1-F6/R2-F7/R3-F4 (transcript persistence + anti-smoothing + transcript
+floor). See Appendix A/B for full dispositions.*
+
 ---
 
 ## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
@@ -897,13 +1049,31 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F1 | FR-12 cites wrong entry-point group | R1 | Applied — FR-12 rewritten to check CLI subcommands + MCP `action` enum + documented consumers; called out the vacuous deterministic-provider gate. | 2026-07-04 |
+| R1-F2 | Alias window must cover MCP `action` enum | R1 | Applied — FR-10 now requires hidden aliases for BOTH CLI names AND MCP `ConciergeInput.action` enum for the one-release window, with non-error+deprecation-warning acceptance. | 2026-07-04 |
+| R1-F4 | Name PANEL_CONSUMABLE in FR-15 invariant | R1 | Applied — FR-15 panel bullet adds a `PANEL_CONSUMABLE` disposition sub-bullet (no reference remains in kernel `core.py`; byte-identity test). | 2026-07-04 |
+| R1-F5 | Provenance value for shaping ranges | R1 | Applied — FR-8 enum gains `shaping-range` (distinct from `estimate`); range-not-scalar lint + width-floor make FR-13a/NR-7 enforceable. | 2026-07-04 |
+| R1-F7 | FR-1a "consumer break=zero" needs stated condition | R1 | Applied — FR-1a adds the alias-window condition (old `project init` keeps posting VIPP by default until the window closes); double-break named. | 2026-07-04 |
+| R1-F8 | FR-1 heading says "four verbs" | R1 | Applied — heading changed to "three greenfield verbs + a brownfield on-ramp". | 2026-07-04 |
+| R1-F9 | FR-13 evidence is single-domain | R1 | Applied — added external-validity caveat sub-bullet (domain-scoped as of v0.16; second-domain facilitated run required before productizing). | 2026-07-04 |
+| R2-F1 | FR-12 needs detection/notification mechanism | R2 | Applied — FR-12 adds a named trigger (dated review issue / CI staleness lint / named owner) that fires when criteria jointly met. | 2026-07-04 |
+| R2-F2 | FR-15 must specify import-error semantics | R2 | Applied — FR-15 panel bullet adds import-error-semantics sub-bullet (lazy-import required; degrading `except` disallowed; env-removed byte-identity test). | 2026-07-04 |
+| R2-F3 | FR-7 CLI-confinement acceptance test | R2 | Applied — FR-7 adds CLI path-traversal + symlink-escape acceptance tests, must survive M1–M3 renames. | 2026-07-04 |
+| R2-F4 | FR-13c H2 threshold default + tuning | R2 | Applied — H2 states default `≥2`, configurable flag, prominent-halt failure mode. | 2026-07-04 |
+| R2-F5 | OQ-10 needs named resolution path | R2 | Applied — OQ-10 "Decide during CRP" converted to a hard M3-exit gate (testable trigger spec required before M3 ships). | 2026-07-04 |
+| R3-F1 | Reconcile §0.2 cold vs facilitated model | R3 | Applied — added a two-modes reconciliation callout after the "three survivors chain" (build the FR-13b facilitated multi-round process, not the cold blank-field pipeline). | 2026-07-04 |
+| R3-F2 | Mark FR-13a empirically unvalidated | R3 | Applied — FR-13a carries an "Evidence status — HYPOTHESIS, untested as of v0.16" note + ninth-run + width-floor gate before ship. | 2026-07-04 |
+| R3-F3 | Restore changelog integrity (v0.12–v0.15) | R3 | Applied — added v0.12–v0.16 changelog entries; header now matches last footer. | 2026-07-04 |
+| R3-F5 | FR-13b(5) degraded-mode contract | R3 | Applied — FR-13b(5) adds degraded-mode contract (per-item model-family provenance; single-family labeled `single-model`, never cross-family; `is_infra_error` analogue). | 2026-07-04 |
+| R3-F6 | Define budget gate H3 + wire startd8.costs | R3 | Applied — FR-13c H3 defines the budget gate (cap + halt), requires consuming `startd8.costs` + benchmark-matrix preflight, and mandates offer-time call-count/cost-band disclosure. | 2026-07-04 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| R2-F6 | State FR-1a "break=zero" condition in requirements text | R2 | Redundant — R1-F7 (accepted) already writes the alias-window condition directly into FR-1a's prose; R2-F6 asks for the same edit, now applied. | 2026-07-04 |
+
+*Deferred (untriaged, human deciding): **R1-F3** (FR-6/NR-2 vs facilitation-orchestrator conductor contradiction) left in Appendix C. Its dependents **R1-F6** (transcript persistence as a requirement) and **R3-F4** (transcript store under the safe-write floor) and **R2-F7** (anti-smoothing as a requirement) are also deferred as blocked on R1-F3 — whether the orchestrator is an FR-6-exempt opt-in tool or a bounded violation determines whether/how these three land.*
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
