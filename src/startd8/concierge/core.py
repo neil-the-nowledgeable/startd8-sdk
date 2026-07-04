@@ -11,6 +11,7 @@ Design constraints (CONCIERGE_MCP_REQUIREMENTS.md):
 from __future__ import annotations
 
 import re
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -27,11 +28,22 @@ SCHEMA_VERSION = 1
 READ_ACTIONS = ("survey", "assess")
 # Write actions return a PREVIEW (WritePlan) from handle_concierge_tool; the CLI is the only path
 # that applies it (OQ-7). handle_concierge_tool never writes — it builds the plan.
-WRITE_ACTIONS = ("instantiate-kickoff", "log-friction")
-# derive-contract returns a PREVIEW (candidate contract + report) or a drift report from
+# M0b rename: `instantiate-kickoff`→`instantiate` (the old value stays dispatchable via
+# _ACTION_ALIASES for one release, FR-10).
+WRITE_ACTIONS = ("instantiate", "log-friction")
+# `derive` returns a PREVIEW (candidate contract + report) or a drift report from
 # handle_concierge_tool; the CLI is the only path that writes the contract (OQ-7).
-DERIVE_ACTIONS = ("derive-contract",)
+# M0b rename: `derive-contract`→`derive` (old value aliased for one release).
+DERIVE_ACTIONS = ("derive",)
 DEFERRED_ACTIONS = ()
+
+# FR-10 alias window: the old MCP `ConciergeInput.action` enum values (and any scripted caller that
+# keys on the action string) keep dispatching for one release, mapped to their canonical name with a
+# DeprecationWarning. Remove this map when the alias window closes.
+_ACTION_ALIASES = {
+    "instantiate-kickoff": "instantiate",
+    "derive-contract": "derive",
+}
 
 # The four kickoff input *value* domains — the YAML files under ``docs/kickoff/inputs/``. This is the
 # single source of truth shared by concierge assessment (below), project-init shape triage, and the
@@ -316,12 +328,24 @@ def handle_concierge_tool(action: str, project_root: str | Path, **params: Any) 
     Read actions return their report; **write actions return a PREVIEW WritePlan and never touch
     disk** (OQ-7 — only the CLI applies, via ``apply_write_plan``). Deferred actions return a
     structured ``not_implemented`` rather than raising, so a caller discovers scope without a crash.
+
+    FR-10 alias window: an old action name (``instantiate-kickoff``/``derive-contract``) still
+    dispatches, mapped to its canonical name with a ``DeprecationWarning``.
     """
+    if action in _ACTION_ALIASES:
+        canonical = _ACTION_ALIASES[action]
+        warnings.warn(
+            f"concierge action '{action}' is deprecated; use '{canonical}'. "
+            "This alias will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        action = canonical
     if action == "survey":
         return build_survey(project_root)
     if action == "assess":
         return build_assess(project_root)
-    if action == "instantiate-kickoff":
+    if action == "instantiate":
         from .writes import build_instantiate_plan
         return build_instantiate_plan(
             project_root,
@@ -343,14 +367,14 @@ def handle_concierge_tool(action: str, project_root: str | Path, **params: Any) 
             raise ConciergeError(f"log-friction requires field {e}") from None
         except ConciergeWriteError as e:
             raise ConciergeError(str(e)) from None
-    if action == "derive-contract":
+    if action == "derive":
         import dataclasses
 
         from .derive import build_derivation, check_drift
 
         modules = params.get("modules")
         if not modules:
-            raise ConciergeError("derive-contract requires `modules` (Pydantic model import paths)")
+            raise ConciergeError("derive requires `modules` (Pydantic model import paths)")
         pythonpath = params.get("pythonpath") or str(project_root)
         common = dict(project_pythonpath=pythonpath, model_names=params.get("model_names"),
                       exclude_models=params.get("exclude_models"))

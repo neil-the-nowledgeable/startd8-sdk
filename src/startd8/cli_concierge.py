@@ -14,21 +14,50 @@ confinement/clobber guard; 1 `--check` drift detected.
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import List, Optional
 
 import typer
+from rich.console import Console as _Console
 
 from .cli_shared import console
 
+# Deprecation notices go to stderr so they never pollute the `--json` stdout contract.
+_stderr_console = _Console(stderr=True)
+
+# The kernel surface: `startd8 kickoff` (M0b). The same command bodies are registered here under
+# the kernel names and, for one release, under the old `startd8 concierge` names as hidden aliases
+# (M0b alias window, FR-10). `concierge_app` below is that deprecated alias group.
 concierge_app = typer.Typer(
     name="concierge",
-    help="Onboarding assist: survey/assess a project (read-only) and instantiate-kickoff/log-friction (CLI-only writes).",
+    help="[DEPRECATED — use `startd8 kickoff`] Onboarding assist alias (works for one release).",
+)
+
+kickoff_kernel_app = typer.Typer(
+    name="kickoff",
+    help="Onboarding kernel: survey/assess a project (read-only) and instantiate/derive/log-friction.",
 )
 
 _EXIT_FATAL_INPUTS = 2
 _EXIT_BLOCKED = 3
 _EXIT_DRIFT = 1
+
+
+@concierge_app.callback()
+def _concierge_deprecated() -> None:
+    """[DEPRECATED] Renamed to `startd8 kickoff`. This alias works for one release (FR-10)."""
+    warnings.warn(
+        "`startd8 concierge` is deprecated; use `startd8 kickoff` "
+        "(instantiate-kickoff→instantiate, derive-contract→derive). "
+        "This alias will be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _stderr_console.print(
+        "[yellow]deprecation:[/yellow] `startd8 concierge` is renamed to `startd8 kickoff` "
+        "(instantiate-kickoff→instantiate, derive-contract→derive); this alias works for one release."
+    )
 
 
 def _emit_json(result: dict) -> None:
@@ -333,3 +362,16 @@ def concierge_derive_contract(
     console.print("  [dim]written as a CANDIDATE (unratified) — the Architect must ratify (FR-DC-7c)[/dim]")
     if not res.ok:
         raise typer.Exit(_EXIT_BLOCKED)
+
+
+# --- M0b: the `startd8 kickoff` kernel surface ---------------------------------------------------
+# The kernel reuses the exact command bodies above under function-named verbs. `survey`/`assess`/
+# `log-friction` keep their names; `instantiate-kickoff`→`instantiate` and `derive-contract`→`derive`
+# are renamed (OQ-9: `derive` stays on-surface as the labeled brownfield on-ramp). The old
+# `startd8 concierge …` subcommand names remain reachable via the deprecated `concierge_app` alias
+# group (its callback emits the FR-10 deprecation warning).
+kickoff_kernel_app.command("survey")(concierge_survey)
+kickoff_kernel_app.command("assess")(concierge_assess)
+kickoff_kernel_app.command("instantiate")(concierge_instantiate)
+kickoff_kernel_app.command("log-friction")(concierge_log_friction)
+kickoff_kernel_app.command("derive")(concierge_derive_contract)

@@ -1009,12 +1009,19 @@ class StatusInput(BaseModel):
 class ConciergeAction(str, Enum):
     """Concierge actions. Over MCP all are read/preview-only — the CLI is the only writer (OQ-7).
 
-    ``derive-contract`` is intentionally CLI-only (spec-deferred from the v1 MCP surface,
-    CONCIERGE_MCP_REQUIREMENTS FR-C8) and is NOT exposed here — keeping the MCP action set a tight
-    read/preview floor (WM Concierge-mode M-CM6). Adding a write/apply action here would breach it.
+    ``derive`` (formerly ``derive-contract``) is intentionally CLI-only (spec-deferred from the v1
+    MCP surface, CONCIERGE_MCP_REQUIREMENTS FR-C8) and is NOT exposed here — keeping the MCP action
+    set a tight read/preview floor (WM Concierge-mode M-CM6). Adding a write/apply action here would
+    breach it.
+
+    M0b rename: the canonical write action is ``instantiate``; the old ``instantiate-kickoff`` value
+    stays accepted for one release (FR-10) and dispatches with a DeprecationWarning via
+    ``handle_concierge_tool``'s alias map.
     """
     SURVEY = "survey"
     ASSESS = "assess"
+    INSTANTIATE = "instantiate"
+    # Deprecated alias (FR-10 alias window) — still dispatches, warns, removed next release.
     INSTANTIATE_KICKOFF = "instantiate-kickoff"
     LOG_FRICTION = "log-friction"
 

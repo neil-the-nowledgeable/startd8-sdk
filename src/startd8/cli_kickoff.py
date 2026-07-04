@@ -35,8 +35,12 @@ from .manifest_extraction.models import ExtractionRecord, ExtractionResult
 console = Console()
 
 kickoff_app = typer.Typer(
-    help="Kickoff-package tooling (authoring contract, conformance)."
+    help="[DEPRECATED — renamed to `kickoff-legacy`] Kickoff-package metaphor tooling "
+    "(authoring contract, conformance). The `kickoff` name now hosts the onboarding kernel."
 )
+
+# stderr so the notice never pollutes any `--json` stdout contract.
+_stderr_console = Console(stderr=True)
 
 _EXIT_CONFORMANCE = 1
 _EXIT_FATAL = 2
@@ -54,7 +58,23 @@ def _is_conformance_failure(record: ExtractionRecord) -> bool:
 
 @kickoff_app.callback()
 def _kickoff_callback() -> None:
-    """Kickoff-package tooling (use `kickoff check`)."""
+    """[DEPRECATED] The metaphor group moved to `startd8 kickoff-legacy` (M0a).
+
+    The `kickoff` name now hosts the onboarding kernel (survey/assess/instantiate/derive). These
+    metaphor commands keep working under `kickoff-legacy` for the transition.
+    """
+    import warnings
+
+    warnings.warn(
+        "`startd8 kickoff <metaphor-command>` moved to `startd8 kickoff-legacy`; "
+        "the `kickoff` name now hosts the onboarding kernel.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _stderr_console.print(
+        "[yellow]deprecation:[/yellow] these metaphor commands moved to "
+        "`startd8 kickoff-legacy` (the `kickoff` name now hosts the onboarding kernel)."
+    )
 
 
 @kickoff_app.command("check")

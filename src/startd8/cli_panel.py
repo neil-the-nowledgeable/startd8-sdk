@@ -54,7 +54,7 @@ def _load_or_exit(project_root: Path):
     path = _roster_path(project_root)
     if not path.is_file():
         console.print(
-            f"[red]panel:[/red] no roster at {path} — run `startd8 concierge instantiate-kickoff` first."
+            f"[red]panel:[/red] no roster at {path} — run `startd8 kickoff instantiate` first."
         )
         raise typer.Exit(_EXIT_FATAL_INPUTS)
     try:

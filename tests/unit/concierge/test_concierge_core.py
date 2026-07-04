@@ -72,14 +72,15 @@ def test_handle_unknown_action_raises(project):
 
 
 def test_handle_unknown_action_raises_not_crash(project):
-    # All v1 actions (survey/assess/instantiate-kickoff/log-friction/derive-contract) are now
-    # implemented — DEFERRED_ACTIONS is empty. An out-of-scope action degrades gracefully
-    # (a clear ConciergeError listing the known actions), never an opaque crash.
+    # All v1 actions (survey/assess/instantiate/log-friction/derive) are now implemented —
+    # DEFERRED_ACTIONS is empty. The known-actions listing uses the M0b canonical names (the old
+    # `instantiate-kickoff`/`derive-contract` values still dispatch via the alias window). An
+    # out-of-scope action degrades gracefully (a clear ConciergeError), never an opaque crash.
     import pytest
 
     with pytest.raises(ConciergeError) as exc:
         handle_concierge_tool("teleport", project)
-    assert "teleport" in str(exc.value) and "derive-contract" in str(exc.value)
+    assert "teleport" in str(exc.value) and "derive" in str(exc.value)
 
 
 def test_survey_is_pure_no_writes(project):
