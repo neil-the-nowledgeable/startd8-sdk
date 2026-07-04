@@ -49,221 +49,43 @@ Usage::
 
 from __future__ import annotations
 
-import asyncio
-import datetime
-import hashlib
-import json
-import os.path
-import re
-import shlex
-import subprocess
-import sys
-import threading
-import time
 import warnings
-from collections import defaultdict
-from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional
 
 from startd8.contractors.artisan_contractor import (
     AbstractPhaseHandler,
     WorkflowPhase,
-    _SAFE_TASK_ID_PATTERN,
-    compute_lanes,
 )
-from startd8.contractors.protocols import (
-    CodeGenerator,
-    DRAFT_MODEL_CLAUDE_HAIKU,
-    GenerationResult,
-    REVIEW_MODEL_CLAUDE_OPUS,
-    VALIDATE_MODEL_CLAUDE_SONNET,
-)
-from startd8.utils.file_operations import atomic_write_json
-from startd8.utils.retry import RetryConfig, _is_retryable_exception, _calculate_delay
-from startd8.utils.token_usage import (
-    token_usage_cost,
-    token_usage_input,
-    token_usage_output,
-)
-
-from startd8.contractors.context_schema import (
-    FinalizePhaseOutput,
-    ImplementPhaseOutput,
-    ReviewPhaseOutput,
-    ValidationPhaseOutput,
-)
-from startd8.contractors.context_seed.shared import (
-    SeedTask,
-    _ensure_context_loaded,
-    _load_enriched_seed,
-    _log_context_completeness,
-    _parse_tasks,
-    _topological_sort,
-    _track_onboarding_consumption,
-)
+from startd8.contractors.protocols import CodeGenerator
+from startd8.contractors.context_seed.handler_support import HandlerConfig
 from startd8.contractors.context_seed.phases.plan import PlanPhaseHandler
 from startd8.contractors.context_seed.phases.scaffold import ScaffoldPhaseHandler
-from startd8.contractors.context_seed.phases.finalize import FinalizePhaseHandler  # noqa: F401
-from startd8.contractors.context_seed.phases.integrate import IntegratePhaseHandler  # noqa: F401
-from startd8.contractors.context_seed.phases.test_phase import TestPhaseHandler  # noqa: F401
-from startd8.contractors.context_seed.phases.review import ReviewPhaseHandler  # noqa: F401
-from startd8.contractors.context_seed.phases.implement import ImplementPhaseHandler  # noqa: F401
-from startd8.contractors.context_seed.design_support import (
-    _classify_complexity_tier,
-    _compute_ccd_task_metadata,
-    _detect_cross_file_edges,
-    _extract_design_target_files,
-    _extract_referenced_elements,
-    _extract_structural_delta,
-    _extract_complexity_signals,
-    _infer_path_prefix,
-    _normalize_target_path,
-    _set_default_complexity_metadata,
-    build_shared_file_manifest,
-    compute_critical_path_tasks,
-    compute_lane_to_file_mapping,
-)
-from startd8.contractors.artisan_contractor import HAS_OTEL, _NoOpSpan
-from startd8.exceptions import Startd8Error
+from startd8.contractors.context_seed.phases.finalize import FinalizePhaseHandler
+from startd8.contractors.context_seed.phases.integrate import IntegratePhaseHandler
+from startd8.contractors.context_seed.phases.test_phase import TestPhaseHandler
+from startd8.contractors.context_seed.phases.review import ReviewPhaseHandler
+from startd8.contractors.context_seed.phases.implement import ImplementPhaseHandler
 from startd8.logging_config import get_logger
-from startd8.otel import attach_context, capture_context, detach_context
-from startd8.utils.artifact_inventory import (
-    load_artifact_content,
-    load_inventory,
-    lookup_artifact,
-)
-from startd8.contractors.artisan_phases.self_consistency import (
-    validate_protocol_fidelity,
-    validate_dockerfile_coherence,
-)
 
 logger = get_logger("startd8.contractors.context_seed_handlers")
 
-if TYPE_CHECKING:  # pragma: no cover - typing-only imports
-    from startd8.contractors.context_seed.phases.design import DesignPhaseHandler
-
-from startd8.contractors.context_seed.tracing import _HAS_OTEL, _phase_tracer
-
-# --- Step 0a: shared substrate moved to handler_support.py (leaf). core re-imports
-# them so still-in-core handlers + the compat wrapper keep resolving. Removed when
-# core becomes the pure aggregator (final step).
-from startd8.contractors.context_seed.handler_support import (  # noqa: F401
-    ArtisanIntegrationListener,
-    EditModeClassification,
-    HandlerConfig,
-    OTelIntegrationListener,
-    PerFileMode,
-    SeedTaskUnit,
-    _CACHE_SCHEMA_VERSION,
-    _MAX_GEN_FILE_HASH_BYTES,
-    _PHASE_RESULT_KEYS,
-    _SIZE_REGRESSION_MIN_LINES,
-    _SIZE_REGRESSION_THRESHOLD,
-    _build_provenance_links,
-    _capture_task_span_context,
-    _coerce_optional_float,
-    _compute_design_results_hash,
-    _compute_gen_file_hash,
-    _dict_to_gen_result,
-    _format_review_prompt,
-    _get_review_template,
-    _log_task_boundary_complete,
-    _log_task_boundary_start,
-    _log_task_timing,
-)
-
-# Maximum file size for hash computation (50 MB).  Files larger than this
-# are skipped to prevent memory spikes during cache validation.
-
-# PCA-603: Gate 4 size regression detection thresholds (configurable).
-
-
-
-
-# ---------------------------------------------------------------------------
-# E6: Cross-phase provenance linking helpers
-# ---------------------------------------------------------------------------
-
-# Maps phase names to the context key holding per-task results for that phase.
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# PCA-600: Typed data structures for edit-mode classification
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-from startd8.contractors.gate_contracts import GateEmitter
-
+# This module is the pure composition root: it wires the extracted phase handlers
+# (plan/scaffold/design/implement/integrate/test/review/finalize) into a handler set.
+# Shared helpers/dataclasses live in handler_support.py (leaf); each handler lives in
+# phases/*.py. DesignPhaseHandler is imported lazily inside create_all() to avoid a
+# load-time cycle via artisan_contractor. See docs/design/context-seed-refactor/.
 __all__ = [
-    "HandlerConfig",
     "ContextSeedHandlers",
+    "HandlerConfig",
     "PlanPhaseHandler",
     "ScaffoldPhaseHandler",
-    "DesignPhaseHandler",
     "ImplementPhaseHandler",
+    "IntegratePhaseHandler",
     "TestPhaseHandler",
     "ReviewPhaseHandler",
     "FinalizePhaseHandler",
 ]
-
-
-def __getattr__(name: str) -> Any:
-    if name == "DesignPhaseHandler":
-        from startd8.contractors.context_seed.phases.design import DesignPhaseHandler
-        return DesignPhaseHandler
-    raise AttributeError(name)
-
-
-
-
-
-
-
-
-
-
-# ============================================================================
-# Handler configuration
-# ============================================================================
-
-
-
-
-
-
-# ============================================================================
-# INTEGRATE phase — merge staged files into project_root
-# ============================================================================
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # ============================================================================

@@ -9,66 +9,69 @@ from __future__ import annotations
 import subprocess  # noqa: F401 — re-exported for test patching
 
 from startd8.contractors.artisan_contractor import WorkflowPhase
-from startd8.contractors.context_seed.core import (  # noqa: F401
+# Aggregator stays in core; each handler is imported from its own phase module,
+# each shared symbol from its real home (handler_support / shared / design_support).
+# core no longer re-exports these, so the wrapper imports them directly.
+from startd8.contractors.context_seed.core import ContextSeedHandlers  # noqa: F401
+from startd8.contractors.context_seed.phases.plan import PlanPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.scaffold import ScaffoldPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.design import DesignPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.implement import ImplementPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.integrate import IntegratePhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.test_phase import TestPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.review import ReviewPhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.phases.finalize import FinalizePhaseHandler  # noqa: F401
+from startd8.contractors.context_seed.handler_support import (  # noqa: F401
     ArtisanIntegrationListener,
-    ContextSeedHandlers,
-    DesignPhaseHandler,
     EditModeClassification,
-    FinalizePhaseHandler,
     HandlerConfig,
-    ImplementPhaseHandler,
-    IntegratePhaseHandler,
     OTelIntegrationListener,
     PerFileMode,
-    PlanPhaseHandler,
-    ReviewPhaseHandler,
-    ScaffoldPhaseHandler,
-    SeedTask,
     SeedTaskUnit,
-    TestPhaseHandler,
+    _CACHE_SCHEMA_VERSION,
     _PHASE_RESULT_KEYS,
     _build_provenance_links,
     _capture_task_span_context,
     _coerce_optional_float,
-    _compute_ccd_task_metadata,
     _compute_design_results_hash,
     _compute_gen_file_hash,
-    _detect_cross_file_edges,
+    _format_review_prompt,
+    _get_review_template,
+    _log_task_boundary_complete,
+    _log_task_boundary_start,
+    _log_task_timing,
+)
+from startd8.contractors.context_seed.shared import (  # noqa: F401
+    SeedTask,
+    _PCA_CONTEXT_FIELDS,
     _ensure_context_loaded,
+    _load_enriched_seed,
+    _log_context_completeness,
+    _parse_tasks,
+    _topological_sort,
+    _track_onboarding_consumption,
+    scope_dependencies_to_file,
+)
+from startd8.contractors.context_seed.design_support import (  # noqa: F401
+    _CCD_DESIGN_SPAN_ATTRS,
+    _classify_complexity_tier,
+    _compute_ccd_task_metadata,
+    _compute_manifest_file_checksums,
+    _detect_cross_file_edges,
     _extract_complexity_signals,
     _extract_design_target_files,
     _extract_referenced_elements,
     _extract_structural_delta,
-    _format_review_prompt,
-    _get_review_template,
+    _has_valid_extension,
     _infer_path_prefix,
-    _load_enriched_seed,
-    _log_context_completeness,
-    _log_task_boundary_complete,
-    _log_task_boundary_start,
-    _log_task_timing,
     _normalize_target_path,
-    _parse_tasks,
+    _record_design_element_contracts,
     _set_default_complexity_metadata,
-    _topological_sort,
-    _track_onboarding_consumption,
     build_shared_file_manifest,
     compute_critical_path_tasks,
     compute_lane_to_file_mapping,
 )
-from startd8.contractors.context_seed.core import _CACHE_SCHEMA_VERSION  # noqa: F401
-from startd8.contractors.context_seed.design_support import (  # noqa: F401
-    _CCD_DESIGN_SPAN_ATTRS,
-    _classify_complexity_tier,
-    _compute_manifest_file_checksums,
-    _has_valid_extension,
-    _record_design_element_contracts,
-)
 from startd8.contractors.gate_contracts import GateEmitter  # noqa: F401
-from startd8.contractors.context_seed.shared import (  # noqa: F401
-    _PCA_CONTEXT_FIELDS,
-    scope_dependencies_to_file,
-)
 from startd8.utils.file_operations import atomic_write_json  # noqa: F401
 
 from startd8.logging_config import get_logger as _get_logger
