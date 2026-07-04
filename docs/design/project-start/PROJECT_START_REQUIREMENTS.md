@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.5 (Consumer-validated against 3 real apps)
+**Version:** 0.6 (Discovery experiment run — FR-13 scoped to evidence)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -368,12 +368,15 @@ might be missing* (breadth, real value); it may not *estimate the specific value
   - **Discovery output is breadth, human-judged.** A persona surfaces *what might
     be missing*; the human decides. Every surfaced item is provenance-marked
     non-authored and requires human ratification — that ratification is the
-    guardrail (§0.2), not a weakness. *Evidence status (§0.3, OQ-12): the
-    **capability-discovery** half ("given personas, they answer discriminatingly")
-    is pilot-proven; the **roster-discovery** half ("the panel surfaces viewpoints
-    you'd have missed") is a **hypothesis** — on the one multi-stakeholder app the
-    human authored the roster himself. Prove or shrink via OQ-12 before over-
-    scoping this.*
+    guardrail (§0.2), not a weakness. *Evidence status (OQ-12, experiment run
+    2026-07-04): **roster-discovery is DROPPED** — the `panel ask-all` run
+    surfaced no viewpoint the human hadn't already authored. **Capability-discovery
+    is retained but honestly scoped: low-yield** (1 genuine novel gap per 14 paid
+    calls) and **best from operationally-specific personas** (the one hit came from
+    the operator; generic role-labels echoed or refused). FR-13's value is "an
+    occasional real gap worth sifting for," NOT "systematic coverage of what you'd
+    miss." This further raises the bar on OQ-11 (does a low-yield aid justify ~20
+    modules?) and OQ-10 (offer only where operationally-specific personas exist).*
   - **Preserve the single-source (`core.py:38-41`).** The "which inputs count"
     domain list is deliberately shared so `assess` and any advisor can't drift.
     Ownership of that list moves **into the kernel**; discovery reads it. The
@@ -487,18 +490,32 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
   distinct roles, presence of competing/external viewpoints (vendors, press,
   regulators), regulatory/compliance domain — not "is there a team." Must be
   $0/deterministic; default-off bias so a false trigger is a quiet one-line offer,
-  never a gate. Decide during CRP.
-- **OQ-12 — Prove discovery end-to-end (the gap §0.3 exposed).** No live app has
-  yet run multi-stakeholder discovery end-to-end and shown it *changed a
-  decision*. The 5-role reviewer pilot discriminated (correct deferral), but the
-  benchmark portal's 14-persona roster was **provisioned, not exercised**, and the
-  human *authored* those personas himself — so *"panel surfaces viewpoints you'd
-  have missed"* (roster discovery) is unproven; only *"given personas, they answer
-  discriminatingly"* (capability discovery) is. **Action:** run `panel ask-all`
-  on the benchmark-portal roster and capture whether it surfaces a capability/gap
-  the human hadn't already listed. This is the missing data point that would
-  either confirm FR-13's value or shrink it to capability-discovery-only. Until
-  then, FR-13's roster-discovery claim is a hypothesis, flagged as such.
+  never a gate. **Refined by OQ-12:** favor *operationally-specific* personas
+  (concrete hands-on relationship to the artifact — operator, SRE, security) over
+  generic role-labels (SE-manager, backend), which echoed or refused. A roster of
+  abstract role-labels is a weak trigger; a roster with real operational owners is
+  a strong one. Decide during CRP.
+- **OQ-12 — Prove discovery end-to-end. RESOLVED — experiment run 2026-07-04.**
+  Ran `panel ask-all` (Haiku, $0.00x) on the benchmark-portal 14-persona roster,
+  one gap-elicitation question, judged against the portal's schema + FRs + known-
+  deferred list. **Result:** 2 honest refusals (thin-brief personas deferred to
+  the human — the guardrail working), **10 echoes** (persona restates its own
+  briefed lens or a capability already on disk; the 3 vendor-comms personas gave
+  the *same* spec-hash-lookup idea), 1 out-of-scope product idea (customer: "run
+  it on my stack" — brushes a non-goal), and **1 genuine novel gap** (the
+  **operator**: a *score-change audit trail* — who changed which cell's score,
+  when, why — absent from the schema, which has only flat timestamps + a `locked`
+  flag, and absent from the backlog). **Findings:**
+  - **Roster-discovery DISPROVEN on this app** — the panel surfaced no viewpoint
+    the human hadn't already authored. FR-13's "surfaces viewpoints you'd have
+    missed" claim does not hold; **dropped** (see FR-13 evidence note).
+  - **Capability-discovery = real but low-yield** — 1 genuine gap / 14 paid calls.
+    Non-zero (the audit-trail gap genuinely matters for an adjudication system),
+    but not systematic coverage.
+  - **Usefulness tracks operational specificity, not stakeholder count** — the one
+    hit came from the persona with a hands-on operational relationship to the
+    artifact (the operator); generic role-labels echoed or refused. Refines OQ-10:
+    the trigger/roster should favor operationally-specific personas.
 - **OQ-11 — Where does the retained discovery capability live?** The persona/agent
   machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
   *conditionally-offered discovery* a thin caller the kernel owns that invokes a
@@ -543,3 +560,12 @@ viewpoint-multiplicity, not team size. **Exposed:** FR-13 roster-discovery is
 unproven (human authored the one rich roster himself) → new OQ-12 (run `panel
 ask-all` on the portal to get the missing data point). Distillation still holds;
 one value claim is now honestly marked a hypothesis.*
+
+*v0.6 — Discovery experiment run (OQ-12 resolved). `panel ask-all` on the portal's
+14 personas yielded 2 refusals, 10 echoes, 1 out-of-scope idea, **1 genuine novel
+gap** (operator's score-change audit trail). **Roster-discovery dropped** (no
+missed viewpoint surfaced — human authored the roster); **capability-discovery
+retained but scoped honestly: low-yield (1/14), best from operationally-specific
+personas.** Updated FR-13 evidence note, OQ-10 (favor operational personas), OQ-11
+(low yield sharpens the ~20-module justification). The panel earns a place — as an
+occasional-gap-finder worth sifting, not a coverage engine.*
