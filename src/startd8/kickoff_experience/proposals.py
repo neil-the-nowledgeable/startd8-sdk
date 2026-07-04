@@ -137,66 +137,94 @@ class ProposalBuffer:
 # --- propose handler (read-effect; records, never writes) --------------------------------------
 
 
+def build_proposal(
+    args: dict,
+    *,
+    project_root: str | Path,
+    config: Optional[KickoffExperienceConfig] = None,
+) -> ProposedAction:
+    """Validate ``args`` (kind + params) per-kind and construct a typed :class:`ProposedAction`.
+
+    The single per-kind validation primitive (FR-PU-1): the same logic every VIPP-inbox producer
+    validates through — the agentic :func:`make_propose_handler`, and the deterministic ``project
+    init`` producer seam. It is **pure**: it raises a typed error on invalid input
+    (``ConciergeInputError`` — including ``unknown_kind`` for a kind outside ``PROPOSAL_KINDS`` — or
+    ``CaptureError``) and has **no** buffer side-effect, telemetry, or human message string. Callers
+    decide how to surface success/failure, so the accept/reject signal is a typed exception, never a
+    parsed message.
+    """
+    cfg = config or default_config()
+    root = str(project_root)
+    kind = (args.get("kind") or "").strip()
+    if kind not in PROPOSAL_KINDS:
+        raise ConciergeInputError(
+            "unknown_kind", f"unknown proposal kind {kind!r}; one of {PROPOSAL_KINDS}")
+    if kind == "friction":
+        fr = args.get("friction", "") or ""
+        wh = args.get("what_happened", "") or ""
+        im = args.get("implication", "") or ""
+        validate_friction(fr, wh, im)
+        return ProposedAction("friction",
+                              {"friction": fr, "what_happened": wh, "implication": im},
+                              id=_new_id())
+    if kind == "instantiate":
+        posture = args.get("posture", "prototype") or "prototype"
+        validate_posture(posture)
+        return ProposedAction("instantiate", {"posture": posture}, id=_new_id())
+    if kind == "capture":
+        vp = args.get("value_path", "") or ""
+        val = str(args.get("value", ""))
+        # Full validation + propose-time base_sha via a trial plan (allow-list, round-trip).
+        plan = build_capture_plan(root, vp, val, config=cfg)
+        return ProposedAction("capture", {"value_path": vp, "value": val},
+                              id=_new_id(), base_sha=plan.base_sha)
+    if kind == "schema":  # RCT N2 — brief is OPTIONAL at propose (apply reads the on-disk
+        # requirements brief when absent — the two-step, R1-F4). Full emit/gate runs at apply.
+        return ProposedAction(
+            "schema",
+            {"brief": args.get("brief", "") or "",
+             "contract_path": args.get("contract_path", "prisma/schema.prisma"),
+             "acknowledge_drift": bool(args.get("acknowledge_drift", False))},
+            id=_new_id())
+    if kind == "manifest":  # RCT N1 — prose only; extraction + dest mapping happen at apply (R1-F2/F11)
+        src = args.get("source", "") or ""
+        if not src.strip():
+            raise ConciergeInputError(
+                "missing_source", "authoring prose is required for a manifest proposal")
+        return ProposedAction(
+            "manifest",
+            {"source": src, "source_label": args.get("source_label", "authoring.md"),
+             "replace": bool(args.get("replace", False))},
+            id=_new_id())
+    # brief (RCT N2 two-step, R1-F4) — step 1: write the requirements brief to disk. The only kind
+    # left once unknown/friction/instantiate/capture/schema/manifest are handled.
+    src = args.get("source", "") or ""
+    if not src.strip():
+        raise ConciergeInputError(
+            "missing_source", "requirements prose is required for a brief proposal")
+    return ProposedAction(
+        "brief", {"source": src, "replace": bool(args.get("replace", False))},
+        id=_new_id())
+
+
 def make_propose_handler(
     project_root: str | Path,
     buffer: ProposalBuffer,
     *,
     config: Optional[KickoffExperienceConfig] = None,
 ) -> Callable[[dict], str]:
-    """Build the `propose_action` tool handler: validate by kind, record, return a tiny ack."""
+    """Build the `propose_action` tool handler: validate by kind (via :func:`build_proposal`), record
+    into the host buffer, and return a tiny human ack for the agentic loop.
+
+    Thin wrapper over the pure primitive (FR-PU-2): the record / telemetry / message concerns live
+    here; the per-kind validation rules live in ``build_proposal``. The ack/error string contract is
+    unchanged (an ``error:`` string on rejection, a ``recorded a proposal …`` string on success)."""
     cfg = config or default_config()
     root = str(project_root)
 
     def handler(args: dict) -> str:
-        kind = (args.get("kind") or "").strip()
-        if kind not in PROPOSAL_KINDS:
-            return f"error: unknown proposal kind {kind!r}; one of {PROPOSAL_KINDS}"
         try:
-            if kind == "friction":
-                fr = args.get("friction", "") or ""
-                wh = args.get("what_happened", "") or ""
-                im = args.get("implication", "") or ""
-                validate_friction(fr, wh, im)
-                action = ProposedAction("friction",
-                                        {"friction": fr, "what_happened": wh, "implication": im},
-                                        id=_new_id())
-            elif kind == "instantiate":
-                posture = args.get("posture", "prototype") or "prototype"
-                validate_posture(posture)
-                action = ProposedAction("instantiate", {"posture": posture}, id=_new_id())
-            elif kind == "capture":
-                vp = args.get("value_path", "") or ""
-                val = str(args.get("value", ""))
-                # Full validation + propose-time base_sha via a trial plan (allow-list, round-trip).
-                plan = build_capture_plan(root, vp, val, config=cfg)
-                action = ProposedAction("capture", {"value_path": vp, "value": val},
-                                        id=_new_id(), base_sha=plan.base_sha)
-            elif kind == "schema":  # RCT N2 — brief is OPTIONAL at propose (apply reads the on-disk
-                # requirements brief when absent — the two-step, R1-F4). Full emit/gate runs at apply.
-                action = ProposedAction(
-                    "schema",
-                    {"brief": args.get("brief", "") or "",
-                     "contract_path": args.get("contract_path", "prisma/schema.prisma"),
-                     "acknowledge_drift": bool(args.get("acknowledge_drift", False))},
-                    id=_new_id())
-            elif kind == "manifest":  # RCT N1 — prose only; extraction + dest mapping happen at apply (R1-F2/F11)
-                src = args.get("source", "") or ""
-                if not src.strip():
-                    raise ConciergeInputError(
-                        "missing_source", "authoring prose is required for a manifest proposal")
-                action = ProposedAction(
-                    "manifest",
-                    {"source": src, "source_label": args.get("source_label", "authoring.md"),
-                     "replace": bool(args.get("replace", False))},
-                    id=_new_id())
-            else:  # brief (RCT N2 two-step, R1-F4) — step 1: write the requirements brief to disk
-                src = args.get("source", "") or ""
-                if not src.strip():
-                    raise ConciergeInputError(
-                        "missing_source", "requirements prose is required for a brief proposal")
-                action = ProposedAction(
-                    "brief", {"source": src, "replace": bool(args.get("replace", False))},
-                    id=_new_id())
+            action = build_proposal(args, project_root=root, config=cfg)
         except (ConciergeInputError, CaptureError) as exc:
             return f"error: proposal rejected ({getattr(exc, 'code', 'invalid')}): {exc}"
         try:

@@ -163,13 +163,6 @@ class ProposalsFileError(ValueError):
     """The ``--proposals`` file is unreadable or structurally malformed (exit 2, nothing written)."""
 
 
-def _rejection_detail(ack: str) -> str:
-    """Pretty the propose-handler ack for an error message — used only for the *message*, never as
-    the accept/reject decision (that comes from the buffer-length delta, so a change to the handler's
-    ack wording can never silently turn a rejection into an acceptance)."""
-    return ack[len("error:"):].strip() if ack.startswith("error:") else ack.strip()
-
-
 def _load_proposals_file(path: Path) -> List[Dict[str, Any]]:
     """Parse an authored ``--proposals`` file into a list of ``{kind, ...params}`` entries (OQ-7).
 
@@ -212,25 +205,29 @@ def _load_proposals_file(path: Path) -> List[Dict[str, Any]]:
 def _buffer_from_entries(
     project_root: Any, entries: List[Dict[str, Any]]
 ) -> "ProposalBuffer":
-    """Validate each authored entry through the **same per-kind validators the propose handler uses**
-    (FR-12) and record it into a :class:`ProposalBuffer` — building each as a ``ProposedAction`` so the
-    downstream ``serialize_buffer`` keeps envelope parity (FR-14). A rejected entry raises
+    """Validate each authored entry through the shared per-kind primitive (``build_proposal``, FR-12)
+    and record it into a :class:`ProposalBuffer` — each a ``ProposedAction`` so the downstream
+    ``serialize_buffer`` keeps envelope parity (FR-14). A rejected entry raises
     :class:`ProposalsFileError` before anything is serialized (exit 2, no half-written inbox).
 
-    Accept/reject is decided by whether the handler **recorded into the buffer** (its actual contract),
-    not by sniffing the ack string — so a reworded handler message can never silently admit a bad
-    proposal."""
-    from ..kickoff_experience.proposals import ProposalBuffer, make_propose_handler
+    Accept/reject is a **typed exception** from ``build_proposal`` (FR-PU-3), never a parsed message —
+    so a reworded ack can no longer silently admit a bad proposal."""
+    from ..kickoff_experience.proposals import (
+        BufferFull,
+        CaptureError,
+        ConciergeInputError,
+        ProposalBuffer,
+        build_proposal,
+    )
 
     buffer = ProposalBuffer()
-    handler = make_propose_handler(str(project_root), buffer)
     for i, entry in enumerate(entries):
-        before = len(buffer)
-        ack = handler(dict(entry))
-        if len(buffer) == before:  # the handler records only on success — nothing recorded ⇒ rejected
+        try:
+            buffer.add(build_proposal(dict(entry), project_root=str(project_root)))
+        except (ConciergeInputError, CaptureError, BufferFull) as exc:
             raise ProposalsFileError(
-                f"proposal #{i} ({entry.get('kind')!r}) rejected — {_rejection_detail(ack)}"
-            )
+                f"proposal #{i} ({entry.get('kind')!r}) rejected — {exc}"
+            ) from exc
     return buffer
 
 
@@ -253,7 +250,12 @@ def produce_inbox(
 
     Result ``status`` ∈ {``produced``, ``skipped_undrained``, ``no_gap``, ``not_greenfield``}.
     """
-    from ..kickoff_experience.proposals import ProposalBuffer, make_propose_handler
+    from ..kickoff_experience.proposals import (
+        CaptureError,
+        ConciergeInputError,
+        ProposalBuffer,
+        build_proposal,
+    )
     from ..kickoff_experience.vipp_seam import serialize_buffer
 
     root = Path(project_root)
@@ -272,12 +274,12 @@ def produce_inbox(
                     f"'{shape.verdict}'. Supply --proposals for an authored proposal set instead."
                 ),
             }
-        # Build via the propose handler so posture is validated by the same path (FR-12/FR-14).
+        # Validate the posture via the shared primitive (FR-12/FR-14/FR-PU-3).
         buffer = ProposalBuffer()
-        handler = make_propose_handler(str(root), buffer)
-        ack = handler({"kind": "instantiate", "posture": posture})
-        if len(buffer) == 0:  # not recorded ⇒ rejected (buffer-delta, not string-sniffing)
-            return {"status": "rejected", "detail": _rejection_detail(ack)}
+        try:
+            buffer.add(build_proposal({"kind": "instantiate", "posture": posture}, project_root=str(root)))
+        except (ConciergeInputError, CaptureError) as exc:
+            return {"status": "rejected", "detail": str(exc)}
         source = {"kind": "instantiate", "posture": posture}
     else:
         return {"status": "no_gap", "detail": "inbox-ready; no deterministic gap to propose against"}
