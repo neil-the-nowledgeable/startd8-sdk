@@ -1,29 +1,293 @@
-"""M-CM0 — the shared Concierge view-model (the parity oracle for both surfaces).
+"""M-CM — the consolidated Concierge view + apply module (GE-M2 detangle).
 
-`build_concierge_view` is the one representation the web (M-CM3) and TUI (M-CM4) both render, so
-parity is a property of a single payload (mirrors `state.to_dict()`). It composes existing read-only
-machinery — never re-derives readiness (FR-CM-4):
+This is the ONE Concierge module (GE-M2 / FR-GE-7 "one vocabulary, one write path"). It folds the
+former quartet — the parity view-model (this file), the typed applier (`concierge_apply`), the TUI
+driver (`tui_concierge`), and the agent-spec resolver (`concierge_agent`) — into a single surface so
+the web, TUI, and CLI share one view payload, one write path, and one agent-resolution ladder. The
+old module names remain importable as thin compat shims re-exporting from here (one-release window,
+coupled to the M1 alias retirement).
 
-* `survey`     — `concierge.build_survey` (brownfield triage), **memoized** (R1-S6: it walks
-  `root.rglob("*")`, an O(repo) cost; a short TTL keeps repeated `GET /concierge` cheap).
-* `readiness`  — `ReadinessView.from_assess(build_assess())`, reused.
-* `instantiate_offer` — `{needed, package_state, postures}` where `package_state` ∈
-  `missing | partial | complete` is **restart-safe** (R5-F1): computed from the instantiate plan's
-  per-file stat, so a half-scaffolded package (some files present) reads `partial`, not a boolean
-  keyed only to `inputs/`.
-* `friction_form` — the field spec (with the length cap).
-* `next_action` — a derived CTA both surfaces show (R2-F2).
+Four concerns live here, top to bottom:
 
-**Not the MCP surface (R1-F7/S9):** this aggregator carries write-affordance metadata
+1. **Agent resolution** (`resolve_concierge_agent_spec`) — which provider/model the agentic Concierge
+   uses, by the FR-PC-4 precedence.
+2. **The typed applier** (`apply_concierge_plan` + `ConciergeWriteCode`/`ConciergeWriteResult` +
+   pre-apply validation) — every Concierge write rides `concierge/safe_write.py` (FR-GE-13); this is
+   the one write path.
+3. **The parity view-model** (`build_concierge_view`) — the one read-only payload both the web
+   (M-CM3) and the TUI (M-CM4) render, so parity is a property of a single fold. Never re-derives
+   readiness (FR-CM-4 / FR-GE-6 no-new-engine).
+4. **The TUI driver** (`run_concierge`) — renders the same view payload and applies via the same
+   `apply_concierge_plan`.
+
+**Not the MCP surface (R1-F7/S9):** the view aggregator carries write-affordance metadata
 (`instantiate_offer`, `friction_form`); MCP exposes only the bare `build_survey` shape.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from .concierge_apply import FRICTION_FIELD_MAX
+# ================================================================================================
+# 1. Agent resolution (folded from `concierge_agent.py`)
+# ================================================================================================
+#
+# Precedence (FR-PC-4) — first present, non-placeholder, resolvable-as-a-string layer wins:
+#
+#     1. the explicit ``--agent`` flag            → source "flag"
+#     2. per-project ``docs/kickoff/inputs/build-preferences.yaml`` ``concierge_agent`` → "project"
+#     3. global ``~/.startd8/config.json`` ``preferences.concierge_agent``              → "global"
+#     4. the catalog default ``Models.CLAUDE_SONNET_LATEST``                            → "default"
+#
+# This returns the chosen **spec string + source label only** — it does NOT validate the spec or
+# build an agent (FR-PC-5 / OQ-6). A malformed/unreadable project file is skipped, never fatal
+# (FR-PC-9); angle-bracket template placeholders are treated as unset (FR-PC-10).
+
+# Project config path is pinned (FR-PC-8): this file only, never an examples/ or templates/ copy.
+_PROJECT_BUILD_PREFS = ("docs", "kickoff", "inputs", "build-preferences.yaml")
+
+
+def _usable(spec: Optional[str]) -> Optional[str]:
+    """A config value is usable iff it's a non-empty string that is not a `<…>` placeholder (FR-PC-10)."""
+    if not spec:
+        return None
+    s = spec.strip()
+    if not s or (s.startswith("<") and s.endswith(">")):
+        return None
+    return s
+
+
+def _project_concierge_agent(project_root: str | Path) -> Optional[str]:
+    """Read `concierge_agent` from the project's build-preferences.yaml; skip on any error (FR-PC-9)."""
+    path = Path(project_root).expanduser().joinpath(*_PROJECT_BUILD_PREFS)
+    if not path.is_file():
+        return None
+    try:
+        from ..kickoff_inputs import parse_build_preferences
+
+        return _usable(parse_build_preferences(path.read_text(encoding="utf-8")).concierge_agent)
+    except Exception:
+        # Malformed sheet / IO error → skip this layer (degrade to the next), never crash.
+        return None
+
+
+def _global_concierge_agent() -> Optional[str]:
+    try:
+        from ..config import get_config_manager
+
+        return _usable(get_config_manager().get_preference("concierge_agent"))
+    except Exception:
+        return None
+
+
+def resolve_concierge_agent_spec(
+    project_root: str | Path,
+    flag: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Return ``(spec, source)`` for the agentic Concierge per the FR-PC-4 precedence."""
+    from ..model_catalog import Models
+
+    flag_spec = _usable(flag)
+    if flag_spec:
+        return flag_spec, "flag"
+    project_spec = _project_concierge_agent(project_root)
+    if project_spec:
+        return project_spec, "project"
+    global_spec = _global_concierge_agent()
+    if global_spec:
+        return global_spec, "global"
+    return Models.CLAUDE_SONNET_LATEST, "default"   # catalog reference, not a literal (FR-PC-6)
+
+
+# ================================================================================================
+# 2. The typed applier (folded from `concierge_apply.py`)
+# ================================================================================================
+#
+# Concierge mode reuses the existing write seam — `to_planned_writes` (`concierge/writes.py`) →
+# `apply_write_plan` (`concierge/safe_write.py`), the same 3-line pattern the CLI uses — behind one
+# typed result so the web, TUI, and telemetry share a stable reason-code vocabulary.
+#
+# Two CRP-surfaced correctness points are baked in here:
+#
+# * **`skipped`/`partial` outcomes (R1-F2/S3).** No-clobber instantiate of a file that already
+#   exists lands in `WriteResult.skipped` with `ok=True`. A flat OK can't tell "wrote 7 files" from
+#   "all 7 existed, wrote 0" — so this maps the write counts into distinct codes.
+# * **Timestamp layer (R1-F1/S2).** The friction timestamp is NOT stamped here —
+#   `build_friction_entry` bakes the JSON line (incl. `ts`) into `append_text` at build time, so the
+#   **surface handler** passes `timestamp=` into the builder. This applier receives an
+#   already-serialized plan and only applies it.
+#
+# Typed validation of user input (R2-F5) happens *before* a plan is built — see `validate_friction`
+# and `validate_posture`.
+
+# Conservative cap on a friction free-text field before it is serialized into the append-only log.
+FRICTION_FIELD_MAX = 4000
+
+
+class ConciergeWriteCode:
+    """Stable typed outcomes for a Concierge write (parallel to CaptureCode)."""
+
+    OK = "ok"                       # all planned files written
+    SKIPPED = "skipped"            # nothing written — every target already existed (no-clobber no-op)
+    PARTIAL = "partial"           # some written, some skipped/blocked — retry is idempotent
+    WRITE_BLOCKED = "write_blocked"   # confinement/symlink refusal (with the ALLOWED_ROOTS hint)
+    WRITE_REFUSED = "write_refused"   # the writer refused everything (no file written)
+    # pre-apply input validation (R2-F5)
+    MISSING_REQUIRED_FIELD = "missing_required_field"
+    INVALID_POSTURE = "invalid_posture"
+    INPUT_TOO_LARGE = "input_too_large"
+
+
+_ALLOWED_ROOTS_HINT = (
+    "set STARTD8_CONCIERGE_ALLOWED_ROOTS to the project's real path if it is under a symlinked "
+    "directory (e.g. macOS /tmp → /private/tmp)"
+)
+
+
+class ConciergeInputError(ValueError):
+    """A pre-apply validation failure carrying a stable :class:`ConciergeWriteCode`."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class ConciergeWriteResult:
+    """The shared result envelope both surfaces render (R4-S4)."""
+
+    code: str
+    written: tuple = ()
+    skipped: tuple = ()
+    warnings: tuple = ()
+    message: Optional[str] = None
+    hint: Optional[str] = None
+
+    @property
+    def ok(self) -> bool:
+        return self.code in (ConciergeWriteCode.OK, ConciergeWriteCode.PARTIAL, ConciergeWriteCode.SKIPPED)
+
+    @property
+    def wrote_anything(self) -> bool:
+        return len(self.written) > 0
+
+    def to_dict(self) -> dict:
+        d: Dict[str, Any] = {
+            "code": self.code,
+            "written_count": len(self.written),
+            "skipped_count": len(self.skipped),
+            "written": list(self.written),
+            "warnings": list(self.warnings),
+        }
+        if self.message is not None:
+            d["message"] = self.message
+        if self.hint is not None:
+            d["hint"] = self.hint
+        return d
+
+
+# --- pre-apply validation (R2-F5) --------------------------------------------------------------
+
+
+def validate_friction(friction: str, what_happened: str, implication: str) -> None:
+    """Validate the three friction fields before a plan is built. Raises ConciergeInputError."""
+    for name, value in (("friction", friction), ("what_happened", what_happened),
+                        ("implication", implication)):
+        if not (value or "").strip():
+            raise ConciergeInputError(
+                ConciergeWriteCode.MISSING_REQUIRED_FIELD, f"{name} is required"
+            )
+        if len(value) > FRICTION_FIELD_MAX:
+            raise ConciergeInputError(
+                ConciergeWriteCode.INPUT_TOO_LARGE,
+                f"{name} exceeds {FRICTION_FIELD_MAX} characters",
+            )
+
+
+def validate_posture(posture: str) -> None:
+    from ..concierge.writes import VALID_POSTURES
+
+    if posture not in VALID_POSTURES:
+        raise ConciergeInputError(
+            ConciergeWriteCode.INVALID_POSTURE,
+            f"posture must be one of {VALID_POSTURES}, got {posture!r}",
+        )
+
+
+# --- the applier -------------------------------------------------------------------------------
+
+
+def apply_concierge_plan(
+    project_root: str | Path,
+    plan: Mapping[str, Any],
+    *,
+    force: bool = False,
+) -> ConciergeWriteResult:
+    """Apply a Concierge WritePlan via the safe-writer; return a typed, counted result.
+
+    Never raises for a write-side issue — confinement refusals and per-file blocks come back as a
+    typed code the surface can render (mirrors the M6 capture pattern).
+    """
+    from ..concierge.safe_write import SafeWriteError, apply_write_plan
+    from ..concierge.writes import to_planned_writes
+
+    warnings = tuple(plan.get("warnings", ()) or ())
+    try:
+        result = apply_write_plan(Path(project_root).expanduser(), to_planned_writes(plan),
+                                  force=force)
+    except SafeWriteError as exc:
+        return ConciergeWriteResult(
+            code=ConciergeWriteCode.WRITE_BLOCKED,
+            warnings=warnings,
+            message=f"safe-writer refused the write: {exc}",
+            hint=_ALLOWED_ROOTS_HINT,
+        )
+
+    written = tuple(result.written)
+    skipped = tuple(s.get("path", "?") if isinstance(s, dict) else str(s) for s in result.skipped)
+    has_failure = bool(result.blocked or result.errors)
+
+    if has_failure:
+        # Some files may still have been written before/after the failing one (non-atomic).
+        code = ConciergeWriteCode.PARTIAL if written else ConciergeWriteCode.WRITE_REFUSED
+        detail = (result.blocked or result.errors or [{}])[0]
+        return ConciergeWriteResult(
+            code=code, written=written, skipped=skipped, warnings=warnings,
+            message=f"write incomplete: {detail}",
+            hint=_ALLOWED_ROOTS_HINT if code == ConciergeWriteCode.WRITE_REFUSED else None,
+        )
+    if written and skipped:
+        code = ConciergeWriteCode.PARTIAL          # some new, some already existed (idempotent retry)
+    elif written:
+        code = ConciergeWriteCode.OK
+    elif skipped:
+        code = ConciergeWriteCode.SKIPPED          # no-clobber no-op: everything already existed
+    else:
+        code = ConciergeWriteCode.OK               # empty plan
+    return ConciergeWriteResult(code=code, written=written, skipped=skipped, warnings=warnings)
+
+
+# ================================================================================================
+# 3. The parity view-model (the read-only payload both surfaces render)
+# ================================================================================================
+#
+# `build_concierge_view` is the one representation the web (M-CM3) and TUI (M-CM4) both render, so
+# parity is a property of a single payload (mirrors `state.to_dict()`). It composes existing
+# read-only machinery — never re-derives readiness (FR-CM-4):
+#
+# * `survey`     — `concierge.build_survey` (brownfield triage), **memoized** (R1-S6: it walks
+#   `root.rglob("*")`, an O(repo) cost; a short TTL keeps repeated `GET /concierge` cheap).
+# * `readiness`  — `ReadinessView.from_assess(build_assess())`, reused.
+# * `instantiate_offer` — `{needed, package_state, postures}` where `package_state` ∈
+#   `missing | partial | complete` is **restart-safe** (R5-F1): computed from the instantiate plan's
+#   per-file stat, so a half-scaffolded package (some files present) reads `partial`, not a boolean
+#   keyed only to `inputs/`.
+# * `friction_form` — the field spec (with the length cap).
+# * `next_action` — a derived CTA both surfaces show (R2-F2).
 
 SCHEMA_VERSION = 1
 
@@ -136,3 +400,129 @@ def build_concierge_view(
         "friction_form": _friction_form(),
         "next_action": _next_action(package_state, readiness),
     }
+
+
+# ================================================================================================
+# 4. The TUI driver (folded from `tui_concierge.py`)
+# ================================================================================================
+#
+# Renders the **same** `build_concierge_view` payload the web surface renders (parity), and applies
+# writes through the **same** `apply_concierge_plan` (one write path, FR-CM-7) after an explicit
+# human confirmation. The confirm/prompt callables are injected so the flow is testable without a
+# TTY and so non-interactive use **fails closed** (R3-S5): when no foreground confirmation is
+# possible (`questionary` returns ``None`` on a non-TTY or interrupt), nothing is written.
+
+# Confirm returns True/False, or None when no foreground confirmation is possible (fail closed).
+ConfirmFn = Callable[[str], Optional[bool]]
+# Prompt returns the entered text, or None on interrupt/non-TTY.
+PromptFn = Callable[[str], Optional[str]]
+PrintFn = Callable[[str], None]
+
+CONFIRM_UNAVAILABLE = "confirm_unavailable"
+
+
+@dataclass
+class ConciergeRunResult:
+    """What the TUI run did — for tests and a final summary line."""
+
+    package_state: str
+    instantiate: Optional[str] = None   # a ConciergeWriteCode, CONFIRM_UNAVAILABLE, or None (declined)
+    friction: Optional[str] = None
+    lines: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {"package_state": self.package_state, "instantiate": self.instantiate,
+                "friction": self.friction}
+
+
+def run_concierge(
+    project_root: str,
+    *,
+    confirm: ConfirmFn,
+    prompt: PromptFn,
+    emit_line: PrintFn,
+    posture: str = "prototype",
+) -> ConciergeRunResult:
+    """Render the Concierge view and offer instantiate + friction, applying via the shared path."""
+    from ..concierge.writes import build_friction_entry, build_instantiate_plan
+    from .telemetry import (
+        EV_CONCIERGE_WRITE_REFUSED,
+        EV_FRICTION_LOGGED,
+        EV_KICKOFF_INSTANTIATED,
+        EV_SURVEY_VIEWED,
+        emit,
+    )
+
+    view = build_concierge_view(project_root)
+    emit(EV_SURVEY_VIEWED, source="tui")
+    s = view["survey"]
+    offer = view["instantiate_offer"]
+    na = view["next_action"]
+    result = ConciergeRunResult(package_state=offer["package_state"])
+
+    def out(line: str) -> None:
+        result.lines.append(line)
+        emit_line(line)
+
+    out(view["posture_banner"])
+    out(f"Survey: {len(s.get('requirement_docs', []))} req docs · "
+        f"{len(s.get('model_files', []))} models · {len(s.get('pii_risk_flags', []))} PII flags")
+    out(f"Kickoff package: {offer['package_state']}")
+    out(f"Next: {na['title']} — {na['detail']}")
+
+    # Instantiate (only if the package is missing/partial).
+    if offer["needed"]:
+        decision = confirm(f"Create/complete the kickoff package ({posture})?")
+        if decision is None:
+            result.instantiate = CONFIRM_UNAVAILABLE  # fail closed — no write
+            out("No interactive confirmation available — not writing (use the CLI to apply).")
+        elif decision:
+            res = apply_concierge_plan(project_root, build_instantiate_plan(project_root, posture))
+            result.instantiate = res.code
+            if res.ok and res.wrote_anything:
+                emit(EV_KICKOFF_INSTANTIATED, source="tui", posture=posture, code=res.code,
+                     written_count=len(res.written))
+                out(f"Instantiated: {res.code} ({len(res.written)} written, {len(res.skipped)} skipped)")
+            elif not res.ok:
+                emit(EV_CONCIERGE_WRITE_REFUSED, source="tui", action="instantiate", code=res.code)
+                out(f"Refused: {res.code} — {res.message or ''} {res.hint or ''}".strip())
+            else:
+                out(f"No-op: {res.code} (package already present)")
+
+    # Friction (always offered).
+    if confirm("Log a friction item?"):
+        fr = prompt("What friction did you hit?")
+        wh = prompt("What happened?")
+        im = prompt("Implication for the SDK / role?")
+        try:
+            validate_friction(fr or "", wh or "", im or "")
+        except ConciergeInputError as exc:
+            result.friction = exc.code
+            out(f"Friction not logged: {exc.code} — {exc}")
+            return result
+        plan = build_friction_entry(
+            project_root, friction=fr, what_happened=wh, implication=im,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        res = apply_concierge_plan(project_root, plan)
+        result.friction = res.code
+        if res.ok:
+            emit(EV_FRICTION_LOGGED, source="tui", code=res.code)
+            out("Friction logged.")
+        else:
+            emit(EV_CONCIERGE_WRITE_REFUSED, source="tui", action="friction", code=res.code)
+            out(f"Friction refused: {res.code} — {res.message or ''} {res.hint or ''}".strip())
+
+    return result
+
+
+def _questionary_confirm(message: str) -> Optional[bool]:
+    import questionary
+
+    return questionary.confirm(message, default=False).ask()
+
+
+def _questionary_prompt(message: str) -> Optional[str]:
+    import questionary
+
+    return questionary.text(message).ask()

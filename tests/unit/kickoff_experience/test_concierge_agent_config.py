@@ -48,7 +48,9 @@ def test_project_config_used_when_no_flag(tmp_path):
 
 def test_global_config_layer(tmp_path, monkeypatch):
     """Global ~/.startd8 preference applies when no flag and no project value (FR-PC-3)."""
-    import startd8.kickoff_experience.concierge_agent as mod
+    # GE-M2: the ladder helpers now live in `concierge_view` (concierge_agent is a compat shim);
+    # patch where the symbol is looked up, not where it is re-exported.
+    import startd8.kickoff_experience.concierge_view as mod
 
     monkeypatch.setattr(mod, "_project_concierge_agent", lambda _root: None)
 

@@ -87,12 +87,15 @@ def test_completion_in_to_dict(tmp_path):
 
 
 # ── CRP R1-S1: structural anti-import guard (the no-import property is structural, not just behavioral)
+# GE-M2: the wizard + completion code now lives in the `orchestrator` conductor (wizard /
+# red_carpet_completion are compat shims). The guard scans the conductor — the real code's home — so
+# the NR-4a property stays enforced on the actual implementation, not the shim.
 
 _FORBIDDEN = ("introspect_models", "resolve_models", "build_derivation", "importlib")
 
 
-@pytest.mark.parametrize("mod", [wizard, __import__(
-    "startd8.kickoff_experience.red_carpet_completion", fromlist=["x"])])
+@pytest.mark.parametrize("mod", [__import__(
+    "startd8.kickoff_experience.orchestrator", fromlist=["x"])])
 def test_wizard_modules_never_reference_import_machinery(mod):
     # Structural (AST) guard — code references only; the docstring may name the prohibition.
     tree = ast.parse(Path(mod.__file__).read_text(encoding="utf-8"))
