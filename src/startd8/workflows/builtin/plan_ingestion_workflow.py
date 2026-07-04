@@ -3809,6 +3809,171 @@ class PlanIngestionWorkflow(WorkflowBase):
     # Main execution
     # ------------------------------------------------------------------
 
+    def _finalize_success(
+        self,
+        *,
+        state,
+        steps,
+        parsed_plan,
+        complexity,
+        route,
+        threshold,
+        review_output,
+        emit_result,
+        plan_path,
+        plan_text,
+        started_at,
+        _heuristic_degraded,
+        output_dir,
+        doc_path,
+        traceability_path,
+        translation_quality,
+        rounds_completed,
+        root_span,
+    ) -> WorkflowResult:
+        """Success-path finalization of ``_execute``: build kaizen diagnostics,
+        seed-quality, the output dict + OTel finalize, and the success WorkflowResult.
+        Extracted verbatim (Stage 1); the wide signature collapses to the run-context
+        object in Stage 2. See docs/design/plan-ingestion-refactor/PLAN.md.
+        """
+        # --- Kaizen diagnostic report (REQ-KPI-1xx, 3xx) ---
+        _diag_phase_map: Dict[str, PhaseDiagnostic] = {}
+        for _s in steps:
+            _phase_name = _s.step_name.split(":")[0]  # strip sub-tags like "assess:quality-override"
+            if _phase_name in _diag_phase_map:
+                # Accumulate cost/tokens for multi-step phases (e.g. refine)
+                existing = _diag_phase_map[_phase_name]
+                existing.time_ms += _s.time_ms
+                existing.input_tokens += _s.input_tokens
+                existing.output_tokens += _s.output_tokens
+                existing.cost_usd += _s.cost
+                if _s.error:
+                    existing.success = False
+            else:
+                _diag_phase_map[_phase_name] = PhaseDiagnostic(
+                    phase=_phase_name,
+                    success=_s.error is None,
+                    time_ms=_s.time_ms,
+                    input_tokens=_s.input_tokens,
+                    output_tokens=_s.output_tokens,
+                    cost_usd=_s.cost,
+                    code_extraction_fallback=_s.metadata.get(
+                        "code_extraction_fallback", False,
+                    ),
+                    deterministic=_s.metadata.get("deterministic", False),
+                )
+
+        # Attach quality signals to phase diagnostics
+        if "parse" in _diag_phase_map and parsed_plan is not None:
+            _diag_phase_map["parse"].quality_signals = compute_parse_quality(
+                parsed_plan.features,
+                parsed_plan.dependency_graph,
+                parsed_plan.mentioned_files,
+            )
+        if "assess" in _diag_phase_map and complexity is not None:
+            _dims = [
+                complexity.feature_count, complexity.cross_file_deps,
+                complexity.api_surface, complexity.test_complexity,
+                complexity.integration_depth, complexity.domain_novelty,
+                complexity.ambiguity,
+            ]
+            _diag_phase_map["assess"].quality_signals = compute_assess_quality(
+                complexity.composite, route.value, threshold, _dims,
+            )
+        if "refine" in _diag_phase_map:
+            _diag_phase_map["refine"].quality_signals = compute_refine_quality(
+                review_output,
+            )
+
+        # Seed quality (artisan only — read seed JSON back)
+        _seed_score = 0.0
+        _seed_warnings: List[str] = []
+        if emit_result.context_seed_path and emit_result.context_seed_path.exists():
+            try:
+                _seed_dict = json.loads(
+                    emit_result.context_seed_path.read_text(encoding="utf-8")
+                )
+                _density = compute_task_density(_seed_dict.get("tasks", []))
+                _seed_score, _seed_warnings = compute_seed_quality(
+                    _seed_dict, task_density=_density,
+                )
+            except (OSError, json.JSONDecodeError) as _seed_err:
+                logger.debug("Kaizen: seed quality read failed: %s", _seed_err)
+
+        # Task density
+        _task_density = compute_task_density(emit_result.tasks)
+
+        _plan_checksum = sha256(plan_text.encode()).hexdigest()[:16]
+        # Honest top-level signal: a run that completed on a degenerate
+        # single-fallback-feature parse (tripwire opted out) must not
+        # report overall_success — phase-level degeneracy reflects up.
+        _diag = build_diagnostic(
+            run_timestamp=started_at.isoformat(),
+            plan_source=str(plan_path),
+            plan_checksum=_plan_checksum,
+            route=route.value,
+            overall_success=not _heuristic_degraded,
+            phase_diagnostics=_diag_phase_map,
+            seed_quality_score=_seed_score,
+            quality_warnings=_seed_warnings,
+            task_density=_task_density,
+            enrichment=emit_result.enrichment_diagnostic,
+        )
+        # Provenance (step 7): record which model ingestion actually used, so
+        # "what ran where" is answerable from the artifact (run-026 gap).
+        _ing_models = getattr(self, "_ingestion_models", None)
+        if _ing_models:
+            _diag.totals["models"] = dict(_ing_models)
+        persist_diagnostic(_diag, output_dir)
+
+        completed_at = datetime.now(timezone.utc)
+        total_ms = int((completed_at - started_at).total_seconds() * 1000)
+
+        output: Dict[str, Any] = {
+            "route": route.value,
+            "plan_document_path": str(doc_path),
+            "review_config_path": str(emit_result.config_path),
+            "complexity_score": complexity.composite,
+            "refine_rounds_completed": rounds_completed,
+            "traceability_path": str(traceability_path),
+            "translation_quality": {
+                "requirements_coverage_percent": translation_quality.get(
+                    "requirements_coverage_percent", 100.0
+                ),
+                "artifact_mapping_percent": translation_quality.get(
+                    "artifact_mapping_percent", 100.0
+                ),
+                "conflict_count": translation_quality.get("conflict_count", 0),
+            },
+        }
+        if emit_result.context_seed_path is not None:
+            output["context_seed_path"] = str(emit_result.context_seed_path)
+        if emit_result.tracking_result:
+            output["task_tracking"] = emit_result.tracking_result
+
+        # OTel: finalize root span on success
+        if _HAS_OTEL and not isinstance(root_span, _NoOpSpan):
+            root_span.set_attribute("workflow.route", route.value)
+            root_span.set_attribute("workflow.total_cost", state.total_cost)
+            root_span.set_status(_StatusCode.OK)
+
+        return WorkflowResult(
+            workflow_id=self.metadata.workflow_id,
+            success=True,
+            output=output,
+            metrics=WorkflowMetrics(
+                total_time_ms=total_ms,
+                input_tokens=sum(s.input_tokens for s in steps),
+                output_tokens=sum(s.output_tokens for s in steps),
+                total_cost=state.total_cost,
+                step_count=len(steps),
+            ),
+            steps=steps,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+
+
     def _execute(
         self,
         config: Dict[str, Any],
@@ -4838,141 +5003,25 @@ class PlanIngestionWorkflow(WorkflowBase):
             # Save final state
             _save_state()
 
-            # --- Kaizen diagnostic report (REQ-KPI-1xx, 3xx) ---
-            _diag_phase_map: Dict[str, PhaseDiagnostic] = {}
-            for _s in steps:
-                _phase_name = _s.step_name.split(":")[0]  # strip sub-tags like "assess:quality-override"
-                if _phase_name in _diag_phase_map:
-                    # Accumulate cost/tokens for multi-step phases (e.g. refine)
-                    existing = _diag_phase_map[_phase_name]
-                    existing.time_ms += _s.time_ms
-                    existing.input_tokens += _s.input_tokens
-                    existing.output_tokens += _s.output_tokens
-                    existing.cost_usd += _s.cost
-                    if _s.error:
-                        existing.success = False
-                else:
-                    _diag_phase_map[_phase_name] = PhaseDiagnostic(
-                        phase=_phase_name,
-                        success=_s.error is None,
-                        time_ms=_s.time_ms,
-                        input_tokens=_s.input_tokens,
-                        output_tokens=_s.output_tokens,
-                        cost_usd=_s.cost,
-                        code_extraction_fallback=_s.metadata.get(
-                            "code_extraction_fallback", False,
-                        ),
-                        deterministic=_s.metadata.get("deterministic", False),
-                    )
-
-            # Attach quality signals to phase diagnostics
-            if "parse" in _diag_phase_map and parsed_plan is not None:
-                _diag_phase_map["parse"].quality_signals = compute_parse_quality(
-                    parsed_plan.features,
-                    parsed_plan.dependency_graph,
-                    parsed_plan.mentioned_files,
-                )
-            if "assess" in _diag_phase_map and complexity is not None:
-                _dims = [
-                    complexity.feature_count, complexity.cross_file_deps,
-                    complexity.api_surface, complexity.test_complexity,
-                    complexity.integration_depth, complexity.domain_novelty,
-                    complexity.ambiguity,
-                ]
-                _diag_phase_map["assess"].quality_signals = compute_assess_quality(
-                    complexity.composite, route.value, threshold, _dims,
-                )
-            if "refine" in _diag_phase_map:
-                _diag_phase_map["refine"].quality_signals = compute_refine_quality(
-                    review_output,
-                )
-
-            # Seed quality (artisan only — read seed JSON back)
-            _seed_score = 0.0
-            _seed_warnings: List[str] = []
-            if emit_result.context_seed_path and emit_result.context_seed_path.exists():
-                try:
-                    _seed_dict = json.loads(
-                        emit_result.context_seed_path.read_text(encoding="utf-8")
-                    )
-                    _density = compute_task_density(_seed_dict.get("tasks", []))
-                    _seed_score, _seed_warnings = compute_seed_quality(
-                        _seed_dict, task_density=_density,
-                    )
-                except (OSError, json.JSONDecodeError) as _seed_err:
-                    logger.debug("Kaizen: seed quality read failed: %s", _seed_err)
-
-            # Task density
-            _task_density = compute_task_density(emit_result.tasks)
-
-            _plan_checksum = sha256(plan_text.encode()).hexdigest()[:16]
-            # Honest top-level signal: a run that completed on a degenerate
-            # single-fallback-feature parse (tripwire opted out) must not
-            # report overall_success — phase-level degeneracy reflects up.
-            _diag = build_diagnostic(
-                run_timestamp=started_at.isoformat(),
-                plan_source=str(plan_path),
-                plan_checksum=_plan_checksum,
-                route=route.value,
-                overall_success=not _heuristic_degraded,
-                phase_diagnostics=_diag_phase_map,
-                seed_quality_score=_seed_score,
-                quality_warnings=_seed_warnings,
-                task_density=_task_density,
-                enrichment=emit_result.enrichment_diagnostic,
-            )
-            # Provenance (step 7): record which model ingestion actually used, so
-            # "what ran where" is answerable from the artifact (run-026 gap).
-            _ing_models = getattr(self, "_ingestion_models", None)
-            if _ing_models:
-                _diag.totals["models"] = dict(_ing_models)
-            persist_diagnostic(_diag, output_dir)
-
-            completed_at = datetime.now(timezone.utc)
-            total_ms = int((completed_at - started_at).total_seconds() * 1000)
-
-            output: Dict[str, Any] = {
-                "route": route.value,
-                "plan_document_path": str(doc_path),
-                "review_config_path": str(emit_result.config_path),
-                "complexity_score": complexity.composite,
-                "refine_rounds_completed": rounds_completed,
-                "traceability_path": str(traceability_path),
-                "translation_quality": {
-                    "requirements_coverage_percent": translation_quality.get(
-                        "requirements_coverage_percent", 100.0
-                    ),
-                    "artifact_mapping_percent": translation_quality.get(
-                        "artifact_mapping_percent", 100.0
-                    ),
-                    "conflict_count": translation_quality.get("conflict_count", 0),
-                },
-            }
-            if emit_result.context_seed_path is not None:
-                output["context_seed_path"] = str(emit_result.context_seed_path)
-            if emit_result.tracking_result:
-                output["task_tracking"] = emit_result.tracking_result
-
-            # OTel: finalize root span on success
-            if _HAS_OTEL and not isinstance(root_span, _NoOpSpan):
-                root_span.set_attribute("workflow.route", route.value)
-                root_span.set_attribute("workflow.total_cost", state.total_cost)
-                root_span.set_status(_StatusCode.OK)
-
-            return WorkflowResult(
-                workflow_id=self.metadata.workflow_id,
-                success=True,
-                output=output,
-                metrics=WorkflowMetrics(
-                    total_time_ms=total_ms,
-                    input_tokens=sum(s.input_tokens for s in steps),
-                    output_tokens=sum(s.output_tokens for s in steps),
-                    total_cost=state.total_cost,
-                    step_count=len(steps),
-                ),
+            return self._finalize_success(
+                state=state,
                 steps=steps,
+                parsed_plan=parsed_plan,
+                complexity=complexity,
+                route=route,
+                threshold=threshold,
+                review_output=review_output,
+                emit_result=emit_result,
+                plan_path=plan_path,
+                plan_text=plan_text,
                 started_at=started_at,
-                completed_at=completed_at,
+                _heuristic_degraded=_heuristic_degraded,
+                output_dir=output_dir,
+                doc_path=doc_path,
+                traceability_path=traceability_path,
+                translation_quality=translation_quality,
+                rounds_completed=rounds_completed,
+                root_span=root_span,
             )
 
         except Exception as exc:
