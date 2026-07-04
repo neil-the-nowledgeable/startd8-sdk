@@ -142,9 +142,14 @@ def test_session_top_level_schema(tmp_path, small_roster):
         "session_id", "created_at", "project", "objective", "strategy", "prep",
         "model_assignment", "adversaries", "facilitator_model", "rounds", "synthesis",
         "cost_total_usd",
+        # GE-M3b hardening: first-class halt state (H2/H3) + budget ceiling surface (H3)
+        "status", "halt", "budget_usd",
     }
     assert session["adversaries"] == ["adversary-exploit", "adversary-discredit"]
     assert session["session_id"].startswith("kp-")
+    # a clean full run completes and is not halted
+    assert session["status"] == "completed"
+    assert session["halt"] is None
 
 
 # ── transcript contract: path + per-round atomic-replace (FR-UX-1 / FR-UX-17) ─

@@ -71,6 +71,8 @@ async def orchestrate(args: argparse.Namespace) -> None:
         outside_view=args.outside_view,
         adversary=args.adversary,
         final_judgment=args.final_judgment,
+        assumptions_halt_threshold=args.assumptions_halt_threshold,  # H2 (FR-13c-2)
+        budget_usd=args.budget_usd,                                  # H3 (FR-13c-3)
     )
     roster_path = Path(args.project).expanduser() / "docs" / "kickoff" / "inputs" / "stakeholders.yaml"
     roster = load_roster(roster_path)
@@ -107,7 +109,11 @@ async def orchestrate(args: argparse.Namespace) -> None:
         on_synthesis=_print_synthesis,
     )
     session = await fac.run()
-    print(f"\nSaved transcript: {fac.transcript_path(session['session_id'])}")
+    if session.get("status") == "halted":  # H2/H3 first-class halted state
+        h = session["halt"]
+        print(f"\n{'!'*78}\n## HALTED ({h['reason']})\n{'!'*78}\n{h['message']}")
+    print(f"\nSession cost: ${session.get('cost_total_usd', 0.0):.4f} total")  # H3
+    print(f"Saved transcript: {fac.transcript_path(session['session_id'])}")
 
 
 def main(argv=None):
@@ -127,6 +133,14 @@ def main(argv=None):
     ap.add_argument("--outside-view", dest="outside_view", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--adversary", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--final-judgment", dest="final_judgment", action=argparse.BooleanOptionalAction, default=True)
+    # GE-M3b hardening surfaces (H2 assumptions gate / H3 budget ceiling)
+    ap.add_argument("--assumptions-halt-threshold", dest="assumptions_halt_threshold", type=int, default=2,
+                    help="Halt (validate the premise first) at >= this many high-impact/low-confidence "
+                         "assumptions (H2, FR-13c-2). Default 2; too low halts on noise, too high lets "
+                         "false premises through.")
+    ap.add_argument("--budget-usd", dest="budget_usd", type=float, default=0.0,
+                    help="Hard budget ceiling in USD; a cumulative-abort halts before the round that "
+                         "would exceed it (H3, FR-13c-3). 0 = uncapped.")
     args = ap.parse_args(argv)
     try:
         asyncio.run(orchestrate(args))
