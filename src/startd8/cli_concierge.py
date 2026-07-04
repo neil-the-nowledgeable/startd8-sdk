@@ -175,6 +175,34 @@ def concierge_assess(
     if headline:
         console.print(f"\n[bold]Next command[/bold]: [cyan]{headline}[/cyan]")
 
+    # GE-M0 (FR-GE-1/3): the guided-experience routing seam. One ignorable line on *stderr*, never a
+    # gate, $0/no-LLM. Suppressed on `--json` (already returned above) and on a non-interactive stdout
+    # so the kernel path stays byte-identical.
+    _maybe_offer_guided(project_root, assess=result)
+
+
+def _maybe_offer_guided(project_root: Path, *, assess: dict) -> None:
+    """Emit the single ignorable guided-experience offer line on stderr, if routing says so (GE-M0).
+
+    Read-only, $0, defensive: any failure here must never perturb the kernel `assess` output.
+    """
+    try:
+        from .kickoff_experience.guided_routing import decide_guided_routing, offer_line
+
+        decision = decide_guided_routing(
+            project_root,
+            flag=None,               # GE-M0: no --guided/--no-guided flag on the kernel yet (GE-M1+)
+            served_surface=False,    # a CLI invocation is not a served/TUI surface
+            assess=assess,           # project-shape signal (reuse the payload we already computed)
+            interactive=console.is_terminal,  # non-TTY (piped/CI) ⇒ suppressed, never blocking
+        )
+        line = offer_line(decision)
+        if line:
+            _stderr_console.print(line)
+    except Exception:
+        # The offer is a courtesy; never let it break or alter the kernel path.
+        return
+
 
 def _render_write_result(res) -> None:
     for p in res.written:
