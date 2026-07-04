@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.8 (Third experiment — flagship model; panel is a mirror, not a telescope)
+**Version:** 0.9 (Fourth experiment — facilitated process; mirror becomes a lens)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -355,6 +355,20 @@ might be missing* (breadth, real value); it may not *estimate the specific value
   needs — is retained as an **`[ESSENTIAL]`, conditionally-offered** aid at the
   data-model bookend, **not** un-bundled (reverses v0.1–v0.3). Governing rule:
   *meet the user where they are; offer tools where needed.*
+  - **FR-13b — The value is the FACILITATION STRUCTURE, not the roster (v0.9,
+    fourth-run evidence).** Cold "name a gap" questions make the panel a mirror
+    (echo). What converts it to a **lens** is modeling a real kickoff: (1) a shared
+    **project context + business objective + strategy** block the personas reason
+    *from*; (2) **means-ends probing** ("given this objective/strategy, what tactics
+    in YOUR domain, what breaks, what are we not thinking about?") that forces
+    derivation rather than recall; (3) **cross-role tension/convergence** surfacing;
+    (4) **synthesis**. This is the load-bearing requirement — a persona roster
+    without this facilitation scaffold reverts to a mirror. The high-leverage
+    implementation work is the scaffold, not the personas. (Note: the current
+    `persona.py` "answer only from the brief" prompt did NOT block facilitated mode
+    — personas engaged with context supplied in the question — but doing it *well/
+    repeatably* wants first-class support for a shared-context/objective block,
+    per-role means-ends templates, an optional cross-role round, and synthesis.)
   - **Coverage (the trigger) already exists and is $0.** "Which values need
     populating" is surfaced today by `instantiate` templates (`<...>`
     placeholders) + `assess` unfilled-field reporting. The essential act is
@@ -382,13 +396,17 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     content) and confirmed the panel **stays out of bucket-4** even aimed at
     content (names requirements, never writes copy). Combined 28-call discovery
     rate = 1/28 → whatever survives must be thin. A **third** run (retail team,
-    **Gemini 3 Pro flagship**, freshly-migrated roster) yielded **0 novel / 10** —
-    every persona restated its own brief, and the stronger model produced MORE
-    faithful echo, not more insight. **Decisive finding: the panel is a MIRROR, not
-    a telescope** — brief-bounded by construction (rich brief → echo; thin brief →
-    defer; neither discovers). This largely removes the evidence for the "discovery"
-    framing; FR-13's real values are viewpoint-articulation + consensus. Triggers
-    the reclassification decision (keep-thin-as-articulation vs. demote-to-optional).*
+    flagship) yielded 0/10 cold — confirming the mirror in cold mode. **But a
+    FOURTH run reversed the framing: run as a faithful FACILITATED process (shared
+    objective + strategy, means-ends probing), the mirror became a LENS** — ~4/10
+    roles produced genuine non-obvious derivations (bundling → FX-margin trap;
+    bundling → CurrencyService QPS + float risk) and finance+payments independently
+    converged on a derived risk. **Net: mirror when cold, lens when facilitated.**
+    FR-13's value is the **facilitation STRUCTURE** (context + objective→strategy→
+    tactics + means-ends + cross-role tension + synthesis), not the roster — and the
+    value concentrates in roles with analytical leverage against the specific
+    strategy probed. Bounds: competent-generalist grade, synthetic/ratify. This
+    revives FR-13 with a concrete design direction (see the reclassification below).*
   - **Preserve the single-source (`core.py:38-41`).** The "which inputs count"
     domain list is deliberately shared so `assess` and any advisor can't drift.
     Ownership of that list moves **into the kernel**; discovery reads it. The
@@ -555,16 +573,38 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
     MORE echo than Haiku, not more discovery** — a stronger model is better at
     staying in character (`persona.py`: "the brief above is your ENTIRE
     knowledge"), so capability amplifies *fidelity to the brief*, not insight.
-  - **DECISIVE combined verdict (38 paid calls, 2 models, 2 projects, 3 runs =
-    1 genuinely novel item): the panel is a MIRROR, not a telescope.** It is
-    architecturally brief-bounded: rich brief → restates it (echo); thin brief →
-    defers (refusal); no configuration produces discovery. Its real, evidenced
-    values are (a) **viewpoint articulation** (crisp per-lens restatement of what
-    you encoded) and (b) **consensus/prioritization** (cross-role convergence on
-    load-bearing items) — never bucket-4 authoring, never surfacing what you'd
-    miss. **This largely removes the evidentiary basis for FR-13's "discovery"
-    framing** and forces the reclassification decision (keep-thin-as-articulation
-    vs. demote-to-optional) — see the open decision below OQ-12.
+  - **Combined verdict of runs 1-3 (38 cold calls = 1 novel): cold-question mode
+    is a MIRROR.** With a thin/backward-looking brief + a generic "name a gap"
+    question, the panel restates (rich brief → echo; thin brief → defer). This is
+    real, but it is the DEGENERATE test — a roster with no facilitation process.
+  - **Fourth run — FACILITATED process (2026-07-04, retail roster, Gemini 3 Pro
+    flagship). The mirror became a LENS.** Modeled a faithful kickoff: shared
+    project **context + business objective + strategy**, then a **means-ends +
+    tension + blind-spot** question forcing each role to *derive from the objective
+    into its domain* (not "name a gap"). Result changed materially:
+    - **~4/10 roles produced genuine, non-obvious derivations absent from their
+      briefs** — payments (bundling → CurrencyService QPS spike + bundle-price FX
+      float risk), finance (bundling across 6 currencies → *AOV up while margin
+      down*), merchandising (bundle price → 6-currency validation), compliance
+      (fast cart iteration → PCI scope creep). Kickoff-grade risk-surfacing a solo
+      founder would plausibly miss.
+    - **Cross-role convergence on a derived, non-obvious risk:** finance AND
+      payments *independently* flagged "bundling × 6-currency = FX-multiplication +
+      margin." Two domains catching the same hazard = the productive-tension signal
+      a real workshop produces.
+    - **~6/10 roles recontextualized their briefs** (their existing asks reframed
+      by the objective) — mild uplift, not new. **Value concentrated in roles with
+      real analytical leverage against the *specific strategy* probed** (refines
+      OQ-10's trigger: not just operational specificity, but causal relationship to
+      the strategy).
+    - **Bounds:** competent-generalist grade (obvious-to-expert, invisible-to-
+      novice — the useful zone), NOT proprietary/specialist; still synthetic/
+      ratify; numeric guard never fired (grounded means-ends, not invention).
+  - **REVISED verdict: the panel is a mirror when run cold, a LENS when run as a
+    faithful facilitated process.** The product is the **facilitation STRUCTURE**
+    (context + objective→strategy→tactics + means-ends probing + cross-role tension
+    + synthesis), NOT the roster. This substantially revives FR-13's value case and
+    gives it a concrete design direction — see FR-13 + the reclassification decision.
 - **OQ-11 — Where does the retained discovery capability live?** The persona/agent
   machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
   *conditionally-offered discovery* a thin caller the kernel owns that invokes a
@@ -639,3 +679,16 @@ stronger model amplifies fidelity not insight. 3 runs / 2 models / 2 projects /
 38 calls = 1 novel item. This removes most of the basis for FR-13's "discovery"
 framing → surfaced a live reclassification decision (keep-thin-as-articulation
 vs. demote-to-optional). Side effect: validated the roster-format migration path.*
+
+*v0.9 — Fourth experiment: FACILITATED process (retail roster, flagship). Modeled
+a real kickoff — shared objective+strategy + means-ends probing — instead of a
+cold "name a gap." **The mirror became a lens:** ~4/10 roles produced genuine
+non-obvious derivations (bundling→FX-margin trap; bundling→CurrencyService QPS +
+float risk), finance+payments independently converged on a derived risk, ~6/10
+recontextualized their briefs. **Revised verdict: mirror when cold, lens when
+facilitated.** The product is the facilitation STRUCTURE (context + objective→
+strategy→tactics + means-ends + cross-role tension + synthesis), NOT the roster
+(FR-13b). Value concentrates in roles with analytical leverage against the
+specific strategy; bounds = competent-generalist grade, synthetic/ratify. Revives
+FR-13's value case with a concrete design direction; reframes the reclassification
+decision from "keep-thin/demote/retire" toward "keep as a facilitation capability."*
