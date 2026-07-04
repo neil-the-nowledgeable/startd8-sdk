@@ -42,14 +42,19 @@ class ConsultationService:
         target: str = ALL,
         images: "Optional[list[ImageInput]]" = None,
     ) -> ConsultationSession:
-        return asyncio.run(self.engine.follow_up(session, roster, prompt, target, images))
+        # QW-2: serialize + reload inside the lock so a concurrent CLI writer can't lost-update.
+        with self.store.session_write_lock(session.id):
+            fresh = self.store.load(session.id)
+            return asyncio.run(self.engine.follow_up(fresh, roster, prompt, target, images))
 
     def retry_failed(
         self,
         session: ConsultationSession,
         roster: "dict[str, BaseAgent]",
     ) -> ConsultationSession:
-        return asyncio.run(self.engine.retry_failed(session, roster))
+        with self.store.session_write_lock(session.id):
+            fresh = self.store.load(session.id)
+            return asyncio.run(self.engine.retry_failed(fresh, roster))
 
     def load(self, session_id: str) -> ConsultationSession:
         return self.store.load(session_id)

@@ -430,6 +430,7 @@ details[open] .fold{transform:rotate(90deg);color:var(--ch,var(--amber))}
         turn.appendChild(ans);
         var badges=el("div","badges");
         function badge(label,val){ if(val==null) return; var b=el("span","badge"); b.innerHTML="<b></b> "+esc(label); b.querySelector("b").textContent=val; badges.prepend(b); }
+        if(t.cost_usd!=null){ var bc=el("span","badge"); bc.innerHTML="<b></b>"; bc.querySelector("b").textContent="$"+Number(t.cost_usd).toFixed(4); badges.appendChild(bc);}
         if(t.time_ms!=null){ var bt=el("span","badge"); bt.innerHTML="<b></b> ms"; bt.querySelector("b").textContent=t.time_ms; badges.appendChild(bt);}
         var bi=el("span","badge"); bi.innerHTML="in <b></b>"; bi.querySelector("b").textContent=(t.input_tokens!=null?t.input_tokens:"—"); badges.appendChild(bi);
         var bo=el("span","badge"); bo.innerHTML="out <b></b>"; bo.querySelector("b").textContent=(t.output_tokens!=null?t.output_tokens:"—"); badges.appendChild(bo);
