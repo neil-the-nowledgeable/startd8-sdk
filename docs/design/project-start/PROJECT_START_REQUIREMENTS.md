@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.7 (Second discovery experiment — content question)
+**Version:** 0.8 (Third experiment — flagship model; panel is a mirror, not a telescope)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -381,7 +381,14 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     **consensus/prioritization** value (cross-audience agreement on load-bearing
     content) and confirmed the panel **stays out of bucket-4** even aimed at
     content (names requirements, never writes copy). Combined 28-call discovery
-    rate = 1/28 → whatever survives must be thin.*
+    rate = 1/28 → whatever survives must be thin. A **third** run (retail team,
+    **Gemini 3 Pro flagship**, freshly-migrated roster) yielded **0 novel / 10** —
+    every persona restated its own brief, and the stronger model produced MORE
+    faithful echo, not more insight. **Decisive finding: the panel is a MIRROR, not
+    a telescope** — brief-bounded by construction (rich brief → echo; thin brief →
+    defer; neither discovers). This largely removes the evidence for the "discovery"
+    framing; FR-13's real values are viewpoint-articulation + consensus. Triggers
+    the reclassification decision (keep-thin-as-articulation vs. demote-to-optional).*
   - **Preserve the single-source (`core.py:38-41`).** The "which inputs count"
     domain list is deliberately shared so `assess` and any advisor can't drift.
     Ownership of that list moves **into the kernel**; discovery reads it. The
@@ -537,12 +544,27 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
     at content, the panel still produces *what should exist*, not *the real
     words* — breadth-not-precision holds under pressure, so this is not a bucket-4
     breach.
-  - **Combined verdict (28 paid calls, 2 questions): the panel is NOT a discovery
-    engine** — 1 capability gap + 0 content ideas. Its demonstrated values are
-    modest: (a) an *occasional* real gap from operationally-specific personas, and
-    (b) cross-audience *consensus* on load-bearing priorities — never crossing into
-    authoring content. A 1-in-28 discovery rate hardens OQ-11: whatever discovery
-    implementation survives must be **thin**.
+  - **Third run — different project + FLAGSHIP model (2026-07-04).** Ran capability
+    discovery on the **ContextCore Blue Planet Adventures retail team** (10 personas
+    freshly migrated from the old `contextcore.io/v1alpha1 PersonaManifest` format —
+    which the strict parser rejected — into the newest strict roster) using
+    **Gemini 3 Pro flagship** (`gemini:gemini-3.1-pro-preview`), to test the
+    counter-hypothesis "an unspecced project + a stronger model discovers more."
+    **Result: 0 novel / 10 — every persona restated its own brief**, several reusing
+    verbatim phrases authored into their `known_positions`. **The flagship produced
+    MORE echo than Haiku, not more discovery** — a stronger model is better at
+    staying in character (`persona.py`: "the brief above is your ENTIRE
+    knowledge"), so capability amplifies *fidelity to the brief*, not insight.
+  - **DECISIVE combined verdict (38 paid calls, 2 models, 2 projects, 3 runs =
+    1 genuinely novel item): the panel is a MIRROR, not a telescope.** It is
+    architecturally brief-bounded: rich brief → restates it (echo); thin brief →
+    defers (refusal); no configuration produces discovery. Its real, evidenced
+    values are (a) **viewpoint articulation** (crisp per-lens restatement of what
+    you encoded) and (b) **consensus/prioritization** (cross-role convergence on
+    load-bearing items) — never bucket-4 authoring, never surfacing what you'd
+    miss. **This largely removes the evidentiary basis for FR-13's "discovery"
+    framing** and forces the reclassification decision (keep-thin-as-articulation
+    vs. demote-to-optional) — see the open decision below OQ-12.
 - **OQ-11 — Where does the retained discovery capability live?** The persona/agent
   machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
   *conditionally-offered discovery* a thin caller the kernel owns that invokes a
@@ -606,3 +628,14 @@ prioritization instrument, not discovery — strong cross-audience convergence o
 held unprompted** — aimed straight at content, personas named requirements, never
 wrote copy (direct §0.2 evidence). Combined 28-call rate = 1/28 novel → the panel
 is NOT a discovery engine; whatever survives OQ-11 must be thin.*
+
+*v0.8 — Third experiment: capability discovery on the ContextCore Blue Planet
+Adventures retail team (10 personas migrated from the old
+`contextcore.io/v1alpha1` format the strict parser rejected → newest strict
+roster), run with the **Gemini 3 Pro flagship**. Result: **0 novel / 10** — every
+persona restated its own brief; the flagship gave MORE faithful echo than Haiku.
+**Decisive: the panel is a MIRROR, not a telescope** — brief-bounded, so a
+stronger model amplifies fidelity not insight. 3 runs / 2 models / 2 projects /
+38 calls = 1 novel item. This removes most of the basis for FR-13's "discovery"
+framing → surfaced a live reclassification decision (keep-thin-as-articulation
+vs. demote-to-optional). Side effect: validated the roster-format migration path.*
