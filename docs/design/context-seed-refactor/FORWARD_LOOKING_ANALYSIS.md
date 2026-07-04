@@ -18,7 +18,7 @@ the `__getattr__` shims are deleted, and an automated acyclicity gate now guards
 | Rank | File | Lines | Status / note |
 |---|---|--:|---|
 | 1 | `contractors/prime_contractor.py` | 6,094 | **Active** construction path. Breadth (124 methods), not depth. |
-| 2 | `contractors/artisan_phases/development.py` | 5,678 | **ON HOLD** (Artisan). Quarantine candidate, not refactor. |
+| 2 | `contractors/artisan_phases/development.py` | 5,678 | ON HOLD orchestrator, but **actively reused** — the live IMPLEMENT path delegates to its `DevelopmentPhase`/`DevelopmentChunk`/`ChunkStatus` at runtime. Not quarantinable without extraction (§4.1). |
 | 3 | `micro_prime/engine.py` | 5,087 | **Active**. Per-language branching → strategy-pattern candidate. |
 | 4 | `workflows/builtin/plan_ingestion_workflow.py` | 4,987 | **Active**. Has a 1,176-line `_execute`. |
 | 5 | `contractors/context_seed/phases/implement.py` | 4,722 | **Just isolated** (this refactor). Part B target. |
@@ -105,27 +105,31 @@ the next god file, and safely deferrable/incremental.
 
 Ordered by value × tractability. The recipe transfers directly to any of these.
 
-1. **Quarantine ON-HOLD Artisan code (highest value).** Quarantine = *relocate* the frozen Artisan code
-   into a clearly-marked `contractors/_artisan_onhold/` subpackage (import-path update, **no** deletion,
-   **no** behavior change) so it stops dominating the `contractors/` package and every structural audit
-   (CLAUDE.md: don't invest, don't delete). But it is **not** uniformly a "pure relocation" — a
-   dependency check (2026-07-04) splits it into two buckets:
-   - **Cleanly quarantinable (~low risk):** the Artisan-only orchestrator bodies —
-     `artisan_phases/development.py` (5,678), `test_construction.py` (2,309), `preflight.py` (1,613),
-     `retrospective.py` (1,459), `final_testing.py` (1,313). Move as-is; only Artisan-internal imports change.
-   - **Entangled — `artisan_contractor.py` (3,922) needs an extraction first.** It is *not* purely frozen:
-     it houses **shared primitives the active Prime path imports** — `AbstractPhaseHandler`, `WorkflowPhase`,
-     `compute_lanes`, `HAS_OTEL`, `_NoOpSpan`, `_SAFE_TASK_ID_PATTERN` — used by **~15 active files** (the
-     extracted context_seed phases, `prime_contractor.py`, `plan_ingestion_*`, `seeds/models.py`,
-     `observability/collector.py`, …). Naively moving it would break the live path. Sequence: (a) extract
-     those primitives into a neutral module (e.g. `contractors/phase_protocol.py`) and repoint the ~15
-     importers — the same "sever the inversion" pattern this refactor used (an active layer must not depend
-     on a frozen file for its base classes); (b) *then* quarantine the residual Artisan-orchestration part.
+1. **Quarantine ON-HOLD Artisan code — SMALLER & harder than earlier drafts claimed.** Quarantine =
+   *relocate* frozen Artisan code into a marked `contractors/_artisan_onhold/` subpackage (import-path
+   update, **no** deletion/behavior change) so it stops dominating audits. **But an import-reachability
+   check (2026-07-04) largely invalidated the "clean bucket ~11K LOC" framing** — most of `artisan_phases/`
+   is *reused by the active Prime path*, not frozen. Actual reality:
+   - **Genuinely quarantinable — only `final_testing.py` (1,313).** No module imports it (import-unreachable;
+     only a docstring in `artisan_phases/__init__.py` mentions it). Effectively dead. Safe to relocate.
+   - **Test-only — `test_construction.py` (2,309).** No active-src importer; referenced by `artisan_phases/
+     __init__.py` + 4 test files. Movable with those import updates.
+   - **Entangled / active-runtime-reused (do NOT move without extraction):**
+     `development.py` (5,678 — active `implement.py`/`design_support.py`/`plan_ingestion_mottainai.py`
+     delegate to `DevelopmentPhase`/`DevelopmentChunk`/`ChunkStatus` at runtime), `preflight.py` (active
+     `gate_contracts.py`), `retrospective.py` (active `postmortem.py`/`prime_postmortem.py`), and
+     `artisan_contractor.py` (3,922 — base primitives `AbstractPhaseHandler`/`WorkflowPhase`/`compute_lanes`/
+     `HAS_OTEL`/… used by ~15 active files). These are load-bearing; quarantining requires extracting the
+     reused pieces into a neutral module first (same sever-the-inversion pattern this refactor used).
 
-   Net: the clean bucket (~11K LOC) is a genuinely cheap win; `artisan_contractor.py` is a small extraction
-   job first, then quarantine. Still high-value and mostly low-risk — but **not** the uniformly-trivial
-   relocation an earlier draft of this doc claimed. Do the clean bucket **first**; treat `artisan_contractor.py`
-   as its own scoped step.
+   **The deeper finding:** `artisan_phases/` is a *mix* of frozen and actively-reused modules — "ON HOLD"
+   applies to the Artisan **orchestrator** (`artisan_contractor`'s 8-phase driver), NOT to the phase
+   **libraries** the active Prime path reuses. So there is no clean "move the phases as a block" win.
+   Moving only the 2 clean files would *splinter* `artisan_phases/` across two dirs while the reused phases
+   stay put. **Options:** (a) minimal — isolate/annotate just `final_testing.py` (the dead one); (b) proper —
+   a real reused-library vs. frozen-orchestrator separation (a design project, not a file move); (c) leave
+   it and drop "quarantine Artisan" from the cheap-wins list. This is **no longer the recommended first
+   move** — see §4.2 for a genuinely cheap win.
 
 2. **`plan_ingestion_workflow.py` (4,987).** Has a **1,176-line `_execute`** with a nested ~1,000-line
    `_fail`. A sibling `plan_ingestion_emitter.py` already exists, so the split pattern is established.
@@ -184,8 +188,9 @@ Ordered by value × tractability. The recipe transfers directly to any of these.
 
 ## 7. Recommended next sequence
 
-1. **Quarantine the clean-bucket ON-HOLD Artisan files** (§4.1) — cheapest large win, unblocks cleaner
-   audits. (`artisan_contractor.py` is a separate, scoped extraction-then-quarantine step.)
+1. **`plan_ingestion_workflow._execute`** (§4.2) — the genuinely cheap large win (the Artisan-quarantine
+   idea largely collapsed under an import-reachability check; see §4.1 — most of `artisan_phases/` is
+   actively reused, so it is *not* a cheap relocation).
 2. **Finish Part B incrementally** (§3) — or defer; it's isolated polish.
 3. **`plan_ingestion_workflow._execute`** (§4.2) — next real god-method, established split pattern.
 4. **Retire the compat wrapper** (§5) — closes out this refactor's Tier-2 tail.
