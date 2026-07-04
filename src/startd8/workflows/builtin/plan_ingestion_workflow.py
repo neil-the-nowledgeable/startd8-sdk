@@ -17,7 +17,7 @@ from hashlib import sha256
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from dataclasses import replace as _dataclass_replace
+from dataclasses import dataclass, replace as _dataclass_replace
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Set, Tuple, Union
 
 import yaml
@@ -1094,6 +1094,33 @@ class EmitResult(NamedTuple):
 # ---------------------------------------------------------------------------
 # Workflow
 # ---------------------------------------------------------------------------
+
+@dataclass
+class _IngestionRun:
+    """Per-`_execute` run-context (Stage 2). A pure DATA bag of cross-phase mutable
+    run-state, passed by reference — `state`/`steps`/`forensics` accumulation depends on
+    shared identity, so it is never deep-copied. The stateful behaviors that need
+    `self.metadata`/`_tracer` live as workflow methods (`_rt_check_cost/_rt_save_state/
+    _rt_fail`); only `progress()` (a pure counter + callback) belongs here.
+    See docs/design/plan-ingestion-refactor/PLAN.md §4.
+    """
+    state: "IngestionState"
+    steps: List["StepResult"]
+    output_dir: Path
+    plan_path: Path
+    state_dir: Path
+    forensics: Dict[str, Any]
+    total_steps: int
+    on_progress: Optional["ProgressCallback"] = None
+    warn_cost_usd: Optional[float] = None
+    max_cost_usd: Optional[float] = None
+    current_step: int = 0
+
+    def progress(self, msg: str) -> None:
+        self.current_step += 1
+        if self.on_progress:
+            self.on_progress(self.current_step, self.total_steps, msg)
+
 
 class PlanIngestionWorkflow(WorkflowBase):
     """
@@ -3809,6 +3836,67 @@ class PlanIngestionWorkflow(WorkflowBase):
     # Main execution
     # ------------------------------------------------------------------
 
+    def _rt_check_cost(self, run: "_IngestionRun", label: str) -> Optional[WorkflowResult]:
+        """Check cost thresholds, return an error result if exceeded (was a closure)."""
+        if run.warn_cost_usd is not None and run.state.total_cost > run.warn_cost_usd:
+            logger.warning(
+                "Cost warning: $%.4f exceeds warn threshold $%.2f after %s",
+                run.state.total_cost, run.warn_cost_usd, label,
+            )
+        if run.max_cost_usd is not None and run.state.total_cost > run.max_cost_usd:
+            return self._rt_fail(
+                run,
+                f"Cost limit exceeded: ${run.state.total_cost:.4f} > "
+                f"${run.max_cost_usd:.2f} after {label}"
+            )
+        return None
+
+    def _rt_save_state(self, run: "_IngestionRun") -> None:
+        """Persist current state for post-mortem debugging (was a closure)."""
+        try:
+            with _tracer.start_as_current_span("io.state.write") as _io_span:
+                atomic_write_json(
+                    run.state_dir / "plan_ingestion_state.json",
+                    run.state.to_dict(),
+                    indent=2,
+                )
+                if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
+                    _io_span.set_attribute(
+                        "io.path", str(run.state_dir / "plan_ingestion_state.json"),
+                    )
+        except Exception as exc:
+            logger.debug("Failed to save ingestion state: %s", exc)
+
+    def _rt_fail(self, run: "_IngestionRun", error_msg: str) -> WorkflowResult:
+        """Record failure in state, persist forensics, return error result (was a closure)."""
+        run.state.current_phase = IngestionPhase.FAILED
+        run.state.error = error_msg
+        self._rt_save_state(run)
+        try:
+            run.output_dir.mkdir(parents=True, exist_ok=True)
+            _forensics_payload = {
+                "overall_success": False,
+                "error": error_msg,
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "plan_source": str(run.plan_path),
+                **run.forensics,
+            }
+            (run.output_dir / "plan-ingestion-failure-forensics.json").write_text(
+                json.dumps(_forensics_payload, indent=2, default=str),
+                encoding="utf-8",
+            )
+            logger.info(
+                "Failure forensics persisted to %s",
+                run.output_dir / "plan-ingestion-failure-forensics.json",
+            )
+        except Exception as _forensics_err:  # never mask the original error
+            logger.warning(
+                "Could not persist failure forensics: %s", _forensics_err,
+            )
+        return WorkflowResult.from_error(
+            self.metadata.workflow_id, error_msg, steps=run.steps,
+        )
+
     def _finalize_success(
         self,
         *,
@@ -4104,88 +4192,35 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
         total_steps = 6  # preflight, parse, assess, transform, refine, emit
-        current_step = 0
-
-        def progress(msg: str):
-            nonlocal current_step
-            current_step += 1
-            if on_progress:
-                on_progress(current_step, total_steps, msg)
-
-        def _check_cost(label: str) -> Optional[WorkflowResult]:
-            """Check cost thresholds, return error result if exceeded."""
-            if warn_cost_usd is not None and state.total_cost > warn_cost_usd:
-                logger.warning(
-                    "Cost warning: $%.4f exceeds warn threshold $%.2f after %s",
-                    state.total_cost, warn_cost_usd, label,
-                )
-            if max_cost_usd is not None and state.total_cost > max_cost_usd:
-                return _fail(
-                    f"Cost limit exceeded: ${state.total_cost:.4f} > "
-                    f"${max_cost_usd:.2f} after {label}"
-                )
-            return None
 
         # Save state for debugging
         state_dir = output_dir / ".startd8"
         state_dir.mkdir(parents=True, exist_ok=True)
 
-        def _save_state():
-            """Persist current state for post-mortem debugging."""
-            try:
-                with _tracer.start_as_current_span("io.state.write") as _io_span:
-                    atomic_write_json(
-                        state_dir / "plan_ingestion_state.json",
-                        state.to_dict(),
-                        indent=2,
-                    )
-                    if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
-                        _io_span.set_attribute(
-                            "io.path", str(state_dir / "plan_ingestion_state.json"),
-                        )
-            except Exception as exc:
-                logger.debug("Failed to save ingestion state: %s", exc)
-
         # Failure forensics ledger (strtd8 kickoff note 1d): phases append
-        # evidence as they complete; _fail persists it so gate-failed runs
-        # leave diagnosable artifacts instead of just an exit code. (Run 2-3
-        # of the kickoff pilot tripped the quality gate and emitted NOTHING —
-        # whether the LLM parse extracted any features was unobservable.)
+        # evidence as they complete; _rt_fail persists it so gate-failed runs
+        # leave diagnosable artifacts instead of just an exit code.
         _forensics: Dict[str, Any] = {}
 
-        def _fail(error_msg: str) -> WorkflowResult:
-            """Record failure in state, persist forensics, return error result."""
-            state.current_phase = IngestionPhase.FAILED
-            state.error = error_msg
-            _save_state()
-            try:
-                output_dir.mkdir(parents=True, exist_ok=True)
-                _forensics_payload = {
-                    "overall_success": False,
-                    "error": error_msg,
-                    "failed_at": datetime.now(timezone.utc).isoformat(),
-                    "plan_source": str(plan_path),
-                    **_forensics,
-                }
-                (output_dir / "plan-ingestion-failure-forensics.json").write_text(
-                    json.dumps(_forensics_payload, indent=2, default=str),
-                    encoding="utf-8",
-                )
-                logger.info(
-                    "Failure forensics persisted to %s",
-                    output_dir / "plan-ingestion-failure-forensics.json",
-                )
-            except Exception as _forensics_err:  # never mask the original error
-                logger.warning(
-                    "Could not persist failure forensics: %s", _forensics_err,
-                )
-            return WorkflowResult.from_error(
-                self.metadata.workflow_id, error_msg, steps=steps,
-            )
+        # Run-context (Stage 2): shared-mutable run-state passed BY REFERENCE
+        # (state/steps/forensics keep their identity — never deepcopy). The 4
+        # closures became run.progress() + the _rt_* workflow methods below.
+        run = _IngestionRun(
+            state=state,
+            steps=steps,
+            output_dir=output_dir,
+            plan_path=plan_path,
+            state_dir=state_dir,
+            forensics=_forensics,
+            total_steps=total_steps,
+            on_progress=on_progress,
+            warn_cost_usd=warn_cost_usd,
+            max_cost_usd=max_cost_usd,
+        )
 
         # Deferred Layer 5 capability validation failure (set before _fail was defined)
         if _cap_validation_error:
-            return _fail(_cap_validation_error)
+            return self._rt_fail(run, _cap_validation_error)
 
         # OTel root span (manual lifecycle to avoid re-indenting 400 lines)
         _root_span_ctx = _tracer.start_as_current_span(
@@ -4223,7 +4258,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             _pf_span = _active_phase_ctx.__enter__()
             root_span.add_event("state.transition", {"phase": "preflight"})
 
-            progress("Preflight")
+            run.progress("Preflight")
             preflight_step = StepResult(step_name="preflight", output="Running export contract checks")
             onboarding_metadata, preflight_evidence, preflight_warnings, preflight_errors = (
                 self._preflight_export_contract(
@@ -4251,13 +4286,13 @@ class PlanIngestionWorkflow(WorkflowBase):
             _active_phase_ctx = None
 
             if preflight_step.error:
-                return _fail(preflight_step.error)
+                return self._rt_fail(run, preflight_step.error)
             requirements_hints_index = _normalize_requirements_hints(onboarding_metadata)
 
             # Load requirements corpus for routing quality + dual-document refine
             requirements_docs = _load_requirements_documents(requirements_files, output_dir)
             if requirements_files and not requirements_docs:
-                return _fail(
+                return self._rt_fail(run, 
                     "Requirements files were provided but none could be loaded. "
                     "Check requirements_path/requirements_files paths."
                 )
@@ -4285,7 +4320,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             _parse_span = _active_phase_ctx.__enter__()
             root_span.add_event("state.transition", {"phase": "parse"})
 
-            progress("Parse")
+            run.progress("Parse")
             state.current_phase = IngestionPhase.PARSE
 
             _used_heuristic_parse = False
@@ -4359,7 +4394,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.total_cost += parse_step.cost
             step_costs["parse"] = parse_step.cost
             if parse_step.error:
-                return _fail(parse_step.error)
+                return self._rt_fail(run, parse_step.error)
             # ── Deterministic enrichment: inject Implementation Contract
             # text from the plan markdown into feature descriptions so
             # downstream phases (TRANSFORM, EMIT) have full detail
@@ -4460,7 +4495,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if _plan_token_count >= 3 and cfg.fail_on_degenerate_parse:
                     _active_phase_ctx.__exit__(None, None, None)
                     _active_phase_ctx = None
-                    return _fail(
+                    return self._rt_fail(run, 
                         f"Degenerate parse: plan text contains "
                         f"{_plan_token_count} distinct F-xxx feature tokens "
                         f"but parsing collapsed to a single fallback feature. "
@@ -4486,7 +4521,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 translation_quality["_heuristic_degraded"] = True
             _forensics["translation_quality"] = translation_quality
 
-            cost_err = _check_cost("parse")
+            cost_err = self._rt_check_cost(run, "parse")
 
             if _HAS_OTEL and not isinstance(_parse_span, _NoOpSpan):
                 _parse_span.set_attribute("phase.cost", parse_step.cost)
@@ -4506,7 +4541,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             _assess_span = _active_phase_ctx.__enter__()
             root_span.add_event("state.transition", {"phase": "assess"})
 
-            progress("Assess")
+            run.progress("Assess")
             state.current_phase = IngestionPhase.ASSESS
 
             _used_heuristic_assess = False
@@ -4561,7 +4596,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.total_cost += assess_step.cost
             step_costs["assess"] = assess_step.cost
             if assess_step.error:
-                return _fail(assess_step.error)
+                return self._rt_fail(run, assess_step.error)
             state.complexity = complexity
             state.route = complexity.route
             _forensics["complexity"] = complexity.to_seed_dict()
@@ -4612,7 +4647,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                             "policy": "fail",
                             "details": details,
                         })
-                    return _fail(
+                    return self._rt_fail(run, 
                         "Translation quality gate failed: "
                         + details
                         + ". Remedies: improve plan↔requirements mappings, "
@@ -4633,7 +4668,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 threshold,
             )
 
-            cost_err = _check_cost("assess")
+            cost_err = self._rt_check_cost(run, "assess")
 
             if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
                 _assess_span.set_attribute("phase.cost", assess_step.cost)
@@ -4651,14 +4686,14 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             route = complexity.route
             if route is None:
-                return _fail("Assessment did not produce a route")
+                return self._rt_fail(run, "Assessment did not produce a route")
 
             # --- TRANSFORM ---
             _active_phase_ctx = _tracer.start_as_current_span("ingestion.transform")
             _transform_span = _active_phase_ctx.__enter__()
             root_span.add_event("state.transition", {"phase": "transform"})
 
-            progress("Transform")
+            run.progress("Transform")
             state.current_phase = IngestionPhase.TRANSFORM
             out_filename = "plan-ingestion-tasks.yaml"
             if cfg.enable_llm_transform:
@@ -4707,10 +4742,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.total_cost += transform_step.cost
             step_costs["transform"] = transform_step.cost
             if transform_step.error:
-                return _fail(transform_step.error)
+                return self._rt_fail(run, transform_step.error)
             state.plan_document_path = str(doc_path)
 
-            cost_err = _check_cost("transform")
+            cost_err = self._rt_check_cost(run, "transform")
 
             if _HAS_OTEL and not isinstance(_transform_span, _NoOpSpan):
                 _transform_span.set_attribute("phase.cost", transform_step.cost)
@@ -4725,7 +4760,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             _refine_span = _active_phase_ctx.__enter__()
             root_span.add_event("state.transition", {"phase": "refine"})
 
-            progress("Refine")
+            run.progress("Refine")
             state.current_phase = IngestionPhase.REFINE
 
             # Refine spend gate (strtd8 kickoff note 3, Zero-Value Precision):
@@ -4909,7 +4944,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                         len(refine_steps), len(design_snapshot),
                     )
 
-            cost_err = _check_cost("refine")
+            cost_err = self._rt_check_cost(run, "refine")
 
             if _HAS_OTEL and not isinstance(_refine_span, _NoOpSpan):
                 _refine_span.set_attribute("phase.cost", refine_cost)
@@ -4926,7 +4961,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             _emit_span = _active_phase_ctx.__enter__()
             root_span.add_event("state.transition", {"phase": "emit"})
 
-            progress("Emit")
+            run.progress("Emit")
             state.current_phase = IngestionPhase.EMIT
 
             _emit_project_root = Path(cfg.project_root) if cfg.project_root else None
@@ -5001,7 +5036,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.current_phase = IngestionPhase.COMPLETED
 
             # Save final state
-            _save_state()
+            self._rt_save_state(run)
 
             return self._finalize_success(
                 state=state,
@@ -5029,7 +5064,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 root_span.record_exception(exc)
                 root_span.set_status(_StatusCode.ERROR, str(exc))
             logger.error("Plan ingestion failed: %s", exc, exc_info=True)
-            return _fail(str(exc))
+            return self._rt_fail(run, str(exc))
         finally:
             if _active_phase_ctx is not None:
                 _active_phase_ctx.__exit__(None, None, None)
