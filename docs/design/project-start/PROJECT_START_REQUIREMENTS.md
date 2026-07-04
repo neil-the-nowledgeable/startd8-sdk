@@ -1,6 +1,6 @@
 # Project-Start Distillation — Requirements
 
-**Version:** 0.3 (Post lessons-learned hardening — ready for CRP)
+**Version:** 0.4 (Design-conversation update — panel reclassified)
 **Date:** 2026-07-04
 **Status:** Draft
 **Lens:** `docs/design-princples/ACCIDENTAL_COMPLEXITY_ANTI_PRINCIPLE.md`
@@ -56,10 +56,71 @@
   not one import (`project/init.py:138-408`). **Impact:** FR-1a's "fold" option
   is a larger lift than a single opt-in flag; noted there.
 - **[CRP steering]** — least-reviewed artifact = this doc (brand-new, no prior
-  external review). Settled / do-not-relitigate for CRP: the three
-  already-made decisions (essential model; 3-verb kernel + brownfield on-ramp;
-  un-bundle Panel + VIPP) and the anti-principle lens. Carried into the focus
-  file for Phase 5.
+  external review). Settled / do-not-relitigate for CRP: the essential model, the
+  3-verb kernel + brownfield on-ramp, and the anti-principle lens. Carried into
+  the focus file for Phase 5. *(Note: "un-bundle Panel" is no longer settled — it
+  was reopened and re-decided in §0.2 below.)*
+
+### 0.2 Design-Conversation Update (v0.4) — the Stakeholder Panel reclassified
+
+> v0.1–v0.3 tagged the Stakeholder Panel a **`[COMPENSATORY]` scope breach** and
+> slated it for un-bundling. A design conversation reversed that. This section
+> records the reversal and its reasoning; FR-13 is rewritten accordingly.
+
+**The error being corrected.** The v0.1–v0.3 analysis collapsed two different
+jobs and swung the bucket rule at both:
+- **Authoring the real value content** (bucket 4 — the SDK correctly shouldn't).
+- **Surfacing high-level capability ideas for the human to judge** — *requirements
+  discovery*, which is **not a bucket at all**. It is the DATA-MODEL *front
+  bookend* CLAUDE.md itself names as the highest-leverage human activity
+  (*"human leverage concentrates at DATA MODEL … the contract bucket-1 derives
+  from"*). The panel feeds that bookend; the bucket rule (a fence around bucket 4)
+  does not reach it. **The bucket-rule breach finding was wrong** — see the
+  corrected §1 callout.
+
+**The distinction that carries it (breadth vs. precision).** The panel's personas
+are strong at *breadth* and structurally weak at *precision*:
+- **Breadth = discovery** (*"you have no funnel KPIs at all — a demo-stage product
+  usually tracks signup and activation"*). Real value; the LLM can do it from a
+  thin brief because it is pattern-level; the human keeps the judgment.
+- **Precision = value-drafting** (*`signup_rate: 8%`*). Fake value; the specific
+  number needs project grounding the persona (brief-only, no product/market
+  context — `persona.py:48`) cannot have. This is the "something an LLM estimated
+  had value" the panel must **not** do.
+
+**Concrete evidence (the 8% example).** `panel recommend` on a blank
+`product_funnel.signup_rate` sends the Product Owner persona a one-line drafting
+prompt (`recommend.py:94-106`) and gets back `TARGET: 8% || WHY: …realistic launch
+baseline…`, persisted as `provenance:"estimate"`. The persona has no way to know
+the real rate — it is industry-generic filler in a confident wrapper. This is the
+ghost; it is dropped (new NR-7).
+
+**"Still needs human ratification" was misread as a weakness — it is the feature.**
+It is the guardrail that keeps the panel on the discovery side of the line: the
+panel brings raw material, the human brings vision/judgment/insight. A discovery
+aid that did *not* require human judgment would be the real scope breach.
+
+**The reclassified model** (governing principle: *meet the user where they are;
+offer tools where needed* — StartDate-style solo projects rarely need this, a
+multi-stakeholder benchmark portal does):
+
+| Function | Status | Cost |
+|----------|--------|------|
+| **ID what needs populating** (coverage) | **Essential — already exists** in the `instantiate` templates (`<...>` placeholders) + `assess` unfilled-field reporting | $0, keep |
+| **Discovery** — persona surfaces *missing dimensions* the templates don't list | **Essential, conditionally offered** by project shape | LLM, breadth |
+| **Shaping range** — persona offers an estimated *range* + reasoning to help the human place the real value | **Optional, honest** — the salvaged sliver of Teian | LLM, envelope-not-point |
+| **Value-drafting** (`8%`) | **Dropped — ghost** (NR-7) | gone |
+
+The three survivors chain: the $0 coverage signal **triggers** the conditional
+discovery offer, discovery **invokes** a persona, who may offer a **shaping range**
+on a specific field. One flow, three honest steps, no fabricated answers. The
+essential act is **identifying a value that needs populating — never the
+population itself**; and that identification is the cheapest thing in the stack,
+already deterministic.
+
+**What did NOT change:** VIPP is still un-bundled (FR-14). Welcome Mat / Red Carpet
+still retire (FR-9–12). Teian's *drafting* dies (NR-7); its *coverage signal*
+survives as the discovery trigger.
 
 ---
 
@@ -99,18 +160,31 @@ what's missing → **validate** readiness → **write** safely at human privileg
 | **Concierge** (`concierge/`) — survey/assess/instantiate/derive-contract | The read+translate+write core; maps 1:1 onto the five transformations | **`[ESSENTIAL]`** | The kernel. Keep, rename by function. |
 | **Welcome Mat** (`kickoff_experience/`, 26 mod) — served web/TUI GUI + per-field capture-write | A *rendering* of `assess` + a read-modify-write-into-YAML seam | **`[COMPENSATORY]`** | Retire (phased). The report is essential; the served app is not. |
 | **Red Carpet** (`red_carpet*.py`) — conductor + advisor + wizard | A second ranked re-presentation of `assess` blockers | **`[COMPENSATORY]`** | Retire. Its own docs: "never a gate; removing it does not change `cascade_offerable`." |
-| **Stakeholder Panel / Kaigi + Teian** (`stakeholder_panel/`, 22 mod) — persona agents answer OMIT + draft blank fields | An LLM subsystem synthesizing input *content* | **`[COMPENSATORY]` + scope breach** | Un-bundle → separate "content review" capability. |
+| **Stakeholder Panel / Kaigi** (`stakeholder_panel/`) — personas surface missing capabilities/dimensions | Requirements *discovery* at the data-model bookend (breadth, human judges) | **`[ESSENTIAL]`, conditionally offered** | Keep as a project-shape-triggered discovery tool (§0.2). |
+| **— Teian value-drafting** (`recommend`) — persona drafts specific blank-field *values* (`8%`) | LLM estimating precision it can't ground | **`[GHOST]`** | Drop (NR-7). Its $0 coverage signal survives as the discovery trigger. |
 | **VIPP** (`vipp/`, 10 mod) — cross-process negotiator/applier | Automates "human applies," across a process boundary, vs. Sapper | **`[COMPENSATORY]`/`[DEFENSIVE]`** | Un-bundle → separate "brownfield migration" capability. |
 
-### Bucket-rule breach (CLAUDE.md)
+### Bucket-rule scope — where it applies, and where it does NOT (corrected)
 
 CLAUDE.md fixes the SDK's LLM-generation scope: bucket 2 (placeholder content) is
 "~zero importance… do not invest in making it good"; bucket 4 (real content) is
-"the USER's job, NOT the SDK's." The **Stakeholder Panel** is a full LLM
-subsystem built to make bucket-2 starters *good* and to synthesize bucket-4
-answers — and it still requires human ratification of everything it produces. It
-targets exactly what the SDK declared out of scope. This is the strongest signal
-the panel does not belong in the project-start kernel.
+"the USER's job, NOT the SDK's." The rule is a fence around **bucket 4**.
+
+An earlier draft (v0.1–v0.3) swung that fence at the Stakeholder Panel and called
+it a scope breach. **That was wrong** (reversed in §0.2). The rule does not reach
+the panel's essential job, because that job is not in any bucket:
+- **`[GHOST]` — Teian value-drafting** *does* violate the rule's spirit: it has the
+  LLM estimate specific value content (`signup_rate: 8%`). Dropped (NR-7).
+- **`[ESSENTIAL]` — discovery** does **not**: surfacing *which capabilities/values
+  a project of this shape typically needs* is **requirements discovery** — the
+  DATA-MODEL front bookend CLAUDE.md names as the *highest-leverage* human
+  activity, feeding bucket 1. The human keeps vision/judgment/insight; the panel
+  only surfaces raw material for that judgment. Fencing this off mis-applies a
+  bucket-4 rule to the front bookend.
+
+The discriminator is **breadth vs. precision** (§0.2): the LLM may surface *what
+might be missing* (breadth, real value); it may not *estimate the specific value*
+(precision it cannot ground).
 
 ---
 
@@ -230,24 +304,45 @@ the panel does not belong in the project-start kernel.
   consumer(s) migrated + no external caller in the deterministic-provider entry
   points. Removal is a later, separate change.
 
-### Un-bundling (out of the project-start story)
+### Discovery (conditionally offered — the reclassified panel)
 
-- **FR-13 — Stakeholder Panel → separate capability (requires cutting a real
-  edge).** The Stakeholder Panel / Kaigi + Teian is removed from the
-  project-start narrative and re-filed as an independent, opt-in "content review /
-  multi-perspective input" capability with its own requirements and justification
-  (which must reconcile with the bucket rule). **Correction:** the v0.1 claim
-  "not referenced by any kernel verb" is currently **false** — `assess`
-  unconditionally imports `stakeholder_panel` and always injects a `stakeholders`
-  domain (`core.py:256,267`), and the "roster ships in a later increment"
-  language is stale (`PANEL_CONSUMABLE=True` now). Un-bundling therefore requires
-  a **code change**: remove the unconditional injection / `_assess_stakeholder_
-  roster` from the kernel, or gate it behind the same opt-in pattern the VIPP
-  seam uses. Update any test asserting the `stakeholders` key. **Preserve the
-  single-source (`core.py:38-41`):** the "which inputs count" domain list is
-  deliberately shared so `assess` and the advisor can't drift — the edge-cut must
-  move ownership of that list *into the kernel*, not merely delete the injection,
-  or it reintroduces the drift the co-location was preventing.
+- **FR-13 — Discovery is a project-shape-triggered tool, not a mandatory step
+  (reclassified in §0.2).** The Stakeholder Panel's *discovery* function — personas
+  surfacing **missing capabilities/dimensions** a project of this shape typically
+  needs — is retained as an **`[ESSENTIAL]`, conditionally-offered** aid at the
+  data-model bookend, **not** un-bundled (reverses v0.1–v0.3). Governing rule:
+  *meet the user where they are; offer tools where needed.*
+  - **Coverage (the trigger) already exists and is $0.** "Which values need
+    populating" is surfaced today by `instantiate` templates (`<...>`
+    placeholders) + `assess` unfilled-field reporting. The essential act is
+    **identifying** the gap, not filling it — and it is already the cheapest thing
+    in the stack. No new subsystem for the coverage core.
+  - **The offer is conditional.** `survey`/`assess` decide *whether to offer*
+    discovery from project-shape signals (number of distinct stakeholder roles,
+    regulatory/domain surface, solo-vs-team, blank-canvas-vs-rich-brownfield).
+    Solo single-user projects (StartDate) get silence; multi-stakeholder projects
+    (benchmark portal) get the offer. Offering costs $0; only accepting spends.
+  - **Discovery output is breadth, human-judged.** A persona surfaces *what might
+    be missing*; the human decides. Every surfaced item is provenance-marked
+    non-authored and requires human ratification — that ratification is the
+    guardrail (§0.2), not a weakness.
+  - **Preserve the single-source (`core.py:38-41`).** The "which inputs count"
+    domain list is deliberately shared so `assess` and any advisor can't drift.
+    Ownership of that list moves **into the kernel**; discovery reads it. The
+    kernel must not hard-import `stakeholder_panel` for its coverage core — the
+    persona/discovery layer loads only when the offer is accepted (SOTTO,
+    FR-15).
+
+- **FR-13a — Shaping ranges, never point values (the "no-8%" rule).** When a
+  persona speaks to a *specific* field value, it may offer an **estimated range +
+  reasoning** to shape the human's answer (e.g. *"early demo funnels typically
+  land 5–15%"*) — it may **not** emit a single point value as a draft (e.g.
+  `signup_rate: 8%`). A range wears its uncertainty on its face and hands the
+  human an envelope to place the real value in; a point value hides its
+  uncertainty and invites blind acceptance. This is the breadth/precision line
+  (§0.2) made enforceable. See NR-7 for the dropped point-value drafter.
+
+### Un-bundling (out of the project-start story)
 
 - **FR-14 — VIPP → separate capability (requires de-coupling `project init`).**
   VIPP is removed from the project-start narrative and re-filed as an independent
@@ -265,9 +360,14 @@ the panel does not belong in the project-start kernel.
     (`vipp_opted_in`), and `maybe_serialize_buffer` writes nothing when absent
     (`vipp_seam.py:11,82,250`). Keep this invariant; assert it per-seam with
     evidence.
-  - **Panel-in-assess — NOT satisfied.** Present package ⇒ populated
-    `stakeholders` block; the try/except only degrades on partial checkout. FR-13
-    must make it genuinely absent-by-default before the invariant holds.
+  - **Panel-in-assess — must become opt-in-loaded.** Today the package's mere
+    presence ⇒ a populated `stakeholders` block (`core.py:256,267`); the
+    try/except only degrades on partial checkout. Under the reclassification
+    (FR-13) the **coverage core is kernel-owned and imports nothing from
+    `stakeholder_panel`**; the persona/discovery layer loads **only when the
+    conditional offer is accepted**. Target invariant: with no discovery accepted,
+    `assess` output is byte-identical to a build that never knew the panel
+    existed — the offer is additive, the acceptance is where cost/effect begin.
   Only assert byte-identical-when-absent **per seam, with evidence** — never as a
   blanket claim.
 
@@ -279,8 +379,13 @@ the panel does not belong in the project-start kernel.
   serve an interactive GUI. Readiness is a CLI report.
 - **NR-2 — No embedded agentic loop for project-start.** The kernel does not run
   an LLM chat/conductor. The user's own agent is the interactive surface.
-- **NR-3 — No synthetic stakeholder content in the kernel.** The kernel does not
-  role-play absent stakeholders or auto-draft "good" content for blank fields.
+- **NR-3 — No *mandatory* stakeholder role-play, no point-value drafting.** The
+  kernel does not force stakeholder role-play on every project and never
+  auto-drafts specific field *values*. *(Nuanced in §0.2: discovery — surfacing
+  which capabilities/values may be missing — IS retained, but only as a
+  project-shape-triggered offer (FR-13), and personas may offer shaping *ranges*
+  not point values (FR-13a). The prohibition is on precision the LLM can't
+  ground, not on breadth-level discovery.)*
 - **NR-4 — No cross-process applier in the kernel.** No proposal-serialization
   inbox, no auto-adjudication against ground truth, as part of project-start.
 - **NR-5 — Not deleting the un-bundled/retired code in this change.** This is a
@@ -288,6 +393,13 @@ the panel does not belong in the project-start kernel.
 - **NR-6 — Not re-authoring the deterministic $0 cascade.** The kernel produces
   inputs *for* `generate backend/scaffold/views/frontend`; it does not change how
   the cascade consumes them.
+- **NR-7 — No point-value field drafting (Teian dropped).** The proactive
+  value-drafter (`panel recommend` → `Recommendation` with `provenance:"estimate"`,
+  `recommend.py`) is removed. Evidence it is the ghost: on a blank
+  `product_funnel.signup_rate` it emits `8%` from a persona that sees only its own
+  brief — industry-generic filler pretending to project knowledge (§0.2). Its one
+  worth-keeping byproduct — the **$0 coverage signal** ("these fields are blank")
+  — survives as the FR-13 discovery *trigger*, not as a drafter.
 
 ---
 
@@ -310,6 +422,20 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
   Keeping it there preserves one surface but blurs the "greenfield kernel = 3
   verbs" story; moving it fully to the brownfield capability sharpens the story
   but splits the surface. Decide during CRP.
+- **OQ-10 — The discovery-offer trigger (FR-13).** What exact, cheap signals make
+  `survey`/`assess` offer discovery? Candidates: count of distinct stakeholder
+  roles in the roster, count of high-value blank fields, presence of a
+  regulatory/compliance domain, solo-vs-team, greenfield-vs-brownfield. Must be
+  $0/deterministic (the trigger can't itself spend). Needs a concrete rule + a
+  default-off bias so a false trigger is a quiet, ignorable one-line offer, never
+  a gate. Decide during CRP.
+- **OQ-11 — Where does the retained discovery capability live?** The persona/agent
+  machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
+  *conditionally-offered discovery* a thin caller the kernel owns that invokes a
+  slimmed panel, or does the panel package stay whole and the kernel just gates
+  the call? Reconcile "keep discovery" with the anti-principle: rescuing the
+  *purpose* did not bless the current module count — a distillation pass on the
+  discovery implementation is still owed.
 
 ---
 
@@ -326,3 +452,14 @@ audit (all `file:line` verified against source), single-source vocabulary
 ownership (FR-13 must preserve the "which inputs count" list), prune phantom
 scope (`derive` demoted), depth-of-coupling check (`project init` VIPP-coupled at
 ~7 sites), CRP steering (focus file assembled). Ready for CRP review.*
+
+*v0.4 — Design-conversation update. **Reversed** the Stakeholder Panel un-bundling:
+its *discovery* function is reclassified `[ESSENTIAL]`, conditionally offered
+(FR-13) — requirements discovery is the DATA-MODEL front bookend, not a bucket-4
+breach; the earlier bucket-rule finding was wrong (§1 corrected). Split the panel:
+discovery kept (breadth), point-value drafting dropped as the ghost (NR-7, the
+"8%" example). Added FR-13a (shaping ranges, never point values), nuanced NR-3,
+reframed the panel half of FR-15 (opt-in-loaded, kernel-owned coverage core),
+added OQ-10 (offer trigger) + OQ-11 (discovery still owes a distillation pass).
+Governing rule: meet the user where they are; offer tools where needed. VIPP
+un-bundling and Welcome Mat / Red Carpet retirement unchanged.*
