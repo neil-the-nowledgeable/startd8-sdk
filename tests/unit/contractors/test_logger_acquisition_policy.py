@@ -34,6 +34,9 @@ ALLOWED_STRING_LOGGER_NAMES: dict[str, set[str]] = {
     "src/startd8/contractors/context_seed/phases/scaffold.py": {
         "startd8.contractors.context_seed_handlers",
     },
+    "src/startd8/contractors/context_seed/phases/finalize.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
 }
 
 

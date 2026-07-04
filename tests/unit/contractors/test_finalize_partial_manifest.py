@@ -79,7 +79,7 @@ class TestPartialManifestOnCrash:
             return original_write(path, data, **kwargs)
 
         with patch(
-            "startd8.contractors.context_seed.core.atomic_write_json",
+            "startd8.contractors.context_seed.phases.finalize.atomic_write_json",
             side_effect=failing_write,
         ):
             result = finalize_handler.execute(
