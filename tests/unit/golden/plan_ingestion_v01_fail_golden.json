@@ -1,0 +1,175 @@
+{
+  ".startd8/plan_ingestion_state.json": {
+    "complexity_composite": 24,
+    "complexity_route": "prime",
+    "context_seed_path": null,
+    "current_phase": "failed",
+    "error": "Translation quality gate failed: requirements_coverage=0.0%, conflict_count=2. Remedies: improve plan\u2194requirements mappings, lower the thresholds (min_requirements_coverage / min_artifact_mapping_coverage / max_contract_conflicts) with documented justification, or set low_quality_policy to 'bias_artisan' (advisory-only; valid values: bias_artisan, fail).",
+    "parsed_plan_feature_count": 3,
+    "parsed_plan_title": "Deterministic Parse Test Plan",
+    "plan_document_path": null,
+    "review_config_path": null,
+    "route": "prime",
+    "total_cost": 0.0
+  },
+  "plan-ingestion-failure-forensics.json": {
+    "complexity": {
+      "composite": 24,
+      "dimensions": {
+        "ambiguity": 45,
+        "api_surface": 24,
+        "call_graph_impact": 0,
+        "cross_file_deps": 10,
+        "domain_novelty": 40,
+        "feature_count": 21,
+        "integration_depth": 10,
+        "test_complexity": 18
+      },
+      "reasoning": "Heuristic fallback complexity used after assess failure",
+      "route": "prime"
+    },
+    "error": "Translation quality gate failed: requirements_coverage=0.0%, conflict_count=2. Remedies: improve plan\u2194requirements mappings, lower the thresholds (min_requirements_coverage / min_artifact_mapping_coverage / max_contract_conflicts) with documented justification, or set low_quality_policy to 'bias_artisan' (advisory-only; valid values: bias_artisan, fail).",
+    "failed_at": "<VOLATILE>",
+    "overall_success": false,
+    "parse": {
+      "dependency_edges": 1,
+      "deterministic": true,
+      "feature_count": 3,
+      "feature_ids": [
+        "F-001",
+        "F-002",
+        "F-003"
+      ],
+      "heuristic_fallback": false,
+      "llm_parse_error": null,
+      "mentioned_files_count": 3
+    },
+    "parsed_plan": {
+      "approach": "",
+      "dependency_graph": {
+        "F-002": [
+          "F-001"
+        ]
+      },
+      "design_snapshot": "",
+      "features": [
+        {
+          "affected_callers": [],
+          "api_signatures": [],
+          "artifact_types_addressed": [],
+          "dependencies": [],
+          "description": "alpha module \u2014 requirements: FR-1",
+          "design_doc_sections": [],
+          "estimated_loc": 50,
+          "feature_id": "F-001",
+          "high_impact": false,
+          "labels": [],
+          "name": "alpha module",
+          "negative_scope": [],
+          "protocol": "",
+          "runtime_dependencies": [],
+          "target_files": [
+            "src/alpha.py"
+          ],
+          "targets_dead_code": false
+        },
+        {
+          "affected_callers": [],
+          "api_signatures": [],
+          "artifact_types_addressed": [],
+          "dependencies": [
+            "F-001"
+          ],
+          "description": "beta module \u2014 requirements: FR-2",
+          "design_doc_sections": [],
+          "estimated_loc": 60,
+          "feature_id": "F-002",
+          "high_impact": false,
+          "labels": [],
+          "name": "beta module",
+          "negative_scope": [],
+          "protocol": "",
+          "runtime_dependencies": [],
+          "target_files": [
+            "src/beta.py"
+          ],
+          "targets_dead_code": false
+        },
+        {
+          "affected_callers": [],
+          "api_signatures": [],
+          "artifact_types_addressed": [],
+          "dependencies": [],
+          "description": "gamma module \u2014 requirements: FR-3",
+          "design_doc_sections": [],
+          "estimated_loc": 70,
+          "feature_id": "F-003",
+          "high_impact": false,
+          "labels": [],
+          "name": "gamma module",
+          "negative_scope": [],
+          "protocol": "",
+          "runtime_dependencies": [],
+          "target_files": [
+            "src/gamma.py"
+          ],
+          "targets_dead_code": false
+        }
+      ],
+      "goals": [],
+      "intent": "",
+      "mentioned_files": [
+        "src/alpha.py",
+        "src/beta.py",
+        "src/gamma.py"
+      ],
+      "scope_boundary": "",
+      "title": "Deterministic Parse Test Plan"
+    },
+    "plan_source": "<OUTDIR>/plan.md",
+    "quality_gate": {
+      "policy": "fail",
+      "reasons": [
+        "requirements_coverage=0.0%",
+        "conflict_count=2"
+      ],
+      "thresholds": {
+        "max_contract_conflicts": 0,
+        "min_artifact_mapping_coverage": 70.0,
+        "min_requirements_coverage": 99.0
+      }
+    },
+    "route": "prime",
+    "translation_quality": {
+      "artifact_mapped": 0,
+      "artifact_mapping_percent": 100.0,
+      "artifact_to_feature": {},
+      "artifact_total": 0,
+      "conflict_count": 2,
+      "requirement_acceptance_anchors": {
+        "REQ-ZZZ-001": [],
+        "REQ-ZZZ-002": []
+      },
+      "requirement_source_references": {
+        "REQ-ZZZ-001": [],
+        "REQ-ZZZ-002": []
+      },
+      "requirement_to_feature": {
+        "REQ-ZZZ-001": [],
+        "REQ-ZZZ-002": []
+      },
+      "requirements_coverage_percent": 0.0,
+      "requirements_mapped": 0,
+      "requirements_pipeline_innate_total": 0,
+      "requirements_project_specific_total": 2,
+      "requirements_total": 2,
+      "unmapped_artifacts": [],
+      "unmapped_requirements": [
+        "REQ-ZZZ-001",
+        "REQ-ZZZ-002"
+      ],
+      "unmet_artifact_count": 0,
+      "unmet_requirement_count": 2
+    }
+  }
+}

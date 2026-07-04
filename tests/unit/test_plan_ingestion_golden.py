@@ -57,6 +57,20 @@ PRESENCE_ONLY = [
     "plan-ingestion-tasks-review.md",
 ]
 
+# --- Failure path (R1-S6): a deterministic quality-gate _fail. The forensics ledger
+# it writes is exactly the cross-phase state Stage 2/4 rethread, and is otherwise
+# uncharacterized. Requirements that no plan feature satisfies + fail policy trip the gate.
+GOLDEN_FAIL = Path(__file__).parent / "golden" / "plan_ingestion_v01_fail_golden.json"
+REQS_UNSATISFIABLE = (
+    "# Reqs\n\n| ID | Requirement |\n|---|---|\n"
+    "| REQ-ZZZ-001 | unmatched one |\n"
+    "| REQ-ZZZ-002 | unmatched two |\n"
+)
+FAIL_SNAPSHOT_FILES = [
+    ".startd8/plan_ingestion_state.json",
+    "plan-ingestion-failure-forensics.json",
+]
+
 # Keys whose values are volatile and must be blanked:
 #  - timestamps / durations
 #  - content hashes (derived from files that embed absolute paths, so machine-dependent;
@@ -101,10 +115,10 @@ def _path_prefixes(*dirs: str) -> list[str]:
     return sorted(seen, key=len, reverse=True)
 
 
-def _snapshot(outdir: Path, repo: str) -> dict:
+def _snapshot(outdir: Path, repo: str, files: list[str] = SNAPSHOT_FILES) -> dict:
     prefixes = _path_prefixes(str(outdir), repo)
     snap: dict = {}
-    for rel in SNAPSHOT_FILES:
+    for rel in files:
         p = outdir / rel
         if not p.exists():
             snap[rel] = "<MISSING>"
@@ -165,3 +179,61 @@ def test_v01_artifacts_match_golden(tmp_path: Path):
     assert set(snap) == set(expected), "artifact SET changed vs golden"
     for rel in sorted(expected):
         assert snap[rel] == expected[rel], f"artifact drifted vs golden: {rel}"
+
+
+def _run_failing_gate(tmp_path: Path):
+    """Trip the translation-quality gate deterministically (zero LLM) → _fail path."""
+    (tmp_path / "plan.md").write_text(V01_PLAN)
+    (tmp_path / "reqs.md").write_text(REQS_UNSATISFIABLE)
+    agent = MagicMock()
+    agent.name, agent.model, agent.max_tokens = "test-agent", "mock-model", 4096
+    agent.generate.side_effect = Exception("LLM should not be needed")
+    with patch(
+        "startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec",
+        return_value=agent,
+    ):
+        result = PlanIngestionWorkflow().run({
+            "plan_path": str(tmp_path / "plan.md"),
+            "requirements_path": str(tmp_path / "reqs.md"),
+            "output_dir": str(tmp_path),
+            "review_rounds": 0,
+            "low_quality_policy": "fail",
+            "min_requirements_coverage": 99.0,
+            "max_contract_conflicts": 0,
+        })
+    return result, agent
+
+
+def test_forced_fail_is_deterministic_and_zero_llm(tmp_path: Path):
+    """The quality-gate _fail path runs deterministically with NO LLM call and writes forensics."""
+    result, agent = _run_failing_gate(tmp_path)
+    assert result.success is False
+    agent.generate.assert_not_called()
+    for rel in FAIL_SNAPSHOT_FILES:
+        assert (tmp_path / rel).exists(), f"expected _fail artifact missing: {rel}"
+
+
+def test_forced_fail_forensics_match_golden(tmp_path: Path):
+    """The _fail-path artifacts (forensics + FAILED state) match the committed golden.
+
+    R1-S6 (CRP): Stage 2/4 rethread the `_forensics` ledger + `_fail`/`_save_state` closures —
+    this pins that path before those stages, closing the gap the success-only golden left.
+    """
+    result, _ = _run_failing_gate(tmp_path)
+    assert result.success is False
+    repo = str(Path(__file__).resolve().parents[2])
+    snap = _snapshot(tmp_path, repo, files=FAIL_SNAPSHOT_FILES)
+
+    if os.environ.get("STARTD8_REGEN_GOLDEN"):
+        GOLDEN_FAIL.parent.mkdir(parents=True, exist_ok=True)
+        GOLDEN_FAIL.write_text(json.dumps(snap, indent=2, sort_keys=True), encoding="utf-8")
+        pytest.skip("regenerated fail golden")
+
+    assert GOLDEN_FAIL.exists(), (
+        "fail golden missing — seed it with STARTD8_REGEN_GOLDEN=1 pytest "
+        "tests/unit/test_plan_ingestion_golden.py"
+    )
+    expected = json.loads(GOLDEN_FAIL.read_text(encoding="utf-8"))
+    assert set(snap) == set(expected), "_fail artifact SET changed vs golden"
+    for rel in sorted(expected):
+        assert snap[rel] == expected[rel], f"_fail artifact drifted vs golden: {rel}"
