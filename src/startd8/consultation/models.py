@@ -92,6 +92,10 @@ class ConsultationSession(BaseModel):
     images: list[SessionImageRef] = Field(default_factory=list)
     roster: list[str] = Field(default_factory=list)
     turns_by_model: dict[str, list[Turn]] = Field(default_factory=dict)
+    # Continuity mode pinned at creation (FR-NC-5a): "native" or "transcript". None on sessions
+    # created before native continuity → treated as "transcript" (never silently switched, so a
+    # model's thread never replays a different history than the model originally saw).
+    continuity_mode: Optional[str] = None
     created_at: str = Field(default_factory=_utcnow_iso)
     updated_at: str = Field(default_factory=_utcnow_iso)
 

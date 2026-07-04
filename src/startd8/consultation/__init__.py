@@ -22,6 +22,7 @@ from .selection import resolve_images, select_from_dir, load_paths
 from .view import comparison_table, comparison_text, render_html
 from .cost import session_cost, turn_cost_usd
 from .presets import PresetStore
+from .continuity import build_messages, reload_image
 
 __all__ = [
     "ConsultationSession",
@@ -47,4 +48,6 @@ __all__ = [
     "turn_cost_usd",
     "PresetStore",
     "SessionBusyError",
+    "build_messages",
+    "reload_image",
 ]

@@ -195,6 +195,7 @@ class GeminiAgent(BaseAgent):
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         images: Optional[list] = None,
+        contents_override: Optional[list] = None,
     ):
         """
         Make the raw API call to Gemini.
@@ -224,9 +225,11 @@ class GeminiAgent(BaseAgent):
             config_kwargs["system_instruction"] = system_prompt
         generation_config = genai_types.GenerateContentConfig(**config_kwargs)
 
-        # FR-MMC-2: mix image parts into contents only when supplied (byte-identical
-        # otherwise). google-genai coerces the inline_data PartDicts into Parts.
-        if images:
+        # FR-NC-2: native multi-turn — a pre-built role-tagged `contents` array wins over
+        # prompt/images (system stays system_instruction, FR-NC-1a). Else FR-MMC-2 single-shot.
+        if contents_override is not None:
+            contents = contents_override
+        elif images:
             from .multimodal import to_gemini_part
             contents = [prompt, *(to_gemini_part(img) for img in images)]
         else:
@@ -242,18 +245,25 @@ class GeminiAgent(BaseAgent):
             )
         )
 
+    def supports_messages(self) -> bool:
+        return True  # FR-NC-2
+
     async def agenerate(
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         images: Optional[list] = None,
+        messages: Optional[list] = None,
     ) -> GenerateResult:
         """
         Generate response using Gemini async API.
 
         ``images`` (optional, FR-MMC-2): list of ``multimodal.ImageInput`` sent as
         Gemini inline-data parts. Omitted/empty ⇒ byte-identical text-only path.
+
+        ``messages`` (optional, FR-NC-2): canonical ``messages.Message`` list rendered to
+        role-tagged Gemini ``contents``; precedence over prompt/images. ``None`` ⇒ single-shot.
 
         If retry_config is set, transient failures (rate limits, server errors)
         will be automatically retried with exponential backoff.
@@ -279,6 +289,11 @@ class GeminiAgent(BaseAgent):
         # Resolve system prompt: call-level overrides instance-level
         effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
 
+        contents_override = None
+        if messages is not None:
+            from .messages import render_gemini
+            contents_override = render_gemini(messages)  # role-tagged (user/model), FR-NC-2
+
         start_time = time.time()
 
         try:
@@ -287,12 +302,12 @@ class GeminiAgent(BaseAgent):
                 make_call = with_retry(self.retry_config)(self._make_api_call)
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
-                    images=images,
+                    images=images, contents_override=contents_override,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
-                    images=images,
+                    images=images, contents_override=contents_override,
                 )
 
         except RetryError as e:

@@ -268,6 +268,15 @@ class BaseAgent(ABC):
         """
         return False
 
+    def supports_messages(self) -> bool:
+        """Whether ``agenerate`` accepts a canonical ``messages=`` list (FR-NC-2).
+
+        Opt-in, default ``False`` — the tool-free multi-turn-text primitive. The consultation engine
+        gates on this: capable agents get native message arrays; others fall back to transcript
+        continuity (FR-NC-9). Distinct from :meth:`supports_tool_use` (which is tool-shaped).
+        """
+        return False
+
     def supports_streaming(self) -> bool:
         """Whether this agent implements ``agenerate_tools_stream`` (FR-S2).
 
@@ -396,6 +405,7 @@ class BaseAgent(ABC):
         pipeline_id: Optional[str] = None,
         job_id: Optional[str] = None,
         images: Optional[list] = None,
+        messages: Optional[list] = None,
     ) -> GenerateResult:
         """
         Execute API call with cost tracking and budget enforcement.
@@ -453,11 +463,15 @@ class BaseAgent(ABC):
                     estimated_cost=estimated_cost
                 )
 
-        # STEP 2: Execute API call (FR-MMC-2: images ride the tracked path so
-        # consultation image-token cost is attributed like any other call). Only pass
-        # images when present, so agents whose agenerate has no images param keep the
-        # exact ``agenerate(prompt)`` call (byte-identical text-only behavior).
-        result = await self.agenerate(prompt, **({"images": images} if images else {}))
+        # STEP 2: Execute API call. images (FR-MMC-2) and messages (FR-NC-4) ride the tracked
+        # path so consultation cost is attributed like any other call. Only pass a kwarg when
+        # present, so agents without that param keep the exact ``agenerate(prompt)`` call.
+        _kw = {}
+        if images:
+            _kw["images"] = images
+        if messages is not None:
+            _kw["messages"] = messages
+        result = await self.agenerate(prompt, **_kw)
         response_text, response_time_ms, token_usage = result
 
         # STEP 3: Post-call cost recording
@@ -582,6 +596,7 @@ class BaseAgent(ABC):
         pipeline_id: Optional[str] = None,
         job_id: Optional[str] = None,
         images: Optional[list] = None,
+        messages: Optional[list] = None,
     ) -> AgentResponse:
         """
         Async generate and create an AgentResponse object
@@ -619,13 +634,17 @@ class BaseAgent(ABC):
                 pipeline_id=pipeline_id,
                 job_id=job_id,
                 images=images,
+                messages=messages,
             )
         else:
-            # Direct call without cost tracking. Only pass images when present so agents
-            # without an images param keep the exact ``agenerate(prompt)`` call.
-            response_text, response_time_ms, token_usage = await self.agenerate(
-                prompt, **({"images": images} if images else {})
-            )
+            # Direct call without cost tracking. Only pass a kwarg when present so agents
+            # without that param keep the exact ``agenerate(prompt)`` call.
+            _kw = {}
+            if images:
+                _kw["images"] = images
+            if messages is not None:
+                _kw["messages"] = messages
+            response_text, response_time_ms, token_usage = await self.agenerate(prompt, **_kw)
 
         response_obj = AgentResponse(
             id=response_id,

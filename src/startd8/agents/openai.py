@@ -58,6 +58,17 @@ def _build_user_content(prompt: str, images: Optional[list]):
     return parts
 
 
+def _build_native_messages(system_prompt: Optional[str], canonical_messages: list) -> list:
+    """OpenAI native message array from canonical messages + system routing (FR-NC-1a/2)."""
+    from .messages import render_openai_turns
+
+    out = []
+    if system_prompt is not None:
+        out.append({"role": "system", "content": system_prompt})  # OpenAI's system sink = a message
+    out.extend(render_openai_turns(canonical_messages))
+    return out
+
+
 def _build_chat_kwargs(
     model: str,
     messages: list,
@@ -206,31 +217,22 @@ class GPT4Agent(BaseAgent):
         temperature: Optional[float] = None,
         stop: Optional[list] = None,
         images: Optional[list] = None,
+        native_messages: Optional[list] = None,
     ):
         """
         Make the raw API call to OpenAI.
 
-        This is separated from agenerate to allow retry logic to wrap it.
-        Raises the raw API exceptions for retry handling.
-
-        Args:
-            prompt: The user prompt text
-            system_prompt: Optional system prompt. If provided, prepended as a
-                ``{"role": "system", ...}`` message.
-            max_tokens: Optional per-call max_tokens override. When provided,
-                takes precedence over the instance-level ``self.max_tokens``.
-            temperature: Optional sampling temperature override. When provided,
-                passed to the API call. If None, the API default is used.
-            stop: Optional list of stop sequences. When provided, the API will
-                stop generating when any of these sequences is encountered.
-            images: Optional list of ``multimodal.ImageInput`` (FR-MMC-2). When present
-                the user message becomes a content-parts list (text + ``image_url``
-                parts); when absent the payload is byte-identical to the text-only path.
+        ``native_messages`` (FR-NC-2): a pre-built OpenAI messages array (already including any
+        system message). When given it is used **directly** and ``prompt``/``images`` are ignored;
+        when ``None`` the single-shot path is byte-identical to before.
         """
-        messages = []
-        if system_prompt is not None:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": _build_user_content(prompt, images)})
+        if native_messages is not None:
+            messages = native_messages
+        else:
+            messages = []
+            if system_prompt is not None:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": _build_user_content(prompt, images)})
 
         token_limit = max_tokens if max_tokens is not None else self.max_tokens
         # GPT4Agent always targets the real OpenAI endpoint → enforce next-gen params.
@@ -238,6 +240,9 @@ class GPT4Agent(BaseAgent):
             self.model, messages, token_limit, temperature, stop, enforce_next_gen=True
         )
         return await self.async_client.chat.completions.create(**kwargs)
+
+    def supports_messages(self) -> bool:
+        return True  # FR-NC-2
 
     async def agenerate(
         self,
@@ -247,12 +252,16 @@ class GPT4Agent(BaseAgent):
         temperature: Optional[float] = None,
         stop: Optional[list] = None,
         images: Optional[list] = None,
+        messages: Optional[list] = None,
     ) -> GenerateResult:
         """
-        Generate response using GPT-4 async API.
+        Generate response using GPT-4 async API. (`supports_messages()` → True — FR-NC-2.)
 
         ``images`` (optional, FR-MMC-2): list of ``multimodal.ImageInput`` sent as
         ``image_url`` content parts. Omitted/empty ⇒ byte-identical text-only path.
+
+        ``messages`` (optional, FR-NC-2): canonical ``messages.Message`` list for native
+        multi-turn continuity; precedence over ``prompt``/``images``. ``None`` ⇒ single-shot.
 
         If retry_config is set, transient failures (rate limits, server errors)
         will be automatically retried with exponential backoff.
@@ -281,6 +290,8 @@ class GPT4Agent(BaseAgent):
         # Resolve system prompt: call-level overrides instance-level
         effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
 
+        native = _build_native_messages(effective_system_prompt, messages) if messages is not None else None
+
         start_time = time.time()
 
         try:
@@ -290,13 +301,13 @@ class GPT4Agent(BaseAgent):
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
-                    stop=stop, images=images,
+                    stop=stop, images=images, native_messages=native,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
-                    stop=stop, images=images,
+                    stop=stop, images=images, native_messages=native,
                 )
 
         except RetryError as e:
@@ -896,6 +907,7 @@ class OpenAICompatibleAgent(BaseAgent):
         temperature: Optional[float] = None,
         stop: Optional[list] = None,
         images: Optional[list] = None,
+        native_messages: Optional[list] = None,
     ):
         """
         Make the raw API call to the OpenAI-compatible endpoint.
@@ -915,11 +927,15 @@ class OpenAICompatibleAgent(BaseAgent):
                 stop generating when any of these sequences is encountered.
             images: Optional list of ``multimodal.ImageInput`` (FR-MMC-2). Rendered as
                 ``image_url`` content parts; absent ⇒ byte-identical text-only payload.
+            native_messages: Optional pre-built OpenAI messages array (FR-NC-2); used directly.
         """
-        messages = []
-        if system_prompt is not None:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": _build_user_content(prompt, images)})
+        if native_messages is not None:
+            messages = native_messages
+        else:
+            messages = []
+            if system_prompt is not None:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": _build_user_content(prompt, images)})
 
         token_limit = max_tokens if max_tokens is not None else self.max_tokens
         # Only enforce next-gen params against the real OpenAI endpoint (M3).
@@ -929,6 +945,9 @@ class OpenAICompatibleAgent(BaseAgent):
         )
         return await self.async_client.chat.completions.create(**kwargs)
 
+    def supports_messages(self) -> bool:
+        return True  # FR-NC-2
+
     async def agenerate(
         self,
         prompt: str,
@@ -937,9 +956,10 @@ class OpenAICompatibleAgent(BaseAgent):
         temperature: Optional[float] = None,
         stop: Optional[list] = None,
         images: Optional[list] = None,
+        messages: Optional[list] = None,
     ) -> GenerateResult:
         """
-        Generate response using OpenAI-compatible API (async).
+        Generate response using OpenAI-compatible API (async). (`supports_messages()`→True — FR-NC-2.)
 
         If retry_config is set, transient failures (rate limits, server errors)
         will be automatically retried with exponential backoff.
@@ -967,6 +987,8 @@ class OpenAICompatibleAgent(BaseAgent):
         # Resolve system prompt: call-level overrides instance-level
         effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
 
+        native = _build_native_messages(effective_system_prompt, messages) if messages is not None else None
+
         start_time = time.time()
 
         try:
@@ -976,13 +998,13 @@ class OpenAICompatibleAgent(BaseAgent):
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
-                    stop=stop, images=images,
+                    stop=stop, images=images, native_messages=native,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
-                    stop=stop, images=images,
+                    stop=stop, images=images, native_messages=native,
                 )
 
             end_time = time.time()

@@ -65,8 +65,9 @@ def _tokens(token_usage) -> tuple[Optional[int], Optional[int]]:
 class ConsultationEngine:
     """Runs the initial fan-out and follow-up turns for a consultation session."""
 
-    def __init__(self, store: ConsultationStore) -> None:
+    def __init__(self, store: ConsultationStore, *, resend_images: bool = True) -> None:
         self.store = store
+        self.resend_images = resend_images  # OQ-2: re-send prior images by default
 
     # ── public API ───────────────────────────────────────────────────────────
     async def start(
@@ -79,11 +80,15 @@ class ConsultationEngine:
         images = images or []
         session_id = new_session_id()
         self.store.create_session_dir(session_id)  # exclusive; fail-loud on collision
+        # FR-NC-5a: pin continuity mode at creation. "native" if any roster model supports the
+        # message array; else "transcript". A session never switches modes later.
+        mode = "native" if any(a.supports_messages() for a in roster.values()) else "transcript"
         session = ConsultationSession(
             id=session_id,
             prompt=prompt,
             images=[SessionImageRef.from_ref(i.to_ref()) for i in images],
             roster=list(roster.keys()),
+            continuity_mode=mode,
         )
         await self._fan_out(session, roster, prompt, images, targets=list(roster.keys()))
         return session
@@ -177,15 +182,26 @@ class ConsultationEngine:
             )
             return
 
-        # Build the effective prompt from prior *valid* turns (R1-S8) + this prompt.
-        effective_prompt = self._render_history(session, model_id) + prompt
+        # FR-NC-5a: use native messages iff this session is pinned native AND the agent supports
+        # them (per-model consistent — a model's thread never mixes modes). Else transcript.
+        use_native = session.continuity_mode == "native" and agent.supports_messages()
+
+        if use_native:
+            from .continuity import build_messages
+            native_messages = build_messages(
+                session, model_id, prompt, images, resend_images=self.resend_images
+            )
+            call_kwargs = {"prompt": prompt, "messages": native_messages}
+        else:
+            # Transcript prefix from prior valid turns (R1-S8), built from the turns' own fields.
+            call_kwargs = {"prompt": self._render_history(session, model_id) + prompt, "images": images or None}
+
         turns.append(Turn(role=TurnRole.user, text=prompt, images=img_refs))
 
         try:
             response = await agent.acreate_response(
                 prompt_id=f"{session.id}:{model_id}:{len(turns)}",
-                prompt=effective_prompt,
-                images=images or None,
+                **call_kwargs,
             )
             in_tok, out_tok = _tokens(getattr(response, "token_usage", None))
             from .cost import turn_cost_usd
