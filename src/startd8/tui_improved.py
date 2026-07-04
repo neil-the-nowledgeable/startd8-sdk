@@ -46,6 +46,7 @@ from .tui.mixin_capdevpipe import CapDevPipeMixin
 from .tui.mixin_polish import PolishMixin
 from .tui.mixin_prompts_stats import PromptsStatsMixin
 from .tui.mixin_iterative_workflow import IterativeWorkflowMixin
+from .tui.mixin_consultation import ConsultationMixin
 from .tui.mixin_enhancement_chain import EnhancementChainMixin
 from .tui.mixin_readiness_review import ReadinessReviewMixin
 from .tui.mixin_diagnostics import DiagnosticsMixin
@@ -96,6 +97,7 @@ class ImprovedTUI(
     PolishMixin,
     PromptsStatsMixin,
     IterativeWorkflowMixin,
+    ConsultationMixin,
     EnhancementChainMixin,
     ReadinessReviewMixin,
     DiagnosticsMixin,
@@ -259,6 +261,7 @@ class ImprovedTUI(
         choices.append("🔍 Critical Review Workflow (Multi-Agent Analysis)")
         choices.append("🏛️ Architectural Review Log Workflow (Append-Only Review)")
         choices.append("🔄 Iterative Dev Workflow (Dev → Review → Fix)")
+        choices.append("🗣️  Multi-Model Consultation (Prompt + Images → N Models)")
         choices.append("📥 Job Queue")
         
         if self.current_prompt:
@@ -449,6 +452,8 @@ class ImprovedTUI(
                 self.arc_review_workflow()
             elif "Iterative" in choice:
                 self.iterative_workflow_menu()
+            elif "Multi-Model Consultation" in choice:
+                self.consultation_menu()
             elif "Job Queue" in choice:
                 self.job_queue_menu()
             elif "Test All Agents Readiness" in choice:

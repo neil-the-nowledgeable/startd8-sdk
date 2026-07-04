@@ -194,6 +194,7 @@ class GeminiAgent(BaseAgent):
         prompt: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        images: Optional[list] = None,
     ):
         """
         Make the raw API call to Gemini.
@@ -207,6 +208,9 @@ class GeminiAgent(BaseAgent):
                 ``system_instruction`` in the GenerateContentConfig.
             max_tokens: Optional per-call max_tokens override. When provided,
                 takes precedence over the instance-level ``self.max_tokens``.
+            images: Optional list of ``multimodal.ImageInput`` (FR-MMC-2). When present,
+                ``contents`` becomes ``[prompt, <inline_data part>...]``; when absent it
+                stays the bare ``prompt`` string (byte-identical text-only payload).
         """
         # google.genai Client API - run in executor for async compatibility
         # Create generation config
@@ -220,12 +224,20 @@ class GeminiAgent(BaseAgent):
             config_kwargs["system_instruction"] = system_prompt
         generation_config = genai_types.GenerateContentConfig(**config_kwargs)
 
+        # FR-MMC-2: mix image parts into contents only when supplied (byte-identical
+        # otherwise). google-genai coerces the inline_data PartDicts into Parts.
+        if images:
+            from .multimodal import to_gemini_part
+            contents = [prompt, *(to_gemini_part(img) for img in images)]
+        else:
+            contents = prompt
+
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             lambda: self.client.models.generate_content(
                 model=self.model_name,
-                contents=prompt,
+                contents=contents,
                 config=generation_config
             )
         )
@@ -235,9 +247,13 @@ class GeminiAgent(BaseAgent):
         prompt: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        images: Optional[list] = None,
     ) -> GenerateResult:
         """
         Generate response using Gemini async API.
+
+        ``images`` (optional, FR-MMC-2): list of ``multimodal.ImageInput`` sent as
+        Gemini inline-data parts. Omitted/empty ⇒ byte-identical text-only path.
 
         If retry_config is set, transient failures (rate limits, server errors)
         will be automatically retried with exponential backoff.
@@ -271,10 +287,12 @@ class GeminiAgent(BaseAgent):
                 make_call = with_retry(self.retry_config)(self._make_api_call)
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    images=images,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    images=images,
                 )
 
         except RetryError as e:
