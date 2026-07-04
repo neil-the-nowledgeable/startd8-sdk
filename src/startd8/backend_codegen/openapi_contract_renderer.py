@@ -17,8 +17,9 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
+from ..frontend_codegen.schema_renderer import schema_sha256
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
+from ..schema_contract.prisma_json_schema import model_names, object_schema
 from .api_overlay_manifest import (
     apply_api_overlay,
     parse_api_overlay,
@@ -30,24 +31,6 @@ from .pydantic_renderer import _PY_SCALAR
 
 OPENAPI_CONTRACT_PATH = "app/openapi_contract.py"
 
-# Prisma scalar → OpenAPI 3.0 JSON Schema fragment (hand-built subset — no runtime model import).
-_OAS_SCALAR: Dict[str, Dict[str, Any]] = {
-    "String": {"type": "string"},
-    "Boolean": {"type": "boolean"},
-    "Int": {"type": "integer"},
-    "BigInt": {"type": "integer"},
-    "Float": {"type": "number"},
-    "Decimal": {"type": "number"},
-    "DateTime": {"type": "string", "format": "date-time"},
-    "Json": {},
-    "Bytes": {"type": "string", "format": "byte"},
-}
-
-
-def _model_names(schema: PrismaSchema, schema_text: str) -> List[str]:
-    composites = composite_type_names(schema_text)
-    return [n for n in schema.models if n not in composites]
-
 
 def _server_set(field: PrismaField) -> bool:
     return any(
@@ -56,35 +39,10 @@ def _server_set(field: PrismaField) -> bool:
     )
 
 
-def _field_schema(field: PrismaField, schema: PrismaSchema) -> Dict[str, Any]:
-    if field.type in schema.enums:
-        base: Dict[str, Any] = {"type": "string", "enum": list(schema.enums[field.type])}
-    else:
-        base = dict(_OAS_SCALAR.get(field.type, {}))
-    if field.is_list:
-        return {"type": "array", "items": base}
-    return base
-
-
-def _object_schema(
-    fields: List[PrismaField], schema: PrismaSchema, *, force_optional: bool = False
-) -> Dict[str, Any]:
-    props: Dict[str, Any] = {}
-    required: List[str] = []
-    for f in fields:
-        props[f.name] = _field_schema(f, schema)
-        if not force_optional and not f.is_optional:
-            required.append(f.name)
-    out: Dict[str, Any] = {"type": "object", "properties": props}
-    if required:
-        out["required"] = required
-    return out
-
-
 def _crud_routes(schema: PrismaSchema, schema_text: str) -> List[Tuple[str, str]]:
     """``(method, path)`` pairs mirroring ``render_routers`` / ``_entity_block``."""
     routes: List[Tuple[str, str]] = []
-    for name in _model_names(schema, schema_text):
+    for name in model_names(schema, schema_text):
         prefix = f"/{name.lower()}/"
         routes.append(("GET", prefix))
         routes.append(("POST", prefix))
@@ -115,7 +73,7 @@ def _conditional_routes(
 ) -> List[Tuple[str, str]]:
     """Manifest-derived routes — empty when the triggering manifest is absent (FR-3 / SOTTO)."""
     routes: List[Tuple[str, str]] = []
-    known = frozenset(_model_names(schema, schema_text))
+    known = frozenset(model_names(schema, schema_text))
 
     if pages_text:
         from .pages_generator import parse_pages
@@ -184,7 +142,7 @@ def _path_item_parameters(
         return _generic_path_parameters(path)
     segments = [s for s in path.split("/") if s and not s.startswith("{")]
     entity = next(
-        (n for n in _model_names(schema, schema_text) if n.lower() == (segments[0] if segments else "")),
+        (n for n in model_names(schema, schema_text) if n.lower() == (segments[0] if segments else "")),
         None,
     )
     pk_type = "string"
@@ -208,20 +166,20 @@ def _build_openapi_spec(
     paths: Dict[str, Any] = {}
     schemas: Dict[str, Any] = {}
 
-    for name in _model_names(schema, schema_text):
+    for name in model_names(schema, schema_text):
         scalars = schema.scalar_fields(name)
         create_fields = [f for f in scalars if not _server_set(f)]
         update_fields = [f for f in scalars if not f.is_id]
-        schemas[f"{name}Create"] = _object_schema(create_fields, schema)
-        schemas[f"{name}Read"] = _object_schema(list(scalars), schema)
-        schemas[f"{name}Update"] = _object_schema(update_fields, schema, force_optional=True)
+        schemas[f"{name}Create"] = object_schema(create_fields, schema)
+        schemas[f"{name}Read"] = object_schema(list(scalars), schema)
+        schemas[f"{name}Update"] = object_schema(update_fields, schema, force_optional=True)
 
     for method, path in routes:
         entry = paths.setdefault(path, {})
         op: Dict[str, Any] = {"responses": {"200": {"description": "OK"}}}
         if method == "POST":
             match = next(
-                (n for n in _model_names(schema, schema_text) if n.lower() == path.strip("/").split("/")[0]),
+                (n for n in model_names(schema, schema_text) if n.lower() == path.strip("/").split("/")[0]),
                 None,
             )
             if match:
@@ -247,7 +205,7 @@ def _build_openapi_spec(
             segments = [s for s in path.split("/") if s and not s.startswith("{")]
             if segments:
                 match = next(
-                    (n for n in _model_names(schema, schema_text) if n.lower() == segments[0]),
+                    (n for n in model_names(schema, schema_text) if n.lower() == segments[0]),
                     None,
                 )
                 if match:
@@ -277,7 +235,7 @@ def _build_openapi_spec(
             op["parameters"] = params
         entry[method.lower()] = op
 
-    names = _model_names(schema, schema_text)
+    names = model_names(schema, schema_text)
     title = names[0] if names else "App"
     return {
         "openapi": "3.0.3",

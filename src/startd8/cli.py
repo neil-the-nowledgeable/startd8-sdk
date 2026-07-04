@@ -38,6 +38,7 @@ from .cli_consult import consult_app
 from .cli_assist import assist_app
 from .cli_nav import nav_app
 from .cli_polish import polish_app
+from .cli_openapi import openapi_app
 from .cli_capdevpipe import capdevpipe_app
 from .cli_fde import fde_app
 from .cli_sapper import sapper_app
@@ -1237,6 +1238,7 @@ app.add_typer(manifest_app, name="manifest")
 # Deterministic frontend code generation (no LLM)
 # ──────────────────────────────────────────────────────────────────────────
 app.add_typer(generate_app, name="generate")
+app.add_typer(openapi_app, name="openapi")
 app.add_typer(consult_app, name="consult")
 
 

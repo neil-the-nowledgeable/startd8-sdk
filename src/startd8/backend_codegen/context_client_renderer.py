@@ -29,7 +29,8 @@ from .openapi_client_renderer import (
     _pinned_spec_methods,
     _prisma_dto_names,
 )
-from .openapi_contract_renderer import _model_names, _project_openapi
+from ..schema_contract.prisma_json_schema import model_names
+from .openapi_contract_renderer import _project_openapi
 
 
 def _class_name(ctx_id: str) -> str:
@@ -140,7 +141,7 @@ def render_context_client(
 
     table_imports: Set[str] = set()
     if not pinned:
-        for n in _model_names(schema, schema_text):
+        for n in model_names(schema, schema_text):
             table_imports.add(n)
             table_imports.add(f"{n}Create")
             table_imports.add(f"{n}Read")
@@ -163,7 +164,7 @@ def render_context_client(
     else:
         blocks = [
             _entity_methods(schema, schema_text, n, use_traced_request=True)
-            for n in _model_names(schema, schema_text)
+            for n in model_names(schema, schema_text)
         ]
         overlay_block = _overlay_client_methods(
             schema, schema_text, spec, use_traced_request=True

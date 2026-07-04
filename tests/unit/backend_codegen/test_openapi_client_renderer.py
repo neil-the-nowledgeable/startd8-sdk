@@ -163,3 +163,74 @@ def test_overlay_inline_only_skips_client_method() -> None:
 
 def test_overlay_client_byte_identical_without_api() -> None:
     assert render_http_client(SCHEMA) == render_http_client(SCHEMA, api_text=None)
+
+
+OVERLAY_RESPONSE_ONLY = """\
+paths:
+  /notes/summary:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteRead'
+"""
+
+
+def test_overlay_client_response_only_ref() -> None:
+    text = render_http_client(SCHEMA, api_text=OVERLAY_RESPONSE_ONLY)
+    assert "def get_notes_summary(" in text
+    assert "-> NoteRead" in text
+
+
+OVERLAY_201 = """\
+paths:
+  /custom/note:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteCreate'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteRead'
+"""
+
+
+def test_overlay_client_accepts_201_response() -> None:
+    text = render_http_client(SCHEMA, api_text=OVERLAY_201)
+    assert "def post_custom_note(" in text
+    assert "-> NoteRead" in text
+
+
+OVERLAY_INT_PARAM = """\
+paths:
+  /widgets/{widget_id}/activate:
+    post:
+      parameters:
+        - in: path
+          name: widget_id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteRead'
+"""
+
+
+def test_overlay_client_integer_path_param() -> None:
+    text = render_http_client(SCHEMA, api_text=OVERLAY_INT_PARAM)
+    assert "def post_widgets_widget_id_activate(self, widget_id: int)" in text

@@ -18,7 +18,8 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import yaml
 
 from ..frontend_codegen.schema_renderer import schema_sha256
-from .openapi_contract_renderer import _crud_routes, _model_names
+from ..schema_contract.prisma_json_schema import model_names
+from .openapi_contract_renderer import _crud_routes
 from .openapi_client_renderer import _prisma_dto_names
 
 _ROUTE_MODES = frozenset({"crud", "all_json"})
@@ -426,7 +427,7 @@ def filter_spec_for_client(
     schemas = spec.get("components", {}).get("schemas", {})
     if routes == "crud":
         keep_schema_names = set()
-        for entity in _model_names(schema, schema_text):
+        for entity in model_names(schema, schema_text):
             keep_schema_names.update(
                 {f"{entity}Create", f"{entity}Read", f"{entity}Update"}
             )

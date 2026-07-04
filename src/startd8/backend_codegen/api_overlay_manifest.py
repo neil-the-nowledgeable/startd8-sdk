@@ -14,13 +14,14 @@ from typing import Any, Dict, List, Set, Tuple
 
 import yaml
 
-from ..frontend_codegen.schema_renderer import composite_type_names
+from ..schema_contract.prisma_json_schema import model_names
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 
 _HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
 _DTO_SUFFIXES = ("Create", "Read", "Update")
 _PATH_PARAM_RE = re.compile(r"\{([^}]+)\}")
 _VALIDATION_ONLY_KEY = "x-startd8-validation-only"
+_SINGLE_SEGMENT_RE = re.compile(r"^/[a-z][a-z0-9_-]*$")
 
 
 class ReconcileError(ValueError):
@@ -33,6 +34,44 @@ class OverlayMergePlan:
 
     additive: Dict[str, Any]
     warnings: List[str] = field(default_factory=list)
+
+
+def normalize_overlay_path(path: str) -> str:
+    """Normalize overlay path keys toward CRUD trailing-slash convention (OQ-7).
+
+    Single-segment collection paths (``/note``) gain a trailing slash (``/note/``).
+    Multi-segment paths and paths with template parameters are unchanged.
+    """
+    if _SINGLE_SEGMENT_RE.match(path):
+        return path + "/"
+    return path
+
+
+def normalize_overlay_paths(
+    paths: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Rewrite overlay path keys; raise on trailing-slash duplicates (OQ-7)."""
+    warnings: List[str] = []
+    normalized: Dict[str, Any] = {}
+    canonical_sources: Dict[str, str] = {}
+
+    for raw_path, path_item in paths.items():
+        if not isinstance(path_item, dict):
+            continue
+        norm_path = normalize_overlay_path(raw_path)
+        prior = canonical_sources.get(norm_path)
+        if prior is not None and prior != raw_path:
+            raise ReconcileError(
+                f"trailing-slash duplicate: {raw_path!r} and {prior!r} "
+                f"both normalize to {norm_path!r}"
+            )
+        canonical_sources.setdefault(norm_path, raw_path)
+        if norm_path in normalized and raw_path != norm_path:
+            raise ReconcileError(
+                f"trailing-slash duplicate: {raw_path!r} collides with {norm_path!r}"
+            )
+        normalized[norm_path] = path_item
+    return normalized, warnings
 
 
 def parse_api_overlay(text: str) -> Dict[str, Any]:
@@ -56,6 +95,7 @@ def parse_api_overlay(text: str) -> Dict[str, Any]:
     schemas = components.setdefault("schemas", {})
     if not isinstance(schemas, dict):
         raise ValueError("api overlay components.schemas must be a mapping")
+    data["paths"], _ = normalize_overlay_paths(data["paths"])
     return data
 
 
@@ -155,8 +195,7 @@ def prepare_overlay_merge(
 
 
 def _model_names(schema: PrismaSchema, schema_text: str) -> List[str]:
-    composites = composite_type_names(schema_text)
-    return [n for n in schema.models if n not in composites]
+    return model_names(schema, schema_text)
 
 
 def _collect_refs(node: Any, out: Set[str]) -> None:

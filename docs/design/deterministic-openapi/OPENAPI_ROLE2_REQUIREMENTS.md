@@ -154,10 +154,11 @@ Role 2 raises the **declarative ceiling** for routes and DTO shapes — not hand
 
 ## 5. Open Questions (remaining)
 
-- **OQ-6:** Exact `api.yaml` authoring template for wireframe/concierge extraction — closed grammar
-  vs freeform OpenAPI subset? *(Lean: freeform subset + validator; add concierge template later.)*
-- **OQ-7:** Trailing-slash normalization policy for overlay paths vs CRUD `/{entity}/` convention.
-  *(Lean: normalize to CRUD convention on ingest; reject mixed duplicates.)*
+- **OQ-6 → Resolved (2026-07-04).** Freeform OpenAPI subset + ``parse_api_overlay`` validator;
+  authoring example at ``examples/api.yaml.example``; concierge closed-grammar template deferred.
+- **OQ-7 → Resolved (2026-07-04).** ``normalize_overlay_path`` / ``normalize_overlay_paths`` on
+  ingest; single-segment collection paths gain trailing slash; mixed ``/note`` + ``/note/`` raises
+  ``ReconcileError``.
 
 ---
 

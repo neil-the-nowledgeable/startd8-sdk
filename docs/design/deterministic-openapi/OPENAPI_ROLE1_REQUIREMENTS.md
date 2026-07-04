@@ -159,9 +159,9 @@ the same Prisma keystone that already drives `render_routers`.
 
 - **OQ-5** Should `render_main` gain an explicit `from .openapi_contract import OPENAPI_SPEC` mount
   hook, or is export-only sufficient for v1? *(Lean: export-only; FastAPI already builds live spec.)*
-- **OQ-6** Exact `components.schemas` shape — mirror Pydantic `model_json_schema()` output vs a
-  simplified hand-built subset? *(Lean: hand-built subset matching CRUD DTO field names; smaller,
-  stable, no runtime import.)*
+- **OQ-6 → Resolved (2026-07-04).** `components.schemas` uses the shared `schema_contract` CRUD
+  subset (Create/Read/Update); OpenAPI contract renderer imports `object_schema` / `model_names` —
+  zero duplicate resolver.
 
 ---
 
