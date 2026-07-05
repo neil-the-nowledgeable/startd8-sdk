@@ -733,13 +733,7 @@ def test_bridge_callable_run_all_if_declared():
     fn = getattr(suite, "run_all", None)
     if fn is None:
         return
-    try:
-        fn(_Client())
-    except TypeError:
-        try:
-            fn(_target_call_suite_native_bare)
-        except TypeError:
-            fn()
+    _call_with_optional_adapter(fn, _target_call_suite_native_bare)
 '''
 
 

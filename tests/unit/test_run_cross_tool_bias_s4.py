@@ -194,6 +194,13 @@ def test_preflight_accepts_v2_bridge_contract_aliases(tmp_path: Path) -> None:
     assert not any(error.startswith("S4 suite bridge contract invalid:") for error in result["errors"])
 
 
+def test_bridge_run_all_uses_callable_adapter_seam() -> None:
+    source = s4.bridge_contract_test_source()
+
+    assert "fn(_Client())" not in source
+    assert "_call_with_optional_adapter(fn, _target_call_suite_native_bare)" in source
+
+
 def test_preflight_blocks_when_suite_author_row_is_rejected(tmp_path: Path) -> None:
     store, gate, mutants, pre_registration = _accepted_s4_store(
         tmp_path, ledger_row={"status": "rejected_with_reason"}
