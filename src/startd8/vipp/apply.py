@@ -30,17 +30,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Optional
 
+from ..fde.ratification import RatificationError, assert_ratifiable
 from ..kickoff_experience.proposals import ProposedAction, apply_proposal
 from ..kickoff_experience.vipp_seam import read_inbox, shred_inbox
 from ..logging_config import get_logger
 from . import context
 from .assistant import DISPOSITIONS_JSON
-from .models import Decision, ProposalEnvelope, VippDisposition, VippReport
+from .models import Decision, ProposalEnvelope, VippDisposition, VippReport, oneline
 
 logger = get_logger(__name__)
 
 # (action, disposition) -> approve? The CLI renders action.summary() / capture preview here (FR-16).
 ConfirmFn = Callable[[ProposedAction, VippDisposition], bool]
+
+# FR-GE-14 / FR-RW-2: the human ``confirm()`` IS the ratification act. This sentinel is the
+# non-empty token handed to ``assert_ratifiable`` once (and only once) the human has confirmed —
+# there is exactly one human content gate (NR-4), so a synthetic claim is ratified by that same
+# confirmation, never by a second prompt.
+_RATIFY_TOKEN = "vipp:human-confirm"
 
 
 @dataclass
@@ -143,7 +150,29 @@ def apply_dispositions(
             continue
 
         action = _reconstruct(enveloped, disp)
-        if not confirm(action, disp):  # FR-16 sole content gate — no write without it
+        confirmed = confirm(
+            action, disp
+        )  # FR-16 sole content gate — no write without it
+
+        # FR-GE-14 / FR-RW-1..3: a synthetic (panel-authored) claim may only cross into the
+        # project's load-bearing store with an explicit human ratification — and the confirm()
+        # above IS that ratification (FR-RW-2). Gate every claim; a synthetic one reaching here
+        # unconfirmed (token absent) is refused as "unratified", not silently written. Non-synthetic
+        # claims pass untouched, so all of today's oracle-sourced dispositions apply byte-identically
+        # (FR-RW-4). RatificationError is caught here, never propagated (don't crash the loop).
+        token = _RATIFY_TOKEN if confirmed else None
+        try:
+            for claim in disp.claims:
+                assert_ratifiable(claim, ratification_token=token)
+        except RatificationError as exc:
+            rec.update(code="unratified", ok=False, detail=oneline(str(exc)))
+            result.outcomes.append(rec)
+            consumed_all = (
+                False  # leave pending; a later confirmed (ratifying) run applies it
+            )
+            continue
+
+        if not confirmed:
             rec.update(code="unconfirmed", ok=False)
             result.outcomes.append(rec)
             consumed_all = False  # human declined this round → leave pending for resume

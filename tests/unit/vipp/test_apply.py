@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 
+from startd8.fde.models import ClaimLabel, LabeledClaim
 from startd8.kickoff_experience import vipp_seam as seam
 from startd8.kickoff_experience.capture import CaptureCode
 from startd8.kickoff_experience.concierge_apply import ConciergeWriteCode
@@ -298,3 +299,120 @@ def test_stale_seq_is_refused(tmp_path):
     assert res.stale is True
     assert "re-negotiate" in res.refused_reason
     assert res.wrote == 0
+
+
+# --- FR-GE-14 / FR-RW: synthetic claims are ratification-gated on the write path -------------------
+
+
+def _synthetic_claim(text="ship by Q3", role_id="product-owner") -> LabeledClaim:
+    """A panel-authored (synthetic, unratified) claim — qualifier='synthetic', source='panel:…'."""
+    return LabeledClaim(
+        label=ClaimLabel.OBSERVED,
+        text=text,
+        source=f"panel:{role_id}",
+        claim_id=f"panel:{role_id}:sha256:abc",
+        qualifier="synthetic",
+    )
+
+
+def _apply_recorder(calls):
+    def _fake(pr, action, *, config=None):
+        calls.append(action)
+        return ProposalOutcome(action.kind, ConciergeWriteCode.OK, "ok")
+
+    return _fake
+
+
+def test_synthetic_claim_written_when_human_confirms_ratifies(tmp_path, monkeypatch):
+    # FR-RW-1/2: the human confirm() IS the ratification — a confirmed synthetic claim is written.
+    proj = _proj(tmp_path)
+    buf = ProposalBuffer()
+    buf.add(ProposedAction(kind="friction", params={"friction": "x"}, id="syn"))
+    seq = _serialize(proj, buf)
+    _write_dispositions(
+        proj,
+        seq,
+        [
+            VippDisposition(
+                proposal_id="syn",
+                decision=Decision.ACCEPT,
+                envelope_seq=seq,
+                claims=[_synthetic_claim()],
+            )
+        ],
+    )
+    calls = []
+    monkeypatch.setattr("startd8.vipp.apply.apply_proposal", _apply_recorder(calls))
+
+    res = apply_dispositions(proj, confirm=YES)  # confirm ratifies the synthetic claim
+
+    assert len(calls) == 1 and res.wrote == 1  # ratified → written
+    assert res.inbox_shredded is True
+
+
+def test_synthetic_claim_refused_as_unratified_without_confirmation(
+    tmp_path, monkeypatch
+):
+    # FR-RW-1/3 (the FR-GE-14 sentence): an unratified synthetic input is refused, never written.
+    proj = _proj(tmp_path)
+    buf = ProposalBuffer()
+    buf.add(ProposedAction(kind="friction", params={"friction": "x"}, id="syn"))
+    seq = _serialize(proj, buf)
+    _write_dispositions(
+        proj,
+        seq,
+        [
+            VippDisposition(
+                proposal_id="syn",
+                decision=Decision.ACCEPT,
+                envelope_seq=seq,
+                claims=[_synthetic_claim()],
+            )
+        ],
+    )
+    calls = []
+    monkeypatch.setattr("startd8.vipp.apply.apply_proposal", _apply_recorder(calls))
+
+    res = apply_dispositions(proj, confirm=NO)  # no human ratification
+
+    assert calls == []  # the unratified synthetic claim is NOT written
+    out = res.outcomes[0]
+    assert out["code"] == "unratified" and out["ok"] is False
+    assert "surface it for confirmation" in out["detail"]
+    assert res.inbox_shredded is False  # left pending for a later ratified run
+
+
+def test_nonsynthetic_claim_unaffected_by_ratification_gate(tmp_path, monkeypatch):
+    # FR-RW-4 (SOTTO): a disposition carrying only oracle-sourced (non-synthetic) claims applies
+    # byte-identically — the gate is inert for today's flows.
+    proj = _proj(tmp_path)
+    buf = ProposalBuffer()
+    buf.add(ProposedAction(kind="friction", params={"friction": "x"}, id="obs"))
+    seq = _serialize(proj, buf)
+    oracle_claim = LabeledClaim(
+        label=ClaimLabel.OBSERVED,
+        text="t",
+        source="project_knowledge",
+        claim_id="obs",
+        qualifier="",
+    )
+    _write_dispositions(
+        proj,
+        seq,
+        [
+            VippDisposition(
+                proposal_id="obs",
+                decision=Decision.ACCEPT,
+                envelope_seq=seq,
+                claims=[oracle_claim],
+            )
+        ],
+    )
+    calls = []
+    monkeypatch.setattr("startd8.vipp.apply.apply_proposal", _apply_recorder(calls))
+
+    res = apply_dispositions(proj, confirm=YES)
+
+    assert (
+        len(calls) == 1 and res.wrote == 1
+    )  # non-synthetic → gate passes, writes normally
