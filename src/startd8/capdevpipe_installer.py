@@ -8,8 +8,11 @@ and the test suite — can run a full install with no TUI present. The TUI handl
 thin caller that gathers an :class:`InstallConfig` and invokes :meth:`execute`.
 
 Two embedding methods (FR-4): **symlink** (single source of truth with the canonical
-checkout; implemented here in Python) and **copy** (shells out to the canonical
-``install-cap-dev-pipe.sh`` rsync installer, then reconciles).
+checkout) and **copy** (shells out to the canonical ``install-cap-dev-pipe.sh`` rsync
+installer, then reconciles). Both derive their action list from the canonical shared
+planner ``resolve_install_plan`` (FR-A7) — the SDK owns the pipeline.env merge, wrapper,
+language profiles, gitignore and transactional rollback layered on top, but no longer
+re-derives which inventory entries are symlinked vs copied.
 
 Failures raise the SDK exception hierarchy from :mod:`startd8.exceptions` (never bare
 ``OSError``/``ValueError``) so messages structurally name the offending path and a
@@ -25,13 +28,16 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .capdevpipe_embed_manifest import (
     DEFAULT_EMBED_PROFILE,
+    check_embed_namespace,
     resolve_embed_inventory,
+    resolve_embed_plan,
 )
 from .config import get_config_manager
 from .exceptions import ConfigurationError, FileOperationError, ValidationError
@@ -296,32 +302,60 @@ class Manifest:
     profiles: List[str] = field(default_factory=list)
     state: ManifestState = ManifestState.COMPLETE
     manifest_version: int = MANIFEST_VERSION
+    #: Embed profile and the canonical top-level managed-path set (FR-A6). These make the
+    #: manifest readable by canonical ``verify_embed``/``repair_embed`` — which require
+    #: ``embed_profile``/``install_method``/``managed_paths`` and otherwise crash with a raw
+    #: ``KeyError`` on an SDK-written manifest (interop bug C1, spike-validated).
+    embed_profile: str = DEFAULT_EMBED_PROFILE
+    managed_paths: List[str] = field(default_factory=list)
+    #: UTC ISO-8601 install timestamp (canonical field). ``None`` → stamped at ``to_dict`` time.
+    installed_at: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize for ``.install-manifest.json`` (FR-18). Paths are stored as strings."""
+        """Serialize for ``.install-manifest.json`` (FR-18 / FR-A6).
+
+        Emits the **canonical** field set (so ``pipeline verify``/``repair`` accept the file)
+        plus SDK-only bookkeeping (``created_paths``/``profiles``) that canonical
+        ``read_install_manifest`` ignores as unknown keys. ``schema_version`` and
+        ``manifest_version`` are both written at the same value for either reader.
+        """
         return {
+            "schema_version": self.manifest_version,
             "manifest_version": self.manifest_version,
-            "method": self.method.value,
+            "install_method": self.method.value,
             "source_path": str(self.source_path),
+            "embed_profile": self.embed_profile,
+            "installed_at": self.installed_at
+            or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "managed_paths": sorted(set(self.managed_paths)),
+            "state": self.state.value,
+            # SDK-only bookkeeping (rollback / orphan-prune / uninstall). Canonical ignores these.
             "created_paths": [str(p) for p in self.created_paths],
             "profiles": list(self.profiles),
-            "state": self.state.value,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Manifest":
-        """Reconstruct from parsed JSON (FR-18).
+        """Reconstruct from parsed JSON (FR-18), tolerating legacy and canonical shapes (FR-A10).
 
-        Forward-compatible handling of an unknown ``manifest_version`` is added in P2
-        (R3-S5 / task #11); here a missing field falls back to the current default.
+        Reads ``install_method`` (canonical) falling back to legacy ``method``; ``schema_version``
+        falling back to legacy ``manifest_version``. A pre-A6 SDK manifest (``method`` +
+        ``created_paths``, no ``managed_paths``/``embed_profile``) still loads; the next write
+        upgrades it to the canonical superset in place (migration-on-write, OQ-3).
         """
+        method_raw = data.get("install_method", data.get("method"))
         return cls(
-            method=InstallMethod(data["method"]),
+            method=InstallMethod(method_raw),
             source_path=Path(data["source_path"]),
             created_paths=[Path(p) for p in data.get("created_paths", [])],
             profiles=list(data.get("profiles", [])),
             state=ManifestState(data.get("state", ManifestState.COMPLETE.value)),
-            manifest_version=int(data.get("manifest_version", MANIFEST_VERSION)),
+            manifest_version=int(
+                data.get("schema_version", data.get("manifest_version", MANIFEST_VERSION))
+            ),
+            embed_profile=str(data.get("embed_profile", DEFAULT_EMBED_PROFILE)),
+            managed_paths=list(data.get("managed_paths", [])),
+            installed_at=data.get("installed_at"),
         )
 
 
@@ -534,6 +568,9 @@ class CapDevPipeInstaller:
         (tasks #4–#7).
         """
         self._validate_target(cfg)
+        # Namespace guard (FR-A8): refuse to embed a `pipeline` package into a project that
+        # already has a generic `pipeline` module which would shadow it. Delegated to canonical.
+        check_embed_namespace(Path(cfg.source_path), cfg.embed_profile, cfg.target_root)
         actions: List[Action] = []
         if self._effective_method(cfg) is InstallMethod.SYMLINK:
             actions += self.embed_symlink(cfg)
@@ -699,6 +736,7 @@ class CapDevPipeInstaller:
         embed = Path(cfg.target_root) / EMBED_DIR_NAME
         embed_preexisted = embed.is_symlink() or embed.exists()
         embed.mkdir(parents=True, exist_ok=True)
+        managed = self._resolved_managed_paths(cfg.source_path, cfg.embed_profile)
         # Pending marker (R2-S7): written before any action so a crash is detectable.
         self.write_manifest(
             cfg.target_root,
@@ -707,6 +745,8 @@ class CapDevPipeInstaller:
                 source_path=cfg.source_path,
                 profiles=[p.lang for p in cfg.profiles],
                 state=ManifestState.PENDING,
+                embed_profile=cfg.embed_profile,
+                managed_paths=managed,
             ),
         )
         has_subprocess = any(a.type is ActionType.RUN_SUBPROCESS for a in actions)
@@ -768,6 +808,8 @@ class CapDevPipeInstaller:
             created_paths=created_paths,
             profiles=[p.lang for p in cfg.profiles],
             state=ManifestState.COMPLETE,
+            embed_profile=cfg.embed_profile,
+            managed_paths=managed,
         )
         self.write_manifest(cfg.target_root, manifest)
         manifest_path = cfg.target_root / EMBED_DIR_NAME / MANIFEST_FILENAME
@@ -789,6 +831,30 @@ class CapDevPipeInstaller:
                 )
 
     # -- manifest (FR-18) -------------------------------------------------- #
+
+    def _resolved_managed_paths(self, source: Path, profile: str) -> List[str]:
+        """Top-level embed-dir entry names for *profile* — the canonical ``managed_paths`` set.
+
+        Mirrors canonical ``ResolvedEmbedProfile.managed_paths()``: scripts + python aliases +
+        packages + resource trees + copy_files, deduped and sorted. SDK-unique post-step
+        artifacts (project-named wrapper, ``pipeline.env``, ``.gitignore``) are deliberately
+        NOT included — they are tolerated extras under canonical verify, not managed paths
+        (FR-A6, spike §0.2). Best-effort: on any resolution error, returns ``[]`` so the
+        install still records a (canonical-shaped) manifest rather than crashing.
+        """
+        try:
+            inv = resolve_embed_inventory(source, profile)
+        except Exception as exc:  # noqa: BLE001 - manifest managed_paths are best-effort
+            self.logger.warning("capdevpipe managed_paths resolution failed: %s", exc)
+            return []
+        names = [
+            *inv.scripts,
+            *inv.python_aliases,
+            *inv.packages,
+            *inv.resource_trees,
+            *inv.copy_files,
+        ]
+        return sorted(set(names))
 
     def write_manifest(self, target: Path, manifest: Manifest) -> None:
         """Persist the install manifest to ``.cap-dev-pipe/.install-manifest.json`` (FR-18)."""
@@ -850,41 +916,37 @@ class CapDevPipeInstaller:
 
     # -- embedding (FR-5, FR-6) -------------------------------------------- #
 
+    #: Canonical ``EmbedActionType`` value → SDK ``ActionType`` (FR-A7 delegation).
+    _EMBED_ACTION_MAP = {
+        "mkdir": ActionType.MKDIR,
+        "symlink": ActionType.SYMLINK,
+        "copy_file": ActionType.COPY_FILE,
+        "copy_tree": ActionType.COPY_TREE,
+    }
+
     def embed_symlink(self, cfg: InstallConfig) -> List[Action]:
         """Actions to symlink the manifest-resolved embed set with absolute targets (FR-5).
 
-        Inventory is resolved from ``embed-manifest.yaml`` via the shared cap-dev-pipe
-        planner (FR-16). Script and package symlinks use **absolute** ``source`` paths so
-        ``dirname "$0"`` resolves to the embedded dir (NFR-3). Resource trees are copied
-        locally (read from SCRIPT_DIR). ``copy_files`` entries (e.g. the wrapper template)
-        are copied as files when listed in the profile.
+        The *kind → action* mapping (which inventory entries are symlinked vs copied) is
+        delegated to the canonical shared planner ``resolve_install_plan`` (FR-A7): the SDK
+        no longer re-derives it, it translates the canonical plan to its own ``Action`` type.
+        Script and package symlinks keep **absolute** ``source`` paths so ``dirname "$0"``
+        resolves to the embedded dir (NFR-3); resource trees are copied locally.
         """
         source = Path(cfg.source_path).resolve()
-        inventory = resolve_embed_inventory(source, cfg.embed_profile)
         embed = Path(cfg.target_root) / EMBED_DIR_NAME
-        actions: List[Action] = [Action(type=ActionType.MKDIR, target=embed)]
-        for name in (*inventory.scripts, *inventory.python_aliases, *inventory.packages):
-            actions.append(
-                Action(
-                    type=ActionType.SYMLINK, target=embed / name, source=source / name
+        plan = resolve_embed_plan(source, cfg.embed_profile, "symlink", cfg.target_root)
+        actions: List[Action] = []
+        for step in plan:
+            action_type = self._EMBED_ACTION_MAP.get(step.action_type)
+            if action_type is None:  # pragma: no cover - unknown canonical action kind
+                raise ConfigurationError(
+                    f"unsupported canonical embed action '{step.action_type}' — "
+                    "cap-dev-pipe planner is newer than this SDK installer."
                 )
-            )
-        for resource in inventory.resource_trees:
-            actions.append(
-                Action(
-                    type=ActionType.COPY_TREE,
-                    target=embed / resource,
-                    source=source / resource,
-                )
-            )
-        for copy_name in inventory.copy_files:
-            actions.append(
-                Action(
-                    type=ActionType.COPY_FILE,
-                    target=embed / copy_name,
-                    source=source / copy_name,
-                )
-            )
+            target = embed if step.target_rel == "." else embed / step.target_rel
+            src = source / step.source_rel if step.source_rel else None
+            actions.append(Action(type=action_type, target=target, source=src))
         return actions
 
     @staticmethod
@@ -1312,17 +1374,25 @@ class CapDevPipeInstaller:
             exists=True, manifest=manifest, pending=pending, broken_symlinks=broken
         )
 
-    def _prune_orphan_symlinks(self, target: Path, cfg: InstallConfig) -> None:
-        """Remove embed symlinks whose script was deleted upstream so embed == source (R2-F6)."""
+    def orphan_symlink_candidates(self, target: Path, cfg: InstallConfig) -> List[Path]:
+        """Embed symlinks NOT in the current inventory — what ``upgrade`` would prune (read-only).
+
+        Extracted so a ``--dry-run`` can preview the prune set without unlinking anything.
+        """
         embed = Path(target) / EMBED_DIR_NAME
         inventory = resolve_embed_inventory(cfg.source_path, cfg.embed_profile)
         valid = inventory.symlink_top_level_names()
-        for entry in sorted(embed.iterdir()) if embed.is_dir() else []:
-            if entry.is_symlink() and entry.name not in valid:
-                entry.unlink()
-                self.logger.info(
-                    "capdevpipe upgrade: pruned orphaned symlink %s", entry
-                )
+        return [
+            entry
+            for entry in (sorted(embed.iterdir()) if embed.is_dir() else [])
+            if entry.is_symlink() and entry.name not in valid
+        ]
+
+    def _prune_orphan_symlinks(self, target: Path, cfg: InstallConfig) -> None:
+        """Remove embed symlinks whose script was deleted upstream so embed == source (R2-F6)."""
+        for entry in self.orphan_symlink_candidates(target, cfg):
+            entry.unlink()
+            self.logger.info("capdevpipe upgrade: pruned orphaned symlink %s", entry)
 
     def apply_mode(self, target: Path, mode: ReRunMode, cfg: InstallConfig) -> None:
         """Apply a re-run mode with a defined per-file change set (FR-12).

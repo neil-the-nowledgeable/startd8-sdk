@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from .exceptions import ConfigurationError
 
@@ -89,3 +89,69 @@ def resolve_embed_inventory(
         packages=resolved.packages,
         copy_files=resolved.copy_files,
     )
+
+
+class EmbedPlanAction(NamedTuple):
+    """A normalized canonical install action (decouples the SDK from canonical types).
+
+    ``action_type`` is one of ``mkdir | symlink | copy_file | copy_tree``; ``target_rel``
+    is relative to the embed dir (``"."`` = the embed dir itself); ``source_rel`` is
+    relative to the source checkout (empty for mkdir).
+    """
+
+    action_type: str
+    target_rel: str
+    source_rel: str
+
+
+def resolve_embed_plan(
+    source_root: Path, profile: str, method: str, target_root: Path
+) -> tuple[EmbedPlanAction, ...]:
+    """Delegate embed-plan derivation to the canonical shared planner (FR-A7).
+
+    Canonical ``resolve_install_plan`` is the single owner of the *kind → action* mapping
+    (which inventory entries are symlinked vs copied). The SDK translates the returned
+    actions to its own ``Action`` type rather than re-deriving that mapping locally.
+    """
+    em = _import_planner(source_root)
+    try:
+        actions = em.resolve_install_plan(
+            source_root.resolve(), profile, method, Path(target_root)
+        )
+    except em.EmbedManifestError as exc:  # includes InstallPlanError
+        raise ConfigurationError(str(exc)) from exc
+    return tuple(
+        EmbedPlanAction(
+            action_type=str(getattr(a.action_type, "value", a.action_type)),
+            target_rel=a.target_rel,
+            source_rel=a.source_rel,
+        )
+        for a in actions
+    )
+
+
+def check_embed_namespace(source_root: Path, profile: str, target_root: Path) -> None:
+    """Refuse embed when a generic ``pipeline`` module would shadow the embed package (FR-A8).
+
+    Delegates to canonical ``check_embed_namespace`` when available (Increment A+); a checkout
+    predating the guard simply skips the check (no-op) rather than failing the install.
+    """
+    em = _import_planner(source_root)
+    guard = getattr(em, "check_embed_namespace", None)
+    if guard is None:  # pragma: no cover - only on a pre-guard canonical checkout
+        return
+    embed_dir = Path(target_root) / EMBED_DIR_NAME_DEFAULT
+    try:
+        guard(
+            Path(target_root),
+            embed_dir,
+            profile=profile,
+            source_root=source_root.resolve(),
+        )
+    except em.EmbedManifestError as exc:  # InstallPlanError subclasses EmbedManifestError
+        raise ConfigurationError(str(exc)) from exc
+
+
+#: The embed directory name, mirrored here so the namespace guard can build the embed path
+#: without importing the installer (avoids a circular import).
+EMBED_DIR_NAME_DEFAULT = ".cap-dev-pipe"
