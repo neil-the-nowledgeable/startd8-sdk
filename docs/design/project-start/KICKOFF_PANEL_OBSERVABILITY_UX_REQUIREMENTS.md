@@ -1,11 +1,43 @@
 # Kickoff-Panel Observability UX — Requirements
 
-**Version:** 0.1 (Draft)
-**Date:** 2026-07-04
-**Status:** Draft — the viewer over the facilitated-panel transcript.
+**Version:** 0.2 (v1 implemented)
+**Date:** 2026-07-04 (v0.1) · 2026-07-05 (v0.2 build)
+**Status:** **v1 IMPLEMENTED** — static offline HTML + CLI (`startd8 kickoff-panel view/list/show`)
+in `src/startd8/kickoff_view/` (branch `feat/kickoff-panel-viewer`). Deferred to v2: `--watch`
+live-follow (FR-UX-17/18) and the served mode (§3). Both were the reqs' own recommended cut.
 **Tracks:** `KICKOFF_PANEL_FACILITATION_DESIGN.md` §6 (transcript contract) / §8 (non-goals).
 **Precedent:** the `startd8-consult` `consultation/{store,serve,view,_webview_template,facade}`
 package (the user's "show all models + their feedback" reference).
+
+---
+
+## v0.2 — build-time resolutions (grounded in the merged transcript contract)
+
+- **OQ-UX-1 (synthesis structure) → RESOLVED: render prose now.** The on-disk `synthesis` is
+  `{model, text}` with **Markdown-embedded** risk register / tensions / recommendations / open
+  questions — the structured arrays do **not** exist as JSON (verified against
+  `facilitation.py:748` and all three fixtures). So FR-UX-16 (prose fallback) is the **primary**
+  render path; FR-UX-15's structured views stay latent and light up if the orchestrator later
+  emits structure. The one machine-structured signal that *does* exist —
+  `synthesis.open_tension_ids` (anti-smoothing) — is surfaced as a distinct "unresolved tensions"
+  band (FR-UX-15's anti-smoothing intent, satisfied from real data).
+- **OQ-UX-5 (family map) → RESOLVED: derive from the `provider:` prefix** (`model_family()` in
+  `models.py`) — Claude / GPT / Gemini + Mistral/Ollama/DeepSeek, unknown → "Other".
+- **OQ-UX-3 (prompt visibility) → show, collapsed-by-default** in a secondary per-entry
+  disclosure (FR-UX-7) — transparency of *how* the facilitation drove each answer, without
+  crowding the reading surface.
+- **OQ-UX-4 (TUI) / OQ-UX-2 (live-follow) / OQ-UX-6 (laddering sub-entries) → deferred** with the
+  served mode; the read model + payload already tolerate multiple entries per role per round
+  (role-major groups by `role_id`), so laddering needs only a UI sub-grouping later.
+- **Schema-drift hardening (FR-UX-3, reinforced):** older transcripts lack
+  `prep`/`adversaries`/`status`/`halt`/`budget_usd` and the synthesis `*_tension_ids`. Every
+  field is optional with `extra="allow"`; absence renders as an explicit empty/"(pending)" state.
+  Covered by the `thin_schema.json` fixture.
+
+**Shipped surfaces:** `kickoff_view/{models,store,view,_webview_template,facade}.py` +
+`cli_kickoff_panel.py` (mounted in `cli.py`). 28 unit tests; browser-verified (two-axis toggle,
+per-entry disclosure, adversary/grounding/family badges, halted-state banner, XSS breakout
+neutralized to the 2 real `<script>` containers).
 
 ---
 
