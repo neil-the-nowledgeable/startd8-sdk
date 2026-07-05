@@ -61,7 +61,10 @@ _KIND_ORDER = {
 # ── Command constants (CRP R1-S6) — one source of truth for the playbook, reflection, and the
 #    command-drift validation test. No bare `startd8 …` literal should live outside this module. ─────
 CMD_GENERATE_CONTRACT_PROMOTE = "startd8 generate contract --promote"
-CMD_RED_CARPET_AGENT = "startd8 kickoff red-carpet --agent"
+# M0a rename: the metaphor `red-carpet` group moved to `kickoff-legacy`, so the bare
+# `startd8 kickoff red-carpet …` no longer resolves. Point the agentic interview at the surviving
+# legacy path so the command echoed into `kickoff guided` / the advisor playbook actually resolves.
+CMD_RED_CARPET_AGENT = "startd8 kickoff-legacy red-carpet --agent"
 CMD_WIREFRAME = "startd8 wireframe"
 CMD_GENERATE_BACKEND = "startd8 generate backend"
 # FR-MS-8 — the Manifest Suggester is the guided way to fill the "which screens?" gap (pages/views),

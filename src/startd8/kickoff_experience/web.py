@@ -939,7 +939,7 @@ def build_kickoff_app(
     @app.get("/red-carpet.json")
     def red_carpet_json() -> JSONResponse:
         # The Red Carpet staged build map (FR-RCT-2, OQ-4) — read-only, $0; the chat-page stage rail
-        # fetches this. Same payload as `startd8 kickoff red-carpet --json` and the agent's tool.
+        # fetches this. Same payload as `startd8 kickoff-legacy red-carpet --json` and the agent's tool.
         from .red_carpet import build_red_carpet_state
 
         return JSONResponse(build_red_carpet_state(root).to_dict(), headers=dict(_FRAME_DENY_HEADERS))
@@ -1043,7 +1043,7 @@ def build_kickoff_app(
             return HTMLResponse(
                 _page("Concierge — chat",
                       "<p><a href='/concierge'>← Concierge</a></p><h1>Agentic chat not enabled</h1>"
-                      "<p>Start the server with an agent (e.g. <code>startd8 kickoff start --agent "
+                      "<p>Start the server with an agent (e.g. <code>startd8 kickoff-legacy start --agent "
                       "anthropic:claude-sonnet-4-6</code>) to enable the conversational Concierge.</p>",
                       stylesheet),
                 headers=dict(_FRAME_DENY_HEADERS))

@@ -262,7 +262,7 @@ def reflection_text(state: RedCarpetState) -> str:
             cmd = f"  ⟶  {step.command}" if step.command else ""
             lines.append(f"    {step.rank}. {step.title}{cmd}")
     lines.append("  if the kickoff grammar rejected something, you can log friction "
-                 "(`startd8 kickoff concierge`).")
+                 "(`startd8 kickoff-legacy concierge`).")
     return "\n".join(lines)
 
 

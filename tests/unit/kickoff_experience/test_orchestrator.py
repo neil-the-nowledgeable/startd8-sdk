@@ -30,7 +30,8 @@ def test_cost_tag_mapping():
     assert (
         cost_tag("startd8 screens suggest") == "$0+paid"
     )  # $0 baseline, optional --roles
-    assert cost_tag("startd8 kickoff red-carpet --agent") == "paid"
+    # M0a: the paid interview command moved under the demoted `kickoff-legacy` group.
+    assert cost_tag("startd8 kickoff-legacy red-carpet --agent") == "paid"
     assert cost_tag(None) == "gate"  # a command-less step is a human gate
     assert cost_tag("startd8 something-unknown") == "step"
 

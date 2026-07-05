@@ -121,16 +121,16 @@ def headline(state: Any) -> dict:
     # so no jargon can leak in). Any incomplete state → the guided $0 wizard; done → Build.
     if greenfield:
         na_title = "Not started — begin with Your data"
-        cmd = "startd8 kickoff red-carpet --wizard"
+        cmd = "startd8 kickoff-legacy red-carpet --wizard"
     elif gap is not None:
         na_title = f"{'Start with' if gap.key == 'data_model' else 'Add'} {gap.plain_name}"
-        cmd = "startd8 kickoff red-carpet --wizard"
+        cmd = "startd8 kickoff-legacy red-carpet --wizard"
     elif buildable:
         na_title = "Ready to Build"
         cmd = "startd8 generate backend"
     else:
         na_title = "Review remaining gaps"
-        cmd = "startd8 kickoff red-carpet --verbose"
+        cmd = "startd8 kickoff-legacy red-carpet --verbose"
 
     # "% filled," honestly annotated (CRP R1-F3).
     label = "—" if pct is None else f"{pct}% filled"

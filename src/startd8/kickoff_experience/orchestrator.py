@@ -487,7 +487,7 @@ def run_red_carpet_driver(
                 interview(state.next_stage)
             else:
                 emit_line(f"no pre-populated action for `{state.next_stage}` — "
-                          "run `startd8 kickoff red-carpet --agent` to author it.")
+                          "run `startd8 kickoff-legacy red-carpet --agent` to author it.")
                 break
             steps += 1
             continue
@@ -515,7 +515,7 @@ def run_red_carpet_driver(
             emit_line("  (skipped)")
             if stalls[action.stage] >= no_progress_limit:
                 emit_line(f"  stuck on `{action.stage}` — you can log friction "
-                          "(`startd8 kickoff concierge`) or work it manually.")
+                          "(`startd8 kickoff-legacy concierge`) or work it manually.")
                 stalls[action.stage] = 0
         steps += 1
     return steps
