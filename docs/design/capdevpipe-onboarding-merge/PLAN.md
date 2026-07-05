@@ -87,5 +87,17 @@
 ## Sequencing
 A-1 → A-2 (Thread A usable, dead pointer live) → A-3/A-6 (interop, standalone-valuable) → A-4/A-5 (debt/safety) → B-1..B-4 (depends on A-1) → docs → D-1 (optional).
 
+## Implementation status (2026-07-05)
+
+All of Thread A + Thread B **SHIPPED** on branch `feat/capdevpipe-onboarding-merge` (4 commits):
+- **A-1/A-2** (`46c06163`) — `startd8 capdevpipe install` CLI + dead-pointer now live. 13 tests.
+- **A-3/A-6** (`670de5ee`) — manifest canonical-interop + legacy migration. Spike-validated:
+  canonical `verify_embed`/`repair_embed` now pass on SDK installs (was an uncaught KeyError). 5 tests.
+- **A-4/A-5** (`49bb4124`) — symlink-plan delegation to canonical + namespace guard. 5 tests.
+- **B** (`89d540d1`) — `kickoff assess` gated offer (`capdevpipe` block, readiness-gated). 14 tests.
+
+Regression: 769 tests green across capdevpipe + concierge + kickoff_experience. Docs (FR-DOC1/2)
+and **D-1 (optional embedded re-install)** remain — D-1 pending user discussion.
+
 ## Traceability
 FR-A1→A-1 · FR-A2→A-1 · FR-A3→A-1(D4) · FR-A4→A-1 · FR-A5→A-2 · FR-A6→A-3 · FR-A7→A-4 · FR-A8→A-5 · FR-A9→A-1(D5) · FR-A10→A-6 · FR-B1→B-1 · FR-B2→B-2/B-3 · FR-B3→B-2 · FR-B4→B-4 · FR-B5→B-1 · FR-D1→D-1 · FR-DOC1/2→docs.
