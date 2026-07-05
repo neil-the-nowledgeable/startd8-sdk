@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -296,32 +297,60 @@ class Manifest:
     profiles: List[str] = field(default_factory=list)
     state: ManifestState = ManifestState.COMPLETE
     manifest_version: int = MANIFEST_VERSION
+    #: Embed profile and the canonical top-level managed-path set (FR-A6). These make the
+    #: manifest readable by canonical ``verify_embed``/``repair_embed`` — which require
+    #: ``embed_profile``/``install_method``/``managed_paths`` and otherwise crash with a raw
+    #: ``KeyError`` on an SDK-written manifest (interop bug C1, spike-validated).
+    embed_profile: str = DEFAULT_EMBED_PROFILE
+    managed_paths: List[str] = field(default_factory=list)
+    #: UTC ISO-8601 install timestamp (canonical field). ``None`` → stamped at ``to_dict`` time.
+    installed_at: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize for ``.install-manifest.json`` (FR-18). Paths are stored as strings."""
+        """Serialize for ``.install-manifest.json`` (FR-18 / FR-A6).
+
+        Emits the **canonical** field set (so ``pipeline verify``/``repair`` accept the file)
+        plus SDK-only bookkeeping (``created_paths``/``profiles``) that canonical
+        ``read_install_manifest`` ignores as unknown keys. ``schema_version`` and
+        ``manifest_version`` are both written at the same value for either reader.
+        """
         return {
+            "schema_version": self.manifest_version,
             "manifest_version": self.manifest_version,
-            "method": self.method.value,
+            "install_method": self.method.value,
             "source_path": str(self.source_path),
+            "embed_profile": self.embed_profile,
+            "installed_at": self.installed_at
+            or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "managed_paths": sorted(set(self.managed_paths)),
+            "state": self.state.value,
+            # SDK-only bookkeeping (rollback / orphan-prune / uninstall). Canonical ignores these.
             "created_paths": [str(p) for p in self.created_paths],
             "profiles": list(self.profiles),
-            "state": self.state.value,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Manifest":
-        """Reconstruct from parsed JSON (FR-18).
+        """Reconstruct from parsed JSON (FR-18), tolerating legacy and canonical shapes (FR-A10).
 
-        Forward-compatible handling of an unknown ``manifest_version`` is added in P2
-        (R3-S5 / task #11); here a missing field falls back to the current default.
+        Reads ``install_method`` (canonical) falling back to legacy ``method``; ``schema_version``
+        falling back to legacy ``manifest_version``. A pre-A6 SDK manifest (``method`` +
+        ``created_paths``, no ``managed_paths``/``embed_profile``) still loads; the next write
+        upgrades it to the canonical superset in place (migration-on-write, OQ-3).
         """
+        method_raw = data.get("install_method", data.get("method"))
         return cls(
-            method=InstallMethod(data["method"]),
+            method=InstallMethod(method_raw),
             source_path=Path(data["source_path"]),
             created_paths=[Path(p) for p in data.get("created_paths", [])],
             profiles=list(data.get("profiles", [])),
             state=ManifestState(data.get("state", ManifestState.COMPLETE.value)),
-            manifest_version=int(data.get("manifest_version", MANIFEST_VERSION)),
+            manifest_version=int(
+                data.get("schema_version", data.get("manifest_version", MANIFEST_VERSION))
+            ),
+            embed_profile=str(data.get("embed_profile", DEFAULT_EMBED_PROFILE)),
+            managed_paths=list(data.get("managed_paths", [])),
+            installed_at=data.get("installed_at"),
         )
 
 
@@ -699,6 +728,7 @@ class CapDevPipeInstaller:
         embed = Path(cfg.target_root) / EMBED_DIR_NAME
         embed_preexisted = embed.is_symlink() or embed.exists()
         embed.mkdir(parents=True, exist_ok=True)
+        managed = self._resolved_managed_paths(cfg.source_path, cfg.embed_profile)
         # Pending marker (R2-S7): written before any action so a crash is detectable.
         self.write_manifest(
             cfg.target_root,
@@ -707,6 +737,8 @@ class CapDevPipeInstaller:
                 source_path=cfg.source_path,
                 profiles=[p.lang for p in cfg.profiles],
                 state=ManifestState.PENDING,
+                embed_profile=cfg.embed_profile,
+                managed_paths=managed,
             ),
         )
         has_subprocess = any(a.type is ActionType.RUN_SUBPROCESS for a in actions)
@@ -768,6 +800,8 @@ class CapDevPipeInstaller:
             created_paths=created_paths,
             profiles=[p.lang for p in cfg.profiles],
             state=ManifestState.COMPLETE,
+            embed_profile=cfg.embed_profile,
+            managed_paths=managed,
         )
         self.write_manifest(cfg.target_root, manifest)
         manifest_path = cfg.target_root / EMBED_DIR_NAME / MANIFEST_FILENAME
@@ -789,6 +823,30 @@ class CapDevPipeInstaller:
                 )
 
     # -- manifest (FR-18) -------------------------------------------------- #
+
+    def _resolved_managed_paths(self, source: Path, profile: str) -> List[str]:
+        """Top-level embed-dir entry names for *profile* — the canonical ``managed_paths`` set.
+
+        Mirrors canonical ``ResolvedEmbedProfile.managed_paths()``: scripts + python aliases +
+        packages + resource trees + copy_files, deduped and sorted. SDK-unique post-step
+        artifacts (project-named wrapper, ``pipeline.env``, ``.gitignore``) are deliberately
+        NOT included — they are tolerated extras under canonical verify, not managed paths
+        (FR-A6, spike §0.2). Best-effort: on any resolution error, returns ``[]`` so the
+        install still records a (canonical-shaped) manifest rather than crashing.
+        """
+        try:
+            inv = resolve_embed_inventory(source, profile)
+        except Exception as exc:  # noqa: BLE001 - manifest managed_paths are best-effort
+            self.logger.warning("capdevpipe managed_paths resolution failed: %s", exc)
+            return []
+        names = [
+            *inv.scripts,
+            *inv.python_aliases,
+            *inv.packages,
+            *inv.resource_trees,
+            *inv.copy_files,
+        ]
+        return sorted(set(names))
 
     def write_manifest(self, target: Path, manifest: Manifest) -> None:
         """Persist the install manifest to ``.cap-dev-pipe/.install-manifest.json`` (FR-18)."""
