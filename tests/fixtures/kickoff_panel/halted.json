@@ -1,0 +1,30 @@
+{
+  "session_id": "kp-20260705T120000-halt01",
+  "created_at": "2026-07-05T12:00:00+00:00",
+  "project": "demo-halt",
+  "objective": "Ship X in Q3",
+  "strategy": "Land-and-expand",
+  "prep": {
+    "grounded_context": "The repo has **no** existing schema; greenfield.",
+    "key_assumptions": "1. Users want X (HIGH impact, LOW confidence)\n2. Budget approved (HIGH impact, LOW confidence)",
+    "outside_view": "Base rate for greenfield Q3 delivery: ~30%."
+  },
+  "model_assignment": {
+    "pm": "anthropic:claude-opus-4-8",
+    "eng": "openai:gpt-5.5",
+    "adv": "gemini:gemini-3.1-pro-preview"
+  },
+  "adversaries": [
+    "adv"
+  ],
+  "facilitator_model": "anthropic:claude-opus-4-8",
+  "status": "halted",
+  "halt": {
+    "reason": "assumptions_gate",
+    "message": "2 high-impact/low-confidence assumptions \u2014 validate the premise before running the panel."
+  },
+  "budget_usd": 5.0,
+  "rounds": [],
+  "synthesis": null,
+  "cost_total_usd": 0.0
+}
