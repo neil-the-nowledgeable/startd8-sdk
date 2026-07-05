@@ -3952,6 +3952,82 @@ class PlanIngestionWorkflow(WorkflowBase):
                 exc,
             )
 
+    def _run_preflight(
+        self,
+        run: "_IngestionRun",
+        *,
+        root_span,
+        contextcore_export_dir,
+        context_files,
+        output_dir: Path,
+        min_export_coverage,
+        contextcore_yaml,
+        requirements_files,
+    ):
+        """PREFLIGHT phase (Stage 4). Owns its `ingestion.preflight` span via a ``with``
+        (uniformly closes on any exit — R1-S3). Returns
+        (onboarding_metadata, preflight_evidence, requirements_hints_index, requirements_docs,
+        early) where a non-None `early` WorkflowResult means "early-exit — propagate it".
+        The `_rt_fail` early-exits fire *after* the span closes (matching the pre-refactor
+        order: preflight span was explicitly closed before the error check).
+        """
+        with _tracer.start_as_current_span("ingestion.preflight") as _pf_span:
+            root_span.add_event("state.transition", {"phase": "preflight"})
+
+            run.progress("Preflight")
+            preflight_step = StepResult(step_name="preflight", output="Running export contract checks")
+            onboarding_metadata, preflight_evidence, preflight_warnings, preflight_errors = (
+                self._preflight_export_contract(
+                    contextcore_export_dir=contextcore_export_dir,
+                    context_files=context_files,
+                    output_dir=output_dir,
+                    min_export_coverage=min_export_coverage,
+                    contextcore_yaml_path=contextcore_yaml,
+                )
+            )
+            if preflight_warnings:
+                preflight_step.output = (
+                    preflight_step.output
+                    + "; warnings: "
+                    + " | ".join(preflight_warnings[:5])
+                )
+            if preflight_errors:
+                preflight_step.error = " ; ".join(preflight_errors)
+            run.steps.append(preflight_step)
+
+            if _HAS_OTEL and not isinstance(_pf_span, _NoOpSpan):
+                _pf_span.set_attribute("phase.warnings_count", len(preflight_warnings))
+                _pf_span.set_attribute("phase.errors_count", len(preflight_errors))
+
+        if preflight_step.error:
+            return None, None, None, None, self._rt_fail(run, preflight_step.error)
+        requirements_hints_index = _normalize_requirements_hints(onboarding_metadata)
+
+        # Load requirements corpus for routing quality + dual-document refine
+        requirements_docs = _load_requirements_documents(requirements_files, output_dir)
+        if requirements_files and not requirements_docs:
+            return None, None, None, None, self._rt_fail(
+                run,
+                "Requirements files were provided but none could be loaded. "
+                "Check requirements_path/requirements_files paths."
+            )
+        return (onboarding_metadata, preflight_evidence, requirements_hints_index,
+                requirements_docs, None)
+
+    def _discover_contextcore_yaml(self, cfg, output_dir: Path) -> Optional[Path]:
+        """Resolve the .contextcore.yaml path (explicit override, else auto-discover:
+        project_root → output_dir → cwd). Pure lookup; used by PREFLIGHT + MANIFEST. Stage 4."""
+        _raw_cc_yaml = cfg.contextcore_yaml
+        if _raw_cc_yaml is not None:
+            return Path(str(_raw_cc_yaml)).expanduser()
+        candidates = [output_dir / ".contextcore.yaml", Path.cwd() / ".contextcore.yaml"]
+        if cfg.project_root:
+            candidates.insert(0, Path(cfg.project_root) / ".contextcore.yaml")
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
+
     def _validate_entry_capabilities(self, config: Dict[str, Any]) -> Optional[str]:
         """Layer-5 capability validation — returns a blocking-violation error string, or None.
 
@@ -4267,63 +4343,22 @@ class PlanIngestionWorkflow(WorkflowBase):
             requirements_hints_index: Dict[str, Dict[str, Any]] = {}
 
             # --- DISCOVER .contextcore.yaml (needed by both PREFLIGHT and MANIFEST) ---
-            contextcore_yaml: Optional[Path] = None
-            _raw_cc_yaml = cfg.contextcore_yaml
-            if _raw_cc_yaml is not None:
-                contextcore_yaml = Path(str(_raw_cc_yaml)).expanduser()
-            else:
-                # Auto-discover: project_root (most specific), output_dir, cwd
-                candidates = [output_dir / ".contextcore.yaml", Path.cwd() / ".contextcore.yaml"]
-                if cfg.project_root:
-                    candidates.insert(0, Path(cfg.project_root) / ".contextcore.yaml")
-                for candidate in candidates:
-                    if candidate.exists():
-                        contextcore_yaml = candidate
-                        break
+            contextcore_yaml = self._discover_contextcore_yaml(cfg, output_dir)
 
             # --- PREFLIGHT ---
-            _active_phase_ctx = _tracer.start_as_current_span("ingestion.preflight")
-            _pf_span = _active_phase_ctx.__enter__()
-            root_span.add_event("state.transition", {"phase": "preflight"})
-
-            run.progress("Preflight")
-            preflight_step = StepResult(step_name="preflight", output="Running export contract checks")
-            onboarding_metadata, preflight_evidence, preflight_warnings, preflight_errors = (
-                self._preflight_export_contract(
-                    contextcore_export_dir=contextcore_export_dir,
-                    context_files=context_files,
-                    output_dir=output_dir,
-                    min_export_coverage=min_export_coverage,
-                    contextcore_yaml_path=contextcore_yaml,
-                )
+            (onboarding_metadata, preflight_evidence, requirements_hints_index,
+             requirements_docs, _pf_early) = self._run_preflight(
+                run,
+                root_span=root_span,
+                contextcore_export_dir=contextcore_export_dir,
+                context_files=context_files,
+                output_dir=output_dir,
+                min_export_coverage=min_export_coverage,
+                contextcore_yaml=contextcore_yaml,
+                requirements_files=requirements_files,
             )
-            if preflight_warnings:
-                preflight_step.output = (
-                    preflight_step.output
-                    + "; warnings: "
-                    + " | ".join(preflight_warnings[:5])
-                )
-            if preflight_errors:
-                preflight_step.error = " ; ".join(preflight_errors)
-            steps.append(preflight_step)
-
-            if _HAS_OTEL and not isinstance(_pf_span, _NoOpSpan):
-                _pf_span.set_attribute("phase.warnings_count", len(preflight_warnings))
-                _pf_span.set_attribute("phase.errors_count", len(preflight_errors))
-            _active_phase_ctx.__exit__(None, None, None)
-            _active_phase_ctx = None
-
-            if preflight_step.error:
-                return self._rt_fail(run, preflight_step.error)
-            requirements_hints_index = _normalize_requirements_hints(onboarding_metadata)
-
-            # Load requirements corpus for routing quality + dual-document refine
-            requirements_docs = _load_requirements_documents(requirements_files, output_dir)
-            if requirements_files and not requirements_docs:
-                return self._rt_fail(run, 
-                    "Requirements files were provided but none could be loaded. "
-                    "Check requirements_path/requirements_files paths."
-                )
+            if _pf_early is not None:
+                return _pf_early
 
             # --- MANIFEST LOADING (optional) ---
             manifest_context: Dict[str, Any] = {}
