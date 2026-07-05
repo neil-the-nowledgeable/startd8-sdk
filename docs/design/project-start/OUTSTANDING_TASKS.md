@@ -20,21 +20,26 @@ v0.17,PLAN v2.0}`, `GUIDED_EXPERIENCE_{REQUIREMENTS v0.4,PLAN v1.1}`,
 These are honestly marked deferred/partial in the specs (docs↔code agree). Each is a
 real, scoped follow-up if/when the value is wanted.
 
-- **OQ-10 — the conditional-offer trigger for discovery (the big one).** The spec calls
-  this a *hard M3 gate*, but the Deepen phase is currently offered **unconditionally**
-  (a pointer whenever `--deepen`/a session exists). The "solo → silence,
-  multi-stakeholder → offer" project-shape gate does not exist. **Design input from the
-  experiments:** trigger on **domain viewpoint-multiplicity, NOT team size**, and favor
-  **operationally-specific personas** (the ones with a causal relationship to the
-  strategy). Guided routing (`guided_routing.py`) keys only on greenfield-vs-brownfield
-  (FR-GE-3), not this signal. *Refs: FR-13, OQ-10.*
-- **FR-13a — shaping ranges, never point values.** Self-flagged HYPOTHESIS; the
-  roster-discovery value is unproven. No `shaping-range` provenance (FR-8) and no
-  width-floor/degenerate-range check exist. NR-7's point-value prohibition is enforced
-  only by *deletion* of the Teian drafter, not by the data-layer width-floor. **Do:**
-  either prove roster-discovery value (run `panel ask-all` for a real "surface a
-  viewpoint you'd have missed" data point) or shrink the claim to capability-discovery
-  and implement the width-floor only if kept. *Refs: FR-13a, FR-8, NR-7.*
+- **OQ-10 — discovery-offer trigger — ✅ RESOLVED (2026-07-05: ALWAYS OFFER, no
+  trigger).** Decision: discovery is **always offered** as a $0, ignorable one-line
+  option; there is **no** project-shape gate on whether to offer. It may or may not add
+  value on a given project, but it should always be available, and the feature's value
+  will grow over time — so gating it now would suppress a maturing capability. This
+  **withdraws** the "hard M3 gate" / "solo → silence, multi-stakeholder → offer" trigger
+  design: **nothing to build** — the current unconditional offer is the intended state.
+  The project-shape / viewpoint-multiplicity / operational-specificity signals survive
+  only as *optional prioritization of which personas to suggest* once a human accepts,
+  never as a gate. Recorded in `PROJECT_START_REQUIREMENTS.md` (OQ-10 + FR-13 offer
+  bullet). *Refs: FR-13, OQ-10.*
+- **FR-13a — shaping ranges, never point values — ⏸ DEFERRED (2026-07-05).** Not
+  scheduled for build. Remains an untested HYPOTHESIS (across all eight runs no persona
+  ever emitted a shaping range — the behavior it regulates has never manifested), and
+  the danger it guards (blind acceptance of an invented point value) structurally cannot
+  occur today: the point-value drafter is deleted (NR-7) and no producer of shaping
+  values exists. **Revisit only if** a value-shaping producer is introduced OR a targeted
+  ninth run demonstrates a placeable range; the width-floor/degenerate-range check must
+  then be specified before ship. Recorded as DEFERRED in `PROJECT_START_REQUIREMENTS.md`
+  (FR-13a). *Refs: FR-13a, FR-8, NR-7.*
 - **FR-GE-14 — structural ratification gate — ✅ DONE (2026-07-05, `5169d804`).** The
   gate is now **wired** on the write path. `vipp/apply.py:apply_dispositions` calls
   `assert_ratifiable()` on every claim before `apply_proposal`; the human `confirm()` is

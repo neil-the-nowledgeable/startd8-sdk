@@ -522,11 +522,17 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     placeholders) + `assess` unfilled-field reporting. The essential act is
     **identifying** the gap, not filling it — and it is already the cheapest thing
     in the stack. No new subsystem for the coverage core.
-  - **The offer is conditional.** `survey`/`assess` decide *whether to offer*
-    discovery from project-shape signals (number of distinct stakeholder roles,
-    regulatory/domain surface, solo-vs-team, blank-canvas-vs-rich-brownfield).
-    Solo single-user projects (StartDate) get silence; multi-stakeholder projects
-    (benchmark portal) get the offer. Offering costs $0; only accepting spends.
+  - **The offer is unconditional but ignorable (DECISION 2026-07-05 — supersedes
+    "conditional").** Discovery is **always offered** as a $0, one-line, ignorable
+    option — it is *never* gated on project-shape signals. Offering costs $0; only
+    *accepting* spends, and the human always decides whether to engage. Rationale:
+    meet-the-user-where-they-are means making the aid *available* and letting the
+    human judge, not pre-deciding for them; and this feature's value grows over time,
+    so a project-shape gate would suppress a maturing capability for a present-day
+    low-yield reading. This **resolves OQ-10** by rejecting conditionality (the
+    earlier "solo → silence / multi-stakeholder → offer" trigger is withdrawn); the
+    project-shape signal set survives only as *optional prioritization* of *which*
+    personas to suggest, never as a gate on whether to offer at all.
   - **Discovery output is breadth, human-judged.** A persona surfaces *what might
     be missing*; the human decides. Every surfaced item is provenance-marked
     non-authored and requires human ratification — that ratification is the
@@ -570,7 +576,16 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     cross-role derivation), or keep the "competent-generalist grade" claim explicitly
     marked single-strategy-family until that second-domain run exists.
 
-- **FR-13a — Shaping ranges, never point values (the "no-8%" rule).** When a
+- **FR-13a — Shaping ranges, never point values (the "no-8%" rule). DEFERRED —
+  2026-07-05.** Not scheduled for build. It remains an untested HYPOTHESIS (see the
+  evidence note below: across all eight runs no persona ever emitted a shaping range,
+  so the range-*offering* behavior this FR regulates has never manifested), and the
+  danger it guards — blind acceptance of an invented point value — structurally cannot
+  occur today because the point-value drafter is deleted (NR-7) and no producer of
+  shaping values exists. **Revisit only if** a producer of value-shaping personas is
+  introduced OR a targeted ninth run demonstrates a placeable range; at that point the
+  width-floor/degenerate-range check must also be specified before ship. Until then it
+  is a deferred hypothesis, not scoped work. *(Original requirement text retained:)* When a
   persona speaks to a *specific* field value, it may offer an **estimated range +
   reasoning** to shape the human's answer (e.g. *"early demo funnels typically
   land 5–15%"*) — it may **not** emit a single point value as a draft (e.g.
@@ -750,8 +765,19 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
   *Refinement:* `assess`/`survey` should only surface `next_command: kickoff derive`
   when `survey` detected existing Pydantic models (`build_survey` model_files,
   `core.py:120`).
-- **OQ-10 — The discovery-offer trigger (FR-13).** What exact, cheap signals make
-  `survey`/`assess` offer discovery? **Refined by §0.3:** the discriminator is
+- **OQ-10 — The discovery-offer trigger (FR-13). RESOLVED — 2026-07-05: ALWAYS
+  OFFER (no trigger).** Decision: discovery is **always offered** as a $0, ignorable
+  one-line option; there is **no** project-shape gate on *whether* to offer. It may or
+  may not add value on a given project, but it should always be available as an option,
+  and the feature's value will grow over time — so gating it now would suppress a
+  maturing capability. This withdraws the conditional-trigger design below (kept for the
+  record). **What survives:** the project-shape / viewpoint-multiplicity / operational-
+  specificity signals become *optional prioritization of which personas to suggest* once
+  a human accepts — never a gate on the offer. **M3 impact:** the "compute cheap project-
+  shape signals to decide whether to offer" task is **removed**; the current unconditional
+  offer is the intended state. *(Superseded design, retained for provenance:)* ~~What
+  exact, cheap signals make `survey`/`assess` offer discovery? **Refined by §0.3:** the
+  discriminator is
   **domain viewpoint-multiplicity, NOT team size** — all three live apps are
   solo-*operated*, yet only the benchmark portal has many distinct *viewpoints*
   (14, partly adversarial). So key on: an authored roster with N≥threshold
@@ -768,7 +794,8 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
   has failed its own mechanism. **The resolution must be recorded as a concrete,
   testable trigger spec (a resolved OQ-10 entry like OQ-5/OQ-8/OQ-9, or a named spec)
   BEFORE M3 exits** — M3 must not ship with placeholder/undefined trigger logic. Until
-  then this is a hard M3 gate, not a CRP-deferred note.
+  then this is a hard M3 gate, not a CRP-deferred note.~~ *(↑ the above trigger design is
+  withdrawn by the 2026-07-05 "always offer" decision — no trigger ships.)*
 - **OQ-12 — Prove discovery end-to-end. RESOLVED — experiment run 2026-07-04.**
   Ran `panel ask-all` (Haiku, $0.00x) on the benchmark-portal 14-persona roster,
   one gap-elicitation question, judged against the portal's schema + FRs + known-
