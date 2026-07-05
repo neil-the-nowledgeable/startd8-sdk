@@ -1265,8 +1265,9 @@ app.add_typer(deploy_app, name="deploy")
 kickoff_kernel_app.add_typer(panel_app, name="panel")
 app.add_typer(kickoff_kernel_app, name="kickoff")
 # M0a: the metaphor group is demoted to `kickoff-legacy` (freeing `kickoff`); its subcommands
-# keep working under the legacy name behind a deprecation notice.
-app.add_typer(kickoff_legacy_app, name="kickoff-legacy")
+# keep working under the legacy name behind a deprecation notice. FR-GE-7 / R1-F1: hidden from the
+# top-level `--help` so `kickoff` is the single prominent kickoff-domain group — still resolvable.
+app.add_typer(kickoff_legacy_app, name="kickoff-legacy", hidden=True)
 # FR-10 / FR-GE-7 alias window: the old top-level `startd8 concierge …` and `startd8 panel …` names
 # stay reachable (hidden) for one release, each emitting a deprecation warning via its group callback.
 app.add_typer(concierge_app, name="concierge", hidden=True)

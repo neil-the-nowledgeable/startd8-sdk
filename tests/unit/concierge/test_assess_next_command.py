@@ -16,6 +16,7 @@ from startd8.concierge import build_assess, handle_concierge_tool
 from startd8.concierge.core import (
     CMD_GENERATE_CONTRACT_PROMOTE,
     CMD_KICKOFF_ASSESS,
+    CMD_KICKOFF_DERIVE,
     CMD_KICKOFF_INSTANTIATE,
     CMD_SCREENS_SUGGEST,
     _blocker_command,
@@ -25,6 +26,7 @@ from startd8.concierge.core import (
 # The commands this milestone is allowed to emit. Each is verified resolvable below.
 _EMITTABLE_COMMANDS = {
     CMD_GENERATE_CONTRACT_PROMOTE,
+    CMD_KICKOFF_DERIVE,
     CMD_SCREENS_SUGGEST,
     CMD_KICKOFF_INSTANTIATE,
     CMD_KICKOFF_ASSESS,
@@ -39,8 +41,20 @@ _LEGACY_METAPHOR_VERBS = ("red-carpet", "wizard", "start", "chat", "concierge-ch
 
 
 def test_blocker_command_schema_family():
-    for section in ("Schema / data model", "Contract", "Data Model missing"):
+    # FR-5: the data-model family — incl. the cold-start `Services` / `Entities & CRUD` wireframe
+    # blocker titles — all route contract-first for a greenfield project.
+    for section in (
+        "Schema / data model", "Contract", "Data Model missing",
+        "Services", "Entities & CRUD",
+    ):
         assert _blocker_command(section) == CMD_GENERATE_CONTRACT_PROMOTE
+
+
+def test_blocker_command_schema_family_brownfield_derives():
+    # OQ-9: a brownfield project (existing Pydantic models) routes the SAME data-model blockers to
+    # the `kickoff derive` on-ramp instead of authoring a contract from scratch.
+    for section in ("Schema / data model", "Contract", "Services", "Entities & CRUD"):
+        assert _blocker_command(section, brownfield=True) == CMD_KICKOFF_DERIVE
 
 
 def test_blocker_command_screen_family():
@@ -57,8 +71,9 @@ def test_blocker_command_app_family_retargeted_not_red_carpet():
 
 
 def test_blocker_command_unmapped_returns_none():
-    assert _blocker_command("Services") is None
-    assert _blocker_command("Deployment posture") is None
+    # Genuinely off-map sections stay None (stable schema — the key is always present).
+    assert _blocker_command("Deployment mode") is None
+    assert _blocker_command("Content Inputs (buckets 2/4 — visibility only)") is None
 
 
 # ── no emitted constant references a legacy metaphor path (R3-S1) ───────────────────────────────
@@ -141,6 +156,25 @@ def test_assess_emits_headline_next_command(tmp_path):
     assert headline is not None
     assert headline in _EMITTABLE_COMMANDS
     assert _resolve_in_registry(headline)
+
+
+def test_cold_start_headline_is_contract_first(tmp_path):
+    # FR-5 fix: a blank (greenfield) project's HEADLINE is contract-first — the data-model gap
+    # (`Services`/`Entities & CRUD` blockers) wins, NOT the downstream `screens suggest`.
+    out = build_assess(tmp_path)
+    assert out["next_command"] == CMD_GENERATE_CONTRACT_PROMOTE
+
+
+def test_brownfield_headline_is_derive_on_ramp(tmp_path):
+    # OQ-9: a project that already declares Pydantic models resolves the data-model gap via
+    # `kickoff derive` (lift existing models into a contract), not `generate contract --promote`.
+    (tmp_path / "models.py").write_text(
+        "from pydantic import BaseModel\n\nclass Widget(BaseModel):\n    name: str\n",
+        encoding="utf-8",
+    )
+    out = build_assess(tmp_path)
+    assert out["next_command"] == CMD_KICKOFF_DERIVE
+    assert _resolve_in_registry(CMD_KICKOFF_DERIVE)
 
 
 def test_headline_points_at_first_commanded_blocker():

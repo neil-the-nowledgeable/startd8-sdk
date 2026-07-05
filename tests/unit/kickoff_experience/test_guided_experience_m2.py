@@ -146,3 +146,53 @@ def test_chat_constructors_collapse_to_one_parametrized_factory():
     assert agentic and red_carpet
     with pytest.raises(ValueError):
         chat.build_kickoff_chat(object(), "/tmp/x", mode="not-a-mode")
+
+
+# ── FR-GE-7 / R1-F1 / R2-F7 — one prominent kickoff group + no retired metaphor in prose ─────────
+
+# The retired metaphor DISPLAY names that must never surface in user-facing output (FR-GE-7).
+_RETIRED_METAPHORS = ("Red Carpet", "Welcome Mat", "Kaigi", "Teian")
+
+
+def test_help_exposes_exactly_one_kickoff_domain_top_level_group():
+    """R1-F1 / R2-F7: `startd8 --help` shows exactly ONE kickoff-domain top-level group (`kickoff`).
+    `kickoff-legacy` stays registered/resolvable but hidden from the top-level help."""
+    from startd8.cli import app
+
+    groups = app.registered_groups
+    visible_kickoff = [
+        g.name for g in groups
+        if g.name and g.name.startswith("kickoff") and not getattr(g, "hidden", False)
+    ]
+    assert visible_kickoff == ["kickoff"], f"expected one visible kickoff group, got {visible_kickoff}"
+
+    # kickoff-legacy is registered (still resolvable) but hidden.
+    legacy = [g for g in groups if g.name == "kickoff-legacy"]
+    assert legacy, "kickoff-legacy must remain registered (resolvable)"
+    assert getattr(legacy[0], "hidden", False) is True, "kickoff-legacy must be hidden from --help"
+
+
+def test_no_retired_metaphor_name_in_kickoff_help_surfaces():
+    """FR-GE-7: no retired metaphor DISPLAY name appears in the kickoff help surfaces."""
+    from typer.testing import CliRunner
+
+    from startd8.cli import app
+
+    runner = CliRunner()
+    for argv in (["kickoff", "--help"], ["kickoff", "guided", "--help"]):
+        out = runner.invoke(app, argv).stdout
+        for meta in _RETIRED_METAPHORS:
+            assert meta not in out, f"retired metaphor {meta!r} leaked into `{' '.join(argv)}`"
+
+
+def test_no_retired_metaphor_name_in_guided_agent_verbose(tmp_path):
+    """FR-GE-7: the guided `--agent` verbose pointer names no retired metaphor DISPLAY name."""
+    from typer.testing import CliRunner
+
+    from startd8.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["kickoff", "guided", str(tmp_path), "--agent"])
+    assert result.exit_code == 0, result.stdout
+    for meta in _RETIRED_METAPHORS:
+        assert meta not in result.stdout, f"retired metaphor {meta!r} leaked into guided --agent output"

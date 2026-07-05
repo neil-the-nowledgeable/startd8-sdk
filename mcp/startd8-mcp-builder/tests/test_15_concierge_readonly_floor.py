@@ -5,9 +5,10 @@ read-only MCP floor are today enforced only by the *absence* of an apply/write t
 addition could silently widen. This test pins the floor so a regression fails loudly.
 
 It asserts, across BOTH MCP server modules:
-  1. the MCP `startd8_concierge` action set is exactly the read/preview floor
-     {survey, assess, instantiate-kickoff, log-friction} — no `derive-contract` (CLI-only,
-     FR-C8 spec-deferral), no apply/commit/promote/cascade action;
+  1. the MCP `startd8_concierge` action set is exactly the reconciled read/preview floor
+     {survey, assess, instantiate, instantiate-kickoff, log-friction} — the canonical
+     `instantiate` plus its deprecated `instantiate-kickoff` alias (FR-10), no `derive-contract`
+     (CLI-only, FR-C8 spec-deferral), no apply/commit/promote/cascade action;
   2. the MCP concierge input carries no `apply` param and no derive-contract fields;
   3. the `startd8_concierge` tool is annotated read-only (readOnlyHint=True, destructiveHint=False);
   4. the agentic-loop registries (`build_concierge_registry` / `build_kickoff_registry`) expose only
@@ -31,7 +32,8 @@ except Exception:  # pragma: no cover - second server optional in some layouts
     pass
 
 # The read/preview floor: reads + preview-only writes. NO derive-contract, NO apply.
-READ_PREVIEW_ACTIONS = {"survey", "assess", "instantiate-kickoff", "log-friction"}
+# FR-10: canonical `instantiate` + its deprecated `instantiate-kickoff` alias both live on the floor.
+READ_PREVIEW_ACTIONS = {"survey", "assess", "instantiate", "instantiate-kickoff", "log-friction"}
 # Core read actions that must always remain in the loop allow-list (it may grow with new READ tools).
 LOOP_READ_ACTIONS = {"survey", "assess", "field_states"}
 _WRITE_MARKERS = ("apply", "commit", "delete", "promote", "cascade")

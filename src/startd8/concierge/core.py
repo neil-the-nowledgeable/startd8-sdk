@@ -68,27 +68,39 @@ KICKOFF_INPUT_DOMAINS = ("business-targets", "observability", "conventions", "bu
 # advisor pointed app/manifest/form/flow gaps at `startd8 kickoff red-carpet --agent`, but after M0
 # the metaphor group moved to `kickoff-legacy`, so a bare `startd8 kickoff red-carpet` no longer
 # resolves. These constants therefore target the CURRENT kernel surface:
-#   * schema/data-model/contract → `startd8 generate contract --promote` (`cli_generate.py:734`)
-#   * page/view/screen           → `startd8 screens suggest`            (`cli_screens.py:63`)
-#   * app/manifest/form/flow     → `startd8 kickoff instantiate`        (scaffolds the input package)
+#   * schema/data-model/entities/CRUD/services → `startd8 generate contract --promote` (contract-first)
+#   * page/view/screen                         → `startd8 screens suggest`            (`cli_screens.py:63`)
+#   * app/manifest/form/flow                   → `startd8 kickoff instantiate`        (scaffolds the input package)
+#   * brownfield model/contract gap            → `startd8 kickoff derive`             (OQ-9 on-ramp)
 CMD_GENERATE_CONTRACT_PROMOTE = "startd8 generate contract --promote"
 CMD_SCREENS_SUGGEST = "startd8 screens suggest"
 CMD_KICKOFF_INSTANTIATE = "startd8 kickoff instantiate"
+# OQ-9: when the project already declares Pydantic models (brownfield), the contract on-ramp is to
+# DERIVE the contract from those models rather than author one from scratch (`generate contract`).
+CMD_KICKOFF_DERIVE = "startd8 kickoff derive"
 
 # The headline next-command when the cascade is not yet ready but no blocker names a more specific
 # step — surface the assess report itself as the canonical read-only next move.
 CMD_KICKOFF_ASSESS = "startd8 kickoff assess"
 
 
-def _blocker_command(section: str) -> str | None:
+def _blocker_command(section: str, *, brownfield: bool = False) -> str | None:
     """Map a cascade-blocker section title → the exact CLI command that advances it (FR-5).
 
     Re-targeted for the post-M0 kernel surface (see the constants above): no emitted command
     references a `startd8 kickoff <metaphor>` path that moved to `kickoff-legacy`.
+
+    The data-model family — ``schema``/``data model``/``contract``/``entities``/``CRUD``/``services``
+    — all trace back to the missing contract, so for a cold-start (blank) project the highest-leverage
+    move is contract-first. Because ``Services`` is the FIRST cascade blocker, mapping it here makes
+    the contract command the *headline* for a blank project (rather than the downstream "screens" gap).
+
+    OQ-9: when *brownfield* (the project already declares Pydantic models), the data-model gap resolves
+    via ``kickoff derive`` (lift the existing models into a contract) instead of authoring one anew.
     """
     s = section.lower()
-    if any(k in s for k in ("schema", "data model", "contract")):
-        return CMD_GENERATE_CONTRACT_PROMOTE
+    if any(k in s for k in ("schema", "data model", "contract", "entit", "crud", "service")):
+        return CMD_KICKOFF_DERIVE if brownfield else CMD_GENERATE_CONTRACT_PROMOTE
     # The "screens" gap (pages/views) routes to the Manifest Suggester — the guided way to decide
     # *which* screens the product needs.
     if any(k in s for k in ("page", "view", "screen")):
@@ -98,6 +110,16 @@ def _blocker_command(section: str) -> str | None:
     if any(k in s for k in ("app", "manifest", "form", "flow")):
         return CMD_KICKOFF_INSTANTIATE
     return None
+
+
+def _has_pydantic_models(root: Path) -> bool:
+    """True if the project already declares Pydantic models (brownfield). Early-exit scan reusing the
+    survey heuristic (OQ-9) — cheaper than a full ``build_survey`` because it stops at the first hit.
+    Path/name/import-based; contents are read only to confirm the ``BaseModel`` marker (OQ-8 lean)."""
+    for p in _iter_files(root):
+        if p.is_file() and p.suffix == ".py" and _is_pydantic_module(p):
+            return True
+    return False
 
 # --- survey heuristics (all path/name-based; never reads flagged file contents — OQ-8 lean) ---
 
@@ -230,7 +252,10 @@ def build_assess(project_root: str | Path) -> Dict[str, Any]:
     root = _resolve_root(project_root)
     logger.info("concierge.assess root=%s", root)
 
-    cascade = _assess_cascade(root)
+    # OQ-9: a brownfield project (existing Pydantic models) resolves its data-model gap via the
+    # `kickoff derive` on-ramp; a greenfield/blank project authors a contract (`generate contract`).
+    brownfield = _has_pydantic_models(root)
+    cascade = _assess_cascade(root, brownfield=brownfield)
     return {
         "schema_version": SCHEMA_VERSION,
         "action": "assess",
@@ -322,8 +347,12 @@ def _assess_kickoff_inputs(root: Path) -> Dict[str, Any]:
     return out
 
 
-def _assess_cascade(root: Path) -> Dict[str, Any]:
-    """The $0-cascade readiness view, delegated to the wireframe machinery (FR-C10)."""
+def _assess_cascade(root: Path, *, brownfield: bool = False) -> Dict[str, Any]:
+    """The $0-cascade readiness view, delegated to the wireframe machinery (FR-C10).
+
+    ``brownfield`` (OQ-9) selects the data-model blocker's on-ramp: `kickoff derive` when models
+    already exist, else `generate contract --promote`.
+    """
     # Import locally so a missing wireframe dep degrades gracefully rather than at import time.
     from startd8.wireframe import (
         AssemblyInputsError,
@@ -346,7 +375,7 @@ def _assess_cascade(root: Path) -> Dict[str, Any]:
             "section": s.title,
             "status": s.status,
             "consequence": s.consequence,
-            "next_command": _blocker_command(s.title),
+            "next_command": _blocker_command(s.title, brownfield=brownfield),
         }
         for s in plan.sections
         if s.status in ("invalid", "not_defined") and s.consequence

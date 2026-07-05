@@ -474,10 +474,11 @@ def kickoff_guided(
     console.print(plan.render(), markup=False, highlight=False)
     if agent:
         # `--agent` is the strictly opt-in, propose-only LLM interview (FR-GE-5). Guide's *default*
-        # remains $0; the interview lives on the existing red-carpet surface, run by the human.
+        # remains $0; the optional interview runs at human privilege via the legacy kickoff group.
+        # FR-GE-7: no retired metaphor name is emitted in user-facing output — point neutrally.
         console.print(
-            "\n  [dim]--agent: the optional LLM interview is available at "
-            "[cyan]startd8 kickoff-legacy red-carpet --agent[/cyan] (paid, propose-only).[/dim]"
+            "\n  [dim]--agent: an optional, opt-in LLM interview (paid, propose-only) is available "
+            "via the legacy kickoff group; the deterministic $0 guide above stands on its own.[/dim]"
         )
 
     # ── Deepen — the shared projection (render_deepen_lines): a persisted session's status/halt/cost

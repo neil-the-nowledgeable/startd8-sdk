@@ -328,6 +328,12 @@ document specifies it. Two forces shape it:
   on) an unratified synthetic input** until the human explicitly ratifies it. Test: a
   synthetic input written by the guided layer is tagged unratified; feeding it to the
   kernel without ratification is refused/warned.
+  - **Status — PARTIAL (prose-only ratification; structural gate DEFERRED).** Today the
+    guided/deepen surfaces only *label* synthetic outputs as unratified in prose (e.g. the
+    Deepen surface line "*(paid, synthetic — unratified input)*" in `concierge_view.py` /
+    `web.py`). The **machine-checkable provenance marker** and the **structural refuse/warn
+    gate** (the kernel rejecting an unratified synthetic input at the consume boundary) are
+    **not yet implemented** — the acceptance test above is the target, not a delivered claim.
 
 ---
 

@@ -91,9 +91,12 @@ def test_concierge_alias_old_write_subcommands_still_registered():
 def test_concierge_group_hidden_from_top_level_help():
     res = runner.invoke(app, ["--help"])
     assert res.exit_code == 0
+    # The onboarding kernel `kickoff` is the single prominent kickoff-domain group.
     assert "kickoff" in res.output
-    assert "kickoff-legacy" in res.output
-    # The deprecated alias is hidden from the main command listing.
+    # FR-GE-7 / R1-F1: the demoted metaphor group `kickoff-legacy` is now hidden from the
+    # top-level listing (still resolvable), so `kickoff` is the ONE visible kickoff group.
+    assert "kickoff-legacy" not in res.output
+    # The deprecated `concierge` alias is likewise hidden from the main command listing.
     assert "concierge" not in res.output
 
 

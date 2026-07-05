@@ -3206,8 +3206,16 @@ async def startd8_concierge(params: ConciergeInput) -> str:
     try:
         with _redirect_stdout_to_stderr():
             _ensure_sdk_available()
-            from startd8.concierge import handle_concierge_tool
-            result = handle_concierge_tool(action, project_root, **extra)
+            from startd8.concierge import handle_concierge_read, handle_concierge_tool
+            from startd8.concierge.core import READ_ACTIONS
+            # FR-7: route read actions (survey/assess) through the structural read floor so a write
+            # verb is rejected BEFORE dispatch — read-only is enforced, not merely preview-incidental.
+            # Write actions (instantiate/log-friction) still return a preview WritePlan (MCP never
+            # writes — the CLI is the only applier, OQ-7).
+            if action in READ_ACTIONS:
+                result = handle_concierge_read(action, project_root, **extra)
+            else:
+                result = handle_concierge_tool(action, project_root, **extra)
         _emit_event({
             "event": "tool.end", "tool": "startd8_concierge", "request_id": request_id,
             "duration_ms": int((time.perf_counter() - started) * 1000),
