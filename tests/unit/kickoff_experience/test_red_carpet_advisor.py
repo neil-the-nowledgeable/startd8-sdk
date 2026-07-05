@@ -16,9 +16,15 @@ from startd8.kickoff_experience.red_carpet import (
 from startd8.kickoff_experience.red_carpet_advisor import (
     ADVISOR_COMMANDS,
     ADVISORY_KINDS,
+    CMD_GENERATE_BACKEND,
     CMD_GENERATE_CONTRACT_PROMOTE,
+    CMD_GENERATE_SCAFFOLD,
+    CMD_GENERATE_VIEWS,
+    CMD_POLISH_APPLY,
     CMD_RED_CARPET_AGENT,
     CMD_SCREENS_SUGGEST,
+    CMD_SCREENS_SUGGEST_ROLES,
+    CMD_WIREFRAME,
     KIND_CASCADE_BLOCKER,
     KIND_INPUT_GAP,
     KIND_INPUT_INVALID,
@@ -295,15 +301,45 @@ def test_playbook_ranked_and_ordered():
     # FR-MS-8: the page/view (screens) gates point at the Manifest Suggester; the app manifest does not.
     by_title = {s.title: s.command for s in manifest_steps}
     assert by_title["Add app manifest"] == CMD_RED_CARPET_AGENT
-    assert by_title["Add at least one page"] == CMD_SCREENS_SUGGEST
+    # PAGES points at the paid `--roles` pass (the $0 baseline only proposes views); VIEWS keeps
+    # the $0 baseline (it authors the view).
+    assert by_title["Add at least one page"] == CMD_SCREENS_SUGGEST_ROLES
     assert by_title["Add at least one view"] == CMD_SCREENS_SUGGEST
 
 
-def test_playbook_offerable_ends_with_wireframe_then_backend():
+def test_playbook_surfaces_ready_generators_with_flag_complete_commands():
+    # Per-generator build surfacing (FR-RCA-24): each `ready` generator gets its concrete,
+    # flag-complete command — independent of whole-cascade offerability.
     st = _state(schema=True, app=True, pages=True, views=True)  # offerable
-    steps = build_playbook(".", st, ())
-    run = [s for s in steps if s.stage == "run"]
-    assert [s.command for s in run][-2:] == ["startd8 wireframe", "startd8 generate backend"]
+    steps = build_playbook(
+        ".", st, (),
+        readiness={"scaffold": "ready", "backend": "ready", "views": "ready"},
+    )
+    run_cmds = [s.command for s in steps if s.stage == "run"]
+    assert CMD_WIREFRAME in run_cmds
+    assert CMD_GENERATE_SCAFFOLD in run_cmds
+    assert CMD_GENERATE_BACKEND in run_cmds  # carries --schema
+    assert CMD_GENERATE_VIEWS in run_cmds    # carries --schema + --views
+    assert CMD_POLISH_APPLY in run_cmds
+    # every emitted build command is flag-complete (would actually run)
+    assert "--schema" in CMD_GENERATE_BACKEND and "--views" in CMD_GENERATE_VIEWS
+
+
+def test_playbook_surfaces_partial_readiness_even_when_not_offerable():
+    # navig8's case: backend/views ready but app/pages gates unmet → build commands STILL surface.
+    st = _state(schema=True, app=False, pages=False, views=True)  # NOT offerable
+    steps = build_playbook(
+        ".", st, (),
+        readiness={"scaffold": "ready", "backend": "ready", "views": "ready"},
+    )
+    run_cmds = [s.command for s in steps if s.stage == "run"]
+    assert CMD_GENERATE_BACKEND in run_cmds and CMD_GENERATE_VIEWS in run_cmds
+
+
+def test_playbook_no_build_steps_when_no_generator_ready():
+    st = _state(schema=False)  # greenfield: nothing generatable
+    steps = build_playbook(".", st, (), readiness={"backend": "blocked(no schema)"})
+    assert [s for s in steps if s.stage == "run"] == []
 
 
 def test_playbook_cap():
@@ -525,8 +561,12 @@ def test_greenfield_keeps_schema_shape_in_capped_set(tmp_path):
 
 def test_run_step_includes_preview():
     st = _state(schema=True, app=True, pages=True, views=True)  # offerable
-    steps = build_playbook(".", st, (), preview={"shape": "modular-monolith", "counts": {"ready": 5}})
-    run = [s for s in steps if s.title == "Run the $0 cascade"][0]
+    steps = build_playbook(
+        ".", st, (),
+        preview={"shape": "modular-monolith", "counts": {"ready": 5}},
+        readiness={"backend": "ready"},
+    )
+    run = [s for s in steps if s.title == "Generate the backend"][0]
     assert "modular-monolith" in run.detail
 
 
@@ -586,7 +626,13 @@ def _resolve_in_registry(command: str) -> bool:
 
     tokens = command.split()
     assert tokens[0] == "startd8"
-    path = [t for t in tokens[1:] if not t.startswith("-")]  # subcommand path only, drop flags
+    # The subcommand path is the tokens BEFORE the first option flag; everything from the first
+    # `-`/`--` onward is options + their values (e.g. `--schema prisma/schema.prisma`), not path.
+    path = []
+    for t in tokens[1:]:
+        if t.startswith("-"):
+            break
+        path.append(t)
 
     def _walk(typer_app, remaining):
         if not remaining:
