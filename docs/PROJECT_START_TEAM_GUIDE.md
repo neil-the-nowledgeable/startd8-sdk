@@ -1,6 +1,6 @@
 # StartD8 Project Start — Team Guide
 
-**A guided path from "idea + data model" to a working app scaffold** — orient, draft your
+**A guided path from idea to a deployed application** — orient, draft your
 requirements and screens, optionally pressure-test with the stakeholder panel, and generate the
 app. Written for a **new project**; if you already have code, there's a short brownfield section
 near the end.
