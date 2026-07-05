@@ -30,7 +30,10 @@ def test_cost_tag_mapping():
     assert (
         cost_tag("startd8 screens suggest") == "$0+paid"
     )  # $0 baseline, optional --roles
-    assert cost_tag("startd8 kickoff red-carpet --agent") == "paid"
+    # red-carpet: the $0 conductor base + optional paid `--agent <spec>` interview (resolvable
+    # `kickoff-legacy` path; the demoted `kickoff red-carpet` with a bare `--agent` was the bug).
+    assert cost_tag("startd8 kickoff-legacy red-carpet") == "$0+paid"
+    assert cost_tag("startd8 kickoff-legacy red-carpet --agent gemini:gemini-2.5-pro") == "$0+paid"
     assert cost_tag(None) == "gate"  # a command-less step is a human gate
     assert cost_tag("startd8 something-unknown") == "step"
 

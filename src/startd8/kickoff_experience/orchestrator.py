@@ -69,7 +69,7 @@ _COST: dict = {
     CMD_WIREFRAME: "$0",
     CMD_GENERATE_BACKEND: "$0",
     CMD_SCREENS_SUGGEST: "$0+paid",  # baseline is $0; `--roles` spends
-    CMD_RED_CARPET_AGENT: "paid",  # the LLM interview
+    CMD_RED_CARPET_AGENT: "$0+paid",  # $0 conductor; the optional `--agent <spec>` interview spends
 }
 
 
@@ -135,7 +135,11 @@ class KickoffPlan:
                 f"you are here: next stage = {self.next_stage or 'done'}; unmet gates = {gates}"
             )
         if self.readiness_score is not None:
-            lines.append(f"readiness score: {self.readiness_score}")
+            # Clarify the axis: this is the fraction of $0-cascade GENERATORS (scaffold/backend/views)
+            # that are ready — NOT overall build-readiness. It can read 1.0 while manifest gates
+            # (app/pages) above are still unmet; the two are distinct axes (avoids the "1.0 but
+            # unmet gates" contradiction a bare "readiness score" invites).
+            lines.append(f"cascade generators ready: {self.readiness_score} (scaffold/backend/views)")
         lines.append("")
         if not self.steps:
             lines.append(
@@ -487,7 +491,7 @@ def run_red_carpet_driver(
                 interview(state.next_stage)
             else:
                 emit_line(f"no pre-populated action for `{state.next_stage}` — "
-                          "run `startd8 kickoff red-carpet --agent` to author it.")
+                          f"run `{CMD_RED_CARPET_AGENT}` to author it.")
                 break
             steps += 1
             continue

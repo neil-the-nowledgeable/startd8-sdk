@@ -733,7 +733,9 @@ def render_guided_lines(view: Mapping[str, Any], *, deepen_flag: bool = True) ->
     ]
     score = guide.get("readiness_score")
     if score is not None:
-        lines.append(f"  readiness score: {score}")
+        # Fraction of $0-cascade generators (scaffold/backend/views) ready — a distinct axis from the
+        # manifest gates below; labeled explicitly so 1.0 doesn't read as "done" while gates are unmet.
+        lines.append(f"  cascade generators ready: {score} (scaffold/backend/views)")
     domains = ((orient.get("kickoff_inputs") or {}).get("domains")) or {}
     for name, info in domains.items():
         lines.append(f"  • {name}: {info.get('status')}")
