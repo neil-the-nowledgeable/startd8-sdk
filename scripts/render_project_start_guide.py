@@ -130,27 +130,23 @@ main{padding:44px 56px 90px;min-width:0}
   letter-spacing:-.01em;margin:0 0 6px}
 .masthead .kicker{font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.22em;
   text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:14px}
-.masthead .lede{font-size:16.5px;color:var(--muted);max-width:64ch}
+.masthead .lede{font-size:17px;color:var(--ink);max-width:62ch;line-height:1.55}
+.masthead .lede p{margin:0}
 .masthead .lede b{color:var(--ink)}
+.masthead .lede blockquote{margin:14px 0 0;padding:0 0 0 14px;border-left:2px solid var(--line2);
+  font-size:13.5px;color:var(--muted)}
+.masthead .lede blockquote p{margin:0}
 
-/* summary card */
-.summary{margin:30px 0 8px;background:linear-gradient(180deg,var(--card),#f6f0e2);
-  border:1px solid var(--line2);border-radius:16px;padding:26px 28px;box-shadow:var(--shadow)}
-.summary h2{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
-  color:var(--accent);margin:0 0 16px;font-weight:600}
-.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:20px}
-.flow .step{font-family:"IBM Plex Mono",monospace;font-size:12.5px;background:var(--paper);border:1px solid var(--line2);
-  border-radius:999px;padding:6px 13px;font-weight:500}
-.flow .arr{color:var(--line2);font-size:14px}
-.sgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px 26px}
-@media(max-width:720px){.sgrid{grid-template-columns:1fr}}
-.sgrid h3{font-size:13px;margin:0 0 7px;color:var(--ink);font-weight:600;
-  font-family:"IBM Plex Mono",monospace;letter-spacing:.02em}
-.sgrid p{margin:0;font-size:13.7px;color:var(--muted);line-height:1.5}
-.rules{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
-.rule{flex:1 1 220px;background:var(--paper);border:1px solid var(--line);border-left:3px solid var(--accent);
-  border-radius:0 9px 9px 0;padding:11px 14px;font-size:13px;color:var(--muted)}
-.rule b{color:var(--ink)}
+/* summary — a minimal clickable path map */
+.summary{margin:26px 0 6px}
+.flow{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.flow .step{font-family:"IBM Plex Mono",monospace;font-size:13px;background:var(--card);
+  border:1px solid var(--line2);border-radius:999px;padding:8px 16px;font-weight:500;color:var(--ink);
+  transition:all .13s}
+.flow .step:hover{border-color:var(--accent);color:var(--accent);text-decoration:none;
+  transform:translateY(-1px);box-shadow:var(--shadow)}
+.flow .arr{color:var(--line2);font-size:15px}
+.reassure{margin:16px 0 0;font-size:13.5px;color:var(--muted)}
 
 /* toolbar */
 .toolbar{display:flex;align-items:center;gap:10px;margin:30px 0 10px;
@@ -220,46 +216,34 @@ mark{background:#f7e3a8;color:inherit;border-radius:2px;padding:0 1px}
 }
 """
 
-SUMMARY_HTML = """
-<section class="summary" id="summary">
-  <h2>At a glance</h2>
-  <div class="flow">
-    <span class="step">Orient</span><span class="arr">→</span>
-    <span class="step">Onboard</span><span class="arr">→</span>
-    <span class="step">Draft</span><span class="arr">→</span>
-    <span class="step">Facilitate</span><span class="arr">→</span>
-    <span class="step">View</span><span class="arr">→</span>
-    <span class="step">Generate</span>
-  </div>
-  <div class="sgrid">
-    <div>
-      <h3>Greenfield (no schema/app)</h3>
-      <p>Orient with <code>kickoff assess</code>, author the input package with
-      <code>kickoff instantiate&nbsp;--apply</code>, then turn prose into a schema with
-      <code>generate contract&nbsp;--promote</code>.</p>
-    </div>
-    <div>
-      <h3>Brownfield (existing code)</h3>
-      <p>Triage with <code>kickoff survey</code>, derive the contract from your models with
-      <code>kickoff derive&nbsp;--apply</code>, then run the VIPP ground-truth loop
-      (<code>vipp negotiate</code> → <code>apply</code>).</p>
-    </div>
-  </div>
-  <div class="rules">
-    <div class="rule"><b>$0 vs paid.</b> Almost everything is <span class="pill pill-free">$0</span>,
-      deterministic, no&nbsp;LLM. Paid = <code>guided --agent</code>, <code>panel ask</code>, and the
-      <code>--roles</code> passes. The CLI labels each.</div>
-    <div class="rule"><b>Preview vs write.</b> Reads preview by default; writing needs
-      <code>--apply</code> or an <code>approve</code> verb. Nothing runs your app or authors your content.</div>
-  </div>
-</section>
-"""
+FLOW = [("Orient", "1"), ("Onboard", "2"), ("Draft", "3"),
+        ("Facilitate", "4"), ("View", "5"), ("Generate", "6")]
+
+
+def build_summary(slug_by_num: dict) -> str:
+    """A minimal, scannable map: the flow as clickable steps + one reassurance line."""
+    steps = []
+    for i, (label, num) in enumerate(FLOW):
+        slug = slug_by_num.get(num, "")
+        sep = '<span class="arr">→</span>' if i else ""
+        steps.append(f'{sep}<a class="step" href="#{slug}" data-open="{slug}">{label}</a>')
+    return (
+        '<section class="summary">'
+        f'<div class="flow">{"".join(steps)}</div>'
+        '<p class="reassure">Almost everything is <span class="pill pill-free">$0</span> and '
+        "preview-only — nothing writes until you add <code>--apply</code> or "
+        "<code>approve</code>.</p>"
+        "</section>"
+    )
 
 
 def build() -> str:
     md = SRC.read_text(encoding="utf-8")
     intro_md, sections = split_sections(md)
     intro_html = markdown.markdown(intro_md, extensions=MD_EXT, output_format="html5")
+
+    slug_by_num = {s["num"]: s["slug"] for s in sections if s["num"]}
+    summary_html = build_summary(slug_by_num)
 
     toc = []
     body_parts = []
@@ -270,7 +254,7 @@ def build() -> str:
             f'<span class="n">{html.escape(num)}</span>'
             f'<span>{plain(s["title"])}</span></a>'
         )
-        open_attr = " open" if i == 0 else ""
+        open_attr = ""  # all sections collapsed by default — a calm, scannable start
         body_parts.append(
             f'<details class="sec" id="{s["slug"]}"{open_attr}>'
             f'<summary><span class="num">{html.escape(num)}</span>'
@@ -309,10 +293,12 @@ def build() -> str:
   // expand / collapse all
   document.getElementById('exp').addEventListener('click',function(){secs.forEach(function(d){d.open=true;});});
   document.getElementById('col').addEventListener('click',function(){secs.forEach(function(d){d.open=false;});});
-  // TOC click → open + scroll
-  links.forEach(function(l){l.addEventListener('click',function(){
-    var d=document.getElementById(l.dataset.slug); if(d) d.open=true;
-  });});
+  // TOC + summary-flow clicks → open the target section
+  function openTarget(id){var d=document.getElementById(id); if(d) d.open=true;}
+  links.forEach(function(l){l.addEventListener('click',function(){openTarget(l.dataset.slug);});});
+  document.querySelectorAll('.flow a[data-open]').forEach(function(a){
+    a.addEventListener('click',function(){openTarget(a.dataset.open);});
+  });
   // open on hash
   if(location.hash){var d=document.getElementById(location.hash.slice(1)); if(d&&d.tagName==='DETAILS') d.open=true;}
   // scroll-spy
@@ -356,8 +342,6 @@ def build() -> str:
       <input id="filter" type="search" placeholder="Filter sections…" aria-label="Filter sections">
     </div>
     <nav class="toc">{''.join(toc)}</nav>
-    <div class="side-foot">Rendered from <code>PROJECT_START_TEAM_GUIDE.md</code> — the source of
-      truth. Regenerate with <code>scripts/render_project_start_guide.py</code>.</div>
   </aside>
   <main>
     <header class="masthead">
@@ -365,7 +349,7 @@ def build() -> str:
       <h1>Project-Start Team Guide</h1>
       <div class="lede">{intro_html}</div>
     </header>
-    {SUMMARY_HTML}
+    {summary_html}
     <div class="toolbar">
       <span class="label">{len(sections)} sections</span>
       <button class="btn" id="exp">Expand all</button>

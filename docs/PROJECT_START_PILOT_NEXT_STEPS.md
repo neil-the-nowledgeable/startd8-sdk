@@ -52,8 +52,8 @@ python3 <startd8-sdk>/scripts/run_kickoff_panel.py --project $HH
 - [ ] Terminal A's page updates round-by-round as B lands them (the LIVE banner + "filling Rn").
 - [ ] On completion the page settles (stops auto-refreshing) and shows the synthesis.
 - [ ] Cost is reported after the paid run; a missing key degrades cleanly (no half-charge).
-- [ ] Optional next: `requirements` + `screens` drafting (§4 of the guide), then the VIPP loop
-      (`vipp negotiate` → `vipp apply`).
+- [ ] Optional next: `requirements` + `screens` drafting (§3 of the guide), then the VIPP loop
+      (§9; `vipp negotiate` → `vipp apply`).
 
 ---
 

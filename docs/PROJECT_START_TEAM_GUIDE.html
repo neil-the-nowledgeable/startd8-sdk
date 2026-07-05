@@ -52,27 +52,23 @@ main{padding:44px 56px 90px;min-width:0}
   letter-spacing:-.01em;margin:0 0 6px}
 .masthead .kicker{font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.22em;
   text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:14px}
-.masthead .lede{font-size:16.5px;color:var(--muted);max-width:64ch}
+.masthead .lede{font-size:17px;color:var(--ink);max-width:62ch;line-height:1.55}
+.masthead .lede p{margin:0}
 .masthead .lede b{color:var(--ink)}
+.masthead .lede blockquote{margin:14px 0 0;padding:0 0 0 14px;border-left:2px solid var(--line2);
+  font-size:13.5px;color:var(--muted)}
+.masthead .lede blockquote p{margin:0}
 
-/* summary card */
-.summary{margin:30px 0 8px;background:linear-gradient(180deg,var(--card),#f6f0e2);
-  border:1px solid var(--line2);border-radius:16px;padding:26px 28px;box-shadow:var(--shadow)}
-.summary h2{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.16em;text-transform:uppercase;
-  color:var(--accent);margin:0 0 16px;font-weight:600}
-.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:20px}
-.flow .step{font-family:"IBM Plex Mono",monospace;font-size:12.5px;background:var(--paper);border:1px solid var(--line2);
-  border-radius:999px;padding:6px 13px;font-weight:500}
-.flow .arr{color:var(--line2);font-size:14px}
-.sgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px 26px}
-@media(max-width:720px){.sgrid{grid-template-columns:1fr}}
-.sgrid h3{font-size:13px;margin:0 0 7px;color:var(--ink);font-weight:600;
-  font-family:"IBM Plex Mono",monospace;letter-spacing:.02em}
-.sgrid p{margin:0;font-size:13.7px;color:var(--muted);line-height:1.5}
-.rules{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
-.rule{flex:1 1 220px;background:var(--paper);border:1px solid var(--line);border-left:3px solid var(--accent);
-  border-radius:0 9px 9px 0;padding:11px 14px;font-size:13px;color:var(--muted)}
-.rule b{color:var(--ink)}
+/* summary — a minimal clickable path map */
+.summary{margin:26px 0 6px}
+.flow{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.flow .step{font-family:"IBM Plex Mono",monospace;font-size:13px;background:var(--card);
+  border:1px solid var(--line2);border-radius:999px;padding:8px 16px;font-weight:500;color:var(--ink);
+  transition:all .13s}
+.flow .step:hover{border-color:var(--accent);color:var(--accent);text-decoration:none;
+  transform:translateY(-1px);box-shadow:var(--shadow)}
+.flow .arr{color:var(--line2);font-size:15px}
+.reassure{margin:16px 0 0;font-size:13.5px;color:var(--muted)}
 
 /* toolbar */
 .toolbar{display:flex;align-items:center;gap:10px;margin:30px 0 10px;
@@ -149,137 +145,43 @@ mark{background:#f7e3a8;color:inherit;border-radius:2px;padding:0 1px}
       <svg viewBox="0 0 24 24" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
       <input id="filter" type="search" placeholder="Filter sections…" aria-label="Filter sections">
     </div>
-    <nav class="toc"><a href="#0-two-rules-that-apply-to-every-command" data-slug="0-two-rules-that-apply-to-every-command"><span class="n">0</span><span>Two rules that apply to every command</span></a><a href="#1-which-path-are-you-on" data-slug="1-which-path-are-you-on"><span class="n">1</span><span>Which path are you on?</span></a><a href="#2-orient-see-where-you-are-0-read-only" data-slug="2-orient-see-where-you-are-0-read-only"><span class="n">2</span><span>Orient — see where you are ($0, read-only)</span></a><a href="#3-onboard-get-a-data-contract-the-kickoff-input-package" data-slug="3-onboard-get-a-data-contract-the-kickoff-input-package"><span class="n">3</span><span>Onboard — get a data contract + the kickoff input package</span></a><a href="#4-draft-requirements-screens-a-fast-first-draft-to-approve" data-slug="4-draft-requirements-screens-a-fast-first-draft-to-approve"><span class="n">4</span><span>Draft — requirements &amp; screens (a fast first draft to approve)</span></a><a href="#5-facilitate-the-stakeholder-panel-optional-mostly-paid" data-slug="5-facilitate-the-stakeholder-panel-optional-mostly-paid"><span class="n">5</span><span>Facilitate — the stakeholder panel (optional, mostly paid)</span></a><a href="#6-view-follow-the-panel-transcript-0-read-only" data-slug="6-view-follow-the-panel-transcript-0-read-only"><span class="n">6</span><span>View — follow the panel transcript ($0, read-only)</span></a><a href="#7-brownfield-the-vipp-ground-truth-loop" data-slug="7-brownfield-the-vipp-ground-truth-loop"><span class="n">7</span><span>Brownfield: the VIPP ground-truth loop</span></a><a href="#8-generate-the-app-the-0-cascade" data-slug="8-generate-the-app-the-0-cascade"><span class="n">8</span><span>Generate the app (the $0 cascade)</span></a><a href="#9-deprecated-command-names-don-t-build-on-these" data-slug="9-deprecated-command-names-don-t-build-on-these"><span class="n">9</span><span>Deprecated command names (don&#x27;t build on these)</span></a><a href="#10-cheat-sheet" data-slug="10-cheat-sheet"><span class="n">10</span><span>Cheat sheet</span></a></nav>
-    <div class="side-foot">Rendered from <code>PROJECT_START_TEAM_GUIDE.md</code> — the source of
-      truth. Regenerate with <code>scripts/render_project_start_guide.py</code>.</div>
+    <nav class="toc"><a href="#1-orient-see-where-you-are-0-read-only" data-slug="1-orient-see-where-you-are-0-read-only"><span class="n">1</span><span>Orient — see where you are ($0, read-only)</span></a><a href="#2-onboard-get-a-data-contract-the-kickoff-input-package" data-slug="2-onboard-get-a-data-contract-the-kickoff-input-package"><span class="n">2</span><span>Onboard — get a data contract + the kickoff input package</span></a><a href="#3-draft-requirements-screens" data-slug="3-draft-requirements-screens"><span class="n">3</span><span>Draft — requirements &amp; screens</span></a><a href="#4-facilitate-the-stakeholder-panel-optional-mostly-paid" data-slug="4-facilitate-the-stakeholder-panel-optional-mostly-paid"><span class="n">4</span><span>Facilitate — the stakeholder panel (optional, mostly paid)</span></a><a href="#5-view-follow-the-panel-transcript-0-read-only" data-slug="5-view-follow-the-panel-transcript-0-read-only"><span class="n">5</span><span>View — follow the panel transcript ($0, read-only)</span></a><a href="#6-generate-the-app-the-0-cascade" data-slug="6-generate-the-app-the-0-cascade"><span class="n">6</span><span>Generate the app (the $0 cascade)</span></a><a href="#7-good-to-know-0-vs-paid-preview-vs-write" data-slug="7-good-to-know-0-vs-paid-preview-vs-write"><span class="n">7</span><span>Good to know — $0 vs paid, preview vs write</span></a><a href="#8-deprecated-command-names-don-t-build-on-these" data-slug="8-deprecated-command-names-don-t-build-on-these"><span class="n">8</span><span>Deprecated command names (don&#x27;t build on these)</span></a><a href="#9-working-with-an-existing-codebase-brownfield" data-slug="9-working-with-an-existing-codebase-brownfield"><span class="n">9</span><span>Working with an existing codebase (brownfield)</span></a><a href="#10-cheat-sheet" data-slug="10-cheat-sheet"><span class="n">10</span><span>Cheat sheet</span></a></nav>
   </aside>
   <main>
     <header class="masthead">
       <div class="kicker">StartD8 · Project Start</div>
       <h1>Project-Start Team Guide</h1>
-      <div class="lede"><p><strong>Audience:</strong> any team onboarding a project onto the StartD8 SDK (greenfield or brownfield).
-<strong>What this is:</strong> the single, canonical walkthrough of the <em>project-start</em> experience — from
-"idea + data model" to a working app scaffold, plus the optional stakeholder-panel facilitation
-and its viewer. It replaces the earlier one-off <code>STARTD8_PROJECT_INIT_GUIDE.md</code> +
-<code>PERSONA_DRAFTING_KICKOFF_GUIDE.md</code> (both predated the project-start distillation and used renamed
-commands).
-<strong>Currency:</strong> reflects the <strong>post-distillation</strong> CLI (the kernel renamed <code>concierge</code> → <code>kickoff</code>;
-the guided experience; the <code>kickoff-panel</code> transcript viewer). If a command below differs from
-<code>startd8 &lt;group&gt; --help</code>, trust <code>--help</code> and file an issue.</p>
+      <div class="lede"><p><strong>A guided path from "idea + data model" to a working app scaffold</strong> — orient, draft your
+requirements and screens, optionally pressure-test with the stakeholder panel, and generate the
+app. Written for a <strong>new project</strong>; if you already have code, there's a short brownfield section
+near the end.</p>
 <blockquote>
-<p><strong>Per-project quick start:</strong> each pilot repo has a short <code>docs/STARTD8_START_HERE.md</code> that says
-<em>where that repo is today</em> and <em>the exact next commands</em>. Read that first; use this guide for the
-full picture.</p>
+<p>If a command differs from <code>startd8 &lt;group&gt; --help</code>, trust <code>--help</code>. Each repo also has a short
+<code>docs/STARTD8_START_HERE.md</code> with its exact next commands.</p>
 </blockquote>
 <hr></div>
     </header>
-    
-<section class="summary" id="summary">
-  <h2>At a glance</h2>
-  <div class="flow">
-    <span class="step">Orient</span><span class="arr">→</span>
-    <span class="step">Onboard</span><span class="arr">→</span>
-    <span class="step">Draft</span><span class="arr">→</span>
-    <span class="step">Facilitate</span><span class="arr">→</span>
-    <span class="step">View</span><span class="arr">→</span>
-    <span class="step">Generate</span>
-  </div>
-  <div class="sgrid">
-    <div>
-      <h3>Greenfield (no schema/app)</h3>
-      <p>Orient with <code>kickoff assess</code>, author the input package with
-      <code>kickoff instantiate&nbsp;--apply</code>, then turn prose into a schema with
-      <code>generate contract&nbsp;--promote</code>.</p>
-    </div>
-    <div>
-      <h3>Brownfield (existing code)</h3>
-      <p>Triage with <code>kickoff survey</code>, derive the contract from your models with
-      <code>kickoff derive&nbsp;--apply</code>, then run the VIPP ground-truth loop
-      (<code>vipp negotiate</code> → <code>apply</code>).</p>
-    </div>
-  </div>
-  <div class="rules">
-    <div class="rule"><b>$0 vs paid.</b> Almost everything is <span class="pill pill-free">$0</span>,
-      deterministic, no&nbsp;LLM. Paid = <code>guided --agent</code>, <code>panel ask</code>, and the
-      <code>--roles</code> passes. The CLI labels each.</div>
-    <div class="rule"><b>Preview vs write.</b> Reads preview by default; writing needs
-      <code>--apply</code> or an <code>approve</code> verb. Nothing runs your app or authors your content.</div>
-  </div>
-</section>
-
+    <section class="summary"><div class="flow"><a class="step" href="#1-orient-see-where-you-are-0-read-only" data-open="1-orient-see-where-you-are-0-read-only">Orient</a><span class="arr">→</span><a class="step" href="#2-onboard-get-a-data-contract-the-kickoff-input-package" data-open="2-onboard-get-a-data-contract-the-kickoff-input-package">Onboard</a><span class="arr">→</span><a class="step" href="#3-draft-requirements-screens" data-open="3-draft-requirements-screens">Draft</a><span class="arr">→</span><a class="step" href="#4-facilitate-the-stakeholder-panel-optional-mostly-paid" data-open="4-facilitate-the-stakeholder-panel-optional-mostly-paid">Facilitate</a><span class="arr">→</span><a class="step" href="#5-view-follow-the-panel-transcript-0-read-only" data-open="5-view-follow-the-panel-transcript-0-read-only">View</a><span class="arr">→</span><a class="step" href="#6-generate-the-app-the-0-cascade" data-open="6-generate-the-app-the-0-cascade">Generate</a></div><p class="reassure">Almost everything is <span class="pill pill-free">$0</span> and preview-only — nothing writes until you add <code>--apply</code> or <code>approve</code>.</p></section>
     <div class="toolbar">
-      <span class="label">11 sections</span>
+      <span class="label">10 sections</span>
       <button class="btn" id="exp">Expand all</button>
       <button class="btn" id="col">Collapse all</button>
     </div>
-    <details class="sec" id="0-two-rules-that-apply-to-every-command" open><summary><span class="num">0</span><span class="stitle">Two rules that apply to every command</span><span class="chev">▶</span></summary><div class="inner"><ol>
-<li><strong><code><span class="pill pill-free">$0</span></code> vs paid.</strong> Almost everything here is <strong><code><span class="pill pill-free">$0</span></code>, deterministic, no LLM, no network</strong> — the
-   CLI labels each command. The only paid (token-spending) commands are: <code>kickoff guided --agent</code>,
-   <code>kickoff panel ask</code> / <code>ask-all</code>, the optional <code>--roles</code> pass on <code>requirements elicit</code> /
-   <code>screens suggest</code>, and the legacy <code>kickoff-legacy chat</code>. Paid commands tell you the cost after
-   they run, and degrade cleanly to "no spend / defer" if a key is missing.</li>
-<li><strong>Preview vs write.</strong> Read/draft commands <strong>preview by default</strong>; writing requires an explicit
-   flag — <strong><code>--apply</code></strong> (<code>kickoff instantiate</code>, <code>kickoff derive</code>, <code>vipp apply</code>) or an
-   <strong><code>approve</code></strong> verb (<code>requirements</code>, <code>screens</code>). <code>review</code> shows the <em>literal bytes</em> a following
-   <code>approve</code> will write. Nothing runs your app or authors your real product content.</li>
-</ol>
-<p><strong>Prerequisite:</strong> <code>startd8</code> on your PATH (<code>startd8 --help</code>). If not, run from the SDK checkout:
-<code>PYTHONPATH=/Users/neilyashinsky/Documents/dev/startd8-sdk/src python3 -m startd8.cli …</code>.</p>
-<hr></div></details><details class="sec" id="1-which-path-are-you-on"><summary><span class="num">1</span><span class="stitle">Which path are you on?</span><span class="chev">▶</span></summary><div class="inner"><table>
-<thead>
-<tr>
-<th></th>
-<th><strong>Greenfield</strong> (no schema/app yet)</th>
-<th><strong>Brownfield</strong> (existing code/models)</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Orient</td>
-<td><code>kickoff assess</code> · optional <code>kickoff guided</code></td>
-<td><code>kickoff survey</code> → <code>kickoff assess</code></td>
-</tr>
-<tr>
-<td>Get a data contract</td>
-<td>prose → <code>generate contract --promote</code></td>
-<td><code>kickoff derive --models &lt;pkg&gt; --apply</code></td>
-</tr>
-<tr>
-<td>Onboard package</td>
-<td><code>kickoff instantiate --apply</code></td>
-<td><code>kickoff instantiate --apply</code> (if you want the input package)</td>
-</tr>
-<tr>
-<td>Ground-truth loop</td>
-<td>(skip — nothing to adjudicate)</td>
-<td><code>project init --with-vipp</code> → <code>vipp negotiate</code> → <code>vipp apply</code></td>
-</tr>
-</tbody>
-</table>
-<p>The <strong>guided experience</strong> (<code>kickoff guided</code>) is an optional, additive layer that walks you through
-the right path for your project — it <strong>spends and writes nothing</strong> by default; it just prints the
-commands to run. It is an <em>offer</em>, never a gate.</p>
-<hr></div></details><details class="sec" id="2-orient-see-where-you-are-0-read-only"><summary><span class="num">2</span><span class="stitle">Orient — see where you are (<code>$0</code>, read-only)</span><span class="chev">▶</span></summary><div class="inner"><pre><code class="language-bash">startd8 kickoff survey      # brownfield triage: docs, models, fixtures, PII (read-only)
-startd8 kickoff assess      # readiness + the <span class="pill pill-free">$0</span>-cascade view; offers the guided experience
-startd8 kickoff guided      # optional: Orient → Guide → Deepen playbook, prints commands
+    <details class="sec" id="1-orient-see-where-you-are-0-read-only"><summary><span class="num">1</span><span class="stitle">Orient — see where you are (<code>$0</code>, read-only)</span><span class="chev">▶</span></summary><div class="inner"><pre><code class="language-bash">startd8 kickoff assess      # readiness + the <span class="pill pill-free">$0</span>-cascade view; offers the guided experience
+startd8 kickoff guided      # optional: a walkthrough that just prints the commands to run
 #   add --agent for a PAID conversational interview (off by default → guided is <span class="pill pill-free">$0</span>)
 </code></pre>
-<p><code>assess</code> accepts <code>--guided/--no-guided</code> to force the offer on/off; <code>--json</code> on all three for CI.</p>
-<hr></div></details><details class="sec" id="3-onboard-get-a-data-contract-the-kickoff-input-package"><summary><span class="num">3</span><span class="stitle">Onboard — get a data contract + the kickoff input package</span><span class="chev">▶</span></summary><div class="inner"><p><strong>Greenfield</strong> — the schema comes from prose, not from code:</p>
+<p>The guided experience <strong>spends and writes nothing</strong> by default — it's an offer, never a gate.
+<code>--json</code> on both for CI.</p>
+<hr></div></details><details class="sec" id="2-onboard-get-a-data-contract-the-kickoff-input-package"><summary><span class="num">2</span><span class="stitle">Onboard — get a data contract + the kickoff input package</span><span class="chev">▶</span></summary><div class="inner"><p>On a new project the schema comes from your prose, not from code:</p>
 <pre><code class="language-bash">startd8 kickoff instantiate            # preview the 7-file kickoff input package
 startd8 kickoff instantiate --apply    # write it  (--with-authoring adds REQUIREMENTS/PLAN/TEST_USERS)
 #   --posture prototype|production (default prototype)
 startd8 generate contract --promote    # turn the authored prose into prisma/schema.prisma
 </code></pre>
-<p><strong>Brownfield</strong> — derive the contract from your existing Pydantic models:</p>
-<pre><code class="language-bash">startd8 kickoff derive --models app.models --check     # preview / drift (non-zero exit on drift)
-startd8 kickoff derive --models app.models --apply     # write prisma/schema.prisma
-#   --models is REQUIRED and repeatable; --pythonpath sets where to import from
-</code></pre>
-<p><code>derive</code> is <strong>brownfield-only</strong> (it errors on greenfield — use <code>generate contract</code> there).</p>
-<hr></div></details><details class="sec" id="4-draft-requirements-screens-a-fast-first-draft-to-approve"><summary><span class="num">4</span><span class="stitle">Draft — requirements &amp; screens (a fast first draft to approve)</span><span class="chev">▶</span></summary><div class="inner"><p>These are unchanged from before the distillation. Every suggestion carries <strong>provenance</strong>
-(<code>baseline</code> = <span class="pill pill-free">$0</span> deterministic, <code>estimate</code> = role-drafted, <code>human</code>), nothing is written without an
-explicit <code>approve</code>, and the tools <strong>never author your real content</strong> — only shells and stubs.</p>
+<hr></div></details><details class="sec" id="3-draft-requirements-screens"><summary><span class="num">3</span><span class="stitle">Draft — requirements &amp; screens</span><span class="chev">▶</span></summary><div class="inner"><p>A fast first draft for you to approve. Every suggestion carries <strong>provenance</strong> (<code>baseline</code> = <span class="pill pill-free">$0</span>
+deterministic, <code>estimate</code> = role-drafted, <code>human</code>), nothing is written without an explicit
+<code>approve</code>, and the tools <strong>never author your real content</strong> — only shells and stubs.</p>
 <p><strong>Requirements</strong> (<code>elicit → synthesize → review → approve</code>):</p>
 <pre><code class="language-bash">startd8 requirements init-roster                 # once; then EDIT docs/kickoff/inputs/stakeholders.yaml
 startd8 requirements elicit --brief docs/brief.md        # <span class="pill pill-free">$0</span> baseline (schema+brief → FR stubs)
@@ -294,7 +196,7 @@ startd8 screens review             # <span class="pill pill-free">$0</span>: lit
 startd8 screens approve --all      # apply staged screens → prisma/views.yaml / pages.yaml (accumulates)
 startd8 screens reject --name &quot;X&quot;  # drop one (writes nothing)
 </code></pre>
-<hr></div></details><details class="sec" id="5-facilitate-the-stakeholder-panel-optional-mostly-paid"><summary><span class="num">5</span><span class="stitle">Facilitate — the stakeholder panel (optional, mostly paid)</span><span class="chev">▶</span></summary><div class="inner"><p>A roster of stakeholder personas that pressure-tests your strategy. Two levels:</p>
+<hr></div></details><details class="sec" id="4-facilitate-the-stakeholder-panel-optional-mostly-paid"><summary><span class="num">4</span><span class="stitle">Facilitate — the stakeholder panel (optional, mostly paid)</span><span class="chev">▶</span></summary><div class="inner"><p>A roster of stakeholder personas that pressure-tests your strategy. Two levels:</p>
 <pre><code class="language-bash">startd8 kickoff panel list         # <span class="pill pill-free">$0</span>: show the persona roster (the &quot;mirror&quot;)
 startd8 kickoff panel ask   …      # PAID: one persona answers (synthetic, unratified)
 startd8 kickoff panel ask-all …    # PAID: the whole roster answers
@@ -302,42 +204,38 @@ startd8 kickoff panel import …     # <span class="pill pill-free">$0</span>: i
 </code></pre>
 <p>The <strong>multi-round facilitated</strong> process (R0–R4: prep → individual → pre-mortem → cross-pollination
 → synthesis) currently runs via <code>scripts/run_kickoff_panel.py</code> in the SDK checkout; it writes a
-transcript to <code>.startd8/kickoff-panel/&lt;session&gt;.json</code>. <code>startd8 kickoff deepen</code> is presently a
-<strong>pointer</strong> to it. Every persona output is <strong>synthetic and unratified</strong> — a fast draft from a room
-full of stakeholders, never a decision.</p>
-<hr></div></details><details class="sec" id="6-view-follow-the-panel-transcript-0-read-only"><summary><span class="num">6</span><span class="stitle">View — follow the panel transcript (<code>$0</code>, read-only)</span><span class="chev">▶</span></summary><div class="inner"><p>Once a facilitation transcript exists (<code>.startd8/kickoff-panel/&lt;session&gt;.json</code>), the viewer renders
-it as a standalone, offline HTML page you can navigate by <strong>round</strong> and by <strong>role</strong>:</p>
+transcript to <code>.startd8/kickoff-panel/&lt;session&gt;.json</code>. Every persona output is <strong>synthetic and
+unratified</strong> — a fast draft from a room full of stakeholders, never a decision.</p>
+<hr></div></details><details class="sec" id="5-view-follow-the-panel-transcript-0-read-only"><summary><span class="num">5</span><span class="stitle">View — follow the panel transcript (<code>$0</code>, read-only)</span><span class="chev">▶</span></summary><div class="inner"><p>Once a facilitation transcript exists, the viewer renders it as a standalone, offline HTML page you
+can navigate by <strong>round</strong> and by <strong>role</strong>:</p>
 <pre><code class="language-bash">startd8 kickoff-panel list                      # session ids, newest first
 startd8 kickoff-panel show [SESSION_ID]          # terminal dump; --by-role to re-pivot; --json for raw
 startd8 kickoff-panel view [SESSION_ID] --open   # write + open the HTML viewer (default: newest session)
 startd8 kickoff-panel view --watch               # live-follow: auto-updates as rounds land
-#   [SESSION_ID] defaults to the newest; --project &lt;root&gt; to point at another repo; --interval N
+#   [SESSION_ID] defaults to the newest; --project &lt;root&gt; to point at another repo
 </code></pre>
 <p>The viewer is <strong>observe-only</strong> — two-axis expand/collapse, per-persona model/family badges,
-adversary + grounding markers, the R0 prep cards, the halted-panel state, and a persistent
-"synthetic / unratified" banner. No scoring, no acceptance, no write-back (you ratify elsewhere).</p>
-<hr></div></details><details class="sec" id="7-brownfield-the-vipp-ground-truth-loop"><summary><span class="num">7</span><span class="stitle">Brownfield: the VIPP ground-truth loop</span><span class="chev">▶</span></summary><div class="inner"><p>VIPP is the project-side negotiator: a producer serializes onboarding <strong>proposals</strong> to
-<code>.startd8/vipp/proposals-inbox.json</code>; you <strong>negotiate</strong> them against your project's ground truth,
-then <strong>apply</strong> the accepted ones at your own privilege. Ground truth <em>adjudicates</em>, never
-<em>originates</em> — so on a healthy project this is often a clean no-op.</p>
-<pre><code class="language-bash">startd8 project init --with-vipp        # establish the VIPP posting (or: startd8 vipp init)
-startd8 vipp negotiate                   # <span class="pill pill-free">$0</span> deterministic dispositions.{json,md}
-startd8 vipp apply                       # preview; add --apply to write accepted proposals
-</code></pre>
-<blockquote>
-<p>During the deprecation window, bare <code>startd8 project init</code> still posts VIPP <strong>by default</strong> with a
-notice. Prefer the explicit <code>--with-vipp</code> so you don't depend on the default flipping later.</p>
-</blockquote>
-<hr></div></details><details class="sec" id="8-generate-the-app-the-0-cascade"><summary><span class="num">8</span><span class="stitle">Generate the app (the <code>$0</code> cascade)</span><span class="chev">▶</span></summary><div class="inner"><p>Once you have <code>prisma/schema.prisma</code>, the deterministic cascade builds the app — <strong>no LLM</strong>:</p>
+adversary + grounding markers, the R0 prep cards, and a persistent "synthetic / unratified" banner.
+No scoring, no acceptance, no write-back.</p>
+<hr></div></details><details class="sec" id="6-generate-the-app-the-0-cascade"><summary><span class="num">6</span><span class="stitle">Generate the app (the <code>$0</code> cascade)</span><span class="chev">▶</span></summary><div class="inner"><p>Once you have <code>prisma/schema.prisma</code>, the deterministic cascade builds the app — <strong>no LLM</strong>:</p>
 <pre><code class="language-bash">startd8 generate backend --check    # Pydantic + SQLModel + FastAPI + HTMX modular monolith
 startd8 generate views --schema prisma/schema.prisma --views prisma/views.yaml …
 startd8 polish apply --project &lt;out&gt; --theme &lt;theme&gt;    # accessible design system
 startd8 wireframe                   # <span class="pill pill-free">$0</span> pre-generation summary of what the cascade will build
 </code></pre>
-<p>(See the SDK <code>CLAUDE.md</code> "generation scope" section for the bucket separation — the SDK builds the
-application skeleton; it never authors your real user-facing content.)</p>
-<hr></div></details><details class="sec" id="9-deprecated-command-names-don-t-build-on-these"><summary><span class="num">9</span><span class="stitle">Deprecated command names (don&#x27;t build on these)</span><span class="chev">▶</span></summary><div class="inner"><p>The distillation renamed several groups. Old names still work <strong>for one release</strong> (with a stderr
-notice) but will be removed:</p>
+<p>The SDK builds the application skeleton; it never authors your real user-facing content.</p>
+<hr></div></details><details class="sec" id="7-good-to-know-0-vs-paid-preview-vs-write"><summary><span class="num">7</span><span class="stitle">Good to know — <code>$0</code> vs paid, preview vs write</span><span class="chev">▶</span></summary><div class="inner"><ul>
+<li><strong><code><span class="pill pill-free">$0</span></code> vs paid.</strong> Almost everything is <strong><code><span class="pill pill-free">$0</span></code>, deterministic, no LLM</strong> — the CLI labels each. The
+  only paid commands are <code>kickoff guided --agent</code>, <code>kickoff panel ask</code> / <code>ask-all</code>, and the optional
+  <code>--roles</code> pass on <code>requirements elicit</code> / <code>screens suggest</code>. Paid commands report their cost after
+  running and degrade cleanly to "no spend / defer" if a key is missing.</li>
+<li><strong>Preview vs write.</strong> Reads preview by default; <strong>writing needs <code>--apply</code></strong> (<code>kickoff instantiate</code>,
+  <code>generate contract --promote</code>) or an <code>approve</code> verb (<code>requirements</code>, <code>screens</code>). <code>review</code> shows the
+  literal bytes <code>approve</code> will write. Nothing runs your app or authors your real content.</li>
+<li><strong>Prerequisite.</strong> <code>startd8</code> on your PATH (check with <code>startd8 --help</code>).</li>
+</ul>
+<hr></div></details><details class="sec" id="8-deprecated-command-names-don-t-build-on-these"><summary><span class="num">8</span><span class="stitle">Deprecated command names (don&#x27;t build on these)</span><span class="chev">▶</span></summary><div class="inner"><p>Some groups were renamed; old names still work <strong>for one release</strong> (with a stderr notice) but will
+be removed:</p>
 <table>
 <thead>
 <tr>
@@ -356,11 +254,7 @@ notice) but will be removed:</p>
 </tr>
 <tr>
 <td><code>startd8 kickoff plan</code> / <code>kickoff next</code></td>
-<td><code>startd8 kickoff guided</code> (now under <code>kickoff-legacy</code>)</td>
-</tr>
-<tr>
-<td><code>startd8 kickoff-legacy …</code></td>
-<td>the canonical <code>kickoff …</code> kernel + <code>kickoff guided</code></td>
+<td><code>startd8 kickoff guided</code></td>
 </tr>
 <tr>
 <td><code>startd8 project init</code> (bare, greenfield onboarding)</td>
@@ -369,6 +263,24 @@ notice) but will be removed:</p>
 </tbody>
 </table>
 <p><code>startd8 requirements …</code>, <code>startd8 screens …</code>, and <code>startd8 vipp …</code> are <strong>unchanged</strong>.</p>
+<hr></div></details><details class="sec" id="9-working-with-an-existing-codebase-brownfield"><summary><span class="num">9</span><span class="stitle">Working with an existing codebase (brownfield)</span><span class="chev">▶</span></summary><div class="inner"><p>If you already have code and models, three things differ from the new-project flow above; the rest
+(Draft, Facilitate, View, Generate) is identical.</p>
+<p><strong>Orient with a triage</strong> instead of a bare <code>assess</code>:</p>
+<pre><code class="language-bash">startd8 kickoff survey      # docs, models, fixtures, PII (read-only)
+</code></pre>
+<p><strong>Derive the data contract from your existing Pydantic models</strong> (instead of <code>generate contract</code>):</p>
+<pre><code class="language-bash">startd8 kickoff derive --models app.models --check     # preview / drift (non-zero exit on drift)
+startd8 kickoff derive --models app.models --apply     # write prisma/schema.prisma
+#   --models is REQUIRED and repeatable; --pythonpath sets where to import from
+</code></pre>
+<p><code>derive</code> is brownfield-only (it errors on a greenfield project).</p>
+<p><strong>Run the VIPP ground-truth loop</strong> — negotiate onboarding proposals against your project's ground
+truth, then apply the accepted ones at your own privilege. Ground truth <em>adjudicates</em>, never
+<em>originates</em>, so on a healthy project this is often a clean no-op:</p>
+<pre><code class="language-bash">startd8 project init --with-vipp        # establish the VIPP posting (or: startd8 vipp init)
+startd8 vipp negotiate                   # <span class="pill pill-free">$0</span> deterministic dispositions.{json,md}
+startd8 vipp apply                       # preview; add --apply to write accepted proposals
+</code></pre>
 <hr></div></details><details class="sec" id="10-cheat-sheet"><summary><span class="num">10</span><span class="stitle">Cheat sheet</span><span class="chev">▶</span></summary><div class="inner"><table>
 <thead>
 <tr>
@@ -380,22 +292,17 @@ notice) but will be removed:</p>
 <tbody>
 <tr>
 <td>See where I am</td>
-<td><code>kickoff survey</code> / <code>kickoff assess</code> / <code>kickoff guided</code></td>
-<td><span class="pill pill-free">$0</span></td>
-</tr>
-<tr>
-<td>Data contract (greenfield)</td>
-<td><code>generate contract --promote</code></td>
-<td><span class="pill pill-free">$0</span></td>
-</tr>
-<tr>
-<td>Data contract (brownfield)</td>
-<td><code>kickoff derive --models &lt;pkg&gt; --apply</code></td>
+<td><code>kickoff assess</code> / <code>kickoff guided</code></td>
 <td><span class="pill pill-free">$0</span></td>
 </tr>
 <tr>
 <td>Kickoff input package</td>
 <td><code>kickoff instantiate --apply</code></td>
+<td><span class="pill pill-free">$0</span></td>
+</tr>
+<tr>
+<td>Data contract</td>
+<td><code>generate contract --promote</code></td>
 <td><span class="pill pill-free">$0</span></td>
 </tr>
 <tr>
@@ -419,13 +326,18 @@ notice) but will be removed:</p>
 <td><span class="pill pill-free">$0</span></td>
 </tr>
 <tr>
-<td>Brownfield ground truth</td>
-<td><code>project init --with-vipp</code> → <code>vipp negotiate</code> → <code>vipp apply --apply</code></td>
+<td>Build the app</td>
+<td><code>generate backend</code> → <code>generate views</code> → <code>polish apply</code></td>
 <td><span class="pill pill-free">$0</span></td>
 </tr>
 <tr>
-<td>Build the app</td>
-<td><code>generate backend</code> → <code>generate views</code> → <code>polish apply</code></td>
+<td>Brownfield: data contract</td>
+<td><code>kickoff derive --models &lt;pkg&gt; --apply</code></td>
+<td><span class="pill pill-free">$0</span></td>
+</tr>
+<tr>
+<td>Brownfield: ground truth</td>
+<td><code>project init --with-vipp</code> → <code>vipp negotiate</code> → <code>vipp apply --apply</code></td>
 <td><span class="pill pill-free">$0</span></td>
 </tr>
 </tbody>
@@ -454,10 +366,12 @@ notice) but will be removed:</p>
   // expand / collapse all
   document.getElementById('exp').addEventListener('click',function(){secs.forEach(function(d){d.open=true;});});
   document.getElementById('col').addEventListener('click',function(){secs.forEach(function(d){d.open=false;});});
-  // TOC click → open + scroll
-  links.forEach(function(l){l.addEventListener('click',function(){
-    var d=document.getElementById(l.dataset.slug); if(d) d.open=true;
-  });});
+  // TOC + summary-flow clicks → open the target section
+  function openTarget(id){var d=document.getElementById(id); if(d) d.open=true;}
+  links.forEach(function(l){l.addEventListener('click',function(){openTarget(l.dataset.slug);});});
+  document.querySelectorAll('.flow a[data-open]').forEach(function(a){
+    a.addEventListener('click',function(){openTarget(a.dataset.open);});
+  });
   // open on hash
   if(location.hash){var d=document.getElementById(location.hash.slice(1)); if(d&&d.tagName==='DETAILS') d.open=true;}
   // scroll-spy
