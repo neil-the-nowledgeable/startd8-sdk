@@ -6,7 +6,11 @@
 from typing import Optional
 from pathlib import Path
 import typer
+from rich.console import Console
 from .cli_shared import console
+
+# Deprecation / advisory notices go to stderr so `--json` stdout stays parseable (mirrors cli_concierge).
+_stderr_console = Console(stderr=True)
 
 
 project_app = typer.Typer(
@@ -67,8 +71,17 @@ def project_init(
     project_root: Optional[Path] = typer.Argument(
         None, help="Project root to onboard (default: current directory)."
     ),
+    with_vipp: Optional[bool] = typer.Option(
+        None,
+        "--with-vipp/--no-vipp",
+        help=(
+            "Establish the VIPP / ground-truth-adjudication posting + inbox. Default (unset): posted "
+            "for consumer safety during the alias window, with a deprecation notice. --with-vipp = "
+            "explicit opt-in (no notice); --no-vipp = opt out (no VIPP posting, no `import vipp`)."
+        ),
+    ),
     with_fde: bool = typer.Option(
-        False, "--with-fde", help="Also establish the FDE posting (VIPP is always established)."
+        False, "--with-fde", help="Also establish the FDE posting."
     ),
     instantiate: bool = typer.Option(
         False,
@@ -90,11 +103,17 @@ def project_init(
         False, "--json", help="Emit the machine-readable summary as JSON (for CI)."
     ),
 ) -> None:
-    """Deterministically onboard a directory as a StartD8 project ($0, no LLM).
+    """Set up the un-bundled VIPP / ground-truth-adjudication capability on a directory ($0, no LLM).
 
-    Detects greenfield/brownfield, establishes the ``.startd8/`` role postings, makes the project
-    VIPP-inbox-ready, and (on a declared gap) produces a first inbox non-interactively. Re-runnable
-    as a clean no-op. See ``docs/design/project-init/`` for the design.
+    Re-filed (M3, FR-1a/FR-14/OQ-8): this is the **setup entrypoint of the opt-in VIPP capability**,
+    not kernel onboarding — greenfield onboarding is ``startd8 kickoff instantiate``. It detects
+    greenfield/brownfield, establishes the ``.startd8/`` role postings, makes the project
+    VIPP-inbox-ready, and (on a declared gap) produces a first inbox non-interactively. Re-runnable as
+    a clean no-op.
+
+    The VIPP posting is **opt-in**, default-on during a consumer-safe alias window (the two live
+    consumers reach VIPP through this command) — pass ``--no-vipp`` to opt out (no ``import vipp``),
+    or ``--with-vipp`` to opt in explicitly and silence the deprecation notice.
     """
     import json as _json
 
@@ -102,9 +121,35 @@ def project_init(
     from .project.init import ProposalsFileError, run_project_init
 
     root = project_root or Path.cwd()
+
+    # Tri-state resolution of the VIPP posting (FR-1a alias window):
+    #   None  -> default-on for consumer safety; emit the deprecation notice pointing at the opt-in.
+    #   True  -> explicit opt-in (post VIPP, no notice — the user chose the VIPP capability).
+    #   False -> opt out (no VIPP posting, and run_project_init never `import vipp`).
+    resolved_with_vipp = True if with_vipp is None else with_vipp
+    if with_vipp is None and not check:
+        # Consumer-safe default: keep posting VIPP so household-o11y / benchmark portal do not break,
+        # but announce the scope-out so callers migrate to `--with-vipp` (or the VIPP-capability home).
+        import warnings as _warnings
+
+        _warnings.warn(
+            "`startd8 project init` now sets up the opt-in VIPP / ground-truth-adjudication "
+            "capability, not kernel onboarding. VIPP is still posted by default for one release; "
+            "pass `--with-vipp` to opt in explicitly (no notice) or `--no-vipp` to opt out. "
+            "For plain greenfield onboarding use `startd8 kickoff instantiate`.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        _stderr_console.print(
+            "[yellow]deprecation:[/yellow] `startd8 project init` is now VIPP-capability setup "
+            "(not kernel onboarding); VIPP is posted by default for one release — pass `--with-vipp` "
+            "to opt in explicitly, `--no-vipp` to opt out. Greenfield onboarding: `startd8 kickoff instantiate`."
+        )
+
     try:
         summary = run_project_init(
             root,
+            with_vipp=resolved_with_vipp,
             with_fde=with_fde,
             instantiate=instantiate,
             proposals_file=proposals,
@@ -155,6 +200,9 @@ def _render_summary(summary: dict) -> None:
     console.print(f"[green]project init[/green] — shape: [cyan]{shape.get('verdict', '?')}[/cyan]")
     postings = summary.get("postings", {})
     console.print(f"  postings: {', '.join(sorted(postings)) or '(none)'}")
+    if summary.get("vipp") == "opted-out":
+        console.print("  [dim]VIPP opted out (--no-vipp): no posting, no inbox.[/dim]")
+        return
     inbox = summary.get("inbox_ready", {})
     if inbox.get("written"):
         console.print(f"  inbox-ready: created {', '.join(inbox['written'])}")

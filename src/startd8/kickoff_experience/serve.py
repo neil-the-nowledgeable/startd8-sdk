@@ -292,12 +292,20 @@ def serve_kickoff(
     config: Optional[KickoffExperienceConfig] = None,
     agent_spec: Optional[str] = None,
     red_carpet: bool = False,
+    cloud: bool = False,
+    api_key: Optional[str] = None,
 ) -> None:  # pragma: no cover - blocking I/O; covered indirectly via build_kickoff_app + preflight
     """Serve the kickoff web app on the loopback (R1-S8). Blocks until interrupted.
 
     Runs preflight first and refuses on a blocking failure. The scratch GC reclaims stale app
     fingerprints before serving (R5-S8). When *agent_spec* resolves, the web agentic chat panel
     (`/concierge/chat`) is enabled (spends LLM tokens); else the panel shows a disabled notice.
+
+    *cloud* (GE-M5, FR-GE-8) serves **read/preview-only**: every write + LLM-invoking endpoint is
+    refused (``cloud_write_deferred``, OQ-GE-7) and the agentic/facilitation panel is disabled;
+    Deepen is static-transcript-only. *api_key*, when set with *cloud*, gates POSTs via the static
+    ``server/auth.py`` middleware (coarse cloud auth, not a tenancy model). This does **not** build
+    real cloud hosting — the operator provides the bind/reverse-proxy; *host* defaults to loopback.
     """
     from .web import build_kickoff_app
 
@@ -311,13 +319,13 @@ def serve_kickoff(
 
     gc_stale_scratch(project_root, app_fingerprint(cfg, theme=theme))
     chat_factory = None
-    if agent_spec:
+    if agent_spec and not cloud:  # GE-M5: no LLM-invoking panel on a cloud read-only serve
         resolution = resolve_chat_panel(project_root, agent_spec, red_carpet=red_carpet)
         chat_factory = resolution.factory
         if chat_factory is None:
             logger.warning("agentic chat panel disabled: %s", resolution.reason)
     app = build_kickoff_app(project_root, config=cfg, theme=theme, mode=mode,
-                            chat_factory=chat_factory)
+                            chat_factory=chat_factory, cloud=cloud, api_key=api_key)
     bind_port = port or find_free_port(host)
 
     import uvicorn

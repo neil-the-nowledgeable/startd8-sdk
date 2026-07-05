@@ -35,8 +35,12 @@ from .manifest_extraction.models import ExtractionRecord, ExtractionResult
 console = Console()
 
 kickoff_app = typer.Typer(
-    help="Kickoff-package tooling (authoring contract, conformance)."
+    help="[DEPRECATED — renamed to `kickoff-legacy`] Kickoff-package metaphor tooling "
+    "(authoring contract, conformance). The `kickoff` name now hosts the onboarding kernel."
 )
+
+# stderr so the notice never pollutes any `--json` stdout contract.
+_stderr_console = Console(stderr=True)
 
 _EXIT_CONFORMANCE = 1
 _EXIT_FATAL = 2
@@ -54,7 +58,23 @@ def _is_conformance_failure(record: ExtractionRecord) -> bool:
 
 @kickoff_app.callback()
 def _kickoff_callback() -> None:
-    """Kickoff-package tooling (use `kickoff check`)."""
+    """[DEPRECATED] The metaphor group moved to `startd8 kickoff-legacy` (M0a).
+
+    The `kickoff` name now hosts the onboarding kernel (survey/assess/instantiate/derive). These
+    metaphor commands keep working under `kickoff-legacy` for the transition.
+    """
+    import warnings
+
+    warnings.warn(
+        "`startd8 kickoff <metaphor-command>` moved to `startd8 kickoff-legacy`; "
+        "the `kickoff` name now hosts the onboarding kernel.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _stderr_console.print(
+        "[yellow]deprecation:[/yellow] these metaphor commands moved to "
+        "`startd8 kickoff-legacy` (the `kickoff` name now hosts the onboarding kernel)."
+    )
 
 
 @kickoff_app.command("check")
@@ -506,11 +526,23 @@ def start_cmd(
         "--red-carpet",
         help="Make the web chat the stage-aware Red Carpet build conductor.",
     ),
+    cloud: bool = typer.Option(
+        False,
+        "--cloud",
+        help="Cloud read/preview-only posture (GE-M5, FR-GE-8): all writes + the paid "
+        "facilitation/chat panel are refused (cloud-write deferred to OQ-GE-7). Reads only.",
+    ),
+    api_key: Optional[str] = typer.Option(
+        None,
+        "--api-key",
+        help="Static X-API-Key gating POSTs when serving --cloud (coarse cloud auth, not tenancy).",
+    ),
 ) -> None:
     """Serve the interactive kickoff web app on the loopback (preflight first; teardown on exit).
 
     Pass --agent to enable the conversational Concierge chat panel at /concierge/chat; add --red-carpet
-    to make that panel the stage-aware Red Carpet build conductor.
+    to make that panel the stage-aware Red Carpet build conductor. Pass --cloud for a read/preview-only
+    surface (no writes, no paid facilitation; cloud-write deferred to OQ-GE-7).
     """
     from .kickoff_experience.concierge_agent import resolve_concierge_agent_spec
     from .kickoff_experience.serve import (
@@ -536,8 +568,14 @@ def start_cmd(
         raise typer.Exit(_EXIT_FATAL)
     # The agentic panel spends tokens, so it stays opt-in: enable it only on an EXPLICIT agent choice
     # — the --agent flag or a configured `concierge_agent` (project/global) — never the bare default.
+    # GE-M5: a --cloud serve is read/preview-only, so the LLM panel is force-disabled regardless.
     spec, source = resolve_concierge_agent_spec(project, agent)
-    panel_spec = spec if source != "default" else None
+    panel_spec = None if cloud else (spec if source != "default" else None)
+    if cloud:
+        console.print(
+            "  [yellow]•[/yellow] cloud read/preview-only: writes + paid facilitation refused "
+            "(cloud-write deferred, OQ-GE-7)"
+        )
     if panel_spec:
         resolution = resolve_chat_panel(project, panel_spec, red_carpet=red_carpet)
         flavor = "Red Carpet build conductor" if red_carpet else "Concierge"
@@ -561,6 +599,8 @@ def start_cmd(
         port=port,
         agent_spec=panel_spec,
         red_carpet=red_carpet,
+        cloud=cloud,
+        api_key=api_key,
     )
 
 

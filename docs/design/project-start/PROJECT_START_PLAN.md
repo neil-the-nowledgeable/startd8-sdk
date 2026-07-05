@@ -97,17 +97,29 @@ consumers migrate (NR-5, FR-9/FR-12).
   promotion+hardening, surface parity, cloud-read). Only the Teian ghost is deleted.
 - **Satisfies:** parent FR-9 (as consolidation), the guided-experience FR-GE-* set.
 
-### M5 — Migration + removal criteria (no deletions)
+### M5 — Migration + removal criteria (no deletions) — **DONE**
 - Deprecation notices on the consolidated-away surfaces, each pointing to the
-  `kickoff` guided verb that replaces it.
-- Write the **navig8 migration note** (FR-11): navig8 = kernel-only (`instantiate` +
-  `derive`), zero impact (OQ-5 resolved).
-- Codify **removal criteria** (FR-12, CRP-fixed): kernel/guided shipped + consumers
-  migrated + **no CLI subcommand / MCP `action` value / documented consumer resolves
-  to the retiring code** (grep-verified; NOT the deterministic-provider group) ⇒
-  eligible for a later deletion PR. Add a **detection trigger** (R2-F1) so the gate's
-  satisfaction is noticed, not passive.
-- **Satisfies:** FR-9, FR-10, FR-11, FR-12, NR-5.
+  `kickoff` guided verb that replaces it. *(Already emitted by M0/M3/GE — the
+  `concierge`/`panel`/`kickoff-legacy` group callbacks + the `_ACTION_ALIASES`
+  `DeprecationWarning` + the `project init` VIPP deprecation notice.)*
+- **navig8 migration note (FR-11) — written:** `MIGRATION_NOTE.md`. navig8 =
+  kernel-only (`instantiate` + `derive`), **zero impact** (old CLI + MCP `action`
+  names still alias). household-o11y + benchmark portal = `project init` VIPP posts
+  by default until the alias window closes (migrate to `--with-vipp`). The MCP
+  `action` enum aliases keep scripted callers working. **Skipped FR-5a**
+  (schema-shape diagnostics `_schema_advisories` not ported) recorded as a known,
+  navig8-irrelevant capability loss (code retained, NR-5).
+- **Removal criteria (FR-12, CRP-fixed) — codified** in `MIGRATION_NOTE.md`:
+  kernel/guided shipped + consumers migrated + **no CLI subcommand / MCP `action`
+  value / documented consumer resolves to the retiring code** (grep across the three
+  real registries; **NOT** the vacuous `deterministic_providers` group — R1-F1) ⇒
+  eligible for a later, separate deletion PR.
+- **Detection trigger (R2-F1) — built:**
+  `tests/unit/concierge/test_removal_criteria_trigger.py` enumerates every
+  deprecated-alias surface, asserts they still resolve (NR-5 — nothing deleted yet),
+  and emits the deletion checklist. When the aliases are removed the assertions flip
+  to failing — a loud, dated, CI-visible activation signal.
+- **Satisfies:** FR-9, FR-10, FR-11, FR-12, NR-5. **See:** `MIGRATION_NOTE.md`.
 
 ### M6 (separate spec) — Un-bundled VIPP capability
 - VIPP → its own "ground-truth proposal adjudication / brownfield" requirements,

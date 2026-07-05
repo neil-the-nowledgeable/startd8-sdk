@@ -46,6 +46,17 @@ _TOKEN_TTL_S = 3600.0
 _BUNDLE_MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024
 # Welcome Mat 2.0 chat input cap (FR-WM2-5b): reject an oversized message before any provider call.
 _MAX_CHAT_MESSAGE_CHARS = 4096
+# GE-M5 (FR-GE-8) — cloud is READ/PREVIEW-ONLY. Cloud-WRITE is intentionally **not built**: a cloud
+# (non-loopback) surface has no per-tenant trust substrate — only the static `server/auth.py`
+# `X-API-Key` (no principal/tenancy/session/CSRF). So every write + LLM-invoking (facilitation/chat)
+# endpoint is refused in cloud mode with a typed **501** carrying this code, making the deferral
+# explicit and discoverable rather than a silent 403/404. Building cloud-write needs the net-new
+# auth/tenancy/CSRF design tracked as **OQ-GE-7** (see GUIDED_EXPERIENCE_REQUIREMENTS.md FR-GE-8 /
+# OQ-GE-7). The human downloads produced inputs and writes locally (FR-GE-13/14: human/CLI is the
+# sole writer). Deepen stays static-transcript-only on cloud: `/guided` reads only persisted
+# `.startd8/kickoff-panel/*` sessions via `build_guided_view(load_deepen=True)` and invokes no LLM.
+CLOUD_WRITE_DEFERRED_CODE = "cloud_write_deferred"
+
 # stop_reason → typed /chat code (FR-WM2-8b); `completed` is the only non-refusal outcome.
 _CHAT_STOP_CODE = {
     "budget": "chat_budget_exceeded",
@@ -512,6 +523,79 @@ def _render_concierge(view: dict, csrf: str, intents: dict, stylesheet: str) -> 
     return _page("Concierge", "".join(parts), stylesheet)
 
 
+def _render_guided(view: dict, stylesheet: str) -> str:
+    """Render the shared guided view-model (GE-M4) as HTML — the SAME payload the CLI and TUI render.
+
+    The served leg is read/preview-only: it presents Orient → Guide → Deepen (incl. GE-M3b's
+    halted-session + per-round/total-cost states) but invokes no LLM and writes nothing. Parity is a
+    property of `build_guided_view`; this function differs from the CLI/TUI only in *rendering*.
+    """
+    from .concierge_view import format_cost
+
+    orient = view.get("orient") or {}
+    guide = view.get("guide") or {}
+    deepen = view.get("deepen") or {}
+    parts = [
+        "<p><a href='/'>← overview</a></p><h1>Guided kickoff</h1>",
+        "<p class='muted'>One experience, three phases — Orient → Guide → Deepen "
+        "(read-only, $0, no LLM).</p>",
+        # Orient
+        "<h2>1. Orient — where you are (readiness)</h2>",
+    ]
+    score = guide.get("readiness_score")
+    if score is not None:
+        parts.append(f"<p>Readiness score: <strong>{_esc(score)}</strong></p>")
+    domains = ((orient.get("kickoff_inputs") or {}).get("domains")) or {}
+    if domains:
+        parts.append("<ul>")
+        for name, info in domains.items():
+            parts.append(f"<li><code>{_esc(name)}</code>: {_esc(info.get('status'))}</li>")
+        parts.append("</ul>")
+    unmet = guide.get("unmet_gates") or []
+    parts.append(f"<p>Unmet gates: {_esc(', '.join(unmet) if unmet else '(none)')}</p>")
+    # Guide
+    parts.append("<h2>2. Guide — the $0 conductor (deterministic, no LLM)</h2>")
+    steps = guide.get("steps") or []
+    if steps:
+        parts.append("<ol>")
+        for s in steps:
+            cmd = s.get("command")
+            cmd_html = f" <code>{_esc(cmd)}</code>" if cmd else ""
+            parts.append(
+                f"<li>[{_esc(s.get('cost'))}] {_esc(s.get('title'))} "
+                f"({_esc(s.get('stage'))}){cmd_html}</li>"
+            )
+        parts.append("</ol>")
+    else:
+        parts.append("<p class='muted'>No next steps — the $0 cascade is build-ready.</p>")
+    # Deepen — the same halt/cost projection every surface shows
+    parts.append("<h2>3. Deepen — optional multi-perspective facilitation</h2>")
+    if deepen.get("engaged"):
+        parts.append(
+            f"<p>Session <code>{_esc(deepen.get('session_id'))}</code> — "
+            f"status: <strong>{_esc(deepen.get('status'))}</strong></p>"
+        )
+        if deepen.get("halted") and deepen.get("halt"):
+            parts.append(
+                "<div class='card'><h3>⛔ HALTED "
+                f"({_esc(deepen['halt'].get('reason'))})</h3>"
+                f"<p>{_esc(deepen['halt'].get('message'))}</p></div>"
+            )
+        cap = deepen.get("budget_usd") or 0.0
+        cap_str = f" of {format_cost(cap)} cap" if cap else ""
+        parts.append(
+            f"<p>Cost: <strong>{_esc(format_cost(deepen.get('cost_total_usd')))}</strong>"
+            f"{_esc(cap_str)} over {_esc(deepen.get('n_rounds'))} round(s)</p>"
+        )
+    else:
+        parts.append(
+            "<p class='muted'>Optional — drive the facilitation panel via "
+            f"<code>{_esc(deepen.get('surface'))}</code> (paid, synthetic — unratified input). "
+            "Nothing is spent or written here.</p>"
+        )
+    return _page("Guided kickoff", "".join(parts), stylesheet)
+
+
 # --- the app factory ----------------------------------------------------------------------------
 
 
@@ -523,12 +607,22 @@ def build_kickoff_app(
     mode: str = "write",
     clock=time.monotonic,
     chat_factory: "Optional[Callable[[], object]]" = None,
+    cloud: bool = False,
+    api_key: Optional[str] = None,
 ):
     """Build the kickoff web app (FastAPI). Pure function of *project_root* + config + theme.
 
     *mode* is the R4-F5 feature mode: ``write`` (default) allows applies; ``preview`` /
     ``inspect`` refuse apply (the surface is read/preview only); ``demo`` allows applies on a
     fixture. *clock* is injectable so rate-limit/expiry behavior is testable without real time.
+
+    *cloud* (GE-M5, FR-GE-8) puts the served surface in **cloud read/preview-only** posture,
+    orthogonal to and stronger than *mode*: **every write and LLM-invoking (facilitation/chat)
+    endpoint is refused** with a typed 501 (``cloud_write_deferred``) because a cloud surface has
+    no per-tenant trust substrate — cloud-write is deferred to OQ-GE-7. Reads (Orient + Guide +
+    the static-transcript-only Deepen view) stay open. When *api_key* is set on a cloud app, the
+    static ``server/auth.py`` ``X-API-Key`` middleware gates mutation (POST) requests — reused as
+    the coarse cloud auth, **not** a new tenancy model (OQ-GE-7).
     """
     from fastapi import Cookie, FastAPI, Form, Header
     from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -537,6 +631,25 @@ def build_kickoff_app(
 
     cfg = config or default_config()
     root = str(project_root)
+    # GE-M5 cloud read-only guard: no LLM-invoking agentic panel on cloud (an un-metered
+    # spend/abuse surface under a tenancy-less static key). Reads remain fully available.
+    if cloud:
+        chat_factory = None
+
+    def _cloud_deferred(what: str = "write") -> "JSONResponse":
+        """The explicit OQ-GE-7 refusal: cloud is read/preview-only; *what* is deferred (501)."""
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": CLOUD_WRITE_DEFERRED_CODE,
+                "message": (
+                    f"cloud is read/preview-only; {what} is deferred to OQ-GE-7 "
+                    "(net-new auth/tenancy). Download inputs and write locally."
+                ),
+            },
+            status_code=501,
+            headers=dict(_FRAME_DENY_HEADERS),
+        )
     stylesheet = render_stylesheet(get_theme(theme))
     fingerprint = app_fingerprint(cfg, theme=theme)
     sessions = _SessionStore()
@@ -547,6 +660,7 @@ def build_kickoff_app(
     chats = _ChatStore(clock=clock)   # live agentic chat sessions (web agentic panel); idle-expiring
     chat_locks: Dict[str, asyncio.Lock] = {}   # FR-WM2-5c: one in-flight turn per chat session
     app.state.kickoff_agentic_enabled = chat_factory is not None
+    app.state.kickoff_cloud = cloud  # GE-M5 read-only posture (introspectable by preflight/tests)
 
     def _capture_error(exc: CaptureError, http_status: int = 400) -> JSONResponse:
         return JSONResponse(
@@ -613,6 +727,9 @@ def build_kickoff_app(
         value: str = Form(...),
         csrf: str = Form(...),
     ) -> JSONResponse:
+        # GE-M5 cloud read-only gate (FR-GE-8): cloud never writes — deferred to OQ-GE-7.
+        if cloud:
+            return _cloud_deferred("capture")
         # Feature-mode gate (R4-F5): preview/inspect modes cannot reach apply_write_plan.
         if mode in ("preview", "inspect"):
             return JSONResponse(
@@ -752,7 +869,9 @@ def build_kickoff_app(
     from .concierge_view import build_concierge_view
 
     def _concierge_write_gate(host: Optional[str], csrf: str, now: float):
-        """Shared gate for Concierge write POSTs: mode, loopback Host, CSRF, rate-limit."""
+        """Shared gate for Concierge write POSTs: cloud, mode, loopback Host, CSRF, rate-limit."""
+        if cloud:  # GE-M5 (FR-GE-8): cloud is read/preview-only — write deferred to OQ-GE-7.
+            return _cloud_deferred()
         if mode in ("preview", "inspect"):
             return JSONResponse({"ok": False, "code": "preview_only",
                                  "message": f"mode {mode!r} is read/preview only"}, status_code=403)
@@ -787,6 +906,35 @@ def build_kickoff_app(
     def concierge_json() -> JSONResponse:
         # Shared view-model payload (parity oracle; the TUI renders the same dict).
         return JSONResponse(build_concierge_view(root), headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.get("/guided", response_class=HTMLResponse)
+    def guided() -> HTMLResponse:
+        # GE-M4 served leg — read/preview-only render of the ONE guided view-model (Orient → Guide →
+        # Deepen, incl. the GE-M3b halt/cost states). Degrades to an error page if the kernel `assess`
+        # cannot read the project; never 500s the surface.
+        from .concierge_view import build_guided_view
+
+        try:
+            view = build_guided_view(root, load_deepen=True)
+        except Exception as exc:
+            return HTMLResponse(
+                _page("Guided kickoff", f"<h1>Guided kickoff</h1><p>could not read project: "
+                                        f"{_esc(exc)}</p>", stylesheet),
+                status_code=200, headers=dict(_FRAME_DENY_HEADERS),
+            )
+        return HTMLResponse(_render_guided(view, stylesheet), headers=dict(_FRAME_DENY_HEADERS))
+
+    @app.get("/guided.json")
+    def guided_json() -> JSONResponse:
+        # Same guided view-model payload the CLI `kickoff guided --json` emits and the TUI renders.
+        from .concierge_view import build_guided_view
+
+        try:
+            view = build_guided_view(root, load_deepen=True)
+        except Exception as exc:
+            return JSONResponse({"ok": False, "code": "assess_failed", "message": str(exc)},
+                                status_code=400, headers=dict(_FRAME_DENY_HEADERS))
+        return JSONResponse(view, headers=dict(_FRAME_DENY_HEADERS))
 
     @app.get("/red-carpet.json")
     def red_carpet_json() -> JSONResponse:
@@ -880,6 +1028,17 @@ def build_kickoff_app(
 
     @app.get("/concierge/chat", response_class=HTMLResponse)
     def chat_page() -> HTMLResponse:
+        if cloud:
+            # GE-M5 (FR-GE-8): the agentic/facilitation chat spends LLM tokens — disabled on cloud
+            # (un-metered spend/abuse under a tenancy-less static key). Deferred to OQ-GE-7.
+            return HTMLResponse(
+                _page("Concierge — chat",
+                      "<p><a href='/concierge'>← Concierge</a></p><h1>Chat unavailable on cloud</h1>"
+                      "<p>This is a cloud read/preview-only surface — the conversational Concierge "
+                      "and the paid facilitation panel are disabled (OQ-GE-7). Use a local install "
+                      "to author, or download the kickoff templates and write locally.</p>",
+                      stylesheet),
+                headers=dict(_FRAME_DENY_HEADERS))
         if chat_factory is None:
             return HTMLResponse(
                 _page("Concierge — chat",
@@ -924,6 +1083,8 @@ def build_kickoff_app(
     async def chat_message(message: str = Form(...), host: Optional[str] = Header(default=None),
                            kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         from .telemetry import EV_CHAT_TURN, emit, kickoff_span
+        if cloud:                                    # GE-M5 (FR-GE-8): no LLM spend on cloud — OQ-GE-7
+            return _cloud_deferred("chat")
         if mode in ("preview", "inspect"):           # FR-WM2-8a — never spend in read/preview modes
             return _chat_refused("preview_only", 403)
         if not _host_ok(host):
@@ -1018,6 +1179,8 @@ def build_kickoff_app(
                    kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         # R4-F6 — new conversation: destroy the current session's history and mint a fresh one. $0,
         # no provider call, no chat_turn event. CSRF-protected (it mutates server state).
+        if cloud:  # GE-M5: chat is disabled on cloud (OQ-GE-7)
+            return _cloud_deferred("chat")
         if chat_factory is None:
             return JSONResponse({"ok": False, "code": "chat_disabled"}, status_code=409,
                                 headers=dict(_FRAME_DENY_HEADERS))
@@ -1031,5 +1194,13 @@ def build_kickoff_app(
         resp = JSONResponse({"ok": True}, headers=dict(_FRAME_DENY_HEADERS))
         resp.set_cookie("kickoff_chat", new_sid, httponly=True, samesite="strict")
         return resp
+
+    # GE-M5 — reuse the static server/auth.py X-API-Key as the coarse cloud gate on mutation (POST)
+    # requests (NOT a new tenancy model — OQ-GE-7). Cloud writes 501 regardless; this additionally
+    # protects the read-only preview POSTs behind the shared key.
+    if cloud and api_key:
+        from ..server.auth import APIKeyMiddleware
+
+        app.add_middleware(APIKeyMiddleware, api_key=api_key)
 
     return app

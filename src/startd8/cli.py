@@ -43,9 +43,9 @@ from .cli_capdevpipe import capdevpipe_app
 from .cli_fde import fde_app
 from .cli_sapper import sapper_app
 from .cli_secrets import secrets_app
-from .cli_kickoff import kickoff_app
-from .cli_concierge import concierge_app
-from .cli_panel import panel_app
+from .cli_kickoff import kickoff_app as kickoff_legacy_app
+from .cli_concierge import concierge_app, kickoff_kernel_app
+from .cli_panel import panel_app, panel_deprecated_app
 from .cli_requirements import requirements_app
 from .cli_screens import screens_app
 from .cli_vipp import vipp_app
@@ -1259,9 +1259,18 @@ app.add_typer(fde_app, name="fde")
 app.add_typer(sapper_app, name="sapper")
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(deploy_app, name="deploy")
-app.add_typer(kickoff_app, name="kickoff")
-app.add_typer(concierge_app, name="concierge")
-app.add_typer(panel_app, name="panel")
+# M0b/GE-M1: the onboarding kernel claims the `kickoff` name (survey/assess/instantiate/derive/
+# guided). GE-M1 folds the stakeholder panel under it as `startd8 kickoff panel …` so the one
+# entry point / one vocabulary metric holds (FR-GE-7).
+kickoff_kernel_app.add_typer(panel_app, name="panel")
+app.add_typer(kickoff_kernel_app, name="kickoff")
+# M0a: the metaphor group is demoted to `kickoff-legacy` (freeing `kickoff`); its subcommands
+# keep working under the legacy name behind a deprecation notice.
+app.add_typer(kickoff_legacy_app, name="kickoff-legacy")
+# FR-10 / FR-GE-7 alias window: the old top-level `startd8 concierge …` and `startd8 panel …` names
+# stay reachable (hidden) for one release, each emitting a deprecation warning via its group callback.
+app.add_typer(concierge_app, name="concierge", hidden=True)
+app.add_typer(panel_deprecated_app, name="panel", hidden=True)
 app.add_typer(requirements_app, name="requirements")
 app.add_typer(screens_app, name="screens")
 app.add_typer(vipp_app, name="vipp")

@@ -72,14 +72,15 @@ def test_handle_unknown_action_raises(project):
 
 
 def test_handle_unknown_action_raises_not_crash(project):
-    # All v1 actions (survey/assess/instantiate-kickoff/log-friction/derive-contract) are now
-    # implemented — DEFERRED_ACTIONS is empty. An out-of-scope action degrades gracefully
-    # (a clear ConciergeError listing the known actions), never an opaque crash.
+    # All v1 actions (survey/assess/instantiate/log-friction/derive) are now implemented —
+    # DEFERRED_ACTIONS is empty. The known-actions listing uses the M0b canonical names (the old
+    # `instantiate-kickoff`/`derive-contract` values still dispatch via the alias window). An
+    # out-of-scope action degrades gracefully (a clear ConciergeError), never an opaque crash.
     import pytest
 
     with pytest.raises(ConciergeError) as exc:
         handle_concierge_tool("teleport", project)
-    assert "teleport" in str(exc.value) and "derive-contract" in str(exc.value)
+    assert "teleport" in str(exc.value) and "derive" in str(exc.value)
 
 
 def test_survey_is_pure_no_writes(project):
@@ -105,6 +106,104 @@ def test_assess_kickoff_inputs_provenance(tmp_path):
     assert domains["observability"]["status"] == "absent"
     # cascade half always present (wraps wireframe); shape is env-dependent, status key is not.
     assert "status" in out["cascade"]
+
+
+# ── M2: kernel-owned coverage; the panel-in-assess edge is cut (FR-13/FR-15, R1-F4/R2-F2) ──
+
+
+def test_assess_reports_only_kernel_owned_domains(tmp_path):
+    """assess coverage is the kernel-owned KICKOFF_INPUT_DOMAINS ONLY — no ``stakeholders`` domain.
+
+    The Stakeholder Panel is an optional, later discovery offer (M4), not a kernel input domain, so
+    it must never be injected into kernel ``assess`` output (FR-15 panel half).
+    """
+    from startd8.concierge.core import KICKOFF_INPUT_DOMAINS
+
+    root = tmp_path / "kp"
+    (root / "docs" / "kickoff" / "inputs").mkdir(parents=True)
+    domains = handle_concierge_tool("assess", root)["kickoff_inputs"]["domains"]
+    assert set(domains) == set(KICKOFF_INPUT_DOMAINS)
+    assert "stakeholders" not in domains  # the panel-in-assess edge is cut (M2)
+
+
+def test_assess_core_does_not_import_stakeholder_panel():
+    """The kernel coverage core carries no reference to ``stakeholder_panel`` / ``PANEL_CONSUMABLE``.
+
+    R1-F4: removing the domain-list coupling is not enough — the module source must not name the
+    package or the ship-state flag anywhere in executable code.
+    """
+    import ast
+    import inspect
+
+    from startd8.concierge import core as core_mod
+
+    tree = ast.parse(inspect.getsource(core_mod))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    assert not any(m.startswith("startd8.stakeholder_panel") for m in imported), imported
+    # No bare-name reference to the removed coupling flag in any executable node.
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert "PANEL_CONSUMABLE" not in names
+
+
+def test_assess_byte_identical_when_panel_absent(tmp_path, monkeypatch):
+    """R2-F2: with ``stakeholder_panel`` REMOVED from the import graph, ``assess`` output is
+    byte-identical to a build that never knew the panel existed — true absence, not a degrading
+    ``try/except ImportError`` that returns different output.
+
+    Mechanism: capture the baseline ``assess`` output, then make the package genuinely
+    un-importable — evict every ``startd8.stakeholder_panel*`` module from ``sys.modules`` AND wrap
+    ``builtins.__import__`` to raise ``ImportError`` on any attempt to import it — and re-invoke
+    ``build_assess``. If any code path still reached into the panel (e.g. a residual
+    ``try/except ImportError`` that degrades to different output), the blocked run would either crash
+    or diverge; asserting canonical-JSON byte-equality proves neither happens.
+
+    (Companion coverage: ``test_assess_core_does_not_import_stakeholder_panel`` proves the SOURCE
+    names no panel import, so this test does not need a module reload to exercise import-time
+    coupling — a reload would replace the module object and break symbols other tests hold.)
+    """
+    import builtins
+    import json
+    import sys
+
+    from startd8.concierge.core import build_assess
+
+    root = tmp_path / "kp"
+    (root / "docs" / "kickoff" / "inputs").mkdir(parents=True)
+    (root / "docs" / "kickoff" / "inputs" / "stakeholders.yaml").write_text(
+        # A perfectly valid roster — under the old edge this populated a `stakeholders` domain.
+        "domain: stakeholders\n"
+        "personas:\n"
+        "  - role_id: product-owner\n"
+        "    display_name: Product Owner\n"
+        "    goals: ['ship']\n",
+        encoding="utf-8",
+    )
+
+    def _canonical(obj) -> str:
+        return json.dumps(obj, sort_keys=True, indent=2)
+
+    baseline = _canonical(build_assess(root))
+
+    # Make the panel package genuinely un-importable, then re-run assess.
+    real_import = builtins.__import__
+
+    def _blocking_import(name, *args, **kwargs):
+        if name == "startd8.stakeholder_panel" or name.startswith("startd8.stakeholder_panel."):
+            raise ImportError(f"blocked for test: {name}")
+        return real_import(name, *args, **kwargs)
+
+    for mod in [m for m in sys.modules if m.startswith("startd8.stakeholder_panel")]:
+        monkeypatch.delitem(sys.modules, mod, raising=False)
+    monkeypatch.setattr(builtins, "__import__", _blocking_import)
+
+    blocked = _canonical(build_assess(root))
+
+    assert blocked == baseline
 
 
 _COHERENT_DEPLOYED = (

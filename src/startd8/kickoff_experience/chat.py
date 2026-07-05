@@ -317,30 +317,85 @@ def kickoff_chat_session_config() -> SessionConfig:
     )
 
 
+# --- one parametrized constructor (GE-M2) ------------------------------------------------------
+#
+# GE-M2 collapsed the three near-identical constructors into ONE parametrized factory. The parameter
+# surface is a single 3-valued *mode* (not N independent booleans — R2-S2), so there is NO dead flag
+# combination: the old two-boolean space (agentic × red_carpet) had a dead corner
+# (red_carpet-without-propose is invalid), which a single enum forecloses by construction. Each mode
+# selects (propose tool on/off, red_carpet stage tool on/off, the mode-paired system prompt, whether
+# a ProposalBuffer is attached):
+#
+#   read       — pure read-only chat: three read tools, no propose tool, no buffer (pure guidance).
+#   agentic    — the agentic Concierge: read tools + read-effect `propose_action`, propose-only.
+#   red_carpet — the staged build-from-scratch conductor: agentic + the `red_carpet_state` tool.
+#
+# The three legacy names (`new_kickoff_chat` / `new_agentic_kickoff_chat` / `new_red_carpet_chat`)
+# remain as thin wrappers over this one factory.
+
+CHAT_MODE_READ = "read"
+CHAT_MODE_AGENTIC = "agentic"
+CHAT_MODE_RED_CARPET = "red_carpet"
+_CHAT_MODES = (CHAT_MODE_READ, CHAT_MODE_AGENTIC, CHAT_MODE_RED_CARPET)
+
+# mode → (agentic?, red_carpet?, system_prompt). `agentic` implies a propose_action tool + buffer;
+# `red_carpet` implies agentic (it is never a valid standalone flag — the dead corner is gone).
+_CHAT_MODE_SPEC = {
+    CHAT_MODE_READ: (False, False, KICKOFF_SYSTEM_PROMPT),
+    CHAT_MODE_AGENTIC: (True, False, KICKOFF_AGENTIC_SYSTEM_PROMPT),   # propose-aware (FR-NEW-1 mode-paired)
+    CHAT_MODE_RED_CARPET: (True, True, RED_CARPET_SYSTEM_PROMPT),
+}
+
+
+def build_kickoff_chat(
+    agent: BaseAgent,
+    project_root: str | Path,
+    *,
+    mode: str = CHAT_MODE_READ,
+    config: Optional[SessionConfig] = None,
+) -> KickoffChat:
+    """Construct a kickoff chat in one of the three :data:`_CHAT_MODES` (GE-M2 one-constructor).
+
+    The loop NEVER writes in any mode — in ``agentic``/``red_carpet`` the read-effect
+    ``propose_action`` tool only records a proposal into the returned chat's ``buffer``; a human
+    confirms via the host, which applies through the typed write path.
+    """
+    if mode not in _CHAT_MODE_SPEC:
+        raise ValueError(f"unknown kickoff chat mode {mode!r} (expected one of {_CHAT_MODES})")
+    agentic, red_carpet, system_prompt = _CHAT_MODE_SPEC[mode]
+
+    buffer = None
+    proposal_sink = None
+    if agentic:
+        from .proposals import ProposalBuffer, make_propose_handler
+
+        buffer = ProposalBuffer()
+        proposal_sink = make_propose_handler(project_root, buffer)
+
+    registry = build_kickoff_registry(
+        project_root, proposal_sink=proposal_sink, red_carpet=red_carpet,
+    )
+    session = AgenticSession(
+        agent,
+        registry,
+        system_prompt=system_prompt,
+        config=config or kickoff_chat_session_config(),
+    )
+    return KickoffChat(session=session, project_root=str(project_root), buffer=buffer,
+                       red_carpet=red_carpet)
+
+
+# --- thin wrappers preserving the three legacy names -------------------------------------------
+
+
 def new_agentic_kickoff_chat(
     agent: BaseAgent,
     project_root: str | Path,
     *,
     config: Optional[SessionConfig] = None,
 ) -> KickoffChat:
-    """Construct the AGENTIC Concierge chat: read tools + the read-effect `propose_action` tool.
-
-    The loop still never writes — `propose_action` records a proposal into the returned chat's
-    ``buffer``; a human confirms via the host, which applies through the typed write path.
-    """
-    from .proposals import ProposalBuffer, make_propose_handler
-
-    buffer = ProposalBuffer()
-    registry = build_kickoff_registry(
-        project_root, proposal_sink=make_propose_handler(project_root, buffer)
-    )
-    session = AgenticSession(
-        agent,
-        registry,
-        system_prompt=KICKOFF_AGENTIC_SYSTEM_PROMPT,   # propose-aware (FR-NEW-1 mode-paired)
-        config=config or kickoff_chat_session_config(),
-    )
-    return KickoffChat(session=session, project_root=str(project_root), buffer=buffer)
+    """Construct the AGENTIC Concierge chat: read tools + the read-effect `propose_action` tool."""
+    return build_kickoff_chat(agent, project_root, mode=CHAT_MODE_AGENTIC, config=config)
 
 
 def new_red_carpet_chat(
@@ -350,24 +405,8 @@ def new_red_carpet_chat(
     config: Optional[SessionConfig] = None,
 ) -> KickoffChat:
     """Construct the Red Carpet conductor chat (FR-RCT): the agentic propose-only chat + the staged
-    `red_carpet_state` read tool + the stage-aware build-from-scratch prompt.
-
-    Same propose/confirm floor as the agentic Concierge — the loop never writes; every input
-    (schema/manifest/value) is a proposal the human confirms — but stage-aware (it drives the next gap).
-    """
-    from .proposals import ProposalBuffer, make_propose_handler
-
-    buffer = ProposalBuffer()
-    registry = build_kickoff_registry(
-        project_root, proposal_sink=make_propose_handler(project_root, buffer), red_carpet=True,
-    )
-    session = AgenticSession(
-        agent,
-        registry,
-        system_prompt=RED_CARPET_SYSTEM_PROMPT,
-        config=config or kickoff_chat_session_config(),
-    )
-    return KickoffChat(session=session, project_root=str(project_root), buffer=buffer, red_carpet=True)
+    `red_carpet_state` read tool + the stage-aware build-from-scratch prompt."""
+    return build_kickoff_chat(agent, project_root, mode=CHAT_MODE_RED_CARPET, config=config)
 
 
 def new_kickoff_chat(
@@ -377,14 +416,7 @@ def new_kickoff_chat(
     config: Optional[SessionConfig] = None,
 ) -> KickoffChat:
     """Construct a read-only kickoff chat over *agent*, pinned to *project_root* (no propose tool)."""
-    registry = build_kickoff_registry(project_root)
-    session = AgenticSession(
-        agent,
-        registry,
-        system_prompt=KICKOFF_SYSTEM_PROMPT,
-        config=config or kickoff_chat_session_config(),
-    )
-    return KickoffChat(session=session, project_root=str(project_root))
+    return build_kickoff_chat(agent, project_root, mode=CHAT_MODE_READ, config=config)
 
 
 # --- REPL host (expose the read-only agentic chat) ---------------------------------------------

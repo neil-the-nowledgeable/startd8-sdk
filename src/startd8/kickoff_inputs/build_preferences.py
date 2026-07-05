@@ -20,7 +20,7 @@ import yaml
 
 _TOP_LEVEL_KEYS = frozenset({
     "domain", "provenance_default", "budgets", "model_routing", "generation", "unattended",
-    "concierge_agent",
+    "concierge_agent", "guided",
 })
 
 
@@ -37,6 +37,11 @@ class BuildPreferencesManifest:
     # The agent spec (provider:model / provider / model-id / alias) the agentic Concierge uses
     # for THIS project (FR-PC-2). A full resolve_agent_spec string, never a tier.
     concierge_agent: Optional[str] = None
+    # GE-M0 (FR-GE-3/4): the project's guided-experience preference — **tri-state**. ``None`` is
+    # ``unset`` (fall through to the next layer); ``True``/``False`` are explicit ``on``/``off``. An
+    # explicit ``False`` here must NOT be lost to a falsy fall-through — it terminates resolution at
+    # the routing seam (see ``guided_routing.py``). Stored as a real bool so ``off`` ≠ ``unset``.
+    guided: Optional[bool] = None
 
 
 def _scalar_map(value: object, key: str, *, bool_keys: frozenset = frozenset()) -> Dict[str, object]:
@@ -88,6 +93,11 @@ def parse_build_preferences(text: Optional[str]) -> BuildPreferencesManifest:
     concierge_agent = data.get("concierge_agent")
     if concierge_agent is not None and not isinstance(concierge_agent, str):
         raise ValueError("build-preferences.yaml: `concierge_agent` must be a string (agent spec)")
+    # GE-M0 (FR-GE-3/4): tri-state. Absent ⇒ ``None`` (unset). A present value must be a real bool so
+    # that ``guided: false`` (off) stays distinct from absence (unset) — no string coercion here.
+    guided = data.get("guided")
+    if guided is not None and not isinstance(guided, bool):
+        raise ValueError("build-preferences.yaml: `guided` must be a boolean (true/false)")
 
     return BuildPreferencesManifest(
         domain=domain,
@@ -99,4 +109,5 @@ def parse_build_preferences(text: Optional[str]) -> BuildPreferencesManifest:
             data.get("unattended"), "unattended", bool_keys=frozenset({"non_interactive"})
         ),
         concierge_agent=concierge_agent,
+        guided=guided,
     )

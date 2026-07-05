@@ -11,6 +11,7 @@ Design constraints (CONCIERGE_MCP_REQUIREMENTS.md):
 from __future__ import annotations
 
 import re
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -27,19 +28,76 @@ SCHEMA_VERSION = 1
 READ_ACTIONS = ("survey", "assess")
 # Write actions return a PREVIEW (WritePlan) from handle_concierge_tool; the CLI is the only path
 # that applies it (OQ-7). handle_concierge_tool never writes — it builds the plan.
-WRITE_ACTIONS = ("instantiate-kickoff", "log-friction")
-# derive-contract returns a PREVIEW (candidate contract + report) or a drift report from
+# M0b rename: `instantiate-kickoff`→`instantiate` (the old value stays dispatchable via
+# _ACTION_ALIASES for one release, FR-10).
+WRITE_ACTIONS = ("instantiate", "log-friction")
+# `derive` returns a PREVIEW (candidate contract + report) or a drift report from
 # handle_concierge_tool; the CLI is the only path that writes the contract (OQ-7).
-DERIVE_ACTIONS = ("derive-contract",)
+# M0b rename: `derive-contract`→`derive` (old value aliased for one release).
+DERIVE_ACTIONS = ("derive",)
 DEFERRED_ACTIONS = ()
 
+# FR-10 alias window: the old MCP `ConciergeInput.action` enum values (and any scripted caller that
+# keys on the action string) keep dispatching for one release, mapped to their canonical name with a
+# DeprecationWarning. Remove this map when the alias window closes.
+_ACTION_ALIASES = {
+    "instantiate-kickoff": "instantiate",
+    "derive-contract": "derive",
+}
+
 # The four kickoff input *value* domains — the YAML files under ``docs/kickoff/inputs/``. This is the
-# single source of truth shared by concierge assessment (below), project-init shape triage, and the
-# red-carpet advisor, so "which inputs count" cannot drift across them. ``stakeholders`` is
-# deliberately NOT in this set: it carries a different shape/status set and each consumer handles it
-# as a dedicated special case (do not fold it in). The 3-domain stakeholder-authoring set in
-# ``stakeholder_panel.input_domains`` is a *different* concept (it excludes ``observability``).
+# kernel-owned single source of truth for "which inputs count," shared by concierge assessment
+# (below), project-init shape triage, and the red-carpet advisor, so the coverage core cannot drift
+# across them (FR-13, M2). It is deliberately owned HERE, in the kernel, and imports nothing from
+# ``stakeholder_panel``: the coverage signal ("which inputs are unfilled") is the $0 essential act,
+# independent of the (optional, later) persona/discovery layer.
+#
+# ``stakeholders`` is deliberately NOT in this set. The Stakeholder Panel is a project-shape-triggered
+# discovery *offer*, not a kernel input domain; its readiness is assessed only when that offer is
+# accepted (the guided experience, M4) — never unconditionally injected into kernel ``assess`` output.
+# The 3-domain stakeholder-authoring set in ``stakeholder_panel.input_domains`` is a *different*
+# concept (it excludes ``observability``) and lives with the panel, not the kernel.
 KICKOFF_INPUT_DOMAINS = ("business-targets", "observability", "conventions", "build-preferences")
+
+# --- next-command map (FR-5) -------------------------------------------------------------------
+# `assess` names what is missing AND emits the exact next command to move forward (the handoff
+# surface). Ported from the retiring Red Carpet advisor (`red_carpet_advisor.py:63-73,348-358`) —
+# the ~40-60-LOC command map ONLY, never the ranked playbook (which re-imports the retired metaphor).
+#
+# CRITICAL (M0 rename): every emitted command MUST resolve in the post-M0 CLI registry. The old
+# advisor pointed app/manifest/form/flow gaps at `startd8 kickoff red-carpet --agent`, but after M0
+# the metaphor group moved to `kickoff-legacy`, so a bare `startd8 kickoff red-carpet` no longer
+# resolves. These constants therefore target the CURRENT kernel surface:
+#   * schema/data-model/contract → `startd8 generate contract --promote` (`cli_generate.py:734`)
+#   * page/view/screen           → `startd8 screens suggest`            (`cli_screens.py:63`)
+#   * app/manifest/form/flow     → `startd8 kickoff instantiate`        (scaffolds the input package)
+CMD_GENERATE_CONTRACT_PROMOTE = "startd8 generate contract --promote"
+CMD_SCREENS_SUGGEST = "startd8 screens suggest"
+CMD_KICKOFF_INSTANTIATE = "startd8 kickoff instantiate"
+
+# The headline next-command when the cascade is not yet ready but no blocker names a more specific
+# step — surface the assess report itself as the canonical read-only next move.
+CMD_KICKOFF_ASSESS = "startd8 kickoff assess"
+
+
+def _blocker_command(section: str) -> str | None:
+    """Map a cascade-blocker section title → the exact CLI command that advances it (FR-5).
+
+    Re-targeted for the post-M0 kernel surface (see the constants above): no emitted command
+    references a `startd8 kickoff <metaphor>` path that moved to `kickoff-legacy`.
+    """
+    s = section.lower()
+    if any(k in s for k in ("schema", "data model", "contract")):
+        return CMD_GENERATE_CONTRACT_PROMOTE
+    # The "screens" gap (pages/views) routes to the Manifest Suggester — the guided way to decide
+    # *which* screens the product needs.
+    if any(k in s for k in ("page", "view", "screen")):
+        return CMD_SCREENS_SUGGEST
+    # Broader app/manifest/form/flow gaps route to `instantiate`, which scaffolds the honest starter
+    # input-file package (app.yaml, manifests, forms, flows) at human privilege.
+    if any(k in s for k in ("app", "manifest", "form", "flow")):
+        return CMD_KICKOFF_INSTANTIATE
+    return None
 
 # --- survey heuristics (all path/name-based; never reads flagged file contents — OQ-8 lean) ---
 
@@ -172,12 +230,16 @@ def build_assess(project_root: str | Path) -> Dict[str, Any]:
     root = _resolve_root(project_root)
     logger.info("concierge.assess root=%s", root)
 
+    cascade = _assess_cascade(root)
     return {
         "schema_version": SCHEMA_VERSION,
         "action": "assess",
         "project_root": str(root),
         "kickoff_inputs": _assess_kickoff_inputs(root),
-        "cascade": _assess_cascade(root),
+        "cascade": cascade,
+        # FR-5: the handoff surface — the single exact next command to move forward (may be None
+        # when the cascade is fully ready). Per-blocker commands live under cascade.blockers.
+        "next_command": _headline_next_command(cascade),
         "deployment": _assess_deployment(root),
     }
 
@@ -250,31 +312,14 @@ def _assess_kickoff_inputs(root: Path) -> Dict[str, Any]:
             continue
         out["domains"][domain] = {"status": "present", "provenance_default": provenance}
 
-    # Stakeholder Panel roster (FR-4): structurally validated, not just present-checked. Also carries
-    # the authored-vs-consumable distinction (R2-S5) so an early adopter who authors a roster after
-    # M0 is not misled into expecting live-panel behavior that has not shipped yet.
-    out["domains"]["stakeholders"] = _assess_stakeholder_roster(inputs_dir)
+    # M2 (FR-13/FR-15, R1-F4/R2-F2): the coverage core is kernel-owned and imports NOTHING from
+    # ``stakeholder_panel``. The old unconditional ``stakeholders`` domain injection (which pulled in
+    # ``PANEL_CONSUMABLE`` and coupled kernel ``assess`` to the panel's ship-state) is removed. The
+    # persona/discovery layer loads only when a conditional discovery offer is accepted — a LATER
+    # milestone (M4 / the guided experience). Absence of ``stakeholder_panel`` from the import graph
+    # is now true byte-identity: this path never references the package, so there is no degrading
+    # ``try/except ImportError`` branch that could emit different output on a partial checkout.
     return out
-
-
-def _assess_stakeholder_roster(inputs_dir: Path) -> Dict[str, Any]:
-    """Roster readiness (absent/invalid/present) + whether the live panel can consume it yet.
-
-    Local import so a partial checkout without the ``stakeholder_panel`` package degrades to a
-    graceful "unavailable" rather than crashing the whole assess (parity with the wireframe import).
-    """
-    try:
-        from startd8.stakeholder_panel import PANEL_CONSUMABLE, assess_roster
-    except ImportError:  # pragma: no cover - defensive, package ships with the SDK
-        return {"status": "unavailable", "error": "stakeholder_panel package not importable"}
-
-    result = dict(assess_roster(inputs_dir / "stakeholders.yaml"))
-    # A validated roster is "authored"; "consumable" tracks whether the live panel exists to query it.
-    result["authored"] = result.get("status") == "present"
-    result["consumable"] = bool(PANEL_CONSUMABLE)
-    if result["authored"] and not result["consumable"]:
-        result["note"] = "roster authored; live Stakeholder Panel ships in a later increment"
-    return result
 
 
 def _assess_cascade(root: Path) -> Dict[str, Any]:
@@ -295,8 +340,14 @@ def _assess_cascade(root: Path) -> Dict[str, Any]:
     except AssemblyInputsError as exc:
         return {"status": "inputs_error", "error": str(exc)}
 
+    # FR-5: each blocker carries the exact next command that advances it (or None where none exists).
     blockers = [
-        {"section": s.title, "status": s.status, "consequence": s.consequence}
+        {
+            "section": s.title,
+            "status": s.status,
+            "consequence": s.consequence,
+            "next_command": _blocker_command(s.title),
+        }
         for s in plan.sections
         if s.status in ("invalid", "not_defined") and s.consequence
     ]
@@ -310,18 +361,45 @@ def _assess_cascade(root: Path) -> Dict[str, Any]:
     }
 
 
+def _headline_next_command(cascade: Dict[str, Any]) -> str | None:
+    """FR-5: the single most-actionable next command for the whole assess report.
+
+    The first blocker that names a command wins (blockers are already leverage-ordered by the
+    wireframe machinery); if the cascade could not resolve its inputs, point at `assess` itself so
+    the human re-runs after fixing the assembly inputs; if everything is ready, no command is needed.
+    """
+    if cascade.get("status") != "ok":
+        return CMD_KICKOFF_ASSESS
+    for b in cascade.get("blockers") or []:
+        if b.get("next_command"):
+            return b["next_command"]
+    return None
+
+
 def handle_concierge_tool(action: str, project_root: str | Path, **params: Any) -> Dict[str, Any]:
     """Action dispatch (FR-C1). The single entry the MCP tool and CLI both call.
 
     Read actions return their report; **write actions return a PREVIEW WritePlan and never touch
     disk** (OQ-7 — only the CLI applies, via ``apply_write_plan``). Deferred actions return a
     structured ``not_implemented`` rather than raising, so a caller discovers scope without a crash.
+
+    FR-10 alias window: an old action name (``instantiate-kickoff``/``derive-contract``) still
+    dispatches, mapped to its canonical name with a ``DeprecationWarning``.
     """
+    if action in _ACTION_ALIASES:
+        canonical = _ACTION_ALIASES[action]
+        warnings.warn(
+            f"concierge action '{action}' is deprecated; use '{canonical}'. "
+            "This alias will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        action = canonical
     if action == "survey":
         return build_survey(project_root)
     if action == "assess":
         return build_assess(project_root)
-    if action == "instantiate-kickoff":
+    if action == "instantiate":
         from .writes import build_instantiate_plan
         return build_instantiate_plan(
             project_root,
@@ -343,14 +421,14 @@ def handle_concierge_tool(action: str, project_root: str | Path, **params: Any) 
             raise ConciergeError(f"log-friction requires field {e}") from None
         except ConciergeWriteError as e:
             raise ConciergeError(str(e)) from None
-    if action == "derive-contract":
+    if action == "derive":
         import dataclasses
 
         from .derive import build_derivation, check_drift
 
         modules = params.get("modules")
         if not modules:
-            raise ConciergeError("derive-contract requires `modules` (Pydantic model import paths)")
+            raise ConciergeError("derive requires `modules` (Pydantic model import paths)")
         pythonpath = params.get("pythonpath") or str(project_root)
         common = dict(project_pythonpath=pythonpath, model_names=params.get("model_names"),
                       exclude_models=params.get("exclude_models"))
