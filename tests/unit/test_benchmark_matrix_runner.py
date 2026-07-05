@@ -185,6 +185,18 @@ def test_missing_api_key_is_infra_not_model_failure():
     assert not is_infra_error("generated code calls stripe.api_key but has a logic bug")
 
 
+def test_insufficient_balance_is_infra_not_model_failure():
+    # A 402 "Insufficient Balance" (DeepSeek) means the key AUTHENTICATED but the account is out of
+    # credit — a funding/setup failure, never the model's catastrophic 0.
+    from startd8.benchmark_matrix import is_infra_error
+    assert is_infra_error(
+        "API call failed: Error code: 402 - {'error': {'message': 'Insufficient Balance'}}"
+    )
+    assert is_infra_error("402 Payment Required")
+    # Bare "402" mirrors the existing 401/404/403/429 markers — matched against the cell's
+    # EXECUTION error string (not generated code), where a 402 is virtually always the billing error.
+
+
 def test_missing_key_reclassified_and_excluded_from_model_score():
     # A prior run that recorded a missing-key cell as STATUS_FAILED is reclassified to infra and
     # excluded — so the model is not unfairly scored 0/catastrophic for an unset key.
