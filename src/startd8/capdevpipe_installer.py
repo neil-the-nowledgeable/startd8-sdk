@@ -8,8 +8,11 @@ and the test suite — can run a full install with no TUI present. The TUI handl
 thin caller that gathers an :class:`InstallConfig` and invokes :meth:`execute`.
 
 Two embedding methods (FR-4): **symlink** (single source of truth with the canonical
-checkout; implemented here in Python) and **copy** (shells out to the canonical
-``install-cap-dev-pipe.sh`` rsync installer, then reconciles).
+checkout) and **copy** (shells out to the canonical ``install-cap-dev-pipe.sh`` rsync
+installer, then reconciles). Both derive their action list from the canonical shared
+planner ``resolve_install_plan`` (FR-A7) — the SDK owns the pipeline.env merge, wrapper,
+language profiles, gitignore and transactional rollback layered on top, but no longer
+re-derives which inventory entries are symlinked vs copied.
 
 Failures raise the SDK exception hierarchy from :mod:`startd8.exceptions` (never bare
 ``OSError``/``ValueError``) so messages structurally name the offending path and a
@@ -32,7 +35,9 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from .capdevpipe_embed_manifest import (
     DEFAULT_EMBED_PROFILE,
+    check_embed_namespace,
     resolve_embed_inventory,
+    resolve_embed_plan,
 )
 from .config import get_config_manager
 from .exceptions import ConfigurationError, FileOperationError, ValidationError
@@ -563,6 +568,9 @@ class CapDevPipeInstaller:
         (tasks #4–#7).
         """
         self._validate_target(cfg)
+        # Namespace guard (FR-A8): refuse to embed a `pipeline` package into a project that
+        # already has a generic `pipeline` module which would shadow it. Delegated to canonical.
+        check_embed_namespace(Path(cfg.source_path), cfg.embed_profile, cfg.target_root)
         actions: List[Action] = []
         if self._effective_method(cfg) is InstallMethod.SYMLINK:
             actions += self.embed_symlink(cfg)
@@ -908,41 +916,37 @@ class CapDevPipeInstaller:
 
     # -- embedding (FR-5, FR-6) -------------------------------------------- #
 
+    #: Canonical ``EmbedActionType`` value → SDK ``ActionType`` (FR-A7 delegation).
+    _EMBED_ACTION_MAP = {
+        "mkdir": ActionType.MKDIR,
+        "symlink": ActionType.SYMLINK,
+        "copy_file": ActionType.COPY_FILE,
+        "copy_tree": ActionType.COPY_TREE,
+    }
+
     def embed_symlink(self, cfg: InstallConfig) -> List[Action]:
         """Actions to symlink the manifest-resolved embed set with absolute targets (FR-5).
 
-        Inventory is resolved from ``embed-manifest.yaml`` via the shared cap-dev-pipe
-        planner (FR-16). Script and package symlinks use **absolute** ``source`` paths so
-        ``dirname "$0"`` resolves to the embedded dir (NFR-3). Resource trees are copied
-        locally (read from SCRIPT_DIR). ``copy_files`` entries (e.g. the wrapper template)
-        are copied as files when listed in the profile.
+        The *kind → action* mapping (which inventory entries are symlinked vs copied) is
+        delegated to the canonical shared planner ``resolve_install_plan`` (FR-A7): the SDK
+        no longer re-derives it, it translates the canonical plan to its own ``Action`` type.
+        Script and package symlinks keep **absolute** ``source`` paths so ``dirname "$0"``
+        resolves to the embedded dir (NFR-3); resource trees are copied locally.
         """
         source = Path(cfg.source_path).resolve()
-        inventory = resolve_embed_inventory(source, cfg.embed_profile)
         embed = Path(cfg.target_root) / EMBED_DIR_NAME
-        actions: List[Action] = [Action(type=ActionType.MKDIR, target=embed)]
-        for name in (*inventory.scripts, *inventory.python_aliases, *inventory.packages):
-            actions.append(
-                Action(
-                    type=ActionType.SYMLINK, target=embed / name, source=source / name
+        plan = resolve_embed_plan(source, cfg.embed_profile, "symlink", cfg.target_root)
+        actions: List[Action] = []
+        for step in plan:
+            action_type = self._EMBED_ACTION_MAP.get(step.action_type)
+            if action_type is None:  # pragma: no cover - unknown canonical action kind
+                raise ConfigurationError(
+                    f"unsupported canonical embed action '{step.action_type}' — "
+                    "cap-dev-pipe planner is newer than this SDK installer."
                 )
-            )
-        for resource in inventory.resource_trees:
-            actions.append(
-                Action(
-                    type=ActionType.COPY_TREE,
-                    target=embed / resource,
-                    source=source / resource,
-                )
-            )
-        for copy_name in inventory.copy_files:
-            actions.append(
-                Action(
-                    type=ActionType.COPY_FILE,
-                    target=embed / copy_name,
-                    source=source / copy_name,
-                )
-            )
+            target = embed if step.target_rel == "." else embed / step.target_rel
+            src = source / step.source_rel if step.source_rel else None
+            actions.append(Action(type=action_type, target=target, source=src))
         return actions
 
     @staticmethod
