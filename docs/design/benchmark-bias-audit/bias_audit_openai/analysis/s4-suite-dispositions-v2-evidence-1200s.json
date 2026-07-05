@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "status": "reviewed",
+  "reviewed_at_utc": "2026-07-05T15:45:00Z",
+  "reviewer": "codex",
+  "batch_id": "pricing-cross-tool-authoring-v2-evidence-1200s",
+  "scope": "S4 suite-authoring evidence admission only; generated suites are not modified.",
+  "exclusions": []
+}

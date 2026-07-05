@@ -413,13 +413,7 @@ def declared_bridge_contract(suite_path: Path, manifest_path: Path) -> dict:
             "conventions": conventions,
         }
 
-    declared_callable_names = bridge_contract.get("callable_names")
-    if declared_callable_names is None:
-        declared_callable_names = bridge_contract.get("callables")
-    if declared_callable_names is None:
-        declared_callable_names = bridge_contract.get("exported_callables")
-    if isinstance(declared_callable_names, str):
-        declared_callable_names = [declared_callable_names]
+    declared_callable_names = _declared_callable_names(bridge_contract)
     if not isinstance(declared_callable_names, list) or not all(isinstance(name, str) for name in declared_callable_names):
         return {
             "status": "not_executable",
@@ -448,6 +442,8 @@ def declared_bridge_contract(suite_path: Path, manifest_path: Path) -> dict:
         for key in (
             "invalid_argument_convention",
             "invalid_argument_signal",
+            "invalid_argument_signaling",
+            "invalid_argument_signaling_convention",
             "invalid_argument",
             "invalid_case_convention",
             "error_convention",
@@ -470,6 +466,37 @@ def declared_bridge_contract(suite_path: Path, manifest_path: Path) -> dict:
         "declared_callable_names": declared_callable_names,
         "conventions": conventions,
     }
+
+
+def _callable_basename(value: str) -> str:
+    """Normalize manifest callable declarations such as ``run_all(call=None)``."""
+    return value.split("(", 1)[0].strip()
+
+
+def _declared_callable_names(bridge_contract: dict) -> list[str] | None:
+    """Extract callable names from reviewed prompt-era aliases.
+
+    Earlier bridge manifests expected ``callable_names`` as a list. Later authoring prompt
+    variants also produce ``callables`` / ``exported_callables`` as either a list or an object
+    mapping callable name to description. The bridge admission check can safely normalize these
+    declaration shapes without mutating generated artifacts.
+    """
+    declared = bridge_contract.get("callable_names")
+    if declared is None:
+        declared = bridge_contract.get("callables")
+    if declared is None:
+        declared = bridge_contract.get("exported_callables")
+    if isinstance(declared, dict):
+        declared = list(declared)
+    if isinstance(declared, str):
+        declared = [declared]
+    if isinstance(declared, list):
+        return [
+            _callable_basename(item)
+            for item in declared
+            if isinstance(item, str) and _callable_basename(item)
+        ]
+    return declared
 
 
 def bridge_adapter_source() -> str:
