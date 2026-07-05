@@ -133,8 +133,9 @@ already deterministic.
 > facilitated process is the actual capability. (See FR-13's evidence note + FR-13b.)
 
 **What did NOT change:** VIPP is still un-bundled (FR-14). Welcome Mat / Red Carpet
-still retire (FR-9–12). Teian's *drafting* dies (NR-7); its *coverage signal*
-survives as the discovery trigger.
+still retire (FR-9–12). ~~Teian's *drafting* dies (NR-7);~~ *(superseded 2026-07-05:
+**Teian's drafting is RETAINED** — NR-7 reversed;* its *coverage signal* also feeds the
+discovery trigger.)
 
 ### 0.3 Consumer Validation — 3 real apps (natural experiment)
 
@@ -268,7 +269,7 @@ what's missing → **validate** readiness → **write** safely at human privileg
 | **Welcome Mat** (`kickoff_experience/`, 26 mod) — served web/TUI GUI + per-field capture-write | A *rendering* of `assess` + a read-modify-write-into-YAML seam | **`[COMPENSATORY]`** | Retire (phased). The report is essential; the served app is not. |
 | **Red Carpet** (`red_carpet*.py`) — conductor + advisor + wizard | A second ranked re-presentation of `assess` blockers | **`[COMPENSATORY]`** | Retire. Its own docs: "never a gate; removing it does not change `cascade_offerable`." |
 | **Stakeholder Panel / Kaigi** (`stakeholder_panel/`) — personas surface missing capabilities/dimensions | Requirements *discovery* at the data-model bookend (breadth, human judges) | **`[ESSENTIAL]`, conditionally offered** | Keep as a project-shape-triggered discovery tool (§0.2). |
-| **— Teian value-drafting** (`recommend`) — persona drafts specific blank-field *values* (`8%`) | LLM estimating precision it can't ground | **`[GHOST]`** | Drop (NR-7). Its $0 coverage signal survives as the discovery trigger. |
+| **— Teian value-drafting** (`recommend`) — persona drafts specific blank-field *values* as `estimate`-provenance, human approve/reject | ~~LLM estimating precision it can't ground~~ → bounded by `estimate` provenance + a human gate | **`[ESSENTIAL]`** *(reclassified 2026-07-05; was `[GHOST]`)* | **RETAINED** — kept capability by owner decision (see NR-7 reversal). Its $0 coverage signal also feeds the discovery trigger. |
 | **VIPP** (`vipp/`, 10 mod) — cross-process negotiator/applier | Automates "human applies," across a process boundary, vs. Sapper | **`[COMPENSATORY]`/`[DEFENSIVE]`** | Un-bundle → separate "brownfield migration" capability. |
 
 ### Bucket-rule scope — where it applies, and where it does NOT (corrected)
@@ -450,7 +451,9 @@ might be missing* (breadth, real value); it may not *estimate the specific value
   Carpet, and Teira/Teian code remain in the tree during the transition. This
   requirement gates removal on the kernel being the documented, shipped surface.
   *(v0.17: for Welcome Mat / Red Carpet this is now permanent — they are retained
-  and consolidated, not removed; only Teian's point-value drafter is dropped.)*
+  and consolidated, not removed. **Correction 2026-07-05: Teian is also retained** —
+  nothing was ultimately dropped; the earlier "only Teian's point-value drafter is
+  dropped" claim is superseded by the NR-7 reversal.)*
 
 - **FR-10 — Deprecation markers.** Each retiring surface (Welcome Mat serve/web,
   Red Carpet CLI commands, Teian `panel recommend`) emits a deprecation notice
@@ -577,14 +580,19 @@ might be missing* (breadth, real value); it may not *estimate the specific value
     marked single-strategy-family until that second-domain run exists.
 
 - **FR-13a — Shaping ranges, never point values (the "no-8%" rule). DEFERRED —
-  2026-07-05.** Not scheduled for build. It remains an untested HYPOTHESIS (see the
-  evidence note below: across all eight runs no persona ever emitted a shaping range,
-  so the range-*offering* behavior this FR regulates has never manifested), and the
-  danger it guards — blind acceptance of an invented point value — structurally cannot
-  occur today because the point-value drafter is deleted (NR-7) and no producer of
-  shaping values exists. **Revisit only if** a producer of value-shaping personas is
-  introduced OR a targeted ninth run demonstrates a placeable range; at that point the
-  width-floor/degenerate-range check must also be specified before ship. Until then it
+  2026-07-05 (rationale corrected).** Not scheduled for build. It remains an untested
+  HYPOTHESIS (see the evidence note below: across all eight runs no persona ever emitted
+  a shaping range, so the range-*offering* behavior this FR regulates has never
+  manifested). **Correction:** an earlier version of this deferral said "the point-value
+  drafter is deleted (NR-7) and no producer of shaping values exists" — that was **wrong**.
+  Teian (`panel recommend`) is a **retained** producer of `estimate`-tier point values
+  (NR-7 reversed). So FR-13a is properly framed as a deferred **refinement to the kept
+  Teian capability**: should `panel recommend`'s starter estimates be expressed as
+  *ranges* rather than point values? The blind-acceptance danger is currently mitigated by
+  Teian's `estimate` provenance + human approve/reject gate, not by the drafter's absence.
+  **Revisit only if** that refinement is prioritized OR a targeted ninth run demonstrates
+  a placeable range; at that point the width-floor/degenerate-range check must also be
+  specified before ship (a `5–5%` range collapses to a point). Until then it
   is a deferred hypothesis, not scoped work. *(Original requirement text retained:)* When a
   persona speaks to a *specific* field value, it may offer an **estimated range +
   reasoning** to shape the human's answer (e.g. *"early demo funnels typically
@@ -727,13 +735,20 @@ might be missing* (breadth, real value); it may not *estimate the specific value
 - **NR-6 — Not re-authoring the deterministic $0 cascade.** The kernel produces
   inputs *for* `generate backend/scaffold/views/frontend`; it does not change how
   the cascade consumes them.
-- **NR-7 — No point-value field drafting (Teian dropped).** The proactive
-  value-drafter (`panel recommend` → `Recommendation` with `provenance:"estimate"`,
-  `recommend.py`) is removed. Evidence it is the ghost: on a blank
-  `product_funnel.signup_rate` it emits `8%` from a persona that sees only its own
-  brief — industry-generic filler pretending to project knowledge (§0.2). Its one
-  worth-keeping byproduct — the **$0 coverage signal** ("these fields are blank")
-  — survives as the FR-13 discovery *trigger*, not as a drafter.
+- **NR-7 — REVERSED (DECISION 2026-07-05): Teian is RETAINED, not dropped.** The
+  earlier NR-7 said the proactive value-drafter (`panel recommend` → `Recommendation`
+  with `provenance:"estimate"`, `recommend.py`) *"is removed."* **That never happened
+  in code** (`recommend.py` is present and `panel recommend`/`review`/`approve`/`reject`
+  are CLI-wired via `cli_panel.py`; M5 shipped "no deletions"), and it is now a
+  **retained first-class capability** by owner decision. It stays because its output is
+  honestly bounded: every draft is minted `estimate` provenance (`recommend_provenance.py`),
+  never `authored`, and reaches disk only through the human **approve/reject** surface —
+  so the `8%`-on-a-blank-field concern is handled by *provenance + a human gate*, not by
+  deleting the drafter. (Its $0 coverage byproduct still doubles as the FR-13 discovery
+  trigger.) **Consequence:** the "point-value drafter is a ghost / dropped" framing
+  elsewhere in this doc is superseded by this reversal (see the §0.2 classification row,
+  FR-13a, OQ-11). The `[GHOST]` tag on `recommend` was a **misclassification** — it is
+  `[ESSENTIAL]`.
 
 ---
 
@@ -984,13 +999,21 @@ _OQ-1 through OQ-4, OQ-6, OQ-7 resolved in §0 by the planning pass. Remaining:_
       (app code) or wire Sapper/`survey`. (3) cost tracking still unwired.
     - **Net across #7+#8: Tier-1 both catches a false premise AND lifts a valid one.**
       FR-13b + the gap-analysis Tier-1 additions validated end-to-end.
-- **OQ-11 — Where does the retained discovery capability live?** The persona/agent
-  machinery (`stakeholder_panel/` minus `recommend`) is still ~20 modules. Is the
-  *conditionally-offered discovery* a thin caller the kernel owns that invokes a
-  slimmed panel, or does the panel package stay whole and the kernel just gates
-  the call? Reconcile "keep discovery" with the anti-principle: rescuing the
-  *purpose* did not bless the current module count — a distillation pass on the
-  discovery implementation is still owed.
+- **OQ-11 — Where does the retained discovery capability live? RESOLVED — 2026-07-05:
+  DISSOLVED, no distillation owed.** The question rested on two premises that are both
+  now reversed: (a) *discovery is low-value / maybe cut* → reversed by OQ-10 (**always
+  offer**); (b) *Teian `recommend` is being dropped* → reversed by the NR-7 decision
+  (**Teian retained**). With **both** capabilities kept, the `stakeholder_panel/` module
+  count (~13 Kaigi-discovery + ~6 Teian-`recommend`) reflects **essential separation of
+  concerns**, not accidental sprawl. It also already satisfies the anti-principle's own
+  success metric — *"one entry point / one vocabulary / one write path, NOT fewer LOC"*
+  (coherent `panel` + `requirements` CLIs; single-concern modules). Note: `requirements_panel`
+  is a **distinct sibling** (drafts requirements, not kickoff-input values) that
+  *deliberately* owns its enumeration rather than reusing Teian (reuse "failed twice",
+  `elicit.py` R1-S1/R2-S1) — so it is **not** a Teian duplicate to consolidate. **No
+  capability-level distillation is owed.** (A future discretionary code-hygiene pass
+  *could* merge a few thin single-concern modules, e.g. `budget`/`routing`, but that trades
+  file-count for larger files and is not required by the anti-principle.)
 
 ---
 

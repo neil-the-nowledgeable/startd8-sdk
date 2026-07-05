@@ -31,15 +31,18 @@ real, scoped follow-up if/when the value is wanted.
   only as *optional prioritization of which personas to suggest* once a human accepts,
   never as a gate. Recorded in `PROJECT_START_REQUIREMENTS.md` (OQ-10 + FR-13 offer
   bullet). *Refs: FR-13, OQ-10.*
-- **FR-13a — shaping ranges, never point values — ⏸ DEFERRED (2026-07-05).** Not
-  scheduled for build. Remains an untested HYPOTHESIS (across all eight runs no persona
-  ever emitted a shaping range — the behavior it regulates has never manifested), and
-  the danger it guards (blind acceptance of an invented point value) structurally cannot
-  occur today: the point-value drafter is deleted (NR-7) and no producer of shaping
-  values exists. **Revisit only if** a value-shaping producer is introduced OR a targeted
-  ninth run demonstrates a placeable range; the width-floor/degenerate-range check must
-  then be specified before ship. Recorded as DEFERRED in `PROJECT_START_REQUIREMENTS.md`
-  (FR-13a). *Refs: FR-13a, FR-8, NR-7.*
+- **FR-13a — shaping ranges, never point values — ⏸ DEFERRED (2026-07-05, rationale
+  corrected).** Not scheduled for build. Remains an untested HYPOTHESIS (across all eight
+  runs no persona ever emitted a shaping range — the behavior it regulates has never
+  manifested). **Correction:** an earlier version said "the point-value drafter is deleted
+  (NR-7) and no producer of shaping values exists" — **wrong**; Teian (`panel recommend`)
+  is a **retained** producer of `estimate`-tier point values (NR-7 reversed). So FR-13a is
+  really a deferred **refinement to the kept Teian capability** (should its estimates be
+  *ranges*?); the blind-acceptance danger is mitigated by Teian's `estimate` provenance +
+  human approve/reject gate, not by the drafter's absence. **Revisit only if** that
+  refinement is prioritized OR a ninth run shows a placeable range (then spec the
+  width-floor first). Recorded in `PROJECT_START_REQUIREMENTS.md` (FR-13a). *Refs: FR-13a,
+  NR-7 (reversed), FR-8.*
 - **FR-GE-14 — structural ratification gate — ✅ DONE (2026-07-05, `5169d804`).** The
   gate is now **wired** on the write path. `vipp/apply.py:apply_dispositions` calls
   `assert_ratifiable()` on every claim before `apply_proposal`; the human `confirm()` is
@@ -58,10 +61,15 @@ real, scoped follow-up if/when the value is wanted.
   no-PK / island-tables / empty-enum, ~90 LOC in `red_carpet_advisor.py:181-250`) was
   intentionally **skipped** (the FR's "accept the loss and name it" branch). Recorded
   in `MIGRATION_NOTE.md`. Port into kernel `assess` if the diagnostics are wanted.
-- **OQ-11 — distillation pass on the discovery implementation.** GE-M2 detangled the
-  *concierge/conductor* modules, but the `stakeholder_panel/` discovery machinery
-  (~20 modules) was **not** distilled — "keeping the purpose did not bless the module
-  count." A focused reduction pass is owed (only the Teian drafter was removed).
+- **OQ-11 — distillation pass on the discovery implementation — ✅ RESOLVED (2026-07-05:
+  DISSOLVED, no distillation owed).** The premise reversed: with discovery **always
+  offered** (OQ-10) and Teian `recommend` **retained** (NR-7 reversed — Teian was never
+  actually deleted; `panel recommend` is live + CLI-wired), the `stakeholder_panel/`
+  module count reflects **essential separation of concerns**, and the anti-principle's own
+  metric (*one entry point / one vocabulary / one write path, NOT fewer LOC*) is already
+  met. `requirements_panel` is a distinct sibling, not a Teian duplicate. No
+  capability-level distillation owed; a thin-module code-hygiene merge is discretionary
+  only. *Refs: OQ-11, NR-7 (reversed), OQ-10.*
 
 ---
 
