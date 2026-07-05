@@ -35,12 +35,22 @@ real, scoped follow-up if/when the value is wanted.
   either prove roster-discovery value (run `panel ask-all` for a real "surface a
   viewpoint you'd have missed" data point) or shrink the claim to capability-discovery
   and implement the width-floor only if kept. *Refs: FR-13a, FR-8, NR-7.*
-- **FR-GE-14 — structural ratification gate.** Synthetic facilitation output is marked
-  "unratified" in **prose only**; there is no machine-checkable provenance/ratification
-  field and no kernel refuse-until-ratified gate. **Mitigated in practice** (transcripts
-  are never written into the kickoff input YAMLs, so they never reach the kernel
-  consume path), so this is low-risk — implement only if a structural guarantee is
-  wanted. *Refs: FR-GE-14, CRP R1-F10.*
+- **FR-GE-14 — structural ratification gate (CORRECTED 2026-07-05 — a wiring gap, not
+  "prose only").** The earlier claim here ("marked unratified in prose only; no
+  machine-checkable field; no gate") was **wrong** — verified against
+  `src/startd8/stakeholder_panel/provenance.py` + `tests/unit/stakeholder_panel/test_provenance.py`.
+  **Built + tested:** a machine-checkable provenance marker (`synthetic_claim()` →
+  `qualifier="synthetic"`; `is_synthetic()` is a *typed* check, R1-F2), an
+  unratified-by-default ratification state, serialization-survival of the marker
+  (`round_trips_synthetic()`, R1-F6), and the refuse-until-ratified **gate primitive**
+  `assert_ratifiable()`/`RatificationError`. **NOT done:** the gate is **unwired** —
+  nothing invokes `assert_ratifiable` on any consume path (grep: only the `__init__.py`
+  re-exports; VIPP `apply.py` does not call it). `provenance.py` itself anticipated
+  *"the live ratified store is wired by VIPP in M2,"* but VIPP shipped without wiring it.
+  **Mitigated** — no panel answer / facilitation transcript is persisted into a kernel
+  input YAML today, so nothing unratified reaches the kernel. **To close:** one wiring
+  change — call `assert_ratifiable` at the synthetic-value→load-bearing-input boundary
+  (the VIPP `apply.py` floor). *Refs: FR-GE-14, CRP R1-F10.*
 - **FR-5a — schema-shape diagnostics.** The `_schema_advisories` port (missing-FK /
   no-PK / island-tables / empty-enum, ~90 LOC in `red_carpet_advisor.py:181-250`) was
   intentionally **skipped** (the FR's "accept the loss and name it" branch). Recorded
@@ -54,11 +64,23 @@ real, scoped follow-up if/when the value is wanted.
 
 ## 2. Owed separate specs — spun out by the distillation
 
-- **VIPP / ground-truth-adjudication capability (parent-plan M6).** `project init` was
-  scoped OUT of the kernel and re-filed as this capability's setup entrypoint (OQ-8),
-  but the capability's **own requirements + plan were never written**. It is the
-  "adjudicate proposals against existing ground-truth once a schema exists" feature,
-  paired with `derive`. *Refs: FR-1a, FR-14, parent-plan M6.*
+- ~~**VIPP / ground-truth-adjudication capability (parent-plan M6).**~~ **REMOVED
+  (CORRECTED 2026-07-05) — this was wrong; nothing is owed here.** VIPP is **fully
+  built**: `src/startd8/vipp/` (`evaluate`/`apply`/`ground_truth`/`compose`/`context`/
+  `models`), `cli_vipp.py`, `vipp_bridge.py`, `vipp_seam.py`, with specs at
+  `docs/design/vipp/` (`VIPP_REQUIREMENTS.md` **v0.3**, reflective→CRP-reviewed) — so the
+  claim "own requirements + plan were never written" was false. Greenfield is also
+  covered by the sibling **`project init`** capability (`docs/design/project-init/`):
+  greenfield/brownfield detection (FR-2) + the greenfield-only `--instantiate`
+  ground-truth→proposal mapping, and `vipp negotiate` adjudicates what it honestly can
+  (Controlled-Corpus identity-collision; no-ground-truth → labeled ACCEPT routed to the
+  panel). The `project-init` spec already litigated and rejected the deeper "originate a
+  first inbox from ground truth" idea (FR-5: *"ground truth adjudicates, never
+  originates"*). The only *un*-built idea surfaced while re-checking this is **optional
+  cross-proposal internal-consistency adjudication** (use a greenfield inbox as its own
+  corpus: entity near-miss collisions across authored proposals, dangling `capture`
+  refs, duplicate/conflicting entities) — a candidate enhancement, **not** an owed spec;
+  pursue only if wanted.
 - **Cloud-write trust model (OQ-GE-7).** Cloud is currently **read/preview-only** (typed
   `501 cloud_write_deferred`). Cloud-**write** needs a net-new **auth / tenancy /
   principal / CSRF** design — none exists (`server/auth.py` is a static API-key on POST
