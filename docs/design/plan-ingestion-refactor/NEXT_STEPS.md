@@ -46,18 +46,28 @@ Established + OTel-verified in Stage 4a (`_run_preflight` is the template).
    - `<inputs>` = every local the block reads (root_span + the phase's config locals + prior-phase outputs).
    - `<outputs>` = every local the block produces that the pipeline uses downstream.
    - Last tuple element = the early-exit signal: **non-None `WorkflowResult` means "propagate it"**.
-2. **Own the span with a `with` block (R1-S3):**
+2. **Own the span with `try/finally: __exit__(None, None, None)` — NOT a `with` block (R1-S3/S4):**
    ```python
-   with _tracer.start_as_current_span("ingestion.<phase>") as _span:
+   _phase_ctx = _tracer.start_as_current_span("ingestion.<phase>")
+   _span = _phase_ctx.__enter__()
+   try:
        root_span.add_event("state.transition", {"phase": "<phase>"})
        run.progress("<Phase>")
        ...phase glue + self._phase_<x>(...)...
        # set _span attrs
-   # span closed here (matches the old explicit __exit__/outer-finally, UNSET status)
+   finally:
+       _phase_ctx.__exit__(None, None, None)   # UNSET even on exception — matches pre-refactor
    if <error>:
-       return <Nones...>, self._rt_fail(run, <msg>)   # _rt_fail AFTER the with (parenting preserved)
+       return <Nones...>, self._rt_fail(run, <msg>)   # _rt_fail AFTER close (parenting preserved)
    return <outputs...>, None
    ```
+   > **Why not `with`?** `start_as_current_span` defaults to `record_exception=True,
+   > set_status_on_exception=True`, so a `with` would set the phase span to ERROR + record the
+   > exception on a mid-phase raise. Pre-refactor, the phase span was closed by the *outer*
+   > `finally` with `(None,None,None)` → **UNSET**, no exception recorded (only the root span got
+   > ERROR). `try/finally: __exit__(None,None,None)` reproduces that exactly. (Caught in Stage-4a
+   > `/code-review --fix`; the `with` version had passed the OTel test only because it doesn't
+   > exercise a mid-phase exception.)
    - Replaces the manual `_active_phase_ctx = _tracer.start_as_current_span(...)` / `.__enter__()` / `.__exit__(None,None,None)` / deferred-close asymmetry.
    - For the **deferred cost-cap** shape: `cost_err = self._rt_check_cost(run, "<phase>")` inside/after the `with` as the original ordered it, then `return <Nones...>, cost_err` (which is None or a WorkflowResult) — do NOT drop it.
 3. **Shared-by-reference (Stage 2):** `steps.append(...)` → `run.steps.append(...)`; `state`/`_forensics` stay the same objects via `run`. Don't rewrite `state.x` / `_forensics[...]` sites.

@@ -3964,14 +3964,21 @@ class PlanIngestionWorkflow(WorkflowBase):
         contextcore_yaml,
         requirements_files,
     ):
-        """PREFLIGHT phase (Stage 4). Owns its `ingestion.preflight` span via a ``with``
-        (uniformly closes on any exit — R1-S3). Returns
+        """PREFLIGHT phase (Stage 4). Owns its `ingestion.preflight` span.
+
+        Uses ``try/finally: __exit__(None, None, None)`` — NOT a ``with`` block — to close the
+        span with UNSET status even on an exception, exactly matching the pre-refactor behavior
+        (the phase span was closed by the outer ``finally`` with None args, so a mid-phase
+        exception never set ERROR / recorded the exception on the *phase* span; only the root
+        span got ERROR in the outer ``except``). A ``with`` would instead record the exception
+        and set ERROR (a telemetry regression — CRP R1-S4). Returns
         (onboarding_metadata, preflight_evidence, requirements_hints_index, requirements_docs,
-        early) where a non-None `early` WorkflowResult means "early-exit — propagate it".
-        The `_rt_fail` early-exits fire *after* the span closes (matching the pre-refactor
-        order: preflight span was explicitly closed before the error check).
+        early); a non-None `early` WorkflowResult means "early-exit — propagate it". The
+        `_rt_fail` early-exits fire *after* the span closes (matching pre-refactor order).
         """
-        with _tracer.start_as_current_span("ingestion.preflight") as _pf_span:
+        _phase_ctx = _tracer.start_as_current_span("ingestion.preflight")
+        _pf_span = _phase_ctx.__enter__()
+        try:
             root_span.add_event("state.transition", {"phase": "preflight"})
 
             run.progress("Preflight")
@@ -3998,6 +4005,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             if _HAS_OTEL and not isinstance(_pf_span, _NoOpSpan):
                 _pf_span.set_attribute("phase.warnings_count", len(preflight_warnings))
                 _pf_span.set_attribute("phase.errors_count", len(preflight_errors))
+        finally:
+            _phase_ctx.__exit__(None, None, None)
 
         if preflight_step.error:
             return None, None, None, None, self._rt_fail(run, preflight_step.error)
