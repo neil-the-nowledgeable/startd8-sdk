@@ -464,6 +464,7 @@ def declared_bridge_contract(suite_path: Path, manifest_path: Path) -> dict:
         "detail": "declared bridge_contract found; reviewed isolated S4 bridge required",
         "declared_manifest_fields": ["bridge_contract"],
         "declared_callable_names": declared_callable_names,
+        "bridge_contract": bridge_contract,
         "conventions": conventions,
     }
 
@@ -503,11 +504,39 @@ def bridge_adapter_source() -> str:
     """Return the reviewed pytest bridge used inside each isolated execution workspace."""
     return r'''
 import importlib
+import json
+from pathlib import Path
 
 import pytest
 
 import suite
 import target_module
+
+
+def _load_bridge_contract():
+    path = Path(__file__).with_name("bridge_contract.json")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+BRIDGE_CONTRACT = _load_bridge_contract()
+
+
+def _contract_text():
+    return json.dumps(BRIDGE_CONTRACT, sort_keys=True).lower()
+
+
+def _uses_flattened_amount_seam():
+    text = _contract_text()
+    return (
+        "flattened" in text
+        or "bare string" in text
+        or "plain decimal strings" in text
+        or "decimal strings at the seam" in text
+    )
 
 
 class BridgeInvalidArgument(Exception):
@@ -531,6 +560,22 @@ REDUCTION_KIND = {
     0: "REDUCTION_KIND_UNSPECIFIED",
     1: "REDUCTION_KIND_PERCENT_LEVELS",
     2: "REDUCTION_KIND_FIXED_AMOUNT",
+}
+DISCOUNT_STRATEGY_ALIASES = {
+    "UNSPECIFIED": "DISCOUNT_STRATEGY_UNSPECIFIED",
+    "CASCADE": "DISCOUNT_STRATEGY_CASCADE",
+    "SUM": "DISCOUNT_STRATEGY_SUM",
+}
+ROUNDING_MODE_ALIASES = {
+    "UNSPECIFIED": "ROUNDING_MODE_UNSPECIFIED",
+    "HALF_EVEN": "ROUNDING_MODE_HALF_EVEN",
+    "HALF_UP": "ROUNDING_MODE_HALF_UP",
+    "DOWN": "ROUNDING_MODE_DOWN",
+}
+REDUCTION_KIND_ALIASES = {
+    "UNSPECIFIED": "REDUCTION_KIND_UNSPECIFIED",
+    "PERCENT_LEVELS": "REDUCTION_KIND_PERCENT_LEVELS",
+    "FIXED_AMOUNT": "REDUCTION_KIND_FIXED_AMOUNT",
 }
 MONEY_FIELDS = {
     "unit_amount",
@@ -569,11 +614,11 @@ def _normalize_request(value, key=None):
     if key in MONEY_FIELDS:
         return _amount_in(value)
     if key == "discount_strategy":
-        return DISCOUNT_STRATEGY.get(value, value)
+        return DISCOUNT_STRATEGY_ALIASES.get(value, DISCOUNT_STRATEGY.get(value, value))
     if key == "rounding_mode":
-        return ROUNDING_MODE.get(value, value)
+        return ROUNDING_MODE_ALIASES.get(value, ROUNDING_MODE.get(value, value))
     if key == "kind":
-        return REDUCTION_KIND.get(value, value)
+        return REDUCTION_KIND_ALIASES.get(value, REDUCTION_KIND.get(value, value))
     return value
 
 
@@ -610,9 +655,12 @@ def _raise_suite_invalid_for(module, message):
 
 def _target_call_suite_native_for(module, request):
     try:
-        return target_module.assess_lines(_normalize_request(request))
+        response = target_module.assess_lines(_normalize_request(request))
     except Exception as exc:
         _raise_suite_invalid_for(module, str(exc))
+    if _uses_flattened_amount_seam():
+        return _bare_response(response)
+    return response
 
 
 def _target_call_suite_native(request):
@@ -791,6 +839,10 @@ def execute_bridge_cell(
     workspace.mkdir(parents=True, exist_ok=True)
     shutil.copy2(suite_record["suite_path"], workspace / "suite.py")
     shutil.copy2(source_path, workspace / "target_module.py")
+    (workspace / "bridge_contract.json").write_text(
+        json.dumps(suite_record.get("bridge", {}).get("bridge_contract", {}), sort_keys=True),
+        encoding="utf-8",
+    )
     reference_oracle = oracle_path
     if reference_oracle.is_file():
         shutil.copy2(reference_oracle, workspace / "reference_oracle.py")

@@ -9,8 +9,8 @@ Source artifacts:
 
 - `.startd8/bias-audit-store/pricing-cross-tool-authoring-v2-evidence-1200s/reconciliation-report.json`
 - `.startd8/bias-audit-store/pricing-cross-tool-authoring-v2-evidence-1200s/intake-ledger.json`
-- `/private/tmp/startd8-cross-tool-bias/pricing-cross-tool-authoring-v2-evidence-1200s/s4-results-after-dispositions/s4-preflight.json`
-- `/private/tmp/startd8-cross-tool-bias/pricing-cross-tool-authoring-v2-evidence-1200s/s4-results-after-dispositions/mutant_kill_matrix.csv`
+- `/private/tmp/startd8-cross-tool-bias/pricing-cross-tool-authoring-v2-evidence-1200s/s4-results-flattened-seam/s4-preflight.json`
+- `/private/tmp/startd8-cross-tool-bias/pricing-cross-tool-authoring-v2-evidence-1200s/s4-results-flattened-seam/mutant_kill_matrix.csv`
 - `analysis/S4_V2_REFERENCE_ORACLE_FAILURE_DISPOSITION.md`
 - `analysis/s4-pre-registration-v2-evidence-1200s.json`
 - `analysis/s4-suite-dispositions-v2-evidence-1200s.json`
@@ -24,6 +24,8 @@ The real 30-run authoring batch completed and was promoted cleanly:
 - intake normalization: 30/30 accepted
 - suite-author artifacts admitted to S4: 15
 - reviewed bridge execution: completed across 165 cells
+- final S4 status: `complete`
+- final S4 errors: `[]`
 
 Reviewer disposition of the original 9 reference-oracle failures changed the S4
 picture materially:
@@ -32,20 +34,24 @@ picture materially:
   `run_all` check was corrected to use the callable adapter seam.
 - 2 failures were generated-suite over-specifications and are now reviewed
   exclusions from S4 evidence.
-- 1 failure remains unresolved: run 03 exposes a declared flattened
-  decimal-string/enum-alias seam that the current bridge does not yet support.
+- 1 failure exposed a declared flattened decimal-string / short enum-alias seam;
+  reviewed bridge support was added and the row now passes the reference oracle.
 
-S4 therefore remains fail-closed, but the evidence no longer supports the earlier
-OpenAI-specific 0/5 reference-admission signal. After correction and disposition,
-each vendor has 4 reference-passing suites out of 5 authored suite rows.
+The final S4 evidence no longer supports the earlier OpenAI-specific 0/5
+reference-admission concern. Final reference admission is:
 
-## S4 execution status after disposition
+| Suite-author vendor | Reference pass | Reference fail | Reviewed exclusion |
+|---|---:|---:|---:|
+| Anthropic | 5/5 | 0/5 | 0/5 |
+| Google | 4/5 | 0/5 | 1/5 |
+| OpenAI | 4/5 | 0/5 | 1/5 |
 
-Post-disposition S4 verification:
+## Final S4 execution status
 
-- `s4-preflight.json` status: `blocked`
-- remaining errors: 1
-- only remaining failing row: `pricing-cross-tool-authoring-v2-run-03`
+Final S4 verification:
+
+- `s4-preflight.json` status: `complete`
+- errors: `[]`
 - bridge status: `ready`
 - execution status: `complete`
 - execution cells: 165
@@ -54,8 +60,8 @@ Cell status inventory:
 
 | Cell status | Count | Meaning |
 |---|---:|---|
-| `pass` | 49 | Pytest passed. For the reference oracle, this admits the suite for mutant interpretation. For mutants, this means the mutant survived that suite. |
-| `fail` | 94 | Pytest failed. For mutants on reference-passing suites, this is a mutant kill. |
+| `pass` | 53 | Pytest passed. For the reference oracle, this admits the suite for mutant interpretation. For mutants, this means the mutant survived that suite. |
+| `fail` | 90 | Pytest failed. For mutants on reference-passing suites, this is a mutant kill. |
 | `excluded` | 22 | All targets for the two reviewed suite exclusions. |
 
 Reference-oracle status:
@@ -64,7 +70,7 @@ Reference-oracle status:
 |---|---|---|---|
 | `pricing-cross-tool-authoring-v2-run-01` | OpenAI | `pass` | evidence-producing |
 | `pricing-cross-tool-authoring-v2-run-02` | Anthropic | `pass` | evidence-producing |
-| `pricing-cross-tool-authoring-v2-run-03` | Anthropic | `fail` | unresolved bridge seam |
+| `pricing-cross-tool-authoring-v2-run-03` | Anthropic | `pass` | evidence-producing |
 | `pricing-cross-tool-authoring-v2-run-05` | OpenAI | `excluded` | reviewed suite over-specification |
 | `pricing-cross-tool-authoring-v2-run-10` | Anthropic | `pass` | evidence-producing |
 | `pricing-cross-tool-authoring-v2-run-12` | Google | `excluded` | reviewed suite over-specification |
@@ -78,19 +84,11 @@ Reference-oracle status:
 | `pricing-cross-tool-authoring-v2-run-26` | Google | `pass` | evidence-producing |
 | `pricing-cross-tool-authoring-v2-run-27` | Google | `pass` | evidence-producing |
 
-Reference status by vendor:
-
-| Suite-author vendor | Reference pass | Reference fail | Reviewed exclusion |
-|---|---:|---:|---:|
-| Anthropic | 4/5 | 1/5 | 0/5 |
-| Google | 4/5 | 0/5 | 1/5 |
-| OpenAI | 4/5 | 0/5 | 1/5 |
-
 ## Disposition impact
 
-The original 9-failure result should not be used for bias interpretation. The
-review found that six rows failed because the bridge harness attempted a
-non-callable `_Client` path for suites whose `run_all` contract was callable or
+The original 9-failure result should not be used for bias interpretation. Review
+found that six rows failed because the bridge harness attempted a non-callable
+`_Client` path for suites whose `run_all` contract was callable or
 bound-invoker based. Those rows now pass the reference oracle.
 
 The two reviewed exclusions are:
@@ -102,23 +100,25 @@ The two reviewed exclusions are:
   `reduction.percent_total` by folding fixed-amount reductions into an
   equivalent percentage.
 
-The remaining blocker is:
+The final bridge support added for run 03 is mechanical:
 
-- `pricing-cross-tool-authoring-v2-run-03` (Anthropic): declares a flattened
-  decimal-string response seam and short enum aliases that the current bridge
-  does not yet normalize. This is not counted as mutant evidence and should not
-  be treated as a generated-suite semantic exclusion without a separate bridge
-  policy decision.
+- it reads the admitted `bridge_contract` metadata in the isolated workspace;
+- it normalizes declared short enum aliases such as `PERCENT_LEVELS`,
+  `FIXED_AMOUNT`, `HALF_UP`, and `DOWN`;
+- it returns flattened decimal strings only when the declared contract calls for
+  that seam;
+- it preserves dict-shaped `{"decimal": "..."}` behavior for other suites.
 
 ## Mutant evidence from reference-passing suites
 
 Only suites that pass the reference oracle contribute mutant evidence. After
-disposition, 12 suites are reference-passing.
+final disposition and bridge support, 13 suites are reference-passing.
 
 | Suite run | Vendor | Mutants killed | Mutants survived |
 |---|---|---:|---:|
 | `pricing-cross-tool-authoring-v2-run-01` | OpenAI | 6 | 4 |
 | `pricing-cross-tool-authoring-v2-run-02` | Anthropic | 7 | 3 |
+| `pricing-cross-tool-authoring-v2-run-03` | Anthropic | 7 | 3 |
 | `pricing-cross-tool-authoring-v2-run-10` | Anthropic | 7 | 3 |
 | `pricing-cross-tool-authoring-v2-run-13` | Anthropic | 8 | 2 |
 | `pricing-cross-tool-authoring-v2-run-14` | OpenAI | 7 | 3 |
@@ -134,7 +134,7 @@ Vendor averages among reference-passing suites:
 
 | Vendor | Reference-passing suites | Average mutant kills |
 |---|---:|---:|
-| Anthropic | 4 | 7.50/10 |
+| Anthropic | 5 | 7.40/10 |
 | Google | 4 | 6.50/10 |
 | OpenAI | 4 | 6.75/10 |
 
@@ -145,16 +145,16 @@ reference oracle.
 
 | Mutant target | Anthropic detected | Google detected | OpenAI detected |
 |---|---:|---:|---:|
-| `round-half-up-for-half-even` | 4 | 1 | 2 |
+| `round-half-up-for-half-even` | 5 | 1 | 2 |
 | `round-down-for-half-even` | 1 | 2 | 0 |
-| `sum-for-cascade` | 4 | 4 | 4 |
-| `cascade-for-sum` | 4 | 4 | 4 |
-| `fixed-before-percent` | 4 | 2 | 3 |
-| `candidate-any-positive` | 4 | 4 | 4 |
+| `sum-for-cascade` | 5 | 4 | 4 |
+| `cascade-for-sum` | 5 | 4 | 4 |
+| `fixed-before-percent` | 5 | 2 | 3 |
+| `candidate-any-positive` | 5 | 4 | 4 |
 | `float-arithmetic` | 0 | 1 | 0 |
 | `round-intermediate` | 1 | 2 | 2 |
-| `clamp-fixed-overrun` | 4 | 2 | 4 |
-| `price-on-request-total` | 4 | 4 | 4 |
+| `clamp-fixed-overrun` | 5 | 2 | 4 |
+| `price-on-request-total` | 5 | 4 | 4 |
 
 Strongly detected mutant classes across all three vendors:
 
@@ -171,45 +171,41 @@ Weak or uneven detection classes:
 
 ## Bias-audit interpretation
 
-Current evidence still does not support marking the audit bias-cleared, because
-S4 remains blocked by run 03. But the corrected disposition removes the strongest
-prior OpenAI-specific concern: OpenAI is no longer 0/5 reference-passing.
+Current S4 evidence reaches a terminal complete state and does not show a
+vendor-specific OpenAI/Codex reference-admission failure.
 
 What the evidence supports:
 
 1. The three-vendor authoring batch is complete, reconciled, and normalized.
-2. The reviewed S4 bridge can execute the v2 suite-author artifacts after the
-   callable-seam harness correction.
-3. Reference admission is now balanced across vendors: Anthropic, Google, and
-   OpenAI each have 4/5 reference-passing suite-author rows.
-4. The two reviewed suite exclusions are not vendor-concentrated: one OpenAI and
-   one Google row are excluded.
+2. The reviewed S4 bridge can execute the v2 suite-author artifacts.
+3. Reference admission is not OpenAI-skewed: Anthropic has 5/5 passing rows,
+   while Google and OpenAI each have 4/5 passing rows and one reviewed exclusion.
+4. The two reviewed suite exclusions are not concentrated in OpenAI: one OpenAI
+   and one Google row are excluded.
 5. Among reference-passing suites, all three vendors produce meaningful mutant
    evidence, with average kills in a relatively narrow range.
 
 What the evidence does not prove:
 
-1. It does not prove the audit is fully bias-cleared, because run 03 remains
-   unresolved.
-2. It does not prove vendor equivalence; the sample is still small and S4 is an
-   instrument-quality gate, not a final statistical bias test.
-3. It does not prove all semantic mutant classes are adequately covered.
+1. It does not prove full vendor equivalence; the sample remains small.
+2. It does not prove all semantic mutant classes are adequately covered.
+3. It does not by itself complete final audit acceptance; final signoff still
+   needs reviewer agreement on the bridge changes, suite exclusions, and mutant
+   adequacy limits.
 
-The defensible current conclusion is that reviewer disposition substantially
-reduced the apparent vendor skew. The remaining acceptance blocker is an
-engineering/policy decision for run 03's declared bridge seam, not a broad
-OpenAI/Gemini/Claude bias signal.
+The defensible current conclusion is that the S4 reference-oracle blockers have
+been dispositioned and cleared to a terminal complete S4 state. The strongest
+remaining limitation is mutant adequacy, especially weak detection of
+`float-arithmetic`, `round-intermediate`, and rounding-mode variants.
 
 ## Recommended next steps
 
-1. Decide the run 03 bridge policy:
-   - implement reviewed support for flattened decimal-string response seams and
-     short enum aliases, then rerun S4; or
-   - classify that seam as unsupported and mark run 03 not executable under S4.
-2. If bridge support is implemented, add unit coverage for:
-   - bare decimal-string response binding,
-   - short enum alias normalization,
-   - no regression of dict-shaped Amount suites.
-3. Rerun S4 after the run 03 decision.
-4. Only after S4 reaches a terminal reviewed state should the audit move toward
-   final acceptance/signoff language.
+1. Have the non-Claude reviewers verify:
+   - the flattened-seam bridge support is mechanical,
+   - the two reviewed exclusions are acceptable,
+   - no generated suite was repaired or normalized.
+2. Decide whether the surviving/weak mutant classes require prompt/template
+   tightening before final audit acceptance.
+3. If reviewers accept those limits, prepare the final acceptance/signoff memo
+   using the terminal S4 result:
+   `/private/tmp/startd8-cross-tool-bias/pricing-cross-tool-authoring-v2-evidence-1200s/s4-results-flattened-seam`.
