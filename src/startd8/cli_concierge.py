@@ -158,6 +158,18 @@ def _render_assess(result: dict) -> None:
     if headline:
         console.print(f"\n[bold]Next command[/bold]: [cyan]{headline}[/cyan]")
 
+    # Thread B / FR-B2: advisory cap-dev-pipe offer — rendered in a distinctly non-blocking
+    # voice, AFTER the blocking headline, so it never reads as a required step. Only shown when
+    # there is something to offer (absent+ready, or a broken existing embed); healthy = silent.
+    capdevpipe = result.get("capdevpipe") or {}
+    offer = capdevpipe.get("next_command")
+    if offer:
+        if capdevpipe.get("status") == "present_no_manifest":
+            reason = "a cap-dev-pipe embed is present but incomplete"
+        else:
+            reason = "the project is ready — you can install the capability-delivery pipeline"
+        console.print(f"\n[dim]Optional next step[/dim] ({reason}): [cyan]{offer}[/cyan]")
+
 
 @concierge_app.command("assess")
 def concierge_assess(

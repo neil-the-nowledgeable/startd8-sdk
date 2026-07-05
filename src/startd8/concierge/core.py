@@ -79,6 +79,12 @@ CMD_KICKOFF_INSTANTIATE = "startd8 kickoff instantiate"
 # step — surface the assess report itself as the canonical read-only next move.
 CMD_KICKOFF_ASSESS = "startd8 kickoff assess"
 
+# cap-dev-pipe capability-delivery pipeline (Thread B / FR-B2). Offered — never gated — once the
+# project has satisfied all required kickoff elements: a user is not ready to run the pipeline the
+# inputs feed until the project itself is ready to start.
+CMD_CAPDEVPIPE_INSTALL = "startd8 capdevpipe install"
+CMD_CAPDEVPIPE_REPAIR = "startd8 capdevpipe install --rerun-mode repair"
+
 
 def _blocker_command(section: str) -> str | None:
     """Map a cascade-blocker section title → the exact CLI command that advances it (FR-5).
@@ -231,17 +237,73 @@ def build_assess(project_root: str | Path) -> Dict[str, Any]:
     logger.info("concierge.assess root=%s", root)
 
     cascade = _assess_cascade(root)
+    kickoff_inputs = _assess_kickoff_inputs(root)
     return {
         "schema_version": SCHEMA_VERSION,
         "action": "assess",
         "project_root": str(root),
-        "kickoff_inputs": _assess_kickoff_inputs(root),
+        "kickoff_inputs": kickoff_inputs,
         "cascade": cascade,
         # FR-5: the handoff surface — the single exact next command to move forward (may be None
         # when the cascade is fully ready). Per-blocker commands live under cascade.blockers.
         "next_command": _headline_next_command(cascade),
         "deployment": _assess_deployment(root),
+        # Thread B / FR-B2: advisory cap-dev-pipe offer. A SEPARATE top-level block (named
+        # `capdevpipe`, NOT `pipeline`, to avoid colliding with the `cascade` generation-pipeline
+        # concept). Deliberately NOT a cascade blocker and NOT routed through the FR-5 headline —
+        # so readiness math and exit semantics are byte-identical with/without it (FR-B3).
+        "capdevpipe": _assess_pipeline(
+            root, ready=_kickoff_ready(cascade, kickoff_inputs)
+        ),
     }
+
+
+def _kickoff_ready(cascade: Dict[str, Any], kickoff_inputs: Dict[str, Any]) -> bool:
+    """Whether the project has satisfied all *required* kickoff elements (FR-B2 gate).
+
+    True iff the $0-cascade resolved with zero blockers AND every required kickoff-input domain
+    is present. This is the precondition for *offering* the capability-delivery pipeline: a
+    not-ready project is never pitched the pipeline. Reuses already-computed assess data — it does
+    NOT re-derive readiness.
+    """
+    if cascade.get("status") != "ok" or cascade.get("blockers"):
+        return False
+    domains = kickoff_inputs.get("domains", {})
+    if not domains:
+        return False
+    return all(d.get("status") == "present" for d in domains.values())
+
+
+def _assess_pipeline(root: Path, *, ready: bool) -> Dict[str, Any]:
+    """FR-B1/B5: the cap-dev-pipe presence block — a cheap, $0, read-only 3-state detector.
+
+    States: ``absent`` (no ``.cap-dev-pipe/``) → offer install *iff kickoff-ready*;
+    ``present_no_manifest`` (dir but no install manifest) → offer repair (an existing embed is a
+    maintenance action, not "starting", so it is not readiness-gated); ``healthy`` (dir + manifest)
+    → no offer (FR-B4). Deep canonical ``verify_embed`` is intentionally NOT run here (it stays in
+    the install command) to keep ``assess`` a $0 read-only call. Degrades to ``unavailable`` if the
+    installer constants can't be imported (mirrors ``_assess_deployment``'s local-import guard).
+    """
+    try:
+        from startd8.capdevpipe_installer import EMBED_DIR_NAME, MANIFEST_FILENAME
+    except ImportError as exc:  # pragma: no cover - installer ships with the SDK
+        return {"status": "unavailable", "error": str(exc), "next_command": None}
+
+    embed = root / EMBED_DIR_NAME
+    if not embed.is_dir():
+        status = "absent"
+    elif not (embed / MANIFEST_FILENAME).is_file():
+        status = "present_no_manifest"
+    else:
+        status = "healthy"
+
+    next_command: str | None = None
+    if status == "absent" and ready:
+        next_command = CMD_CAPDEVPIPE_INSTALL  # offer only once the project is ready to start
+    elif status == "present_no_manifest":
+        next_command = CMD_CAPDEVPIPE_REPAIR  # fix a broken existing embed anytime
+
+    return {"status": status, "kickoff_ready": ready, "next_command": next_command}
 
 
 def _assess_deployment(root: Path) -> Dict[str, Any]:
