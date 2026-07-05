@@ -106,6 +106,24 @@ class TestOptionValidation:
         assert result.exit_code != 0
 
 
+class TestDryRunSafety:
+    def test_dry_run_with_rerun_mode_does_not_mutate(self, full_source, target):
+        """--dry-run must never mutate, even on an existing install with a re-run mode."""
+        # First do a real install so the embed exists.
+        assert runner.invoke(capdevpipe_app, _install_args(full_source, target)).exit_code == 0
+        embed = target / EMBED_DIR_NAME
+        before = {p.name: (p.is_symlink(), p.stat().st_mtime) for p in embed.iterdir()}
+
+        result = runner.invoke(
+            capdevpipe_app, _install_args(full_source, target, "--rerun-mode", "upgrade", "--dry-run")
+        )
+        assert result.exit_code == 0, result.output
+        after = {p.name: (p.is_symlink(), p.stat().st_mtime) for p in embed.iterdir()}
+        assert before == after, "dry-run mutated the existing embed"
+        # The upgrade preview reports its prune analysis.
+        assert "prune" in result.output.lower()
+
+
 class TestReRun:
     def test_repair_on_existing_install(self, full_source, target):
         first = runner.invoke(capdevpipe_app, _install_args(full_source, target))

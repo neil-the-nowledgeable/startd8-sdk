@@ -196,6 +196,13 @@ def install_command(
 
         state = installer.detect_existing(cfg.target_root)
 
+        # --dry-run is non-mutating on EVERY path — computed and printed BEFORE any apply_mode /
+        # execute, so it can never touch disk (esp. important against an existing embed with local
+        # state). The re-run branch below is reached only when NOT a dry run.
+        if dry_run:
+            _preview_install(installer, cfg, mode=mode, existing=state.exists)
+            return
+
         # Existing install + explicit re-run mode → apply that mode, then verify.
         if state.exists and mode is not None:
             if mode is ReRunMode.DOCTOR:
@@ -206,19 +213,8 @@ def install_command(
             _render_verify(cfg, vr, mode=mode)
             raise typer.Exit(_EXIT_OK if vr.passed else _EXIT_ERROR)
 
-        # Fresh install: plan → (preview and stop on --dry-run) → execute → verify.
+        # Fresh install: plan → execute → verify.
         actions = installer.plan_actions(cfg)
-        if dry_run:
-            console.print(
-                f"[bold]cap-dev-pipe install — dry run[/bold] "
-                f"(target: {cfg.target_root}, method: {cfg.method.value}, "
-                f"profile: {cfg.embed_profile})"
-            )
-            for action in actions:
-                console.print(f"  • {action.describe()}")
-            console.print(f"[dim]{len(actions)} action(s) planned; nothing written.[/dim]")
-            return
-
         result = installer.execute(cfg, actions=actions)
         if not result.success:
             tail = (
@@ -237,6 +233,49 @@ def install_command(
     except Startd8Error as exc:
         console.print(f"[red]error[/red]: {exc}")
         raise typer.Exit(_EXIT_ERROR) from exc
+
+
+def _preview_install(installer, cfg, *, mode, existing: bool) -> None:
+    """Non-mutating ``--dry-run`` preview. Never touches disk.
+
+    Fresh install (or no re-run mode) → the full planned action list. An existing install with a
+    re-run mode → the mode-specific change set: for ``upgrade`` that is the re-embedded action set
+    PLUS the read-only orphan-symlink prune candidates (the decisive "what would be removed?"
+    answer); other modes preview the full plan the mode converges toward, clearly caveated.
+    """
+    from .capdevpipe_installer import ReRunMode
+
+    console.print(
+        f"[bold]cap-dev-pipe install — dry run[/bold] "
+        f"(target: {cfg.target_root}, method: {cfg.method.value}, profile: {cfg.embed_profile})"
+    )
+    if existing and mode is not None:
+        console.print(f"[dim]existing install detected; re-run mode: {mode.value}[/dim]")
+        if mode is ReRunMode.DOCTOR:
+            console.print("  • doctor is read-only (health check only); nothing would change.")
+            return
+        if mode is ReRunMode.UPGRADE:
+            actions = installer.embed_symlink(cfg)
+            for action in actions:
+                console.print(f"  • {action.describe()}")
+            prunes = installer.orphan_symlink_candidates(cfg.target_root, cfg)
+            if prunes:
+                console.print("[yellow]would PRUNE these orphan symlinks (not in the current "
+                              "inventory):[/yellow]")
+                for p in prunes:
+                    console.print(f"  • prune {p}")
+            else:
+                console.print("[dim]no orphan symlinks would be pruned.[/dim]")
+            console.print(f"[dim]{len(actions)} action(s) + {len(prunes)} prune(s); "
+                          "nothing written.[/dim]")
+            return
+        # reconfigure / repair / replace-pipeline.env: show the plan the mode converges toward.
+        console.print("[dim](preview shows the full target plan; this mode applies its "
+                      "relevant subset)[/dim]")
+    actions = installer.plan_actions(cfg)
+    for action in actions:
+        console.print(f"  • {action.describe()}")
+    console.print(f"[dim]{len(actions)} action(s) planned; nothing written.[/dim]")
 
 
 def _render_verify(cfg, vr, *, mode=None, installed: bool = False) -> None:

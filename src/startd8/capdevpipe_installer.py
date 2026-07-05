@@ -1374,17 +1374,25 @@ class CapDevPipeInstaller:
             exists=True, manifest=manifest, pending=pending, broken_symlinks=broken
         )
 
-    def _prune_orphan_symlinks(self, target: Path, cfg: InstallConfig) -> None:
-        """Remove embed symlinks whose script was deleted upstream so embed == source (R2-F6)."""
+    def orphan_symlink_candidates(self, target: Path, cfg: InstallConfig) -> List[Path]:
+        """Embed symlinks NOT in the current inventory — what ``upgrade`` would prune (read-only).
+
+        Extracted so a ``--dry-run`` can preview the prune set without unlinking anything.
+        """
         embed = Path(target) / EMBED_DIR_NAME
         inventory = resolve_embed_inventory(cfg.source_path, cfg.embed_profile)
         valid = inventory.symlink_top_level_names()
-        for entry in sorted(embed.iterdir()) if embed.is_dir() else []:
-            if entry.is_symlink() and entry.name not in valid:
-                entry.unlink()
-                self.logger.info(
-                    "capdevpipe upgrade: pruned orphaned symlink %s", entry
-                )
+        return [
+            entry
+            for entry in (sorted(embed.iterdir()) if embed.is_dir() else [])
+            if entry.is_symlink() and entry.name not in valid
+        ]
+
+    def _prune_orphan_symlinks(self, target: Path, cfg: InstallConfig) -> None:
+        """Remove embed symlinks whose script was deleted upstream so embed == source (R2-F6)."""
+        for entry in self.orphan_symlink_candidates(target, cfg):
+            entry.unlink()
+            self.logger.info("capdevpipe upgrade: pruned orphaned symlink %s", entry)
 
     def apply_mode(self, target: Path, mode: ReRunMode, cfg: InstallConfig) -> None:
         """Apply a re-run mode with a defined per-file change set (FR-12).
