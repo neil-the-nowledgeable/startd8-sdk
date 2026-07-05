@@ -41,6 +41,10 @@ _INFRA_ERROR_MARKERS = (
     "rate_limit", "rate limit", "429", "overloaded_error", "overloaded",
     "apiconnectionerror", "connection error", "timed out connecting",
     "insufficient_quota", "quota",
+    # Billing/funding: a 402 "Insufficient Balance" (e.g. DeepSeek) means the key AUTHENTICATED
+    # but the account is out of credit — an env/setup failure ($0 model output), never the model's
+    # fault. Classify infra so an unfunded account is excluded, not scored a catastrophic 0.
+    "402", "insufficient balance", "insufficient_balance", "payment required",
     # Missing/unconfigured credentials — a setup failure ($0, no LLM call), never the model's
     # fault. The provider raises "<Provider> API key required..." wrapped in "Failed to resolve
     # agents: ...". Classify as infra so it's excluded, exactly like a dead-key 401.
