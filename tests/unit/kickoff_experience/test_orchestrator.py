@@ -25,11 +25,16 @@ def _greenfield(tmp_path):
 
 
 def test_cost_tag_mapping():
-    assert cost_tag("startd8 generate backend") == "$0"
     assert cost_tag("startd8 wireframe") == "$0"
-    assert (
-        cost_tag("startd8 screens suggest") == "$0+paid"
-    )  # $0 baseline, optional --roles
+    # the $0 cascade generators — matched with their required flags (the emitted, runnable form)
+    assert cost_tag("startd8 generate scaffold") == "$0"
+    assert cost_tag("startd8 generate backend --schema prisma/schema.prisma") == "$0"
+    assert cost_tag(
+        "startd8 generate views --schema prisma/schema.prisma --views prisma/views.yaml"
+    ) == "$0"
+    assert cost_tag("startd8 polish apply --project .") == "$0"
+    assert cost_tag("startd8 screens suggest") == "$0+paid"  # $0 baseline, optional --roles
+    assert cost_tag("startd8 screens suggest --roles") == "paid"  # persona pass always spends
     # red-carpet: the $0 conductor base + optional paid `--agent <spec>` interview (resolvable
     # `kickoff-legacy` path; the demoted `kickoff red-carpet` with a bare `--agent` was the bug).
     assert cost_tag("startd8 kickoff-legacy red-carpet") == "$0+paid"

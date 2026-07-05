@@ -69,13 +69,24 @@ CMD_GENERATE_CONTRACT_PROMOTE = "startd8 generate contract --promote"
 # by-symbol references (advisor + orchestrator + tests) — only the value changed.
 CMD_RED_CARPET_AGENT = "startd8 kickoff-legacy red-carpet"
 CMD_WIREFRAME = "startd8 wireframe"
-CMD_GENERATE_BACKEND = "startd8 generate backend"
+# The $0 cascade generators. Each carries the flags it REQUIRES so the emitted command actually runs
+# (a bare `startd8 generate backend` errors with "Missing option '--schema'"). Paths are the
+# conventional locations the generators default to and that the kickoff package writes.
+CMD_GENERATE_SCAFFOLD = "startd8 generate scaffold"
+CMD_GENERATE_BACKEND = "startd8 generate backend --schema prisma/schema.prisma"
+CMD_GENERATE_VIEWS = "startd8 generate views --schema prisma/schema.prisma --views prisma/views.yaml"
+CMD_POLISH_APPLY = "startd8 polish apply --project ."
 # FR-MS-8 — the Manifest Suggester is the guided way to fill the "which screens?" gap (pages/views),
 # so the advisor points at it at the moment of need rather than the generic interview.
 CMD_SCREENS_SUGGEST = "startd8 screens suggest"
+# For the PAGES gap specifically: the $0 baseline only proposes composite VIEWS (schema-grounded), so
+# once views exist a bare `suggest` just dedupes to nothing. Non-entity pages come from the paid
+# persona pass, so the pages gap points at `--roles`.
+CMD_SCREENS_SUGGEST_ROLES = "startd8 screens suggest --roles"
 ADVISOR_COMMANDS: Tuple[str, ...] = (
-    CMD_GENERATE_CONTRACT_PROMOTE, CMD_RED_CARPET_AGENT, CMD_WIREFRAME, CMD_GENERATE_BACKEND,
-    CMD_SCREENS_SUGGEST,
+    CMD_GENERATE_CONTRACT_PROMOTE, CMD_RED_CARPET_AGENT, CMD_WIREFRAME,
+    CMD_GENERATE_SCAFFOLD, CMD_GENERATE_BACKEND, CMD_GENERATE_VIEWS, CMD_POLISH_APPLY,
+    CMD_SCREENS_SUGGEST, CMD_SCREENS_SUGGEST_ROLES,
 )
 
 # The value-input domains diagnosed by the generic loop — EXCLUDES `stakeholders` (CRP R1-F1: it has a
@@ -464,10 +475,21 @@ def build_playbook(
     *,
     cap: int = 7,
     preview: Optional[Mapping[str, Any]] = None,
+    readiness: Optional[Mapping[str, str]] = None,
 ) -> Tuple[NextStep, ...]:
-    """Assemble the ranked, command-bearing playbook in canonical dependency order (FR-RCA-8)."""
+    """Assemble the ranked, command-bearing playbook in canonical dependency order (FR-RCA-8).
+
+    ``readiness`` is the assess ``cascade.readiness`` per-generator map
+    (``{"scaffold": "ready", "backend": "ready", "views": "blocked(...)"}``). When present, each
+    generator that is ``ready`` gets a concrete, **flag-complete** build command surfaced NOW — even
+    if the whole cascade is not yet offerable — so a project whose backend/views are buildable (but
+    whose app/pages gates are still open) is told exactly how to generate what's ready.
+    """
     steps: List[NextStep] = []
     unmet = set(getattr(state, "unmet_gates", ()) or ())
+    ready_gen = {
+        g for g, s in (readiness or {}).items() if str(s).strip().lower() == "ready"
+    }
 
     def add(stage: str, title: str, detail: str, command: Optional[str] = None) -> None:
         steps.append(NextStep(len(steps) + 1, stage, title, _bound(detail), command))
@@ -477,11 +499,46 @@ def build_playbook(
         add("data_model", "Author the data-model contract",
             "Interview → requirements brief → promote prisma/schema.prisma (the front bookend).",
             CMD_RED_CARPET_AGENT)
-    # 2 — unmet cascade gates in canonical app → pages → views order. The screens gaps (pages/views)
-    #     point at the Manifest Suggester (FR-MS-8); the app manifest stays the interview.
+    # 1.5 — BUILD what's already generatable (FR-RCA-24). Each cascade generator that is `ready`
+    #       gets its concrete, flag-complete command surfaced NOW — independent of the whole-cascade
+    #       offer — so a project with a ready backend/views (but open app/pages gates) is told how to
+    #       build. Placed high so these immediately-actionable steps aren't truncated by the cap.
+    if ready_gen:
+        add("run", "Preview the build (wireframe)",
+            "See what the $0 cascade will generate — read-only, no writes.", CMD_WIREFRAME)
+        if "scaffold" in ready_gen:
+            add("run", "Generate project plumbing",
+                "pyproject / logging / alembic / Dockerfile from the app manifest ($0, no LLM).",
+                CMD_GENERATE_SCAFFOLD)
+        if "backend" in ready_gen:
+            run_detail = "The all-Python backend: models, tables, CRUD, HTMX UI, API ($0, no LLM)."
+            if preview:  # FR-RCA-20 — weave the already-fetched wireframe shape into the go/no-go.
+                shape, counts = preview.get("shape"), preview.get("counts")
+                if shape:
+                    run_detail += f" Planned shape: {shape}."
+                if counts:
+                    run_detail += f" Sections: {counts}."
+            add("run", "Generate the backend", run_detail, CMD_GENERATE_BACKEND)
+        if "views" in ready_gen:
+            add("run", "Generate the views",
+                "Composite dashboard/board/workspace views from views.yaml ($0, no LLM).",
+                CMD_GENERATE_VIEWS)
+        if "backend" in ready_gen:
+            add("run", "Apply presentation polish",
+                "Accessible themed design system over the generated app ($0, no LLM).",
+                CMD_POLISH_APPLY)
+    # 2 — unmet cascade gates in canonical app → pages → views order. The screens gaps point at the
+    #     Manifest Suggester (FR-MS-8); the app manifest stays the interview. The PAGES gap points at
+    #     `--roles` because the $0 baseline only proposes views (a bare `suggest` dedupes to nothing
+    #     once views exist); the VIEWS gap keeps the $0 baseline (it authors the view).
     for g in ("app", "pages", "views"):
         if g in unmet:
-            cmd = CMD_SCREENS_SUGGEST if g in ("pages", "views") else CMD_RED_CARPET_AGENT
+            if g == "app":
+                cmd = CMD_RED_CARPET_AGENT
+            elif g == "pages":
+                cmd = CMD_SCREENS_SUGGEST_ROLES
+            else:
+                cmd = CMD_SCREENS_SUGGEST
             add("manifests", f"Add {_GATE_LABEL[g]}",
                 f"The '{g}' cascade gate is unmet; author it from the schema.",
                 cmd)
@@ -493,18 +550,6 @@ def build_playbook(
     for a in advisories:
         if a.kind == KIND_PROVENANCE_REVIEW:
             add("value_inputs", a.title, a.detail, a.command)
-    # 5 — offerable ⇒ wireframe checkpoint, then the $0 cascade.
-    if getattr(state, "cascade_offerable", False):
-        add("run", "Review the wireframe",
-            "Preview what the $0 cascade will build before running it.", CMD_WIREFRAME)
-        # FR-RCA-20 — weave the (already-fetched) wireframe preview into the run step for a concrete go/no-go.
-        run_detail = "Generate the app deterministically (no LLM)."
-        if preview:
-            shape = preview.get("shape")
-            counts = preview.get("counts")
-            if shape:
-                run_detail += f" Planned shape: {shape}."
-            if counts:
-                run_detail += f" Sections: {counts}."
-        add("run", "Run the $0 cascade", run_detail, CMD_GENERATE_BACKEND)
+    # (The build/run steps are emitted in section 1.5 above, per-generator-ready — superseding the
+    #  old offerable-only block so a partially-ready cascade still surfaces its buildable commands.)
     return tuple(steps[:cap])

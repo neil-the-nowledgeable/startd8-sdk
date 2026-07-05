@@ -179,7 +179,14 @@ def build_red_carpet_state(project_root: str | Path) -> RedCarpetState:
             # FR-RCA-19 — cap to top-N but never drop the headline schema insight.
             advisories = cap_advisories(derive_advisories(root, base, assess, schema_text), _ADVISORY_CAP)
             # FR-RCA-20 — thread the already-fetched preview into the run step.
-            next_steps = build_playbook(root, base, advisories, cap=_NEXTSTEP_CAP, preview=base.preview)
+            # FR-RCA-24 — thread the per-generator cascade.readiness so the playbook surfaces a
+            # concrete build command for each generator that is already `ready` (reuses the single
+            # `assess` fetch above — never re-scans).
+            cascade_readiness = (assess.get("cascade") or {}).get("readiness") or {}
+            next_steps = build_playbook(
+                root, base, advisories, cap=_NEXTSTEP_CAP, preview=base.preview,
+                readiness=cascade_readiness,
+            )
         except Exception:
             advisories, next_steps = (), ()
 

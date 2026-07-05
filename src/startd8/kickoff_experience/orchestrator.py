@@ -36,8 +36,12 @@ from startd8.kickoff_experience.red_carpet import build_red_carpet_state
 from startd8.kickoff_experience.red_carpet_advisor import (
     CMD_GENERATE_BACKEND,
     CMD_GENERATE_CONTRACT_PROMOTE,
+    CMD_GENERATE_SCAFFOLD,
+    CMD_GENERATE_VIEWS,
+    CMD_POLISH_APPLY,
     CMD_RED_CARPET_AGENT,
     CMD_SCREENS_SUGGEST,
+    CMD_SCREENS_SUGGEST_ROLES,
     CMD_WIREFRAME,
 )
 
@@ -67,7 +71,11 @@ __all__ = [
 _COST: dict = {
     CMD_GENERATE_CONTRACT_PROMOTE: "$0",
     CMD_WIREFRAME: "$0",
+    CMD_GENERATE_SCAFFOLD: "$0",
     CMD_GENERATE_BACKEND: "$0",
+    CMD_GENERATE_VIEWS: "$0",
+    CMD_POLISH_APPLY: "$0",
+    CMD_SCREENS_SUGGEST_ROLES: "paid",  # the persona pass always spends (no $0 baseline)
     CMD_SCREENS_SUGGEST: "$0+paid",  # baseline is $0; `--roles` spends
     CMD_RED_CARPET_AGENT: "$0+paid",  # $0 conductor; the optional `--agent <spec>` interview spends
 }
