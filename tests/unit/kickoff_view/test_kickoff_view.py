@@ -248,3 +248,149 @@ class TestFacade:
         assert "<!doctype html>" in html
         txt = svc.render_text("kp-20260704T154131-e70156", by_role=True)
         assert "SYNTHETIC PANEL" in txt
+
+
+# ── live-follow (v2: FR-UX-17/18/19) ──
+def _in_progress(rounds: int, roster: int = 3, status: str = "in_progress") -> dict:
+    ma = {f"r{i}": "anthropic:claude-opus-4-8" for i in range(roster)}
+    rnds = [
+        {
+            "round_id": f"R{n}",
+            "title": f"round {n}",
+            "kind": "individual",
+            "entries": [
+                {
+                    "role_id": f"r{i}",
+                    "display_name": f"R{i}",
+                    "model": ma[f"r{i}"],
+                    "text": "x",
+                }
+                for i in range(roster)
+            ],
+        }
+        for n in range(1, rounds + 1)
+    ]
+    return {
+        "session_id": "kp-live",
+        "project": "p",
+        "model_assignment": ma,
+        "status": status,
+        "rounds": rnds,
+        "cost_total_usd": 0.0,
+    }
+
+
+class TestModelLiveState:
+    def test_is_done(self):
+        assert KickoffTranscript.model_validate(_in_progress(1)).is_done is False
+        done = _in_progress(4, status="completed")
+        assert KickoffTranscript.model_validate(done).is_done is True
+        assert (
+            KickoffTranscript.model_validate({"status": "halted", "halt": {}}).is_done
+            is True
+        )
+
+    def test_active_round_pending_next(self):
+        t = KickoffTranscript.model_validate(
+            _in_progress(2)
+        )  # 2 full rounds, still running
+        # all landed rounds are full → the *next* round is pending
+        assert t.active_round_id() == "R3"
+
+    def test_active_round_filling_partial(self):
+        d = _in_progress(2)
+        d["rounds"][1]["entries"] = d["rounds"][1]["entries"][:1]  # R2 short of roster
+        t = KickoffTranscript.model_validate(d)
+        assert t.active_round_id() == "R2"
+
+    def test_active_round_none_when_done(self):
+        assert (
+            KickoffTranscript.model_validate(
+                _in_progress(4, status="completed")
+            ).active_round_id()
+            is None
+        )
+
+
+class TestLiveRender:
+    def test_byte_identity_no_live(self):
+        t = _load("complete_retail.json")
+        assert render_html(t) == render_html(t, live_reload_secs=None)
+
+    def test_live_injects_refresh_and_banner(self):
+        t = KickoffTranscript.model_validate(_in_progress(2))
+        html = render_html(t, live_reload_secs=3)
+        assert '<meta http-equiv="refresh" content="3">' in html
+        assert "live-banner" in html and "LIVE — following kp-live" in html
+        # in-progress → payload marks the pending round for the filling badge
+        assert '"active_round": "R3"' in html
+
+    def test_text_marks_filling(self):
+        d = _in_progress(2)
+        d["rounds"][1]["entries"] = d["rounds"][1]["entries"][:1]
+        txt = render_text(KickoffTranscript.model_validate(d))
+        assert "◀ filling" in txt
+
+
+class TestWatcher:
+    def _store(self, tmp_path):
+        from startd8.kickoff_view import KickoffPanelStore, TranscriptWatcher
+
+        store = KickoffPanelStore(tmp_path)
+        store.root.mkdir(parents=True, exist_ok=True)
+        return store, TranscriptWatcher
+
+    def _write(self, store, payload):
+        store._path("kp-live").write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_poll_detects_change_only(self, tmp_path):
+        store, Watcher = self._store(tmp_path)
+        self._write(store, _in_progress(1))
+        w = Watcher(store, "kp-live", interval=0)
+        first = w.poll()
+        assert first is not None and len(first.rounds) == 1
+        assert w.poll() is None  # unchanged → None
+        self._write(store, _in_progress(2))  # size grows → signature changes
+        again = w.poll()
+        assert again is not None and len(again.rounds) == 2
+
+    def test_poll_absent_and_bad_json_tolerated(self, tmp_path):
+        store, Watcher = self._store(tmp_path)
+        w = Watcher(store, "kp-live", interval=0)
+        assert w.poll() is None  # not there yet
+        store._path("kp-live").write_text("{not json", encoding="utf-8")
+        assert w.poll() is None  # unreadable → None, no crash
+        self._write(store, _in_progress(1))
+        assert w.poll() is not None  # settles on the next valid write
+
+    def test_follow_streams_until_done(self, tmp_path):
+        store, Watcher = self._store(tmp_path)
+        self._write(store, _in_progress(1))
+        # scripted future writes, applied one per sleep() call
+        stages = iter([_in_progress(2), _in_progress(4, status="completed")])
+
+        def fake_sleep(_):
+            try:
+                self._write(store, next(stages))
+            except StopIteration:
+                pass
+
+        seen = []
+        w = Watcher(store, "kp-live", interval=0)
+        final = w.follow(
+            lambda t: seen.append((t.status, len(t.rounds))),
+            sleep=fake_sleep,
+            max_ticks=50,
+        )
+        assert seen == [("in_progress", 1), ("in_progress", 2), ("completed", 4)]
+        assert final is not None and final.is_done
+
+    def test_follow_max_ticks_guard(self, tmp_path):
+        store, Watcher = self._store(tmp_path)
+        self._write(store, _in_progress(1))  # never becomes done
+        calls = []
+        w = Watcher(store, "kp-live", interval=0)
+        final = w.follow(lambda t: calls.append(t), sleep=lambda _: None, max_ticks=5)
+        # only the first (and only) change fires on_change; loop still exits via max_ticks
+        assert len(calls) == 1
+        assert final is not None and not final.is_done

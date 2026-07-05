@@ -22,6 +22,7 @@ from .models import (
 from .store import KickoffPanelStore
 from .view import render_html, render_text
 from .facade import KickoffViewService
+from .watcher import TranscriptWatcher
 
 __all__ = [
     "KickoffTranscript",
@@ -34,4 +35,5 @@ __all__ = [
     "render_html",
     "render_text",
     "KickoffViewService",
+    "TranscriptWatcher",
 ]

@@ -13,6 +13,7 @@ from typing import Optional
 from .models import KickoffTranscript
 from .store import KickoffPanelStore
 from .view import render_html, render_text
+from .watcher import TranscriptWatcher
 
 
 class KickoffViewService:
@@ -33,8 +34,16 @@ class KickoffViewService:
     def load_latest(self) -> Optional[KickoffTranscript]:
         return self.store.load_latest()
 
-    def render_html(self, session_id: str) -> str:
-        return render_html(self.store.load(session_id))
+    def render_html(
+        self, session_id: str, *, live_reload_secs: "Optional[int]" = None
+    ) -> str:
+        return render_html(
+            self.store.load(session_id), live_reload_secs=live_reload_secs
+        )
 
     def render_text(self, session_id: str, *, by_role: bool = False) -> str:
         return render_text(self.store.load(session_id), by_role=by_role)
+
+    def watcher(self, session_id: str, *, interval: float = 1.0) -> TranscriptWatcher:
+        """A :class:`TranscriptWatcher` for live-follow (FR-UX-17)."""
+        return TranscriptWatcher(self.store, session_id, interval=interval)

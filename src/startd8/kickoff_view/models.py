@@ -140,6 +140,29 @@ class KickoffTranscript(BaseModel):
         """Roster size from the model assignment (denominator for per-round progress)."""
         return len(self.model_assignment)
 
+    @property
+    def is_done(self) -> bool:
+        """Terminal state for live-follow (FR-UX-17) — the run won't write again."""
+        return self.status in ("completed", "done") or self.is_halted
+
+    def active_round_id(self) -> Optional[str]:
+        """The round currently being filled (FR-UX-18), or ``None`` when idle/complete.
+
+        A round is "filling" when it has fewer entries than the roster; otherwise, while the
+        run is still ``in_progress`` and no round is short, the *next* round is pending. Returns
+        ``None`` once the run is done. Honest about the current orchestrator (which persists
+        whole rounds): between landings this reports the pending round id, never a false
+        partial bar.
+        """
+        if self.is_done:
+            return None
+        for rnd in self.rounds:
+            if self.roster_size and len(rnd.entries) < self.roster_size:
+                return rnd.round_id
+        if self.status == "in_progress":
+            return f"R{len(self.rounds) + 1}"
+        return None
+
     def is_adversary(self, role_id: str) -> bool:
         return role_id in self.adversaries
 

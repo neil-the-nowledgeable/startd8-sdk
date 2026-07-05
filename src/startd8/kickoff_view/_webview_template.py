@@ -95,6 +95,12 @@ WEBVIEW_TEMPLATE = r"""<!doctype html>
   .tensions{background:#1a1508;border:1px solid var(--warn);border-radius:9px;padding:10px 14px;margin:12px 0;color:#e8cf94}
   footer{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim);font-size:12px}
   .empty{color:var(--dim);padding:18px 0;font-style:italic}
+  .live-banner{background:#0f2417;border-bottom:1px solid var(--ok);color:#7fe0ab;
+    padding:7px 20px;font-size:12.5px;text-align:center}
+  .live-banner .pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);
+    margin-right:6px;animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+  .badge.filling{border-color:var(--ok);color:#7fe0ab;background:#0f2417}
 </style>
 </head>
 <body>
@@ -266,7 +272,9 @@ __SESSION_JSON__
       var k=el("span","rkind"); k.textContent=rnd.kind||"";
       var denom=rosterSize||rnd.entry_count;
       var pr=el("span","prog"); pr.textContent=rnd.entry_count+"/"+denom+" roles";
-      sum.append(fold,t,k,pr); det.appendChild(sum);
+      sum.append(fold,t,k,pr);
+      if(data.active_round && rnd.round_id===data.active_round){ sum.appendChild(badge("filling","● filling",false)); }
+      det.appendChild(sum);
       var body=el("div","rbody");
       (rnd.entries||[]).forEach(function(en){ body.appendChild(buildEntry(en,null)); });
       det.appendChild(body); main.appendChild(det);

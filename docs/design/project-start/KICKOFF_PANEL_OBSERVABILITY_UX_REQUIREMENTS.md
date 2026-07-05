@@ -1,10 +1,13 @@
 # Kickoff-Panel Observability UX — Requirements
 
-**Version:** 0.2 (v1 implemented)
-**Date:** 2026-07-04 (v0.1) · 2026-07-05 (v0.2 build)
-**Status:** **v1 IMPLEMENTED** — static offline HTML + CLI (`startd8 kickoff-panel view/list/show`)
-in `src/startd8/kickoff_view/` (branch `feat/kickoff-panel-viewer`). Deferred to v2: `--watch`
-live-follow (FR-UX-17/18) and the served mode (§3). Both were the reqs' own recommended cut.
+**Version:** 0.3 (v1 + live-follow implemented)
+**Date:** 2026-07-04 (v0.1) · 2026-07-05 (v0.2 static build, v0.3 `--watch`)
+**Status:** **IMPLEMENTED through live-follow** — static offline HTML + CLI + `--watch`
+(`startd8 kickoff-panel view/list/show [--watch]`) in `src/startd8/kickoff_view/` (branch
+`feat/kickoff-panel-viewer`). **FR-UX-17/18 now shipped** (no-server poll-and-diff live-follow;
+`show --watch` re-renders the terminal, `view --watch` re-writes an auto-refreshing HTML file).
+Still deferred: the optional **served mode** (§3) — pre-specified, adds a network trust surface
+for zero new capability, so intentionally not built.
 **Tracks:** `KICKOFF_PANEL_FACILITATION_DESIGN.md` §6 (transcript contract) / §8 (non-goals).
 **Precedent:** the `startd8-consult` `consultation/{store,serve,view,_webview_template,facade}`
 package (the user's "show all models + their feedback" reference).
@@ -34,10 +37,21 @@ package (the user's "show all models + their feedback" reference).
   field is optional with `extra="allow"`; absence renders as an explicit empty/"(pending)" state.
   Covered by the `thin_schema.json` fixture.
 
-**Shipped surfaces:** `kickoff_view/{models,store,view,_webview_template,facade}.py` +
-`cli_kickoff_panel.py` (mounted in `cli.py`). 28 unit tests; browser-verified (two-axis toggle,
+**Shipped surfaces:** `kickoff_view/{models,store,view,_webview_template,facade,watcher}.py` +
+`cli_kickoff_panel.py` (mounted in `cli.py`). 39 unit tests; browser-verified (two-axis toggle,
 per-entry disclosure, adversary/grounding/family badges, halted-state banner, XSS breakout
-neutralized to the 2 real `<script>` containers).
+neutralized to the 2 real `<script>` containers, LIVE banner + meta-refresh + filling marker).
+
+**Live-follow design (v0.3, FR-UX-17/18/19):** `watcher.py` `TranscriptWatcher` separates
+change-detection (`poll` — mtime+size signature, tolerates a transient mid-write decode blip →
+returns "no change") from the loop (`follow` — renders on each change, self-terminates when the
+run hits a terminal `status`; `sleep`/`max_ticks` injectable for tests). No server: the browser
+auto-updates via a `<meta http-equiv="refresh">` injected **only** in watch mode (the static
+default stays byte-identical); on completion the final write omits the refresh so the page
+settles. FR-UX-18 progress is **honest about the whole-round persistence**: a landed round shows
+`n/roster`, and the *pending* next round is named in the LIVE banner (not shown as a false
+partial bar); the in-round `filling` badge lights only if a round is actually persisted short of
+its roster.
 
 ---
 

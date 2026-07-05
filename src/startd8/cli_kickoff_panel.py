@@ -8,6 +8,11 @@ validation-by-observation and inspiration. **Observe only** — no scoring, acce
 write-back (mirrors the facilitation design §8). A thin front door over the same
 ``KickoffViewService`` any TUI surface would drive (no logic fork).
 
+``--watch`` live-follows an in-progress run (FR-UX-17/18): ``show --watch`` re-renders the
+terminal on each landed round; ``view --watch`` re-writes an auto-refreshing HTML file so an
+open browser updates itself. No server — the orchestrator writes the transcript atomically
+round-by-round, so a poll-and-diff loop suffices (FR-UX-19).
+
 Exit codes: 0 ok; 2 bad input (no such session / no sessions).
 """
 
@@ -47,6 +52,14 @@ def _resolve_session_or_exit(service, session_id: Optional[str]) -> str:
     return latest
 
 
+def _load_or_exit(service, session_id: str):
+    try:
+        return service.load(session_id)
+    except FileNotFoundError:
+        console.print(f"[red]kickoff-panel:[/red] no such session: {session_id}")
+        raise typer.Exit(_EXIT_BAD_INPUT)
+
+
 @kickoff_panel_app.command("list")
 def kickoff_list(
     project: Optional[Path] = typer.Option(
@@ -74,23 +87,50 @@ def kickoff_show(
     json_out: bool = typer.Option(
         False, "--json", help="Emit the raw transcript JSON."
     ),
+    watch: bool = typer.Option(
+        False,
+        "--watch",
+        "--follow",
+        help="Live-follow: re-render on each landed round.",
+    ),
+    interval: float = typer.Option(
+        2.0, "--interval", help="Watch poll interval (seconds)."
+    ),
     project: Optional[Path] = typer.Option(
         None, "--project", help="Project root (default: cwd)."
     ),
 ) -> None:
     """Print a kickoff-panel transcript to stdout (round-major, or --by-role)."""
+    from .kickoff_view import render_text
+
     service = _service(project)
     sid = _resolve_session_or_exit(service, session_id)
-    try:
-        transcript = service.load(sid)
-    except FileNotFoundError:
-        console.print(f"[red]kickoff-panel:[/red] no such session: {sid}")
-        raise typer.Exit(_EXIT_BAD_INPUT)
+
+    if watch and not json_out:
+        _resolve_session_or_exit(service, sid)  # ensure the dir has it (or exit 2)
+        watcher = service.watcher(sid, interval=interval)
+
+        def _render(transcript) -> None:
+            console.clear()
+            console.print(f"[dim]watching {sid} — Ctrl-C to stop[/dim]\n")
+            console.print(render_text(transcript, by_role=by_role))
+
+        try:
+            final = watcher.follow(_render)
+        except KeyboardInterrupt:
+            console.print("\n[dim]kickoff-panel: stopped watching.[/dim]")
+            return
+        if final is None:
+            console.print(f"[red]kickoff-panel:[/red] no such session: {sid}")
+            raise typer.Exit(_EXIT_BAD_INPUT)
+        state = "halted" if final.is_halted else "complete"
+        console.print(f"\n[green]kickoff-panel:[/green] run {state}.")
+        return
+
+    transcript = _load_or_exit(service, sid)
     if json_out:
         console.print(transcript.model_dump_json(indent=2))
     else:
-        from .kickoff_view import render_text
-
         console.print(render_text(transcript, by_role=by_role))
 
 
@@ -105,6 +145,15 @@ def kickoff_view_cmd(
     open_browser: bool = typer.Option(
         False, "--open", help="Open the page in a browser."
     ),
+    watch: bool = typer.Option(
+        False,
+        "--watch",
+        "--follow",
+        help="Live-follow: re-write an auto-refreshing page as rounds land.",
+    ),
+    interval: float = typer.Option(
+        2.0, "--interval", help="Watch poll / browser-refresh interval (seconds)."
+    ),
     project: Optional[Path] = typer.Option(
         None, "--project", help="Project root (default: cwd)."
     ),
@@ -114,14 +163,44 @@ def kickoff_view_cmd(
 
     service = _service(project)
     sid = _resolve_session_or_exit(service, session_id)
-    try:
-        transcript = service.load(sid)
-    except FileNotFoundError:
-        console.print(f"[red]kickoff-panel:[/red] no such session: {sid}")
-        raise typer.Exit(_EXIT_BAD_INPUT)
-
     target = out or (service.store.root / f"{sid}.view.html")
     target.parent.mkdir(parents=True, exist_ok=True)
+    refresh_secs = max(1, round(interval))
+
+    def _write(transcript) -> None:
+        secs = None if transcript.is_done else refresh_secs
+        target.write_text(
+            render_html(transcript, live_reload_secs=secs), encoding="utf-8"
+        )
+
+    if watch:
+        watcher = service.watcher(sid, interval=interval)
+        opened = {"done": False}
+
+        def _on_change(transcript) -> None:
+            _write(transcript)
+            console.print(
+                f"[green]kickoff-panel:[/green] rendered {len(transcript.rounds)} round(s) → {target}"
+            )
+            if open_browser and not opened["done"]:
+                import webbrowser
+
+                webbrowser.open(target.resolve().as_uri())
+                opened["done"] = True
+
+        try:
+            final = watcher.follow(_on_change)
+        except KeyboardInterrupt:
+            console.print("\n[dim]kickoff-panel: stopped watching.[/dim]")
+            return
+        if final is None:
+            console.print(f"[red]kickoff-panel:[/red] no such session: {sid}")
+            raise typer.Exit(_EXIT_BAD_INPUT)
+        state = "halted" if final.is_halted else "complete"
+        console.print(f"[green]kickoff-panel:[/green] run {state} — {target}")
+        return
+
+    transcript = _load_or_exit(service, sid)
     target.write_text(render_html(transcript), encoding="utf-8")
     console.print(f"[green]kickoff-panel view:[/green] {target}")
     if open_browser:

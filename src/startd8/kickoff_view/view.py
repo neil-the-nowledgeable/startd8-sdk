@@ -86,6 +86,7 @@ def _session_payload(t: KickoffTranscript) -> dict:
         "family_distribution": t.family_distribution(),
         "model_assignment": dict(t.model_assignment),
         "adversaries": list(t.adversaries),
+        "active_round": t.active_round_id(),
         "prep": prep,
         "rounds": [_round_payload(t, r) for r in t.rounds],
         "synthesis": synthesis,
@@ -97,19 +98,48 @@ def _embed_json(obj) -> str:
     return json.dumps(obj, ensure_ascii=True).replace("<", "\\u003c")
 
 
-def render_html(transcript: KickoffTranscript, serve: Optional[dict] = None) -> str:
+def _inject_live(html: str, secs: int, t: KickoffTranscript) -> str:
+    """Add a browser-side auto-refresh + a LIVE banner for ``--watch`` (FR-UX-17).
+
+    No server: a ``<meta http-equiv="refresh">`` reloads the (re-rendered) file every ``secs``
+    seconds. Applied only in watch mode — the non-watch static output is untouched.
+    """
+    from html import escape
+
+    meta = f'<meta http-equiv="refresh" content="{int(secs)}">'
+    html = html.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n' + meta, 1)
+    active = t.active_round_id()
+    tail = f" · filling {escape(active)}" if active else ""
+    landed = len(t.rounds)
+    banner = (
+        '<div class="live-banner"><span class="pulse"></span>● LIVE — following '
+        f"{escape(t.session_id)} · {landed} round(s) landed · status {escape(t.status or 'in_progress')}{tail}"
+        "</div>"
+    )
+    return html.replace('<div class="wrap">', banner + '\n<div class="wrap">', 1)
+
+
+def render_html(
+    transcript: KickoffTranscript,
+    serve: Optional[dict] = None,
+    live_reload_secs: Optional[int] = None,
+) -> str:
     """Render the standalone two-axis HTML viewer over a transcript (FR-UX-4..23).
 
-    ``serve is None`` ⇒ the static offline file (the only v1 surface). The single
-    ``__SESSION_JSON__`` substitution is escape-first (FR-UX-22); when ``serve`` is later
-    supported it must keep the ``serve is None`` byte-identity guarantee.
+    ``serve is None`` and ``live_reload_secs is None`` ⇒ the static offline file (the default
+    surface), byte-identical to the no-arg call. The single ``__SESSION_JSON__`` substitution is
+    escape-first (FR-UX-22). ``live_reload_secs`` (``--watch``) injects a meta-refresh + LIVE
+    banner so an open browser auto-updates as the orchestrator lands rounds (FR-UX-17); when a
+    served mode is later added it must keep the ``serve is None`` static byte-identity guarantee.
     """
     html = WEBVIEW_TEMPLATE.replace(
         "__SESSION_JSON__", _embed_json(_session_payload(transcript))
     )
+    if live_reload_secs and live_reload_secs > 0:
+        html = _inject_live(html, live_reload_secs, transcript)
     if serve is None:
         return html
-    # Reserved for a future served mode (read-only, loopback) — pre-specified, not built (v2).
+    # Reserved for a future served mode (read-only, loopback) — pre-specified, not built.
     return html
 
 
@@ -202,11 +232,18 @@ def render_text(
             lines.append("")
     else:
         # Round-major (default): entries grouped under each round (FR-UX-4).
+        active = t.active_round_id()
         for rnd in t.rounds:
             progress = f" ({len(rnd.entries)}/{t.roster_size or len(rnd.entries)})"
-            lines.append(f"══ {rnd.round_id} · {rnd.title} [{rnd.kind}]{progress} ══")
+            fill = "  ◀ filling" if rnd.round_id == active else ""
+            lines.append(
+                f"══ {rnd.round_id} · {rnd.title} [{rnd.kind}]{progress}{fill} ══"
+            )
             for entry in rnd.entries:
                 render_entry(entry)
+            lines.append("")
+        if active and active not in {r.round_id for r in t.rounds}:
+            lines.append(f"…awaiting {active} (status {t.status or 'in_progress'})")
             lines.append("")
 
     if t.synthesis is not None and t.synthesis.text:
