@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "status": "reviewed",
+  "reviewed_at_utc": "2026-07-05T15:45:00Z",
+  "reviewer": "codex",
+  "batch_id": "pricing-cross-tool-authoring-v2-evidence-1200s",
+  "scope": "S4 suite-authoring evidence admission only; generated suites are not modified.",
+  "exclusions": [
+    {
+      "run_id": "pricing-cross-tool-authoring-v2-run-05",
+      "normalized_sha256": "309f4298b3c6e987106ba164c0f6bbe704f181de0848b3fe7d85cb102042806c",
+      "reason_class": "suite_over_specifies_canonical_output_shape",
+      "disposition": "exclude_from_s4_evidence",
+      "reviewed_by": "codex",
+      "rationale": "Reference-oracle execution fails because the generated suite expects price-on-request response lines to include numeric-line fields such as promotion_applied/reduction. The reviewed canonical oracle excludes price-on-request lines from numeric assessment output beyond the canonical POA echo fields, so this is generated-suite over-specification rather than bridge failure."
+    },
+    {
+      "run_id": "pricing-cross-tool-authoring-v2-run-12",
+      "normalized_sha256": "8520ff6e1049d244d3ce9d74587c3ef363f1a266a813d5ffd36550a9248854ab",
+      "reason_class": "suite_over_specifies_canonical_output_shape",
+      "disposition": "exclude_from_s4_evidence",
+      "reviewed_by": "codex",
+      "rationale": "Reference-oracle execution fails because the generated suite expects reduction.percent_total to include fixed-amount reductions as an equivalent percent value. The reviewed canonical oracle treats percent_total as the effective percentage-level summary and reports fixed reductions in reduction.amount, so this is generated-suite over-specification rather than bridge failure."
+    }
+  ]
+}

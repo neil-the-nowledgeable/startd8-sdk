@@ -167,6 +167,73 @@ def test_preflight_blocks_when_bridge_contract_callable_is_not_exported(tmp_path
     ) in result["errors"]
 
 
+def test_preflight_accepts_v2_bridge_contract_aliases(tmp_path: Path) -> None:
+    store, gate, mutants, pre_registration = _accepted_s4_store(tmp_path)
+    _write_json(
+        store / "batch/normalized/run_01/suite_manifest.json",
+        {
+            "bridge_contract": {
+                "exported_callables": {
+                    "configure": "configure(adapter) -> None",
+                    "run_all": "run_all(call=None) -> dict",
+                },
+                "request_shape": {"type": "object"},
+                "response_shape": {"type": "object"},
+                "invalid_argument_signaling": {"code": "INVALID_ARGUMENT"},
+            },
+        },
+    )
+
+    _, result = s4.run_preflight(
+        store_root=store, batch_id="batch", results_root=tmp_path / "results", gate_path=gate,
+        mutants_path=mutants, pre_registration_path=pre_registration,
+        suite_disposition_path=tmp_path / "missing-s4-suite-dispositions.json",
+    )
+
+    assert result["suites"][0]["bridge"]["status"] == "bridge_required"
+    assert not any(error.startswith("S4 suite bridge contract invalid:") for error in result["errors"])
+
+
+def test_bridge_run_all_uses_callable_adapter_seam() -> None:
+    source = s4.bridge_contract_test_source()
+
+    assert "fn(_Client())" not in source
+    assert "_call_with_optional_adapter(fn, _target_call_suite_native_bare)" in source
+
+
+def test_declared_bridge_contract_preserves_bridge_metadata(tmp_path: Path) -> None:
+    suite_path = tmp_path / "suite.py"
+    suite_path.write_text("def bind_invoker(fn):\n    return fn\n", encoding="utf-8")
+    manifest_path = tmp_path / "suite_manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "bridge_contract": {
+                "callable_names": ["bind_invoker"],
+                "amount_encoding": "plain decimal strings at the seam",
+                "request_shape": {"type": "object"},
+                "response_shape": {"type": "object"},
+                "invalid_argument_signaling": {"code": "INVALID_ARGUMENT"},
+            },
+        },
+    )
+
+    contract = s4.declared_bridge_contract(suite_path, manifest_path)
+
+    assert contract["status"] == "bridge_required"
+    assert contract["bridge_contract"]["amount_encoding"] == "plain decimal strings at the seam"
+
+
+def test_bridge_adapter_supports_declared_flattened_alias_seam() -> None:
+    source = s4.bridge_adapter_source()
+
+    assert "bridge_contract.json" in source
+    assert "plain decimal strings" in source
+    assert '"PERCENT_LEVELS": "REDUCTION_KIND_PERCENT_LEVELS"' in source
+    assert '"HALF_UP": "ROUNDING_MODE_HALF_UP"' in source
+    assert "if _uses_flattened_amount_seam():" in source
+
+
 def test_preflight_blocks_when_suite_author_row_is_rejected(tmp_path: Path) -> None:
     store, gate, mutants, pre_registration = _accepted_s4_store(
         tmp_path, ledger_row={"status": "rejected_with_reason"}

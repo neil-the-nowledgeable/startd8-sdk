@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "status": "pre_registered",
+  "experiment": "S4_suite_authoring",
+  "batch_id": "pricing-cross-tool-authoring-v2-evidence-1200s",
+  "input_policy": {
+    "require_promoted_store": true,
+    "require_reconciliation_status": "accepted",
+    "require_intake_status": "accepted",
+    "artifact_type": "suite.py",
+    "experiment": "suite_author"
+  },
+  "instrument_policy": {
+    "require_oracle_gate_status": "accepted",
+    "targets": ["reference_oracle", "accepted_mutants"],
+    "require_isolated_no_egress_bridge": true,
+    "treat_harness_failure_as_mutant_kill": false
+  },
+  "outcomes": {
+    "oracle_pass": "all collected tests pass against reference oracle",
+    "mutant_kill": "reference passes identical inventory and mutant has semantic test failure",
+    "equivalence": "pairwise Jaccard distance of binary target-outcome vectors",
+    "empty_jaccard_union_distance": 0
+  },
+  "planned_outputs": [
+    "s4-preflight.json",
+    "suite_equivalence_matrix.csv",
+    "mutant_kill_matrix.csv",
+    "per-suite execution logs"
+  ],
+  "interpretation_limit": "S4 is not a vendor-bias, score-impact, or acceptance verdict."
+}
