@@ -61,7 +61,13 @@ _KIND_ORDER = {
 # ── Command constants (CRP R1-S6) — one source of truth for the playbook, reflection, and the
 #    command-drift validation test. No bare `startd8 …` literal should live outside this module. ─────
 CMD_GENERATE_CONTRACT_PROMOTE = "startd8 generate contract --promote"
-CMD_RED_CARPET_AGENT = "startd8 kickoff red-carpet --agent"
+# The resolvable base command for the red-carpet conductor. Post-M0 the metaphor group moved to
+# `kickoff-legacy` (a bare `startd8 kickoff red-carpet` no longer resolves — the same trap core.py's
+# command map already fixed), AND a bare `--agent` fails (`--agent` takes a `provider:model` arg). So
+# we emit the $0 base command that RESOLVES and RUNS; the paid LLM interview is the optional
+# `--agent <provider:model>` upgrade (reflected in the "$0+paid" cost tag). Name kept for the many
+# by-symbol references (advisor + orchestrator + tests) — only the value changed.
+CMD_RED_CARPET_AGENT = "startd8 kickoff-legacy red-carpet"
 CMD_WIREFRAME = "startd8 wireframe"
 CMD_GENERATE_BACKEND = "startd8 generate backend"
 # FR-MS-8 — the Manifest Suggester is the guided way to fill the "which screens?" gap (pages/views),

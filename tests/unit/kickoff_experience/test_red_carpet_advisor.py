@@ -573,3 +573,45 @@ def test_cross_surface_parity(tmp_path):
     from startd8.kickoff_experience.web import build_kickoff_app
     client = TestClient(build_kickoff_app(tmp_path, chat_factory=None), headers={"host": "127.0.0.1:8000"})
     assert _without_perf(client.get("/red-carpet.json").json()) == canonical
+
+
+# ── Command-resolution guard (regression for the stale `kickoff red-carpet --agent` bug) ─────────
+# Every command the guided advisor emits MUST resolve in the post-M0 CLI registry. This is the guard
+# that was missing when CMD_RED_CARPET_AGENT still pointed at the demoted `startd8 kickoff red-carpet`
+# (moved to `kickoff-legacy`) with a bare `--agent` (which needs a `provider:model` arg).
+
+def _resolve_in_registry(command: str) -> bool:
+    """True if `command` (a `startd8 …` string) resolves to a registered Typer command."""
+    from startd8.cli import app
+
+    tokens = command.split()
+    assert tokens[0] == "startd8"
+    path = [t for t in tokens[1:] if not t.startswith("-")]  # subcommand path only, drop flags
+
+    def _walk(typer_app, remaining):
+        if not remaining:
+            return True
+        head, *tail = remaining
+        for grp in typer_app.registered_groups:
+            if grp.name == head:
+                return _walk(grp.typer_instance, tail)
+        for cmd in typer_app.registered_commands:
+            if cmd.name == head and not tail:
+                return True
+        return False
+
+    return _walk(app, path)
+
+
+@pytest.mark.parametrize("command", ADVISOR_COMMANDS)
+def test_every_advisor_command_resolves(command):
+    assert _resolve_in_registry(command), f"{command!r} does not resolve in the CLI registry"
+
+
+def test_red_carpet_command_is_the_resolvable_legacy_path():
+    # Regression: the app/schema-gate command must be the resolvable `kickoff-legacy red-carpet`,
+    # NOT the demoted `kickoff red-carpet` and NOT a bare `--agent` (which requires an argument).
+    assert _resolve_in_registry(CMD_RED_CARPET_AGENT)
+    assert "kickoff-legacy" in CMD_RED_CARPET_AGENT
+    assert not CMD_RED_CARPET_AGENT.rstrip().endswith("--agent")
+    assert not _resolve_in_registry("startd8 kickoff red-carpet")  # proves the trap is real
