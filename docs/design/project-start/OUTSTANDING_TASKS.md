@@ -35,22 +35,20 @@ real, scoped follow-up if/when the value is wanted.
   either prove roster-discovery value (run `panel ask-all` for a real "surface a
   viewpoint you'd have missed" data point) or shrink the claim to capability-discovery
   and implement the width-floor only if kept. *Refs: FR-13a, FR-8, NR-7.*
-- **FR-GE-14 — structural ratification gate (CORRECTED 2026-07-05 — a wiring gap, not
-  "prose only").** The earlier claim here ("marked unratified in prose only; no
-  machine-checkable field; no gate") was **wrong** — verified against
-  `src/startd8/stakeholder_panel/provenance.py` + `tests/unit/stakeholder_panel/test_provenance.py`.
-  **Built + tested:** a machine-checkable provenance marker (`synthetic_claim()` →
-  `qualifier="synthetic"`; `is_synthetic()` is a *typed* check, R1-F2), an
-  unratified-by-default ratification state, serialization-survival of the marker
-  (`round_trips_synthetic()`, R1-F6), and the refuse-until-ratified **gate primitive**
-  `assert_ratifiable()`/`RatificationError`. **NOT done:** the gate is **unwired** —
-  nothing invokes `assert_ratifiable` on any consume path (grep: only the `__init__.py`
-  re-exports; VIPP `apply.py` does not call it). `provenance.py` itself anticipated
-  *"the live ratified store is wired by VIPP in M2,"* but VIPP shipped without wiring it.
-  **Mitigated** — no panel answer / facilitation transcript is persisted into a kernel
-  input YAML today, so nothing unratified reaches the kernel. **To close:** one wiring
-  change — call `assert_ratifiable` at the synthetic-value→load-bearing-input boundary
-  (the VIPP `apply.py` floor). *Refs: FR-GE-14, CRP R1-F10.*
+- **FR-GE-14 — structural ratification gate — ✅ DONE (2026-07-05, `5169d804`).** The
+  gate is now **wired** on the write path. `vipp/apply.py:apply_dispositions` calls
+  `assert_ratifiable()` on every claim before `apply_proposal`; the human `confirm()` is
+  the ratification (one gate, NR-4), so a synthetic claim reaching the write path
+  unratified → `code="unratified"`, no write, left pending (non-synthetic claims pass
+  untouched → byte-identical for today's oracle-sourced dispositions, SOTTO). The
+  claim-level primitives were moved to the leaf `fde/ratification.py` to avoid the
+  `stakeholder_panel↔vipp` import cycle (`stakeholder_panel.provenance` re-exports them,
+  API unchanged). Spec: `FR_GE_14_RATIFICATION_WIRING.md`. Tests: 3 new in
+  `tests/unit/vipp/test_apply.py` (synthetic+confirm→written; synthetic+no-confirm→
+  refused unratified; non-synthetic→unaffected); 310 green across vipp+stakeholder_panel+fde.
+  *(Historical note: an earlier version of this entry wrongly called it "prose only" —
+  the marker/state/gate primitive were always built + tested; only the consume-path
+  wiring was missing, and that is what shipped here.)* *Refs: FR-GE-14, CRP R1-F10.*
 - **FR-5a — schema-shape diagnostics.** The `_schema_advisories` port (missing-FK /
   no-PK / island-tables / empty-enum, ~90 LOC in `red_carpet_advisor.py:181-250`) was
   intentionally **skipped** (the FR's "accept the loss and name it" branch). Recorded
