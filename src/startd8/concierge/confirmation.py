@@ -131,6 +131,22 @@ def _read_field_value(project_root: str | Path, file: str, dotted_key: str) -> O
     return None if isinstance(node, (dict, list)) else str(node)
 
 
+def field_current_value(
+    project_root: str | Path, value_path: str, *, config: Optional[Any] = None
+) -> Optional[str]:
+    """The current on-disk scalar for a confirmable field's ``value_path`` (read-only), or None.
+
+    A public getter over ``_read_field_value`` for surfaces that show "the current default" (e.g. the
+    guided confirm walk). Additive — does not touch ``build_confirm_plan``/``apply_confirm``/the ledger."""
+    from ..kickoff_experience.manifest import default_config
+
+    cfg = config or default_config()
+    field = cfg.field_by_value_path(value_path)
+    if field is None or field.write_target is None:
+        return None
+    return _read_field_value(project_root, field.write_target.file, field.write_target.key)
+
+
 def domain_confirmation(project_root: str | Path, config: Optional[Any] = None) -> Dict[str, dict]:
     """Per-domain honest count from PROJECT STATE (ledger + inputs), not the static template.
 
