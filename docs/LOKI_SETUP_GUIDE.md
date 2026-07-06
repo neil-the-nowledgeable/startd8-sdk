@@ -239,6 +239,23 @@ export STARTD8_LOG_DIR=/custom/path/to/logs
 
 Then update `promtail-config.yml` accordingly.
 
+### CLI console verbosity
+
+The CLI is **quiet by default**: the console shows only `WARNING`/`ERROR`, so diagnostic plumbing
+(`<ts> - startd8.<module> - INFO - …`) does not clutter normal use. `INFO`/`DEBUG` records still flow to
+the log file (`~/.startd8/logs/startd8.log`) and OTel/Loki at full fidelity.
+
+To see diagnostics on the console:
+
+```bash
+startd8 --debug <command>        # e.g. startd8 --debug kickoff survey .
+export STARTD8_DEBUG=1           # session-wide equivalent of --debug
+export STARTD8_LOG_LEVEL=DEBUG   # explicit level; takes precedence over --debug/STARTD8_DEBUG
+```
+
+`--debug` controls **logging** verbosity and is independent of `--verbose` (which controls domain
+detail) and `--json` (machine output).
+
 ## Stopping the Stack
 
 ```bash

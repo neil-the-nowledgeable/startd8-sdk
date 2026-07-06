@@ -64,8 +64,6 @@ def _kickoff_root(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is not None:
         return
     # FR-UX-16 (CRP R2-S4) — the same shared banner every subcommand uses, then the command list.
-    from .cli_shared import render_intro_banner
-
     render_intro_banner()
     console.print(ctx.get_help())
 

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Kickoff UX — output hygiene & orientation (FR-UX-13..16)
+
+> The `startd8` CLI is now **quiet by default** and self-orienting. Design + traceability:
+> `docs/design/kickoff/KICKOFF_UX_REQUIREMENTS.md` (v0.7) / `KICKOFF_UX_PLAN.md` (v0.5).
+
+**Changed (affects every CLI command, not just kickoff):**
+
+- **Diagnostic logs are off by default.** The console log level is now `WARNING`, so internal plumbing
+  lines (`<ts> - startd8.<module> - INFO - …`, e.g. `concierge.survey root=…`, language/provider
+  discovery, the `Telemetry: ACTIVE` banner) no longer print during normal use. `INFO`/`DEBUG` still flow
+  to the rotating file sink (`~/.startd8/logs/startd8.log`) and OTel at full fidelity; `WARNING`/`ERROR`
+  still reach the console. **Downstream note:** consumers tracking the live SDK will see quieter CLI output.
+- The OTel `Telemetry: ACTIVE -> …` startup banner moved from `INFO` to `DEBUG` (the error path stays
+  visible).
+
+**Added:**
+
+- **`--debug` flag** (global, on the root command) **and `STARTD8_DEBUG=1` env var** restore the full
+  `INFO`/`DEBUG` console stream for troubleshooting. `STARTD8_LOG_LEVEL` still takes precedence over both.
+  This is a separate axis from `--verbose` (which controls domain detail, not logging).
+- **A high-level intro banner** on every human-facing kickoff invocation — bare `kickoff`, `red-carpet`,
+  and the kernel subcommands (`survey`/`assess`/`instantiate`/`derive`/`confirm`/`log-friction`) — a
+  concise "three things you provide → Build" orientation, suppressed under `--json`/`--check`
+  (`explain`/`guided`/`deepen` are exempt as self-orienting surfaces).
+- The single "next action" now states **why** it's next, in plain language.
+
 ### VIPP — project-side negotiator/applier (new `startd8 vipp`)
 
 > The project-side counterpart to the Concierge / Welcome Mat / Red Carpet hosts — the
