@@ -1,3 +1,8 @@
+<!-- BANNER -->
+**Kickoff** sets up the inputs your app's build needs and can't invent.
+You provide three things — **Your data** → **Your screens** → **Your settings** — then **Build** ($0).
+Machines draft; you decide. Add `--verbose` for more detail, or `--debug` to see logs.
+<!-- /BANNER -->
 <!-- TL;DR -->
 **Kickoff** collects the inputs the build genuinely needs and cannot invent — what the business
 wants, what "good" looks like in numbers, what conventions to follow, the budget, and how the app

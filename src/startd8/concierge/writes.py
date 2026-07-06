@@ -125,9 +125,22 @@ _EXPERIENCE_DOCS: Dict[str, str] = {
 
 _TLDR_OPEN = "<!-- TL;DR -->"
 _TLDR_CLOSE = "<!-- /TL;DR -->"
+_BANNER_OPEN = "<!-- BANNER -->"
+_BANNER_CLOSE = "<!-- /BANNER -->"
+
+#: All render-only slice markers stripped on a full render (they are runtime-only).
+_SLICE_MARKERS = (_TLDR_OPEN, _TLDR_CLOSE, _BANNER_OPEN, _BANNER_CLOSE)
 
 
-def load_experience_doc(key: str, *, compact: bool = False) -> str:
+def _extract_slice(text: str, open_marker: str, close_marker: str) -> Optional[str]:
+    start = text.find(open_marker)
+    end = text.find(close_marker)
+    if start != -1 and end != -1 and end > start:
+        return text[start + len(open_marker):end].strip()
+    return None
+
+
+def load_experience_doc(key: str, *, compact: bool = False, section: Optional[str] = None) -> str:
     """Read a packaged **render-only** instructional doc by closed-vocabulary *key*.
 
     Backed by the same ``_load_template`` (``importlib.resources``) read as the written templates —
@@ -135,20 +148,27 @@ def load_experience_doc(key: str, *, compact: bool = False) -> str:
     ``render_template_content``, which is bound to the instantiate write/download inventory; these
     docs are surfaced only, never written into a project.
 
-    ``compact=True`` returns just the ``<!-- TL;DR -->`` … ``<!-- /TL;DR -->`` slice (the one-screen
-    intro for the bare/guided surfaces); it falls back to the full text if no TL;DR block is present.
+    ``section="banner"`` returns just the tight ``<!-- BANNER -->`` … slice (the ≤6-line header shown on
+    every kickoff invocation, FR-UX-16); ``compact=True`` returns the fuller ``<!-- TL;DR -->`` slice (the
+    one-screen intro). Either falls back to the full text if its block is absent.
     """
     rel = _EXPERIENCE_DOCS.get(key)
     if rel is None:
         raise ConciergeWriteError(f"unknown experience doc key: {key!r}")
     text = _load_template(rel)
+    if section == "banner":
+        sliced = _extract_slice(text, _BANNER_OPEN, _BANNER_CLOSE)
+        if sliced is not None:
+            return sliced
+    elif section is not None:
+        raise ConciergeWriteError(f"unknown experience-doc section: {section!r}")
     if compact:
-        start = text.find(_TLDR_OPEN)
-        end = text.find(_TLDR_CLOSE)
-        if start != -1 and end != -1 and end > start:
-            return text[start + len(_TLDR_OPEN):end].strip()
-    # Full render: drop the TL;DR delimiter comments (they are runtime-only slice markers).
-    text = text.replace(_TLDR_OPEN + "\n", "").replace(_TLDR_CLOSE + "\n", "")
+        sliced = _extract_slice(text, _TLDR_OPEN, _TLDR_CLOSE)
+        if sliced is not None:
+            return sliced
+    # Full render: drop every render-only slice marker (keeping the surrounded prose).
+    for marker in _SLICE_MARKERS:
+        text = text.replace(marker + "\n", "")
     return text.strip()
 
 

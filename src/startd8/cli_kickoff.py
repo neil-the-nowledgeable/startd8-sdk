@@ -262,9 +262,11 @@ def _render_red_carpet_state(state, *, verbose: bool = False) -> None:
             f"  {glyph.get(n.status, '·')} [{style}]{n.plain_name}[/{style}]{meter}"
         )
 
-    # FR-UX-4 — the single next action (plain, from the spine — never playbook jargon).
+    # FR-UX-4/15 — the single next action (plain, from the spine — never playbook jargon), with its
+    # one-line *why* so the user understands not just what to do but why it's next.
     na = hl["next_action"]
-    console.print(f"[bold]▸ Do next:[/bold] {na['title']}")
+    why = f" [dim]— {na['why']}[/dim]" if na.get("why") else ""
+    console.print(f"[bold]▸ Do next:[/bold] {na['title']}{why}")
     if na.get("command"):
         console.print(f"   [cyan]{na['command']}[/cyan]")
 
@@ -395,6 +397,13 @@ def red_carpet_cmd(
     import json as _json
 
     from .kickoff_experience.red_carpet import build_red_carpet_state
+
+    # FR-UX-16 — the high-level banner leads every human-facing invocation (status, wizard, agent).
+    # Never on --json (machine payload) or --check (CI signal).
+    if not json_out and not check:
+        from .cli_shared import render_intro_banner
+
+        render_intro_banner()
 
     if wizard:
         _run_red_carpet_wizard(project)

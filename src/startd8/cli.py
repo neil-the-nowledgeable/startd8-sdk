@@ -17,6 +17,14 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich import print as rprint
 
+# Output hygiene (Kickoff UX FR-UX-13/14): quiet the console BEFORE the heavy
+# submodule imports below (.framework/.agents/.benchmark/.providers) can emit
+# import-time INFO logs. This env-derived pass catches the earliest logs; the
+# root callback re-resolves it with the parsed --debug flag.
+from .logging_config import configure_cli_logging, _env_debug
+
+configure_cli_logging(debug=_env_debug())
+
 from .framework import AgentFramework
 from .agents import BaseAgent
 from .benchmark import BenchmarkRunner, ComparisonReport
@@ -62,12 +70,25 @@ app = typer.Typer(
 
 
 @app.callback()
-def _bootstrap() -> None:
-    """Runs before any subcommand: hydrate secrets from the active backend (FR-17).
+def _bootstrap(
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Show diagnostic logs (logger names, timestamps). Also via STARTD8_DEBUG=1.",
+    ),
+) -> None:
+    """Runs before any subcommand: apply CLI logging hygiene, then hydrate secrets.
 
-    Idempotent and a no-op for the default ``local`` backend (no network). A Doppler
-    fetch failure is fail-open by default, so this never breaks the CLI.
+    Logging (FR-UX-13/14): the console is quiet by default (WARNING+); ``--debug``
+    or ``STARTD8_DEBUG=1`` restores full ``INFO``/``DEBUG`` output. ``STARTD8_LOG_LEVEL``
+    still takes precedence. (Logs emitted before argv is parsed honor only the env
+    vars — see the import-time guard at the top of this module.)
+
+    Secrets (FR-17): hydrate from the active backend. Idempotent and a no-op for the
+    default ``local`` backend (no network). A Doppler fetch failure is fail-open by
+    default, so this never breaks the CLI.
     """
+    configure_cli_logging(debug=debug or _env_debug())
     try:
         from .secrets import hydrate
 

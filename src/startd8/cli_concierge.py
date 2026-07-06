@@ -21,7 +21,7 @@ from typing import List, Optional
 import typer
 from rich.console import Console as _Console
 
-from .cli_shared import console
+from .cli_shared import console, render_intro_banner
 
 # Deprecation notices go to stderr so they never pollute the `--json` stdout contract.
 _stderr_console = _Console(stderr=True)
@@ -63,13 +63,10 @@ def _kickoff_root(ctx: typer.Context) -> None:
     """Onboarding kernel — run a subcommand, or see the intro below."""
     if ctx.invoked_subcommand is not None:
         return
-    from .concierge import load_experience_doc
+    # FR-UX-16 (CRP R2-S4) — the same shared banner every subcommand uses, then the command list.
+    from .cli_shared import render_intro_banner
 
-    try:
-        _render_markdown(load_experience_doc("intro", compact=True))
-        console.print()
-    except Exception:  # never let the courtesy intro break the help path
-        pass
+    render_intro_banner()
     console.print(ctx.get_help())
 
 
@@ -104,6 +101,10 @@ def concierge_survey(
 ) -> None:
     """Brownfield triage: requirement docs (+ extraction-format match), models, fixtures, PII flags."""
     from .concierge import ConciergeError, handle_concierge_tool
+
+    # FR-UX-16 — the shared banner leads the human view (never before a --json payload).
+    if not json_out:
+        render_intro_banner()
 
     try:
         result = handle_concierge_tool("survey", project_root)
@@ -259,6 +260,10 @@ def concierge_assess(
     """Onboarding-readiness report: kickoff-input provenance + the $0-cascade view (wraps wireframe)."""
     from .concierge import ConciergeError, handle_concierge_tool
 
+    # FR-UX-16 — the shared banner leads the human view (never before a --json payload).
+    if not json_out:
+        render_intro_banner()
+
     try:
         result = handle_concierge_tool("assess", project_root)
     except ConciergeError as exc:
@@ -322,6 +327,9 @@ def concierge_instantiate(
     json_out: bool = typer.Option(False, "--json", help="Emit schema-versioned JSON."),
 ) -> None:
     """Project the kickoff package into a project (FR-C7). Preview by default; --apply to write."""
+    # FR-UX-16 — banner leads the human view; suppressed for --json and the --check CI signal.
+    if not json_out and not check:
+        render_intro_banner()
     from .concierge.safe_write import SafeWriteError, apply_write_plan
     from .concierge.writes import (
         ConciergeWriteError,
@@ -380,6 +388,9 @@ def concierge_log_friction(
     json_out: bool = typer.Option(False, "--json", help="Emit schema-versioned JSON."),
 ) -> None:
     """Append a structured friction entry to concierge-friction.jsonl (FR-C9)."""
+    # FR-UX-16 — banner leads the human view (never before a --json payload).
+    if not json_out:
+        render_intro_banner()
     from datetime import datetime, timezone
 
     from .concierge.safe_write import SafeWriteError, apply_write_plan
@@ -438,6 +449,10 @@ def concierge_derive_contract(
     """
     from .concierge.derive import DeriveImportError, build_derivation, check_drift
     from .concierge.safe_write import ACTION_NEW, ACTION_OVERWRITE, PlannedWrite, SafeWriteError, apply_write_plan
+
+    # FR-UX-16 — banner leads the human view; suppressed for --json and the --check CI signal.
+    if not json_out and not check:
+        render_intro_banner()
 
     ppath = str(pythonpath) if pythonpath else str(project_root)
     try:
@@ -759,6 +774,10 @@ def kickoff_confirm(
             raise typer.Exit(_EXIT_FATAL_INPUTS)
         _kickoff_confirm_guided(project_root, json_out)
         return
+
+    # FR-UX-16 — banner leads the direct-confirm human view; the guided walk above is exempt.
+    if not json_out:
+        render_intro_banner()
 
     if (value is not None) == as_is:   # need exactly one of --value / --as-is
         console.print("[red]kickoff confirm:[/red] provide exactly one of --value <v> or --as-is")

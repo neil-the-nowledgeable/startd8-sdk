@@ -1,7 +1,7 @@
 # Kickoff UX / Information Architecture — Requirements
 
-**Version:** 0.4 (Post-CRP R1)
-**Date:** 2026-07-02
+**Version:** 0.7 (Output hygiene & orientation — implementation refinement)
+**Date:** 2026-07-06
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
 **Plan:** `KICKOFF_UX_PLAN.md`
@@ -128,8 +128,16 @@ the CLI (and later the web surface) present the existing mechanisms coherently a
   stage map, the advisories, and the playbook are *views of the same state*, not three lists.
 - **UX-P4 — Calm, not alarming.** A blank project is normal, not broken. Severity/color reflects real
   user urgency, not internal machinery state.
-- **UX-P5 — This spec owns presentation; it never changes mechanism.** No new backend behavior, grammar,
-  or write path. It re-shapes what `build_red_carpet_state`/the advisor/the wizard already produce.
+- **UX-P5 — This spec owns presentation; it never changes *generation* mechanism.** No new backend
+  generation behavior, grammar, or write path. It re-shapes what `build_red_carpet_state`/the advisor/the
+  wizard already produce. *(v0.5 refinement: §3E extends this doc's reach into the CLI **output/logging
+  hygiene** layer — console log level, a `--debug` toggle, the banner — which is output presentation, not
+  generation mechanism. The generation/backend invariant above is unchanged.)*
+- **UX-P6 — Quiet by default; diagnostics on request.** The terminal is the user's workspace, not a log
+  sink. Operational/diagnostic logging (logger names, timestamps, INFO traces) is **hidden by default** and
+  available **on demand** (`--debug`/env var). Only user-relevant `WARNING`/`ERROR` surface unbidden. Every
+  line the user sees by default must earn its place by helping them understand *what* is happening and
+  *why*.
 
 ---
 
@@ -216,12 +224,107 @@ the CLI (and later the web surface) present the existing mechanisms coherently a
   web `/concierge/chat` rail renders the *same* four-things spine, plain names, and one-step wizard. (The
   web build is a later increment; this spec makes it fall out of the same model.)
 
+### E. Output hygiene & orientation (v0.5)
+
+> **Scope note.** FR-UX-13/14 are **CLI output/logging-hygiene** requirements. Their root cause is
+> **global**, not kickoff-local: `get_logger()` → `_ensure_default_log_file_handler()` attaches a console
+> `StreamHandler(sys.stderr)` at **INFO** to the root `startd8` logger (`logging_config.py:229-238`), so
+> **every** SDK `logger.info(...)` (e.g. `concierge/core.py:244` → `startd8.concierge.core - INFO -
+> concierge.survey root=…`) prints to the user's terminal during *any* command. The fix therefore lives at
+> the CLI-logging layer and applies **CLI-wide** (all user-facing commands quiet-by-default); kickoff is the
+> surface that **exercises and verifies** it. FR-UX-15/16 are kickoff-scoped presentation requirements.
+>
+> **Cross-command pointer (CRP R2-F2).** Because FR-UX-13/14 change **console behavior for every CLI
+> command** (not just kickoff) — applied **once** at the root seam (`cli.py:64` `_bootstrap`), never
+> per-command — this is recorded here as the owning spec, but the change is CLI-wide: any command owner who
+> greps for CLI logging behavior should find this pointer. An **"applied-once" invariant** (the seam runs
+> exactly once per process) is a plan-side test (Step 8).
+
+- **FR-UX-13 — Diagnostic log lines are off by default (CLI-wide).** During normal interactive use the CLI
+  must **not** emit Python-logging plumbing lines — the `%(asctime)s - %(name)s - %(levelname)s -
+  %(message)s` stream (`logging_config.py:125-127,233-236`), e.g. `2026-07-06 11:54:57 -
+  startd8.concierge.core - INFO - concierge.survey root=/…`. Such lines carry no end-user value: logger
+  names, timestamps, and module paths are diagnostics, not guidance. **Requirement:** the default **console
+  handler** level for interactive CLI invocations is **`WARNING`**, so `INFO`/`DEBUG` records do not reach the
+  terminal. `WARNING`/`ERROR` **do** reach the console (users must see real problems — consistent with the
+  FR-UX-5 error exception). **Fidelity caveat (CRP R2-F1):** "records still flow to the file
+  (`~/.startd8/logs/startd8.log`) and OTel" holds **only if the `startd8` *logger* level is at `DEBUG`** —
+  Python drops records below the *logger's* own level **before any handler**, and today
+  `_ensure_default_log_file_handler()` pins the logger at `INFO` (`logging_config.py:242`). So the quiet
+  default is a **handler-level** change (console → `WARNING`) that must **keep the logger at `DEBUG`** for the
+  file/OTel sinks to retain full fidelity. **Error-visibility guarantee (CRP R2-F5):** the FR-UX-5
+  error advisories `--check` gates on are printed via the Rich `console` (stdout), **not** via `logger.*`, so
+  no console-handler level can hide them *by construction* — the human view and `--check` cannot diverge.
+  This is a **distinct axis from `--verbose`** (FR-UX-5 = domain advisory/playbook *detail*; FR-UX-13 =
+  logging *plumbing*): the two never share a flag, and turning one on must not turn the other on.
+- **FR-UX-14 — A `--debug` toggle (flag + env) restores full diagnostics.** Troubleshooting must remain
+  possible. Both a **`--debug` flag** on the kickoff command *and* an **environment variable** raise the
+  **console handler** level back to `DEBUG`, restoring the full `<ts> - <logger> - <level> - <msg>` stream.
+  **Logger-gate requirement (CRP R2-F1):** because the `startd8` logger is pinned at `INFO`
+  (`logging_config.py:242`), raising the *console handler* alone surfaces `INFO` but **never `DEBUG`** — so
+  `--debug` must **also lower the `startd8` logger level to `DEBUG`**, else `logger.debug(...)` is dropped
+  before any handler and "restore full diagnostics" is unmet.
+  **Precedence:** an explicit `--debug` **or** `STARTD8_DEBUG=1` overrides the FR-UX-13 quiet default; the
+  existing **`STARTD8_LOG_LEVEL`** continues to take precedence over both (it already gates console level at
+  `logging_config.py:230,242`). `--debug` is **independent of and composable with** `--verbose`/`--json`
+  (debug = plumbing verbosity; `--verbose` = domain detail; `--json` = machine payload). Help text names all
+  three roles so their separation is discoverable (extends FR-UX-11).
+- **FR-UX-15 — Every step shows only what's needed — with the "why".** Building on FR-UX-4/9/10: each
+  surface (status view and each wizard step) presents the **minimum the user needs to act**, and every shown
+  element carries enough context for the user to understand **what** is happening **and why**. The single
+  next action states not just the command but its **reason** ("Author your data first — your screens and
+  settings are built from it"), glossary-plain (FR-UX-2) and one line. No raw internal state, no plumbing,
+  no unexplained numbers. Depth and rationale-in-detail stay behind `--verbose`. **Acceptance — the exact
+  element→why set (CRP R2-F4)** (so a snapshot is unambiguous; `headline()` has no why-clause today,
+  `presentation.py:142-146`): **next action** → a full one-line why-clause; **pct label** → the FR-UX-7
+  "not yet buildable / N defaulted" annotation *is* its why; **error banner** → "N problem(s) → `--verbose`";
+  **spine nodes** → plain name only (no why needed). A snapshot asserts each enumerated element carries its
+  named why-string and `has_jargon()` passes on every why; nothing else appears that the user cannot act on
+  or interpret.
+- **FR-UX-16 — A high-level intro banner on every human-facing invocation.** Every human-facing kickoff
+  invocation **opens with a concise, visually distinct banner** that orients the user and makes the output
+  easier to scan: a one-line statement of what kickoff is, the three-things-plus-Build mental model
+  (FR-UX-1) at a glance, and how to go deeper. **One shared renderer** (`render_intro_banner`) so every
+  surface shows a **byte-identical** banner (CRP R2-S4). Rendered inside a rule/panel so it reads as a
+  header, and **precedes** the focused output.
+  - **Source (implementation-corrected):** the banner is the content contract's dedicated **`<!-- BANNER -->`
+    slice** — `load_experience_doc("intro", section="banner")` — a tight block *distinct from* the fuller
+    `TL;DR`/`explain` content. Implementation found the packaged TL;DR is **~17 lines**, so a compact-TL;DR
+    banner would blow the budget (the R2-F3 discovery, resolved by a purpose-built slice rather than reusing
+    TL;DR).
+  - **Surfaces (enumerated for testability).** The banner shows on **bare `kickoff`** and every human-facing
+    status/action command — **`survey`, `assess`, `instantiate`, `derive`, `confirm`, `log-friction`**, and
+    **`red-carpet`** (all its human modes). It is **suppressed under `--json`** (machine output stays clean)
+    and under `red-carpet --check` (CI signal).
+  - **Exempt** (these already surface the intro/instructional content — a banner would duplicate it):
+    **`explain`** (renders the full doc the banner is sliced from) and the guided **`guided`/`deepen`** flow
+    (its Orient phase renders the intro).
+  - **Constraints:** compact (≤ ~6 lines — must not reintroduce the FR-UX-4 overload), glossary-plain
+    (FR-UX-2). **Acceptance:** a snapshot of any banner-bearing command shows the banner first, ≤ ~6 lines,
+    no jargon tokens; `--json` output contains no banner; the exempt commands show no duplicate banner.
+  - **Source-level budget (CRP R2-F3):** because a `section`/`compact` slice **falls back to the full doc**
+    when its block is absent (`concierge/writes.py`), the ≤6-line budget is **also asserted on the packaged
+    `<!-- BANNER -->` block itself** (present *and* ≤ ~6 lines), not only on the render.
+
 ---
 
 ## 4. Non-Requirements
 
-- **NR-1 — No new backend feature / grammar / write path.** Presentation only; `build_red_carpet_state`,
-  the advisor, the completion model, and the wizard proposals are unchanged in behavior.
+- **NR-1 — No new backend feature / grammar / write path.** Generation behavior is untouched;
+  `build_red_carpet_state`, the advisor, the completion model, and the wizard proposals are unchanged.
+  *(v0.5: FR-UX-13/14 change the CLI **console log level default** and add a `--debug` toggle — an
+  output-hygiene change at the logging layer, not a generation/backend behavior change. `INFO`/`DEBUG`
+  records still reach the file/OTel sinks; only their **console visibility** changes. **This IS a CLI-wide
+  console-behavior change for all commands** (CRP R2-F2) — "no backend change" is not "no behavior change"; it
+  is scoped to console output hygiene, applied once at the root seam.)*
+- **NR-6 — `--debug` is not `--verbose`, and neither raises the other.** The two flags stay separate axes
+  (FR-UX-13/14); no change collapses them into one setting.
+- **NR-7 — The quiet *default* never suppresses `WARNING`/`ERROR`** *(scoped, CRP R2-F5)*. In the
+  **default (env-unset)** case FR-UX-13 lowers only `INFO`/`DEBUG` console visibility; real problems still
+  print. The absolute is scoped to the default: a user who **explicitly** sets `STARTD8_LOG_LEVEL=ERROR`
+  (honored verbatim, FR-UX-14 precedence) *does* suppress `WARNING` at the console — that is a deliberate
+  user override, not the quiet default. Independently, the FR-UX-5 error advisories are **console-printed,
+  not `logger`-emitted**, so they print regardless of any console-handler level (FR-UX-13 guarantee).
 - **NR-2 — No change to what the cascade builds** or to the offer predicate / gates.
 - **NR-3 — `--json` shape is stable.** Machine consumers are untouched (additive only, if anything).
 - **NR-4 — Not a visual/web build.** The web wizard is a later increment; this spec only makes the IA
@@ -250,6 +353,38 @@ the CLI (and later the web surface) present the existing mechanisms coherently a
 model is the existing 5 stages **renamed** (not restructured), so the whole thing collapses to one new
 `presentation.py` (glossary + spine + headline) + a `--verbose` flag + two render swaps — **zero mechanism
 change**. All 6 OQs resolved. Next: lessons-learned hardening, then CRP.*
+
+*v0.7 — Implementation refinement (no new review round). FR-UX-16 updated to match what shipped: the banner
+is a **purpose-built `<!-- BANNER -->` slice** (`section="banner"`), not the `compact=True` TL;DR — the packaged
+TL;DR proved to be ~17 lines, so R2-F3's budget concern is resolved by a dedicated slice rather than reusing
+TL;DR. FR-UX-16 now **enumerates its surfaces** (bare `kickoff` + `survey`/`assess`/`instantiate`/`derive`/
+`confirm`/`log-friction`/`red-carpet`, `--json`/`--check` suppressed) and its **exemptions** (`explain`,
+`guided`/`deepen` — self-orienting content surfaces), so "every invocation" is testable. Drives the
+kernel-subcommand banner wiring (plan Step 11).*
+
+*v0.6 — Post-CRP R2 (reviewer claude-opus-4-8, v0.5-scoped; 5 F + 5 S, all code-grounded, **all accepted**).
+Two high-severity corrections re-verified against the bytes: (R2-F1/S1) the `startd8` **logger** is pinned at
+`INFO` (`logging_config.py:242`) so a console-handler-only fix drops `DEBUG` before any sink — FR-UX-13/14
+now require lowering the **logger** level, and the "full fidelity" claim is caveated; (R2-S2) `cli.py` imports
+`.framework/.agents/.benchmark/.providers` **before** `logging_config`, so the import-time guard must move
+above them (plan Step 8). Also: FR-UX-13 gains an **error-visibility guarantee** (FR-UX-5 advisories are
+Rich-`console`-printed, not `logger`-emitted → uncloseable by any handler level — R2-F5); NR-7 scoped to the
+env-unset default; NR-1 + §3E name the **CLI-wide** console change and add a cross-command pointer (R2-F2);
+FR-UX-15 enumerates the element→why set (R2-F4); FR-UX-16 adds a **source-level** TL;DR budget assert since
+`compact=True` falls back to full text (R2-F3). Dispositions in Appendix A; R2 verbatim in Appendix C. Ready
+for implementation.*
+
+*v0.5 — Output hygiene & orientation. Adds §3E (FR-UX-13..16) + UX-P6 in response to real terminal noise:
+diagnostic Python-logging lines (`… - startd8.concierge.core - INFO - concierge.survey root=…`) leaking to
+the user because `get_logger()` attaches an **INFO console handler CLI-wide** (`logging_config.py:229-238`).
+**FR-UX-13** makes the CLI quiet-by-default (console → `WARNING`; `INFO`/`DEBUG` to file/OTel only), a
+**distinct axis** from `--verbose`. **FR-UX-14** adds a `--debug` flag **and** env toggle (`STARTD8_DEBUG`;
+`STARTD8_LOG_LEVEL` still wins) to restore full diagnostics. **FR-UX-15** requires every default-view element
+to carry a plain-language "what + why". **FR-UX-16** adds a compact high-level intro banner on every
+invocation (content-contract-sourced, `--json`-suppressed). Scope note: FR-UX-13/14 are a CLI-logging-layer
+change (output hygiene, not generation mechanism) — UX-P5 refined, NR-1 clarified, NR-6/7 added. Decisions
+locked with the sponsor: **CLI-wide** suppression, **flag + env** toggle, **banner every invocation**.
+Pre-CRP — recommend a CRP round before implementation.*
 
 *v0.4 — Post-CRP R1 (reviewer claude-opus-4-8-1m, focus-steered; 6 F + 6 S, all code-grounded).
 **Accept all; none rejected.** Material corrections: Build never renders "✓ done" (offerable ≠ built) +
@@ -302,11 +437,29 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | R1-S5 | Operationalize FR-UX-3 (plan step + test) | CRP R1 | plan Step 2/6 | 2026-07-02 |
 | R1-S6 | Sync plan front-matter to reqs v0.4 | CRP R1 | plan header | 2026-07-02 |
 
+> Triage R2 (orchestrator, 2026-07-06). **v0.5 additions only — all 5 F + 5 S accepted; none rejected** —
+> grounded in `logging_config.py` (logger-gate `:242`), `cli.py` (import order `:20-25`), `concierge/writes.py`
+> (`:130+`), `cli_concierge.py` (`_kickoff_root`). The two high-severity items (logger-level gate, import
+> order) were re-verified against the bytes before accepting.
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| R2-F1 | Lower the `startd8` **logger** level to DEBUG, not only the console handler ("full fidelity" was false) | CRP R2 | FR-UX-13 fidelity caveat + FR-UX-14 logger-gate requirement; plan Step 7 (R2-S1) | 2026-07-06 |
+| R2-F2 | Name the CLI-wide console-behavior change + cross-command pointer; reword NR-1 | CRP R2 | §3E cross-command pointer; NR-1; applied-once invariant → plan Step 8 | 2026-07-06 |
+| R2-F3 | Assert packaged intro has a `<!-- TL;DR -->` block ≤ ~6 lines (source-level; compact falls back to full) | CRP R2 | FR-UX-16 source-level budget; plan Step 10 (R2-S5) | 2026-07-06 |
+| R2-F4 | Enumerate the exact default-view element→why set (untestable otherwise) | CRP R2 | FR-UX-15 acceptance (next-action/pct/banner/spine) | 2026-07-06 |
+| R2-F5 | Scope NR-7 to the default (env-unset) case; assert error advisories are console-printed not logger-emitted | CRP R2 | NR-7; FR-UX-13 error-visibility guarantee | 2026-07-06 |
+| R2-S1 | Step 7 also lowers the logger level to DEBUG | CRP R2 | plan Step 7 (mirrors R2-F1) | 2026-07-06 |
+| R2-S2 | Move logging import + import-time guard above the heavy imports (`cli.py:20-23`) | CRP R2 | plan Step 8 | 2026-07-06 |
+| R2-S3 | Harden the console-handler locator (zero-handler early-return `:181`; mutate all non-File StreamHandlers) | CRP R2 | plan Step 7 | 2026-07-06 |
+| R2-S4 | Unify the banner renderer (Panel vs `_render_markdown`) for byte-consistency | CRP R2 | plan Step 9 | 2026-07-06 |
+| R2-S5 | Source-level TL;DR budget test + no-double-render (group callback + subcommand) test | CRP R2 | plan Step 10 (mirrors R2-F3) | 2026-07-06 |
+
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| *None.* All R1 suggestions were code-grounded and accepted. |  |  |  |  |
+| *None.* All R1 + R2 suggestions were code-grounded and accepted. |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
@@ -363,3 +516,52 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
 | R1-F5 | Validation | medium | FR-UX-3 ("right-size settings") has no acceptance criterion or render mechanism — add one (e.g. settings shown as a single collapsed line with field count, visually lighter than data/screens). | The plan flags `content` as `later` but never operationalizes settings right-sizing; an untestable requirement will silently not ship. | FR-UX-3 | Snapshot: settings occupies ≤1 default line and is visually subordinate to data/screens. |
 | R1-F6 | Interfaces | low | Reconcile the header ("**Plan:** `KICKOFF_UX_PLAN.md`") with the plan, which cites "Requirements … (v0.1)" while this doc is v0.3 — pin a matching version so reviewers know the pair is in sync. | Plan header says v0.1; requirements are v0.3 — a stale cross-reference risks review against the wrong baseline. | Requirements front-matter / Plan front-matter | Grep: both docs cite the same requirements version. |
+
+#### Review Round R2 — claude-opus-4-8 — 2026-07-06
+
+- **Reviewer**: claude-opus-4-8
+- **Date**: 2026-07-06 16:45:00 UTC
+- **Scope**: v0.5 additions only (§3E FR-UX-13..16 + UX-P6), weighted per the sponsor focus file. Code-grounded in `logging_config.py` (INFO console handler + logger-level gate), `cli.py` (`_bootstrap`/import order), `cli_concierge.py` (`_kickoff_root`), `concierge/writes.py` (`load_experience_doc`), `kickoff_experience/presentation.py`. FR-UX-1..12 not re-litigated.
+
+##### Sponsor focus asks (answered first)
+
+**Ask 1 — FR-UX-13 blast radius vs. the doc's home.**
+- **Summary answer:** **Partial** — mechanically safe (one seam), but doc-placement is risky and NR-1 understates it.
+- **Rationale:** The change is applied once at the single root seam (`cli.py:64` `_bootstrap` + one import-time call), so "applied once, not per-command" is achievable. But it silently changes console behavior for **every** CLI command, and it lives in a *kickoff* doc where other command owners won't see it. NR-1 says "no backend behavior change" — true — but this **is** a CLI-wide *console* behavior change for all commands, which the requirement should name explicitly.
+- **Assumptions / conditions:** the seam is invoked exactly once (see Ask 2 ordering hazard).
+- **Suggested improvements:** Add a CLI-logging companion pointer/requirement (see R2-F2) and an "applied-once" invariant test. Reword NR-1 to acknowledge the CLI-wide console change.
+
+**Ask 2 — Mechanism correctness of quiet-by-default.**
+- **Summary answer:** **No, not as specified** — mutating only the console handler level is insufficient, and the import ordering is defeated by cli.py's own import order.
+- **Rationale:** `_ensure_default_log_file_handler` sets the **root `startd8` logger** level to `INFO` (`logging_config.py:242`). Python drops records below the *logger's* level **before** any handler, so DEBUG records never reach the file/OTel sinks — contradicting FR-UX-13's "full fidelity retained" — and `--debug` (which per plan Step 7 only raises the *console handler* to DEBUG) surfaces INFO but **never** DEBUG, breaking FR-UX-14's "restore full diagnostics." Separately, cli.py imports `.framework/.agents/.benchmark/.providers` at **lines 20-23 before** `logging_config` at **line 25**, so any import-time `logger.info` in those modules leaks before a line-25-anchored guard runs. `--debug` is indeed too late for import-time logs (only `STARTD8_DEBUG` catches them — the plan acknowledges this residual, but not the logger-level gap).
+- **Assumptions / conditions:** env unset (default path).
+- **Suggested improvements:** See R2-F1 (lower the logger level, not just the console handler). Plan-side: R2-S1/S2/S3.
+
+**Ask 3 — Interaction with existing axes and NR-6/7.**
+- **Summary answer:** **Yes, the axes hold** — and are *stronger* than the doc claims, with one env caveat.
+- **Rationale:** The FR-UX-5 error advisories that `--check` fails on are printed via the Rich `console` (stdout) in `cli_kickoff.py`, **not** via `logger.*` — so the FR-UX-13 logging-handler level **cannot** hide them *by construction* (a reassuring, code-grounded fact the doc should assert). `--verbose` (domain detail) and `--debug` (logging plumbing) touch disjoint code, so NR-6 holds. Caveat: NR-7 states an **absolute** ("never suppresses WARNING/ERROR"), but `STARTD8_LOG_LEVEL=ERROR` (which the plan honors verbatim) *would* suppress WARNING at the console — so NR-7 must be scoped to the default (env-unset) case.
+- **Assumptions / conditions:** error advisories stay console-printed (they are today).
+- **Suggested improvements:** R2-F5.
+
+**Ask 4 — Testability of FR-UX-15/16.**
+- **Summary answer:** **Partial** — both need tighter acceptance anchors; FR-UX-16's budget is not guaranteed by its source.
+- **Rationale:** FR-UX-16 sources the banner from `load_experience_doc("intro", compact=True)`, which **falls back to the full doc text if the packaged intro lacks a `<!-- TL;DR -->` block** (`concierge/writes.py:130+`) — so the "≤ ~6 lines" budget can silently blow, re-creating the FR-UX-4 overload it exists to prevent (Risk R6). FR-UX-15's "every element carries a what+why" doesn't enumerate *which* elements need a why-string, so a snapshot can't be written unambiguously (the existing `headline()` next-action has no why-clause today — `presentation.py:142-146`).
+- **Assumptions / conditions:** none.
+- **Suggested improvements:** R2-F3 (assert the packaged intro has a bounded TL;DR block, source-level), R2-F4 (enumerate the element→why set).
+
+##### Feature Requirements Suggestions (first pass)
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F1 | Data | high | FR-UX-13/14 must require lowering the **`startd8` logger level to DEBUG** (not only the console-handler level). State that "full fidelity retained" holds only if the logger gate is at DEBUG; otherwise DEBUG records are dropped and `--debug` cannot restore them. | `logging_config.py:242` pins the root logger at `INFO`; Python drops sub-level records before any handler, so file/OTel never see DEBUG and `--debug` (console→DEBUG) still shows only INFO. | FR-UX-13 (fidelity clause) + FR-UX-14 (`--debug` restores) | Unit: a planted `logger.debug(...)` appears in `~/.startd8/logs/startd8.log` and, under `--debug`, on the console. |
+| R2-F2 | Architecture | medium | Add a companion CLI-logging requirement (or an explicit cross-command pointer) noting FR-UX-13/14 changes console behavior for **all** commands, applied once at the root seam; and reword NR-1 to acknowledge the CLI-wide console change (not only "no backend change"). | The change is CLI-wide but buried in a kickoff doc; other command owners won't discover it (Ask 1). | §3E scope note + NR-1 | Grep: a CLI-logging pointer exists; NR-1 names the console-wide scope. |
+| R2-F3 | Validation | medium | FR-UX-16 acceptance must assert the **packaged intro doc contains a `<!-- TL;DR -->` block that is ≤ ~6 lines** (source-level), not only that the rendered banner is short — because `compact=True` falls back to full text when the block is absent. | `load_experience_doc(..., compact=True)` falls back to the full doc (`writes.py:130+`); a missing/oversized TL;DR silently violates the ≤6-line budget (Risk R6). | FR-UX-16 (Constraints/Acceptance) | Test on the packaged intro asset: TL;DR present and line count ≤ ~6. |
+| R2-F4 | Validation | medium | FR-UX-15 must enumerate the exact default-view **element→why** set (e.g. next-action: full why-clause; pct-label: the "not yet buildable" annotation serves as its why; error banner: "N problems → --verbose"; spine nodes: name only). | "Every element carries a what+why" is untestable without the element list; `headline()` next-action has no why today (`presentation.py:142-146`). | FR-UX-15 (Acceptance) | Snapshot asserts each enumerated element carries its named why-string; `has_jargon()` passes on every why. |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-F5 | Risks | low | Scope NR-7 to the **default (env-unset)** case and add that FR-UX-5 error advisories are **console-printed, not logger-emitted**, so FR-UX-13 cannot hide them by construction. | `STARTD8_LOG_LEVEL=ERROR` (honored verbatim by plan Step 7) would suppress WARNING, contradicting NR-7's absolute; the console-print fact is the real guarantee for `--check` parity (Ask 3). | NR-7 + FR-UX-5 note | Test: error advisory prints regardless of console handler level; `STARTD8_LOG_LEVEL=ERROR` documented as an explicit override of NR-7. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with): none — all R1-F items are already triaged into Appendix A; no untriaged prior items remain.
