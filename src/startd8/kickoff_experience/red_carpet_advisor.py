@@ -76,6 +76,10 @@ CMD_GENERATE_SCAFFOLD = "startd8 generate scaffold"
 CMD_GENERATE_BACKEND = "startd8 generate backend --schema prisma/schema.prisma"
 CMD_GENERATE_VIEWS = "startd8 generate views --schema prisma/schema.prisma --views prisma/views.yaml"
 CMD_POLISH_APPLY = "startd8 polish apply --project ."
+# FR-13/20 — `generate backend` always ships a default top nav + home/index page auto-derived from the
+# schema (no pages.yaml needed). This is the inspector for its registry (labels/hrefs/groups); the
+# opt-out is the `--no-nav` flag on `generate backend`.
+CMD_NAV_KEYS = "startd8 nav keys"
 # FR-MS-8 — the Manifest Suggester is the guided way to fill the "which screens?" gap (pages/views),
 # so the advisor points at it at the moment of need rather than the generic interview.
 CMD_SCREENS_SUGGEST = "startd8 screens suggest"
@@ -86,7 +90,7 @@ CMD_SCREENS_SUGGEST_ROLES = "startd8 screens suggest --roles"
 ADVISOR_COMMANDS: Tuple[str, ...] = (
     CMD_GENERATE_CONTRACT_PROMOTE, CMD_RED_CARPET_AGENT, CMD_WIREFRAME,
     CMD_GENERATE_SCAFFOLD, CMD_GENERATE_BACKEND, CMD_GENERATE_VIEWS, CMD_POLISH_APPLY,
-    CMD_SCREENS_SUGGEST, CMD_SCREENS_SUGGEST_ROLES,
+    CMD_NAV_KEYS, CMD_SCREENS_SUGGEST, CMD_SCREENS_SUGGEST_ROLES,
 )
 
 # The value-input domains diagnosed by the generic loop — EXCLUDES `stakeholders` (CRP R1-F1: it has a
@@ -511,7 +515,13 @@ def build_playbook(
                 "pyproject / logging / alembic / Dockerfile from the app manifest ($0, no LLM).",
                 CMD_GENERATE_SCAFFOLD)
         if "backend" in ready_gen:
-            run_detail = "The all-Python backend: models, tables, CRUD, HTMX UI, API ($0, no LLM)."
+            # FR-13/20 — surface the always-on default nav: `generate backend` ships a top nav +
+            # home/index page auto-derived from the schema (no pages.yaml needed). Name the opt-out
+            # (`--no-nav`) and the inspector so it's not a silent surprise.
+            run_detail = (
+                "The all-Python backend (models, CRUD, HTMX, API) + a default top nav & home page "
+                f"auto-derived from the schema ($0). --no-nav opts out; `{CMD_NAV_KEYS}` inspects."
+            )
             if preview:  # FR-RCA-20 — weave the already-fetched wireframe shape into the go/no-go.
                 shape, counts = preview.get("shape"), preview.get("counts")
                 if shape:
