@@ -693,11 +693,52 @@ def kickoff_explain(
 # $0 kernel verb: capture a REAL value (or --as-is) into a defaulted field and record the decision in
 # the additive, committed ledger (docs/kickoff/confirmed.yaml). `kickoff assess` then shows the honest
 # awaiting/confirmed count. Never writes a sentinel; partial-failure is loud (see confirmation.py).
+def _kickoff_confirm_guided(project_root: Path, json_out: bool) -> None:
+    """Bare `kickoff confirm` — the interactive guided walk over awaiting fields (FR-1/FR-7). TTY-only:
+    under --json / a pipe / non-TTY it REFUSES to prompt (a write flow must not silently no-op) and
+    instead lists the awaiting fields + the scriptable single-field form."""
+    from .concierge.confirm_walk import awaiting_fields, run_confirm_walk
+
+    awaiting = awaiting_fields(project_root)
+    paths = [f["value_path"] for f in awaiting]
+
+    if json_out or not console.is_terminal:   # FR-7: refuse, don't no-op — list instead.
+        if json_out:
+            _emit_json({"schema": "kickoff.confirm.walk.v1", "action": "confirm_walk",
+                        "interactive": False, "awaiting": paths})
+        elif paths:
+            console.print("[yellow]The guided walk needs a terminal.[/yellow] Script these instead:")
+            for p in paths:
+                console.print(f"  startd8 kickoff confirm {p} --value <v>")
+        else:
+            console.print("[green]✓ nothing awaiting confirmation.[/green]")
+        return
+
+    if not awaiting:
+        console.print("[green]✓ nothing awaiting confirmation.[/green]")
+        return
+
+    def _read(prompt: str) -> Optional[str]:
+        try:
+            return typer.prompt(prompt, default="", show_default=False)
+        except (EOFError, KeyboardInterrupt):
+            return None
+
+    console.print("[bold]Guided confirm[/bold] — walk your defaulted inputs ($0, no LLM). "
+                  "[dim]Enter = skip · a = as-is · q = quit[/dim]\n")
+    summary = run_confirm_walk(
+        project_root, read_input=_read,
+        emit_line=lambda s: console.print(s, markup=False, highlight=False),
+    )
+    console.print(f"\n[bold]Done[/bold] — {len(summary['confirmed'])} confirmed this session · "
+                  f"{summary['remaining']} still awaiting.")
+
+
 def kickoff_confirm(
-    value_path: str = typer.Argument(
-        ...,
+    value_path: Optional[str] = typer.Argument(
+        None,
         help="The field to confirm, e.g. build-preferences.yaml#/budgets.per_pipeline_run "
-             "(see `startd8 kickoff assess`).",
+             "(see `startd8 kickoff assess`). OMIT for the interactive guided walk.",
     ),
     value: Optional[str] = typer.Option(None, "--value", help="A real value to set and confirm."),
     as_is: bool = typer.Option(
@@ -706,8 +747,18 @@ def kickoff_confirm(
     project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the confirmation as JSON."),
 ) -> None:
-    """Confirm a defaulted kickoff value-input ($0): set a real value (or `--as-is`) and record it."""
+    """Confirm a defaulted kickoff value-input ($0). Give a <value_path> to set/confirm one field, or
+    OMIT it to walk all awaiting fields interactively."""
     from .concierge.confirmation import ConfirmError, apply_confirm, build_confirm_plan
+
+    # Bare `kickoff confirm` → the guided walk (OQ-1).
+    if value_path is None:
+        if value is not None or as_is:
+            console.print("[red]kickoff confirm:[/red] --value/--as-is need a <value_path>; "
+                          "omit them for the guided walk")
+            raise typer.Exit(_EXIT_FATAL_INPUTS)
+        _kickoff_confirm_guided(project_root, json_out)
+        return
 
     if (value is not None) == as_is:   # need exactly one of --value / --as-is
         console.print("[red]kickoff confirm:[/red] provide exactly one of --value <v> or --as-is")
