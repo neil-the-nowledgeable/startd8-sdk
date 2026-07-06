@@ -38,7 +38,7 @@ def test_preview_absent_until_offerable_then_present(tmp_path: Path) -> None:
     assert build_red_carpet_state(tmp_path).preview is None
     # Build the minimal subset (schema + app + pages + views) → preview appears.
     assert apply_proposal(tmp_path, ProposedAction("schema", {"brief": _BRIEF}, id="s")).ok
-    (tmp_path / "app.yaml").write_text("package_name: demo\n")
+    (tmp_path / "app.yaml").write_text('app:\n  name: demo\n  package: app\npersistence:\n  path: ./data/demo.db\ncontainer:\n  dockerfile: true\n')
     assert apply_proposal(tmp_path, ProposedAction("manifest", {"source": _PAGES}, id="m1")).ok
     assert apply_proposal(tmp_path, ProposedAction("manifest", {"source": _VIEWS}, id="m2")).ok
     state = build_red_carpet_state(tmp_path)

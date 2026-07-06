@@ -62,7 +62,7 @@ def test_cascade_offerable_only_with_the_full_minimal_subset(tmp_path: Path) -> 
     # schema + app + pages + views (the R1-F7 predicate). Build them via the proposal kinds.
     assert apply_proposal(tmp_path, ProposedAction("schema", {"brief": _BRIEF}, id="s1")).ok
     assert not build_red_carpet_state(tmp_path).cascade_offerable   # only schema so far
-    (tmp_path / "app.yaml").write_text("package_name: demo\n")      # app manifest
+    (tmp_path / "app.yaml").write_text('app:\n  name: demo\n  package: app\npersistence:\n  path: ./data/demo.db\ncontainer:\n  dockerfile: true\n')      # app manifest
     assert apply_proposal(tmp_path, ProposedAction("manifest", {"source": _PAGES}, id="m1")).ok
     assert not build_red_carpet_state(tmp_path).cascade_offerable   # still no views
     assert apply_proposal(tmp_path, ProposedAction("manifest", {"source": _VIEWS}, id="m2")).ok
@@ -73,7 +73,7 @@ def test_cascade_offerable_only_with_the_full_minimal_subset(tmp_path: Path) -> 
 
 def test_state_is_recomputed_from_filesystem(tmp_path: Path) -> None:
     # Resumability/R1-F6: no stale cursor — deleting a manifest moves the gap back on the next read.
-    (tmp_path / "app.yaml").write_text("package_name: demo\n")
+    (tmp_path / "app.yaml").write_text('app:\n  name: demo\n  package: app\npersistence:\n  path: ./data/demo.db\ncontainer:\n  dockerfile: true\n')
     assert apply_proposal(tmp_path, ProposedAction("schema", {"brief": _BRIEF}, id="s1")).ok
     assert build_red_carpet_state(tmp_path).unmet_gates  # pages/views still missing
     (tmp_path / "prisma" / "schema.prisma").unlink()
@@ -92,3 +92,16 @@ def test_cli_red_carpet_json(tmp_path: Path) -> None:
     import json
     payload = json.loads(result.stdout)
     assert payload["next_stage"] == "data_model" and payload["cascade_offerable"] is False
+
+
+def test_invalid_manifest_is_not_offerable(tmp_path: Path) -> None:
+    """FR-A1: a manifest that is PRESENT but INVALID must NOT count as a met gate — the guide must
+    not offer to build over a broken contract (the old file-existence gate did)."""
+    assert apply_proposal(tmp_path, ProposedAction("schema", {"brief": _BRIEF}, id="s1")).ok
+    assert apply_proposal(tmp_path, ProposedAction("manifest", {"source": _PAGES}, id="m1")).ok
+    assert apply_proposal(tmp_path, ProposedAction("manifest", {"source": _VIEWS}, id="m2")).ok
+    # a present-but-invalid app.yaml (wrong top-level schema) — file exists, but generation would fail
+    (tmp_path / "app.yaml").write_text("package_name: demo\n")
+    state = build_red_carpet_state(tmp_path)
+    assert not state.cascade_offerable
+    assert "app" in state.unmet_gates
