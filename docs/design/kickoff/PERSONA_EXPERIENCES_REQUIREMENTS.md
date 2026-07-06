@@ -1,6 +1,6 @@
 # Kickoff Persona Experiences — Requirements
 
-**Version:** 0.6 (Post-CRP hardening — see §3.1 + Appendix A)
+**Version:** 0.7 (OQ-10/OQ-11 resolved — decision-complete)
 **Date:** 2026-07-06
 **Status:** Draft
 **Owners:** kickoff kernel (`concierge/`, `kickoff_experience/`)
@@ -306,6 +306,20 @@ ends of one slider.
   allowlist. (Granularity: domain-level default *sets*, field-level shieldability gate.)
 - **A-OQ8 — resolved** by the A-FR6 compatibility table (encoding = additive `provenance` field; bump
   conditional; rollback tolerated read-only).
+- **A-OQ10 (resolves OQ-10) — deferred pre-pass.** `set` = preference-only; the pre-pass fires at
+  **walk-start** (explicit write action), never on a read/GET. One canonical setter
+  (`set_audience_preference`) is the sole preference writer; CLI `audience set` and web (FR-19) both
+  call it. This is the single pre-pass trigger site the idempotency test (R2-S21) and A-FR16 assume.
+- **A-FR19 (new; resolves OQ-11) — web audience selector, guarded.** The web surface exposes an
+  interactive selector that **persists** the audience by calling the **same** `set_audience_preference`
+  as the CLI — it is **not** a second preference-write path. It rides the existing `web.py` write
+  guards (CSRF token + Origin check + session + rate-limit, the same class as the capture-apply
+  endpoint), validates input against the `KickoffAudience` enum, and — per A-OQ10 — writes **only the
+  preference** (the pre-pass fires later at walk-start, on an explicit POST, not on the selector write
+  or any render). The rendered effective-audience + selector state flow through `build_guided_view` /
+  `guided_parity_digest` (FR-14) so CLI/TUI/web stay in lockstep. **Because this is the riskiest
+  surface, FR-19 carries an explicit M5 security-review gate** (precedent: the consult `--serve`
+  CRP-hardening).
 
 ## 4. Non-Requirements
 
@@ -328,10 +342,17 @@ ends of one slider.
 - **OQ-9** For Beginner reduced surface, *which specific fields/domains* are shielded? Is it
   domain-granular (e.g. shield all of `observability` + `conventions`) or field-granular? (Affects
   the `AUDIENCE_PROFILES` shape and the `awaiting_fields` predicate.)
-- **OQ-10** Should `kickoff audience set` re-run the pre-pass immediately (apply beginner defaults on
-  switch) or only affect the *next* guided invocation? (Idempotency + surprise-write concern.)
-- **OQ-11** Does the web surface need a persona selector control in v1, or is persona set via
-  CLI/preference and merely *rendered* by web? (Scope of the M5 parity work.)
+- **OQ-10 → RESOLVED (user): DEFERRED.** `kickoff audience set` (and the web selector, FR-19) writes
+  **only the preference** — never the pre-pass. The pre-pass (`apply_audience_defaults`) and the
+  widening re-open (A-FR16) fire when the user **begins the confirm walk** — an explicit write action
+  (CLI `kickoff confirm` / guided walk start; web: an explicit POST). It **never fires on a read-only
+  render/GET** — so a web guided-view page load does not write. One semantic trigger (walk-start),
+  surface-independent; `set` stays a cheap, non-destructive preference write. *(See A-FR19 for how web
+  honors this.)*
+- **OQ-11 → RESOLVED (user): FULL WEB SELECTOR.** The web surface exposes an interactive audience
+  selector that **persists** the choice (not render-only). This is the higher-scope path — it adds the
+  web preference-write surface flagged as the riskiest part of interactive-kickoff — so it ships with
+  mandatory guardrails; see **A-FR19**.
 - **OQ-12 → RESOLVED (user, post-panel).** **User-facing label = `audience`** (`startd8 kickoff
   audience`), matching the code namespace — one collision-free term for both surfaces. The panel
   dogfood elevated this from a warmth call to a correctness decision: the **veteran archetype** — the

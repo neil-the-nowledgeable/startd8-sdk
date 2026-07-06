@@ -1,6 +1,6 @@
 # Kickoff Persona Experiences — Implementation Plan
 
-**Version:** 1.1 (Post-CRP — re-keyed to requirements v0.6)
+**Version:** 1.2 (OQ-10/OQ-11 resolved — decision-complete)
 **Date:** 2026-07-06
 **Requirements:** `PERSONA_EXPERIENCES_REQUIREMENTS.md` (v0.2)
 
@@ -30,22 +30,25 @@ The build is sequenced so the **persistence spine ships first with zero behavior
 
 ## Milestones
 
-### M1 — Persistence spine (FR-1, FR-2, FR-3)
-`persona.py` resolver + `BuildPreferencesManifest.persona` + global preference + `kickoff audience`
-command. Resolver returns **Intermediate** on UNSET; the Intermediate path is today's
-`awaiting_fields`/`build_guided_view` with no filter and no pre-pass. **Ships with zero behavior
-change** — pure persistence + selection. Guards FR-4 by construction for unset users.
+### M1 — Persistence spine (FR-1, FR-2, FR-3; OQ-10 deferred)
+`audience.py` resolver + `BuildPreferencesManifest.audience` + global preference + `kickoff audience`
+command + the **single canonical `set_audience_preference`** (sole preference writer, called by CLI
+and later web). Resolver returns **Intermediate** on UNSET; the Intermediate path is today's
+`awaiting_fields`/`build_guided_view` with no filter and no pre-pass. Per **A-OQ10**, `audience set`
+writes **only the preference** — no pre-pass. **Ships with zero behavior change** — pure persistence +
+selection. Guards FR-4 by construction for unset users.
 
 ### M2 — Provenance + counting (FR-6, FR-13, OQ-5, OQ-8)
 Ledger `v2` with a `audience-default:<slug>` provenance (encoding decided by OQ-8 — leaning additive
 `provenance` field for backward tolerance); `domain_confirmation` gains the `audience_defaulted`
 bucket; `assess` surfaces it. Pure ledger/reporting — testable in isolation, no UX change yet.
 
-### M3 — Profiles + surface pre-pass (FR-5, FR-7, FR-8, FR-11; needs OQ-9)
+### M3 — Profiles + surface pre-pass (FR-5, FR-7, FR-8, FR-11; OQ-9 resolved by A-OQ9)
 `AUDIENCE_PROFILES` in `manifest.py`; `apply_audience_defaults` pre-pass writing shielded defaults via
-existing `build_confirm_plan`/`apply_confirm`; persona predicate on `awaiting_fields`. Beginner
-reduced-but-written surface goes live. **Blocked on OQ-9** (which fields are shielded — domain- vs
-field-granular) before the profile shape is fixed.
+existing `build_confirm_plan`/`apply_confirm`; audience predicate on `awaiting_fields`. Per **A-OQ10**
+the pre-pass fires at **walk-start** (explicit action), never on a read/render. Shieldability gate per
+A-OQ9 (a field is shieldable only if it has a safe reversible default; else always prompted). Beginner
+reduced-but-written surface goes live.
 
 ### M4 — Disclosure tiers (FR-9, FR-10) — HIGHEST DRIFT RISK
 Author `<!-- PLAIN -->` regions **inside** `KICKOFF_EXPERIENCE_INTRO.md`; migrate
@@ -53,10 +56,14 @@ Author `<!-- PLAIN -->` regions **inside** `KICKOFF_EXPERIENCE_INTRO.md`; migrat
 single-source review** — the one place NR-1 (no prose fork) can be violated. A separate plain-language
 file is prohibited.
 
-### M5 — Efficiency + parity (FR-4, FR-12, FR-14; needs OQ-11)
-Advanced confirm-all `--as-is` batch; `persona` block in guided view + parity digest; byte-identity
-golden test across personas for a fixed decision script. Update `test_guided_experience_m4.py`.
-OQ-11 decides whether web gets a persona *selector* or only *renders* the preference.
+### M5 — Efficiency + parity + web selector (FR-4, FR-12, FR-14, FR-19; OQ-11 resolved)
+Advanced confirm-all `--as-is` batch (two-phase, A-FR12) + FR-18 dry-run gate; `audience` block in
+guided view + parity digest; the byte-identity goldens (A-FR4: inputs-byte + ledger-value +
+partial-explicit + pre-pass-then-promote). Update `test_guided_experience_m4.py`. **FR-19 web audience
+selector** (OQ-11 = full selector): a CSRF/Origin/session/rate-limit-guarded POST that calls the M1
+`set_audience_preference` (NOT a second write path), validates against `KickoffAudience`, writes
+preference-only (pre-pass still at walk-start per A-OQ10). **M5 carries an explicit security-review
+gate for FR-19** (riskiest surface; consult `--serve` precedent).
 
 ## Sequencing rationale
 
@@ -78,12 +85,14 @@ OQ-11 decides whether web gets a persona *selector* or only *renders* the prefer
 - **Single-source disclosure (FR-9):** loader `tier` projection reads one doc; a lint/test asserts no
   second plain-language file exists.
 
-## Open dependencies (from requirements §5)
+## Open dependencies (from requirements §5) — ALL RESOLVED
 
-- **OQ-8** (ledger provenance encoding) gates M2.
-- **OQ-9** (which fields Beginner shields) gates M3 profile shape.
-- **OQ-10** (persona-switch re-runs pre-pass?) gates M1/M3 boundary behavior.
-- **OQ-11** (web persona selector vs render-only) gates M5 scope.
+- **OQ-8** → additive `provenance` field + conditional bump (A-FR6). M2 unblocked.
+- **OQ-9** → shieldability criterion / safe-reversible-default gate (A-OQ9). M3 unblocked.
+- **OQ-10** → DEFERRED: `set` = preference-only; pre-pass at walk-start (A-OQ10). M1/M3 boundary fixed.
+- **OQ-11** → FULL web selector via the canonical setter + guards + M5 security gate (A-FR19). M5 scope fixed.
+
+*No open questions remain — the design is decision-complete and ready for implementation (start M1).*
 
 ---
 
