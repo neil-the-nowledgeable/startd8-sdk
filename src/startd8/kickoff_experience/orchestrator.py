@@ -471,6 +471,19 @@ def wizard_prepopulate(project_root: str | Path, inventory: dict, state: Any,
 _QUIT_WORDS = frozenset({"", "exit", "quit", ":q", "q"})
 
 
+def _proposal_signature(action: Any) -> Optional[str]:
+    """A stable, id-free signature for a WizardAction's proposal (its ``summary()``), or ``None`` when
+    there is no summarizable proposal (command steps, test doubles) — those are never loop-guarded."""
+    proposal = getattr(action, "proposal", None)
+    summarize = getattr(proposal, "summary", None)
+    if callable(summarize):
+        try:
+            return summarize()
+        except Exception:
+            return None
+    return None
+
+
 def run_red_carpet_driver(
     *,
     banner: str,
@@ -496,6 +509,7 @@ def run_red_carpet_driver(
     emit_line(banner)
     steps = 0
     stalls: dict = {}
+    applied: set = set()   # proposal signatures already applied ok this session (loop-guard)
     while steps < max_steps:
         state = build_state()
         render_state(state)
@@ -503,6 +517,11 @@ def run_red_carpet_driver(
             emit_line("✅ the input surface is complete — the $0 cascade is offerable.")
             break
         actions = [a for a in prepopulate(state) if a.stage == state.next_stage] or prepopulate(state)
+        # Loop-guard (CRP): a confirmed proposal that does NOT advance the gap (e.g. capturing a
+        # defaulted value writes a placeholder but leaves the field flagged "to review") would else be
+        # re-proposed every pass until `max_steps`. Drop proposals already applied ok this session, so
+        # each distinct edit is offered at most once and the loop makes forward progress or terminates.
+        actions = [a for a in actions if _proposal_signature(a) not in applied]
         if not actions:
             # no asset can pre-fill this gap → hand to the interview (FR-WD-8) or stop.
             if interview is not None:
@@ -529,6 +548,9 @@ def run_red_carpet_driver(
         if outcome is not None and getattr(outcome, "ok", False):
             emit_line(f"  ✓ {code}: {getattr(outcome, 'detail', '')}")
             stalls[action.stage] = 0
+            sig = _proposal_signature(action)   # never re-propose this exact edit (loop-guard)
+            if sig is not None:
+                applied.add(sig)
         elif outcome is not None and getattr(outcome, "retriable", False):
             emit_line(f"  … {code} (retriable) — leaving this step in place")
             # retain the step; do NOT count toward no-progress (CRP R1-S3)
