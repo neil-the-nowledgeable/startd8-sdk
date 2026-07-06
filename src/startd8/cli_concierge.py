@@ -63,13 +63,10 @@ def _kickoff_root(ctx: typer.Context) -> None:
     """Onboarding kernel — run a subcommand, or see the intro below."""
     if ctx.invoked_subcommand is not None:
         return
-    from .concierge import load_experience_doc
+    # FR-UX-16 (CRP R2-S4) — the same shared banner every subcommand uses, then the command list.
+    from .cli_shared import render_intro_banner
 
-    try:
-        _render_markdown(load_experience_doc("intro", compact=True))
-        console.print()
-    except Exception:  # never let the courtesy intro break the help path
-        pass
+    render_intro_banner()
     console.print(ctx.get_help())
 
 

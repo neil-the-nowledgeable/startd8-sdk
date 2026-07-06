@@ -33,6 +33,13 @@ WHAT_IS = {
     "content": "starter copy / test data (optional)",
     "run": "generate the app ($0)",
 }
+# The one-line *why this is next* (FR-UX-15) — plain, glossary-safe. Keyed by the thing being acted on.
+WHY = {
+    "data_model": "your screens and settings are built from it",
+    "manifests": "they're what people actually use",
+    "value_inputs": "a few choices the build can't guess for you",
+    "run": "everything it needs is ready",
+}
 # The "three things the user provides" (FR-UX-1) — data → screens → settings. content/run are not peers.
 PROVIDES = ("data_model", "manifests", "value_inputs")
 
@@ -131,15 +138,19 @@ def headline(state: Any) -> dict:
     # so no jargon can leak in). Any incomplete state → the guided $0 wizard; done → Build.
     if greenfield:
         na_title = "Not started — begin with Your data"
+        na_why = WHY["data_model"]
         cmd = CMD_WIZARD
     elif gap is not None:
         na_title = f"{'Start with' if gap.key == 'data_model' else 'Add'} {gap.plain_name}"
+        na_why = WHY.get(gap.key, "")
         cmd = CMD_WIZARD
     elif buildable:
         na_title = "Ready to Build"
+        na_why = WHY["run"]
         cmd = CMD_BUILD
     else:
         na_title = "Review remaining gaps"
+        na_why = "a filled input still needs a fix before it can build"
         cmd = CMD_REVIEW
 
     # "% filled," honestly annotated (CRP R1-F3).
@@ -153,7 +164,7 @@ def headline(state: Any) -> dict:
         "pct": pct,
         "pct_label": label,
         "you_are_here": (gap.plain_name if gap else ("Build" if buildable else "—")),
-        "next_action": {"title": na_title, "command": cmd},
+        "next_action": {"title": na_title, "command": cmd, "why": na_why},
         "n_errors": n_err,               # never hidden (CRP R1-F4)
         "greenfield": greenfield,
     }

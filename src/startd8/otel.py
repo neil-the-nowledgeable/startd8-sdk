@@ -728,7 +728,12 @@ def auto_configure_otel() -> Dict[str, Any]:
     _otel_logger = logging.getLogger("startd8.otel")
 
     banner = format_telemetry_banner(state)
-    _otel_logger.info("%s", banner)
+    # Diagnostic plumbing, not user guidance — emit at DEBUG so the quiet-by-default
+    # CLI console (WARNING+) does not surface it (Kickoff UX FR-UX-13). The error path
+    # below stays ERROR-level and remains visible. This banner fires at import time
+    # (via __init__ -> _ensure_default_log_file_handler), before the CLI --debug flag
+    # is parsed, so it is governed by STARTD8_LOG_LEVEL, not --debug (two-tier residual).
+    _otel_logger.debug("%s", banner)
 
     if not state["will_configure"]:
         if state["severity"] == "error":

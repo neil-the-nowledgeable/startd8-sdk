@@ -293,16 +293,103 @@ def _attach_otel_handlers(logger: logging.Logger) -> None:
 def get_logger(name: str = "startd8") -> logging.Logger:
     """
     Get a logger instance.
-    
+
     Automatically sets up a default log file handler if one doesn't exist.
     Logs are written to ~/.startd8/logs/startd8.log in JSON format (Loki-friendly).
-    
+
     Args:
         name: Logger name (defaults to "startd8")
-    
+
     Returns:
         Logger instance
     """
     _ensure_default_log_file_handler()
     return logging.getLogger(name)
+
+
+def _env_debug() -> bool:
+    """True when ``STARTD8_DEBUG`` is set to a truthy value (``1``/``true``/``yes``/``on``).
+
+    Used by the CLI to resolve the diagnostic-logging toggle from the environment,
+    complementing the ``--debug`` flag (Kickoff UX FR-UX-14).
+    """
+    return os.environ.get("STARTD8_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def configure_cli_logging(*, debug: bool) -> None:
+    """Apply the CLI output-hygiene logging policy (Kickoff UX FR-UX-13/14).
+
+    Interactive CLI invocations are **quiet by default**: the console shows only
+    ``WARNING``/``ERROR`` unless ``debug`` is requested, so diagnostic plumbing
+    lines (``<ts> - startd8.<module> - INFO - …``) never reach the user's terminal.
+    ``INFO``/``DEBUG`` records still flow to the rotating file sink and OTel.
+
+    Two levels are set, and **both matter**:
+
+    - The ``startd8`` **logger** level is pinned to ``DEBUG`` so records are not
+      dropped *before any handler* — otherwise the file/OTel sinks lose fidelity
+      and ``--debug`` could never surface ``DEBUG`` on the console (the logger gate
+      that ``_ensure_default_log_file_handler`` leaves at ``INFO``, see :242).
+    - The **console handler(s)** level gates terminal visibility: ``WARNING`` by
+      default, ``DEBUG`` under ``debug``.
+
+    Precedence: an explicit ``STARTD8_LOG_LEVEL`` **wins** and is honored verbatim
+    for both the logger and the console (preserving the pre-existing env override),
+    so e.g. ``STARTD8_LOG_LEVEL=ERROR`` overrides ``--debug``.
+
+    CLI-only: this is invoked from the CLI entry, never from library import, so
+    embedders keep the ``_ensure_default_log_file_handler`` defaults.
+
+    Idempotent — mutates handler/logger *levels* (adds a console handler only if
+    one is genuinely absent); safe to call twice (import guard + root callback).
+
+    Note: ``--debug`` (parsed from argv) cannot retroactively surface logs emitted
+    *before* argv is parsed; the earliest import-time logs honor only the env vars.
+    """
+    root_logger = logging.getLogger("startd8")
+
+    if _ENV_LOG_LEVEL:
+        # Explicit env override wins for everything (verbatim), matching prior semantics.
+        logger_level = getattr(logging, _ENV_LOG_LEVEL, logging.WARNING)
+        console_level = logger_level
+    else:
+        # Keep the logger open so file/OTel retain full fidelity; gate the console.
+        logger_level = logging.DEBUG
+        console_level = logging.DEBUG if debug else logging.WARNING
+
+    def _apply_console_level() -> None:
+        # Mutate every non-file console StreamHandler (a stderr one from
+        # _ensure_default_log_file_handler AND possibly a stdout one from setup_logging).
+        handlers = [
+            h for h in root_logger.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+        ]
+        if not handlers:
+            # _ensure_default_log_file_handler early-returns before adding a console
+            # handler when a file handler already exists; add one so the quiet default
+            # (and --debug) actually take effect rather than silently no-op'ing.
+            handler = logging.StreamHandler(sys.stderr)
+            handler.setFormatter(
+                logging.Formatter(
+                    '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S',
+                )
+            )
+            root_logger.addHandler(handler)
+            handlers = [handler]
+        for handler in handlers:
+            handler.setLevel(console_level)
+
+    # Quiet the console BEFORE _ensure_default_log_file_handler() runs its first-time
+    # init — that path creates the console handler (at INFO) AND calls
+    # auto_configure_otel(), which logs "Telemetry: ACTIVE …" at INFO. Setting the
+    # level up front (and the logger level, so _ensure won't reset a NOTSET logger to
+    # INFO) suppresses that line on the quiet default.
+    root_logger.setLevel(logger_level)
+    _apply_console_level()
+    _ensure_default_log_file_handler()
+    # Re-assert after init (it may have added handlers / re-set the root level).
+    root_logger.setLevel(logger_level)
+    _apply_console_level()
 

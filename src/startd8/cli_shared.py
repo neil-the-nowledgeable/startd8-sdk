@@ -39,3 +39,30 @@ def _resolve_agent(spec: str, *, name: Optional[str] = None) -> BaseAgent:
     See startd8.utils.agent_resolution.resolve_agent_spec for full documentation.
     """
     return _resolve_agent_impl(spec, name=name)
+
+
+def render_intro_banner() -> None:
+    """FR-UX-16 — the single shared high-level kickoff banner (≤6 lines), shown at the top of every
+    human-facing kickoff invocation.
+
+    Sourced from the content contract's tight ``BANNER`` slice (not the fuller TL;DR), so it stays
+    scannable and never re-introduces the FR-UX-4 wall. **One** renderer so bare ``kickoff`` and every
+    subcommand emit an identical banner (CRP R2-S4). Callers suppress it under ``--json``. Never raises —
+    a courtesy banner must not break a command.
+    """
+    try:
+        from .concierge import load_experience_doc
+
+        text = load_experience_doc("intro", section="banner")
+    except Exception:
+        return
+    if not text:
+        return
+    if console.is_terminal:
+        from rich.panel import Panel
+        from rich.markdown import Markdown
+
+        console.print(Panel(Markdown(text), border_style="dim", padding=(0, 1)))
+    else:
+        console.print(text, markup=False, highlight=False)
+    console.print()

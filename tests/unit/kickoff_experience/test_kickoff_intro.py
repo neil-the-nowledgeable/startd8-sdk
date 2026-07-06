@@ -50,8 +50,8 @@ def _make_project(tmp_path, *, with_inputs=False):
 def test_bare_kickoff_orients_and_exits_zero():
     res = runner.invoke(app, ["kickoff"])
     assert res.exit_code == 0, res.stdout
-    # intro content present …
-    assert "Machines draft and translate" in res.stdout
+    # intro content present — the shared FR-UX-16 banner (same one every subcommand shows) …
+    assert "sets up the inputs" in res.stdout
     # … and the subcommand list still shows (the help was appended).
     assert "instantiate" in res.stdout and "explain" in res.stdout
 
