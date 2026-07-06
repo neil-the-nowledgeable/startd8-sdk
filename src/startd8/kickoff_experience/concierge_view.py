@@ -626,6 +626,52 @@ def load_latest_deepen_session(project_root: str | Path) -> Optional[Dict[str, A
         return None
 
 
+# FR-1/FR-4/clauses A,B — the intro + posture the guided experience must surface (information only;
+# the guided flow writes nothing, FR-GE-1). Posture is shown, never recorded here — the actionable
+# choice stays on `instantiate --posture` (FR-4). Kept as module constants so every surface is byte-
+# identical and single-sourced.
+INTRO_EXPLAIN_COMMAND = "startd8 kickoff explain --intro"
+POSTURE_HINT = "startd8 kickoff instantiate --posture <prototype|production>"
+POSTURE_OPTIONS: tuple = (
+    {"posture": "prototype", "deployment_mode": "installed",
+     "summary": "solo/dogfood — every value pre-filled, no humans required to start; local-first."},
+    {"posture": "production", "deployment_mode": "deployed",
+     "summary": "named human roles validate each value; multi-user, behind a gateway."},
+)
+
+
+def _inputs_present(orient: Mapping[str, Any]) -> bool:
+    """Read-only heuristic (FR-10): is the project already past onboarding (any input domain present)?"""
+    domains = ((orient.get("kickoff_inputs") or {}).get("domains")) or {}
+    return any((info or {}).get("status") == "present" for info in domains.values())
+
+
+def _build_intro_block(orient: Mapping[str, Any], brief: bool) -> Dict[str, Any]:
+    """Clause A — the compact process intro. ``full`` on a first run; ``brief`` pointer once the
+    project has inputs or when ``brief`` is forced (FR-10). Read-only; no write informs the decision."""
+    mode = "brief" if (brief or _inputs_present(orient)) else "full"
+    text = f"New to kickoff? {INTRO_EXPLAIN_COMMAND} explains the process and its inputs."
+    if mode == "full":
+        try:
+            from ..concierge import load_experience_doc
+
+            text = load_experience_doc("intro", compact=True)
+        except Exception:  # fall back to the brief pointer if the packaged doc can't be read
+            mode = "brief"
+    return {"mode": mode, "text": text, "explain_command": INTRO_EXPLAIN_COMMAND}
+
+
+def _build_posture_block(orient: Mapping[str, Any]) -> Dict[str, Any]:
+    """Clause B — posture as INFORMATION (FR-4): the two options + the current declared mode (if any)
+    + the actionable hint pointing at `instantiate`. The guided flow never records the choice."""
+    deployment = orient.get("deployment") or {}
+    return {
+        "current_mode": deployment.get("mode"),
+        "options": [dict(o) for o in POSTURE_OPTIONS],
+        "actionable_hint": POSTURE_HINT,
+    }
+
+
 def build_guided_view(
     project_root: str | Path,
     *,
@@ -633,6 +679,7 @@ def build_guided_view(
     plan: Optional[Any] = None,
     deepen_session: Optional[Mapping[str, Any]] = None,
     load_deepen: bool = True,
+    brief: bool = False,
 ) -> Dict[str, Any]:
     """The ONE guided-experience view-model — Orient → Guide → Deepen (read-only, ``$0``, no LLM).
 
@@ -661,6 +708,8 @@ def build_guided_view(
         "schema_version": GUIDED_SCHEMA_VERSION,
         "action": "guided_view",
         "project_root": orient.get("project_root", str(project_root)),
+        "intro": _build_intro_block(orient, brief),
+        "posture": _build_posture_block(orient),
         "orient": orient,
         "guide": guide_dict,
         "deepen": project_deepen_state(session),
@@ -678,8 +727,12 @@ def guided_parity_digest(view: Mapping[str, Any]) -> Dict[str, Any]:
     deepen = view.get("deepen") or {}
     steps = guide.get("steps") or []
     halt = deepen.get("halt") or None
+    intro = view.get("intro") or {}
+    posture = view.get("posture") or {}
     return {
         "phases": ("Orient", "Guide", "Deepen"),
+        "intro_mode": intro.get("mode"),
+        "posture_hint": posture.get("actionable_hint"),
         "readiness_score": guide.get("readiness_score"),
         "unmet_gates": tuple(guide.get("unmet_gates") or ()),
         "next_commands": tuple(s["command"] for s in steps if s.get("command")),
@@ -731,11 +784,15 @@ def render_guided_lines(view: Mapping[str, Any], *, deepen_flag: bool = True) ->
     orient = view.get("orient") or {}
     guide = view.get("guide") or {}
     deepen = view.get("deepen") or {}
+    intro = view.get("intro") or {}
+    posture = view.get("posture") or {}
     lines: List[str] = [
         "Guided kickoff — one experience, three phases (Orient → Guide → Deepen)",
         "",
-        "1. Orient — where you are (readiness)",
     ]
+    if intro.get("text"):
+        lines += [intro["text"], ""]
+    lines.append("1. Orient — where you are (readiness)")
     score = guide.get("readiness_score")
     if score is not None:
         # Fraction of $0-cascade generators (scaffold/backend/views) ready — a distinct axis from the
@@ -756,6 +813,10 @@ def render_guided_lines(view: Mapping[str, Any], *, deepen_flag: bool = True) ->
         _cov = (_cascade.get("content_coverage") or {}).get("overall") or {}
         _cov_s = f"; content {_cov['authored']}/{_cov['total']}" if _cov.get("total") else ""
         lines.append(f"  will build: {len(_paths)} files{_cov_s}  (→ startd8 wireframe for the full plan)")
+    if posture.get("actionable_hint"):
+        cur = posture.get("current_mode")
+        state = f"current mode = {cur}" if cur else "not yet chosen"
+        lines.append(f"  posture: {state} — set it when you instantiate: {posture['actionable_hint']}")
 
     lines += ["", "2. Guide — the $0 conductor (deterministic, no LLM)"]
     for s in guide.get("steps") or []:
