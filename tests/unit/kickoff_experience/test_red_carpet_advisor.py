@@ -661,3 +661,13 @@ def test_red_carpet_command_is_the_resolvable_legacy_path():
     assert "kickoff-legacy" in CMD_RED_CARPET_AGENT
     assert not CMD_RED_CARPET_AGENT.rstrip().endswith("--agent")
     assert not _resolve_in_registry("startd8 kickoff red-carpet")  # proves the trap is real
+
+
+# ── Default-nav surfacing (FR-13/20): the guide must not ship a silent nav ──────────────────────
+def test_backend_build_step_surfaces_default_nav():
+    st = _state(schema=True, app=True, pages=True, views=True)
+    steps = build_playbook(".", st, (), readiness={"backend": "ready"})
+    backend = [s for s in steps if s.command == CMD_GENERATE_BACKEND][0]
+    d = backend.detail.lower()
+    assert "nav" in d and "--no-nav" in d          # the default nav + its opt-out are named
+    assert "startd8 nav keys" in backend.detail     # the inspector is named

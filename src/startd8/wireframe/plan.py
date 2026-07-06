@@ -89,7 +89,7 @@ _ABSENT_STATUS = {
 _ABSENT_CONSEQUENCE = {
     "schema": "no contract → no entities, CRUD, forms, or views",
     "app": "default scaffold (app/, SQLite ./data/app.db, Dockerfile on, py3.11)",
-    "pages": "no content pages or site nav",
+    "pages": "no custom content pages (a default top nav + home/index page still ship, auto-derived from the schema)",
     "views": "no composite views",
     "ai_passes": "no AI service/passes",
     "human_inputs": "only server-managed omissions apply",
@@ -514,7 +514,7 @@ def _services_section(
                 detail=f"{len(passes)} pass(es)",
                 paths=(
                     "app/ai/__init__.py", "app/ai/service.py", "app/ai/edge_schemas.py",
-                    "app/ai/routes.py", "app/server.py",
+                    "app/ai/routes.py", "app/ai/guards.py", "app/server.py",
                     "tests/test_edge_privacy.py", "tests/test_ai_passes.py",
                     # FR-40 executable guarantees (F-305 moved off the LLM path)
                     "tests/test_keyless_boot.py", "tests/test_cost_logging.py",
@@ -585,15 +585,41 @@ def _entities_section(state: _ManifestState) -> WireframeSection:
     )
 
 
+def _nav_items() -> list:
+    """The always-on default navigation (FR-13/20): a top nav + home/index page + live-toggle admin,
+    all auto-derived from the schema and shipped by `generate backend` regardless of pages.yaml
+    (suppress with `--no-nav`). Listed unconditionally so the plan honestly reflects what the cascade
+    emits — pages.yaml only ADDS custom content pages on top."""
+    return [
+        WireframeItem(
+            "default top nav", Status.PLANNED,
+            detail="auto-derived from the schema; --no-nav opts out",
+            paths=("app/nav.py", "app/templates/_nav.html"),
+        ),
+        WireframeItem(
+            "home / index page", Status.PLANNED,
+            detail="generated home + always-on /_index sitemap",
+            paths=("app/index.py", "app/templates/index.html"),
+        ),
+        WireframeItem(
+            "nav live-toggle admin", Status.PLANNED,
+            detail="DB-backed hide/reveal without restart (FR-29)",
+            paths=("app/nav_store.py", "app/nav_admin.py", "app/templates/nav_admin.html"),
+        ),
+    ]
+
+
 def _pages_section(state: _ManifestState, *, authoring: bool) -> WireframeSection:
     if state.status not in (Status.PLANNED, Status.PLACEHOLDER) or state.parsed is None:
+        # No pages.yaml → still list the always-on default nav; the consequence explains pages
+        # are optional custom content on top of the auto-derived nav.
         return WireframeSection(
-            "pages", "Pages & Nav", state.status,
+            "pages", "Pages & Nav", state.status, tuple(_nav_items()),
             consequence=_consequence(state), error=state.error,
             error_truncated=state.error_truncated,
         )
     pages, nav_override = state.parsed
-    items = [
+    items = _nav_items() + [
         WireframeItem(
             "pages router", state.status,
             detail="nav: explicit" if nav_override is not None else "nav: from nav_label",
