@@ -2,7 +2,7 @@
 
 **Version:** 1.2 (OQ-10/OQ-11 resolved — decision-complete)
 **Date:** 2026-07-06
-**Requirements:** `PERSONA_EXPERIENCES_REQUIREMENTS.md` (v0.2)
+**Requirements:** `PERSONA_EXPERIENCES_REQUIREMENTS.md` (v0.7)
 
 ---
 
@@ -19,14 +19,14 @@ The build is sequenced so the **persistence spine ships first with zero behavior
 |--------|--------|
 | `concierge/audience.py` *(new)* | `KickoffAudience` enum (`beginner\|intermediate\|advanced`); `resolve_audience_preference` (clone of `guided_routing.resolve_guided_preference`); `apply_audience_defaults` pre-pass; disclosure-tier map. *(R1-S2: canonical `audience`, never `persona`.)* |
 | `kickoff_inputs/build_preferences.py` | Add `audience: Optional[str]` to `BuildPreferencesManifest` + validation. |
-| `config.py` | Reuse global `preferences.persona` (existing `set_preference`/`get_preference` path, `:299-309`). |
-| `kickoff_experience/manifest.py` | Add `AUDIENCE_PROFILES` data + `audience_defaults(persona, cfg)` accessor; `lint_config` coverage for profile value_paths. |
+| `config.py` | Reuse global `preferences.audience` (existing `set_preference`/`get_preference` path, `:299-309`). |
+| `kickoff_experience/manifest.py` | Add `AUDIENCE_PROFILES` data + `audience_defaults(audience, cfg)` accessor; `lint_config` coverage for profile value_paths. |
 | `concierge/confirmation.py` | Bump `LEDGER_SCHEMA → v2`; add provenance to `ConfirmPlan`/ledger entry; add `audience_defaulted` bucket to `domain_confirmation`. |
-| `concierge/confirm_walk.py` | One persona predicate in the `awaiting_fields` comprehension (`:70-73`); advanced prose suppression in `field_prompt_lines` (`:89-108`). |
+| `concierge/confirm_walk.py` | One audience predicate in the `awaiting_fields` comprehension (`:70-73`); advanced prose suppression in `field_prompt_lines` (`:89-108`). |
 | `concierge/writes.py` | `load_experience_doc(compact:bool) → tier:str`; new `<!-- PLAIN -->` regions in `KICKOFF_EXPERIENCE_INTRO.md`; update 4 callers. |
 | `kickoff_experience/concierge_view.py` | audience block in `build_guided_view` (`:675`) + `guided_parity_digest` (`:719`). **NB path** — this file is under `kickoff_experience/`, not `concierge/`. |
 | `cli_concierge.py` | New `kickoff audience [show\|set]` command; `--as-is` batch flag on `kickoff confirm` (FR-12). |
-| `test_guided_experience_m4.py` | Update expected parity digests to carry `persona`. |
+| `test_guided_experience_m4.py` | Update expected parity digests to carry `audience`. |
 
 ## Milestones
 
@@ -67,21 +67,21 @@ gate for FR-19** (riskiest surface; consult `--serve` precedent).
 
 ## Sequencing rationale
 
-- M1 first so everything downstream has a resolved persona to key on, with **no user-visible change**
+- M1 first so everything downstream has a resolved audience to key on, with **no user-visible change**
   until a knob lands — de-risks the whole feature (can ship M1 and stop).
 - M2 before M3 because the pre-pass (M3) must write the provenance the ledger only understands after
   M2 — otherwise audience-defaults masquerade as human confirmations.
 - M4 isolated and gated because it is the sole NR-1 (single-source) risk.
-- M5 last: parity + byte-identity golden is the acceptance gate proving persona stayed a lens.
+- M5 last: parity + byte-identity golden is the acceptance gate proving audience stayed a lens.
 
 ## Test strategy
 
 - **Byte-identity golden (FR-4):** a fixed explicit-decision script produces identical `inputs/` +
-  `confirmed.yaml` *values* under all three personas.
+  `confirmed.yaml` *values* under all three audiences.
 - **Provenance round-trip (FR-6/FR-13):** audience-default → `domain_confirmation` reports
   `audience_defaulted`; `kickoff confirm <vp>` promotes it to `explicit`.
 - **Pre-pass no-override (FR-5):** a field explicitly set before the pre-pass is left untouched.
-- **Parity digest (FR-14):** CLI == web == TUI persona rendering (extend existing M4 parity test).
+- **Parity digest (FR-14):** CLI == web == TUI audience rendering (extend existing M4 parity test).
 - **Single-source disclosure (FR-9):** loader `tier` projection reads one doc; a lint/test asserts no
   second plain-language file exists.
 
@@ -133,7 +133,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
 | R1-S1 | FR-15/16/17/18 unmapped; plan keyed to v0.2 | opus | Post-CRP §: mapped to M4/M3/M2→M3/M5; re-keyed v0.6 | 2026-07-06 |
-| R1-S2 | Module table used reserved `persona` | opus | Renamed to `audience.py`/`KickoffAudience`; `build_preferences.persona`→`audience` | 2026-07-06 |
+| R1-S2 | Module table used reserved `persona` | opus | Renamed to `audience.py`/`KickoffAudience`; `build_preferences.audience`→`audience` | 2026-07-06 |
 | R1-S3 | Missing mandated tests + FR-4 normalization | opus | Added to Test strategy additions | 2026-07-06 |
 | R1-S4, R2-S20 | M2 backward-compat unspecified | opus+sonnet | M2 hardened: conditional bump, v1 fixture, rollback | 2026-07-06 |
 | R1-S5 | M3/M4 sequencing strands Beginner in jargon | opus | FR-15 wording sequenced with M4 | 2026-07-06 |
