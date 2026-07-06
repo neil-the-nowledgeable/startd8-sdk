@@ -186,18 +186,17 @@ def test_no_ledger_when_nothing_confirmed(tmp_path):
     assert not (tmp_path / LEDGER_REL).exists()
 
 
-# ── FR-7: the legacy prefill no longer emits the sentinel ────────────────────────────────────────
+# ── FR-7: the legacy prefill (the "REVIEW" sentinel source) is GONE entirely ─────────────────────
 
 
-def test_legacy_prefill_no_longer_proposes_review_sentinel(tmp_path):
-    from startd8.kickoff_experience.orchestrator import _prefill_actions
+def test_legacy_prefill_machinery_removed():
+    # The red-carpet wizard's value-input prefill (`_prefill_actions`, which once wrote the "REVIEW"
+    # sentinel) was retired with the wizard — a stronger guarantee than "no sentinel". Value-input
+    # confirmation now lives only in the kernel `kickoff confirm` (+ the guided walk).
+    import startd8.kickoff_experience.orchestrator as orch
 
-    _mk_project(tmp_path)
-    actions = _prefill_actions(tmp_path, {})
-    assert all(a.action_kind != "capture" for a in actions)   # no capture proposals at all
-    for a in actions:
-        assert getattr(a, "proposal", None) is None
-        assert "confirm" in (a.command or "")   # points at the kernel verb
+    assert not hasattr(orch, "_prefill_actions")
+    assert not hasattr(orch, "run_red_carpet_driver")
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────────────────────────

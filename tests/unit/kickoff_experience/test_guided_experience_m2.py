@@ -123,14 +123,13 @@ def test_legacy_module_names_still_import_after_the_detangle():
     assert ConciergeWriteCode is concierge_view.ConciergeWriteCode
     assert run_concierge is concierge_view.run_concierge
 
-    # Three projections → orchestrator (the conductor)
+    # The surviving projections re-export from orchestrator (the conductor). The red-carpet wizard
+    # (run_red_carpet_driver / wizard_prepopulate / the `wizard` shim) was retired — see
+    # ADR_RETIRE_RED_CARPET_WIZARD.
     from startd8.kickoff_experience import orchestrator
     from startd8.kickoff_experience.red_carpet_completion import build_completion
-    from startd8.kickoff_experience.wizard import run_red_carpet_driver, wizard_prepopulate
 
     assert build_completion is orchestrator.build_completion
-    assert wizard_prepopulate is orchestrator.wizard_prepopulate
-    assert run_red_carpet_driver is orchestrator.run_red_carpet_driver
 
 
 def test_chat_constructors_collapse_to_one_parametrized_factory():

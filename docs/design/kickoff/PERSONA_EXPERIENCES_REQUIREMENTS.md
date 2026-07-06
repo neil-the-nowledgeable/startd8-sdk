@@ -1,6 +1,6 @@
 # Kickoff Persona Experiences — Requirements
 
-**Version:** 0.3 (Post lessons-learned hardening)
+**Version:** 0.4 (Post persona-panel dogfood)
 **Date:** 2026-07-06
 **Status:** Draft
 **Owners:** kickoff kernel (`concierge/`, `kickoff_experience/`)
@@ -221,5 +221,11 @@ ends of one slider.
 *v0.3 — Post lessons-learned hardening. Applied 4 lessons: phantom-reference audit (caught a
 `concierge/` vs `kickoff_experience/` path error on the FR-14 anchors), overloaded-term co-location
 (MATERIAL — "persona" is an owned term ×319; code namespaced to `audience`, OQ-12 raised for the
-surface word), single-source vocabulary ownership (clean), CRP steering (target + focus file named).
-Ready for CRP review.*
+surface word), single-source vocabulary ownership (clean), CRP steering (target + focus file named).*
+
+*v0.4 — Post persona-panel dogfood. Ran the SDK's own adversarial stakeholder panel with the three
+proposed personas embodied as end-users, reviewing this doc. Folded in FR-15 (beginner reassurance
+moment), FR-16 (in-session surface-expand escape hatch), FR-17 (live provenance in the walk), FR-18
+(confirm-all dry-run); sharpened FR-4/FR-12 to name their guardrail tests; fixed FR-13 (no display
+regression for non-persona users); elevated OQ-12 (the veteran archetype argues against the "keep
+persona" default — needs a user decision). Ready for CRP review.*
