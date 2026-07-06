@@ -413,6 +413,14 @@ def _assess_cascade(root: Path) -> Dict[str, Any]:
         for s in plan.sections
         if s.status in ("invalid", "not_defined") and s.consequence
     ]
+    # Wireframe↔kickoff merge (FR-B1): stop the lossy projection — carry through the rich plan data
+    # the wireframe already computed, so the kickoff surfaces can show "what will be built" without a
+    # separate `startd8 wireframe` run. All advisory (NR-2), reusing the single plan (no recompute).
+    cov = plan.content_coverage
+
+    def _cov(c) -> Dict[str, Any]:
+        return {"authored": c.authored, "total": c.total, "ratio": round(c.ratio, 3)}
+
     return {
         "status": "ok",
         "inventory_used": _rel(inventory, root) if yaml_paths else "(convention paths)",
@@ -420,6 +428,23 @@ def _assess_cascade(root: Path) -> Dict[str, Any]:
         "status_counts": plan.status_counts,
         "readiness": plan.readiness,
         "blockers": blockers,
+        # FR-B1 — the exact files the $0 cascade will write, every section's status+consequence, the
+        # per-manifest derived status (the FR-A1 offerability signal), coverage + merge warnings.
+        "claimed_paths": list(plan.claimed_paths),
+        "sections": [
+            {"key": s.key, "title": s.title, "status": s.status, "consequence": s.consequence,
+             "items": len(s.items)}
+            for s in plan.sections
+        ],
+        "manifest_status": {
+            key: prov.get("status") for key, prov in plan.input_provenance.items()
+        },
+        "content_coverage": {
+            "page_bodies": _cov(cov.page_bodies), "view_copy": _cov(cov.view_copy),
+            "ai_prompts": _cov(cov.ai_prompts), "form_help": _cov(cov.form_help),
+            "overall": _cov(cov.overall),
+        },
+        "merge_warnings": [dict(w) for w in plan.merge_warnings],
     }
 
 

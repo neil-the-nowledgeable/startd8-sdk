@@ -111,7 +111,18 @@ def build_red_carpet_state(project_root: str | Path) -> RedCarpetState:
         except Exception:
             assess = {}
 
-        gates = {k: _present(root, k) for k in _CASCADE_GATE_KEYS}
+        # FR-A1 — a cascade gate is "met" only when its manifest is PRESENT AND VALID per the
+        # wireframe plan (status == "planned"), not merely present on disk. This stops the guide
+        # offering to build over a manifest that exists but is invalid/placeholder. Reuses the single
+        # `assess` fetch above (FR-A2); degrades to the coarse presence check only when the plan
+        # projection is unavailable (assess failed / older shape).
+        _manifest_status = (assess.get("cascade") or {}).get("manifest_status") or {}
+
+        def _gate_met(k: str) -> bool:
+            st = _manifest_status.get(k)
+            return _present(root, k) if st is None else st == "planned"
+
+        gates = {k: _gate_met(k) for k in _CASCADE_GATE_KEYS}
         unmet = tuple(k for k in _CASCADE_GATE_KEYS if not gates[k])
         offerable = not unmet
 
