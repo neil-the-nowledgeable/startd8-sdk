@@ -44,6 +44,35 @@ _EXIT_BLOCKED = 3
 _EXIT_DRIFT = 1
 
 
+def _render_markdown(text: str) -> None:
+    """Print instructional markdown — pretty on a TTY, plain text when piped/non-interactive."""
+    if console.is_terminal:
+        from rich.markdown import Markdown
+
+        console.print(Markdown(text))
+    else:
+        console.print(text, markup=False, highlight=False)
+
+
+# FR-2 / clause A: bare `startd8 kickoff` (no subcommand) must ORIENT, not error. Today the group
+# exits 2 ("Missing command"); this callback flips it to a $0 intro + the subcommand list (exit 0).
+# `--json` is a per-subcommand option, so this bare-group path never sees it. Scope: the top
+# `kickoff` group only (OQ-9); `kickoff panel` keeps its current behavior.
+@kickoff_kernel_app.callback(invoke_without_command=True)
+def _kickoff_root(ctx: typer.Context) -> None:
+    """Onboarding kernel — run a subcommand, or see the intro below."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from .concierge import load_experience_doc
+
+    try:
+        _render_markdown(load_experience_doc("intro", compact=True))
+        console.print()
+    except Exception:  # never let the courtesy intro break the help path
+        pass
+    console.print(ctx.get_help())
+
+
 @concierge_app.callback()
 def _concierge_deprecated() -> None:
     """[DEPRECATED] Renamed to `startd8 kickoff`. This alias works for one release (FR-10)."""
@@ -468,6 +497,10 @@ def kickoff_guided(
         False, "--agent",
         help="Opt in to the LLM-assisted interview during Guide (paid). OFF by default — Guide is $0/no-LLM.",
     ),
+    brief: bool = typer.Option(
+        False, "--brief", "--no-intro",
+        help="Show the one-line intro pointer instead of the full process intro (FR-10).",
+    ),
     json_out: bool = typer.Option(False, "--json", help="Emit the combined guided view as JSON."),
 ) -> None:
     """The single guided kickoff experience: Orient → Guide → Deepen, over the existing kernel.
@@ -493,13 +526,30 @@ def kickoff_guided(
     # GE-M4: the ONE guided view-model (parity oracle) — the CLI is now a pure function of it. Reuse
     # the already-computed Orient/Guide (no recompute); Deepen reads any persisted facilitation
     # session so its GE-M3b halted/cost states surface identically to the TUI and served surfaces.
-    view = build_guided_view(project_root, assess=assess, plan=plan, load_deepen=True)
+    view = build_guided_view(project_root, assess=assess, plan=plan, load_deepen=True, brief=brief)
 
     if json_out:
         _emit_json(view)
         return
 
     console.print("[bold]Guided kickoff[/bold] — one experience, three phases (Orient → Guide → Deepen)\n")
+
+    # FR-3 / clause A — lead with the process intro (full on first run, one-line pointer once past
+    # onboarding or under --brief). FR-4 / clause B — surface posture as information, pointing at the
+    # actionable `instantiate --posture`; the guided flow never records it (FR-GE-1).
+    intro = view.get("intro") or {}
+    if intro.get("text"):
+        console.print(intro["text"], markup=False, highlight=False)
+        console.print()
+    posture = view.get("posture") or {}
+    if posture.get("actionable_hint"):
+        cur = posture.get("current_mode")
+        state = f"current mode = {cur}" if cur else "not yet chosen"
+        console.print(
+            f"[bold cyan]Posture[/bold cyan] — {state}. Set it when you instantiate: "
+            f"{posture['actionable_hint']}\n",
+            highlight=False,
+        )
 
     console.print("[bold cyan]1. Orient[/bold cyan] — where you are (readiness)\n")
     _render_assess(view["orient"])
@@ -542,6 +592,59 @@ def kickoff_deepen(
     )
 
 
+# --- FR-5 / clauses E,G,H: the instructional surface — "what each input is and why we ask" --------
+# `kickoff explain` renders the packaged instructional docs at runtime (no leaving the terminal, no
+# instantiate required). `--intro` = the generic experience intro (render-only loader); `--inputs`
+# (default) = the What/Why/Who explainer + the "inputs we do NOT ask here" boundary and the
+# pre-non-demo contacts warning. Single-source: same packaged bytes instantiate would write (FR-6).
+
+_INPUTS_EXPLAINED_KEY = "kickoff-inputs-explained"
+
+
+def _strip_template_banner(text: str) -> str:
+    """Drop a leading ``> **TEMPLATE** …`` blockquote (instantiate-only noise) for display."""
+    lines = text.splitlines()
+    out: List[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith(">") and "TEMPLATE" in line:
+            while i < len(lines) and lines[i].startswith(">"):
+                i += 1
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out).strip()
+
+
+def kickoff_explain(
+    intro: bool = typer.Option(
+        False, "--intro", help="Show the generic kickoff-process intro instead of the inputs explainer."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the doc content as JSON to stdout."),
+) -> None:
+    """Explain the kickoff inputs — what each is, why the build needs it, and who provides it ($0)."""
+    from .concierge import load_experience_doc
+    from .concierge.writes import get_template_entry, render_template_content
+
+    if intro:
+        doc, content = "kickoff-experience-intro", load_experience_doc("intro")
+    else:
+        entry = get_template_entry(_INPUTS_EXPLAINED_KEY)
+        if entry is None:  # pragma: no cover — manifest is a build-time invariant
+            console.print("[red]kickoff explain:[/red] inputs explainer template not found.")
+            raise typer.Exit(_EXIT_FATAL_INPUTS)
+        doc, content = _INPUTS_EXPLAINED_KEY, _strip_template_banner(render_template_content(entry))
+
+    if json_out:
+        _emit_json({"schema": "kickoff.explain.v1", "action": "explain", "doc": doc, "content": content})
+        return
+
+    _render_markdown(content)
+
+
 # --- M0b: the `startd8 kickoff` kernel surface ---------------------------------------------------
 # The kernel reuses the exact command bodies above under function-named verbs. `survey`/`assess`/
 # `log-friction` keep their names; `instantiate-kickoff`→`instantiate` and `derive-contract`→`derive`
@@ -550,6 +653,8 @@ def kickoff_deepen(
 # group (its callback emits the FR-10 deprecation warning).
 kickoff_kernel_app.command("survey")(concierge_survey)
 kickoff_kernel_app.command("assess")(concierge_assess)
+# FR-5: the instructional surface (intro + inputs What/Why/Who). Read-only, $0.
+kickoff_kernel_app.command("explain")(kickoff_explain)
 kickoff_kernel_app.command("instantiate")(concierge_instantiate)
 kickoff_kernel_app.command("log-friction")(concierge_log_friction)
 kickoff_kernel_app.command("derive")(concierge_derive_contract)

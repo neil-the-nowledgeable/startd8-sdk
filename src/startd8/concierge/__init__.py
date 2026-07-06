@@ -25,6 +25,7 @@ from .core import (
     handle_concierge_read,
     handle_concierge_tool,
 )
+from .writes import load_experience_doc
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -33,4 +34,5 @@ __all__ = [
     "build_survey",
     "handle_concierge_read",
     "handle_concierge_tool",
+    "load_experience_doc",
 ]

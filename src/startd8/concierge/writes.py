@@ -116,6 +116,42 @@ def _load_template(rel: str) -> str:
     return (root / rel).read_text(encoding="utf-8")
 
 
+#: Packaged, render-only instructional docs — surfaced at runtime, NEVER written by `instantiate`
+#: and NOT part of the download manifest (which is bound to the write inventory, see
+#: ``kickoff_template_manifest``). Keyed by a closed slug so callers never pass a path.
+_EXPERIENCE_DOCS: Dict[str, str] = {
+    "intro": "KICKOFF_EXPERIENCE_INTRO.md",
+}
+
+_TLDR_OPEN = "<!-- TL;DR -->"
+_TLDR_CLOSE = "<!-- /TL;DR -->"
+
+
+def load_experience_doc(key: str, *, compact: bool = False) -> str:
+    """Read a packaged **render-only** instructional doc by closed-vocabulary *key*.
+
+    Backed by the same ``_load_template`` (``importlib.resources``) read as the written templates —
+    one source of bytes, so runtime text can never drift from the packaged file (FR-6). Distinct from
+    ``render_template_content``, which is bound to the instantiate write/download inventory; these
+    docs are surfaced only, never written into a project.
+
+    ``compact=True`` returns just the ``<!-- TL;DR -->`` … ``<!-- /TL;DR -->`` slice (the one-screen
+    intro for the bare/guided surfaces); it falls back to the full text if no TL;DR block is present.
+    """
+    rel = _EXPERIENCE_DOCS.get(key)
+    if rel is None:
+        raise ConciergeWriteError(f"unknown experience doc key: {key!r}")
+    text = _load_template(rel)
+    if compact:
+        start = text.find(_TLDR_OPEN)
+        end = text.find(_TLDR_CLOSE)
+        if start != -1 and end != -1 and end > start:
+            return text[start + len(_TLDR_OPEN):end].strip()
+    # Full render: drop the TL;DR delimiter comments (they are runtime-only slice markers).
+    text = text.replace(_TLDR_OPEN + "\n", "").replace(_TLDR_CLOSE + "\n", "")
+    return text.strip()
+
+
 def _render_input(rel_template: str, posture: str) -> str:
     text = _load_template(rel_template)
     if rel_template.endswith("conventions.yaml") and _CONVENTIONS_PLACEHOLDER in text:
