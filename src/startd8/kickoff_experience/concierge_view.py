@@ -741,6 +741,13 @@ def render_guided_lines(view: Mapping[str, Any], *, deepen_flag: bool = True) ->
         lines.append(f"  • {name}: {info.get('status')}")
     unmet = guide.get("unmet_gates") or []
     lines.append(f"  unmet gates: {', '.join(unmet) if unmet else '(none)'}")
+    # FR-B3 — surface "what will be built" from the same plan (the wireframe cross-ref for detail).
+    _cascade = orient.get("cascade") or {}
+    _paths = _cascade.get("claimed_paths") or []
+    if _paths:
+        _cov = (_cascade.get("content_coverage") or {}).get("overall") or {}
+        _cov_s = f"; content {_cov['authored']}/{_cov['total']}" if _cov.get("total") else ""
+        lines.append(f"  will build: {len(_paths)} files{_cov_s}  (→ startd8 wireframe for the full plan)")
 
     lines += ["", "2. Guide — the $0 conductor (deterministic, no LLM)"]
     for s in guide.get("steps") or []:

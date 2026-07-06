@@ -79,7 +79,12 @@ def wireframe(
         "mode — it is the business walkthrough artifact.",
     ),
 ) -> None:
-    """Show what the $0 deterministic cascade WILL build — and what is not yet defined."""
+    """Show what the $0 deterministic cascade WILL build — and what is not yet defined.
+
+    This is the deep, file-by-file view of the same cascade `startd8 kickoff assess` summarizes
+    (both read one `build_wireframe_plan`): assess shows the shape + "will build N files"; this shows
+    every artifact path, per-section item, consequence, content-coverage, and merge/provenance detail.
+    """
     overrides = {
         "schema": schema,
         "app": manifest,

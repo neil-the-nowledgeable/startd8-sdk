@@ -144,6 +144,28 @@ def _render_assess(result: dict) -> None:
         for gen, state in cascade["readiness"].items():
             color = "green" if state == "ready" else "yellow"
             console.print(f"  {gen}: [{color}]{state}[/{color}]")
+
+        # Wireframe↔kickoff merge (FR-B2/B3, FR-C1..3): surface "what will be built" inline — the exact
+        # file count, the softer (defaults/placeholder) consequences the blocker list drops, content
+        # coverage, and merge warnings — so the plan is visible without a separate `startd8 wireframe`.
+        paths = cascade.get("claimed_paths") or []
+        sections = cascade.get("sections") or []
+        if paths:
+            planned = [s for s in sections if s.get("status") == "planned"]
+            console.print(
+                f"\n[bold]Will build[/bold]: {len(paths)} files across "
+                f"{len(planned)} planned section(s)."
+            )
+            for s in sections:  # FR-B1: the non-blocker consequences the projection used to drop
+                if s.get("status") in ("defaults", "placeholder") and s.get("consequence"):
+                    console.print(f"  • {s['title']} ([dim]{s['status']}[/dim]): {s['consequence']}")
+            cov = (cascade.get("content_coverage") or {}).get("overall") or {}
+            if cov.get("total"):
+                console.print(f"  content authored: {cov['authored']}/{cov['total']} prose surface(s)")
+            for w in cascade.get("merge_warnings") or []:
+                console.print(f"  [yellow]⚠ merge:[/yellow] {w.get('message') or w.get('key') or w}")
+            console.print("  [dim]full file-by-file plan →[/dim] [cyan]startd8 wireframe[/cyan]")
+
         blockers = cascade.get("blockers") or []
         if blockers:
             console.print("\n[bold]Blocking next step[/bold]:")
