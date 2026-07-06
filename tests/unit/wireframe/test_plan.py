@@ -70,7 +70,7 @@ def test_defaults_consequences_rendered(mini_root: Path) -> None:
     """FR-W5: consequence lines in app-shape terms."""
     plan = _plan(mini_root)
     assert "default scaffold" in plan.section("scaffold").consequence
-    assert "presence-rule fallback" in plan.section("completeness").consequence
+    assert "presence rules" in plan.section("completeness").consequence
     # R3-F5: defaults completeness enumerates the presence-rule signals.
     labels = [i.label for i in plan.section("completeness").items]
     assert "signal: Profile" in labels

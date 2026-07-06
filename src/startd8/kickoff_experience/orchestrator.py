@@ -134,7 +134,9 @@ class KickoffPlan:
         }
 
     def render(self) -> str:
-        lines: List[str] = ["Kickoff plan — the guided greenfield path", ""]
+        # "path" is deliberately shape-neutral — the guided conductor serves both greenfield and
+        # brownfield projects, so the header must not hardcode "greenfield".
+        lines: List[str] = ["Kickoff plan — the guided path", ""]
         if self.cascade_offerable:
             lines.append("you are here: the $0 cascade is BUILD-READY (all gates met)")
         else:

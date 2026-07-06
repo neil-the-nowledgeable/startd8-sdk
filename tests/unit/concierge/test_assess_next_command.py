@@ -18,6 +18,7 @@ from startd8.concierge.core import (
     CMD_KICKOFF_ASSESS,
     CMD_KICKOFF_INSTANTIATE,
     CMD_SCREENS_SUGGEST,
+    CMD_SCREENS_SUGGEST_ROLES,
     _blocker_command,
     _headline_next_command,
 )
@@ -26,6 +27,7 @@ from startd8.concierge.core import (
 _EMITTABLE_COMMANDS = {
     CMD_GENERATE_CONTRACT_PROMOTE,
     CMD_SCREENS_SUGGEST,
+    CMD_SCREENS_SUGGEST_ROLES,
     CMD_KICKOFF_INSTANTIATE,
     CMD_KICKOFF_ASSESS,
 }
@@ -44,7 +46,9 @@ def test_blocker_command_schema_family():
 
 
 def test_blocker_command_screen_family():
-    for section in ("Pages & Nav", "Composite Views", "View: dashboard", "Screen X"):
+    # PAGES → the paid `--roles` pass (the $0 baseline only authors views); VIEWS/screens → baseline.
+    assert _blocker_command("Pages & Nav") == CMD_SCREENS_SUGGEST_ROLES
+    for section in ("Composite Views", "View: dashboard", "Screen X"):
         assert _blocker_command(section) == CMD_SCREENS_SUGGEST
 
 

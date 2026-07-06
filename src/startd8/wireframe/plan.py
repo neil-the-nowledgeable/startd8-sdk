@@ -93,7 +93,7 @@ _ABSENT_CONSEQUENCE = {
     "views": "no composite views",
     "ai_passes": "no AI service/passes",
     "human_inputs": "only server-managed omissions apply",
-    "completeness": "presence-rule fallback scoring",
+    "completeness": "scored by presence rules (no completeness manifest)",
     "imports": "no bulk-import owned-kind (app/importer.py) or paste/upload surface",
     "api": "schema-only OpenAPI contract (no api.yaml overlay merge)",
     "contexts": "no per-producer inter-context consumer clients",
@@ -320,14 +320,18 @@ def _apply_override(
             message = (
                 f"inputs declare `{state.key}` absent but the file exists — parser result wins"
             )
-            logger.warning("wireframe: %s", message)
+            # Surfaced to the user via `merge_warnings` (the `⚠ merge:` line / JSON) — this log is a
+            # diagnostic only, at DEBUG so it never leaks into the user-facing assess/guided output.
+            logger.debug("wireframe: %s", message)
             return state, {"key": state.key, "message": message}
         return state, None
     if override == "placeholder":
         return _ManifestState(state.key, Status.PLACEHOLDER), None
     if override == "authored":
         message = f"inputs declare `{state.key}` authored but the file is missing"
-        logger.warning("wireframe: %s", message)
+        # Surfaced to the user via `merge_warnings` (the `⚠ merge:` line / JSON) — this log is a
+        # diagnostic only, at DEBUG so it never leaks into the user-facing assess/guided output.
+        logger.debug("wireframe: %s", message)
         return state, {"key": state.key, "message": message}
     return state, None  # `absent` keeps the absence semantics
 
@@ -851,12 +855,12 @@ def _content_section(
                 )
     if not items:
         return WireframeSection(
-            "content", "Content Inputs (buckets 2/4 — visibility only)", Status.NOT_DEFINED,
+            "content", "Content Inputs (optional — visibility only)", Status.NOT_DEFINED,
             consequence="no content files referenced by the manifests",
         )
     status = worst(*(i.status for i in items))
     return WireframeSection(
-        "content", "Content Inputs (buckets 2/4 — visibility only)", status, tuple(items),
+        "content", "Content Inputs (optional — visibility only)", status, tuple(items),
         consequence=(
             "placeholder content is the intended starting state — never gated, honestly scored"
             if status != Status.PLANNED else ""
