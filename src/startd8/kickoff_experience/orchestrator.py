@@ -10,9 +10,10 @@ GE-M2 consolidated the three overlapping projections over the same ``red_carpet_
   ``build_red_carpet_state().next_steps`` (the advisor's ranked playbook). The Guide-phase entry.
 * **the completion meter** (FR-WD-2, ``build_completion``) — a ``$0`` filled/total meter over the
   user-fillable surface.
-* **the interactive wizard** (FR-WD, ``run_red_carpet_driver`` + ``wizard_prepopulate`` /
-  ``wizard_inventory`` / ``WizardAction``) — a deterministic ``$0`` conductor that proposes
-  pre-populated inputs and advances through the playbook.
+
+The interactive red-carpet wizard (``run_red_carpet_driver`` + ``wizard_prepopulate``) was **retired**
+(see ``docs/design/kickoff/ADR_RETIRE_RED_CARPET_WIZARD.md``); its value-input leg is superseded by the
+kernel ``kickoff confirm`` walk and its schema/manifest advisory by ``kickoff guided``.
 
 None of these recompute a plan, spend, write, or auto-run a step (P1/NR-KO-1): they PROJECT the
 already-computed advisor output. No new engine (FR-GE-6). The legacy module names
@@ -30,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, List, Mapping, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Tuple
 
 from startd8.kickoff_experience.red_carpet import build_red_carpet_state
 from startd8.kickoff_experience.red_carpet_advisor import (
@@ -55,11 +56,6 @@ __all__ = [
     "StageCompletion",
     "Completion",
     "build_completion",
-    # interactive wizard
-    "WizardAction",
-    "wizard_inventory",
-    "wizard_prepopulate",
-    "run_red_carpet_driver",
 ]
 
 # ================================================================================================
@@ -314,243 +310,3 @@ def build_completion(
     overall = round(100 * (sum(fracs) / len(fracs))) if fracs else 0
     return Completion(stages=stages, overall_pct=overall, n_defaulted=n_defaulted)
 
-
-# ================================================================================================
-# The interactive wizard (FR-WD, folded from `wizard.py`)
-# ================================================================================================
-#
-# Leads the greenfield/brownfield user over the live ``build_red_carpet_state``: inventories existing
-# project assets, proposes **pre-populated inputs** from them (each a proposal the human confirms),
-# and advances through the ranked playbook with a completion meter — using the agentic interview only
-# where no asset can pre-fill a gap.
-
-_BRIEF_REL = "docs/kickoff/REQUIREMENTS.md"
-_DERIVE_COMMAND = "startd8 concierge derive-contract --modules <your.models> --apply  # then confirm `schema`"
-
-
-@dataclass(frozen=True)
-class WizardAction:
-    """One step's found / needed / action triple (FR-WD-3). ``action_kind`` is a ``PROPOSAL_KINDS``
-    member (proposal set) or ``"command"`` (a named CLI command) — never free prose (CRP R1-F8)."""
-
-    stage: str
-    found: str
-    needed: str
-    action_kind: str
-    proposal: Optional[Any] = None   # a ProposedAction when action_kind is a proposal kind
-    command: Optional[str] = None    # the CLI command when action_kind == "command"
-
-    def to_dict(self) -> dict:
-        d = {"stage": self.stage, "found": self.found, "needed": self.needed,
-             "action_kind": self.action_kind}
-        if self.command:
-            d["command"] = self.command
-        if self.proposal is not None:
-            d["proposal_kind"] = self.proposal.kind
-        return d
-
-
-def wizard_inventory(project_root: str | Path) -> dict:
-    """FR-WD-4 — read-only asset inventory via ``survey`` (never imports project code). Excludes the
-    brief's own output from PRD candidates so a re-drive doesn't re-detect it (CRP R1-F6)."""
-    from ..concierge.core import build_survey
-
-    surv = build_survey(project_root)
-    reqs = [d for d in (surv.get("requirement_docs") or []) if str(d.get("path")) != _BRIEF_REL]
-    return {
-        "model_files": list(surv.get("model_files") or []),
-        "requirement_docs": reqs,
-        "fixture_candidates": list(surv.get("fixture_candidates") or []),
-    }
-
-
-def _read_text(p: Path) -> str:
-    try:
-        return p.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-
-
-def _package_present(root: Path) -> bool:
-    return (root / "docs" / "kickoff" / "inputs").is_dir()
-
-
-def _instantiate_proposal() -> Any:
-    from .proposals import ProposedAction, _new_id
-
-    return ProposedAction("instantiate", {"posture": "prototype"}, id=_new_id())
-
-
-def _prefill_actions(root: Path, domains_status: dict) -> List[WizardAction]:
-    """FR-7 (value-input confirmation) — the legacy wizard NO LONGER writes the ``"REVIEW"`` sentinel
-    into typed fields. That sentinel corrupted numeric/typed fields and never converged (it wrote a
-    placeholder that couldn't clear the "to review" state → the PR #111 infinite loop). Instead, when
-    defaulted value-input fields remain, point the human at the kernel ``kickoff confirm`` verb, which
-    captures a *real* value and records confirmation honestly in the ledger. Never imports project code."""
-    from .manifest import default_config
-
-    cfg = default_config()
-    defaulted = [
-        f for f in cfg.writable_fields()
-        if f.write_target is not None and f.provenance_default in ("estimate", "config-default")
-    ]
-    if not defaulted:
-        return []
-    # A single, non-destructive pointer (a `command` action the human runs) — never a `capture`
-    # proposal with a sentinel value.
-    return [WizardAction(
-        "value_inputs",
-        found=f"{len(defaulted)} value input(s) still on a default",
-        needed="a confirmed value",
-        action_kind="command",
-        command="startd8 kickoff confirm <value_path> --value <v>   (see `startd8 kickoff assess`)",
-    )]
-
-
-def wizard_prepopulate(project_root: str | Path, inventory: dict, state: Any,
-                       assess: Optional[dict] = None) -> List[WizardAction]:
-    """FR-WD-5/6/7 — pure preview; **NO writes, NO project imports.** Returns per-gap WizardActions."""
-    root = Path(project_root)
-    unmet = set(getattr(state, "unmet_gates", ()) or ())
-    out: List[WizardAction] = []
-
-    # FR-WD-5 — schema: PROPOSE THE DERIVE COMMAND (never import project code) when models exist.
-    if "schema" in unmet:
-        models = inventory.get("model_files") or []
-        if models:
-            shown = ", ".join(models[:4]) + ("…" if len(models) > 4 else "")
-            out.append(WizardAction(
-                "data_model",
-                found=f"{len(models)} existing data file(s): {shown}",   # KICKOFF_UX FR-UX-10 — plain
-                needed="Your data",
-                action_kind="command",
-                command=_DERIVE_COMMAND,
-            ))
-        else:
-            # FR-WD-6 — brief from an existing PRD (safe read; the brief output is already excluded).
-            reqs = inventory.get("requirement_docs") or []
-            if reqs:
-                prd = str(reqs[0].get("path"))
-                text = _read_text(root / prd)
-                if text.strip():
-                    from .proposals import ProposedAction, _new_id
-
-                    out.append(WizardAction(
-                        "data_model",
-                        found=f"a requirements doc: {prd}",
-                        needed="Your data",                 # KICKOFF_UX FR-UX-10 — plain
-                        action_kind="brief",
-                        proposal=ProposedAction("brief", {"source": text}, id=_new_id()),
-                    ))
-
-    # FR-WD-7 — value inputs: instantiate first (capture cannot create the package/keys), then pre-fill.
-    if not _package_present(root):
-        out.append(WizardAction(
-            "value_inputs",
-            found="no settings yet",                    # KICKOFF_UX FR-UX-10 — plain
-            needed="Your settings",
-            action_kind="instantiate",
-            proposal=_instantiate_proposal(),
-        ))
-    else:
-        domains_status = ((assess or {}).get("kickoff_inputs") or {}).get("domains") or {}
-        out.extend(_prefill_actions(root, domains_status))
-    return out
-
-
-# Inputs the driver treats as "end the session".
-_QUIT_WORDS = frozenset({"", "exit", "quit", ":q", "q"})
-
-
-def _proposal_signature(action: Any) -> Optional[str]:
-    """A stable, id-free signature for a WizardAction's proposal (its ``summary()``), or ``None`` when
-    there is no summarizable proposal (command steps, test doubles) — those are never loop-guarded."""
-    proposal = getattr(action, "proposal", None)
-    summarize = getattr(proposal, "summary", None)
-    if callable(summarize):
-        try:
-            return summarize()
-        except Exception:
-            return None
-    return None
-
-
-def run_red_carpet_driver(
-    *,
-    banner: str,
-    build_state: "Callable[[], Any]",
-    prepopulate: "Callable[[Any], List[WizardAction]]",
-    read_input: "Callable[[str], Optional[str]]",
-    emit_line: "Callable[[str], None]",
-    on_proposal: "Callable[[Any], Any]",
-    render_state: "Callable[[Any], None]" = lambda s: None,
-    interview: "Optional[Callable[[str], None]]" = None,
-    no_progress_limit: int = 3,
-    max_steps: int = 100,
-) -> int:
-    """The deterministic `$0` driver loop (FR-WD-1) — **pure of IO** for testability.
-
-    Each step: build the live state → render it → compute the current gap's pre-populated action(s) →
-    present the found/needed/action → confirm via ``on_proposal`` (human privilege). Advance mapping
-    (CRP R1-S3): advance on ``ProposalOutcome.ok``; a **retriable** outcome retains the step (no
-    advance, no no-progress increment); a decline/skip increments the no-progress counter. When it
-    hits ``no_progress_limit`` on one stage, it offers the interview / friction path. Returns steps
-    completed.
-    """
-    emit_line(banner)
-    steps = 0
-    stalls: dict = {}
-    applied: set = set()   # proposal signatures already applied ok this session (loop-guard)
-    while steps < max_steps:
-        state = build_state()
-        render_state(state)
-        if getattr(state, "next_stage", None) is None:
-            emit_line("✅ the input surface is complete — the $0 cascade is offerable.")
-            break
-        actions = [a for a in prepopulate(state) if a.stage == state.next_stage] or prepopulate(state)
-        # Loop-guard (CRP): a confirmed proposal that does NOT advance the gap (e.g. capturing a
-        # defaulted value writes a placeholder but leaves the field flagged "to review") would else be
-        # re-proposed every pass until `max_steps`. Drop proposals already applied ok this session, so
-        # each distinct edit is offered at most once and the loop makes forward progress or terminates.
-        actions = [a for a in actions if _proposal_signature(a) not in applied]
-        if not actions:
-            # no asset can pre-fill this gap → hand to the interview (FR-WD-8) or stop.
-            if interview is not None:
-                interview(state.next_stage)
-            else:
-                emit_line(f"no pre-populated action for `{state.next_stage}` — "
-                          f"run `{CMD_RED_CARPET_AGENT}` to author it.")
-                break
-            steps += 1
-            continue
-        action = actions[0]
-        emit_line(f"[{action.stage}] found: {action.found}")
-        emit_line(f"           needed: {action.needed}")
-        if action.action_kind == "command":
-            emit_line(f"           run: {action.command}")
-            # a command is the human's to run; we cannot confirm it — advance the presentation.
-            reply = read_input("[enter to continue, or q to quit] ")
-            if reply is None or reply.strip().lower() in _QUIT_WORDS:
-                break
-            steps += 1
-            continue
-        outcome = on_proposal(action.proposal)   # host confirm → apply (or decline)
-        code = getattr(outcome, "code", None)
-        if outcome is not None and getattr(outcome, "ok", False):
-            emit_line(f"  ✓ {code}: {getattr(outcome, 'detail', '')}")
-            stalls[action.stage] = 0
-            sig = _proposal_signature(action)   # never re-propose this exact edit (loop-guard)
-            if sig is not None:
-                applied.add(sig)
-        elif outcome is not None and getattr(outcome, "retriable", False):
-            emit_line(f"  … {code} (retriable) — leaving this step in place")
-            # retain the step; do NOT count toward no-progress (CRP R1-S3)
-        else:
-            stalls[action.stage] = stalls.get(action.stage, 0) + 1
-            emit_line("  (skipped)")
-            if stalls[action.stage] >= no_progress_limit:
-                emit_line(f"  stuck on `{action.stage}` — you can log friction "
-                          "(`startd8 kickoff concierge`) or work it manually.")
-                stalls[action.stage] = 0
-        steps += 1
-    return steps
