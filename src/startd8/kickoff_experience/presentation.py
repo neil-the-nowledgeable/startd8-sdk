@@ -108,13 +108,12 @@ def _first_gap(spine: List[SpineNode]) -> Optional[SpineNode]:
     return None
 
 
-# The resolvable next-action commands. Post-M0 the red-carpet metaphor moved to `kickoff-legacy`, so a
-# bare `startd8 kickoff red-carpet …` NO LONGER RESOLVES ("No such command 'red-carpet'"). This is the
-# "every emitted command MUST resolve" trap that already bit concierge/core.py and red_carpet_advisor.py
-# (fix c2ab1864) — this headline was the third emitter still on the stale form. Single-sourced here so a
-# rename can't silently re-introduce it; a resolution guard test locks it in.
-CMD_WIZARD = "startd8 kickoff-legacy red-carpet --wizard"
-CMD_REVIEW = "startd8 kickoff-legacy red-carpet --verbose"
+# The resolvable next-action commands. Every emitted command MUST resolve in the CLI registry (the trap
+# that bit concierge/core.py + red_carpet_advisor.py, fix c2ab1864, and #110). The interactive wizard
+# was retired (ADR_RETIRE_RED_CARPET_WIZARD): value gaps → `kickoff confirm` (the guided walk), plan
+# review → `kickoff assess`. Single-sourced here; the resolution-guard test locks it in.
+CMD_WIZARD = "startd8 kickoff confirm"
+CMD_REVIEW = "startd8 kickoff assess"
 CMD_BUILD = "startd8 generate backend"
 
 
@@ -168,20 +167,3 @@ def headline(state: Any) -> dict:
         "n_errors": n_err,               # never hidden (CRP R1-F4)
         "greenfield": greenfield,
     }
-
-
-def render_wizard_step(state: Any) -> List[str]:
-    """FR-UX-9 (CRP R1-S1) — the compact per-step render the driver calls as ``render_state(state)``.
-    Consumes ``state`` (the action is computed by the driver after this call). Just the spine header +
-    'you are here' — the found/needed/action lines are emitted by the driver from the (now
-    glossary-translated) WizardAction."""
-    # The three things the user provides (exclude the `content` add-on and the `run`/Build destination),
-    # so the dot row and the "N/M done" count are over the SAME set.
-    real = [n for n in build_spine(state) if not n.optional and n.key != "run"]
-    done = sum(1 for n in real if n.status == "done")
-    hl = headline(state)
-    dots = "".join("●" if n.status == "done" else ("◉" if n.status == "next" else "◌") for n in real)
-    return [
-        f"  {dots}   {done}/{len(real)} done · {hl['pct_label']}",
-        f"  → {hl['you_are_here']}",
-    ]

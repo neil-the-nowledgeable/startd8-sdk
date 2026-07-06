@@ -299,61 +299,6 @@ def _render_red_carpet_state(state, *, verbose: bool = False) -> None:
         )
 
 
-def _run_red_carpet_wizard(project: Path) -> None:
-    """FR-WD-1 — the deterministic $0 completion-driver (no LLM). Leads over the live state, proposes
-    pre-populated inputs from assets, confirms each at human privilege."""
-    from .kickoff_experience.proposals import apply_proposal
-    from .kickoff_experience.red_carpet import build_red_carpet_state
-    from .kickoff_experience.wizard import (
-        run_red_carpet_driver,
-        wizard_inventory,
-        wizard_prepopulate,
-    )
-
-    def _prepopulate(state):
-        assess = None
-        try:
-            from .kickoff_experience.concierge import build_assess  # type: ignore
-
-            assess = build_assess(project)
-        except Exception:
-            assess = None
-        return wizard_prepopulate(
-            project, wizard_inventory(project), state, assess=assess
-        )
-
-    def _on_proposal(action):
-        console.print(f"[yellow]Proposed:[/yellow] {action.summary()}")
-        if typer.confirm("Apply this?", default=False):
-            return apply_proposal(project, action)
-        return None  # declined
-
-    def _read(prompt: str) -> Optional[str]:
-        try:
-            return typer.prompt(prompt, default="", show_default=False)
-        except (EOFError, KeyboardInterrupt):
-            return None
-
-    # KICKOFF_UX FR-UX-9 — the wizard shows ONE step, not the full status wall: render only the compact
-    # spine (from `state`), and let the driver emit the (glossary-translated) found/needed/action.
-    from .kickoff_experience.presentation import render_wizard_step
-
-    def _compact(state) -> None:
-        for line in render_wizard_step(state):
-            console.print(line)
-
-    run_red_carpet_driver(
-        banner="🟥 Red Carpet — guided setup ($0, no LLM). We'll use what your project already has and "
-        "walk you through the rest, one step at a time.",
-        build_state=lambda: build_red_carpet_state(project),
-        prepopulate=_prepopulate,
-        read_input=_read,
-        emit_line=lambda line: console.print(line),
-        on_proposal=_on_proposal,
-        render_state=_compact,
-    )
-
-
 @kickoff_app.command("red-carpet")
 def red_carpet_cmd(
     project: Path = typer.Argument(
@@ -373,12 +318,6 @@ def red_carpet_cmd(
         help="CI signal ($0, read-only): exit 1 if any error-severity advisory (hard readiness "
         "problem) is present, else 0. warn/info never fail.",
     ),
-    wizard: bool = typer.Option(
-        False,
-        "--wizard",
-        help="Deterministic $0 completion-driver: inventories project assets, proposes pre-populated "
-        "inputs, and leads you through the remaining gaps (you confirm each). No LLM.",
-    ),
     agent: Optional[str] = typer.Option(
         None,
         "--agent",
@@ -388,8 +327,8 @@ def red_carpet_cmd(
     """Red Carpet Treatment — the staged, agentic build-from-scratch conductor.
 
     Without a flag: read-only staged status ($0) — where the build stands, the next gap, completion %.
-    With `--wizard`: the deterministic $0 completion-driver — leverages existing assets to pre-populate,
-    leads you through each gap; you confirm every write. No LLM.
+    (The interactive `--wizard` was retired — use `startd8 kickoff confirm` for value inputs and
+    `startd8 kickoff guided` for the plan.)
     With `--agent`: the conversational interview loop — the agent works the next gap and RECOMMENDS each
     input; you confirm every write.
     With `--check`: an advisory CI signal — exit 1 iff an error-severity advisory is present.
@@ -398,16 +337,12 @@ def red_carpet_cmd(
 
     from .kickoff_experience.red_carpet import build_red_carpet_state
 
-    # FR-UX-16 — the high-level banner leads every human-facing invocation (status, wizard, agent).
+    # FR-UX-16 — the high-level banner leads every human-facing invocation (status, agent).
     # Never on --json (machine payload) or --check (CI signal).
     if not json_out and not check:
         from .cli_shared import render_intro_banner
 
         render_intro_banner()
-
-    if wizard:
-        _run_red_carpet_wizard(project)
-        return
 
     # FR-RCA-15 — advisory CI exit-code mode (not a build gate; warn/info never fail).
     if check:

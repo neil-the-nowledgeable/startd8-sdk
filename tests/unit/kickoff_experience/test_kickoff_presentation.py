@@ -63,12 +63,14 @@ def test_headline_flags_all_defaulted():
 
 # ── FR-UX-4/8: single next action + calm greenfield ───────────────────────────────────────────────
 
-def test_greenfield_is_calm_and_points_to_wizard():
+def test_greenfield_is_calm_and_points_to_confirm():
+    # The interactive wizard was retired; greenfield now points at the kernel `kickoff confirm`.
     st = _state(schema=False, completion={"overall_pct": 0, "n_defaulted": 0, "stages": []})
     hl = P.headline(st)
     assert hl["greenfield"] is True
     assert "begin with Your data" in hl["next_action"]["title"]
-    assert "--wizard" in hl["next_action"]["command"]
+    assert hl["next_action"]["command"] == "startd8 kickoff confirm"
+    assert "--wizard" not in hl["next_action"]["command"]
 
 
 # ── FR-UX-4/F4: error advisories are counted (never hidden) ───────────────────────────────────────
@@ -123,26 +125,8 @@ def test_verbose_restores_detail():
     assert "Insights" in text and "Playbook" in text          # detail is back under --verbose
 
 
-# ── FR-UX-9/10 / CRP R1-S2: wizard step copy is plain (no jargon) ─────────────────────────────────
-
-def test_wizard_found_needed_are_plain():
-    import os
-    from startd8.kickoff_experience.wizard import wizard_inventory, wizard_prepopulate
-    d = tempfile.mkdtemp()
-    os.makedirs(os.path.join(d, "app"))
-    open(os.path.join(d, "app", "m.py"), "w").write("from pydantic import BaseModel\nclass A(BaseModel):\n id:str\n")
-    acts = wizard_prepopulate(d, wizard_inventory(d), _state(schema=False))
-    for a in acts:
-        assert P.has_jargon(a.found) is None, f"wizard found leaked jargon: {a.found!r}"
-        assert P.has_jargon(a.needed) is None, f"wizard needed leaked jargon: {a.needed!r}"
-
-
-def test_render_wizard_step_consumes_state():
-    # CRP R1-S1 — the callback takes `state` (not (action, spine)); returns compact lines, no wall.
-    st = build_red_carpet_state(tempfile.mkdtemp())
-    lines = P.render_wizard_step(st)
-    assert isinstance(lines, list) and lines
-    assert not any("Insights" in ln or "Playbook" in ln for ln in lines)  # no status wall
+# (The wizard-step render + wizard-prose tests were removed with the retired red-carpet wizard —
+#  ADR_RETIRE_RED_CARPET_WIZARD; value-input prompts now live in the kernel confirm walk.)
 
 
 # ── Command-resolution guard (regression for the stale `kickoff red-carpet` next-action) ──────────
