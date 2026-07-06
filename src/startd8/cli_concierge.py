@@ -635,14 +635,35 @@ def _strip_template_banner(text: str) -> str:
 
 
 def kickoff_explain(
+    domain: Optional[str] = typer.Argument(
+        None,
+        help="One input domain to explain (business-targets|observability|conventions|"
+             "build-preferences). Omit for the whole explainer.",
+    ),
     intro: bool = typer.Option(
         False, "--intro", help="Show the generic kickoff-process intro instead of the inputs explainer."
     ),
     json_out: bool = typer.Option(False, "--json", help="Emit the doc content as JSON to stdout."),
 ) -> None:
     """Explain the kickoff inputs — what each is, why the build needs it, and who provides it ($0)."""
-    from .concierge import load_experience_doc
+    from .concierge import ConciergeError, load_experience_doc
+    from .concierge.core import explain_input_domain
     from .concierge.writes import get_template_entry, render_template_content
+
+    # A single domain: registry routing metadata + its section sliced from the explainer (FR-5 / OQ-7).
+    if domain:
+        try:
+            d = explain_input_domain(domain)
+        except ConciergeError as exc:
+            console.print(f"[red]kickoff explain:[/red] {exc}")
+            raise typer.Exit(_EXIT_FATAL_INPUTS)
+        if json_out:
+            _emit_json({"schema": "kickoff.explain.v1", "action": "explain", "doc": f"domain:{domain}", **d})
+            return
+        console.print(f"[bold]{d['label']}[/bold] — {d['question']}")
+        console.print(f"[dim]File:[/dim] {d['file']}    [dim]Provided by:[/dim] {d['who']}\n")
+        _render_markdown(d["prose"])
+        return
 
     if intro:
         doc, content = "kickoff-experience-intro", load_experience_doc("intro")

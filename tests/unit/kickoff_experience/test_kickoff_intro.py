@@ -20,8 +20,15 @@ from typer.testing import CliRunner
 
 from startd8.cli import app
 from startd8.concierge import load_experience_doc
+from startd8.concierge.core import (
+    KICKOFF_INPUT_DOMAINS,
+    KICKOFF_INPUT_REGISTRY,
+    _load_inputs_explained,
+    explain_input_domain,
+)
 from startd8.concierge.writes import build_instantiate_plan, kickoff_template_manifest
 from startd8.kickoff_experience.concierge_view import build_guided_view
+from startd8.kickoff_experience.web import _render_guided
 
 runner = CliRunner()
 
@@ -126,3 +133,60 @@ def test_experience_intro_absent_from_manifest_and_instantiate(tmp_path):
     assert "kickoff-experience-intro" not in keys
     plan = build_instantiate_plan(_make_project(tmp_path), "prototype")
     assert "KICKOFF_EXPERIENCE_INTRO.md" not in json.dumps(plan)
+
+
+# ── Follow-up 1 (NR-5): the SERVED surface renders intro + posture (parity) ───────────────────────
+
+
+def test_served_guided_renders_intro_and_posture(tmp_path):
+    view = build_guided_view(_make_project(tmp_path), load_deepen=False)
+    html = _render_guided(view, "")
+    assert "Machines draft and translate" in html            # intro (clause A)
+    # posture hint (clause B) — present, HTML-escaped (`<…>` → `&lt;…&gt;`).
+    assert "instantiate --posture" in html and "&lt;prototype|production&gt;" in html
+    # the digest oracle now carries intro/posture so parity is enforceable across surfaces.
+    from startd8.kickoff_experience.concierge_view import guided_parity_digest
+
+    digest = guided_parity_digest(view)
+    assert digest["intro_mode"] == view["intro"]["mode"]
+    assert digest["posture_hint"] == view["posture"]["actionable_hint"]
+
+
+# ── Follow-up 2 (OQ-7): the per-domain registry + `kickoff explain <domain>` ──────────────────────
+
+
+def test_registry_slugs_match_canonical_domains():
+    # single-source: the registry is keyed by exactly the canonical slug tuple (no drift).
+    assert tuple(KICKOFF_INPUT_REGISTRY) == KICKOFF_INPUT_DOMAINS
+
+
+def test_registry_label_and_ordinal_align_with_explainer():
+    # drift guard: each registry (ordinal,label) matches the explainer's `## N. <label>` heading.
+    explained = _load_inputs_explained()
+    for meta in KICKOFF_INPUT_REGISTRY.values():
+        assert f"## {meta.ordinal}. {meta.label}" in explained, meta.slug
+
+
+def test_explain_domain_returns_sliced_prose():
+    d = explain_input_domain("observability")
+    assert d["label"] == "Observability"
+    assert d["who"] == "operations owner + business owner"
+    # the sliced section is that domain's block — What/Why present, next domain's heading absent.
+    assert "What we ask" in d["prose"] and "Why" in d["prose"]
+    assert "## 3. Technology conventions" not in d["prose"]
+
+
+def test_explain_domain_cli_and_json():
+    res = runner.invoke(app, ["kickoff", "explain", "conventions"])
+    assert res.exit_code == 0, res.stdout
+    assert "Technology conventions" in res.stdout and "architect" in res.stdout
+    j = runner.invoke(app, ["kickoff", "explain", "conventions", "--json"])
+    doc = json.loads(j.stdout)
+    assert doc["doc"] == "domain:conventions"
+    assert doc["slug"] == "conventions" and doc["file"].endswith("conventions.yaml")
+
+
+def test_explain_unknown_domain_exits_nonzero():
+    res = runner.invoke(app, ["kickoff", "explain", "not-a-domain"])
+    assert res.exit_code == 2
+    assert "unknown kickoff input domain" in res.stdout
