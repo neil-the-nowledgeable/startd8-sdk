@@ -195,6 +195,23 @@ instead of the full intro. A `--brief` / `--no-intro` flag forces the short form
 See §0 — OQ-1→new packaged doc; OQ-2→exits 2, callback flips to 0; OQ-3→prose only, registry
 deferred; OQ-4→read-only heuristic + flag; OQ-5→information only; OQ-6→strong test infra exists.
 
+## 5. Follow-ups (implemented 2026-07-06, branch `feat/kickoff-content-contract-followups`)
+
+**NR-5 → DONE (served surface).** `_render_guided` (`web.py`) now renders the `intro` and `posture`
+view-model blocks (intro before Orient; posture inside Orient after unmet gates), HTML-escaped,
+mirroring the CLI/TUI. The digest already carried `intro_mode`/`posture_hint`, so CLI/TUI/served
+parity is now assertable and asserted.
+
+**OQ-7 / NR-6 → DONE (per-domain registry, drift-free).** Added `KICKOFF_INPUT_REGISTRY`
+(`core.py`) — a `{slug: KickoffInputDomain(label, question, file, who, ordinal)}` map of **structured
+routing metadata only**. `KICKOFF_INPUT_DOMAINS` is unchanged (its exact-tuple + `is`-identity
+consumers/tests demand it); the registry is keyed by exactly those slugs (test-guarded). The
+long-form What/Why/Who **prose stays single-sourced** in `KICKOFF_INPUTS_EXPLAINED` and is sliced on
+demand by `explain_input_domain(slug)` (`_slice_explained_section` cuts the `## N.` block) — so the
+registry and the prose cannot drift (a test asserts each registry `(ordinal,label)` matches the
+explainer heading). Surfaced as `startd8 kickoff explain <domain>` (+ `--json`). This resolves OQ-8
+(delivery = a per-domain argument on the existing `explain` verb).
+
 - **OQ-1** — Should the FR-1 generic intro live as a new packaged doc
   (`concierge_templates/KICKOFF_EXPERIENCE_INTRO.md`), as Python string constants, or be *derived*
   from the per-project template with the `<Project>` slots generalized? (bears on FR-6)

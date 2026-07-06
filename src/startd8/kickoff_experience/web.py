@@ -535,13 +535,19 @@ def _render_guided(view: dict, stylesheet: str) -> str:
     orient = view.get("orient") or {}
     guide = view.get("guide") or {}
     deepen = view.get("deepen") or {}
+    intro = view.get("intro") or {}
+    posture = view.get("posture") or {}
     parts = [
         "<p><a href='/'>← overview</a></p><h1>Guided kickoff</h1>",
         "<p class='muted'>One experience, three phases — Orient → Guide → Deepen "
         "(read-only, $0, no LLM).</p>",
-        # Orient
-        "<h2>1. Orient — where you are (readiness)</h2>",
     ]
+    # Intro (clause A) — the same process intro the CLI/TUI lead with (full on a first run, else a
+    # one-line pointer). Rendered ahead of Orient so the served surface orients too (parity).
+    if intro.get("text"):
+        parts.append(f"<div class='card'><p>{_esc(intro['text'])}</p></div>")
+    # Orient
+    parts.append("<h2>1. Orient — where you are (readiness)</h2>")
     score = guide.get("readiness_score")
     if score is not None:
         parts.append(f"<p>Readiness score: <strong>{_esc(score)}</strong></p>")
@@ -553,6 +559,14 @@ def _render_guided(view: dict, stylesheet: str) -> str:
         parts.append("</ul>")
     unmet = guide.get("unmet_gates") or []
     parts.append(f"<p>Unmet gates: {_esc(', '.join(unmet) if unmet else '(none)')}</p>")
+    # Posture (clause B) — information only; points at the actionable `instantiate --posture`.
+    if posture.get("actionable_hint"):
+        cur = posture.get("current_mode")
+        state = f"current mode = {cur}" if cur else "not yet chosen"
+        parts.append(
+            f"<p>Posture: {_esc(state)} — set it when you instantiate: "
+            f"<code>{_esc(posture['actionable_hint'])}</code></p>"
+        )
     # Guide
     parts.append("<h2>2. Guide — the $0 conductor (deterministic, no LLM)</h2>")
     steps = guide.get("steps") or []

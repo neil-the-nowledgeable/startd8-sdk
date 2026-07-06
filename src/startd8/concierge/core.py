@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -58,6 +59,76 @@ _ACTION_ALIASES = {
 # The 3-domain stakeholder-authoring set in ``stakeholder_panel.input_domains`` is a *different*
 # concept (it excludes ``observability``) and lives with the panel, not the kernel.
 KICKOFF_INPUT_DOMAINS = ("business-targets", "observability", "conventions", "build-preferences")
+
+
+# --- per-domain registry (FR-5 / OQ-7) ----------------------------------------------------------
+# Structured ROUTING metadata for each input domain — label, one-line question, file, and short
+# owner — so surfaces can explain a single domain (`kickoff explain <domain>`) and link it to its
+# YAML. Deliberately holds NO long-form prose: the What/Why/Who narrative stays single-sourced in
+# ``KICKOFF_INPUTS_EXPLAINED`` and is sliced on demand (``explain_input_domain``) so the two cannot
+# drift. ``KICKOFF_INPUT_DOMAINS`` above remains the canonical slug tuple (identity/exact-value
+# consumers depend on it); this registry is keyed by exactly those slugs (guarded by test).
+@dataclass(frozen=True)
+class KickoffInputDomain:
+    slug: str
+    label: str
+    question: str   # the domain's §N heading tagline in KICKOFF_INPUTS_EXPLAINED
+    file: str       # the input YAML this domain fills
+    who: str        # short owner (from the explainer's summary table)
+    ordinal: int    # the §N section number in KICKOFF_INPUTS_EXPLAINED (for prose slicing)
+
+
+KICKOFF_INPUT_REGISTRY: Dict[str, KickoffInputDomain] = {
+    "business-targets": KickoffInputDomain(
+        "business-targets", "Business targets", "what does success look like, in numbers?",
+        "docs/kickoff/inputs/business-targets.yaml", "business / product owner", 1),
+    "observability": KickoffInputDomain(
+        "observability", "Observability",
+        "how will we know the app is healthy, and who hears when it isn't?",
+        "docs/kickoff/inputs/observability.yaml", "operations owner + business owner", 2),
+    "conventions": KickoffInputDomain(
+        "conventions", "Technology conventions", "what stack and structure must everything follow?",
+        "docs/kickoff/inputs/conventions.yaml", "architect", 3),
+    "build-preferences": KickoffInputDomain(
+        "build-preferences", "Build preferences", "how should the factory itself run?",
+        "docs/kickoff/inputs/build-preferences.yaml", "project manager / budget owner", 4),
+}
+
+
+def _load_inputs_explained() -> str:
+    """The packaged KICKOFF_INPUTS_EXPLAINED prose — the single source for per-domain What/Why/Who."""
+    from .writes import get_template_entry, render_template_content
+
+    entry = get_template_entry("kickoff-inputs-explained")
+    return render_template_content(entry) if entry else ""
+
+
+def _slice_explained_section(text: str, ordinal: int) -> str:
+    """Return the ``## {ordinal}. …`` section of the explainer, up to the next ``## ``/``---``."""
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if ln.startswith(f"## {ordinal}.")), None)
+    if start is None:
+        return ""
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith("## ") or lines[j].strip() == "---":
+            end = j
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
+def explain_input_domain(slug: str) -> Dict[str, Any]:
+    """Per-domain What/Why/Who (FR-5): registry routing metadata + the domain's section sliced from
+    the single-sourced explainer prose. Raises :class:`ConciergeError` on an unknown slug."""
+    meta = KICKOFF_INPUT_REGISTRY.get(slug)
+    if meta is None:
+        known = ", ".join(KICKOFF_INPUT_REGISTRY)
+        raise ConciergeError(f"unknown kickoff input domain: {slug!r} (known: {known})")
+    return {
+        "slug": meta.slug, "label": meta.label, "question": meta.question,
+        "file": meta.file, "who": meta.who,
+        "prose": _slice_explained_section(_load_inputs_explained(), meta.ordinal),
+    }
 
 # --- next-command map (FR-5) -------------------------------------------------------------------
 # `assess` names what is missing AND emits the exact next command to move forward (the handoff
