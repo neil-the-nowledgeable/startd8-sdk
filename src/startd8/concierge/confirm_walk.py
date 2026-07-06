@@ -35,6 +35,9 @@ logger = get_logger(__name__)
 WALK_QUIT = frozenset({"q", "quit", "exit", ":q"})
 WALK_AS_IS = "a"
 _LEGEND = "  [value] type a value · [a] confirm as-is · [Enter] skip · [q] quit"
+_UNKNOWN_ORDINAL = 99   # a field whose domain isn't in the registry sorts last (defensive; shouldn't happen)
+#: ConfirmError codes the user can fix by retyping ⇒ re-prompt the same field (else advance, FR-4/FR-6).
+_REPROMPT_CODES = frozenset({"bad_value", "capture_failed", "missing_value"})
 
 ReadInput = Callable[[str], Optional[str]]
 EmitLine = Callable[[str], None]
@@ -44,13 +47,30 @@ def _domain_ordinal(slug: str) -> int:
     from .core import KICKOFF_INPUT_REGISTRY
 
     meta = KICKOFF_INPUT_REGISTRY.get(slug)
-    return meta.ordinal if meta is not None else 99
+    return meta.ordinal if meta is not None else _UNKNOWN_ORDINAL
+
+
+def _input_file_present(project_root: str | Path, field: dict, cfg: Any) -> bool:
+    """A field is walkable only if its input YAML exists on disk (else confirm can't splice/read it —
+    consistent with `assess`, which only counts awaiting for present domains, and avoids re-prompting a
+    field that would always fail `capture_failed`/`missing_value`)."""
+    fdef = cfg.field_by_value_path(field["value_path"])
+    if fdef is None or fdef.write_target is None:
+        return False
+    return (Path(project_root) / "docs" / "kickoff" / "inputs" / fdef.write_target.file).is_file()
 
 
 def awaiting_fields(project_root: str | Path, config: Optional[Any] = None) -> List[dict]:
-    """Confirmable fields not yet in the ledger, ordered by domain ordinal then declaration order."""
+    """Confirmable fields whose input file is present and that are not yet in the ledger, ordered by
+    domain ordinal then declaration order."""
+    from ..kickoff_experience.manifest import default_config
+
+    cfg = config or default_config()
     confirmed = confirmed_value_paths(project_root)
-    pending = [f for f in confirmable_fields(config) if f["value_path"] not in confirmed]
+    pending = [
+        f for f in confirmable_fields(cfg)
+        if f["value_path"] not in confirmed and _input_file_present(project_root, f, cfg)
+    ]
     return sorted(pending, key=lambda f: _domain_ordinal(f["domain"]))   # stable ⇒ declaration order kept
 
 
@@ -109,9 +129,9 @@ def run_confirm_walk(
 
     for field in fields:
         vp = field["value_path"]
-        while True:   # re-prompt this field on a validation error
-            for line in field_prompt_lines(project_root, field, cfg, qcache):
-                emit_line(line)
+        for line in field_prompt_lines(project_root, field, cfg, qcache):   # context shown ONCE
+            emit_line(line)
+        while True:   # input loop — re-prompt (compactly) only on a fixable validation error
             emit_line(_LEGEND)
             raw = read_input(f"  ▸ {field['label']}: ")
             if raw is None or raw.strip().lower() in WALK_QUIT:
@@ -130,8 +150,8 @@ def run_confirm_walk(
                 apply_confirm(project_root, plan)
             except ConfirmError as exc:
                 emit_line(f"  ✗ {exc}")
-                if exc.code in ("bad_value", "capture_failed", "missing_value"):
-                    continue   # bad input → re-prompt the same field (FR-6)
+                if exc.code in _REPROMPT_CODES:
+                    continue   # user-fixable → re-prompt this field (FR-6)
                 break          # other failure → leave awaiting, advance (FR-4)
             confirmed_now.append(vp)
             emit_line(f"  ✓ confirmed ({mode})")
