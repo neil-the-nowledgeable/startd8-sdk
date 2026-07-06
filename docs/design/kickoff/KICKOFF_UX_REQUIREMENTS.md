@@ -1,6 +1,6 @@
 # Kickoff UX / Information Architecture — Requirements
 
-**Version:** 0.6 (Output hygiene & orientation — Post-CRP R2)
+**Version:** 0.7 (Output hygiene & orientation — implementation refinement)
 **Date:** 2026-07-06
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
@@ -281,19 +281,30 @@ the CLI (and later the web surface) present the existing mechanisms coherently a
   **spine nodes** → plain name only (no why needed). A snapshot asserts each enumerated element carries its
   named why-string and `has_jargon()` passes on every why; nothing else appears that the user cannot act on
   or interpret.
-- **FR-UX-16 — A high-level intro banner on every invocation.** Every kickoff invocation **opens with a
-  concise, visually distinct banner** that orients the user and makes the output easier to scan: a one-line
-  statement of what kickoff is, the three-things-plus-Build mental model (FR-UX-1) at a glance, and how to go
-  deeper (`--verbose`) or get help. It is sourced from the content contract (`load_experience_doc("intro",
-  compact=True)` — the FR-2/clause-A intro surface), rendered inside a rule/panel so it reads as a header,
-  and **precedes** the focused step output. **Constraints:** it stays compact (a few lines — it must not
-  reintroduce the FR-UX-4 information overload), speaks glossary-plain (FR-UX-2), and is **suppressed under
-  `--json`** (machine output stays clean). **Acceptance:** a snapshot of any kickoff command shows the banner
-  first, ≤ ~6 lines, no jargon tokens (FR-UX-2 list); `--json` output contains no banner. **Source-level
-  budget (CRP R2-F3):** because `load_experience_doc("intro", compact=True)` **falls back to the full doc
-  text when the packaged intro lacks a `<!-- TL;DR -->` block** (`concierge/writes.py:130+`), the ≤ ~6-line
-  budget must **also be asserted on the packaged asset itself** (TL;DR block present *and* ≤ ~6 lines), not
-  only on the rendered banner — otherwise a missing/oversized TL;DR silently blows the budget (Risk R6).
+- **FR-UX-16 — A high-level intro banner on every human-facing invocation.** Every human-facing kickoff
+  invocation **opens with a concise, visually distinct banner** that orients the user and makes the output
+  easier to scan: a one-line statement of what kickoff is, the three-things-plus-Build mental model
+  (FR-UX-1) at a glance, and how to go deeper. **One shared renderer** (`render_intro_banner`) so every
+  surface shows a **byte-identical** banner (CRP R2-S4). Rendered inside a rule/panel so it reads as a
+  header, and **precedes** the focused output.
+  - **Source (implementation-corrected):** the banner is the content contract's dedicated **`<!-- BANNER -->`
+    slice** — `load_experience_doc("intro", section="banner")` — a tight block *distinct from* the fuller
+    `TL;DR`/`explain` content. Implementation found the packaged TL;DR is **~17 lines**, so a compact-TL;DR
+    banner would blow the budget (the R2-F3 discovery, resolved by a purpose-built slice rather than reusing
+    TL;DR).
+  - **Surfaces (enumerated for testability).** The banner shows on **bare `kickoff`** and every human-facing
+    status/action command — **`survey`, `assess`, `instantiate`, `derive`, `confirm`, `log-friction`**, and
+    **`red-carpet`** (all its human modes). It is **suppressed under `--json`** (machine output stays clean)
+    and under `red-carpet --check` (CI signal).
+  - **Exempt** (these already surface the intro/instructional content — a banner would duplicate it):
+    **`explain`** (renders the full doc the banner is sliced from) and the guided **`guided`/`deepen`** flow
+    (its Orient phase renders the intro).
+  - **Constraints:** compact (≤ ~6 lines — must not reintroduce the FR-UX-4 overload), glossary-plain
+    (FR-UX-2). **Acceptance:** a snapshot of any banner-bearing command shows the banner first, ≤ ~6 lines,
+    no jargon tokens; `--json` output contains no banner; the exempt commands show no duplicate banner.
+  - **Source-level budget (CRP R2-F3):** because a `section`/`compact` slice **falls back to the full doc**
+    when its block is absent (`concierge/writes.py`), the ≤6-line budget is **also asserted on the packaged
+    `<!-- BANNER -->` block itself** (present *and* ≤ ~6 lines), not only on the render.
 
 ---
 
@@ -342,6 +353,14 @@ the CLI (and later the web surface) present the existing mechanisms coherently a
 model is the existing 5 stages **renamed** (not restructured), so the whole thing collapses to one new
 `presentation.py` (glossary + spine + headline) + a `--verbose` flag + two render swaps — **zero mechanism
 change**. All 6 OQs resolved. Next: lessons-learned hardening, then CRP.*
+
+*v0.7 — Implementation refinement (no new review round). FR-UX-16 updated to match what shipped: the banner
+is a **purpose-built `<!-- BANNER -->` slice** (`section="banner"`), not the `compact=True` TL;DR — the packaged
+TL;DR proved to be ~17 lines, so R2-F3's budget concern is resolved by a dedicated slice rather than reusing
+TL;DR. FR-UX-16 now **enumerates its surfaces** (bare `kickoff` + `survey`/`assess`/`instantiate`/`derive`/
+`confirm`/`log-friction`/`red-carpet`, `--json`/`--check` suppressed) and its **exemptions** (`explain`,
+`guided`/`deepen` — self-orienting content surfaces), so "every invocation" is testable. Drives the
+kernel-subcommand banner wiring (plan Step 11).*
 
 *v0.6 — Post-CRP R2 (reviewer claude-opus-4-8, v0.5-scoped; 5 F + 5 S, all code-grounded, **all accepted**).
 Two high-severity corrections re-verified against the bytes: (R2-F1/S1) the `startd8` **logger** is pinned at

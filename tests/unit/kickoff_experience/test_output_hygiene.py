@@ -176,3 +176,50 @@ def test_bare_kickoff_and_subcommand_share_one_banner(tmp_path):
     rc = runner.invoke(app, ["kickoff-legacy", "red-carpet", str(tmp_path)])
     assert "sets up the inputs" in bare.stdout
     assert "sets up the inputs" in rc.stdout
+
+
+# ── FR-UX-16 (v0.7) — full surface: the kernel `kickoff` subcommands (Step 11) ─────────────────────
+
+_BANNER = "sets up the inputs"
+
+# The enumerated kernel commands that must show the banner, with minimal args. Some intentionally
+# hit an error path (bad model/field) — the banner leads the human view regardless (it precedes the
+# command's own work), and CliRunner captures output either way.
+def _kernel_cmds(d):
+    return {
+        "survey": ["survey", str(d)],
+        "assess": ["assess", str(d)],
+        "instantiate": ["instantiate", str(d)],
+        "log-friction": ["log-friction", str(d), "--friction", "f", "--what-happened", "w",
+                         "--implication", "i"],
+        "derive": ["derive", str(d), "--models", "nonexistent_module_xyz_qqq"],
+        "confirm": ["confirm", "build-preferences.yaml#/nope.field", "--as-is", "--project", str(d)],
+    }
+
+
+@pytest.mark.parametrize("name", ["survey", "assess", "instantiate", "log-friction", "derive", "confirm"])
+def test_kernel_command_shows_banner(tmp_path, name):
+    res = runner.invoke(app, ["kickoff", *_kernel_cmds(tmp_path)[name]])
+    assert _BANNER in res.stdout, f"{name} should show the banner\n{res.stdout}"
+
+
+@pytest.mark.parametrize("name", ["survey", "assess", "instantiate", "log-friction", "derive", "confirm"])
+def test_kernel_command_json_suppresses_banner(tmp_path, name):
+    res = runner.invoke(app, ["kickoff", *_kernel_cmds(tmp_path)[name], "--json"])
+    assert _BANNER not in res.stdout, f"{name} --json must not show the banner\n{res.stdout}"
+
+
+def test_explain_is_exempt_but_renders_full_content(tmp_path):
+    # `explain` is exempt from the banner (it renders the full instructional doc, which itself
+    # contains the banner sentence — so we assert the full-doc heading, not banner-absence).
+    res = runner.invoke(app, ["kickoff", "explain", "--intro"])
+    assert res.exit_code == 0, res.stdout
+    assert 'What "kickoff" is' in res.stdout
+
+
+@pytest.mark.parametrize("name", ["guided", "deepen"])
+def test_guided_flow_is_exempt(tmp_path, name):
+    # The guided flow's Orient phase renders the fuller TL;DR, not the banner — so the banner-only
+    # phrase must be absent (proves render_intro_banner is not invoked there).
+    res = runner.invoke(app, ["kickoff", name, str(tmp_path)])
+    assert _BANNER not in res.stdout, f"{name} should be banner-exempt\n{res.stdout}"

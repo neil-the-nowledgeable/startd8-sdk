@@ -1,6 +1,6 @@
 # Kickoff UX / Information Architecture — Implementation Plan
 
-**Version:** 0.4 (v0.5 output-hygiene increment — Post-CRP R2)
+**Version:** 0.5 (v0.5 increment + Step 11 kernel-subcommand banner)
 **Date:** 2026-07-06
 **Requirements:** `KICKOFF_UX_REQUIREMENTS.md` — **v0.4** (Steps 1–6) **+ v0.6 §3E** (Steps 7–10, Post-CRP
 R2). The v0.5 increment (FR-UX-13..16 + UX-P6: quiet-by-default logging, `--debug` flag+env, per-step
@@ -115,6 +115,12 @@ a `--verbose` flag + render swaps. The biggest "aha" is that the four-things mod
 
 ---
 
+*v0.5 — Added **Step 11** (banner on the kernel `kickoff` subcommands — `survey`/`assess`/`instantiate`/
+`derive`/`confirm`/`log-friction`; `explain`/`guided`/`deepen` exempt), completing FR-UX-16's "every
+invocation" coverage beyond the v0.5 landing's red-carpet + bare-kickoff. Corrected Step 9's banner source
+to the `<!-- BANNER -->` slice (`section="banner"`) in `cli_shared.py` — reflecting what shipped (the TL;DR
+proved ~17 lines). Tracks requirements v0.7.*
+
 *v0.4 — Post-CRP R2 on the v0.5 increment (reviewer claude-opus-4-8; 5 S accepted, none rejected). Folded:
 Step 7 now lowers the **`startd8` logger** level to `DEBUG` (not only the console handler — R2-S1, the
 blocking bug) and uses a **robust handler locator** (zero-handler add + mutate all non-File StreamHandlers —
@@ -209,10 +215,12 @@ requirements Appendix A.*
   are built from it"`. The status view's **single next-action line = action + why** (glossary-plain,
   FR-UX-2, one line). The wizard `needed` line (Step 3) already carries rationale — ensure it renders plain.
   No raw internal state or unexplained numbers reach the default view.
-- **FR-UX-16 (banner):** add **one** `render_intro_banner(*, compact=True) -> RenderableType` to the
-  presentation module, sourcing `load_experience_doc("intro", compact=True)` (`concierge/writes.py` — the
-  FR-2 intro surface). Emit it at the **top of every kickoff command** (`red-carpet` default, `--wizard`,
-  `--agent`), **suppressed under `--json`**.
+- **FR-UX-16 (banner):** add **one** `render_intro_banner()` helper in **`cli_shared.py`** (not
+  `presentation.py`, which stays Rich-free/pure), sourcing a dedicated **`<!-- BANNER -->` slice** via
+  `load_experience_doc("intro", section="banner")`. *(Implementation correction: the packaged TL;DR is ~17
+  lines, so `compact=True` cannot be the banner source — a purpose-built `section="banner"` slice is added to
+  `writes.py` + the intro asset.)* Emit it at the **top of every human-facing red-carpet mode** (default,
+  `--wizard`, `--agent`), **suppressed under `--json`/`--check`**.
   - **Single shared renderer (CRP R2-S4 — resolve the contradiction):** today the bare-`kickoff` callback
     `_kickoff_root` (`cli_concierge.py:62`) renders the intro via `_render_markdown(...)` with **no panel**,
     while this step wanted a Rich `Panel`/rule — "reuse the same helper so bare + subcommands are
@@ -249,6 +257,19 @@ requirements Appendix A.*
 - **Import-time / applied-once (CRP R2-S2/F2):** an import-time INFO planted in `providers` is **quiet** by
   default (guard runs above the heavy imports) and **loud** under `STARTD8_DEBUG`; assert no duplicate
   console handler accrues across the import guard + callback (idempotency).
+
+### Step 11 — Banner on the kernel subcommands (FR-UX-16 full coverage)
+- The v0.5 landing wired the banner into `red-carpet` + bare `kickoff` only. FR-UX-16 (v0.7) enumerates the
+  full surface, so extend to the **kernel `kickoff` commands** whose bodies live in `cli_concierge.py`
+  (registered onto `kickoff_kernel_app` at the tail of the module, reusing the same function bodies):
+  - **Add `render_intro_banner()`** on the **human path** (immediately after the `if json_out: … return`
+    early-return, before the console render) of: `concierge_survey`, `concierge_assess`,
+    `concierge_instantiate`, `concierge_derive_contract`, `kickoff_confirm`, `concierge_log_friction`.
+  - **Exempt** (self-orienting content — a banner would duplicate): `kickoff_explain` (renders the full doc)
+    and the guided `kickoff_guided`/`kickoff_deepen` flow (its Orient phase already renders the intro).
+  - Same `render_intro_banner()` helper (byte-identical, CRP R2-S4); never before a `--json` payload.
+- Tests: parametrized CLI check that each enumerated command shows the banner once and `--json` suppresses
+  it; each exempt command shows **no** banner (and `explain` still shows its full-doc heading).
 
 ### Validation additions (§7, v0.5)
 - **Quiet proof:** no plumbing lines on the default path of any kickoff command; the log file still has them.
