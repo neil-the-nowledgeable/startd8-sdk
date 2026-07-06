@@ -18,16 +18,17 @@ not reopen them:
   provenance-tagged. (FR-4/5/6.)
 - **Default persona = Intermediate = today's walk, byte-identical.** (FR-2.)
 - **Two-knob model** (DISCLOSURE × SURFACE); Beginner = expanded+reduced, Advanced = compact+full.
-- **Code symbols namespaced to `audience`** to avoid the `stakeholder_panel` "persona" collision
-  (§0.1). The *user-facing* word is open (OQ-12) — reviewers may weigh in there, but the code
-  namespace decision is settled.
+- **Naming SETTLED = `audience`** (both code AND user-facing CLI verb), resolving the
+  `stakeholder_panel` "persona" ×319 overload (§0.1/§0.3, OQ-12). `persona` is reserved for the
+  roster concept. **Do not relitigate the word**; the filename/title keep "Persona" as a cosmetic
+  follow-up. Reviewers MAY verify terminology is applied *consistently*, but not reopen the choice.
 
 ## Where independent review is most valuable
 
 - **FR-9 (disclosure without forking)** — the single NR-1 risk. Is the "same-doc delimiter-marked
   region" model actually sufficient, or does plain-language beginner prose diverge enough in
   structure that a projection can't hold? Is there a cleaner single-source mechanism?
-- **FR-11 pre-pass (`apply_persona_defaults`)** — writing shielded defaults *before* a filtered walk.
+- **FR-11 pre-pass (`apply_audience_defaults`)** — writing shielded defaults *before* a filtered walk.
   Any ordering/idempotency hazard vs. the existing confirm machinery? Interaction with OQ-10
   (persona-switch re-run).
 - **OQ-8** — ledger provenance encoding (new `mode` value vs. additive `provenance` field) and
