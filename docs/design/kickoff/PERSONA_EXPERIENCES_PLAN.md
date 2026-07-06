@@ -1,6 +1,6 @@
 # Kickoff Persona Experiences — Implementation Plan
 
-**Version:** 1.0 (Post-planning)
+**Version:** 1.1 (Post-CRP — re-keyed to requirements v0.6)
 **Date:** 2026-07-06
 **Requirements:** `PERSONA_EXPERIENCES_REQUIREMENTS.md` (v0.2)
 
@@ -17,8 +17,8 @@ The build is sequenced so the **persistence spine ships first with zero behavior
 
 | Module | Change |
 |--------|--------|
-| `concierge/persona.py` *(new)* | `Persona` enum (`beginner\|intermediate\|advanced`); `resolve_audience_preference` (clone of `guided_routing.resolve_guided_preference`); `apply_audience_defaults` pre-pass; disclosure-tier map. |
-| `kickoff_inputs/build_preferences.py` | Add `persona: Optional[str]` to `BuildPreferencesManifest` + validation. |
+| `concierge/audience.py` *(new)* | `KickoffAudience` enum (`beginner\|intermediate\|advanced`); `resolve_audience_preference` (clone of `guided_routing.resolve_guided_preference`); `apply_audience_defaults` pre-pass; disclosure-tier map. *(R1-S2: canonical `audience`, never `persona`.)* |
+| `kickoff_inputs/build_preferences.py` | Add `audience: Optional[str]` to `BuildPreferencesManifest` + validation. |
 | `config.py` | Reuse global `preferences.persona` (existing `set_preference`/`get_preference` path, `:299-309`). |
 | `kickoff_experience/manifest.py` | Add `AUDIENCE_PROFILES` data + `audience_defaults(persona, cfg)` accessor; `lint_config` coverage for profile value_paths. |
 | `concierge/confirmation.py` | Bump `LEDGER_SCHEMA → v2`; add provenance to `ConfirmPlan`/ledger entry; add `audience_defaulted` bucket to `domain_confirmation`. |
@@ -87,8 +87,23 @@ OQ-11 decides whether web gets a persona *selector* or only *renders* the prefer
 
 ---
 
-*v1.0 — mapped from requirements v0.2. Five milestones; M1 ships zero-behavior-change persistence,
-M4 is the single drift-risk gate. Four open questions block specific milestones.*
+## Post-CRP Amendments (v1.1)
+
+> Triaged R1/R2 (Appendix C). Re-keyed to **requirements v0.6**. All accepted; dispositions in Appendix A.
+
+- **Milestone remap (R1-S1)** — the four panel FRs are now placed:
+  - **FR-15** (beginner reassurance moment) → **M4** (needs plain-language wording).
+  - **FR-16** (in-session expand-surface escape hatch, mechanics per A-FR16) → **M3** (owns the pre-pass it reverses).
+  - **FR-17** (live in-walk provenance, parity-bound per A-FR17) → **M2 → M3 boundary** (data in M2, rendered in M3 walk).
+  - **FR-18** (confirm-all `--dry-run`/preview, mandatory) → **M5 gate on FR-12** (two-phase collect-then-apply, A-FR12).
+- **M2 hardened (R1-S4, R2-S20, A-FR6)** — conditional `v1→v2` bump (only on first audience-default write); provenance-absence ⇒ explicit; add v1-ledger-load fixture + rollback tolerance; add **`test_assess_no_audience_regression`** as an **M2 merge gate** (A-FR13).
+- **M3 hardened (R2-S21, A-FR16)** — pre-pass idempotency test (2nd run writes nothing, no `at` bump); encode the un-shield/no-re-shield + broaden-audience-re-opens contract.
+- **M4 hardened (R1-S6, R2-S22, A-FR9)** — replace the manual single-source review with an **automated per-region tier-resolution + `expanded ⊇ light` superset lint**; co-located tier variants, not append-only regions.
+- **Test strategy additions (R1-S3)** — `test_confirm_all_equals_single`; FR-4 value-only normalization + partial-explicit golden + pre-pass-then-promote golden; v1-ledger fixture.
+
+*v1.1 — re-keyed to requirements v0.6; FR-15/16/17/18 mapped; M2/M3/M4 hardened per CRP; module table
+canonicalized to `audience`. M1 still ships zero-behavior-change persistence; M4 remains the single
+drift-risk gate (now automated).*
 
 ---
 
@@ -108,7 +123,14 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-S1 | FR-15/16/17/18 unmapped; plan keyed to v0.2 | opus | Post-CRP §: mapped to M4/M3/M2→M3/M5; re-keyed v0.6 | 2026-07-06 |
+| R1-S2 | Module table used reserved `persona` | opus | Renamed to `audience.py`/`KickoffAudience`; `build_preferences.persona`→`audience` | 2026-07-06 |
+| R1-S3 | Missing mandated tests + FR-4 normalization | opus | Added to Test strategy additions | 2026-07-06 |
+| R1-S4, R2-S20 | M2 backward-compat unspecified | opus+sonnet | M2 hardened: conditional bump, v1 fixture, rollback | 2026-07-06 |
+| R1-S5 | M3/M4 sequencing strands Beginner in jargon | opus | FR-15 wording sequenced with M4 | 2026-07-06 |
+| R1-S6, R2-S22 | M4 single-source gate manual/insufficient | opus+sonnet | M4 hardened: automated superset lint | 2026-07-06 |
+| R2-S21 | No pre-pass idempotency test | sonnet | M3 hardened: 2nd-run-no-write test | 2026-07-06 |
+| R2-S23 | Byte-identity golden misses pre-pass-then-promote | sonnet | Added pre-pass-then-promote golden to M5 | 2026-07-06 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -117,3 +139,40 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | (none yet) |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — general-purpose (opus) — 2026-07-06
+
+- **R1-S1** *(Milestones/footer, Architecture, critical)* Plan is keyed to requirements **v0.2**; the four panel FRs (15–18, added v0.4) are unmapped: no milestone builds FR-15/16/17, and M5 mentions confirm-all but not FR-18's MANDATORY `--dry-run`. Fold FR-15/16 into M3, FR-17 into the M2→M3 boundary, make FR-18 an explicit M5 gate on FR-12; bump the version reference to v0.5.
+- **R1-S2** *(module table, Architecture, high)* Table specifies `concierge/persona.py (new)` + `Persona` enum — mixing the RESERVED `persona` token with `audience`. Rename module/enum/symbols to canonical `audience` (`audience.py`, `KickoffAudience`, `resolve_audience`); only the doc filename keeps "Persona".
+- **R1-S3** *(Test strategy, Validation, high)* Missing FR-12's `test_confirm_all_equals_single`, FR-4's value-only normalization + partial-explicit golden, and a v1-ledger-load fixture (OQ-8).
+- **R1-S4** *(M2, Data, high)* State the provenance-absence invariant: absence of `provenance` ⇒ explicit/human, so v1 ledgers + pre-existing entries route to `confirmed`, never `audience_defaulted` (this is what preserves FR-13 non-regression). Add the conditional-bump rule (R1-F1) to M2 acceptance.
+- **R1-S5** *(M3/M4, Risks, high)* M3 ships Beginner reduced surface while M4 (plain-language) lands later → interim Beginner gets reduced surface in Intermediate-level jargon; FR-15 reassurance would be non-plain. Sequence FR-15 wording with M4 or state "M3 interim = reduced surface, light prose." M3 pre-pass must encode the R1-F4 idempotency/un-shield contract.
+- **R1-S6** *(M4, Architecture, medium)* M4's NR-1 protection is a MANUAL review + file-count lint — neither proves the projection is well-formed. Make the merge gate the automated per-region tier-resolution lint (R1-F3).
+
+#### Review Round R2 — claude-sonnet-4-6 (adversarial) — 2026-07-06
+
+- **R2-S20** *(M2, Data, critical)* Ships the v1→v2 bump with no backward-compat test. Add a v1 `confirmed.yaml` fixture; assert v2 code loads it with identical counts + no error; address rollback (v1 code vs v2 file).
+- **R2-S21** *(M3, Validation, high)* No idempotency test for `apply_audience_defaults` under the OQ-10 re-run/switch path. Add: run pre-pass twice → second run writes nothing and does NOT bump existing `at` timestamps.
+- **R2-S22** *(M4, Architecture, high)* File-count lint won't catch a `<!-- PLAIN -->` region that drifted from its "light" prose. Add a golden asserting `tier=expanded` ⊇ `tier=light`, or a checksum-of-adjacent-light-prose lint.
+- **R2-S23** *(M5, Validation, high)* `test_audience_byte_identity` as a fresh-start script misses the pre-pass-then-promote timeline (the one that produces `at`/provenance divergence). Mandate a "pre-pass first → promote all → compare vs Intermediate-direct" fixture in the M5 gate.
+
+## Requirements Coverage Matrix — R1
+
+| FR | Plan milestone(s) | Coverage |
+|----|-------------------|----------|
+| FR-1/2/3 | M1 | Covered (FR-2 has schema-bump tension — R1-F1) |
+| FR-4 | M5 | Covered but NARROW (R1-F2/R2-F21) |
+| FR-5 | M3 | Covered |
+| FR-6 | M2 | Covered (conditional bump + backward-compat — R1-F1/R2-F25) |
+| FR-7/8 | M3 | Covered (extend lint per R1-F5) |
+| FR-9/10 | M4 | Covered but UNDER-SPECIFIED (R1-F3/R2-F23) |
+| FR-11 | M3 | Covered (idempotency gap — R1-F4) |
+| FR-12 | M5 | Covered; `test_confirm_all_equals_single` missing from plan (R1-S3); "reuses"→"extends" (R2-F28) |
+| FR-13 | M2 | Covered; non-regression test missing (R2-F26) |
+| FR-14 | M5 | Covered; `persona`→`audience` key (R2-F27) |
+| **FR-15** | **none → map to M3/M4** | **GAP (R1-S1)** |
+| **FR-16** | **none → map to M3** | **GAP (R1-S1) + mechanics undefined (R2-F24)** |
+| **FR-17** | **none → map to M2→M3** | **GAP (R1-S1) + parity binding (R1-F6)** |
+| **FR-18** | M5 (partial) | **PARTIAL — dry-run/preview not a gate (R1-S1)** |
+
+No orphan plan steps. All gaps are one-directional (v0.4 panel FRs unmapped because the plan is still keyed to v0.2).

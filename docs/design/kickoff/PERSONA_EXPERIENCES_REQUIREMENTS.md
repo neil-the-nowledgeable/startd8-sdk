@@ -1,6 +1,6 @@
 # Kickoff Persona Experiences — Requirements
 
-**Version:** 0.5 (Audience naming resolved; panel findings folded)
+**Version:** 0.6 (Post-CRP hardening — see §3.1 + Appendix A)
 **Date:** 2026-07-06
 **Status:** Draft
 **Owners:** kickoff kernel (`concierge/`, `kickoff_experience/`)
@@ -238,10 +238,74 @@ ends of one slider.
   is prohibited — it is indistinguishable from the tool making choices for the user.
 
 ### Surface parity (CLI / TUI / web)
-- **FR-14** *(sited — OQ-6)* Persona applies identically across CLI, TUI, and web by adding a
-  `persona` block to `build_guided_view` and a `persona` key to `guided_parity_digest`
-  (alongside the existing `posture` block). The existing byte-equal parity test enforces lockstep;
-  `KickoffState` is **not** touched.
+- **FR-14** *(sited — OQ-6; §0.3-corrected)* Audience applies identically across CLI, TUI, and web by
+  adding an **`audience`** block to `build_guided_view` and an **`audience`** key to
+  `guided_parity_digest` (alongside the existing `posture` block). The existing byte-equal parity test
+  enforces lockstep; `KickoffState` is **not** touched. Acceptance: `grep -n '\bpersona\b'` on the new
+  code in `concierge_view.py` returns 0 (§0.3 canonical term).
+
+## 3.1 Post-CRP Amendments (v0.6)
+
+> Triaged the R1 (opus) + R2 (sonnet adversarial) rounds in Appendix C. All accepted (they falsify
+> real claims or close real gaps); dispositions in Appendix A. These amend the FRs above.
+
+- **A-FR4 (R1-F2, R2-F20/F21/F22) — the byte-identity guarantee is redefined precisely.** Split the
+  two artifacts: **`inputs/*.yaml` = byte-identical** across audiences (they carry no metadata);
+  **`confirmed.yaml` = VALUE-identical** per `value_path`, explicitly **excluding** the metadata
+  fields `at`, `mode`, and `provenance` (which legitimately differ by path). `test_audience_byte_identity`
+  MUST (a) assert full-byte equality of `inputs/`, and (b) assert value-only equality of the ledger
+  after normalizing out `at`/`mode`/`provenance` and audience-default-only entries. Add a **second
+  golden**: a *partial-explicit* fixture (decide subset S explicitly, let the rest audience-default
+  under Beginner) AND a *pre-pass-then-promote* timeline fixture (Beginner pre-pass persists, then all
+  fields promoted via `kickoff confirm`) — both compared against an Intermediate-direct run. This is
+  the timeline the fresh-start script misses.
+- **A-FR6 (R1-F1, R2-F25, R1-S4) — conditional schema bump + backward-compat contract.** The ledger
+  stays `kickoff.confirmed.v1` until the **first `audience-default` provenance is actually written**;
+  only then is it rewritten `v2`. So a user who never sets an audience gets **zero** file change
+  (preserves FR-2). Provenance-absence is normative: **absence of `provenance` ⇒ explicit/human** — so
+  v1 files and pre-existing entries route to `confirmed`, never `audience_defaulted`. Add the
+  compatibility table to the spec: {v2-code×v1-file → load clean, treat as explicit; v2-code×mixed →
+  valid; **v1-code×v2-file (rollback) → v1 reader must not crash: unknown provenance keys are ignored,
+  schema-version mismatch tolerated read-only**}. Name which writes trigger the bump (only an
+  audience-default write).
+- **A-FR6b (R2-F22) — explicit promotion strips provenance.** `kickoff confirm <vp>` promoting an
+  audience-default to explicit MUST remove the `provenance` key (and set `mode: set`), so the resulting
+  entry is **indistinguishable** from a direct explicit confirmation — otherwise A-FR4 value-equality
+  is impossible.
+- **A-FR9 (R1-F3, R2-F23) — disclosure is co-located per-region variants, and the NR-1 claim is made
+  honest.** Beginner plain-language is **substitutive** (rewords the same concept inline), which an
+  append-only `<!-- PLAIN -->` block cannot do. Model each disclosure unit as a **co-located region
+  carrying up to three tier variants** (compact/light/expanded); the loader selects one; a region
+  lacking `expanded` **degrades to `light`**. NR-1 is restated honestly: single-source means *one
+  file*, but the in-file variants can still drift, so the guard is **structural + a superset/freshness
+  test**, NOT a mere file-count check: a lint MUST assert every region resolves at all three tiers AND
+  that `tier=expanded` is a content-superset of `tier=light` (or each variant carries a checksum of the
+  light prose it shadows). *(This is the single largest post-CRP change; it converts FR-9 from an
+  under-specified claim into an enforceable one.)*
+- **A-FR12 (R2-F28) — "extends", not "reuses".** FR-18's pre-commit preview forces a **two-phase
+  collect-all-plans-then-apply** shape the interleaved single-field path lacks. FR-12 therefore
+  **extends** (not reuses) the `--as-is` machinery; `test_confirm_all_equals_single` asserts the
+  preview is a **no-op on ledger bytes** vs N single confirms.
+- **A-FR13 (R2-F26) — omit the empty bucket + M2 gate.** `domain_confirmation` MUST **omit** the
+  `audience_defaulted` key entirely when zero (not emit `audience_defaulted: 0`), else `assess` output
+  regresses for every non-audience user. Add named test **`test_assess_no_audience_regression`** as an
+  **M2 merge gate** (not M5).
+- **A-FR16 (R1-F4, R2-F24) — mechanics fully specified.** "Expand surface now" **deletes** the
+  audience-default ledger entries (the only cross-session-viable op) and re-prompts them in the current
+  walk. If the user quits mid-expand, the abandoned fields are `awaiting` (documented; a Beginner
+  re-entry re-runs the pre-pass and re-shields them, an Intermediate re-entry prompts them). The
+  pre-pass MUST record fields **un-shielded this project** and **skip re-shielding them**; a switch to a
+  **broader-surface audience re-opens** audience-defaulted fields (Advanced promises all defaults
+  visible). Pre-pass is **idempotent**: a second run writes nothing and never bumps an existing `at`.
+- **A-FR17 (R1-F6) — parity-bound.** The live in-walk provenance indicator flows through
+  `build_guided_view` + `guided_parity_digest`, so the byte-equal parity test enforces it across
+  CLI/TUI/web (not a CLI-only affordance).
+- **A-OQ9 (R1-F5) — shieldability criterion (resolves OQ-9).** A field is **shieldable only if it has
+  a safe, universally-reasonable, reversible default**; fields without one are **always prompted, even
+  for Beginner**. `lint_config` validates every `AUDIENCE_PROFILES` entry against a safe-default
+  allowlist. (Granularity: domain-level default *sets*, field-level shieldability gate.)
+- **A-OQ8 — resolved** by the A-FR6 compatibility table (encoding = additive `provenance` field; bump
+  conditional; rollback tolerated read-only).
 
 ## 4. Non-Requirements
 
@@ -313,7 +377,16 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F2, R2-F20/F21/F22 | FR-4 byte-identity under-proven (metadata leak, pre-pass-then-promote timeline) | opus+sonnet | Applied §3.1 A-FR4: split inputs=byte / ledger=value-only; 2 new goldens | 2026-07-06 |
+| R1-F1, R2-F25, R1-S4 | Unconditional v2 bump breaks FR-2; backward-compat unspecified | opus+sonnet | Applied §3.1 A-FR6: conditional bump + compat table + rollback | 2026-07-06 |
+| R2-F22 | Provenance not stripped on explicit promotion | sonnet | Applied §3.1 A-FR6b | 2026-07-06 |
+| R1-F3, R2-F23 | FR-9 in-file variant still forks; NR-1 claim unenforced | opus+sonnet | Applied §3.1 A-FR9: co-located tier variants + superset lint | 2026-07-06 |
+| R2-F28 | FR-12 "reuses" wrong; FR-18 forces two-phase | sonnet | Applied §3.1 A-FR12: "extends" + preview no-op test | 2026-07-06 |
+| R2-F26 | FR-13 non-regression untested; `audience_defaulted:0` leaks | sonnet | Applied §3.1 A-FR13: omit empty key + M2 gate test | 2026-07-06 |
+| R2-F27 | FR-14 `persona` key violates §0.3 | sonnet | Applied inline to FR-14 (→`audience` key + grep gate) | 2026-07-06 |
+| R1-F4, R2-F24 | FR-16 mechanics undefined; re-shield hazard | opus+sonnet | Applied §3.1 A-FR16 | 2026-07-06 |
+| R1-F6 | FR-17 not parity-bound | opus | Applied §3.1 A-FR17 | 2026-07-06 |
+| R1-F5 | OQ-9 needs shieldability criterion | opus | Applied §3.1 A-OQ9 (resolves OQ-9) | 2026-07-06 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -322,3 +395,26 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | (none yet) |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — general-purpose (opus) — 2026-07-06
+
+- **R1-F1** *(FR-6/FR-2/OQ-8, Data, high)* Unconditional `v1→v2` schema bump rewrites the schema line in `confirmed.yaml` for users who never touch audience → breaks FR-2 byte-identity at that line. Keep `v1` until the FIRST `audience-default` is written; only then rewrite `v2`.
+- **R1-F2** *(FR-4, Validation, high)* The golden drives an all-explicit script → the pre-pass is a no-op, so byte-identity is tautological and the real leak (audience-default entries perturbing YAML ordering of sibling entries) is never exercised. (a) State the comparison is VALUES-only, excluding `at`/provenance; (b) add a partial-explicit golden (decide subset S, let remainder audience-default under Beginner, assert S's values byte-identical after normalizing out metadata).
+- **R1-F3** *(FR-9/NR-1, Architecture, high)* The `<!-- PLAIN -->` model is additive, but real beginner plain-language is SUBSTITUTIVE (rewords the same concept inline) — an appended region can't reword inline text, so the projection may be structurally unable to hold. Specify additive-vs-substitutive; for substitution mandate per-region co-located variants (each concept carries compact/light/expanded; loader selects; missing expanded→degrade to light) + a lint asserting every region resolves at all 3 tiers.
+- **R1-F4** *(FR-11/FR-16/OQ-10, Risks, high)* Pre-pass skips ledgered fields, but FR-16 un-ledgers (back to awaiting) → a later pre-pass run RE-SHIELDS exactly what the user un-shielded, silently reversing "show me everything." Require the pre-pass to skip fields un-shielded this project/session; widening audience (Beginner→Advanced) must RE-OPEN audience-defaulted fields.
+- **R1-F5** *(OQ-9/FR-8, Data, medium)* Silently writing a default for a project-specific field the Beginner never saw ships a wrong invisible decision. A field is shieldable ONLY if it has a safe, universally-reasonable, reversible default; else always prompted even for Beginner. `lint_config` validates every `AUDIENCE_PROFILES` entry against a safe-default allowlist.
+- **R1-F6** *(FR-17/FR-14, Interfaces, medium)* FR-17's live provenance indicator isn't tied to the parity contract → CLI-only indicator diverges from web/TUI. Flow it through `build_guided_view`/`guided_parity_digest` so the byte-equal parity test enforces it across surfaces.
+
+#### Review Round R2 — claude-sonnet-4-6 (adversarial) — 2026-07-06
+
+- **R2-F20** *(FR-4, Validation, high)* "values byte-identical" is ambiguous: does `test_audience_byte_identity` compare full `yaml.dump` bytes or only each `value_path`'s `value` field? If field-extracted, entries with different `at`/`mode`/`provenance` still pass — proving nothing. Make the assertion explicit.
+- **R2-F21** *(FR-4, Risks, critical)* Concrete break: Beginner pre-pass writes `{value:X, at:T0, mode:audience-default}`; user later promotes to explicit — does promotion set `at:T1` or preserve `at:T0`? Intermediate path has `at:T1`. A fresh-start fixed script never runs the pre-pass first, so the golden MISSES this. Add a "pre-pass-then-promote" timeline fixture.
+- **R2-F22** *(FR-6/FR-13, Data, high)* Is the `provenance` field STRIPPED on explicit promotion? If preserved as history, promoted entry `{...,provenance:audience-default:beginner}` ≠ Intermediate entry `{...}` → not byte-identical. Mandate promotion strips/overwrites provenance so it's indistinguishable from a direct explicit confirm.
+- **R2-F23** *(FR-9/NR-1, Architecture, high)* The same-doc region doesn't prevent a fork — it inlines one with NO freshness guarantee. Fix "light" prose, and the `<!-- PLAIN -->` variant silently goes stale; the file-count lint passes. Either mandate a superset/checksum test or honestly downgrade the NR-1-compliance claim to "authoring discipline + structural lint."
+- **R2-F24** *(FR-16, Risks, high)* "converts back to awaiting (or re-prompts)" — the "or" hides two incompatible mechanics. Only ledger-delete survives session boundaries, but if the user quits before re-confirming, fields are in `awaiting` limbo → next Intermediate session prompts for un-shielded jargon. Also mid-session `domain_confirmation` shows 0 `audience_defaulted` while incomplete. Specify the exact op + abandoned-expand ledger state.
+- **R2-F25** *(FR-6/OQ-8, Data, critical)* "backward-tolerant load" asserted not specified. Give a table code-version × file-version → behavior, incl. mixed-version files and the ROLLBACK case (v1 code reads v2 file) — the most dangerous, unaddressed. Specify exactly which writes trigger the bump (else 100% of M2 users get a surprise v2 upgrade).
+- **R2-F26** *(FR-13, Validation, high)* No named test for the non-regression case. Naive impl always includes `audience_defaulted:0` → `yaml.dump` emits a new key for every non-audience user, breaking display byte-identity. Add `test_assess_no_audience_regression` as an M2 merge gate; omit the key entirely when empty.
+- **R2-F27** *(FR-14/§0.3, Interfaces, high)* FR-14 adds a `persona` key to `build_guided_view`/`guided_parity_digest` — a NEW code symbol named `persona`, violating the §0.3 canonical rule that resolved OQ-12. Rename to `audience`. Acceptance: grep `\bpersona\b` on new code in `concierge_view.py` returns 0.
+- **R2-F28** *(FR-12/FR-18, Interfaces, high)* FR-18's pre-commit preview forces collect-ALL-plans-then-apply; the single-field path interleaves plan+apply. So FR-12 "reuses" is wrong — the batch path needs a NEW two-phase collect-then-apply pattern. Say "extends" not "reuses"; ensure the preview is a no-op on ledger bytes for `test_confirm_all_equals_single`.
+
+**Endorsements (cross-reviewer, raise triage priority):** R1-F2≡R2-F20/F21 (FR-4 under-proven); R1-F1≡R2-F25 (conditional bump/backward-compat); R1-F3≡R2-F23 (FR-9 fork not actually avoided); R2-F26 (FR-13 untested regression); R2-F27≡plan-S2 (FR-14 `persona` key violates §0.3).
