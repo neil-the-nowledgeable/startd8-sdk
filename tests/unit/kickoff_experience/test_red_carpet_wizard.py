@@ -218,3 +218,40 @@ def test_driver_no_progress_guard_offers_friction():
         no_progress_limit=2, max_steps=5,
     )
     assert any("stuck on" in ln for ln in lines)
+
+
+# ── Regression: the `budgets.per_pipeline_run = 'REVIEW'` infinite re-proposal loop ───────────────
+# A confirmed capture that does NOT advance the gap (writing the "REVIEW" placeholder leaves the field
+# flagged "to review") was re-offered every pass until max_steps=100. The loop-guard offers each
+# distinct edit at most once, so the loop makes progress or terminates.
+
+
+def test_driver_does_not_reloop_on_an_applied_capture():
+    from startd8.kickoff_experience.proposals import ProposedAction
+
+    prop = ProposedAction(
+        "capture", {"value_path": "budgets.per_pipeline_run", "value": "REVIEW"}, id="p1"
+    )
+    action = WizardAction(
+        "value_inputs", "Per-pipeline-run budget — currently a default", "a confirmed value",
+        "capture", proposal=prop,
+    )
+    applies = {"n": 0}
+
+    def on_proposal(a):
+        applies["n"] += 1
+        return _Outcome(ok=True)   # write "succeeds" but the gap never clears (the bug's premise)
+
+    lines = []
+    steps = run_red_carpet_driver(
+        banner="B",
+        build_state=lambda: _state(schema=False),   # never completes → the loop would run forever
+        prepopulate=lambda s: [action],
+        read_input=lambda p: "",
+        emit_line=lines.append,
+        on_proposal=on_proposal,
+        max_steps=100,
+    )
+    # Without the guard this applied 100 times; with it, exactly once, then the loop terminates.
+    assert applies["n"] == 1, f"re-proposed {applies['n']}× (expected 1 — loop-guard failed)"
+    assert steps < 5
