@@ -166,14 +166,29 @@ def _render_assess(result: dict) -> None:
                 console.print(f"  [yellow]⚠ merge:[/yellow] {w.get('message') or w.get('key') or w}")
             console.print("  [dim]full file-by-file plan →[/dim] [cyan]startd8 wireframe[/cyan]")
 
-        blockers = cascade.get("blockers") or []
-        if blockers:
-            console.print("\n[bold]Blocking next step[/bold]:")
-            for b in blockers:
-                console.print(f"  • {b['section']} ([yellow]{b['status']}[/yellow]): {b['consequence']}")
-                cmd = b.get("next_command")
-                if cmd:
-                    console.print(f"      → next: [cyan]{cmd}[/cyan]")
+        # Blocker reframe (FR-3): HARD blockers (must fix) and OPTIONAL next steps are two honestly-
+        # different tiers — an un-authored `pages`/`content` is NOT "blocking" a build.
+        hard = cascade.get("hard_blockers") or []
+        if hard:
+            console.print("\n[bold red]Blocking[/bold red] (invalid manifest — fix to build):")
+            for b in hard:
+                console.print(f"  • {b['section']} ([red]{b['status']}[/red]): {b['consequence']}")
+                if b.get("next_command"):
+                    console.print(f"      → fix: [cyan]{b['next_command']}[/cyan]")
+        blocked_gen = cascade.get("blocked_generators") or {}
+        if cascade.get("buildable"):
+            console.print("\n[green]Ready to build[/green] — the $0 cascade can generate now.")
+        elif blocked_gen:
+            console.print("\n[bold]Not yet buildable[/bold] — resolve the root, then everything downstream follows:")
+            for gen, reason in blocked_gen.items():
+                console.print(f"  • {gen}: [yellow]{reason}[/yellow]")
+        optional = cascade.get("optional_next_steps") or []
+        if optional:
+            console.print("\n[bold]Optional next steps[/bold] (enrichments — the app builds without them):")
+            for b in optional:
+                console.print(f"  • {b['section']} ([dim]{b['status']}[/dim]): {b['consequence']}")
+                if b.get("next_command"):
+                    console.print(f"      → [cyan]{b['next_command']}[/cyan]")
 
     # FR-5: the handoff surface — the single exact next command to move forward.
     headline = result.get("next_command")

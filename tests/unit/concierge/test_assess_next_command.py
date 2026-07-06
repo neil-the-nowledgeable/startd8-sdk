@@ -14,6 +14,7 @@ import pytest
 
 from startd8.concierge import build_assess, handle_concierge_tool
 from startd8.concierge.core import (
+    CMD_GENERATE_BACKEND,
     CMD_GENERATE_CONTRACT_PROMOTE,
     CMD_KICKOFF_ASSESS,
     CMD_KICKOFF_INSTANTIATE,
@@ -25,6 +26,7 @@ from startd8.concierge.core import (
 
 # The commands this milestone is allowed to emit. Each is verified resolvable below.
 _EMITTABLE_COMMANDS = {
+    CMD_GENERATE_BACKEND,
     CMD_GENERATE_CONTRACT_PROMOTE,
     CMD_SCREENS_SUGGEST,
     CMD_SCREENS_SUGGEST_ROLES,
@@ -85,8 +87,13 @@ def _resolve_in_registry(command: str) -> bool:
 
     tokens = command.split()
     assert tokens[0] == "startd8"
-    # Drop option flags (`--promote`) — only subcommand path tokens matter for resolution.
-    path = [t for t in tokens[1:] if not t.startswith("-")]
+    # The subcommand path is the tokens BEFORE the first option flag; everything from the first
+    # `-`/`--` on is options + their values (e.g. `--schema prisma/schema.prisma`), not path.
+    path = []
+    for t in tokens[1:]:
+        if t.startswith("-"):
+            break
+        path.append(t)
 
     def _walk(typer_app, remaining):
         if not remaining:
@@ -121,20 +128,16 @@ def test_legacy_red_carpet_does_not_resolve_under_kickoff():
 # ── integration: assess attaches next_command to blockers + a headline ──────────────────────────
 
 
-def test_assess_blockers_carry_next_command(tmp_path):
-    out = handle_concierge_tool("assess", tmp_path)
-    cascade = out["cascade"]
+def test_assess_reframes_bare_project_as_not_buildable(tmp_path):
+    # Blocker reframe: a bare project has NO hard blockers (nothing is *invalid*), but it is NOT
+    # buildable — the schema is missing, so backend/views generators are blocked. Optional next
+    # steps are suppressed while not buildable (they're downstream of the missing schema).
+    cascade = handle_concierge_tool("assess", tmp_path)["cascade"]
     assert cascade["status"] == "ok"
-    blockers = cascade.get("blockers") or []
-    # A bare project yields blockers; each blocker exposes a next_command key (value may be None
-    # for sections the map does not cover, but the key is always present — a stable schema).
-    assert blockers, "expected a bare project to produce cascade blockers"
-    for b in blockers:
-        assert "next_command" in b
-        cmd = b["next_command"]
-        if cmd is not None:
-            assert cmd in _EMITTABLE_COMMANDS
-            assert _resolve_in_registry(cmd)
+    assert cascade["hard_blockers"] == []
+    assert cascade["buildable"] is False
+    assert cascade["blocked_generators"]  # backend/views blocked on the schema
+    assert cascade["optional_next_steps"] == []
 
 
 def test_assess_emits_headline_next_command(tmp_path):
@@ -147,16 +150,24 @@ def test_assess_emits_headline_next_command(tmp_path):
     assert _resolve_in_registry(headline)
 
 
-def test_headline_points_at_first_commanded_blocker():
-    cascade = {
-        "status": "ok",
-        "blockers": [
-            {"section": "Services", "next_command": None},
-            {"section": "Pages & Nav", "next_command": CMD_SCREENS_SUGGEST},
-            {"section": "Forms", "next_command": CMD_KICKOFF_INSTANTIATE},
-        ],
-    }
-    assert _headline_next_command(cascade) == CMD_SCREENS_SUGGEST
+def test_headline_hard_blocker_wins():
+    # A hard blocker (invalid manifest) that names a command takes priority.
+    cascade = {"status": "ok", "buildable": False,
+               "hard_blockers": [{"section": "App", "next_command": CMD_KICKOFF_INSTANTIATE}]}
+    assert _headline_next_command(cascade) == CMD_KICKOFF_INSTANTIATE
+
+
+def test_headline_buildable_points_at_build():
+    # Reframe: buildable (no hard blockers, all generators ready) → BUILD, not an optional gap.
+    cascade = {"status": "ok", "hard_blockers": [], "buildable": True, "blocked_generators": {}}
+    assert _headline_next_command(cascade) == CMD_GENERATE_BACKEND
+
+
+def test_headline_not_buildable_points_at_schema_root():
+    # Reframe: a blocked backend/views generator → the schema contract is the root (not pages).
+    cascade = {"status": "ok", "hard_blockers": [], "buildable": False,
+               "blocked_generators": {"backend": "blocked(missing schema.prisma)"}}
+    assert _headline_next_command(cascade) == CMD_GENERATE_CONTRACT_PROMOTE
 
 
 def test_headline_falls_back_to_assess_on_inputs_error():
