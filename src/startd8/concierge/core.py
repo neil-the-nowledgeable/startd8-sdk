@@ -438,9 +438,16 @@ def _assess_deployment(root: Path) -> Dict[str, Any]:
 
 
 def _assess_kickoff_inputs(root: Path) -> Dict[str, Any]:
-    """Per kickoff input domain: present? and its declared provenance (honest, not graded)."""
+    """Per kickoff input domain: present? and its declared provenance (honest, not graded).
+
+    Present domains that have confirmable (defaulted) fields also carry an honest per-field
+    ``confirmation`` count read from PROJECT STATE (the confirmation ledger + inputs), never the
+    static template — so ``awaiting`` genuinely decreases as fields are confirmed (FR-3)."""
+    from .confirmation import domain_confirmation
+
     inputs_dir = root / "docs" / "kickoff" / "inputs"
     out: Dict[str, Any] = {"inputs_dir": _rel(inputs_dir, root), "domains": {}}
+    confirmation = domain_confirmation(root)   # {slug: {confirmable, confirmed, awaiting, stale}}
     for domain in KICKOFF_INPUT_DOMAINS:
         f = inputs_dir / f"{domain}.yaml"
         if not f.is_file():
@@ -453,7 +460,10 @@ def _assess_kickoff_inputs(root: Path) -> Dict[str, Any]:
         except (OSError, yaml.YAMLError) as exc:
             out["domains"][domain] = {"status": "invalid", "error": str(exc)}
             continue
-        out["domains"][domain] = {"status": "present", "provenance_default": provenance}
+        entry: Dict[str, Any] = {"status": "present", "provenance_default": provenance}
+        if domain in confirmation:
+            entry["confirmation"] = confirmation[domain]
+        out["domains"][domain] = entry
 
     # M2 (FR-13/FR-15, R1-F4/R2-F2): the coverage core is kernel-owned and imports NOTHING from
     # ``stakeholder_panel``. The old unconditional ``stakeholders`` domain injection (which pulled in

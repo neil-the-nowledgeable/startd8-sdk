@@ -154,7 +154,15 @@ def _render_assess(result: dict) -> None:
     for domain, info in result["kickoff_inputs"]["domains"].items():
         status = info.get("status")
         if status == "present":
-            console.print(f"  • {domain}: [green]present[/green] — provenance: {info.get('provenance_default')}")
+            conf = info.get("confirmation") or {}
+            tail = ""
+            if conf.get("confirmable"):
+                tail = (f"  ·  {conf.get('confirmed', 0)} of {conf['confirmable']} confirmed · "
+                        f"{conf.get('awaiting', 0)} awaiting")
+                if conf.get("stale"):
+                    tail += f" · [yellow]{conf['stale']} stale[/yellow]"
+            console.print(f"  • {domain}: [green]present[/green] — provenance: "
+                          f"{info.get('provenance_default')}{tail}")
         elif status == "absent":
             console.print(f"  • {domain}: [yellow]absent[/yellow]")
         else:
@@ -681,6 +689,46 @@ def kickoff_explain(
     _render_markdown(content)
 
 
+# --- Value-input confirmation: `kickoff confirm` (the honest replacement for the legacy wizard) ---
+# $0 kernel verb: capture a REAL value (or --as-is) into a defaulted field and record the decision in
+# the additive, committed ledger (docs/kickoff/confirmed.yaml). `kickoff assess` then shows the honest
+# awaiting/confirmed count. Never writes a sentinel; partial-failure is loud (see confirmation.py).
+def kickoff_confirm(
+    value_path: str = typer.Argument(
+        ...,
+        help="The field to confirm, e.g. build-preferences.yaml#/budgets.per_pipeline_run "
+             "(see `startd8 kickoff assess`).",
+    ),
+    value: Optional[str] = typer.Option(None, "--value", help="A real value to set and confirm."),
+    as_is: bool = typer.Option(
+        False, "--as-is", help="Confirm the current default value unchanged (no YAML value change)."
+    ),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the confirmation as JSON."),
+) -> None:
+    """Confirm a defaulted kickoff value-input ($0): set a real value (or `--as-is`) and record it."""
+    from .concierge.confirmation import ConfirmError, apply_confirm, build_confirm_plan
+
+    if (value is not None) == as_is:   # need exactly one of --value / --as-is
+        console.print("[red]kickoff confirm:[/red] provide exactly one of --value <v> or --as-is")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    mode = "as-is" if as_is else "set"
+    try:
+        plan = build_confirm_plan(project_root, value_path, value, mode=mode)
+        result = apply_confirm(project_root, plan)
+    except ConfirmError as exc:
+        console.print(f"[red]kickoff confirm:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    if json_out:
+        _emit_json({"schema": "kickoff.confirm.v1", "action": "confirm", **result})
+        return
+    console.print(
+        f"  [green]✓ confirmed[/green] {result['value_path']} = {result['value']!r} "
+        f"([dim]{result['mode']}[/dim]) — [dim]run[/dim] startd8 kickoff assess [dim]to see the count[/dim]"
+    )
+
+
 # --- M0b: the `startd8 kickoff` kernel surface ---------------------------------------------------
 # The kernel reuses the exact command bodies above under function-named verbs. `survey`/`assess`/
 # `log-friction` keep their names; `instantiate-kickoff`→`instantiate` and `derive-contract`→`derive`
@@ -691,6 +739,8 @@ kickoff_kernel_app.command("survey")(concierge_survey)
 kickoff_kernel_app.command("assess")(concierge_assess)
 # FR-5: the instructional surface (intro + inputs What/Why/Who). Read-only, $0.
 kickoff_kernel_app.command("explain")(kickoff_explain)
+# Value-input confirmation ($0): set/confirm a defaulted field; assess shows the honest count.
+kickoff_kernel_app.command("confirm")(kickoff_confirm)
 kickoff_kernel_app.command("instantiate")(concierge_instantiate)
 kickoff_kernel_app.command("log-friction")(concierge_log_friction)
 kickoff_kernel_app.command("derive")(concierge_derive_contract)
