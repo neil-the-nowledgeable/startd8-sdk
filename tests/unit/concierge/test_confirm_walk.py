@@ -54,6 +54,16 @@ def test_awaiting_ordered_by_domain_ordinal(tmp_path):
     assert order == [_MODE, _OBS, _BUDGET]
 
 
+def test_awaiting_excludes_fields_whose_input_file_is_absent(tmp_path):
+    # Only build-preferences present ⇒ only its field is walkable (consistent with `assess`, and
+    # avoids offering a field whose confirm would always fail with the file missing).
+    inputs = tmp_path / "docs" / "kickoff" / "inputs"
+    inputs.mkdir(parents=True)
+    (inputs / "build-preferences.yaml").write_text(_FILES["build-preferences.yaml"], encoding="utf-8")
+    order = [f["value_path"] for f in awaiting_fields(tmp_path)]
+    assert order == [_BUDGET]   # _MODE / _OBS excluded (their files are absent)
+
+
 def test_field_prompt_lines_reuse_registry_and_grammar(tmp_path):
     _mk_project(tmp_path)
     field = next(f for f in awaiting_fields(tmp_path) if f["value_path"] == _BUDGET)
