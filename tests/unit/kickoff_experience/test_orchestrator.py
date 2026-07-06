@@ -57,7 +57,7 @@ def test_build_plan_greenfield_has_ranked_cost_labeled_steps(tmp_path):
 def test_plan_render_and_json_are_consistent(tmp_path):
     plan = build_kickoff_plan(_greenfield(tmp_path))
     text = plan.render()
-    assert "guided greenfield path" in text
+    assert "guided path" in text
     assert "read-only map" in text  # it never spends/writes
     d = plan.to_dict()
     assert d["steps"] and d["steps"][0]["rank"] == 1
@@ -77,7 +77,7 @@ def test_cli_kickoff_plan(tmp_path):
     proj = _greenfield(tmp_path)
     r = runner.invoke(kickoff_app, ["plan", "--project", str(proj)])
     assert r.exit_code == 0
-    assert "guided greenfield path" in r.stdout
+    assert "guided path" in r.stdout
     assert "screens suggest" in r.stdout  # the FR-MS-8 step is in the plan
 
 

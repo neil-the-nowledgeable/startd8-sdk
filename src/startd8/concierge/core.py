@@ -73,6 +73,10 @@ KICKOFF_INPUT_DOMAINS = ("business-targets", "observability", "conventions", "bu
 #   * app/manifest/form/flow     → `startd8 kickoff instantiate`        (scaffolds the input package)
 CMD_GENERATE_CONTRACT_PROMOTE = "startd8 generate contract --promote"
 CMD_SCREENS_SUGGEST = "startd8 screens suggest"
+# The PAGES gap needs the paid persona pass: the $0 `screens suggest` baseline only proposes composite
+# VIEWS from the schema, so once views exist a bare `suggest` dedupes to nothing. Non-entity pages come
+# only from `--roles`. (Keeps this headline in step with the guided playbook, which already emits it.)
+CMD_SCREENS_SUGGEST_ROLES = "startd8 screens suggest --roles"
 CMD_KICKOFF_INSTANTIATE = "startd8 kickoff instantiate"
 
 # The headline next-command when the cascade is not yet ready but no blocker names a more specific
@@ -95,9 +99,12 @@ def _blocker_command(section: str) -> str | None:
     s = section.lower()
     if any(k in s for k in ("schema", "data model", "contract")):
         return CMD_GENERATE_CONTRACT_PROMOTE
-    # The "screens" gap (pages/views) routes to the Manifest Suggester — the guided way to decide
-    # *which* screens the product needs.
-    if any(k in s for k in ("page", "view", "screen")):
+    # The "screens" gap routes to the Manifest Suggester. PAGES need the paid `--roles` pass (the $0
+    # baseline only authors views); VIEWS keep the $0 baseline. This keeps the assess headline in step
+    # with the guided playbook (which already distinguishes the two).
+    if "page" in s:
+        return CMD_SCREENS_SUGGEST_ROLES
+    if any(k in s for k in ("view", "screen")):
         return CMD_SCREENS_SUGGEST
     # Broader app/manifest/form/flow gaps route to `instantiate`, which scaffolds the honest starter
     # input-file package (app.yaml, manifests, forms, flows) at human privilege.
