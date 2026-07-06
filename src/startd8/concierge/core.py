@@ -73,7 +73,14 @@ KICKOFF_INPUT_DOMAINS = ("business-targets", "observability", "conventions", "bu
 #   * app/manifest/form/flow     → `startd8 kickoff instantiate`        (scaffolds the input package)
 CMD_GENERATE_CONTRACT_PROMOTE = "startd8 generate contract --promote"
 CMD_SCREENS_SUGGEST = "startd8 screens suggest"
+# The PAGES gap needs the paid persona pass: the $0 `screens suggest` baseline only proposes composite
+# VIEWS from the schema, so once views exist a bare `suggest` dedupes to nothing. Non-entity pages come
+# only from `--roles`. (Keeps this headline in step with the guided playbook, which already emits it.)
+CMD_SCREENS_SUGGEST_ROLES = "startd8 screens suggest --roles"
 CMD_KICKOFF_INSTANTIATE = "startd8 kickoff instantiate"
+# The BUILD command — the headline when a project is *buildable* (no hard blockers, all cascade
+# generators ready). Carries --schema so it runs as-shown (a bare `generate backend` errors).
+CMD_GENERATE_BACKEND = "startd8 generate backend --schema prisma/schema.prisma"
 
 # The headline next-command when the cascade is not yet ready but no blocker names a more specific
 # step — surface the assess report itself as the canonical read-only next move.
@@ -95,9 +102,12 @@ def _blocker_command(section: str) -> str | None:
     s = section.lower()
     if any(k in s for k in ("schema", "data model", "contract")):
         return CMD_GENERATE_CONTRACT_PROMOTE
-    # The "screens" gap (pages/views) routes to the Manifest Suggester — the guided way to decide
-    # *which* screens the product needs.
-    if any(k in s for k in ("page", "view", "screen")):
+    # The "screens" gap routes to the Manifest Suggester. PAGES need the paid `--roles` pass (the $0
+    # baseline only authors views); VIEWS keep the $0 baseline. This keeps the assess headline in step
+    # with the guided playbook (which already distinguishes the two).
+    if "page" in s:
+        return CMD_SCREENS_SUGGEST_ROLES
+    if any(k in s for k in ("view", "screen")):
         return CMD_SCREENS_SUGGEST
     # Broader app/manifest/form/flow gaps route to `instantiate`, which scaffolds the honest starter
     # input-file package (app.yaml, manifests, forms, flows) at human privilege.
@@ -402,17 +412,29 @@ def _assess_cascade(root: Path) -> Dict[str, Any]:
     except AssemblyInputsError as exc:
         return {"status": "inputs_error", "error": str(exc)}
 
-    # FR-5: each blocker carries the exact next command that advances it (or None where none exists).
-    blockers = [
-        {
-            "section": s.title,
-            "status": s.status,
-            "consequence": s.consequence,
-            "next_command": _blocker_command(s.title),
-        }
-        for s in plan.sections
-        if s.status in ("invalid", "not_defined") and s.consequence
-    ]
+    # Blocker reframe (FR-1): split the flat list into two honestly-different tiers.
+    #   * HARD BLOCKER — a section is `invalid` (a corrupt manifest that would break generation).
+    #   * OPTIONAL NEXT STEP — a section is `not_defined` while the project is BUILDABLE (all cascade
+    #     generators `ready`): the app builds fine; these are un-authored enrichments (custom pages,
+    #     content). When NOT buildable, `not_defined` sections are downstream of a blocked generator
+    #     (e.g. everything waits on a missing schema) — they are suppressed here, not paraded as
+    #     independent "blockers"; the headline points at the ROOT instead (_headline_next_command).
+    readiness = plan.readiness
+    buildable = bool(readiness) and all(str(v).strip() == "ready" for v in readiness.values())
+
+    def _entry(s) -> Dict[str, Any]:
+        return {"section": s.title, "key": s.key, "status": s.status,
+                "consequence": s.consequence, "next_command": _blocker_command(s.title)}
+
+    nonplanned = [s for s in plan.sections if s.status in ("invalid", "not_defined") and s.consequence]
+    hard_blockers = [_entry(s) for s in nonplanned if s.status == "invalid"]
+    optional_next_steps = (
+        [_entry(s) for s in nonplanned if s.status == "not_defined"] if buildable else []
+    )
+    blocked_generators = {g: v for g, v in readiness.items() if str(v).strip() != "ready"}
+    # Back-compat: `blockers` now = hard blockers only, so any un-updated consumer stops mislabeling
+    # optional gaps as "blocking" (it simply shows fewer/none) — the safe degradation.
+    blockers = hard_blockers
     # Wireframe↔kickoff merge (FR-B1): stop the lossy projection — carry through the rich plan data
     # the wireframe already computed, so the kickoff surfaces can show "what will be built" without a
     # separate `startd8 wireframe` run. All advisory (NR-2), reusing the single plan (no recompute).
@@ -426,7 +448,13 @@ def _assess_cascade(root: Path) -> Dict[str, Any]:
         "inventory_used": _rel(inventory, root) if yaml_paths else "(convention paths)",
         "shape": plan.shape,
         "status_counts": plan.status_counts,
-        "readiness": plan.readiness,
+        "readiness": readiness,
+        # Blocker reframe (FR-1): the two honest tiers + the buildable predicate + which generators
+        # (if any) block a build. `blockers` == `hard_blockers` for back-compat (see above).
+        "buildable": buildable,
+        "hard_blockers": hard_blockers,
+        "optional_next_steps": optional_next_steps,
+        "blocked_generators": blocked_generators,
         "blockers": blockers,
         # FR-B1 — the exact files the $0 cascade will write, every section's status+consequence, the
         # per-manifest derived status (the FR-A1 offerability signal), coverage + merge warnings.
@@ -449,18 +477,27 @@ def _assess_cascade(root: Path) -> Dict[str, Any]:
 
 
 def _headline_next_command(cascade: Dict[str, Any]) -> str | None:
-    """FR-5: the single most-actionable next command for the whole assess report.
+    """FR-2: the single most-actionable next command, reframed around *buildability*.
 
-    The first blocker that names a command wins (blockers are already leverage-ordered by the
-    wireframe machinery); if the cascade could not resolve its inputs, point at `assess` itself so
-    the human re-runs after fixing the assembly inputs; if everything is ready, no command is needed.
+    Priority: (1) inputs couldn't resolve → re-run `assess`; (2) a hard blocker (an INVALID manifest)
+    names a command → fix it; (3) the project is BUILDABLE (all generators ready) → **build** now,
+    not an optional gap; (4) NOT buildable → point at the ROOT — backend/views block on the schema
+    contract, a scaffold-only block on the app manifest; (5) otherwise nothing to do. An OPTIONAL
+    next step never captures the headline (it's advisory, surfaced separately).
     """
     if cascade.get("status") != "ok":
         return CMD_KICKOFF_ASSESS
-    for b in cascade.get("blockers") or []:
+    for b in cascade.get("hard_blockers") or []:  # invalid manifests — fix first
         if b.get("next_command"):
             return b["next_command"]
-    return None
+    if cascade.get("buildable"):
+        return CMD_GENERATE_BACKEND
+    blocked = set(cascade.get("blocked_generators") or {})
+    if not blocked:
+        return None
+    if "backend" in blocked or "views" in blocked:
+        return CMD_GENERATE_CONTRACT_PROMOTE  # the schema is the root — author/repair the contract
+    return CMD_KICKOFF_INSTANTIATE  # scaffold-only block → author the app manifest
 
 
 def handle_concierge_tool(action: str, project_root: str | Path, **params: Any) -> Dict[str, Any]:

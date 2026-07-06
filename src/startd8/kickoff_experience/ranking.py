@@ -69,6 +69,29 @@ def blocker_cta(readiness: Any) -> Optional[NextAction]:
     return NextAction(kind=KIND_BLOCKER, title=f"Resolve readiness blocker: {section}", detail=detail)
 
 
+def _readiness_map(readiness: Any) -> dict:
+    """The raw per-generator readiness map from a ``ReadinessView`` (``.readiness``) or a raw dict."""
+    if readiness is None:
+        return {}
+    m = getattr(readiness, "readiness", None)
+    if m is None and isinstance(readiness, Mapping):
+        m = readiness.get("readiness")
+    return dict(m or {}) if isinstance(m, Mapping) else {}
+
+
+def not_buildable_cta(readiness: Any) -> Optional[NextAction]:
+    """Blocker reframe: when a cascade GENERATOR is blocked (e.g. a missing/invalid schema), the
+    project isn't buildable yet — resolve the root before anything downstream matters. Returns
+    ``None`` when buildable (all generators ready), so callers fall through to the build-ready branch.
+    Distinct from ``blocker_cta`` (which fires on invalid-manifest hard blockers)."""
+    m = _readiness_map(readiness)
+    blocked = {g: v for g, v in m.items() if str(v).strip() != "ready"}
+    if not blocked:
+        return None
+    detail = "; ".join(f"{g}: {v}" for g, v in blocked.items())
+    return NextAction(kind=KIND_BLOCKER, title="Not yet buildable — resolve the root", detail=detail)
+
+
 def blocker_subject(cta_or_section: Any) -> Optional[str]:
     """Normalize a blocker to a shared subject (FR-NU-4), keying on the **root cause** — a schema-absent
     project fans out into Services/Entities/Forms/Views blockers whose consequence is "no contract → …",
@@ -120,6 +143,12 @@ def next_action(
     if cta is not None:
         return cta
 
+    # Tier 1.5 — not yet buildable (a generator is blocked, e.g. missing schema): resolve the root
+    # before the author gaps below, which are downstream of it.
+    nb = not_buildable_cta(readiness)
+    if nb is not None:
+        return nb
+
     # Tier 2 — author-actionable extraction gaps (already identity-sorted).
     blocked = state.blocked_fields()
     if blocked:
@@ -142,4 +171,7 @@ def next_action(
             value_path=f.value_path,
         )
 
-    return NextAction(kind=KIND_DONE, title="Kickoff is build-ready", detail="No blocking gaps remain.")
+    return NextAction(
+        kind=KIND_DONE, title="Ready to build",
+        detail="Run `startd8 generate backend` — the $0 cascade can generate the app now.",
+    )

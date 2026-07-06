@@ -354,7 +354,12 @@ def _next_action(package_state: str, readiness: Optional[dict]) -> Dict[str, str
     cta = ranking.blocker_cta(readiness)
     if cta is not None:
         return cta.to_dict()
-    return {"kind": "ready", "title": "Kickoff is build-ready", "detail": "No blocking gaps remain."}
+    # Blocker reframe: a blocked generator (e.g. missing schema) → not-yet-buildable, before "ready".
+    nb = ranking.not_buildable_cta(readiness)
+    if nb is not None:
+        return nb.to_dict()
+    return {"kind": "ready", "title": "Ready to build",
+            "detail": "Run `startd8 generate backend` — the $0 cascade can generate the app now."}
 
 
 def _friction_form() -> dict:
@@ -739,8 +744,11 @@ def render_guided_lines(view: Mapping[str, Any], *, deepen_flag: bool = True) ->
     domains = ((orient.get("kickoff_inputs") or {}).get("domains")) or {}
     for name, info in domains.items():
         lines.append(f"  • {name}: {info.get('status')}")
+    # Blocker reframe: these presence-based gates are OPTIONAL manifests to author (the app is
+    # buildable without them once generators are ready) — not "unmet" build blockers.
     unmet = guide.get("unmet_gates") or []
-    lines.append(f"  unmet gates: {', '.join(unmet) if unmet else '(none)'}")
+    if unmet:
+        lines.append(f"  optional manifests to author: {', '.join(unmet)}")
     # FR-B3 — surface "what will be built" from the same plan (the wireframe cross-ref for detail).
     _cascade = orient.get("cascade") or {}
     _paths = _cascade.get("claimed_paths") or []

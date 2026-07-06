@@ -134,13 +134,23 @@ class KickoffPlan:
         }
 
     def render(self) -> str:
-        lines: List[str] = ["Kickoff plan — the guided greenfield path", ""]
+        # "path" is deliberately shape-neutral — the guided conductor serves both greenfield and
+        # brownfield projects, so the header must not hardcode "greenfield".
+        lines: List[str] = ["Kickoff plan — the guided path", ""]
+        # Blocker reframe: "unmet gates" (the presence-based complete-app set) are *optional*
+        # manifests when the generators are already ready — the app is buildable without them.
+        gates = ", ".join(self.unmet_gates) if self.unmet_gates else "(none)"
+        buildable = self.readiness_score == 1.0
         if self.cascade_offerable:
-            lines.append("you are here: the $0 cascade is BUILD-READY (all gates met)")
-        else:
-            gates = ", ".join(self.unmet_gates) if self.unmet_gates else "(none)"
+            lines.append("you are here: the $0 cascade is COMPLETE — all manifests authored")
+        elif buildable:
             lines.append(
-                f"you are here: next stage = {self.next_stage or 'done'}; unmet gates = {gates}"
+                f"you are here: BUILDABLE now (generators ready); optional manifests not yet "
+                f"authored: {gates}"
+            )
+        else:
+            lines.append(
+                f"you are here: next stage = {self.next_stage or 'done'}; not yet authored: {gates}"
             )
         if self.readiness_score is not None:
             # Clarify the axis: this is the fraction of $0-cascade GENERATORS (scaffold/backend/views)
