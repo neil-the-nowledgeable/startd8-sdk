@@ -65,8 +65,10 @@ existing `build_confirm_plan`/`apply_confirm` path, persisting immediately (resu
 ## 2. Requirements
 
 **FR-1 — Interactive guided walk over awaiting fields.** Provide a $0/no-LLM interactive flow that
-iterates the **awaiting** confirmable fields (those in `confirmable_fields()` not in the ledger),
-one at a time, until the user finishes or quits.
+iterates the **awaiting** confirmable fields — those in `confirmable_fields()`, **whose input file is
+present**, and not yet in the ledger — one at a time, until the user finishes or quits. (The
+present-file gate keeps the walk consistent with `assess`'s awaiting count and avoids offering a field
+whose confirm would always fail because its input YAML is absent.)
 
 **FR-2 — Per-field context.** For each field, show: the `label`; the field's **domain** what/why (the
 `explain_input_domain(slug).question` one-liner, joined by domain slug — reuse, no new prose);
