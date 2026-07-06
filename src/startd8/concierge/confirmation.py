@@ -1,0 +1,257 @@
+# Copyright 2026 StartD8 Contributors
+# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+
+"""Kickoff value-input confirmation — the kernel-native, $0 way to confirm a defaulted value-input.
+
+Confirming a defaulted field (a) captures a *real* value into its input YAML via the existing
+replace-only splice (`kickoff_experience/capture.py`) and (b) records the decision in an **additive,
+committed ledger** at ``docs/kickoff/confirmed.yaml`` (OUTSIDE ``inputs/`` so no input scanner glob
+matches it). Confirmation is a *decision act, not a value-lock*: a later hand-edit does not
+un-confirm the field (staleness is surfaced separately). See
+``docs/design/kickoff/VALUE_INPUT_CONFIRMATION_{REQUIREMENTS,PLAN}.md``.
+
+The ledger IS the per-field confirmation state (per-field provenance does not exist in the domain
+YAMLs). Absent ledger ⇒ nothing confirmed ⇒ byte-identical to today.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import yaml
+
+from startd8.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+#: Committed ledger, OUTSIDE ``docs/kickoff/inputs/`` (so the ``inputs/*.yaml`` glob + survey/wireframe
+#: scanners never match it — OQ-6 decision). Version-controlled beside the inputs it annotates.
+LEDGER_REL = "docs/kickoff/confirmed.yaml"
+LEDGER_SCHEMA = "kickoff.confirmed.v1"
+
+#: A field is "confirmable" (worth a human decision) when its template provenance is a default.
+_CONFIRMABLE_PROVENANCE = frozenset({"estimate", "config-default"})
+VALID_MODES = ("set", "as-is")
+
+
+class ConfirmError(ValueError):
+    """A confirmation failure carrying a stable code (mirrors CaptureError/ConciergeError style)."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+# --- ledger IO (tolerant; absent/malformed ⇒ empty, never raises) -------------------------------
+
+
+def _ledger_path(project_root: str | Path) -> Path:
+    return Path(project_root) / LEDGER_REL
+
+
+def load_ledger(project_root: str | Path) -> Dict[str, dict]:
+    """The confirmed map ``{value_path: {value, at, mode}}``. ``{}`` if absent or malformed."""
+    path = _ledger_path(project_root)
+    if not path.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("kickoff confirmation ledger unreadable at %s: %s", path, exc)
+        return {}
+    confirmed = data.get("confirmed") if isinstance(data, dict) else None
+    return dict(confirmed) if isinstance(confirmed, dict) else {}
+
+
+def confirmed_value_paths(project_root: str | Path) -> set:
+    return set(load_ledger(project_root).keys())
+
+
+def _dump_ledger(confirmed: Dict[str, dict]) -> str:
+    return yaml.safe_dump(
+        {"schema": LEDGER_SCHEMA, "confirmed": confirmed}, sort_keys=True, allow_unicode=True
+    )
+
+
+# --- confirmable-field inventory (the SET is a template fact; confirmed-ness is project state) ----
+
+
+def _domain_slug(write_target_file: str) -> str:
+    return write_target_file[:-5] if write_target_file.endswith(".yaml") else Path(write_target_file).stem
+
+
+def confirmable_fields(config: Optional[Any] = None) -> List[dict]:
+    """Every defaulted, writable field a human can confirm — from the static SDK config (a template
+    fact). Each carries its domain slug, canonical ``value_path``, label, widget, and choices."""
+    from ..kickoff_experience.manifest import default_config
+
+    cfg = config or default_config()
+    out: List[dict] = []
+    for f in cfg.writable_fields():
+        if f.provenance_default not in _CONFIRMABLE_PROVENANCE or f.write_target is None:
+            continue
+        out.append({
+            "value_path": f.value_path,   # THE canonical key — also the ledger key (R1-S7)
+            "label": f.label,
+            "domain": _domain_slug(f.write_target.file),
+            "widget": f.widget,
+            "choices": list(f.choices),
+        })
+    return out
+
+
+def _scalar_eq(recorded: Any, on_disk: str) -> bool:
+    """Compare a ledger-recorded scalar to an on-disk scalar YAML-semantically, so numeric
+    normalization (e.g. ``"5.00"`` vs the parsed ``5.0``) is NOT reported as a hand-edit."""
+    if str(recorded) == on_disk:
+        return True
+    try:
+        return yaml.safe_load(str(recorded)) == yaml.safe_load(on_disk)
+    except yaml.YAMLError:
+        return False
+
+
+def _read_field_value(project_root: str | Path, file: str, dotted_key: str) -> Optional[str]:
+    """The on-disk scalar at ``file#/dotted_key`` (for as-is capture + stale detection), or None."""
+    path = Path(project_root) / "docs" / "kickoff" / "inputs" / file
+    if not path.is_file():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    node: Any = data
+    for part in dotted_key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return None if isinstance(node, (dict, list)) else str(node)
+
+
+def domain_confirmation(project_root: str | Path, config: Optional[Any] = None) -> Dict[str, dict]:
+    """Per-domain honest count from PROJECT STATE (ledger + inputs), not the static template.
+
+    ``{slug: {confirmable, confirmed, awaiting, stale}}``. Absent ledger ⇒ ``confirmed:0`` (all
+    awaiting). ``stale`` = confirmed fields whose on-disk value diverged from the recorded value
+    (a later hand-edit) — display only (FR-9), never auto-rewritten.
+    """
+    from ..kickoff_experience.manifest import default_config
+
+    cfg = config or default_config()
+    by_vp = {f.value_path: f for f in cfg.writable_fields()}
+    ledger = load_ledger(project_root)
+    out: Dict[str, dict] = {}
+    for field in confirmable_fields(cfg):
+        slug = field["domain"]
+        counts = out.setdefault(slug, {"confirmable": 0, "confirmed": 0, "awaiting": 0, "stale": 0})
+        counts["confirmable"] += 1
+        vp = field["value_path"]
+        entry = ledger.get(vp)
+        if entry is None:
+            counts["awaiting"] += 1
+            continue
+        counts["confirmed"] += 1
+        fdef = by_vp.get(vp)
+        if fdef is not None and fdef.write_target is not None:
+            on_disk = _read_field_value(project_root, fdef.write_target.file, fdef.write_target.key)
+            if on_disk is not None and not _scalar_eq(entry.get("value"), on_disk):
+                counts["stale"] += 1
+    return out
+
+
+# --- plan + apply --------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ConfirmPlan:
+    value_path: str
+    mode: str                 # "set" | "as-is"
+    value: str                # the value recorded in the ledger
+    at: str
+    capture_plan: Optional[Any]   # a CapturePlan for the value write, or None when mode == "as-is"
+    ledger_text: str          # the full ledger content to write
+
+
+def build_confirm_plan(
+    project_root: str | Path,
+    value_path: str,
+    value: Optional[str] = None,
+    *,
+    mode: str = "set",
+    timestamp: Optional[str] = None,
+    config: Optional[Any] = None,
+) -> ConfirmPlan:
+    """Plan a confirmation (no write). ``mode="set"`` captures *value*; ``mode="as-is"`` confirms the
+    current on-disk default unchanged. ``timestamp`` injectable for deterministic tests."""
+    from ..kickoff_experience.capture import CaptureError, build_capture_plan
+    from ..kickoff_experience.manifest import default_config
+
+    if mode not in VALID_MODES:
+        raise ConfirmError("bad_mode", f"mode must be one of {VALID_MODES}, got {mode!r}")
+    cfg = config or default_config()
+    field = cfg.field_by_value_path(value_path)
+    if field is None or field.write_target is None or field.provenance_default not in _CONFIRMABLE_PROVENANCE:
+        known = ", ".join(sorted(f["value_path"] for f in confirmable_fields(cfg)))
+        raise ConfirmError(
+            "unknown_field",
+            f"{value_path!r} is not a confirmable value-input field (known: {known})",
+        )
+    at = timestamp or date.today().isoformat()
+
+    capture_plan = None
+    if mode == "set":
+        if value is None:
+            raise ConfirmError("missing_value", "mode 'set' requires a value (--value)")
+        if field.choices and value not in field.choices:
+            raise ConfirmError("bad_value", f"value for {value_path!r} must be one of {field.choices}")
+        try:
+            capture_plan = build_capture_plan(project_root, value_path, value, config=cfg)
+        except CaptureError as exc:
+            raise ConfirmError(getattr(exc, "code", "capture_failed"), str(exc))
+        recorded = value
+    else:  # as-is
+        recorded = _read_field_value(project_root, field.write_target.file, field.write_target.key)
+        if recorded is None:
+            raise ConfirmError(
+                "missing_value", f"cannot confirm-as-is: no on-disk value at {value_path!r}"
+            )
+
+    ledger = load_ledger(project_root)
+    ledger[value_path] = {"value": recorded, "at": at, "mode": mode}
+    return ConfirmPlan(
+        value_path=value_path, mode=mode, value=recorded, at=at,
+        capture_plan=capture_plan, ledger_text=_dump_ledger(ledger),
+    )
+
+
+def apply_confirm(project_root: str | Path, plan: ConfirmPlan) -> Dict[str, Any]:
+    """Apply a confirmation: value write first (if any), then the ledger — with a defined
+    partial-failure contract. ``safe_write.apply_write_plan`` does NOT raise on a per-file error, so
+    we inspect the ``WriteResult`` and fail LOUD if the ledger did not land (never a silent
+    under-count). Raises :class:`ConfirmError` on any failure."""
+    from ..kickoff_experience.capture import CaptureError, apply_capture
+    from .safe_write import ACTION_OVERWRITE, PlannedWrite, SafeWriteError, apply_write_plan
+
+    root = Path(project_root)
+
+    # 1. Value write first — so a ledger entry never claims a write that didn't land.
+    if plan.capture_plan is not None:
+        try:
+            apply_capture(root, plan.capture_plan)
+        except CaptureError as exc:
+            raise ConfirmError(getattr(exc, "code", "capture_failed"), f"value not written: {exc}")
+
+    # 2. Ledger write (upsert = ACTION_OVERWRITE ⇒ needs force=True, else silent skip — R1-S8).
+    write = PlannedWrite(path=LEDGER_REL, content=plan.ledger_text, action=ACTION_OVERWRITE)
+    try:
+        result = apply_write_plan(root, [write], force=True)
+    except SafeWriteError as exc:
+        raise ConfirmError("ledger_refused", f"value written, confirmation NOT recorded: {exc}")
+    if not result.ok or LEDGER_REL not in result.written:
+        detail = (result.blocked or result.errors or result.skipped or [{"reason": "unknown"}])[0]
+        raise ConfirmError("ledger_not_recorded", f"value written, confirmation NOT recorded: {detail}")
+
+    return {"value_path": plan.value_path, "mode": plan.mode, "value": plan.value, "confirmed": True}

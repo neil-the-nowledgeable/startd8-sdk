@@ -382,38 +382,29 @@ def _instantiate_proposal() -> Any:
 
 
 def _prefill_actions(root: Path, domains_status: dict) -> List[WizardAction]:
-    """FR-WD-7 — pre-fill absent value-input fields via `capture`, ONLY for template-seeded keys on an
-    instantiated package. `build_capture_plan` validates the key exists (it replaces, cannot create);
-    a non-seeded key raises → we skip it (no failing proposal). Never imports project code."""
+    """FR-7 (value-input confirmation) — the legacy wizard NO LONGER writes the ``"REVIEW"`` sentinel
+    into typed fields. That sentinel corrupted numeric/typed fields and never converged (it wrote a
+    placeholder that couldn't clear the "to review" state → the PR #111 infinite loop). Instead, when
+    defaulted value-input fields remain, point the human at the kernel ``kickoff confirm`` verb, which
+    captures a *real* value and records confirmation honestly in the ledger. Never imports project code."""
     from .manifest import default_config
-    from .proposals import ProposedAction, _new_id
 
-    out: List[WizardAction] = []
     cfg = default_config()
-    try:
-        from .capture import build_capture_plan
-    except Exception:
-        return out
-    for f in cfg.writable_fields():
-        if f.write_target is None:
-            continue
-        # only offer a pre-fill where the field is a default worth confirming (estimate/config-default)
-        if f.provenance_default not in ("estimate", "config-default"):
-            continue
-        default_val = "REVIEW"   # placeholder value the human edits; capture validates round-trip
-        try:
-            plan = build_capture_plan(root, f.value_path, default_val, config=cfg)
-        except Exception:
-            continue   # unseeded key / missing file / round-trip fail → skip (FR-WD-7 precondition)
-        out.append(WizardAction(
-            "value_inputs",
-            found=f"{f.label} — currently a default",   # KICKOFF_UX FR-UX-10: plain, no value_path/provenance jargon
-            needed="a confirmed value",
-            action_kind="capture",
-            proposal=ProposedAction("capture", {"value_path": f.value_path, "value": default_val},
-                                    id=_new_id(), base_sha=plan.base_sha),
-        ))
-    return out
+    defaulted = [
+        f for f in cfg.writable_fields()
+        if f.write_target is not None and f.provenance_default in ("estimate", "config-default")
+    ]
+    if not defaulted:
+        return []
+    # A single, non-destructive pointer (a `command` action the human runs) — never a `capture`
+    # proposal with a sentinel value.
+    return [WizardAction(
+        "value_inputs",
+        found=f"{len(defaulted)} value input(s) still on a default",
+        needed="a confirmed value",
+        action_kind="command",
+        command="startd8 kickoff confirm <value_path> --value <v>   (see `startd8 kickoff assess`)",
+    )]
 
 
 def wizard_prepopulate(project_root: str | Path, inventory: dict, state: Any,
