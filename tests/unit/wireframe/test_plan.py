@@ -285,3 +285,20 @@ def test_merge_warnings_surface_in_plan(mini_root: Path) -> None:
     plan = build_wireframe_plan(inputs)
     assert len(plan.merge_warnings) == 1
     assert plan.input_provenance["views"]["source"] == "yaml"
+
+
+def test_default_nav_listed_even_without_pages_yaml(mini_root: Path) -> None:
+    """FR-13/20: the always-on default nav ships regardless of pages.yaml, so the plan must claim
+    its artifacts and the consequence must not falsely deny a site nav."""
+    plan = _plan(mini_root)
+    pages = plan.section("pages")
+    assert pages.status == Status.NOT_DEFINED  # no pages.yaml in a schema-only project
+    claimed = set(plan.claimed_paths)
+    for p in (
+        "app/nav.py", "app/templates/_nav.html",
+        "app/index.py", "app/templates/index.html",
+        "app/nav_store.py", "app/nav_admin.py", "app/templates/nav_admin.html",
+    ):
+        assert p in claimed, f"plan must claim the always-on nav artifact {p}"
+    # the stale "no ... site nav" consequence is gone
+    assert "no content pages or site nav" not in pages.consequence
