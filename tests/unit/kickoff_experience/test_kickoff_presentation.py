@@ -143,3 +143,48 @@ def test_render_wizard_step_consumes_state():
     lines = P.render_wizard_step(st)
     assert isinstance(lines, list) and lines
     assert not any("Insights" in ln or "Playbook" in ln for ln in lines)  # no status wall
+
+
+# ── Command-resolution guard (regression for the stale `kickoff red-carpet` next-action) ──────────
+# The headline's next-action command MUST resolve in the post-M0 CLI registry. Post-M0 the red-carpet
+# metaphor moved to `kickoff-legacy`, so `startd8 kickoff red-carpet …` errors "No such command
+# 'red-carpet'". This headline was the third emitter of that stale form (after core.py + the advisor).
+import pytest
+
+
+def _resolve_in_registry(command: str) -> bool:
+    """True if `command` (a `startd8 …` string) resolves to a registered Typer command."""
+    from startd8.cli import app
+
+    tokens = command.split()
+    assert tokens[0] == "startd8"
+    path = []
+    for t in tokens[1:]:
+        if t.startswith("-"):
+            break
+        path.append(t)
+
+    def _walk(typer_app, remaining):
+        if not remaining:
+            return True
+        head, *tail = remaining
+        for grp in typer_app.registered_groups:
+            if grp.name == head:
+                return _walk(grp.typer_instance, tail)
+        for cmd in typer_app.registered_commands:
+            if cmd.name == head and not tail:
+                return True
+        return False
+
+    return _walk(app, path)
+
+
+@pytest.mark.parametrize("command", [P.CMD_WIZARD, P.CMD_REVIEW, P.CMD_BUILD])
+def test_headline_command_resolves(command):
+    assert _resolve_in_registry(command), f"{command!r} does not resolve in the CLI registry"
+
+
+def test_no_headline_command_uses_the_demoted_bare_red_carpet():
+    # Regression: the bug the user hit — a bare `kickoff red-carpet` (must be `kickoff-legacy`).
+    for command in (P.CMD_WIZARD, P.CMD_REVIEW, P.CMD_BUILD):
+        assert "kickoff red-carpet" not in command

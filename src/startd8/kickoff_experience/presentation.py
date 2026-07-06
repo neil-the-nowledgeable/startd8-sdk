@@ -101,6 +101,16 @@ def _first_gap(spine: List[SpineNode]) -> Optional[SpineNode]:
     return None
 
 
+# The resolvable next-action commands. Post-M0 the red-carpet metaphor moved to `kickoff-legacy`, so a
+# bare `startd8 kickoff red-carpet …` NO LONGER RESOLVES ("No such command 'red-carpet'"). This is the
+# "every emitted command MUST resolve" trap that already bit concierge/core.py and red_carpet_advisor.py
+# (fix c2ab1864) — this headline was the third emitter still on the stale form. Single-sourced here so a
+# rename can't silently re-introduce it; a resolution guard test locks it in.
+CMD_WIZARD = "startd8 kickoff-legacy red-carpet --wizard"
+CMD_REVIEW = "startd8 kickoff-legacy red-carpet --verbose"
+CMD_BUILD = "startd8 generate backend"
+
+
 def headline(state: Any) -> dict:
     """The one-line status headline (FR-UX-4/7/8): the '% filled' meter (honest annotations), the plain
     'you are here', the single next action (derived from the spine — jargon-free by construction, not from
@@ -121,16 +131,16 @@ def headline(state: Any) -> dict:
     # so no jargon can leak in). Any incomplete state → the guided $0 wizard; done → Build.
     if greenfield:
         na_title = "Not started — begin with Your data"
-        cmd = "startd8 kickoff red-carpet --wizard"
+        cmd = CMD_WIZARD
     elif gap is not None:
         na_title = f"{'Start with' if gap.key == 'data_model' else 'Add'} {gap.plain_name}"
-        cmd = "startd8 kickoff red-carpet --wizard"
+        cmd = CMD_WIZARD
     elif buildable:
         na_title = "Ready to Build"
-        cmd = "startd8 generate backend"
+        cmd = CMD_BUILD
     else:
         na_title = "Review remaining gaps"
-        cmd = "startd8 kickoff red-carpet --verbose"
+        cmd = CMD_REVIEW
 
     # "% filled," honestly annotated (CRP R1-F3).
     label = "—" if pct is None else f"{pct}% filled"
