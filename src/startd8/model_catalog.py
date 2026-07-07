@@ -141,6 +141,16 @@ class Models:
     DEEPSEEK_REASONER = "deepseek:deepseek-reasoner"
 
     # ==========================================================================
+    # OpenRouter (US-billed OpenAI-compatible aggregator; see docs/design/openrouter-vendor/)
+    # ==========================================================================
+
+    # DeepSeek's models via OpenRouter (no DeepSeek billing); canonical slash ids passed through
+    OPENROUTER_DEEPSEEK_CHAT = "openrouter:deepseek/deepseek-chat"
+    OPENROUTER_DEEPSEEK_R1 = "openrouter:deepseek/deepseek-r1"
+    # Hosted 2.5-family sibling of the local qwen2.5-coder:7b (scale-controlled contamination compare)
+    OPENROUTER_QWEN_CODER_32B = "openrouter:qwen/qwen-2.5-coder-32b-instruct"
+
+    # ==========================================================================
     # Jetson Edge Cluster (self-hosted; opt-in, LAN; see docs/design/jetson-cluster-benchmark/)
     # ==========================================================================
 
@@ -382,6 +392,25 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         tier="balanced",
         capabilities={"text", "code", "reasoning"},
     ),
+    # OpenRouter (canonical slash ids passed through; provider="openrouter")
+    "deepseek/deepseek-chat": ModelInfo(
+        provider="openrouter",
+        model_id="deepseek/deepseek-chat",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "deepseek/deepseek-r1": ModelInfo(
+        provider="openrouter",
+        model_id="deepseek/deepseek-r1",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "qwen/qwen-2.5-coder-32b-instruct": ModelInfo(
+        provider="openrouter",
+        model_id="qwen/qwen-2.5-coder-32b-instruct",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
     # Jetson edge cluster (aliases; served on a self-hosted LAN endpoint)
     "mistral-7b-base": ModelInfo(
         provider="jetson",
@@ -549,6 +578,13 @@ def get_latest_model(
             "fast": Models.DEEPSEEK_CHAT,
             "mini": Models.DEEPSEEK_CHAT,
             "reasoning": Models.DEEPSEEK_REASONER,
+        },
+        "openrouter": {
+            "flagship": Models.OPENROUTER_DEEPSEEK_CHAT,
+            "balanced": Models.OPENROUTER_DEEPSEEK_CHAT,
+            "fast": Models.OPENROUTER_QWEN_CODER_32B,
+            "mini": Models.OPENROUTER_QWEN_CODER_32B,
+            "reasoning": Models.OPENROUTER_DEEPSEEK_R1,
         },
         "jetson": {
             "flagship": Models.JETSON_MISTRAL_BASE,
