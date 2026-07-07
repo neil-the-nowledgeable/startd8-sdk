@@ -30,7 +30,32 @@ logger = get_logger(__name__)
 #: Committed ledger, OUTSIDE ``docs/kickoff/inputs/`` (so the ``inputs/*.yaml`` glob + survey/wireframe
 #: scanners never match it — OQ-6 decision). Version-controlled beside the inputs it annotates.
 LEDGER_REL = "docs/kickoff/confirmed.yaml"
+#: The base (legacy) schema. An all-explicit ledger — every entry a human ``kickoff confirm`` — stays
+#: ``v1`` **byte-for-byte as before** (A-FR6d): the audience M2 change is a pure superset.
 LEDGER_SCHEMA = "kickoff.confirmed.v1"
+#: Emitted ONLY once the ledger holds at least one ``audience-default:*`` provenance entry (A-FR6).
+#: The bump is **conditional** so a user who never sets an audience sees no schema-line change (FR-2).
+LEDGER_SCHEMA_V2 = "kickoff.confirmed.v2"
+
+#: Per-decision provenance (M2, FR-6). It is an **additive, optional** ledger-entry field; its
+#: **absence means ``explicit``** (a human confirmation) — the fail-open default (A-FR6). A machine
+#: writer (the M3 pre-pass) stamps ``audience-default:<slug>``; ``kickoff confirm`` never stamps
+#: anything, so promoting an audience-default to explicit simply drops the field (A-FR6b).
+AUDIENCE_DEFAULT_PREFIX = "audience-default:"
+
+
+def audience_default_provenance(slug: str) -> str:
+    """The provenance string a machine writer stamps for an audience-default (``audience-default:<slug>``)."""
+    return f"{AUDIENCE_DEFAULT_PREFIX}{slug}"
+
+
+def _is_audience_default(entry: Any) -> bool:
+    """True iff a ledger entry was written by the audience pre-pass (has an ``audience-default:*`` provenance)."""
+    if not isinstance(entry, dict):
+        return False
+    prov = entry.get("provenance")
+    return isinstance(prov, str) and prov.startswith(AUDIENCE_DEFAULT_PREFIX)
+
 
 #: A field is "confirmable" (worth a human decision) when its template provenance is a default.
 _CONFIRMABLE_PROVENANCE = frozenset({"estimate", "config-default"})
@@ -71,8 +96,12 @@ def confirmed_value_paths(project_root: str | Path) -> set:
 
 
 def _dump_ledger(confirmed: Dict[str, dict]) -> str:
+    """Serialize the ledger, **schema-aware** (A-FR6d, R4-F35): the single writer emits ``v2`` only
+    when the map holds an ``audience-default:*`` entry, else ``v1`` — so an all-explicit ledger is
+    byte-for-byte identical to the pre-audience behavior (FR-2)."""
+    schema = LEDGER_SCHEMA_V2 if any(_is_audience_default(e) for e in confirmed.values()) else LEDGER_SCHEMA
     return yaml.safe_dump(
-        {"schema": LEDGER_SCHEMA, "confirmed": confirmed}, sort_keys=True, allow_unicode=True
+        {"schema": schema, "confirmed": confirmed}, sort_keys=True, allow_unicode=True
     )
 
 
@@ -150,9 +179,18 @@ def field_current_value(
 def domain_confirmation(project_root: str | Path, config: Optional[Any] = None) -> Dict[str, dict]:
     """Per-domain honest count from PROJECT STATE (ledger + inputs), not the static template.
 
-    ``{slug: {confirmable, confirmed, awaiting, stale}}``. Absent ledger ⇒ ``confirmed:0`` (all
-    awaiting). ``stale`` = confirmed fields whose on-disk value diverged from the recorded value
-    (a later hand-edit) — display only (FR-9), never auto-rewritten.
+    ``{slug: {confirmable, confirmed, awaiting, stale[, audience_defaulted]}}``. The buckets
+    ``confirmed`` / ``awaiting`` / ``audience_defaulted`` **partition** the confirmable set
+    (``confirmed + awaiting + audience_defaulted == confirmable``, A-FR13b): a ledger entry with an
+    ``audience-default:*`` provenance counts as ``audience_defaulted`` (a machine default the user
+    hasn't ratified), NOT as ``confirmed``. ``stale`` is an **overlay** (a subset flag, never a fourth
+    partition) counting either-bucket entries whose on-disk value diverged from the recorded value —
+    display only (FR-9), never auto-rewritten; an audience-default is thus ``audience_defaulted`` AND
+    possibly ``stale``, never double-counted.
+
+    **No-regression (A-FR13 / R2-F26):** when a domain has **no** audience-default entries, the
+    ``audience_defaulted`` key is **omitted entirely** — so the returned shape (and any serialization
+    of it) is byte-identical to the pre-audience behavior for every user who never sets an audience.
     """
     from ..kickoff_experience.manifest import default_config
 
@@ -162,19 +200,32 @@ def domain_confirmation(project_root: str | Path, config: Optional[Any] = None) 
     out: Dict[str, dict] = {}
     for field in confirmable_fields(cfg):
         slug = field["domain"]
-        counts = out.setdefault(slug, {"confirmable": 0, "confirmed": 0, "awaiting": 0, "stale": 0})
+        # ``_audef`` is an internal accumulator; it is promoted to (or dropped from) the public shape
+        # after the loop so the no-audience case stays byte-identical to today.
+        counts = out.setdefault(
+            slug, {"confirmable": 0, "confirmed": 0, "awaiting": 0, "stale": 0, "_audef": 0}
+        )
         counts["confirmable"] += 1
         vp = field["value_path"]
         entry = ledger.get(vp)
         if entry is None:
             counts["awaiting"] += 1
             continue
-        counts["confirmed"] += 1
+        if _is_audience_default(entry):
+            counts["_audef"] += 1
+        else:
+            counts["confirmed"] += 1
+        # stale overlay — applies to BOTH the confirmed and audience-defaulted buckets (A-FR13b).
         fdef = by_vp.get(vp)
         if fdef is not None and fdef.write_target is not None:
             on_disk = _read_field_value(project_root, fdef.write_target.file, fdef.write_target.key)
             if on_disk is not None and not _scalar_eq(entry.get("value"), on_disk):
                 counts["stale"] += 1
+    # Finalize: surface ``audience_defaulted`` only when non-zero (else keep today's exact shape).
+    for counts in out.values():
+        n = counts.pop("_audef")
+        if n:
+            counts["audience_defaulted"] = n
     return out
 
 
@@ -189,6 +240,10 @@ class ConfirmPlan:
     at: str
     capture_plan: Optional[Any]   # a CapturePlan for the value write, or None when mode == "as-is"
     ledger_text: str          # the full ledger content to write
+    #: Per-decision provenance (M2, FR-6): ``None`` ⇒ **explicit** (a human confirmation; no field
+    #: written), or ``audience-default:<slug>`` for a machine default (the M3 pre-pass). Absence in the
+    #: ledger entry is the fail-open "explicit" default (A-FR6).
+    provenance: Optional[str] = None
 
 
 def build_confirm_plan(
@@ -199,9 +254,15 @@ def build_confirm_plan(
     mode: str = "set",
     timestamp: Optional[str] = None,
     config: Optional[Any] = None,
+    provenance: Optional[str] = None,
 ) -> ConfirmPlan:
     """Plan a confirmation (no write). ``mode="set"`` captures *value*; ``mode="as-is"`` confirms the
-    current on-disk default unchanged. ``timestamp`` injectable for deterministic tests."""
+    current on-disk default unchanged. ``timestamp`` injectable for deterministic tests.
+
+    ``provenance`` (M2, FR-6): ``None`` (default) writes an **explicit** entry with **no** provenance
+    field — so a human ``kickoff confirm`` that promotes a prior audience-default **strips** the
+    provenance (the entry is rebuilt wholesale; A-FR6b). A machine writer (the M3 pre-pass) passes
+    ``audience-default:<slug>`` to stamp the entry (A-FR6c write-path invariant)."""
     from ..kickoff_experience.capture import CaptureError, build_capture_plan
     from ..kickoff_experience.manifest import default_config
 
@@ -235,11 +296,16 @@ def build_confirm_plan(
                 "missing_value", f"cannot confirm-as-is: no on-disk value at {value_path!r}"
             )
 
+    # Rebuild the entry wholesale — an explicit confirm (provenance=None) therefore carries NO
+    # provenance field, so promoting a prior audience-default drops it (A-FR6b).
+    entry: Dict[str, Any] = {"value": recorded, "at": at, "mode": mode}
+    if provenance is not None:
+        entry["provenance"] = provenance
     ledger = load_ledger(project_root)
-    ledger[value_path] = {"value": recorded, "at": at, "mode": mode}
+    ledger[value_path] = entry
     return ConfirmPlan(
         value_path=value_path, mode=mode, value=recorded, at=at,
-        capture_plan=capture_plan, ledger_text=_dump_ledger(ledger),
+        capture_plan=capture_plan, ledger_text=_dump_ledger(ledger), provenance=provenance,
     )
 
 

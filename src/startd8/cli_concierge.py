@@ -160,6 +160,10 @@ def _render_assess(result: dict) -> None:
             if conf.get("confirmable"):
                 tail = (f"  ·  {conf.get('confirmed', 0)} of {conf['confirmable']} confirmed · "
                         f"{conf.get('awaiting', 0)} awaiting")
+                # M2 (A-FR13): audience-defaulted fields — machine defaults the user can still ratify
+                # via `kickoff confirm`. Surfaced only when present (omitted ⇒ no display change).
+                if conf.get("audience_defaulted"):
+                    tail += f" · [cyan]{conf['audience_defaulted']} audience-default[/cyan]"
                 if conf.get("stale"):
                     tail += f" · [yellow]{conf['stale']} stale[/yellow]"
             console.print(f"  • {domain}: [green]present[/green] — provenance: "
