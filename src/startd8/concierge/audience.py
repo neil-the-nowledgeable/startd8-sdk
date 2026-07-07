@@ -43,6 +43,21 @@ class KickoffAudience(Enum):
 # unset user's experience is byte-identical to pre-feature behavior.
 DEFAULT_AUDIENCE = KickoffAudience.INTERMEDIATE
 
+#: The DISCLOSURE knob (M4, FR-9/FR-10): each audience → the ``load_experience_doc`` tier it reads.
+#: Beginner gets the plain-language ``expanded`` rewrite; Intermediate the ``light`` full body
+#: (today's default → byte-identical); Advanced the terse ``compact`` TL;DR. Intermediate mapping to
+#: ``light`` is what keeps an unset user's prose unchanged.
+_DISCLOSURE_TIER = {
+    KickoffAudience.BEGINNER: "expanded",
+    KickoffAudience.INTERMEDIATE: "light",
+    KickoffAudience.ADVANCED: "compact",
+}
+
+
+def disclosure_tier(audience: "str | KickoffAudience") -> str:
+    """The experience-doc disclosure tier for an audience (``expanded``/``light``/``compact``)."""
+    return _DISCLOSURE_TIER.get(coerce_audience(audience) or DEFAULT_AUDIENCE, "light")
+
 
 def coerce_audience(value: Any) -> Optional[KickoffAudience]:
     """Coerce a heterogeneous preference value → :class:`KickoffAudience`, or ``None`` (unset).

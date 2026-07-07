@@ -195,7 +195,7 @@ def test_walk_beginner_reduced_surface(tmp_path, monkeypatch):
     _force_audience(monkeypatch, KickoffAudience.BEGINNER)
     summary, lines = _walk(tmp_path, [])   # reader never needed — nothing left to ask
     assert summary["confirmed"] == [] and summary["remaining"] == 0
-    assert any("pre-filled 3 field(s)" in ln for ln in lines)   # FR-15 (minimal) reassurance
+    assert any("set up 3 things for you" in ln for ln in lines)   # FR-15 reassurance moment
     # the shielded fields are ledgered as audience-defaults (reduced-but-WRITTEN, never dropped)
     ledger = load_ledger(tmp_path)
     assert {_BUDGET, _MODE, _OBS} <= set(ledger)

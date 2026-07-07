@@ -670,6 +670,7 @@ def kickoff_explain(
     intro: bool = typer.Option(
         False, "--intro", help="Show the generic kickoff-process intro instead of the inputs explainer."
     ),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root (for the audience tier)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the doc content as JSON to stdout."),
 ) -> None:
     """Explain the kickoff inputs — what each is, why the build needs it, and who provides it ($0)."""
@@ -693,7 +694,12 @@ def kickoff_explain(
         return
 
     if intro:
-        doc, content = "kickoff-experience-intro", load_experience_doc("intro")
+        # M4 (FR-9): the intro renders at the resolved audience's disclosure tier — Beginner gets the
+        # plain-language rewrite, Advanced the terse TL;DR, Intermediate today's full body.
+        from .concierge.audience import disclosure_tier, resolve_audience_preference
+
+        tier = disclosure_tier(resolve_audience_preference(project_root).value)
+        doc, content = "kickoff-experience-intro", load_experience_doc("intro", tier=tier)
     else:
         entry = get_template_entry(_INPUTS_EXPLAINED_KEY)
         if entry is None:  # pragma: no cover — manifest is a build-time invariant
