@@ -1,9 +1,24 @@
 # Demo-Data Management + Config-Driven Facilitation — Requirements
 
-**Version:** 0.1 (Draft — grounded against the live modules)
+**Version:** 0.2 (Phase 1 + Phase 2 implemented)
 **Date:** 2026-07-07
-**Status:** Draft
+**Status:** WS1 + WS2 landed on `chore/demo-data-cleanup`; WS3 FR-11 (re-run portal panel) is Phase 3
 **Owner:** startd8-sdk
+
+> **Implementation status.**
+> - **Phase 1 (WS1 + FR-5/9/10/12):** done — neutral fixtures + `docs/demos/` registry; baked
+>   Blue Planet defaults removed from `facilitation.py`; doc references pointed at the registry;
+>   origin demo registered, not deleted.
+> - **Phase 2 (FR-6/7/8):** done — `stakeholder_panel/context_resolver.py` derives desc/objective/
+>   strategy from `business-targets.yaml` (goals→objective/strategy) and an auto-discovered
+>   requirements-doc overview (→desc), neutral placeholder only as a recorded last resort;
+>   `run_kickoff_panel.py` wired (explicit args override). Verified against the real portal inputs.
+>   - **OQ-1 resolved:** `desc` ← `business-targets.yaml` `description`/`summary` if authored, else the
+>     requirements-doc overview paragraph, else the neutral artifact-deferring placeholder. **No new
+>     kickoff domain added** (NR-5 held).
+>   - **OQ-5 resolved:** thin parser — heading-anchored (Problem Statement/Overview) first-paragraph
+>     extraction, bounded to one line; no structured requirements grammar.
+> - **Phase 3 (FR-11):** pending — delete + cleanly re-run the portal's contaminated panel session.
 **Origin:** Cleanup of "Blue Planet Adventures" retail-demo contamination that leaked into the SDK
 panel/facilitation path while testing the panel against a richer dataset than the benchmark portal.
 
