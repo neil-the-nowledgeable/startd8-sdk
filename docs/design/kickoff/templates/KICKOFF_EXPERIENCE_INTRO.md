@@ -64,3 +64,32 @@ The **data-model contract** (`schema.prisma` — the single most important human
 file-shaped inputs that live in the project itself; kickoff references them, it does not duplicate
 them. See `startd8 kickoff explain --inputs` for the full "what we ask / why / who" of each domain,
 and the per-project `KICKOFF_INPUTS_EXPLAINED.md` written by `instantiate`.
+
+<!-- PLAIN -->
+## Getting started — the plain version
+
+You're about to set up a new app. Before the tool can build it, it needs to know a few things about
+what you want — things it can't just guess. That's what "kickoff" is: a short setup step where you
+answer (or accept our suggestions for) a handful of questions.
+
+**You can't break anything here, and you can change any answer later.** Where you're not sure, we
+fill in a safe, sensible default for you — so you're never stuck. Nothing is final until you say so.
+
+Here's the whole idea in three steps:
+
+1. **See what's there.** `startd8 kickoff assess` shows you what's set up and what still needs an
+   answer. It only looks — it doesn't change anything.
+2. **Set it up.** `startd8 kickoff instantiate` creates the setup files, already filled in with good
+   starting values you can edit.
+3. **Adjust what matters to you** and leave the rest — the safe defaults are fine to keep.
+
+A few words you might see:
+
+- **"input"** — one of the things the app needs to know (like your budget, or what the app is for).
+- **"default"** — a value we picked for you so you don't have to. Always changeable.
+- **"provenance"** — just a label showing where a value came from: *you typed it*, or *we suggested
+  it*. It's there so nothing pretends to be finished when it isn't.
+
+When you're ready, run `startd8 kickoff assess` to see where you stand. Take it one answer at a time.
+<!-- /PLAIN -->
+

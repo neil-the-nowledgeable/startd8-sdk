@@ -160,6 +160,10 @@ def _render_assess(result: dict) -> None:
             if conf.get("confirmable"):
                 tail = (f"  ·  {conf.get('confirmed', 0)} of {conf['confirmable']} confirmed · "
                         f"{conf.get('awaiting', 0)} awaiting")
+                # M2 (A-FR13): audience-defaulted fields — machine defaults the user can still ratify
+                # via `kickoff confirm`. Surfaced only when present (omitted ⇒ no display change).
+                if conf.get("audience_defaulted"):
+                    tail += f" · [cyan]{conf['audience_defaulted']} audience-default[/cyan]"
                 if conf.get("stale"):
                     tail += f" · [yellow]{conf['stale']} stale[/yellow]"
             console.print(f"  • {domain}: [green]present[/green] — provenance: "
@@ -666,6 +670,7 @@ def kickoff_explain(
     intro: bool = typer.Option(
         False, "--intro", help="Show the generic kickoff-process intro instead of the inputs explainer."
     ),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root (for the audience tier)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the doc content as JSON to stdout."),
 ) -> None:
     """Explain the kickoff inputs — what each is, why the build needs it, and who provides it ($0)."""
@@ -689,7 +694,12 @@ def kickoff_explain(
         return
 
     if intro:
-        doc, content = "kickoff-experience-intro", load_experience_doc("intro")
+        # M4 (FR-9): the intro renders at the resolved audience's disclosure tier — Beginner gets the
+        # plain-language rewrite, Advanced the terse TL;DR, Intermediate today's full body.
+        from .concierge.audience import disclosure_tier, resolve_audience_preference
+
+        tier = disclosure_tier(resolve_audience_preference(project_root).value)
+        doc, content = "kickoff-experience-intro", load_experience_doc("intro", tier=tier)
     else:
         entry = get_template_entry(_INPUTS_EXPLAINED_KEY)
         if entry is None:  # pragma: no cover — manifest is a build-time invariant
@@ -749,6 +759,56 @@ def _kickoff_confirm_guided(project_root: Path, json_out: bool) -> None:
                   f"{summary['remaining']} still awaiting.")
 
 
+def _kickoff_confirm_all(project_root, *, as_is: bool, dry_run: bool, yes: bool, json_out: bool) -> None:
+    """`kickoff confirm --all --as-is` — the Advanced batch (FR-12) with a mandatory preview (FR-18)
+    and the placeholder skip (A-FR12b). Two-phase: build the preview (no writes), then apply only on
+    an explicit `--yes` (or `--dry-run` to preview only)."""
+    from .concierge.confirmation import apply_confirm_all, build_confirm_all_plan
+
+    if not as_is:
+        console.print("[red]kickoff confirm --all:[/red] batch confirm requires --as-is "
+                      "(it accepts every current default unchanged)")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    plan = build_confirm_all_plan(project_root)
+
+    if json_out:
+        payload = {
+            "schema": "kickoff.confirm_all.v1", "action": "confirm-all",
+            "to_confirm": [{"value_path": vp, "value": v} for vp, v in plan.to_confirm],
+            "skipped_placeholder": [{"value_path": vp, "value": v} for vp, v in plan.skipped_placeholder],
+            "dry_run": dry_run, "applied": False,
+        }
+        if not dry_run and yes:
+            payload["confirmed"] = apply_confirm_all(project_root, plan)
+            payload["applied"] = True
+        _emit_json(payload)
+        return
+
+    render_intro_banner()
+    if not plan.to_confirm and not plan.skipped_placeholder:
+        console.print("  nothing awaiting — every confirmable field is already confirmed.")
+        return
+    console.print(f"[bold]Confirm-all preview[/bold] — {len(plan.to_confirm)} field(s) would be "
+                  f"confirmed as-is:")
+    for vp, v in plan.to_confirm:
+        console.print(f"  • {vp} = {v!r}")
+    if plan.skipped_placeholder:
+        console.print(f"  [yellow]{len(plan.skipped_placeholder)} skipped[/yellow] "
+                      f"(still a template placeholder — set a real value first):")
+        for vp, v in plan.skipped_placeholder:
+            console.print(f"    · {vp} = {v!r}")
+    if dry_run:
+        console.print("  [dim]--dry-run: nothing written.[/dim]")
+        return
+    if not yes:
+        console.print("  [dim]re-run with[/dim] --yes [dim]to confirm these, or[/dim] "
+                      "--dry-run [dim]to preview only.[/dim]")
+        return
+    applied = apply_confirm_all(project_root, plan)
+    console.print(f"  [green]✓ confirmed {len(applied)} field(s) as-is.[/green]")
+
+
 def kickoff_confirm(
     value_path: Optional[str] = typer.Argument(
         None,
@@ -759,12 +819,22 @@ def kickoff_confirm(
     as_is: bool = typer.Option(
         False, "--as-is", help="Confirm the current default value unchanged (no YAML value change)."
     ),
+    all_: bool = typer.Option(
+        False, "--all", help="Advanced: confirm EVERY awaiting field as-is in one batch (needs --as-is)."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="With --all: preview only, write nothing."),
+    yes: bool = typer.Option(False, "--yes", help="With --all: the explicit confirmation to write."),
     project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the confirmation as JSON."),
 ) -> None:
-    """Confirm a defaulted kickoff value-input ($0). Give a <value_path> to set/confirm one field, or
-    OMIT it to walk all awaiting fields interactively."""
+    """Confirm a defaulted kickoff value-input ($0). Give a <value_path> to set/confirm one field,
+    OMIT it to walk all awaiting fields interactively, or use --all --as-is for the batch (Advanced)."""
     from .concierge.confirmation import ConfirmError, apply_confirm, build_confirm_plan
+
+    # `kickoff confirm --all --as-is` → the Advanced batch (FR-12) with a mandatory preview (FR-18).
+    if all_:
+        _kickoff_confirm_all(project_root, as_is=as_is, dry_run=dry_run, yes=yes, json_out=json_out)
+        return
 
     # Bare `kickoff confirm` → the guided walk (OQ-1).
     if value_path is None:
@@ -799,6 +869,94 @@ def kickoff_confirm(
     )
 
 
+# --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------
+# `audience` is a lens over the one guided experience (orthogonal to `posture`): beginner /
+# intermediate / advanced. M1 is the persistence spine only — `set` writes ONLY the preference; it
+# never runs the pre-pass (that is M3, at walk-start). Unset ⇒ intermediate ⇒ byte-identical to today.
+audience_app = typer.Typer(
+    name="audience",
+    help="Choose how much guidance kickoff gives you (beginner/intermediate/advanced).",
+)
+
+
+def _render_audience_show(project_root: Path, json_out: bool) -> None:
+    """Resolve + render the current audience (shared by the group callback and `show`)."""
+    from .concierge.audience import resolve_audience_preference
+
+    res = resolve_audience_preference(project_root)
+    if json_out:
+        _emit_json({
+            "schema": "kickoff.audience.v1",
+            "action": "show",
+            "audience": res.value.value,
+            "source": res.source,
+        })
+        return
+    from .cli_shared import render_intro_banner
+
+    render_intro_banner()
+    console.print(f"  audience: [cyan]{res.value.value}[/cyan]  ([dim]from {res.source}[/dim])")
+    if res.source == "default":
+        console.print(
+            "  [dim]unset — defaulting to intermediate. set one with[/dim] "
+            "startd8 kickoff audience set <beginner|intermediate|advanced>"
+        )
+
+
+@audience_app.callback(invoke_without_command=True)
+def _audience_root(ctx: typer.Context) -> None:
+    """Show or set your kickoff audience. With no subcommand, shows the current one."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _render_audience_show(Path("."), False)
+
+
+@audience_app.command("show")
+def _audience_show(
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the resolved audience as JSON."),
+) -> None:
+    """Show the resolved kickoff audience and which layer decided it ($0, read-only)."""
+    _render_audience_show(project_root, json_out)
+
+
+@audience_app.command("set")
+def _audience_set(
+    audience: str = typer.Argument(..., help="beginner | intermediate | advanced"),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
+    global_scope: bool = typer.Option(
+        False, "--global", help="Write the user-level preference instead of this project's."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the write result as JSON."),
+) -> None:
+    """Set your kickoff audience ($0). Writes ONLY the preference — it takes effect the next time you
+    run the guided walk, and never changes what gets built."""
+    from .concierge.audience import set_audience_preference
+
+    scope = "global" if global_scope else "project"
+    try:
+        result = set_audience_preference(audience, project_root=project_root, scope=scope)
+    except ValueError as exc:
+        console.print(f"[red]kickoff audience set:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    if json_out:
+        _emit_json({
+            "schema": "kickoff.audience.v1",
+            "action": "set",
+            "audience": result.value.value,
+            "scope": result.scope,
+            "target": result.target,
+        })
+        return
+    console.print(
+        f"  [green]✓ audience set[/green] to [cyan]{result.value.value}[/cyan] "
+        f"([dim]{result.scope}: {result.target}[/dim])"
+    )
+    console.print(
+        "  [dim]takes effect on your next[/dim] startd8 kickoff guided [dim]— nothing was built[/dim]"
+    )
+
+
 # --- M0b: the `startd8 kickoff` kernel surface ---------------------------------------------------
 # The kernel reuses the exact command bodies above under function-named verbs. `survey`/`assess`/
 # `log-friction` keep their names; `instantiate-kickoff`→`instantiate` and `derive-contract`→`derive`
@@ -818,3 +976,5 @@ kickoff_kernel_app.command("derive")(concierge_derive_contract)
 kickoff_kernel_app.command("guided")(kickoff_guided)
 # GE-M1: the optional Deepen phase as a standalone verb under `kickoff` (pointer only in GE-M1).
 kickoff_kernel_app.command("deepen")(kickoff_deepen)
+# Kickoff-audience M1: the `startd8 kickoff audience [show|set]` sub-group (fluency lens).
+kickoff_kernel_app.add_typer(audience_app, name="audience")

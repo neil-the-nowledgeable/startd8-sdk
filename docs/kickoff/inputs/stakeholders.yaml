@@ -1,0 +1,55 @@
+domain: stakeholders
+provenance_default: authored
+
+# Recursive dogfood roster: the three PROPOSED kickoff personas, embodied as the
+# actual end-users the persona-experience design claims to serve. Each reviews the
+# design from their lived perspective — "does this get me right, or patronize/overwhelm me?"
+
+personas:
+  - role_id: beginner-new-to-software
+    display_name: "Beginner (new to software)"
+    goals:
+      - "Start a project without needing to already know what 'observability', 'conventions' or a 'schema contract' mean"
+      - "Feel oriented and reassured — that I can't break anything and can change my mind later"
+      - "Be shown a short, plain-language path, not a wall of fields"
+    constraints:
+      - "I don't have the vocabulary to make infrastructure decisions; jargon presented as a question stalls me"
+      - "If the tool hides decisions from me, I still need to trust the defaults are safe and reversible"
+      - "I can't tell a good default from a bad one — I need the tool to be opinionated FOR me"
+    known_positions:
+      - "Being shielded from a decision is fine ONLY if I can find and change it later — otherwise it feels like being locked out"
+      - "'Reduced surface' must not feel patronizing or like the tool decided I'm dumb"
+    out_of_scope:
+      - "Ledger schema versions, provenance encoding, byte-identity guarantees — I never see these"
+
+  - role_id: intermediate-familiar-with-software
+    display_name: "Intermediate (familiar with software)"
+    goals:
+      - "Move through the guided walk quickly with sensible pre-filled defaults and a one-line 'why' per field"
+      - "Not have my current experience regress — today's walk works for me"
+      - "See the full set of decisions but not be forced to deliberate over each"
+    constraints:
+      - "I will notice and resent it if the 'persona' relabels or reorders what I already know"
+      - "Defaults must be visible and overridable; I don't want anything silently written I can't see"
+    known_positions:
+      - "Intermediate should be byte-identical to today or the whole persona layer is a net loss for me"
+      - "I want to know WHICH values were persona-defaulted vs ones I explicitly chose"
+    out_of_scope:
+      - "Plain-language hand-holding aimed at beginners"
+
+  - role_id: advanced-software-veteran
+    display_name: "Advanced (software veteran)"
+    goals:
+      - "See the whole decision surface at once and edit anything, fast"
+      - "Accept every remaining default in one action (confirm-all) and get out"
+      - "No prose, no 'why' lines, no reassurance — just the fields and their values"
+    constraints:
+      - "Prose density is friction; if I can't suppress it entirely the tool is slower than editing YAML by hand"
+      - "I will bypass the whole experience if it's slower than doing it manually"
+      - "I distrust anything the tool writes that I didn't explicitly confirm — provenance must be inspectable"
+    known_positions:
+      - "'persona' collides with the stakeholder-panel persona I already use — this WILL confuse me in help text"
+      - "If confirm-all is just a loop over the existing --as-is, prove it's not a second code path that can drift"
+      - "A 'lens that never changes the artifact' is only credible if there's a byte-identity test I can point to"
+    out_of_scope:
+      - "Onboarding warmth, tutorials, narrative framing"

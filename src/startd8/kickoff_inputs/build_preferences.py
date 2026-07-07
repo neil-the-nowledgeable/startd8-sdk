@@ -20,8 +20,15 @@ import yaml
 
 _TOP_LEVEL_KEYS = frozenset({
     "domain", "provenance_default", "budgets", "model_routing", "generation", "unattended",
-    "concierge_agent", "guided",
+    "concierge_agent", "guided", "audience",
 })
+
+# Kickoff-audience M1 (FR-1/FR-3): the project's audience (fluency) preference — the project layer of
+# the audience ladder resolved in ``concierge/audience.py``. Absent ⇒ ``None`` (unset, falls through to
+# the global layer, then to Intermediate). These literals MUST match ``KickoffAudience`` in
+# ``concierge/audience.py`` (a drift-guard test asserts equality); duplicated here so this leaf manifest
+# module never imports ``concierge`` (layering).
+_VALID_AUDIENCES = frozenset({"beginner", "intermediate", "advanced"})
 
 
 @dataclass(frozen=True)
@@ -42,6 +49,10 @@ class BuildPreferencesManifest:
     # explicit ``False`` here must NOT be lost to a falsy fall-through — it terminates resolution at
     # the routing seam (see ``guided_routing.py``). Stored as a real bool so ``off`` ≠ ``unset``.
     guided: Optional[bool] = None
+    # Kickoff-audience M1 (FR-1): the project's audience (fluency) preference — ``beginner`` /
+    # ``intermediate`` / ``advanced`` — or ``None`` (unset ⇒ fall through to global, then Intermediate).
+    # The project layer of the audience ladder (``concierge/audience.py:resolve_audience_preference``).
+    audience: Optional[str] = None
 
 
 def _scalar_map(value: object, key: str, *, bool_keys: frozenset = frozenset()) -> Dict[str, object]:
@@ -98,6 +109,15 @@ def parse_build_preferences(text: Optional[str]) -> BuildPreferencesManifest:
     guided = data.get("guided")
     if guided is not None and not isinstance(guided, bool):
         raise ValueError("build-preferences.yaml: `guided` must be a boolean (true/false)")
+    # Kickoff-audience M1: strict — a present ``audience`` must be one of the known fluency values.
+    # An unknown value is a loud error here (this module's strict philosophy), not a silent unset.
+    audience = data.get("audience")
+    if audience is not None:
+        if not isinstance(audience, str) or audience not in _VALID_AUDIENCES:
+            raise ValueError(
+                f"build-preferences.yaml: `audience` must be one of {sorted(_VALID_AUDIENCES)}, "
+                f"got {audience!r}"
+            )
 
     return BuildPreferencesManifest(
         domain=domain,
@@ -110,4 +130,5 @@ def parse_build_preferences(text: Optional[str]) -> BuildPreferencesManifest:
         ),
         concierge_agent=concierge_agent,
         guided=guided,
+        audience=audience,
     )

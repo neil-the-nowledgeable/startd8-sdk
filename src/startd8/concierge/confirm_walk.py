@@ -87,10 +87,15 @@ def _domain_question(slug: str, cache: Dict[str, str]) -> str:
 
 
 def field_prompt_lines(
-    project_root: str | Path, field: dict, config: Any, qcache: Dict[str, str]
+    project_root: str | Path, field: dict, config: Any, qcache: Dict[str, str],
+    *, terse: bool = False,
 ) -> List[str]:
     """The per-field context block — label + current default, the domain 'why', grammar, and choices.
-    Reuses the registry `question` + `FieldDef.grammar_help` verbatim (no new prose)."""
+    Reuses the registry `question` + `FieldDef.grammar_help` verbatim (no new prose).
+
+    ``terse=True`` (M4, FR-10 — Advanced disclosure) suppresses the ``why`` and ``grammar`` lines: a
+    veteran wants the field + its valid values, not the scaffolding. ``choices`` are always kept (they
+    are the valid-value contract, not prose)."""
     from ..kickoff_experience.manifest import default_config
 
     cfg = config or default_config()
@@ -98,11 +103,12 @@ def field_prompt_lines(
     current = field_current_value(project_root, field["value_path"], config=cfg)
     head = field["label"] if current is None else f"{field['label']} (currently {current!r})"
     lines = [head]
-    why = _domain_question(field["domain"], qcache)
-    if why:
-        lines.append(f"  why: {why}")
-    if fdef is not None and fdef.grammar_help:
-        lines.append(f"  {fdef.grammar_help}")
+    if not terse:
+        why = _domain_question(field["domain"], qcache)
+        if why:
+            lines.append(f"  why: {why}")
+        if fdef is not None and fdef.grammar_help:
+            lines.append(f"  {fdef.grammar_help}")
     if field.get("choices"):
         lines.append(f"  choices: {', '.join(field['choices'])}")
     return lines
@@ -121,6 +127,30 @@ def run_confirm_walk(
     from ..kickoff_experience.manifest import default_config
 
     cfg = config or default_config()
+
+    # M3 (FR-11, A-OQ10): the audience pre-pass fires HERE — at walk-start, an explicit action — never
+    # on a read/render. For Beginner it shields safe-default fields (they drop out of `awaiting_fields`
+    # below = reduced surface); for Intermediate/Advanced it is a no-op (byte-identical to today).
+    from .audience import apply_audience_defaults, resolve_audience_preference
+
+    audience = resolve_audience_preference(project_root).value
+    prepass = apply_audience_defaults(project_root, audience, config=cfg, timestamp=timestamp)
+    if prepass.blocked:   # A-FR11b: fail-closed — never silently full-surface a Beginner
+        emit_line("  This project isn't set up yet, so we couldn't pre-fill anything for you.")
+        emit_line("  Run:  startd8 kickoff instantiate   then try the walk again.")
+        return {"confirmed": [], "skipped": [], "quit": False, "remaining": 0, "blocked": True}
+    if prepass.written:
+        # FR-15 — the plain-language reassurance moment: what we did, and how to change it.
+        n = len(prepass.written)
+        emit_line(
+            f"  ✓ We set up {n} thing{'s' if n != 1 else ''} for you with safe defaults, so you "
+            f"don't have to. You can see and change any of them any time — run: startd8 kickoff assess"
+        )
+
+    from .audience import KickoffAudience
+
+    terse = audience is KickoffAudience.ADVANCED   # FR-10: Advanced suppresses per-field scaffolding
+
     fields = awaiting_fields(project_root, cfg)   # snapshot at start (R2 — stable set)
     confirmed_now: List[str] = []
     skipped: List[str] = []
@@ -129,7 +159,7 @@ def run_confirm_walk(
 
     for field in fields:
         vp = field["value_path"]
-        for line in field_prompt_lines(project_root, field, cfg, qcache):   # context shown ONCE
+        for line in field_prompt_lines(project_root, field, cfg, qcache, terse=terse):   # shown ONCE
             emit_line(line)
         while True:   # input loop — re-prompt (compactly) only on a fixable validation error
             emit_line(_LEGEND)

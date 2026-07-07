@@ -127,9 +127,21 @@ _TLDR_OPEN = "<!-- TL;DR -->"
 _TLDR_CLOSE = "<!-- /TL;DR -->"
 _BANNER_OPEN = "<!-- BANNER -->"
 _BANNER_CLOSE = "<!-- /BANNER -->"
+#: Audience M4 (FR-9): the co-located Beginner **plain-language** variant of a doc. It is a distinct
+#: prose block in the SAME file (single-source; NO second file — NR-1). It is served ONLY at
+#: ``tier="expanded"``; on every other render it is **removed whole** so beginner prose never leaks
+#: into ``explain``/light (R3-F30 (b)).
+_PLAIN_OPEN = "<!-- PLAIN -->"
+_PLAIN_CLOSE = "<!-- /PLAIN -->"
 
-#: All render-only slice markers stripped on a full render (they are runtime-only).
-_SLICE_MARKERS = (_TLDR_OPEN, _TLDR_CLOSE, _BANNER_OPEN, _BANNER_CLOSE)
+#: All render-only markers (their *lines* are stripped on a light/full render; the surrounded prose of
+#: TL;DR/BANNER is kept — they are excerpts of the body). PLAIN is registered here too, so its marker
+#: lines are never left behind — but its *content* is region-stripped separately (see the loader).
+_SLICE_MARKERS = (_TLDR_OPEN, _TLDR_CLOSE, _BANNER_OPEN, _BANNER_CLOSE, _PLAIN_OPEN, _PLAIN_CLOSE)
+
+#: The three disclosure tiers (FR-9). ``compact`` = the TL;DR one-screen; ``light`` = today's full body
+#: (the default and the fail-closed degrade target); ``expanded`` = the Beginner PLAIN rewrite.
+DISCLOSURE_TIERS = ("compact", "light", "expanded")
 
 
 def _extract_slice(text: str, open_marker: str, close_marker: str) -> Optional[str]:
@@ -140,18 +152,36 @@ def _extract_slice(text: str, open_marker: str, close_marker: str) -> Optional[s
     return None
 
 
-def load_experience_doc(key: str, *, compact: bool = False, section: Optional[str] = None) -> str:
-    """Read a packaged **render-only** instructional doc by closed-vocabulary *key*.
+def _strip_region(text: str, open_marker: str, close_marker: str) -> str:
+    """Remove an entire ``open..close`` block (inclusive) so its content never leaks into a render."""
+    start = text.find(open_marker)
+    end = text.find(close_marker)
+    if start != -1 and end != -1 and end > start:
+        return text[:start] + text[end + len(close_marker):]
+    return text
 
-    Backed by the same ``_load_template`` (``importlib.resources``) read as the written templates —
-    one source of bytes, so runtime text can never drift from the packaged file (FR-6). Distinct from
-    ``render_template_content``, which is bound to the instantiate write/download inventory; these
-    docs are surfaced only, never written into a project.
 
-    ``section="banner"`` returns just the tight ``<!-- BANNER -->`` … slice (the ≤6-line header shown on
-    every kickoff invocation, FR-UX-16); ``compact=True`` returns the fuller ``<!-- TL;DR -->`` slice (the
-    one-screen intro). Either falls back to the full text if its block is absent.
+def load_experience_doc(
+    key: str, *, tier: str = "light", section: Optional[str] = None, compact: Optional[bool] = None
+) -> str:
+    """Read a packaged **render-only** instructional doc by closed-vocabulary *key*, at a disclosure
+    ``tier`` (FR-9). One source of bytes (``_load_template``) so runtime text can never drift (FR-6).
+
+    ``tier`` ∈ ``{compact, light, expanded}`` and **composes with** the orthogonal ``section=`` axis —
+    a banner is a *section*, not a tier (R3-F30 (a)):
+    - ``section="banner"`` → the tight ``<!-- BANNER -->`` header (tier-independent), else degrades.
+    - ``tier="compact"`` → the ``<!-- TL;DR -->`` one-screen slice, else degrades to light.
+    - ``tier="expanded"`` → the Beginner ``<!-- PLAIN -->`` rewrite, else **degrades to light**
+      (A-FR9 fail-closed — never serves raw un-tiered prose).
+    - ``tier="light"`` (default + degrade target) → the full body with the PLAIN region **removed
+      whole** (R3-F30 (b) — beginner prose never leaks here) and all marker lines dropped.
+
+    ``compact=`` is a deprecated back-compat alias (``True`` ⇒ ``tier="compact"``).
     """
+    if compact is not None:
+        tier = "compact" if compact else "light"
+    if tier not in DISCLOSURE_TIERS:
+        raise ConciergeWriteError(f"unknown disclosure tier: {tier!r} (expected one of {DISCLOSURE_TIERS})")
     rel = _EXPERIENCE_DOCS.get(key)
     if rel is None:
         raise ConciergeWriteError(f"unknown experience doc key: {key!r}")
@@ -159,17 +189,25 @@ def load_experience_doc(key: str, *, compact: bool = False, section: Optional[st
     if section == "banner":
         sliced = _extract_slice(text, _BANNER_OPEN, _BANNER_CLOSE)
         if sliced is not None:
-            return sliced
+            return sliced   # (banner precedes PLAIN; no leak risk)
     elif section is not None:
         raise ConciergeWriteError(f"unknown experience-doc section: {section!r}")
-    if compact:
+    if tier == "compact":
         sliced = _extract_slice(text, _TLDR_OPEN, _TLDR_CLOSE)
         if sliced is not None:
             return sliced
-    # Full render: drop every render-only slice marker (keeping the surrounded prose).
+        # TL;DR absent → degrade to light (fall through)
+    if tier == "expanded":
+        plain = _extract_slice(text, _PLAIN_OPEN, _PLAIN_CLOSE)
+        if plain is not None:
+            return plain
+        # A-FR9b (c): PLAIN absent → degrade to light, never serve raw un-tiered prose (fall through)
+    # LIGHT (default + degrade target): remove the Beginner-only PLAIN block WHOLE so it can't leak
+    # (R3-F30 (b)), then drop the remaining marker lines (keeping TL;DR/BANNER prose, which are excerpts).
+    body = _strip_region(text, _PLAIN_OPEN, _PLAIN_CLOSE)
     for marker in _SLICE_MARKERS:
-        text = text.replace(marker + "\n", "")
-    return text.strip()
+        body = body.replace(marker + "\n", "")
+    return body.strip()
 
 
 def _render_input(rel_template: str, posture: str) -> str:

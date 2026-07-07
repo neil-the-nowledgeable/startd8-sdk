@@ -710,10 +710,20 @@ def build_guided_view(
         "project_root": orient.get("project_root", str(project_root)),
         "intro": _build_intro_block(orient, brief),
         "posture": _build_posture_block(orient),
+        "audience": _build_audience_block(project_root),
         "orient": orient,
         "guide": guide_dict,
         "deepen": project_deepen_state(session),
     }
+
+
+def _build_audience_block(project_root: str | Path) -> Dict[str, Any]:
+    """The resolved audience (fluency) + its disclosure tier — M4/M5 (FR-14). Read-only; flows through
+    the parity digest so CLI/TUI/web render the same effective audience in lockstep."""
+    from ..concierge.audience import disclosure_tier, resolve_audience_preference
+
+    res = resolve_audience_preference(project_root)
+    return {"audience": res.value.value, "source": res.source, "tier": disclosure_tier(res.value)}
 
 
 def guided_parity_digest(view: Mapping[str, Any]) -> Dict[str, Any]:
@@ -729,10 +739,13 @@ def guided_parity_digest(view: Mapping[str, Any]) -> Dict[str, Any]:
     halt = deepen.get("halt") or None
     intro = view.get("intro") or {}
     posture = view.get("posture") or {}
+    audience = view.get("audience") or {}
     return {
         "phases": ("Orient", "Guide", "Deepen"),
         "intro_mode": intro.get("mode"),
         "posture_hint": posture.get("actionable_hint"),
+        "audience": audience.get("audience"),
+        "audience_tier": audience.get("tier"),
         "readiness_score": guide.get("readiness_score"),
         "unmet_gates": tuple(guide.get("unmet_gates") or ()),
         "next_commands": tuple(s["command"] for s in steps if s.get("command")),
