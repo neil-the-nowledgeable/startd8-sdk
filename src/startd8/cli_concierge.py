@@ -759,6 +759,56 @@ def _kickoff_confirm_guided(project_root: Path, json_out: bool) -> None:
                   f"{summary['remaining']} still awaiting.")
 
 
+def _kickoff_confirm_all(project_root, *, as_is: bool, dry_run: bool, yes: bool, json_out: bool) -> None:
+    """`kickoff confirm --all --as-is` — the Advanced batch (FR-12) with a mandatory preview (FR-18)
+    and the placeholder skip (A-FR12b). Two-phase: build the preview (no writes), then apply only on
+    an explicit `--yes` (or `--dry-run` to preview only)."""
+    from .concierge.confirmation import apply_confirm_all, build_confirm_all_plan
+
+    if not as_is:
+        console.print("[red]kickoff confirm --all:[/red] batch confirm requires --as-is "
+                      "(it accepts every current default unchanged)")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    plan = build_confirm_all_plan(project_root)
+
+    if json_out:
+        payload = {
+            "schema": "kickoff.confirm_all.v1", "action": "confirm-all",
+            "to_confirm": [{"value_path": vp, "value": v} for vp, v in plan.to_confirm],
+            "skipped_placeholder": [{"value_path": vp, "value": v} for vp, v in plan.skipped_placeholder],
+            "dry_run": dry_run, "applied": False,
+        }
+        if not dry_run and yes:
+            payload["confirmed"] = apply_confirm_all(project_root, plan)
+            payload["applied"] = True
+        _emit_json(payload)
+        return
+
+    render_intro_banner()
+    if not plan.to_confirm and not plan.skipped_placeholder:
+        console.print("  nothing awaiting — every confirmable field is already confirmed.")
+        return
+    console.print(f"[bold]Confirm-all preview[/bold] — {len(plan.to_confirm)} field(s) would be "
+                  f"confirmed as-is:")
+    for vp, v in plan.to_confirm:
+        console.print(f"  • {vp} = {v!r}")
+    if plan.skipped_placeholder:
+        console.print(f"  [yellow]{len(plan.skipped_placeholder)} skipped[/yellow] "
+                      f"(still a template placeholder — set a real value first):")
+        for vp, v in plan.skipped_placeholder:
+            console.print(f"    · {vp} = {v!r}")
+    if dry_run:
+        console.print("  [dim]--dry-run: nothing written.[/dim]")
+        return
+    if not yes:
+        console.print("  [dim]re-run with[/dim] --yes [dim]to confirm these, or[/dim] "
+                      "--dry-run [dim]to preview only.[/dim]")
+        return
+    applied = apply_confirm_all(project_root, plan)
+    console.print(f"  [green]✓ confirmed {len(applied)} field(s) as-is.[/green]")
+
+
 def kickoff_confirm(
     value_path: Optional[str] = typer.Argument(
         None,
@@ -769,12 +819,22 @@ def kickoff_confirm(
     as_is: bool = typer.Option(
         False, "--as-is", help="Confirm the current default value unchanged (no YAML value change)."
     ),
+    all_: bool = typer.Option(
+        False, "--all", help="Advanced: confirm EVERY awaiting field as-is in one batch (needs --as-is)."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="With --all: preview only, write nothing."),
+    yes: bool = typer.Option(False, "--yes", help="With --all: the explicit confirmation to write."),
     project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the confirmation as JSON."),
 ) -> None:
-    """Confirm a defaulted kickoff value-input ($0). Give a <value_path> to set/confirm one field, or
-    OMIT it to walk all awaiting fields interactively."""
+    """Confirm a defaulted kickoff value-input ($0). Give a <value_path> to set/confirm one field,
+    OMIT it to walk all awaiting fields interactively, or use --all --as-is for the batch (Advanced)."""
     from .concierge.confirmation import ConfirmError, apply_confirm, build_confirm_plan
+
+    # `kickoff confirm --all --as-is` → the Advanced batch (FR-12) with a mandatory preview (FR-18).
+    if all_:
+        _kickoff_confirm_all(project_root, as_is=as_is, dry_run=dry_run, yes=yes, json_out=json_out)
+        return
 
     # Bare `kickoff confirm` → the guided walk (OQ-1).
     if value_path is None:

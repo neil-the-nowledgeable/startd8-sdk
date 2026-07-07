@@ -16,10 +16,11 @@ YAMLs). Absent ledger ⇒ nothing confirmed ⇒ byte-identical to today.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -337,3 +338,78 @@ def apply_confirm(project_root: str | Path, plan: ConfirmPlan) -> Dict[str, Any]
         raise ConfirmError("ledger_not_recorded", f"value written, confirmation NOT recorded: {detail}")
 
     return {"value_path": plan.value_path, "mode": plan.mode, "value": plan.value, "confirmed": True}
+
+
+# --- M5: Advanced confirm-all (FR-12/FR-18, A-FR12b) --------------------------------------------
+
+#: A template placeholder default (e.g. ``$<5.00>`` / ``<free-during-demo | live>``) — an angle-bracket
+#: token. Confirm-all MUST NOT ledger these as real values (R4-F33); they stay ``awaiting``.
+_PLACEHOLDER_RE = re.compile(r"<[^>]*>")
+
+
+def _is_placeholder(value: Optional[str]) -> bool:
+    return value is not None and bool(_PLACEHOLDER_RE.search(value))
+
+
+@dataclass(frozen=True)
+class ConfirmAllPlan:
+    """The PREVIEW of a confirm-all (FR-18): the decisions, computed with **no writes** (A-FR12
+    two-phase). ``to_confirm`` = ``(value_path, on_disk_value)`` that would be confirmed as-is;
+    ``skipped_placeholder`` = ``(value_path, on_disk_value)`` left awaiting because the on-disk value
+    is a ``<…>`` placeholder (A-FR12b)."""
+
+    to_confirm: Tuple[Tuple[str, str], ...]
+    skipped_placeholder: Tuple[Tuple[str, str], ...]
+
+    @property
+    def rows(self) -> List[Tuple[str, str]]:
+        return list(self.to_confirm)
+
+
+def build_confirm_all_plan(
+    project_root: str | Path, *, config: Optional[Any] = None
+) -> ConfirmAllPlan:
+    """Phase 1 (preview, no writes): decide which awaiting fields a confirm-all would confirm as-is.
+
+    Skips any field whose on-disk value is a ``<…>`` placeholder (A-FR12b/R4-F33 — never ledger
+    garbage) or is missing. This is the table FR-18 shows before anything is written.
+    """
+    from ..kickoff_experience.manifest import default_config
+    from .confirm_walk import awaiting_fields
+
+    cfg = config or default_config()
+    to_confirm: List[Tuple[str, str]] = []
+    skipped: List[Tuple[str, str]] = []
+    for f in awaiting_fields(project_root, cfg):
+        vp = f["value_path"]
+        fdef = cfg.field_by_value_path(vp)
+        on_disk = (
+            _read_field_value(project_root, fdef.write_target.file, fdef.write_target.key)
+            if fdef is not None and fdef.write_target is not None else None
+        )
+        if on_disk is None:
+            continue
+        if _is_placeholder(on_disk):
+            skipped.append((vp, on_disk))
+            continue
+        to_confirm.append((vp, on_disk))
+    return ConfirmAllPlan(tuple(to_confirm), tuple(skipped))
+
+
+def apply_confirm_all(
+    project_root: str | Path,
+    plan: ConfirmAllPlan,
+    *,
+    timestamp: Optional[str] = None,
+    config: Optional[Any] = None,
+) -> List[str]:
+    """Phase 2 (commit): confirm each ``to_confirm`` field as-is, **sequentially against the live
+    ledger** — so each entry is byte-identical to a single ``kickoff confirm --as-is`` and later
+    fields never clobber earlier batch writes (``test_confirm_all_equals_single``). Returns the
+    confirmed value_paths. The caller is responsible for the FR-18 explicit-confirmation gate."""
+    confirmed: List[str] = []
+    for vp, _on_disk in plan.to_confirm:
+        p = build_confirm_plan(project_root, vp, mode="as-is", timestamp=timestamp, config=config)
+        apply_confirm(project_root, p)
+        confirmed.append(vp)
+    return confirmed
