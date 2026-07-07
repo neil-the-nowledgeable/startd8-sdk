@@ -56,6 +56,24 @@ def _print_synthesis(spec: str, text: str) -> None:
     print(f"\n{'='*78}\n## R5 — Synthesis (facilitator: {spec})\n{'='*78}\n{text}")
 
 
+def _build_cost_tracker(project_root: Path):
+    """Construct a CostTracker persisting to ``<project>/.startd8/panel-costs.db`` (H3 attribution).
+
+    Returns ``None`` (never raises) if cost infra can't be stood up — the run still proceeds, and the
+    honesty guard reports spend as NOT TRACKED rather than a misleading $0.0000.
+    """
+    try:
+        from startd8.costs import CostTracker, PricingService
+        from startd8.costs.store import CostStore
+
+        db_dir = project_root / ".startd8"
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return CostTracker(CostStore(db_dir / "panel-costs.db"), PricingService())
+    except Exception as exc:  # noqa: BLE001 - cost infra must never block a panel run
+        print(f"[kickoff-panel] cost tracking unavailable ({exc}); spend will not be recorded")
+        return None
+
+
 async def orchestrate(args: argparse.Namespace) -> None:
     from startd8.stakeholder_panel.roster import load_roster
     from startd8.stakeholder_panel.context_resolver import resolve_context
@@ -124,18 +142,28 @@ async def orchestrate(args: argparse.Namespace) -> None:
         print("  persona will reason from the intended goals/constraints before any paid --run.")
         return
 
+    # H3 real cost attribution: without a cost_tracker the panel prices every answer at $0
+    # (StakeholderPanel._record_cost short-circuits), which both under-reports spend AND silently
+    # defeats the --budget-usd cap (it reads the same $0 total). Wire one unless opted out.
+    cost_tracker = None if args.no_cost_tracking else _build_cost_tracker(Path(args.project).expanduser())
+
     fac = F.KickoffFacilitator(
         cfg,
         roster=roster,
         on_prep=_print_prep,
         on_round=_print_round,
         on_synthesis=_print_synthesis,
+        cost_tracker=cost_tracker,
     )
     session = await fac.run()
     if session.get("status") == "halted":  # H2/H3 first-class halted state
         h = session["halt"]
         print(f"\n{'!'*78}\n## HALTED ({h['reason']})\n{'!'*78}\n{h['message']}")
-    print(f"\nSession cost: ${session.get('cost_total_usd', 0.0):.4f} total")  # H3
+    if cost_tracker is None:
+        # Honesty guard: a real $0 (nothing spent) must not be confused with "not tracked".
+        print("\nSession cost: NOT TRACKED (no cost tracker wired; real spend was not recorded)")
+    else:
+        print(f"\nSession cost: ${session.get('cost_total_usd', 0.0):.4f} total")  # H3
     print(f"Saved transcript: {fac.transcript_path(session['session_id'])}")
 
 
@@ -150,6 +178,9 @@ def main(argv=None):
     ap.add_argument("--requirements", default=None,
                     help="Path to a requirements markdown to source the project description from "
                          "(else a conventional REQUIREMENTS.md is auto-discovered)")
+    ap.add_argument("--no-cost-tracking", dest="no_cost_tracking", action="store_true",
+                    help="Disable per-answer cost attribution (spend reported as NOT TRACKED). "
+                         "Default: on, persisting to <project>/.startd8/panel-costs.db.")
     ap.add_argument("--project-name", dest="project_name", default="",
                     help="Short domain noun used in prompts (e.g. 'a benchmark portal'). "
                          "Prevents the default-domain leaking into a re-purposed run (bug fix from #8).")

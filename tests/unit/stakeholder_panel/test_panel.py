@@ -67,6 +67,28 @@ def test_cost_recorded_with_role_and_session_attribution(
     panel.close()
 
 
+def test_record_cost_splits_provider_prefix_for_pricing(two_persona_roster):
+    """The pricing table is keyed by the BARE model id; passing 'provider:model' misses it and
+    falls back to a generic estimate (the costUsd-mismapping). _record_cost must split the spec."""
+    from .conftest import ScriptedAgent
+
+    spy = SpyTracker(total_cost=0.01)
+
+    def factory(brief):
+        return ScriptedAgent(
+            name=f"persona:{brief.role_id}",
+            model="anthropic:claude-opus-4-8",
+            reply="ok\nGROUNDING: grounded",
+        )
+
+    panel = _panel(two_persona_roster, factory, cost_tracker=spy)
+    asyncio.run(panel.ask("end-user", "q?"))
+    rec = spy.records[-1]
+    assert rec["model"] == "claude-opus-4-8"  # bare id -> matches the pricing table
+    assert rec["provider"] == "anthropic"
+    panel.close()
+
+
 def test_ask_all_answers_every_persona(two_persona_roster, scripted_factory):
     panel = _panel(two_persona_roster, scripted_factory())
     answers = asyncio.run(panel.ask_all("what's your top concern?"))

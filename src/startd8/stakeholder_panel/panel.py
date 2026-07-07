@@ -257,9 +257,17 @@ class StakeholderPanel:
         if self._cost_tracker is None or not answer.available:
             return 0.0
         try:
+            # The pricing table is keyed by the BARE model id, but answer.model / self._model_spec
+            # carry the full ``provider:model`` agent spec (e.g. "anthropic:claude-opus-4-8"). Passing
+            # that verbatim misses the table and silently falls back to a generic estimate — the
+            # costUsd-mismapping. Split the prefix so the real per-model price is used.
+            spec = answer.model or self._model_spec
+            provider, sep, bare = spec.partition(":")
+            model, provider = (bare, provider) if sep else (spec, None)
             record = self._cost_tracker.record_cost(
                 agent_name=f"panel:{answer.role_id}",
-                model=answer.model or self._model_spec,
+                model=model,
+                provider=provider or None,
                 input_tokens=answer.input_tokens,
                 output_tokens=answer.output_tokens,
                 project=self._cost_project,
