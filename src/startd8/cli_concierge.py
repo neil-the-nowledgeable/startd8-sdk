@@ -799,6 +799,94 @@ def kickoff_confirm(
     )
 
 
+# --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------
+# `audience` is a lens over the one guided experience (orthogonal to `posture`): beginner /
+# intermediate / advanced. M1 is the persistence spine only — `set` writes ONLY the preference; it
+# never runs the pre-pass (that is M3, at walk-start). Unset ⇒ intermediate ⇒ byte-identical to today.
+audience_app = typer.Typer(
+    name="audience",
+    help="Choose how much guidance kickoff gives you (beginner/intermediate/advanced).",
+)
+
+
+def _render_audience_show(project_root: Path, json_out: bool) -> None:
+    """Resolve + render the current audience (shared by the group callback and `show`)."""
+    from .concierge.audience import resolve_audience_preference
+
+    res = resolve_audience_preference(project_root)
+    if json_out:
+        _emit_json({
+            "schema": "kickoff.audience.v1",
+            "action": "show",
+            "audience": res.value.value,
+            "source": res.source,
+        })
+        return
+    from .cli_shared import render_intro_banner
+
+    render_intro_banner()
+    console.print(f"  audience: [cyan]{res.value.value}[/cyan]  ([dim]from {res.source}[/dim])")
+    if res.source == "default":
+        console.print(
+            "  [dim]unset — defaulting to intermediate. set one with[/dim] "
+            "startd8 kickoff audience set <beginner|intermediate|advanced>"
+        )
+
+
+@audience_app.callback(invoke_without_command=True)
+def _audience_root(ctx: typer.Context) -> None:
+    """Show or set your kickoff audience. With no subcommand, shows the current one."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _render_audience_show(Path("."), False)
+
+
+@audience_app.command("show")
+def _audience_show(
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the resolved audience as JSON."),
+) -> None:
+    """Show the resolved kickoff audience and which layer decided it ($0, read-only)."""
+    _render_audience_show(project_root, json_out)
+
+
+@audience_app.command("set")
+def _audience_set(
+    audience: str = typer.Argument(..., help="beginner | intermediate | advanced"),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
+    global_scope: bool = typer.Option(
+        False, "--global", help="Write the user-level preference instead of this project's."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the write result as JSON."),
+) -> None:
+    """Set your kickoff audience ($0). Writes ONLY the preference — it takes effect the next time you
+    run the guided walk, and never changes what gets built."""
+    from .concierge.audience import set_audience_preference
+
+    scope = "global" if global_scope else "project"
+    try:
+        result = set_audience_preference(audience, project_root=project_root, scope=scope)
+    except ValueError as exc:
+        console.print(f"[red]kickoff audience set:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    if json_out:
+        _emit_json({
+            "schema": "kickoff.audience.v1",
+            "action": "set",
+            "audience": result.value.value,
+            "scope": result.scope,
+            "target": result.target,
+        })
+        return
+    console.print(
+        f"  [green]✓ audience set[/green] to [cyan]{result.value.value}[/cyan] "
+        f"([dim]{result.scope}: {result.target}[/dim])"
+    )
+    console.print(
+        "  [dim]takes effect on your next[/dim] startd8 kickoff guided [dim]— nothing was built[/dim]"
+    )
+
+
 # --- M0b: the `startd8 kickoff` kernel surface ---------------------------------------------------
 # The kernel reuses the exact command bodies above under function-named verbs. `survey`/`assess`/
 # `log-friction` keep their names; `instantiate-kickoff`→`instantiate` and `derive-contract`→`derive`
@@ -818,3 +906,5 @@ kickoff_kernel_app.command("derive")(concierge_derive_contract)
 kickoff_kernel_app.command("guided")(kickoff_guided)
 # GE-M1: the optional Deepen phase as a standalone verb under `kickoff` (pointer only in GE-M1).
 kickoff_kernel_app.command("deepen")(kickoff_deepen)
+# Kickoff-audience M1: the `startd8 kickoff audience [show|set]` sub-group (fluency lens).
+kickoff_kernel_app.add_typer(audience_app, name="audience")
