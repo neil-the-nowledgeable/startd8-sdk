@@ -1,8 +1,8 @@
 # Kickoff Persona Experiences — Implementation Plan
 
-**Version:** 1.2 (OQ-10/OQ-11 resolved — decision-complete)
+**Version:** 1.3 (Post-CRP R3/R4)
 **Date:** 2026-07-06
-**Requirements:** `PERSONA_EXPERIENCES_REQUIREMENTS.md` (v0.7)
+**Requirements:** `PERSONA_EXPERIENCES_REQUIREMENTS.md` (v0.8)
 
 ---
 
@@ -113,6 +113,30 @@ gate for FR-19** (riskiest surface; consult `--serve` precedent).
 *v1.1 — re-keyed to requirements v0.6; FR-15/16/17/18 mapped; M2/M3/M4 hardened per CRP; module table
 canonicalized to `audience`. M1 still ships zero-behavior-change persistence; M4 remains the single
 drift-risk gate (now automated).*
+
+## Post-CRP Amendments — R3/R4 (v1.3)
+
+> Triaged R3/R4 (requirements Appendix C, `claude-opus-4-8` — R4 builder's-eye, verified vs `origin/main`
+> post-#115/#116/#117). All accepted; requirements §3.2. These land at specific milestones/edit-sites:
+
+- **M2 — `_dump_ledger` schema-aware (A-FR6d, R4-F35)**: emit `schema: v1` unless the map holds an
+  `audience-default` entry; test all-explicit ledger serializes `v1` byte-for-byte. **+ bucket partition
+  (A-FR13b, R4-F34)**: `domain_confirmation` buckets MUST partition the confirmable set (Σ==confirmable);
+  an audience-default that diverged on disk is `audience_defaulted`+`stale`-flagged, not double-counted.
+- **M3 — pre-pass fail-closed vs the present-file gate (A-FR11b, R4-F32, HIGH)**: `kickoff instantiate`
+  is a documented precondition; walk-start on an un-instantiated project instantiates-then-shields or
+  refuses — **never silently full-surfaces**. FR-11 golden includes an un-instantiated start. **+
+  provenance write-path invariant (A-FR6c, R3-F31)**: `apply_audience_defaults` never writes a
+  `provenance`-less entry; add `test_prepass_writes_are_provenance_tagged` + a no-untagged-writer grep.
+- **M4 — tier loader composes with post-#115 code (A-FR9b, R3-F30, HIGH)**: `tier` is orthogonal to the
+  existing `section=` axis; register tier/`<!-- PLAIN -->` markers in `_SLICE_MARKERS` (else Beginner
+  prose leaks into `explain`); **replace** the silent full-doc fallback with fail-closed degrade-to-light.
+  The M4 gate now also asserts no tier marker survives a full/`explain` render.
+- **M5 — no `as-is` over placeholders (A-FR12b, R4-F33, HIGH)**: confirm-all skips/rejects a field whose
+  on-disk value matches a `<…>`/placeholder pattern (stays `awaiting`); `test_confirm_all_*` asserts it.
+
+*v1.3 — re-keyed to requirements v0.8; R3/R4 (incl. two builder's-eye HIGH integration bugs vs same-day
+merges #115/#116) mapped to M2–M5. M1 unchanged.*
 
 ---
 

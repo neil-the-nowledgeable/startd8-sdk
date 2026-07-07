@@ -1,6 +1,6 @@
 # Kickoff Persona Experiences — Requirements
 
-**Version:** 0.7 (OQ-10/OQ-11 resolved — decision-complete)
+**Version:** 0.8 (Post-CRP R3/R4 — builder's-eye integration hardening)
 **Date:** 2026-07-06
 **Status:** Draft
 **Owners:** kickoff kernel (`concierge/`, `kickoff_experience/`)
@@ -321,6 +321,54 @@ ends of one slider.
   surface, FR-19 carries an explicit M5 security-review gate** (precedent: the consult `--serve`
   CRP-hardening).
 
+## 3.2 Post-CRP Amendments — R3/R4 (v0.8)
+
+> Triaged the R3 + R4 rounds (Appendix C), both `claude-opus-4-8` external runs — R4 a **builder's-eye**
+> review by the agent who implemented the ledger/walk substrate, verified against `origin/main` after
+> PRs #115/#116/#117 that **post-date this doc's planning pass**. All six accepted (two are new HIGH
+> integration bugs from same-day merges). Dispositions in Appendix A.
+
+- **A-FR9b (R3-F30) — the tier loader must compose with post-#115 `load_experience_doc`.** The live
+  signature is `load_experience_doc(key, *, compact=False, section=None)` with
+  `_SLICE_MARKERS = (<!-- TL;DR -->, <!-- BANNER -->)` and a **silent fall-back-to-full-doc** on a
+  missing region (`concierge/writes.py`). A-FR9's tier work MUST: (a) make `tier` **orthogonal to and
+  compose with** the existing `section=` axis (a banner is not a disclosure tier); (b) **register** the
+  new tier/`<!-- PLAIN -->` (or per-region-variant) markers in `_SLICE_MARKERS`, or Beginner prose
+  **leaks into `explain`/full-render** (which strips only registered markers); (c) **replace** the
+  loader's silent full-doc fallback with A-FR9's fail-closed **degrade-to-light** — never serve raw
+  un-tiered prose to a Beginner; (d) refresh the stale `writes.py:126` "binary slice / no third region"
+  citations in §0/FR-9. **This makes A-FR9 implementable against real code.**
+- **A-FR6c (R3-F31) — fail-open provenance is a *tested write-path invariant*.** A-FR6's "absence of
+  `provenance` ⇒ explicit" is fail-*open* (untagged → most-authoritative bucket), safe only if **every**
+  non-explicit writer stamps provenance. Make it normative: every ledger writer other than
+  `kickoff confirm` (the FR-11 pre-pass + any future machine writer) MUST stamp `provenance`; add named
+  test **`test_prepass_writes_are_provenance_tagged`** + an AST/grep check that no non-`confirm` write
+  path omits it.
+- **A-FR11b (R4-F32) — pre-pass vs the present-file gate (PR #116), HIGH.** `awaiting_fields` now
+  surfaces a field **only if its input YAML exists** (`confirm_walk.py:_input_file_present`), and
+  `apply_audience_defaults` writes via `build_confirm_plan`, which **splices into that file**. So a
+  Beginner who sets audience **before `kickoff instantiate`** (or on a partial project) gets a pre-pass
+  that writes nothing and is **silently full-surfaced** — breaking FR-11 with no error. **Fix:** the
+  pre-pass MUST be **fail-closed** — `kickoff instantiate` is a documented precondition; if inputs are
+  absent the walk-start either instantiates-then-shields or refuses with a message, **never silently
+  full-surfaces.** The FR-11 golden MUST include an un-instantiated start.
+- **A-FR12b (R4-F33) — no `as-is` over placeholder defaults, HIGH.** On-disk template defaults are
+  literal placeholders (`budgets.per_pipeline_run = "$<5.00>"`, `monetization.mode_now =
+  <free-during-demo | live>`). `build_confirm_plan(mode="as-is")` records the on-disk value, so
+  confirm-all-`as-is` (FR-12) would ledger the **placeholder string** — and an invalid `select` choice.
+  FR-12/FR-18 MUST **skip or reject** a field whose on-disk value matches a `<…>`/placeholder pattern
+  (leave it `awaiting` with guidance), not just surface it in the FR-18 dry-run. Test: `test_confirm_all_*`
+  asserts a placeholder-valued field is **not** batch-confirmed.
+- **A-FR13b (R4-F34) — bucket precedence vs `stale`.** `domain_confirmation` already returns
+  `{confirmable, confirmed, awaiting, stale}`. Define precedence for an audience-default whose on-disk
+  value later diverged: it is **`audience_defaulted` with a `stale` flag** (not double-counted), and the
+  buckets MUST **partition** the confirmable set (Σ == `confirmable`). Add a partition-invariant test.
+- **A-FR6d (R4-F35) — the conditional bump's exact edit site.** `_dump_ledger` writes
+  `schema: LEDGER_SCHEMA` **unconditionally** (`confirmation.py`). A-FR6's "stay `v1` until the first
+  `audience-default`" is one edit at that single writer: emit `v1` unless the map contains an
+  `audience-default` entry, else `v2`. Test: an all-explicit ledger serializes `schema:
+  kickoff.confirmed.v1` byte-for-byte as today.
+
 ## 4. Non-Requirements
 
 - **NR-1** No three parallel experiences / no prose forks. Persona is a lens; the expanded
@@ -408,6 +456,12 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | R1-F4, R2-F24 | FR-16 mechanics undefined; re-shield hazard | opus+sonnet | Applied §3.1 A-FR16 | 2026-07-06 |
 | R1-F6 | FR-17 not parity-bound | opus | Applied §3.1 A-FR17 | 2026-07-06 |
 | R1-F5 | OQ-9 needs shieldability criterion | opus | Applied §3.1 A-OQ9 (resolves OQ-9) | 2026-07-06 |
+| R3-F30 | FR-9/A-FR9 specced vs pre-#115 loader (section=, marker registration, fallback) | opus-4-8 | Applied §3.2 A-FR9b | 2026-07-06 |
+| R3-F31 | Fail-open provenance default unenforced | opus-4-8 | Applied §3.2 A-FR6c (+ named test) | 2026-07-06 |
+| R4-F32 | Pre-pass collides with present-file gate (#116) → silent full-surface | opus-4-8 (builder) | Applied §3.2 A-FR11b (fail-closed precondition) | 2026-07-06 |
+| R4-F33 | confirm-all `as-is` over `<…>` placeholder writes garbage | opus-4-8 (builder) | Applied §3.2 A-FR12b (skip/reject placeholders) | 2026-07-06 |
+| R4-F34 | `audience_defaulted` vs `stale` bucket precedence undefined | opus-4-8 (builder) | Applied §3.2 A-FR13b (partition invariant) | 2026-07-06 |
+| R4-F35 | `_dump_ledger` writes schema unconditionally | opus-4-8 (builder) | Applied §3.2 A-FR6d (exact edit site) | 2026-07-06 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -439,3 +493,59 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 - **R2-F28** *(FR-12/FR-18, Interfaces, high)* FR-18's pre-commit preview forces collect-ALL-plans-then-apply; the single-field path interleaves plan+apply. So FR-12 "reuses" is wrong — the batch path needs a NEW two-phase collect-then-apply pattern. Say "extends" not "reuses"; ensure the preview is a no-op on ledger bytes for `test_confirm_all_equals_single`.
 
 **Endorsements (cross-reviewer, raise triage priority):** R1-F2≡R2-F20/F21 (FR-4 under-proven); R1-F1≡R2-F25 (conditional bump/backward-compat); R1-F3≡R2-F23 (FR-9 fork not actually avoided); R2-F26 (FR-13 untested regression); R2-F27≡plan-S2 (FR-14 `persona` key violates §0.3).
+
+#### Review Round R3 — claude-opus-4-8 — 2026-07-06
+
+- **Reviewer**: claude-opus-4-8
+- **Scope**: Fresh review weighted per the sponsor focus file, by a reviewer who **implemented and merged PR #115 (Kickoff UX output hygiene) earlier the same day** — which changed `load_experience_doc`, the exact function FR-9/A-FR9 rebuild. Read against `concierge/writes.py` @ `origin/main` (post-#115), the confirm-ledger machinery, and the R1/R2 dispositions in Appendix A. Settled items are **not** reopened; A-FR9/A-FR16/A-FR4/A-FR6 were verified as already covering several focus asks (noted below so they are not re-proposed).
+
+##### Sponsor focus asks (answered first)
+
+**Ask — FR-9 (disclosure without forking): is the same-doc region model sufficient?**
+- **Summary answer:** The *model* is sound (A-FR9's co-located per-region tier variants + superset/freshness lint is right), but it is specified against a **stale snapshot of `load_experience_doc`** and will collide with code merged today.
+- **Rationale:** FR-9 cites `writes.py:126` as "a **binary** slice, **no third region**." As of PR #115, `load_experience_doc(key, *, compact=False, section=None)` already has a **second axis** (`section=`) and a **third region** (`<!-- BANNER -->`), plus a `_SLICE_MARKERS` full-render strip. The tier rebuild must compose with `section=` (orthogonal: *which slice* × *disclosure tier*), and the current loader **falls back to the full doc** when a region is absent — the exact anti-pattern A-FR9's "degrade to light" must replace, not inherit.
+- **Assumptions:** `origin/main` post-#115 is the implementation base.
+- **Suggested improvement:** See **R3-F30**.
+
+**Ask — FR-11 pre-pass ordering/idempotency vs confirm machinery + OQ-10.**
+- **Summary answer:** Already resolved — no new suggestion.
+- **Rationale:** A-FR16 makes the pre-pass idempotent ("a second run writes nothing and never bumps an existing `at`"), records fields un-shielded this project and skips re-shielding them, and specifies a broader-surface switch **re-opens** audience-defaulted fields — closing the persona-switch and re-shield hazards.
+- **Assumptions:** A-FR16 is implemented as written.
+- **Suggested improvement:** None — do not reopen.
+
+**Ask — OQ-8 ledger provenance encoding + backward-tolerance.**
+- **Summary answer:** The encoding decision (A-FR6 conditional bump + compat table + A-FR6b strip-on-promote) is solid; the residual risk is that the **fail-open default is unenforced**.
+- **Rationale:** A-FR6 makes "absence of `provenance` ⇒ explicit/human" normative — fail-*open* (routes an untagged entry to the more-authoritative bucket), safe only while **every** non-explicit writer stamps provenance. Nothing makes that a tested invariant.
+- **Assumptions:** the pre-pass (FR-11) and any future machine writer share the ledger.
+- **Suggested improvement:** See **R3-F31**.
+
+**Ask — OQ-9 which fields Beginner shields.**
+- **Summary answer:** Adequately resolved by A-OQ9 (shieldable ⇔ safe/universal/reversible default + `lint_config` allowlist). No new suggestion.
+
+**Ask — Byte-identity guarantee (FR-4): is a golden sufficient?**
+- **Summary answer:** A-FR4's split (`inputs/` full-byte vs `confirmed.yaml` value-only-per-path, normalizing `at`/`mode`/`provenance`) + the partial-explicit and pre-pass-then-promote timeline goldens is sufficient; the entry-ordering concern is subsumed by the per-`value_path` comparison. No new suggestion.
+
+##### Feature Requirements Suggestions
+
+- **R3-F30** *(FR-9/A-FR9, Architecture/Interfaces, high)* The tier-loader rebuild is specified against a **pre-#115 `load_experience_doc`** and will collide with merged code. On `origin/main` the signature is `load_experience_doc(key, *, compact=False, section=None)` with a `<!-- BANNER -->` region and a `_SLICE_MARKERS` full-render strip (`concierge/writes.py`). A-FR9 must: (a) make `tier` **compose with** the existing `section=` axis rather than replacing `compact` in isolation (a banner is not a disclosure tier); (b) add the new tier/`<!-- PLAIN -->` (or per-region-variant) markers to **`_SLICE_MARKERS`**, or Beginner prose **leaks into `explain`/full-render** (that path strips only registered markers); (c) explicitly **replace** the loader's current silent **fall-back-to-full-doc** behavior with A-FR9's fail-closed "degrade to light" — the tier loader must never serve raw un-tiered prose to a Beginner (the shipped loader concretely exhibits the fallback hazard R2-F23/A-FR9 warned of); (d) refresh the stale `writes.py:126` "binary slice / no third region" citations. **Validation:** `tier=expanded` on a doc lacking an expanded variant yields the *light* variant (never the full doc); no tier marker survives a full/`explain` render.
+- **R3-F31** *(FR-6/A-FR6/FR-11, Data/Validation, medium-high)* Make the fail-open provenance default enforceable. A-FR6 routes `provenance`-absent entries to `confirmed`/explicit — correct for legacy `v1` writers, but it silently **launders any future untagged write into a human confirmation**. Add a **normative write-path invariant** — every non-explicit ledger writer (the FR-11 pre-pass, any later machine writer) MUST stamp `provenance` — plus a named test (`test_prepass_writes_are_provenance_tagged`) asserting `apply_audience_defaults` **never** writes a `provenance`-less entry. This is the inverse of the codebase's own trust-tier fail-safe precedent (a missing trust marker must not default to the *most*-trusted tier unless a write-path invariant guarantees the marker is always present), so the guarantee must be explicit and tested, not assumed. **Validation:** an AST/grep check that every ledger write outside `kickoff confirm` supplies a provenance; the named test above.
+
+**Endorsements (cross-reviewer):** none new — all R1/R2 items are already triaged into Appendix A; R3 raises only points unaddressed by the applied amendments.
+
+#### Review Round R4 — claude-opus-4-8 — 2026-07-06
+
+- **Reviewer**: claude-opus-4-8
+- **Scope**: **Builder's-eye review** by the agent who implemented the substrate this feature rests on — the `confirmed.yaml` ledger + `build_confirm_plan`/`apply_confirm` (value-input confirmation, PRs #112/#113), the guided confirm walk + `awaiting_fields`/`domain_confirmation` (PR #114) **including the present-file gate merged TODAY (PR #116)**, `load_experience_doc` (content-contract), and the red-carpet-wizard retirement (PR #117). All findings below were **verified against `origin/main`** post-#115/#116/#117 (which post-date this doc's planning pass). Settled A/B items not reopened.
+
+**Endorsements (validated against current code):**
+- **R3-F30 (STRONGLY endorse — verified).** Confirmed the live signature is `load_experience_doc(key, *, compact=False, section=None)` with `_SLICE_MARKERS = (<!-- TL;DR -->, <!-- BANNER -->)`, a `section="banner"` slice, AND a silent **fall-back-to-full-doc** on a missing region (`concierge/writes.py`). All four R3-F30 asks are real; (b) marker-registration and (c) replace-the-fallback are the two that will otherwise leak Beginner prose or serve raw un-tiered prose. Apply before FR-9 is implementable.
+- **R3-F31 (endorse).** The fail-open provenance invariant needs the named write-path test; correct precedent citation.
+
+**New Feature Requirements Suggestions:**
+
+- **R4-F32** *(FR-11/A-FR16, Risks, HIGH — new since planning)* **The pre-pass collides with the present-file gate merged today (PR #116).** `awaiting_fields` now surfaces a confirmable field **only if its input YAML exists on disk** (`confirm_walk.py:_input_file_present`), and `apply_audience_defaults` writes via `build_confirm_plan`, which **splices into that file** (requires it to exist). Consequence: the Beginner pre-pass can shield **only already-instantiated fields** — if a user sets Beginner before `kickoff instantiate`, or on a partial project, the pre-pass writes nothing and the Beginner silently gets the **FULL** surface, breaking the reduced-surface promise (FR-11) with no error. **Fix:** make `kickoff instantiate` a documented precondition of the pre-pass (fail-closed with a message if inputs absent), OR have the pre-pass instantiate-then-shield. Add a test: Beginner walk-start on an un-instantiated project either instantiates+shields or refuses — never silently full-surfaces. **Validation:** the FR-11 golden must include an un-instantiated start.
+- **R4-F33** *(FR-12/FR-18, Data, HIGH)* **Advanced confirm-all-`as-is` over placeholder defaults writes garbage.** The confirmable fields' on-disk template defaults are literal placeholders — `build-preferences.yaml#/budgets.per_pipeline_run = "$<5.00>"`, `business-targets.yaml#/monetization.mode_now = <free-during-demo | live>`. `build_confirm_plan(mode="as-is")` records the **on-disk value**, so a batch confirm-all-`as-is` ledgers the *placeholder string* as a confirmed value — and for the `select` field it isn't even a valid choice (would raise `bad_value` or persist a non-choice). FR-18's `--dry-run` lets a human *notice*, but the spec should **forbid or validate `as-is` over a `<…>`/placeholder value** (skip it → it stays `awaiting`, or reject with guidance). I hit this exact trap building the walk. **Validation:** `test_confirm_all_*` asserts a placeholder-valued field is NOT batch-confirmed as-is.
+- **R4-F34** *(A-FR13/FR-13, Interfaces, MEDIUM)* **The new `audience_defaulted` bucket's interaction with the existing `stale` bucket is undefined.** `domain_confirmation` already returns `{confirmable, confirmed, awaiting, stale}` (`stale` = confirmed-but-hand-edited-since). An `audience-default` field the user later hand-edits: is it `stale`, `audience_defaulted`, or **both** (double-counted)? A-FR13 adds the bucket without a precedence rule vs `stale`. **Fix:** define bucket precedence (recommend: an audience-default whose on-disk value diverged is `audience_defaulted` + `stale`-flagged, or promote to a single winning bucket) and assert the buckets **partition** the confirmable set (sum == confirmable, no double-count).
+- **R4-F35** *(A-FR6, Data, MEDIUM — concrete edit site)* **The conditional v1→v2 bump requires making `_dump_ledger` schema-aware.** Today `_dump_ledger` writes `schema: LEDGER_SCHEMA` **unconditionally** (`confirmation.py`). A-FR6's "stay `v1` until the first `audience-default` is written" is not free — `_dump_ledger` must emit `v1` unless the map contains an `audience-default` entry, else it. Name this as the exact implementation site in the plan (single writer, so one edit) and test: a ledger with only explicit entries serializes `schema: kickoff.confirmed.v1` byte-for-byte as today.
+
+**Process note (not a suggestion):** the filename is still `PERSONA_EXPERIENCES_*` while the canonical term is `audience` (§0.3) — already tracked as a cosmetic follow-up; noting so a later reviewer doesn't re-raise it.
