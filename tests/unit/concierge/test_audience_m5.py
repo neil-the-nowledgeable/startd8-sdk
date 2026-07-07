@@ -83,9 +83,10 @@ def _decide_all_explicitly(tmp_path, audience):
     return blob, _ledger_values(tmp_path)
 
 
-def test_same_explicit_decisions_are_byte_identical_across_audiences(tmp_path):
-    """A-FR4: audience is a lens — the SAME explicit decisions yield byte-identical inputs and
-    value-identical ledgers, whether or not a Beginner pre-pass ran first (A-FR6b promotion strips)."""
+def test_audience_byte_identity(tmp_path):
+    """FR-4 (A-FR4) — the named M5 merge gate. Audience is a lens: the SAME explicit decisions yield
+    byte-identical inputs/ and value-identical ledgers, whether or not a Beginner pre-pass ran first
+    (the pre-pass-then-promote timeline; A-FR6b promotion strips provenance)."""
     results = {}
     for audience in ("beginner", "intermediate", "advanced"):
         d = tmp_path / audience

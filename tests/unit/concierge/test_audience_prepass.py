@@ -129,6 +129,25 @@ def test_prepass_beginner_shields_all_and_tags(tmp_path):
     assert bp.get("audience_defaulted") == 1 and bp["confirmed"] == 0
 
 
+def test_prepass_writes_are_provenance_tagged(tmp_path):
+    """A-FR6c (R3-F31) — the named write-path invariant gate: the pre-pass NEVER writes an untagged
+    (would-be-explicit) ledger entry. Every entry it lands carries an ``audience-default:*``
+    provenance; and at the source level, ``apply_audience_defaults`` always passes ``provenance=``."""
+    import inspect
+    _mk_instantiated(tmp_path)
+    res = apply_audience_defaults(tmp_path, "beginner", timestamp="2026-07-06")
+    ledger = load_ledger(tmp_path)
+    # runtime: every field the pre-pass wrote is tagged (none untagged)
+    assert res.written, "expected the pre-pass to write at least one field"
+    for vp in res.written:
+        prov = ledger[vp].get("provenance")
+        assert isinstance(prov, str) and prov.startswith("audience-default:"), (vp, ledger[vp])
+    # source-level invariant: the pre-pass never calls the writer without a provenance= argument
+    src = inspect.getsource(apply_audience_defaults)
+    assert "provenance=audience_default_provenance" in src
+    assert "build_confirm_plan(" in src and "provenance=" in src
+
+
 def test_prepass_unledgered_only_never_overrides_explicit(tmp_path):
     """FR-5: a field the user already confirmed explicitly is left untouched."""
     _mk_instantiated(tmp_path)
