@@ -80,22 +80,22 @@ OUTSIDE_VIEW_SPEC = FAMILIES["gpt"]    # de-correlate the base-rate estimate
 
 ADVERSARY_IDS = {"adversary-exploit", "adversary-discredit"}
 
-# --- default Blue Planet Adventures context (overridable via config) ----------
+# --- domain-NEUTRAL placeholder context (FR-9) --------------------------------
+# These carry NO project domain. They are only a last-resort fallback that defers to the live
+# project artifact (which ``_gather_artifact`` loads) when a caller supplies no context. The panel's
+# run context (desc/objective/strategy) MUST come from the project's kickoff inputs / requirements
+# (config-driven — see FR-6/FR-7); a run that facilitates against these placeholders is a
+# misconfiguration, not a demo. (Historically these baked the ContextCore "Blue Planet Adventures"
+# retail demo, which silently contaminated every run that omitted a domain — removed 2026-07-07.)
 DEFAULT_DESC = (
-    "Blue Planet Adventures is an online store selling outdoor gear (15 SKUs across "
-    "jackets, boots, shirts) to adventure-minded consumers in 6 currencies, on a "
-    "microservice platform (catalog, cart, checkout, payment, currency, shipping, "
-    "email, recommendations, ads)."
+    "the project described by the artifact and kickoff inputs below "
+    "(no domain provided — see the grounded context)"
 )
 DEFAULT_OBJECTIVE = (
-    "Grow revenue from the existing catalog by lifting average order value AND "
-    "conversion rate, WITHOUT adding checkout friction and WITHOUT breaking "
-    "multi-currency correctness or PCI compliance."
+    "deliver the project's stated goals as described in its requirements and kickoff inputs below"
 )
 DEFAULT_STRATEGY = (
-    "(1) grow basket size via complementary-gear bundling and recommendations; "
-    "(2) improve product discovery and trust so browsers convert; "
-    "(3) keep the funnel fast and reliable at seasonal peak."
+    "follow the approach implied by the project's requirements and kickoff inputs below"
 )
 DEFAULT_PROJECT_NAME = "the project described above"
 _NEUTRAL_SYS = (

@@ -58,12 +58,24 @@ def _print_synthesis(spec: str, text: str) -> None:
 
 async def orchestrate(args: argparse.Namespace) -> None:
     from startd8.stakeholder_panel.roster import load_roster
+    from startd8.stakeholder_panel.context_resolver import resolve_context
+
+    # FR-7: derive desc/objective/strategy from the project's own kickoff inputs / requirements
+    # (explicit --desc/--objective/--strategy still override). Never a baked demo domain.
+    ctx = resolve_context(
+        Path(args.project).expanduser(),
+        desc=args.desc,
+        objective=args.objective,
+        strategy=args.strategy,
+        requirements_path=args.requirements,
+    )
+    print(f"[kickoff-panel] {ctx.summary_line()}")
 
     cfg = F.FacilitationConfig(
         project=Path(args.project).expanduser(),
-        objective=args.objective,
-        strategy=args.strategy,
-        desc=args.desc,
+        objective=ctx.objective,
+        strategy=ctx.strategy,
+        desc=ctx.desc,
         project_name=args.project_name,
         cap=args.cap,
         ground=args.ground,
@@ -119,9 +131,14 @@ async def orchestrate(args: argparse.Namespace) -> None:
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Facilitated multi-round kickoff panel (v0.2 / Tier-1).")
     ap.add_argument("--project", required=True, help="Project root with docs/kickoff/inputs/stakeholders.yaml")
-    ap.add_argument("--objective", default=F.DEFAULT_OBJECTIVE)
-    ap.add_argument("--strategy", default=F.DEFAULT_STRATEGY)
-    ap.add_argument("--desc", default=F.DEFAULT_DESC)
+    # Default None → resolve_context() derives these from the project's kickoff inputs / requirements
+    # (FR-7). Passing a value here overrides the derived one. No baked demo domain (FR-5/FR-6).
+    ap.add_argument("--objective", default=None, help="Override the objective derived from business-targets.yaml")
+    ap.add_argument("--strategy", default=None, help="Override the strategy derived from business-targets.yaml")
+    ap.add_argument("--desc", default=None, help="Override the project description (else parsed / artifact-deferred)")
+    ap.add_argument("--requirements", default=None,
+                    help="Path to a requirements markdown to source the project description from "
+                         "(else a conventional REQUIREMENTS.md is auto-discovered)")
     ap.add_argument("--project-name", dest="project_name", default="",
                     help="Short domain noun used in prompts (e.g. 'a benchmark portal'). "
                          "Prevents the default-domain leaking into a re-purposed run (bug fix from #8).")

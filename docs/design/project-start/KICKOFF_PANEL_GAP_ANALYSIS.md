@@ -50,7 +50,7 @@ hop?" systematically rather than by luck.
 *(Critical Systems Heuristics, Ulrich: who is affected but not consulted?)* The
 roster is fixed and **entirely internal** — no **customer voice**, no **adversary**
 (fraudster, competitor), no **regulator-as-participant**, no absent-but-affected
-party (fulfillment, accessibility, sustainability given the "Blue Planet" brand). A
+party (fulfillment, accessibility, sustainability given the project's own domain). A
 facilitator's reflex — "who's not in the room?" — is never triggered.
 
 ### Gap 5 — R0 is thin; the panel is still semi-blind

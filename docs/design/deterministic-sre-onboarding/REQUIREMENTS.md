@@ -5,7 +5,8 @@
 **Status:** Draft
 **Owner:** neil-the-nowledgeable
 **Relates to:** `docs/design/benchmark-observability-tracking/` (T0–T5 tracking), the ContextCore
-retail demo (Blue Planet Adventures), `observability/`, `dashboard_creator/`, `startd8-mixin/`
+retail demo (`retail-blue-planet` in `docs/demos/DEMO_REGISTRY.yaml`), `observability/`,
+`dashboard_creator/`, `startd8-mixin/`
 
 ---
 
