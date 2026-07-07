@@ -1,8 +1,9 @@
 # Demo-Data Management + Config-Driven Facilitation — Requirements
 
-**Version:** 0.2 (Phase 1 + Phase 2 implemented)
+**Version:** 0.3 (adds WS4 / FR-13 — dry-run roster-inspection hint)
 **Date:** 2026-07-07
-**Status:** WS1 + WS2 landed on `chore/demo-data-cleanup`; WS3 FR-11 (re-run portal panel) is Phase 3
+**Status:** WS1 + WS2 landed (PR #122); WS3 FR-11 (re-run portal panel) is Phase 3; WS4 FR-13 is new,
+not yet implemented
 **Owner:** startd8-sdk
 
 > **Implementation status.**
@@ -114,6 +115,30 @@ stakeholder panel. The leak has three shapes:
 - **FR-12 — Register, don't delete, the origin.** The retail demo is preserved and referenced via
   FR-2. The generated `convergent-review-prompt-…-20260704T1219.md` at the SDK repo root (untracked,
   regenerable) may be deleted.
+
+### Workstream 4 — Dry-run roster-inspection hint
+
+> **Motivation.** The dry-run echoes only `role_id` (in the model-assignment list) — the roster YAML's
+> richer per-persona metadata (`display_name`, `goals`, `constraints`, `known_positions`,
+> `out_of_scope`, `answers_for`) is parsed and fed into prompts but never shown. A user validating a
+> run before spending has no in-place pointer to inspect that metadata for `$0`.
+
+- **FR-13 — Dry-run ends with a `$0` roster-inspection hint block.** At the **end** of the dry-run
+  output (after the projected-calls / `[DRY-RUN]` line, before returning), `run_kickoff_panel.py`
+  prints a titled block — e.g. `Inspect the roster ($0, no model calls):` — listing the roster-metadata
+  inspection commands, **each with a one-line description of what it shows**. Required entries, with the
+  real resolved `--project` path substituted in:
+  1. `startd8 kickoff panel list --project <PROJECT>`
+     — per-persona `display_name` + goal count (the human-readable roster overview).
+  2. `startd8 kickoff panel list --project <PROJECT> --json`
+     — the full parsed briefs: all 7 `PersonaBrief` fields per persona (`role_id`, `display_name`,
+     `goals`, `constraints`, `known_positions`, `out_of_scope`, `answers_for`) for machine/agent use.
+  3. A trailing descriptive line naming *what the fields are* and *why they matter* — that the panel's
+     answers are bounded to these briefs, so this is how to verify a persona will reason from the
+     intended goals/constraints before any paid run.
+  - **Constraints:** dry-run only (not printed on a real `--run`); `$0` (no model calls, no I/O beyond
+    the print); the printed `<PROJECT>` must be the actual resolved project path so the commands are
+    copy-paste runnable; the block is additive and must not alter existing dry-run lines (back-compat).
 
 ---
 
