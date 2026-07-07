@@ -121,6 +121,24 @@ def run_confirm_walk(
     from ..kickoff_experience.manifest import default_config
 
     cfg = config or default_config()
+
+    # M3 (FR-11, A-OQ10): the audience pre-pass fires HERE — at walk-start, an explicit action — never
+    # on a read/render. For Beginner it shields safe-default fields (they drop out of `awaiting_fields`
+    # below = reduced surface); for Intermediate/Advanced it is a no-op (byte-identical to today).
+    from .audience import apply_audience_defaults, resolve_audience_preference
+
+    audience = resolve_audience_preference(project_root).value
+    prepass = apply_audience_defaults(project_root, audience, config=cfg, timestamp=timestamp)
+    if prepass.blocked:   # A-FR11b: fail-closed — never silently full-surface a Beginner
+        emit_line("  This project isn't set up yet, so we couldn't pre-fill anything for you.")
+        emit_line("  Run:  startd8 kickoff instantiate   then try the walk again.")
+        return {"confirmed": [], "skipped": [], "quit": False, "remaining": 0, "blocked": True}
+    if prepass.written:
+        emit_line(
+            f"  ✓ pre-filled {len(prepass.written)} field(s) for you "
+            f"(audience: {prepass.audience.value}) — see them with: startd8 kickoff assess"
+        )
+
     fields = awaiting_fields(project_root, cfg)   # snapshot at start (R2 — stable set)
     confirmed_now: List[str] = []
     skipped: List[str] = []

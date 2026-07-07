@@ -210,6 +210,36 @@ def lint_config(config: KickoffExperienceConfig) -> List[LintIssue]:
                     LintIssue(f.key, "unsafe_write_key", "write_target.key must be a dotted key")
                 )
 
+    # M3 (FR-7/FR-8, A-OQ9): every audience-profile default must reference a real, confirmable, and
+    # SHIELDABLE field, with a value valid for that field. This is what stops a profile from silently
+    # pre-filling a field that has no safe default (A-OQ9) or an out-of-choices value.
+    by_vp = {f.value_path: f for f in config.iter_fields()}
+    confirmable = {
+        f.value_path for f in config.writable_fields()
+        if f.provenance_default in _CONFIRMABLE_PROVENANCE
+    }
+    for audience, profile in AUDIENCE_PROFILES.items():
+        fkey = f"audience:{audience}"
+        for vp, value in profile.items():
+            fdef = by_vp.get(vp)
+            if fdef is None:
+                issues.append(LintIssue(
+                    fkey, "profile_unknown_field",
+                    f"audience {audience!r} default references unknown value_path {vp!r}"))
+                continue
+            if vp not in confirmable:
+                issues.append(LintIssue(
+                    fkey, "profile_not_confirmable",
+                    f"audience {audience!r} default {vp!r} is not a confirmable (defaulted) field"))
+            if vp not in SHIELDABLE_VALUE_PATHS:
+                issues.append(LintIssue(
+                    fkey, "profile_not_shieldable",
+                    f"audience {audience!r} default {vp!r} has no safe default (A-OQ9) — cannot shield"))
+            if fdef.choices and value not in fdef.choices:
+                issues.append(LintIssue(
+                    fkey, "profile_bad_value",
+                    f"audience {audience!r} default {vp!r}={value!r} not in choices {fdef.choices}"))
+
     return issues
 
 
@@ -351,3 +381,45 @@ def default_config() -> KickoffExperienceConfig:
     return KickoffExperienceConfig(
         steps=(conventions_step, build_step, business_step, observability_step)
     )
+
+
+# --- audience default profiles (M3: FR-7/FR-8, A-OQ9) -------------------------------------------
+
+# The template-provenance markers that make a writable field *confirmable* (worth a human decision).
+# Mirrors ``confirmation._CONFIRMABLE_PROVENANCE`` (kept as a literal here to avoid a manifest→
+# confirmation import cycle; a test asserts the two agree).
+_CONFIRMABLE_PROVENANCE: frozenset[str] = frozenset({"estimate", "config-default"})
+
+#: A confirmable field is **shieldable** (an audience may silently pre-fill it) ONLY if it has a
+#: safe, universally-reasonable, **reversible** default (A-OQ9 / R1-F5). A confirmable field WITHOUT
+#: one is never shielded — always prompted, even for Beginner. A future confirmable field with no safe
+#: default is simply omitted here, and ``lint_config`` then rejects any profile that references it.
+SHIELDABLE_VALUE_PATHS: frozenset[str] = frozenset({
+    "build-preferences.yaml#/budgets.per_pipeline_run",   # a low non-prod $ ceiling — safe, reversible
+    "business-targets.yaml#/monetization.mode_now",        # "free-during-demo" — safe (not charging)
+    "observability.yaml#/provenance_default",              # "config-default" — safe industry defaults
+})
+
+#: Per-audience default profiles (FR-7), PARTIAL by design (FR-8): a profile lists only the fields it
+#: shields with a safe default; anything unlisted is left to the normal walk. **Beginner** shields all
+#: shieldable fields (reduced surface); **Intermediate** / **Advanced** shield nothing (today's full
+#: walk — byte-identical). Keyed by the audience SLUG (a plain string) so this module never imports the
+#: ``KickoffAudience`` enum (no cycle). Every entry is validated by ``lint_config``.
+AUDIENCE_PROFILES: dict[str, dict[str, str]] = {
+    "beginner": {
+        "build-preferences.yaml#/budgets.per_pipeline_run": "$5.00",
+        "business-targets.yaml#/monetization.mode_now": "free-during-demo",
+        "observability.yaml#/provenance_default": "config-default",
+    },
+    "intermediate": {},
+    "advanced": {},
+}
+
+
+def audience_defaults(audience: str, config: Optional[KickoffExperienceConfig] = None) -> dict:
+    """The ``{value_path: safe_default}`` a given audience pre-fills (FR-7).
+
+    ``{}`` for an unknown audience or one that shields nothing (Intermediate/Advanced). Partial by
+    design (FR-8) — the returned map is a copy, safe for the caller to iterate/mutate.
+    """
+    return dict(AUDIENCE_PROFILES.get(audience, {}))

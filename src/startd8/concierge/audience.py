@@ -196,3 +196,96 @@ def set_audience_preference(
         target = _write_project_audience(project_root, resolved)
         return AudienceWriteResult(resolved, "project", target)
     raise ValueError(f"unknown scope {scope!r} (expected 'project' or 'global')")
+
+
+# --- M3: the walk-start surface pre-pass (FR-11 / FR-5 / A-FR11b / A-FR6c) -----------------------
+
+
+@dataclass(frozen=True)
+class PrepassResult:
+    """The outcome of :func:`apply_audience_defaults` at a walk-start."""
+
+    audience: KickoffAudience
+    ran: bool                              # False for a non-shielding audience (Intermediate/Advanced)
+    written: tuple                         # value_paths newly shielded this run
+    skipped_ledgered: tuple                # already ledgered (explicit or prior default) — FR-5/idempotent
+    blocked_missing_inputs: tuple          # shieldable fields whose input file is absent (A-FR11b)
+
+    @property
+    def blocked(self) -> bool:
+        """True when the pre-pass wrote nothing because the project isn't instantiated (fail-closed)."""
+        return bool(self.blocked_missing_inputs)
+
+
+def _input_present(project_root: str | Path, file: str) -> bool:
+    return (Path(project_root) / "docs" / "kickoff" / "inputs" / file).is_file()
+
+
+def apply_audience_defaults(
+    project_root: str | Path,
+    audience: str | KickoffAudience,
+    *,
+    config: Optional[Any] = None,
+    timestamp: Optional[str] = None,
+) -> PrepassResult:
+    """The walk-start pre-pass (FR-11): pre-fill an audience's shielded defaults into the ledger as
+    ``audience-default:<slug>`` entries, so they drop out of the confirm walk (Beginner's reduced
+    surface). It is the machine writer M2's provenance was built for.
+
+    Guarantees:
+    - **FR-5 / idempotent (R2-S21):** writes ONLY fields not already in the ledger, so it never
+      overrides an explicit choice and a second run writes nothing (no ``at`` re-bump).
+    - **A-FR6c:** every write is stamped ``audience-default:<slug>`` — it never writes an untagged
+      (would-be-``explicit``) entry.
+    - **A-FR11b (fail-closed):** if any shieldable field's input YAML is absent (the project isn't
+      instantiated), it writes **NOTHING** and reports the missing fields, so a Beginner is never
+      silently full-surfaced. The caller directs the user to ``kickoff instantiate`` first.
+    - Non-shielding audiences (Intermediate/Advanced) are a no-op (``ran=False``) — byte-identical
+      to today.
+    """
+    from ..kickoff_experience.manifest import audience_defaults, default_config
+    from .confirmation import (
+        apply_confirm,
+        audience_default_provenance,
+        build_confirm_plan,
+        confirmed_value_paths,
+    )
+
+    aud = coerce_audience(audience) or DEFAULT_AUDIENCE
+    cfg = config or default_config()
+    profile = audience_defaults(aud.value, cfg)
+    if not profile:
+        return PrepassResult(aud, ran=False, written=(), skipped_ledgered=(), blocked_missing_inputs=())
+
+    ledgered = confirmed_value_paths(project_root)
+
+    # Fail-closed present-file gate (A-FR11b): every field we WOULD write must have its input on disk.
+    missing = []
+    for vp in profile:
+        if vp in ledgered:
+            continue
+        fdef = cfg.field_by_value_path(vp)
+        if fdef is None or fdef.write_target is None:
+            continue
+        if not _input_present(project_root, fdef.write_target.file):
+            missing.append(vp)
+    if missing:
+        return PrepassResult(
+            aud, ran=True, written=(), skipped_ledgered=(), blocked_missing_inputs=tuple(sorted(missing))
+        )
+
+    written: list = []
+    skipped: list = []
+    for vp, value in profile.items():
+        if vp in ledgered:
+            skipped.append(vp)   # FR-5 + idempotent: never overwrite / re-bump an existing entry
+            continue
+        plan = build_confirm_plan(
+            project_root, vp, value, mode="set", timestamp=timestamp,
+            config=cfg, provenance=audience_default_provenance(aud.value),
+        )
+        apply_confirm(project_root, plan)
+        written.append(vp)
+    return PrepassResult(
+        aud, ran=True, written=tuple(written), skipped_ledgered=tuple(skipped), blocked_missing_inputs=()
+    )
