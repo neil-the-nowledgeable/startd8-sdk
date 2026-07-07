@@ -277,6 +277,87 @@ def _fmt_inventory(label: str, items: List[str], cap: int = 40) -> str:
     return f"{label} ({len(items)}): {shown}"
 
 
+_ROUTE_MARKER_RE = re.compile(
+    r"@\w+\.(?:get|post|put|patch|delete|websocket)\(|"  # FastAPI/Starlette decorators
+    r"\bAPIRouter\(|\binclude_router\(|\badd_api_route\(|"  # FastAPI routers
+    r"@(?:app|bp|blueprint)\.route\("  # Flask
+)
+_ENTRYPOINT_NAMES = {"main.py", "app.py", "asgi.py", "wsgi.py", "server.py", "manage.py"}
+_SCAN_SKIP_DIRS = {
+    ".git", ".venv", "venv", "env", "node_modules", "__pycache__", ".mypy_cache",
+    ".pytest_cache", ".startd8", "dist", "build", ".ruff_cache", ".tox", "site-packages",
+}
+
+
+def _scan_built_app(root: Path, *, cap: int = 4000) -> dict:
+    """Read-only heuristic inventory of a BUILT application (H1).
+
+    The kernel survey only reports models/docs/fixtures, so a generated FastAPI app reads to the
+    panel as "a schema, nothing built yet" — even when routers, auth, an entrypoint, and tests all
+    exist on disk. This scans for that build evidence (content/name heuristics only, bounded walk)
+    so grounding reflects a *running system*. Never opens more than ``cap`` files.
+    """
+    modules = test_files = endpoints = migrations = 0
+    route_files: List[str] = []
+    entrypoints: List[str] = []
+    auth_modules: List[str] = []
+    for p in root.rglob("*.py"):
+        if any(part in _SCAN_SKIP_DIRS for part in p.parts) or not p.is_file():
+            continue
+        modules += 1
+        if modules > cap:
+            break
+        try:
+            rel = str(p.relative_to(root))
+        except ValueError:
+            rel = p.name
+        name = p.name.lower()
+        if name.startswith("test_") or name.endswith("_test.py"):
+            test_files += 1
+        if p.name in _ENTRYPOINT_NAMES:
+            entrypoints.append(rel)
+        if "auth" in name:
+            auth_modules.append(rel)
+        if p.parent.name in ("versions", "migrations"):
+            migrations += 1
+        try:
+            hits = len(_ROUTE_MARKER_RE.findall(p.read_text(errors="ignore")))
+        except OSError:
+            hits = 0
+        if hits:
+            endpoints += hits
+            route_files.append(rel)
+    return {
+        "py_modules": modules, "test_files": test_files, "endpoints": endpoints,
+        "route_files": route_files, "entrypoints": entrypoints,
+        "auth_modules": auth_modules, "migrations": migrations,
+    }
+
+
+def _render_built_app(app: dict) -> str:
+    """Render the built-application inventory as grounding — the counter to 'nothing is built yet'."""
+    n = int(app.get("py_modules", 0) or 0)
+    if not n:
+        return "### Built application\n(No application code found on disk — data-model/contract only.)"
+    lines = ["### Built application (already exists on disk — this is NOT just a schema)",
+             f"Python modules: {n}"]
+    rf = app.get("route_files", [])
+    if rf:
+        lines.append(
+            f"HTTP route/endpoint files: {len(rf)} (~{app.get('endpoints', 0)} route handlers) — "
+            f"e.g. {', '.join(rf[:5])}"
+        )
+    if app.get("entrypoints"):
+        lines.append(f"App entrypoint(s): {', '.join(app['entrypoints'][:4])}")
+    if app.get("auth_modules"):
+        lines.append(f"Auth module(s): {', '.join(app['auth_modules'][:4])}")
+    if app.get("migrations"):
+        lines.append(f"DB migration files: {app['migrations']}")
+    if app.get("test_files"):
+        lines.append(f"Test files: {app['test_files']}")
+    return "\n".join(lines)
+
+
 def _render_survey(survey: dict) -> str:
     """Render the kernel ``survey`` inventory (models/docs/fixtures) as grounding text (H1)."""
     reqs = [d.get("path", "") for d in survey.get("requirement_docs", [])]
@@ -318,6 +399,14 @@ def _gather_artifact(project) -> Tuple[str, str]:
             "files ONLY. Current-state and assumptions-confidence may under-read reality."
         )
         logger.warning("facilitation grounding degraded to schema-only: %s", exc)
+
+    # H1: built-application inventory — routers/auth/entrypoint/tests on disk. Without this the
+    # grounding is models+schema only, which the panel reads as "nothing is built yet" even for a
+    # fully generated, running app. Independent of build_survey so it still runs if that degrades.
+    try:
+        parts.append(_render_built_app(_scan_built_app(root)))
+    except Exception as exc:  # noqa: BLE001 - grounding must never crash the run
+        logger.warning("built-app scan failed: %s", exc)
 
     # Static schema/description excerpts (kept as corroborating detail under the live inventory).
     picks = ["prisma/schema.prisma", ".contextcore.yaml", "CLAUDE.md", "README.md"]
