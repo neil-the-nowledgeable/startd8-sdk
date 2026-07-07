@@ -111,6 +111,17 @@ async def orchestrate(args: argparse.Namespace) -> None:
 
     if not args.run:
         print("\n[DRY-RUN] No model calls made. Re-run with --run to execute (spends money).")
+        # FR-13: the dry-run echoes only role_id above; point at the $0 ways to inspect the
+        # roster's richer per-persona metadata before spending on a real run.
+        proj = Path(args.project).expanduser()
+        print("\nInspect the roster ($0, no model calls):")
+        print(f"  startd8 kickoff panel list --project {proj}")
+        print("      -> each persona's display_name + goal count (human-readable roster overview)")
+        print(f"  startd8 kickoff panel list --project {proj} --json")
+        print("      -> full parsed briefs: all 7 PersonaBrief fields per persona")
+        print("         (role_id, display_name, goals, constraints, known_positions, out_of_scope, answers_for)")
+        print("  Panel answers are bounded to each persona's brief, so use the above to confirm a")
+        print("  persona will reason from the intended goals/constraints before any paid --run.")
         return
 
     fac = F.KickoffFacilitator(

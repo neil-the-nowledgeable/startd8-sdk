@@ -2,8 +2,8 @@
 
 **Version:** 0.3 (adds WS4 / FR-13 — dry-run roster-inspection hint)
 **Date:** 2026-07-07
-**Status:** WS1 + WS2 landed (PR #122); WS3 FR-11 (re-run portal panel) is Phase 3; WS4 FR-13 is new,
-not yet implemented
+**Status:** WS1 + WS2 landed (PR #122); WS4 FR-13 implemented (this branch); WS3 FR-11 (re-run portal
+panel) is Phase 3
 **Owner:** startd8-sdk
 
 > **Implementation status.**
