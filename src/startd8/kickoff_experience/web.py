@@ -950,6 +950,38 @@ def build_kickoff_app(
                                 status_code=400, headers=dict(_FRAME_DENY_HEADERS))
         return JSONResponse(view, headers=dict(_FRAME_DENY_HEADERS))
 
+    @app.get("/audience.json")
+    def audience_json() -> JSONResponse:
+        # FR-14/FR-19: the resolved audience + its disclosure tier + the selectable choices. Read-only.
+        from ..concierge.audience import KickoffAudience, disclosure_tier, resolve_audience_preference
+
+        res = resolve_audience_preference(root)
+        return JSONResponse(
+            {"audience": res.value.value, "source": res.source, "tier": disclosure_tier(res.value),
+             "choices": [a.value for a in KickoffAudience]},
+            headers=dict(_FRAME_DENY_HEADERS),
+        )
+
+    @app.post("/audience/set")
+    def audience_set(audience: str = Form(...), csrf: str = Form(...),
+                     host: Optional[str] = Header(default=None)) -> JSONResponse:
+        """FR-19: the web audience selector. Persists via the **same** canonical
+        ``set_audience_preference`` the CLI uses (NOT a second write path), behind the shared write
+        gate (cloud read-only / feature-mode / loopback-Host / CSRF / rate-limit). Writes ONLY the
+        preference — no pre-pass (A-OQ10); the audience takes effect at the next walk-start."""
+        gate = _concierge_write_gate(host, csrf, clock())
+        if gate is not None:
+            return gate
+        from ..concierge.audience import set_audience_preference
+
+        try:
+            result = set_audience_preference(audience, project_root=root, scope="project")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "code": "bad_audience", "message": str(exc)},
+                                status_code=400, headers=dict(_FRAME_DENY_HEADERS))
+        return JSONResponse({"ok": True, "audience": result.value.value, "scope": result.scope,
+                             "target": result.target}, headers=dict(_FRAME_DENY_HEADERS))
+
     @app.get("/red-carpet.json")
     def red_carpet_json() -> JSONResponse:
         # The Red Carpet staged build map (FR-RCT-2, OQ-4) — read-only, $0; the chat-page stage rail
