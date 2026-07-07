@@ -35,7 +35,7 @@ def _load(name: str) -> KickoffTranscript:
 # ── model / graceful optionals (FR-UX-3) ──
 class TestModel:
     def test_complete_fixture_loads(self):
-        t = _load("complete_retail.json")
+        t = _load("complete_generic.json")
         assert t.session_id.startswith("kp-")
         assert len(t.rounds) == 4
         assert t.roster_size == 12
@@ -71,7 +71,7 @@ class TestModel:
         assert model_family(spec) == fam
 
     def test_family_distribution_and_adversary(self):
-        t = _load("complete_retail.json")
+        t = _load("complete_generic.json")
         dist = t.family_distribution()
         assert dist == {"Claude": 4, "GPT": 4, "Gemini": 4}
         assert sum(dist.values()) == t.roster_size
@@ -80,7 +80,7 @@ class TestModel:
         assert t.is_adversary(t.adversaries[0])
 
     def test_all_entries_flatten(self):
-        t = _load("complete_retail.json")
+        t = _load("complete_generic.json")
         pairs = t.all_entries()
         assert len(pairs) == sum(len(r.entries) for r in t.rounds)
 
@@ -103,7 +103,7 @@ class TestStore:
 
     def test_list_newest_first(self, tmp_path):
         root = self._project_with(
-            tmp_path, "complete_retail.json", "thin_schema.json", "halted.json"
+            tmp_path, "complete_generic.json", "thin_schema.json", "halted.json"
         )
         store = KickoffPanelStore(root)
         ids = store.list_sessions()
@@ -112,7 +112,7 @@ class TestStore:
         assert mtimes == sorted(mtimes, reverse=True)  # newest first
 
     def test_load_roundtrips(self, tmp_path):
-        root = self._project_with(tmp_path, "complete_retail.json")
+        root = self._project_with(tmp_path, "complete_generic.json")
         store = KickoffPanelStore(root)
         sid = store.latest_session_id()
         t = store.load(sid)
@@ -126,14 +126,14 @@ class TestStore:
 # ── HTML render (FR-UX-4..22) ──
 class TestRenderHtml:
     def test_standalone_document(self):
-        html = render_html(_load("complete_retail.json"))
+        html = render_html(_load("complete_generic.json"))
         assert html.lstrip().startswith("<!doctype html>")
         assert html.rstrip().endswith("</html>")
         assert "__SESSION_JSON__" not in html
 
     def test_byte_identity_static_default(self):
         """serve is None ⇒ byte-identical to the no-arg call (static guarantee)."""
-        t = _load("complete_retail.json")
+        t = _load("complete_generic.json")
         assert render_html(t) == render_html(t, serve=None)
 
     def test_embedded_json_no_raw_closing_script(self):
@@ -167,7 +167,7 @@ class TestRenderHtml:
         assert "\\u003c" in html  # the escape is present
 
     def test_embedded_json_parses_after_unescaping(self):
-        html = render_html(_load("complete_retail.json"))
+        html = render_html(_load("complete_generic.json"))
         m = re.search(
             r'<script type="application/json" id="session-data">\s*(.*?)\s*</script>',
             html,
@@ -179,7 +179,7 @@ class TestRenderHtml:
         assert len(payload["rounds"]) == 4
 
     def test_contains_rounds_roles_and_families(self):
-        t = _load("complete_retail.json")
+        t = _load("complete_generic.json")
         html = render_html(t)
         first_entry = t.rounds[0].entries[0]
         assert first_entry.display_name in html or first_entry.role_id in html
@@ -189,14 +189,14 @@ class TestRenderHtml:
 
     def test_adversary_marking_present(self):
         """FR-UX-10: adversary roles are visually distinguished in the payload/markup."""
-        t = _load("complete_retail.json")
+        t = _load("complete_generic.json")
         assert t.adversaries
         html = render_html(t)
         assert '"is_adversary": true' in html
         assert "adversary" in html  # the attack-framed badge label
 
     def test_unratified_banner_always_present(self):
-        for fx in ("complete_retail.json", "thin_schema.json", "halted.json"):
+        for fx in ("complete_generic.json", "thin_schema.json", "halted.json"):
             html = render_html(_load(fx))
             assert "SYNTHETIC PANEL" in html
             assert "unratified" in html
@@ -210,19 +210,19 @@ class TestRenderHtml:
 
     def test_cost_zero_renders_not_recorded(self):
         # complete fixture has cost_total_usd 0.0 → payload carries 0/None; text renderer says so
-        txt = render_text(_load("complete_retail.json"))
+        txt = render_text(_load("complete_generic.json"))
         assert "not recorded" in txt
 
 
 # ── text render (CLI show) ──
 class TestRenderText:
     def test_round_major_default(self):
-        txt = render_text(_load("complete_retail.json"))
+        txt = render_text(_load("complete_generic.json"))
         assert "SYNTHETIC PANEL" in txt.splitlines()[0]
         assert "R1" in txt and "R4" in txt
 
     def test_role_major_repivot(self):
-        t = _load("complete_retail.json")
+        t = _load("complete_generic.json")
         role_txt = render_text(t, by_role=True)
         # a role id appears as a thread header
         assert any(e.role_id in role_txt for r in t.rounds for e in r.entries)
@@ -239,7 +239,7 @@ class TestFacade:
         d = tmp_path / ".startd8" / "kickoff-panel"
         d.mkdir(parents=True)
         shutil.copy(
-            FIXTURES / "complete_retail.json", d / "kp-20260704T154131-e70156.json"
+            FIXTURES / "complete_generic.json", d / "kp-20260704T154131-e70156.json"
         )
         svc = KickoffViewService(tmp_path)
         assert svc.list_sessions() == ["kp-20260704T154131-e70156"]
@@ -314,7 +314,7 @@ class TestModelLiveState:
 
 class TestLiveRender:
     def test_byte_identity_no_live(self):
-        t = _load("complete_retail.json")
+        t = _load("complete_generic.json")
         assert render_html(t) == render_html(t, live_reload_secs=None)
 
     def test_live_injects_refresh_and_banner(self):
