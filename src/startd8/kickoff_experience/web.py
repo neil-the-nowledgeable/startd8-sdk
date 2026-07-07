@@ -979,6 +979,9 @@ def build_kickoff_app(
         except ValueError as exc:
             return JSONResponse({"ok": False, "code": "bad_audience", "message": str(exc)},
                                 status_code=400, headers=dict(_FRAME_DENY_HEADERS))
+        except OSError as exc:   # a write/permission failure must not 500 the surface
+            return JSONResponse({"ok": False, "code": "write_failed", "message": str(exc)},
+                                status_code=500, headers=dict(_FRAME_DENY_HEADERS))
         return JSONResponse({"ok": True, "audience": result.value.value, "scope": result.scope,
                              "target": result.target}, headers=dict(_FRAME_DENY_HEADERS))
 

@@ -260,6 +260,7 @@ def apply_audience_defaults(
     """
     from ..kickoff_experience.manifest import audience_defaults, default_config
     from .confirmation import (
+        ConfirmError,
         apply_confirm,
         audience_default_provenance,
         build_confirm_plan,
@@ -291,16 +292,26 @@ def apply_audience_defaults(
 
     written: list = []
     skipped: list = []
+    failed: list = []
     for vp, value in profile.items():
         if vp in ledgered:
             skipped.append(vp)   # FR-5 + idempotent: never overwrite / re-bump an existing entry
             continue
-        plan = build_confirm_plan(
-            project_root, vp, value, mode="set", timestamp=timestamp,
-            config=cfg, provenance=audience_default_provenance(aud.value),
-        )
-        apply_confirm(project_root, plan)
+        try:
+            plan = build_confirm_plan(
+                project_root, vp, value, mode="set", timestamp=timestamp,
+                config=cfg, provenance=audience_default_provenance(aud.value),
+            )
+            apply_confirm(project_root, plan)
+        except ConfirmError:
+            # The file is present but the write still failed (e.g. a keyless/partial input). Fail-closed
+            # (A-FR11b): treat it like a missing input so the walk never silently full-surfaces — never
+            # let a shield failure crash the walk. Fields written before this remain valid audience
+            # defaults (idempotent on the next run).
+            failed.append(vp)
+            continue
         written.append(vp)
     return PrepassResult(
-        aud, ran=True, written=tuple(written), skipped_ledgered=tuple(skipped), blocked_missing_inputs=()
+        aud, ran=True, written=tuple(written), skipped_ledgered=tuple(skipped),
+        blocked_missing_inputs=tuple(sorted(failed)),
     )

@@ -179,6 +179,24 @@ def test_prepass_fail_closed_on_uninstantiated(tmp_path):
     assert load_ledger(tmp_path) == {}   # zero partial writes
 
 
+def test_prepass_fail_closed_on_write_error(tmp_path, monkeypatch):
+    """Reliability: a present-file that still fails to write (keyless/partial input → ConfirmError) is
+    reported as blocked, NOT crashed into the walk — fail-closed even when the write itself throws."""
+    import startd8.concierge.confirmation as conf
+    _mk_instantiated(tmp_path)
+    real = conf.build_confirm_plan
+
+    def flaky(project_root, vp, *a, **k):
+        if vp == _OBS:
+            raise conf.ConfirmError("capture_failed", "boom")
+        return real(project_root, vp, *a, **k)
+
+    monkeypatch.setattr(conf, "build_confirm_plan", flaky)
+    res = apply_audience_defaults(tmp_path, "beginner", timestamp="2026-07-06")   # must NOT raise
+    assert res.ran is True
+    assert _OBS in res.blocked_missing_inputs   # the failed field is surfaced, not silently dropped
+
+
 def test_prepass_fail_closed_on_partial_project(tmp_path):
     """A-FR11b: even one missing input blocks the whole pre-pass (no partial shield)."""
     inputs = tmp_path / "docs" / "kickoff" / "inputs"
