@@ -267,6 +267,12 @@ class ProviderRegistry:
             pass
 
         try:
+            from .openrouter import OpenRouterProvider
+            _register_if_missing("openrouter", OpenRouterProvider, "OpenRouter")
+        except ImportError:
+            pass
+
+        try:
             from .jetson import JetsonProvider
             _register_if_missing("jetson", JetsonProvider, "Jetson Edge Cluster")
         except ImportError:

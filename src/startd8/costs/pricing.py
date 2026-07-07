@@ -416,6 +416,26 @@ class PricingService:
             input_cost_per_million=0.0, output_cost_per_million=0.0,
             estimated=True, notes="Local Ollama; ≈$0 marginal; 'local' lane (not cost-ranked vs cloud).",
         ),
+        # OpenRouter (FR-OR-5). REAL per-token cost — a normal cost-ranked cloud vendor (FR-OR-7),
+        # NOT a $0 local lane. Keyed by the canonical slash id (== the id the tracker & estimate both
+        # see; no alias translation). The exact provider="openrouter" here is what makes
+        # get_provider_for_model disambiguate an OpenRouter "deepseek/deepseek-chat" from the direct
+        # "deepseek-chat" — they are different id strings. Confirm rates at openrouter.ai/models.
+        "deepseek/deepseek-chat": ModelPricing(
+            model="deepseek/deepseek-chat", provider="openrouter",
+            input_cost_per_million=0.30, output_cost_per_million=1.20,
+            estimated=True, notes="OpenRouter DeepSeek-V3; confirm at openrouter.ai/models.",
+        ),
+        "deepseek/deepseek-r1": ModelPricing(
+            model="deepseek/deepseek-r1", provider="openrouter",
+            input_cost_per_million=0.55, output_cost_per_million=2.19,
+            estimated=True, notes="OpenRouter DeepSeek-R1; confirm at openrouter.ai/models.",
+        ),
+        "qwen/qwen-2.5-coder-32b-instruct": ModelPricing(
+            model="qwen/qwen-2.5-coder-32b-instruct", provider="openrouter",
+            input_cost_per_million=0.16, output_cost_per_million=0.16,
+            estimated=True, notes="OpenRouter Qwen2.5-Coder-32B; confirm at openrouter.ai/models.",
+        ),
     }
 
     # Provider detection patterns
@@ -427,6 +447,10 @@ class PricingService:
         "deepseek": ["deepseek"],
         "jetson": ["jetson"],
         "ollama": ["qwen", "codellama", "llama", "gemma", "startd8-coder"],
+        # NB: aggregator slash-ids (deepseek/…, qwen/…) can't be disambiguated by substring — an
+        # OpenRouter id is attributed via its EXACT DEFAULT_PRICING entry (provider="openrouter"),
+        # not this pattern (which only catches an id literally containing "openrouter").
+        "openrouter": ["openrouter"],
     }
     
     def __init__(self, pricing_file: Optional[Path] = None):

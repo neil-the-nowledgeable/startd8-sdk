@@ -126,6 +126,7 @@ gemini = "startd8.providers.gemini:GeminiProvider"
 mistral = "startd8.providers.mistral:MistralProvider"
 deepseek = "startd8.providers.deepseek:DeepSeekProvider"
 jetson = "startd8.providers.jetson:JetsonProvider"
+openrouter = "startd8.providers.openrouter:OpenRouterProvider"
 nim = "startd8.providers.openai:NIMProvider"
 openai-compatible = "startd8.providers.openai:OpenAICompatibleProvider"
 
