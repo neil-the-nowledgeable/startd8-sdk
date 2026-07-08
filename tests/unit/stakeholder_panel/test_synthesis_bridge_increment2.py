@@ -104,3 +104,13 @@ def test_serialize_only_accepted_and_writes_inbox(tmp_path, monkeypatch):
     envelope = json.loads(inbox.read_text())
     paths = [p["params"]["value_path"] for p in envelope["proposals"]]
     assert paths == ["business-targets.budget.target"]
+
+
+def test_default_mapper_import_path_resolves():
+    # Regression: `_default_mapper` once imported `resolve_agent_spec` from `startd8.agents`, which does
+    # not export it (canonical: `startd8.utils.agent_resolution`) — the real paid path would ImportError.
+    # The mock spec resolves a MockAgent (no network, no spend) and must return a string end-to-end.
+    from startd8.stakeholder_panel.synthesis_bridge.extract_llm import _default_mapper
+
+    out = _default_mapper("mock:mock-model")("return []")
+    assert isinstance(out, str)
