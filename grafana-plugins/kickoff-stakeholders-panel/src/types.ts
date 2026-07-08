@@ -10,6 +10,45 @@ export interface StakeholdersPanelOptions {
   datasourceUid: string;
   /** Default cap (max personas queried). Empty = all. */
   defaultCap?: number;
+  /** Which surface this panel shows: the paid Q&A run, or the FR-R7 apply gate. Default `run`. */
+  mode?: 'run' | 'apply';
+}
+
+/** One proposal the apply gate WOULD write — mirrors an item of PreviewResult.would_apply. */
+export interface WouldApplyItem {
+  proposal_id: string;
+  kind: string;
+  value_path?: string | null;
+  params?: Record<string, unknown>;
+}
+
+/** FR-R7 preview response — the would-apply set + the single-use HMAC challenge. */
+export interface ApplyPreviewResult {
+  would_apply: WouldApplyItem[];
+  envelope_seq: number;
+  content_hash: string;
+  challenge: string;
+  expires_in_seconds: number;
+  posture: string;
+}
+
+/** One per-proposal apply outcome — mirrors ApplyResult.outcomes[]. */
+export interface ApplyOutcome {
+  proposal_id: string;
+  decision: string;
+  code: string;
+  ok?: boolean;
+  detail?: string;
+}
+
+/** FR-R7 ratify response — mirrors ApplyResult.to (wrote/actionable/outcomes/shredded). */
+export interface ApplyResultView {
+  wrote: number;
+  actionable: number;
+  outcomes: ApplyOutcome[];
+  inbox_shredded: boolean;
+  stale: boolean;
+  refused_reason: string;
 }
 
 /** Dry-run preview (no spend) — mirrors stakeholder_run.DryRun.to_dict(). */

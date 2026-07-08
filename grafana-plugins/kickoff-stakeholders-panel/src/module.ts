@@ -18,5 +18,20 @@ export const plugin = new PanelPlugin<StakeholdersPanelOptions>(StakeholdersPane
       name: 'Default cap',
       description: 'Default max personas to query (empty = all). Bounds spend.',
       category: ['Run'],
+    })
+    .addRadio({
+      path: 'mode',
+      name: 'Panel mode',
+      description:
+        'Run = the paid stakeholder Q&A. Apply = the FR-R7 write gate (preview → paste challenge → ' +
+        'ratify) that writes the project source of record. Token-gated, not human-proof.',
+      defaultValue: 'run',
+      settings: {
+        options: [
+          { value: 'run', label: 'Run' },
+          { value: 'apply', label: 'Apply' },
+        ],
+      },
+      category: ['Connection'],
     });
 });
