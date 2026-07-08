@@ -79,7 +79,7 @@ def _default_mapper(model_spec: Optional[str]) -> Mapper:
     def mapper(prompt: str) -> str:
         import asyncio
 
-        from startd8.agents import resolve_agent_spec
+        from startd8.utils.agent_resolution import resolve_agent_spec
 
         spec = model_spec or "anthropic:claude-sonnet-4-6"
         agent = resolve_agent_spec(spec)
