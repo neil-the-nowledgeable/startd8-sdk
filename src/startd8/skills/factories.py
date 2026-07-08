@@ -10,6 +10,7 @@ Example:
     >>> response = await agent.agenerate("Add achievement system")
 """
 
+from pathlib import Path
 from typing import Optional
 
 from .agent import SkillAgent, SkillAgentConfig
@@ -21,6 +22,27 @@ try:
 except ImportError:
     CostTracker = None
     _COSTS_AVAILABLE = False
+
+
+def _build_cost_tracker():
+    """Construct a usable ``CostTracker`` (store + pricing) or ``None``.
+
+    ``CostTracker()`` requires a ``store`` and a ``pricing_service`` — calling it with no args (as
+    this module previously did) raises ``TypeError`` the moment ``cost_tracking=True`` is requested,
+    which the docstrings example. Build a real tracker persisting to ``~/.startd8/skill-costs.db``;
+    return ``None`` (cost tracking simply off) if the cost infra can't be stood up — never raise.
+    """
+    if not _COSTS_AVAILABLE:
+        return None
+    try:
+        from ..costs import PricingService
+        from ..costs.store import CostStore
+
+        db = Path.home() / ".startd8" / "skill-costs.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        return CostTracker(CostStore(db), PricingService())
+    except Exception:  # noqa: BLE001 - cost tracking is optional; never block agent creation
+        return None
 
 
 def create_game_enhancer_agent(
@@ -68,7 +90,7 @@ def create_game_enhancer_agent(
     
     cost_tracker = None
     if cost_tracking and _COSTS_AVAILABLE:
-        cost_tracker = CostTracker()
+        cost_tracker = _build_cost_tracker()
     
     return SkillAgent.from_config(config, cost_tracker=cost_tracker)
 
@@ -118,7 +140,7 @@ def create_html5_game_designer_agent(
     
     cost_tracker = None
     if cost_tracking and _COSTS_AVAILABLE:
-        cost_tracker = CostTracker()
+        cost_tracker = _build_cost_tracker()
     
     return SkillAgent.from_config(config, cost_tracker=cost_tracker)
 
@@ -169,6 +191,6 @@ def create_code_reviewer_agent(
     
     cost_tracker = None
     if cost_tracking and _COSTS_AVAILABLE:
-        cost_tracker = CostTracker()
+        cost_tracker = _build_cost_tracker()
     
     return SkillAgent.from_config(config, cost_tracker=cost_tracker)
