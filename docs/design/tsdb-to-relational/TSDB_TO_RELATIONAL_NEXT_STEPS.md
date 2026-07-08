@@ -60,7 +60,8 @@ genuinely-new writers.
 - [ ] **M0 — TSDB reader (FR-1).** New `tsdb_maturation/reader.py`: `httpx` instant query +
       `last_over_time(<m>[<lookback>])` + endpoint config (Grafana proxy **with auth** / direct Mimir) +
       **empty-result detection** (OQ-6). *Validate vs a recorded fixture or a live/local Mimir.* — **reuse
-      the recon scripts in `/tmp/tsdb_*.py` as the starting shape.**
+      the preserved recon scripts in `spike/recon/` (`tsdb_recon.py` inventory, `tsdb_inspect.py` labels,
+      `tsdb_range.py` query_range→specimen) as the starting shape.**
 - [ ] **M1 — Specimen (FR-2, FR-9).** `specimen.py`: `flatten_series` → durable **raw** JSON + `--dry-run`
       + `grain` metadata. (Aggregation deferred to M2/M5 — it needs the identity.)
 - [~] **M2 — Inference core (FR-3/4/5/11/12) — THE RISK.** *Core PROVEN by the spike* (`spike_inference.py`,
@@ -119,8 +120,9 @@ This single test is the empirical proof of rung 3.
 - **Reference stays external.** The michigan repo (`~/Documents/politics/government-observability/…`) is
   read-only reference; do not vendor it. Port the *shape* of `query_mimir`/`extract_labels`/`extract_value`
   /`deduplicate_rows`, not the urllib/PostgREST specifics.
-- **Recon artifacts** (`/tmp/tsdb_recon.py`, `tsdb_inspect.py`, `tsdb_range.py`,
-  `specimen-startd8_cost_USD_total.json`) are throwaway but are the working starting shape for M0/M1.
+- **Recon artifacts** are preserved in `spike/recon/` (`tsdb_recon.py`, `tsdb_inspect.py`,
+  `tsdb_range.py`, `specimen-startd8_cost_USD_total.json`) — the working starting shape for M0/M1 and a
+  real specimen fixture for the M2 tests (read-only against a Grafana datasource proxy at :3000).
 - **Capability-index:** on ship, add a capability entry (this is a new SDK surface — the front-half of the
   two generation paths' relational story).
 
