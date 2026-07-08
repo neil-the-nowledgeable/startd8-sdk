@@ -251,6 +251,66 @@ def test_execute_fail_closed_no_spend(tmp_path):
     assert _Panel.constructions == 0  # refused BEFORE constructing/spending
 
 
+def test_execute_forwards_cost_tracker(tmp_path):
+    r = _Roster([_P("a")])
+    captured = {}
+
+    class _CapPanel(_Panel):
+        def __init__(self, roster, **kw):
+            super().__init__(roster, **kw)
+            captured.update(kw)
+
+    execute_run(
+        r, project_root=tmp_path, question="q", cap=None, model="m",
+        run_key=derive_run_key("q", None, roster_version(r)),
+        budget_manager=_blocking_manager(), cost_tracker="TRACKER-SENTINEL", panel_factory=_CapPanel,
+    )
+    assert captured.get("cost_tracker") == "TRACKER-SENTINEL"  # FR-9: tracker reaches the panel
+
+
+def test_cancel_in_flight_run(tmp_path):
+    import threading
+    import time
+
+    from startd8.kickoff_experience.stakeholder_run import cancel_run
+
+    r = _Roster([_P("a"), _P("b")])
+    rk = derive_run_key("q", None, roster_version(r))
+
+    class _SlowPanel(_Panel):
+        async def ask_all(self, question, *, cap=None, value_path=""):
+            import asyncio
+
+            await asyncio.sleep(30)  # long — will be cancelled mid-flight
+            return []
+
+    out = {}
+
+    def _worker():
+        out["res"] = execute_run(
+            r, project_root=tmp_path, question="q", cap=None, model="m",
+            run_key=rk, budget_manager=_blocking_manager(), panel_factory=_SlowPanel,
+        )
+
+    t = threading.Thread(target=_worker)
+    t.start()
+    signalled = False
+    for _ in range(60):  # wait until the run registers, then cancel it
+        time.sleep(0.05)
+        if cancel_run(rk):
+            signalled = True
+            break
+    t.join(timeout=5)
+    assert signalled
+    assert out["res"].status == "cancelled"
+
+
+def test_cancel_unknown_run_returns_false():
+    from startd8.kickoff_experience.stakeholder_run import cancel_run
+
+    assert cancel_run("no-such-run") is False
+
+
 class _PartialPanel(_Panel):
     async def ask_all(self, question, *, cap=None, value_path=""):
         return [_Answer("a", "grounded"), _Answer("b", "deferred")]

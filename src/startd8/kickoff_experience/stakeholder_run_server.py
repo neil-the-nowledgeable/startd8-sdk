@@ -35,6 +35,7 @@ from .stakeholder_run import (
     BudgetNotConfiguredError,
     RunKeyMismatchError,
     StakeholderRunError,
+    cancel_run,
     dry_run,
     execute_run,
 )
@@ -69,6 +70,7 @@ class RunServerConfig:
     allowed_origins: Tuple[str, ...] = ()
     # injectable for tests / wiring (real callers leave these None → constructed on demand)
     budget_manager: Any = None
+    cost_tracker: Any = None
     panel_factory: Optional[Callable[..., Any]] = None
     pricing: Any = None
     nonces: _NonceStore = field(default_factory=_NonceStore)
@@ -107,12 +109,24 @@ def _load_roster(config: RunServerConfig) -> Any:
     return load_roster(path)
 
 
+def _cost_db(config: RunServerConfig) -> Path:
+    return Path(config.project_root).expanduser() / ".startd8" / "costs.db"
+
+
 def _default_manager(config: RunServerConfig) -> Any:
     from startd8.costs.budget import BudgetManager
     from startd8.costs.store import CostStore
 
-    db = Path(config.project_root).expanduser() / ".startd8" / "costs.db"
-    return BudgetManager(CostStore(db))
+    return BudgetManager(CostStore(_cost_db(config)))
+
+
+def _default_cost_tracker(config: RunServerConfig) -> Any:
+    """A real cost tracker so actual per-run spend is recorded (FR-9) — same CostStore as the budget."""
+    from startd8.costs.pricing import PricingService
+    from startd8.costs.store import CostStore
+    from startd8.costs.tracker import CostTracker
+
+    return CostTracker(CostStore(_cost_db(config)), PricingService())
 
 
 async def _run(request: Request) -> JSONResponse:
@@ -143,6 +157,7 @@ async def _run(request: Request) -> JSONResponse:
         return _err(400, "run_key is required for a confirmed run (obtain it from a dry_run)")
 
     manager = config.budget_manager or _default_manager(config)
+    tracker = config.cost_tracker if config.cost_tracker is not None else _default_cost_tracker(config)
     try:
         result = await run_in_threadpool(
             execute_run,
@@ -154,6 +169,7 @@ async def _run(request: Request) -> JSONResponse:
             run_key=run_key,
             budget_manager=manager,
             scope_project=config.scope_project,
+            cost_tracker=tracker,
             panel_factory=config.panel_factory,
         )
     except BudgetNotConfiguredError as exc:
@@ -187,6 +203,15 @@ async def _status(request: Request) -> JSONResponse:
     )
 
 
+async def _cancel(request: Request) -> JSONResponse:
+    config: RunServerConfig = request.app.state.config
+    if (denied := _authorize(request, config)) is not None:
+        return denied
+    run_key = request.path_params["run_key"]
+    ok = cancel_run(run_key)  # signals the in-flight run (FR-12); already-answered personas persist
+    return JSONResponse({"run_key": run_key, "cancelled": ok}, status_code=200 if ok else 404)
+
+
 async def _healthz(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
@@ -198,6 +223,7 @@ def build_stakeholder_run_app(config: RunServerConfig) -> Starlette:
     app = Starlette(
         routes=[
             Route("/stakeholders/run", _run, methods=["POST"]),
+            Route("/stakeholders/run/{run_key}/cancel", _cancel, methods=["POST"]),
             Route("/stakeholders/run/{session_id}", _status, methods=["GET"]),
             Route("/healthz", _healthz, methods=["GET"]),
         ]

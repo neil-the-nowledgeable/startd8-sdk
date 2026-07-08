@@ -173,6 +173,35 @@ def test_status_roundtrip(tmp_path, monkeypatch):
     assert client.get("/stakeholders/run/sess-x").status_code == 401  # auth required
 
 
+# --------------------------------------------------------------------------- cost tracker / cancel
+
+
+def test_server_wires_cost_tracker(tmp_path, monkeypatch):
+    captured = {}
+
+    class _CapPanel(_Panel):
+        def __init__(self, roster, **kw):
+            super().__init__(roster, **kw)
+            captured.update(kw)
+
+    roster = _Roster(["owner"])
+    cfg = srv.RunServerConfig(
+        project_root=tmp_path, token=TOKEN, model="m",
+        budget_manager=_Manager([_Budget()]), panel_factory=_CapPanel,
+    )
+    monkeypatch.setattr(srv, "_load_roster", lambda config: roster)
+    client = TestClient(srv.build_stakeholder_run_app(cfg))
+    rk = derive_run_key("q", None, roster_version(roster))
+    client.post("/stakeholders/run", json={"question": "q", "run_key": rk}, headers=_auth())
+    assert captured.get("cost_tracker") is not None  # server built + passed a real CostTracker (FR-9)
+
+
+def test_cancel_route_auth_and_unknown(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    assert client.post("/stakeholders/run/nope/cancel").status_code == 401  # auth required
+    assert client.post("/stakeholders/run/nope/cancel", headers=_auth()).status_code == 404  # no such run
+
+
 # --------------------------------------------------------------------------- strict mode
 
 

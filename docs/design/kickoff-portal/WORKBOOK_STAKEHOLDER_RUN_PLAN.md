@@ -84,10 +84,12 @@ plugin README).
 - **Daily USD ceiling — SHIPPED:** `ensure_daily_ceiling()` registers a DAILY `block_on_exceed` budget
   (also satisfies the fail-closed gate); `kickoff stakeholders serve --daily-ceiling` sets it. Aborts
   before the next run's calls exceed the day's cap.
-- **Cancel/abort — DEFERRED (rationale):** the endpoint runs a request **synchronously** (`execute_run`
-  blocks on `ask_all`'s `asyncio.gather` fan-out), so there is no running job to signal. True cancel
-  needs async job management (a job registry + cooperative cancellation in `ask_all`) — a larger change
-  than M3. The daily ceiling + `--cap` bound spend meanwhile; cancel is a CONSIDER-level follow-up.
+- **Cancel/abort — SHIPPED:** `POST /stakeholders/run/{run_key}/cancel` + `cancel_run()`. A run executes
+  in a worker thread's own event loop; a `_RunRegistry` holds `(loop, task)` so a cancel request (a
+  different thread) aborts it cross-thread via `loop.call_soon_threadsafe(task.cancel)`. Personas that
+  already answered persist to the transcript (incremental); in-flight LLM calls are aborted; the run
+  returns `status="cancelled"` with the partial. (No full async-job refactor needed — the sync response
+  contract is preserved.)
 
 ## M4 — Pilot + verdict on household
 
