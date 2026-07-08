@@ -66,8 +66,16 @@ genuinely-new writers.
       capability. 19 tests green (`tests/unit/tsdb_maturation/test_reader.py`, `httpx.MockTransport`, no live
       TSDB). Recon scripts preserved at `spike/recon/` (`tsdb_recon.py` inventory, `tsdb_inspect.py` labels,
       `tsdb_range.py` query_range→specimen; the starting shape M0 generalized onto `httpx`).
-- [ ] **M1 — Specimen (FR-2, FR-9).** `specimen.py`: `flatten_series` → durable **raw** JSON + `--dry-run`
-      + `grain` metadata. (Aggregation deferred to M2/M5 — it needs the identity.)
+- [x] **M1 — Specimen (FR-2, FR-9).** ✅ **DONE** — `src/startd8/tsdb_maturation/specimen.py`:
+      `flatten_series` (one raw record per series `{<label>…, "value", "observed_at"}`), durable atomic
+      JSON (`write_specimen`/`load_specimen`), and `summarize` (dry-run counts + per-label cardinality +
+      sample). **R1-F9 raw invariant** enforced (`n_records == len(series)`, `aggregated=False`) + the FR-4
+      input guard `Specimen.assert_raw()` (aggregated specimen → raises, pinning specimen→identity→aggregate,
+      no cycle). **FR-9 grain honesty**: `Grain.coerce` defaults unknown/missing to least-trusted
+      `tsdb_aggregate` (never inflates to `import_source`); TSDB reads default least-trusted, lossless via
+      `from_records`. Reserved-key (`value`/`observed_at`) label collision refused loudly. 17 tests green;
+      E2E-verified against the preserved recon specimen (28 records, high-card `project` surfaced for FR-5).
+      (Aggregation still deferred to M5 — it needs the identity.)
 - [~] **M2 — Inference core (FR-3/4/5/11/12) — THE RISK.** *Core PROVEN by the spike* (`spike_inference.py`,
       12/12 green): `_infer_scalar_type` (measure→Decimal, labels→String, enums OFF), **direct `EntityGraph`**
       (the `graph_from_prisma` pattern — NOT `extract_entities`), single-metric `infer_identity` → composite

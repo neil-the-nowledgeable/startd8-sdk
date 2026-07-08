@@ -7,12 +7,14 @@ back-half (``generate backend`` + importer). See
 
 Milestones (PLAN §5):
 
-* **M0 — reader** (:mod:`startd8.tsdb_maturation.reader`) — FR-1, this module. A bounded
-  Prometheus/Mimir reader over ``last_over_time(<metric>[<lookback>])``.
-* M1 — specimen · M2 — inference core · M2.5 — confirmation gate · M3 — ``imports.yaml``
-  generator · M4 — gate wiring · M5 — backend + backfill · M6 — CLI · M7 — histograms.
+* **M0 — reader** (:mod:`startd8.tsdb_maturation.reader`) — FR-1. A bounded Prometheus/Mimir
+  reader over ``last_over_time(<metric>[<lookback>])``.
+* **M1 — specimen** (:mod:`startd8.tsdb_maturation.specimen`) — FR-2/FR-9. Flattens a read
+  into a durable, raw, grain-labeled specimen file.
+* M2 — inference core · M2.5 — confirmation gate · M3 — ``imports.yaml`` generator · M4 —
+  gate wiring · M5 — backend + backfill · M6 — CLI · M7 — histograms.
 
-Only M0 is implemented so far.
+M0 and M1 are implemented so far.
 """
 
 from __future__ import annotations
@@ -29,8 +31,19 @@ from .reader import (
     TsdbReader,
     TsdbReaderError,
 )
+from .specimen import (
+    Grain,
+    Specimen,
+    SpecimenError,
+    SpecimenSummary,
+    flatten_series,
+    load_specimen,
+    summarize,
+    write_specimen,
+)
 
 __all__ = [
+    # M0 — reader
     "AuthError",
     "DirectMimirEndpoint",
     "Endpoint",
@@ -41,4 +54,13 @@ __all__ = [
     "Series",
     "TsdbReader",
     "TsdbReaderError",
+    # M1 — specimen
+    "Grain",
+    "Specimen",
+    "SpecimenError",
+    "SpecimenSummary",
+    "flatten_series",
+    "load_specimen",
+    "summarize",
+    "write_specimen",
 ]
