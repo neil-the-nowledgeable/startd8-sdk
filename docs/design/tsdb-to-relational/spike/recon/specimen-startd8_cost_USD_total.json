@@ -1,0 +1,228 @@
+{
+  "metric": "startd8_cost_USD_total",
+  "n_records": 28,
+  "records": [
+    {
+      "job": "startd8-sdk",
+      "model": "anthropic:claude-opus-4-8",
+      "project": "paymentservice-anthropic_claude-opus-4-8-r0",
+      "provider": "anthropic",
+      "value": 0.0,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "anthropic:claude-opus-4-8",
+      "project": "paymentservice-anthropic_claude-opus-4-8-r1",
+      "provider": "anthropic",
+      "value": 0.0,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "anthropic:claude-opus-4-8",
+      "project": "paymentservice-anthropic_claude-opus-4-8-r2",
+      "provider": "anthropic",
+      "value": 0.0,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "anthropic:claude-sonnet-4-6",
+      "project": "adservice-anthropic_claude-sonnet-4-6-r1",
+      "provider": "anthropic",
+      "value": 0.17507699999999998,
+      "observed_at": "2026-06-15T23:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "anthropic:claude-sonnet-4-6",
+      "project": "adservice-anthropic_claude-sonnet-4-6-r2",
+      "provider": "anthropic",
+      "value": 0.176079,
+      "observed_at": "2026-06-15T23:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "anthropic:claude-sonnet-4-6",
+      "project": "strtd8",
+      "provider": "anthropic",
+      "value": 0.6589140000000001,
+      "observed_at": "2026-06-04T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "gemini:gemini-2.5-flash-lite",
+      "project": "paymentservice-gemini_gemini-2.5-flash-lite-r0",
+      "provider": "gemini",
+      "value": 0.0042306,
+      "observed_at": "2026-06-14T05:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "gemini:gemini-2.5-flash",
+      "project": "paymentservice-gemini_gemini-2.5-flash-r0",
+      "provider": "gemini",
+      "value": 0.00590715,
+      "observed_at": "2026-06-14T05:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "gemini:gemini-2.5-pro",
+      "project": "paymentservice-gemini_gemini-2.5-pro-r0",
+      "provider": "gemini",
+      "value": 0.0,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "gemini:gemini-2.5-pro",
+      "project": "paymentservice-gemini_gemini-2.5-pro-r1",
+      "provider": "gemini",
+      "value": 0.0,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "gemini:gemini-2.5-pro",
+      "project": "paymentservice-gemini_gemini-2.5-pro-r2",
+      "provider": "gemini",
+      "value": 0.0,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "gemini:gemini-2.5-pro",
+      "project": "strtd8-v2-cascade",
+      "provider": "gemini",
+      "value": 0.07878425,
+      "observed_at": "2026-06-06T23:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "mock-model",
+      "project": "context-project",
+      "provider": "unknown",
+      "value": 8.1e-05,
+      "observed_at": "2026-06-17T23:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "mock-model",
+      "project": "test-project",
+      "provider": "unknown",
+      "value": 0.000261,
+      "observed_at": "2026-06-17T23:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "mock-model",
+      "provider": "unknown",
+      "value": 0.0020429999999999992,
+      "observed_at": "2026-06-17T23:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "ollama:startd8-coder",
+      "project": "strtd8",
+      "provider": "ollama",
+      "value": 0.0,
+      "observed_at": "2026-06-04T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.4-mini",
+      "project": "cartservice-openai_gpt-5.4-mini-r0",
+      "provider": "openai",
+      "value": 0.025708400000000003,
+      "observed_at": "2026-06-14T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.4-mini",
+      "project": "checkoutservice-openai_gpt-5.4-mini-r2",
+      "provider": "openai",
+      "value": 0.037886,
+      "observed_at": "2026-06-16T23:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.4-mini",
+      "project": "checkoutservice-openai_gpt-5.4-mini-r3",
+      "provider": "openai",
+      "value": 0.039356,
+      "observed_at": "2026-06-16T23:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.4-mini",
+      "project": "checkoutservice-openai_gpt-5.4-mini-r4",
+      "provider": "openai",
+      "value": 0.0443824,
+      "observed_at": "2026-06-16T23:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.4-nano",
+      "project": "cartservice-openai_gpt-5.4-nano-r0",
+      "provider": "openai",
+      "value": 0.0072237,
+      "observed_at": "2026-06-14T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.4-nano",
+      "project": "paymentservice-openai_gpt-5.4-nano-r0",
+      "provider": "openai",
+      "value": 0.0,
+      "observed_at": "2026-06-14T05:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.5",
+      "project": "cartservice-openai_gpt-5.5-r0",
+      "provider": "openai",
+      "value": 0.347245,
+      "observed_at": "2026-06-14T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.5",
+      "project": "currencyservice-openai_gpt-5.5-r3",
+      "provider": "openai",
+      "value": 0.202795,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.5",
+      "project": "paymentservice-openai_gpt-5.5-r0",
+      "provider": "openai",
+      "value": 0.0,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.5",
+      "project": "paymentservice-openai_gpt-5.5-r1",
+      "provider": "openai",
+      "value": 0.0,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "openai:gpt-5.5",
+      "project": "paymentservice-openai_gpt-5.5-r2",
+      "provider": "openai",
+      "value": 0.0,
+      "observed_at": "2026-06-15T17:50:32Z"
+    },
+    {
+      "job": "startd8-sdk",
+      "model": "test-model",
+      "provider": "unknown",
+      "value": 8.1e-05,
+      "observed_at": "2026-06-17T23:50:32Z"
+    }
+  ]
+}
