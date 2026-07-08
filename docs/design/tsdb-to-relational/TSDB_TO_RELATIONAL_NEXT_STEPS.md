@@ -19,7 +19,17 @@ the running to-do; the FR/AC detail lives in those specs.
 | Reflective-requirements loop (draft → plan → reflect → harden → OQs resolved) | ✅ **v0.5**, plan v1.1 |
 | Every named seam grep-verified (Reference Audit) | ✅ |
 | **CRP (Phase 5)** — R1 run + triaged (19 suggestions, all accepted & merged) | ✅ done |
-| **Any code** | ⛔ **not started — design only** |
+| **M2 inference spike** — rung-3 reproduces the michigan `department_budgets` golden vs the REAL emitter (12/12 GREEN) | ✅ done — `spike/spike_inference.py` |
+| **Production code (`src/`)** | ⛔ not started — the spike is the M2 seed |
+
+> **Spike verdict (2026-07-08, GREEN, committed `6e543fe4` on `spike/tsdb-relational-inference`):**
+> inference independently found the exact 5-col identity key (no `*_display` leak), typed
+> `fiscal_year`→`Int` / `amount`→`Decimal` / slugs→`String`, renamed `source`→`dataSource` to dodge the
+> bookkeeping collision (zero emitter errors), and emitted a valid `schema.prisma` via the real
+> `render_prisma_schema`. **M2 — the load-bearing risk — is de-risked.** Honest caveat: the specimen is
+> full-factorial (independent dims), the clean minimal-unique case; on *correlated* real data a smaller
+> subset can be coincidentally unique — which is exactly why the F1 golden tie-break + F7 confirmation gate
+> exist (both paths exercised). The correlated-columns case is the first fixture to add when hardening M2.
 
 **Nothing is built.** This is a fully-specced, un-implemented capability.
 
@@ -53,14 +63,16 @@ genuinely-new writers.
       the recon scripts in `/tmp/tsdb_*.py` as the starting shape.**
 - [ ] **M1 — Specimen (FR-2, FR-9).** `specimen.py`: `flatten_series` → durable **raw** JSON + `--dry-run`
       + `grain` metadata. (Aggregation deferred to M2/M5 — it needs the identity.)
-- [ ] **M2 — Inference core (FR-3/4/5/11/12) — THE RISK.** `_infer_scalar_type(values)` (measure→Decimal,
-      labels→String, enums OFF), **direct `EntityGraph`** (the `graph_from_prisma` pattern — NOT
-      `extract_entities`), `infer_identity` → composite `IdentityKey`, **bookkeeping-collision rename**
-      (via a **public emitter reserved-names accessor**, R1-S7), reduction policy, family grouper
-      (member-alignment/outer-join). **Two-gate exit (R1-S1):** structural AND identity-correct (key vs
-      `CONFLICT_COLUMNS` + a negative `*_display` fixture) — don't pass on structure alone. Golden test
-      applies the 4 expected transforms before comparing (R1-S2); replicate `extract_entities` invariants
-      (R1-S8). Validated against `20260313220000_michigan_budget_schema.sql`.
+- [~] **M2 — Inference core (FR-3/4/5/11/12) — THE RISK.** *Core PROVEN by the spike* (`spike_inference.py`,
+      12/12 green): `_infer_scalar_type` (measure→Decimal, labels→String, enums OFF), **direct `EntityGraph`**
+      (the `graph_from_prisma` pattern — NOT `extract_entities`), single-metric `infer_identity` → composite
+      `IdentityKey`, **bookkeeping-collision rename** → valid `schema.prisma` via the real emitter.
+      **Remaining to productionize:** promote to `src/startd8/tsdb_maturation/infer.py`; the **public emitter
+      reserved-names accessor** (R1-S7 — the spike read `_BOOKKEEPING` directly); reduction policy (FR-5);
+      family grouper / member-alignment (FR-12, not in the spike); the **two-gate exit** (R1-S1) as a real
+      test incl. the **negative `*_display` fixture** AND a **correlated-columns fixture** (proves the
+      confirmation gate catches a coincidental key); golden asserts the 4 transforms (R1-S2); replicate
+      `extract_entities` invariants (R1-S8). Golden = `20260313220000_michigan_budget_schema.sql`.
 - [ ] **M2.5 — Confirmation gate (FR-4, R1-S6).** Surface the inferred key next to the golden diff; record
       a **committed confirmation marker** (kickoff `confirmed.yaml` pattern); re-promote re-confirms if the
       key changed. Small new milestone between infer (M2) and gate (M4).
