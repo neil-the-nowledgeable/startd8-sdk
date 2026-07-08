@@ -101,9 +101,16 @@ genuinely-new writers.
       the golden diff (R1-F7). **R1-S6 three-case acceptance green**: unconfirmed→refused, confirmed→allowed,
       key-changed-on-re-promote→re-confirm. Order-insensitive (composite key = set); tolerant ledger IO
       (absent/malformed → empty). 14 tests green (83 in the package).
-- [ ] **M3 — `imports.yaml` generator (FR-14).** Serialize the inferred `IdentityKey` (+ coerce tags) into
-      an `imports.yaml` that `parse_imports` accepts round-trip. *Without this, `generate backend` emits no
-      importer → `id`-dedup → infinite duplication.* First programmatic manifest writer in the SDK.
+- [x] **M3 — `imports.yaml` generator (FR-14).** ✅ **DONE** —
+      `src/startd8/tsdb_maturation/imports_writer.py`, the first programmatic manifest writer in the SDK.
+      `generate_imports_yaml([InferenceResult])` serializes the inferred identity into an `imports.yaml`
+      (`format: json` + composite/field `identity:`) that `parse_imports` accepts. **R1-F3 semantic
+      round-trip contract enforced** (self-checks its own output: `parse_imports(generate(key)).identity ==
+      key` on kind + ordered cols; fails loud on drift). **Smoke-verified against the real `render_import`**:
+      the generated manifest bakes a **composite** `_IDENTITY` into the importer, NOT `id` — so TSDB rows
+      (no stable `id`) dedup on the inferred columns instead of infinitely duplicating. Decimal/DateTime
+      coercion is free (`_COERCE`). 18 tests green (101 in the package). The E2E dedup proof (R1-S3, re-run
+      twice → 0 new rows) lands with M5.
 - [ ] **M4 — Gate wiring (FR-7).** Reuse `emit_schema_draft`→`promote_schema` on the M2 graph; surface the
       inferred identity next to the golden for **confirmation** (OQ-4); refuse empty/unrenderable.
 - [ ] **M5 — Backend + backfill (FR-6, FR-8).** `generate backend --imports <generated>` + `from_json`;

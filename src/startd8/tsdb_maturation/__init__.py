@@ -15,10 +15,13 @@ Milestones (PLAN §5):
   raw specimen into an ``EntityGraph`` and renders ``schema.prisma`` via the real emitter.
 * **M2.5 — confirmation gate** (:mod:`startd8.tsdb_maturation.confirmation`) — FR-4/R1-F7/R1-S6.
   A committed-ledger gate: an inferred identity key must be human-confirmed before promotion.
-* M3 — ``imports.yaml`` generator · M4 — gate wiring · M5 — backend + backfill · M6 — CLI ·
-  M7 — histograms. (FR-5 reduction + FR-12 family grouper are the remaining M2 sub-tasks.)
+* **M3 — imports.yaml writer** (:mod:`startd8.tsdb_maturation.imports_writer`) — FR-14. Serializes
+  the inferred identity into an ``imports.yaml`` the importer dedups on (R1-F3 round-trip).
+* M4 — gate wiring · M5 — backend + backfill · M6 — CLI · M7 — histograms. (FR-5 reduction +
+  FR-12 family grouper are the remaining M2 sub-tasks.)
 
-M0, M1, the M2 inference core, and the M2.5 confirmation gate are implemented so far.
+M0, M1, the M2 inference core, the M2.5 confirmation gate, and the M3 imports writer are
+implemented so far.
 """
 
 from __future__ import annotations
@@ -64,6 +67,12 @@ from .confirmation import (
     render_confirmation_surface,
     require_confirmation,
 )
+from .imports_writer import (
+    build_import_entry,
+    generate_imports_yaml,
+    inferred_identity_key,
+    write_imports_yaml,
+)
 
 __all__ = [
     # M0 — reader
@@ -103,4 +112,9 @@ __all__ = [
     "record_confirmation",
     "render_confirmation_surface",
     "require_confirmation",
+    # M3 — imports.yaml writer
+    "build_import_entry",
+    "generate_imports_yaml",
+    "inferred_identity_key",
+    "write_imports_yaml",
 ]
