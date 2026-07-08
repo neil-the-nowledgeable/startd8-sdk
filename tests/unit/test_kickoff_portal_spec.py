@@ -140,6 +140,29 @@ def test_stakeholders_section_renders_roster(demo_state: KickoffState) -> None:
     assert len(titles) == len(set(titles))
 
 
+def test_stakeholders_section_renders_latest_run(demo_state: KickoffState) -> None:
+    roster = _R([_P("owner", "Business Owner")])
+    results = [
+        {"role_id": "owner", "text": "Ship the MVP by Q3.", "grounding": "grounded",
+         "cost_usd": 0.012, "question": "What's the top priority?", "session_id": "s-123"},
+        {"role_id": "sre", "text": "Guard the error budget.", "grounding": "uncertain",
+         "cost_usd": 0.008, "question": "What's the top priority?", "session_id": "s-123"},
+    ]
+    spec = build_kickoff_portal_spec(demo_state, "demo", roster=roster, panel_results=results)
+    content = next(p for p in spec["panels"] if p["title"] == "Stakeholders")["options"]["content"]
+    assert "Latest run" in content
+    assert "s-123" in content and "What's the top priority?" in content
+    assert "Ship the MVP by Q3." in content and "Guard the error budget." in content
+    assert "SYNTHETIC & UNRATIFIED" in content
+    assert "$0.0200" in content  # summed cost 0.012 + 0.008
+
+
+def test_stakeholders_section_no_run_no_latest_block(demo_state: KickoffState) -> None:
+    spec = build_kickoff_portal_spec(demo_state, "demo", roster=_R([_P("owner", "Owner")]))
+    content = next(p for p in spec["panels"] if p["title"] == "Stakeholders")["options"]["content"]
+    assert "Latest run" not in content
+
+
 def test_empty_state_still_valid() -> None:
     spec = build_kickoff_portal_spec(_state(), "empty")
     assert spec["uid"] == "cc-portal-kickoff-empty"
