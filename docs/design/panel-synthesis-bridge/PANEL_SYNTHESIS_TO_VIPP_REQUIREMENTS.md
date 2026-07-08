@@ -1,9 +1,22 @@
 # Panel Synthesis → VIPP Proposals Bridge — Requirements
 
-**Version:** 0.4 (Increment 1 built)
-**Date:** 2026-07-07
-**Status:** Increment 1 (NON-DECIDABLE router) IMPLEMENTED; increment 2 (FIELD-LEVEL → VIPP envelope) deferred
+**Version:** 0.5 (Increments 1 + 2 built)
+**Date:** 2026-07-08
+**Status:** Increment 1 (NON-DECIDABLE router) + increment 2 (FIELD-LEVEL → VIPP envelope) IMPLEMENTED
 **Owner:** startd8-sdk
+
+> **Increment 2 (FIELD-LEVEL lane) — BUILT.** `synthesis_bridge/extract_llm.py` (OQ-9: the one paid
+> step — maps a synthesis's concrete kickoff-input edits to allow-listed `{value_path, value}`;
+> mockable `mapper`, `$0` when the allow-list is empty) + `synthesis_bridge/stage.py`
+> (`stage_recommendations` → `estimate`-provenance `Recommendation`s in `ProposalStore` [FR-6/7];
+> `serialize_accepted_to_vipp` composes `build_proposal("capture")` + `ProposalBuffer` +
+> `serialize_buffer` [FR-8], FR-4 allow-list gate enforced by `build_proposal`, NR-7 no new envelope
+> code) + `startd8 kickoff panel propose` CLI (`$0` preview / `--run` extract+stage / `--serialize`).
+> Covers **FR-4, FR-6, FR-7, FR-8, FR-9(cost), FR-12** and OQ-9. 6 tests (mocked mapper; allow-list
+> gate reject + accept→inbox); suite green (265). **OQ-4 settled:** read-only triage =
+> `kickoff-panel triage`; write verb = `kickoff panel propose`. Empirically the allow-list is the 8
+> kickoff-input fields, so — as the plan predicted — most synthesis items map to nothing and stay
+> NON-DECIDABLE; the lane fires only for a concrete kickoff-input recommendation.
 **Related:** `docs/design/vipp/` (VIPP negotiator/applier), `docs/design/stakeholder-panel/` (panel + proposals), `docs/design/kickoff/` (Concierge host, inbox seam)
 
 > **Implementation status (increment 1 — the always-firing `$0` core).** BUILT in
