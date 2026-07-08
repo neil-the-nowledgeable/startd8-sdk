@@ -11,10 +11,13 @@ Milestones (PLAN §5):
   reader over ``last_over_time(<metric>[<lookback>])``.
 * **M1 — specimen** (:mod:`startd8.tsdb_maturation.specimen`) — FR-2/FR-9. Flattens a read
   into a durable, raw, grain-labeled specimen file.
-* M2 — inference core · M2.5 — confirmation gate · M3 — ``imports.yaml`` generator · M4 —
-  gate wiring · M5 — backend + backfill · M6 — CLI · M7 — histograms.
+* **M2 — inference core** (:mod:`startd8.tsdb_maturation.infer`) — FR-3/FR-4/FR-11. Projects a
+  raw specimen into an ``EntityGraph`` and renders ``schema.prisma`` via the real emitter.
+* M2.5 — confirmation gate · M3 — ``imports.yaml`` generator · M4 — gate wiring · M5 — backend
+  + backfill · M6 — CLI · M7 — histograms. (FR-5 reduction + FR-12 family grouper are the
+  remaining M2 sub-tasks.)
 
-M0 and M1 are implemented so far.
+M0, M1, and the M2 inference core are implemented so far.
 """
 
 from __future__ import annotations
@@ -41,6 +44,13 @@ from .specimen import (
     summarize,
     write_specimen,
 )
+from .infer import (
+    InferenceError,
+    InferenceResult,
+    infer_identity,
+    infer_scalar_type,
+    infer_schema,
+)
 
 __all__ = [
     # M0 — reader
@@ -63,4 +73,10 @@ __all__ = [
     "load_specimen",
     "summarize",
     "write_specimen",
+    # M2 — inference core
+    "InferenceError",
+    "InferenceResult",
+    "infer_identity",
+    "infer_scalar_type",
+    "infer_schema",
 ]

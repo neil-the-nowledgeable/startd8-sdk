@@ -60,6 +60,18 @@ _BOOKKEEPING: Tuple[Tuple[str, str], ...] = (
 )
 
 
+def reserved_field_names() -> Tuple[str, ...]:
+    """The implicit bookkeeping field names the emitter injects on every model.
+
+    A **public, supported accessor** (R1-S7) over the private ``_BOOKKEEPING`` set —
+    ``id/ownerId/source/confirmed/createdAt/updatedAt``. Inference-side collision guards
+    (TSDB maturation FR-11) read this instead of importing the private constant, so the guard
+    has a stable contract and cannot silently break if the bookkeeping set is refactored. A
+    contract test pins this accessor to the emitter's actual injection set.
+    """
+    return tuple(name for name, _ in _BOOKKEEPING)
+
+
 @dataclass(frozen=True)
 class UnrenderableField:
     """A field flagged out (type outside the plain-type vocabulary) — never emitted wrong."""

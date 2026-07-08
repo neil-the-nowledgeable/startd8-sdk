@@ -76,16 +76,21 @@ genuinely-new writers.
       `from_records`. Reserved-key (`value`/`observed_at`) label collision refused loudly. 17 tests green;
       E2E-verified against the preserved recon specimen (28 records, high-card `project` surfaced for FR-5).
       (Aggregation still deferred to M5 — it needs the identity.)
-- [~] **M2 — Inference core (FR-3/4/5/11/12) — THE RISK.** *Core PROVEN by the spike* (`spike_inference.py`,
-      12/12 green): `_infer_scalar_type` (measure→Decimal, labels→String, enums OFF), **direct `EntityGraph`**
-      (the `graph_from_prisma` pattern — NOT `extract_entities`), single-metric `infer_identity` → composite
-      `IdentityKey`, **bookkeeping-collision rename** → valid `schema.prisma` via the real emitter.
-      **Remaining to productionize:** promote to `src/startd8/tsdb_maturation/infer.py`; the **public emitter
-      reserved-names accessor** (R1-S7 — the spike read `_BOOKKEEPING` directly); reduction policy (FR-5);
-      family grouper / member-alignment (FR-12, not in the spike); the **two-gate exit** (R1-S1) as a real
-      test incl. the **negative `*_display` fixture** AND a **correlated-columns fixture** (proves the
-      confirmation gate catches a coincidental key); golden asserts the 4 transforms (R1-S2); replicate
-      `extract_entities` invariants (R1-S8). Golden = `20260313220000_michigan_budget_schema.sql`.
+- [~] **M2 — Inference core (FR-3/4/11 DONE; FR-5/FR-12 remaining) — THE RISK.** ✅ **Core SHIPPED** —
+      `src/startd8/tsdb_maturation/infer.py` (`infer_schema` consuming an M1 `Specimen`). All spike
+      productionization items landed: **R1-S7** public emitter accessor `reserved_field_names()` (no more
+      private `_BOOKKEEPING` read; contract-tested against the injection set); **R1-S8** direct-graph
+      invariant guard `assert_graph_invariants` (vocab/reserved/dupe/unique-declared + emitter-clean parity);
+      **R1-F1** deterministic identity tie-break (fewest cols → golden → lexicographic); **R1-F2** display
+      exclusion; **R1-F8** measure-name collision suffix; **R1-F9** raw-specimen input via `assert_raw`;
+      **R1-F10** rename-collision check. **The two-gate golden test (R1-S1)** is live
+      (`test_infer_golden.py`): gate (a) structural + gate (b) identity==michigan `CONFLICT_COLUMNS`, the
+      **negative `*_display` fixture**, and the **correlated-columns fixture** (proves a coincidental smaller
+      key slips past structural inference → the M2.5/M4 confirmation gate is load-bearing, not cosmetic).
+      **R1-S2** four expected transforms asserted post-normalization. 33 M2 tests green (69 in the package);
+      golden = `20260313220000_michigan_budget_schema.sql`. **Remaining M2 sub-tasks:** FR-5 reduction policy
+      (auto top-N + loud warning, OQ-3) and FR-12 family grouper / member-alignment (multi-measure tables) —
+      both additive and separable from the load-bearing identity risk, deferred to a follow-on slice.
 - [ ] **M2.5 — Confirmation gate (FR-4, R1-S6).** Surface the inferred key next to the golden diff; record
       a **committed confirmation marker** (kickoff `confirmed.yaml` pattern); re-promote re-confirms if the
       key changed. Small new milestone between infer (M2) and gate (M4).
