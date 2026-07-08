@@ -17,11 +17,14 @@ Endpoints: ``POST /stakeholders/run`` (``{question, cap, dry_run, run_key, model
 ``GET /stakeholders/run/{session_id}``, ``GET /healthz`` (unauthenticated liveness). The Increment 3
 panel-processing pipeline adds ``$0`` drive routes (same auth): ``POST /stakeholders/triage``,
 ``…/disposition``, ``…/serialize``, ``…/negotiate`` (an opt-in narrative pass spends its own
-``max_cost_usd`` ceiling). The write-touching apply gate lands separately (M-apply).
+``max_cost_usd`` ceiling), plus the one PAID step ``…/extract`` (dry-run estimate → checksum-gated
+confirm, keyed on ``session_id + synthesis-checksum``). The write-touching apply gate lands separately
+(M-apply).
 """
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import threading
 import time
@@ -37,12 +40,18 @@ from starlette.routing import Route
 
 from .stakeholder_run import (
     BudgetNotConfiguredError,
+    IdempotencyStore,
     RunKeyMismatchError,
     StakeholderRunError,
     cancel_run,
     dry_run,
+    ensure_blocking_budget,
     execute_run,
 )
+
+# Char budget for the extract prompt scaffold (the fixed instructions + allow-list wrapped around the
+# synthesis) — folded into the pre-call token estimate so it isn't a systematic under-count.
+_EXTRACT_SCAFFOLD_CHARS = 1200
 
 _NONCE_TTL_SECONDS = 900
 
@@ -406,6 +415,169 @@ async def _negotiate(request: Request) -> JSONResponse:
     )
 
 
+# --------------------------------------------------------------------------- pipeline drive (PAID)
+#
+# FR-R3 extract→stage — the ONE paid step in the panel-processing pipeline. `extract_field_mappings`
+# (LLM) maps synthesis prose → allow-listed field edits; `stage_recommendations` ($0) persists them as
+# unratified drafts. dry-run → confirm mirrors the run endpoint's UX, but the preflight is keyed on
+# `(session_id + synthesis-checksum)` — NOT `run_key` (which binds question/cap/roster) — per CRP F-8.
+
+
+def _synthesis_checksum(text: str) -> str:
+    """Stable content hash of the synthesis being extracted — the FR-R3 idempotency basis."""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def _derive_extract_key(session_id: str, checksum: str) -> str:
+    """Opaque key binding {session_id, synthesis-checksum} — minted at dry-run, echoed at confirm."""
+    blob = f"extract:{session_id}:{checksum}"
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+
+
+def _tracked_extract_mapper(model: str, cost_tracker: Any, pricing: Any, spent: dict) -> Callable[[str], str]:
+    """A paid mapper that records ACTUAL token spend (FR-9 parity) into *spent*.
+
+    The default synthesis-bridge mapper discards token usage; this one captures ``result.token_usage``,
+    prices it via the same pricing stack the estimate used, and records it to the ``CostTracker`` so
+    extract spend is attributed exactly like a run-endpoint call. Cost recording is best-effort — it
+    must never break the extraction result itself.
+    """
+
+    def mapper(prompt: str) -> str:
+        import asyncio
+
+        from startd8.utils.agent_resolution import resolve_agent_spec
+
+        agent = resolve_agent_spec(model)
+        result = asyncio.run(agent.agenerate(prompt))
+        usage = getattr(result, "token_usage", None)
+        in_tok = int(getattr(usage, "input", 0) or 0)
+        out_tok = int(getattr(usage, "output", 0) or 0)
+        spent["input_tokens"] = in_tok
+        spent["output_tokens"] = out_tok
+        try:
+            spent["cost"] = float(pricing.calculate_total_cost(model, in_tok, out_tok))
+        except Exception:  # pragma: no cover - pricing optional / unknown model
+            spent["cost"] = 0.0
+        if cost_tracker is not None and usage is not None:
+            try:
+                cost_tracker.record_cost(
+                    agent_name="stakeholder-extract", model=model,
+                    input_tokens=in_tok, output_tokens=out_tok, tags=["stakeholder-extract"],
+                )
+            except Exception:  # pragma: no cover - recording must not break extraction
+                pass
+        return getattr(result, "text", "") or ""
+
+    return mapper
+
+
+async def _extract(request: Request) -> JSONResponse:
+    """FR-R3 — extract synthesis → staged recommendations (the ONE paid pipeline step).
+
+    ``dry_run`` returns a token-based estimate + a ``synthesis_checksum`` (``$0``); a confirm echoes the
+    checksum, is deduped on ``(session_id + checksum)``, fail-closes on the blocking budget, and gates on
+    ``max_cost_usd`` before spending. Actual spend is recorded (FR-9); staged output is UNRATIFIED.
+    """
+    config: RunServerConfig = request.app.state.config
+    if (denied := _authorize(request, config)) is not None:
+        return denied
+    body = await _json_body(request)
+    if isinstance(body, JSONResponse):
+        return body
+
+    from startd8.kickoff_experience.manifest import default_config
+    from startd8.kickoff_view import KickoffViewService
+    from startd8.stakeholder_panel.synthesis_bridge import extract_field_mappings, stage_recommendations
+
+    service = KickoffViewService(str(config.project_root))
+    sid = str(body.get("session_id") or "").strip() or service.latest_session_id()
+    if not sid:
+        return _err(404, "no kickoff-panel sessions — run a facilitated panel first")
+    try:
+        transcript = await run_in_threadpool(service.load, sid)
+    except (FileNotFoundError, KeyError):
+        return _err(404, f"no such session: {sid}")
+    except ValueError:
+        return _err(400, "invalid session id")
+
+    synthesis = getattr(transcript, "synthesis", None)
+    synthesis_text = getattr(synthesis, "text", "") if synthesis is not None else ""
+    if not (synthesis_text or "").strip():
+        return _err(422, "session has no facilitated synthesis to extract from (ask-all runs have none)")
+
+    checksum = _synthesis_checksum(synthesis_text)
+    extract_key = _derive_extract_key(sid, checksum)
+    allowed = default_config().allowed_value_paths()
+
+    # Token-based estimate (never a spend): synthesis + scaffold in, a bounded mapping payload out.
+    from startd8.costs.pricing import PricingService
+
+    pricing = config.pricing or PricingService()
+    prompt_chars = len(synthesis_text) + _EXTRACT_SCAFFOLD_CHARS + sum(len(p) for p in allowed)
+    estimated = float(pricing.estimate_cost(config.model, prompt_chars, expected_output_chars=len(allowed) * 120))
+
+    if body.get("dry_run"):
+        return JSONResponse(
+            {"session_id": sid, "synthesis_checksum": checksum, "extract_key": extract_key,
+             "estimated_cost": round(estimated, 6), "model": config.model, "n_allowed": len(allowed),
+             "note": "estimate — real cost is only known after extraction"}
+        )
+
+    # Confirm: the echoed checksum must match the CURRENT synthesis (a concurrent edit → re-preview).
+    if str(body.get("confirm_checksum") or "") != checksum:
+        return _err(409, "synthesis changed since preview — re-run dry_run for a fresh checksum")
+
+    store = IdempotencyStore(config.project_root)
+    try:
+        prior = store.lookup(extract_key, checksum)
+    except RunKeyMismatchError as exc:
+        return _err(409, str(exc))
+    if prior and prior.get("status") == "completed":
+        from startd8.stakeholder_panel.proposals import ProposalStore
+
+        recs = await run_in_threadpool(ProposalStore(config.project_root, sid).load)
+        return JSONResponse(
+            {"session_id": sid, "status": "deduped",
+             "staged": [{"value_path": r.value_path, "value": r.recommended_value} for r in recs],
+             "synthesis_checksum": checksum,
+             "note": "idempotent replay — prior extraction returned, no re-charge"}
+        )
+
+    manager = config.budget_manager or _default_manager(config)
+    try:
+        ensure_blocking_budget(manager, scope_project=config.scope_project)  # fail-CLOSED
+    except BudgetNotConfiguredError as exc:
+        return _err(412, str(exc))
+
+    # Pre-call ceiling: refuse to spend if the honest estimate already blows the cap (prevents the spend).
+    max_cost = body.get("max_cost_usd")
+    if max_cost is not None and estimated > float(max_cost):
+        return _err(412, f"estimated ${estimated:.4f} exceeds max_cost_usd ${float(max_cost):.4f} — refusing")
+
+    store.record_start(extract_key, checksum)  # spend marker BEFORE the provider call (crash-safety)
+    spent: dict = {"cost": 0.0, "input_tokens": 0, "output_tokens": 0}
+    mapper = _tracked_extract_mapper(config.model, config.cost_tracker, pricing, spent)
+    try:
+        mappings = await run_in_threadpool(extract_field_mappings, synthesis_text, allowed, mapper=mapper)
+    except Exception as exc:  # provider/mapper failure — do NOT mark complete (a retry may re-run)
+        return _err(502, f"extraction failed: {exc}")
+
+    recs = await run_in_threadpool(stage_recommendations, config.project_root, sid, mappings)
+    store.mark_complete(extract_key, sid)
+    # Mottainai: the call already charged, so we KEEP the staged output even if actuals topped the cap —
+    # we surface the overage (ceiling_exceeded) rather than discard paid-for work.
+    ceiling_exceeded = max_cost is not None and float(spent["cost"]) > float(max_cost)
+    return JSONResponse(
+        {"session_id": sid, "status": "staged",
+         "staged": [{"value_path": r.value_path, "value": r.recommended_value} for r in recs],
+         "synthesis_checksum": checksum, "actual_cost": round(float(spent["cost"]), 6),
+         "input_tokens": spent["input_tokens"], "output_tokens": spent["output_tokens"],
+         "ceiling_exceeded": ceiling_exceeded,
+         "note": "SYNTHETIC & UNRATIFIED — review, mark accepted, then serialize into the VIPP inbox"}
+    )
+
+
 async def _healthz(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
@@ -430,6 +602,8 @@ def build_stakeholder_run_app(config: RunServerConfig) -> Starlette:
             Route("/stakeholders/disposition", _disposition, methods=["POST"]),
             Route("/stakeholders/serialize", _serialize, methods=["POST"]),
             Route("/stakeholders/negotiate", _negotiate, methods=["POST"]),
+            # FR-R3 extract→stage — the one PAID pipeline step (dry-run estimate → checksum-gated confirm).
+            Route("/stakeholders/extract", _extract, methods=["POST"]),
             Route("/healthz", _healthz, methods=["GET"]),
         ]
     )
