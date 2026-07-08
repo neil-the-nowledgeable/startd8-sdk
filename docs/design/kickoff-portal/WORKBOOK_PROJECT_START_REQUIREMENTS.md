@@ -1,8 +1,9 @@
 # Digital Project Workbook — Project-Start Generation Requirements
 
-**Version:** 0.4 (Post-CRP R1 — 9 of 10 findings accepted)
+**Version:** 0.5 (Implemented + verified; FR-5 scope refined — see §0.3)
 **Date:** 2026-07-08
-**Status:** Draft — ready to implement
+**Status:** IMPLEMENTED — FR-1..4, FR-6..11 + all NR fully available & tested; FR-5 collision-detection
+deferred (provision-time, §0.3)
 **Owner doc for the generator/content:** `GRAFANA_KICKOFF_PORTAL_REQUIREMENTS.md` (v0.4). **This doc owns
 only the project-start _lifecycle_** — when/how the Workbook is created, not what it contains.
 
@@ -42,6 +43,22 @@ only the project-start _lifecycle_** — when/how the Workbook is created, not w
   NOT "reuse only"** — it needs a **bounded** addition: a `dashlist` `PanelType` + a mixin `panels.dashlist`
   constructor. This is the single, explicit exception to NR-5 (the phantom-reference audit caught it before
   CRP, not during implementation).
+
+### 0.3 Implementation-Verification (v0.4 → v0.5)
+
+> Post-implementation review mapped every FR/NR to the shipped code + tests. **FR-1..4, FR-6..11 and
+> all NR are fully available and working as documented** (14 `test_portal_build` cases + the
+> `dashboard_creator` suite). One refinement:
+>
+> - **FR-5 collision-detection narrowed.** The v0.4 "two distinct projects that slugify to the same UID
+>   MUST be detected and rejected" is **not a `$0`/deterministic capability** — there is no local
+>   registry of all projects' UIDs, and a cross-project collision is only observable at *provision* time
+>   against a shared Grafana. Implemented deterministically: the **1:1 named slug + reserved-`index` +
+>   empty-slug rejection** (all tested); rename → new UID → old board orphaned-but-index-listed (a
+>   documented acceptable outcome, no code). **Cross-project collision detection is deferred** to a
+>   provision-time guard (a `get_dashboard(uid)` title check), tracked with the other provisioning-
+>   hardening deferrals. The doc now states this limitation honestly rather than claiming an unshipped
+>   capability.
 
 ### 0.2 CRP Round-1 Triage (v0.3 → v0.4)
 
@@ -120,14 +137,20 @@ Workbook generation into the project-start flow (`kickoff instantiate`) and form
   Workbook for an all-fresh-template project MUST produce valid JSON with **no panel in an error state**
   (empty/"No data" is fine, a broken query is not) — a golden guards day-1 UX rather than deferring
   correctness to the owner doc by citation.
-- **FR-5 — Idempotent upsert + 1:1 slug (CRP R1-F4/R1-F6).** Generation MUST target the stable UID
-  `cc-portal-kickoff-{project-slug}` and overwrite in place. The **slug function MUST be named and 1:1
-  within a project** (pin the ref in the Reference Audit). Two *distinct* projects that slugify to the same
-  UID MUST be **detected and rejected with a clear error, never silently clobbered**; a project **rename**
-  MUST have defined behavior (re-point the same board, or emit an "orphaned prior UID `cc-portal-kickoff-
-  {old}`" warning — the index may still list the stale board). The literal slug **`index` is RESERVED**
-  (see FR-11) — a project slugifying to `index` MUST be escaped/suffixed or rejected, never allowed to
-  collide with the portfolio-index UID.
+- **FR-5 — Idempotent upsert + 1:1 slug (CRP R1-F4/R1-F6; scope refined at impl-verification — see §0.3).**
+  Generation MUST target the stable UID `cc-portal-kickoff-{project-slug}` and overwrite in place. The
+  **slug function MUST be named and 1:1** (`portal_spec.slugify_project`/`workbook_uid`, pinned in the
+  Reference Audit). The literal slug **`index` is RESERVED** (see FR-11) — a project slugifying to `index`
+  MUST be rejected (`WorkbookSlugError`), never allowed to collide with the portfolio-index UID; an
+  empty slug is likewise rejected. **Rename** has defined behavior with no new code: a renamed project
+  slugifies to a *new* UID → a new board; the old board is orphaned and remains listed by the index
+  (an explicitly acceptable outcome). **Cross-project UID collision detection** (two *distinct* projects
+  whose names slugify to the same UID) is **DEFERRED to a provision-time guard** — it is not a
+  `$0`/deterministic capability (there is no local registry of all projects' UIDs; a collision is only
+  observable when provisioning to a shared Grafana, via a `get_dashboard(uid)` title check). Tracked with
+  the other provisioning-hardening deferrals; until then a same-slug second project provisioned to the
+  *same* Grafana overwrites the first (documented limitation, not silent — the slug rule makes the
+  collision predictable).
 - **FR-6 — Graceful toolchain degradation (absent AND broken — CRP R1-F2).** (a) If the jsonnet toolchain
   (binary `jsonnet` or `gojsonnet`) is **absent**, instantiate MUST NOT fail; it completes the file
   scaffold and prints an actionable one-liner (`Workbook skipped — install jsonnet or `pip install
