@@ -372,6 +372,67 @@ def _render_survey(survey: dict) -> str:
     )
 
 
+_GROUNDING_REFS_REL = "docs/kickoff/grounding-refs.yaml"
+_MAX_GROUNDING_REFS = 12
+
+
+def _render_referenced(root: Path) -> str:
+    """Include author-listed EXTERNAL grounding context (opt-in cross-repo references).
+
+    The kernel survey only sees *this* project, so the panel can't discover things that live in a
+    sibling repo — e.g. a benchmark *engine* and its ``results/`` that a review portal only consumes.
+    A project opts in with ``docs/kickoff/grounding-refs.yaml``::
+
+        refs:
+          - path: ../../results/round3          # relative to the project root; may point outside it
+            note: the benchmark results this portal reviews
+          - path: ../../../startd8-sdk/src/startd8/benchmark_matrix
+            note: the benchmark engine (lives in the SDK, not this repo)
+
+    Read-only, bounded, and **only** the paths the author lists — never a blind cross-repo walk. A
+    file contributes a short excerpt; a directory contributes a bounded file inventory. Returns "".
+    """
+    import yaml as _yaml  # lazy; yaml is an SDK dep
+
+    refs_file = root / _GROUNDING_REFS_REL
+    if not refs_file.is_file():
+        return ""
+    try:
+        data = _yaml.safe_load(refs_file.read_text(errors="ignore")) or {}
+    except Exception:  # noqa: BLE001 - malformed refs must not crash grounding
+        return ""
+    refs = data.get("refs") if isinstance(data, dict) else None
+    if not isinstance(refs, list):
+        return ""
+
+    out: List[str] = ["### Referenced external context (grounding-refs.yaml — author-listed)"]
+    for entry in refs[:_MAX_GROUNDING_REFS]:
+        if not isinstance(entry, dict):
+            continue
+        rel = str(entry.get("path", "")).strip()
+        if not rel:
+            continue
+        note = str(entry.get("note", "")).strip()
+        label = f"- {rel}" + (f" — {note}" if note else "")
+        target = root / rel
+        if target.is_file():
+            excerpt = target.read_text(errors="ignore")[:1500]
+            out.append(f"{label}\n  (file excerpt)\n{excerpt}")
+        elif target.is_dir():
+            names: List[str] = []
+            for p in target.rglob("*"):
+                if any(part in _SCAN_SKIP_DIRS for part in p.parts):
+                    continue
+                if p.is_file():
+                    names.append(str(p.relative_to(target)))
+                    if len(names) >= 20:
+                        break
+            out.append(f"{label}\n  (dir, {len(names)}+ files) e.g. " + ", ".join(names[:12]))
+        else:
+            out.append(f"{label}\n  (path not found from the project root)")
+    return "\n".join(out) if len(out) > 1 else ""
+
+
 def _gather_artifact(project) -> Tuple[str, str]:
     """Ground R0 on the REAL system (H1 / FR-13c-1), not the schema alone.
 
@@ -407,6 +468,16 @@ def _gather_artifact(project) -> Tuple[str, str]:
         parts.append(_render_built_app(_scan_built_app(root)))
     except Exception as exc:  # noqa: BLE001 - grounding must never crash the run
         logger.warning("built-app scan failed: %s", exc)
+
+    # Opt-in EXTERNAL grounding (cross-repo refs the author lists) — e.g. a benchmark engine/results
+    # that live in a sibling repo the survey can't reach. Placed before the static picks so it
+    # survives the 12k truncation. Read-only, bounded, never a blind cross-repo walk.
+    try:
+        ref_block = _render_referenced(root)
+        if ref_block:
+            parts.append(ref_block)
+    except Exception as exc:  # noqa: BLE001 - grounding must never crash the run
+        logger.warning("grounding-refs failed: %s", exc)
 
     # Static schema/description excerpts (kept as corroborating detail under the live inventory).
     picks = ["prisma/schema.prisma", ".contextcore.yaml", "CLAUDE.md", "README.md"]

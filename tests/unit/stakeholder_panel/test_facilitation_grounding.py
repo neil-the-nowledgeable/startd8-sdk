@@ -69,3 +69,30 @@ def test_render_built_app_empty_is_honest(tmp_path):
     # a schema-only project (no app code) must say so, not fabricate a running system
     out = _render_built_app(_scan_built_app(tmp_path))
     assert "No application code found" in out
+
+
+# ── opt-in cross-repo grounding refs ──
+def test_grounding_refs_include_external_paths(tmp_path):
+    # a sibling "engine" dir + a results file, referenced from the project's grounding-refs.yaml
+    engine = tmp_path / "sibling" / "engine"
+    engine.mkdir(parents=True)
+    (engine / "runner.py").write_text("def run():\n    pass\n")
+    (tmp_path / "sibling" / "results.md").write_text("ROUND3: 405 cells scored\n")
+
+    proj = tmp_path / "proj"
+    (proj / "docs" / "kickoff").mkdir(parents=True)
+    (proj / "docs" / "kickoff" / "grounding-refs.yaml").write_text(
+        "refs:\n"
+        "  - path: ../sibling/engine\n    note: the benchmark engine\n"
+        "  - path: ../sibling/results.md\n    note: scored results\n"
+    )
+    artifact, warning = _gather_artifact(proj)
+    assert "Referenced external context" in artifact
+    assert "the benchmark engine" in artifact and "runner.py" in artifact
+    assert "ROUND3: 405 cells scored" in artifact  # file excerpt included
+    assert warning == ""
+
+
+def test_grounding_refs_absent_is_noop(tmp_path):
+    artifact, _ = _gather_artifact(tmp_path)
+    assert "Referenced external context" not in artifact
