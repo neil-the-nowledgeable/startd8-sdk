@@ -188,3 +188,102 @@ def test_index_provision_to_shared_url_needs_confirmation():
     # loopback is fine without confirmation (generation still $0; provisioning would need a live server)
     assert portal_build._is_loopback("http://localhost:3000")
     assert not portal_build._is_loopback("http://grafana.example.com:3000")
+
+
+# --------------------------------------------------------------------------- FR-9 refresh on confirm
+
+
+def _confirmable_field(proj) -> str:
+    import re
+
+    a = runner.invoke(
+        kickoff_kernel_app,
+        ["confirm", "--all", "--as-is", "--dry-run", "--project", str(proj)],
+    )
+    m = re.findall(r"([a-z-]+\.yaml#/[^\s]+) =", a.stdout)
+    return m[0] if m else "observability.yaml#/provenance_default"
+
+
+def test_confirm_refreshes_workbook_fr9():
+    proj = _proj()
+    _instantiate(proj, "--no-portal")  # scaffold, no board yet
+    out = runner.invoke(
+        kickoff_kernel_app,
+        ["confirm", _confirmable_field(proj), "--as-is", "--project", str(proj)],
+    )
+    assert out.exit_code == 0
+    dash = proj / ".startd8" / "dashboards"
+    assert dash.is_dir() and list(
+        dash.glob("cc-portal-kickoff-*.json")
+    )  # board regenerated
+    assert any("Workbook:" in ln for ln in out.stdout.splitlines())
+
+
+def test_confirm_no_portal_skips_refresh_fr9():
+    proj = _proj()
+    _instantiate(proj, "--no-portal")
+    out = runner.invoke(
+        kickoff_kernel_app,
+        [
+            "confirm",
+            _confirmable_field(proj),
+            "--as-is",
+            "--no-portal",
+            "--project",
+            str(proj),
+        ],
+    )
+    assert out.exit_code == 0
+    assert not (proj / ".startd8" / "dashboards").exists()
+
+
+# --------------------------------------------------------------------------- FR-5 collision guard
+
+
+def _fake_grafana(monkeypatch, resp):
+    import startd8.dashboard_creator.grafana_client as gc
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_dashboard(self, uid):
+            return resp
+
+    monkeypatch.setattr(gc, "GrafanaClient", _Client)
+
+
+class _Resp:
+    def __init__(self, success, title=""):
+        self.success = success
+        self.data = {"dashboard": {"title": title}} if success else {}
+
+
+def test_provision_collision_reason(monkeypatch):
+    url, uid, title = (
+        "http://grafana.example:3000",
+        "cc-portal-kickoff-x",
+        "Mine — Digital Project Workbook",
+    )
+    # a DIFFERENT project already owns the UID → refuse
+    _fake_grafana(monkeypatch, _Resp(True, "Other — Digital Project Workbook"))
+    assert "already belongs" in (
+        portal_build._provision_collision_reason(url, uid, title) or ""
+    )
+    # 404 (not found) → no collision
+    _fake_grafana(monkeypatch, _Resp(False))
+    assert portal_build._provision_collision_reason(url, uid, title) is None
+    # same board (same title) → idempotent upsert, no collision
+    _fake_grafana(monkeypatch, _Resp(True, title))
+    assert portal_build._provision_collision_reason(url, uid, title) is None
+
+
+def test_build_refuses_provision_on_collision(monkeypatch):
+    proj = _proj()
+    _instantiate(proj, "--no-portal")
+    _fake_grafana(monkeypatch, _Resp(True, "Someone Else — Digital Project Workbook"))
+    res = build_and_maybe_provision(
+        proj, "demo", provision_url="http://grafana.example:3000"
+    )
+    assert res.skipped_reason and "already belongs" in res.skipped_reason
+    assert res.json_path is None  # refused before provisioning — never clobbered

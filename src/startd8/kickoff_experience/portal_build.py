@@ -165,6 +165,36 @@ def _roster(project_root: Path) -> Any:
 # --------------------------------------------------------------------------- generation
 
 
+def _provision_collision_reason(
+    provision_url: str, uid: str, title: str
+) -> Optional[str]:
+    """FR-5 provision-time collision guard: return a refusal reason if ``uid`` already belongs to a
+    DIFFERENT project on the target Grafana, else None. Best-effort — a check that cannot run (network,
+    auth) does not block; the provision itself surfaces real connectivity/auth errors. Only a positive
+    hit (a same-UID board with a *different* title) refuses, so two distinct projects that slugify to
+    the same UID never silently clobber each other on a shared instance.
+    """
+    try:
+        from ..dashboard_creator.grafana_client import GrafanaClient
+
+        client = GrafanaClient(
+            provision_url, allow_insecure=provision_url.startswith("http://")
+        )
+        resp = client.get_dashboard(uid)
+    except (
+        Exception
+    ):  # pragma: no cover - can't check → don't block (provision surfaces real errors)
+        return None
+    if getattr(resp, "success", False):
+        existing = ((resp.data or {}).get("dashboard") or {}).get("title", "")
+        if existing and existing != title:
+            return (
+                f"UID {uid} already belongs to {existing!r} on {provision_url} — refusing to overwrite "
+                f"a different project's Workbook (FR-5). Rename this project or its board."
+            )
+    return None
+
+
 def _run_workflow(
     spec: Dict[str, Any], out_dir: Path, provision_url: Optional[str]
 ) -> Any:
@@ -274,6 +304,15 @@ def build_and_maybe_provision(
             "confirmed": ac.get("ok", 0),
             "gaps": ac.get("blocked", 0),
         }
+        # FR-5: before pushing to a shared Grafana, refuse if this UID already belongs to a *different*
+        # project (two names slugging to the same UID) — never silently clobber. Disk-only gen can't
+        # collide (each project owns its own file), so the guard is provision-path only.
+        if provision_url and (
+            reason := _provision_collision_reason(
+                provision_url, spec["uid"], spec["title"]
+            )
+        ):
+            return PortalResult(uid=uid, summary=summary, skipped_reason=reason)
         result = _run_workflow(spec, dest, provision_url)
     except (
         Exception

@@ -93,9 +93,12 @@ def _emit_json(result: dict) -> None:
 @concierge_app.command("survey")
 def concierge_survey(
     project_root: Path = typer.Argument(
-        Path("."), help="Project to triage (default: current dir). Read-only — never modified."
+        Path("."),
+        help="Project to triage (default: current dir). Read-only — never modified.",
     ),
-    json_out: bool = typer.Option(False, "--json", help="Emit the schema-versioned JSON to stdout."),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the schema-versioned JSON to stdout."
+    ),
 ) -> None:
     """Brownfield triage: requirement docs (+ extraction-format match), models, fixtures, PII flags."""
     from .concierge import ConciergeError, handle_concierge_tool
@@ -120,7 +123,11 @@ def concierge_survey(
     if docs:
         console.print(f"\n[bold]Requirement docs[/bold] ({len(docs)}):")
         for d in docs:
-            tag = "[green]extraction-format[/green]" if d["extraction_format"] else "[yellow]needs reformat (F-4)[/yellow]"
+            tag = (
+                "[green]extraction-format[/green]"
+                if d["extraction_format"]
+                else "[yellow]needs reformat (F-4)[/yellow]"
+            )
             console.print(f"  • {d['path']}  {tag}")
     else:
         console.print("\n[dim]No requirement/PRD/PLAN docs found.[/dim]")
@@ -137,11 +144,15 @@ def concierge_survey(
 
     pii = result["pii_risk_flags"]
     if pii:
-        console.print(f"\n[bold red]Personal/PII risk flags[/bold red] ({len(pii)}) — review before any carve/commit:")
+        console.print(
+            f"\n[bold red]Personal/PII risk flags[/bold red] ({len(pii)}) — review before any carve/commit:"
+        )
         for p in pii:
             console.print(f"  [red]⚠[/red] {p}")
     else:
-        console.print("\n[green]No personal/PII-material flagged[/green] (name/extension heuristic).")
+        console.print(
+            "\n[green]No personal/PII-material flagged[/green] (name/extension heuristic)."
+        )
 
 
 def _render_assess(result: dict) -> None:
@@ -156,16 +167,22 @@ def _render_assess(result: dict) -> None:
             conf = info.get("confirmation") or {}
             tail = ""
             if conf.get("confirmable"):
-                tail = (f"  ·  {conf.get('confirmed', 0)} of {conf['confirmable']} confirmed · "
-                        f"{conf.get('awaiting', 0)} awaiting")
+                tail = (
+                    f"  ·  {conf.get('confirmed', 0)} of {conf['confirmable']} confirmed · "
+                    f"{conf.get('awaiting', 0)} awaiting"
+                )
                 # M2 (A-FR13): audience-defaulted fields — machine defaults the user can still ratify
                 # via `kickoff confirm`. Surfaced only when present (omitted ⇒ no display change).
                 if conf.get("audience_defaulted"):
-                    tail += f" · [cyan]{conf['audience_defaulted']} audience-default[/cyan]"
+                    tail += (
+                        f" · [cyan]{conf['audience_defaulted']} audience-default[/cyan]"
+                    )
                 if conf.get("stale"):
                     tail += f" · [yellow]{conf['stale']} stale[/yellow]"
-            console.print(f"  • {domain}: [green]present[/green] — provenance: "
-                          f"{info.get('provenance_default')}{tail}")
+            console.print(
+                f"  • {domain}: [green]present[/green] — provenance: "
+                f"{info.get('provenance_default')}{tail}"
+            )
         elif status == "absent":
             console.print(f"  • {domain}: [yellow]absent[/yellow]")
         else:
@@ -174,7 +191,9 @@ def _render_assess(result: dict) -> None:
     cascade = result["cascade"]
     console.print("\n[bold]$0 cascade[/bold]:")
     if cascade.get("status") != "ok":
-        console.print(f"  [red]{cascade.get('status')}[/red]: {cascade.get('error', '')}")
+        console.print(
+            f"  [red]{cascade.get('status')}[/red]: {cascade.get('error', '')}"
+        )
     else:
         shape = cascade["shape"]
         console.print(
@@ -196,37 +215,63 @@ def _render_assess(result: dict) -> None:
                 f"\n[bold]Will build[/bold]: {len(paths)} files across "
                 f"{len(planned)} planned section(s)."
             )
-            for s in sections:  # FR-B1: the non-blocker consequences the projection used to drop
-                if s.get("status") in ("defaults", "placeholder") and s.get("consequence"):
-                    console.print(f"  • {s['title']} ([dim]{s['status']}[/dim]): {s['consequence']}")
+            for (
+                s
+            ) in (
+                sections
+            ):  # FR-B1: the non-blocker consequences the projection used to drop
+                if s.get("status") in ("defaults", "placeholder") and s.get(
+                    "consequence"
+                ):
+                    console.print(
+                        f"  • {s['title']} ([dim]{s['status']}[/dim]): {s['consequence']}"
+                    )
             cov = (cascade.get("content_coverage") or {}).get("overall") or {}
             if cov.get("total"):
-                console.print(f"  content authored: {cov['authored']}/{cov['total']} prose surface(s)")
+                console.print(
+                    f"  content authored: {cov['authored']}/{cov['total']} prose surface(s)"
+                )
             for w in cascade.get("merge_warnings") or []:
-                console.print(f"  [yellow]⚠ merge:[/yellow] {w.get('message') or w.get('key') or w}")
-            console.print("  [dim]full file-by-file plan →[/dim] [cyan]startd8 wireframe[/cyan]")
+                console.print(
+                    f"  [yellow]⚠ merge:[/yellow] {w.get('message') or w.get('key') or w}"
+                )
+            console.print(
+                "  [dim]full file-by-file plan →[/dim] [cyan]startd8 wireframe[/cyan]"
+            )
 
         # Blocker reframe (FR-3): HARD blockers (must fix) and OPTIONAL next steps are two honestly-
         # different tiers — an un-authored `pages`/`content` is NOT "blocking" a build.
         hard = cascade.get("hard_blockers") or []
         if hard:
-            console.print("\n[bold red]Blocking[/bold red] (invalid manifest — fix to build):")
+            console.print(
+                "\n[bold red]Blocking[/bold red] (invalid manifest — fix to build):"
+            )
             for b in hard:
-                console.print(f"  • {b['section']} ([red]{b['status']}[/red]): {b['consequence']}")
+                console.print(
+                    f"  • {b['section']} ([red]{b['status']}[/red]): {b['consequence']}"
+                )
                 if b.get("next_command"):
                     console.print(f"      → fix: [cyan]{b['next_command']}[/cyan]")
         blocked_gen = cascade.get("blocked_generators") or {}
         if cascade.get("buildable"):
-            console.print("\n[green]Ready to build[/green] — the $0 cascade can generate now.")
+            console.print(
+                "\n[green]Ready to build[/green] — the $0 cascade can generate now."
+            )
         elif blocked_gen:
-            console.print("\n[bold]Not yet buildable[/bold] — resolve the root, then everything downstream follows:")
+            console.print(
+                "\n[bold]Not yet buildable[/bold] — resolve the root, then everything downstream follows:"
+            )
             for gen, reason in blocked_gen.items():
                 console.print(f"  • {gen}: [yellow]{reason}[/yellow]")
         optional = cascade.get("optional_next_steps") or []
         if optional:
-            console.print("\n[bold]Optional next steps[/bold] (enrichments — the app builds without them):")
+            console.print(
+                "\n[bold]Optional next steps[/bold] (enrichments — the app builds without them):"
+            )
             for b in optional:
-                console.print(f"  • {b['section']} ([dim]{b['status']}[/dim]): {b['consequence']}")
+                console.print(
+                    f"  • {b['section']} ([dim]{b['status']}[/dim]): {b['consequence']}"
+                )
                 if b.get("next_command"):
                     console.print(f"      → [cyan]{b['next_command']}[/cyan]")
 
@@ -245,7 +290,9 @@ def _render_assess(result: dict) -> None:
             reason = "a cap-dev-pipe embed is present but incomplete"
         else:
             reason = "the project is ready — you can install the capability-delivery pipeline"
-        console.print(f"\n[dim]Optional next step[/dim] ({reason}): [cyan]{offer}[/cyan]")
+        console.print(
+            f"\n[dim]Optional next step[/dim] ({reason}): [cyan]{offer}[/cyan]"
+        )
 
 
 @concierge_app.command("assess")
@@ -253,9 +300,12 @@ def concierge_assess(
     project_root: Path = typer.Argument(
         Path("."), help="Project to assess (default: current dir). Read-only."
     ),
-    json_out: bool = typer.Option(False, "--json", help="Emit the schema-versioned JSON to stdout."),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the schema-versioned JSON to stdout."
+    ),
     guided: Optional[bool] = typer.Option(
-        None, "--guided/--no-guided",
+        None,
+        "--guided/--no-guided",
         help="Offer (or silence) the guided kickoff experience. Overrides the project/global preference.",
     ),
 ) -> None:
@@ -284,7 +334,9 @@ def concierge_assess(
     _maybe_offer_guided(project_root, assess=result, flag=guided)
 
 
-def _maybe_offer_guided(project_root: Path, *, assess: dict, flag: Optional[bool] = None) -> None:
+def _maybe_offer_guided(
+    project_root: Path, *, assess: dict, flag: Optional[bool] = None
+) -> None:
     """Emit the single ignorable guided-experience offer line on stderr, if routing says so (GE-M0).
 
     Read-only, $0, defensive: any failure here must never perturb the kernel `assess` output.
@@ -294,9 +346,9 @@ def _maybe_offer_guided(project_root: Path, *, assess: dict, flag: Optional[bool
 
         decision = decide_guided_routing(
             project_root,
-            flag=flag,               # GE-M1: the real tri-state --guided/--no-guided (None ⇒ fall through)
-            served_surface=False,    # a CLI invocation is not a served/TUI surface
-            assess=assess,           # project-shape signal (reuse the payload we already computed)
+            flag=flag,  # GE-M1: the real tri-state --guided/--no-guided (None ⇒ fall through)
+            served_surface=False,  # a CLI invocation is not a served/TUI surface
+            assess=assess,  # project-shape signal (reuse the payload we already computed)
             interactive=console.is_terminal,  # non-TTY (piped/CI) ⇒ suppressed, never blocking
         )
         line = offer_line(decision)
@@ -320,19 +372,40 @@ def _render_write_result(res) -> None:
 
 @concierge_app.command("instantiate-kickoff")
 def concierge_instantiate(
-    project_root: Path = typer.Argument(Path("."), help="Target project (default: current dir)."),
-    posture: str = typer.Option("prototype", "--posture", help="prototype | production"),
-    with_authoring: bool = typer.Option(False, "--with-authoring", help="Also project the REQUIREMENTS/PLAN/TEST_USERS authoring trio."),
-    apply: bool = typer.Option(False, "--apply", help="Write the files (default: preview only)."),
-    force: bool = typer.Option(False, "--force", help="With --apply: overwrite files that diverged from the template."),
-    check: bool = typer.Option(False, "--check", help="Report drift (matches/diverged/absent) + verdict; non-zero exit on drift."),
+    project_root: Path = typer.Argument(
+        Path("."), help="Target project (default: current dir)."
+    ),
+    posture: str = typer.Option(
+        "prototype", "--posture", help="prototype | production"
+    ),
+    with_authoring: bool = typer.Option(
+        False,
+        "--with-authoring",
+        help="Also project the REQUIREMENTS/PLAN/TEST_USERS authoring trio.",
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="Write the files (default: preview only)."
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="With --apply: overwrite files that diverged from the template.",
+    ),
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Report drift (matches/diverged/absent) + verdict; non-zero exit on drift.",
+    ),
     portal: bool = typer.Option(
-        True, "--portal/--no-portal",
+        True,
+        "--portal/--no-portal",
         help="After --apply, generate the Digital Project Workbook dashboard (default on; degrades "
-             "gracefully — a missing jsonnet toolchain is a printed note, never a failure).",
+        "gracefully — a missing jsonnet toolchain is a printed note, never a failure).",
     ),
     provision: Optional[str] = typer.Option(
-        None, "--provision", metavar="URL",
+        None,
+        "--provision",
+        metavar="URL",
         help="With --portal: also push the Workbook to Grafana (needs GRAFANA_API_TOKEN).",
     ),
     json_out: bool = typer.Option(False, "--json", help="Emit schema-versioned JSON."),
@@ -355,7 +428,9 @@ def concierge_instantiate(
     )
 
     try:
-        plan = build_instantiate_plan(project_root, posture, with_authoring=with_authoring)
+        plan = build_instantiate_plan(
+            project_root, posture, with_authoring=with_authoring
+        )
     except ConciergeWriteError as exc:
         console.print(f"[red]concierge:[/red] {exc}")
         raise typer.Exit(_EXIT_FATAL_INPUTS)
@@ -365,8 +440,12 @@ def concierge_instantiate(
         if json_out:
             _emit_json(drift)
         else:
-            color = {"complete": "green", "partial": "yellow", "drifted": "red"}[drift["verdict"]]
-            console.print(f"[bold]instantiate-kickoff --check[/bold] — verdict: [{color}]{drift['verdict']}[/{color}]")
+            color = {"complete": "green", "partial": "yellow", "drifted": "red"}[
+                drift["verdict"]
+            ]
+            console.print(
+                f"[bold]instantiate-kickoff --check[/bold] — verdict: [{color}]{drift['verdict']}[/{color}]"
+            )
             for f in drift["files"]:
                 console.print(f"  {f['state']:<9} {f['path']}")
         raise typer.Exit(0 if drift["verdict"] == "complete" else _EXIT_DRIFT)
@@ -375,9 +454,13 @@ def concierge_instantiate(
         if json_out:
             _emit_json(plan)
         else:
-            console.print(f"[bold]instantiate-kickoff[/bold] (preview, posture={plan['posture']}) — {plan['project_root']}")
+            console.print(
+                f"[bold]instantiate-kickoff[/bold] (preview, posture={plan['posture']}) — {plan['project_root']}"
+            )
             for w in plan["writes"]:
-                console.print(f"  [{('green' if w['status']=='new' else 'yellow')}]{w['status']:<7}[/] {w['path']} ({w['bytes']} B)")
+                console.print(
+                    f"  [{('green' if w['status']=='new' else 'yellow')}]{w['status']:<7}[/] {w['path']} ({w['bytes']} B)"
+                )
             for warn in plan["warnings"]:
                 console.print(f"  [yellow]⚠[/yellow] {warn}")
             console.print("\n  [dim]preview only — re-run with --apply to write[/dim]")
@@ -401,10 +484,14 @@ def concierge_instantiate(
         try:
             from .kickoff_experience.portal_build import build_and_maybe_provision
 
-            pres = build_and_maybe_provision(project_root, out_dir=None, provision_url=provision)
+            pres = build_and_maybe_provision(
+                project_root, out_dir=None, provision_url=provision
+            )
             if not json_out:
                 console.print(f"  [dim]{pres.message()}[/dim]")
-        except Exception as exc:  # pragma: no cover - helper already degrades; last-resort isolation
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - helper already degrades; last-resort isolation
             if not json_out:
                 console.print(f"  [yellow]Workbook: skipped — {exc}[/yellow]")
     elif not json_out:
@@ -413,11 +500,17 @@ def concierge_instantiate(
 
 @concierge_app.command("log-friction")
 def concierge_log_friction(
-    project_root: Path = typer.Argument(Path("."), help="Project whose friction log to append (default: current dir)."),
+    project_root: Path = typer.Argument(
+        Path("."), help="Project whose friction log to append (default: current dir)."
+    ),
     friction: str = typer.Option(..., "--friction", help="The friction encountered."),
     what_happened: str = typer.Option(..., "--what-happened", help="What happened."),
-    implication: str = typer.Option(..., "--implication", help="Implication for the SDK / role."),
-    apply: bool = typer.Option(False, "--apply", help="Append the entry (default: preview only)."),
+    implication: str = typer.Option(
+        ..., "--implication", help="Implication for the SDK / role."
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="Append the entry (default: preview only)."
+    ),
     json_out: bool = typer.Option(False, "--json", help="Emit schema-versioned JSON."),
 ) -> None:
     """Append a structured friction entry to concierge-friction.jsonl (FR-C9)."""
@@ -427,7 +520,11 @@ def concierge_log_friction(
     from datetime import datetime, timezone
 
     from .concierge.safe_write import SafeWriteError, apply_write_plan
-    from .concierge.writes import ConciergeWriteError, build_friction_entry, to_planned_writes
+    from .concierge.writes import (
+        ConciergeWriteError,
+        build_friction_entry,
+        to_planned_writes,
+    )
 
     try:
         plan = build_friction_entry(
@@ -447,7 +544,9 @@ def concierge_log_friction(
         else:
             w = plan["writes"][0]
             verb = "create" if w["status"] == "new" else "append to"
-            console.print(f"[bold]log-friction[/bold] (preview) — would {verb} {w['path']}")
+            console.print(
+                f"[bold]log-friction[/bold] (preview) — would {verb} {w['path']}"
+            )
             console.print(f"  {w['append_text'].rstrip()}")
             console.print("\n  [dim]preview only — re-run with --apply to write[/dim]")
         return
@@ -464,15 +563,41 @@ def concierge_log_friction(
 
 @concierge_app.command("derive-contract")
 def concierge_derive_contract(
-    project_root: Path = typer.Argument(Path("."), help="Project root (default: current dir)."),
-    models: List[str] = typer.Option(..., "--models", help="Pydantic model module import path(s) (repeatable)."),
-    pythonpath: Optional[Path] = typer.Option(None, "--pythonpath", help="Where to import the models from (default: project root)."),
-    model_names: Optional[List[str]] = typer.Option(None, "--model-name", help="Restrict to these class names (repeatable)."),
-    exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Exclude these models, FQ or bare class name (repeatable)."),
-    out: Path = typer.Option(Path("prisma/schema.prisma"), "--out", help="Contract path (relative to project root) for --apply."),
-    check: bool = typer.Option(False, "--check", help="Report drift vs the live contract; non-zero exit on drift (FR-DC-11)."),
-    apply: bool = typer.Option(False, "--apply", help="Write the candidate contract (default: preview only)."),
-    force: bool = typer.Option(False, "--force", help="With --apply: overwrite an existing contract."),
+    project_root: Path = typer.Argument(
+        Path("."), help="Project root (default: current dir)."
+    ),
+    models: List[str] = typer.Option(
+        ..., "--models", help="Pydantic model module import path(s) (repeatable)."
+    ),
+    pythonpath: Optional[Path] = typer.Option(
+        None,
+        "--pythonpath",
+        help="Where to import the models from (default: project root).",
+    ),
+    model_names: Optional[List[str]] = typer.Option(
+        None, "--model-name", help="Restrict to these class names (repeatable)."
+    ),
+    exclude: Optional[List[str]] = typer.Option(
+        None,
+        "--exclude",
+        help="Exclude these models, FQ or bare class name (repeatable).",
+    ),
+    out: Path = typer.Option(
+        Path("prisma/schema.prisma"),
+        "--out",
+        help="Contract path (relative to project root) for --apply.",
+    ),
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Report drift vs the live contract; non-zero exit on drift (FR-DC-11).",
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="Write the candidate contract (default: preview only)."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="With --apply: overwrite an existing contract."
+    ),
     json_out: bool = typer.Option(False, "--json", help="Emit schema-versioned JSON."),
 ) -> None:
     """Derive a candidate schema.prisma from a project's Pydantic models (FR-DC-1..14).
@@ -481,7 +606,13 @@ def concierge_derive_contract(
     writer, OQ-7). The emitted contract is marked `unratified` — the Architect ratifies (FR-DC-7c).
     """
     from .concierge.derive import DeriveImportError, build_derivation, check_drift
-    from .concierge.safe_write import ACTION_NEW, ACTION_OVERWRITE, PlannedWrite, SafeWriteError, apply_write_plan
+    from .concierge.safe_write import (
+        ACTION_NEW,
+        ACTION_OVERWRITE,
+        PlannedWrite,
+        SafeWriteError,
+        apply_write_plan,
+    )
 
     # FR-UX-16 — banner leads the human view; suppressed for --json and the --check CI signal.
     if not json_out and not check:
@@ -492,22 +623,35 @@ def concierge_derive_contract(
         if check:
             live_file = project_root / out
             if not live_file.is_file():
-                console.print(f"[red]concierge:[/red] --check needs a live contract; none at {live_file}")
+                console.print(
+                    f"[red]concierge:[/red] --check needs a live contract; none at {live_file}"
+                )
                 raise typer.Exit(_EXIT_FATAL_INPUTS)
-            drift = check_drift(list(models), live_schema_text=live_file.read_text(encoding="utf-8"),
-                                project_pythonpath=ppath, model_names=model_names, exclude_models=exclude)
+            drift = check_drift(
+                list(models),
+                live_schema_text=live_file.read_text(encoding="utf-8"),
+                project_pythonpath=ppath,
+                model_names=model_names,
+                exclude_models=exclude,
+            )
             if json_out:
                 _emit_json(drift.__dict__)
             else:
                 color = "green" if drift.verdict == "in_sync" else "red"
-                console.print(f"[bold]derive-contract --check[/bold] — [{color}]{drift.verdict}[/{color}] "
-                              f"({len(drift.drift)} drift, {len(drift.excluded_flagged)} ratified-flagged suppressed)")
+                console.print(
+                    f"[bold]derive-contract --check[/bold] — [{color}]{drift.verdict}[/{color}] "
+                    f"({len(drift.drift)} drift, {len(drift.excluded_flagged)} ratified-flagged suppressed)"
+                )
                 for line in drift.drift:
                     console.print(f"  [red]drift[/red] {line}")
             raise typer.Exit(0 if drift.verdict == "in_sync" else _EXIT_DRIFT)
 
-        derivation = build_derivation(list(models), project_pythonpath=ppath,
-                                      model_names=model_names, exclude_models=exclude)
+        derivation = build_derivation(
+            list(models),
+            project_pythonpath=ppath,
+            model_names=model_names,
+            exclude_models=exclude,
+        )
     except DeriveImportError as exc:
         console.print(f"[red]concierge: derivation failed (fail-closed) — {exc}[/red]")
         raise typer.Exit(_EXIT_FATAL_INPUTS)
@@ -516,18 +660,26 @@ def concierge_derive_contract(
     if json_out and not apply:
         _emit_json(derivation.__dict__)
         return
-    console.print(f"[bold]derive-contract[/bold] {'(preview)' if not apply else ''} — "
-                  f"{derivation.shape['entities']} entities, {derivation.shape['enums']} enums, "
-                  f"{derivation.shape['joins']} joins")
+    console.print(
+        f"[bold]derive-contract[/bold] {'(preview)' if not apply else ''} — "
+        f"{derivation.shape['entities']} entities, {derivation.shape['enums']} enums, "
+        f"{derivation.shape['joins']} joins"
+    )
     for e in derivation.errors:
         console.print(f"  [red]error[/red] {e}")
     if r.get("flags"):
-        console.print(f"  [yellow]{len(r['flags'])} flag(s)[/yellow] for review (ambiguities/exclusions)")
+        console.print(
+            f"  [yellow]{len(r['flags'])} flag(s)[/yellow] for review (ambiguities/exclusions)"
+        )
     if derivation.unrenderable:
-        console.print(f"  [yellow]{len(derivation.unrenderable)} unrenderable field(s)[/yellow]")
+        console.print(
+            f"  [yellow]{len(derivation.unrenderable)} unrenderable field(s)[/yellow]"
+        )
 
     if not apply:
-        console.print("\n  [dim]preview only — re-run with --apply to write the candidate contract[/dim]")
+        console.print(
+            "\n  [dim]preview only — re-run with --apply to write the candidate contract[/dim]"
+        )
         return
 
     rel = out.as_posix()
@@ -539,7 +691,9 @@ def concierge_derive_contract(
         console.print(f"[red]concierge: blocked — {exc}[/red]")
         raise typer.Exit(_EXIT_BLOCKED)
     _render_write_result(res)
-    console.print("  [dim]written as a CANDIDATE (unratified) — the Architect must ratify (FR-DC-7c)[/dim]")
+    console.print(
+        "  [dim]written as a CANDIDATE (unratified) — the Architect must ratify (FR-DC-7c)[/dim]"
+    )
     if not res.ok:
         raise typer.Exit(_EXIT_BLOCKED)
 
@@ -558,21 +712,28 @@ def concierge_derive_contract(
 
 def kickoff_guided(
     project_root: Path = typer.Argument(
-        Path("."), help="Project to guide (default: current dir). Orient + Guide are read-only, $0."
+        Path("."),
+        help="Project to guide (default: current dir). Orient + Guide are read-only, $0.",
     ),
     deepen: bool = typer.Option(
-        False, "--deepen",
+        False,
+        "--deepen",
         help="Surface the optional Deepen phase (facilitation panel) pointer. GE-M1: pointer only, no LLM.",
     ),
     agent: bool = typer.Option(
-        False, "--agent",
+        False,
+        "--agent",
         help="Opt in to the LLM-assisted interview during Guide (paid). OFF by default — Guide is $0/no-LLM.",
     ),
     brief: bool = typer.Option(
-        False, "--brief", "--no-intro",
+        False,
+        "--brief",
+        "--no-intro",
         help="Show the one-line intro pointer instead of the full process intro (FR-10).",
     ),
-    json_out: bool = typer.Option(False, "--json", help="Emit the combined guided view as JSON."),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the combined guided view as JSON."
+    ),
 ) -> None:
     """The single guided kickoff experience: Orient → Guide → Deepen, over the existing kernel.
 
@@ -581,7 +742,10 @@ def kickoff_guided(
     this command spends/writes nothing; each Guide step is a command the human runs at its gate.
     """
     from .concierge import ConciergeError, build_assess
-    from .kickoff_experience.concierge_view import build_guided_view, render_deepen_lines
+    from .kickoff_experience.concierge_view import (
+        build_guided_view,
+        render_deepen_lines,
+    )
     from .kickoff_experience.orchestrator import build_kickoff_plan
 
     # ── Orient — the readiness surface (reuse `build_assess`; NO recompute — FR-GE-6). ──
@@ -597,13 +761,17 @@ def kickoff_guided(
     # GE-M4: the ONE guided view-model (parity oracle) — the CLI is now a pure function of it. Reuse
     # the already-computed Orient/Guide (no recompute); Deepen reads any persisted facilitation
     # session so its GE-M3b halted/cost states surface identically to the TUI and served surfaces.
-    view = build_guided_view(project_root, assess=assess, plan=plan, load_deepen=True, brief=brief)
+    view = build_guided_view(
+        project_root, assess=assess, plan=plan, load_deepen=True, brief=brief
+    )
 
     if json_out:
         _emit_json(view)
         return
 
-    console.print("[bold]Guided kickoff[/bold] — one experience, three phases (Orient → Guide → Deepen)\n")
+    console.print(
+        "[bold]Guided kickoff[/bold] — one experience, three phases (Orient → Guide → Deepen)\n"
+    )
 
     # FR-3 / clause A — lead with the process intro (full on first run, one-line pointer once past
     # onboarding or under --brief). FR-4 / clause B — surface posture as information, pointing at the
@@ -625,7 +793,9 @@ def kickoff_guided(
     console.print("[bold cyan]1. Orient[/bold cyan] — where you are (readiness)\n")
     _render_assess(view["orient"])
 
-    console.print("\n[bold cyan]2. Guide[/bold cyan] — the $0 conductor (deterministic, no LLM)\n")
+    console.print(
+        "\n[bold cyan]2. Guide[/bold cyan] — the $0 conductor (deterministic, no LLM)\n"
+    )
     console.print(plan.render(), markup=False, highlight=False)
     if agent:
         # `--agent` is the strictly opt-in, propose-only LLM interview (FR-GE-5). Guide's *default*
@@ -637,7 +807,9 @@ def kickoff_guided(
 
     # ── Deepen — the shared projection (render_deepen_lines): a persisted session's status/halt/cost
     #    when engaged (GE-M3b), else the GE-M1 optional pointer. Same text the TUI emits (parity). ──
-    console.print("\n[bold cyan]3. Deepen[/bold cyan] — optional multi-perspective facilitation")
+    console.print(
+        "\n[bold cyan]3. Deepen[/bold cyan] — optional multi-perspective facilitation"
+    )
     for line in render_deepen_lines(view["deepen"], deepen_flag=deepen):
         console.print(line, markup=False, highlight=False)
 
@@ -655,7 +827,9 @@ def kickoff_deepen(
     NOT invoke an LLM or promote the panel (GE-M3 promotes/hardens facilitation as a first-class
     phase). Read-only, $0.
     """
-    console.print("[bold]Deepen[/bold] — optional multi-perspective facilitation (the discovery pass)")
+    console.print(
+        "[bold]Deepen[/bold] — optional multi-perspective facilitation (the discovery pass)"
+    )
     console.print(
         "  [dim]This first-class facilitation phase is coming in a later step (GE-M3). For now, drive "
         "the stakeholder panel directly via[/dim] [cyan]startd8 kickoff stakeholders ask-all[/cyan] "
@@ -694,13 +868,19 @@ def kickoff_explain(
     domain: Optional[str] = typer.Argument(
         None,
         help="One input domain to explain (business-targets|observability|conventions|"
-             "build-preferences). Omit for the whole explainer.",
+        "build-preferences). Omit for the whole explainer.",
     ),
     intro: bool = typer.Option(
-        False, "--intro", help="Show the generic kickoff-process intro instead of the inputs explainer."
+        False,
+        "--intro",
+        help="Show the generic kickoff-process intro instead of the inputs explainer.",
     ),
-    project_root: Path = typer.Option(Path("."), "--project", help="Project root (for the audience tier)."),
-    json_out: bool = typer.Option(False, "--json", help="Emit the doc content as JSON to stdout."),
+    project_root: Path = typer.Option(
+        Path("."), "--project", help="Project root (for the audience tier)."
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the doc content as JSON to stdout."
+    ),
 ) -> None:
     """Explain the kickoff inputs — what each is, why the build needs it, and who provides it ($0)."""
     from .concierge import ConciergeError, load_experience_doc
@@ -715,10 +895,19 @@ def kickoff_explain(
             console.print(f"[red]kickoff explain:[/red] {exc}")
             raise typer.Exit(_EXIT_FATAL_INPUTS)
         if json_out:
-            _emit_json({"schema": "kickoff.explain.v1", "action": "explain", "doc": f"domain:{domain}", **d})
+            _emit_json(
+                {
+                    "schema": "kickoff.explain.v1",
+                    "action": "explain",
+                    "doc": f"domain:{domain}",
+                    **d,
+                }
+            )
             return
         console.print(f"[bold]{d['label']}[/bold] — {d['question']}")
-        console.print(f"[dim]File:[/dim] {d['file']}    [dim]Provided by:[/dim] {d['who']}\n")
+        console.print(
+            f"[dim]File:[/dim] {d['file']}    [dim]Provided by:[/dim] {d['who']}\n"
+        )
         _render_markdown(d["prose"])
         return
 
@@ -728,16 +917,29 @@ def kickoff_explain(
         from .concierge.audience import disclosure_tier, resolve_audience_preference
 
         tier = disclosure_tier(resolve_audience_preference(project_root).value)
-        doc, content = "kickoff-experience-intro", load_experience_doc("intro", tier=tier)
+        doc, content = "kickoff-experience-intro", load_experience_doc(
+            "intro", tier=tier
+        )
     else:
         entry = get_template_entry(_INPUTS_EXPLAINED_KEY)
         if entry is None:  # pragma: no cover — manifest is a build-time invariant
-            console.print("[red]kickoff explain:[/red] inputs explainer template not found.")
+            console.print(
+                "[red]kickoff explain:[/red] inputs explainer template not found."
+            )
             raise typer.Exit(_EXIT_FATAL_INPUTS)
-        doc, content = _INPUTS_EXPLAINED_KEY, _strip_template_banner(render_template_content(entry))
+        doc, content = _INPUTS_EXPLAINED_KEY, _strip_template_banner(
+            render_template_content(entry)
+        )
 
     if json_out:
-        _emit_json({"schema": "kickoff.explain.v1", "action": "explain", "doc": doc, "content": content})
+        _emit_json(
+            {
+                "schema": "kickoff.explain.v1",
+                "action": "explain",
+                "doc": doc,
+                "content": content,
+            }
+        )
         return
 
     _render_markdown(content)
@@ -756,12 +958,20 @@ def _kickoff_confirm_guided(project_root: Path, json_out: bool) -> None:
     awaiting = awaiting_fields(project_root)
     paths = [f["value_path"] for f in awaiting]
 
-    if json_out or not console.is_terminal:   # FR-7: refuse, don't no-op — list instead.
+    if json_out or not console.is_terminal:  # FR-7: refuse, don't no-op — list instead.
         if json_out:
-            _emit_json({"schema": "kickoff.confirm.walk.v1", "action": "confirm_walk",
-                        "interactive": False, "awaiting": paths})
+            _emit_json(
+                {
+                    "schema": "kickoff.confirm.walk.v1",
+                    "action": "confirm_walk",
+                    "interactive": False,
+                    "awaiting": paths,
+                }
+            )
         elif paths:
-            console.print("[yellow]The guided walk needs a terminal.[/yellow] Script these instead:")
+            console.print(
+                "[yellow]The guided walk needs a terminal.[/yellow] Script these instead:"
+            )
             for p in paths:
                 console.print(f"  startd8 kickoff confirm {p} --value <v>")
         else:
@@ -778,35 +988,48 @@ def _kickoff_confirm_guided(project_root: Path, json_out: bool) -> None:
         except (EOFError, KeyboardInterrupt):
             return None
 
-    console.print("[bold]Guided confirm[/bold] — walk your defaulted inputs ($0, no LLM). "
-                  "[dim]Enter = skip · a = as-is · q = quit[/dim]\n")
+    console.print(
+        "[bold]Guided confirm[/bold] — walk your defaulted inputs ($0, no LLM). "
+        "[dim]Enter = skip · a = as-is · q = quit[/dim]\n"
+    )
     summary = run_confirm_walk(
-        project_root, read_input=_read,
+        project_root,
+        read_input=_read,
         emit_line=lambda s: console.print(s, markup=False, highlight=False),
     )
-    console.print(f"\n[bold]Done[/bold] — {len(summary['confirmed'])} confirmed this session · "
-                  f"{summary['remaining']} still awaiting.")
+    console.print(
+        f"\n[bold]Done[/bold] — {len(summary['confirmed'])} confirmed this session · "
+        f"{summary['remaining']} still awaiting."
+    )
 
 
-def _kickoff_confirm_all(project_root, *, as_is: bool, dry_run: bool, yes: bool, json_out: bool) -> None:
+def _kickoff_confirm_all(
+    project_root, *, as_is: bool, dry_run: bool, yes: bool, json_out: bool
+) -> None:
     """`kickoff confirm --all --as-is` — the Advanced batch (FR-12) with a mandatory preview (FR-18)
     and the placeholder skip (A-FR12b). Two-phase: build the preview (no writes), then apply only on
     an explicit `--yes` (or `--dry-run` to preview only)."""
     from .concierge.confirmation import apply_confirm_all, build_confirm_all_plan
 
     if not as_is:
-        console.print("[red]kickoff confirm --all:[/red] batch confirm requires --as-is "
-                      "(it accepts every current default unchanged)")
+        console.print(
+            "[red]kickoff confirm --all:[/red] batch confirm requires --as-is "
+            "(it accepts every current default unchanged)"
+        )
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     plan = build_confirm_all_plan(project_root)
 
     if json_out:
         payload = {
-            "schema": "kickoff.confirm_all.v1", "action": "confirm-all",
+            "schema": "kickoff.confirm_all.v1",
+            "action": "confirm-all",
             "to_confirm": [{"value_path": vp, "value": v} for vp, v in plan.to_confirm],
-            "skipped_placeholder": [{"value_path": vp, "value": v} for vp, v in plan.skipped_placeholder],
-            "dry_run": dry_run, "applied": False,
+            "skipped_placeholder": [
+                {"value_path": vp, "value": v} for vp, v in plan.skipped_placeholder
+            ],
+            "dry_run": dry_run,
+            "applied": False,
         }
         if not dry_run and yes:
             payload["confirmed"] = apply_confirm_all(project_root, plan)
@@ -816,60 +1039,123 @@ def _kickoff_confirm_all(project_root, *, as_is: bool, dry_run: bool, yes: bool,
 
     render_intro_banner()
     if not plan.to_confirm and not plan.skipped_placeholder:
-        console.print("  nothing awaiting — every confirmable field is already confirmed.")
+        console.print(
+            "  nothing awaiting — every confirmable field is already confirmed."
+        )
         return
-    console.print(f"[bold]Confirm-all preview[/bold] — {len(plan.to_confirm)} field(s) would be "
-                  f"confirmed as-is:")
+    console.print(
+        f"[bold]Confirm-all preview[/bold] — {len(plan.to_confirm)} field(s) would be "
+        f"confirmed as-is:"
+    )
     for vp, v in plan.to_confirm:
         console.print(f"  • {vp} = {v!r}")
     if plan.skipped_placeholder:
-        console.print(f"  [yellow]{len(plan.skipped_placeholder)} skipped[/yellow] "
-                      f"(still a template placeholder — set a real value first):")
+        console.print(
+            f"  [yellow]{len(plan.skipped_placeholder)} skipped[/yellow] "
+            f"(still a template placeholder — set a real value first):"
+        )
         for vp, v in plan.skipped_placeholder:
             console.print(f"    · {vp} = {v!r}")
     if dry_run:
         console.print("  [dim]--dry-run: nothing written.[/dim]")
         return
     if not yes:
-        console.print("  [dim]re-run with[/dim] --yes [dim]to confirm these, or[/dim] "
-                      "--dry-run [dim]to preview only.[/dim]")
+        console.print(
+            "  [dim]re-run with[/dim] --yes [dim]to confirm these, or[/dim] "
+            "--dry-run [dim]to preview only.[/dim]"
+        )
         return
     applied = apply_confirm_all(project_root, plan)
     console.print(f"  [green]✓ confirmed {len(applied)} field(s) as-is.[/green]")
+
+
+def _workbook_refresh(
+    project_root: Path, *, provision: Optional[str], json_out: bool
+) -> None:
+    """FR-9: regenerate the Digital Project Workbook after a confirm so the board tracks the newly
+    confirmed field. Reuses the shared helper (FR-10) — `$0`, non-fatal, silent under `--json`.
+    """
+    try:
+        from .kickoff_experience.portal_build import build_and_maybe_provision
+
+        res = build_and_maybe_provision(
+            project_root, out_dir=None, provision_url=provision
+        )
+        if not json_out:
+            console.print(f"  [dim]{res.message()}[/dim]")
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - helper already degrades; last-resort isolation
+        if not json_out:
+            console.print(f"  [yellow]Workbook: skipped — {exc}[/yellow]")
 
 
 def kickoff_confirm(
     value_path: Optional[str] = typer.Argument(
         None,
         help="The field to confirm, e.g. build-preferences.yaml#/budgets.per_pipeline_run "
-             "(see `startd8 kickoff assess`). OMIT for the interactive guided walk.",
+        "(see `startd8 kickoff assess`). OMIT for the interactive guided walk.",
     ),
-    value: Optional[str] = typer.Option(None, "--value", help="A real value to set and confirm."),
+    value: Optional[str] = typer.Option(
+        None, "--value", help="A real value to set and confirm."
+    ),
     as_is: bool = typer.Option(
-        False, "--as-is", help="Confirm the current default value unchanged (no YAML value change)."
+        False,
+        "--as-is",
+        help="Confirm the current default value unchanged (no YAML value change).",
     ),
     all_: bool = typer.Option(
-        False, "--all", help="Advanced: confirm EVERY awaiting field as-is in one batch (needs --as-is)."
+        False,
+        "--all",
+        help="Advanced: confirm EVERY awaiting field as-is in one batch (needs --as-is).",
     ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="With --all: preview only, write nothing."),
-    yes: bool = typer.Option(False, "--yes", help="With --all: the explicit confirmation to write."),
-    project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
-    json_out: bool = typer.Option(False, "--json", help="Emit the confirmation as JSON."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="With --all: preview only, write nothing."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="With --all: the explicit confirmation to write."
+    ),
+    project_root: Path = typer.Option(
+        Path("."), "--project", help="Project root (default: cwd)."
+    ),
+    portal: bool = typer.Option(
+        True,
+        "--portal/--no-portal",
+        help="After a single-field confirm, refresh the Digital Project Workbook so the board tracks "
+        "the newly-confirmed field (FR-9; default on, degrades gracefully, $0).",
+    ),
+    provision: Optional[str] = typer.Option(
+        None,
+        "--provision",
+        metavar="URL",
+        help="With --portal: also push the refreshed Workbook to Grafana (needs GRAFANA_API_TOKEN).",
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the confirmation as JSON."
+    ),
 ) -> None:
     """Confirm a defaulted kickoff value-input ($0). Give a <value_path> to set/confirm one field,
-    OMIT it to walk all awaiting fields interactively, or use --all --as-is for the batch (Advanced)."""
+    OMIT it to walk all awaiting fields interactively, or use --all --as-is for the batch (Advanced).
+
+    A single-field confirm refreshes the Workbook afterward (FR-9, `--no-portal` to skip). The batch
+    (`--all`) and guided walks don't yet auto-refresh — re-run `startd8 kickoff portal` after those.
+    """
     from .concierge.confirmation import ConfirmError, apply_confirm, build_confirm_plan
 
     # `kickoff confirm --all --as-is` → the Advanced batch (FR-12) with a mandatory preview (FR-18).
     if all_:
-        _kickoff_confirm_all(project_root, as_is=as_is, dry_run=dry_run, yes=yes, json_out=json_out)
+        _kickoff_confirm_all(
+            project_root, as_is=as_is, dry_run=dry_run, yes=yes, json_out=json_out
+        )
         return
 
     # Bare `kickoff confirm` → the guided walk (OQ-1).
     if value_path is None:
         if value is not None or as_is:
-            console.print("[red]kickoff confirm:[/red] --value/--as-is need a <value_path>; "
-                          "omit them for the guided walk")
+            console.print(
+                "[red]kickoff confirm:[/red] --value/--as-is need a <value_path>; "
+                "omit them for the guided walk"
+            )
             raise typer.Exit(_EXIT_FATAL_INPUTS)
         _kickoff_confirm_guided(project_root, json_out)
         return
@@ -878,8 +1164,10 @@ def kickoff_confirm(
     if not json_out:
         render_intro_banner()
 
-    if (value is not None) == as_is:   # need exactly one of --value / --as-is
-        console.print("[red]kickoff confirm:[/red] provide exactly one of --value <v> or --as-is")
+    if (value is not None) == as_is:  # need exactly one of --value / --as-is
+        console.print(
+            "[red]kickoff confirm:[/red] provide exactly one of --value <v> or --as-is"
+        )
         raise typer.Exit(_EXIT_FATAL_INPUTS)
     mode = "as-is" if as_is else "set"
     try:
@@ -891,11 +1179,15 @@ def kickoff_confirm(
 
     if json_out:
         _emit_json({"schema": "kickoff.confirm.v1", "action": "confirm", **result})
+        if portal:
+            _workbook_refresh(project_root, provision=provision, json_out=True)
         return
     console.print(
         f"  [green]✓ confirmed[/green] {result['value_path']} = {result['value']!r} "
         f"([dim]{result['mode']}[/dim]) — [dim]run[/dim] startd8 kickoff assess [dim]to see the count[/dim]"
     )
+    if portal:  # FR-9: keep the Workbook current with the just-confirmed field
+        _workbook_refresh(project_root, provision=provision, json_out=False)
 
 
 # The Workbook data loaders (panel run + pipeline funnel) live in
@@ -915,30 +1207,45 @@ def kickoff_confirm(
 @kickoff_kernel_app.command("portal")
 def kickoff_portal(
     project_root: Path = typer.Argument(
-        Path("."), help="Project to build the portal for (default: current dir). Read-only — never modified."
+        Path("."),
+        help="Project to build the portal for (default: current dir). Read-only — never modified.",
     ),
     project: Optional[str] = typer.Option(
-        None, "--project", help="Project name for the dashboard (default: the project-root directory name)."
+        None,
+        "--project",
+        help="Project name for the dashboard (default: the project-root directory name).",
     ),
     provision: Optional[str] = typer.Option(
-        None, "--provision", metavar="URL",
+        None,
+        "--provision",
+        metavar="URL",
         help="Provision to Grafana (e.g. http://localhost:3000; needs GRAFANA_API_TOKEN). Omit = generate JSON only.",
     ),
     out_dir: Optional[Path] = typer.Option(
-        None, "--out", help="Output dir for the dashboard JSON (default: <root>/.startd8/dashboards)."
+        None,
+        "--out",
+        help="Output dir for the dashboard JSON (default: <root>/.startd8/dashboards).",
     ),
     session: Optional[str] = typer.Option(
-        None, "--session", help="Render a SPECIFIC stakeholder-run session (default: the most recent)."
+        None,
+        "--session",
+        help="Render a SPECIFIC stakeholder-run session (default: the most recent).",
     ),
     index: bool = typer.Option(
-        False, "--index", help="Build the PORTFOLIO INDEX dashboard (a link-list of every project's "
-                               "Workbook) instead of this project's Workbook (FR-11).",
+        False,
+        "--index",
+        help="Build the PORTFOLIO INDEX dashboard (a link-list of every project's "
+        "Workbook) instead of this project's Workbook (FR-11).",
     ),
     yes: bool = typer.Option(
-        False, "--yes", help="With --index --provision to a SHARED (non-loopback) Grafana: confirm the "
-                             "portfolio-wide write (NR-6).",
+        False,
+        "--yes",
+        help="With --index --provision to a SHARED (non-loopback) Grafana: confirm the "
+        "portfolio-wide write (NR-6).",
     ),
-    json_out: bool = typer.Option(False, "--json", help="Emit a JSON result summary to stdout."),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit a JSON result summary to stdout."
+    ),
 ) -> None:
     """Build the Digital Project Workbook — canonical kickoff state on a Grafana dashboard ($0, no LLM).
 
@@ -957,13 +1264,24 @@ def kickoff_portal(
     dest = out_dir.expanduser() if out_dir else None
 
     if index:
-        res = build_index(root, out_dir=dest, provision_url=provision, confirm_shared=yes)
+        res = build_index(
+            root, out_dir=dest, provision_url=provision, confirm_shared=yes
+        )
         if json_out:
-            _emit_json({"schema": "kickoff.portal-index.v1", "uid": res.uid, "json_path": res.json_path,
-                        "dashboard_url": res.provisioned_url, "skipped_reason": res.skipped_reason})
+            _emit_json(
+                {
+                    "schema": "kickoff.portal-index.v1",
+                    "uid": res.uid,
+                    "json_path": res.json_path,
+                    "dashboard_url": res.provisioned_url,
+                    "skipped_reason": res.skipped_reason,
+                }
+            )
             return
         if res.skipped_reason:
-            console.print(f"[yellow]kickoff portal --index:[/yellow] {res.skipped_reason}")
+            console.print(
+                f"[yellow]kickoff portal --index:[/yellow] {res.skipped_reason}"
+            )
             raise typer.Exit(0)
         console.print(f"[bold]Portfolio index[/bold] — [cyan]{res.json_path}[/cyan]")
         if res.provisioned_url:
@@ -981,10 +1299,19 @@ def kickoff_portal(
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     name = project or root.resolve().name
-    res = build_and_maybe_provision(root, name, out_dir=dest, provision_url=provision, session=session)
+    res = build_and_maybe_provision(
+        root, name, out_dir=dest, provision_url=provision, session=session
+    )
     if json_out:
-        _emit_json({**res.summary, "json_path": res.json_path, "dashboard_url": res.provisioned_url,
-                    "provisioned": bool(provision), "skipped_reason": res.skipped_reason})
+        _emit_json(
+            {
+                **res.summary,
+                "json_path": res.json_path,
+                "dashboard_url": res.provisioned_url,
+                "provisioned": bool(provision),
+                "skipped_reason": res.skipped_reason,
+            }
+        )
         return
     if res.skipped_reason:
         console.print(f"[yellow]kickoff portal:[/yellow] {res.skipped_reason}")
@@ -999,7 +1326,9 @@ def kickoff_portal(
     if res.provisioned_url:
         console.print(f"  Grafana: [cyan]{res.provisioned_url}[/cyan]")
     elif not provision:
-        console.print("  [dim]run again with[/dim] --provision http://localhost:3000 [dim]to push to Grafana[/dim]")
+        console.print(
+            "  [dim]run again with[/dim] --provision http://localhost:3000 [dim]to push to Grafana[/dim]"
+        )
 
 
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------
@@ -1018,17 +1347,21 @@ def _render_audience_show(project_root: Path, json_out: bool) -> None:
 
     res = resolve_audience_preference(project_root)
     if json_out:
-        _emit_json({
-            "schema": "kickoff.audience.v1",
-            "action": "show",
-            "audience": res.value.value,
-            "source": res.source,
-        })
+        _emit_json(
+            {
+                "schema": "kickoff.audience.v1",
+                "action": "show",
+                "audience": res.value.value,
+                "source": res.source,
+            }
+        )
         return
     from .cli_shared import render_intro_banner
 
     render_intro_banner()
-    console.print(f"  audience: [cyan]{res.value.value}[/cyan]  ([dim]from {res.source}[/dim])")
+    console.print(
+        f"  audience: [cyan]{res.value.value}[/cyan]  ([dim]from {res.source}[/dim])"
+    )
     if res.source == "default":
         console.print(
             "  [dim]unset — defaulting to intermediate. set one with[/dim] "
@@ -1046,8 +1379,12 @@ def _audience_root(ctx: typer.Context) -> None:
 
 @audience_app.command("show")
 def _audience_show(
-    project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
-    json_out: bool = typer.Option(False, "--json", help="Emit the resolved audience as JSON."),
+    project_root: Path = typer.Option(
+        Path("."), "--project", help="Project root (default: cwd)."
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the resolved audience as JSON."
+    ),
 ) -> None:
     """Show the resolved kickoff audience and which layer decided it ($0, read-only)."""
     _render_audience_show(project_root, json_out)
@@ -1056,11 +1393,17 @@ def _audience_show(
 @audience_app.command("set")
 def _audience_set(
     audience: str = typer.Argument(..., help="beginner | intermediate | advanced"),
-    project_root: Path = typer.Option(Path("."), "--project", help="Project root (default: cwd)."),
-    global_scope: bool = typer.Option(
-        False, "--global", help="Write the user-level preference instead of this project's."
+    project_root: Path = typer.Option(
+        Path("."), "--project", help="Project root (default: cwd)."
     ),
-    json_out: bool = typer.Option(False, "--json", help="Emit the write result as JSON."),
+    global_scope: bool = typer.Option(
+        False,
+        "--global",
+        help="Write the user-level preference instead of this project's.",
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the write result as JSON."
+    ),
 ) -> None:
     """Set your kickoff audience ($0). Writes ONLY the preference — it takes effect the next time you
     run the guided walk, and never changes what gets built."""
@@ -1068,18 +1411,22 @@ def _audience_set(
 
     scope = "global" if global_scope else "project"
     try:
-        result = set_audience_preference(audience, project_root=project_root, scope=scope)
+        result = set_audience_preference(
+            audience, project_root=project_root, scope=scope
+        )
     except ValueError as exc:
         console.print(f"[red]kickoff audience set:[/red] {exc}")
         raise typer.Exit(_EXIT_FATAL_INPUTS)
     if json_out:
-        _emit_json({
-            "schema": "kickoff.audience.v1",
-            "action": "set",
-            "audience": result.value.value,
-            "scope": result.scope,
-            "target": result.target,
-        })
+        _emit_json(
+            {
+                "schema": "kickoff.audience.v1",
+                "action": "set",
+                "audience": result.value.value,
+                "scope": result.scope,
+                "target": result.target,
+            }
+        )
         return
     console.print(
         f"  [green]✓ audience set[/green] to [cyan]{result.value.value}[/cyan] "

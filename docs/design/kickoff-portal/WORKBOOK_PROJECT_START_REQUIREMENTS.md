@@ -1,9 +1,9 @@
 # Digital Project Workbook — Project-Start Generation Requirements
 
-**Version:** 0.5 (Implemented + verified; FR-5 scope refined — see §0.3)
+**Version:** 0.6 (FR-9 + FR-5 collision-detection now implemented — post-merge deferred-item pass)
 **Date:** 2026-07-08
-**Status:** IMPLEMENTED — FR-1..4, FR-6..11 + all NR fully available & tested; FR-5 collision-detection
-deferred (provision-time, §0.3)
+**Status:** IMPLEMENTED — every FR available & tested (FR-9 single-field confirm; FR-5 collision guard at
+provision-time). Remaining deferrals: FR-9 batch/guided refresh, and the owner-doc live-metrics track (NR-1).
 **Owner doc for the generator/content:** `GRAFANA_KICKOFF_PORTAL_REQUIREMENTS.md` (v0.4). **This doc owns
 only the project-start _lifecycle_** — when/how the Workbook is created, not what it contains.
 
@@ -144,13 +144,12 @@ Workbook generation into the project-start flow (`kickoff instantiate`) and form
   MUST be rejected (`WorkbookSlugError`), never allowed to collide with the portfolio-index UID; an
   empty slug is likewise rejected. **Rename** has defined behavior with no new code: a renamed project
   slugifies to a *new* UID → a new board; the old board is orphaned and remains listed by the index
-  (an explicitly acceptable outcome). **Cross-project UID collision detection** (two *distinct* projects
-  whose names slugify to the same UID) is **DEFERRED to a provision-time guard** — it is not a
-  `$0`/deterministic capability (there is no local registry of all projects' UIDs; a collision is only
-  observable when provisioning to a shared Grafana, via a `get_dashboard(uid)` title check). Tracked with
-  the other provisioning-hardening deferrals; until then a same-slug second project provisioned to the
-  *same* Grafana overwrites the first (documented limitation, not silent — the slug rule makes the
-  collision predictable).
+  (an explicitly acceptable outcome). **Cross-project UID collision detection — IMPLEMENTED (v0.6).**
+  Before provisioning to a Grafana, `portal_build._provision_collision_reason` does a
+  `get_dashboard(uid)` title check; if the UID already belongs to a **different** project (different
+  title) the provision is **refused, never clobbered** — the user renames. Best-effort: a check that
+  can't run (network/auth) doesn't block (the provision itself surfaces those errors), and disk-only
+  generation can't collide (each project owns its own file). Only the provision path needs it.
 - **FR-6 — Graceful toolchain degradation (absent AND broken — CRP R1-F2).** (a) If the jsonnet toolchain
   (binary `jsonnet` or `gojsonnet`) is **absent**, instantiate MUST NOT fail; it completes the file
   scaffold and prints an actionable one-liner (`Workbook skipped — install jsonnet or `pip install
@@ -168,8 +167,11 @@ Workbook generation into the project-start flow (`kickoff instantiate`) and form
   is unchanged.)
 - **FR-8 — Single-source vocabulary.** This doc owns only the project-start lifecycle. Content, panels,
   and live-data status are owned by `GRAFANA_KICKOFF_PORTAL_REQUIREMENTS.md`; cite it, don't restate.
-- **FR-9 — Refresh on confirm (DEFERRED).** `kickoff confirm` MAY later offer to regenerate the Workbook
-  so the board tracks a newly-confirmed field. For now, refresh = the human re-running `kickoff portal`.
+- **FR-9 — Refresh on confirm (IMPLEMENTED v0.6 for single-field confirm).** `kickoff confirm <field>`
+  regenerates the Workbook afterward (reuses the FR-10 helper; `--portal/--no-portal` default ON,
+  `--provision` passthrough), so the board tracks the newly-confirmed field. Non-fatal + `$0`. The batch
+  (`--all`) and interactive guided walks do **not** yet auto-refresh — a small follow-up (they call the
+  same `_workbook_refresh` helper); until then re-run `startd8 kickoff portal` after those.
 - **FR-10 — Shared generation helper (anti-drift).** The generate-(+provision) logic MUST live in ONE
   helper reused by both `kickoff portal` and `instantiate --portal`, so the two entry points cannot drift
   (the portal command body is the current home; factor its state→spec→workflow steps out).
