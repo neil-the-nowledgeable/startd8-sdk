@@ -412,6 +412,11 @@ def panel_propose(
     serialize: bool = typer.Option(
         False, "--serialize", help="Serialize ACCEPTED staged recommendations into the VIPP inbox."
     ),
+    accept_all: bool = typer.Option(
+        False, "--accept-all",
+        help="With --serialize: promote every staged draft to accepted first (skips per-item human "
+             "review — VIPP still adjudicates each against project ground truth).",
+    ),
 ) -> None:
     """Map a panel synthesis's field-level items to VIPP ``capture`` proposals (synthesis-bridge incr. 2).
 
@@ -436,7 +441,20 @@ def panel_propose(
         raise typer.Exit(2)
 
     if serialize:
+        import dataclasses
+
         recs = ProposalStore(project_root, sid).load()
+        if not recs:
+            console.print("[yellow]panel propose:[/yellow] no staged recommendations — run `--run` first.")
+            raise typer.Exit(2)
+        if accept_all:
+            recs = [dataclasses.replace(r, disposition="accepted") for r in recs]
+        elif not any(r.disposition == "accepted" for r in recs):
+            console.print(
+                "[yellow]panel propose:[/yellow] no recommendation is marked accepted. Edit the "
+                f"disposition in the staged file for {sid}, or re-run with `--accept-all`."
+            )
+            raise typer.Exit(2)
         result = serialize_accepted_to_vipp(project_root, recs)
         console.print(f"[green]serialized:[/green] {result['staged'] or '(none)'}")
         if result["rejected"]:

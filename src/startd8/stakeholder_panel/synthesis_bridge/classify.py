@@ -33,12 +33,16 @@ _BUILD_HINTS = ("build ", "add a ", "convert ", "design ", "implement ", "create
 
 
 def _detect_value_path(text: str, allowed: FrozenSet[str]) -> Optional[str]:
-    """Return the first allow-listed ``entity.field`` token in *text*, if any."""
+    """Return the first allow-listed ``entity.field`` token in *text*, if any.
+
+    An empty allow-list confirms nothing capturable, so nothing matches and everything stays
+    NON-DECIDABLE — the read-only triage's normal state (the real prose→value_path mapping is the LLM
+    step in :mod:`.extract_llm`, increment 2). Coarse literal-token heuristic: fires only when the
+    synthesis writes an allow-listed value_path verbatim.
+    """
     for match in _VALUE_PATH_RE.findall(text):
-        if not allowed or match in allowed:
-            # With no allow-list we cannot confirm a field is real/capturable → treat as non-field.
-            if allowed and match in allowed:
-                return match
+        if match in allowed:
+            return match
     return None
 
 
