@@ -898,79 +898,10 @@ def kickoff_confirm(
     )
 
 
-def _load_panel_run(project_root: Path, session_id: Optional[str] = None) -> Optional[List[dict]]:
-    """Load a stakeholder-panel run's answers for the Workbook (best-effort, $0 read-only).
-
-    With ``session_id`` renders that **specific** run (FR-8, the session the run loop returned — no
-    race); otherwise the most-recent transcript by mtime (Phase 1.5, fine for single-user CLI display).
-    Returns None on any absence/error — a missing/unreadable transcript must never fail the portal.
-    """
-    try:
-        from .stakeholder_panel.transcript import TranscriptStore
-
-        if session_id:
-            answers = TranscriptStore(project_root, session_id).load()
-            return [a.to_dict() for a in answers] or None
-        tdir = project_root / ".startd8" / "stakeholder-panel"
-        if not tdir.is_dir():
-            return None
-        sessions = sorted(
-            (p for p in tdir.glob("*.json") if p.is_file()),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if not sessions:
-            return None
-        answers = TranscriptStore(project_root, sessions[0].stem).load()
-        return [a.to_dict() for a in answers] or None
-    except Exception:  # pragma: no cover - never let transcript loading break the portal
-        return None
-
-
-def _load_pipeline_state(project_root: Path) -> Optional[dict]:
-    """Assemble the panel→bridge→VIPP funnel for the Workbook (best-effort, $0 read-only, Increment 3).
-
-    Reads the three persisted stores — staged recommendations (`ProposalStore`), the VIPP inbox, and
-    VIPP dispositions. Returns None if there's no pipeline activity. Never breaks the portal.
-    """
-    try:
-        staged: List[dict] = []
-        pdir = project_root / ".startd8" / "stakeholder-panel" / "proposals"
-        if pdir.is_dir():
-            from .stakeholder_panel.proposals import ProposalStore
-
-            for f in sorted(pdir.glob("proposals-*.json")):
-                sid = f.stem[len("proposals-"):]
-                staged.extend(r.to_dict() for r in ProposalStore(project_root, sid).load())
-
-        inbox = {"present": False}
-        inbox_path = project_root / ".startd8" / "vipp" / "proposals-inbox.json"
-        if inbox_path.is_file() and not inbox_path.is_symlink():
-            from .vipp.models import ProposalEnvelope
-
-            env = ProposalEnvelope.from_json(inbox_path.read_text(encoding="utf-8"))
-            inbox = {"present": True, "count": len(env.proposals), "envelope_seq": env.envelope_seq}
-
-        dispositions = {"present": False}
-        disp_path = project_root / ".startd8" / "vipp" / "dispositions.json"
-        if disp_path.is_file() and not disp_path.is_symlink():
-            from .vipp.models import VippReport
-
-            rep = VippReport.from_json(disp_path.read_text(encoding="utf-8"))
-            dispositions = {
-                "present": True, "counts": rep.counts(), "evidence_available": rep.evidence_available,
-                "items": [
-                    {"proposal_id": d.proposal_id,
-                     "decision": getattr(d.decision, "value", str(d.decision)), "reason": d.reason}
-                    for d in rep.dispositions
-                ],
-                "advisories": list(rep.panel_advisories or []),
-            }
-        if not staged and not inbox["present"] and not dispositions["present"]:
-            return None
-        return {"staged": staged, "inbox": inbox, "dispositions": dispositions}
-    except Exception:  # pragma: no cover - never let pipeline loading break the portal
-        return None
+# The Workbook data loaders (panel run + pipeline funnel) live in
+# `kickoff_experience/portal_build.py`, reused by both `kickoff portal` and `instantiate --portal`
+# (FR-10 anti-drift). The previously-inline copies here were removed once `kickoff portal` was
+# re-pointed at that shared helper.
 
 
 # --- Kickoff portal — the Digital Project Workbook (Grafana presentation surface) ----------------
