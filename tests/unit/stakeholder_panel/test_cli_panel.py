@@ -111,3 +111,15 @@ def test_serve_enable_apply_with_strict_sets_config(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0
     assert captured["cfg"].enable_apply is True and captured["cfg"].strict is True
+
+
+def test_serve_missing_server_extra_is_friendly(tmp_path, monkeypatch):
+    # Simulate the `[server]` extra absent: importing the server module raises ImportError. The command
+    # must print an actionable install hint and exit 2 — not dump a raw ModuleNotFoundError traceback.
+    import sys
+
+    monkeypatch.setitem(sys.modules, "startd8.kickoff_experience.stakeholder_run_server", None)
+    result = runner.invoke(panel_app, ["serve", "--project", str(tmp_path), "--token", "t"])
+    assert result.exit_code == 2
+    out = " ".join(result.stdout.split())  # collapse Rich's line-wrapping
+    assert "startd8[server]" in out  # the escaped bracket must render literally (not eaten as markup)

@@ -359,9 +359,22 @@ def panel_serve(
 
     from .stakeholder_panel.panel import DEFAULT_MODEL_SPEC
     from .kickoff_experience.stakeholder_run import ensure_daily_ceiling
-    from .kickoff_experience.stakeholder_run_server import RunServerConfig, serve_stakeholder_run
     from .costs.budget import BudgetManager
     from .costs.store import CostStore
+
+    # The HTTP endpoint needs the `[server]` extra (starlette/uvicorn/fastapi). If it's absent, fail with
+    # an actionable one-liner instead of a raw ModuleNotFoundError traceback (a shipped command's rough edge).
+    try:
+        from .kickoff_experience.stakeholder_run_server import RunServerConfig, serve_stakeholder_run
+    except ImportError as exc:
+        missing = getattr(exc, "name", None) or "a server dependency"
+        # NB: escape the bracket — Rich would parse `[server]` as a style tag and drop it.
+        console.print(
+            f"[red]stakeholders serve: missing '{missing}'[/red] — the HTTP endpoint needs the server "
+            "extra. Install it with:  pip install 'startd8\\[server]'  (starlette + uvicorn + fastapi), "
+            "or run from a venv that has it."
+        )
+        raise typer.Exit(2)
 
     tok = token or os.getenv("STARTD8_STAKEHOLDER_TOKEN") or secrets.token_urlsafe(24)
     root = project_root.expanduser()
