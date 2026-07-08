@@ -30,8 +30,21 @@ _PKG_DIR = Path(ke_pkg.__file__).parent
 
 # The experience modules whose writes must ride the safe-write floor. (The floor itself,
 # `concierge/safe_write.py`, lives in a different package and is intentionally out of scope.)
+#
+# FR-GE-13 governs GUIDED-EXPERIENCE writes to the project **source of record** (docs/kickoff/…). A few
+# modules living in this package are NOT guided-experience write surfaces — they own their own
+# **endpoint / spend-safety state** under `.startd8/` (atomic tmpfile+rename, plus an fcntl lock file),
+# intentionally outside the concierge floor. Exempt them by name, with the reason, rather than let the
+# glob mis-scope the audit onto server/endpoint code.
+_ENDPOINT_STATE_MODULES = {
+    # Phase-2 stakeholder-run HTTP endpoint: writes the run idempotency/crash-marker ledger + an fcntl
+    # lock file under .startd8/stakeholder-run/ (spend-safety state, not kickoff source-of-record).
+    "stakeholder_run.py",
+}
 _EXPERIENCE_MODULES = sorted(
-    p for p in _PKG_DIR.glob("*.py") if p.name != "__init__.py"
+    p
+    for p in _PKG_DIR.glob("*.py")
+    if p.name != "__init__.py" and p.name not in _ENDPOINT_STATE_MODULES
 )
 
 _WRITE_METHODS = {"write_text", "write_bytes", "writelines"}
