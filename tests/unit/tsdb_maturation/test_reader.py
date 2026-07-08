@@ -231,6 +231,39 @@ def test_non_success_status_raises_query_error():
 
 
 # --------------------------------------------------------------------------- #
+# Transport failures are wrapped as TsdbReaderError (the CLI's catch contract). #
+# --------------------------------------------------------------------------- #
+def test_connection_error_wrapped_as_reader_error():
+    from startd8.tsdb_maturation.reader import TsdbReaderError
+
+    def handler(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    reader = TsdbReader(DirectMimirEndpoint("http://mimir:9009"), client=client)
+    with pytest.raises(TsdbReaderError, match="cannot reach"):
+        reader.read("m")
+
+
+def test_http_500_wrapped_as_reader_error():
+    from startd8.tsdb_maturation.reader import TsdbReaderError
+
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500, text="boom")))
+    reader = TsdbReader(DirectMimirEndpoint("http://mimir:9009"), client=client)
+    with pytest.raises(TsdbReaderError, match="HTTP 500"):
+        reader.read("m")
+
+
+def test_non_json_body_wrapped_as_reader_error():
+    from startd8.tsdb_maturation.reader import TsdbReaderError
+
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html>proxy</html>")))
+    reader = TsdbReader(DirectMimirEndpoint("http://mimir:9009"), client=client)
+    with pytest.raises(TsdbReaderError, match="non-JSON"):
+        reader.read("m")
+
+
+# --------------------------------------------------------------------------- #
 # Context-manager lifecycle closes an owned client.                             #
 # --------------------------------------------------------------------------- #
 def test_context_manager_uses_injected_client():
