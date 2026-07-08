@@ -556,7 +556,7 @@ def _questionary_prompt(message: str) -> Optional[str]:
 GUIDED_SCHEMA = "kickoff.guided.v1"
 GUIDED_SCHEMA_VERSION = 1
 # The optional Deepen surface a user drives to run the facilitation panel (named, not invoked here).
-DEEPEN_SURFACE = "startd8 kickoff panel ask-all"
+DEEPEN_SURFACE = "startd8 kickoff stakeholders ask-all"
 
 
 def format_cost(usd: float | int | None) -> str:

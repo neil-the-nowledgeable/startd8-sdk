@@ -28,31 +28,59 @@ panel_app = typer.Typer(
     help="Query the synthetic stakeholder panel: list (read-only), ask/ask-all (paid, synthetic).",
 )
 
-# GE-M1 (FR-GE-7): the panel group is folded under `startd8 kickoff panel …`. The old top-level
-# `startd8 panel …` stays reachable (hidden) for one release as a deprecated alias — its callback
-# emits the deprecation notice. `panel_app` (above) is the clean group nested under `kickoff`; the
-# same command bodies are re-registered on `panel_deprecated_app` at the bottom of this module.
+# The stakeholder panel is a key part of the **Digital Project Workbook** (a dynamic, query-based
+# evolution of Brooks' static workbook — "Why Did the Tower of Babel Fail?", The Mythical Man-Month). Its
+# canonical surface is `startd8 kickoff stakeholders …`. Two hidden deprecated aliases stay reachable for
+# one release: the old top-level `startd8 panel …` and the interim `startd8 kickoff panel …` (renamed to
+# disambiguate from `startd8 kickoff portal`, the Grafana Workbook view). `panel_app` (above) is the
+# clean group; the command bodies are re-registered on both deprecated apps at the bottom of this module.
 panel_deprecated_app = typer.Typer(
     name="panel",
-    help="[DEPRECATED — use `startd8 kickoff panel`] Stakeholder-panel alias (works for one release).",
+    help="[DEPRECATED — use `startd8 kickoff stakeholders`] Stakeholder-panel alias (works for one release).",
 )
 
 
 @panel_deprecated_app.callback()
 def _panel_deprecated() -> None:
-    """[DEPRECATED] Renamed to `startd8 kickoff panel`. This alias works for one release (FR-GE-7/FR-10)."""
+    """[DEPRECATED] Renamed to `startd8 kickoff stakeholders`. This alias works for one release."""
     import warnings
     from rich.console import Console as _Console
 
     warnings.warn(
-        "`startd8 panel` is deprecated; use `startd8 kickoff panel`. "
+        "`startd8 panel` is deprecated; use `startd8 kickoff stakeholders`. "
         "This alias will be removed in a future release.",
         DeprecationWarning,
         stacklevel=2,
     )
     _Console(stderr=True).print(
-        "[yellow]deprecation:[/yellow] `startd8 panel` is folded under `startd8 kickoff panel`; "
+        "[yellow]deprecation:[/yellow] `startd8 panel` is renamed to `startd8 kickoff stakeholders`; "
         "this alias works for one release."
+    )
+
+
+# Interim alias: `startd8 kickoff panel …` was canonical for one release before the rename to
+# `stakeholders` (disambiguating it from `startd8 kickoff portal`, the Grafana Project Workbook view).
+kickoff_panel_deprecated_app = typer.Typer(
+    name="panel",
+    help="[DEPRECATED — use `startd8 kickoff stakeholders`] Renamed (works for one release).",
+)
+
+
+@kickoff_panel_deprecated_app.callback()
+def _kickoff_panel_deprecated() -> None:
+    """[DEPRECATED] `kickoff panel` is renamed to `kickoff stakeholders`. Alias works for one release."""
+    import warnings
+    from rich.console import Console as _Console
+
+    warnings.warn(
+        "`startd8 kickoff panel` is renamed to `startd8 kickoff stakeholders`. "
+        "This alias will be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _Console(stderr=True).print(
+        "[yellow]deprecation:[/yellow] `startd8 kickoff panel` is renamed to "
+        "`startd8 kickoff stakeholders`; this alias works for one release."
     )
 
 _EXIT_FATAL_INPUTS = 2
@@ -305,3 +333,9 @@ panel_deprecated_app.command("list")(panel_list)
 panel_deprecated_app.command("ask")(panel_ask)
 panel_deprecated_app.command("ask-all")(panel_ask_all)
 panel_deprecated_app.command("import")(panel_import)
+
+# Interim `startd8 kickoff panel …` alias (renamed to `kickoff stakeholders`) — same command bodies.
+kickoff_panel_deprecated_app.command("list")(panel_list)
+kickoff_panel_deprecated_app.command("ask")(panel_ask)
+kickoff_panel_deprecated_app.command("ask-all")(panel_ask_all)
+kickoff_panel_deprecated_app.command("import")(panel_import)

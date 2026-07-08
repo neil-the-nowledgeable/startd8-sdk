@@ -54,7 +54,7 @@ from .cli_sapper import sapper_app
 from .cli_secrets import secrets_app
 from .cli_kickoff import kickoff_app as kickoff_legacy_app
 from .cli_concierge import concierge_app, kickoff_kernel_app
-from .cli_panel import panel_app, panel_deprecated_app
+from .cli_panel import kickoff_panel_deprecated_app, panel_app, panel_deprecated_app
 from .cli_requirements import requirements_app
 from .cli_screens import screens_app
 from .cli_vipp import vipp_app
@@ -1283,9 +1283,11 @@ app.add_typer(sapper_app, name="sapper")
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(deploy_app, name="deploy")
 # M0b/GE-M1: the onboarding kernel claims the `kickoff` name (survey/assess/instantiate/derive/
-# guided). GE-M1 folds the stakeholder panel under it as `startd8 kickoff panel …` so the one
-# entry point / one vocabulary metric holds (FR-GE-7).
-kickoff_kernel_app.add_typer(panel_app, name="panel")
+# guided). The stakeholder panel lives under it as `startd8 kickoff stakeholders …` (a key part of the
+# Digital Project Workbook; renamed from `kickoff panel` to disambiguate from `kickoff portal`, the
+# Grafana Workbook view). The interim `kickoff panel` name stays as a hidden one-release deprecated alias.
+kickoff_kernel_app.add_typer(panel_app, name="stakeholders")
+kickoff_kernel_app.add_typer(kickoff_panel_deprecated_app, name="panel", hidden=True)
 app.add_typer(kickoff_kernel_app, name="kickoff")
 # M0a: the metaphor group is demoted to `kickoff-legacy` (freeing `kickoff`); its subcommands
 # keep working under the legacy name behind a deprecation notice.
