@@ -20,6 +20,7 @@ Endpoints: ``POST /stakeholders/run`` (``{question, cap, dry_run, run_key, model
 from __future__ import annotations
 
 import hmac
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,15 +50,17 @@ class _NonceStore:
     def __init__(self, ttl_seconds: int = _NONCE_TTL_SECONDS) -> None:
         self._ttl = ttl_seconds
         self._seen: dict[str, float] = {}
+        self._lock = threading.Lock()  # M1: prune+check+add is a TOCTOU race under concurrent requests
 
     def use(self, nonce: str, *, now: Optional[float] = None) -> bool:
         """Return True if the nonce is fresh (and record it); False if already used within the TTL."""
         now = time.time() if now is None else now
-        self._seen = {n: t for n, t in self._seen.items() if now - t <= self._ttl}  # prune
-        if nonce in self._seen:
-            return False
-        self._seen[nonce] = now
-        return True
+        with self._lock:
+            self._seen = {n: t for n, t in self._seen.items() if now - t <= self._ttl}  # prune
+            if nonce in self._seen:
+                return False
+            self._seen[nonce] = now
+            return True
 
 
 @dataclass
@@ -220,6 +223,12 @@ def build_stakeholder_run_app(config: RunServerConfig) -> Starlette:
     """Build the Starlette app. Refuses (ValueError) without a token — a spend endpoint is never anon."""
     if not config.token:
         raise ValueError("a bearer token is required (a non-loopback spend endpoint must not be anonymous)")
+    # M3: build the budget manager + cost tracker ONCE (not per request → no repeated SQLite opens /
+    # write contention). Injected values (tests, the CLI's ceiling-registered manager) are preserved.
+    if config.budget_manager is None:
+        config.budget_manager = _default_manager(config)
+    if config.cost_tracker is None:
+        config.cost_tracker = _default_cost_tracker(config)
     app = Starlette(
         routes=[
             Route("/stakeholders/run", _run, methods=["POST"]),

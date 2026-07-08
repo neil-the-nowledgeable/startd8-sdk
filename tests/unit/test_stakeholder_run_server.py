@@ -196,6 +196,17 @@ def test_server_wires_cost_tracker(tmp_path, monkeypatch):
     assert captured.get("cost_tracker") is not None  # server built + passed a real CostTracker (FR-9)
 
 
+def test_build_app_caches_defaults(tmp_path):
+    # M3: budget manager + cost tracker built ONCE at app-build (not per request); injected values kept.
+    cfg = srv.RunServerConfig(
+        project_root=tmp_path, token=TOKEN, model="m", budget_manager=_Manager([_Budget()]),
+    )
+    assert cfg.cost_tracker is None
+    srv.build_stakeholder_run_app(cfg)
+    assert cfg.cost_tracker is not None                 # default tracker built once
+    assert isinstance(cfg.budget_manager, _Manager)     # injected manager preserved
+
+
 def test_cancel_route_auth_and_unknown(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     assert client.post("/stakeholders/run/nope/cancel").status_code == 401  # auth required
