@@ -81,14 +81,22 @@ M4-class action loop, specialized to the *paid* stakeholder panel. This is a del
 
 - **FR-1 — Trigger from the Workbook.** An action-panel in the Workbook triggers a stakeholder-panel
   run (`ask-all` with a question + optional `--cap`) and shows progress + results.
-- **FR-2 — Route THROUGH the CLI + BUILD real auth (CRP F-2).** The action POSTs to a thin CLI-backed
-  endpoint that invokes the `StakeholderPanel` code path (preserves CLI-sole-writer). Reachable from the
-  KinD Grafana pod via `host.docker.internal` — which requires a **non-loopback bind**, deleting
-  `serve.py`'s sole control (loopback) and exposing the spend endpoint + returned answer text to the
-  LAN. `serve.py` supplies **no CSRF/Origin/replay**. So the endpoint MUST add: **constant-time**
-  `APIKeyMiddleware` + an **Origin allow-list** + a **CSRF token** + a **replay nonce** — or bind the
-  **docker-bridge IP** (not `0.0.0.0`) behind TLS/tunnel. Contract: `POST /stakeholders/run`,
-  `GET /stakeholders/run/{id}` (schemas in the plan) — not the owl mock's `/workflow/*`.
+- **FR-2 — Route THROUGH the CLI + auth SCOPED to the deployment posture (CRP F-2, local-posture
+  split).** The action POSTs to a thin CLI-backed endpoint that invokes the `StakeholderPanel` code path
+  (preserves CLI-sole-writer). Reachability from the KinD Grafana pod (`host.docker.internal`) requires
+  a **non-loopback bind**, so the endpoint is not loopback-protected. The threat model splits by posture:
+  - **Load-bearing regardless of posture (always on):** a **constant-time bearer token** (a spend
+    endpoint on any non-loopback bind must not be anonymous) **+ the fail-closed budget ceiling (FR-4)**
+    — the budget bounds the *harm* of any triggering; the token bounds *who* can trigger. The endpoint
+    **refuses to start without a token**. `run_key` idempotency (FR-11) neutralizes replay's double-charge.
+  - **Local-trusted DEFAULT (household posture):** token + budget ceiling + idempotency is sufficient.
+    CSRF is **not applicable** (auth is a header token, not a cookie, and the write originates
+    **server-side** from the `contextcore-datasource` proxy — no ambient credential to forge); replay's
+    harm is already covered by idempotency. So CSRF/Origin/replay-nonce are **deferred** here.
+  - **`--strict-auth` OPT-IN (untrusted/shared network):** additionally enforce an **Origin allow-list**
+    + a **replay nonce**, and prefer binding the **docker-bridge IP** (not broad `0.0.0.0`) + TLS/tunnel.
+  Contract: `POST /stakeholders/run`, `GET /stakeholders/run/{session_id}` — not the owl mock's
+  `/workflow/*`. (Rationale recorded so the CRP's controls are **scoped**, not silently dropped.)
 - **FR-3 — Dry-run BEFORE spend, with an HONEST cost basis (CRP F-3).** The preview shows personas ×
   question with `--cap` applied and an **estimated** cost = `min(cap, len(roster)) × per_question_
   estimate`. **Do NOT use `projected_calls`** (it's the multi-round *facilitator* basis, ×3–4 too high,
