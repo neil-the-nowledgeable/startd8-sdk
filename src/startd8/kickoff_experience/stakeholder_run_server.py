@@ -14,7 +14,10 @@ Auth is **scoped to the deployment posture** (FR-2, local-posture split):
     nonce; prefer binding the docker-bridge IP over broad `0.0.0.0`.
 
 Endpoints: ``POST /stakeholders/run`` (``{question, cap, dry_run, run_key, model?}``),
-``GET /stakeholders/run/{session_id}``, ``GET /healthz`` (unauthenticated liveness).
+``GET /stakeholders/run/{session_id}``, ``GET /healthz`` (unauthenticated liveness). The Increment 3
+panel-processing pipeline adds ``$0`` drive routes (same auth): ``POST /stakeholders/triage``,
+``…/disposition``, ``…/serialize``, ``…/negotiate`` (an opt-in narrative pass spends its own
+``max_cost_usd`` ceiling). The write-touching apply gate lands separately (M-apply).
 """
 
 from __future__ import annotations
@@ -81,6 +84,17 @@ class RunServerConfig:
 
 def _err(status: int, message: str) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status)
+
+
+async def _json_body(request: Request) -> Any:
+    """Parse a JSON object body; return the dict, or a 400 JSONResponse the caller must return."""
+    try:
+        body = await request.json()
+    except Exception:
+        return _err(400, "invalid JSON body")
+    if not isinstance(body, dict):
+        return _err(400, "JSON body must be an object")
+    return body
 
 
 def _authorize(request: Request, config: RunServerConfig) -> Optional[JSONResponse]:
@@ -215,6 +229,183 @@ async def _cancel(request: Request) -> JSONResponse:
     return JSONResponse({"run_key": run_key, "cancelled": ok}, status_code=200 if ok else 404)
 
 
+# --------------------------------------------------------------------------- pipeline drive ($0)
+#
+# The panel-processing pipeline routes (Increment 3, FR-R1..R6). Each threads THROUGH the CLI code
+# paths (`synthesis_bridge`, `ProposalStore`, `vipp`) — never re-implementing pipeline logic — and
+# reuses the same bearer-token/posture auth as the run endpoint. Everything here is $0 except an
+# opt-in narrative negotiate, which spends through `run_vipp_negotiate`'s OWN `max_cost_usd` ceiling
+# (NOT the run preflight — CRP F-8 / FR-R6): the route requires + forwards that ceiling explicitly.
+# The write-touching gate (apply) is deliberately absent — it lands last, isolated, in M-apply.
+
+
+async def _triage(request: Request) -> JSONResponse:
+    """FR-R2 — triage a facilitated synthesis into a routing report ($0, read-only)."""
+    config: RunServerConfig = request.app.state.config
+    if (denied := _authorize(request, config)) is not None:
+        return denied
+    body = await _json_body(request)
+    if isinstance(body, JSONResponse):
+        return body
+
+    from startd8.kickoff_view import KickoffViewService
+    from startd8.stakeholder_panel.synthesis_bridge import build_triage
+
+    service = KickoffViewService(str(config.project_root))
+    sid = str(body.get("session_id") or "").strip() or service.latest_session_id()
+    if not sid:
+        return _err(404, "no kickoff-panel sessions — run a facilitated panel first")
+    try:
+        transcript = await run_in_threadpool(service.load, sid)
+    except (FileNotFoundError, KeyError):
+        return _err(404, f"no such session: {sid}")
+    except ValueError:
+        return _err(400, "invalid session id")
+
+    report = build_triage(transcript)  # tolerates an absent synthesis (empty candidates) — degrade clean
+    synthesis = getattr(transcript, "synthesis", None)
+    synthesis_present = bool(getattr(synthesis, "text", "") if synthesis is not None else "")
+    return JSONResponse({**report.to_dict(), "synthesis_present": synthesis_present})
+
+
+async def _disposition(request: Request) -> JSONResponse:
+    """FR-R4 — set a staged recommendation's disposition ($0, the human accept/reject gate).
+
+    Pins the exact literals ``"accepted"``/``"rejected"`` (``serialize`` filters ``== "accepted"``; the
+    store docstring's "approved" is a trap) and surfaces the no-op-when-unstaged as a 404 rather than a
+    false success (``update_disposition`` returns False if the rec was never staged).
+    """
+    config: RunServerConfig = request.app.state.config
+    if (denied := _authorize(request, config)) is not None:
+        return denied
+    body = await _json_body(request)
+    if isinstance(body, JSONResponse):
+        return body
+
+    session_id = str(body.get("session_id") or "").strip()
+    domain = str(body.get("domain") or "").strip()
+    value_path = str(body.get("value_path") or "").strip()
+    disposition = str(body.get("disposition") or "").strip()
+    if not session_id or not value_path or not disposition:
+        return _err(400, "session_id, value_path, and disposition are required")
+    if disposition not in ("accepted", "rejected"):
+        return _err(400, "disposition must be exactly 'accepted' or 'rejected'")
+
+    from startd8.stakeholder_panel.proposals import ProposalStore
+
+    try:
+        store = ProposalStore(config.project_root, session_id)
+    except ValueError:
+        return _err(400, "invalid session id")
+    updated = await run_in_threadpool(store.update_disposition, domain, value_path, disposition)
+    if not updated:
+        return _err(404, f"no staged recommendation for ({domain!r}, {value_path!r}) — stage it first")
+    return JSONResponse(
+        {"session_id": session_id, "domain": domain, "value_path": value_path,
+         "disposition": disposition, "updated": True}
+    )
+
+
+async def _serialize(request: Request) -> JSONResponse:
+    """FR-R5 — serialize ACCEPTED staged recommendations into the VIPP inbox ($0).
+
+    Non-allow-listed paths are **rejected, not dropped** (``serialize_accepted_to_vipp`` reports them).
+    """
+    config: RunServerConfig = request.app.state.config
+    if (denied := _authorize(request, config)) is not None:
+        return denied
+    body = await _json_body(request)
+    if isinstance(body, JSONResponse):
+        return body
+
+    session_id = str(body.get("session_id") or "").strip()
+    if not session_id:
+        return _err(400, "session_id is required")
+
+    from startd8.concierge.safe_write import SafeWriteError
+    from startd8.stakeholder_panel.proposals import ProposalStore
+    from startd8.stakeholder_panel.synthesis_bridge import serialize_accepted_to_vipp
+
+    try:
+        recs = await run_in_threadpool(ProposalStore(config.project_root, session_id).load)
+    except ValueError:
+        return _err(400, "invalid session id")
+    if not recs:
+        return _err(404, "no staged recommendations — extract → stage first")
+    if not any(getattr(r, "disposition", "") == "accepted" for r in recs):
+        return _err(409, "no recommendation is marked accepted — disposition one first")
+
+    try:
+        result = await run_in_threadpool(
+            serialize_accepted_to_vipp, config.project_root, recs, accepted_only=True
+        )
+    except SafeWriteError as exc:  # confinement / symlink refusal
+        return _err(403, f"serialize blocked: {exc}")
+    return JSONResponse(
+        {"staged": result["staged"], "rejected": result["rejected"], "inbox": result["inbox"]}
+    )
+
+
+async def _negotiate(request: Request) -> JSONResponse:
+    """FR-R6 — adjudicate the VIPP inbox into a dispositions report ($0 deterministic; narrative paid).
+
+    The deterministic adjudication is ``$0``. An opt-in ``narrative`` prose pass spends through
+    ``run_vipp_negotiate``'s own ``max_cost_usd`` ceiling — NOT the run endpoint's preflight (F-8) — so
+    the route **requires** that ceiling to be set and forwards it explicitly.
+    """
+    config: RunServerConfig = request.app.state.config
+    if (denied := _authorize(request, config)) is not None:
+        return denied
+    body = await _json_body(request)
+    if isinstance(body, JSONResponse):
+        return body
+
+    from startd8.concierge.safe_write import SafeWriteError
+    from startd8.kickoff_experience.vipp_seam import inbox_path
+    from startd8.vipp import run_vipp_negotiate
+
+    ip = inbox_path(config.project_root)
+    if not ip.exists():
+        return _err(409, "no VIPP inbox — serialize accepted recommendations first")
+
+    narrative = bool(body.get("narrative"))
+    max_cost_usd = body.get("max_cost_usd")
+    agent = None
+    if narrative:
+        if max_cost_usd is None:
+            return _err(400, "narrative negotiate requires an explicit max_cost_usd ceiling (FR-R6)")
+        try:
+            from startd8.utils.agent_resolution import resolve_agent_spec
+
+            agent = resolve_agent_spec(config.model)
+        except Exception as exc:  # provider/config failure — clean message, not a traceback
+            return _err(502, f"could not construct narrative agent: {exc}")
+
+    try:
+        outcome = await run_in_threadpool(
+            run_vipp_negotiate,
+            ip,
+            project_root=config.project_root,
+            narrative=narrative,
+            agent=agent,
+            max_cost_usd=max_cost_usd,
+            write=True,
+            force=False,
+        )
+    except SafeWriteError as exc:  # confinement / symlink refusal
+        return _err(403, f"negotiate blocked: {exc}")
+    except ValueError as exc:  # future-protocol / malformed / symlink'd inbox
+        return _err(400, f"unreadable or invalid inbox: {exc}")
+    except Exception as exc:  # provider failure on the narrative path
+        return _err(502, f"negotiate failed: {exc}")
+
+    report = outcome.report
+    return JSONResponse(
+        {"skipped": outcome.skipped, "report_path": str(outcome.report_path),
+         "counts": report.counts(), "report": report.to_dict()}
+    )
+
+
 async def _healthz(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
@@ -234,6 +425,11 @@ def build_stakeholder_run_app(config: RunServerConfig) -> Starlette:
             Route("/stakeholders/run", _run, methods=["POST"]),
             Route("/stakeholders/run/{run_key}/cancel", _cancel, methods=["POST"]),
             Route("/stakeholders/run/{session_id}", _status, methods=["GET"]),
+            # Increment 3 pipeline drive ($0; narrative negotiate spends its own ceiling) — FR-R1..R6.
+            Route("/stakeholders/triage", _triage, methods=["POST"]),
+            Route("/stakeholders/disposition", _disposition, methods=["POST"]),
+            Route("/stakeholders/serialize", _serialize, methods=["POST"]),
+            Route("/stakeholders/negotiate", _negotiate, methods=["POST"]),
             Route("/healthz", _healthz, methods=["GET"]),
         ]
     )

@@ -19,19 +19,22 @@ pipeline). This file is the running to-do; the FR/AC detail lives in those specs
 
 ## Remaining — Increment 3 drive/apply (build against reqs **v0.4**)
 
-### 1. M-drive-$0 — safe endpoint routes (NEXT)
-Extend `stakeholder_run_server.py` with `$0` routes, each threading **through the CLI code paths**
-(never reimplement); reuse the existing bearer-token auth + confinement.
-- [ ] **triage** (FR-R2) → `build_triage(transcript)` → `TriageReport.to_dict()`. Needs a *facilitated
-      synthesis* transcript (ask-all runs don't have one) — degrade cleanly when absent.
-- [ ] **disposition** (FR-R4) → `ProposalStore.update_disposition(domain, value_path, "accepted")` —
-      ⚠ **3 positional args**, pin the literal **`"accepted"`/`"rejected"`** (serialize filters `== "accepted"`;
-      the docstring's "approved" is a trap), and **ensure the rec is staged first** (else it no-ops).
-- [ ] **serialize** (FR-R5) → `serialize_accepted_to_vipp(accepted_only=True)`. Non-allow-listed paths
-      are **rejected, not dropped**.
-- [ ] **negotiate** (FR-R6) → `run_vipp_negotiate` → dispositions. Narrative/panel spend uses its **own
-      `max_cost_usd`** ceiling (NOT the run preflight) — set + enforce it explicitly.
-- [ ] Tests: each route round-trips a store; disposition/serialize inherit `0600` + symlink-reject.
+### 1. M-drive-$0 — safe endpoint routes ✅ (built, branch `feat/workbook-pipeline-drive-m0`)
+Extended `stakeholder_run_server.py` with `$0` routes, each threading **through the CLI code paths**
+(never reimplement); reuse the existing bearer-token auth + confinement. 19 route tests + 17 existing green.
+- [x] **triage** (FR-R2) → `build_triage(transcript)` → `TriageReport.to_dict()`. `POST …/triage`
+      (`{session_id?}`, default latest); degrades cleanly when no synthesis (`synthesis_present:false`,
+      empty candidates); unknown/absent session → 404.
+- [x] **disposition** (FR-R4) → `ProposalStore.update_disposition(domain, value_path, "accepted")`.
+      `POST …/disposition`; pins the literals (only `"accepted"`/`"rejected"` accepted, else 400); the
+      no-op-when-unstaged is surfaced as **404, not a false success**.
+- [x] **serialize** (FR-R5) → `serialize_accepted_to_vipp(accepted_only=True)`. `POST …/serialize`;
+      non-allow-listed paths **rejected, not dropped**; no-staged → 404, none-accepted → 409.
+- [x] **negotiate** (FR-R6) → `run_vipp_negotiate` → dispositions. `POST …/negotiate`; `$0` by default;
+      an opt-in `narrative:true` **requires** an explicit `max_cost_usd` (400 otherwise) and forwards it
+      to `run_vipp_negotiate`'s own ceiling (NOT the run preflight); missing inbox → 409.
+- [x] Tests: each route round-trips a store; disposition write verified `0600`; serialize inherits
+      symlink-reject/confinement via the CLI path (`SafeWriteError` → 403).
 
 ### 2. M-drive-paid — extract→stage
 - [ ] **extract** (FR-R3) → `extract_field_mappings` (paid) → `stage_recommendations`. Fail-closed
