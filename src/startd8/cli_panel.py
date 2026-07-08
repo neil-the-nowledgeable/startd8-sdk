@@ -397,3 +397,74 @@ kickoff_panel_deprecated_app.command("list")(panel_list)
 kickoff_panel_deprecated_app.command("ask")(panel_ask)
 kickoff_panel_deprecated_app.command("ask-all")(panel_ask_all)
 kickoff_panel_deprecated_app.command("import")(panel_import)
+
+
+@panel_app.command("propose")
+def panel_propose(
+    session_id: Optional[str] = typer.Argument(
+        None, help="Kickoff-panel session id (default: newest)."
+    ),
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
+    run: bool = typer.Option(
+        False, "--run", help="Call the model to map synthesis→fields (spends). Default: $0 preview."
+    ),
+    model: Optional[str] = typer.Option(None, "--model", help="Agent spec for extraction."),
+    serialize: bool = typer.Option(
+        False, "--serialize", help="Serialize ACCEPTED staged recommendations into the VIPP inbox."
+    ),
+) -> None:
+    """Map a panel synthesis's field-level items to VIPP ``capture`` proposals (synthesis-bridge incr. 2).
+
+    Pipeline: extract (LLM, paid) → stage as ``estimate`` recommendations → [human review] →
+    ``--serialize`` accepted into the VIPP inbox for ``startd8 vipp negotiate``. Most synthesis items
+    are NON-DECIDABLE (see ``startd8 kickoff-panel triage``); only concrete kickoff-input edits become
+    proposals. Output is synthetic + unratified — a human accepts before serialization.
+    """
+    from .kickoff_experience.proposals import default_config
+    from .kickoff_view import KickoffViewService
+    from .stakeholder_panel.proposals import ProposalStore
+    from .stakeholder_panel.synthesis_bridge import (
+        extract_field_mappings,
+        serialize_accepted_to_vipp,
+        stage_recommendations,
+    )
+
+    service = KickoffViewService(str(project_root))
+    sid = session_id or service.latest_session_id()
+    if not sid:
+        console.print("[red]panel propose:[/red] no kickoff-panel sessions.")
+        raise typer.Exit(2)
+
+    if serialize:
+        recs = ProposalStore(project_root, sid).load()
+        result = serialize_accepted_to_vipp(project_root, recs)
+        console.print(f"[green]serialized:[/green] {result['staged'] or '(none)'}")
+        if result["rejected"]:
+            console.print(f"[yellow]rejected (not allow-listed / invalid):[/yellow] {result['rejected']}")
+        if result["inbox"]:
+            console.print(f"VIPP inbox: {result['inbox']} — run `startd8 vipp negotiate`")
+        return
+
+    transcript = service.load(sid)
+    synthesis = transcript.synthesis.text if transcript.synthesis else ""
+    allowed = default_config().allowed_value_paths()
+    console.print(f"[bold]Capturable fields ({len(allowed)}):[/bold] " + ", ".join(sorted(allowed)))
+    if not run:
+        console.print("[dim]$0 preview. Re-run with --run to extract field mappings (spends).[/dim]")
+        return
+
+    mappings = extract_field_mappings(synthesis, allowed, model_spec=model)
+    if not mappings:
+        console.print(
+            "No field-level items mapped — every synthesis item is NON-DECIDABLE "
+            "(see `startd8 kickoff-panel triage`)."
+        )
+        return
+    recs = stage_recommendations(project_root, sid, mappings)
+    console.print(f"[green]Staged {len(recs)} draft recommendation(s)[/green] (estimate provenance):")
+    for r in recs:
+        console.print(f"  {r.value_path} = {r.recommended_value!r}")
+    console.print(
+        "[yellow]⚠ SYNTHETIC, UNRATIFIED[/yellow] — review, mark accepted, then re-run with "
+        "`--serialize` to write the VIPP inbox."
+    )

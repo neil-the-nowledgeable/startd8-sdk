@@ -20,8 +20,10 @@ from __future__ import annotations
 
 from .classify import classify, health_check
 from .extract import extract_candidates
+from .extract_llm import extract_field_mappings
 from .models import Candidate, Lane, TriageReport
 from .route import build_triage
+from .stage import serialize_accepted_to_vipp, stage_recommendations
 
 __all__ = [
     "Candidate",
@@ -31,4 +33,8 @@ __all__ = [
     "classify",
     "health_check",
     "build_triage",
+    # increment 2 — FIELD-LEVEL lane
+    "extract_field_mappings",
+    "stage_recommendations",
+    "serialize_accepted_to_vipp",
 ]
