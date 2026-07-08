@@ -207,3 +207,34 @@ def kickoff_view_cmd(
         import webbrowser
 
         webbrowser.open(target.resolve().as_uri())
+
+
+@kickoff_panel_app.command("triage")
+def kickoff_triage(
+    session_id: Optional[str] = typer.Argument(
+        None, help="Session id (default: newest)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the triage report as JSON."),
+    project: Optional[Path] = typer.Option(
+        None, "--project", help="Project root (default: cwd)."
+    ),
+) -> None:
+    """Triage a synthesis into a NON-DECIDABLE routing report ($0, read-only).
+
+    Extracts the synthesis's discrete items (recommendations, open questions, risks, tensions) and
+    routes each: NON-DECIDABLE items (narrative / governance / human-decision) get a reason + a
+    suggested owner; FIELD-LEVEL items (an allow-listed ``entity.field``) are flagged as candidates
+    for a VIPP ``capture`` proposal (staged in increment 2). Nothing is silently dropped.
+    """
+    import json as _json
+
+    from .stakeholder_panel.synthesis_bridge import build_triage
+
+    service = _service(project)
+    sid = _resolve_session_or_exit(service, session_id)
+    transcript = _load_or_exit(service, sid)
+    report = build_triage(transcript)
+    if json_out:
+        console.print_json(_json.dumps(report.to_dict()))
+    else:
+        console.print(report.to_markdown())
