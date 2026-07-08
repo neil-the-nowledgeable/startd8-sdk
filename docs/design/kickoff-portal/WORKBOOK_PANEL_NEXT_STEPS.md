@@ -79,6 +79,35 @@ in the UI).
 
 ---
 
+## Access Control & Provisioning Security (own track)
+
+**Spec:** `WORKBOOK_ACCESS_CONTROL_{REQUIREMENTS.md v0.3, PLAN.md v1.0}`. Fills the gap that the **read
+Workbook has no authz** — it bakes real business targets/budgets/roster into panels and provisions them
+to Grafana's **General folder** (visible to every org Viewer) on a **shared** instance. Planning found
+`GrafanaClient` has **no folder or permission support** today — folder-ACL is the load-bearing to-build
+control (not content redaction; `tracking_redaction` is secrets-only).
+
+- [ ] ⚠ **IMMEDIATE: the household Workbook is currently in the General folder** (from the earlier
+      `--provision`) — so its targets/budgets are visible to any Grafana Viewer on the shared `o11y-dev`.
+      **Migrate it to the restricted folder once M1 lands** (or manually move/delete it sooner if the
+      instance has other users).
+- [ ] **CRP the access-control spec** (security/authz — an external review is warranted; offered).
+- [ ] **M1 — folder + ACL (highest value):** add `create_folder` + `folderUid` on `upsert_dashboard` +
+      `set_folder_permissions` to `grafana_client.py`; portal `--folder-uid` (default `cc-kickoff-{project}`)
+      + `--viewers`; **fail-closed** — refuse to provision if ACLs can't be applied (`--allow-no-acl` to override).
+- [ ] **M2 — content policy:** run panel free-text through `tracking_redaction` (secrets/paths out);
+      keep business values (folder-protected, not scrubbed).
+- [ ] **M3 — token + viewing boundary:** `--provision` preflight that **refuses/warns if anonymous
+      access is enabled**; docs for a **folder-scoped least-privilege SA** + rotation; never embed the
+      token in generated JSON/logs.
+- [ ] **M4 — pilot:** migrate household → restricted folder; verify a **non-ACL Grafana user cannot see it**.
+
+**Suggested order on this front:** CRP → migrate household out of General (or delete it) → build M1
+(folder+ACL, fail-closed) → M2/M3 hardening → M4 verify. M1 is the one that actually closes the exposure;
+everything else is defense-in-depth around it.
+
+---
+
 ## Sequencing + risk
 
 Do them in order: **M-drive-$0 → M-drive-paid → M-apply → M-pilot.** M-apply is last and isolated — it
