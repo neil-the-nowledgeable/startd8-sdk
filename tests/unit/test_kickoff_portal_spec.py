@@ -182,6 +182,42 @@ def test_load_panel_run_specific_vs_latest(tmp_path) -> None:
     assert _load_panel_run(tmp_path, "missing") is None
 
 
+def test_pipeline_section_renders_funnel(demo_state: KickoffState) -> None:
+    pipeline = {
+        "staged": [
+            {"value_path": "business-targets.on_time_rate", "recommended_value": "95%",
+             "role_id": "owner", "grounding": "grounded", "disposition": "accepted", "cost_usd": 0.01},
+            {"value_path": "observability.slo", "recommended_value": "99.5", "role_id": "sre",
+             "grounding": "uncertain", "disposition": "draft"},
+        ],
+        "inbox": {"present": True, "count": 1, "envelope_seq": 3},
+        "dispositions": {"present": True, "counts": {"ACCEPT": 1}, "evidence_available": False,
+                         "items": [{"proposal_id": "p-abc123", "decision": "ACCEPT", "reason": "field ok"}],
+                         "advisories": [{"question": "what about X?", "advisory": "consider Y"}]},
+    }
+    spec = build_kickoff_portal_spec(demo_state, "demo", pipeline=pipeline)
+    sec = next(p for p in spec["panels"] if p["title"] == "Panel Processing Pipeline")["options"]["content"]
+    assert "2 staged (1 accepted)" in sec and "1 in inbox" in sec
+    assert "business-targets.on_time_rate" in sec and "accepted" in sec
+    assert "p-abc123" in sec and "ACCEPT" in sec
+    assert "SYNTHETIC & UNRATIFIED" in sec
+    assert "evidence unavailable" in sec              # degraded qualifier
+    assert "what about X?" in sec                     # anti-anchoring advisory
+    assert "pending negotiate/apply" in sec           # apply status (inbox present)
+    titles = _titles(spec)
+    assert len(titles) == len(set(titles))
+
+
+def test_pipeline_section_empty_and_omitted(demo_state: KickoffState) -> None:
+    # None → no pipeline section at all
+    spec = build_kickoff_portal_spec(demo_state, "demo")
+    assert not any(p["title"] == "Panel Processing Pipeline" for p in spec["panels"])
+    # present-but-empty → an empty-state panel
+    spec2 = build_kickoff_portal_spec(demo_state, "demo", pipeline={"staged": [], "inbox": {"present": False}})
+    sec = next(p for p in spec2["panels"] if p["title"] == "Panel Processing Pipeline")["options"]["content"]
+    assert "No pipeline activity yet" in sec
+
+
 def test_empty_state_still_valid() -> None:
     spec = build_kickoff_portal_spec(_state(), "empty")
     assert spec["uid"] == "cc-portal-kickoff-empty"
