@@ -17,11 +17,12 @@ Milestones (PLAN §5):
   A committed-ledger gate: an inferred identity key must be human-confirmed before promotion.
 * **M3 — imports.yaml writer** (:mod:`startd8.tsdb_maturation.imports_writer`) — FR-14. Serializes
   the inferred identity into an ``imports.yaml`` the importer dedups on (R1-F3 round-trip).
-* M4 — gate wiring · M5 — backend + backfill · M6 — CLI · M7 — histograms. (FR-5 reduction +
-  FR-12 family grouper are the remaining M2 sub-tasks.)
+* **M4 — gate wiring** (:mod:`startd8.tsdb_maturation.gate`) — FR-7. Reuses ``emit_schema_draft`` →
+  ``promote_schema``, enforces the M2.5 confirmation, refuses empty/unrenderable.
+* M5 — backend + backfill · M6 — CLI · M7 — histograms. (FR-5 reduction + FR-12 family grouper are
+  the remaining M2 sub-tasks.)
 
-M0, M1, the M2 inference core, the M2.5 confirmation gate, and the M3 imports writer are
-implemented so far.
+M0–M4 (reader → specimen → inference → confirmation → imports writer → gate) are implemented.
 """
 
 from __future__ import annotations
@@ -73,6 +74,7 @@ from .imports_writer import (
     inferred_identity_key,
     write_imports_yaml,
 )
+from .gate import PromotionResult, gate_and_promote
 
 __all__ = [
     # M0 — reader
@@ -117,4 +119,7 @@ __all__ = [
     "generate_imports_yaml",
     "inferred_identity_key",
     "write_imports_yaml",
+    # M4 — gate wiring
+    "PromotionResult",
+    "gate_and_promote",
 ]

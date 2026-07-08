@@ -111,8 +111,15 @@ genuinely-new writers.
       (no stable `id`) dedup on the inferred columns instead of infinitely duplicating. Decimal/DateTime
       coercion is free (`_COERCE`). 18 tests green (101 in the package). The E2E dedup proof (R1-S3, re-run
       twice → 0 new rows) lands with M5.
-- [ ] **M4 — Gate wiring (FR-7).** Reuse `emit_schema_draft`→`promote_schema` on the M2 graph; surface the
-      inferred identity next to the golden for **confirmation** (OQ-4); refuse empty/unrenderable.
+- [x] **M4 — Gate wiring (FR-7).** ✅ **DONE** — `src/startd8/tsdb_maturation/gate.py`,
+      `gate_and_promote(...)  → PromotionResult`. Reuses `emit_schema_draft`→`promote_schema` on the M2
+      graph verbatim; **enforces the M2.5 confirmation** (UNCONFIRMED/STALE → refuse; `require_confirmed=
+      False` for a `--force` caller, status still reported); **refuses empty materialization** (OQ-6, before
+      any gate work); **greenfield gate** = round-trip + non-empty + no-unrenderable (un-typeable label →
+      `UnrenderableField`, never silently dropped); **re-promote computes parity drift** (schema evolution →
+      refuse on divergence). Flips `prisma/schema.prisma` only on pass; surfaces the inferred identity every
+      time (`render_confirmation_surface`). Returns a uniform result (never raises on a refusal) for clean
+      CLI exit-code mapping. 9 tests green (110 in the package) incl. the re-promote parity-drift path.
 - [ ] **M5 — Backend + backfill (FR-6, FR-8).** `generate backend --imports <generated>` + `from_json`;
       records-build **aggregation** (post-identity; **bound to metric additivity** — gauge≠sum, R1-F5).
       **E2E dedup test (R1-S3):** generated `imports.yaml` → importer dedups on the inferred identity,
