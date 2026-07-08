@@ -130,8 +130,14 @@ genuinely-new writers.
       (not `id`); Decimal/DateTime coerce back. **R1-S4 guards green**: additive collision → exact Decimal
       sum (0.1+0.2=0.3, no last-writer-wins loss); gauge collision → NOT summed (`last`+warning). 24 tests
       (14 unit + 10 E2E; 124 in the package).
-- [ ] **M6 — CLI (FR-10).** `startd8 promote tsdb <metric>` orchestrating M0→M5, modeled on `generate
-      contract`. `--dry-run` / `--lookback` / `--reduce` / `--identity` / `--endpoint`.
+- [x] **M6 — CLI (FR-10).** ✅ **DONE** — `src/startd8/cli_tsdb.py`, `startd8 promote tsdb <metric>`
+      orchestrating M0→M5 (registered in `cli.py`). Two input modes: `--specimen <file>` (recorded M1
+      JSON — the tested path, gov series pruned) or `--endpoint`/`--datasource-uid`/`--direct` (live M0).
+      Flow flags: `--dry-run` (read→infer→surface, write nothing), `--confirm` (record the M2.5 marker),
+      default = gate+promote → write `imports.yaml` + backend + `backfill-<entity>.json`; `--force` bypasses
+      confirmation; `--identity`/`--entity`/`--lookback`/`--aggregate` pass through; `--reduce` errors
+      (FR-5 deferred). Exit codes 0 ok / 1 refused / 2 input-error. 8 CLI tests green (132 in the package)
+      via `CliRunner`, incl. the full confirm→promote→generate-app path.
 - [ ] **M7 — Histograms (FR-13).** `_bucket`/`_sum`/`_count` → a percentile/stats table. Isolated + last so
       it can be dropped without unshipping the core.
 

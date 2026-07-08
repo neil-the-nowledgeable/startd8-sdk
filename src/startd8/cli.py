@@ -42,6 +42,7 @@ from .cli_manifest import manifest_app
 from .cli_dashboard import dashboard_app
 from .cli_element_registry import element_registry_app
 from .cli_generate import generate_app
+from .cli_tsdb import promote_app
 from .cli_consult import consult_app
 from .cli_kickoff_panel import kickoff_panel_app
 from .cli_assist import assist_app
@@ -1282,6 +1283,7 @@ app.add_typer(fde_app, name="fde")
 app.add_typer(sapper_app, name="sapper")
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(deploy_app, name="deploy")
+app.add_typer(promote_app, name="promote")  # M6: `startd8 promote tsdb <metric>` (TSDB→relational)
 # M0b/GE-M1: the onboarding kernel claims the `kickoff` name (survey/assess/instantiate/derive/
 # guided). The stakeholder panel lives under it as `startd8 kickoff stakeholders …` (a key part of the
 # Digital Project Workbook; renamed from `kickoff panel` to disambiguate from `kickoff portal`, the
