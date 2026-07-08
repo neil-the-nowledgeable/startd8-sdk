@@ -36,11 +36,22 @@ Extended `stakeholder_run_server.py` with `$0` routes, each threading **through 
 - [x] Tests: each route round-trips a store; disposition write verified `0600`; serialize inherits
       symlink-reject/confinement via the CLI path (`SafeWriteError` → 403).
 
-### 2. M-drive-paid — extract→stage
-- [ ] **extract** (FR-R3) → `extract_field_mappings` (paid) → `stage_recommendations`. Fail-closed
-      budget, but a **new preflight/estimate keyed on `(session_id + synthesis-checksum)`** — NOT
-      `run_key` (which binds question/cap/roster).
-- [ ] Dry-run estimate → confirm; dedupe on resubmit of the same synthesis.
+### 2. M-drive-paid — extract→stage ✅ (built, branch `feat/workbook-pipeline-drive-paid`)
+`POST /stakeholders/extract` — the one paid pipeline step. 8 route tests green.
+- [x] **extract** (FR-R3) → `extract_field_mappings` (paid, via a route-local **tracked mapper** that
+      records actual token spend to the `CostTracker` — FR-9 parity) → `stage_recommendations` ($0).
+      Preflight/estimate keyed on **`(session_id + synthesis-checksum)`** via the reused `IdempotencyStore`
+      — NOT `run_key`. Token estimate via `PricingService.estimate_cost`; fail-closed on the blocking
+      budget; pre-call `max_cost_usd` gate refuses (412) before spending.
+- [x] Dry-run estimate (`{dry_run:true}` → `{estimated_cost, synthesis_checksum, extract_key}`, $0) →
+      confirm (`{confirm_checksum}`; stale checksum → 409); dedupe on resubmit (`status:"deduped"`, model
+      runs once). Staged output is **SYNTHETIC & UNRATIFIED**; over-ceiling actuals are surfaced
+      (`ceiling_exceeded`), not discarded (Mottainai — the call already charged).
+- ⚠ **Found latent bug (not fixed here):** `extract_llm.py`'s *default* mapper imports
+      `from startd8.agents import resolve_agent_spec` — that name is **not** exported there (canonical is
+      `startd8.utils.agent_resolution`), so the CLI's real paid `panel propose --run` path would
+      `ImportError`. Our route injects a working mapper and sidesteps it; the CLI default needs a one-line
+      fix (separate PR).
 
 ### 3. M-apply — the gate (rebuilt, token-gated; most-guarded, LAST)
 Per FR-R7 v0.4. **Apply is token-gated, not human-proof** (a real HTTP human gate is impossible — say so
