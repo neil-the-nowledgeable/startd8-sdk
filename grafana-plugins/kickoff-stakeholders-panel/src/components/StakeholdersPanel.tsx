@@ -4,8 +4,9 @@ import { getBackendSrv } from '@grafana/runtime';
 import { Alert, Button, ConfirmModal, Field, Input, TextArea, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 import { DryRunResult, PanelAnswerView, RunResult, StakeholdersPanelOptions } from '../types';
+import { ApplyPanel } from './ApplyPanel';
 
-interface Props extends PanelProps<StakeholdersPanelOptions> {}
+type Props = PanelProps<StakeholdersPanelOptions>;
 
 type Phase = 'idle' | 'previewing' | 'confirm' | 'running' | 'done';
 
@@ -14,7 +15,15 @@ async function proxyPost<T>(dsUid: string, path: string, body: unknown): Promise
   return getBackendSrv().post(`/api/datasources/proxy/uid/${dsUid}/${path}`, body);
 }
 
-export const StakeholdersPanel: React.FC<Props> = ({ options, width, height }) => {
+export const StakeholdersPanel: React.FC<Props> = (props) => {
+  // The registered panel dispatches to the FR-R7 apply gate when the panel is configured for it.
+  if (props.options.mode === 'apply') {
+    return <ApplyPanel {...props} />;
+  }
+  return <RunPanel {...props} />;
+};
+
+const RunPanel: React.FC<Props> = ({ options, width, height }) => {
   const styles = useStyles2(getStyles);
   const [question, setQuestion] = useState('');
   const [cap, setCap] = useState<number | undefined>(options.defaultCap);
