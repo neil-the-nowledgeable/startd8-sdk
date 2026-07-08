@@ -24,16 +24,16 @@ from startd8.dashboard_creator.models import (
 
 
 class TestPanelType:
-    def test_all_22_values_accepted(self):
+    def test_all_23_values_accepted(self):
         expected = {
             "stat", "gauge", "timeseries", "table", "barchart", "barGauge",
             "piechart", "histogram", "logs", "row", "traceqlStat",
             "traceqlTable", "traceqlTimeseries", "traceqlGauge", "traces",
-            "text", "geomap", "canvas", "heatmap", "state-timeline",
+            "text", "dashlist", "geomap", "canvas", "heatmap", "state-timeline",
             "xychart", "candlestick",
         }
         assert {pt.value for pt in PanelType} == expected
-        assert len(PanelType) == 22
+        assert len(PanelType) == 23
 
     def test_string_enum_value(self):
         assert PanelType.STAT == "stat"

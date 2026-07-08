@@ -166,7 +166,7 @@ def test_stakeholders_section_no_run_no_latest_block(demo_state: KickoffState) -
 def test_load_panel_run_specific_vs_latest(tmp_path) -> None:
     import time
 
-    from startd8.cli_concierge import _load_panel_run
+    from startd8.kickoff_experience.portal_build import _load_panel_run
     from startd8.stakeholder_panel.models import Grounding, PanelAnswer
     from startd8.stakeholder_panel.transcript import TranscriptStore
 

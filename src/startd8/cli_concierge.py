@@ -326,9 +326,23 @@ def concierge_instantiate(
     apply: bool = typer.Option(False, "--apply", help="Write the files (default: preview only)."),
     force: bool = typer.Option(False, "--force", help="With --apply: overwrite files that diverged from the template."),
     check: bool = typer.Option(False, "--check", help="Report drift (matches/diverged/absent) + verdict; non-zero exit on drift."),
+    portal: bool = typer.Option(
+        True, "--portal/--no-portal",
+        help="After --apply, generate the Digital Project Workbook dashboard (default on; degrades "
+             "gracefully — a missing jsonnet toolchain is a printed note, never a failure).",
+    ),
+    provision: Optional[str] = typer.Option(
+        None, "--provision", metavar="URL",
+        help="With --portal: also push the Workbook to Grafana (needs GRAFANA_API_TOKEN).",
+    ),
     json_out: bool = typer.Option(False, "--json", help="Emit schema-versioned JSON."),
 ) -> None:
-    """Project the kickoff package into a project (FR-C7). Preview by default; --apply to write."""
+    """Project the kickoff package into a project (FR-C7). Preview by default; --apply to write.
+
+    On --apply the Digital Project Workbook dashboard is generated afterward (FR-2, `--no-portal` to
+    skip) — strictly after the source-of-record write returns, isolated + non-fatal so a dashboard
+    hiccup never changes the exit code (FR-7).
+    """
     # FR-UX-16 — banner leads the human view; suppressed for --json and the --check CI signal.
     if not json_out and not check:
         render_intro_banner()
@@ -378,6 +392,23 @@ def concierge_instantiate(
     _render_write_result(res)
     if not res.ok:
         raise typer.Exit(_EXIT_BLOCKED)
+
+    # FR-2/FR-7: generate the Workbook ONLY after the source-of-record write has durably returned
+    # res.ok (never concurrently); the helper writes only under .startd8/dashboards/ and never raises,
+    # so a dashboard failure is a printed note and never changes this command's exit code. Preview and
+    # --check paths return earlier and never reach here.
+    if portal:
+        try:
+            from .kickoff_experience.portal_build import build_and_maybe_provision
+
+            pres = build_and_maybe_provision(project_root, out_dir=None, provision_url=provision)
+            if not json_out:
+                console.print(f"  [dim]{pres.message()}[/dim]")
+        except Exception as exc:  # pragma: no cover - helper already degrades; last-resort isolation
+            if not json_out:
+                console.print(f"  [yellow]Workbook: skipped — {exc}[/yellow]")
+    elif not json_out:
+        console.print("  [dim]Workbook: skipped (--no-portal)[/dim]")
 
 
 @concierge_app.command("log-friction")
@@ -867,79 +898,10 @@ def kickoff_confirm(
     )
 
 
-def _load_panel_run(project_root: Path, session_id: Optional[str] = None) -> Optional[List[dict]]:
-    """Load a stakeholder-panel run's answers for the Workbook (best-effort, $0 read-only).
-
-    With ``session_id`` renders that **specific** run (FR-8, the session the run loop returned — no
-    race); otherwise the most-recent transcript by mtime (Phase 1.5, fine for single-user CLI display).
-    Returns None on any absence/error — a missing/unreadable transcript must never fail the portal.
-    """
-    try:
-        from .stakeholder_panel.transcript import TranscriptStore
-
-        if session_id:
-            answers = TranscriptStore(project_root, session_id).load()
-            return [a.to_dict() for a in answers] or None
-        tdir = project_root / ".startd8" / "stakeholder-panel"
-        if not tdir.is_dir():
-            return None
-        sessions = sorted(
-            (p for p in tdir.glob("*.json") if p.is_file()),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if not sessions:
-            return None
-        answers = TranscriptStore(project_root, sessions[0].stem).load()
-        return [a.to_dict() for a in answers] or None
-    except Exception:  # pragma: no cover - never let transcript loading break the portal
-        return None
-
-
-def _load_pipeline_state(project_root: Path) -> Optional[dict]:
-    """Assemble the panel→bridge→VIPP funnel for the Workbook (best-effort, $0 read-only, Increment 3).
-
-    Reads the three persisted stores — staged recommendations (`ProposalStore`), the VIPP inbox, and
-    VIPP dispositions. Returns None if there's no pipeline activity. Never breaks the portal.
-    """
-    try:
-        staged: List[dict] = []
-        pdir = project_root / ".startd8" / "stakeholder-panel" / "proposals"
-        if pdir.is_dir():
-            from .stakeholder_panel.proposals import ProposalStore
-
-            for f in sorted(pdir.glob("proposals-*.json")):
-                sid = f.stem[len("proposals-"):]
-                staged.extend(r.to_dict() for r in ProposalStore(project_root, sid).load())
-
-        inbox = {"present": False}
-        inbox_path = project_root / ".startd8" / "vipp" / "proposals-inbox.json"
-        if inbox_path.is_file() and not inbox_path.is_symlink():
-            from .vipp.models import ProposalEnvelope
-
-            env = ProposalEnvelope.from_json(inbox_path.read_text(encoding="utf-8"))
-            inbox = {"present": True, "count": len(env.proposals), "envelope_seq": env.envelope_seq}
-
-        dispositions = {"present": False}
-        disp_path = project_root / ".startd8" / "vipp" / "dispositions.json"
-        if disp_path.is_file() and not disp_path.is_symlink():
-            from .vipp.models import VippReport
-
-            rep = VippReport.from_json(disp_path.read_text(encoding="utf-8"))
-            dispositions = {
-                "present": True, "counts": rep.counts(), "evidence_available": rep.evidence_available,
-                "items": [
-                    {"proposal_id": d.proposal_id,
-                     "decision": getattr(d.decision, "value", str(d.decision)), "reason": d.reason}
-                    for d in rep.dispositions
-                ],
-                "advisories": list(rep.panel_advisories or []),
-            }
-        if not staged and not inbox["present"] and not dispositions["present"]:
-            return None
-        return {"staged": staged, "inbox": inbox, "dispositions": dispositions}
-    except Exception:  # pragma: no cover - never let pipeline loading break the portal
-        return None
+# The Workbook data loaders (panel run + pipeline funnel) live in
+# `kickoff_experience/portal_build.py`, reused by both `kickoff portal` and `instantiate --portal`
+# (FR-10 anti-drift). The previously-inline copies here were removed once `kickoff portal` was
+# re-pointed at that shared helper.
 
 
 # --- Kickoff portal — the Digital Project Workbook (Grafana presentation surface) ----------------
@@ -968,101 +930,74 @@ def kickoff_portal(
     session: Optional[str] = typer.Option(
         None, "--session", help="Render a SPECIFIC stakeholder-run session (default: the most recent)."
     ),
+    index: bool = typer.Option(
+        False, "--index", help="Build the PORTFOLIO INDEX dashboard (a link-list of every project's "
+                               "Workbook) instead of this project's Workbook (FR-11).",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="With --index --provision to a SHARED (non-loopback) Grafana: confirm the "
+                             "portfolio-wide write (NR-6).",
+    ),
     json_out: bool = typer.Option(False, "--json", help="Emit a JSON result summary to stdout."),
 ) -> None:
     """Build the Digital Project Workbook — canonical kickoff state on a Grafana dashboard ($0, no LLM).
 
     The "Digital Project Workbook" is a dynamic, query-based evolution of Brooks' (static) workbook
     (*The Mythical Man-Month*) — the shared, whole-project view of the foundational decisions, generated
-    live from project state. Reads `docs/kickoff/authoring`, folds it into the canonical `KickoffState`
-    (the same view-model the web UI/TUI use), builds a `DashboardSpec`, and compiles it via the jsonnet
-    dashboard pipeline. PRESENTATION only — never edits kickoff inputs. Read-only by default (writes just
-    the dashboard JSON); pass `--provision URL` to push it to Grafana.
+    live from project state. PRESENTATION only — never edits kickoff inputs. Read-only by default (writes
+    just the dashboard JSON); pass `--provision URL` to push to Grafana. `--index` builds the portfolio
+    index (a self-updating link-list of every project's Workbook) instead of one project's board.
     """
-    from .kickoff_experience.docs import load_kickoff_docs, live_schema_text
-    from .kickoff_experience.state import build_kickoff_state
-    from .kickoff_experience.portal_spec import build_kickoff_portal_spec
+    from .kickoff_experience.portal_build import build_and_maybe_provision, build_index
 
     if not json_out:
         render_intro_banner()
 
     root = project_root.expanduser()
-    docs = load_kickoff_docs(root)
-    if not docs:
+    dest = out_dir.expanduser() if out_dir else None
+
+    if index:
+        res = build_index(root, out_dir=dest, provision_url=provision, confirm_shared=yes)
+        if json_out:
+            _emit_json({"schema": "kickoff.portal-index.v1", "uid": res.uid, "json_path": res.json_path,
+                        "dashboard_url": res.provisioned_url, "skipped_reason": res.skipped_reason})
+            return
+        if res.skipped_reason:
+            console.print(f"[yellow]kickoff portal --index:[/yellow] {res.skipped_reason}")
+            raise typer.Exit(0)
+        console.print(f"[bold]Portfolio index[/bold] — [cyan]{res.json_path}[/cyan]")
+        if res.provisioned_url:
+            console.print(f"  Grafana: [cyan]{res.provisioned_url}[/cyan]")
+        return
+
+    # An explicit `kickoff portal` on a project with NO kickoff package is a user error (exit 2),
+    # distinct from a toolchain/compile skip (exit 0 with a note). A package with no authoring yet is
+    # fine — it renders the FR-4 skeleton board.
+    if not (root / "docs" / "kickoff").is_dir():
         console.print(
-            f"[red]kickoff portal:[/red] no kickoff authoring docs found under {root}/docs/kickoff/. "
+            f"[red]kickoff portal:[/red] no kickoff package under {root}/docs/kickoff/. "
             "Run [bold]startd8 kickoff instantiate[/bold] first."
         )
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     name = project or root.resolve().name
-    state = build_kickoff_state(docs, live_schema_text=live_schema_text(root))
-
-    # Best-effort: the stakeholder roster + the latest panel run are a key part of the Workbook
-    # (display-only). A missing/invalid roster or transcript must never fail the portal — the section
-    # renders an empty-state instead.
-    roster = None
-    try:
-        from .stakeholder_panel import load_roster
-
-        roster_path = root / "docs" / "kickoff" / "inputs" / "stakeholders.yaml"
-        if roster_path.is_file():
-            roster = load_roster(roster_path)
-    except Exception:  # pragma: no cover - defensive: never let roster loading break the portal
-        roster = None
-
-    panel_results = _load_panel_run(root, session_id=session)
-    pipeline = _load_pipeline_state(root)
-    spec = build_kickoff_portal_spec(state, name, roster=roster, panel_results=panel_results, pipeline=pipeline)
-
-    dest = out_dir.expanduser() if out_dir else (root / ".startd8" / "dashboards")
-    config: dict = {"spec": spec, "output_dir": str(dest)}
-    if provision:
-        config.update(provision=True, grafana_url=provision, allow_insecure=provision.startswith("http://"))
-
-    from .dashboard_creator.workflow import DashboardCreatorWorkflow
-
-    result = DashboardCreatorWorkflow().run(config)
-    if not result.success:
-        err = getattr(result, "error", None) or "dashboard generation failed"
-        console.print(f"[red]kickoff portal:[/red] {err}")
-        raise typer.Exit(_EXIT_DRIFT)
-
-    output = result.output if isinstance(result.output, dict) else {}
-    json_path = output.get("json_path")
-    if json_path and Path(json_path).is_file():
-        try:  # full-width text panels (non-fatal cosmetic pass)
-            from .observability.portal_spec_builder import fixup_portal_json
-
-            Path(json_path).write_text(json.dumps(fixup_portal_json(json.loads(Path(json_path).read_text())), indent=2))
-        except Exception:  # pragma: no cover - cosmetic only
-            pass
-
-    ac = state.attention_counts
-    summary = {
-        "schema": "kickoff.portal.v1",
-        "uid": spec["uid"],
-        "panels": len(spec["panels"]),
-        "fields": len(state.fields),
-        "confirmed": ac.get("ok", 0),
-        "gaps": ac.get("blocked", 0),
-        "json_path": json_path,
-        "dashboard_url": output.get("dashboard_url"),
-        "provisioned": bool(provision),
-    }
+    res = build_and_maybe_provision(root, name, out_dir=dest, provision_url=provision, session=session)
     if json_out:
-        _emit_json(summary)
+        _emit_json({**res.summary, "json_path": res.json_path, "dashboard_url": res.provisioned_url,
+                    "provisioned": bool(provision), "skipped_reason": res.skipped_reason})
         return
-
+    if res.skipped_reason:
+        console.print(f"[yellow]kickoff portal:[/yellow] {res.skipped_reason}")
+        raise typer.Exit(0)
+    s = res.summary
     console.print(
         f"[bold]Kickoff portal[/bold] — {name}  "
-        f"([green]{summary['confirmed']} confirmed[/green], [red]{summary['gaps']} gaps[/red] "
-        f"of {summary['fields']} fields, {summary['panels']} panels)"
+        f"([green]{s.get('confirmed', 0)} confirmed[/green], [red]{s.get('gaps', 0)} gaps[/red] "
+        f"of {s.get('fields', 0)} fields, {s.get('panels', 0)} panels)"
     )
-    if json_path:
-        console.print(f"  dashboard JSON: [cyan]{json_path}[/cyan]")
-    if summary["dashboard_url"]:
-        console.print(f"  Grafana: [cyan]{summary['dashboard_url']}[/cyan]")
+    console.print(f"  dashboard JSON: [cyan]{res.json_path}[/cyan]")
+    if res.provisioned_url:
+        console.print(f"  Grafana: [cyan]{res.provisioned_url}[/cyan]")
     elif not provision:
         console.print("  [dim]run again with[/dim] --provision http://localhost:3000 [dim]to push to Grafana[/dim]")
 
