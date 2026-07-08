@@ -98,6 +98,26 @@
 | S-4 | SHOULD | Infinity (OQ-8) has no standing read-only endpoint for server-side fetch | OQ-8/M2 must **specify** how Infinity reaches state (static file vs standing read-only endpoint + auth) or drop it for iter 1. |
 | S-5 | SHOULD | Plugin fork is likely **two** forks (panel + `contextcore-datasource`), under-scoped | M4/Risk-3 **enumerate** the real delta + pin **both** plugin commits. |
 
+### 0.3 Implementation Status (semantic-validation reconciliation, 2026-07-08)
+
+> A per-FR traceability audit against the shipped code. This increment deliberately shipped the
+> **read-side spike ("Option 1: bake current state into panels + re-provide")**; the **live-data path
+> is the deferred follow-on**. Marked explicitly so the FR list is not over-read.
+
+| FR | Shipped? | Note |
+|----|----------|------|
+| FR-1 (single-source, no-mutation Stakeholders section) | ✅ **DONE** | pure `build_kickoff_portal_spec`; CLI reads roster/transcript read-only |
+| FR-3 (YAML authoritative) · FR-4 (generated dashboard, sibling builder) | ✅ **DONE** | `portal_spec.py` → `DashboardCreatorWorkflow` |
+| FR-5 (a) gauge (b) per-domain (c) per-field (e) markdown | ✅ **DONE (static)** | baked `vector(N)` + markdown from `explain_input_domain` |
+| FR-2 (real OTel `Meter`→Mimir producers) | ⛔ **DEFERRED** | the live metric-emit seam; panels use baked literals today |
+| FR-5 (d) burndown timeseries | ⛔ **DEFERRED** | needs FR-2's history metrics |
+| FR-6 (confirm-scalar write panel) | ⛔ **DEFERRED** | no `kickoff-capture-panel` (Phase-2 built a *different* panel — the stakeholders runner) |
+| FR-7 (kickoff-completeness verifier + gauge) | ⛔ **DEFERRED** | completeness is computed inline (a ratio), not emitted as a verifier gauge |
+| FR-8/FR-9 (pilot + verdict) | ✅ deliverables | `SPIKE_FINDINGS.md` |
+
+**Verdict:** the shipped scope (FR-1/3/4 + static FR-5 a/b/c/e) is **complete and semantically correct**;
+FR-2/5d/6/7 are the **explicitly-deferred "make the reads live" follow-on**, not delivered capability.
+
 ---
 
 ## 1. Problem Statement
