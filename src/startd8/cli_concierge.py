@@ -869,6 +869,31 @@ def kickoff_confirm(
     )
 
 
+def _load_latest_panel_run(project_root: Path) -> Optional[List[dict]]:
+    """Load the most-recent stakeholder-panel run's answers for the Workbook (best-effort).
+
+    Reads the newest transcript under ``.startd8/stakeholder-panel/`` (display-only, $0). Returns None
+    on any absence/error — a missing/unreadable transcript must never fail the portal.
+    """
+    try:
+        tdir = project_root / ".startd8" / "stakeholder-panel"
+        if not tdir.is_dir():
+            return None
+        sessions = sorted(
+            (p for p in tdir.glob("*.json") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not sessions:
+            return None
+        from .stakeholder_panel.transcript import TranscriptStore
+
+        answers = TranscriptStore(project_root, sessions[0].stem).load()
+        return [a.to_dict() for a in answers] or None
+    except Exception:  # pragma: no cover - never let transcript loading break the portal
+        return None
+
+
 # --- Kickoff portal — the Digital Project Workbook (Grafana presentation surface) ----------------
 # The portal is the **Digital Project Workbook**: a dynamic, query-based evolution of Brooks' workbook
 # ("Why Did the Tower of Babel Fail?", The Mythical Man-Month) — the single shared structure holding
@@ -922,8 +947,9 @@ def kickoff_portal(
     name = project or root.resolve().name
     state = build_kickoff_state(docs, live_schema_text=live_schema_text(root))
 
-    # Best-effort: the stakeholder roster is a key part of the Workbook (Phase 1 display-only). A
-    # missing/invalid roster must never fail the portal — the section renders an empty-state instead.
+    # Best-effort: the stakeholder roster + the latest panel run are a key part of the Workbook
+    # (display-only). A missing/invalid roster or transcript must never fail the portal — the section
+    # renders an empty-state instead.
     roster = None
     try:
         from .stakeholder_panel import load_roster
@@ -934,7 +960,8 @@ def kickoff_portal(
     except Exception:  # pragma: no cover - defensive: never let roster loading break the portal
         roster = None
 
-    spec = build_kickoff_portal_spec(state, name, roster=roster)
+    panel_results = _load_latest_panel_run(root)
+    spec = build_kickoff_portal_spec(state, name, roster=roster, panel_results=panel_results)
 
     dest = out_dir.expanduser() if out_dir else (root / ".startd8" / "dashboards")
     config: dict = {"spec": spec, "output_dir": str(dest)}

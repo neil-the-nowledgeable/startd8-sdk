@@ -157,12 +157,42 @@ def _manifest_section(manifest: str, fields: List[Any]) -> Dict[str, Any]:
     }
 
 
-def _stakeholders_section(roster: Any) -> Dict[str, Any]:
-    """Render the Stakeholders section — the panel's roster (a key part of the Workbook).
+def _latest_run_lines(panel_results: List[Dict[str, Any]]) -> List[str]:
+    """Render the latest stakeholder-panel run (answers from the most-recent transcript)."""
+    if not panel_results:
+        return []
+    first = panel_results[0]
+    total_cost = sum(float(a.get("cost_usd") or 0.0) for a in panel_results)
+    session = _md_escape(first.get("session_id", "?"))
+    question = _md_escape(first.get("question", ""))
+    created = _md_escape(first.get("created_at", ""))
+    lines = [
+        "",
+        f"**Latest run** — session `{session}` · {created} · {len(panel_results)} answers "
+        f"· ~${total_cost:.4f}",
+        f"_Question:_ {question}",
+        "",
+        "> ⚠ **SYNTHETIC & UNRATIFIED** — role-played stand-ins, not real stakeholders. "
+        "Confirm with a human before relying on these.",
+        "",
+        "| Role | Grounding | Answer |",
+        "|---|---|---|",
+    ]
+    for a in panel_results:
+        lines.append(
+            f"| `{_md_escape(a.get('role_id', ''))}` | {_md_escape(a.get('grounding', ''))} "
+            f"| {_value_snippet(a.get('text', ''), 160)} |"
+        )
+    return lines
+
+
+def _stakeholders_section(roster: Any, panel_results: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
+    """Render the Stakeholders section — the panel's roster + latest run (a key part of the Workbook).
 
     ``roster`` is a loaded ``Roster`` (duck-typed: ``.personas`` with ``.role_id``/``.display_name``/
-    ``.answers_for``) or ``None`` when no roster file exists. Phase 1 is display-only ($0); running the
-    panel (paid `ask-all`) from the dashboard is Phase 2.
+    ``.answers_for``) or ``None`` when no roster file exists. ``panel_results`` is the latest run's
+    answer dicts (``role_id``/``text``/``grounding``/``cost_usd``/``question``/``session_id``), if any.
+    Phase 1/1.5 is display-only ($0); *running* the panel from the dashboard is Phase 2.
     """
     lines = [
         "### Stakeholders",
@@ -191,16 +221,24 @@ def _stakeholders_section(roster: Any) -> Dict[str, Any]:
             "`startd8 kickoff stakeholders ask-all` (paid — answers are **SYNTHETIC & UNRATIFIED**, "
             "confirm with a human before relying on them).",
         ]
+    lines += _latest_run_lines(panel_results or [])
     return {"type": "text", "title": "Stakeholders", "options": {"content": "\n".join(lines)},
             "group": "Stakeholders"}
 
 
-def build_kickoff_portal_spec(state: KickoffState, project: str, *, roster: Any = None) -> Dict[str, Any]:
+def build_kickoff_portal_spec(
+    state: KickoffState,
+    project: str,
+    *,
+    roster: Any = None,
+    panel_results: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
     """Build a ``DashboardSpec`` dict for the kickoff portal from the canonical state.
 
-    Pure function — deterministic in *(state, project, roster)*, no I/O. The returned dict is the input
-    to ``DashboardCreatorWorkflow.run({"spec": spec, ...})``. ``roster`` (optional) adds the
-    Stakeholders section — a key part of the Workbook (Phase 1: display-only).
+    Pure function — deterministic in *(state, project, roster, panel_results)*, no I/O. The returned
+    dict is the input to ``DashboardCreatorWorkflow.run({"spec": spec, ...})``. ``roster`` (optional)
+    adds the Stakeholders section; ``panel_results`` (optional) renders the latest run's answers — a key
+    part of the Workbook (Phase 1/1.5: display-only; running the panel is Phase 2).
     """
     by_manifest: Dict[str, List[Any]] = {}
     for f in state.fields:
@@ -209,7 +247,7 @@ def build_kickoff_portal_spec(state: KickoffState, project: str, *, roster: Any 
     panels: List[Dict[str, Any]] = _overview_panels(state, by_manifest)
     for manifest in sorted(by_manifest, key=_manifest_sort_key):
         panels.append(_manifest_section(manifest, by_manifest[manifest]))
-    panels.append(_stakeholders_section(roster))
+    panels.append(_stakeholders_section(roster, panel_results))
 
     uid_project = project.lower().replace("_", "-").replace(" ", "-")
     return {
