@@ -20,7 +20,7 @@ silently sum).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Mapping, Optional, Sequence
 
@@ -117,7 +117,7 @@ def build_payload(
     order: list[tuple] = []
     for record in specimen.records:
         row = _map_row(record, result)
-        row[measure] = Decimal(str(record.get("value", 0)))
+        row[measure] = _measure_decimal(record.get("value"))
         key = tuple(row.get(f) for f in id_fields)
         if key not in groups:
             groups[key] = []
@@ -158,6 +158,21 @@ def build_payload(
         collapsed_groups=collapsed_groups,
         agg_func=func,
     )
+
+
+def _measure_decimal(value: object) -> Decimal:
+    """Coerce a measure value to Decimal, treating None/empty/non-numeric as ``0`` (never crash).
+
+    ``flatten_series`` always sets a float, but a lossless ``from_records`` specimen may carry a
+    missing/None measure — a cryptic ``InvalidOperation`` there would be a poor failure mode.
+    """
+    if value is None or value == "":
+        return Decimal(0)
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        logger.warning("non-numeric measure value %r → treating as 0", value)
+        return Decimal(0)
 
 
 def _decimal_to_jsonable(value: Decimal) -> str:

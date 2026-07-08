@@ -237,7 +237,12 @@ class TsdbReader:
     def _get(self, api: str, params: Optional[dict] = None) -> dict:
         assert self.client is not None
         url = self.endpoint.api_url(api)
-        resp = self.client.get(url, params=params, headers=self.endpoint.headers())
+        # A connection/timeout failure is a reader error, not a raw httpx traceback — callers
+        # (the CLI) catch TsdbReaderError, so every failure mode surfaces through that contract.
+        try:
+            resp = self.client.get(url, params=params, headers=self.endpoint.headers())
+        except httpx.RequestError as exc:
+            raise TsdbReaderError(f"cannot reach {url!r}: {exc}") from exc
         # Auth is classified BEFORE any body parsing so a 401 can never fall through to the
         # empty-result path (R1-F11).
         if resp.status_code in (401, 403):
@@ -246,8 +251,16 @@ class TsdbReader:
                 f"({'/'.join(_token_env_of(self.endpoint))}); tokens come from env/secrets, "
                 "never a flag"
             )
-        resp.raise_for_status()
-        payload = resp.json()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise TsdbReaderError(
+                f"endpoint returned HTTP {resp.status_code} for {api!r}: {exc}"
+            ) from exc
+        try:
+            payload = resp.json()
+        except ValueError as exc:  # non-JSON body (e.g. an HTML error page from a proxy)
+            raise TsdbReaderError(f"non-JSON response from {url!r}: {exc}") from exc
         if payload.get("status") != "success":
             raise TsdbQueryError(
                 f"PromQL {api!r} returned status={payload.get('status')!r}: "
