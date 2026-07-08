@@ -105,6 +105,41 @@ def test_uid_slugifies_project_name(demo_state: KickoffState) -> None:
     assert spec["uid"] == "cc-portal-kickoff-my-project-name"
 
 
+class _P:
+    """Minimal duck-typed PersonaBrief for the stakeholders-section tests."""
+
+    def __init__(self, role_id, display_name, answers_for=()):
+        self.role_id = role_id
+        self.display_name = display_name
+        self.answers_for = list(answers_for)
+
+
+class _R:
+    def __init__(self, personas):
+        self.personas = personas
+
+
+def test_stakeholders_section_empty_state(demo_state: KickoffState) -> None:
+    spec = build_kickoff_portal_spec(demo_state, "demo")  # no roster
+    sec = next(p for p in spec["panels"] if p["title"] == "Stakeholders")
+    assert "No stakeholder roster yet" in sec["options"]["content"]
+    assert "kickoff instantiate" in sec["options"]["content"]
+
+
+def test_stakeholders_section_renders_roster(demo_state: KickoffState) -> None:
+    roster = _R([_P("owner", "Business Owner", ["business-targets"]), _P("sre", "On-call SRE")])
+    spec = build_kickoff_portal_spec(demo_state, "demo", roster=roster)
+    sec = next(p for p in spec["panels"] if p["title"] == "Stakeholders")
+    content = sec["options"]["content"]
+    assert "owner" in content and "Business Owner" in content
+    assert "sre" in content
+    assert "2 personas" in content
+    assert "SYNTHETIC & UNRATIFIED" in content  # the paid-run guardrail label
+    # still unique titles with the extra section
+    titles = _titles(spec)
+    assert len(titles) == len(set(titles))
+
+
 def test_empty_state_still_valid() -> None:
     spec = build_kickoff_portal_spec(_state(), "empty")
     assert spec["uid"] == "cc-portal-kickoff-empty"

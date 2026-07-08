@@ -921,7 +921,20 @@ def kickoff_portal(
 
     name = project or root.resolve().name
     state = build_kickoff_state(docs, live_schema_text=live_schema_text(root))
-    spec = build_kickoff_portal_spec(state, name)
+
+    # Best-effort: the stakeholder roster is a key part of the Workbook (Phase 1 display-only). A
+    # missing/invalid roster must never fail the portal — the section renders an empty-state instead.
+    roster = None
+    try:
+        from .stakeholder_panel import load_roster
+
+        roster_path = root / "docs" / "kickoff" / "inputs" / "stakeholders.yaml"
+        if roster_path.is_file():
+            roster = load_roster(roster_path)
+    except Exception:  # pragma: no cover - defensive: never let roster loading break the portal
+        roster = None
+
+    spec = build_kickoff_portal_spec(state, name, roster=roster)
 
     dest = out_dir.expanduser() if out_dir else (root / ".startd8" / "dashboards")
     config: dict = {"spec": spec, "output_dir": str(dest)}
