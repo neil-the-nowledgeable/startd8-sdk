@@ -66,8 +66,10 @@ in the UI).
 
 ## Cross-cutting follow-ups (independent of the milestones above)
 
-- [ ] **Plugin cancel button** — the Phase-2 server `POST …/run/{run_key}/cancel` is built + tested, but
-      the `kickoff-stakeholders-panel` UI never calls it. Add a Cancel control.
+- [x] **Plugin cancel button** ✅ — `kickoff-stakeholders-panel` now shows a destructive **Cancel run**
+      control while a run is in flight; it POSTs `…/run/{run_key}/cancel` for the previewed `run_key`
+      (via the datasource proxy, no token client-side). The awaiting run resolves `status:"cancelled"`
+      with partial answers, shown honestly. 2 RTL tests (`StakeholdersPanel.test.tsx`).
 - [ ] **Provision the plugin(s)** into the shared KinD Grafana — unsigned allow-list + a restart that
       touches the online-boutique dashboards (**NR-10 blast radius; operator decision**). Steps in
       `grafana-plugins/kickoff-stakeholders-panel/README.md`. Re-run the pilots *through* Grafana after.

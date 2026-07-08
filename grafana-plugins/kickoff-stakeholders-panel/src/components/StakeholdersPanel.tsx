@@ -22,6 +22,7 @@ export const StakeholdersPanel: React.FC<Props> = ({ options, width, height }) =
   const [dryRun, setDryRun] = useState<DryRunResult | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   const configured = Boolean(options.datasourceUid);
 
@@ -29,6 +30,7 @@ export const StakeholdersPanel: React.FC<Props> = ({ options, width, height }) =
     setDryRun(null);
     setResult(null);
     setError(null);
+    setCancelling(false);
   }, []);
 
   // Step 1 — dry-run (no spend): honest estimate + a run_key, then open the confirm modal.
@@ -69,8 +71,26 @@ export const StakeholdersPanel: React.FC<Props> = ({ options, width, height }) =
     } catch (err) {
       setError(errText(err));
       setPhase('idle');
+    } finally {
+      setCancelling(false);
     }
   }, [dryRun, question, cap, options.datasourceUid]);
+
+  // Cancel an in-flight run: signal the server (FR-12) — personas that already answered persist; the
+  // awaiting confirm request then resolves with status "cancelled" + the partial answers.
+  const handleCancel = useCallback(async () => {
+    if (!dryRun || cancelling) {
+      return;
+    }
+    setCancelling(true);
+    try {
+      await proxyPost(options.datasourceUid, `stakeholders/run/${encodeURIComponent(dryRun.run_key)}/cancel`, {});
+    } catch (err) {
+      // A failed cancel is non-fatal — the run may finish normally; surface it and let the run resolve.
+      setError(errText(err));
+      setCancelling(false);
+    }
+  }, [dryRun, cancelling, options.datasourceUid]);
 
   return (
     <div className={styles.container} style={{ width, height }}>
@@ -110,7 +130,12 @@ export const StakeholdersPanel: React.FC<Props> = ({ options, width, height }) =
         >
           {phase === 'previewing' ? 'Estimating…' : phase === 'running' ? 'Running…' : 'Preview cost'}
         </Button>
-        {(dryRun || result || error) && (
+        {phase === 'running' && (
+          <Button variant="destructive" onClick={handleCancel} disabled={cancelling}>
+            {cancelling ? 'Cancelling…' : 'Cancel run'}
+          </Button>
+        )}
+        {phase !== 'running' && (dryRun || result || error) && (
           <Button variant="secondary" fill="text" onClick={() => { reset(); setPhase('idle'); }}>
             Clear
           </Button>
@@ -158,6 +183,9 @@ const Results: React.FC<{ result: RunResult; styles: ReturnType<typeof getStyles
     </Alert>
     {result.status === 'deduped' && (
       <div className={styles.dim}>This run_key already ran — showing the prior result (not re-charged).</div>
+    )}
+    {result.status === 'cancelled' && (
+      <div className={styles.dim}>Run cancelled — showing only the personas that answered before cancellation.</div>
     )}
     {result.answers.map((a: PanelAnswerView, i: number) => (
       <div key={i} className={styles.answer}>
