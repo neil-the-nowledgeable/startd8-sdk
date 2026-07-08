@@ -120,11 +120,16 @@ genuinely-new writers.
       refuse on divergence). Flips `prisma/schema.prisma` only on pass; surfaces the inferred identity every
       time (`render_confirmation_surface`). Returns a uniform result (never raises on a refusal) for clean
       CLI exit-code mapping. 9 tests green (110 in the package) incl. the re-promote parity-drift path.
-- [ ] **M5 — Backend + backfill (FR-6, FR-8).** `generate backend --imports <generated>` + `from_json`;
-      records-build **aggregation** (post-identity; **bound to metric additivity** — gauge≠sum, R1-F5).
-      **E2E dedup test (R1-S3):** generated `imports.yaml` → importer dedups on the inferred identity,
-      re-run twice → **0 new rows**. **Key-collapse guard + non-additive negative (R1-S4).** Decimal/
-      DateTime coercion is free (`_COERCE`).
+- [x] **M5 — Backend + backfill (FR-6, FR-8).** ✅ **DONE** — `src/startd8/tsdb_maturation/backfill.py`:
+      `build_payload`/`records_to_json` map the raw specimen → the `from_json` importer payload (emitted
+      field names; measure as canonical Decimal string; renamed-label values preserved). **FR-6 key-collapse
+      aggregation bound to additivity (R1-F5)**: `classify_additivity` (`_amount`/`_total`/`_sum`/`_count`→
+      additive→`sum`; unknown/gauge→fail-safe `last`+loud warning; explicit `aggregate=` override wins).
+      **R1-S3 E2E dedup proof green** (`test_backfill_e2e.py`): infer→`imports.yaml`→**real `render_backend`**
+      →run generated `from_json` **twice** → **0 new rows**, table stable at 16, composite `_IDENTITY` baked
+      (not `id`); Decimal/DateTime coerce back. **R1-S4 guards green**: additive collision → exact Decimal
+      sum (0.1+0.2=0.3, no last-writer-wins loss); gauge collision → NOT summed (`last`+warning). 24 tests
+      (14 unit + 10 E2E; 124 in the package).
 - [ ] **M6 — CLI (FR-10).** `startd8 promote tsdb <metric>` orchestrating M0→M5, modeled on `generate
       contract`. `--dry-run` / `--lookback` / `--reduce` / `--identity` / `--endpoint`.
 - [ ] **M7 — Histograms (FR-13).** `_bucket`/`_sum`/`_count` → a percentile/stats table. Isolated + last so

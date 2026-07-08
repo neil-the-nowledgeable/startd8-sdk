@@ -19,10 +19,12 @@ Milestones (PLAN §5):
   the inferred identity into an ``imports.yaml`` the importer dedups on (R1-F3 round-trip).
 * **M4 — gate wiring** (:mod:`startd8.tsdb_maturation.gate`) — FR-7. Reuses ``emit_schema_draft`` →
   ``promote_schema``, enforces the M2.5 confirmation, refuses empty/unrenderable.
-* M5 — backend + backfill · M6 — CLI · M7 — histograms. (FR-5 reduction + FR-12 family grouper are
-  the remaining M2 sub-tasks.)
+* **M5 — backfill** (:mod:`startd8.tsdb_maturation.backfill`) — FR-6/FR-8. Builds the ``from_json``
+  payload with additivity-bound key-collapse aggregation (R1-F5).
+* M6 — CLI · M7 — histograms. (FR-5 reduction + FR-12 family grouper are the remaining M2 sub-tasks.)
 
-M0–M4 (reader → specimen → inference → confirmation → imports writer → gate) are implemented.
+M0–M5 (reader → specimen → inference → confirmation → imports writer → gate → backfill) are
+implemented.
 """
 
 from __future__ import annotations
@@ -75,6 +77,14 @@ from .imports_writer import (
     write_imports_yaml,
 )
 from .gate import PromotionResult, gate_and_promote
+from .backfill import (
+    Additivity,
+    AggFunc,
+    BackfillPayload,
+    build_payload,
+    classify_additivity,
+    records_to_json,
+)
 
 __all__ = [
     # M0 — reader
@@ -122,4 +132,11 @@ __all__ = [
     # M4 — gate wiring
     "PromotionResult",
     "gate_and_promote",
+    # M5 — backfill
+    "Additivity",
+    "AggFunc",
+    "BackfillPayload",
+    "build_payload",
+    "classify_additivity",
+    "records_to_json",
 ]
