@@ -226,12 +226,87 @@ def _stakeholders_section(roster: Any, panel_results: List[Dict[str, Any]] | Non
             "group": "Stakeholders"}
 
 
+def _apply_status(pipeline: Dict[str, Any]) -> str:
+    inbox = pipeline.get("inbox") or {}
+    disp = pipeline.get("dispositions") or {}
+    if inbox.get("present"):
+        return f"⏳ {inbox.get('count', 0)} proposal(s) in the VIPP inbox — pending negotiate/apply."
+    if disp.get("present"):
+        return "✅ inbox consumed — dispositions applied (or negotiated & drained)."
+    return "—"
+
+
+def _pipeline_section(pipeline: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Render the panel→bridge→VIPP processing funnel (Increment 3 M-display; read-only, $0).
+
+    ``pipeline`` (assembled by the CLI from the 4 stores) has ``staged`` (Recommendation dicts),
+    ``inbox`` ({present,count,envelope_seq}), ``dispositions`` ({present,counts,evidence_available,
+    items,advisories}). Everything shown is SYNTHETIC & UNRATIFIED; nothing here is authored.
+    """
+    lines = [
+        "### Panel Processing Pipeline",
+        "",
+        "_How the panel's synthetic suggestions become structured, adjudicated, human-gated field "
+        "changes: triage → staged → VIPP inbox → dispositions → apply._",
+        "",
+    ]
+    if not pipeline or not any((pipeline.get("staged"), (pipeline.get("inbox") or {}).get("present"),
+                               (pipeline.get("dispositions") or {}).get("present"))):
+        lines += [
+            "**No pipeline activity yet.** Run the panel, then `startd8 kickoff stakeholders propose "
+            "--run` (stage) → `--serialize` (to VIPP) → `startd8 vipp negotiate` → `vipp apply`.",
+        ]
+        return {"type": "text", "title": "Panel Processing Pipeline",
+                "options": {"content": "\n".join(lines)}, "group": "Panel Pipeline"}
+
+    staged = pipeline.get("staged") or []
+    disp = pipeline.get("dispositions") or {}
+    n_accepted = sum(1 for r in staged if r.get("disposition") == "accepted")
+    inbox_ct = (pipeline.get("inbox") or {}).get("count", 0)
+    d_counts = disp.get("counts") or {}
+    lines += [
+        f"**Funnel:** {len(staged)} staged ({n_accepted} accepted) → {inbox_ct} in inbox → "
+        f"{sum(d_counts.values())} dispositioned {dict(d_counts)}",
+        "",
+        f"**Apply status:** {_apply_status(pipeline)}",
+        "",
+        "> ⚠ **SYNTHETIC & UNRATIFIED** — staged values are `estimate` provenance (draft starters), "
+        "never confirmed field values; ground truth *adjudicates, never originates*.",
+        "",
+    ]
+    if staged:
+        lines += ["#### Staged recommendations", "| Field | Disposition | Grounding | Draft value |",
+                  "|---|---|---|---|"]
+        for r in staged:
+            lines.append(
+                f"| `{_md_escape(r.get('value_path', ''))}` | {_md_escape(r.get('disposition', 'draft'))} "
+                f"| {_md_escape(r.get('grounding', ''))} | {_value_snippet(r.get('recommended_value', ''), 60)} |"
+            )
+        lines.append("")
+    items = disp.get("items") or []
+    if items:
+        ev = "" if disp.get("evidence_available", True) else " _(evidence unavailable — degraded/narrative)_"
+        lines += [f"#### VIPP dispositions{ev}", "| Proposal | Decision | Reason |", "|---|---|---|"]
+        for it in items:
+            lines.append(
+                f"| `{_md_escape(str(it.get('proposal_id', ''))[:12])}` | {_md_escape(it.get('decision', ''))} "
+                f"| {_value_snippet(it.get('reason', ''), 80)} |"
+            )
+        lines.append("")
+    for adv in disp.get("advisories") or []:  # anti-anchoring: show the question next to the advisory
+        q = _md_escape(adv.get("question", adv.get("symbol", "")))
+        lines += [f"> _Panel advisory (SYNTHETIC) re: {q}:_ {_value_snippet(adv.get('advisory', adv.get('text', '')), 160)}"]
+    return {"type": "text", "title": "Panel Processing Pipeline",
+            "options": {"content": "\n".join(lines)}, "group": "Panel Pipeline"}
+
+
 def build_kickoff_portal_spec(
     state: KickoffState,
     project: str,
     *,
     roster: Any = None,
     panel_results: List[Dict[str, Any]] | None = None,
+    pipeline: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build a ``DashboardSpec`` dict for the kickoff portal from the canonical state.
 
@@ -248,6 +323,8 @@ def build_kickoff_portal_spec(
     for manifest in sorted(by_manifest, key=_manifest_sort_key):
         panels.append(_manifest_section(manifest, by_manifest[manifest]))
     panels.append(_stakeholders_section(roster, panel_results))
+    if pipeline is not None:
+        panels.append(_pipeline_section(pipeline))
 
     uid_project = project.lower().replace("_", "-").replace(" ", "-")
     return {

@@ -898,6 +898,52 @@ def _load_panel_run(project_root: Path, session_id: Optional[str] = None) -> Opt
         return None
 
 
+def _load_pipeline_state(project_root: Path) -> Optional[dict]:
+    """Assemble the panel→bridge→VIPP funnel for the Workbook (best-effort, $0 read-only, Increment 3).
+
+    Reads the three persisted stores — staged recommendations (`ProposalStore`), the VIPP inbox, and
+    VIPP dispositions. Returns None if there's no pipeline activity. Never breaks the portal.
+    """
+    try:
+        staged: List[dict] = []
+        pdir = project_root / ".startd8" / "stakeholder-panel" / "proposals"
+        if pdir.is_dir():
+            from .stakeholder_panel.proposals import ProposalStore
+
+            for f in sorted(pdir.glob("proposals-*.json")):
+                sid = f.stem[len("proposals-"):]
+                staged.extend(r.to_dict() for r in ProposalStore(project_root, sid).load())
+
+        inbox = {"present": False}
+        inbox_path = project_root / ".startd8" / "vipp" / "proposals-inbox.json"
+        if inbox_path.is_file() and not inbox_path.is_symlink():
+            from .vipp.models import ProposalEnvelope
+
+            env = ProposalEnvelope.from_json(inbox_path.read_text(encoding="utf-8"))
+            inbox = {"present": True, "count": len(env.proposals), "envelope_seq": env.envelope_seq}
+
+        dispositions = {"present": False}
+        disp_path = project_root / ".startd8" / "vipp" / "dispositions.json"
+        if disp_path.is_file() and not disp_path.is_symlink():
+            from .vipp.models import VippReport
+
+            rep = VippReport.from_json(disp_path.read_text(encoding="utf-8"))
+            dispositions = {
+                "present": True, "counts": rep.counts(), "evidence_available": rep.evidence_available,
+                "items": [
+                    {"proposal_id": d.proposal_id,
+                     "decision": getattr(d.decision, "value", str(d.decision)), "reason": d.reason}
+                    for d in rep.dispositions
+                ],
+                "advisories": list(rep.panel_advisories or []),
+            }
+        if not staged and not inbox["present"] and not dispositions["present"]:
+            return None
+        return {"staged": staged, "inbox": inbox, "dispositions": dispositions}
+    except Exception:  # pragma: no cover - never let pipeline loading break the portal
+        return None
+
+
 # --- Kickoff portal — the Digital Project Workbook (Grafana presentation surface) ----------------
 # The portal is the **Digital Project Workbook**: a dynamic, query-based evolution of Brooks' workbook
 # ("Why Did the Tower of Babel Fail?", The Mythical Man-Month) — the single shared structure holding
@@ -968,7 +1014,8 @@ def kickoff_portal(
         roster = None
 
     panel_results = _load_panel_run(root, session_id=session)
-    spec = build_kickoff_portal_spec(state, name, roster=roster, panel_results=panel_results)
+    pipeline = _load_pipeline_state(root)
+    spec = build_kickoff_portal_spec(state, name, roster=roster, panel_results=panel_results, pipeline=pipeline)
 
     dest = out_dir.expanduser() if out_dir else (root / ".startd8" / "dashboards")
     config: dict = {"spec": spec, "output_dir": str(dest)}
