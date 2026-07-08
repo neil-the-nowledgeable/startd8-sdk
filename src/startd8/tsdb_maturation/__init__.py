@@ -13,11 +13,12 @@ Milestones (PLAN §5):
   into a durable, raw, grain-labeled specimen file.
 * **M2 — inference core** (:mod:`startd8.tsdb_maturation.infer`) — FR-3/FR-4/FR-11. Projects a
   raw specimen into an ``EntityGraph`` and renders ``schema.prisma`` via the real emitter.
-* M2.5 — confirmation gate · M3 — ``imports.yaml`` generator · M4 — gate wiring · M5 — backend
-  + backfill · M6 — CLI · M7 — histograms. (FR-5 reduction + FR-12 family grouper are the
-  remaining M2 sub-tasks.)
+* **M2.5 — confirmation gate** (:mod:`startd8.tsdb_maturation.confirmation`) — FR-4/R1-F7/R1-S6.
+  A committed-ledger gate: an inferred identity key must be human-confirmed before promotion.
+* M3 — ``imports.yaml`` generator · M4 — gate wiring · M5 — backend + backfill · M6 — CLI ·
+  M7 — histograms. (FR-5 reduction + FR-12 family grouper are the remaining M2 sub-tasks.)
 
-M0, M1, and the M2 inference core are implemented so far.
+M0, M1, the M2 inference core, and the M2.5 confirmation gate are implemented so far.
 """
 
 from __future__ import annotations
@@ -51,6 +52,18 @@ from .infer import (
     infer_scalar_type,
     infer_schema,
 )
+from .confirmation import (
+    ConfirmationError,
+    ConfirmationRecord,
+    ConfirmationRequired,
+    ConfirmationStatus,
+    confirm_inference,
+    confirmation_status,
+    is_confirmed,
+    record_confirmation,
+    render_confirmation_surface,
+    require_confirmation,
+)
 
 __all__ = [
     # M0 — reader
@@ -79,4 +92,15 @@ __all__ = [
     "infer_identity",
     "infer_scalar_type",
     "infer_schema",
+    # M2.5 — confirmation gate
+    "ConfirmationError",
+    "ConfirmationRecord",
+    "ConfirmationRequired",
+    "ConfirmationStatus",
+    "confirm_inference",
+    "confirmation_status",
+    "is_confirmed",
+    "record_confirmation",
+    "render_confirmation_surface",
+    "require_confirmation",
 ]

@@ -91,9 +91,16 @@ genuinely-new writers.
       golden = `20260313220000_michigan_budget_schema.sql`. **Remaining M2 sub-tasks:** FR-5 reduction policy
       (auto top-N + loud warning, OQ-3) and FR-12 family grouper / member-alignment (multi-measure tables) —
       both additive and separable from the load-bearing identity risk, deferred to a follow-on slice.
-- [ ] **M2.5 — Confirmation gate (FR-4, R1-S6).** Surface the inferred key next to the golden diff; record
-      a **committed confirmation marker** (kickoff `confirmed.yaml` pattern); re-promote re-confirms if the
-      key changed. Small new milestone between infer (M2) and gate (M4).
+- [x] **M2.5 — Confirmation gate (FR-4, R1-S6).** ✅ **DONE** —
+      `src/startd8/tsdb_maturation/confirmation.py`, modeled on the kickoff `confirmed.yaml`
+      committed-ledger pattern. Committed ledger at `docs/tsdb-maturation/confirmed.yaml` (outside any
+      scanner glob), keyed by metric → confirmed identity. `confirmation_status` →
+      CONFIRMED/UNCONFIRMED/**STALE** (key changed); `require_confirmation` is the hard gate M4 calls
+      (raises `ConfirmationRequired` unless the current key is confirmed); `record_confirmation`/
+      `confirm_inference` write the marker; `render_confirmation_surface` shows the inferred key next to
+      the golden diff (R1-F7). **R1-S6 three-case acceptance green**: unconfirmed→refused, confirmed→allowed,
+      key-changed-on-re-promote→re-confirm. Order-insensitive (composite key = set); tolerant ledger IO
+      (absent/malformed → empty). 14 tests green (83 in the package).
 - [ ] **M3 — `imports.yaml` generator (FR-14).** Serialize the inferred `IdentityKey` (+ coerce tags) into
       an `imports.yaml` that `parse_imports` accepts round-trip. *Without this, `generate backend` emits no
       importer → `id`-dedup → infinite duplication.* First programmatic manifest writer in the SDK.
