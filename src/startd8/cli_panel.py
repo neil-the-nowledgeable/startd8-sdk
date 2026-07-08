@@ -326,6 +326,64 @@ def panel_import(
         console.print(f"  [yellow]⚠[/yellow] {warning}")
 
 
+@panel_app.command("serve")
+def panel_serve(
+    project_root: Path = typer.Option(Path("."), "--project", help="Project root."),
+    token: Optional[str] = typer.Option(
+        None, "--token", help="Bearer token (default: $STARTD8_STAKEHOLDER_TOKEN, else a generated one is printed)."
+    ),
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind host (0.0.0.0 so the KinD Grafana pod reaches it)."),
+    port: int = typer.Option(8710, "--port", help="Bind port."),
+    model: Optional[str] = typer.Option(None, "--model", help="Agent spec (default: SDK cheap model)."),
+    daily_ceiling: float = typer.Option(
+        5.0, "--daily-ceiling", help="Daily USD spend ceiling (fail-closed; a blocking budget)."
+    ),
+    strict: bool = typer.Option(
+        False, "--strict", help="Untrusted-network mode: also enforce Origin allow-list + replay nonce."
+    ),
+    allowed_origin: Optional[List[str]] = typer.Option(
+        None, "--allowed-origin", help="Allowed Origin (repeatable; --strict only)."
+    ),
+) -> None:
+    """Serve the stakeholder-run endpoint so the Digital Project Workbook can trigger runs (PAID).
+
+    Fail-closed: registers a daily USD ceiling (a blocking budget) and refuses to spend past it. The
+    LLM only ever runs here (server-side), never in Grafana; every answer is SYNTHETIC & UNRATIFIED.
+    """
+    import secrets
+
+    from .stakeholder_panel.panel import DEFAULT_MODEL_SPEC
+    from .kickoff_experience.stakeholder_run import ensure_daily_ceiling
+    from .kickoff_experience.stakeholder_run_server import RunServerConfig, serve_stakeholder_run
+    from .costs.budget import BudgetManager
+    from .costs.store import CostStore
+
+    tok = token or os.getenv("STARTD8_STAKEHOLDER_TOKEN") or secrets.token_urlsafe(24)
+    root = project_root.expanduser()
+
+    # Fail-closed spend safety: a DAILY blocking budget must exist before the endpoint accepts runs.
+    manager = BudgetManager(CostStore(root / ".startd8" / "costs.db"))
+    ensure_daily_ceiling(manager, limit_usd=daily_ceiling)
+
+    cfg = RunServerConfig(
+        project_root=root,
+        token=tok,
+        model=model or DEFAULT_MODEL_SPEC,
+        budget_manager=manager,
+        strict=strict,
+        allowed_origins=tuple(allowed_origin or ()),
+    )
+    console.print(f"[bold]stakeholders serve[/bold] — http://{host}:{port}  (daily ceiling ${daily_ceiling:.2f})")
+    console.print(f"  token: [cyan]{tok}[/cyan]  [dim](send as `Authorization: Bearer <token>`)[/dim]")
+    if strict:
+        console.print("  [dim]strict mode: Origin allow-list + replay nonce enforced[/dim]")
+    console.print(
+        "  [yellow]⚠ PAID endpoint[/yellow] — runs spend LLM; every answer is [yellow]SYNTHETIC & "
+        "UNRATIFIED[/yellow]. Ctrl-C to stop."
+    )
+    serve_stakeholder_run(cfg, host=host, port=port)
+
+
 # --- GE-M1: deprecated top-level `startd8 panel …` alias (folded under `startd8 kickoff panel`) ---
 # Re-register the exact command bodies above under the deprecated alias group. Its callback emits the
 # one-release FR-GE-7/FR-10 deprecation notice; the commands themselves are byte-identical.

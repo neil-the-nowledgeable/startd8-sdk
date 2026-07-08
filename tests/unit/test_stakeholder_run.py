@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from startd8.costs.models import CostPeriod
 from startd8.kickoff_experience.stakeholder_run import (
     BudgetNotConfiguredError,
     DryRun,
@@ -11,6 +12,7 @@ from startd8.kickoff_experience.stakeholder_run import (
     derive_run_key,
     dry_run,
     ensure_blocking_budget,
+    ensure_daily_ceiling,
     estimate_cost_per_question,
     execute_run,
     roster_version,
@@ -157,6 +159,43 @@ def test_idempotency_ttl_expiry(tmp_path):
 def test_ensure_blocking_budget_passes_with_blocking():
     ensure_blocking_budget(_Manager([_Budget(True, "stakeholder-panel")]))
     ensure_blocking_budget(_Manager([_Budget(True, None)]))  # global blocking budget
+
+
+class _DailyBudget:
+    def __init__(self, scope="stakeholder-panel"):
+        self.block_on_exceed = True
+        self.period = CostPeriod.DAILY
+        self.scope_project = scope
+
+
+class _CreatingManager:
+    def __init__(self, budgets=None):
+        self._b = list(budgets or [])
+        self.created = []
+
+    def list_budgets(self, active_only=True):
+        return self._b
+
+    def create_budget(self, **kw):
+        b = type("B", (), {"block_on_exceed": kw["block_on_exceed"], "period": kw["period"],
+                           "scope_project": kw["scope_project"]})()
+        self.created.append(kw)
+        self._b.append(b)
+        return b
+
+
+def test_ensure_daily_ceiling_creates_and_satisfies_fail_closed():
+    m = _CreatingManager()
+    ensure_daily_ceiling(m, limit_usd=5.0)
+    assert len(m.created) == 1
+    assert m.created[0]["period"] == CostPeriod.DAILY and m.created[0]["block_on_exceed"] is True
+    ensure_blocking_budget(m)  # now passes — a blocking budget exists
+
+
+def test_ensure_daily_ceiling_idempotent():
+    m = _CreatingManager([_DailyBudget()])
+    ensure_daily_ceiling(m, limit_usd=5.0)
+    assert m.created == []  # reused the existing daily blocking budget
 
 
 def test_ensure_blocking_budget_fail_closed():

@@ -869,13 +869,19 @@ def kickoff_confirm(
     )
 
 
-def _load_latest_panel_run(project_root: Path) -> Optional[List[dict]]:
-    """Load the most-recent stakeholder-panel run's answers for the Workbook (best-effort).
+def _load_panel_run(project_root: Path, session_id: Optional[str] = None) -> Optional[List[dict]]:
+    """Load a stakeholder-panel run's answers for the Workbook (best-effort, $0 read-only).
 
-    Reads the newest transcript under ``.startd8/stakeholder-panel/`` (display-only, $0). Returns None
-    on any absence/error — a missing/unreadable transcript must never fail the portal.
+    With ``session_id`` renders that **specific** run (FR-8, the session the run loop returned — no
+    race); otherwise the most-recent transcript by mtime (Phase 1.5, fine for single-user CLI display).
+    Returns None on any absence/error — a missing/unreadable transcript must never fail the portal.
     """
     try:
+        from .stakeholder_panel.transcript import TranscriptStore
+
+        if session_id:
+            answers = TranscriptStore(project_root, session_id).load()
+            return [a.to_dict() for a in answers] or None
         tdir = project_root / ".startd8" / "stakeholder-panel"
         if not tdir.is_dir():
             return None
@@ -886,8 +892,6 @@ def _load_latest_panel_run(project_root: Path) -> Optional[List[dict]]:
         )
         if not sessions:
             return None
-        from .stakeholder_panel.transcript import TranscriptStore
-
         answers = TranscriptStore(project_root, sessions[0].stem).load()
         return [a.to_dict() for a in answers] or None
     except Exception:  # pragma: no cover - never let transcript loading break the portal
@@ -916,6 +920,9 @@ def kickoff_portal(
     ),
     out_dir: Optional[Path] = typer.Option(
         None, "--out", help="Output dir for the dashboard JSON (default: <root>/.startd8/dashboards)."
+    ),
+    session: Optional[str] = typer.Option(
+        None, "--session", help="Render a SPECIFIC stakeholder-run session (default: the most recent)."
     ),
     json_out: bool = typer.Option(False, "--json", help="Emit a JSON result summary to stdout."),
 ) -> None:
@@ -960,7 +967,7 @@ def kickoff_portal(
     except Exception:  # pragma: no cover - defensive: never let roster loading break the portal
         roster = None
 
-    panel_results = _load_latest_panel_run(root)
+    panel_results = _load_panel_run(root, session_id=session)
     spec = build_kickoff_portal_spec(state, name, roster=roster, panel_results=panel_results)
 
     dest = out_dir.expanduser() if out_dir else (root / ".startd8" / "dashboards")

@@ -163,6 +163,25 @@ def test_stakeholders_section_no_run_no_latest_block(demo_state: KickoffState) -
     assert "Latest run" not in content
 
 
+def test_load_panel_run_specific_vs_latest(tmp_path) -> None:
+    import time
+
+    from startd8.cli_concierge import _load_panel_run
+    from startd8.stakeholder_panel.models import Grounding, PanelAnswer
+    from startd8.stakeholder_panel.transcript import TranscriptStore
+
+    TranscriptStore(tmp_path, "old").append(
+        PanelAnswer(role_id="a", question="q", text="OLD", grounding=Grounding.GROUNDED, session_id="old")
+    )
+    time.sleep(0.02)
+    TranscriptStore(tmp_path, "new").append(
+        PanelAnswer(role_id="b", question="q", text="NEW", grounding=Grounding.GROUNDED, session_id="new")
+    )
+    assert _load_panel_run(tmp_path)[0]["text"] == "NEW"           # latest by mtime (Phase 1.5)
+    assert _load_panel_run(tmp_path, "old")[0]["text"] == "OLD"    # FR-8 specific session
+    assert _load_panel_run(tmp_path, "missing") is None
+
+
 def test_empty_state_still_valid() -> None:
     spec = build_kickoff_portal_spec(_state(), "empty")
     assert spec["uid"] == "cc-portal-kickoff-empty"

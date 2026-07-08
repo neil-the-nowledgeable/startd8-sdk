@@ -72,8 +72,13 @@ fail-closed budget gate + real auth; never runs the LLM in Grafana.
 - Idempotency + rate-limit finalized; **crash-marker recovery** (re-submit after crash not re-charged);
   partial-failure reporting (per-persona status). Per-run audit line (who/when/question/cap/estimated+
   actual cost/session_id) via transcript + the M0-built `cost_tracker`.
-- **Cancel/abort path** (poll exists; add abort) + a **per-session/daily USD ceiling** that aborts
-  before the next run's calls (reuse `FacilitationConfig.budget_usd`'s cumulative-abort pattern).
+- **Daily USD ceiling — SHIPPED:** `ensure_daily_ceiling()` registers a DAILY `block_on_exceed` budget
+  (also satisfies the fail-closed gate); `kickoff stakeholders serve --daily-ceiling` sets it. Aborts
+  before the next run's calls exceed the day's cap.
+- **Cancel/abort — DEFERRED (rationale):** the endpoint runs a request **synchronously** (`execute_run`
+  blocks on `ask_all`'s `asyncio.gather` fan-out), so there is no running job to signal. True cancel
+  needs async job management (a job registry + cooperative cancellation in `ask_all`) — a larger change
+  than M3. The daily ceiling + `--cap` bound spend meanwhile; cancel is a CONSIDER-level follow-up.
 
 ## M4 — Pilot + verdict on household
 

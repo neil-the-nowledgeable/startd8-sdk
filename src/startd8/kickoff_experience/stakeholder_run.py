@@ -227,6 +227,31 @@ def ensure_blocking_budget(manager: Any, *, scope_project: str = "stakeholder-pa
     )
 
 
+def ensure_daily_ceiling(manager: Any, *, limit_usd: float, scope_project: str = "stakeholder-panel") -> Any:
+    """Ensure a DAILY *blocking* budget exists — the cumulative daily spend ceiling (FR-12).
+
+    Both satisfies :func:`ensure_blocking_budget` (a blocking budget exists → fail-closed) AND caps
+    cumulative spend per day. Idempotent: returns the existing daily blocking budget if one applies,
+    else creates one. This is the spend-safety backstop for the run endpoint.
+    """
+    from startd8.costs.models import CostPeriod
+
+    for b in manager.list_budgets(active_only=True):
+        if (
+            getattr(b, "block_on_exceed", False)
+            and getattr(b, "period", None) == CostPeriod.DAILY
+            and getattr(b, "scope_project", None) in (None, scope_project)
+        ):
+            return b
+    return manager.create_budget(
+        name=f"{scope_project}-daily-ceiling",
+        period=CostPeriod.DAILY,
+        limit_amount=limit_usd,
+        block_on_exceed=True,
+        scope_project=scope_project,
+    )
+
+
 @dataclass
 class RunResult:
     session_id: str
