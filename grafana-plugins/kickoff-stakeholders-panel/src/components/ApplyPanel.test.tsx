@@ -88,7 +88,8 @@ describe('ApplyPanel', () => {
     await waitFor(() =>
       expect(post).toHaveBeenLastCalledWith(
         `/api/datasources/proxy/uid/${DS}/stakeholders/apply/ratify`,
-        { proposal_ids: ['f1'], challenge: 'BODY.SIGNATURE' }
+        { proposal_ids: ['f1'], challenge: 'BODY.SIGNATURE' },
+        expect.objectContaining({ headers: expect.objectContaining({ 'X-Nonce': expect.any(String) }) })
       )
     );
     await screen.findByText(/Applied 1\/1/);

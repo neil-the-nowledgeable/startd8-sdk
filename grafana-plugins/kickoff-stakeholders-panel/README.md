@@ -17,31 +17,32 @@ adds it server-side. The panel only takes a **datasource UID**.
 
 ### Datasource setup (once)
 
-Point the panel at a datasource that proxies `/stakeholders/*` to the run endpoint. On the datasource
-(e.g. a provisioned `contextcore-datasource` or a dedicated one), add a route + the token:
+The panel POSTs to `/api/datasources/proxy/uid/<uid>/stakeholders/<...>`. Grafana's **core datasource
+proxy** forwards `<url>/stakeholders/<...>` and injects `Authorization: Bearer <token>` via the
+`httpHeaderName1` / `httpHeaderValue1` pair — so the **token is added server-side**, never in the
+dashboard JSON or the browser (FR-2 / S-3). Two ways to provision (both under `provisioning/`):
 
-```yaml
-# grafana datasource provisioning
-jsonData:
-  url: http://host.docker.internal:8710      # the run endpoint (see `startd8 kickoff stakeholders serve`)
-secureJsonData:
-  # the bearer token minted by `serve` — added as a header by the route below, never exposed to the browser
-routes:
-  - path: "stakeholders/run"
-    url: "{{ .JsonData.url }}/stakeholders/run"
-    method: "*"
-    headers:
-      - name: Authorization
-        content: "Bearer {{ .SecureJsonData.token }}"
-  - path: "stakeholders/run/*"
-    url: "{{ .JsonData.url }}/stakeholders/run"
-    method: "GET"
-    headers:
-      - name: Authorization
-        content: "Bearer {{ .SecureJsonData.token }}"
-```
+- **No-restart API upsert (preferred on shared Grafana):** `provisioning/provision-datasource.sh`.
+  Survives token rotation (re-run with a fresh token); no Grafana restart. Operator-run — it mutates a
+  possibly shared instance.
+  ```bash
+  GRAFANA_URL=http://localhost:3000 GRAFANA_TOKEN=<grafana-sa-token> \
+  STAKEHOLDER_TOKEN=<from `serve`> ENDPOINT_URL=http://host.docker.internal:8710 \
+    provisioning/provision-datasource.sh
+  ```
+- **Declarative:** `provisioning/datasources/stakeholders.yaml` — env-interpolated token
+  (`$__env{STARTD8_STAKEHOLDER_TOKEN}`), so rotation needs a provisioning reload/restart (NR-10 blast
+  radius on the shared `o11y-dev` — prefer the script).
 
-Then set the panel option **Run datasource UID** to that datasource's UID.
+Type is `yesoreyeram-infinity-datasource` (installed on `o11y-dev`); the custom-header pair is applied
+by Grafana core, so any HTTP datasource type works. Then set the panel option **Run datasource UID** to
+the datasource's UID (default `startd8-stakeholders`).
+
+**Strict mode + the apply gate.** The FR-R7 apply gate mandates `--strict` (Origin allow-list + replay
+nonce). Through the proxy the browser Origin is not the upstream Origin, so **run `serve` with no
+`--allowed-origin`** (the endpoint skips the Origin check when the allow-list is empty) and rely on the
+replay nonce: the panel sends a fresh **`X-Nonce`** per request, which the proxy forwards upstream. So
+`serve --enable-apply --strict` (no `--allowed-origin`) is the proxy-compatible apply posture.
 
 ## Build
 

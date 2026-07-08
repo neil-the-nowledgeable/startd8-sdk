@@ -1,0 +1,32 @@
+# Grafana datasource provisioning for the StartD8 stakeholder-run endpoint.
+#
+# The panel POSTs to /api/datasources/proxy/uid/<uid>/stakeholders/<...>. Grafana's CORE datasource
+# proxy forwards <url>/stakeholders/<...> and injects the custom header below — so the bearer TOKEN is
+# added server-side and is NEVER in the dashboard JSON or the browser (FR-2 / S-3). The panel's
+# per-request X-Nonce (needed for the strict apply gate) is set by the frontend and forwarded by the
+# proxy; only the token is added here.
+#
+# Type is `yesoreyeram-infinity-datasource` (installed on o11y-dev) — a generic HTTP datasource whose
+# health check tolerates a non-Infinity URL; the httpHeaderName1/httpHeaderValue1 pair is applied by
+# Grafana core, not the plugin, so it works regardless of type.
+#
+# Declarative token wiring uses env interpolation, which means the token must be in Grafana's process
+# env and a provisioning reload/restart is needed on rotation. On the SHARED o11y-dev Grafana a restart
+# has blast radius (NR-10) — prefer the no-restart API upsert in ../provision-datasource.sh instead.
+
+apiVersion: 1
+
+datasources:
+  - name: StartD8 Stakeholders Endpoint
+    uid: startd8-stakeholders
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    # `startd8 kickoff stakeholders serve --host 0.0.0.0` on the host; the KinD pod reaches it here.
+    url: http://host.docker.internal:8710
+    isDefault: false
+    editable: false
+    jsonData:
+      httpHeaderName1: Authorization
+    secureJsonData:
+      # The bearer token minted by `serve`, from Grafana's env. Rotation ⇒ provisioning reload.
+      httpHeaderValue1: "Bearer $__env{STARTD8_STAKEHOLDER_TOKEN}"

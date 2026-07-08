@@ -90,8 +90,15 @@ in the UI). **Backend gate ✅ built** (branch `feat/workbook-pipeline-apply`); 
 - [ ] **Provision the plugin(s)** into the shared KinD Grafana — unsigned allow-list + a restart that
       touches the online-boutique dashboards (**NR-10 blast radius; operator decision**). Steps in
       `grafana-plugins/kickoff-stakeholders-panel/README.md`. Re-run the pilots *through* Grafana after.
-- [ ] **Datasource `/stakeholders/*` proxy route + token** — set up the `contextcore-datasource` (or a
-      dedicated one) that adds the bearer token server-side, so the plugin never holds it (S-3 / FR-2).
+      *(Still operator-gated — the shared-instance restart is not automated.)*
+- [x] **Datasource `/stakeholders/*` proxy route + token** ✅ — real provisioning shipped under
+      `grafana-plugins/kickoff-stakeholders-panel/provisioning/`: a declarative `datasources/
+      stakeholders.yaml` (Infinity type, core `httpHeaderName1` Authorization injection — token
+      server-side, never in the browser) + a **no-restart API upsert** `provision-datasource.sh`
+      (survives token rotation). **Fixed the real code gap:** the plugin now sends a fresh **`X-Nonce`**
+      per request so a **strict** endpoint accepts it through the proxy (Origin check skipped via empty
+      allow-list; run `serve --enable-apply --strict` with no `--allowed-origin`). README rewritten;
+      `RunPanel` unified onto the shared `api.ts`. Live create/verify is the operator's step.
 - [ ] **OQ-2** — decide: pipeline funnel as a **sibling dashboard** `cc-portal-kickoff-pipeline-{project}`
       vs a section in the main Workbook (the funnel is large).
 - [ ] **Reverse consult-panel pass** (`panel_advisories`) is only on `run_vipp_negotiate(panel=…)`, not

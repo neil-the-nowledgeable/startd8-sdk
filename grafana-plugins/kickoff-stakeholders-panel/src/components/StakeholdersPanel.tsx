@@ -1,19 +1,14 @@
 import React, { useCallback, useState } from 'react';
 import { PanelProps } from '@grafana/data';
-import { getBackendSrv } from '@grafana/runtime';
 import { Alert, Button, ConfirmModal, Field, Input, TextArea, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 import { DryRunResult, PanelAnswerView, RunResult, StakeholdersPanelOptions } from '../types';
 import { ApplyPanel } from './ApplyPanel';
+import { errText, proxyPost } from '../api';
 
 type Props = PanelProps<StakeholdersPanelOptions>;
 
 type Phase = 'idle' | 'previewing' | 'confirm' | 'running' | 'done';
-
-// The token is NEVER sent from here — the datasource proxy adds it server-side (FR-2/S-3).
-async function proxyPost<T>(dsUid: string, path: string, body: unknown): Promise<T> {
-  return getBackendSrv().post(`/api/datasources/proxy/uid/${dsUid}/${path}`, body);
-}
 
 export const StakeholdersPanel: React.FC<Props> = (props) => {
   // The registered panel dispatches to the FR-R7 apply gate when the panel is configured for it.
@@ -206,14 +201,6 @@ const Results: React.FC<{ result: RunResult; styles: ReturnType<typeof getStyles
     ))}
   </div>
 );
-
-function errText(err: unknown): string {
-  if (err && typeof err === 'object') {
-    const anyErr = err as { data?: { error?: string }; statusText?: string; message?: string };
-    return anyErr.data?.error || anyErr.message || anyErr.statusText || 'request failed';
-  }
-  return String(err);
-}
 
 const getStyles = () => ({
   container: css`

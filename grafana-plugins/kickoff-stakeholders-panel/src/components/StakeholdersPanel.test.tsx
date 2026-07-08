@@ -91,7 +91,8 @@ describe('StakeholdersPanel cancel button', () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith(
         `/api/datasources/proxy/uid/${DS}/stakeholders/run/rk-abc/cancel`,
-        {}
+        {},
+        expect.objectContaining({ headers: expect.objectContaining({ 'X-Nonce': expect.any(String) }) })
       )
     );
 
