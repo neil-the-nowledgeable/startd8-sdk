@@ -85,3 +85,29 @@ def test_ask_unknown_role_exits_2(tmp_path, monkeypatch):
         ["ask", "--role", "cfo", "--project", str(_project(tmp_path)), "Budget?"],
     )
     assert result.exit_code == 2
+
+
+# --- serve --enable-apply gating (FR-R7: apply is mandatory-strict) -------------------------------
+
+
+def test_serve_enable_apply_requires_strict(tmp_path):
+    # The footgun: --enable-apply without --strict would 403 every request → refuse loudly at startup.
+    result = runner.invoke(
+        panel_app, ["serve", "--project", str(tmp_path), "--enable-apply", "--token", "t"]
+    )
+    assert result.exit_code == 2
+    assert "requires --strict" in result.stdout
+
+
+def test_serve_enable_apply_with_strict_sets_config(tmp_path, monkeypatch):
+    import startd8.kickoff_experience.stakeholder_run_server as srv
+
+    captured = {}
+    monkeypatch.setattr(srv, "serve_stakeholder_run", lambda cfg, *, host, port: captured.update(cfg=cfg))
+    result = runner.invoke(
+        panel_app,
+        ["serve", "--project", str(tmp_path), "--enable-apply", "--strict",
+         "--allowed-origin", "http://x", "--token", "t"],
+    )
+    assert result.exit_code == 0
+    assert captured["cfg"].enable_apply is True and captured["cfg"].strict is True

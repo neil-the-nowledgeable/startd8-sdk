@@ -344,6 +344,11 @@ def panel_serve(
     allowed_origin: Optional[List[str]] = typer.Option(
         None, "--allowed-origin", help="Allowed Origin (repeatable; --strict only)."
     ),
+    enable_apply: bool = typer.Option(
+        False, "--enable-apply",
+        help="Enable the FR-R7 apply WRITE gate (/stakeholders/apply/{preview,ratify}). Writes the "
+             "project source of record — REQUIRES --strict (the routes 403 otherwise).",
+    ),
 ) -> None:
     """Serve the stakeholder-run endpoint so the Digital Project Workbook can trigger runs (PAID).
 
@@ -365,6 +370,15 @@ def panel_serve(
     manager = BudgetManager(CostStore(root / ".startd8" / "costs.db"))
     ensure_daily_ceiling(manager, limit_usd=daily_ceiling)
 
+    # FR-R7 c: the apply write gate is MANDATORY-strict. Refuse the footgun of --enable-apply without
+    # --strict (the routes would 403 every request) — fail loud at startup, not silently at request time.
+    if enable_apply and not strict:
+        console.print(
+            "[red]stakeholders serve:[/red] --enable-apply requires --strict (the apply routes enforce "
+            "an Origin allow-list + replay nonce). Re-run with --strict and at least one --allowed-origin."
+        )
+        raise typer.Exit(2)
+
     cfg = RunServerConfig(
         project_root=root,
         token=tok,
@@ -372,11 +386,17 @@ def panel_serve(
         budget_manager=manager,
         strict=strict,
         allowed_origins=tuple(allowed_origin or ()),
+        enable_apply=enable_apply,
     )
     console.print(f"[bold]stakeholders serve[/bold] — http://{host}:{port}  (daily ceiling ${daily_ceiling:.2f})")
     console.print(f"  token: [cyan]{tok}[/cyan]  [dim](send as `Authorization: Bearer <token>`)[/dim]")
     if strict:
         console.print("  [dim]strict mode: Origin allow-list + replay nonce enforced[/dim]")
+    if enable_apply:
+        console.print(
+            "  [yellow]⚠ APPLY GATE ENABLED[/yellow] — /stakeholders/apply/{preview,ratify} can WRITE the "
+            "project source of record (token-gated, not human-proof)."
+        )
     console.print(
         "  [yellow]⚠ PAID endpoint[/yellow] — runs spend LLM; every answer is [yellow]SYNTHETIC & "
         "UNRATIFIED[/yellow]. Ctrl-C to stop."

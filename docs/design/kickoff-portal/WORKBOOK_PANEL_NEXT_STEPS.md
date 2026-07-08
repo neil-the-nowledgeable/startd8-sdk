@@ -74,6 +74,10 @@ in the UI). **Backend gate ✅ built** (branch `feat/workbook-pipeline-apply`); 
 ### 4. M-pilot — household end-to-end + verdict
 - [ ] Real run → triage → stage → accept → serialize → negotiate → apply-**preview** on household;
       apply's **actual write only on a throwaway project**. Written verdict.
+- **Runbook:** `M_PILOT_RUNBOOK.md` (Track A = CLI, Track B = HTTP gate, gate-behavior checks, verdict
+      template, + the honest "can I do this all in Grafana?" answer). Operator-run.
+- ✅ **Enabler shipped:** `startd8 kickoff stakeholders serve --enable-apply` (requires `--strict`) so the
+      HTTP apply gate is reachable from the CLI (was `enable_apply`-only in config).
 
 ---
 
