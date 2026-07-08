@@ -20,7 +20,7 @@ the running to-do; the FR/AC detail lives in those specs.
 | Every named seam grep-verified (Reference Audit) | ✅ |
 | **CRP (Phase 5)** — R1 run + triaged (19 suggestions, all accepted & merged) | ✅ done |
 | **M2 inference spike** — rung-3 reproduces the michigan `department_budgets` golden vs the REAL emitter (12/12 GREEN) | ✅ done — `spike/spike_inference.py` |
-| **Production code (`src/`)** | ⛔ not started — the spike is the M2 seed |
+| **Production code (`src/startd8/tsdb_maturation/`)** — M0→M7 all shipped | ✅ **DONE** — 143 tests green |
 
 > **Spike verdict (2026-07-08, GREEN, committed `6e543fe4` on `spike/tsdb-relational-inference`):**
 > inference independently found the exact 5-col identity key (no `*_display` leak), typed
@@ -31,7 +31,8 @@ the running to-do; the FR/AC detail lives in those specs.
 > subset can be coincidentally unique — which is exactly why the F1 golden tie-break + F7 confirmation gate
 > exist (both paths exercised). The correlated-columns case is the first fixture to add when hardening M2.
 
-**Nothing is built.** This is a fully-specced, un-implemented capability.
+**The full pipeline is built** (M0→M7, 143 tests green). Remaining: FR-5 cardinality reduction and
+FR-12 metric-family grouper (the two deferred M2 sub-tasks — additive, separable from the shipped core).
 
 ---
 
@@ -57,40 +58,95 @@ the running to-do; the FR/AC detail lives in those specs.
 Risk is entirely in **M2 (inference)**; M4/M5 are reuse; M0/M1 are proven-pattern ports; M3/M7 are the two
 genuinely-new writers.
 
-- [ ] **M0 — TSDB reader (FR-1).** New `tsdb_maturation/reader.py`: `httpx` instant query +
-      `last_over_time(<m>[<lookback>])` + endpoint config (Grafana proxy **with auth** / direct Mimir) +
-      **empty-result detection** (OQ-6). *Validate vs a recorded fixture or a live/local Mimir.* — **reuse
-      the preserved recon scripts in `spike/recon/` (`tsdb_recon.py` inventory, `tsdb_inspect.py` labels,
-      `tsdb_range.py` query_range→specimen) as the starting shape.**
-- [ ] **M1 — Specimen (FR-2, FR-9).** `specimen.py`: `flatten_series` → durable **raw** JSON + `--dry-run`
-      + `grain` metadata. (Aggregation deferred to M2/M5 — it needs the identity.)
-- [~] **M2 — Inference core (FR-3/4/5/11/12) — THE RISK.** *Core PROVEN by the spike* (`spike_inference.py`,
-      12/12 green): `_infer_scalar_type` (measure→Decimal, labels→String, enums OFF), **direct `EntityGraph`**
-      (the `graph_from_prisma` pattern — NOT `extract_entities`), single-metric `infer_identity` → composite
-      `IdentityKey`, **bookkeeping-collision rename** → valid `schema.prisma` via the real emitter.
-      **Remaining to productionize:** promote to `src/startd8/tsdb_maturation/infer.py`; the **public emitter
-      reserved-names accessor** (R1-S7 — the spike read `_BOOKKEEPING` directly); reduction policy (FR-5);
-      family grouper / member-alignment (FR-12, not in the spike); the **two-gate exit** (R1-S1) as a real
-      test incl. the **negative `*_display` fixture** AND a **correlated-columns fixture** (proves the
-      confirmation gate catches a coincidental key); golden asserts the 4 transforms (R1-S2); replicate
-      `extract_entities` invariants (R1-S8). Golden = `20260313220000_michigan_budget_schema.sql`.
-- [ ] **M2.5 — Confirmation gate (FR-4, R1-S6).** Surface the inferred key next to the golden diff; record
-      a **committed confirmation marker** (kickoff `confirmed.yaml` pattern); re-promote re-confirms if the
-      key changed. Small new milestone between infer (M2) and gate (M4).
-- [ ] **M3 — `imports.yaml` generator (FR-14).** Serialize the inferred `IdentityKey` (+ coerce tags) into
-      an `imports.yaml` that `parse_imports` accepts round-trip. *Without this, `generate backend` emits no
-      importer → `id`-dedup → infinite duplication.* First programmatic manifest writer in the SDK.
-- [ ] **M4 — Gate wiring (FR-7).** Reuse `emit_schema_draft`→`promote_schema` on the M2 graph; surface the
-      inferred identity next to the golden for **confirmation** (OQ-4); refuse empty/unrenderable.
-- [ ] **M5 — Backend + backfill (FR-6, FR-8).** `generate backend --imports <generated>` + `from_json`;
-      records-build **aggregation** (post-identity; **bound to metric additivity** — gauge≠sum, R1-F5).
-      **E2E dedup test (R1-S3):** generated `imports.yaml` → importer dedups on the inferred identity,
-      re-run twice → **0 new rows**. **Key-collapse guard + non-additive negative (R1-S4).** Decimal/
-      DateTime coercion is free (`_COERCE`).
-- [ ] **M6 — CLI (FR-10).** `startd8 promote tsdb <metric>` orchestrating M0→M5, modeled on `generate
-      contract`. `--dry-run` / `--lookback` / `--reduce` / `--identity` / `--endpoint`.
-- [ ] **M7 — Histograms (FR-13).** `_bucket`/`_sum`/`_count` → a percentile/stats table. Isolated + last so
-      it can be dropped without unshipping the core.
+- [x] **M0 — TSDB reader (FR-1).** ✅ **DONE** — `src/startd8/tsdb_maturation/reader.py` (`httpx` instant
+      query + `last_over_time(<m>[<lookback>])`, `GrafanaProxyEndpoint`/`DirectMimirEndpoint`, env/secrets
+      auth). Both CRP hardenings live + tested: **R1-F6** two-way empty split (`EmptyMaterialization`
+      pruned-refuse vs `MetricNotFound` config/typo — distinct exception types) and **R1-F11** 401/403 →
+      distinct `AuthError` short-circuiting *before* the index lookup (auth cannot masquerade as an empty
+      refuse). **R1-S5** family fan-out (`read_family`, one query per member) gives M2/FR-12 its read
+      capability. 19 tests green (`tests/unit/tsdb_maturation/test_reader.py`, `httpx.MockTransport`, no live
+      TSDB). Recon scripts preserved at `spike/recon/` (`tsdb_recon.py` inventory, `tsdb_inspect.py` labels,
+      `tsdb_range.py` query_range→specimen; the starting shape M0 generalized onto `httpx`).
+- [x] **M1 — Specimen (FR-2, FR-9).** ✅ **DONE** — `src/startd8/tsdb_maturation/specimen.py`:
+      `flatten_series` (one raw record per series `{<label>…, "value", "observed_at"}`), durable atomic
+      JSON (`write_specimen`/`load_specimen`), and `summarize` (dry-run counts + per-label cardinality +
+      sample). **R1-F9 raw invariant** enforced (`n_records == len(series)`, `aggregated=False`) + the FR-4
+      input guard `Specimen.assert_raw()` (aggregated specimen → raises, pinning specimen→identity→aggregate,
+      no cycle). **FR-9 grain honesty**: `Grain.coerce` defaults unknown/missing to least-trusted
+      `tsdb_aggregate` (never inflates to `import_source`); TSDB reads default least-trusted, lossless via
+      `from_records`. Reserved-key (`value`/`observed_at`) label collision refused loudly. 17 tests green;
+      E2E-verified against the preserved recon specimen (28 records, high-card `project` surfaced for FR-5).
+      (Aggregation still deferred to M5 — it needs the identity.)
+- [~] **M2 — Inference core (FR-3/4/11 DONE; FR-5/FR-12 remaining) — THE RISK.** ✅ **Core SHIPPED** —
+      `src/startd8/tsdb_maturation/infer.py` (`infer_schema` consuming an M1 `Specimen`). All spike
+      productionization items landed: **R1-S7** public emitter accessor `reserved_field_names()` (no more
+      private `_BOOKKEEPING` read; contract-tested against the injection set); **R1-S8** direct-graph
+      invariant guard `assert_graph_invariants` (vocab/reserved/dupe/unique-declared + emitter-clean parity);
+      **R1-F1** deterministic identity tie-break (fewest cols → golden → lexicographic); **R1-F2** display
+      exclusion; **R1-F8** measure-name collision suffix; **R1-F9** raw-specimen input via `assert_raw`;
+      **R1-F10** rename-collision check. **The two-gate golden test (R1-S1)** is live
+      (`test_infer_golden.py`): gate (a) structural + gate (b) identity==michigan `CONFLICT_COLUMNS`, the
+      **negative `*_display` fixture**, and the **correlated-columns fixture** (proves a coincidental smaller
+      key slips past structural inference → the M2.5/M4 confirmation gate is load-bearing, not cosmetic).
+      **R1-S2** four expected transforms asserted post-normalization. 33 M2 tests green (69 in the package);
+      golden = `20260313220000_michigan_budget_schema.sql`. **Remaining M2 sub-tasks:** FR-5 reduction policy
+      (auto top-N + loud warning, OQ-3) and FR-12 family grouper / member-alignment (multi-measure tables) —
+      both additive and separable from the load-bearing identity risk, deferred to a follow-on slice.
+- [x] **M2.5 — Confirmation gate (FR-4, R1-S6).** ✅ **DONE** —
+      `src/startd8/tsdb_maturation/confirmation.py`, modeled on the kickoff `confirmed.yaml`
+      committed-ledger pattern. Committed ledger at `docs/tsdb-maturation/confirmed.yaml` (outside any
+      scanner glob), keyed by metric → confirmed identity. `confirmation_status` →
+      CONFIRMED/UNCONFIRMED/**STALE** (key changed); `require_confirmation` is the hard gate M4 calls
+      (raises `ConfirmationRequired` unless the current key is confirmed); `record_confirmation`/
+      `confirm_inference` write the marker; `render_confirmation_surface` shows the inferred key next to
+      the golden diff (R1-F7). **R1-S6 three-case acceptance green**: unconfirmed→refused, confirmed→allowed,
+      key-changed-on-re-promote→re-confirm. Order-insensitive (composite key = set); tolerant ledger IO
+      (absent/malformed → empty). 14 tests green (83 in the package).
+- [x] **M3 — `imports.yaml` generator (FR-14).** ✅ **DONE** —
+      `src/startd8/tsdb_maturation/imports_writer.py`, the first programmatic manifest writer in the SDK.
+      `generate_imports_yaml([InferenceResult])` serializes the inferred identity into an `imports.yaml`
+      (`format: json` + composite/field `identity:`) that `parse_imports` accepts. **R1-F3 semantic
+      round-trip contract enforced** (self-checks its own output: `parse_imports(generate(key)).identity ==
+      key` on kind + ordered cols; fails loud on drift). **Smoke-verified against the real `render_import`**:
+      the generated manifest bakes a **composite** `_IDENTITY` into the importer, NOT `id` — so TSDB rows
+      (no stable `id`) dedup on the inferred columns instead of infinitely duplicating. Decimal/DateTime
+      coercion is free (`_COERCE`). 18 tests green (101 in the package). The E2E dedup proof (R1-S3, re-run
+      twice → 0 new rows) lands with M5.
+- [x] **M4 — Gate wiring (FR-7).** ✅ **DONE** — `src/startd8/tsdb_maturation/gate.py`,
+      `gate_and_promote(...)  → PromotionResult`. Reuses `emit_schema_draft`→`promote_schema` on the M2
+      graph verbatim; **enforces the M2.5 confirmation** (UNCONFIRMED/STALE → refuse; `require_confirmed=
+      False` for a `--force` caller, status still reported); **refuses empty materialization** (OQ-6, before
+      any gate work); **greenfield gate** = round-trip + non-empty + no-unrenderable (un-typeable label →
+      `UnrenderableField`, never silently dropped); **re-promote computes parity drift** (schema evolution →
+      refuse on divergence). Flips `prisma/schema.prisma` only on pass; surfaces the inferred identity every
+      time (`render_confirmation_surface`). Returns a uniform result (never raises on a refusal) for clean
+      CLI exit-code mapping. 9 tests green (110 in the package) incl. the re-promote parity-drift path.
+- [x] **M5 — Backend + backfill (FR-6, FR-8).** ✅ **DONE** — `src/startd8/tsdb_maturation/backfill.py`:
+      `build_payload`/`records_to_json` map the raw specimen → the `from_json` importer payload (emitted
+      field names; measure as canonical Decimal string; renamed-label values preserved). **FR-6 key-collapse
+      aggregation bound to additivity (R1-F5)**: `classify_additivity` (`_amount`/`_total`/`_sum`/`_count`→
+      additive→`sum`; unknown/gauge→fail-safe `last`+loud warning; explicit `aggregate=` override wins).
+      **R1-S3 E2E dedup proof green** (`test_backfill_e2e.py`): infer→`imports.yaml`→**real `render_backend`**
+      →run generated `from_json` **twice** → **0 new rows**, table stable at 16, composite `_IDENTITY` baked
+      (not `id`); Decimal/DateTime coerce back. **R1-S4 guards green**: additive collision → exact Decimal
+      sum (0.1+0.2=0.3, no last-writer-wins loss); gauge collision → NOT summed (`last`+warning). 24 tests
+      (14 unit + 10 E2E; 124 in the package).
+- [x] **M6 — CLI (FR-10).** ✅ **DONE** — `src/startd8/cli_tsdb.py`, `startd8 promote tsdb <metric>`
+      orchestrating M0→M5 (registered in `cli.py`). Two input modes: `--specimen <file>` (recorded M1
+      JSON — the tested path, gov series pruned) or `--endpoint`/`--datasource-uid`/`--direct` (live M0).
+      Flow flags: `--dry-run` (read→infer→surface, write nothing), `--confirm` (record the M2.5 marker),
+      default = gate+promote → write `imports.yaml` + backend + `backfill-<entity>.json`; `--force` bypasses
+      confirmation; `--identity`/`--entity`/`--lookback`/`--aggregate` pass through; `--reduce` errors
+      (FR-5 deferred). Exit codes 0 ok / 1 refused / 2 input-error. 8 CLI tests green (132 in the package)
+      via `CliRunner`, incl. the full confirm→promote→generate-app path.
+- [x] **M7 — Histograms (FR-13).** ✅ **DONE** — `src/startd8/tsdb_maturation/histogram.py`, a **distinct
+      inference path**. `detect_histogram_family` (`_bucket`/`_sum`/`_count` triple); `histogram_quantile`
+      (Prometheus cumulative-bucket linear interpolation, validated against known values); `compute_histogram_
+      stats` (per-identity count/sum/mean + percentiles); `infer_histogram_schema` → a **stats table**
+      (identity labels + `count`/`sum`/`mean`/`p50`/`p90`/`p95`/`p99` + `observedAt`) via the real emitter;
+      `histogram_payload` for backfill. **Scope boundary (the R1 line-380 gap)**: fixed default percentiles,
+      `le` consumed not a column, identity = non-`le` labels, cumulative-bucket assumption with monotonic
+      clamp. 11 tests green (143 in the package). Isolated — droppable without touching the core.
 
 **Recommended first move:** M0 → M1 → **M2 with the golden test up front** (write the
 `department_budgets` assertion *before* the inference code, so rung 3 is red-green against real DDL). M3
@@ -111,9 +167,9 @@ This single test is the empirical proof of rung 3.
 
 ## Cross-cutting / dependencies
 
-- **CRP (Phase 5) not yet run.** The docs are hardened + OQ-clean. CRP target = the requirements; focus =
-  the inference core (FR-3/4/11/12). Offered; run before M2 if desired (the inference is the part most
-  worth an external read).
+- **CRP (Phase 5) — done.** R1 ran + triaged (19 suggestions, all accepted & merged; see the "Where we
+  are" table). The docs are hardened + OQ-clean; the R1 findings referenced throughout (R1-Fn / R1-Sn) are
+  the accepted set. No further CRP round is gating the build.
 - **The gov data is not in `o11y-dev` Mimir** (retention-pruned; recon confirmed 0 samples). M0/M2
   validation should use **a recorded specimen fixture** (or re-push from the michigan CSVs into a local
   Mimir — "an import away"), not assume live gov series.
