@@ -458,6 +458,20 @@ local config = (import '../config.libsonnet')._config;
     },
   },
 
+  // Dashboard-list panel: links to dashboards carrying any of `tags` (Workbook portfolio index, FR-11).
+  // No datasource/targets — Grafana resolves the tag filter at view time, so the list is self-updating.
+  dashlist(title, tags=[], showSearch=false, showHeadings=true):: {
+    title: title,
+    type: 'dashlist',
+    options: {
+      showSearch: showSearch,
+      showHeadings: showHeadings,
+      showStarred: false,
+      showRecentlyViewed: false,
+      tags: tags,
+    },
+  },
+
   // --- Phase 5: new panel types ------------------------------------------
 
   // Geomap (markers layer; size/color by field)

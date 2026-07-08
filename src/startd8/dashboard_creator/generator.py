@@ -120,27 +120,25 @@ def generate_dashboard_jsonnet(
     )
     shared_crosshair = n_timeseries >= 2
 
-    # Merge block fields (templating, links, graphTooltip)
-    has_merge = bool(spec.variables) or bool(spec.links) or shared_crosshair
-    if has_merge:
-        lines.append(") {")
-        if shared_crosshair:
-            lines.append("  graphTooltip: 1,")
-        if spec.variables:
-            lines.append("  templating: {")
-            lines.append("    list: [")
-            for var in spec.variables:
-                lines.append(f"      {_render_variable(var)},")
-            lines.append("    ],")
-            lines.append("  },")
-        if spec.links:
-            lines.append("  links: [")
-            for link in spec.links:
-                lines.append(f"    {_render_dashboard_link(link)},")
-            lines.append("  ],")
-        lines.append("};")
-    else:
-        lines.append(");")
+    # Merge block fields. ALWAYS emit a `templating.list` (empty when there are no variables) so every
+    # generated dashboard carries the key Grafana + the post-compile JSON validation require — a
+    # variable-less dashboard (e.g. the FR-11 dashlist index) is valid. Output is byte-identical for
+    # specs that have variables (the list is populated exactly as before).
+    lines.append(") {")
+    if shared_crosshair:
+        lines.append("  graphTooltip: 1,")
+    lines.append("  templating: {")
+    lines.append("    list: [")
+    for var in spec.variables:
+        lines.append(f"      {_render_variable(var)},")
+    lines.append("    ],")
+    lines.append("  },")
+    if spec.links:
+        lines.append("  links: [")
+        for link in spec.links:
+            lines.append(f"    {_render_dashboard_link(link)},")
+        lines.append("  ],")
+    lines.append("};")
 
     lines.append("")
 
@@ -174,6 +172,22 @@ def _render_panel(panel: PanelSpec) -> str:
     if ptype == PanelType.TEXT:
         content = _escape_jsonnet_string(panel.options.get("content", ""))
         call = f"panels.text('{_escape_jsonnet_string(panel.title)}', '{content}')"
+        merge_block = _render_merge_block(panel)
+        if merge_block:
+            call += f" {merge_block}"
+        return call
+
+    if ptype == PanelType.DASHLIST:
+        # A link-list of dashboards by tag (FR-11). No targets/datasource; tags + toggles from options.
+        opts = panel.options or {}
+        tags = opts.get("tags", []) or []
+        tags_lit = "[" + ", ".join(f"'{_escape_jsonnet_string(str(t))}'" for t in tags) + "]"
+        show_search = "true" if opts.get("showSearch") else "false"
+        show_headings = "false" if opts.get("showHeadings") is False else "true"
+        call = (
+            f"panels.dashlist('{_escape_jsonnet_string(panel.title)}', "
+            f"tags={tags_lit}, showSearch={show_search}, showHeadings={show_headings})"
+        )
         merge_block = _render_merge_block(panel)
         if merge_block:
             call += f" {merge_block}"

@@ -30,6 +30,7 @@ class PanelType(str, Enum):
     TRACEQL_GAUGE = "traceqlGauge"
     TRACES = "traces"
     TEXT = "text"
+    DASHLIST = "dashlist"  # link-list of dashboards by tag (Workbook portfolio index, FR-11)
     # Phase 5 — new panel types (gap analysis backlog)
     GEOMAP = "geomap"
     CANVAS = "canvas"
@@ -144,6 +145,8 @@ class PanelSpec(BaseModel):
             if "content" not in self.options:
                 raise ValueError("Text panels require options.content")
             return self
+        if self.type == PanelType.DASHLIST:
+            return self  # dashlist links by tag — no expr/query/targets (FR-11)
         has_single = self.expr is not None or self.query is not None
         has_multi = self.targets is not None and len(self.targets) > 0
         if not has_single and not has_multi:

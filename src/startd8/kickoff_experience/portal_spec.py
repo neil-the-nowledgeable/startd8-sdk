@@ -19,9 +19,76 @@ Design (docs/design/kickoff-portal/):
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Tuple
 
 from .state import KickoffState
+
+# --- UID / slug (FR-5) -----------------------------------------------------------------------------
+# The Workbook UID is derived 1:1 from the project name by this single named function (the Reference
+# Audit pins it). The literal ``index`` slug is RESERVED for the portfolio-index dashboard (FR-11) so a
+# project can never collide with it.
+WORKBOOK_TAG = "workbook"  # FR-11 contract: every Workbook carries this tag (the index dashlist filters on it)
+INDEX_UID = "cc-portal-kickoff-index"
+INDEX_TITLE = "Digital Project Workbooks — Index"
+RESERVED_INDEX_SLUG = "index"
+
+
+class WorkbookSlugError(ValueError):
+    """A project name cannot be turned into a valid, non-reserved Workbook UID (FR-5)."""
+
+
+def slugify_project(project: str) -> str:
+    """Deterministic slug: lowercase, ``_``/space → ``-``, drop other chars, collapse/trim ``-``."""
+    s = (project or "").strip().lower().replace("_", "-").replace(" ", "-")
+    s = re.sub(r"[^a-z0-9-]", "", s)
+    return re.sub(r"-+", "-", s).strip("-")
+
+
+def workbook_uid(project: str) -> str:
+    """Return ``cc-portal-kickoff-{slug}``; raise :class:`WorkbookSlugError` on empty/reserved (FR-5)."""
+    slug = slugify_project(project)
+    if not slug:
+        raise WorkbookSlugError(
+            f"project name {project!r} slugifies to empty — cannot form a Workbook UID"
+        )
+    if slug == RESERVED_INDEX_SLUG:
+        raise WorkbookSlugError(
+            f"project name {project!r} slugifies to the reserved '{RESERVED_INDEX_SLUG}', which collides "
+            f"with the portfolio-index UID {INDEX_UID!r}. Rename the project."
+        )
+    return f"cc-portal-kickoff-{slug}"
+
+
+def build_workbook_index_spec() -> Dict[str, Any]:
+    """Build the portfolio-index ``DashboardSpec`` (FR-11): a single ``dashlist`` filtered to the
+    ``workbook`` tag. Self-updating — Grafana resolves the tag at view time — so it is a singleton
+    generated once (idempotent UID) and never regenerated when a new project appears. Deterministic, $0.
+    """
+    return {
+        "title": INDEX_TITLE,
+        "uid": INDEX_UID,
+        "description": (
+            "Portfolio index of every project's Digital Project Workbook. The list is a Grafana "
+            f"dashlist filtered to the '{WORKBOOK_TAG}' tag — it stays current automatically as "
+            "projects are created ($0, deterministic; no per-project registry)."
+        ),
+        "tags": ["portal", "kickoff", WORKBOOK_TAG, "index"],
+        "panels": [
+            {
+                "type": "dashlist",
+                "title": "Project Workbooks",
+                "options": {
+                    "tags": [WORKBOOK_TAG],
+                    "showHeadings": True,
+                    "showSearch": False,
+                },
+            }
+        ],
+        "variables": [],
+        "links": [],
+    }
+
 
 # canonical attention -> (emoji, short label). Attention is derived once in state.py; we never
 # re-derive it here (parity guarantee).
@@ -69,7 +136,9 @@ def _manifest_sort_key(manifest: str):
     return (1, manifest)
 
 
-def _overview_panels(state: KickoffState, by_manifest: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
+def _overview_panels(
+    state: KickoffState, by_manifest: Dict[str, List[Any]]
+) -> List[Dict[str, Any]]:
     ac = state.attention_counts
     total = len(state.fields) or 1
     ok = ac.get("ok", 0)
@@ -93,9 +162,16 @@ def _overview_panels(state: KickoffState, by_manifest: Dict[str, List[Any]]) -> 
     )
 
     panels: List[Dict[str, Any]] = [
-        {"type": "text", "title": "Digital Project Workbook", "options": {"content": intro}, "group": "Overview"},
         {
-            "type": "gauge", "title": "Fields Confirmed", "expr": f"vector({ok_ratio:.4f})",
+            "type": "text",
+            "title": "Digital Project Workbook",
+            "options": {"content": intro},
+            "group": "Overview",
+        },
+        {
+            "type": "gauge",
+            "title": "Fields Confirmed",
+            "expr": f"vector({ok_ratio:.4f})",
             "unit": "percentunit",
             "thresholds": [
                 {"value": None, "color": "red"},
@@ -105,9 +181,14 @@ def _overview_panels(state: KickoffState, by_manifest: Dict[str, List[Any]]) -> 
             "group": "Overview",
         },
         {
-            "type": "stat", "title": "Open Gaps (author action)", "expr": f"vector({blocked})",
+            "type": "stat",
+            "title": "Open Gaps (author action)",
+            "expr": f"vector({blocked})",
             "unit": "short",
-            "thresholds": [{"value": None, "color": "green"}, {"value": 1, "color": "red"}],
+            "thresholds": [
+                {"value": None, "color": "green"},
+                {"value": 1, "color": "red"},
+            ],
             "group": "Overview",
         },
     ]
@@ -115,21 +196,27 @@ def _overview_panels(state: KickoffState, by_manifest: Dict[str, List[Any]]) -> 
         fields = by_manifest.get(manifest)
         if not fields:
             continue
-        panels.append({
-            "type": "stat", "title": f"{slug} · confirmed",
-            "expr": f"vector({_confirmed_ratio(fields):.4f})", "unit": "percentunit",
-            "thresholds": [
-                {"value": None, "color": "red"},
-                {"value": 0.75, "color": "yellow"},
-                {"value": 0.95, "color": "green"},
-            ],
-            "group": "Overview",
-        })
+        panels.append(
+            {
+                "type": "stat",
+                "title": f"{slug} · confirmed",
+                "expr": f"vector({_confirmed_ratio(fields):.4f})",
+                "unit": "percentunit",
+                "thresholds": [
+                    {"value": None, "color": "red"},
+                    {"value": 0.75, "color": "yellow"},
+                    {"value": 0.95, "color": "green"},
+                ],
+                "group": "Overview",
+            }
+        )
     return panels
 
 
 def _manifest_section(manifest: str, fields: List[Any]) -> Dict[str, Any]:
-    ordered = sorted(fields, key=lambda f: (_ATTENTION_SORT.get(f.attention, 9), f.value_path))
+    ordered = sorted(
+        fields, key=lambda f: (_ATTENTION_SORT.get(f.attention, 9), f.value_path)
+    )
     slug = _MANIFEST_DOMAIN.get(manifest)
     lines: List[str] = []
     if slug:
@@ -138,7 +225,12 @@ def _manifest_section(manifest: str, fields: List[Any]) -> Dict[str, Any]:
 
         ex = explain_input_domain(slug)
         title = ex["label"]
-        lines += [f"### {ex['label']} — _{ex['question']}_", "", f"**Who:** {ex['who']}", ""]
+        lines += [
+            f"### {ex['label']} — _{ex['question']}_",
+            "",
+            f"**Who:** {ex['who']}",
+            "",
+        ]
     else:
         title = manifest.replace(".yaml", "")
         lines += [f"### {title}", ""]
@@ -186,7 +278,9 @@ def _latest_run_lines(panel_results: List[Dict[str, Any]]) -> List[str]:
     return lines
 
 
-def _stakeholders_section(roster: Any, panel_results: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
+def _stakeholders_section(
+    roster: Any, panel_results: List[Dict[str, Any]] | None = None
+) -> Dict[str, Any]:
     """Render the Stakeholders section — the panel's roster + latest run (a key part of the Workbook).
 
     ``roster`` is a loaded ``Roster`` (duck-typed: ``.personas`` with ``.role_id``/``.display_name``/
@@ -222,8 +316,12 @@ def _stakeholders_section(roster: Any, panel_results: List[Dict[str, Any]] | Non
             "confirm with a human before relying on them).",
         ]
     lines += _latest_run_lines(panel_results or [])
-    return {"type": "text", "title": "Stakeholders", "options": {"content": "\n".join(lines)},
-            "group": "Stakeholders"}
+    return {
+        "type": "text",
+        "title": "Stakeholders",
+        "options": {"content": "\n".join(lines)},
+        "group": "Stakeholders",
+    }
 
 
 def _apply_status(pipeline: Dict[str, Any]) -> str:
@@ -250,14 +348,23 @@ def _pipeline_section(pipeline: Dict[str, Any] | None) -> Dict[str, Any]:
         "changes: triage → staged → VIPP inbox → dispositions → apply._",
         "",
     ]
-    if not pipeline or not any((pipeline.get("staged"), (pipeline.get("inbox") or {}).get("present"),
-                               (pipeline.get("dispositions") or {}).get("present"))):
+    if not pipeline or not any(
+        (
+            pipeline.get("staged"),
+            (pipeline.get("inbox") or {}).get("present"),
+            (pipeline.get("dispositions") or {}).get("present"),
+        )
+    ):
         lines += [
             "**No pipeline activity yet.** Run the panel, then `startd8 kickoff stakeholders propose "
             "--run` (stage) → `--serialize` (to VIPP) → `startd8 vipp negotiate` → `vipp apply`.",
         ]
-        return {"type": "text", "title": "Panel Processing Pipeline",
-                "options": {"content": "\n".join(lines)}, "group": "Panel Pipeline"}
+        return {
+            "type": "text",
+            "title": "Panel Processing Pipeline",
+            "options": {"content": "\n".join(lines)},
+            "group": "Panel Pipeline",
+        }
 
     staged = pipeline.get("staged") or []
     disp = pipeline.get("dispositions") or {}
@@ -275,8 +382,11 @@ def _pipeline_section(pipeline: Dict[str, Any] | None) -> Dict[str, Any]:
         "",
     ]
     if staged:
-        lines += ["#### Staged recommendations", "| Field | Disposition | Grounding | Draft value |",
-                  "|---|---|---|---|"]
+        lines += [
+            "#### Staged recommendations",
+            "| Field | Disposition | Grounding | Draft value |",
+            "|---|---|---|---|",
+        ]
         for r in staged:
             lines.append(
                 f"| `{_md_escape(r.get('value_path', ''))}` | {_md_escape(r.get('disposition', 'draft'))} "
@@ -285,19 +395,35 @@ def _pipeline_section(pipeline: Dict[str, Any] | None) -> Dict[str, Any]:
         lines.append("")
     items = disp.get("items") or []
     if items:
-        ev = "" if disp.get("evidence_available", True) else " _(evidence unavailable — degraded/narrative)_"
-        lines += [f"#### VIPP dispositions{ev}", "| Proposal | Decision | Reason |", "|---|---|---|"]
+        ev = (
+            ""
+            if disp.get("evidence_available", True)
+            else " _(evidence unavailable — degraded/narrative)_"
+        )
+        lines += [
+            f"#### VIPP dispositions{ev}",
+            "| Proposal | Decision | Reason |",
+            "|---|---|---|",
+        ]
         for it in items:
             lines.append(
                 f"| `{_md_escape(str(it.get('proposal_id', ''))[:12])}` | {_md_escape(it.get('decision', ''))} "
                 f"| {_value_snippet(it.get('reason', ''), 80)} |"
             )
         lines.append("")
-    for adv in disp.get("advisories") or []:  # anti-anchoring: show the question next to the advisory
+    for adv in (
+        disp.get("advisories") or []
+    ):  # anti-anchoring: show the question next to the advisory
         q = _md_escape(adv.get("question", adv.get("symbol", "")))
-        lines += [f"> _Panel advisory (SYNTHETIC) re: {q}:_ {_value_snippet(adv.get('advisory', adv.get('text', '')), 160)}"]
-    return {"type": "text", "title": "Panel Processing Pipeline",
-            "options": {"content": "\n".join(lines)}, "group": "Panel Pipeline"}
+        lines += [
+            f"> _Panel advisory (SYNTHETIC) re: {q}:_ {_value_snippet(adv.get('advisory', adv.get('text', '')), 160)}"
+        ]
+    return {
+        "type": "text",
+        "title": "Panel Processing Pipeline",
+        "options": {"content": "\n".join(lines)},
+        "group": "Panel Pipeline",
+    }
 
 
 def build_kickoff_portal_spec(
@@ -326,17 +452,23 @@ def build_kickoff_portal_spec(
     if pipeline is not None:
         panels.append(_pipeline_section(pipeline))
 
-    uid_project = project.lower().replace("_", "-").replace(" ", "-")
     return {
         "title": f"{project} — Digital Project Workbook",
-        "uid": f"cc-portal-kickoff-{uid_project}",
+        "uid": workbook_uid(project),  # FR-5: 1:1 named slug, reserves `index`
         "description": (
             f"Digital Project Workbook for {project} — canonical KickoffState projected to Grafana "
             f"($0, deterministic; dynamic/query-based). Re-run `startd8 kickoff portal` to refresh."
         ),
-        "tags": ["portal", "kickoff", "workbook", project],
+        # FR-11 contract: WORKBOOK_TAG MUST be present — the portfolio index dashlist filters on it.
+        "tags": ["portal", "kickoff", WORKBOOK_TAG, project],
         "panels": panels,
         # prometheusDatasource var: required by the stat/gauge panels + the workflow's templating check
-        "variables": [{"type": "prometheusDatasource", "name": "datasource", "label": "Data Source"}],
+        "variables": [
+            {
+                "type": "prometheusDatasource",
+                "name": "datasource",
+                "label": "Data Source",
+            }
+        ],
         "links": [],
     }
