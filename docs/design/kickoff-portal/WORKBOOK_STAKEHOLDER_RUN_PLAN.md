@@ -40,7 +40,16 @@ fail-closed budget gate + real auth; never runs the LLM in Grafana.
 - **Exit:** dry-run returns the honest estimate + a `run_key`; a confirmed run (echoing the run_key)
   persists a transcript + returns its `session_id`; no budget configured → refuses.
 
-## M1 — Plugin: fork owl workflow-panel (new render path + run_key + token proxy)
+## M1 — Plugin: fork owl workflow-panel — SOURCE BUILT (provisioning = operator/NR-10)
+
+**Status:** `grafana-plugins/kickoff-stakeholders-panel/` — forked, rewritten `src/`, typecheck clean,
+`npm run build` succeeds (`dist/module.js`). Implements: question+cap input, dry-run→confirm with the
+**run_key echoed** (the base ignored it), per-persona **UNRATIFIED** render (base rendered run-steps),
+and **datasource-proxy token routing** (base sent no creds — token via `secureJsonData`, never in the
+panel/dashboard JSON). **NOT provisioned** to the shared KinD Grafana — that needs the unsigned
+allow-list + a restart affecting the online-boutique dashboards (NR-10), an operator step (see the
+plugin README).
+
 
 **Goal:** trigger + honest dry-run preview + confirm modal + status poll + render answers.
 - **Token delivery is a hard EXIT GATE (S-3):** the base plugin's `fetch()` sends **no credentials**, and

@@ -1,0 +1,18 @@
+{
+  "type": "panel",
+  "name": "StartD8 Kickoff Stakeholders",
+  "id": "startd8-stakeholders-panel",
+  "info": {
+    "description": "Run the stakeholder panel (dry-run → confirm → per-persona answers) from the Digital Project Workbook. Paid; answers are synthetic and unratified.",
+    "author": {
+      "name": "StartD8"
+    },
+    "keywords": ["kickoff", "stakeholders", "workbook", "startd8", "panel"],
+    "version": "1.0.0",
+    "updated": "2026-07-07"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=10.0.0",
+    "plugins": []
+  }
+}
