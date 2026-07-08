@@ -33,7 +33,7 @@ export interface PanelAnswerView {
 /** Confirmed-run result — mirrors stakeholder_run.RunResult.to_dict(). */
 export interface RunResult {
   session_id: string;
-  status: string; // "completed" | "deduped" | "partial"
+  status: string; // "completed" | "deduped" | "partial" | "cancelled"
   run_key: string;
   answers: PanelAnswerView[];
   note?: string;
