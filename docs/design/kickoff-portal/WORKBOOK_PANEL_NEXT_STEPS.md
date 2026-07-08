@@ -55,19 +55,21 @@ Extended `stakeholder_run_server.py` with `$0` routes, each threading **through 
 
 ### 3. M-apply — the gate (rebuilt, token-gated; most-guarded, LAST)
 Per FR-R7 v0.4. **Apply is token-gated, not human-proof** (a real HTTP human gate is impossible — say so
-in the UI).
-- [ ] **preview** (`POST …/apply/preview`) — **PURE reconstruct** the would-apply set from inbox +
-      dispositions; **NEVER call `apply_dispositions`** (it mutates the cursor / can shred the inbox).
-      **AC: `vipp-cursor.json` + inbox byte-identical after preview.** Return a **stateless HMAC challenge**
-      over `{envelope_seq, content-hash, expiry}` (per-server key; single-use).
-- [ ] **ratify** (`POST …/apply/ratify`) — `{proposal_ids, challenge}`; verify HMAC; **refuse if live
-      inbox seq ≠ the challenge's** (concurrent negotiate → stale → re-preview); then
-      `apply_dispositions(confirm=…)` True only for the listed ids. **`force` never exposed**;
-      **`strict=True` mandatory**; wrap with an explicit `resolve_confined_root` (apply doesn't confine itself).
+in the UI). **Backend gate ✅ built** (branch `feat/workbook-pipeline-apply`); plugin flow + pilot remain.
+- [x] **preview** (`POST …/apply/preview`) — new **pure** `preview_dispositions()` in `vipp/apply.py`
+      reconstructs the would-apply set with **zero writes** (never calls `apply_dispositions`), co-located
+      so it shares `_reconstruct`. **AC proven byte-identical** — a unit test drives the F-1 all-REJECT
+      shred trap and asserts inbox + `vipp-cursor.json` unchanged. Returns a **stateless HMAC challenge**
+      over `{envelope_seq, content-hash, expiry}` (per-project persisted key; single-use).
+- [x] **ratify** (`POST …/apply/ratify`) — `{proposal_ids, challenge}`; verify HMAC + expiry;
+      **single-use consumed first** (persisted, survives restart); **refuse if live inbox seq ≠ challenge's
+      OR content-hash changed** (concurrent re-post → stale → re-preview); then `apply_dispositions(confirm=…)`
+      True only for the listed ids. **`force` never exposed**; **`strict=True` mandatory** (+ off unless
+      `enable_apply`); wraps `resolve_confined_root` explicitly (FR-C5).
 - [ ] Plugin: **two-screen** flow (preview → paste challenge → ratify) + honest banner "token-gated —
-      anyone with the endpoint token can apply."
-- [ ] Tests: preview byte-identical; ratify writes only listed proposals; stale/forged challenge writes
-      nothing; concurrent negotiate forces re-preview.
+      anyone with the endpoint token can apply." *(remaining)*
+- [x] Tests: 17 (6 pure-preview incl. byte-identical + already-consumed exclusion; 11 route incl. disabled
+      →404, non-strict→403, forged/expired→403, stale-seq→409, single-use→409, writes-only-listed-ids).
 
 ### 4. M-pilot — household end-to-end + verdict
 - [ ] Real run → triage → stage → accept → serialize → negotiate → apply-**preview** on household;

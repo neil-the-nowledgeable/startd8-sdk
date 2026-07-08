@@ -28,7 +28,7 @@ from .models import (
     VippReport,
     protocol_is_future,
 )
-from .apply import ApplyResult, apply_dispositions
+from .apply import ApplyResult, PreviewResult, apply_dispositions, preview_dispositions
 from .assistant import NegotiateOutcome, run_vipp_negotiate
 from .evaluate import evaluate_envelope
 from .ground_truth import (
@@ -65,4 +65,6 @@ __all__ = [
     # M4 — applier
     "apply_dispositions",
     "ApplyResult",
+    "preview_dispositions",
+    "PreviewResult",
 ]

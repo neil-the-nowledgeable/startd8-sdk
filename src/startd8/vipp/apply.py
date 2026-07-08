@@ -26,6 +26,8 @@ imports ``ProposedAction``/``apply_proposal`` (the contract models avoid that �
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List, Optional
@@ -80,6 +82,94 @@ def _reconstruct(enveloped: Any, disposition: VippDisposition) -> ProposedAction
     # kind + base_sha ALWAYS from the inbox; only params may carry a COUNTER overlay.
     return ProposedAction(
         kind=enveloped.kind, params=params, id=enveloped.id, base_sha=enveloped.base_sha
+    )
+
+
+@dataclass
+class PreviewResult:
+    """Side-effect-free preview of what :func:`apply_dispositions` WOULD write (FR-R7 preview half)."""
+
+    envelope_seq: int = 0
+    # each: {proposal_id, kind, params, value_path} — the reconstructed, provenance-pinned action
+    would_apply: List[dict] = field(default_factory=list)
+    content_hash: str = ""  # canonical hash of {seq + would-apply set} — the challenge binds this
+    stale: bool = False
+    refused_reason: str = ""
+
+    def summary(self) -> str:
+        if self.refused_reason:
+            return f"nothing to apply: {self.refused_reason}"
+        return f"{len(self.would_apply)} proposal(s) would apply at seq {self.envelope_seq}"
+
+
+def _content_hash(seq: int, would_apply: List[dict]) -> str:
+    """Canonical, order-independent hash of the would-apply set — the FR-R7 challenge content binding."""
+    items = sorted(
+        ({"proposal_id": w["proposal_id"], "kind": w["kind"], "params": w["params"]} for w in would_apply),
+        key=lambda x: x["proposal_id"],
+    )
+    canonical = json.dumps({"seq": seq, "items": items}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def preview_dispositions(project_root: Any) -> PreviewResult:
+    """Reconstruct the would-apply set **purely** — the read-only half of the M-apply gate (FR-R7).
+
+    Mirrors :func:`apply_dispositions`' actionable-selection but performs **zero writes**: it never
+    calls ``record_processed`` or ``shred_inbox``, so ``vipp-cursor.json`` + the inbox are byte-identical
+    afterward (CRP F-1 — the v0.3 preview-via-``confirm→False`` recorded REJECTs as consumed and could
+    shred the inbox on an all-REJECT report). Returns the would-apply set + a canonical content hash the
+    ratify challenge binds to.
+    """
+    project_root = Path(project_root)
+
+    raw_inbox = read_inbox(project_root)
+    if raw_inbox is None:
+        return PreviewResult(refused_reason="no inbox to apply")
+    envelope = ProposalEnvelope.from_json(raw_inbox)
+
+    json_path = context.vipp_dir(project_root) / DISPOSITIONS_JSON
+    if not json_path.exists():
+        return PreviewResult(refused_reason="no dispositions to apply")
+    report = VippReport.from_json(json_path.read_text(encoding="utf-8"))
+
+    # Same FR-18 stale-seq refusal apply_dispositions enforces — a stale preview must not be issued.
+    if report.envelope_seq != envelope.envelope_seq:
+        return PreviewResult(
+            stale=True,
+            envelope_seq=envelope.envelope_seq,
+            refused_reason=(
+                f"dispositions pin envelope_seq {report.envelope_seq} but the inbox is "
+                f"seq {envelope.envelope_seq} — re-negotiate"
+            ),
+        )
+
+    inbox_by_id = {p.id: p for p in envelope.proposals}
+    seq = envelope.envelope_seq
+    would_apply: List[dict] = []
+    for disp in report.dispositions:
+        # REJECT never writes (in the real applier it only records the cursor — a side effect we skip).
+        if disp.decision is Decision.REJECT:
+            continue
+        # Everything else is actionable in apply_dispositions; mirror that exactly.
+        key = f"apply:{disp.proposal_id}:{seq}"
+        if context.already_processed(project_root, key, "consumed"):
+            continue  # already applied under this seq — not in the would-apply set (read-only check)
+        enveloped = inbox_by_id.get(disp.proposal_id)
+        if enveloped is None:
+            continue  # no matching inbox entry → can never apply under this seq
+        action = _reconstruct(enveloped, disp)
+        would_apply.append(
+            {
+                "proposal_id": disp.proposal_id,
+                "kind": action.kind,
+                "params": dict(action.params),
+                "value_path": action.params.get("value_path"),
+            }
+        )
+
+    return PreviewResult(
+        envelope_seq=seq, would_apply=would_apply, content_hash=_content_hash(seq, would_apply)
     )
 
 
