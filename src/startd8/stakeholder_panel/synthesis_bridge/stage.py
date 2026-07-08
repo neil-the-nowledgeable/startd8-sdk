@@ -22,7 +22,6 @@ is the deterministic spine it feeds.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..models import Recommendation
@@ -75,7 +74,7 @@ def serialize_accepted_to_vipp(
     """
     # Imported lazily so the deterministic staging half has no hard dependency on kickoff_experience.
     from startd8.kickoff_experience.proposals import ProposalBuffer, build_proposal
-    from startd8.kickoff_experience.vipp_seam import serialize_buffer
+    from startd8.kickoff_experience.vipp_seam import inbox_path, serialize_buffer
 
     buffer = ProposalBuffer()
     staged: List[str] = []
@@ -92,12 +91,12 @@ def serialize_accepted_to_vipp(
             )
             buffer.add(action)
             staged.append(rec.value_path)
-        except Exception as exc:  # noqa: BLE001 - typed reject (allow-list / round-trip) → report, don't drop
-            rejected.append((rec.value_path, f"{type(exc).__name__}: {exc}"))
+        except ValueError as exc:  # ConciergeInputError/CaptureError (allow-list, round-trip) → report,
+            rejected.append((rec.value_path, f"{type(exc).__name__}: {exc}"))  # never drop; other errors propagate
 
     write = None
     inbox = None
     if staged:
         write = serialize_buffer(buffer, project_root)
-        inbox = str(Path(project_root).expanduser() / ".startd8" / "vipp" / "proposals-inbox.json")
+        inbox = str(inbox_path(project_root))  # vipp_seam owns the inbox path — don't hardcode it (DRY)
     return {"staged": staged, "rejected": rejected, "write": write, "inbox": inbox}
