@@ -1,10 +1,25 @@
 # Panel Synthesis → VIPP Proposals Bridge — Requirements
 
-**Version:** 0.3 (Post lessons-learned hardening — ready for CRP)
+**Version:** 0.4 (Increment 1 built)
 **Date:** 2026-07-07
-**Status:** Draft
+**Status:** Increment 1 (NON-DECIDABLE router) IMPLEMENTED; increment 2 (FIELD-LEVEL → VIPP envelope) deferred
 **Owner:** startd8-sdk
 **Related:** `docs/design/vipp/` (VIPP negotiator/applier), `docs/design/stakeholder-panel/` (panel + proposals), `docs/design/kickoff/` (Concierge host, inbox seam)
+
+> **Implementation status (increment 1 — the always-firing `$0` core).** BUILT in
+> `src/startd8/stakeholder_panel/synthesis_bridge/` (`models`/`extract`/`classify`/`route`) + the
+> `startd8 kickoff-panel triage` CLI. Covers **FR-1, FR-2, FR-3, FR-3a, FR-5, FR-10, FR-14** (extract
+> → classify → route the NON-DECIDABLE lane to a report with reason + owner; nothing dropped; FR-14
+> health check on empty synthesis / unresolved context). Validated on the real archived
+> benchmark-portal synthesis: **35 items triaged, all NON-DECIDABLE, 0 field-level** — confirming the
+> plan's brownfield-yield thesis. 7 tests; suite green.
+>
+> **Decision — OQ-1 revised for increment 1:** extraction is a **deterministic `$0` markdown parse**
+> (not an LLM), so the core always fires and needs no spend. The LLM extractor that maps prose →
+> concrete `entity.field` value_paths (OQ-9) moves to **increment 2**, alongside FR-4 (allow-list
+> gate promotes to FIELD-LEVEL), FR-6/7/8 (ProposalStore staging → `serialize_buffer` envelope),
+> FR-11/12/13 (VIPP hand-off, `propose` verb, cost honesty). OQ-4 (command home) is settled *for the
+> read-only triage* as `kickoff-panel triage`; the increment-2 *write* verb (`propose`) is still open.
 
 ---
 
