@@ -57,11 +57,15 @@ the running to-do; the FR/AC detail lives in those specs.
 Risk is entirely in **M2 (inference)**; M4/M5 are reuse; M0/M1 are proven-pattern ports; M3/M7 are the two
 genuinely-new writers.
 
-- [ ] **M0 — TSDB reader (FR-1).** New `tsdb_maturation/reader.py`: `httpx` instant query +
-      `last_over_time(<m>[<lookback>])` + endpoint config (Grafana proxy **with auth** / direct Mimir) +
-      **empty-result detection** (OQ-6). *Validate vs a recorded fixture or a live/local Mimir.* — **reuse
-      the preserved recon scripts in `spike/recon/` (`tsdb_recon.py` inventory, `tsdb_inspect.py` labels,
-      `tsdb_range.py` query_range→specimen) as the starting shape.**
+- [x] **M0 — TSDB reader (FR-1).** ✅ **DONE** — `src/startd8/tsdb_maturation/reader.py` (`httpx` instant
+      query + `last_over_time(<m>[<lookback>])`, `GrafanaProxyEndpoint`/`DirectMimirEndpoint`, env/secrets
+      auth). Both CRP hardenings live + tested: **R1-F6** two-way empty split (`EmptyMaterialization`
+      pruned-refuse vs `MetricNotFound` config/typo — distinct exception types) and **R1-F11** 401/403 →
+      distinct `AuthError` short-circuiting *before* the index lookup (auth cannot masquerade as an empty
+      refuse). **R1-S5** family fan-out (`read_family`, one query per member) gives M2/FR-12 its read
+      capability. 19 tests green (`tests/unit/tsdb_maturation/test_reader.py`, `httpx.MockTransport`, no live
+      TSDB). Recon scripts preserved at `spike/recon/` (`tsdb_recon.py` inventory, `tsdb_inspect.py` labels,
+      `tsdb_range.py` query_range→specimen; the starting shape M0 generalized onto `httpx`).
 - [ ] **M1 — Specimen (FR-2, FR-9).** `specimen.py`: `flatten_series` → durable **raw** JSON + `--dry-run`
       + `grain` metadata. (Aggregation deferred to M2/M5 — it needs the identity.)
 - [~] **M2 — Inference core (FR-3/4/5/11/12) — THE RISK.** *Core PROVEN by the spike* (`spike_inference.py`,
@@ -111,9 +115,9 @@ This single test is the empirical proof of rung 3.
 
 ## Cross-cutting / dependencies
 
-- **CRP (Phase 5) not yet run.** The docs are hardened + OQ-clean. CRP target = the requirements; focus =
-  the inference core (FR-3/4/11/12). Offered; run before M2 if desired (the inference is the part most
-  worth an external read).
+- **CRP (Phase 5) — done.** R1 ran + triaged (19 suggestions, all accepted & merged; see the "Where we
+  are" table). The docs are hardened + OQ-clean; the R1 findings referenced throughout (R1-Fn / R1-Sn) are
+  the accepted set. No further CRP round is gating the build.
 - **The gov data is not in `o11y-dev` Mimir** (retention-pruned; recon confirmed 0 samples). M0/M2
   validation should use **a recorded specimen fixture** (or re-push from the michigan CSVs into a local
   Mimir — "an import away"), not assume live gov series.
