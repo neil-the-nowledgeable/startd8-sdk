@@ -21,10 +21,11 @@ Milestones (PLAN §5):
   ``promote_schema``, enforces the M2.5 confirmation, refuses empty/unrenderable.
 * **M5 — backfill** (:mod:`startd8.tsdb_maturation.backfill`) — FR-6/FR-8. Builds the ``from_json``
   payload with additivity-bound key-collapse aggregation (R1-F5).
-* M6 — CLI · M7 — histograms. (FR-5 reduction + FR-12 family grouper are the remaining M2 sub-tasks.)
+* **M6 — CLI** (:mod:`startd8.cli_tsdb`) — FR-10. ``startd8 promote tsdb <metric>`` (M0→M5).
+* **M7 — histograms** (:mod:`startd8.tsdb_maturation.histogram`) — FR-13. ``_bucket``/``_sum``/
+  ``_count`` → a percentile/stats table (a distinct inference path).
 
-M0–M5 (reader → specimen → inference → confirmation → imports writer → gate → backfill) are
-implemented.
+M0–M7 are implemented. (FR-5 reduction + FR-12 family grouper remain as M2 sub-tasks.)
 """
 
 from __future__ import annotations
@@ -85,6 +86,17 @@ from .backfill import (
     classify_additivity,
     records_to_json,
 )
+from .histogram import (
+    DEFAULT_PERCENTILES,
+    HistogramError,
+    HistogramFamily,
+    HistogramStatsRow,
+    compute_histogram_stats,
+    detect_histogram_family,
+    histogram_payload,
+    histogram_quantile,
+    infer_histogram_schema,
+)
 
 __all__ = [
     # M0 — reader
@@ -139,4 +151,14 @@ __all__ = [
     "build_payload",
     "classify_additivity",
     "records_to_json",
+    # M7 — histograms
+    "DEFAULT_PERCENTILES",
+    "HistogramError",
+    "HistogramFamily",
+    "HistogramStatsRow",
+    "compute_histogram_stats",
+    "detect_histogram_family",
+    "histogram_payload",
+    "histogram_quantile",
+    "infer_histogram_schema",
 ]

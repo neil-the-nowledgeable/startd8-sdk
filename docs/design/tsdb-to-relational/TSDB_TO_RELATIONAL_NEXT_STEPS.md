@@ -20,7 +20,7 @@ the running to-do; the FR/AC detail lives in those specs.
 | Every named seam grep-verified (Reference Audit) | ✅ |
 | **CRP (Phase 5)** — R1 run + triaged (19 suggestions, all accepted & merged) | ✅ done |
 | **M2 inference spike** — rung-3 reproduces the michigan `department_budgets` golden vs the REAL emitter (12/12 GREEN) | ✅ done — `spike/spike_inference.py` |
-| **Production code (`src/`)** | ⛔ not started — the spike is the M2 seed |
+| **Production code (`src/startd8/tsdb_maturation/`)** — M0→M7 all shipped | ✅ **DONE** — 143 tests green |
 
 > **Spike verdict (2026-07-08, GREEN, committed `6e543fe4` on `spike/tsdb-relational-inference`):**
 > inference independently found the exact 5-col identity key (no `*_display` leak), typed
@@ -31,7 +31,8 @@ the running to-do; the FR/AC detail lives in those specs.
 > subset can be coincidentally unique — which is exactly why the F1 golden tie-break + F7 confirmation gate
 > exist (both paths exercised). The correlated-columns case is the first fixture to add when hardening M2.
 
-**Nothing is built.** This is a fully-specced, un-implemented capability.
+**The full pipeline is built** (M0→M7, 143 tests green). Remaining: FR-5 cardinality reduction and
+FR-12 metric-family grouper (the two deferred M2 sub-tasks — additive, separable from the shipped core).
 
 ---
 
@@ -138,8 +139,14 @@ genuinely-new writers.
       confirmation; `--identity`/`--entity`/`--lookback`/`--aggregate` pass through; `--reduce` errors
       (FR-5 deferred). Exit codes 0 ok / 1 refused / 2 input-error. 8 CLI tests green (132 in the package)
       via `CliRunner`, incl. the full confirm→promote→generate-app path.
-- [ ] **M7 — Histograms (FR-13).** `_bucket`/`_sum`/`_count` → a percentile/stats table. Isolated + last so
-      it can be dropped without unshipping the core.
+- [x] **M7 — Histograms (FR-13).** ✅ **DONE** — `src/startd8/tsdb_maturation/histogram.py`, a **distinct
+      inference path**. `detect_histogram_family` (`_bucket`/`_sum`/`_count` triple); `histogram_quantile`
+      (Prometheus cumulative-bucket linear interpolation, validated against known values); `compute_histogram_
+      stats` (per-identity count/sum/mean + percentiles); `infer_histogram_schema` → a **stats table**
+      (identity labels + `count`/`sum`/`mean`/`p50`/`p90`/`p95`/`p99` + `observedAt`) via the real emitter;
+      `histogram_payload` for backfill. **Scope boundary (the R1 line-380 gap)**: fixed default percentiles,
+      `le` consumed not a column, identity = non-`le` labels, cumulative-bucket assumption with monotonic
+      clamp. 11 tests green (143 in the package). Isolated — droppable without touching the core.
 
 **Recommended first move:** M0 → M1 → **M2 with the golden test up front** (write the
 `department_budgets` assertion *before* the inference code, so rung 3 is red-green against real DDL). M3
