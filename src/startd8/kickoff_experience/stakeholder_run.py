@@ -21,7 +21,9 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -35,6 +37,10 @@ _EST_OUTPUT_TOKENS = 600
 _FALLBACK_PER_QUESTION_USD = 0.02  # when pricing has no entry for the model
 _IDEMPOTENCY_TTL_SECONDS = 3600
 _RUN_STATE_REL = Path(".startd8") / "stakeholder-run"
+
+# Process-wide lock serializing IdempotencyStore load-modify-save across concurrent threadpool
+# requests (H1). Module-level because a fresh store instance is created per run.
+_IDEMPOTENCY_LOCK = threading.RLock()
 
 
 class StakeholderRunError(Startd8Error):
@@ -170,6 +176,35 @@ class IdempotencyStore:
                 pass
             raise
 
+    @contextmanager
+    def _locked(self):
+        """Serialize the load-modify-save (H1): a process-wide RLock covers the real threat (concurrent
+        threadpool requests share one process); an ``fcntl`` file lock adds cross-process safety. Without
+        this, two concurrent runs' read-modify-write could lose an idempotency record → a replay
+        re-charges. Reads (`lookup`) need no lock — ``_save`` is atomic (tmpfile + ``os.replace``)."""
+        with _IDEMPOTENCY_LOCK:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            lock_path = self.dir / "idempotency.lock"
+            lock_fh = None
+            try:
+                import fcntl
+
+                lock_fh = open(lock_path, "w")
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            except (ImportError, OSError):  # non-POSIX / lock unsupported → RLock still serializes in-proc
+                lock_fh = None
+            try:
+                yield
+            finally:
+                if lock_fh is not None:
+                    try:
+                        import fcntl
+
+                        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+                    except (ImportError, OSError):  # pragma: no cover
+                        pass
+                    lock_fh.close()
+
     def lookup(self, run_key: str, params_hash: str, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """Return the record for *run_key* if present, unexpired, and params-consistent.
 
@@ -191,17 +226,19 @@ class IdempotencyStore:
     def record_start(self, run_key: str, params_hash: str, *, now: Optional[float] = None) -> None:
         """Write the spend marker BEFORE the provider call (FR-13 crash-safety)."""
         now = time.time() if now is None else now
-        data = self._load()
-        data[run_key] = {"params_hash": params_hash, "started_at": now, "status": "started",
-                         "session_id": None}
-        self._save(data)
+        with self._locked():
+            data = self._load()
+            data[run_key] = {"params_hash": params_hash, "started_at": now, "status": "started",
+                             "session_id": None}
+            self._save(data)
 
     def mark_complete(self, run_key: str, session_id: str, *, now: Optional[float] = None) -> None:
-        data = self._load()
-        rec = data.get(run_key) or {"params_hash": None, "started_at": time.time() if now is None else now}
-        rec.update(status="completed", session_id=session_id)
-        data[run_key] = rec
-        self._save(data)
+        with self._locked():
+            data = self._load()
+            rec = data.get(run_key) or {"params_hash": None, "started_at": time.time() if now is None else now}
+            rec.update(status="completed", session_id=session_id)
+            data[run_key] = rec
+            self._save(data)
 
 
 # --------------------------------------------------------------------------- fail-closed budget gate

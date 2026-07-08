@@ -153,6 +153,25 @@ def test_idempotency_ttl_expiry(tmp_path):
     assert s.lookup("k", "ph", now=100 + 61) is None
 
 
+def test_idempotency_concurrent_writes_lose_nothing(tmp_path):
+    # H1: without locking the load-modify-save, concurrent writers drop each other's records.
+    import threading
+
+    keys = [f"k{i}" for i in range(40)]
+
+    def _w(k):
+        IdempotencyStore(tmp_path).record_start(k, "ph", now=100)
+
+    threads = [threading.Thread(target=_w, args=(k,)) for k in keys]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    store = IdempotencyStore(tmp_path)
+    for k in keys:
+        assert store.lookup(k, "ph", now=101) is not None  # every record survived
+
+
 # --------------------------------------------------------------------------- fail-closed budget gate
 
 
