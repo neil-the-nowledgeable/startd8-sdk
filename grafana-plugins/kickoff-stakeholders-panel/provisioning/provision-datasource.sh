@@ -8,12 +8,14 @@
 #
 # Usage:
 #   GRAFANA_URL=http://localhost:3000 \
-#   GRAFANA_TOKEN=<grafana-service-account-or-api-token>  \   # OR GRAFANA_USER/GRAFANA_PASS
 #   STAKEHOLDER_TOKEN=<token printed by `startd8 kickoff stakeholders serve`> \
 #   ENDPOINT_URL=http://host.docker.internal:8710 \
 #   ./provision-datasource.sh
 #
-# Requires: curl, jq. The token is sent only over the Grafana API body; it is never echoed.
+# Grafana auth is picked up from the env automatically, in order: GRAFANA_TOKEN, GRAFANA_SA_TOKEN,
+# GRAFANA_API_TOKEN, then GRAFANA_USER + GRAFANA_PASS.
+#
+# Requires: curl, jq. Neither token is ever echoed.
 set -euo pipefail
 
 GRAFANA_URL="${GRAFANA_URL:-http://localhost:3000}"
@@ -24,14 +26,15 @@ DS_TYPE="${DS_TYPE:-yesoreyeram-infinity-datasource}"
 
 : "${STAKEHOLDER_TOKEN:?set STAKEHOLDER_TOKEN (from \`startd8 kickoff stakeholders serve\`)}"
 
-# Auth to Grafana: a bearer token (service account) OR basic admin creds.
+# Auth to Grafana: a bearer token (service account / API) from the env, or basic admin creds.
+graf_token="${GRAFANA_TOKEN:-${GRAFANA_SA_TOKEN:-${GRAFANA_API_TOKEN:-}}}"
 auth=()
-if [[ -n "${GRAFANA_TOKEN:-}" ]]; then
-  auth=(-H "Authorization: Bearer ${GRAFANA_TOKEN}")
+if [[ -n "$graf_token" ]]; then
+  auth=(-H "Authorization: Bearer ${graf_token}")
 elif [[ -n "${GRAFANA_USER:-}" && -n "${GRAFANA_PASS:-}" ]]; then
   auth=(-u "${GRAFANA_USER}:${GRAFANA_PASS}")
 else
-  echo "error: set GRAFANA_TOKEN, or GRAFANA_USER + GRAFANA_PASS" >&2
+  echo "error: set GRAFANA_TOKEN / GRAFANA_SA_TOKEN / GRAFANA_API_TOKEN, or GRAFANA_USER + GRAFANA_PASS" >&2
   exit 2
 fi
 
