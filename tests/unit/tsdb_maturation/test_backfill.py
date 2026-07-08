@@ -160,6 +160,20 @@ def test_records_to_json_serializes():
     assert built.rows_out == 1
 
 
+def test_none_measure_value_does_not_crash():
+    # A lossless from_records specimen may carry a missing/None measure — coerce to 0, never crash.
+    spec = Specimen.from_records(
+        "gov_expenditure_amount",
+        [{"department": "a", "fiscal_year": "2025", "value": None, "observed_at": "2025-01-01T00:00:00Z"},
+         {"department": "b", "fiscal_year": "2025", "value": 5.0, "observed_at": "2025-01-01T00:00:00Z"}],
+    )
+    res = infer_schema(spec, entity_name=ENTITY)
+    built = build_payload(spec, res, metric="gov_expenditure_amount")
+    amounts = {r["amount"] for r in built.payload[ENTITY]}
+    assert "0" in amounts  # the None measure coerced to 0
+    assert "5.0" in amounts
+
+
 def test_aggregated_specimen_rejected():
     spec = Specimen.from_records("m", [{"a": "1", "value": 3.0}], aggregated=True)
     res = infer_schema(Specimen.from_records("m", [{"a": "1", "value": 3.0}, {"a": "2", "value": 4.0}]),
