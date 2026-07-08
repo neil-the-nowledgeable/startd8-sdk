@@ -20,16 +20,18 @@ The whole run loop was exercised **end-to-end with real LLM spend** and every gu
 | Renders in the Workbook (FR-8) | `portal --session <id>` → the exact session's answer in the Stakeholders section |
 | Fail-closed budget (FR-4) | a $1 DAILY blocking budget was required + registered before any run |
 
-## Gap the pilot surfaced (follow-up, not a blocker)
+## Gap the pilot surfaced — NOW FIXED
 
-**Actual per-run cost is recorded as `$0.0000`.** The endpoint's `execute_run` accepts a `cost_tracker`
-but the server passes `None`, so `PanelAnswer.cost_usd` is never populated (the same F-1 class the CRP
-flagged for the *CLI* path). Consequences + bounding:
-- **Spend safety is intact** — the fail-closed **preflight** gates on the honest dry-run *estimate*, and
-  the DAILY ceiling caps cumulative spend regardless of per-run accounting.
-- **Audit (FR-9) is degraded** — the displayed/recorded cost is 0, not the real spend.
-- **Fix:** construct a `cost_tracker` (`CostStore`-backed) in `stakeholder_run_server` / `serve` and pass
-  it into `execute_run` → `StakeholderPanel(cost_tracker=…)`. Small, isolated follow-up.
+The pilot found actual per-run cost recorded as `$0.0000` (the endpoint accepted a `cost_tracker` but
+passed `None`). **Fixed (2026-07-08):** `stakeholder_run_server` now constructs a real
+`CostTracker(CostStore, PricingService)` (same DB as the budget) and threads it into
+`execute_run → StakeholderPanel`, so `cost_usd` is recorded (FR-9 audit). Spend safety was intact
+throughout (the fail-closed preflight gates on the honest estimate + the daily ceiling caps cumulative
+spend); this restores accurate accounting on top of it.
+
+**Cancel/abort — also now shipped:** `POST /stakeholders/run/{run_key}/cancel` aborts an in-flight run
+cross-thread (a `_RunRegistry` + `loop.call_soon_threadsafe(task.cancel)`); already-answered personas
+persist, in-flight calls abort, the run returns `status="cancelled"` with the partial.
 
 ## Where Phase 2 stands
 

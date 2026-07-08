@@ -270,6 +270,59 @@ class RunResult:
         }
 
 
+class _RunRegistry:
+    """Tracks in-flight runs so a cancel request (a different thread/event-loop) can abort one (FR-12).
+
+    A run executes in a worker thread's own event loop; ``cancel`` reaches its task cross-thread via
+    ``loop.call_soon_threadsafe``. Already-completed personas' answers are persisted incrementally, so
+    a cancel keeps the partial and aborts only the in-flight LLM calls.
+    """
+
+    def __init__(self) -> None:
+        import threading
+
+        self._lock = threading.RLock()
+        self._runs: Dict[str, Any] = {}  # run_key -> (loop, task)
+
+    def register(self, run_key: str, loop: Any, task: Any) -> None:
+        with self._lock:
+            self._runs[run_key] = (loop, task)
+
+    def unregister(self, run_key: str) -> None:
+        with self._lock:
+            self._runs.pop(run_key, None)
+
+    def cancel(self, run_key: str) -> bool:
+        with self._lock:
+            entry = self._runs.get(run_key)
+        if entry is None:
+            return False
+        loop, task = entry
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+            return True
+        except RuntimeError:  # loop already closed
+            return False
+
+
+_RUN_REGISTRY = _RunRegistry()
+
+
+def cancel_run(run_key: str) -> bool:
+    """Request cancellation of an in-flight run (FR-12). Returns True if a matching run was signalled."""
+    return _RUN_REGISTRY.cancel(run_key)
+
+
+def _load_transcript_dicts(project_root: Path | str, session_id: str) -> List[Dict[str, Any]]:
+    """Answers persisted so far for *session_id* (the partial kept when a run is cancelled)."""
+    try:
+        from startd8.stakeholder_panel.transcript import TranscriptStore
+
+        return [a.to_dict() for a in TranscriptStore(project_root, session_id).load()]
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+
 # A panel factory lets tests inject a fake panel (no LLM spend). Real callers omit it.
 PanelFactory = Callable[..., Any]
 
@@ -330,7 +383,25 @@ def execute_run(
     try:
         import asyncio
 
-        answers = asyncio.run(panel.ask_all(question, cap=cap))
+        # Run ask_all as a task registered for cross-thread cancellation (FR-12). A cancel signal
+        # aborts the in-flight LLM calls; personas that already answered are persisted to the transcript.
+        async def _go() -> Any:
+            loop = asyncio.get_running_loop()
+            task = asyncio.ensure_future(panel.ask_all(question, cap=cap))
+            _RUN_REGISTRY.register(run_key, loop, task)
+            try:
+                return await task
+            finally:
+                _RUN_REGISTRY.unregister(run_key)
+
+        try:
+            answers = asyncio.run(_go())
+        except asyncio.CancelledError:
+            partial = _load_transcript_dicts(project_root, panel.session_id)
+            store.mark_complete(run_key, panel.session_id, now=now)  # so a replay isn't re-charged
+            return RunResult(panel.session_id, partial, "cancelled", run_key,
+                             note="run cancelled — partial answers kept; in-flight personas aborted")
+
         answer_dicts = [a.to_dict() if hasattr(a, "to_dict") else dict(a) for a in answers]
         # Partial-failure (FR-6): a "deferred"/"unavailable" answer means not every persona spent.
         statuses = {d.get("grounding") for d in answer_dicts}
