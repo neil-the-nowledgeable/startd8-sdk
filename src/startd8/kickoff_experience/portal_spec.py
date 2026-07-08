@@ -46,8 +46,13 @@ _MANIFEST_DOMAIN: Dict[str, str] = {v: k for k, v in _DOMAIN_MANIFEST.items()}
 _VALUE_SNIPPET_LEN = 48
 
 
+def _md_escape(value: Any) -> str:
+    """Escape a short cell value for a Markdown table (no truncation)."""
+    return str(value).replace("\n", " ").replace("|", "\\|")
+
+
 def _value_snippet(value: Any, limit: int = _VALUE_SNIPPET_LEN) -> str:
-    s = str(value).replace("\n", " ").replace("|", "\\|")
+    s = _md_escape(value)
     return (s[:limit] + "…") if len(s) > limit else s
 
 
@@ -152,11 +157,50 @@ def _manifest_section(manifest: str, fields: List[Any]) -> Dict[str, Any]:
     }
 
 
-def build_kickoff_portal_spec(state: KickoffState, project: str) -> Dict[str, Any]:
+def _stakeholders_section(roster: Any) -> Dict[str, Any]:
+    """Render the Stakeholders section — the panel's roster (a key part of the Workbook).
+
+    ``roster`` is a loaded ``Roster`` (duck-typed: ``.personas`` with ``.role_id``/``.display_name``/
+    ``.answers_for``) or ``None`` when no roster file exists. Phase 1 is display-only ($0); running the
+    panel (paid `ask-all`) from the dashboard is Phase 2.
+    """
+    lines = [
+        "### Stakeholders",
+        "",
+        "_The panel of stakeholder personas — a key part of the Workbook._",
+        "",
+    ]
+    personas = list(getattr(roster, "personas", []) or []) if roster is not None else []
+    if not personas:
+        lines += [
+            "**No stakeholder roster yet.** Scaffold one with "
+            "`startd8 kickoff instantiate`, then run the panel with "
+            "`startd8 kickoff stakeholders ask-all` (paid, synthetic).",
+        ]
+    else:
+        lines += ["| Role | Persona | Answers for |", "|---|---|---|"]
+        for p in personas:
+            answers_for = ", ".join(getattr(p, "answers_for", []) or []) or "_—_"
+            lines.append(
+                f"| `{_md_escape(getattr(p, 'role_id', ''))}` "
+                f"| {_md_escape(getattr(p, 'display_name', ''))} | {_md_escape(answers_for)} |"
+            )
+        lines += [
+            "",
+            f"**{len(personas)} personas.** Run the panel: "
+            "`startd8 kickoff stakeholders ask-all` (paid — answers are **SYNTHETIC & UNRATIFIED**, "
+            "confirm with a human before relying on them).",
+        ]
+    return {"type": "text", "title": "Stakeholders", "options": {"content": "\n".join(lines)},
+            "group": "Stakeholders"}
+
+
+def build_kickoff_portal_spec(state: KickoffState, project: str, *, roster: Any = None) -> Dict[str, Any]:
     """Build a ``DashboardSpec`` dict for the kickoff portal from the canonical state.
 
-    Pure function — deterministic in *(state, project)*, no I/O. The returned dict is the input to
-    ``DashboardCreatorWorkflow.run({"spec": spec, ...})``.
+    Pure function — deterministic in *(state, project, roster)*, no I/O. The returned dict is the input
+    to ``DashboardCreatorWorkflow.run({"spec": spec, ...})``. ``roster`` (optional) adds the
+    Stakeholders section — a key part of the Workbook (Phase 1: display-only).
     """
     by_manifest: Dict[str, List[Any]] = {}
     for f in state.fields:
@@ -165,6 +209,7 @@ def build_kickoff_portal_spec(state: KickoffState, project: str) -> Dict[str, An
     panels: List[Dict[str, Any]] = _overview_panels(state, by_manifest)
     for manifest in sorted(by_manifest, key=_manifest_sort_key):
         panels.append(_manifest_section(manifest, by_manifest[manifest]))
+    panels.append(_stakeholders_section(roster))
 
     uid_project = project.lower().replace("_", "-").replace(" ", "-")
     return {
