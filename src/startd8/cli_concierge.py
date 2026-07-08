@@ -57,7 +57,7 @@ def _render_markdown(text: str) -> None:
 # FR-2 / clause A: bare `startd8 kickoff` (no subcommand) must ORIENT, not error. Today the group
 # exits 2 ("Missing command"); this callback flips it to a $0 intro + the subcommand list (exit 0).
 # `--json` is a per-subcommand option, so this bare-group path never sees it. Scope: the top
-# `kickoff` group only (OQ-9); `kickoff panel` keeps its current behavior.
+# `kickoff` group only (OQ-9); `kickoff stakeholders`/`kickoff portal` keep their current behavior.
 @kickoff_kernel_app.callback(invoke_without_command=True)
 def _kickoff_root(ctx: typer.Context) -> None:
     """Onboarding kernel — run a subcommand, or see the intro below."""
@@ -629,7 +629,7 @@ def kickoff_deepen(
     console.print("[bold]Deepen[/bold] — optional multi-perspective facilitation (the discovery pass)")
     console.print(
         "  [dim]This first-class facilitation phase is coming in a later step (GE-M3). For now, drive "
-        "the stakeholder panel directly via[/dim] [cyan]startd8 kickoff panel ask-all[/cyan] "
+        "the stakeholder panel directly via[/dim] [cyan]startd8 kickoff stakeholders ask-all[/cyan] "
         "[dim](paid, synthetic — every answer is unratified input).[/dim]"
     )
 
@@ -867,6 +867,112 @@ def kickoff_confirm(
         f"  [green]✓ confirmed[/green] {result['value_path']} = {result['value']!r} "
         f"([dim]{result['mode']}[/dim]) — [dim]run[/dim] startd8 kickoff assess [dim]to see the count[/dim]"
     )
+
+
+# --- Kickoff portal — the Digital Project Workbook (Grafana presentation surface) ----------------
+# The portal is the **Digital Project Workbook**: a dynamic, query-based evolution of Brooks' workbook
+# ("Why Did the Tower of Babel Fail?", The Mythical Man-Month) — the single shared structure holding
+# every foundational project decision so the team sees the whole. Brooks' was static (paper/microfiche);
+# ours is generated live from project state. A third read surface (alongside the HTMX web UI and TUI):
+# project the canonical KickoffState onto a Grafana dashboard, $0/deterministic, via the jsonnet
+# pipeline. Read-only by default (writes only the dashboard JSON); --provision pushes to Grafana. NEVER
+# edits kickoff inputs. Distinct from `kickoff stakeholders` (a key *part* of the Workbook).
+@kickoff_kernel_app.command("portal")
+def kickoff_portal(
+    project_root: Path = typer.Argument(
+        Path("."), help="Project to build the portal for (default: current dir). Read-only — never modified."
+    ),
+    project: Optional[str] = typer.Option(
+        None, "--project", help="Project name for the dashboard (default: the project-root directory name)."
+    ),
+    provision: Optional[str] = typer.Option(
+        None, "--provision", metavar="URL",
+        help="Provision to Grafana (e.g. http://localhost:3000; needs GRAFANA_API_TOKEN). Omit = generate JSON only.",
+    ),
+    out_dir: Optional[Path] = typer.Option(
+        None, "--out", help="Output dir for the dashboard JSON (default: <root>/.startd8/dashboards)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit a JSON result summary to stdout."),
+) -> None:
+    """Build the Digital Project Workbook — canonical kickoff state on a Grafana dashboard ($0, no LLM).
+
+    The "Digital Project Workbook" is a dynamic, query-based evolution of Brooks' (static) workbook
+    (*The Mythical Man-Month*) — the shared, whole-project view of the foundational decisions, generated
+    live from project state. Reads `docs/kickoff/authoring`, folds it into the canonical `KickoffState`
+    (the same view-model the web UI/TUI use), builds a `DashboardSpec`, and compiles it via the jsonnet
+    dashboard pipeline. PRESENTATION only — never edits kickoff inputs. Read-only by default (writes just
+    the dashboard JSON); pass `--provision URL` to push it to Grafana.
+    """
+    from .kickoff_experience.docs import load_kickoff_docs, live_schema_text
+    from .kickoff_experience.state import build_kickoff_state
+    from .kickoff_experience.portal_spec import build_kickoff_portal_spec
+
+    if not json_out:
+        render_intro_banner()
+
+    root = project_root.expanduser()
+    docs = load_kickoff_docs(root)
+    if not docs:
+        console.print(
+            f"[red]kickoff portal:[/red] no kickoff authoring docs found under {root}/docs/kickoff/. "
+            "Run [bold]startd8 kickoff instantiate[/bold] first."
+        )
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    name = project or root.resolve().name
+    state = build_kickoff_state(docs, live_schema_text=live_schema_text(root))
+    spec = build_kickoff_portal_spec(state, name)
+
+    dest = out_dir.expanduser() if out_dir else (root / ".startd8" / "dashboards")
+    config: dict = {"spec": spec, "output_dir": str(dest)}
+    if provision:
+        config.update(provision=True, grafana_url=provision, allow_insecure=provision.startswith("http://"))
+
+    from .dashboard_creator.workflow import DashboardCreatorWorkflow
+
+    result = DashboardCreatorWorkflow().run(config)
+    if not result.success:
+        err = getattr(result, "error", None) or "dashboard generation failed"
+        console.print(f"[red]kickoff portal:[/red] {err}")
+        raise typer.Exit(_EXIT_DRIFT)
+
+    output = result.output if isinstance(result.output, dict) else {}
+    json_path = output.get("json_path")
+    if json_path and Path(json_path).is_file():
+        try:  # full-width text panels (non-fatal cosmetic pass)
+            from .observability.portal_spec_builder import fixup_portal_json
+
+            Path(json_path).write_text(json.dumps(fixup_portal_json(json.loads(Path(json_path).read_text())), indent=2))
+        except Exception:  # pragma: no cover - cosmetic only
+            pass
+
+    ac = state.attention_counts
+    summary = {
+        "schema": "kickoff.portal.v1",
+        "uid": spec["uid"],
+        "panels": len(spec["panels"]),
+        "fields": len(state.fields),
+        "confirmed": ac.get("ok", 0),
+        "gaps": ac.get("blocked", 0),
+        "json_path": json_path,
+        "dashboard_url": output.get("dashboard_url"),
+        "provisioned": bool(provision),
+    }
+    if json_out:
+        _emit_json(summary)
+        return
+
+    console.print(
+        f"[bold]Kickoff portal[/bold] — {name}  "
+        f"([green]{summary['confirmed']} confirmed[/green], [red]{summary['gaps']} gaps[/red] "
+        f"of {summary['fields']} fields, {summary['panels']} panels)"
+    )
+    if json_path:
+        console.print(f"  dashboard JSON: [cyan]{json_path}[/cyan]")
+    if summary["dashboard_url"]:
+        console.print(f"  Grafana: [cyan]{summary['dashboard_url']}[/cyan]")
+    elif not provision:
+        console.print("  [dim]run again with[/dim] --provision http://localhost:3000 [dim]to push to Grafana[/dim]")
 
 
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------

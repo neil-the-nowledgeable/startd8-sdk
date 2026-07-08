@@ -9,8 +9,8 @@ Covers:
   * The guided flow REUSES the existing pieces — `build_assess` (Orient) + `build_kickoff_plan`
     (Guide, which itself wraps `red_carpet_advisor`) — no new readiness engine (FR-GE-6). Asserted
     structurally by import/wiring, not by re-deriving readiness.
-  * Group retirement: the old `concierge` / `panel` groups still resolve as HIDDEN deprecated
-    aliases (one release), while `kickoff panel …` is the surviving surface.
+  * Group retirement: the old `concierge` / `panel` groups (and the interim `kickoff panel`) still
+    resolve as HIDDEN deprecated aliases (one release), while `kickoff stakeholders …` is canonical.
 """
 
 from __future__ import annotations
@@ -174,7 +174,7 @@ def test_guided_imports_no_new_readiness_engine():
         assert forbidden not in src, f"guided must not introduce {forbidden!r} (no new engine)"
 
 
-# ── Group retirement: old groups resolve as hidden deprecated aliases; kickoff panel is canonical ──
+# ── Group retirement: old groups resolve as hidden deprecated aliases; kickoff stakeholders is canonical ──
 
 
 def test_old_concierge_group_is_hidden_deprecated_but_resolves():
@@ -197,12 +197,22 @@ def test_old_panel_group_is_hidden_deprecated_but_resolves():
         assert verb in dep.stdout
 
 
-def test_kickoff_panel_is_the_surviving_surface():
-    res = runner.invoke(app, ["kickoff", "panel", "--help"])
+def test_kickoff_stakeholders_is_the_surviving_surface():
+    res = runner.invoke(app, ["kickoff", "stakeholders", "--help"])
     assert res.exit_code == 0
     for verb in ("list", "ask", "ask-all", "import"):
         assert verb in res.stdout
     assert "DEPRECATED" not in res.stdout  # the canonical surface carries no deprecation banner
+
+
+def test_kickoff_panel_is_now_a_deprecated_alias():
+    # `kickoff panel` was canonical for one release; it is renamed to `kickoff stakeholders` and
+    # survives only as a hidden deprecated alias (disambiguated from `kickoff portal`).
+    res = runner.invoke(app, ["kickoff", "panel", "--help"])
+    assert res.exit_code == 0
+    assert "DEPRECATED" in res.stdout
+    for verb in ("list", "ask", "ask-all", "import"):
+        assert verb in res.stdout
 
 
 def test_panel_deprecated_alias_emits_warning_on_stderr():
@@ -216,4 +226,5 @@ def test_kickoff_deepen_verb_is_a_pointer(tmp_path):
     root = _make_project(tmp_path)
     res = runner.invoke(app, ["kickoff", "deepen", str(root)])
     assert res.exit_code == 0
-    assert "kickoff panel ask-all" in res.stdout  # points at the surviving canonical panel surface
+    # normalize whitespace — Rich wraps the longer command string across lines
+    assert "kickoff stakeholders ask-all" in " ".join(res.stdout.split())  # points at the canonical surface
