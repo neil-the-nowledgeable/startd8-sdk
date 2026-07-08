@@ -18,14 +18,20 @@ Endpoints: ``POST /stakeholders/run`` (``{question, cap, dry_run, run_key, model
 panel-processing pipeline adds ``$0`` drive routes (same auth): ``POST /stakeholders/triage``,
 ``…/disposition``, ``…/serialize``, ``…/negotiate`` (an opt-in narrative pass spends its own
 ``max_cost_usd`` ceiling), plus the one PAID step ``…/extract`` (dry-run estimate → checksum-gated
-confirm, keyed on ``session_id + synthesis-checksum``). The write-touching apply gate lands separately
-(M-apply).
+confirm, keyed on ``session_id + synthesis-checksum``). The write gate ``…/apply/{preview,ratify}``
+(FR-R7) is OFF unless ``enable_apply`` **and** ``strict=True``: a pure preview issues a stateless HMAC
+challenge; ratify verifies it, refuses a stale/changed set, and applies only the echoed proposal ids.
+It is **token-gated, not human-proof**.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
+import json
+import os
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
@@ -55,6 +61,12 @@ _EXTRACT_SCAFFOLD_CHARS = 1200
 
 _NONCE_TTL_SECONDS = 900
 
+# M-apply (FR-R7): the ratify challenge is a stateless HMAC over {seq, content-hash, expiry}. The
+# signing key is persisted per-project (survives restart) and single-use is enforced via the reused
+# IdempotencyStore. Short-lived: a preview must be ratified promptly or re-taken.
+_CHALLENGE_TTL_SECONDS = 300
+_APPLY_KEY_REL = Path(".startd8") / "stakeholder-run" / "apply-hmac.key"
+
 
 class _NonceStore:
     """In-memory replay-nonce set with TTL (strict mode only; the endpoint is on-demand/short-lived)."""
@@ -83,6 +95,9 @@ class RunServerConfig:
     scope_project: str = "stakeholder-panel"
     strict: bool = False
     allowed_origins: Tuple[str, ...] = ()
+    # M-apply (FR-R7): the write-to-source-of-record gate is OFF unless explicitly enabled, AND it
+    # additionally requires strict=True at request time (mandatory Origin allow-list + replay nonce).
+    enable_apply: bool = False
     # injectable for tests / wiring (real callers leave these None → constructed on demand)
     budget_manager: Any = None
     cost_tracker: Any = None
@@ -578,6 +593,192 @@ async def _extract(request: Request) -> JSONResponse:
     )
 
 
+# --------------------------------------------------------------------------- pipeline apply (WRITE)
+#
+# FR-R7 — THE gate. Writes the project source of record. Two requests: a PURE preview (reconstructs the
+# would-apply set with zero side effects, never calls apply_dispositions) that returns a stateless HMAC
+# challenge, and a ratify that verifies the challenge, refuses on a stale seq / changed set, then applies
+# ONLY the echoed proposal_ids. **Token-gated, not human-proof** (CRP F-2): a token holder can drive
+# preview→ratify — the guarantees are that apply is a deliberate two-request act bound to exactly the
+# previewed set, and that strict mode (Origin allow-list + replay nonce) is MANDATORY here.
+
+
+def _apply_hmac_key(config: RunServerConfig) -> bytes:
+    """Per-project signing key for the ratify challenge, persisted 0600 so it survives restart (F-4)."""
+    path = Path(config.project_root).expanduser() / _APPLY_KEY_REL
+    if path.is_file():
+        return path.read_bytes()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    key = secrets.token_bytes(32)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)  # atomic exclusive create
+    except FileExistsError:  # a concurrent first-request won the race — read theirs
+        return path.read_bytes()
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(key)
+    return key
+
+
+def _issue_challenge(key: bytes, seq: int, content_hash: str, *, ttl: int = _CHALLENGE_TTL_SECONDS) -> str:
+    """Sign {seq, content-hash, expiry} into a stateless single-use token: ``<b64(payload)>.<hmac>``."""
+    payload = json.dumps(
+        {"seq": int(seq), "ch": content_hash, "exp": time.time() + ttl}, sort_keys=True
+    )
+    b = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+    sig = hmac.new(key, b.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{b}.{sig}"
+
+
+def _verify_challenge(key: bytes, token: str) -> Optional[dict]:
+    """Return the decoded payload iff the HMAC verifies (constant-time); else None."""
+    try:
+        b, sig = token.split(".", 1)
+    except (ValueError, AttributeError):
+        return None
+    expected = hmac.new(key, b.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    try:
+        return json.loads(base64.urlsafe_b64decode(b.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _apply_guard(request: Request, config: RunServerConfig) -> Optional[JSONResponse]:
+    """Shared gate for both apply routes: auth, explicit enable, and MANDATORY strict mode (FR-R7 c)."""
+    if (denied := _authorize(request, config)) is not None:
+        return denied
+    if not config.enable_apply:
+        return _err(404, "apply route is not enabled on this endpoint")
+    if not config.strict:
+        return _err(403, "apply requires strict mode (Origin allow-list + replay nonce) — refusing")
+    return None
+
+
+def _confined_apply_root(config: RunServerConfig) -> Any:
+    """Resolve the confined project root (FR-C5) — apply_dispositions does NOT confine itself. Returns
+    the resolved Path, or a JSONResponse error the caller must return."""
+    from startd8.concierge.safe_write import SafeWriteError, resolve_confined_root
+
+    try:
+        return resolve_confined_root(config.project_root)
+    except SafeWriteError as exc:
+        return _err(403, f"confinement refused: {exc}")
+
+
+async def _apply_preview(request: Request) -> JSONResponse:
+    """FR-R7 preview — PURE reconstruct of the would-apply set + a stateless HMAC challenge. No writes."""
+    config: RunServerConfig = request.app.state.config
+    if (denied := _apply_guard(request, config)) is not None:
+        return denied
+    root = _confined_apply_root(config)
+    if isinstance(root, JSONResponse):
+        return root
+
+    from startd8.vipp import preview_dispositions
+
+    try:
+        preview = await run_in_threadpool(preview_dispositions, root)
+    except Exception as exc:  # malformed inbox/dispositions — clean message
+        return _err(502, f"preview failed: {exc}")
+    if preview.refused_reason:
+        return JSONResponse(
+            {"would_apply": [], "stale": preview.stale, "refused_reason": preview.refused_reason},
+            status_code=409,
+        )
+
+    challenge = _issue_challenge(_apply_hmac_key(config), preview.envelope_seq, preview.content_hash)
+    return JSONResponse(
+        {
+            "would_apply": preview.would_apply,
+            "envelope_seq": preview.envelope_seq,
+            "content_hash": preview.content_hash,
+            "challenge": challenge,
+            "expires_in_seconds": _CHALLENGE_TTL_SECONDS,
+            "posture": "token-gated, not human-proof — any holder of the endpoint token can ratify",
+        }
+    )
+
+
+async def _apply_ratify(request: Request) -> JSONResponse:
+    """FR-R7 ratify — verify the challenge, refuse a stale/changed set, then apply ONLY the echoed ids."""
+    config: RunServerConfig = request.app.state.config
+    if (denied := _apply_guard(request, config)) is not None:
+        return denied
+    body = await _json_body(request)
+    if isinstance(body, JSONResponse):
+        return body
+
+    proposal_ids = body.get("proposal_ids")
+    challenge = body.get("challenge")
+    if not isinstance(proposal_ids, list) or not proposal_ids:
+        return _err(400, "proposal_ids (a non-empty list) is required")
+    if not isinstance(challenge, str) or not challenge:
+        return _err(400, "challenge is required")
+
+    payload = _verify_challenge(_apply_hmac_key(config), challenge)
+    if payload is None:
+        return _err(403, "invalid or forged challenge")
+    if float(payload.get("exp", 0)) < time.time():
+        return _err(403, "challenge expired — re-preview")
+
+    root = _confined_apply_root(config)
+    if isinstance(root, JSONResponse):
+        return root
+
+    from startd8.vipp import apply_dispositions, preview_dispositions
+
+    # Single-use FIRST (persisted, survives restart — F-4): the challenge ratifies exactly once. Consume
+    # it before applying so a replay can't ride a race, and so a burned challenge always forces a fresh
+    # preview (the correct recovery even after a stale/failed apply).
+    sig = challenge.split(".", 1)[-1]
+    store = IdempotencyStore(root)
+    try:
+        prior = store.lookup(sig, str(payload.get("ch")))
+    except RunKeyMismatchError:
+        return _err(403, "challenge signature/content mismatch")
+    if prior is not None:
+        return _err(409, "challenge already used — re-preview")
+    store.record_start(sig, str(payload.get("ch")))  # consume now
+
+    # Re-preview against the LIVE inbox: the challenge is bound to a specific {seq, content-hash}; a
+    # concurrent negotiate/serialize re-seqs the inbox → stale → refuse (F-3). Both must still match.
+    live = await run_in_threadpool(preview_dispositions, root)
+    if live.refused_reason:
+        return _err(409, f"cannot apply: {live.refused_reason}")
+    if live.envelope_seq != int(payload.get("seq", -1)):
+        return _err(409, "inbox changed since preview (stale envelope_seq) — re-preview")
+    if live.content_hash != payload.get("ch"):
+        return _err(409, "the would-apply set changed since preview — re-preview")
+
+    ids = {str(p) for p in proposal_ids}
+
+    def _confirm(action: Any, disp: Any) -> bool:  # apply ONLY the human-echoed, still-current ids
+        return disp.proposal_id in ids
+
+    from startd8.concierge.safe_write import SafeWriteError
+
+    try:
+        # `force` is NEVER exposed (NR-8) — apply_dispositions defaults force=False.
+        res = await run_in_threadpool(apply_dispositions, root, confirm=_confirm)
+    except SafeWriteError as exc:  # confinement / symlink refusal on the write path
+        return _err(403, f"apply blocked: {exc}")
+    except Exception as exc:
+        return _err(502, f"apply failed: {exc}")
+    store.mark_complete(sig, "apply")  # consume the challenge
+
+    return JSONResponse(
+        {
+            "wrote": res.wrote,
+            "actionable": res.actionable,
+            "outcomes": res.outcomes,
+            "inbox_shredded": res.inbox_shredded,
+            "stale": res.stale,
+            "refused_reason": res.refused_reason,
+        }
+    )
+
+
 async def _healthz(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
@@ -604,6 +805,9 @@ def build_stakeholder_run_app(config: RunServerConfig) -> Starlette:
             Route("/stakeholders/negotiate", _negotiate, methods=["POST"]),
             # FR-R3 extract→stage — the one PAID pipeline step (dry-run estimate → checksum-gated confirm).
             Route("/stakeholders/extract", _extract, methods=["POST"]),
+            # FR-R7 apply — THE write gate (off unless enable_apply; strict mode mandatory at request time).
+            Route("/stakeholders/apply/preview", _apply_preview, methods=["POST"]),
+            Route("/stakeholders/apply/ratify", _apply_ratify, methods=["POST"]),
             Route("/healthz", _healthz, methods=["GET"]),
         ]
     )
