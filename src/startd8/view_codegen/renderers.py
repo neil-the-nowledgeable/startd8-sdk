@@ -149,7 +149,13 @@ def _render_entity_board(v: ViewSpec) -> str:
 
 def _render_workspace(v: ViewSpec) -> str:
     p = v.polymorphic
-    assert p is not None
+    # H3: flag-don't-crash (RUN-029). `workspace` is polymorphic-only; a non-polymorphic root used to
+    # trip a bare `assert p is not None` with no view name. Name the offending view instead.
+    if p is None:
+        raise ValueError(
+            f"workspace {v.module!r}: requires a polymorphic relation "
+            f"(of/type_field/id_field/type_map); root {v.root!r} has none"
+        )
     entities = sorted({v.root, p.of} | {ent for _, ent in p.type_map})
     imports = ", ".join(entities)
     map_lit = "{" + ", ".join(f'"{k}": {ent}' for k, ent in p.type_map) + "}"
@@ -1547,6 +1553,13 @@ def _render_view_test(
         if v.signal:
             setup.append("    assert rows[0]['signal'] is True")
     elif v.kind == "board":
+        # F2 defense-in-depth: parse_views already requires a static board's `order`, but guard here
+        # too so a directly-constructed ViewSpec names the view instead of a bare IndexError.
+        if not v.order:
+            raise ValueError(
+                f"board {v.module!r}: static board requires a non-empty `order` "
+                f"(group_by {v.group_by!r} column allow-list)"
+            )
         a, b = v.order[0], (v.order[1] if len(v.order) > 1 else v.order[0])
         setup += [
             _seed(schema, "_r1", v.root, {v.group_by: repr(a)}),

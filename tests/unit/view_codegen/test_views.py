@@ -260,6 +260,41 @@ def test_model_scope_strict_validation():
         parse_views(bad, known_entities=_KNOWN)
 
 
+# --------------------------------------------------------------------------- #
+# Client-logged friction regressions (docs/design/client-friction-fixes/)
+# --------------------------------------------------------------------------- #
+
+def test_f2_static_board_without_order_raises_named_valueerror_not_indexerror():
+    """portal-rebuild F2: a static `board` whose group_by is an enum, with no `Order:`, used to crash
+    with a bare `IndexError: tuple index out of range`. It must now raise a clear ValueError that
+    names the offending view (flag-don't-crash)."""
+    bad = VIEWS.replace(
+        "    group_by: stage\n    order: [identified, offer]",
+        "    group_by: stage",
+    )
+    with pytest.raises(ValueError, match=r"board 'pipeline_board' requires an `Order:`"):
+        parse_views(bad, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)
+
+
+def test_h3_non_polymorphic_workspace_raises_named_valueerror_not_assertionerror():
+    """household-o11y H3: a `workspace` view on a non-polymorphic root tripped a bare AssertionError
+    (`assert p is not None`) with no view name. It must raise a ValueError naming the view."""
+    from startd8.view_codegen.renderers import _render_workspace
+
+    y = (
+        "views:\n"
+        "  - name: member_workspace\n"
+        "    kind: workspace\n"
+        "    route: /member/{id}\n"
+        "    root: Opportunity\n"
+    )
+    specs = parse_views(y, known_entities=_KNOWN)
+    ws = specs[0]
+    assert ws.polymorphic is None
+    with pytest.raises(ValueError, match=r"workspace 'member_workspace': requires a polymorphic"):
+        _render_workspace(ws)
+
+
 def test_model_scope_route_derivation_and_override():
     specs = {v.name: v for v in parse_views(VIEWS, known_entities=_KNOWN)}
     me = specs["model_export"]

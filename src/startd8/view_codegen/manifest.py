@@ -367,6 +367,19 @@ def parse_views(
                     "(the root's ref to the column entity)"
                 )
             _check_field(root, str(entry["group_by"]), f"view {entry['name']!r} group_by")
+        elif kind == "board":
+            # Static-order board (F2): columns come from a compile-time `order:` allow-list (typically
+            # the group_by enum's declared values). Without it the generator has no columns and used
+            # to crash with a bare `IndexError: tuple index out of range` in the emitted test. Require
+            # it, keyed to the view name (flag-don't-crash) — or use `columns_from:` for the
+            # entity-backed variant handled above.
+            if not (entry.get("order") or []):
+                gb = str(entry.get("group_by", "")) or "<field>"
+                raise ValueError(
+                    f"views.yaml: board {entry['name']!r} requires an `Order:` (the {gb!r} column "
+                    "allow-list, e.g. the group_by enum's values) — or `columns_from:` for an "
+                    "entity-backed board"
+                )
 
         aggregates: List[Aggregate] = []
         for a in entry.get("aggregates") or []:

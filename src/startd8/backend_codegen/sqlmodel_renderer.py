@@ -57,6 +57,32 @@ def _compound_pk_cols(schema: PrismaSchema, model_name: str) -> Set[str]:
     return set()
 
 
+_BLOCK_UNIQUE_RE = re.compile(r"@@unique\(\s*\[([^\]]*)\]")
+
+
+def _compound_unique_cols(
+    schema: PrismaSchema, model_name: str, pk_cols: Set[str]
+) -> List[Tuple[str, ...]]:
+    """Column tuples of a model's ``@@unique([a, b])`` block attributes (F3b, model-level).
+
+    Excludes any tuple identical to the model's compound primary key (``@@id``) — a PK is already
+    unique, so a matching ``@@unique`` would emit a redundant constraint. Order within each tuple is
+    preserved (constraint column order is significant).
+    """
+    model = schema.model(model_name)
+    if model is None:
+        return []
+    out: List[Tuple[str, ...]] = []
+    for a in model.block_attributes:
+        m = _BLOCK_UNIQUE_RE.search(a)
+        if not m:
+            continue
+        cols = tuple(x.strip() for x in m.group(1).split(",") if x.strip())
+        if cols and set(cols) != pk_cols:
+            out.append(cols)
+    return out
+
+
 _DEFAULT_RE = re.compile(r"@default\((.*)\)")
 # Attribute names SQLAlchemy's Declarative API reserves on a mapped class.
 _RESERVED_ATTRS = frozenset({"metadata", "registry"})
@@ -92,6 +118,12 @@ def _default_field_arg(field: PrismaField, needs: Set[str]) -> str:
         return f"default={val}"  # quoted string literal
     if val in ("true", "false"):
         return f"default={'True' if val == 'true' else 'False'}"
+    # F13: `yes`/`no` bareword on a Boolean field is a boolean, NOT a truthy string. Gate on the
+    # field type so a `String @default(yes)` (a legit enum member) stays a string. Without this,
+    # `active Boolean @default(no)` rendered `Field(default="no")` — `"no"` is truthy, so the field
+    # silently defaulted True (portal-rebuild F13: operator-by-default).
+    if field.type == "Boolean" and val in ("yes", "no"):
+        return f"default={'True' if val == 'yes' else 'False'}"
     if re.fullmatch(r"-?\d+(\.\d+)?", val):
         return f"default={val}"  # numeric literal
     return f'default="{val}"'  # bareword (enum member / token) → string default
@@ -281,6 +313,12 @@ def _render_table_field(
         args.append("primary_key=True")
     if fk:
         args.append(f'foreign_key="{fk}"')
+    # F3b: emit a real DB unique constraint for a field-level `@unique`. The parser recognizes it
+    # (PrismaField.is_unique) but the renderer previously dropped it, so `email String @unique`
+    # produced no `unique=True` — uniqueness was advisory-only (portal-rebuild F3b). A PK is already
+    # unique, so skip it there to avoid a redundant constraint.
+    if field.is_unique and not is_pk:
+        args.append("unique=True")
     if default_arg:
         args.append(default_arg)
 
@@ -381,8 +419,13 @@ def _import_block(needs: Set[str]) -> str:
         groups.append(stdlib)
 
     third: List[str] = []
+    sa_names: List[str] = []
     if "sqlalchemy" in needs:
-        third.append("from sqlalchemy import JSON, Column")
+        sa_names += ["JSON", "Column"]  # list-scalar JSON columns
+    if "uniqueconstraint" in needs:
+        sa_names.append("UniqueConstraint")  # F3b: model-level @@unique
+    if sa_names:
+        third.append("from sqlalchemy import " + ", ".join(sa_names))
     sm = (
         ["Field", "Relationship", "SQLModel"]
         if "Relationship" in needs
@@ -473,7 +516,20 @@ def render_sqlmodel_tables(
                     entity=name, field=fld, prisma_type="relation", reason=reason
                 )
             )
-        if not scalars and not rel_lines:
+        # F3b: model-level `@@unique([...])` → a real composite UniqueConstraint. Field-level
+        # `@unique` is handled inline (unique=True); this covers the multi-column case.
+        uniq_cols = _compound_unique_cols(schema, name, set(pk_cols))
+        if uniq_cols:
+            needs.add("uniqueconstraint")
+            constraints = ", ".join(
+                "UniqueConstraint({}, name={!r})".format(
+                    ", ".join(repr(c) for c in cols),
+                    "uq_{}_{}".format(name.lower(), "_".join(cols)),
+                )
+                for cols in uniq_cols
+            )
+            lines.append(f"    __table_args__ = ({constraints},)")
+        if not scalars and not rel_lines and not uniq_cols:
             lines.append("    pass")
         blocks.append("\n".join(lines))
 
