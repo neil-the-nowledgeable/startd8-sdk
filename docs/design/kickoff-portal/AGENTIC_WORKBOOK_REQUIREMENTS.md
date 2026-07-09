@@ -2,7 +2,7 @@
 
 **Version:** 0.5 (User decisions on OQ-2/OQ-3 + FR-6b Loki depth)
 **Date:** 2026-07-09
-**Status:** Ready for implementation (CRP R1 applied; OQ-2/OQ-3 resolved)
+**Status:** IMPLEMENTED (FR-1–FR-10 + FR-6b; FR-11 live-chat deferred) — live-verified on Grafana 13.1.0
 **Owner doc for:** surfacing the kickoff agentic layer in the Grafana Workbook
 **Relates to (does not restate):** `GRAFANA_KICKOFF_PORTAL_REQUIREMENTS.md` (portal), `WORKBOOK_AUDIENCE_PERSONALIZATION_REQUIREMENTS.md` (audience lens), `../dynamic-dashboards/DYNAMIC_DASHBOARDS_REQUIREMENTS.md` (v2 foundation), `../kickoff/AGENTIC_CONCIERGE_MODE_REQUIREMENTS.md` + `../agentic-loop/AGENTIC_LOOP_REQUIREMENTS.md` (the agent), `../kickoff/INTERACTIVE_KICKOFF_EXPERIENCE_REQUIREMENTS.md` (web/TUI surfaces)
 

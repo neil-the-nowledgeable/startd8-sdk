@@ -45,6 +45,47 @@ def _instantiate(proj: Path, *args: str):
     )
 
 
+# --------------------------------------------------------------------------- agentic cockpit (M5 wiring)
+
+
+def test_dynamic_cockpit_folds_snapshot_and_inbox():
+    # M5: build_workbook_v2_and_maybe_provision passes the M2 AgenticView so the Assistant/Proposals
+    # tabs mirror the real session snapshot + VIPP inbox ($0, no provision).
+    from startd8.kickoff_experience import session_snapshot as ss
+    from startd8.vipp.models import EnvelopedProposal, ProposalEnvelope
+
+    proj = _proj()
+    _instantiate(proj, "--no-portal")  # scaffold the kickoff package (docs/kickoff)
+
+    snap = ss.build_session_snapshot(
+        messages=[
+            {"role": "user", "content": "how ready?"},
+            {"role": "assistant", "content": [{"type": "text", "text": "two inputs remain"}]},
+        ],
+        model="m", input_tokens=1, output_tokens=1, total_tokens=2, cost_usd=0.0,
+        posture="concierge · propose-only", project=str(proj), session_id="sid-m5",
+        generated_at="2026-07-09T00:00:00+00:00",
+    )
+    ss.write_snapshot(proj, snap)
+    env = ProposalEnvelope(
+        project_id="p", envelope_seq=1,
+        proposals=[EnvelopedProposal(kind="capture", params={"value_path": "conventions.tz", "value": "UTC"}, id="MP-1")],
+    )
+    ip = proj / ".startd8" / "vipp" / "proposals-inbox.json"
+    ip.parent.mkdir(parents=True, exist_ok=True)
+    ip.write_text(json.dumps(env.to_dict()), encoding="utf-8")
+
+    res = portal_build.build_workbook_v2_and_maybe_provision(proj, out_dir=proj / "out")
+    assert res.ok, res.skipped_reason
+    assert res.summary["snapshot"] == "present"
+    assert res.summary["proposals"] == 1
+    board = json.loads(Path(res.json_path).read_text(encoding="utf-8"))
+    titles = [t["spec"]["title"] for t in board["spec"]["layout"]["spec"]["tabs"]]
+    assert titles == ["Status", "Assistant", "Proposals"]
+    blob = json.dumps(board)
+    assert "two inputs remain" in blob and "MP-1" in blob  # snapshot + proposal folded into the board
+
+
 # --------------------------------------------------------------------------- FR-5 slug / UID
 
 

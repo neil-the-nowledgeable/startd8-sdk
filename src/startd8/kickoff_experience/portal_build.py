@@ -384,7 +384,18 @@ def build_workbook_v2_and_maybe_provision(
         state = build_kickoff_state(docs, live_schema_text=live_schema_text(root))
         audience = resolve_audience_preference(root).value
         provenance = load_ledger(root)
-        board = build_workbook_v2(state, name, audience=audience, provenance=provenance)
+        # Agentic cockpit read-model (M2): fold the FR-1 session snapshot + VIPP inbox so the
+        # Assistant/Proposals tabs mirror the real session. Best-effort — a broken view degrades to
+        # honest empty-state tabs (FR-10), never a failed build.
+        try:
+            from .agentic_view import build_agentic_view
+
+            view = build_agentic_view(root)
+        except Exception:  # pragma: no cover - the cockpit view is never load-bearing
+            view = None
+        board = build_workbook_v2(
+            state, name, audience=audience, provenance=provenance, view=view
+        )
 
         dest = (
             Path(out_dir).expanduser()
@@ -398,6 +409,8 @@ def build_workbook_v2_and_maybe_provision(
             "dynamic": True,
             "audience": audience.value,
             "fields": len(state.fields),
+            "snapshot": (view.snapshot_status if view is not None else "absent"),
+            "proposals": (len(view.proposals) if view is not None else 0),
         }
 
         provisioned_url: Optional[str] = None

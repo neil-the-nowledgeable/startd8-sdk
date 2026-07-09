@@ -1,8 +1,8 @@
 # Agentic Workbook — Implementation Plan
 
-**Version:** 1.2 (OQ-2/OQ-3 user decisions + FR-6b Loki depth)
+**Version:** 1.3 (M1–M5 IMPLEMENTED + live-verified)
 **Date:** 2026-07-09
-**Status:** Ready for implementation (CRP R1 applied; OQ-2/OQ-3 resolved)
+**Status:** IMPLEMENTED (M1–M5; M6 live-chat deferred) — live-verified on Grafana 13.1.0
 **Requirements:** `AGENTIC_WORKBOOK_REQUIREMENTS.md` (v0.5)
 
 ---
@@ -58,6 +58,22 @@ the endpoint decision.
 - **Enumerated live assertions (R1-S8)** on Grafana 13.1.0 (do not delegate to an unspecified harness): (1) all **three tabs render**; (2) toggling the `audience` variable changes **only** the active default (no other panel diff); (3) a **seeded inbox row appears** in the Proposals tab; (4) conditional rendering hides/shows the Beginner-shielded sections; (5) the **Loki `logs` panel renders** and (given a seeded `startd8.kickoff.transcript` log line) returns the full transcript for the newest session. Reuse the dynamic-dashboards live-check harness for transport, add these named checks on top.
 - Docs: update `GRAFANA_KICKOFF_PORTAL_*` + `DYNAMIC_DASHBOARDS_*` cross-refs to point at this cockpit as the M6/M7 consumer.
 
+#### M5 live-verification record (Grafana 13.1.0, 2026-07-09)
+
+Provisioned a view-populated cockpit (seeded snapshot `session_id=live-sid-001` + inbox proposal `LP-1`)
+to a live Grafana **13.1.0** via `provision_v2` (legacy `/api/dashboards/db`, `force=True`) → **success**.
+Enumerated assertions, verified against the **stored v2 form** (`GET /apis/dashboard.grafana.app/v2beta1/…`,
+full fidelity) and the classic projection:
+1. **Three tabs render** — `layout.kind == TabsLayout`, `[Status, Assistant, Proposals]`. ✅
+2. **Audience toggle changes only the active default** — the `audience` CustomVariable survives; byte-identity
+   is unit-proven (`test_fr8_byte_identical_across_audiences_with_frozen_view`). ✅
+3. **Seeded inbox row appears in Proposals** — `LP-1` present in the live board. ✅
+4. **Conditional hide/show survives** — Assistant's Loki row `visibility=hide` (Beginner); Proposals full=`hide`
+   + simplified=`show`. ✅
+5. **Loki full-depth panel (FR-6b)** — the `logs` panel survives in the stored v2 form, LogQL scoped to
+   `session_id="live-sid-001"`. ✅
+Transcript text + audience var also confirmed in the classic projection. Test dashboard deleted after.
+
 ### M6 — Live chat (FR-11) — *DEFERRED, separate track, gated*
 - Not scheduled in this plan. When the endpoint/exposure decision is made: fork the CC panel React shell, rewire to a loopback `AgenticSession` endpoint (survey/assess/propose + confirm), harden via the `consult --serve` pattern. Tracked as future work; no code in M1–M5.
 
@@ -105,6 +121,8 @@ the endpoint decision.
 *v1.0 — initial plan from the post-planning requirements. Six milestones; M1–M5 are the read-only cockpit (v1), M6 (live chat) is deferred behind the endpoint/exposure gate.*
 
 *v1.1 — Post-CRP R1 triage. All 8 S-suggestions ACCEPTED + applied: M1 gained named redaction + planted-secret test + write atomicity/ordering + temp-then-rename; M2 gained the `AgenticView` schema + version-degrade path; M3 gained the pre-refactor golden ordering gate + confirm-command round-trip test; M4 decided embed-not-reference + frozen-fixture byte-diff; M5 enumerated the live assertions; new risk R6 (overwrite/concurrency). See Appendix A.*
+
+*v1.3 — M1–M5 IMPLEMENTED. session_snapshot.py (M1) + agentic_view.py (M2) + portal_spec_v2.py TabsLayout cockpit (M3) + audience conditionals (M4) + portal_build view-wiring (M5). 47 new unit tests; classic path + existing v2 audience-Workbook tests green. Live-verified on Grafana 13.1.0 (record above). M6 live-chat remains deferred.*
 
 *v1.2 — OQ-2/OQ-3 user decisions folded in. OQ-2 (full transcript) → FR-6b: M1 emits redacted transcript turns to Loki via `get_logger`; M3 adds a `loki`-datasource `logs` panel to the Assistant tab for full depth (additive, graceful-degrade, no new endpoint → FR-11 gate uncrossed); new risk R7. OQ-3 (Beginner Proposals) → M4 shows a simplified (not hidden) Proposals tab. Source-verification pass confirmed all named symbols; 3 deltas recorded (redact() tuple return; build_workbook_v2 uses RowsLayout so M3 wraps into a Status Section; --dynamic in cli_concierge.py vs chat seam in cli_kickoff.py:677).*
 
