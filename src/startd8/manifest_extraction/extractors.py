@@ -193,7 +193,8 @@ def extract_views(
             continue
         view["root"] = root
 
-        # board requires Group by: (the column discriminator); optional Order:.
+        # board requires Group by: (the column discriminator); a static board also requires Order:
+        # (or Columns from: for an entity-backed board) — enforced downstream by the F2 generator guard.
         if kind == "board":
             group_by = keys.get("Group by", "")
             if not group_by:

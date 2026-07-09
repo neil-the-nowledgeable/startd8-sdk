@@ -309,6 +309,84 @@ def test_sqlmodel_fidelity_clean_and_flags():
     )
 
 
+# --------------------------------------------------------------------------- #
+# Client-logged friction regressions (docs/design/client-friction-fixes/)
+# --------------------------------------------------------------------------- #
+
+# portal-rebuild F13 + F3b: booleans defaulting via yes/no, and @unique / @@unique constraints.
+_FRICTION_SCHEMA = """
+model Reviewer {
+  id         String  @id
+  email      String  @unique
+  isOperator Boolean @default(no)
+  active     Boolean @default(yes)
+}
+
+model Review {
+  id           String @id
+  assignmentId String @unique
+  score        Int
+}
+
+model Membership {
+  userId String
+  teamId String
+  @@id([userId, teamId])
+  @@unique([userId, teamId])
+}
+
+model Enrollment {
+  id       String @id
+  personId String
+  courseId String
+  @@unique([personId, courseId])
+}
+"""
+
+
+def test_f13_yes_no_boolean_default_is_a_real_bool_not_a_truthy_string():
+    """F13: `Boolean @default(no)` was rendered `Field(default="no")` — a *truthy string*, so the
+    field silently defaulted True (operator-by-default). It must be a real Python boolean."""
+    text = render_sqlmodel_tables(_FRICTION_SCHEMA).text
+    assert "    isOperator: bool = Field(default=False)" in text
+    assert "    active: bool = Field(default=True)" in text
+    # the pre-fix bug signature must be gone
+    assert 'default="no"' not in text and 'default="yes"' not in text
+
+
+def test_f3b_field_level_unique_is_emitted():
+    """F3b: `@unique` was parsed but never emitted — tables had no unique constraints at all."""
+    text = render_sqlmodel_tables(_FRICTION_SCHEMA).text
+    assert "    email: str = Field(unique=True)" in text
+    assert "    assignmentId: str = Field(unique=True)" in text
+
+
+def test_f3b_model_level_unique_becomes_table_args():
+    """F3b: `@@unique([...])` → a composite UniqueConstraint in __table_args__."""
+    text = render_sqlmodel_tables(_FRICTION_SCHEMA).text
+    assert (
+        "    __table_args__ = (UniqueConstraint('personId', 'courseId', "
+        "name='uq_enrollment_personId_courseId'),)"
+    ) in text
+    assert "from sqlalchemy import UniqueConstraint" in text or (
+        "UniqueConstraint" in text and "from sqlalchemy import" in text
+    )
+
+
+def test_f3b_compound_unique_equal_to_pk_is_not_duplicated():
+    """F3b: a `@@unique` identical to the `@@id` PK must not emit a redundant constraint."""
+    text = render_sqlmodel_tables(_FRICTION_SCHEMA).text
+    # Membership's @@unique == its @@id — no UniqueConstraint for it.
+    assert "uq_membership" not in text
+
+
+def test_friction_schema_renders_valid_and_stable_python():
+    """FR-0b: the fixed output must compile and be byte-stable (idempotent)."""
+    out = render_sqlmodel_tables(_FRICTION_SCHEMA).text
+    compile(out, "<friction_tables>", "exec")
+    assert render_sqlmodel_tables(_FRICTION_SCHEMA).text == out
+
+
 def test_sqlmodel_dto_split():
     """OQ-3: Create/Read/Update DTOs alongside the (unchanged) table class."""
     text = render_sqlmodel_tables(PILOT_SCHEMA).text
