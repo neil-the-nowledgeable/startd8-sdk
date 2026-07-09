@@ -9,7 +9,14 @@ Workbook. Two strategy forks are resolved by an up-front spike (M0) before build
 
 ---
 
-## M0 — Spike on the upgraded Grafana (resolves OQ-1, OQ-3) — **do first, gates everything**
+## M0 — Spike on the upgraded Grafana (resolves OQ-1, OQ-3) — ✅ **DONE (2026-07-09, verdict GO)**
+> Executed on live Grafana **13.1.0**. **OQ-1 GO** (both `/api/dashboards/db` and the resource API accept
+> v2 with round-trip fidelity; resource API recommended). **OQ-2** Python-side emitter confirmed (plain
+> JSON). **OQ-3** `dashboardSectionVariables` + `dashboardNewLayouts` ON; tab-scoped section variable
+> round-tripped. Composite board (tabs + conditionalRendering + section var + embedded Panel) validated.
+> Artifacts + full write-up: **`m0-spike/`** (`M0_SPIKE_FINDINGS.md`, `v2-envelope.golden.json`,
+> `v2-envelope-schema.json`, `v2-construct-names.json`). M1 is unblocked.
+
 - **Composite board (R2-S6/R1-S7):** hand-author ONE v2 dashboard that nests **all three FR-2/3/4
   constructs simultaneously** — a `TabsLayout` tab → `RowsLayout` row → a **section variable** on the row,
   a **conditional-rendering rule** on the tab (`variable == 'x'`), AND **one existing classic panel dict

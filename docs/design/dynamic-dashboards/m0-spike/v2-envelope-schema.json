@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "apiVersion": {
+      "const": "dashboard.grafana.app/v2"
+    },
+    "kind": {
+      "const": "Dashboard"
+    },
+    "metadata": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "properties": {
+        "elements": {
+          "type": "object"
+        },
+        "layout": {
+          "properties": {
+            "kind": {
+              "enum": [
+                "GridLayout",
+                "AutoGridLayout",
+                "TabsLayout",
+                "RowsLayout"
+              ]
+            },
+            "spec": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "spec"
+          ],
+          "type": "object"
+        },
+        "title": {
+          "type": "string"
+        },
+        "variables": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "title",
+        "layout",
+        "elements"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "spec"
+  ],
+  "title": "Grafana dashboard.grafana.app/v2 envelope (M0-verified on 13.1.0)",
+  "type": "object"
+}
