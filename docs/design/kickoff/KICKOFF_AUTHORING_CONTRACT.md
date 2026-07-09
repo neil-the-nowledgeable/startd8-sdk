@@ -156,7 +156,9 @@ claim "every other line maps 1:1" was false — CRP R1; the actual mappings:)*
 
 **Per-kind keys (CRP R1/R2):** every block requires `Kind` + `Root` (name from the heading;
 route derived below). `board` additionally **requires `Group by:`** (a Root-entity field — the
-column discriminator; optional `Order:` = allowed column values). `export-package` requires
+column discriminator) **and `Order:`** (the allowed column values, in order — a static board's
+columns); or `Columns from:` for an entity-backed board. Omitting both is a hard error
+(`board '<name>' requires an Order:`, the F2 guard). `export-package` requires
 `Of:` (the workspace it bundles) + `Formats:`. A block ends at the next heading or the first
 non-`- Key:` line.
 
@@ -505,7 +507,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 | R1-G4 | Name-derivation rules (annotation stripping, NFKD kebab, collisions pre-flight, reserved names) | R1 (opus); endorsed R2 | New §2.0 (shared by §2.1–2.3) | 2026-06-05 |
 | R1-G5 | §2.7 Setting→AppManifest mapping + per-cell micro-grammars | R1 (opus) | §2.7 mapping table (port/sqlite-mode/env-keys = generator-gap; env-keys still parsed for the agreement check) | 2026-06-05 |
 | R1-G6 | Single-source vocabulary ownership + resolve the 3 template drifts + exclude category-words + intro matcher | R1 (opus); endorsed R2 | New §5 ownership; §2.4 category-word mapping; drifts adopted into §2.1/§2.4 | 2026-06-05 |
-| R2-G1 | `board` requires `Group by:` (+ optional `Order:`) | R2 (sonnet) | §2.3 per-kind keys | 2026-06-05 |
+| R2-G1 | `board` requires `Group by:` (+ `Order:` — later made **required** for static boards by the F2 guard) | R2 (sonnet) | §2.3 per-kind keys | 2026-06-05 |
 | R2-G2 | `Shows:` fk derivation sequenced AFTER the relationship pass; never guessed | R2 (sonnet) | §2.3 sequencing-dependency clause (`not_extracted(fk-unavailable)`) | 2026-06-05 |
 | R2-G3 | View-heading annotation stripping (`View: ` prefix first, then `*(…)*`) | R2 (sonnet) | §2.0 annotation rule covers both heading forms | 2026-06-05 |
 | R2-G4 | Completeness intro-sentence anchor pattern | R2 (sonnet) | §2.4 block-recognition bullet (`is complete when it has`, case-insensitive) | 2026-06-05 |

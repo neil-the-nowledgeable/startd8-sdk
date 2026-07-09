@@ -117,7 +117,7 @@ Navigation:
 ### View: <Name>
 - Kind: <dashboard | board | workspace | detail-compose | export-package | import-flow | computed-panel>
 - Root: <EntityName>   *(omit for import-flow / computed-panel — they carry no entity)*
-- Group by: <Root-entity field>   *(REQUIRED for board only — the column discriminator; optional `Order:` allow-lists the column values)*
+- Group by: <Root-entity field>   *(REQUIRED for board only — the column discriminator; a static board also REQUIRES `Order:` (the column values, in order), or `Columns from:` for an entity-backed board)*
 - Shows: <Entity→Entity connections / fields to surface>
 ▷ computed-panel binds a registered compute function (e.g. the completeness score):
 - Compute: <binding>   *(computed-panel only; e.g. completeness)*
