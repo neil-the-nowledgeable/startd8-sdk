@@ -145,3 +145,36 @@ def test_outside_view_prompt_is_derived_from_objective(tmp_path, small_roster):
     assert "NAME the general reference class" in ov
     assert "track household chores" in ov          # derived from THIS objective
     assert "online retailer" not in ov.lower()      # the old hardcoded class is gone
+
+
+# ── full-run() wiring: the challenger role must actually RECEIVE challenger framing ───
+# Regression for the `_is_challenger` bug — the prototype skeptic is in SKEPTIC_IDS, NOT
+# ADVERSARY_IDS, so a bare `rid in ADVERSARY_IDS` check silently left it on the ordinary-persona
+# prompt (dead _r1_skeptic_prompt / _premortem_skeptic on the real path). Asserting the per-persona
+# `entry["prompt"]` through a real run() is what the isolated `_r1_for(is_challenger=True)` unit test
+# could not catch.
+def _prompt_for(session, round_id, role_id):
+    rnd = next(r for r in session["rounds"] if r["round_id"] == round_id)
+    return next(e for e in rnd["entries"] if e["role_id"] == role_id)["prompt"]
+
+
+def test_prototype_run_wires_skeptic_framing_to_the_skeptic(tmp_path, small_roster):
+    cfg = F.FacilitationConfig(project=tmp_path, posture="prototype",
+                               ground=False, assumptions=False, outside_view=False)
+    _, session = _run(small_roster, cfg,
+                      persona_agent_factory=_persona_factory(),
+                      facilitator_agent_factory=_facilitator())
+    # the skeptic (a SKEPTIC_IDS challenger) actually gets the skeptic round prompts
+    assert "SKEPTICAL NEW USER" in _prompt_for(session, "R1", "skeptical-new-user")
+    assert "skeptical new user" in _prompt_for(session, "R2", "skeptical-new-user").lower()
+    # an ordinary persona still gets the constructive (non-challenger) framing
+    assert "UX IMPROVEMENTS" in _prompt_for(session, "R1", "product-owner")
+
+
+def test_scrutiny_run_wires_adversary_framing_to_adversaries(tmp_path, small_roster):
+    cfg = F.FacilitationConfig(project=tmp_path, ground=False, assumptions=False, outside_view=False)
+    _, session = _run(small_roster, cfg,
+                      persona_agent_factory=_persona_factory(),
+                      facilitator_agent_factory=_facilitator())
+    assert "ADVERSARY" in _prompt_for(session, "R1", "adversary-exploit")
+    assert "biggest RISK" in _prompt_for(session, "R1", "product-owner")

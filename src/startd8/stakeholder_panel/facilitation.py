@@ -939,8 +939,12 @@ class KickoffFacilitator:
         briefs = {b.role_id: b for b in briefs_all}
         adv_ids = [b.role_id for b in briefs_all if b.role_id in ADVERSARY_IDS]
 
-        def _adv(rid: str) -> bool:
-            return rid in ADVERSARY_IDS
+        def _is_challenger(rid: str) -> bool:
+            # Drives per-round challenger framing. Must span BOTH postures' challengers: scrutiny's
+            # adversaries AND prototype's skeptic (SKEPTIC_IDS) — a bare ADVERSARY_IDS check left the
+            # prototype skeptic on the ordinary-persona prompt. ADVERSARY_IDS ⊆ CHALLENGER_IDS and a
+            # scrutiny roster carries no skeptic, so scrutiny behavior is unchanged.
+            return rid in CHALLENGER_IDS
 
         panel = self._build_panel(briefs_all, specs)
         # Session scaffold up front so H2/H3 halts are FIRST-CLASS transcript states the
@@ -1040,7 +1044,7 @@ class KickoffFacilitator:
 
             # R1 individual means-ends (challengers get challenger framing; posture picks the framing)
             r1_prompts = {
-                b.role_id: _r1_for(ctx, pname, cfg.posture, _adv(b.role_id))
+                b.role_id: _r1_for(ctx, pname, cfg.posture, _is_challenger(b.role_id))
                 for b in briefs_all
             }
             r1 = await self._run_round(panel, briefs_all, "R1", "Individual analysis (means-ends)",
@@ -1051,7 +1055,7 @@ class KickoffFacilitator:
             budget_halt = self._budget_guard(session)  # H3 cumulative-abort before the next round
             if budget_halt is not None:
                 return budget_halt
-            r2_prompts = {b.role_id: _premortem_for(pname, cfg.posture, _adv(b.role_id)) for b in briefs_all}
+            r2_prompts = {b.role_id: _premortem_for(pname, cfg.posture, _is_challenger(b.role_id)) for b in briefs_all}
             r2 = await self._run_round(panel, briefs_all, "R2", "Pre-mortem (private)",
                                        "premortem", r2_prompts, specs, briefs)
             self._land_round(session, r2)
