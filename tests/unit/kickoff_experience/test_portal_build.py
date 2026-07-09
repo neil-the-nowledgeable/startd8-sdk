@@ -287,3 +287,46 @@ def test_build_refuses_provision_on_collision(monkeypatch):
     )
     assert res.skipped_reason and "already belongs" in res.skipped_reason
     assert res.json_path is None  # refused before provisioning — never clobbered
+
+
+# ------------------------------------------- audience personalization fail-open (Era 1, R2-S4/R2-S7)
+
+
+def _overview_content(json_path) -> str:
+    d = json.loads(Path(json_path).read_text())
+    return next(p for p in d["panels"] if p.get("type") == "text")["options"]["content"]
+
+
+def test_audience_resolution_failure_degrades_not_skips(monkeypatch):
+    """R2-S7: a raise in resolve_audience_preference must degrade to the default board, NOT be swallowed
+    by the broad except into a misleading 'generation failed' skip."""
+    proj = _proj()
+    _instantiate(proj, "--no-portal")
+
+    def _boom(*a, **k):
+        raise RuntimeError("config blew up")
+
+    monkeypatch.setattr("startd8.concierge.audience.resolve_audience_preference", _boom)
+    res = build_and_maybe_provision(proj, "demo")
+    assert res.ok and res.skipped_reason is None
+    assert "Rendered for" not in _overview_content(res.json_path)  # degraded to Intermediate/light
+
+
+def test_missing_build_preferences_defaults_to_intermediate():
+    """R2-S4: no build-preferences.yaml → resolve falls to Intermediate; board still generates."""
+    proj = _proj()
+    _instantiate(proj, "--no-portal")
+    (proj / "docs" / "kickoff" / "inputs" / "build-preferences.yaml").unlink(missing_ok=True)
+    res = build_and_maybe_provision(proj, "demo")
+    assert res.ok
+    assert "Rendered for" not in _overview_content(res.json_path)
+
+
+def test_malformed_ledger_yields_no_badges_no_crash():
+    """R2-S4/FR-6: a corrupt confirmed.yaml → load_ledger returns {} tolerantly; no badge, no crash."""
+    proj = _proj()
+    _instantiate(proj, "--no-portal")
+    (proj / "docs" / "kickoff" / "confirmed.yaml").write_text("::: not yaml :::", encoding="utf-8")
+    res = build_and_maybe_provision(proj, "demo")
+    assert res.ok
+    assert "🛡️" not in _overview_content(res.json_path)

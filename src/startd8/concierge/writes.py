@@ -121,6 +121,7 @@ def _load_template(rel: str) -> str:
 #: ``kickoff_template_manifest``). Keyed by a closed slug so callers never pass a path.
 _EXPERIENCE_DOCS: Dict[str, str] = {
     "intro": "KICKOFF_EXPERIENCE_INTRO.md",
+    "workbook": "KICKOFF_WORKBOOK_INTRO.md",
 }
 
 _TLDR_OPEN = "<!-- TL;DR -->"

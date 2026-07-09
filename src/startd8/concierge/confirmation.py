@@ -50,12 +50,28 @@ def audience_default_provenance(slug: str) -> str:
     return f"{AUDIENCE_DEFAULT_PREFIX}{slug}"
 
 
-def _is_audience_default(entry: Any) -> bool:
-    """True iff a ledger entry was written by the audience pre-pass (has an ``audience-default:*`` provenance)."""
+def is_audience_default(entry: Any) -> bool:
+    """True iff a ledger entry was written by the audience pre-pass (an ``audience-default:*`` provenance).
+
+    The public predicate (FR-9) consumers outside this module use to read provenance without reaching a
+    private symbol. Tolerant by design: a non-dict entry, or an entry lacking the optional ``provenance``
+    key (the common ``{value, at, mode}`` shape), returns ``False`` — never raises.
+    """
     if not isinstance(entry, dict):
         return False
     prov = entry.get("provenance")
     return isinstance(prov, str) and prov.startswith(AUDIENCE_DEFAULT_PREFIX)
+
+
+def audience_default_slug(entry: Any) -> Optional[str]:
+    """The ``<slug>`` an audience-default entry was stamped for, or ``None`` if the entry is not one."""
+    if not is_audience_default(entry):
+        return None
+    return entry["provenance"][len(AUDIENCE_DEFAULT_PREFIX) :]
+
+
+#: Back-compat private alias — internal callers (``_dump_ledger``) predate the public name (FR-9).
+_is_audience_default = is_audience_default
 
 
 #: A field is "confirmable" (worth a human decision) when its template provenance is a default.

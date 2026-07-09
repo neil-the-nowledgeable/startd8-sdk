@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import json
 from pathlib import Path
 
 import pytest
@@ -161,12 +160,16 @@ def test_distinct_uid_coexists_with_classic():
     assert workbook_v2_uid("My App") == "cc-portal-kickoff-my-app-v2"
 
 
-def test_classic_build_kickoff_portal_spec_untouched():
-    # R2-F5: M6 is additive — the classic spec builder is not modified by this milestone
-    import inspect
+def test_m6_v2_path_is_separate_from_the_classic_builder():
+    # R2-F5: M6 is additive — `build_workbook_v2` is a SEPARATE module and neither calls nor mutates the
+    # classic `build_kickoff_portal_spec`. (Post-Era-1 the classic builder DOES carry `audience` params —
+    # that is Era 1's classic audience port, an independent feature; M6 neither added them nor depends on
+    # them. So we verify structural separateness, not the absence of the word "audience".)
     from startd8.kickoff_experience.portal_spec import build_kickoff_portal_spec
 
-    src = inspect.getsource(build_kickoff_portal_spec)
+    assert build_workbook_v2.__module__ == "startd8.kickoff_experience.portal_spec_v2"
     assert (
-        "audience" not in src
-    )  # the classic builder on this branch has no audience params (untouched)
+        build_kickoff_portal_spec.__module__ == "startd8.kickoff_experience.portal_spec"
+    )
+    # the v2 builder never *calls* the classic spec builder (bytecode name refs — no docstring false-match)
+    assert "build_kickoff_portal_spec" not in build_workbook_v2.__code__.co_names
