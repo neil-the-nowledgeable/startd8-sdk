@@ -95,6 +95,7 @@ async def orchestrate(args: argparse.Namespace) -> None:
         strategy=ctx.strategy,
         desc=ctx.desc,
         project_name=args.project_name,
+        posture=args.posture,
         cap=args.cap,
         ground=args.ground,
         assumptions=args.assumptions,
@@ -109,21 +110,25 @@ async def orchestrate(args: argparse.Namespace) -> None:
 
     briefs_all = F.build_briefs(cfg, roster)
     specs, fams = F.assign_models(briefs_all)
-    adv_ids = [b.role_id for b in briefs_all if b.role_id in F.ADVERSARY_IDS]
+    challenger_ids = [b.role_id for b in briefs_all if b.role_id in F.CHALLENGER_IDS]
     n = len(briefs_all)
     persona_rounds = 4 if cfg.final_judgment else 3
     projected = F.projected_calls(cfg, n)
 
-    print(f"Kickoff Panel orchestrator (v0.2 / Tier-1) — {n} participants "
-          f"({len(adv_ids)} adversary), {persona_rounds} persona rounds + synthesis")
+    challenger_word = "skeptic" if cfg.posture == F.POSTURE_PROTOTYPE else "adversary"
+    print(f"Kickoff Panel orchestrator (v0.2 / Tier-1) — posture={cfg.posture} — {n} participants "
+          f"({len(challenger_ids)} {challenger_word}), {persona_rounds} persona rounds + synthesis")
+    if cfg.posture == F.POSTURE_PROTOTYPE:
+        print("  prototype posture: constructive UX-improvement framing; assumptions check is a "
+              "NON-BLOCKING readiness note (no premise-halt).")
     print(f"Roster: {roster_path}")
     print("Tier-1 additions:", ", ".join(
         [k for k, v in [("ground", cfg.ground), ("assumptions", cfg.assumptions),
-                        ("outside-view", cfg.outside_view), ("adversary", cfg.adversary),
+                        ("outside-view", cfg.outside_view), ("adversary/skeptic", cfg.adversary),
                         ("final-judgment", cfg.final_judgment)] if v]) or "(none)")
     print("\nModel assignment (de-correlation):")
     for b in briefs_all:
-        tag = "  <ADVERSARY>" if b.role_id in F.ADVERSARY_IDS else ""
+        tag = f"  <{challenger_word.upper()}>" if b.role_id in F.CHALLENGER_IDS else ""
         print(f"  {b.role_id:26s} -> {specs[b.role_id]}  [{fams[b.role_id]}]{tag}")
     print(f"\nProjected model calls: {projected}  (prep + {n}x{persona_rounds} + synth)")
 
@@ -185,6 +190,12 @@ def main(argv=None):
                     help="Short domain noun used in prompts (e.g. 'a benchmark portal'). "
                          "Prevents the default-domain leaking into a re-purposed run (bug fix from #8).")
     ap.add_argument("--cap", type=int, default=0, help="Limit roster to first N personas (0 = all)")
+    ap.add_argument("--posture", choices=list(F.POSTURES), default=F.POSTURE_SCRUTINY,
+                    help="Panel posture. 'scrutiny' (default): strategic red-team/go-no-go — attack "
+                         "adversaries + premise-halt assumptions gate + failure pre-mortems. 'prototype': "
+                         "constructive early-stage UX mode — one skeptical-new-user (no attack adversaries), "
+                         "assumptions check is a NON-BLOCKING readiness note, rounds + synthesis reframed "
+                         "around improving the end-user experience.")
     ap.add_argument("--run", action="store_true", help="Actually call models (spends money). Default: dry-run.")
     # Tier-1 additions (default ON; use --no-<flag> to disable)
     ap.add_argument("--ground", action=argparse.BooleanOptionalAction, default=True)
