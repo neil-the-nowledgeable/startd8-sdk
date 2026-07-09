@@ -88,3 +88,31 @@ def test_project_enables_contract_diff(tmp_path: Path) -> None:
 def test_unreadable_doc_exits_2(tmp_path: Path) -> None:
     result = runner.invoke(app, ["kickoff", "check", str(tmp_path / "missing.md")])
     assert result.exit_code == 2
+
+
+# FR-F1/F8: a truncated in-table `choice of:` is advisory — visible + warn by default, fails --strict.
+_TRUNCATED_CHOICE_DOC = (
+    "## Entities\n\n"
+    "### Assignment\n"
+    "| Field | Type | Required | Notes |\n"
+    "|-------|------|----------|-------|\n"
+    "| status | choice of: not_started|in_progress|submitted | yes | |\n"
+)
+
+
+def test_choice_of_advisory_warns_but_exits_zero_by_default(tmp_path: Path) -> None:
+    doc = tmp_path / "trunc.md"
+    doc.write_text(_TRUNCATED_CHOICE_DOC, encoding="utf-8")
+    result = runner.invoke(app, ["kickoff", "check", str(doc)])
+    assert result.exit_code == 0, result.output
+    assert "advisory:" in result.output
+    assert "choice-of-single-value" in result.output
+
+
+def test_choice_of_advisory_promotes_to_failure_under_strict(tmp_path: Path) -> None:
+    """The false-green bug: on `main` this doc passed --strict clean (enum silently truncated). The
+    advisory must now promote it to a conformance failure."""
+    doc = tmp_path / "trunc.md"
+    doc.write_text(_TRUNCATED_CHOICE_DOC, encoding="utf-8")
+    result = runner.invoke(app, ["kickoff", "check", str(doc), "--strict"])
+    assert result.exit_code == 1, result.output

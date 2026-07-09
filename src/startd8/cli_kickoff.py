@@ -133,7 +133,17 @@ def check(
     else:
         _render(result)
 
-    if strict and any(_is_conformance_failure(r) for r in result.records):
+    # FR-F1a/F1d: advisories (e.g. a truncated `choice of:`) are values that DID extract but are
+    # suspicious. Warn visibly by default (exit 0 preserved); `--strict` promotes them to failures so
+    # silent data loss cannot pass a green gate. Warnings go to stderr so `--json` stdout stays clean.
+    advisories = [r for r in result.records if r.is_advisory]
+    if advisories and not json_out:
+        for r in advisories:
+            _stderr_console.print(f"[yellow]advisory:[/yellow] {r.reason}")
+
+    if strict and (
+        any(_is_conformance_failure(r) for r in result.records) or advisories
+    ):
         raise typer.Exit(_EXIT_CONFORMANCE)
 
 

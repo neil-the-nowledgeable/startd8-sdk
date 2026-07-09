@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 from .grammar import Section, md_tables, plural_candidates, strip_annotations
-from .models import ExtractionRecord, SourceRef, Status
+from .models import ADVISORY_PREFIX, ExtractionRecord, SourceRef, Status
 
 # Plain-type vocabulary → Prisma scalar (contract §2.1, CRP-decided Int/Float split).
 PLAIN_TYPES: Dict[str, str] = {
@@ -235,6 +235,30 @@ def extract_entities(
             elif choice:
                 prisma_type = f"{name}{fname[0].upper()}{fname[1:]}"  # synthesized enum type name
                 enum_values = tuple(v.strip() for v in choice.group(1).split("|") if v.strip())
+                # F1/F8: a `choice of:` that yields exactly ONE value is suspicious — most often an
+                # unescaped `|` split `choice of: a|b|c` across table columns upstream in md_tables,
+                # silently truncating the enum to its first value (portal-rebuild F1; `kickoff check`
+                # reported "docs conform"). Flag it as advisory (warn; --strict fails). FR-F1e: the
+                # raw row is wider than the header when the split happened — that ragged-row evidence
+                # distinguishes a truncation from a genuine single-member vocabulary.
+                if len(enum_values) == 1:
+                    over_wide = len(tables[0].rows[i]) > len(tables[0].headers)
+                    why = (
+                        "an unescaped `|` split the `choice of:` across table columns "
+                        "(escape literal pipes as `\\|`, e.g. `choice of: a\\|b\\|c`)"
+                        if over_wide
+                        else "a single-member `choice of:` (use a plain type if it is not an enum)"
+                    )
+                    records.append(ExtractionRecord(
+                        "schema.prisma", f"/models/{name}/fields/{fname}", Status.EXTRACTED,
+                        value=enum_values[0],
+                        source=SourceRef(doc_label, sec.heading_path, row_index=i),
+                        reason=(
+                            f"{ADVISORY_PREFIX}choice-of-single-value: {name}.{fname} extracted a "
+                            f"single enum value {enum_values[0]!r} from a `choice of:` type — "
+                            f"likely {why}"
+                        ),
+                    ))
             if prisma_type is None:
                 records.append(ExtractionRecord(
                     "schema.prisma", f"/models/{name}/fields/{fname}", Status.NOT_EXTRACTED,
@@ -420,6 +444,23 @@ def _parse_relationships(
                 "schema.prisma", f"/relationships/{subj}-{verb.replace(' ', '_')}-{obj}",
                 Status.EXTRACTED, value=f"{obj}.{_lower_camel(subj)}Id", source=src,
             ))
+            # F3 (FR-F3-iii, flag-only default landing): `has one` is currently emitted IDENTICALLY
+            # to `has many` — a one-to-many with a non-unique child FK (portal-rebuild F3). True
+            # one-to-one (singular relation + @unique on the child FK) is gated on the migration-
+            # safety precondition (FR-F3-iv) and unresolved forks, so rather than silently emit
+            # has-many we FLAG it as advisory: the output is unchanged but the author is told the
+            # one-to-one intent is not enforced (the app must treat it as at-most-one).
+            if verb == "has one":
+                records.append(ExtractionRecord(
+                    "schema.prisma", f"/relationships/{subj}-has_one-{obj}#cardinality",
+                    Status.EXTRACTED, value=f"{obj}.{_lower_camel(subj)}Id", source=src,
+                    reason=(
+                        f"{ADVISORY_PREFIX}has-one-unsupported: '{subj} has one {obj}' is emitted as "
+                        f"one-to-many ({obj}.{_lower_camel(subj)}Id is NOT @unique) — true one-to-one "
+                        f"is not yet enforced. Treat as at-most-one, or add a `Unique:` line on "
+                        f"{obj}.{_lower_camel(subj)}Id to enforce it at the DB."
+                    ),
+                ))
         elif verb == "belongs to":
             rest, rev_name = _split_as_clause(rest)   # FR-PE-13: optional `as <name>`
             obj = _resolve_object(graph, rest, records, subj, src, "parent entity")
