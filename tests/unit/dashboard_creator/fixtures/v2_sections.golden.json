@@ -1,0 +1,215 @@
+{
+  "apiVersion": "dashboard.grafana.app/v2",
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "m4-sections"
+  },
+  "spec": {
+    "annotations": [],
+    "cursorSync": "Off",
+    "description": "",
+    "editable": true,
+    "elements": {
+      "p1": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "",
+          "id": 1,
+          "links": [],
+          "title": "A",
+          "vizConfig": {
+            "kind": "text",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "options": {
+                "content": "x",
+                "mode": "markdown"
+              }
+            }
+          }
+        }
+      },
+      "p2": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "",
+          "id": 2,
+          "links": [],
+          "title": "B",
+          "vizConfig": {
+            "kind": "text",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "options": {
+                "content": "y",
+                "mode": "markdown"
+              }
+            }
+          }
+        }
+      }
+    },
+    "layout": {
+      "kind": "RowsLayout",
+      "spec": {
+        "rows": [
+          {
+            "kind": "RowsLayoutRow",
+            "spec": {
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "p1"
+                        },
+                        "height": 6,
+                        "width": 24,
+                        "x": 0,
+                        "y": 0
+                      }
+                    }
+                  ]
+                }
+              },
+              "title": "R1",
+              "variables": [
+                {
+                  "kind": "CustomVariable",
+                  "spec": {
+                    "current": {
+                      "text": "low",
+                      "value": "low"
+                    },
+                    "hide": "dontHide",
+                    "includeAll": false,
+                    "multi": false,
+                    "name": "detailA",
+                    "options": [
+                      {
+                        "selected": true,
+                        "text": "low",
+                        "value": "low"
+                      },
+                      {
+                        "selected": false,
+                        "text": "high",
+                        "value": "high"
+                      }
+                    ],
+                    "query": "low,high",
+                    "skipUrlSync": false
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "RowsLayoutRow",
+            "spec": {
+              "collapse": false,
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "p2"
+                        },
+                        "height": 6,
+                        "width": 24,
+                        "x": 0,
+                        "y": 0
+                      }
+                    }
+                  ]
+                }
+              },
+              "title": "R2",
+              "variables": [
+                {
+                  "kind": "CustomVariable",
+                  "spec": {
+                    "current": {
+                      "text": "a",
+                      "value": "a"
+                    },
+                    "hide": "dontHide",
+                    "includeAll": false,
+                    "multi": false,
+                    "name": "detailB",
+                    "options": [
+                      {
+                        "selected": true,
+                        "text": "a",
+                        "value": "a"
+                      },
+                      {
+                        "selected": false,
+                        "text": "b",
+                        "value": "b"
+                      },
+                      {
+                        "selected": false,
+                        "text": "c",
+                        "value": "c"
+                      }
+                    ],
+                    "query": "a,b,c",
+                    "skipUrlSync": false
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "links": [],
+    "liveNow": false,
+    "preload": false,
+    "tags": [
+      "m4"
+    ],
+    "timeSettings": {
+      "autoRefresh": "",
+      "autoRefreshIntervals": [],
+      "from": "now-6h",
+      "hideTimepicker": false,
+      "timezone": "browser",
+      "to": "now"
+    },
+    "title": "M4 Sections",
+    "variables": []
+  }
+}

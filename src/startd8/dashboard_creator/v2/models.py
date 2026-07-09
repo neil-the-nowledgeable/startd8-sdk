@@ -130,6 +130,11 @@ class RowsLayoutRow(BaseModel):
     conditional: Any = (
         None  # an optional ConditionalRendering (M3) — show/hide the whole row
     )
+    variables: List[Any] = (
+        Field(  # section-level variables (M4) — CustomVariable, scoped to this row
+            default_factory=list
+        )
+    )
 
     def to_v2(self) -> Dict[str, Any]:
         sub = self.layout if self.layout is not None else GridLayout(items=self.items)
@@ -140,6 +145,8 @@ class RowsLayoutRow(BaseModel):
         }
         if self.conditional is not None:
             spec["conditionalRendering"] = _conditional_v2(self.conditional)
+        if self.variables:
+            spec["variables"] = _section_vars_v2(self.variables)
         return {"kind": "RowsLayoutRow", "spec": spec}
 
 
@@ -195,12 +202,19 @@ class TabsLayoutTab(BaseModel):
     conditional: Any = (
         None  # an optional ConditionalRendering (M3) — show/hide the whole tab
     )
+    variables: List[Any] = (
+        Field(  # section-level variables (M4) — CustomVariable, scoped to this tab
+            default_factory=list
+        )
+    )
 
     def to_v2(self) -> Dict[str, Any]:
         sub = self.layout if self.layout is not None else GridLayout(items=self.items)
         spec: Dict[str, Any] = {"title": self.title, "layout": _sub_layout_v2(sub)}
         if self.conditional is not None:
             spec["conditionalRendering"] = _conditional_v2(self.conditional)
+        if self.variables:
+            spec["variables"] = _section_vars_v2(self.variables)
         return {"kind": "TabsLayoutTab", "spec": spec}
 
 
@@ -338,6 +352,19 @@ def _conditional_v2(conditional: Any) -> Dict[str, Any]:
             f"conditional must be a ConditionalRendering, got {type(conditional).__name__}"
         )
     return conditional.to_v2()
+
+
+def _section_vars_v2(variables: List[Any]) -> List[Dict[str, Any]]:
+    """Render a section's (row/tab) variables to their ``{kind, spec}`` dicts (M4). Each must be a
+    v2 variable (currently ``CustomVariable``) — fails loud otherwise."""
+    out: List[Dict[str, Any]] = []
+    for v in variables:
+        if not hasattr(v, "to_v2"):
+            raise V2ValidationError(
+                f"section variable must be a v2 variable (CustomVariable), got {type(v).__name__}"
+            )
+        out.append(v.to_v2())
+    return out
 
 
 # --- variables ----------------------------------------------------------------------------------

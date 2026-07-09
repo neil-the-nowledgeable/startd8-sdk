@@ -9,6 +9,7 @@ fork from classic (R1-S4/R2-S7). No jsonnet, no LLM, ``$0`` (OQ-2).
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -72,7 +73,12 @@ def emit_v2_dashboard(
 
     layout_v2 = layout.to_v2()
     _validate_element_refs(layout_v2, set(elements))
-    _validate_conditional_variables(layout_v2, {v.name for v in (variables or [])})
+    # a conditional may reference a dashboard-level OR a section-level (M4) variable — both are declared
+    declared_vars = {v.name for v in (variables or [])} | _collect_section_var_names(
+        layout_v2
+    )
+    _validate_conditional_variables(layout_v2, declared_vars)
+    _validate_section_variable_refs(layout_v2)
 
     spec: Dict[str, Any] = {
         "title": title,
@@ -149,6 +155,81 @@ def _collect_conditional_vars(node: Any) -> set:
         for v in node:
             names |= _collect_conditional_vars(v)
     return names
+
+
+def _collect_section_var_names(layout_v2: Dict[str, Any]) -> set:
+    """Every ``CustomVariable`` name declared inside the layout is a *section* variable (M4) — dashboard-
+    level variables live in ``spec.variables``, never in the layout tree."""
+    names: set = set()
+    for name, _query in _iter_section_vars(layout_v2):
+        names.add(name)
+    return names
+
+
+def _iter_section_vars(node: Any):
+    """Yield ``(name, query)`` for each section ``CustomVariable`` anywhere in the layout tree."""
+    if isinstance(node, dict):
+        if node.get("kind") == "CustomVariable":
+            spec = node.get("spec", {})
+            yield spec.get("name"), spec.get("query", "")
+        for v in node.values():
+            yield from _iter_section_vars(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _iter_section_vars(v)
+
+
+_VAR_REF = re.compile(r"\$\{?(\w+)\}?")
+
+
+def _validate_section_variable_refs(layout_v2: Dict[str, Any]) -> None:
+    """Grafana #122553 (R1-F6): a section variable cannot reference another section variable **in the
+    same tab**. Enforced at build time — a same-tab cross-reference raises rather than shipping a board
+    that renders broken. Each ``TabsLayoutTab`` is its own scope; nested tabs are separate scopes.
+    """
+    for tab in _find_tab_nodes(layout_v2):
+        scope: Dict[str, str] = {}
+        _collect_tab_scope_vars(tab.get("spec", {}), scope)
+        names = set(scope)
+        for name, query in scope.items():
+            refs = set(_VAR_REF.findall(query or ""))
+            bad = sorted(refs & (names - {name}))
+            if bad:
+                raise V2ValidationError(
+                    f"section variable {name!r} references same-tab section variable(s) {bad} — "
+                    "unsupported by Grafana (#122553); move it to dashboard-level or a different tab"
+                )
+
+
+def _find_tab_nodes(node: Any):
+    """Yield every ``TabsLayoutTab`` dict anywhere in the tree (each opens its own section-var scope)."""
+    if isinstance(node, dict):
+        if node.get("kind") == "TabsLayoutTab":
+            yield node
+        for v in node.values():
+            yield from _find_tab_nodes(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _find_tab_nodes(v)
+
+
+def _collect_tab_scope_vars(node: Any, scope: Dict[str, str]) -> None:
+    """Collect the section variables in one tab's scope — its own + nested rows' — but STOP at a nested
+    ``TabsLayoutTab`` (a separate scope, validated on its own)."""
+    if isinstance(node, dict):
+        if node.get("kind") == "CustomVariable":
+            spec = node.get("spec", {})
+            if isinstance(spec.get("name"), str):
+                scope[spec["name"]] = spec.get("query", "")
+            return
+        if node.get("kind") == "TabsLayoutTab":
+            # a nested tab starts a fresh scope — don't pull its vars into this one
+            return
+        for v in node.values():
+            _collect_tab_scope_vars(v, scope)
+    elif isinstance(node, list):
+        for v in node:
+            _collect_tab_scope_vars(v, scope)
 
 
 def v2_json(dashboard: Dict[str, Any]) -> str:

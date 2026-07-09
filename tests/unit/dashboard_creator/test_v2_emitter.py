@@ -427,3 +427,140 @@ def test_bad_operator_and_visibility_fail_loud():
         ConditionalRendering(visibility="maybe", items=[]).to_v2()
     with pytest.raises(V2ValidationError, match="group condition must be"):
         ConditionalRendering(condition="xor", items=[]).to_v2()
+
+
+# --- M4: section-level variables (FR-3) ----------------------------------------------------------
+
+_M4_GOLDEN = Path(__file__).parent / "fixtures/v2_sections.golden.json"
+
+
+def _sections_board() -> dict:
+    return emit_v2_dashboard(
+        name="m4-sections",
+        title="M4 Sections",
+        tags=["m4"],
+        elements={"p1": text_panel(1, "A", "x"), "p2": text_panel(2, "B", "y")},
+        layout=RowsLayout(
+            rows=[
+                RowsLayoutRow(
+                    title="R1",
+                    items=[GridItem(element="p1", height=6)],
+                    variables=[CustomVariable(name="detailA", options=["low", "high"])],
+                ),
+                RowsLayoutRow(
+                    title="R2",
+                    items=[GridItem(element="p2", height=6)],
+                    variables=[CustomVariable(name="detailB", options=["a", "b", "c"])],
+                ),
+            ]
+        ),
+    )
+
+
+def test_two_sections_have_independent_variables():
+    rows = _sections_board()["spec"]["layout"]["spec"]["rows"]
+    assert [v["spec"]["name"] for v in rows[0]["spec"]["variables"]] == ["detailA"]
+    assert [v["spec"]["name"] for v in rows[1]["spec"]["variables"]] == ["detailB"]
+    # section variables are CustomVariable kind (the allowlist shape)
+    assert rows[0]["spec"]["variables"][0]["kind"] == "CustomVariable"
+
+
+def test_section_variable_on_tab():
+    board = emit_v2_dashboard(
+        name="tv",
+        title="tv",
+        elements={"p1": text_panel(1, "a", "b")},
+        layout=TabsLayout(
+            tabs=[
+                TabsLayoutTab(
+                    title="T",
+                    items=[GridItem(element="p1")],
+                    variables=[CustomVariable(name="tier", options=["x", "y"])],
+                )
+            ]
+        ),
+    )
+    tab = board["spec"]["layout"]["spec"]["tabs"][0]["spec"]
+    assert [v["spec"]["name"] for v in tab["variables"]] == ["tier"]
+
+
+def test_conditional_may_reference_a_section_variable():
+    # a conditional inside a tab referencing that tab's section variable must NOT falsely fail (M3+M4)
+    board = emit_v2_dashboard(
+        name="cs",
+        title="cs",
+        elements={"p1": text_panel(1, "a", "b")},
+        layout=TabsLayout(
+            tabs=[
+                TabsLayoutTab(
+                    title="T",
+                    items=[GridItem(element="p1")],
+                    variables=[CustomVariable(name="tier", options=["x", "y"])],
+                    conditional=show_when_variable("tier", "x"),
+                )
+            ]
+        ),
+    )
+    assert board["spec"]["layout"]["spec"]["tabs"][0]["spec"]["conditionalRendering"]
+
+
+def test_same_tab_section_variable_cross_reference_fails_122553():
+    with pytest.raises(V2ValidationError, match="#122553"):
+        emit_v2_dashboard(
+            name="bad",
+            title="bad",
+            elements={"p1": text_panel(1, "a", "b")},
+            layout=TabsLayout(
+                tabs=[
+                    TabsLayoutTab(
+                        title="T",
+                        items=[GridItem(element="p1")],
+                        variables=[
+                            CustomVariable(name="base", options=["1", "2"]),
+                            CustomVariable(name="dep", options=["$base-low"]),
+                        ],
+                    )
+                ]
+            ),
+        )
+
+
+def test_cross_tab_section_variable_reference_is_allowed():
+    # #122553 is same-tab only — the same names in DIFFERENT tabs must NOT trip the guard
+    emit_v2_dashboard(
+        name="ok",
+        title="ok",
+        elements={"p1": text_panel(1, "a", "b"), "p2": text_panel(2, "a", "b")},
+        layout=TabsLayout(
+            tabs=[
+                TabsLayoutTab(
+                    title="T1",
+                    items=[GridItem(element="p1")],
+                    variables=[CustomVariable(name="base", options=["1", "2"])],
+                ),
+                TabsLayoutTab(
+                    title="T2",
+                    items=[GridItem(element="p2")],
+                    variables=[CustomVariable(name="dep", options=["$base"])],
+                ),
+            ]
+        ),
+    )
+
+
+def test_sections_board_matches_golden():
+    assert v2_json(_sections_board()) == _M4_GOLDEN.read_text(encoding="utf-8")
+
+
+def test_sections_board_validates_against_m0_schema():
+    jsonschema = pytest.importorskip("jsonschema")
+    jsonschema.validate(
+        _sections_board(), json.loads(_M0_SCHEMA.read_text(encoding="utf-8"))
+    )
+
+
+def test_bad_section_variable_type_fails_loud():
+    with pytest.raises(V2ValidationError, match="section variable must be"):
+        RowsLayoutRow(
+            title="r", items=[GridItem(element="p1")], variables=["not-a-var"]
+        ).to_v2()

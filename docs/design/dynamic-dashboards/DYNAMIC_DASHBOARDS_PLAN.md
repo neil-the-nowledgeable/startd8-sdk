@@ -105,10 +105,19 @@ Workbook. Two strategy forks are resolved by an up-front spike (M0) before build
   validates against the M0 schema **and round-trips through live Grafana 13.1.0** (201, conditional
   survived). Bad operator/visibility/condition + undeclared-variable all fail loud.
 
-## M4 — Section-level variables (FR-3)
-- Per-row/tab `variables`; section-first resolution. Note the same-tab cross-reference limitation
-  (issue #122553) — validate against it.
-- **Verify:** two sections filter independently under one time range.
+## M4 — Section-level variables (FR-3) — ✅ **DONE (2026-07-09)**
+> Added a `variables` field (list of `CustomVariable`) to `RowsLayoutRow`/`TabsLayoutTab` — section-scoped
+> variables, verified on both a row and a tab (round-trip). Two guards: (a) the **#122553 build-time rule
+> (R1-F6)** — a section variable referencing another section variable **in the same tab** raises (per-tab
+> scope; nested tabs are separate scopes; cross-tab is allowed); (b) the M3 conditional-variable guard now
+> also recognizes **section** variables, so a conditional inside a section may reference its own section
+> var without a false "undeclared" error. 34 v2 tests / 515 dashboard_creator green; M4 golden
+> `fixtures/v2_sections.golden.json`. `dashboardSectionVariables` toggle was confirmed ON in M0.
+- Per-row/tab `variables`; section-first resolution ✅. Same-tab cross-reference limitation (#122553)
+  validated at build time ✅.
+- **Verify:** ✅ two rows each with an independent section variable emit + validate against the M0 schema
+  **and round-trip through live Grafana 13.1.0** (201, both sections carry their variable). Same-tab
+  cross-ref + bad section-variable type fail loud; cross-tab reuse is allowed.
 
 ## M5 — Validation + provisioning + version handling (FR-7, FR-6, FR-11)
 - **Schema discriminator FIRST (R2-S4, blocker):** `json_validator.py:69` range-checks `schemaVersion`
