@@ -238,3 +238,61 @@ def kickoff_triage(
         console.print_json(_json.dumps(report.to_dict()))
     else:
         console.print(report.to_markdown())
+
+
+@kickoff_panel_app.command("backlog")
+def kickoff_backlog(
+    session_id: Optional[str] = typer.Argument(None, help="Session id (default: newest)."),
+    project: Optional[Path] = typer.Option(None, "--project", help="Project root (default: cwd)."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Write the backlog section to a NEW file."),
+    append: Optional[Path] = typer.Option(
+        None, "--append", help="Guard-append into an EXISTING backlog doc (preview unless --yes)."),
+    yes: bool = typer.Option(False, "--yes", help="With --append: actually write (else preview + diff)."),
+) -> None:
+    """Fold a panel synthesis into a requirements-backlog section ($0, deterministic).
+
+    Default prints the section. ``--out FILE`` writes a new file. ``--append FILE`` guard-appends into an
+    existing ``ENHANCEMENTS_BACKLOG.md`` (idempotent by session marker, append-only, atomic, fail-closed);
+    without ``--yes`` it previews and exits 0 (in sync) or 2 (a write is pending).
+    """
+    from .stakeholder_panel.synthesis_bridge import (
+        BacklogAppendError,
+        append_backlog,
+        build_triage,
+        render_backlog_section,
+    )
+
+    service = _service(project)
+    sid = _resolve_session_or_exit(service, session_id)
+    transcript = _load_or_exit(service, sid)
+    report = build_triage(transcript)
+    section = render_backlog_section(report, project=getattr(transcript, "project", ""))
+
+    if not section.strip():
+        console.print("[yellow]No candidates — nothing to fold into the backlog.[/yellow]")
+        raise typer.Exit(0)
+
+    if append is not None:
+        try:
+            result = append_backlog(Path(append), section, sid, confirm=yes)
+        except BacklogAppendError as exc:
+            console.print(f"[red]append refused (fail-closed):[/red] {exc}")
+            raise typer.Exit(2)
+        if result.action == "written":
+            console.print(f"[green]appended[/green] backlog block for {sid} → {append}")
+            raise typer.Exit(0)
+        if result.action == "no-op":
+            console.print(f"[dim]in sync[/dim] — {result.reason}")
+            raise typer.Exit(0)
+        # would-write (preview): show it and signal drift via exit 2 (polish-check style, H-21)
+        console.print(f"[yellow]would write[/yellow] a backlog block for {sid} → {append} "
+                      f"(re-run with --yes). Preview:\n")
+        console.print(section)
+        raise typer.Exit(2)
+
+    if out is not None:
+        Path(out).write_text(section, encoding="utf-8")
+        console.print(f"[green]wrote[/green] backlog section → {out}")
+        raise typer.Exit(0)
+
+    console.print(section)

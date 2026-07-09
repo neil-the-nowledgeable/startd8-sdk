@@ -36,11 +36,13 @@ def build_triage(
     synthesis = getattr(transcript, "synthesis", None)
     synthesis_text = getattr(synthesis, "text", "") if synthesis is not None else ""
     objective = getattr(transcript, "objective", "") or ""
+    posture = getattr(transcript, "posture", "scrutiny") or "scrutiny"  # H-10/H-11
 
     candidates = classify(extract_candidates(synthesis_text), allowed_value_paths)
     health = health_check(
         synthesis_text=synthesis_text,
         context_summary=objective,
         default_context=_default_context(),
+        posture=posture,
     )
     return TriageReport(session_id=session_id, candidates=candidates, health=health)
