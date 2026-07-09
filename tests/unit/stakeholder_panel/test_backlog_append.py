@@ -135,3 +135,62 @@ def test_symlink_target_written_through(tmp_path):
     append_backlog(link, section, "sess-1", confirm=True)
     assert link.is_symlink()  # the link is preserved, not clobbered with a regular file
     assert "startd8-panel-backlog" in real.read_text()  # written through to the target
+
+
+# ── FR-15: multi-line italic footer is detected → block lands BEFORE it, not at EOF ──
+def test_multiline_italic_footer_insert_before(tmp_path):
+    body = ("# Backlog\n\nbody line\n\n---\n\n"
+            "*v0.1 — a long footer that wraps across\n"
+            "several lines and only the last one\n"
+            "ends with the closing asterisk.*\n")
+    p = _doc(tmp_path, body)
+    section = render_backlog_section(_report())
+    append_backlog(p, section, "sess-1", confirm=True)
+    text = p.read_text()
+    assert text.index("startd8-panel-backlog") < text.index("*v0.1 — a long footer")  # before the footer
+    # footer text preserved intact and still trailing
+    assert text.rstrip().endswith("ends with the closing asterisk.*")
+
+
+def test_multiline_footer_append_is_idempotent(tmp_path):
+    body = "# B\n\nx\n\n*line one\nline two.*\n"
+    p = _doc(tmp_path, body)
+    section = render_backlog_section(_report())
+    append_backlog(p, section, "sess-1", confirm=True)
+    once = p.read_text()
+    append_backlog(p, section, "sess-1", confirm=True)
+    assert p.read_text() == once  # byte-idempotent even with the multi-line footer path
+
+
+# ── FR-16: metadata continuation bullets are nested under the preceding item ──
+def test_metadata_continuation_bullets_are_nested():
+    r = TriageReport(session_id="s", candidates=[
+        Candidate(title="Verify loop", source_section="UX Improvements",
+                  raw_text="Verify the recurrence loop end-to-end", lane=Lane.NON_DECIDABLE,
+                  input_kind=InputKind.suggestion),
+        Candidate(title="Roles", source_section="UX Improvements",
+                  raw_text="Roles: Maintainer, Finance Lead", lane=Lane.NON_DECIDABLE,
+                  input_kind=InputKind.suggestion),
+        Candidate(title="Corroboration", source_section="UX Improvements",
+                  raw_text="Corroboration: CROSS-FAMILY", lane=Lane.NON_DECIDABLE,
+                  input_kind=InputKind.suggestion),
+    ])
+    out = render_backlog_section(r)
+    lines = [ln for ln in out.splitlines() if ln.strip().startswith(("-", "  -"))]
+    # one top-level item + two indented continuation sub-bullets
+    assert lines[0].startswith("- ") and "Verify the recurrence" in lines[0]
+    assert lines[1].startswith("  - ") and "Roles:" in lines[1]
+    assert lines[2].startswith("  - ") and "Corroboration:" in lines[2]
+    # nothing dropped — all three still present
+    assert out.count("Roles:") == 1 and out.count("Corroboration:") == 1
+
+
+def test_metadata_first_in_group_stays_top_level():
+    # a metadata-looking item with NO preceding parent in the group is not nested (nothing to nest under)
+    r = TriageReport(session_id="s", candidates=[
+        Candidate(title="Note", source_section="(unsectioned)", raw_text="Note: this stands alone",
+                  lane=Lane.UNSTRUCTURED, input_kind=InputKind.content),
+    ])
+    out = render_backlog_section(r)
+    assert "- Note: this stands alone" in out
+    assert "  - Note:" not in out

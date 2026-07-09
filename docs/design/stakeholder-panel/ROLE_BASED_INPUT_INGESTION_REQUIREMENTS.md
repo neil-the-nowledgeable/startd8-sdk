@@ -410,3 +410,24 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 - R1-F7 (bidirectional double-count / disjointness): endorse — the focus file explicitly asks it and FR-5 as written only tests coverage.
 
 **Disagreements:** none. R1-F8's `extra="allow"` observation is confirmed accurate (`kickoff_view/models.py:114`) — I extend rather than dispute it.
+
+---
+
+## 5. Follow-up (v0.6) — renderer polish from dogfooding
+
+> Regenerating the household `ENHANCEMENTS_BACKLOG.md §7` with `kickoff panel backlog --append` (real
+> use of the shipped feature) surfaced two cosmetic gaps that tests didn't. Both are renderer-only,
+> deterministic, additive — no change to extraction/coverage/classification.
+
+- **FR-15 (multi-line footer detection).** `append`'s insertion point (H-17) only detects a *single-line*
+  `*italic*` footer; a **multi-line** italic footer (first line starts `*`, a later line ends `*`, e.g.
+  the household `*v0.1 — … declaration.*` 3-liner) matches nothing → the block lands at EOF *after* the
+  footer. Detect a trailing multi-line italic block and insert **before** it. Single-line behavior and
+  the "genuinely ambiguous → EOF" fallback are unchanged.
+- **FR-16 (nest metadata continuation bullets).** `render_backlog_section` renders every candidate as a
+  top-level bullet, so a synthesis item's continuation sub-bullets (`Roles: …`, `Corroboration: …`) each
+  become their own backlog entry (noise). Render a continuation candidate (matching a small metadata-label
+  set) as an **indented sub-bullet** under the preceding item. Deterministic; nothing dropped (every item
+  still appears, just nested). Non-metadata items are unchanged.
+
+*v0.6 — follow-up renderer polish (FR-15/16) from dogfooding the shipped feature. Renderer-only.*
