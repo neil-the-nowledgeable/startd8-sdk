@@ -43,7 +43,8 @@ skeptical-user voice + a week-one-bounce pre-mortem retain a reality check witho
 
 - API: `FacilitationConfig(posture="scrutiny"|"prototype")` (validated in `__post_init__`).
 - CLI: `run_kickoff_panel.py --posture scrutiny|prototype` (default `scrutiny`).
-- Constants: `POSTURE_SCRUTINY`, `POSTURE_PROTOTYPE`, `POSTURES`, `SKEPTIC_IDS`, `CHALLENGER_IDS`.
+- Constants (exported in `__all__`): `POSTURE_SCRUTINY`, `POSTURE_PROTOTYPE`, `POSTURES`, `SKEPTIC_IDS`, `CHALLENGER_IDS`.
+- Transcript: the saved session records `posture` (self-describing — a consumer can tell a prototype synthesis from a scrutiny one).
 
 ## Incidental fix — outside-view reference class
 
