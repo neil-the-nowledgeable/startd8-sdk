@@ -1,0 +1,69 @@
+{
+  "apiVersion": "dashboard.grafana.app/v2",
+  "conditional_rendering": {
+    "conditions": [
+      "ConditionalRenderingVariable",
+      "ConditionalRenderingData",
+      "ConditionalRenderingTimeRangeSize"
+    ],
+    "group": "ConditionalRenderingGroup",
+    "group_spec": {
+      "condition": [
+        "and",
+        "or"
+      ],
+      "visibility": [
+        "show",
+        "hide"
+      ]
+    },
+    "variable_operators": [
+      "equals",
+      "notEquals",
+      "matches",
+      "notMatches"
+    ]
+  },
+  "element_kind": "Panel",
+  "element_reference": "ElementReference",
+  "feature_toggles_required": [
+    "dashboardNewLayouts",
+    "dashboardSectionVariables"
+  ],
+  "kind": "Dashboard",
+  "layout_items": {
+    "AutoGridLayout": "AutoGridLayoutItem",
+    "GridLayout": "GridLayoutItem",
+    "RowsLayout": "RowsLayoutRow",
+    "TabsLayout": "TabsLayoutTab"
+  },
+  "layout_kinds": [
+    "GridLayout",
+    "AutoGridLayout",
+    "TabsLayout",
+    "RowsLayout"
+  ],
+  "section_variables": {
+    "attaches_on": [
+      "RowsLayoutRow.spec.variables",
+      "TabsLayoutTab.spec.variables"
+    ],
+    "enabled_toggle": "dashboardSectionVariables"
+  },
+  "variable_kinds": [
+    "CustomVariable",
+    "ConstantVariable",
+    "DatasourceVariable",
+    "AdhocVariable",
+    "QueryVariable",
+    "IntervalVariable",
+    "TextVariable",
+    "GroupByVariable"
+  ],
+  "verified_on": {
+    "api": "dashboard.grafana.app/v2",
+    "commit": "b309c9bb3b81a748c3a75289236a27309ed2566a",
+    "date": "2026-07-09",
+    "version": "13.1.0"
+  }
+}

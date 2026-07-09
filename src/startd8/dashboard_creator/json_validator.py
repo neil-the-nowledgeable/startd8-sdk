@@ -52,6 +52,21 @@ def validate_dashboard_json(
             errors=["JSON root must be an object"],
         )
 
+    # Schema discriminator FIRST (dynamic-dashboards M5 / R2-S4): a v2 board (`apiVersion` present) has no
+    # classic `panels`/`templating`/`schemaVersion` and must NOT run the classic checks below — it is
+    # validated by the v2 schema-aware path. Classic boards (no `apiVersion`) are unaffected — byte-
+    # identical validation to before.
+    if "apiVersion" in data:
+        from .v2.validate import validate_v2_dashboard
+
+        v2_errors = validate_v2_dashboard(data, expected_uid=expected_uid)
+        return JsonValidationResult(
+            valid=len(v2_errors) == 0,
+            errors=v2_errors,
+            warnings=[],
+            dashboard_json=data,
+        )
+
     # Required keys
     missing = _REQUIRED_KEYS - set(data.keys())
     if missing:

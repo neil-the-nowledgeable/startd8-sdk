@@ -1237,6 +1237,12 @@ def kickoff_portal(
         help="Build the PORTFOLIO INDEX dashboard (a link-list of every project's "
         "Workbook) instead of this project's Workbook (FR-11).",
     ),
+    dynamic: bool = typer.Option(
+        False,
+        "--dynamic",
+        help="Build the audience-personalized v2 DYNAMIC Workbook (Grafana ≥13.1): flip the `audience` "
+        "variable to switch persona in-browser, no regen/no write. Separate `-v2` board (coexists).",
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -1299,9 +1305,18 @@ def kickoff_portal(
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     name = project or root.resolve().name
-    res = build_and_maybe_provision(
-        root, name, out_dir=dest, provision_url=provision, session=session
-    )
+    if dynamic:
+        from .kickoff_experience.portal_build import (
+            build_workbook_v2_and_maybe_provision,
+        )
+
+        res = build_workbook_v2_and_maybe_provision(
+            root, name, out_dir=dest, provision_url=provision
+        )
+    else:
+        res = build_and_maybe_provision(
+            root, name, out_dir=dest, provision_url=provision, session=session
+        )
     if json_out:
         _emit_json(
             {
