@@ -196,6 +196,31 @@ def _evaluate_one(
             claims=claims,
         )
 
+    # FR-H4a: a `capture` can VALIDATE via FIELD_AUTHORITY (its value_path IS a real project field,
+    # e.g. `Chore.name`) yet still be refused by the kickoff apply floor, whose allow-list is
+    # config-YAML value-paths (`conventions.yaml#/language`) — a DIFFERENT namespace (NR-4: we do NOT
+    # widen that floor). Predict the floor here so a VALIDATED ACCEPT never over-promises a write
+    # apply will refuse (the household-o11y "wrote 1/2" silent partial). Mark such captures
+    # ACCEPT-but-inert, carrying the SAME typed code the floor raises. Lazy import: vipp→
+    # kickoff_experience is already a package-level dependency (apply.py), kept local to avoid
+    # import-time coupling of the evaluate module.
+    if proposal.kind == "capture":
+        vp = str((proposal.params or {}).get("value_path", ""))
+        from ..kickoff_experience.capture import CaptureCode
+        from ..kickoff_experience.manifest import default_config
+
+        if vp and vp not in default_config().allowed_value_paths():
+            return _accept(
+                proposal.id,
+                seq,
+                text=(
+                    f"capture {vp}: validated as a project field but not a kickoff-writable "
+                    f"value-path — inert (apply floor refuses: {CaptureCode.VALUE_PATH_NOT_ALLOWED})"
+                ),
+                source="vipp:value-path-not-allowed",
+                qualifier=CaptureCode.VALUE_PATH_NOT_ALLOWED,
+            )
+
     # All non-OMIT answers are VALIDATED → confirmed ACCEPT, carrying the supporting claims.
     return VippDisposition(
         proposal_id=proposal.id,
