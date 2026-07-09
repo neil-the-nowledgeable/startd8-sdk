@@ -31,6 +31,9 @@ from .models import InputKind, Lane, TriageReport
 
 MARKER_TOKEN = "startd8-panel-backlog"
 
+# FR-16: a continuation sub-bullet carrying metadata about the preceding item (nested, not top-level).
+_META_RE = re.compile(r"^(Roles|Corroboration|Confidence|Impact|Evidence|Owner|Note)\b\s*[:—-]", re.I)
+
 
 def _marker_open(sid: str) -> str:
     return f"<!-- {MARKER_TOKEN}: {sid} -->"
@@ -70,9 +73,14 @@ def render_backlog_section(report: TriageReport, *, title: str = "", project: st
         if not group:
             continue
         lines += [f"### {subheading}", ""]
+        has_parent = False  # FR-16: nest metadata continuation bullets under the preceding item
         for c in group:
+            if has_parent and _META_RE.match(c.raw_text):
+                lines.append(f"  - {c.raw_text}")  # indented sub-bullet (nothing dropped, de-noised)
+                continue
             tag = "" if c.lane is not Lane.UNSTRUCTURED else " _(unstructured)_"
             lines.append(f"- {c.raw_text}{tag} — _{c.source_section} · {c.input_kind.value}_")
+            has_parent = True
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -112,13 +120,33 @@ def _find_marked_block(text: str, sid: str) -> Optional[tuple[int, int]]:
 _FOOTER_RE = re.compile(r"^\*(?!\*).*(?<!\*)\*$")
 
 
+def _starts_italic(s: str) -> bool:
+    return s.startswith("*") and not s.startswith("**")
+
+
+def _ends_italic(s: str) -> bool:
+    return len(s) >= 2 and s.endswith("*") and not s.endswith("**")
+
+
 def _insertion_index(lines: List[str]) -> int:
-    """H-17 — the line index to insert before: the LAST ``*italic*`` footer line if EXACTLY one such
-    trailing block exists, else EOF (never mid-doc)."""
+    """The line index to insert before: a single-line ``*italic*`` footer (H-17), else a **multi-line**
+    trailing italic footer (FR-15), else EOF (never mid-doc)."""
     footer_idxs = [i for i, ln in enumerate(lines) if _FOOTER_RE.match(ln.strip())]
     if len(footer_idxs) == 1:
         return footer_idxs[0]
-    return len(lines)  # ambiguous (0 or many) → EOF
+    if not footer_idxs:
+        # FR-15 — a trailing multi-line italic footer: the last non-blank line ends with a lone '*';
+        # walk up to the line that starts with a lone '*' and insert before it.
+        j = len(lines) - 1
+        while j >= 0 and not lines[j].strip():
+            j -= 1
+        if j >= 0 and _ends_italic(lines[j].strip()):
+            k = j
+            while k >= 0 and lines[k].strip() and not _starts_italic(lines[k].strip()):
+                k -= 1
+            if k >= 0 and lines[k].strip() and _starts_italic(lines[k].strip()):
+                return k
+    return len(lines)  # genuinely ambiguous (0 undetectable, or many) → EOF
 
 
 def compute_append(target: Path, section: str, sid: str) -> AppendResult:
