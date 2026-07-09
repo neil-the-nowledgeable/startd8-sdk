@@ -7,7 +7,7 @@
   "spec": {
     "annotations": [],
     "cursorSync": "Off",
-    "description": "Audience-personalized v2 dynamic Workbook \u2014 flip the `audience` variable to switch persona in-browser (no regeneration, no write). Era-2 successor to the classic Workbook.",
+    "description": "Audience-personalized v2 dynamic agentic cockpit \u2014 Status / Assistant / Proposals tabs mirror the kickoff agentic session read-only (no live backend). Flip the `audience` variable to switch persona in-browser (no regeneration, no write).",
     "editable": true,
     "elements": {
       "panel-1": {
@@ -159,77 +159,274 @@
             }
           }
         }
+      },
+      "panel-6": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "",
+          "id": 6,
+          "links": [],
+          "title": "Assistant",
+          "vizConfig": {
+            "kind": "text",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "options": {
+                "content": "_snapshot \u2014 not a live agent._\n\nNo session yet \u2014 run `startd8 kickoff chat` to begin.",
+                "mode": "markdown"
+              }
+            }
+          }
+        }
+      },
+      "panel-7": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "",
+          "id": 7,
+          "links": [],
+          "title": "Proposals \u2014 awaiting confirmation",
+          "vizConfig": {
+            "kind": "text",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "options": {
+                "content": "_The loop recommends; you confirm. This board never acts._\n\nNo proposals awaiting confirmation.",
+                "mode": "markdown"
+              }
+            }
+          }
+        }
       }
     },
     "layout": {
-      "kind": "RowsLayout",
+      "kind": "TabsLayout",
       "spec": {
-        "rows": [
+        "tabs": [
           {
-            "kind": "RowsLayoutRow",
+            "kind": "TabsLayoutTab",
             "spec": {
-              "collapse": false,
-              "conditionalRendering": {
-                "kind": "ConditionalRenderingGroup",
-                "spec": {
-                  "condition": "and",
-                  "items": [
-                    {
-                      "kind": "ConditionalRenderingVariable",
-                      "spec": {
-                        "operator": "equals",
-                        "value": "beginner",
-                        "variable": "audience"
-                      }
-                    }
-                  ],
-                  "visibility": "show"
-                }
-              },
               "layout": {
-                "kind": "GridLayout",
+                "kind": "RowsLayout",
                 "spec": {
-                  "items": [
+                  "rows": [
                     {
-                      "kind": "GridLayoutItem",
+                      "kind": "RowsLayoutRow",
                       "spec": {
-                        "element": {
-                          "kind": "ElementReference",
-                          "name": "panel-1"
+                        "collapse": false,
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "operator": "equals",
+                                  "value": "beginner",
+                                  "variable": "audience"
+                                }
+                              }
+                            ],
+                            "visibility": "show"
+                          }
                         },
-                        "height": 8,
-                        "width": 24,
-                        "x": 0,
-                        "y": 0
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-1"
+                                  },
+                                  "height": 8,
+                                  "width": 24,
+                                  "x": 0,
+                                  "y": 0
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "title": "Overview"
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "collapse": false,
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "operator": "equals",
+                                  "value": "beginner",
+                                  "variable": "audience"
+                                }
+                              }
+                            ],
+                            "visibility": "hide"
+                          }
+                        },
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-2"
+                                  },
+                                  "height": 6,
+                                  "width": 24,
+                                  "x": 0,
+                                  "y": 0
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "title": "Overview"
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "collapse": false,
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-3"
+                                  },
+                                  "height": 5,
+                                  "width": 24,
+                                  "x": 0,
+                                  "y": 0
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "title": "Business targets"
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "collapse": false,
+                        "conditionalRendering": {
+                          "kind": "ConditionalRenderingGroup",
+                          "spec": {
+                            "condition": "and",
+                            "items": [
+                              {
+                                "kind": "ConditionalRenderingVariable",
+                                "spec": {
+                                  "operator": "equals",
+                                  "value": "beginner",
+                                  "variable": "audience"
+                                }
+                              }
+                            ],
+                            "visibility": "hide"
+                          }
+                        },
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-4"
+                                  },
+                                  "height": 5,
+                                  "width": 24,
+                                  "x": 0,
+                                  "y": 0
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "title": "Business targets \u2014 set for you"
+                      }
+                    },
+                    {
+                      "kind": "RowsLayoutRow",
+                      "spec": {
+                        "collapse": false,
+                        "layout": {
+                          "kind": "GridLayout",
+                          "spec": {
+                            "items": [
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-5"
+                                  },
+                                  "height": 5,
+                                  "width": 24,
+                                  "x": 0,
+                                  "y": 0
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "title": "Technology conventions"
                       }
                     }
                   ]
                 }
               },
-              "title": "Overview"
+              "title": "Status"
             }
           },
           {
-            "kind": "RowsLayoutRow",
+            "kind": "TabsLayoutTab",
             "spec": {
-              "collapse": false,
-              "conditionalRendering": {
-                "kind": "ConditionalRenderingGroup",
-                "spec": {
-                  "condition": "and",
-                  "items": [
-                    {
-                      "kind": "ConditionalRenderingVariable",
-                      "spec": {
-                        "operator": "equals",
-                        "value": "beginner",
-                        "variable": "audience"
-                      }
-                    }
-                  ],
-                  "visibility": "hide"
-                }
-              },
               "layout": {
                 "kind": "GridLayout",
                 "spec": {
@@ -239,7 +436,7 @@
                       "spec": {
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-2"
+                          "name": "panel-6"
                         },
                         "height": 6,
                         "width": 24,
@@ -250,13 +447,12 @@
                   ]
                 }
               },
-              "title": "Overview"
+              "title": "Assistant"
             }
           },
           {
-            "kind": "RowsLayoutRow",
+            "kind": "TabsLayoutTab",
             "spec": {
-              "collapse": false,
               "layout": {
                 "kind": "GridLayout",
                 "spec": {
@@ -266,9 +462,9 @@
                       "spec": {
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-3"
+                          "name": "panel-7"
                         },
-                        "height": 5,
+                        "height": 12,
                         "width": 24,
                         "x": 0,
                         "y": 0
@@ -277,78 +473,7 @@
                   ]
                 }
               },
-              "title": "Business targets"
-            }
-          },
-          {
-            "kind": "RowsLayoutRow",
-            "spec": {
-              "collapse": false,
-              "conditionalRendering": {
-                "kind": "ConditionalRenderingGroup",
-                "spec": {
-                  "condition": "and",
-                  "items": [
-                    {
-                      "kind": "ConditionalRenderingVariable",
-                      "spec": {
-                        "operator": "equals",
-                        "value": "beginner",
-                        "variable": "audience"
-                      }
-                    }
-                  ],
-                  "visibility": "hide"
-                }
-              },
-              "layout": {
-                "kind": "GridLayout",
-                "spec": {
-                  "items": [
-                    {
-                      "kind": "GridLayoutItem",
-                      "spec": {
-                        "element": {
-                          "kind": "ElementReference",
-                          "name": "panel-4"
-                        },
-                        "height": 5,
-                        "width": 24,
-                        "x": 0,
-                        "y": 0
-                      }
-                    }
-                  ]
-                }
-              },
-              "title": "Business targets \u2014 set for you"
-            }
-          },
-          {
-            "kind": "RowsLayoutRow",
-            "spec": {
-              "collapse": false,
-              "layout": {
-                "kind": "GridLayout",
-                "spec": {
-                  "items": [
-                    {
-                      "kind": "GridLayoutItem",
-                      "spec": {
-                        "element": {
-                          "kind": "ElementReference",
-                          "name": "panel-5"
-                        },
-                        "height": 5,
-                        "width": 24,
-                        "x": 0,
-                        "y": 0
-                      }
-                    }
-                  ]
-                }
-              },
-              "title": "Technology conventions"
+              "title": "Proposals"
             }
           }
         ]
