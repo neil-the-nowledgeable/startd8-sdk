@@ -24,6 +24,10 @@ from .taxonomy_enums import Category, Orientation, RouteState
 # here so existing `from ...artifact_generator import ArtifactResult` keeps working.
 from .artifact_generator_models import *  # noqa: F401,F403
 
+# Target Metric Binding (REQ_TARGET_METRIC_BINDING Step 3): resolve one
+# MetricDescriptor per service and thread it into the descriptor-aware generators.
+from .metric_descriptor import MetricDescriptor, resolve_descriptor
+
 # Context + generator clusters extracted to sibling modules (Tier-2 step 2);
 # re-exported so the orchestrator and external consumers keep their import paths.
 from .artifact_generator_context import (  # noqa: F401
@@ -281,21 +285,40 @@ def _repair_and_validate(
     return result
 
 
+# Generators that accept a resolved MetricDescriptor as their 3rd positional arg
+# (REQ_TARGET_METRIC_BINDING Step 3, FR-4/FR-1a). The remaining per-service
+# generators (service_monitor, notification_policy, runbook) are metric-shape-
+# agnostic and keep the (service, business) signature.
+_DESCRIPTOR_AWARE_GENERATORS = frozenset({
+    generate_alert_rules,
+    generate_slo_definitions,
+    generate_dashboard_spec,
+    generate_loki_rule,
+})
+
+
 def _generate_one(
     gen_fn: Any,
     service: ServiceHints,
     business: BusinessContext,
     artifact_type: str,
     output_prefix: str,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate, validate, and score a single artifact. Catches exceptions.
 
     Central taxonomy assignment site (REQ-OAT-023): every result is stamped with
     category/orientation/declared_type/runtime_type from the registry here, so the
     ~7 generator functions never hand-set those axes.
+
+    ``descriptor`` (the per-service resolved MetricDescriptor) is forwarded only
+    to the descriptor-aware generators; the others keep their 2-arg signature.
     """
     try:
-        result = gen_fn(service, business)
+        if descriptor is not None and gen_fn in _DESCRIPTOR_AWARE_GENERATORS:
+            result = gen_fn(service, business, descriptor)
+        else:
+            result = gen_fn(service, business)
         result = _repair_and_validate(result, business, transport=service.transport)
         return _stamp_taxonomy(result)
     except Exception:
@@ -453,10 +476,27 @@ def generate_observability_artifacts(
         (generate_slo_definitions, "slo_definition", "slos"),
     ]
 
+    # Build the effective MetricDescriptor once per service (Step 3, FR-7
+    # terminus). ServiceHints carries the profile + per-axis overrides that
+    # ContextCore resolved from the manifest via onboarding metadata; an empty
+    # profile falls back to semconv-{transport} (byte-identical to prior output).
+    descriptors: Dict[str, MetricDescriptor] = {
+        service.service_id: resolve_descriptor(
+            profile=service.metric_profile or None,
+            transport=service.transport,
+            overrides=service.descriptor_overrides,
+        )
+        for service in services
+    }
+
     for service in services:
+        descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
             report.artifacts.append(
-                _generate_one(gen_fn, service, business, artifact_type, output_prefix)
+                _generate_one(
+                    gen_fn, service, business, artifact_type, output_prefix,
+                    descriptor,
+                )
             )
 
     report.services_processed = len(services)
@@ -483,7 +523,10 @@ def generate_observability_artifacts(
             continue
         for service in services:
             report.artifacts.append(
-                _generate_one(gen_fn, service, business, atype, output_prefix)
+                _generate_one(
+                    gen_fn, service, business, atype, output_prefix,
+                    descriptors[service.service_id],
+                )
             )
 
     # Closure 3A / Gap 2 + REQ-OAT-052: record declared-but-unproduced types as

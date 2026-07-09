@@ -18,6 +18,7 @@ import yaml  # noqa: F401
 
 from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
 from .artifact_generator_models import *  # noqa: F401,F403
+from .metric_descriptor import MetricDescriptor, profile_for_transport
 
 try:
     from startd8.logging_config import get_logger
@@ -51,15 +52,20 @@ _INSTRUMENT_TO_PANEL: Dict[str, str] = {
 }
 
 
+# PromQL query templates keyed by instrument type. The ``{selector}`` slot is a
+# full ``{...}`` label selector built from the resolved MetricDescriptor (FR-4),
+# so the service-identity label key (``service`` vs ``service_name``) and any
+# compound matchers flow in rather than being hardcoded. For the semconv default
+# the selector is ``{service="<svc>"}`` — byte-identical to the prior templates.
 _INSTRUMENT_TO_QUERY: Dict[str, str] = {
     "histogram": (
         "histogram_quantile(0.99, "
-        'rate({metric}_bucket{{service="{service}"}}[$__rate_interval]))'
+        "rate({metric}_bucket{selector}[$__rate_interval]))"
     ),
-    "counter": 'rate({metric}_total{{service="{service}"}}[$__rate_interval])',
-    "gauge": '{metric}{{service="{service}"}}',
-    "up_down_counter": '{metric}{{service="{service}"}}',
-    "observable_gauge": '{metric}{{service="{service}"}}',
+    "counter": "rate({metric}_total{selector}[$__rate_interval])",
+    "gauge": "{metric}{selector}",
+    "up_down_counter": "{metric}{selector}",
+    "observable_gauge": "{metric}{selector}",
 }
 
 
@@ -154,6 +160,22 @@ def _metric_unit(metric_name: str) -> str:
     return ""
 
 
+def _descriptor_for(
+    service: ServiceHints, descriptor: Optional[MetricDescriptor]
+) -> MetricDescriptor:
+    """Resolve the effective MetricDescriptor for a service (Step 3, FR-4).
+
+    The orchestrator (``artifact_generator.py``) builds the descriptor once per
+    service via ``resolve_descriptor`` and threads it in. When a generator is
+    called standalone (tests, older call sites) with ``descriptor=None``, fall
+    back to the transport default (``semconv-{transport}``), which reproduces the
+    pre-Step-3 hardcoded behavior byte-for-byte.
+    """
+    if descriptor is not None:
+        return descriptor
+    return profile_for_transport(service.transport)
+
+
 def _derivation_comment(derivations: List[DerivationTrace]) -> str:
     """Build a YAML comment block documenting derivation traces."""
     lines = ["# Derivation:"]
@@ -165,33 +187,46 @@ def _derivation_comment(derivations: List[DerivationTrace]) -> str:
 def generate_alert_rules(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate Prometheus alert rules for a single service.
 
     Creates alerts for duration metrics (latency) and request count metrics
-    (availability) using convention-based metrics from service hints.
+    (availability) using the resolved :class:`MetricDescriptor` (FR-4). The
+    descriptor supplies metric names, the service-identity label, the error
+    selector, and the latency unit; ``descriptor=None`` falls back to the
+    transport default (``semconv-{transport}``) for byte-identical back-compat.
     """
+    descriptor = _descriptor_for(service, descriptor)
     derivations: List[DerivationTrace] = []
     severity = _severity_for(business, derivations)
     rules: List[Dict[str, Any]] = []
+
+    # Descriptor-sourced metric shapes (FR-4): names, selectors, unit.
+    latency_bucket = descriptor.latency_bucket_metric
+    throughput_metric = descriptor.throughput_metric
+    total_selector = descriptor.selector(service.service_id)
+    error_selector = descriptor.selector(service.service_id, error=True)
 
     # Resolve thresholds
     latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
     avail_raw, _ = _resolve_threshold("availability", business, derivations)
 
     for metric in service.convention_metrics:
-        prom = _prom_name(metric.name)
-
         # Duration/histogram metrics → latency alert
         if metric.type == "histogram" and "duration" in metric.name and latency_raw:
-            threshold_sec = _parse_duration_to_seconds(latency_raw)
+            # FR-4a: emit the threshold in the descriptor's native unit
+            # (500ms → 0.5 for seconds descriptors, 500 for millisecond ones).
+            threshold = descriptor.scale_threshold_seconds(
+                _parse_duration_to_seconds(latency_raw)
+            )
             rules.append(
                 {
                     "alert": _alert_name(service.service_id, "LatencyP99High"),
                     "expr": (
                         f"histogram_quantile(0.99,\n"
-                        f'  rate({prom}_bucket{{service="{service.service_id}"}}[5m])\n'
-                        f") > {threshold_sec}"
+                        f'  rate({latency_bucket}{total_selector}[5m])\n'
+                        f") > {threshold}"
                     ),
                     "for": "5m",
                     "labels": {
@@ -218,7 +253,6 @@ def generate_alert_rules(
             and avail_raw
             and not any(r.get("alert", "").endswith("ErrorRateHigh") for r in rules)
         ):
-            error_filter = _error_filter_for_protocol(service.transport)
             avail_frac = _parse_availability_to_fraction(avail_raw)
             error_threshold = round(1.0 - avail_frac, 4)
             rules.append(
@@ -226,8 +260,8 @@ def generate_alert_rules(
                     "alert": _alert_name(service.service_id, "ErrorRateHigh"),
                     "expr": (
                         f"(\n"
-                        f'  rate({prom}_count{{service="{service.service_id}",{error_filter}}}[5m])\n'
-                        f'  / rate({prom}_count{{service="{service.service_id}"}}[5m])\n'
+                        f'  rate({throughput_metric}{error_selector}[5m])\n'
+                        f'  / rate({throughput_metric}{total_selector}[5m])\n'
                         f") > {error_threshold}"
                     ),
                     "for": "5m",
@@ -255,15 +289,14 @@ def generate_alert_rules(
             and avail_raw
             and not any(r.get("alert", "").endswith("AvailabilityLow") for r in rules)
         ):
-            error_filter = _error_filter_for_protocol(service.transport)
             avail_frac = _parse_availability_to_fraction(avail_raw)
             rules.append(
                 {
                     "alert": _alert_name(service.service_id, "AvailabilityLow"),
                     "expr": (
                         f"(\n"
-                        f'  1 - rate({prom}_count{{service="{service.service_id}",{error_filter}}}[5m])\n'
-                        f'    / rate({prom}_count{{service="{service.service_id}"}}[5m])\n'
+                        f'  1 - rate({throughput_metric}{error_selector}[5m])\n'
+                        f'    / rate({throughput_metric}{total_selector}[5m])\n'
                         f") < {avail_frac}"
                     ),
                     "for": "5m",
@@ -344,40 +377,59 @@ def _alert_name(service_id: str, suffix: str) -> str:
 def _error_filter_for_protocol(transport: str) -> str:
     """Return the PromQL label filter for error responses by protocol.
 
+    Delegates to the transport's default convention profile
+    (``profile_for_transport(...).error_selector``) — the single source of
+    truth for error selectors (FR-4). Retained as a thin shim so existing
+    call sites and tests that import it keep working; new code SHOULD read
+    ``descriptor.error_selector`` directly.
+
     gRPC codes per OTel semantic conventions (server-side failures only):
-    - Unavailable (14): service not reachable
-    - Internal (13): unhandled server error
-    - Unimplemented (12): method not supported
-    - DataLoss (15): unrecoverable data loss
-    Unknown (2) is excluded — it is ambiguous and often client-side.
+    Unavailable/Internal/Unimplemented/DataLoss; Unknown is excluded as
+    ambiguous. HTTP uses ``status=~"5.."``.
     """
-    if transport == "grpc":
-        return 'grpc_code=~"Unavailable|Internal|Unimplemented|DataLoss"'
-    # HTTP
-    return 'status=~"5.."'
+    return profile_for_transport(transport).error_selector
 
 
 def generate_dashboard_spec(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate a DashboardSpec YAML for a single service.
 
     Produces one panel per convention metric with panel type derived from
-    instrument type. Output is compatible with DashboardCreatorWorkflow.
+    instrument type. Query selectors bind to the resolved
+    :class:`MetricDescriptor` (FR-4); ``descriptor=None`` falls back to the
+    transport default for byte-identical back-compat. Output is compatible with
+    DashboardCreatorWorkflow.
     """
+    descriptor = _descriptor_for(service, descriptor)
+    selector = descriptor.selector(service.service_id)
     derivations: List[DerivationTrace] = []
     panels: List[Dict[str, Any]] = []
 
+    # Base name the histogram_quantile ``_bucket`` templates build on. For a
+    # duration histogram this is the descriptor's latency metric (span-metrics:
+    # ``duration_milliseconds``; semconv: ``rpc_server_duration`` — byte-identical
+    # to the old ``_prom_name(metric.name)`` for the semconv default).
+    latency_base = descriptor.latency_bucket_metric
+    if latency_base.endswith("_bucket"):
+        latency_base = latency_base[: -len("_bucket")]
+
     for metric in service.convention_metrics:
         prom = _prom_name(metric.name)
+        is_latency = metric.type == "histogram" and "duration" in metric.name
+        metric_base = latency_base if is_latency else prom
         panel_type = _INSTRUMENT_TO_PANEL.get(metric.type, "timeseries")
         query_tpl = _INSTRUMENT_TO_QUERY.get(metric.type)
         if not query_tpl:
             continue
 
-        query = query_tpl.format(metric=prom, service=service.service_id)
-        unit = _metric_unit(metric.name)
+        query = query_tpl.format(metric=metric_base, selector=selector)
+        # FR-4a: latency panels carry the descriptor's native unit (s vs ms);
+        # non-latency panels keep name-inferred units. For the semconv default
+        # descriptor.latency_unit == "s", matching _metric_unit("*.duration").
+        unit = descriptor.latency_unit if is_latency else _metric_unit(metric.name)
 
         # Infer group from metric name
         group = _panel_group(metric.name)
@@ -394,10 +446,13 @@ def generate_dashboard_spec(
         if "duration" in metric.name and metric.type == "histogram":
             latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
             if latency_raw:
-                threshold_sec = _parse_duration_to_seconds(latency_raw)
+                # FR-4a: threshold in the descriptor's native unit.
+                threshold = descriptor.scale_threshold_seconds(
+                    _parse_duration_to_seconds(latency_raw)
+                )
                 panel["thresholds"] = [
                     {"value": None, "color": "green"},
-                    {"value": threshold_sec, "color": "red"},
+                    {"value": threshold, "color": "red"},
                 ]
 
         panels.append(panel)
@@ -408,7 +463,7 @@ def generate_dashboard_spec(
             for quantile, label in [(0.50, "p50"), (0.95, "p95")]:
                 q_query = (
                     f"histogram_quantile({quantile}, "
-                    f'rate({prom}_bucket{{service="{service.service_id}"}}[$__rate_interval]))'
+                    f"rate({metric_base}_bucket{selector}[$__rate_interval]))"
                 )
                 panels.append({
                     "type": "timeseries",
@@ -419,15 +474,15 @@ def generate_dashboard_spec(
                 })
 
     # Synthesize RED-completing panels if missing (REQ-KZ-OBS-200a)
-    _ensure_red_coverage(panels, service, business, derivations)
+    _ensure_red_coverage(panels, service, business, derivations, descriptor)
 
     # Closure 1 / Gap 1: add domain panels for manifest_declared metrics,
     # grouped by intent (Cost & Tokens, Sessions, Health, Progress). These are
     # additive — the convention-based RED panels above remain the baseline.
-    _add_domain_panels(panels, service, derivations)
+    _add_domain_panels(panels, service, derivations, descriptor)
 
     # REQ-OAG-107: DB latency panels when databases were detected.
-    _add_database_panels(panels, service, derivations)
+    _add_database_panels(panels, service, derivations, descriptor)
 
     if not panels:
         return ArtifactResult(
@@ -566,16 +621,27 @@ def _domain_unit(metric_name: str) -> str:
     return "short"
 
 
-def _domain_query(metric: ConventionMetric, service_id: str) -> str:
+def _domain_query(
+    metric: ConventionMetric,
+    service_id: str,
+    descriptor: Optional[MetricDescriptor] = None,
+) -> str:
     """Build a PromQL query for a declared metric.
 
     Counters become rate panels; gauges/ratios are read directly. Declared
     metric names are already Prometheus-style, so (unlike convention metrics)
     no ``_total`` suffix is appended to names that already carry it.
+
+    The service-identity selector is sourced from the resolved
+    :class:`MetricDescriptor` (FR-4); ``descriptor=None`` falls back to the
+    ``service=`` semconv key for byte-identical back-compat.
     """
     name = metric.name
     mtype = _domain_metric_type(metric)
-    label = f'{{service="{service_id}"}}'
+    if descriptor is not None:
+        label = descriptor.selector(service_id)
+    else:
+        label = f'{{service="{service_id}"}}'
     if mtype == "counter":
         target = name if name.endswith("_total") else f"{name}_total"
         return f"rate({target}{label}[$__rate_interval])"
@@ -592,12 +658,13 @@ def _add_domain_panels(
     panels: List[Dict[str, Any]],
     service: ServiceHints,
     derivations: List[DerivationTrace],
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> None:
     """Append a panel per manifest_declared metric (Closure 1 / Gap 1).
 
     Mutates ``panels`` in place. Skips declared metrics whose query already
     appears among existing panels (dedup against convention panels), so a
-    metric is never visualised twice.
+    metric is never visualised twice. Selectors bind to *descriptor* (FR-4).
     """
     if not service.declared_metrics:
         return
@@ -605,7 +672,7 @@ def _add_domain_panels(
     existing_exprs = {str(p.get("expr", "")) for p in panels}
     added = 0
     for metric in service.declared_metrics:
-        query = _domain_query(metric, service.service_id)
+        query = _domain_query(metric, service.service_id, descriptor)
         if query in existing_exprs:
             continue
         mtype = _domain_metric_type(metric)
@@ -645,19 +712,26 @@ def _add_database_panels(
     panels: List[Dict[str, Any]],
     service: ServiceHints,
     derivations: List[DerivationTrace],
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> None:
     """Add a DB latency panel per detected database (REQ-OAG-107).
 
     Only fires when the service has ``detected_databases``. Uses the OTel
-    ``db.client.operation.duration`` histogram scoped by ``db_system``.
+    ``db.client.operation.duration`` histogram scoped by the descriptor's
+    service-identity label and ``db_system`` label key (FR-1a);
+    ``descriptor=None`` falls back to ``service`` / ``db_system`` for
+    byte-identical back-compat.
     """
     if not service.detected_databases:
         return
+    descriptor = _descriptor_for(service, descriptor)
+    service_matcher = descriptor.service_matcher(service.service_id)
+    db_key = descriptor.db_system_label_key
     for db in service.detected_databases:
         expr = (
             "histogram_quantile(0.99, "
-            f'rate(db_client_operation_duration_bucket{{service="{service.service_id}",'
-            f'db_system="{db}"}}[$__rate_interval]))'
+            f'rate(db_client_operation_duration_bucket{{{service_matcher},'
+            f'{db_key}="{db}"}}[$__rate_interval]))'
         )
         panels.append(
             {
@@ -699,13 +773,17 @@ def _ensure_red_coverage(
     service: ServiceHints,
     business: BusinessContext,
     derivations: List[DerivationTrace],
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> None:
     """Synthesize missing Rate and Error panels for RED coverage (REQ-KZ-OBS-200a).
 
     Inspects existing panels to determine which RED signals are present,
-    then adds synthetic panels for any that are missing. Panels are derived
-    from the service's transport type (gRPC vs HTTP).
+    then adds synthetic panels for any that are missing. Metric names, the
+    service-identity selector, and the error selector are sourced from the
+    resolved :class:`MetricDescriptor` (FR-4); ``descriptor=None`` falls back to
+    the transport default for byte-identical back-compat.
     """
+    descriptor = _descriptor_for(service, descriptor)
     # Shared RED detection — single source of truth with the validator
     try:
         from startd8.validators.observability_artifact_checks import (
@@ -722,23 +800,22 @@ def _ensure_red_coverage(
     if has_rate and has_error:
         return  # Already have full RED coverage
 
-    # Determine metric prefix from transport
-    error_filter = _error_filter_for_protocol(service.transport)
-    if service.transport == "grpc":
-        duration_metric = "rpc_server_duration"
-    else:
-        duration_metric = "http_server_duration"
+    # Descriptor-sourced throughput metric + selectors (FR-4). For the semconv
+    # default this is rpc_server_duration_count / http_server_duration_count with
+    # a {service="..."} selector — byte-identical to the prior hardcoded branch.
+    throughput_metric = descriptor.throughput_metric
+    total_selector = descriptor.selector(service.service_id)
+    error_selector = descriptor.selector(service.service_id, error=True)
 
     rate_expr = (
-        f'sum(rate({duration_metric}_count'
-        f'{{service="{service.service_id}"}}[$__rate_interval]))'
+        f'sum(rate({throughput_metric}'
+        f'{total_selector}[$__rate_interval]))'
     )
     error_expr = (
-        f'sum(rate({duration_metric}_count'
-        f'{{service="{service.service_id}",'
-        f'{error_filter}}}[$__rate_interval]))\n'
-        f'/ sum(rate({duration_metric}_count'
-        f'{{service="{service.service_id}"}}[$__rate_interval]))'
+        f'sum(rate({throughput_metric}'
+        f'{error_selector}[$__rate_interval]))\n'
+        f'/ sum(rate({throughput_metric}'
+        f'{total_selector}[$__rate_interval]))'
     )
 
     if not has_rate:
@@ -775,16 +852,18 @@ def _ensure_red_coverage(
     if business.availability:
         try:
             avail_target = round(float(business.availability) / 100.0, 6)
+            # [1h] window is intentionally kept (context-specific, not a
+            # descriptor axis); only the metric name + selectors bind to the
+            # descriptor (FR-4).
             avail_gauge_expr = (
                 f"(\n"
-                f"  sum(rate({duration_metric}_count"
-                f'{{service="{service.service_id}"}}[1h]))\n'
-                f"  - sum(rate({duration_metric}_count"
-                f'{{service="{service.service_id}",'
-                f'{_error_filter_for_protocol(service.transport)}}}[1h]))\n'
+                f"  sum(rate({throughput_metric}"
+                f'{total_selector}[1h]))\n'
+                f"  - sum(rate({throughput_metric}"
+                f'{error_selector}[1h]))\n'
                 f")\n"
-                f"/ sum(rate({duration_metric}_count"
-                f'{{service="{service.service_id}"}}[1h]))\n'
+                f"/ sum(rate({throughput_metric}"
+                f'{total_selector}[1h]))\n'
                 f"or vector(1)"
             )
             panels.append({
@@ -805,13 +884,22 @@ def _ensure_red_coverage(
 def generate_slo_definitions(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate OpenSLO-format SLO definitions for a single service.
 
     Produces one SLO per applicable business requirement:
     - availability → ratio-based SLO (good/total requests)
     - latency_p99 → threshold-based SLO (P99 under threshold)
+
+    Metric names, selectors, error selector, and the latency threshold unit are
+    sourced from the resolved :class:`MetricDescriptor` (FR-4 / FR-4a);
+    ``descriptor=None`` falls back to the transport default for byte-identical
+    back-compat.
     """
+    descriptor = _descriptor_for(service, descriptor)
+    total_selector = descriptor.selector(service.service_id)
+    error_selector = descriptor.selector(service.service_id, error=True)
     derivations: List[DerivationTrace] = []
     documents: List[str] = []
 
@@ -857,13 +945,14 @@ def generate_slo_definitions(
 
     # Availability SLO
     if counter_metric and avail_raw:
-        prom = _prom_name(counter_metric.name)
-        # When the counter was derived from a histogram, the Prometheus name
-        # needs a _count suffix (e.g. rpc_server_duration_count) — same
-        # pattern the alert generator uses for error rate and availability.
-        if "duration" in counter_metric.name and not prom.endswith("_count"):
-            prom = f"{prom}_count"
-        error_filter = _error_filter_for_protocol(service.transport)
+        # Throughput counter from the descriptor (FR-4). When the counter was
+        # derived from a duration histogram, the semconv default resolves to
+        # ``*_duration_count`` — the same name the prior _prom_name+_count path
+        # produced; span-metrics resolves to ``calls_total``.
+        if "duration" in counter_metric.name:
+            prom = descriptor.throughput_metric
+        else:
+            prom = _prom_name(counter_metric.name)
         avail_target = float(avail_raw)
 
         slo = {
@@ -894,7 +983,7 @@ def generate_slo_definitions(
                                     "spec": {
                                         "query": (
                                             f'rate({prom}'
-                                            f'{{service="{service.service_id}"}}[5m])'
+                                            f'{total_selector}[5m])'
                                         ),
                                     },
                                 },
@@ -905,9 +994,7 @@ def generate_slo_definitions(
                                     "spec": {
                                         "query": (
                                             f'rate({prom}'
-                                            f'{{service="{service.service_id}",'
-                                            f"{error_filter}"
-                                            f"}}[5m])"
+                                            f'{error_selector}[5m])'
                                         ),
                                     },
                                 },
@@ -931,8 +1018,16 @@ def generate_slo_definitions(
 
     # Latency SLO
     if histogram_metric and latency_raw:
-        prom = _prom_name(histogram_metric.name)
-        threshold_sec = _parse_duration_to_seconds(latency_raw)
+        # Latency histogram bucket base from the descriptor (FR-4). Byte-identical
+        # to _prom_name(histogram_metric.name) for the semconv default.
+        latency_bucket_base = descriptor.latency_bucket_metric
+        if latency_bucket_base.endswith("_bucket"):
+            latency_bucket_base = latency_bucket_base[: -len("_bucket")]
+        prom = latency_bucket_base
+        # FR-4a: threshold in the descriptor's native unit (s vs ms).
+        threshold = descriptor.scale_threshold_seconds(
+            _parse_duration_to_seconds(latency_raw)
+        )
 
         slo = {
             "apiVersion": "openslo/v1",
@@ -962,11 +1057,11 @@ def generate_slo_definitions(
                                     "query": (
                                         f"histogram_quantile(0.99, "
                                         f"rate({prom}_bucket"
-                                        f'{{service="{service.service_id}"}}[5m]))'
+                                        f'{total_selector}[5m]))'
                                     ),
                                 },
                             },
-                            "threshold": threshold_sec,
+                            "threshold": threshold,
                             "operator": "lte",
                         },
                     },
@@ -1182,12 +1277,17 @@ def generate_notification_policy(
 def generate_loki_rule(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate a Loki ruler alerting rule for a service's error logs.
 
     Log selector derived from `spec.targets[].name` (FR-CONS-1, REQ-CDP-OBS-006),
-    falling back to the service_id.
+    falling back to the service_id. The LogQL *stream label key* comes from the
+    descriptor (FR-1a) — it may differ from the PromQL label key. ``descriptor=
+    None`` falls back to the ``service`` key for byte-identical back-compat.
     """
+    descriptor = _descriptor_for(service, descriptor)
+    stream_key = descriptor.logql_stream_key()
     derivations: List[DerivationTrace] = []
     severity = _severity_for(business, derivations)
     target = _target_for(service.service_id, business.targets)
@@ -1195,10 +1295,10 @@ def generate_loki_rule(
     if target and target.get("name"):
         derivations.append(DerivationTrace(
             field="loki.selector", source="manifest.spec.targets[].name",
-            transformation=f'service="{selector_name}"', tier="manifest",
+            transformation=f'{stream_key}="{selector_name}"', tier="manifest",
         ))
     expr = (
-        f'sum(rate({{service="{selector_name}"}} |= "error" [5m])) > 0'
+        f'sum(rate({{{stream_key}="{selector_name}"}} |= "error" [5m])) > 0'
     )
     doc: Dict[str, Any] = {
         "groups": [
