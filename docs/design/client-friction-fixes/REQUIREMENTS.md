@@ -244,11 +244,15 @@ offending artifact.
 - **OQ-5.** For FR-H4, is **ACCEPT-but-inert** the right disposition, or should such captures be
   `OMIT` with a reason at negotiate? *(Leaning ACCEPT-but-inert per R1; either way it carries the
   existing `CaptureCode.VALUE_PATH_NOT_ALLOWED`, FR-H4a.)*
-- **OQ-6 → refined (read code before documenting, R1-F7/R1-S5).** Do we treat `observability.yaml` as
-  override-when-present or additive (merge)? **Decide from the code, not after the fact:**
-  `generate_observability_artifacts(observability_yaml_path=...)` (line 426) already has *a* behavior
-  on disk — read it first and assert the documented contract matches, else FR-H5a threads a param
-  whose precedence is undefined and may ship a new silent manifest-drop.
+- **OQ-6 → RESOLVED (additive/opt-in — read from the code, 2026-07-09).** Read the real function
+  `startd8.observability.artifact_generator.generate_observability_artifacts` (`artifact_generator.py:417-426`;
+  the `scripts/` file only wraps it). Line 516 states the contract: **"additive + opt-in: an absent
+  `observability_yaml_path` ⇒ no new artifact"** — present ⇒ EXTRA domain alert + dashboard artifacts
+  from `alerting.metric_thresholds` / `service_levels` (via `from_observability_yaml`); it **never
+  overrides the manifest**. So there is **no override-vs-merge decision and no silent-manifest-drop
+  risk**; the only gap was the CLI never exposed/threaded the flag (now fixed, FR-H5a — **IMPLEMENTED**
+  on `impl/client-friction-p2`). *(The earlier claim that the `scripts/` file itself had the param was
+  a misread — the param is on the imported function.)*
 - **OQ-7 → blocked on FR-F1d.** The hard-vs-warn question is **unanswerable until the record model
   gains an advisory tier** (FR-F1d). Once it exists, lean **warn by default, `--strict` promotes to
   hard**, and use FR-F1e's raw-cell evidence so hard only fires on actual truncation. (R1-F3/R1-S2.)

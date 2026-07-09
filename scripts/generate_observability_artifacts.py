@@ -67,6 +67,18 @@ def main() -> int:
         help="Path to .contextcore.yaml for direct SLO/criticality reads (optional)",
     )
     parser.add_argument(
+        "--observability-yaml",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to an authored observability.yaml (FR-H5). ADDITIVE + opt-in: when "
+            "present, its alerting.metric_thresholds / service_levels render EXTRA domain "
+            "alert + dashboard artifacts; absent = no new artifact (never overrides the "
+            "manifest). Closes the doc-vs-mechanism gap where authored thresholds were "
+            "silently dropped because this flag was never wired."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         required=True,
         help="Directory for generated artifacts",
@@ -132,6 +144,7 @@ def main() -> int:
     onboarding = Path(args.onboarding_metadata)
     output = Path(args.output_dir)
     manifest = Path(args.manifest) if args.manifest else None
+    obs_yaml = Path(args.observability_yaml) if args.observability_yaml else None
 
     if args.check:
         return check_drift(onboarding, output, manifest)
@@ -143,6 +156,7 @@ def main() -> int:
             onboarding_metadata_path=onboarding,
             output_dir=output,
             manifest_path=manifest,
+            observability_yaml_path=obs_yaml,
             dry_run=args.dry_run,
             portal=False,  # We'll generate portals individually below
             dashboard_provision_url=args.provision,
@@ -174,6 +188,7 @@ def main() -> int:
             onboarding_metadata_path=onboarding,
             output_dir=output,
             manifest_path=manifest,
+            observability_yaml_path=obs_yaml,
             dry_run=args.dry_run,
             portal=args.portal,
             portal_persona=args.portal_persona,
