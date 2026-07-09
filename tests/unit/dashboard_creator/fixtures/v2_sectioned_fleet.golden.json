@@ -1,0 +1,209 @@
+{
+  "apiVersion": "dashboard.grafana.app/v2",
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "m7-fleet"
+  },
+  "spec": {
+    "annotations": [],
+    "cursorSync": "Off",
+    "description": "",
+    "editable": true,
+    "elements": {
+      "sec0-p0": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "",
+          "id": 1,
+          "links": [],
+          "title": "Latency",
+          "vizConfig": {
+            "kind": "text",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "options": {
+                "content": "p99 latency for checkout",
+                "mode": "markdown"
+              }
+            }
+          }
+        }
+      },
+      "sec1-p0": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "",
+          "id": 101,
+          "links": [],
+          "title": "Errors",
+          "vizConfig": {
+            "kind": "text",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "options": {
+                "content": "error rate for payment",
+                "mode": "markdown"
+              }
+            }
+          }
+        }
+      }
+    },
+    "layout": {
+      "kind": "TabsLayout",
+      "spec": {
+        "tabs": [
+          {
+            "kind": "TabsLayoutTab",
+            "spec": {
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "sec0-p0"
+                        },
+                        "height": 6,
+                        "width": 24,
+                        "x": 0,
+                        "y": 0
+                      }
+                    }
+                  ]
+                }
+              },
+              "title": "checkout",
+              "variables": [
+                {
+                  "kind": "CustomVariable",
+                  "spec": {
+                    "current": {
+                      "text": "a",
+                      "value": "a"
+                    },
+                    "hide": "dontHide",
+                    "includeAll": false,
+                    "multi": false,
+                    "name": "instance",
+                    "options": [
+                      {
+                        "selected": true,
+                        "text": "a",
+                        "value": "a"
+                      },
+                      {
+                        "selected": false,
+                        "text": "b",
+                        "value": "b"
+                      }
+                    ],
+                    "query": "a,b",
+                    "skipUrlSync": false
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "TabsLayoutTab",
+            "spec": {
+              "layout": {
+                "kind": "GridLayout",
+                "spec": {
+                  "items": [
+                    {
+                      "kind": "GridLayoutItem",
+                      "spec": {
+                        "element": {
+                          "kind": "ElementReference",
+                          "name": "sec1-p0"
+                        },
+                        "height": 6,
+                        "width": 24,
+                        "x": 0,
+                        "y": 0
+                      }
+                    }
+                  ]
+                }
+              },
+              "title": "payment",
+              "variables": [
+                {
+                  "kind": "CustomVariable",
+                  "spec": {
+                    "current": {
+                      "text": "a",
+                      "value": "a"
+                    },
+                    "hide": "dontHide",
+                    "includeAll": false,
+                    "multi": false,
+                    "name": "instance",
+                    "options": [
+                      {
+                        "selected": true,
+                        "text": "a",
+                        "value": "a"
+                      },
+                      {
+                        "selected": false,
+                        "text": "b",
+                        "value": "b"
+                      }
+                    ],
+                    "query": "a,b",
+                    "skipUrlSync": false
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "links": [],
+    "liveNow": false,
+    "preload": false,
+    "tags": [
+      "m7",
+      "fleet"
+    ],
+    "timeSettings": {
+      "autoRefresh": "",
+      "autoRefreshIntervals": [],
+      "from": "now-6h",
+      "hideTimepicker": false,
+      "timezone": "browser",
+      "to": "now"
+    },
+    "title": "Fleet \u2014 services",
+    "variables": []
+  }
+}

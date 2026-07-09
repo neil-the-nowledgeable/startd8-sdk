@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from .emitter import emit_v2_dashboard, persist_v2_dashboard, v2_json
 from .provision import V2ProvisionResult, provision_v2
+from .sectioned import Section, build_sectioned_v2
 from .validate import validate_v2_dashboard
 from .version import parse_version, supports_v2_dynamic, version_gate_reason
 from .models import (
@@ -71,4 +72,7 @@ __all__ = [
     "version_gate_reason",
     "provision_v2",
     "V2ProvisionResult",
+    # M7 — generic sectioned builder (broaden)
+    "build_sectioned_v2",
+    "Section",
 ]

@@ -209,9 +209,22 @@ Workbook. Two strategy forks are resolved by an up-front spike (M0) before build
 - **Verify:** the board defaults to the project audience; flipping the variable changes prose density +
   shielded-field visibility with zero regeneration and zero writes; `portal_build.py` compiles unchanged.
 
-## M7 — Broaden (optional, OQ-7)
-- Fleet (per-service section filters), gov-budget (per-department sections/tabs), o11y-artifact boards opt
-  into the v2 constructs. Sequence after the Workbook proof.
+## M7 — Broaden (optional, OQ-7) — ✅ **DONE (2026-07-09)**
+> Shipped `v2/sectioned.py` — a generic reusable **`build_sectioned_v2(*, name, title, sections,
+> layout_kind='tabs'|'rows', dashboard_variables=…)`** + a typed `Section` (panels + optional
+> section-level variable + optional `show_when` conditional). It composes the shipped M2/M3/M4 models (no
+> logic duplication) and is the seam the plan's other consumers build on. Proven with **two distinct
+> example shapes** (tests + a live round-trip): a **fleet** board (a tab per service, each with a
+> per-service section variable) and a **gov-budget** board (a row per department, a dashboard-level
+> `fiscal_year` variable + a conditional section). Deterministic + M0-schema-valid + golden
+> (`fixtures/v2_sectioned_fleet.golden.json`); both **round-trip through live Grafana 13.1.0 (201)**.
+>
+> **Scope note:** M7 ships the reusable *primitive*. **Per-generator adoption** — wiring the real
+> `observability/` artifact generators / fleet / gov-budget dashboards to actually emit v2 through this
+> seam — is deliberately **follow-on** (each is its own feature's integration), not part of this optional
+> milestone.
+- Fleet (per-service section filters), gov-budget (per-department sections/tabs), o11y-artifact boards ✅
+  the reusable seam exists + is proven; per-generator adoption is follow-on.
 
 ---
 
