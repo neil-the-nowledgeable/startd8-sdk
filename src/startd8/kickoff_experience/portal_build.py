@@ -275,6 +275,28 @@ def build_and_maybe_provision(
             skipped_reason="no kickoff package — run `startd8 kickoff instantiate` first",
         )
 
+    # Audience personalization (Era 1): resolve the disclosure tier + read the confirmation ledger with
+    # their OWN tolerant guard, OUTSIDE the main try (R2-S7). A config/ledger read error must degrade to
+    # the byte-identical default board (Intermediate tier, no shields) with a logged warning — never be
+    # swallowed by the broad `except` below into a misleading "generation failed" skip.
+    audience_value = None
+    tier = "light"
+    provenance: dict = {}
+    try:
+        from ..concierge.audience import disclosure_tier, resolve_audience_preference
+        from ..concierge.confirmation import load_ledger
+
+        res = resolve_audience_preference(root)
+        audience_value = res.value  # a KickoffAudience enum (AudienceResolution.value)
+        tier = disclosure_tier(res.value)
+        provenance = load_ledger(root)
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 — degrade to defaults, board still generates
+        logger.warning(
+            "Workbook audience/ledger resolution failed; using defaults: %s", exc
+        )
+
     try:
         from .docs import live_schema_text, load_kickoff_docs
         from .state import build_kickoff_state
@@ -289,6 +311,9 @@ def build_and_maybe_provision(
             roster=_roster(root),
             panel_results=_load_panel_run(root, session_id=session),
             pipeline=_load_pipeline_state(root),
+            audience=audience_value,
+            tier=tier,
+            provenance=provenance,
         )
         dest = (
             Path(out_dir).expanduser()

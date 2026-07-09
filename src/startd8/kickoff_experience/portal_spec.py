@@ -101,6 +101,14 @@ _ATTENTION_DISPLAY: Dict[str, Tuple[str, str]] = {
 # gaps first when listing a manifest's fields
 _ATTENTION_SORT: Dict[str, int] = {"blocked": 0, "review": 1, "backlog": 2, "ok": 3}
 
+# The audience-default override state (Slice B, FR-5): a machine-shielded default the audience pre-pass
+# set *for* a Beginner. A distinct glyph — NOT ``✅`` (which the intro legend + _ATTENTION_DISPLAY["ok"]
+# bind to human/extraction confirmation) — so a shielded default never reads as author-confirmed.
+_AUDIENCE_DEFAULT_DISPLAY: Tuple[str, str] = ("🛡️", "safe default set for you")
+# Sort rank ≥ ``ok`` (never ``blocked``'s 0): a shielded field is resolved-for-you, not a gap, so it must
+# not re-sort to the "gaps first" top it was meant to remove (FR-7).
+_AUDIENCE_DEFAULT_SORT: int = 3
+
 # the 4 canonical kickoff input domains -> their manifest filename (extraction groups by manifest)
 _DOMAIN_MANIFEST: Dict[str, str] = {
     "business-targets": "business-targets.yaml",
@@ -136,8 +144,52 @@ def _manifest_sort_key(manifest: str):
     return (1, manifest)
 
 
+def _workbook_narrative(tier: str) -> str:
+    """The Workbook intro narrative at the resolved disclosure tier (Slice A, FR-2/FR-4). Owned by the
+    ``workbook`` experience doc; a lazy import avoids an import cycle (same convention as
+    ``explain_input_domain`` below). ``tier="light"`` reproduces the pre-audience narrative byte-for-byte;
+    ``expanded`` (Beginner) serves the PLAIN rewrite; ``compact`` (Advanced) degrades to ``light``.
+    """
+    from startd8.concierge.writes import load_experience_doc
+
+    return load_experience_doc("workbook", tier=tier)
+
+
+def _shielded_value_paths(provenance: Dict[str, Any] | None) -> set:
+    """The value_paths shielded by the audience pre-pass (``audience-default:*`` provenance). Fail-open:
+    ``None``/empty/malformed ledger → empty set (FR-6). This is the single filtering locus (R1-S6/R2-S5)
+    — both the overview count discount and the per-row badge derive shielded-ness from here.
+    """
+    if not provenance:
+        return set()
+    from startd8.concierge.confirmation import is_audience_default
+
+    return {vp for vp, entry in provenance.items() if is_audience_default(entry)}
+
+
+def _rendered_for_note(audience: Any) -> str:
+    """OQ-3: a one-line "Rendered for: <audience>" transparency note for a **non-default** audience.
+    Structurally gated — returns ``""`` for Intermediate/None so it never perturbs the Intermediate
+    byte-identity guarantee (R1-S8). Reads ``audience.value`` (the token), never ``str(audience)``.
+    """
+    from startd8.concierge.audience import KickoffAudience, coerce_audience
+
+    aud = coerce_audience(audience)
+    if aud is None or aud is KickoffAudience.INTERMEDIATE:
+        return ""
+    return (
+        f"\n\n_Rendered for: **{aud.value}** — re-run `startd8 kickoff portal` "
+        "if your audience changes._"
+    )
+
+
 def _overview_panels(
-    state: KickoffState, by_manifest: Dict[str, List[Any]]
+    state: KickoffState,
+    by_manifest: Dict[str, List[Any]],
+    *,
+    tier: str = "light",
+    audience: Any = None,
+    provenance: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     ac = state.attention_counts
     total = len(state.fields) or 1
@@ -146,19 +198,45 @@ def _overview_panels(
     blocked = ac.get("blocked", 0)
     ok_ratio = ok / total
 
+    # Slice B (FR-7): discount audience-default-shielded gaps from the two gap-facing figures only.
+    # The single filtering locus (Step 5): intersect ledger-shielded value_paths with the *extraction*
+    # basis (attention=="blocked") BEFORE subtracting, so a shielded vp absent from state has no effect
+    # (no underflow) and the floor is 0.
+    shielded = _shielded_value_paths(provenance)
+    shielded_gaps = {
+        f.value_path
+        for f in state.fields
+        if f.attention == "blocked" and f.value_path in shielded
+    }
+    blocked_display = max(0, blocked - len(shielded_gaps))
+
+    # Slice A (FR-2/FR-4): the narrative intro is owned by the workbook experience doc, rendered at the
+    # resolved disclosure tier. The legend + status line + trailing note stay code-side (state, not prose).
+    # For tier="light" (Intermediate/unset) with no shields and no audience note, this composes
+    # byte-identically to the pre-audience inline string (the byte-identity guarantee).
+    narrative = _workbook_narrative(tier)
+    legend_extra = (
+        f"| {_AUDIENCE_DEFAULT_DISPLAY[0]} {_AUDIENCE_DEFAULT_DISPLAY[1]} "
+        "| machine-set default you can change |\n"
+        if shielded
+        else ""
+    )
+    set_for_you = f" · {len(shielded)} set for you" if shielded else ""
     intro = (
-        "The **Digital Project Workbook** — the shared, whole-project view of the foundational kickoff "
-        "decisions. A dynamic, query-based evolution of Brooks' workbook (_The Mythical Man-Month_), "
-        "which was static (paper/microfiche); this one is generated from live project state. State is "
-        "the canonical `KickoffState` (the same `$0` extraction the web UI and TUI use) — projected into "
-        "these panels. Re-run `startd8 kickoff portal` to refresh.\n\n"
-        "| Confirmation | Meaning |\n|---|---|\n"
-        "| ✅ confirmed | extracted from your authoring docs |\n"
-        "| 🟡 review | SDK-defaulted — worth a look |\n"
-        "| 🔴 gap | not extracted — **author action needed** |\n\n"
-        f"**{ok}/{total} fields confirmed** · {review} to review · **{blocked} gaps** "
-        f"· grammar `{state.grammar_version}`.\n\n"
-        "_Current state only; the confirmation burndown over time arrives with the metric emit seam._"
+        narrative
+        + "\n\n"
+        + "| Confirmation | Meaning |\n|---|---|\n"
+        + "| ✅ confirmed | extracted from your authoring docs |\n"
+        + "| 🟡 review | SDK-defaulted — worth a look |\n"
+        + "| 🔴 gap | not extracted — **author action needed** |\n"
+        + legend_extra
+        + "\n"
+        + f"**{ok}/{total} fields confirmed** · {review} to review · **{blocked_display} gaps** "
+        + f"· grammar `{state.grammar_version}`."
+        + set_for_you
+        + "\n\n"
+        + "_Current state only; the confirmation burndown over time arrives with the metric emit seam._"
+        + _rendered_for_note(audience)
     )
 
     panels: List[Dict[str, Any]] = [
@@ -183,7 +261,7 @@ def _overview_panels(
         {
             "type": "stat",
             "title": "Open Gaps (author action)",
-            "expr": f"vector({blocked})",
+            "expr": f"vector({blocked_display})",
             "unit": "short",
             "thresholds": [
                 {"value": None, "color": "green"},
@@ -213,10 +291,21 @@ def _overview_panels(
     return panels
 
 
-def _manifest_section(manifest: str, fields: List[Any]) -> Dict[str, Any]:
-    ordered = sorted(
-        fields, key=lambda f: (_ATTENTION_SORT.get(f.attention, 9), f.value_path)
-    )
+def _manifest_section(
+    manifest: str, fields: List[Any], provenance: Dict[str, Any] | None = None
+) -> Dict[str, Any]:
+    from startd8.concierge.confirmation import is_audience_default
+
+    prov = provenance or {}
+
+    def _row_rank(f: Any) -> int:
+        # Slice B (FR-5/R1-S2): a shielded field sorts with/after `ok` (never at blocked's rank 0), so a
+        # resolved-for-you default doesn't re-appear in the "gaps first" ordering it was meant to remove.
+        if is_audience_default(prov.get(f.value_path)):
+            return _AUDIENCE_DEFAULT_SORT
+        return _ATTENTION_SORT.get(f.attention, 9)
+
+    ordered = sorted(fields, key=lambda f: (_row_rank(f), f.value_path))
     slug = _MANIFEST_DOMAIN.get(manifest)
     lines: List[str] = []
     if slug:
@@ -237,7 +326,12 @@ def _manifest_section(manifest: str, fields: List[Any]) -> Dict[str, Any]:
 
     lines += ["| Field | State | Value |", "|---|---|---|"]
     for f in ordered:
-        emoji, label = _ATTENTION_DISPLAY.get(f.attention, ("", f.attention))
+        # Slice B (FR-5): an audience-default-shielded field renders the 🛡️ override glyph INSTEAD of its
+        # extraction attention glyph — a machine-set default reads distinctly from a human/extracted ✅.
+        if is_audience_default(prov.get(f.value_path)):
+            emoji, label = _AUDIENCE_DEFAULT_DISPLAY
+        else:
+            emoji, label = _ATTENTION_DISPLAY.get(f.attention, ("", f.attention))
         value = _value_snippet(f.value) if f.value is not None else "_—_"
         lines.append(f"| `{f.value_path}` | {emoji} {label} | {value} |")
 
@@ -433,21 +527,36 @@ def build_kickoff_portal_spec(
     roster: Any = None,
     panel_results: List[Dict[str, Any]] | None = None,
     pipeline: Dict[str, Any] | None = None,
+    audience: Any = None,
+    tier: str = "light",
+    provenance: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build a ``DashboardSpec`` dict for the kickoff portal from the canonical state.
 
-    Pure function — deterministic in *(state, project, roster, panel_results)*, no I/O. The returned
-    dict is the input to ``DashboardCreatorWorkflow.run({"spec": spec, ...})``. ``roster`` (optional)
-    adds the Stakeholders section; ``panel_results`` (optional) renders the latest run's answers — a key
-    part of the Workbook (Phase 1/1.5: display-only; running the panel is Phase 2).
+    Pure function — deterministic in *(state, project, roster, panel_results, audience, tier,
+    provenance)*, no I/O. The returned dict is the input to ``DashboardCreatorWorkflow.run(...)``.
+    ``roster`` (optional) adds the Stakeholders section; ``panel_results`` (optional) renders the latest
+    run's answers.
+
+    Audience personalization (Era 1, classic schema):
+    - ``tier`` — the disclosure tier (``light``/``expanded``/``compact``) the overview intro is rendered
+      at; the caller resolves it via ``disclosure_tier(audience)``. Defaults to ``light`` = the
+      pre-audience narrative, byte-for-byte.
+    - ``audience`` — the resolved ``KickoffAudience`` enum (``AudienceResolution.value``); drives the
+      optional "Rendered for:" note (non-default audiences only).
+    - ``provenance`` — the raw ledger entry map ``{value_path: entry}`` from ``load_ledger`` (entries may
+      carry an optional ``audience-default:*`` provenance); drives the 🛡️ badge + honest gap counts.
+      Fail-open: ``None``/empty reproduces today's board exactly.
     """
     by_manifest: Dict[str, List[Any]] = {}
     for f in state.fields:
         by_manifest.setdefault(f.manifest, []).append(f)
 
-    panels: List[Dict[str, Any]] = _overview_panels(state, by_manifest)
+    panels: List[Dict[str, Any]] = _overview_panels(
+        state, by_manifest, tier=tier, audience=audience, provenance=provenance
+    )
     for manifest in sorted(by_manifest, key=_manifest_sort_key):
-        panels.append(_manifest_section(manifest, by_manifest[manifest]))
+        panels.append(_manifest_section(manifest, by_manifest[manifest], provenance))
     panels.append(_stakeholders_section(roster, panel_results))
     if pipeline is not None:
         panels.append(_pipeline_section(pipeline))

@@ -1,8 +1,8 @@
 # Workbook × Audience Personalization — Implementation Plan
 
-**Version:** 1.2 (paired with REQUIREMENTS v0.4; CRP R1/R2 triaged)
+**Version:** 1.3 (paired with REQUIREMENTS v0.5; IMPLEMENTED)
 **Date:** 2026-07-08
-**Status:** Draft (CRP R1/R2 applied — ready to implement)
+**Status:** IMPLEMENTED — Era 1 shipped (branch feat/workbook-audience-personalization); see reqs §0.2
 **Scope:** Era 1 only (classic schema). Slice A (tiered intro) + Slice B (audience-default badge).
 
 ---
@@ -96,11 +96,12 @@ Both keep `build_kickoff_portal_spec` **pure** (all I/O — audience resolution,
   appended-then-blanked or trailing-whitespace variant would perturb the Intermediate byte-identity
   golden). Use `audience.value` for the token (R2-S2), never `str(audience)`.
 - **Test — tier slicing + degrade guard (R1-S5):** `tier="expanded"` renders the PLAIN region;
-  `tier="compact"` the TL;DR; `tier="light"` byte-identical to the legacy narrative; unknown/missing
-  markers degrade to `light`. **Plus a positive marker-slice assertion** —
-  `load_experience_doc("workbook","expanded") != load_experience_doc("workbook","light")` **and**
-  `compact != light` — the ONLY guard against the silent degrade-to-`light` no-op (a mis-authored doc
-  passes every byte-identity test because `light` is the pass case).
+  `tier="light"` byte-identical to the legacy narrative. **Positive marker-slice assertion** —
+  `load_experience_doc("workbook","expanded") != load_experience_doc("workbook","light")` — the guard
+  against the silent degrade-to-`light` no-op (a mis-authored doc passes byte-identity because `light`
+  is the pass case). **⚠ `compact != light` DROPPED** (impl discovery, reqs §0.2): a `TL;DR` region
+  leaks into `light` + injects a newline, so `compact` degrades to `light` (Advanced == Intermediate);
+  a distinct compact needs a `writes.py` change (deferred).
 - **Test — two goldens (R1-S4):** (1) `load_experience_doc("workbook","light")` == the narrative
   substring bytes; (2) the **composed** overview panel dict (narrative + legend + status line) for a
   **fixed** `KickoffState` == pre-change. Separates the movable prose from the dynamic status line.

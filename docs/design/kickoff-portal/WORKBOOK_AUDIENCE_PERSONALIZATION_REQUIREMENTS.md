@@ -1,8 +1,8 @@
 # Workbook × Audience Personalization — Requirements
 
-**Version:** 0.4 (Post-CRP triage — R1/R2 applied)
+**Version:** 0.5 (Implemented — Era 1 shipped)
 **Date:** 2026-07-08
-**Status:** Draft (reflective-requirements loop; CRP R1/R2 triaged — ready to implement)
+**Status:** IMPLEMENTED (Era 1, classic schema) — see §0.2 Implementation Insights
 **Owner doc it derives from:** `WORKBOOK_AUDIENCE_PERSONALIZATION_NEXT_STEPS.md` (research; §3 slices, §4 eras)
 **Scope:** **Era 1 only** — the classic-schema (Grafana < 13.1) port of the kickoff `audience` lens
 onto the Digital Project Workbook dashboard. Era 2 (live in-browser switching) is a **non-requirement
@@ -63,7 +63,24 @@ here** and folds into `../dynamic-dashboards/` (FR-8/FR-9).
 | `build_and_maybe_provision` (I/O caller) | `kickoff_experience/portal_build.py` | ✓ (was mis-named `build_kickoff_portal`) |
 | `_build_audience_block` (reuse pattern) | `kickoff_experience/concierge_view.py` | ✓ |
 | `is_audience_default` / `audience_default_slug` (public predicate) | `concierge/confirmation.py` | **to-be-created (FR-9)** |
-| `KICKOFF_WORKBOOK_INTRO.md` + `"workbook"` key | `concierge_templates/` + `writes.py` | **to-be-created (FR-2/FR-3)** |
+| `KICKOFF_WORKBOOK_INTRO.md` + `"workbook"` key | `concierge_templates/` + `writes.py` | ✓ (shipped, FR-2/FR-3) |
+
+### 0.2 Implementation Insights (v0.5 — post-build)
+
+> Discovered while implementing (Phase 6). The reflective loop continues into code: one CRP-accepted
+> item proved mechanically impossible and was corrected.
+
+- **`compact` (Advanced) cannot differ from `light` without breaking byte-identity** — see the FR-2
+  ⚠ note. `writes.py`'s `light` path retains `TL;DR` prose and strips only its marker *lines* (injecting
+  a newline), so a `TL;DR` region both leaks into `light` and breaks the single-line byte-identity target.
+  The doc ships **`PLAIN`-only**; Advanced degrades to `light`. R1-F8/R1-S5's `compact != light`
+  assertion is **dropped**; `expanded != light` is retained as the degrade-guard. A distinct Advanced
+  compact is deferred (needs a `writes.py` change; natural to fold into era 2).
+- **Everything else shipped as specced** — Slice A (tiered Beginner intro), Slice B (🛡️ badge + honest
+  gap counts, sort-after-`ok`, fail-open join), FR-9 public predicate, the `build_and_maybe_provision`
+  resolution guard (own try, degrades not skips), and the byte-identity baseline test (full-spec `==`).
+  A canonical template twin (`docs/design/kickoff/templates/KICKOFF_WORKBOOK_INTRO.md`) was required by
+  the packaged-template invariant (`test_writes.py::test_packaged_templates_match_canonical`).
 
 ---
 
@@ -98,21 +115,24 @@ screams "🔴 3 gaps — author action needed."
     dataclass nor a raw string. The `tier` param MUST be the string from `disclosure_tier(res.value)`. Any
     on-board display of the audience (OQ-3) reads `audience.value` (the token, e.g. `"beginner"`), never
     `str(audience)` (which would render `"KickoffAudience.BEGINNER"`).
-- **FR-2 — Author a tiered workbook experience doc.** A new render-only doc (e.g.
-  `KICKOFF_WORKBOOK_INTRO.md`) MUST carry the overview intro prose with `<!-- PLAIN -->` (Beginner
-  expanded) and `<!-- TL;DR -->` (Advanced compact) regions, so `load_experience_doc` produces a
-  genuinely different intro per tier.
+- **FR-2 — Author a tiered workbook experience doc.** A new render-only doc
+  (`KICKOFF_WORKBOOK_INTRO.md`, shipped) carries the overview intro prose with a `<!-- PLAIN -->`
+  (Beginner expanded) region, so `load_experience_doc` produces a genuinely different Beginner intro.
   - **Byte-identity scope (R1-F5/R1-F7):** the byte-identity guarantee applies to the **narrative intro
     region only** — the substring that moves into the doc. The confirmation-legend table, the dynamic
     status line, and the trailing italic remain **code-appended verbatim** (they are state, not prose;
     the status line is inherently dynamic and cannot be byte-pinned). It is **only** the Intermediate /
     unset (`light`) tier that is byte-identity-guaranteed against today's narrative; Beginner (`expanded`)
-    and Advanced (`compact`) intentionally differ (that is the personalization).
-  - **Marker-presence gate (R1-F8):** the authored doc MUST contain parseable `<!-- PLAIN -->` **and**
-    `<!-- TL;DR -->` regions. A doc missing them makes `load_experience_doc` silently degrade to `light`
-    for all tiers (writes.py A-FR9b) → zero visible personalization that no byte-identity test can catch.
-    Acceptance therefore requires a **positive marker-slice assertion** (`expanded != light` AND
-    `compact != light`), specified in the plan (Step 3 / §3), not merely a `light`-renders test.
+    differs (that is the personalization).
+  - **⚠ IMPLEMENTATION DISCOVERY (§0.2) — `compact` degrades to `light` by design.** The original R1-F8
+    ask (require BOTH `PLAIN` **and** `TL;DR`; assert `compact != light` AND `expanded != light`) proved
+    **mechanically impossible** given `writes.py`: the `light` render **retains** `TL;DR` prose (it is an
+    excerpt) and **strips its marker *lines***, injecting a newline at the seam. So any `TL;DR` region
+    both (a) leaks into `light` and (b) breaks the single-line byte-identity. Since byte-identity is
+    load-bearing, the doc ships **`PLAIN`-only**; **Advanced (`compact`) degrades to `light`** (==
+    Intermediate). Beginner-expanded is the 90% value; a distinct Advanced compact would require a
+    `writes.py` enhancement (deferred, revisited in era 2). The marker-presence gate is therefore
+    **`expanded != light`** (proves `PLAIN` slices; guards the silent degrade-to-`light` no-op).
 - **FR-3 — Register the workbook doc key.** The new doc MUST be registered in `_EXPERIENCE_DOCS` under a
   stable key (e.g. `"workbook"`) so `load_experience_doc("workbook", tier=…)` resolves it.
 - **FR-4 — Render the intro at the resolved tier.** `_overview_panels` MUST render the intro from
