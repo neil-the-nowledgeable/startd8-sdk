@@ -16,6 +16,9 @@ elements, ``GridLayout``/``RowsLayout``, and ``CustomVariable`` (= the FR-8 ``au
 from __future__ import annotations
 
 from .emitter import emit_v2_dashboard, persist_v2_dashboard, v2_json
+from .provision import V2ProvisionResult, provision_v2
+from .validate import validate_v2_dashboard
+from .version import parse_version, supports_v2_dynamic, version_gate_reason
 from .models import (
     V2_API_VERSION,
     V2_KIND,
@@ -61,4 +64,11 @@ __all__ = [
     "emit_v2_dashboard",
     "persist_v2_dashboard",
     "v2_json",
+    # M5 — validation, version gating, provisioning
+    "validate_v2_dashboard",
+    "parse_version",
+    "supports_v2_dynamic",
+    "version_gate_reason",
+    "provision_v2",
+    "V2ProvisionResult",
 ]

@@ -119,7 +119,25 @@ Workbook. Two strategy forks are resolved by an up-front spike (M0) before build
   **and round-trip through live Grafana 13.1.0** (201, both sections carry their variable). Same-tab
   cross-ref + bad section-variable type fail loud; cross-tab reuse is allowed.
 
-## M5 — Validation + provisioning + version handling (FR-7, FR-6, FR-11)
+## M5 — Validation + provisioning + version handling (FR-7, FR-6, FR-11) — ✅ **DONE (2026-07-09)**
+> Shipped `v2/{validate,version,provision,constructs}.py` + a one-line discriminator into the existing
+> `json_validator.py` (classic path byte-untouched). **Validation:** `validate_dashboard_json` routes an
+> `apiVersion`-bearing board to `validate_v2_dashboard`, which positively asserts the envelope
+> (`apiVersion`/`kind`/`spec`+`title`/`layout`/`elements`-is-object), enforces UID via `metadata.name`
+> (R1-S5), and rejects out-of-scope `*Layout`/`*Variable` kinds (NR-6/R1-F7) against the M0 allowlist (a
+> test pins it to `v2-construct-names.json`, no drift). **Version:** minor-aware `parse_version` +
+> `supports_v2_dynamic` (≥13.1) + `version_gate_reason` — fixes the major-only `check_version` gap
+> (R1-F1). **Provision:** `provision_v2(client, board)` = version-gate → UID-collision guard → idempotent
+> legacy upsert (M0 outcome-1 path), recording `provision_api`. 21 M5 tests / 536 dashboard_creator green,
+> and **live-verified** against Grafana 13.1.0 (provision + idempotent re-provision + fetch + cleanup).
+>
+> **Design note (fed back):** the collision guard uses **title comparison** (the FR-5 pattern), **not** an
+> `apiVersion`/schema sniff — the legacy `GET /api/dashboards/uid` returns a *classic-shaped*
+> representation even for a v2-stored board, so "no apiVersion" is not a reliable "classic" signal (a
+> schema sniff caused a false self-collision on re-provision; caught live). Different title ⇒ collision;
+> same title ⇒ idempotent. `force=True` overrides. The **resource API** stays the M0-noted native path but
+> the legacy endpoint is used for its clean `overwrite` upsert (resource-API updates need resourceVersion).
+
 - **Schema discriminator FIRST (R2-S4, blocker):** `json_validator.py:69` range-checks `schemaVersion`
   against `range(36,42)`; a v2 board has **no** `schemaVersion`, so `None not in range(36,42)` is `True`
   and the range error **already fires on every v2 board today**. Add `if "apiVersion" in data: <v2 path>
