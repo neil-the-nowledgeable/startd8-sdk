@@ -323,6 +323,87 @@ def build_and_maybe_provision(
     return _persist(result, provision_url, summary)
 
 
+# ------------------------------------------------- dynamic (v2) Workbook — dynamic-dashboards M6/CLI
+# The audience-personalized v2 dynamic board (`kickoff portal --dynamic`). Additive + SEPARATE from the
+# classic path above (its own `-v2` UID; coexists, R2-F5): pure-Python v2 emit (no jsonnet toolchain
+# needed), then optional provision via `provision_v2` (version-gated + collision-guarded).
+
+
+def build_workbook_v2_and_maybe_provision(
+    project_root: Path,
+    project: Optional[str] = None,
+    *,
+    out_dir: Optional[Path] = None,
+    provision_url: Optional[str] = None,
+) -> PortalResult:
+    """Generate (and optionally provision) the **v2 dynamic** Workbook. Never raises — degrades to a
+    :class:`PortalResult` with a ``skipped_reason`` (mirrors the classic helper)."""
+    root = Path(project_root).expanduser()
+    name = project or root.resolve().name
+    from .portal_spec_v2 import build_workbook_v2, workbook_v2_uid
+
+    uid = workbook_v2_uid(name)
+    if not (root / "docs" / "kickoff").is_dir():
+        return PortalResult(
+            uid=uid,
+            skipped_reason="no kickoff package — run `startd8 kickoff instantiate` first",
+        )
+    try:
+        from ..concierge.audience import resolve_audience_preference
+        from ..concierge.confirmation import load_ledger
+        from ..dashboard_creator.v2 import persist_v2_dashboard, provision_v2
+        from .docs import live_schema_text, load_kickoff_docs
+        from .state import build_kickoff_state
+
+        docs = load_kickoff_docs(root)  # empty pre-authoring → skeleton board (FR-4)
+        state = build_kickoff_state(docs, live_schema_text=live_schema_text(root))
+        audience = resolve_audience_preference(root).value
+        provenance = load_ledger(root)
+        board = build_workbook_v2(state, name, audience=audience, provenance=provenance)
+
+        dest = (
+            Path(out_dir).expanduser()
+            if out_dir
+            else (root / ".startd8" / "dashboards")
+        )
+        pres = persist_v2_dashboard(board, output_dir=dest)
+        summary: Dict[str, Any] = {
+            "schema": "kickoff.portal.v2",
+            "uid": uid,
+            "dynamic": True,
+            "audience": audience.value,
+            "fields": len(state.fields),
+        }
+
+        provisioned_url: Optional[str] = None
+        if provision_url:
+            from ..dashboard_creator.grafana_client import GrafanaClient
+
+            client = GrafanaClient(
+                provision_url, allow_insecure=provision_url.startswith("http://")
+            )
+            r = provision_v2(client, board)
+            if not r.success:
+                return PortalResult(
+                    uid=uid,
+                    json_path=str(pres.json_path),
+                    summary=summary,
+                    skipped_reason=r.skipped_reason or r.error,
+                )
+            provisioned_url = f"{provision_url.rstrip('/')}/d/{uid}"
+        return PortalResult(
+            uid=uid,
+            json_path=str(pres.json_path),
+            provisioned_url=provisioned_url,
+            summary=summary,
+        )
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 — degrade, never propagate (mirrors the classic path)
+        logger.warning("Dynamic Workbook (v2) generation failed: %s", exc)
+        return PortalResult(uid=uid, skipped_reason=f"generation failed: {exc}")
+
+
 # --------------------------------------------------------------------------- portfolio index (FR-11)
 
 
