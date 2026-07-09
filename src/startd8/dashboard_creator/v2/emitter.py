@@ -15,13 +15,17 @@ from typing import Any, Dict, List, Optional
 from .models import (
     V2_API_VERSION,
     V2_KIND,
+    AutoGridLayout,
     CustomVariable,
     GridLayout,
     Layout,
     RowsLayout,
+    TabsLayout,
     V2Panel,
     V2ValidationError,
 )
+
+_LAYOUT_TYPES = (GridLayout, RowsLayout, AutoGridLayout, TabsLayout)
 
 _DEFAULT_TIME = {
     "from": "now-6h",
@@ -56,9 +60,10 @@ def emit_v2_dashboard(
         raise V2ValidationError(
             f"emit_v2_dashboard requires schema='v2' (the single opt-in trigger); got {schema!r}"
         )
-    if not isinstance(layout, (GridLayout, RowsLayout)):
+    if not isinstance(layout, _LAYOUT_TYPES):
         raise V2ValidationError(
-            f"layout must be a GridLayout or RowsLayout, got {type(layout).__name__}"
+            "layout must be a GridLayout / RowsLayout / AutoGridLayout / TabsLayout, "
+            f"got {type(layout).__name__}"
         )
     if not name:
         raise V2ValidationError(

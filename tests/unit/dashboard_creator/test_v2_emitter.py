@@ -166,3 +166,121 @@ def test_classic_dashboardspec_still_requires_panels():
 
     with pytest.raises(ValidationError):
         DashboardSpec(title="t", panels=[])
+
+
+# --- M2: tabs / auto-grid layout + nesting (FR-4) ------------------------------------------------
+
+from startd8.dashboard_creator.v2 import (  # noqa: E402
+    AutoGridItem,
+    AutoGridLayout,
+    TabsLayout,
+    TabsLayoutTab,
+)
+
+_M2_GOLDEN = Path(__file__).parent / "fixtures/v2_tabs.golden.json"
+
+
+def _tabs_board() -> dict:
+    return emit_v2_dashboard(
+        name="m2-tabs",
+        title="M2 Tabs",
+        tags=["m2"],
+        elements={"p1": text_panel(1, "A", "**a**"), "p2": text_panel(2, "B", "**b**")},
+        layout=TabsLayout(
+            tabs=[
+                TabsLayoutTab(
+                    title="Rows",
+                    layout=RowsLayout(
+                        rows=[
+                            RowsLayoutRow(
+                                title="R1", items=[GridItem(element="p1", height=6)]
+                            )
+                        ]
+                    ),
+                ),
+                TabsLayoutTab(
+                    title="Auto",
+                    layout=AutoGridLayout(
+                        items=[AutoGridItem(element="p2")], max_column_count=2
+                    ),
+                ),
+            ]
+        ),
+    )
+
+
+def test_tabs_layout_two_tabs_nesting():
+    # FR-4: a 2-tab board; tab0 nests a RowsLayout, tab1 an AutoGridLayout
+    lay = _tabs_board()["spec"]["layout"]
+    assert lay["kind"] == "TabsLayout"
+    tabs = lay["spec"]["tabs"]
+    assert [t["spec"]["title"] for t in tabs] == ["Rows", "Auto"]
+    assert tabs[0]["spec"]["layout"]["kind"] == "RowsLayout"
+    assert tabs[1]["spec"]["layout"]["kind"] == "AutoGridLayout"
+    # the nested row wraps a GridLayout referencing p1
+    row = tabs[0]["spec"]["layout"]["spec"]["rows"][0]
+    assert row["kind"] == "RowsLayoutRow"
+    assert row["spec"]["layout"]["kind"] == "GridLayout"
+
+
+def test_auto_grid_layout_shape():
+    board = emit_v2_dashboard(
+        name="ag",
+        title="ag",
+        elements={"p1": text_panel(1, "a", "b")},
+        layout=AutoGridLayout(
+            items=[AutoGridItem(element="p1")], max_column_count=4, fill_screen=True
+        ),
+    )
+    spec = board["spec"]["layout"]["spec"]
+    assert spec["maxColumnCount"] == 4 and spec["fillScreen"] is True
+    assert spec["columnWidthMode"] == "standard" and spec["rowHeightMode"] == "standard"
+    assert spec["items"][0]["kind"] == "AutoGridLayoutItem"
+    assert spec["items"][0]["spec"]["element"] == {
+        "kind": "ElementReference",
+        "name": "p1",
+    }
+
+
+def test_tabs_board_matches_golden():
+    assert v2_json(_tabs_board()) == _M2_GOLDEN.read_text(encoding="utf-8")
+
+
+def test_tabs_board_validates_against_m0_schema():
+    jsonschema = pytest.importorskip("jsonschema")
+    jsonschema.validate(
+        _tabs_board(), json.loads(_M0_SCHEMA.read_text(encoding="utf-8"))
+    )
+
+
+def test_element_ref_validation_walks_nested_tabs():
+    # an undeclared element referenced deep inside a tab→autogrid must fail loud (FR-11 intent)
+    with pytest.raises(V2ValidationError, match="undeclared element"):
+        emit_v2_dashboard(
+            name="bad",
+            title="bad",
+            elements={"p1": text_panel(1, "a", "b")},
+            layout=TabsLayout(
+                tabs=[
+                    TabsLayoutTab(
+                        title="t",
+                        layout=AutoGridLayout(items=[AutoGridItem(element="ghost")]),
+                    )
+                ]
+            ),
+        )
+
+
+def test_row_explicit_layout_overrides_items():
+    # RowsLayoutRow.layout (explicit) wins over the items shorthand
+    row = RowsLayoutRow(
+        title="r",
+        items=[GridItem(element="ignored")],
+        layout=AutoGridLayout(items=[AutoGridItem(element="p1")]),
+    ).to_v2()
+    assert row["spec"]["layout"]["kind"] == "AutoGridLayout"
+
+
+def test_bad_nested_layout_fails_loud():
+    with pytest.raises(V2ValidationError, match="nested layout must be"):
+        TabsLayoutTab(title="t", layout="not-a-layout").to_v2()

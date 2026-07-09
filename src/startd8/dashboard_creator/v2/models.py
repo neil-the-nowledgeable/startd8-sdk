@@ -116,19 +116,26 @@ class GridLayout(BaseModel):
 
 
 class RowsLayoutRow(BaseModel):
-    """One ``RowsLayoutRow`` — a titled, optionally-collapsed section wrapping a nested ``GridLayout``."""
+    """One ``RowsLayoutRow`` — a titled, optionally-collapsed section wrapping a nested layout.
+
+    By default the ``items`` are wrapped in a ``GridLayout`` (the M1 shorthand). For richer nesting (M2),
+    pass an explicit ``layout`` (any v2 layout — e.g. an ``AutoGridLayout`` or another ``RowsLayout``);
+    when set it takes precedence over ``items``.
+    """
 
     title: str = ""
     collapse: bool = False
     items: List[GridItem] = Field(default_factory=list)
+    layout: Any = None  # an explicit nested layout; None ⇒ wrap `items` in a GridLayout
 
     def to_v2(self) -> Dict[str, Any]:
+        sub = self.layout if self.layout is not None else GridLayout(items=self.items)
         return {
             "kind": "RowsLayoutRow",
             "spec": {
                 "title": self.title,
                 "collapse": self.collapse,
-                "layout": GridLayout(items=self.items).to_v2(),
+                "layout": _sub_layout_v2(sub),
             },
         }
 
@@ -142,7 +149,77 @@ class RowsLayout(BaseModel):
         return {"kind": "RowsLayout", "spec": {"rows": [r.to_v2() for r in self.rows]}}
 
 
-Layout = Union[GridLayout, RowsLayout]
+class AutoGridItem(BaseModel):
+    """One element in an ``AutoGridLayout`` (auto-placed — no x/y/width/height)."""
+
+    element: str
+
+    def to_v2(self) -> Dict[str, Any]:
+        return {
+            "kind": "AutoGridLayoutItem",
+            "spec": {"element": {"kind": "ElementReference", "name": self.element}},
+        }
+
+
+class AutoGridLayout(BaseModel):
+    """The ``AutoGridLayout`` — Grafana auto-places items into a responsive grid (no manual gridPos)."""
+
+    items: List[AutoGridItem] = Field(default_factory=list)
+    max_column_count: int = 3
+    column_width_mode: str = "standard"
+    row_height_mode: str = "standard"
+    fill_screen: bool = False
+
+    def to_v2(self) -> Dict[str, Any]:
+        return {
+            "kind": "AutoGridLayout",
+            "spec": {
+                "maxColumnCount": self.max_column_count,
+                "columnWidthMode": self.column_width_mode,
+                "rowHeightMode": self.row_height_mode,
+                "fillScreen": self.fill_screen,
+                "items": [i.to_v2() for i in self.items],
+            },
+        }
+
+
+class TabsLayoutTab(BaseModel):
+    """One ``TabsLayoutTab`` — a titled tab wrapping any nested layout (rows/grid/auto-grid/tabs)."""
+
+    title: str = ""
+    items: List[GridItem] = Field(default_factory=list)
+    layout: Any = None  # explicit nested layout; None ⇒ wrap `items` in a GridLayout
+
+    def to_v2(self) -> Dict[str, Any]:
+        sub = self.layout if self.layout is not None else GridLayout(items=self.items)
+        return {
+            "kind": "TabsLayoutTab",
+            "spec": {"title": self.title, "layout": _sub_layout_v2(sub)},
+        }
+
+
+class TabsLayout(BaseModel):
+    """The ``TabsLayout`` (top-level tabbed sections). Each tab carries its own nested layout."""
+
+    tabs: List[TabsLayoutTab] = Field(default_factory=list)
+
+    def to_v2(self) -> Dict[str, Any]:
+        return {"kind": "TabsLayout", "spec": {"tabs": [t.to_v2() for t in self.tabs]}}
+
+
+Layout = Union[GridLayout, RowsLayout, AutoGridLayout, TabsLayout]
+
+
+def _sub_layout_v2(layout: Any) -> Dict[str, Any]:
+    """Render a nested layout to its ``{kind, spec}`` dict — accepts any object exposing ``to_v2()``
+    (the four v2 layout kinds). Fails loud on a non-layout so a bad nesting never ships a broken board.
+    """
+    if not hasattr(layout, "to_v2"):
+        raise V2ValidationError(
+            f"nested layout must be a v2 layout (GridLayout/RowsLayout/AutoGridLayout/TabsLayout), "
+            f"got {type(layout).__name__}"
+        )
+    return layout.to_v2()
 
 
 # --- variables ----------------------------------------------------------------------------------

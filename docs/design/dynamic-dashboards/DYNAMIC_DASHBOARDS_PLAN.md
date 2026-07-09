@@ -74,10 +74,18 @@ Workbook. Two strategy forks are resolved by an up-front spike (M0) before build
   round-trip; classic specs byte-identical to today (493 tests). Element-reference integrity fails loud
   (undeclared `ElementReference` → error).
 
-## M2 — Tabs/rows layout (FR-4)
-- A `layout` descriptor (tabs → rows → panels, nesting) → v2 layout kinds (`TabsLayout`/`RowsLayout`/
-  `AutoGridLayout`/`GridLayout`); auto-grid vs custom selectable.
-- **Verify:** a 2-tab / 2-row spec renders the sections; content outline populated.
+## M2 — Tabs/rows layout (FR-4) — ✅ **DONE (2026-07-09)**
+> Extended `v2/models.py` with `TabsLayout`/`TabsLayoutTab` + `AutoGridLayout`/`AutoGridItem`, and real
+> **nesting** — a tab or row carries any sub-layout (`_sub_layout_v2` fails loud on a non-layout). All four
+> v2 layout kinds (`GridLayout`/`RowsLayout`/`AutoGridLayout`/`TabsLayout`) are now emittable + selectable.
+> Element-reference integrity **walks the full nesting** (an undeclared ref deep in a tab→autogrid fails
+> loud). Backward-compatible: `RowsLayoutRow`/`TabsLayoutTab` keep the M1 `items` shorthand (→GridLayout)
+> and gain an optional explicit `layout`. M2 byte-golden `fixtures/v2_tabs.golden.json`. 19 v2 tests, 500
+> dashboard_creator green.
+- A `layout` descriptor (tabs → rows → panels, nesting) → v2 layout kinds ✅ all four; auto-grid vs custom
+  selectable (`AutoGridLayout` vs `GridLayout`).
+- **Verify:** ✅ a 2-tab board (tab0 = RowsLayout→GridLayout, tab1 = AutoGridLayout) emits + validates
+  against the M0 schema **and round-trips through live Grafana 13.1.0** (201, fidelity confirmed).
 
 ## M3 — Conditional rendering (FR-2)
 - Per-element `conditional`: condition types variable-value (`equals|notEquals|matches|notMatches`),
