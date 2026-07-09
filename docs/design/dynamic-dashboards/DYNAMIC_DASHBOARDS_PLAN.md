@@ -46,25 +46,33 @@ Workbook. Two strategy forks are resolved by an up-front spike (M0) before build
   All three land in `docs/design/dynamic-dashboards/`. **Output:** the artifacts + a filled decision
   matrix reviewed before M1 starts. No SDK code yet.
 
-## M1 — v2 emit foundation (FR-1, FR-5, FR-10)
-- New `dashboard_creator/v2/` (emitter + models) OR a `schema="v2"` branch in the workflow. Additive:
-  extend `DashboardSpec`/`PanelSpec` with optional `layout`, per-element `conditional`, section `variables`
-  (FR-10) — classic path and existing consumers untouched.
-- **Single, explicit opt-in trigger (R1-F2):** v2 is selected **only** by `schema="v2"`, NOT by the mere
-  presence of a dynamic construct — a classic spec that carries one v2-only field is a **validation error**,
-  never a silent schema flip.
-- **Relax the `panels min_length=1` invariant for v2 (R1-S9):** `DashboardSpec.panels` is
-  `Field(min_length=1)` (`models.py:266`) — a legitimate pure-tabs/rows v2 board has zero top-level flat
-  panels. Make the min-length conditional on `schema != "v2"` (or move layout to its own field) so a
-  layout-only v2 spec validates; classic still requires ≥1.
-- Reuse the existing PanelSpec→panel mapping for the leaf panels (validated by M0's embedded classic panel);
-  wrap them in v2 `elements` + `layout`.
-- **Deterministic (R1-S4/R2-S7):** the v2 emitter MUST reuse `output.py`'s exact serializer
-  (`json.dumps(sort_keys=True, indent=2) + "\n"`, `output.py:44`) and route through `persist_dashboard`
-  to inherit the atomic tmp-then-`os.replace` write (`output.py:46-48`) — a separate `dumps`/write path
-  would fork byte-stability (FR-5). A golden pins byte-stability; grep confirms a single serializer site.
-- **Verify:** a minimal v2 spec compiles byte-identically to `v2-envelope.golden.json`; classic specs are
-  byte-identical to today; the emitter output validates against `v2-envelope-schema.json`.
+## M1 — v2 emit foundation (FR-1, FR-5, FR-10) — ✅ **DONE (2026-07-09)**
+> Shipped `src/startd8/dashboard_creator/v2/` (`models.py` + `emitter.py`), 12 tests, 493 dashboard_creator
+> tests green (classic untouched). **Live-verified:** the emitter's foundation board round-trips through
+> Grafana 13.1.0 (201 Created, full fidelity, `text` viz accepted natively). Byte-golden
+> `tests/unit/dashboard_creator/fixtures/v2_foundation.golden.json` + offline schema validation against the
+> M0 `v2-envelope-schema.json`.
+>
+> **Design decision (fed back):** built as a **separate v2 model tree** (own `V2Panel`/`GridLayout`/
+> `RowsLayout`/`CustomVariable`), **not** new fields on `DashboardSpec`. Consequences: (a) classic
+> `DashboardSpec`/generator/compiler/validator are byte-untouched (strongest FR-10/NR-1); (b) **R1-S9 is
+> dissolved** — the `panels min_length=1` invariant is classic-only and never applied to v2, so a
+> layout-only v2 board is legal without editing `models.py`; (c) the R1-F2 opt-in trigger is the
+> `emit_v2_dashboard(schema="v2")` param (raises on any other value), not a `DashboardSpec` field.
+> **Deferred to M6 (not needed by the foundation):** the richer classic-PanelSpec→viz mapping — M1 ships
+> `text_panel` + a `viz_config` passthrough, which covers the Workbook's dominant text panels.
+
+- ~~New `dashboard_creator/v2/` (emitter + models)~~ ✅ done — additive, classic untouched (FR-10).
+- **Single, explicit opt-in trigger (R1-F2):** ✅ `emit_v2_dashboard` requires `schema="v2"`; any other
+  value raises `V2ValidationError` — no silent schema flip.
+- **`panels min_length=1` (R1-S9):** ✅ dissolved by the separate-model design (v2 has no such invariant;
+  classic keeps ≥1 — proven by `test_classic_dashboardspec_still_requires_panels`).
+- **Deterministic (R1-S4/R2-S7):** ✅ `v2_json` is the identical `json.dumps(sort_keys=True, indent=2)+"\n"`
+  call as `output.py:44`; `persist_v2_dashboard` routes through `persist_dashboard` for the atomic
+  tmp-then-`os.replace` write. Byte-golden pins stability.
+- **Verify:** ✅ deterministic + byte-golden + validates against `v2-envelope-schema.json` + live
+  round-trip; classic specs byte-identical to today (493 tests). Element-reference integrity fails loud
+  (undeclared `ElementReference` → error).
 
 ## M2 — Tabs/rows layout (FR-4)
 - A `layout` descriptor (tabs → rows → panels, nesting) → v2 layout kinds (`TabsLayout`/`RowsLayout`/
