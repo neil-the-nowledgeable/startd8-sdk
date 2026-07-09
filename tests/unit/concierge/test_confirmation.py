@@ -221,3 +221,31 @@ def test_cli_confirm_json_and_bad_flags(tmp_path):
     # unknown field → exit 2
     unk = runner.invoke(app, ["kickoff", "confirm", "x.yaml#/y", "--value", "1", "--project", str(tmp_path)])
     assert unk.exit_code == 2
+
+
+# --- public audience-default predicate (WORKBOOK_AUDIENCE_PERSONALIZATION FR-9) ------------------
+
+from startd8.concierge.confirmation import (  # noqa: E402
+    audience_default_provenance,
+    audience_default_slug,
+    is_audience_default,
+)
+
+
+def test_is_audience_default_predicate():
+    # explicit (no provenance key) → False, the common {value,at,mode} shape
+    assert is_audience_default({"value": "v", "at": "t", "mode": "set"}) is False
+    # a machine-shielded entry → True
+    entry = {"value": "v", "at": "t", "mode": "set", "provenance": audience_default_provenance("business-targets")}
+    assert is_audience_default(entry) is True
+    # tolerant: non-dict / None / malformed provenance never raises, returns False
+    assert is_audience_default("not-a-dict") is False
+    assert is_audience_default(None) is False
+    assert is_audience_default({"provenance": 123}) is False
+
+
+def test_audience_default_slug():
+    entry = {"provenance": audience_default_provenance("observability")}
+    assert audience_default_slug(entry) == "observability"
+    assert audience_default_slug({"value": "v"}) is None
+    assert audience_default_slug("nope") is None

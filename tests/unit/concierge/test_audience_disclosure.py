@@ -145,3 +145,34 @@ def test_walk_intermediate_shows_why(tmp_path, monkeypatch):
     lines = []
     run_confirm_walk(tmp_path, read_input=lambda _p: None, emit_line=lines.append, timestamp="2026-07-07")
     assert any(ln.strip().startswith("why:") for ln in lines)       # Intermediate: full scaffolding
+
+
+# --- the workbook intro doc (WORKBOOK_AUDIENCE_PERSONALIZATION Slice A) --------------------------
+
+_WORKBOOK_NARRATIVE = (
+    "The **Digital Project Workbook** — the shared, whole-project view of the foundational kickoff "
+    "decisions. A dynamic, query-based evolution of Brooks' workbook (_The Mythical Man-Month_), "
+    "which was static (paper/microfiche); this one is generated from live project state. State is "
+    "the canonical `KickoffState` (the same `$0` extraction the web UI and TUI use) — projected into "
+    "these panels. Re-run `startd8 kickoff portal` to refresh."
+)
+
+
+def test_workbook_light_is_byte_identical_to_legacy_narrative():
+    # FR-2: the Intermediate/light render MUST equal today's inline narrative byte-for-byte.
+    assert load_experience_doc("workbook", tier="light") == _WORKBOOK_NARRATIVE
+
+
+def test_workbook_expanded_slices_the_plain_beginner_rewrite():
+    # FR-2 marker-slice guard (R1-S5): expanded really differs from light (not a silent degrade-to-light).
+    expanded = load_experience_doc("workbook", tier="expanded")
+    light = load_experience_doc("workbook", tier="light")
+    assert expanded != light
+    assert "Your Project Workbook" in expanded
+    assert "🛡️" in expanded              # the Beginner rewrite explains the safe-default badge
+    assert "<!--" not in expanded         # no marker leakage
+
+
+def test_workbook_compact_degrades_to_light_by_design():
+    # No TL;DR region (byte-identity constraint) → compact degrades to light (Advanced == Intermediate).
+    assert load_experience_doc("workbook", tier="compact") == load_experience_doc("workbook", tier="light")
