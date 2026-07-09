@@ -87,10 +87,23 @@ Workbook. Two strategy forks are resolved by an up-front spike (M0) before build
 - **Verify:** ✅ a 2-tab board (tab0 = RowsLayout→GridLayout, tab1 = AutoGridLayout) emits + validates
   against the M0 schema **and round-trips through live Grafana 13.1.0** (201, fidelity confirmed).
 
-## M3 — Conditional rendering (FR-2)
-- Per-element `conditional`: condition types variable-value (`equals|notEquals|matches|notMatches`),
-  data-presence, time-range-size; AND/OR groups → the conditional-rendering group construct.
-- **Verify:** a panel shown only when `var == 'x'`; hidden otherwise; AND/OR compose.
+## M3 — Conditional rendering (FR-2) — ✅ **DONE (2026-07-09)**
+> Added `ConditionalRendering` (`ConditionalRenderingGroup`, visibility show/hide, condition and/or) with
+> all three condition kinds — `VariableCondition` (operators `equals|notEquals|matches|notMatches`),
+> `DataCondition` (data-presence), `TimeRangeSizeCondition` — plus a `show_when_variable()` helper for the
+> audience knob. A `conditional` field on `RowsLayoutRow`/`TabsLayoutTab`. **Build-time guard:** every
+> `ConditionalRenderingVariable` must reference a declared dashboard variable (else raise — no
+> silently-broken always-hidden section). 26 v2 tests / 507 dashboard_creator green; M3 golden
+> `fixtures/v2_conditional.golden.json`.
+>
+> **⚠ Verified attach-point (design finding):** conditional rendering is **section-level** — it attaches
+> to a **row or tab only**; Grafana 13.1.0 **strips** it from a Panel element and from a GridLayoutItem
+> (both round-tripped away to `None`). So FR-2's "per-panel" show/hide is realized by **wrapping the panel
+> in its own conditionally-rendered row** (the idiom M6's disclosure knob uses). Fed back to FR-2.
+- Condition types + AND/OR groups → the conditional-rendering group construct ✅ (all three kinds).
+- **Verify:** ✅ a row/tab shown only when `audience == 'x'`; AND/OR + hide/show compose; the 2-row board
+  validates against the M0 schema **and round-trips through live Grafana 13.1.0** (201, conditional
+  survived). Bad operator/visibility/condition + undeclared-variable all fail loud.
 
 ## M4 — Section-level variables (FR-3)
 - Per-row/tab `variables`; section-first resolution. Note the same-tab cross-reference limitation

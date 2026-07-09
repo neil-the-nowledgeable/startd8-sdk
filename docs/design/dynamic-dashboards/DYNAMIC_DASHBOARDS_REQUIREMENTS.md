@@ -87,9 +87,14 @@ deterministic (`$0`) capability**, with the Workbook + audience feature as the f
   v2-only field MUST raise a validation error, never silently flip schema. Classic remains the default
   (NR-1). *(Note: `DashboardSpec.panels = Field(min_length=1)` (`models.py:266`) must be relaxed for v2 —
   a pure-tabs/rows board has zero flat panels; see plan M1/R1-S9.)*
-- **FR-2 — Conditional rendering.** A spec MUST be able to attach show/hide rules to **panels, rows, and
-  tabs**, with condition types **variable-value** (`equals|notEquals|matches|notMatches`), **data-presence**,
-  and **time-range-size**, combinable with **AND/OR**. Compiles to Grafana's conditional-rendering group.
+- **FR-2 — Conditional rendering.** A spec MUST be able to attach show/hide rules to **rows and tabs**,
+  with condition types **variable-value** (`equals|notEquals|matches|notMatches`), **data-presence**, and
+  **time-range-size**, combinable with **AND/OR**. Compiles to Grafana's conditional-rendering group.
+  **⚠ M3 finding (attach-point):** conditional rendering is **section-level** — Grafana 13.1.0 accepts it
+  on a `RowsLayoutRow`/`TabsLayoutTab` but **strips** it from a `Panel`/`GridLayoutItem`. So **per-panel**
+  show/hide is realized by wrapping the panel in its own conditionally-rendered row (the idiom M6 uses),
+  not by a per-panel field. **Build-time guard:** a conditional referencing an undeclared dashboard
+  variable MUST raise (never a silently always-hidden section).
 - **FR-3 — Section-level variables.** A spec MUST be able to declare variables **scoped to a row or tab**;
   panels in that section resolve section-first then dashboard-fallback, other sections unaffected
   (shared time range). Requires Grafana's `dashboardSectionVariables` (GA 13.1, OQ-3). **The same-tab

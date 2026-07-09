@@ -72,6 +72,7 @@ def emit_v2_dashboard(
 
     layout_v2 = layout.to_v2()
     _validate_element_refs(layout_v2, set(elements))
+    _validate_conditional_variables(layout_v2, {v.name for v in (variables or [])})
 
     spec: Dict[str, Any] = {
         "title": title,
@@ -118,6 +119,36 @@ def _collect_element_refs(node: Any) -> set:
         for v in node:
             refs |= _collect_element_refs(v)
     return refs
+
+
+def _validate_conditional_variables(
+    layout_v2: Dict[str, Any], declared_vars: set
+) -> None:
+    """Every ``ConditionalRenderingVariable`` in the layout must reference a declared dashboard variable
+    (M3/FR-11): a conditional keyed on a non-existent variable renders as a silently-broken (always-
+    hidden/shown) section. Walks the rendered layout for the condition kind."""
+    referenced = _collect_conditional_vars(layout_v2)
+    missing = sorted(referenced - declared_vars)
+    if missing:
+        raise V2ValidationError(
+            f"conditional rendering references undeclared variable(s): {missing} "
+            f"(declared: {sorted(declared_vars)})"
+        )
+
+
+def _collect_conditional_vars(node: Any) -> set:
+    names: set = set()
+    if isinstance(node, dict):
+        if node.get("kind") == "ConditionalRenderingVariable":
+            var = node.get("spec", {}).get("variable")
+            if isinstance(var, str):
+                names.add(var)
+        for v in node.values():
+            names |= _collect_conditional_vars(v)
+    elif isinstance(node, list):
+        for v in node:
+            names |= _collect_conditional_vars(v)
+    return names
 
 
 def v2_json(dashboard: Dict[str, Any]) -> str:

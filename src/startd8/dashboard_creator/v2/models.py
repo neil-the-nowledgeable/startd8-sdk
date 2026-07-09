@@ -127,17 +127,20 @@ class RowsLayoutRow(BaseModel):
     collapse: bool = False
     items: List[GridItem] = Field(default_factory=list)
     layout: Any = None  # an explicit nested layout; None ⇒ wrap `items` in a GridLayout
+    conditional: Any = (
+        None  # an optional ConditionalRendering (M3) — show/hide the whole row
+    )
 
     def to_v2(self) -> Dict[str, Any]:
         sub = self.layout if self.layout is not None else GridLayout(items=self.items)
-        return {
-            "kind": "RowsLayoutRow",
-            "spec": {
-                "title": self.title,
-                "collapse": self.collapse,
-                "layout": _sub_layout_v2(sub),
-            },
+        spec: Dict[str, Any] = {
+            "title": self.title,
+            "collapse": self.collapse,
+            "layout": _sub_layout_v2(sub),
         }
+        if self.conditional is not None:
+            spec["conditionalRendering"] = _conditional_v2(self.conditional)
+        return {"kind": "RowsLayoutRow", "spec": spec}
 
 
 class RowsLayout(BaseModel):
@@ -189,13 +192,16 @@ class TabsLayoutTab(BaseModel):
     title: str = ""
     items: List[GridItem] = Field(default_factory=list)
     layout: Any = None  # explicit nested layout; None ⇒ wrap `items` in a GridLayout
+    conditional: Any = (
+        None  # an optional ConditionalRendering (M3) — show/hide the whole tab
+    )
 
     def to_v2(self) -> Dict[str, Any]:
         sub = self.layout if self.layout is not None else GridLayout(items=self.items)
-        return {
-            "kind": "TabsLayoutTab",
-            "spec": {"title": self.title, "layout": _sub_layout_v2(sub)},
-        }
+        spec: Dict[str, Any] = {"title": self.title, "layout": _sub_layout_v2(sub)}
+        if self.conditional is not None:
+            spec["conditionalRendering"] = _conditional_v2(self.conditional)
+        return {"kind": "TabsLayoutTab", "spec": spec}
 
 
 class TabsLayout(BaseModel):
@@ -220,6 +226,118 @@ def _sub_layout_v2(layout: Any) -> Dict[str, Any]:
             f"got {type(layout).__name__}"
         )
     return layout.to_v2()
+
+
+# --- conditional rendering (M3, FR-2) -----------------------------------------------------------
+# Verified section-level (attaches to a RowsLayoutRow / TabsLayoutTab, NOT to a Panel/GridLayoutItem —
+# Grafana strips it there). Per-panel show/hide ⇒ wrap the panel in its own conditionally-rendered row.
+
+#: The M0-verified allowlists (see v2-construct-names.json).
+CONDITION_OPERATORS = ("equals", "notEquals", "matches", "notMatches")
+GROUP_CONDITIONS = ("and", "or")
+GROUP_VISIBILITY = ("show", "hide")
+
+
+class VariableCondition(BaseModel):
+    """Show/hide by a dashboard variable's value (``ConditionalRenderingVariable``) — the audience knob."""
+
+    variable: str
+    value: str
+    operator: str = "equals"
+
+    def to_v2(self) -> Dict[str, Any]:
+        if self.operator not in CONDITION_OPERATORS:
+            raise V2ValidationError(
+                f"variable-condition operator must be one of {CONDITION_OPERATORS}, got {self.operator!r}"
+            )
+        return {
+            "kind": "ConditionalRenderingVariable",
+            "spec": {
+                "variable": self.variable,
+                "operator": self.operator,
+                "value": self.value,
+            },
+        }
+
+
+class DataCondition(BaseModel):
+    """Show/hide by data presence (``ConditionalRenderingData``): ``value=True`` ⇒ only when data exists."""
+
+    value: bool = True
+
+    def to_v2(self) -> Dict[str, Any]:
+        return {"kind": "ConditionalRenderingData", "spec": {"value": self.value}}
+
+
+class TimeRangeSizeCondition(BaseModel):
+    """Show/hide by time-range size (``ConditionalRenderingTimeRangeSize``), e.g. ``value="1h"``."""
+
+    value: str
+
+    def to_v2(self) -> Dict[str, Any]:
+        return {
+            "kind": "ConditionalRenderingTimeRangeSize",
+            "spec": {"value": self.value},
+        }
+
+
+Condition = Union[VariableCondition, DataCondition, TimeRangeSizeCondition]
+
+
+class ConditionalRendering(BaseModel):
+    """A ``ConditionalRenderingGroup`` — combine one or more conditions with AND/OR to show or hide a
+    section (row/tab). Empty items = always applies (Grafana treats an empty group as no constraint).
+    """
+
+    items: List[Any] = Field(default_factory=list)
+    visibility: str = "show"
+    condition: str = "and"
+
+    def to_v2(self) -> Dict[str, Any]:
+        if self.visibility not in GROUP_VISIBILITY:
+            raise V2ValidationError(
+                f"visibility must be one of {GROUP_VISIBILITY}, got {self.visibility!r}"
+            )
+        if self.condition not in GROUP_CONDITIONS:
+            raise V2ValidationError(
+                f"group condition must be one of {GROUP_CONDITIONS}, got {self.condition!r}"
+            )
+        return {
+            "kind": "ConditionalRenderingGroup",
+            "spec": {
+                "visibility": self.visibility,
+                "condition": self.condition,
+                "items": [_condition_v2(c) for c in self.items],
+            },
+        }
+
+
+def show_when_variable(
+    variable: str, value: str, *, operator: str = "equals"
+) -> ConditionalRendering:
+    """The common case: show a section only when ``variable`` matches ``value`` (the audience surface knob)."""
+    return ConditionalRendering(
+        visibility="show",
+        condition="and",
+        items=[VariableCondition(variable=variable, value=value, operator=operator)],
+    )
+
+
+def _condition_v2(cond: Any) -> Dict[str, Any]:
+    if not hasattr(cond, "to_v2"):
+        raise V2ValidationError(
+            "a conditional item must be a VariableCondition / DataCondition / TimeRangeSizeCondition, "
+            f"got {type(cond).__name__}"
+        )
+    return cond.to_v2()
+
+
+def _conditional_v2(conditional: Any) -> Dict[str, Any]:
+    if not isinstance(conditional, ConditionalRendering):
+        raise V2ValidationError(
+            f"conditional must be a ConditionalRendering, got {type(conditional).__name__}"
+        )
+    return conditional.to_v2()
 
 
 # --- variables ----------------------------------------------------------------------------------

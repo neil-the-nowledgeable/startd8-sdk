@@ -284,3 +284,146 @@ def test_row_explicit_layout_overrides_items():
 def test_bad_nested_layout_fails_loud():
     with pytest.raises(V2ValidationError, match="nested layout must be"):
         TabsLayoutTab(title="t", layout="not-a-layout").to_v2()
+
+
+# --- M3: conditional rendering (FR-2) ------------------------------------------------------------
+
+from startd8.dashboard_creator.v2 import (  # noqa: E402
+    ConditionalRendering,
+    DataCondition,
+    TimeRangeSizeCondition,
+    VariableCondition,
+    show_when_variable,
+)
+
+_M3_GOLDEN = Path(__file__).parent / "fixtures/v2_conditional.golden.json"
+
+
+def _conditional_board() -> dict:
+    return emit_v2_dashboard(
+        name="m3-cond",
+        title="M3 Conditional",
+        tags=["m3"],
+        variables=[
+            CustomVariable(
+                name="audience", options=["beginner", "intermediate", "advanced"]
+            )
+        ],
+        elements={
+            "p1": text_panel(1, "Shielded", "for beginners"),
+            "p2": text_panel(2, "Adv", "x"),
+        },
+        layout=RowsLayout(
+            rows=[
+                RowsLayoutRow(
+                    title="Beginner only",
+                    items=[GridItem(element="p1", height=6)],
+                    conditional=show_when_variable("audience", "beginner"),
+                ),
+                RowsLayoutRow(
+                    title="Advanced AND has-data",
+                    items=[GridItem(element="p2", height=6)],
+                    conditional=ConditionalRendering(
+                        condition="and",
+                        items=[
+                            VariableCondition(variable="audience", value="advanced"),
+                            DataCondition(value=True),
+                        ],
+                    ),
+                ),
+            ]
+        ),
+    )
+
+
+def test_show_when_variable_row():
+    row0 = _conditional_board()["spec"]["layout"]["spec"]["rows"][0]["spec"]
+    cr = row0["conditionalRendering"]
+    assert cr["kind"] == "ConditionalRenderingGroup"
+    assert cr["spec"]["visibility"] == "show" and cr["spec"]["condition"] == "and"
+    item = cr["spec"]["items"][0]
+    assert item["kind"] == "ConditionalRenderingVariable"
+    assert item["spec"] == {
+        "variable": "audience",
+        "operator": "equals",
+        "value": "beginner",
+    }
+
+
+def test_and_or_groups_and_all_three_condition_kinds():
+    cond = ConditionalRendering(
+        condition="or",
+        visibility="hide",
+        items=[
+            VariableCondition(
+                variable="audience", value="beginner", operator="notEquals"
+            ),
+            DataCondition(value=False),
+            TimeRangeSizeCondition(value="24h"),
+        ],
+    ).to_v2()
+    assert cond["spec"]["condition"] == "or" and cond["spec"]["visibility"] == "hide"
+    kinds = [i["kind"] for i in cond["spec"]["items"]]
+    assert kinds == [
+        "ConditionalRenderingVariable",
+        "ConditionalRenderingData",
+        "ConditionalRenderingTimeRangeSize",
+    ]
+
+
+def test_conditional_on_tab():
+    board = emit_v2_dashboard(
+        name="ct",
+        title="ct",
+        variables=[CustomVariable(name="audience", options=["beginner", "advanced"])],
+        elements={"p1": text_panel(1, "a", "b")},
+        layout=TabsLayout(
+            tabs=[
+                TabsLayoutTab(
+                    title="Adv",
+                    items=[GridItem(element="p1")],
+                    conditional=show_when_variable("audience", "advanced"),
+                )
+            ]
+        ),
+    )
+    tab = board["spec"]["layout"]["spec"]["tabs"][0]["spec"]
+    assert tab["conditionalRendering"]["kind"] == "ConditionalRenderingGroup"
+
+
+def test_conditional_board_matches_golden():
+    assert v2_json(_conditional_board()) == _M3_GOLDEN.read_text(encoding="utf-8")
+
+
+def test_conditional_board_validates_against_m0_schema():
+    jsonschema = pytest.importorskip("jsonschema")
+    jsonschema.validate(
+        _conditional_board(), json.loads(_M0_SCHEMA.read_text(encoding="utf-8"))
+    )
+
+
+def test_undeclared_conditional_variable_fails_loud():
+    # FR-11 guard: a conditional keyed on a variable that isn't declared must raise at build time
+    with pytest.raises(V2ValidationError, match="undeclared variable"):
+        emit_v2_dashboard(
+            name="bad",
+            title="bad",
+            elements={"p1": text_panel(1, "a", "b")},
+            layout=RowsLayout(
+                rows=[
+                    RowsLayoutRow(
+                        items=[GridItem(element="p1")],
+                        conditional=show_when_variable("ghost", "x"),
+                    )
+                ]
+            ),
+        )
+
+
+def test_bad_operator_and_visibility_fail_loud():
+    with pytest.raises(V2ValidationError, match="operator must be"):
+        VariableCondition(variable="a", value="b", operator="LIKE").to_v2()
+    with pytest.raises(V2ValidationError, match="visibility must be"):
+        ConditionalRendering(visibility="maybe", items=[]).to_v2()
+    with pytest.raises(V2ValidationError, match="group condition must be"):
+        ConditionalRendering(condition="xor", items=[]).to_v2()
