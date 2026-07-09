@@ -166,7 +166,24 @@ Workbook. Two strategy forks are resolved by an up-front spike (M0) before build
   upserts idempotently and records its `provision_api`; a mocked `13.0.x` target is refused, a `13.1.x`
   (toggle on) proceeds.
 
-## M6 — Workbook audience consumer (FR-8, FR-9) — the proof
+## M6 — Workbook audience consumer (FR-8, FR-9) — the proof — ✅ **DONE (2026-07-09)**
+> Shipped `kickoff_experience/portal_spec_v2.py` — `build_workbook_v2(state, project, *, audience,
+> provenance)` emits the audience-personalized **v2 dynamic Workbook**. The `audience` **`CustomVariable`**
+> (fixed allowlist, R1-F8) defaults to the resolved token; **disclosure** = a Beginner plain-language intro
+> (`show when audience==beginner`) + a standard intro (`hide when beginner`); **surface** = each domain's
+> `audience-default`-shielded fields in a **separate "safe defaults" subsection hidden for Beginner**
+> (coarse OQ-5), carrying the 🛡️ badge on the non-Beginner render. **FR-9 byte-identity proven:** across
+> beginner/intermediate/advanced the board is byte-identical **except the audience variable's `current`**
+> (golden diff test). 8 M6 tests / full v2 suite green, and **live round-trip through Grafana 13.1.0**
+> (201) — flipping the variable switches persona in-browser, **no regen, no write**.
+>
+> **Build decision (fed back — see reqs §0.2 / the branch note):** built **self-contained** on the
+> dynamic-dashboards branch — Era 1 (the classic audience Workbook) lives on a separate unmerged branch,
+> so M6 consumes only the primitives that ship here (`resolve_audience_preference`/`coerce_audience`,
+> `load_ledger`/`_is_audience_default`, `KickoffState`) and renders the tiered intro **inline**. It is a
+> **separate additive v2 board** (distinct `-v2` UID; coexists with the classic one) and does **not** touch
+> `build_kickoff_portal_spec`/`portal_build` — R2-F5 satisfied trivially (a test asserts the classic
+> builder is unmodified). Wiring v2 into the `kickoff portal` CLI as an opt-in surface is a follow-up.
 - **Named integration sub-task, not just "cite" (R1-S6/R1-F4):** Era 1 wired `resolve_audience_preference`
   into `portal_build.py` (the I/O caller), NOT `portal_spec.py`. It returns an **`AudienceResolution`**
   object with fields **`.value`** (a `KickoffAudience` enum) and `.source` — **not** `.audience`; the
