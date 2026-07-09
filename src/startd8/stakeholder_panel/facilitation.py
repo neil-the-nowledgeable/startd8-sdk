@@ -80,6 +80,21 @@ OUTSIDE_VIEW_SPEC = FAMILIES["gpt"]    # de-correlate the base-rate estimate
 
 ADVERSARY_IDS = {"adversary-exploit", "adversary-discredit"}
 
+# --- posture (early-stage/UX vs strategic scrutiny) ---------------------------
+# The facilitation ships two POSTURES. ``scrutiny`` (default, unchanged) is a strategic
+# red-team/pre-mortem for a go/no-go on a funded initiative: attack adversaries, a premise-halt
+# assumptions gate, failure pre-mortems. ``prototype`` is the constructive early-stage mode for an
+# EARLY PROTOTYPE that wants UX-improvement suggestions, not a premise trial — the assumptions check
+# becomes a non-blocking readiness note (never halts), the two attack adversaries are replaced by ONE
+# constructive "skeptical new user", and every round + the synthesis are reframed around improving the
+# end-user experience. Both share the same grounding/tension machinery; only the framing differs.
+POSTURE_SCRUTINY = "scrutiny"
+POSTURE_PROTOTYPE = "prototype"
+POSTURES = (POSTURE_SCRUTINY, POSTURE_PROTOTYPE)
+SKEPTIC_IDS = {"skeptical-new-user"}
+# The "challenger" role ids across postures — non-team voices that get challenger framing per round.
+CHALLENGER_IDS = ADVERSARY_IDS | SKEPTIC_IDS
+
 # --- domain-NEUTRAL placeholder context (FR-9) --------------------------------
 # These carry NO project domain. They are only a last-resort fallback that defers to the live
 # project artifact (which ``_gather_artifact`` loads) when a caller supplies no context. The panel's
@@ -227,6 +242,147 @@ def _synth_prompt(
         "proprietary knowledge and needs the human's judgment.\n"
         "Be concise and structured. Do not invent specific numbers."
     )
+
+
+# ---- prototype-posture prompt builders (constructive / UX-improvement) -------
+def _r1_prototype_prompt(ctx: str, project_name: str) -> str:
+    return (
+        f"{ctx}\n\nThis is an EARLY PROTOTYPE and the goal is to improve the end-user "
+        "EXPERIENCE — assume the premise is worth pursuing. YOUR TASK, reasoning from your "
+        "specific role and domain: (1) the 2-3 highest-leverage UX IMPROVEMENTS you would make "
+        "to the experience for people like you; (2) the single biggest point of FRICTION you'd "
+        "remove first; (3) one small QUICK WIN or moment of delight that would make you want to "
+        f"keep using it. Be concrete and specific to {project_name}, constructive, not generic."
+    )
+
+
+def _r1_skeptic_prompt(ctx: str, project_name: str) -> str:
+    return (
+        f"{ctx}\n\nYou are a SKEPTICAL NEW USER trying this early prototype for the first time — "
+        "not an attacker, a real prospective user deciding whether it's worth your time. "
+        "(1) In the first few minutes, what would make you HESITATE, get confused, or consider "
+        "walking away? (2) What would you need to see to TRUST it enough to rely on it? (3) One "
+        f"concrete change that would win you over. Be honest and specific to {project_name}."
+    )
+
+
+def _premortem_prototype(project_name: str) -> str:
+    return (
+        "FIRST-WEEK CHECK. It is one week after a new household/user started using this prototype "
+        "and they quietly stopped. From YOUR role's vantage, tell the short story of what made them "
+        "bounce — the specific friction, confusion, or unmet expectation in or adjacent to your "
+        f"domain — and the one change that would have kept them. Be concrete and specific to {project_name}."
+    )
+
+
+def _premortem_skeptic(project_name: str) -> str:
+    return (
+        "FIRST-WEEK CHECK (skeptical new user). It is one week later and you abandoned this "
+        "prototype. Tell the short story of the exact moment you gave up and why, and the one thing "
+        f"that would have kept you using it. Be honest and concrete about {project_name}."
+    )
+
+
+def _r3_prototype_prompt(digest: str) -> str:
+    return (
+        "Here is what the other participants said in their first-round analysis:\n\n"
+        f"{digest}\n\nReacting from YOUR role, constructively: (1) which of their ideas do you want "
+        "to BUILD ON; (2) where do you see a real TRADE-OFF or tension between what two roles want "
+        "(name it honestly — don't paper over it); (3) what UX improvement does someone else's point "
+        "imply for YOUR domain that you did not already say?"
+    )
+
+
+def _r4_prototype_prompt() -> str:
+    return (
+        "Having heard the others, give your FINAL, INDEPENDENT recommendation from your role: "
+        "(1) your TOP prioritized UX improvement for this prototype; (2) the one thing that must feel "
+        "effortless for people like you; (3) one concrete next step. Say what YOU actually conclude, "
+        "even if it dissents from the group."
+    )
+
+
+def _synth_prototype_prompt(
+    transcript_text: str,
+    family_map: Dict[str, str],
+    prep: dict,
+    tension_ids: Optional[Dict[str, str]] = None,
+) -> str:
+    fam = "; ".join(f"{r}={f}" for r, f in family_map.items())
+    prep_txt = ""
+    if prep.get("key_assumptions"):
+        prep_txt += f"\n\nREADINESS NOTES (prep — non-blocking):\n{prep['key_assumptions']}"
+    if prep.get("outside_view"):
+        prep_txt += f"\n\nOUTSIDE VIEW / base rate (prep):\n{prep['outside_view']}"
+    if tension_ids:
+        listed = "; ".join(f"{tid}={label or '(unlabeled)'}" for tid, label in sorted(tension_ids.items()))
+        prep_txt += (
+            f"\n\nNAMED RAW-ROUND TENSIONS (FR-GE-12): {listed}\n"
+            "Each tension_id that you do NOT genuinely resolve MUST appear verbatim in the "
+            "Tensions section marked OPEN (e.g. 'T1 <label> — OPEN'). Never drop or smooth one."
+        )
+    return (
+        f"Model-family assignment (for corroboration strength): {fam}{prep_txt}\n\n"
+        f"Full transcript of the facilitated panel:\n\n{transcript_text}\n\n"
+        "This is an EARLY-PROTOTYPE UX review — synthesize into an ACTIONABLE improvement plan, not "
+        "a go/no-go verdict. Produce a structured synthesis:\n"
+        "## Prioritized UX Improvements\nThe highest-leverage experience changes; which roles asked "
+        "for each; corroboration = CROSS-FAMILY if raised by roles on different model families.\n"
+        "## Quick Wins\nSmall, cheap changes that improve the first-run experience now.\n"
+        "## Bigger Bets\nLarger experience investments worth planning for.\n"
+        "## Tensions\nEach real trade-off between roles, tagged with its tension_id; RESOLVED "
+        "(with the trade-off) or OPEN.\n"
+        "## Open Questions for the Human\nWhere the panel needs the human's judgment or ground truth.\n"
+        "Be concise and structured. Do not invent specific numbers."
+    )
+
+
+# ---- posture-aware prompt dispatch -------------------------------------------
+def _r1_for(ctx: str, project_name: str, posture: str, is_challenger: bool) -> str:
+    if posture == POSTURE_PROTOTYPE:
+        return _r1_skeptic_prompt(ctx, project_name) if is_challenger else _r1_prototype_prompt(ctx, project_name)
+    return _r1_adversary_prompt(ctx, project_name) if is_challenger else _r1_prompt(ctx, project_name)
+
+
+def _premortem_for(project_name: str, posture: str, is_challenger: bool) -> str:
+    if posture == POSTURE_PROTOTYPE:
+        return _premortem_skeptic(project_name) if is_challenger else _premortem_prototype(project_name)
+    return _premortem_prompt(is_challenger, project_name)
+
+
+def _r3_for(digest: str, posture: str) -> str:
+    return _r3_prototype_prompt(digest) if posture == POSTURE_PROTOTYPE else _r3_prompt(digest)
+
+
+def _r4_for(posture: str) -> str:
+    return _r4_prototype_prompt() if posture == POSTURE_PROTOTYPE else _r4_prompt()
+
+
+def _synth_for(posture: str, *args, **kwargs) -> str:
+    builder = _synth_prototype_prompt if posture == POSTURE_PROTOTYPE else _synth_prompt
+    return builder(*args, **kwargs)
+
+
+# ============================ adversary / skeptic briefs ======================
+def _skeptic_briefs() -> List[PersonaBrief]:
+    # The prototype-posture challenger: ONE constructive skeptical new user (not an attacker). Keeps a
+    # reality check on the panel without the adversarial red-team framing that halts early-stage work.
+    return [
+        PersonaBrief(
+            role_id="skeptical-new-user",
+            display_name="Skeptical New User",
+            goals=["Decide, in the first few minutes, whether this early prototype is worth your time — "
+                   "or whether you'd quietly stop using it."],
+            known_positions=[
+                "first-impression: if the first task is confusing, slow, or asks too much, you leave",
+                "trust: you won't rely on a tool you don't yet trust to actually warn you in time",
+            ],
+            constraints=["You are a real prospective user giving honest first-impression feedback — NOT "
+                         "trying to break or attack the product, just deciding whether to keep using it."],
+            out_of_scope=[],
+            answers_for=["first-run", "onboarding", "friction", "trust", "abandonment"],
+        ),
+    ]
 
 
 # ============================ adversary briefs ================================
@@ -571,7 +727,10 @@ def build_briefs(cfg: "FacilitationConfig", roster: Roster) -> List[PersonaBrief
     if cfg.cap:
         briefs_all = briefs_all[: cfg.cap]
     if cfg.adversary:
-        briefs_all = briefs_all + _adversary_briefs()
+        # Posture picks the challenger: prototype keeps ONE constructive skeptic; scrutiny adds the
+        # two attack adversaries. Both ride the same per-round challenger framing.
+        briefs_all = briefs_all + (
+            _skeptic_briefs() if cfg.posture == POSTURE_PROTOTYPE else _adversary_briefs())
     return briefs_all
 
 
@@ -599,6 +758,10 @@ class FacilitationConfig:
     strategy: str = DEFAULT_STRATEGY
     desc: str = DEFAULT_DESC
     project_name: str = ""  # short domain noun threaded into prompts (empty -> generic)
+    # Posture: "scrutiny" (default, strategic red-team/go-no-go) or "prototype" (constructive
+    # early-stage UX-improvement). Prototype reframes every round + synthesis and makes the
+    # assumptions gate a non-blocking readiness note. See POSTURES.
+    posture: str = POSTURE_SCRUTINY
     cap: int = 0
     ground: bool = True
     assumptions: bool = True
@@ -612,6 +775,10 @@ class FacilitationConfig:
     # H3 (FR-13c-3 / R2-S1): hard-halt ceiling on cumulative panel spend in USD. 0 = uncapped.
     # Enforced as a cumulative-abort at round boundaries (before the next round's LLM calls).
     budget_usd: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.posture not in POSTURES:
+            raise ValueError(f"posture must be one of {POSTURES}, got {self.posture!r}")
 
     @property
     def resolved_project_name(self) -> str:
@@ -813,50 +980,67 @@ class KickoffFacilitator:
                     self._emit_prep("grounded_context", FACILITATOR_SPEC, grounded)
             ctx = _context_block(cfg.desc, cfg.objective, cfg.strategy, grounded)
 
+            is_prototype = cfg.posture == POSTURE_PROTOTYPE
             if cfg.assumptions:
                 a = self._facilitator_agent(FACILITATOR_SPEC, "assumptions", _NEUTRAL_SYS)
-                r = await a.agenerate(
-                    f"{ctx}\n\nRun a KEY ASSUMPTIONS CHECK. List the 5-8 load-bearing ASSUMPTIONS this "
-                    "objective+strategy silently rests on. For each: state it in one line; rate CONFIDENCE "
-                    "(low/med/high) and IMPACT IF WRONG (low/med/high). End by naming the 2-3 high-impact / "
-                    "low-confidence assumptions that most need testing."
-                )
+                if is_prototype:
+                    assumptions_prompt = (
+                        f"{ctx}\n\nRun a READINESS CHECK for an EARLY PROTOTYPE (non-blocking — the goal is to "
+                        "improve it, not to gate it). List the 5-8 things that most need to be true for the "
+                        "end-user EXPERIENCE to land. For each: state it in one line; rate CONFIDENCE "
+                        "(low/med/high) and IMPACT IF WRONG (low/med/high). End by naming the 2-3 worth "
+                        "validating soonest. Frame these as things to firm up, not reasons to stop."
+                    )
+                else:
+                    assumptions_prompt = (
+                        f"{ctx}\n\nRun a KEY ASSUMPTIONS CHECK. List the 5-8 load-bearing ASSUMPTIONS this "
+                        "objective+strategy silently rests on. For each: state it in one line; rate CONFIDENCE "
+                        "(low/med/high) and IMPACT IF WRONG (low/med/high). End by naming the 2-3 high-impact / "
+                        "low-confidence assumptions that most need testing."
+                    )
+                r = await a.agenerate(assumptions_prompt)
                 prep["key_assumptions"] = self._agent_text(r)
                 self._emit_prep("key_assumptions", FACILITATOR_SPEC, prep["key_assumptions"])
-                # H2 (FR-13c-2, spec v0.2.1): assumptions-check-as-GATE. If >= threshold assumptions
-                # are high-impact/low-confidence, HALT — "validate the premise first" — rather than
-                # spending R1–R5. The halt is an explicit halted-session transcript state, not a skip.
-                risky = risky_assumptions(prep["key_assumptions"])
-                if len(risky) >= cfg.assumptions_halt_threshold:
-                    return self._finish_halt(
-                        session,
-                        reason="assumptions_gate",
-                        message="Validate the premise first — the Key Assumptions Check surfaced "
-                                f"{len(risky)} high-impact/low-confidence assumption(s) "
-                                f"(threshold {cfg.assumptions_halt_threshold}). The panel rounds "
-                                "were NOT spent.",
-                        detail={
-                            "threshold": cfg.assumptions_halt_threshold,
-                            "risky_count": len(risky),
-                            "risky_assumptions": [a["text"] for a in risky],
-                        },
-                    )
+                # H2 (FR-13c-2, spec v0.2.1): assumptions-check-as-GATE. In SCRUTINY posture, if >=
+                # threshold assumptions are high-impact/low-confidence, HALT — "validate the premise
+                # first" — rather than spending R1–R5. In PROTOTYPE posture the check is a NON-BLOCKING
+                # readiness note (an early prototype has unproven assumptions by definition; halting on
+                # them is the miscalibration this posture fixes) — record it and proceed.
+                if not is_prototype:
+                    risky = risky_assumptions(prep["key_assumptions"])
+                    if len(risky) >= cfg.assumptions_halt_threshold:
+                        return self._finish_halt(
+                            session,
+                            reason="assumptions_gate",
+                            message="Validate the premise first — the Key Assumptions Check surfaced "
+                                    f"{len(risky)} high-impact/low-confidence assumption(s) "
+                                    f"(threshold {cfg.assumptions_halt_threshold}). The panel rounds "
+                                    "were NOT spent.",
+                            detail={
+                                "threshold": cfg.assumptions_halt_threshold,
+                                "risky_count": len(risky),
+                                "risky_assumptions": [a["text"] for a in risky],
+                            },
+                        )
 
             if cfg.outside_view:
                 o = self._facilitator_agent(OUTSIDE_VIEW_SPEC, "outside-view", _NEUTRAL_SYS)
+                # Reference class DERIVED from this project's objective/strategy (not hardcoded — the
+                # old fixed Online-Boutique class silently mis-forecast every non-OB project).
                 r = await o.agenerate(
-                    "Take the OUTSIDE VIEW (reference-class forecasting). Ignore project specifics. For the "
-                    "general class = 'an established multi-currency online retailer adding complementary-"
-                    "product bundling + recommendations to lift AOV and conversion', what is the rough BASE "
-                    "RATE of such initiatives clearly succeeding, and the 3-4 most COMMON FAILURE MODES for "
-                    "initiatives like this? Name the reference class. Be candid about typical disappointment."
+                    "Take the OUTSIDE VIEW (reference-class forecasting) for THIS initiative:\n"
+                    f"OBJECTIVE: {cfg.objective}\nSTRATEGY: {cfg.strategy}\n\n"
+                    "First, NAME the general reference class this initiative belongs to (ignore its "
+                    "specifics). Then give the rough BASE RATE of initiatives in that class clearly "
+                    "succeeding, and the 3-4 most COMMON FAILURE MODES for initiatives like this. Be "
+                    "candid about typical disappointment."
                 )
                 prep["outside_view"] = self._agent_text(r)
                 self._emit_prep("outside_view", OUTSIDE_VIEW_SPEC, prep["outside_view"])
 
-            # R1 individual means-ends (adversaries get attack framing)
+            # R1 individual means-ends (challengers get challenger framing; posture picks the framing)
             r1_prompts = {
-                b.role_id: (_r1_adversary_prompt(ctx, pname) if _adv(b.role_id) else _r1_prompt(ctx, pname))
+                b.role_id: _r1_for(ctx, pname, cfg.posture, _adv(b.role_id))
                 for b in briefs_all
             }
             r1 = await self._run_round(panel, briefs_all, "R1", "Individual analysis (means-ends)",
@@ -867,7 +1051,7 @@ class KickoffFacilitator:
             budget_halt = self._budget_guard(session)  # H3 cumulative-abort before the next round
             if budget_halt is not None:
                 return budget_halt
-            r2_prompts = {b.role_id: _premortem_prompt(_adv(b.role_id), pname) for b in briefs_all}
+            r2_prompts = {b.role_id: _premortem_for(pname, cfg.posture, _adv(b.role_id)) for b in briefs_all}
             r2 = await self._run_round(panel, briefs_all, "R2", "Pre-mortem (private)",
                                        "premortem", r2_prompts, specs, briefs)
             self._land_round(session, r2)
@@ -876,7 +1060,7 @@ class KickoffFacilitator:
             budget_halt = self._budget_guard(session)
             if budget_halt is not None:
                 return budget_halt
-            r3_prompts = {b.role_id: _r3_prompt(_digest(r1["entries"], b.role_id)) for b in briefs_all}
+            r3_prompts = {b.role_id: _r3_for(_digest(r1["entries"], b.role_id), cfg.posture) for b in briefs_all}
             r3 = await self._run_round(panel, briefs_all, "R3", "Cross-pollination",
                                        "cross_pollination", r3_prompts, specs, briefs)
             self._land_round(session, r3)
@@ -886,7 +1070,7 @@ class KickoffFacilitator:
                 budget_halt = self._budget_guard(session)
                 if budget_halt is not None:
                     return budget_halt
-                r4_prompts = {b.role_id: _r4_prompt() for b in briefs_all}
+                r4_prompts = {b.role_id: _r4_for(cfg.posture) for b in briefs_all}
                 r4 = await self._run_round(panel, briefs_all, "R4", "Final private judgment",
                                            "final_judgment", r4_prompts, specs, briefs)
                 self._land_round(session, r4)
@@ -901,7 +1085,7 @@ class KickoffFacilitator:
             raw_tensions = extract_raw_tensions(session["rounds"])
             synth_agent = self._facilitator_agent(FACILITATOR_SPEC, "facilitator", _SYNTH_SYS)
             result = await synth_agent.agenerate(
-                _synth_prompt(transcript_text, fams, prep, raw_tensions), system_prompt=_SYNTH_SYS)
+                _synth_for(cfg.posture, transcript_text, fams, prep, raw_tensions), system_prompt=_SYNTH_SYS)
             synth_text = self._agent_text(result)
             # FR-GE-12 anti-smoothing: structurally verify each raw tension_id survives as OPEN.
             smoothed = check_anti_smoothing(session["rounds"], synth_text)
