@@ -56,7 +56,17 @@ def test_extract_pulls_items_from_known_sections():
 
 def test_extract_empty_is_empty():
     assert extract_candidates("") == []
-    assert extract_candidates("# Heading only\n\nno known sections here") == []
+    # a heading with no body is boilerplate-only → still empty
+    assert extract_candidates("# Heading only\n\n") == []
+
+
+def test_unknown_heading_content_is_captured_as_unstructured():
+    # FR-3/H-1 (behavior change): content under an UNRECOGNIZED heading is no longer silently dropped —
+    # it is preserved verbatim in the UNSTRUCTURED lane rather than lost.
+    cands = extract_candidates("# Heading only\n\nno known sections here")
+    assert len(cands) == 1
+    assert cands[0].lane is Lane.UNSTRUCTURED
+    assert cands[0].raw_text == "no known sections here"
 
 
 def test_classify_all_non_decidable_without_allow_list():

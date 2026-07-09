@@ -1,37 +1,47 @@
 # Copyright 2026 StartD8 Contributors
 # SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
 
-"""Heuristic ($0) extraction of discrete items from a synthesis markdown (FR-2, increment 1).
+"""Heuristic ($0) extraction of discrete items from a synthesis markdown (FR-1/FR-2/FR-3).
 
-The facilitation synthesis is well-structured markdown with `## ` sections. This parses the sections
-that carry *decidable-ish* items — Recommendations, Open Questions, Risk Register, Tensions — into
-:class:`Candidate` rows. No LLM: deterministic and re-runnable.
+Two passes over the same text:
 
-An LLM extractor (OQ-9) that maps prose to concrete ``entity.field`` value_paths is a later,
-*paid* enhancement (increment 2) — this heuristic core always fires and costs nothing. Sections not
-listed here (Adversary Findings, Assumptions At Risk) are intentionally skipped as background, not
-actionable items; add them to ``_SECTION_OWNERS`` if that changes.
+* **structured** — items under a *recognized* ``##`` section (Recommendations, Open Questions, Risk
+  Register, Tensions, and the prototype sections UX Improvements / Quick Wins / Bigger Bets), captured
+  as numbered/bullet/bold-lead lines (FR-1/FR-2). Records the *line index* it claimed.
+* **residual** (FR-3, the centerpiece) — a sweep over the **raw line stream** (NOT gated behind a
+  recognized section, H-1) that emits an ``UNSTRUCTURED`` :class:`Candidate` for every non-boilerplate
+  line the structured pass did **not** claim — so content under *unknown* headings, and recognized-
+  section lines that matched no item pattern, are preserved verbatim rather than silently dropped.
+
+The two passes are disjoint by construction (residual skips ``claimed`` indices — H-3). No LLM.
 """
 
 from __future__ import annotations
 
 import re
-from typing import List
+from typing import List, Set, Tuple
 
-from .models import Candidate
+from .models import Candidate, Lane
 
-# Section header -> the label we tag candidates with. Matched case-insensitively on a `## ` heading;
-# a heading merely has to *start with* one of these (e.g. "Open Questions for the Human").
+MIN_ITEM_CHARS = 8  # the noise floor; boilerplate + fragments shorter than this are excluded (H-2)
+
+# Section header -> the label we tag candidates with. Matched case-insensitively; a heading merely has
+# to *start with* (or contain) one of these. FR-1 adds the three prototype-posture sections.
 _SECTION_PREFIXES = {
     "recommendation": "Recommendations",
     "open question": "Open Questions",
     "risk register": "Risk Register",
     "tension": "Tensions",
+    "prioritized ux": "UX Improvements",
+    "ux improvement": "UX Improvements",
+    "quick win": "Quick Wins",
+    "bigger bet": "Bigger Bets",
 }
 
-_HEADING_RE = re.compile(r"^#{1,4}\s+(.*)$")
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
 _NUMBERED_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
+_BOLD_LEAD_RE = re.compile(r"^\s*\*\*(.+?)\*\*")  # a line that leads with a **bold** span (FR-2)
 
 
 def _section_for(heading: str) -> str:
@@ -50,29 +60,52 @@ def _clean(text: str) -> str:
 
 
 def _title_of(text: str) -> str:
-    """A short label: the leading bold/colon-delimited head, else the first ~80 chars."""
-    # "**Domain scope:** rest" or "Build the immutable X — ..." → the head clause.
-    head = re.split(r"[:—.]", text, maxsplit=1)[0]
-    head = _clean(head)
+    """A short label. For a **bold-lead** item the title is the bold span (NOT split on ``—``/``.`` —
+    H-6: the ``**Label — …**`` format collides with a delimiter split and would truncate the title)."""
+    t = text.strip()
+    bm = _BOLD_LEAD_RE.match(t)
+    if bm:
+        head = _clean(bm.group(1))
+        return head[:90].rstrip() if 3 <= len(head) else _clean(t)[:80].rstrip()
+    head = _clean(re.split(r"[:—.]", t, maxsplit=1)[0])
     if 3 <= len(head) <= 90:
         return head
-    return _clean(text)[:80].rstrip()
+    return _clean(t)[:80].rstrip()
 
 
 def _table_cells(line: str) -> List[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
-def extract_candidates(synthesis_text: str) -> List[Candidate]:
-    """Parse a synthesis markdown into candidate items (deterministic, ``$0``)."""
-    if not synthesis_text:
-        return []
+def _is_boilerplate(line: str) -> bool:
+    """Structural noise excluded from the residual sweep + the FR-5 coverage invariant (H-2).
+
+    boilerplate = blank / heading / any table-scaffolding row (``|`` — risk *data* rows are claimed by
+    the structured pass, so an unclaimed ``|`` line is a header or separator) / the SYNTHETIC-UNRATIFIED
+    banner + disclaimer / fragments shorter than ``MIN_ITEM_CHARS``.
+    """
+    s = line.strip()
+    if not s:
+        return True
+    if _HEADING_RE.match(line):
+        return True
+    if s.startswith("|"):
+        return True
+    up = s.upper()
+    if ("SYNTHETIC" in up and "UNRATIFIED" in up) or "UNRATIFIED PANEL" in up:
+        return True
+    return len(_clean(s)) < MIN_ITEM_CHARS
+
+
+def extract_structured(synthesis_text: str) -> Tuple[List[Candidate], Set[int]]:
+    """The recognized-section items + the set of line indices they claimed (FR-1/FR-2, H-4)."""
     out: List[Candidate] = []
-    section = ""  # current known section label ("" = ignore lines)
+    claimed: Set[int] = set()
+    section = ""  # current known section label ("" = not in a recognized section)
     in_table = False
     table_seen_header = False
 
-    for raw in synthesis_text.splitlines():
+    for i, raw in enumerate(synthesis_text.splitlines()):
         line = raw.rstrip()
         hm = _HEADING_RE.match(line)
         if hm:
@@ -83,26 +116,72 @@ def extract_candidates(synthesis_text: str) -> List[Candidate]:
         if not section:
             continue
 
-        # Risk Register is a markdown table: first row = header, second = |---|, rest = risks.
+        # Risk Register is a markdown table: header row, separator, then risk data rows.
         if section == "Risk Register" and line.lstrip().startswith("|"):
             cells = _table_cells(line)
-            if set("".join(cells)) <= set("-: "):  # separator row
+            if set("".join(cells)) <= set("-: "):  # separator row (boilerplate, unclaimed)
                 in_table = True
                 continue
             if not table_seen_header:
-                table_seen_header = True  # header row
+                table_seen_header = True  # header row (boilerplate, unclaimed)
                 continue
             if in_table and cells and _clean(cells[0]):
                 risk = _clean(cells[0])
                 out.append(Candidate(title=_title_of(risk), source_section="Risk Register",
                                      raw_text=_clean(" — ".join(cells))))
+                claimed.add(i)  # H-4: claim the risk DATA row
             continue
 
         m = _NUMBERED_RE.match(line) or _BULLET_RE.match(line)
         if m:
             item = _clean(m.group(1))
-            if len(item) < 8:  # skip trivial fragments / sub-bullets that are noise
+            if len(item) < MIN_ITEM_CHARS:
                 continue
-            out.append(Candidate(title=_title_of(item), source_section=section, raw_text=item))
+            out.append(Candidate(title=_title_of(m.group(1)), source_section=section, raw_text=item))
+            claimed.add(i)
+            continue
 
+        if _BOLD_LEAD_RE.match(line):  # FR-2: a bold-lead item (e.g. Tensions "**T1 — … OPEN**")
+            item = _clean(line)
+            if len(item) < MIN_ITEM_CHARS:
+                continue
+            out.append(Candidate(title=_title_of(line), source_section=section, raw_text=item))
+            claimed.add(i)
+
+    return out, claimed
+
+
+def extract_residual(synthesis_text: str, claimed: Set[int]) -> List[Candidate]:
+    """FR-3 — preserve every non-boilerplate line the structured pass didn't claim, as UNSTRUCTURED.
+
+    Iterates the raw line stream INDEPENDENTLY of the structured section gate (H-1), so lines under
+    *unrecognized* headings are captured (tagged with the literal heading, else ``(unsectioned)``).
+    """
+    out: List[Candidate] = []
+    section_label = "(unsectioned)"
+    for i, raw in enumerate(synthesis_text.splitlines()):
+        line = raw.rstrip()
+        hm = _HEADING_RE.match(line)
+        if hm:
+            heading = hm.group(1).strip()
+            section_label = _section_for(heading) or heading or "(unsectioned)"
+            continue
+        if i in claimed or _is_boilerplate(line):
+            continue
+        item = _clean(line)
+        out.append(Candidate(title=_title_of(line), source_section=section_label,
+                             raw_text=item, lane=Lane.UNSTRUCTURED))
     return out
+
+
+def extract_candidates(synthesis_text: str) -> List[Candidate]:
+    """Parse a synthesis markdown into candidate items (deterministic, ``$0``).
+
+    Structured items first (recognized sections), then residual UNSTRUCTURED items for everything else —
+    disjoint by construction (residual skips the structured pass's claimed indices).
+    """
+    if not synthesis_text:
+        return []
+    structured, claimed = extract_structured(synthesis_text)
+    residual = extract_residual(synthesis_text, claimed)
+    return structured + residual

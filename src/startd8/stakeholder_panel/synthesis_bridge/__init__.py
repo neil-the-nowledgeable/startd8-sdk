@@ -18,21 +18,38 @@ Design: ``docs/design/panel-synthesis-bridge/`` (requirements v0.3 + plan v1.0).
 
 from __future__ import annotations
 
+from .backlog import (
+    AppendResult,
+    BacklogAppendError,
+    append_backlog,
+    compute_append,
+    render_backlog_section,
+)
 from .classify import classify, health_check
 from .extract import extract_candidates
 from .extract_llm import extract_field_mappings
-from .models import Candidate, Lane, TriageReport
+from .kind_llm import refine_input_kinds
+from .models import Candidate, InputKind, Lane, TriageReport
 from .route import build_triage
 from .stage import serialize_accepted_to_vipp, stage_recommendations
 
 __all__ = [
     "Candidate",
+    "InputKind",
     "Lane",
     "TriageReport",
     "extract_candidates",
     "classify",
     "health_check",
     "build_triage",
+    # E — residual capture + backlog render/append (FR-6/FR-7/FR-14)
+    "render_backlog_section",
+    "append_backlog",
+    "compute_append",
+    "AppendResult",
+    "BacklogAppendError",
+    # LLM Tier-2 (FR-12)
+    "refine_input_kinds",
     # increment 2 — FIELD-LEVEL lane
     "extract_field_mappings",
     "stage_recommendations",
