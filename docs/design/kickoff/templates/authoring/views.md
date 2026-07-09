@@ -59,7 +59,10 @@ tolerated and ignored (contract §1: *the format carries the truth*).
 ### View: <Status Board>
 
 ▷ board = status columns. REQUIRES `Group by:` (a field on the Root entity — the column
-▷ discriminator). Optional `Order:` = the allowed column values, in order.
+▷ discriminator) AND `Order:` (the allowed column values, in order — a static board's columns).
+▷ Omitting `Order:` is a hard error (`board '<name>' requires an Order:`); for runtime-derived
+▷ columns use an entity-backed board (`Columns from:`) instead. If a column value contains a
+▷ literal pipe, escape it as `\|`.
 
 - Kind: board
 - Root: <RootEntity>
@@ -82,7 +85,7 @@ tolerated and ignored (contract §1: *the format carries the truth*).
 | Kind | Required keys | Optional | Route (derived) |
 |------|---------------|----------|-----------------|
 | `dashboard` | Kind, Root | Shows / aggregates ("counts of X per Y") | `/<kebab(name)>` |
-| `board` | Kind, Root, **Group by** | Order | `/<kebab(name)>` |
+| `board` | Kind, Root, **Group by**, **Order** (static) *or* **Columns from** (entity-backed) | — | `/<kebab(name)>` |
 | `workspace` | Kind, Root | — | `/<kebab(root)>/{id}` |
 | `detail-compose` | Kind, Root | Shows, **Scope: model**, Empty state | `/<kebab(name)>` |
 | `export-package` | Kind, **Of**, **Formats** | — | `<of-view-route>/export.{fmt}` |

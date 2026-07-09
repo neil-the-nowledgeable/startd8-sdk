@@ -38,6 +38,7 @@ _DOC = """
 - Kind: board
 - Root: Widget
 - Group by: name
+- Order: alpha, beta
 - Title: Board of widgets
 - Empty state: nothing on the board
 """.strip()
