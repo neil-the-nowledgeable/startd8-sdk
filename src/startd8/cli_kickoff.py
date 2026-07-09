@@ -48,6 +48,27 @@ _EXIT_FATAL = 2
 _GENERATOR_GAP_MARKER = "generator-gap"
 
 
+def _persist_kickoff_snapshot(project: Path, chat: object) -> None:
+    """Persist a durable session snapshot for the agentic Workbook cockpit (FR-1).
+
+    Fully best-effort and self-contained: any failure is swallowed so a snapshot hiccup can never
+    break session exit. Prints a dim confirmation only when a snapshot is actually written (a session
+    that never produced a turn is presence-gated to no file).
+    """
+    try:
+        from .kickoff_experience.session_snapshot import persist_snapshot_for_chat
+
+        path = persist_snapshot_for_chat(str(project), chat)
+    except Exception as exc:  # never break session exit
+        console.print(f"[dim]session snapshot skipped: {exc}[/dim]")
+        return
+    if path is not None:
+        console.print(
+            "[dim]snapshot: session mirrored to .startd8/kickoff/agentic-session.json "
+            "(view in the Workbook cockpit: `startd8 kickoff portal --dynamic`).[/dim]"
+        )
+
+
 def _is_conformance_failure(record: ExtractionRecord) -> bool:
     """Author-actionable failures gate `--strict`; generator-gaps are SDK backlog, not author
     errors."""
@@ -455,6 +476,9 @@ def red_carpet_cmd(
         cost_line=chat.cost_line,
     )
 
+    # Durable session snapshot (FR-1) — mirror the Red Carpet transcript to the Workbook cockpit.
+    _persist_kickoff_snapshot(project, chat)
+
 
 @kickoff_app.command("start")
 def start_cmd(
@@ -609,6 +633,10 @@ def chat_cmd(
         cost_line=chat.cost_line,
     )
 
+    # Durable session snapshot (FR-1) — mirror this read-only transcript to the agentic Workbook
+    # cockpit. Best-effort; a snapshot hiccup never breaks session exit.
+    _persist_kickoff_snapshot(project, chat)
+
 
 @kickoff_app.command("concierge-chat")
 def concierge_chat_cmd(
@@ -690,6 +718,11 @@ def concierge_chat_cmd(
             "[yellow]VIPP: an undrained inbox already exists — run `startd8 vipp negotiate`/`apply` "
             "to consume it before this session's proposals can be serialized.[/yellow]"
         )
+
+    # Durable session snapshot (FR-1), AFTER the inbox handoff (R1-S1 ordering: inbox first, then
+    # snapshot). temp-then-rename means a snapshot failure leaves the inbox intact and no partial
+    # agentic-session.json. Best-effort — never breaks session exit.
+    _persist_kickoff_snapshot(project, chat)
 
 
 @kickoff_app.command("concierge")
