@@ -1,6 +1,6 @@
 # Client-Logged Friction Fixes — Requirements
 
-**Version:** 0.3 (Post lessons-learned hardening)
+**Version:** 0.4 (Post-CRP R1 triage)
 **Date:** 2026-07-09
 **Status:** Draft (pre-CRP)
 **Branch:** `fix/client-friction-triage-p0p2`
@@ -96,6 +96,11 @@ offending artifact.
   **names the offending view/field** (RUN-029 style), never a bare `AssertionError`/`IndexError`.
 - **FR-0b (idempotency preserved).** All codegen fixes must keep `generate … --check` parity /
   byte-identical idempotency on unaffected inputs (no drift on schemas that don't exercise the fix).
+- **FR-0c (red-on-main exemption for un-testable sub-reqs).** *(R1-F8)* FR-0's "fails on `main`"
+  mandate applies to executable behavior only. **Docs-only** sub-requirements (FR-F1b, FR-H5c) and
+  **optional heuristics** (FR-F1c, FR-F2b) that cannot produce a failing assertion are **exempt** —
+  verified by inspection, not a red-on-main test. The verification gate must not read as blocking
+  them (which would be its own silent waiver).
 
 ### P0 — silent-wrong
 
@@ -120,6 +125,21 @@ offending artifact.
   - **FR-F1a (value-level sanity).** When a field's declared type is `choice of:` and extraction
     yields **exactly one** enum value, emit an extraction record/warning
     (`choice-of-single-value`) keyed to the entity.field — surfaced by `kickoff check`.
+  - **FR-F1d (advisory tier — PREREQUISITE, R1-F3/R1-S2).** The extraction record model has no
+    warning severity today: `Status` (`manifest_extraction/models.py:19-22`) is only
+    `EXTRACTED | NOT_EXTRACTED | DEFAULTED`, and `cli_kickoff.py:_is_conformance_failure` gates
+    `--strict` on `NOT_EXTRACTED` minus the `generator-gap` marker. So `choice-of-single-value` has
+    **no home** — `NOT_EXTRACTED` always hard-fails (killing OQ-7's warn option); `EXTRACTED` stays
+    false-green (the original bug). **Before FR-F1a can land, introduce an advisory/warning tier** (a
+    new severity, or a reserved `reason` marker analogous to `generator-gap`) and define how
+    `_is_conformance_failure` treats it under `--strict` vs default. This is a blocking prerequisite,
+    not a detail.
+  - **FR-F1e (truncation-vs-genuine disambiguator, R1-F4).** A `choice of:` that truncated to one
+    value must be distinguishable from a genuinely single-member vocabulary. The signal lives in the
+    **raw cell text** — a cell that *contained* `|`-separated tokens but extracted to one value (a
+    stripped pipe) is evidence of loss; a cell whose raw source had one token is not.
+    `entities.py:236` currently discards this after `split("|")` — **preserve it** so a hard-fail
+    fires only on evidence of truncation (making OQ-7's "hard" option safe).
   - **FR-F1b (author guidance).** The FORMAT worked example shows `choice of:` **inside a table**
     with `\|`-escaped pipes (today the sample is shown outside a table, so it doesn't warn authors).
   - **FR-F1c (optional detection).** Where feasible, detect a raw table cell containing `choice of:`
@@ -147,16 +167,39 @@ offending artifact.
     (`has one` = singular) distinctly from `has many`.
   - **FR-F3-ii.** The Prisma emitter emits a singular relation (`X?`) **and** `@unique` on the child
     FK for `has one` (which, with FR-F3b, becomes a real DB constraint).
-  - **FR-F3-iii.** If full support is not landed this pass, `kickoff check` must **flag `has one` as
-    unsupported** rather than silently emit has-many (no silent-wrong).
+  - **FR-F3-iii (DEFAULT landing, R1-F2/R1-S4).** `kickoff check` must **flag `has one` as
+    unsupported** rather than silently emit has-many (no silent-wrong). This flag-don't-emit floor is
+    now the **default first landing**; full support (FR-F3-i/ii) is an explicit incremental opt-in
+    once the design forks below are resolved. (Supersedes OQ-4's earlier "full support" resolution.)
+  - **FR-F3-iv (migration safety — PREREQUISITE for full support, R1-F1/R1-S3).** Adding `@unique`
+    to a child FK (FR-F3-ii) is **not free on populated tables**: a schema edited from `has many`
+    to `has one` over data with duplicate parent references fails at **constraint-creation / migration
+    time** — silent-wrong converts to a hard migration failure the spec previously did not
+    acknowledge. Before emitting `@unique` for a `has one`, require a stated precondition (child table
+    empty, or a documented dedup/validation step) and specify the failure mode: **schema-gen warns;
+    migration is the enforcement point**. The full-support path must not assume `@unique` is safe.
+    Unresolved design forks gating full support: self-relations, optional-vs-required one-to-one, and
+    existing `has many` datasets.
 - **FR-H4.** A VIPP `capture` of a `<Entity>.<field>` value-path must have a **consistent** story
   between negotiate and apply.
   - **FR-H4a.** At **negotiate** (`evaluate.py`), a `capture` whose value-path has **no writable
-    target** in the kickoff manifest must be adjudicated **ACCEPT-but-inert** (or carry an explicit
-    `value_path_not_allowed`/`not-mapped` qualifier), so the disposition report does not imply a
-    write the floor will refuse.
+    target** in the kickoff manifest must be adjudicated **ACCEPT-but-inert**, carrying the
+    **existing typed reason code** `CaptureCode.VALUE_PATH_NOT_ALLOWED` (R1-F6) — **not** a new
+    parallel string like `not-mapped-to-kickoff-inputs` (two names for one condition re-creates the
+    negotiate/apply divergence this FR closes), so the disposition report does not imply a write the
+    floor will refuse.
+    - **Locus note (R1-F5/R1-S1 — reviewer correction REJECTED, nuance kept).** The VIPP apply path
+      is `vipp/apply.py:36` → `apply_proposal` in `kickoff_experience/proposals.py` → the refusal at
+      `proposals.py:309-310` (`ProposalOutcome(..., CaptureCode.VALUE_PATH_NOT_ALLOWED)`). That is the
+      correct locus this FR cites. `kickoff_experience/capture.py:285-296` raises the **same code**
+      via a **different** path (the direct-capture CLI, `CaptureError`) — a parallel floor, not the
+      VIPP one. The FR-0 red-on-main test therefore targets the VIPP negotiate→apply path, not
+      `capture.py`.
   - **FR-H4b.** The apply summary must not read as a silent partial (`wrote 1/2`) for a proposal that
-    was *never* actionable; inert proposals are reported as inert, not as failed writes.
+    was *never* actionable; inert proposals are reported as inert, not as failed writes. **Preview
+    parity (R1-F9/R1-S8):** the side-effect-free preview (`vipp/apply.py` `would_apply` /
+    `content_hash`) must **also** exclude an inert proposal — else preview over-promises exactly the
+    write apply makes honest.
   - **FR-H4c (non-goal clarifier).** Widening the apply-floor allow-list to accept `<Entity>.<field>`
     paths is **explicitly rejected** (different namespace, no write target) — see NR-4.
 - **FR-H5.** Authored `observability.yaml` must either be a **first-class input** or **documented as
@@ -193,20 +236,110 @@ offending artifact.
 
 ## 4. Open Questions
 
-- **OQ-4 → RESOLVED (full support).** Land full `has one` one-to-one support: thread verb cardinality
-  end-to-end (singular relation + `@unique` on child FK). Will pass through CRP before implementing
-  (batched with H4, F1/F8). FR-F3-iii (flag-only) is the fallback if CRP surfaces a blocker.
+- **OQ-4 → SUPERSEDED by CRP R1 (flag-only default, full support incremental).** The v0.3 "full
+  support" resolution was over-eager: CRP surfaced the FR-F3-iv migration hazard plus unresolved
+  forks (self-relations, optional-vs-required, existing `has many` data). New position: **land
+  FR-F3-iii (flag-as-unsupported) first**; full one-to-one support is an incremental opt-in gated on
+  FR-F3-iv + the forks. (R1-F2/R1-S4.)
 - **OQ-5.** For FR-H4, is **ACCEPT-but-inert** the right disposition, or should such captures be
-  `OMIT` with a reason at negotiate? (Affects how the VIPP disposition report reads.)
-- **OQ-6.** For FR-H5, do we treat `observability.yaml` as authoritative-when-present (override
-  manifest) or additive (merge)? Merge semantics need a precedence rule.
-- **OQ-7.** F1/F8: is the value-level `choice-of-single-value` signal a **hard** conformance failure
-  (`kickoff check --strict` exits non-zero) or a **warning**? Hard = safer (matches "silent data
-  loss"), but may false-positive on a legitimately single-value closed vocabulary.
+  `OMIT` with a reason at negotiate? *(Leaning ACCEPT-but-inert per R1; either way it carries the
+  existing `CaptureCode.VALUE_PATH_NOT_ALLOWED`, FR-H4a.)*
+- **OQ-6 → refined (read code before documenting, R1-F7/R1-S5).** Do we treat `observability.yaml` as
+  override-when-present or additive (merge)? **Decide from the code, not after the fact:**
+  `generate_observability_artifacts(observability_yaml_path=...)` (line 426) already has *a* behavior
+  on disk — read it first and assert the documented contract matches, else FR-H5a threads a param
+  whose precedence is undefined and may ship a new silent manifest-drop.
+- **OQ-7 → blocked on FR-F1d.** The hard-vs-warn question is **unanswerable until the record model
+  gains an advisory tier** (FR-F1d). Once it exists, lean **warn by default, `--strict` promotes to
+  hard**, and use FR-F1e's raw-cell evidence so hard only fires on actual truncation. (R1-F3/R1-S2.)
 
 ---
 
-*v0.3 — Post lessons-learned hardening. Applied 4 SDK lessons (regression base-repro, SQLModel
-MetaData teardown, golden-snapshot text-compare, phantom-reference audit). v0.2 reframed 3
-requirements (H4, F2, H5), promoted 2 to belt-and-suspenders (F13, F3+F3b), demoted 1 to optional
-(F2b), raised 4 open questions. Ready for CRP review.*
+*v0.4 — Post-CRP R1 triage. Accepted 8 of 9 requirements suggestions: added FR-0c (red-on-main
+exemption), FR-F1d (advisory-tier prerequisite — blocks OQ-7), FR-F1e (truncation disambiguator),
+FR-F3-iv (migration safety — gates full has-one support), demoted OQ-4 to flag-only-default; refined
+FR-H4a (reuse CaptureCode), FR-H4b (preview parity), OQ-6 (read-code-first). Rejected R1-F5 (H4 locus
+"correction" was itself a misread — verified `proposals.py:309-310` IS the VIPP path). Dispositions
+in Appendix A/B. v0.3 applied 4 SDK lessons; v0.2 reframed H4/F2/H5.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| R1-F1 | FR-F3-iv migration-safety precondition for `@unique` on `has one` child FK | CRP R1 (opus-4-8) | Added FR-F3-iv; gates full has-one support on empty-table/dedup precondition | 2026-07-09 |
+| R1-F2 | Make flag-only (FR-F3-iii) the default landing, full support opt-in | CRP R1 | Rewrote FR-F3-iii as DEFAULT; superseded OQ-4 | 2026-07-09 |
+| R1-F3 | Add advisory/warning tier — record model has none (`Status` = extracted/not_extracted/defaulted) | CRP R1 | Added FR-F1d as blocking prerequisite; OQ-7 now gated on it | 2026-07-09 |
+| R1-F4 | Truncation-vs-genuine disambiguator via preserved raw cell text | CRP R1 | Added FR-F1e (preserve stripped-pipe evidence, `entities.py:236`) | 2026-07-09 |
+| R1-F6 | Reuse `CaptureCode.VALUE_PATH_NOT_ALLOWED`, don't invent a new string | CRP R1 | FR-H4a now mandates the existing typed code | 2026-07-09 |
+| R1-F7 | Resolve OQ-6 from the code (function already has a precedence behavior) | CRP R1 | OQ-6 refined to read-code-before-documenting | 2026-07-09 |
+| R1-F8 | FR-0 exemption for docs-only / optional sub-reqs (can't fail red-on-main) | CRP R1 | Added FR-0c | 2026-07-09 |
+| R1-F9 | Assert preview (`would_apply`) parity for inert proposals | CRP R1 | FR-H4b now requires preview to exclude inert | 2026-07-09 |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| R1-F5 | "FR-H4 apply-refusal locus is wrong — it's `capture.py:44`, not `proposals.py:308-311`" | CRP R1 (opus-4-8) | **Misread.** Verified: `vipp/apply.py:36` imports `apply_proposal` from `kickoff_experience.proposals`; the VIPP-path refusal IS `proposals.py:309-310` (`ProposalOutcome(..., VALUE_PATH_NOT_ALLOWED)`). `capture.py:285-296` raises the same code on a *different* (direct-capture CLI) path; `capture.py:44` is a comment. My cited locus stands. Kept the useful **dual-locus nuance** as a note under FR-H4a. | 2026-07-09 |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-07-09
+
+- **Reviewer**: Claude Opus 4.8 (claude-opus-4-8-1m)
+- **Date**: 2026-07-09 UTC
+- **Scope**: Requirements review weighted per CRP_FOCUS on FR-F3 (§2/OQ-4), FR-F1/F8 (§2/OQ-7), FR-H4 (§3/OQ-5); also OQ-6 and cross-cutting FR-0. Source loci re-verified against current `src/` this session.
+
+**Focus-file asks — answered (top of block):**
+
+*Ask 1 — FR-F3 `has one` full one-to-one support (OQ-4):*
+- **Summary answer:** Full support is right *only if* it lands behind FR-F3-iii as the default fallback; the `@unique`-on-existing-many-row hazard is real and must be gated by a data-precondition check, not assumed safe.
+- **Rationale:** Verified `entities.py:412` — the branch is literally `verb in ("has many", "has one")` and both append the *same* `ExtractionRecord` (`value=f"{obj}.{_lower_camel(subj)}Id"`, line ~419-421), so cardinality is genuinely dropped at extraction, not just at emit. Adding `@unique` to a child FK that already holds duplicate parent references (a pre-existing `has many` dataset an author edits to `has one`) makes the migration fail at constraint-creation time on populated DBs — silent-wrong converts to a hard migration failure, which FR-F3 does not currently acknowledge.
+- **Assumptions / conditions:** That some downstream schemas already say `has many` and hold multi-row data (stated as a press-on item in the focus file); that F3b lands first so `@unique` actually reaches `tables.py`.
+- **Suggested improvements:** Add FR-F3-iv (migration-safety precondition) + make FR-F3-iii the *default* landing with full support opt-in — see R1-F1, R1-F2.
+
+*Ask 2 — FR-F1/F8 in-table `choice of:` truncation + kickoff-check sanity (OQ-7):*
+- **Summary answer:** OQ-7 as posed is unanswerable because the record model can't express "warning" today — resolve the model gap first; then default to **warn**, with `--strict` promoting to hard.
+- **Rationale:** `manifest_extraction/models.py:19-22` — `Status` is only `EXTRACTED | NOT_EXTRACTED | DEFAULTED`; there is no severity axis. `cli_kickoff.py:_is_conformance_failure` gates `--strict` on `NOT_EXTRACTED` minus the `generator-gap` marker. A `choice-of-single-value` signal therefore has **no home**: mark it `NOT_EXTRACTED` and it hard-fails unconditionally (defeating OQ-7's "warning" option); mark it `EXTRACTED` and `kickoff check` stays false-green (the original bug). The spec must add a warning/advisory tier or a marker convention before OQ-7 can be decided.
+- **Assumptions / conditions:** none — this is verifiable by reading the two files.
+- **Suggested improvements:** R1-F3 (add advisory tier), R1-F4 (truncation-vs-genuine disambiguator).
+
+*Ask 3 — FR-H4 VIPP disposition honesty (OQ-5):*
+- **Summary answer:** ACCEPT-but-inert with a qualifier reads more honestly than OMIT, but FR-H4's cited apply-refusal locus is **wrong** and must be corrected before any test can be written.
+- **Rationale:** REQUIREMENTS §1 row H4 and Step 7 cite `proposals.py:308-311` for the refusal, but the actual refusal is `CaptureError(CaptureCode.VALUE_PATH_NOT_ALLOWED)` from `kickoff_experience/proposals.py` (surfaced via `vipp/apply.py:36` importing `apply_proposal`); the code lives in `kickoff_experience/capture.py:44`, not `vipp/proposals.py`. FR-0 mandates verified loci with exact `file:line`; this one fails that bar and would make the FR-0 red-on-main test target the wrong file.
+- **Assumptions / conditions:** that `CaptureCode.VALUE_PATH_NOT_ALLOWED` is the code the apply floor raises for entity-field paths (confirmed present at `capture.py:44`).
+- **Suggested improvements:** R1-F5 (fix the locus + name the real `CaptureCode`), R1-F6 (make the inert qualifier reuse the existing `CaptureCode` vocabulary rather than inventing a new string).
+
+**Numbered suggestions (requirements):**
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Data | high | Add **FR-F3-iv (migration safety)**: before emitting `@unique` on a child FK for a `has one` that was previously `has many`, require a stated precondition — either the child table is empty, or a data-dedup/validation step is documented — and specify the failure mode (schema-gen warns; migration is the enforcement point). | FR-F3-ii adds `@unique` unconditionally; on an existing populated `has many` table this turns silent-wrong into a hard migration failure. The spec never states what happens to existing multi-row data. | New sub-bullet under FR-F3 | A golden with a `has many`→`has one` edit over seed data asserts a named pre-migration warning, not an opaque constraint-violation traceback. |
+| R1-F2 | Risks | high | Make **FR-F3-iii the default landing** and full support (F3-i/ii) an explicit opt-in for this pass, rather than "fallback if CRP surfaces a blocker" (OQ-4). | OQ-4 says "RESOLVED (full support)" but the press-on items (self-relations, optional-vs-required, existing `has many` data) are unresolved design forks. Flag-don't-emit is the guaranteed-honest floor; full support can land incrementally without risking silent one-to-many on ambiguous inputs. | §4 OQ-4 + FR-F3 ordering | Verify `kickoff check` emits `has-one-unsupported` for any `has one` not covered by the landed full-support cases. |
+| R1-F3 | Validation | high | FR-F1a assumes a record can be "a warning surfaced by `kickoff check`", but `Status` (`models.py:19-22`) has no warning tier. Add an explicit requirement to introduce an **advisory/warning severity** (or a reserved `reason` marker analogous to `generator-gap`) and define how `_is_conformance_failure` treats it under `--strict` vs default. | Without this, `choice-of-single-value` is forced into `NOT_EXTRACTED` (always hard-fails, contradicting OQ-7's warning option) or `EXTRACTED` (stays false-green). OQ-7 cannot be answered until the model supports "warning". | New FR under P0 F1/F8, referenced by OQ-7 | Unit test: a single-value `choice of:` yields a record classified as advisory; default `kickoff check` exit 0 with visible warning, `--strict` exit non-zero. |
+| R1-F4 | Data | medium | For OQ-7, add an acceptance criterion for the **truncation-vs-genuine-single-member disambiguator**: a `choice of:` cell that *contained* `\|`-separated tokens but extracted to one value (evidence of a split at an unescaped pipe) is treated differently from a cell whose raw source had exactly one token. | The focus file asks "what disambiguates a truncation from a genuine single-value enum?" — the answer is in the *raw cell text* (presence of a stripped `|`), which `entities.py:236` discards after `split("|")`. Preserving that signal makes hard-fail safe (only fires on evidence of loss). | FR-F1a / FR-F1c | Test: `choice of: a\|b\|c` truncated → flagged; `choice of: single` → not flagged. |
+| R1-F5 | Interfaces | high | Correct the **FR-H4 apply-refusal locus**: §1 table and OQ-5 cite `proposals.py:308-311`, but the refusal is `CaptureError(CaptureCode.VALUE_PATH_NOT_ALLOWED)` defined at `kickoff_experience/capture.py:44` and enforced through `kickoff_experience/proposals.py` (imported by `vipp/apply.py:36`), not `vipp/proposals.py`. | FR-0 requires verified loci; a wrong `file:line` points the mandatory red-on-main test at a file that never raises, so the test would be vacuous. | §1 table row H4 + §4 OQ-5 | Grep confirms `value_path_not_allowed` exists only in `kickoff_experience/capture.py`, not `vipp/proposals.py`. |
+| R1-F6 | Interfaces | medium | In FR-H4a, specify that the inert qualifier **reuses the existing `CaptureCode` vocabulary** (`VALUE_PATH_NOT_ALLOWED`) rather than inventing a parallel `not-mapped-to-kickoff-inputs` string. | The requirement offers two candidate reason strings; one already exists as a typed stable code (`capture.py:44`, "R4-F4 stable typed reason codes"). Two names for one condition re-creates the negotiate/apply divergence FR-H4 exists to close. | FR-H4a | Assert the negotiate disposition's qualifier `== CaptureCode.VALUE_PATH_NOT_ALLOWED`. |
+| R1-F7 | Ops | medium | Resolve **OQ-6** in the requirements (not just the plan/docs): state whether authored `observability.yaml` overrides or merges with the manifest, because `generate_observability_artifacts(observability_yaml_path=...)` already has *a* behavior on disk today — the spec should assert what it is and whether it's the intended contract, else FR-H5 wires a param whose semantics are undefined. | FR-H5a threads a path into a function that already accepts it; if that function's precedence is "override" but authors expect "merge", H5 ships a *new* silent-drop (manifest values lost). OQ-6 is currently deferred to docs (FR-H5c) but it's a contract decision. | §4 OQ-6 + FR-H5 | Read `generate_observability_artifacts` body; assert observed precedence matches the documented contract in a test. |
+
+### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F8 | Validation | medium | FR-0 says every fix ships a test that "fails on `main`". For FR-F1c (auto-unescape at parse time) and FR-H5c (docs), there is **no executable red-on-main assertion possible** — a doc change and an optional heuristic can't fail red. State FR-0's exemption for docs-only/optional sub-requirements explicitly so the verification gate isn't interpreted as blocking them. | The verification gate checkbox "Each step's regression test fails on `main`" is unsatisfiable for FR-H5c/FR-F1b (pure docs) and ambiguous for optional FR-F1c/FR-F2b. Unstated, it either blocks merge or gets silently waived (the exact silent behavior this doc opposes). | FR-0 + §Verification gate (plan) | N/A — spec-clarity criterion; verify the gate text names the exemption. |
+| R1-F9 | Security | low | FR-H4b guards against a `wrote 1/2` silent-partial in the apply summary, but does not state what the **preview** (`apply.py:90` `apply_dispositions` preview / `would_apply`) reports for an inert proposal. If preview shows it as would-write while apply reports inert, the two disagree. | The VIPP apply path has a side-effect-free preview (`would_apply`, `content_hash` at `apply.py:94-95`); an inert-but-accepted proposal must be excluded from `would_apply` too, or preview over-promises exactly what FR-H4 fixes at apply. | FR-H4b | Test: an inert `capture` is absent from `would_apply` and its `content_hash` is unchanged. |
+
+**Endorsements / Disagreements:** none — this is round R1; Appendices A/B/C carry no prior untriaged items.
