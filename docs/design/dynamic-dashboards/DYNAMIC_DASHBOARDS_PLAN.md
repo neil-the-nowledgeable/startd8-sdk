@@ -219,10 +219,13 @@ Workbook. Two strategy forks are resolved by an up-front spike (M0) before build
 > `fiscal_year` variable + a conditional section). Deterministic + M0-schema-valid + golden
 > (`fixtures/v2_sectioned_fleet.golden.json`); both **round-trip through live Grafana 13.1.0 (201)**.
 >
-> **Scope note:** M7 ships the reusable *primitive*. **Per-generator adoption** — wiring the real
-> `observability/` artifact generators / fleet / gov-budget dashboards to actually emit v2 through this
-> seam — is deliberately **follow-on** (each is its own feature's integration), not part of this optional
-> milestone.
+> **Scope note:** M7 ships the reusable *primitive*. **Per-generator adoption** is follow-on (each is its
+> own feature's integration). **First adoption landed:** `observability/dashboard_renderer_v2.py` —
+> `render_domain_dashboard_v2(spec)` projects the same `ObservabilitySpec` signals as the classic
+> `render_domain_dashboard` onto a v2 sectioned board (a row per severity — Critical/Warning/Other — each
+> with a timeseries panel + prometheus query). **Standalone additive adapter** (the classic renderer is
+> byte-untouched); 7 tests + classic regression green; the timeseries panel + prom query **round-trip
+> through live Grafana 13.1.0 (201)**. Remaining generators (fleet, gov-budget) can follow the same seam.
 - Fleet (per-service section filters), gov-budget (per-department sections/tabs), o11y-artifact boards ✅
   the reusable seam exists + is proven; per-generator adoption is follow-on.
 
