@@ -178,3 +178,20 @@ def test_scrutiny_run_wires_adversary_framing_to_adversaries(tmp_path, small_ros
                       facilitator_agent_factory=_facilitator())
     assert "ADVERSARY" in _prompt_for(session, "R1", "adversary-exploit")
     assert "biggest RISK" in _prompt_for(session, "R1", "product-owner")
+
+
+# ── completeness: the transcript self-describes its posture, and the constants are public ───
+def test_transcript_records_posture(tmp_path, small_roster):
+    cfg = F.FacilitationConfig(project=tmp_path, posture="prototype",
+                               ground=False, assumptions=False, outside_view=False)
+    _, session = _run(small_roster, cfg,
+                      persona_agent_factory=_persona_factory(),
+                      facilitator_agent_factory=_facilitator())
+    # a consumer reading the saved transcript can tell which posture produced it
+    assert session["posture"] == "prototype"
+
+
+def test_posture_constants_are_exported():
+    # the documented public surface (PROTOTYPE_POSTURE.md) — exported like ADVERSARY_IDS
+    for name in ("POSTURE_SCRUTINY", "POSTURE_PROTOTYPE", "POSTURES", "SKEPTIC_IDS", "CHALLENGER_IDS"):
+        assert name in F.__all__, f"{name} missing from facilitation.__all__"

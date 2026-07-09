@@ -144,7 +144,10 @@ def test_session_top_level_schema(tmp_path, small_roster):
         "cost_total_usd",
         # GE-M3b hardening: first-class halt state (H2/H3) + budget ceiling surface (H3)
         "status", "halt", "budget_usd",
+        # posture that produced the transcript (scrutiny|prototype)
+        "posture",
     }
+    assert session["posture"] == "scrutiny"  # default posture recorded
     assert session["adversaries"] == ["adversary-exploit", "adversary-discredit"]
     assert session["session_id"].startswith("kp-")
     # a clean full run completes and is not halted

@@ -954,6 +954,9 @@ class KickoffFacilitator:
             "session_id": f"kp-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "project": Path(cfg.project).name, "objective": cfg.objective, "strategy": cfg.strategy,
+            # posture that produced this transcript — self-describing so a consumer (e.g. the
+            # synthesis-bridge/viewer) can tell a prototype synthesis from a scrutiny one.
+            "posture": cfg.posture,
             "prep": prep, "model_assignment": specs, "adversaries": adv_ids,
             "facilitator_model": FACILITATOR_SPEC,
             "status": "in_progress", "halt": None,
@@ -1176,6 +1179,11 @@ __all__ = [
     "FACILITATOR_SPEC",
     "OUTSIDE_VIEW_SPEC",
     "ADVERSARY_IDS",
+    "SKEPTIC_IDS",
+    "CHALLENGER_IDS",
+    "POSTURE_SCRUTINY",
+    "POSTURE_PROTOTYPE",
+    "POSTURES",
     "DEFAULT_DESC",
     "DEFAULT_OBJECTIVE",
     "DEFAULT_STRATEGY",
