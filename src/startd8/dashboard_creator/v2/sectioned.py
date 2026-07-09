@@ -95,13 +95,14 @@ def build_sectioned_v2(
     elements: Dict[str, V2Panel] = {}
     tabs: List[TabsLayoutTab] = []
     rows: List[RowsLayoutRow] = []
+    pid = 0  # a single monotonic panel id — collision-free regardless of panels-per-section
 
     for s_idx, section in enumerate(sections):
         items: List[GridItem] = []
         for p_idx, pspec in enumerate(section.panels):
-            key = f"sec{s_idx}-p{p_idx}"
-            # element id is an int; derive a stable one from the section/panel index
-            elements[key] = _panel(s_idx * 100 + p_idx + 1, pspec)
+            key = f"sec{s_idx}-p{p_idx}"  # element key: unique + stable across (section, panel)
+            pid += 1
+            elements[key] = _panel(pid, pspec)
             items.append(GridItem(element=key, height=6))
 
         conditional = (

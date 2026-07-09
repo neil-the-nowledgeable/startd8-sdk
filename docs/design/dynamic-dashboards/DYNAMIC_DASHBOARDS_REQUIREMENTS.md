@@ -1,6 +1,6 @@
 # Generate Dynamic Dashboards — Requirements
 
-**Version:** 0.4 (Post-CRP R1/R2 triage — ready for M0 spike)
+**Version:** 0.5 (IMPLEMENTED — M0→M7 live-verified; FR text reconciled to the shipped separate-model design)
 **Date:** 2026-07-09
 **Status:** Draft (CRP R1/R2 triaged; M0 spike is the next action)
 **Prerequisite (ops, not in scope):** Grafana upgraded to **≥ 13.1** — **DONE (13.1.x)**. (Dynamic
@@ -49,6 +49,29 @@ dashboards GA in 13; section-level variables GA in 13.1.) The upgrade itself is 
   the audience model (owned by the persona spec), the Workbook read-only stance (NR-3 there), and the
   deterministic-`$0` generation principle.
 
+### 0.2 Implementation Verification (v0.5 — post-build)
+
+> **Status: IMPLEMENTED (M0→M7 + CLI wiring + first adoption), live-verified on Grafana 13.1.0.** Every
+> FR is present, semantically valid, tested, and (where it touches Grafana) round-trips against the live
+> instance. The FR text above was updated (v0.5) to match the shipped **separate v2 model tree** decision
+> — the earlier "extend `DashboardSpec`" framing (FR-1/FR-10) was superseded by a stronger additivity
+> guarantee (classic models byte-untouched). ~570 tests green (v2 + obs-v2 + kickoff-v2).
+
+| FR | Where | Verified |
+|----|-------|----------|
+| FR-1 additive v2 target | `v2/{models,emitter}.py`; `emit_v2_dashboard(schema="v2")` | unit + M0 golden + live 201 |
+| FR-2 conditional rendering | `v2/models.py` `ConditionalRendering`+conditions; row/tab `conditional` | unit + live (section-level, verified attach-points) |
+| FR-3 section variables | `v2/models.py` row/tab `variables`; #122553 build-time guard | unit + live |
+| FR-4 tabs/rows/auto-grid layout | `v2/models.py` `Tabs/Rows/AutoGrid/GridLayout` + nesting | unit + live |
+| FR-5 deterministic + $0 | `v2/emitter.py` `v2_json` (== `output.py` serializer) + golden fixtures | unit (byte-goldens) |
+| FR-6 provisioning parity | `v2/{provision,version}.py` `provision_v2` (gate+collision+`provision_api`) | unit (mock) + live idempotent |
+| FR-7 schema-aware validation | `json_validator.py` discriminator → `v2/validate.py` (+NR-6 allowlist) | unit; classic unchanged |
+| FR-8 audience personalization | `kickoff_experience/portal_spec_v2.py` `build_workbook_v2` | unit + live 201 |
+| FR-9 one board, viewer-personalized | byte-identity-except-`current` golden diff | unit (FR-9 AC) |
+| FR-10 additive spec model | separate `v2/` package; classic byte-untouched | 493 classic tests green |
+| FR-11 graceful version handling | `v2/version.py` minor-aware gate; `provision_v2` refuses < 13.1 | unit (mock 13.0 → refuse) |
+| Broaden (M7) + CLI | `v2/sectioned.py`; `kickoff portal --dynamic`; `observability/dashboard_renderer_v2.py` | unit + live 201 |
+
 ---
 
 ## 1. Problem Statement
@@ -82,11 +105,14 @@ deterministic (`$0`) capability**, with the Workbook + audience feature as the f
 
 - **FR-1 — Additive v2 (new-schema) emit target.** The generator MUST gain a Grafana **v2 dynamic-schema**
   output target (`apiVersion` + `kind` + `spec{elements, layout, variables}`) **without removing or
-  regressing the classic path**. A `DashboardSpec` opts into v2 by an **explicit, single trigger:
-  `schema="v2"`** (R1-F2) — **not** the mere presence of a dynamic construct. A classic spec that carries a
-  v2-only field MUST raise a validation error, never silently flip schema. Classic remains the default
-  (NR-1). *(Note: `DashboardSpec.panels = Field(min_length=1)` (`models.py:266`) must be relaxed for v2 —
-  a pure-tabs/rows board has zero flat panels; see plan M1/R1-S9.)*
+  regressing the classic path**. Opt-in is an **explicit, single trigger** (R1-F2): the dedicated
+  `emit_v2_dashboard(schema="v2")` entry — any other `schema` value raises, so a classic caller can never
+  silently reach v2. Classic remains the default (NR-1). ✅ **SHIPPED** as `dashboard_creator/v2/` — a
+  **separate v2 model tree** (`V2Panel`/`GridLayout`/`RowsLayout`/`TabsLayout`/`AutoGridLayout`/
+  `CustomVariable`), **not** new fields on `DashboardSpec`. *(This design supersedes the earlier
+  "extend `DashboardSpec`" framing and **dissolves R1-S9** — the classic `panels min_length=1` invariant
+  is classic-only and never applies to v2, so a pure-tabs/rows board is legal without touching `models.py`.
+  See plan M1.)*
 - **FR-2 — Conditional rendering.** A spec MUST be able to attach show/hide rules to **rows and tabs**,
   with condition types **variable-value** (`equals|notEquals|matches|notMatches`), **data-presence**, and
   **time-range-size**, combinable with **AND/OR**. Compiles to Grafana's conditional-rendering group.
@@ -108,10 +134,14 @@ deterministic (`$0`) capability**, with the Workbook + audience feature as the f
 - **FR-6 — Provisioning parity.** The provision path MUST publish a v2 board to Grafana ≥13.1 with the
   same UID / idempotent-upsert semantics as classic — via `/api/dashboards/db` **if it accepts v2**, else
   the new dashboard resource API (OQ-1). A provision that the target can't accept MUST fail loud, not
-  produce a broken board. **The chosen endpoint MUST be observable (R1-F3):** the `ProvisioningResult`
-  records which API accepted the payload (`details["provision_api"]`) so OQ-1's answer is captured in
-  artifacts. A v2 UID that collides with an in-use **classic** board MUST be refused/namespaced, never a
-  silent `overwrite:True` clobber (R1-S8).
+  produce a broken board. **The chosen endpoint MUST be observable (R1-F3):** the result records which
+  API accepted the payload so OQ-1's answer is captured. A UID that already belongs to a **different**
+  board MUST be refused, never a silent `overwrite:True` clobber (R1-S8). ✅ **SHIPPED** as
+  `provision_v2(client, board)` → `V2ProvisionResult.provision_api` (= `/api/dashboards/db`, the M0
+  outcome-1 path — accepts v2 with fidelity + clean overwrite upsert). The collision guard is
+  **title-based** (a different-*titled* board at the UID is refused; the same-titled board re-provisions
+  idempotently) — verified live, because the legacy GET returns a classic-shaped representation even for a
+  v2-stored board, so an `apiVersion`/schema sniff is unreliable. `force=True` overrides. See plan M5.
 - **FR-7 — Schema-aware validation.** Validation MUST **discriminate schema first** (`apiVersion` present →
   v2; absent → classic) **before** any classic-specific check (R2-F3/R2-S4) — today the `schemaVersion`
   range-check at `json_validator.py:69` fires on a v2 board (key absent → `None not in range(36,42)` =
@@ -129,9 +159,14 @@ deterministic (`$0`) capability**, with the Workbook + audience feature as the f
   a per-row 🛡️ badge; the v2 surface knob acts on panels/rows, not table rows. The contract: shielded
   fields move to a **separate collapsible subsection** hidden for beginner (only shielded fields collapse,
   not the whole domain), and the static badge is **retained** on the non-beginner render (orthogonal
-  mechanisms: bake-time label vs runtime show/hide). Era 1's `build_kickoff_portal_spec` signature
-  (`audience`/`tier`/`provenance`) MUST survive the v2 migration (R2-F5). The `audience` model + tiers +
-  profiles are **owned by** the persona feature — cited, not re-specified.
+  mechanisms: bake-time label vs runtime show/hide). The classic `build_kickoff_portal_spec` MUST NOT be
+  disturbed (R2-F5). The `audience` model + tiers + profiles are **owned by** the persona feature —
+  cited, not re-specified. ✅ **SHIPPED** as `kickoff_experience/portal_spec_v2.py:build_workbook_v2(state,
+  project, *, audience, provenance)` — a **separate, additive** v2 board (distinct `-v2` UID; coexists),
+  built self-contained on the branch's audience/provenance primitives (Era 1 lives on a separate unmerged
+  branch). The classic `build_kickoff_portal_spec`/`portal_build` are untouched (R2-F5, asserted by a
+  test). Default token = `resolve_audience_preference(root).value` (a `KickoffAudience`) → `.value`. See
+  plan M6.
 - **FR-9 — One deterministic board per project, viewer-personalized.** The Workbook board carries **all**
   persona variants + the rules; `audience` is a **runtime variable**, so the generated JSON is **identical
   regardless of the viewer's audience** (no per-audience UIDs; strengthens the persona byte-identity
@@ -140,10 +175,14 @@ deterministic (`$0`) capability**, with the Workbook + audience feature as the f
   pins exactly that invariant. Switching `audience` re-renders **in-browser**, no regeneration, **no write**
   (read-only, NR-2). *(Grafana persists variable state to the URL/last-used; a shared link can pin an
   audience — this is still not a write to `inputs/`/`confirmed.yaml`, so read-only holds, R1-F9.)*
-- **FR-10 — Additive spec model.** The dynamic constructs extend `DashboardSpec`/`PanelSpec` with **new
-  optional fields** (e.g. per-element `conditional`, section `variables` on a row/tab element, a `layout`
-  descriptor); existing specs + consumers (portal_spec, observability, dbrd) are untouched until they opt
-  in.
+- **FR-10 — Additive spec model.** The dynamic constructs live in a **separate, additive v2 model tree**
+  (per-element/section models carrying `conditional`, section `variables`, and a `layout` descriptor);
+  existing specs + consumers (`DashboardSpec`/`PanelSpec`, `portal_spec`, observability, dbrd) are
+  **byte-untouched** until they opt in. ✅ **SHIPPED** — a separate `dashboard_creator/v2/` package (not
+  new fields on the classic models), which is a *stronger* additivity guarantee than the earlier "extend
+  `DashboardSpec`" framing: classic generation is provably unchanged (493 classic dashboard_creator tests
+  green; a test asserts the classic `build_kickoff_portal_spec` is unmodified). First opt-in adoption:
+  `observability/dashboard_renderer_v2.py` (a standalone adapter; the classic renderer is byte-untouched).
 - **FR-11 — Graceful version handling.** If the target Grafana is `< 13.1` (or the section-variables
   capability is off), generation/provision MUST **detect and message clearly** (refuse, or emit a classic
   fallback — OQ-4), never silently ship a board the target renders broken. **AC (R1-F1/R1-S3):** detection
