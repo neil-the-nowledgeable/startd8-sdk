@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, List, Optional
 
 from ..fde.ratification import RatificationError, assert_ratifiable
+from ..kickoff_experience.capture import CaptureCode
 from ..kickoff_experience.proposals import ProposedAction, apply_proposal
 from ..kickoff_experience.vipp_seam import read_inbox, shred_inbox
 from ..logging_config import get_logger
@@ -82,6 +83,18 @@ def _reconstruct(enveloped: Any, disposition: VippDisposition) -> ProposedAction
     # kind + base_sha ALWAYS from the inbox; only params may carry a COUNTER overlay.
     return ProposedAction(
         kind=enveloped.kind, params=params, id=enveloped.id, base_sha=enveloped.base_sha
+    )
+
+
+def _is_inert(disposition: VippDisposition) -> bool:
+    """FR-H4b: an ACCEPT-but-inert `capture` (value_path validated as a project field but not a
+    kickoff-writable value-path, FR-H4a) carries the `value_path_not_allowed` qualifier from
+    negotiate. The apply floor would refuse it (reading as a `wrote 1/2` silent partial) and the
+    preview would over-promise it — so both `apply_dispositions` and `preview_dispositions` treat it
+    like a REJECT for write purposes: not attempted, not counted actionable, not in would-apply."""
+    return disposition.decision is Decision.ACCEPT and any(
+        getattr(c, "qualifier", "") == CaptureCode.VALUE_PATH_NOT_ALLOWED
+        for c in (disposition.claims or [])
     )
 
 
@@ -150,6 +163,10 @@ def preview_dispositions(project_root: Any) -> PreviewResult:
     for disp in report.dispositions:
         # REJECT never writes (in the real applier it only records the cursor — a side effect we skip).
         if disp.decision is Decision.REJECT:
+            continue
+        # FR-H4b: an ACCEPT-but-inert capture would be refused by the apply floor — exclude it from
+        # the would-apply set so preview and apply agree (preview must not over-promise it).
+        if _is_inert(disp):
             continue
         # Everything else is actionable in apply_dispositions; mirror that exactly.
         key = f"apply:{disp.proposal_id}:{seq}"
@@ -222,6 +239,21 @@ def apply_dispositions(
                 project_root, key, "consumed", {"decision": "REJECT"}
             )
             rec.update(code="rejected_no_write", ok=True)
+            result.outcomes.append(rec)
+            continue
+
+        # FR-H4b: ACCEPT-but-inert (value_path validated but not kickoff-writable) — the apply floor
+        # would refuse it, so DON'T attempt it and DON'T count it actionable (that produced the
+        # dishonest `wrote 1/2`). Record it consumed + inert so it neither wedges the shred nor reads
+        # as a failed write.
+        if _is_inert(disp):
+            context.record_processed(
+                project_root, key, "consumed", {"decision": "ACCEPT", "code": CaptureCode.VALUE_PATH_NOT_ALLOWED}
+            )
+            rec.update(
+                code=CaptureCode.VALUE_PATH_NOT_ALLOWED, ok=True,
+                detail="inert: value_path is not a kickoff-writable field (not attempted)",
+            )
             result.outcomes.append(rec)
             continue
 

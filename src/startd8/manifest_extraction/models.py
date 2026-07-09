@@ -22,6 +22,15 @@ class Status:
     DEFAULTED = "defaulted"
 
 
+# FR-F1d: the record model had no severity axis, so a value that DID extract but is *suspicious*
+# (e.g. a `choice of:` truncated to one value by an unescaped `|`) had no home — it either
+# hard-failed as NOT_EXTRACTED or stayed invisible as EXTRACTED (false-green). The advisory tier is a
+# reserved `reason` marker (mirroring the `generator-gap` convention): the record keeps its real
+# status (the value IS extracted) but is flagged for `kickoff check` to WARN by default and to FAIL
+# under `--strict`.
+ADVISORY_PREFIX = "advisory:"
+
+
 @dataclass(frozen=True)
 class SourceRef:
     """Structured source locator (FR-WPI-3): where in the kickoff docs a value came from."""
@@ -46,6 +55,11 @@ class ExtractionRecord:
     @property
     def identity(self) -> Tuple[str, str]:
         return (self.manifest, self.value_path)
+
+    @property
+    def is_advisory(self) -> bool:
+        """A value that extracted but is suspicious (FR-F1d). Warn by default; `--strict` fails."""
+        return (self.reason or "").startswith(ADVISORY_PREFIX)
 
 
 class RoundTripError(RuntimeError):
