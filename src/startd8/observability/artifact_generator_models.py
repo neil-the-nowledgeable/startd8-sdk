@@ -39,6 +39,12 @@ class ServiceHints:
     # Distinct from convention_metrics: these describe what *this* service does
     # (e.g. token burn, cost, truncations) rather than generic OTel HTTP semconv.
     declared_metrics: List[ConventionMetric] = field(default_factory=list)
+    # Target metric binding (REQ_TARGET_METRIC_BINDING FR-2/FR-3/FR-6): the
+    # effective convention profile ContextCore resolved for this service, plus
+    # any per-axis descriptor overrides. "" / {} => fall back to the transport
+    # default (semconv-{transport}). Consumed by metric_descriptor.resolve_descriptor.
+    metric_profile: str = ""
+    descriptor_overrides: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -306,6 +306,14 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
         # artifacts describe what *this* service does, not just generic HTTP.
         declared_metrics = _parse_metric_set(metrics.get("manifest_declared", []))
 
+        # Target metric binding (FR-2/FR-3/FR-6): the effective convention
+        # profile + per-axis overrides ContextCore resolved for this service.
+        # Absent => "" / {} => transport-default fallback downstream (FR-7 tier 6).
+        metric_profile = metrics.get("convention_profile", "") or ""
+        descriptor_overrides = metrics.get("descriptor_overrides", {})
+        if not isinstance(descriptor_overrides, dict):
+            descriptor_overrides = {}
+
         services.append(
             ServiceHints(
                 service_id=svc_id,
@@ -314,6 +322,8 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 detected_databases=hint.get("detected_databases", []),
                 convention_metrics=convention_metrics,
                 declared_metrics=declared_metrics,
+                metric_profile=metric_profile,
+                descriptor_overrides=descriptor_overrides,
             )
         )
 

@@ -28,8 +28,11 @@ from manifest/onboarding inputs via the FR-7 precedence ladder is Step 4.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, Tuple
+import logging
+from dataclasses import dataclass, fields, replace
+from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -189,3 +192,61 @@ def profile_for_transport(transport: str) -> MetricDescriptor:
     """
     name = _TRANSPORT_DEFAULTS.get((transport or "").lower(), "semconv-http")
     return _PROFILES[name]
+
+
+#: MetricDescriptor axis fields an override block may set (FR-1/FR-1a). Anything
+#: else in an overrides dict is unknown and ignored-with-warning (FR-3 skew).
+_OVERRIDABLE_AXES = frozenset(
+    f.name for f in fields(MetricDescriptor) if f.name != "profile"
+)
+
+
+def resolve_descriptor(
+    *,
+    profile: Optional[str] = None,
+    transport: str = "http",
+    overrides: Optional[Dict[str, Any]] = None,
+) -> MetricDescriptor:
+    """Build the effective descriptor for a service (terminus of the FR-7 ladder).
+
+    ContextCore resolves project-vs-target precedence at export and passes the
+    *effective* ``profile`` + ``overrides`` here (via onboarding metadata). This
+    function applies the last two ladder tiers and the axis overrides:
+
+    * ``profile`` — the resolved convention profile name, or ``None`` to fall
+      back to ``semconv-{transport}`` (tier 6, today's behavior).
+    * ``overrides`` — per-axis values that override the profile field-by-field
+      (FR-1 escape hatch / FR-7 tier-1 descriptor).
+
+    FR-3 leniency: an **unknown profile name** logs a warning and falls back to
+    the transport default rather than raising (so a newer manifest cannot crash
+    an older generator); **unknown override keys** are ignored with a warning.
+    ``profile_for`` stays strict for authoring-time validation.
+    """
+    if profile:
+        try:
+            base = profile_for(profile)
+        except ValueError:
+            logger.warning(
+                "unknown metric convention profile %r in onboarding metadata; "
+                "falling back to semconv-%s", profile, transport,
+            )
+            base = profile_for_transport(transport)
+    else:
+        base = profile_for_transport(transport)
+
+    if not overrides:
+        return base
+
+    known: Dict[str, Any] = {}
+    for key, value in overrides.items():
+        if key in _OVERRIDABLE_AXES:
+            known[key] = tuple(value) if key == "extra_selectors" else value
+        else:
+            logger.warning(
+                "ignoring unknown metric descriptor override %r=%r "
+                "(not a recognized axis)", key, value,
+            )
+    if not known:
+        return base
+    return replace(base, profile=f"{base.profile}+override", **known)

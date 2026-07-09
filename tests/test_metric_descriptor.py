@@ -13,9 +13,11 @@ from startd8.observability.metric_descriptor import (
     available_profiles,
     profile_for,
     profile_for_transport,
+    resolve_descriptor,
     SEMCONV_PROFILES,
     SPAN_METRICS_PROFILE,
 )
+from startd8.observability.artifact_generator_context import extract_service_hints
 
 
 # ── FR-5: the three profiles resolve to the normative table ────────────────
@@ -159,3 +161,88 @@ def test_descriptor_is_frozen():
     d = profile_for("semconv-http")
     with pytest.raises(Exception):
         d.service_label_key = "changed"  # type: ignore[misc]
+
+
+# ── resolve_descriptor: FR-7 ladder terminus + FR-3 leniency ───────────────
+class TestResolveDescriptor:
+    def test_explicit_profile_wins(self):
+        d = resolve_descriptor(profile="span-metrics-connector", transport="grpc")
+        assert d.profile == "span-metrics-connector"
+        assert d.service_label_key == "service_name"
+
+    def test_no_profile_falls_back_to_transport(self):
+        # FR-7 tier 6: semconv-{transport} default.
+        assert resolve_descriptor(profile=None, transport="grpc").profile == "semconv-grpc"
+        assert resolve_descriptor(profile="", transport="http").profile == "semconv-http"
+
+    def test_overrides_apply_per_axis(self):
+        # Start from a profile, override a single axis (FR-1 escape hatch).
+        d = resolve_descriptor(
+            profile="semconv-http",
+            overrides={"service_label_key": "service_name"},
+        )
+        assert d.service_label_key == "service_name"          # overridden
+        assert d.error_selector == 'status=~"5.."'            # inherited
+        assert d.profile == "semconv-http+override"
+
+    def test_extra_selectors_override_coerced_to_tuple(self):
+        d = resolve_descriptor(
+            profile="span-metrics-connector",
+            overrides={"extra_selectors": ['span_kind="SPAN_KIND_SERVER"']},
+        )
+        assert d.extra_selectors == ('span_kind="SPAN_KIND_SERVER"',)
+
+    def test_unknown_profile_is_lenient_not_raising(self):
+        # FR-3 skew: a newer manifest must not crash an older generator.
+        d = resolve_descriptor(profile="prometheus-native", transport="grpc")
+        assert d.profile == "semconv-grpc"  # fell back to transport default
+
+    def test_unknown_override_key_ignored(self):
+        d = resolve_descriptor(
+            profile="semconv-http",
+            overrides={"bogus_axis": "x", "latency_unit": "ms"},
+        )
+        assert d.latency_unit == "ms"           # known key applied
+        assert not hasattr(d, "bogus_axis")     # unknown key ignored, no crash
+
+
+# ── extract_service_hints reads the binding fields (FR-3 contract) ─────────
+class TestServiceHintsBinding:
+    def _meta(self, metrics_block):
+        return {
+            "instrumentation_hints": {
+                "checkoutservice": {"transport": "grpc", "metrics": metrics_block}
+            }
+        }
+
+    def test_reads_convention_profile_and_overrides(self):
+        meta = self._meta({
+            "convention_based": [{"name": "calls", "type": "counter"}],
+            "convention_profile": "span-metrics-connector",
+            "descriptor_overrides": {"latency_unit": "ms"},
+        })
+        [h] = extract_service_hints(meta)
+        assert h.metric_profile == "span-metrics-connector"
+        assert h.descriptor_overrides == {"latency_unit": "ms"}
+        # end-to-end: hints → resolved descriptor
+        d = resolve_descriptor(
+            profile=h.metric_profile, transport=h.transport, overrides=h.descriptor_overrides
+        )
+        assert d.service_label_key == "service_name"
+
+    def test_legacy_metadata_without_binding_fields(self):
+        # FR-3 back-compat: a new generator reading legacy metadata (no
+        # profile) yields transport-default behavior, not a crash.
+        meta = self._meta({"convention_based": [{"name": "rpc.server.duration", "type": "histogram"}]})
+        [h] = extract_service_hints(meta)
+        assert h.metric_profile == ""
+        assert h.descriptor_overrides == {}
+        assert resolve_descriptor(profile=h.metric_profile, transport=h.transport).profile == "semconv-grpc"
+
+    def test_malformed_overrides_coerced_to_empty(self):
+        meta = self._meta({
+            "convention_based": [],
+            "descriptor_overrides": "not-a-dict",
+        })
+        [h] = extract_service_hints(meta)
+        assert h.descriptor_overrides == {}
