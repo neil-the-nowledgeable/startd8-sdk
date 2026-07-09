@@ -272,6 +272,83 @@ def test_proposals_tab_confirm_command_round_trips(tmp_path):
     assert parsed["path"] == tricky
 
 
+def _frozen_view(tmp_path):
+    """A fixed snapshot + inbox so audience is the only variable across a build (M4 byte-diff)."""
+    import json as _json
+
+    from startd8.kickoff_experience import session_snapshot as ss
+    from startd8.kickoff_experience.agentic_view import build_agentic_view
+    from startd8.vipp.models import EnvelopedProposal, ProposalEnvelope
+
+    snap = ss.build_session_snapshot(
+        messages=[
+            {"role": "user", "content": "how ready?"},
+            {"role": "assistant", "content": [{"type": "text", "text": "two gaps"}]},
+        ],
+        model="m",
+        input_tokens=1,
+        output_tokens=1,
+        total_tokens=2,
+        cost_usd=0.0,
+        posture="concierge · propose-only",
+        project=str(tmp_path),
+        session_id="frozen-sid",
+        generated_at="2026-07-09T00:00:00+00:00",
+    )
+    ss.write_snapshot(tmp_path, snap)
+    env = ProposalEnvelope(
+        project_id="p",
+        envelope_seq=1,
+        proposals=[EnvelopedProposal(kind="capture", params={"value_path": "a.b", "value": "c"}, id="P-1")],
+    )
+    ip = tmp_path / ".startd8" / "vipp" / "proposals-inbox.json"
+    ip.parent.mkdir(parents=True, exist_ok=True)
+    ip.write_text(_json.dumps(env.to_dict()), encoding="utf-8")
+    return build_agentic_view(tmp_path)
+
+
+def test_fr8_byte_identical_across_audiences_with_frozen_view(tmp_path):
+    # FR-8 / R1-F3: for ONE project + ONE frozen snapshot, the three audiences emit JSON identical
+    # EXCEPT the audience variable's current default. The cockpit embeds (bakes) the snapshot, so the
+    # byte-diff is asserted over a frozen fixture (audience is the only variable).
+    view = _frozen_view(tmp_path)
+
+    def _stripped(aud):
+        b = copy.deepcopy(
+            build_workbook_v2(_state(), "demo", audience=aud, provenance=_PROV, view=view)
+        )
+        b["spec"]["variables"] = "<AUDIENCE_VAR>"
+        return v2_json(b)
+
+    assert (
+        _stripped(KickoffAudience.BEGINNER)
+        == _stripped(KickoffAudience.INTERMEDIATE)
+        == _stripped(KickoffAudience.ADVANCED)
+    )
+
+
+def test_fr8_beginner_gets_simplified_proposals_and_hidden_loki(tmp_path):
+    view = _frozen_view(tmp_path)
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV, view=view)
+    # Assistant tab: the Loki full-depth row is hidden-for-beginner
+    assistant = next(t for t in _tabs(board) if t["spec"]["title"] == "Assistant")
+    loki_row = next(
+        r for r in assistant["spec"]["layout"]["spec"]["rows"] if r["spec"]["title"] == "Full Transcript"
+    )
+    assert loki_row["spec"]["conditionalRendering"]["spec"]["visibility"] == "hide"
+    # Proposals tab: full table hidden-for-beginner, a simplified row shown-when-beginner
+    proposals = next(t for t in _tabs(board) if t["spec"]["title"] == "Proposals")
+    prows = proposals["spec"]["layout"]["spec"]["rows"]
+    full = next(r for r in prows if r["spec"]["title"] == "Proposals")
+    simple = next(r for r in prows if r["spec"]["title"] == "Recommendations")
+    assert full["spec"]["conditionalRendering"]["spec"]["visibility"] == "hide"
+    assert simple["spec"]["conditionalRendering"]["spec"]["visibility"] == "show"
+    assert any(
+        i["spec"]["value"] == "beginner"
+        for i in simple["spec"]["conditionalRendering"]["spec"]["items"]
+    )
+
+
 def test_distinct_uid_coexists_with_classic():
     # FR: the v2 board uses a distinct -v2 UID so it never clobbers the classic Workbook (R2-F5 coexistence)
     assert workbook_v2_uid("My App") == "cc-portal-kickoff-my-app-v2"

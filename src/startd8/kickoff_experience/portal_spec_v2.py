@@ -252,6 +252,18 @@ def _proposals_markdown(view: Any) -> str:
     return "\n".join(lines)
 
 
+def _proposals_markdown_simple(view: Any) -> str:
+    """A Beginner-simplified Proposals view (OQ-3): the summary + the confirm command as the teaching
+    moment — no raw table / ids / targets. Not hidden (confirm is still shown), just gentler."""
+    lines = [
+        "_The assistant **recommends** these — nothing happens until you confirm. "
+        "Copy a command below to apply it yourself._\n",
+    ]
+    for r in view.proposals:
+        lines.append(f"**{_md_cell(r.summary)}**\n\n```\n{r.confirm_command}\n```")
+    return "\n".join(lines)
+
+
 def build_workbook_v2(
     state: Any,
     project: str,
@@ -355,20 +367,37 @@ def build_workbook_v2(
                 )
             )
 
-    # --- Assistant tab: FR-1 snapshot transcript (capped tail) + FR-6b Loki full-depth panel ----------
-    assistant_items: List[GridItem] = []
+    # --- Assistant tab (FR-6/FR-6b + FR-8): capped-tail transcript (all) + Loki depth (hidden Beginner) --
     if view is not None and getattr(view, "has_snapshot", False):
         snap = view.snapshot
-        assistant_items.append(
-            GridItem(element=_add("Assistant — session transcript", _transcript_markdown(snap)), height=16)
-        )
-        assistant_items.append(
-            GridItem(
-                element=_add_panel(
-                    _logs_panel(0, "Full Transcript (Loki)", _transcript_logql(snap.session_id))
-                ),
-                height=12,
-            )
+        assistant_tab = TabsLayoutTab(
+            title="Assistant",
+            layout=RowsLayout(
+                rows=[
+                    RowsLayoutRow(
+                        title="Session transcript",
+                        items=[
+                            GridItem(
+                                element=_add("Assistant — session transcript", _transcript_markdown(snap)),
+                                height=16,
+                            )
+                        ],
+                    ),
+                    # FR-8: the full-depth Loki panel is an advanced surface — hidden for Beginner.
+                    RowsLayoutRow(
+                        title="Full Transcript",
+                        items=[
+                            GridItem(
+                                element=_add_panel(
+                                    _logs_panel(0, "Full Transcript (Loki)", _transcript_logql(snap.session_id))
+                                ),
+                                height=12,
+                            )
+                        ],
+                        conditional=_hide_for_beginner(),
+                    ),
+                ]
+            ),
         )
     else:
         hint = (
@@ -376,29 +405,64 @@ def build_workbook_v2(
             if view is not None and view.assistant_message()
             else "No session yet — run `startd8 kickoff chat` to begin."
         )
-        assistant_items.append(
-            GridItem(element=_add("Assistant", f"_snapshot — not a live agent._\n\n{hint}"), height=6)
+        assistant_tab = TabsLayoutTab(
+            title="Assistant",
+            items=[GridItem(element=_add("Assistant", f"_snapshot — not a live agent._\n\n{hint}"), height=6)],
         )
 
-    # --- Proposals tab: pending VIPP inbox + copy-safe confirm commands (FR-7) -------------------------
+    # --- Proposals tab (FR-7 + FR-8): full table (non-Beginner) + simplified (Beginner) — OQ-3 --------
     if view is not None and getattr(view, "proposals", ()):  # non-empty
-        proposals_content = _proposals_markdown(view)
+        proposals_tab = TabsLayoutTab(
+            title="Proposals",
+            layout=RowsLayout(
+                rows=[
+                    RowsLayoutRow(
+                        title="Proposals",
+                        items=[
+                            GridItem(
+                                element=_add("Proposals — awaiting confirmation", _proposals_markdown(view)),
+                                height=12,
+                            )
+                        ],
+                        conditional=_hide_for_beginner(),
+                    ),
+                    RowsLayoutRow(
+                        title="Recommendations",
+                        items=[
+                            GridItem(
+                                element=_add("Proposals — recommendations", _proposals_markdown_simple(view)),
+                                height=10,
+                            )
+                        ],
+                        conditional=show_when_variable("audience", "beginner"),
+                    ),
+                ]
+            ),
+        )
     else:
         msg = (
             view.proposals_message()
             if view is not None and view.proposals_message()
             else "No proposals awaiting confirmation."
         )
-        proposals_content = f"_The loop recommends; you confirm. This board never acts._\n\n{msg}"
-    proposals_items = [
-        GridItem(element=_add("Proposals — awaiting confirmation", proposals_content), height=12)
-    ]
+        proposals_tab = TabsLayoutTab(
+            title="Proposals",
+            items=[
+                GridItem(
+                    element=_add(
+                        "Proposals — awaiting confirmation",
+                        f"_The loop recommends; you confirm. This board never acts._\n\n{msg}",
+                    ),
+                    height=12,
+                )
+            ],
+        )
 
     layout = TabsLayout(
         tabs=[
             TabsLayoutTab(title="Status", layout=RowsLayout(rows=status_rows)),
-            TabsLayoutTab(title="Assistant", items=assistant_items),
-            TabsLayoutTab(title="Proposals", items=proposals_items),
+            assistant_tab,
+            proposals_tab,
         ]
     )
 
