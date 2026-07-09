@@ -38,6 +38,8 @@ _SECTION_PREFIXES = {
     "bigger bet": "Bigger Bets",
 }
 
+_KNOWN_SECTION_LABELS = frozenset(_SECTION_PREFIXES.values())
+
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
 _NUMBERED_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
@@ -166,7 +168,23 @@ def extract_residual(synthesis_text: str, claimed: Set[int]) -> List[Candidate]:
             heading = hm.group(1).strip()
             section_label = _section_for(heading) or heading or "(unsectioned)"
             continue
-        if i in claimed or _is_boilerplate(line):
+        if i in claimed:
+            continue
+        # A table row under an UNRECOGNIZED heading carries real content the structured pass never
+        # sees (that pass only tables under "Risk Register") — preserve its data rows rather than drop
+        # them. Under a KNOWN section, tables are scaffolding the structured pass owns → skip.
+        if line.lstrip().startswith("|"):
+            cells = _table_cells(line)
+            is_separator = set("".join(cells)) <= set("-: ")
+            if is_separator or section_label in _KNOWN_SECTION_LABELS:
+                continue
+            item = _clean(" — ".join(c for c in cells if c))
+            if len(item) < MIN_ITEM_CHARS:
+                continue
+            out.append(Candidate(title=_title_of(item), source_section=section_label,
+                                 raw_text=item, lane=Lane.UNSTRUCTURED))
+            continue
+        if _is_boilerplate(line):
             continue
         item = _clean(line)
         out.append(Candidate(title=_title_of(line), source_section=section_label,

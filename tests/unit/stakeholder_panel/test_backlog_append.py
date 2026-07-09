@@ -82,6 +82,17 @@ def test_insertion_is_before_the_single_footer(tmp_path):
     assert text.index("startd8-panel-backlog") < text.index("*the footer*")  # inserted before footer
 
 
+def test_bold_line_is_not_treated_as_footer_block_goes_to_eof(tmp_path):
+    # H-17 regression: a **bold** callout must NOT be mistaken for the italic footer (else the block
+    # lands mid-document). With no real footer, insertion falls through to EOF.
+    p = _doc(tmp_path, "# Backlog\n\n**Important Note**\n\nbody one\n\nbody two\n")
+    section = render_backlog_section(_report())
+    append_backlog(p, section, "sess-1", confirm=True)
+    text = p.read_text()
+    assert text.index("**Important Note**") < text.index("startd8-panel-backlog")  # block after the bold line
+    assert text.index("body two") < text.index("startd8-panel-backlog")  # at EOF, not mid-doc
+
+
 # ── H-16: marker injection fails closed ──────────────────────────────────────
 def test_marker_injection_fails_closed(tmp_path):
     p = _doc(tmp_path, "# Backlog\n\n*footer*\n")

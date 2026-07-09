@@ -107,7 +107,9 @@ def _find_marked_block(text: str, sid: str) -> Optional[tuple[int, int]]:
     return opens[0], closes[0]
 
 
-_FOOTER_RE = re.compile(r"^\*.*\*$")
+# An *italic* footer line — single-asterisk emphasis. Excludes **bold** callouts, `***` rules, and
+# `* bullet` lines (H-17: those must NOT be treated as the footer, or the block lands mid-doc).
+_FOOTER_RE = re.compile(r"^\*(?!\*).*(?<!\*)\*$")
 
 
 def _insertion_index(lines: List[str]) -> int:

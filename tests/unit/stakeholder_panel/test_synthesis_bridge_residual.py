@@ -131,6 +131,20 @@ def test_coverage_no_drop_and_disjoint_prototype():
     assert claimed.isdisjoint(residual_idx)
 
 
+def test_table_data_under_unknown_heading_is_preserved():
+    # H-2/M-2 regression: a data-bearing table under an UNRECOGNIZED heading is not silently dropped —
+    # the structured pass only tables under "Risk Register", so residual must preserve these rows.
+    text = (
+        "## Some Weird Heading\n\n"
+        "| Feature | Notes |\n|---------|-------|\n"
+        "| Real content that matters | important detail |\n"
+    )
+    cands = extract_candidates(text)
+    joined = " ".join(c.raw_text for c in cands)
+    assert "Real content that matters" in joined
+    assert all(c.lane is Lane.UNSTRUCTURED for c in cands)
+
+
 def test_coverage_scrutiny_risk_table_not_double_counted():
     structured, claimed, residual = _claimed_and_residual(SCRUTINY)
     # the two risk DATA rows are claimed once (structured); residual emits no table scaffolding
