@@ -349,6 +349,36 @@ def test_fr8_beginner_gets_simplified_proposals_and_hidden_loki(tmp_path):
     )
 
 
+def test_proposals_table_neutralizes_backticks_in_host_content(tmp_path):
+    # Robustness: a model-proposed value_path with a backtick must not break the table's code spans.
+    import json as _json
+
+    from startd8.kickoff_experience.agentic_view import build_agentic_view
+    from startd8.vipp.models import EnvelopedProposal, ProposalEnvelope
+
+    # value_path is model-controlled (propose_action params); a backtick in it must not break the
+    # table's `…` code spans. (Proposal ids are SDK-generated and never contain backticks.)
+    env = ProposalEnvelope(
+        project_id="p",
+        envelope_seq=1,
+        proposals=[EnvelopedProposal(kind="capture", params={"value_path": "a.`evil`.b", "value": "v"}, id="P-1")],
+    )
+    ip = tmp_path / ".startd8" / "vipp" / "proposals-inbox.json"
+    ip.parent.mkdir(parents=True, exist_ok=True)
+    ip.write_text(_json.dumps(env.to_dict()), encoding="utf-8")
+    view = build_agentic_view(tmp_path)
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV, view=view)
+    proposals = next(
+        e for e in board["spec"]["elements"].values() if "awaiting confirmation" in e["spec"]["title"]
+    )
+    content = proposals["spec"]["vizConfig"]["spec"]["options"]["content"]
+    # In the TABLE region, host backticks are neutralized so each row's code spans stay balanced;
+    # the fenced confirm-command block below intentionally keeps the raw value_path (exact command).
+    table_lines = [ln for ln in content.splitlines() if ln.startswith("|")]
+    assert any("a.ʼevilʼ.b" in ln for ln in table_lines)  # neutralized in the table
+    assert all(ln.count("`") % 2 == 0 for ln in table_lines)  # balanced code spans
+
+
 def test_distinct_uid_coexists_with_classic():
     # FR: the v2 board uses a distinct -v2 UID so it never clobbers the classic Workbook (R2-F5 coexistence)
     assert workbook_v2_uid("My App") == "cc-portal-kickoff-my-app-v2"

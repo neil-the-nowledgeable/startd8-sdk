@@ -229,8 +229,10 @@ def _transcript_markdown(snapshot: Any) -> str:
 
 
 def _md_cell(text: str) -> str:
-    """Escape a value for a markdown table cell (pipes/newlines would break the row)."""
-    return str(text).replace("|", "\\|").replace("\n", " ")
+    """Escape a value for a markdown table cell. Pipes/newlines break the row; a backtick in
+    host-controlled content (a model-proposed ``value_path``) would break the ```…``` code
+    span the cell wraps it in — neutralize it to the modifier-letter apostrophe (display-only)."""
+    return str(text).replace("|", "\\|").replace("\n", " ").replace("`", "ʼ")
 
 
 def _proposals_markdown(view: Any) -> str:
