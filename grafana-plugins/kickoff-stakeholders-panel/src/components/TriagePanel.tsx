@@ -89,13 +89,21 @@ export const TriagePanel: React.FC<Props> = ({ options, width, height }) => {
         session_id: sessionId,
         dry_run: true,
       });
+      // FR-12 staleness guard: if the synthesis changed since triage (a re-facilitation), the displayed
+      // candidates are stale — refuse to extract against them and prompt a re-triage rather than staging
+      // recs the operator didn't actually see.
+      if (report && report.synthesis_checksum && d.synthesis_checksum !== report.synthesis_checksum) {
+        setNotice('Synthesis changed since you triaged — re-triage to refresh the candidates before extracting.');
+        setPhase('triaged');
+        return;
+      }
       setDryRun(d);
       setPhase('confirm');
     } catch (err) {
       setError(errText(err));
       setPhase('triaged');
     }
-  }, [options.datasourceUid, sessionId]);
+  }, [options.datasourceUid, sessionId, report]);
 
   // Step 2b — extract confirm (PAID). FR-8a: transition phase synchronously BEFORE the await so the
   // modal closes on the first click and a double-click can't issue a second (paid) request.
