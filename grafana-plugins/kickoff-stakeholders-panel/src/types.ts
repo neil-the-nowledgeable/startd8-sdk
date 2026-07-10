@@ -126,9 +126,16 @@ export interface FacilitateStatusResult {
   rounds?: RoundSummary[];
   /** #9 — heuristic: no transcript progress in ~N min (the worker may have died). Not terminal. */
   stalled?: boolean;
-  halt?: string | null;
+  /** Assumptions-gate halt — a dict on the wire (`{reason, message, …}`), not a string. */
+  halt?: HaltInfo | null;
   is_terminal?: boolean;
   error?: string;
+}
+
+/** Assumptions-gate halt payload — mirrors facilitation._finish_halt's `{reason, message, …}` dict. */
+export interface HaltInfo {
+  reason: string;
+  message: string;
 }
 
 /** #7 — one persona's bounded contribution within a round. */
@@ -181,6 +188,7 @@ export interface TriageReportResult {
   candidates: TriageCandidate[];
   synthesis_present: boolean;
   backlog_markdown: string; // "" when no candidates (M1a)
+  synthesis_checksum: string; // FR-12 — checksum of the triaged synthesis; "" when absent
 }
 
 /** Extract dry-run (no spend) — mirrors the `_extract` dry_run response. */

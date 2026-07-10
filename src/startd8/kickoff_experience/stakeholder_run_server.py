@@ -410,14 +410,21 @@ async def _triage(request: Request) -> JSONResponse:
 
     report = build_triage(transcript)  # tolerates an absent synthesis (empty candidates) — degrade clean
     synthesis = getattr(transcript, "synthesis", None)
-    synthesis_present = bool(getattr(synthesis, "text", "") if synthesis is not None else "")
+    synthesis_text = getattr(synthesis, "text", "") if synthesis is not None else ""
+    synthesis_present = bool(synthesis_text)
     # M1a (FR-4): reuse the tested renderer server-side so the Triage panel previews the backlog without
     # re-implementing it in TS (Mottainai). `""` when there are no candidates. Additive field (M1a test
     # asserts the response stays a superset of the prior keys).
     project_name = Path(config.project_root).expanduser().name
     backlog_markdown = render_backlog_section(report, project=project_name)
+    # FR-12 staleness guard: return the checksum of the synthesis these candidates were triaged from, so
+    # the panel can detect a re-facilitation between triage and extract (the SAME `_synthesis_checksum` the
+    # paid extract confirm echoes) and surface "synthesis changed — re-triage" rather than acting on stale
+    # candidates. Empty when there's no synthesis.
+    synthesis_checksum = _synthesis_checksum(synthesis_text) if synthesis_text else ""
     return JSONResponse(
-        {**report.to_dict(), "synthesis_present": synthesis_present, "backlog_markdown": backlog_markdown}
+        {**report.to_dict(), "synthesis_present": synthesis_present, "backlog_markdown": backlog_markdown,
+         "synthesis_checksum": synthesis_checksum}
     )
 
 

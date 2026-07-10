@@ -154,10 +154,13 @@ dashboard and hands off to the existing Apply mode for the final write.
   never a panel option. Mirror the existing components.
 - **FR-7 — Operator docs.** README documents the `triage` mode, the paid extract step, the
   serialize→Apply hand-off, and the manual typecheck/build/restart (Actions is disabled repo-wide).
-- **FR-12 — Staleness guard (CRP R1-F4/R1-S3).** The extract checksum guards *extract* only. The panel
-  MUST pin triage-view + disposition to the `synthesis_checksum` triage was built against; if the synthesis
-  changes mid-flow (a re-facilitation), surface "synthesis changed — re-triage" rather than allowing
-  disposition against superseded staged recs.
+- **FR-12 — Staleness guard (CRP R1-F4/R1-S3).** `_triage` returns the `synthesis_checksum` its
+  candidates were built from (the same `_synthesis_checksum` the extract confirm echoes). The panel pins
+  the triaged candidates to it: at extract-preview it compares the fresh dry-run checksum to the triage
+  checksum and, on a mismatch (a re-facilitation between triage and extract), surfaces "synthesis changed
+  — re-triage" and refuses to extract stale candidates — rather than staging recs the operator never saw.
+  (Post-extract, staged recs are frozen and bound to the extract-confirm checksum; dispositioning those is
+  intentional, so the meaningful staleness window is triage→extract, which this closes.)
 - **FR-13 — Session continuity (CRP R2-F4/R2-S4).** The `session_id` established at extract time is the
   anchor for disposition + serialize; it MUST be held in component state and threaded to every call. A
   lost anchor (re-render/navigation) surfaces as a recoverable "re-triage to re-establish session", not
@@ -220,7 +223,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | R1-F3 (+R1-S1) | Extract must surface `domain` in staged rows | opus | **Blocking.** → FR-9a. Server sub-task (M1b) + test. | 2026-07-10 |
 | R1-F1 (+R2-S1, R1-S2) | Extract double-spend-safe via `reserve()` | opus/sonnet | → FR-8a. Server sub-task (M1c) replaces `lookup`+`record_start`; concurrent-confirm test. | 2026-07-10 |
 | R2-F1 (+R2-S2) | Undrained-inbox → 409, not silent 200 | sonnet | → FR-10b. Server sub-task (M6b); re-serialize test. | 2026-07-10 |
-| R1-F4 (+R1-S3) | Staleness guard on triage/disposition | opus | → FR-12. State machine carries `currentChecksum`. | 2026-07-10 |
+| R1-F4 (+R1-S3) | Staleness guard on triage/disposition | opus | → FR-12. `_triage` returns `synthesis_checksum`; panel compares it to the extract dry-run checksum → "re-triage" on drift (implemented in the post-session review). | 2026-07-10 |
 | R1-F2 (+R1-S7) | `deduped` UX distinct; don't bind absent cost fields | opus | → FR-8b. | 2026-07-10 |
 | R2-F2 (+R2-S3) | ConfirmModal transitions phase synchronously (no double-click) | sonnet | → FR-8a (UX clause). | 2026-07-10 |
 | R1-F5 (+R1-S5) | Surface serialize `rejected[]` | opus | → FR-10a. | 2026-07-10 |

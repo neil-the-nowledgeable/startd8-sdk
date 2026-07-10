@@ -410,8 +410,8 @@ const StatusView: React.FC<{
       <div className={styles.dim}>Cancelled — showing whatever rounds completed before cancellation.</div>
     )}
     {status.halt && (
-      <Alert severity="info" title="Facilitation halted (assumptions gate)">
-        <div className={styles.pre}>{status.halt}</div>
+      <Alert severity="info" title={`Facilitation halted (${status.halt.reason})`}>
+        <div className={styles.pre}>{status.halt.message}</div>
       </Alert>
     )}
     {status.synthesis && (

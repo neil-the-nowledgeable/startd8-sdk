@@ -123,6 +123,19 @@ def test_triage_backlog_markdown_empty_when_no_synthesis(tmp_path, monkeypatch):
     assert body["backlog_markdown"] == ""
 
 
+def test_triage_returns_synthesis_checksum_matching_extract(tmp_path, monkeypatch):
+    # FR-12: triage returns the SAME `_synthesis_checksum` the extract confirm echoes, so the panel can
+    # detect a re-facilitation between triage and extract. Empty when there's no synthesis.
+    text = "We should set the budget and ship the mvp."
+    _patch_service(monkeypatch, transcripts={"s1": _FakeTranscript("s1", text)})
+    body = _client(tmp_path).post("/stakeholders/triage", json={"session_id": "s1"}, headers=_auth()).json()
+    assert body["synthesis_checksum"] == srv._synthesis_checksum(text)  # same basis as _extract
+
+    _patch_service(monkeypatch, transcripts={"s2": _FakeTranscript("s2", None)})
+    empty = _client(tmp_path).post("/stakeholders/triage", json={"session_id": "s2"}, headers=_auth()).json()
+    assert empty["synthesis_checksum"] == ""  # no synthesis → empty
+
+
 # --------------------------------------------------------------------------- FR-R4 disposition
 
 
