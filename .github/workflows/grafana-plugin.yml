@@ -1,0 +1,48 @@
+name: Grafana plugin (kickoff-stakeholders-panel)
+
+# The plugin TypeScript is not covered by the Python test suite, so it can rot silently — a green
+# `pytest` says nothing about the panel. This gate typechecks + builds it on any change to the plugin
+# so a broken `.tsx` is caught in CI instead of at operator build-time. Runs only when the plugin
+# changes (or this workflow itself), keeping it cheap.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'grafana-plugins/kickoff-stakeholders-panel/**'
+      - '.github/workflows/grafana-plugin.yml'
+  pull_request:
+    paths:
+      - 'grafana-plugins/kickoff-stakeholders-panel/**'
+      - '.github/workflows/grafana-plugin.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: grafana-plugins/kickoff-stakeholders-panel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: grafana-plugins/kickoff-stakeholders-panel/package-lock.json
+
+      - name: Install (npm ci)
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Unit tests (vitest)
+        run: npm test
+
+      - name: Build (webpack production)
+        run: npm run build

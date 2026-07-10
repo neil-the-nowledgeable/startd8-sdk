@@ -23,15 +23,18 @@ export const plugin = new PanelPlugin<StakeholdersPanelOptions>(StakeholdersPane
       path: 'mode',
       name: 'Panel mode',
       description:
-        'Run = the paid single-question stakeholder Q&A. Apply = the FR-R7 write gate (preview → paste ' +
-        'challenge → ratify). Facilitate = the multi-round facilitation (fire-and-poll, minutes long). ' +
-        'All token-gated, not human-proof.',
+        'Pick by what you need. Run = ask ALL personas ONE question → answers in seconds (cheap; the ' +
+        '“survey”). Facilitate = a multi-ROUND deliberation → a synthesis you can triage into the ' +
+        'backlog/pipeline (fire-and-poll, minutes, pricier; the “workshop”). Apply = the FR-R7 write ' +
+        'gate that commits proposals to the project source of record (preview → paste challenge → ' +
+        'ratify). Start with Run; use Facilitate when you need a synthesis, not just answers. All ' +
+        'token-gated, not human-proof; output is synthetic + unratified.',
       defaultValue: 'run',
       settings: {
         options: [
-          { value: 'run', label: 'Run' },
-          { value: 'apply', label: 'Apply' },
-          { value: 'facilitate', label: 'Facilitate' },
+          { value: 'run', label: 'Run — 1 question, all personas' },
+          { value: 'facilitate', label: 'Facilitate — multi-round synthesis' },
+          { value: 'apply', label: 'Apply — write gate' },
         ],
       },
       category: ['Connection'],

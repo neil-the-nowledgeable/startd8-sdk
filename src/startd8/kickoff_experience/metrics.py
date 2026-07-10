@@ -8,6 +8,10 @@ burndown + cost-over-time panels:
 - ``kickoff.session.cost_usd``  — latest kickoff session cost (USD)
 - ``kickoff.proposals.pending`` — pending proposals awaiting confirmation
 - ``kickoff.fields.blocked``    — blocked kickoff fields
+- ``kickoff.facilitation.cost_usd`` — latest **facilitation** cost (USD), the one expensive path;
+  carries ``posture`` + ``tier`` labels so Grafana can break spend down by scrutiny/prototype and
+  premium/cheap. Emitted at facilitation completion (see ``facilitate_run._worker``) — without it the
+  cost-over-time panel is blind to the biggest single kickoff spend until a portal rebuild.
 
 Each carries a ``project`` label. In Prometheus/Mimir these become ``kickoff_readiness_percent`` etc.
 (verified live: dots→underscores, no unit suffix). Emission is **best-effort + opt-in**: it calls the
@@ -61,6 +65,10 @@ def _gauges() -> Optional[Dict[str, Any]]:
                 "kickoff.fields.blocked", unit="",
                 description="Blocked kickoff fields",
             ),
+            "facilitation_cost": meter.create_gauge(
+                "kickoff.facilitation.cost_usd", unit="",
+                description="Latest facilitation cost (USD), labeled by posture + tier",
+            ),
         }
     except Exception as exc:  # pragma: no cover - metrics are never load-bearing
         logger.debug("kickoff metrics unavailable: %s", exc)
@@ -95,6 +103,33 @@ def record_kickoff_progress(
         return True
     except Exception as exc:  # pragma: no cover
         logger.debug("kickoff metrics emit skipped: %s", exc)
+        return False
+
+
+def record_facilitation_cost(
+    *,
+    project: str,
+    cost_usd: float,
+    posture: Optional[str] = None,
+    tier: Optional[str] = None,
+) -> bool:
+    """Emit the facilitation cost gauge at run completion (best-effort). Returns True iff recorded.
+
+    Labeled ``{project, posture, tier}`` so the cost panel can break facilitation spend down by
+    scrutiny/prototype and premium/cheap. Never load-bearing — any failure is swallowed."""
+    gauges = _gauges()
+    if not gauges:
+        return False
+    try:
+        attrs = {"project": str(project)}
+        if posture is not None:
+            attrs["posture"] = str(posture)
+        if tier is not None:
+            attrs["tier"] = str(tier)
+        gauges["facilitation_cost"].set(float(cost_usd), attrs)
+        return True
+    except Exception as exc:  # pragma: no cover
+        logger.debug("facilitation cost metric skipped: %s", exc)
         return False
 
 
