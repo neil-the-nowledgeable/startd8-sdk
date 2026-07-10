@@ -25,7 +25,7 @@ Design decisions carried in from the requirements/CRP (do not re-litigate):
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Tuple
 
 from ..manifest_extraction import extract_manifests

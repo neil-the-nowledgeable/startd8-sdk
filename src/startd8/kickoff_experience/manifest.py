@@ -16,7 +16,7 @@ missing / unwritable field or a parity drift.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterator, List, Optional, Tuple
 
 INPUTS_DIR = "docs/kickoff/inputs"

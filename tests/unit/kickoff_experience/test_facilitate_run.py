@@ -96,6 +96,79 @@ def test_concurrency_cap(tmp_path, roster, monkeypatch):
         _start_sync(_cfg(tmp_path), roster)
 
 
+# ── #4 env-configurable cap ──────────────────────────────────────────────────
+def test_max_concurrent_env_override(monkeypatch):
+    monkeypatch.delenv(FR._CAP_ENV, raising=False)
+    assert FR._max_concurrent_facilitations() == FR.MAX_CONCURRENT_FACILITATIONS  # default
+    monkeypatch.setenv(FR._CAP_ENV, "9")
+    assert FR._max_concurrent_facilitations() == 9  # env override honored
+    monkeypatch.setenv(FR._CAP_ENV, "not-an-int")
+    assert FR._max_concurrent_facilitations() == FR.MAX_CONCURRENT_FACILITATIONS  # non-int → default
+    monkeypatch.setenv(FR._CAP_ENV, "-3")
+    assert FR._max_concurrent_facilitations() == FR.MAX_CONCURRENT_FACILITATIONS  # negative → default
+
+
+def test_max_concurrent_env_zero_blocks(tmp_path, roster, monkeypatch):
+    monkeypatch.setenv(FR._CAP_ENV, "0")  # operator throttles to zero → cap fires
+    with pytest.raises(FR.FacilitationCapError):
+        _start_sync(_cfg(tmp_path), roster)
+
+
+# ── #5 outside-view cache (Mottainai) ────────────────────────────────────────
+def test_ov_cache_key_and_roundtrip(tmp_path):
+    # Key binds (objective, strategy, model) — a model switch mints a DIFFERENT key.
+    k1 = F._ov_cache_key("ship X", "lean", "premium-model")
+    k2 = F._ov_cache_key("ship X", "lean", "cheap-model")
+    assert k1 != k2
+    assert F._ov_cache_load(tmp_path, k1) is None  # miss on empty
+    F._ov_cache_store(tmp_path, k1, "base rate 40%")
+    assert F._ov_cache_load(tmp_path, k1) == "base rate 40%"  # round-trip
+    assert F._ov_cache_load(tmp_path, k2) is None  # different key still a miss
+
+
+def test_ov_cache_corrupt_is_miss(tmp_path):
+    p = tmp_path / F.TRANSCRIPT_SUBDIR / F._OV_CACHE_FILE
+    p.parent.mkdir(parents=True)
+    p.write_text("{ not json", encoding="utf-8")
+    assert F._ov_cache_load(tmp_path, "anykey") is None  # corrupt degrades to miss, never raises
+
+
+def _run_ov(tmp_path, roster, ov_calls, *, cap):
+    """Run a full facilitation inline (outside_view ON) counting outside-view agent constructions."""
+    def facilitator_factory():
+        def factory(spec, name, sys):
+            if name == "outside-view":
+                ov_calls.append(spec)
+            return ScriptedAgent(name=name, model=spec, reply=f"[{name}] base rate 40%")
+        return factory
+
+    cfg = F.FacilitationConfig(
+        project=tmp_path, ground=False, assumptions=False, outside_view=True,
+        objective="ship X", strategy="lean", cap=cap)
+    return FR.start_facilitation(
+        cfg, roster, thread_starter=lambda target: target(),
+        persona_agent_factory=_persona_factory(), facilitator_agent_factory=facilitator_factory())
+
+
+def test_outside_view_reused_across_runs(tmp_path, roster):
+    # Same project + objective/strategy but a different `cap` → a DIFFERENT run_key (no dedup), yet the
+    # outside-view inputs are identical → the second run reuses the cache and does NOT re-call the model.
+    ov_calls: list = []
+    _run_ov(tmp_path, roster, ov_calls, cap=0)
+    assert len(ov_calls) == 1  # computed once
+    assert (tmp_path / F.TRANSCRIPT_SUBDIR / F._OV_CACHE_FILE).is_file()
+    _run_ov(tmp_path, roster, ov_calls, cap=1)  # distinct run_key → really executes
+    assert len(ov_calls) == 1  # still 1 — the premium outside-view call was skipped (Mottainai)
+
+
+def test_outside_view_nocache_env_forces_recompute(tmp_path, roster, monkeypatch):
+    ov_calls: list = []
+    _run_ov(tmp_path, roster, ov_calls, cap=0)
+    monkeypatch.setenv(F._OV_NOCACHE_ENV, "1")  # opt out → recompute even on a hit
+    _run_ov(tmp_path, roster, ov_calls, cap=1)
+    assert len(ov_calls) == 2  # the escape hatch bypassed the cache
+
+
 # ── H-15 status of an unknown session ────────────────────────────────────────
 def test_status_unknown_session(tmp_path):
     assert FR.facilitate_status(tmp_path, "kp-nope")["status"] == "unknown"
