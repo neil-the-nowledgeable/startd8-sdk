@@ -280,6 +280,7 @@ class KickoffChat:
     project_root: str
     buffer: "Optional[object]" = None   # ProposalBuffer when agentic; None for pure read-only chat
     red_carpet: bool = False            # the staged build-from-scratch conductor variant (FR-RCT)
+    last_stop_reason: "Optional[str]" = None  # last AgenticResult.stop_reason (Tier-1 #4 snapshot)
 
     def banner(self) -> str:
         if self.red_carpet:
@@ -291,7 +292,9 @@ class KickoffChat:
         return self.buffer is not None
 
     async def ask(self, message: str) -> AgenticResult:
-        return await self.session.send(message)
+        result = await self.session.send(message)
+        self.last_stop_reason = result.stop_reason  # remember why the loop stopped (Tier-1 #4)
+        return result
 
     def cost_line(self, result: AgenticResult) -> str:
         tag = ("red-carpet · propose-only" if self.red_carpet

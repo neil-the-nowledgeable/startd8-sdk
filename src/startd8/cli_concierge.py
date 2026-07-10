@@ -482,9 +482,13 @@ def concierge_instantiate(
     # --check paths return earlier and never reach here.
     if portal:
         try:
-            from .kickoff_experience.portal_build import build_and_maybe_provision
+            # Convergence M3.1: refresh the DEFAULT board — the cockpit ($0, no jsonnet), matching
+            # `kickoff portal`. (The classic board is only built on explicit `kickoff portal --classic`.)
+            from .kickoff_experience.portal_build import (
+                build_workbook_v2_and_maybe_provision,
+            )
 
-            pres = build_and_maybe_provision(
+            pres = build_workbook_v2_and_maybe_provision(
                 project_root, out_dir=None, provision_url=provision
             )
             if not json_out:
@@ -1076,9 +1080,13 @@ def _workbook_refresh(
     confirmed field. Reuses the shared helper (FR-10) — `$0`, non-fatal, silent under `--json`.
     """
     try:
-        from .kickoff_experience.portal_build import build_and_maybe_provision
+        # Convergence M3.1: refresh the DEFAULT board — the cockpit ($0, no jsonnet), so a confirm
+        # tracks the newly confirmed field on the same board `kickoff portal` builds.
+        from .kickoff_experience.portal_build import (
+            build_workbook_v2_and_maybe_provision,
+        )
 
-        res = build_and_maybe_provision(
+        res = build_workbook_v2_and_maybe_provision(
             project_root, out_dir=None, provision_url=provision
         )
         if not json_out:
@@ -1240,8 +1248,14 @@ def kickoff_portal(
     dynamic: bool = typer.Option(
         False,
         "--dynamic",
-        help="Build the audience-personalized v2 DYNAMIC Workbook (Grafana ≥13.1): flip the `audience` "
-        "variable to switch persona in-browser, no regen/no write. Separate `-v2` board (coexists).",
+        help="[now the default] Build the v2 agentic cockpit (Grafana ≥13.1). Kept for back-compat; "
+        "the cockpit is built by default — this flag is a no-op.",
+    ),
+    classic: bool = typer.Option(
+        False,
+        "--classic",
+        help="Build the legacy Era-1 classic Workbook instead of the cockpit (one-release escape "
+        "hatch; the classic board will be retired). Needs the jsonnet toolchain.",
     ),
     yes: bool = typer.Option(
         False,
@@ -1257,8 +1271,11 @@ def kickoff_portal(
 
     The "Digital Project Workbook" is a dynamic, query-based evolution of Brooks' (static) workbook
     (*The Mythical Man-Month*) — the shared, whole-project view of the foundational decisions, generated
-    live from project state. PRESENTATION only — never edits kickoff inputs. Read-only by default (writes
-    just the dashboard JSON); pass `--provision URL` to push to Grafana. `--index` builds the portfolio
+    live from project state. **By default this now builds the agentic COCKPIT** (Status / Assistant /
+    Proposals / Stakeholders / Pipeline — one board, derived from the single `AgenticView` oracle).
+    PRESENTATION only — never edits kickoff inputs. Read-only by default (writes just the dashboard
+    JSON); pass `--provision URL` to push to Grafana. `--classic` builds the legacy Era-1 board (a
+    one-release escape hatch; `--session` applies to `--classic` only). `--index` builds the portfolio
     index (a self-updating link-list of every project's Workbook) instead of one project's board.
     """
     from .kickoff_experience.portal_build import build_and_maybe_provision, build_index
@@ -1305,7 +1322,10 @@ def kickoff_portal(
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     name = project or root.resolve().name
-    if dynamic:
+    # M3: the agentic cockpit is the DEFAULT Digital Project Workbook now (Status / Assistant /
+    # Proposals / Stakeholders / Pipeline — a superset of the classic board). `--classic` is the
+    # one-release escape hatch to the legacy Era-1 board. `--dynamic` is a back-compat no-op.
+    if not classic:
         from .kickoff_experience.portal_build import (
             build_workbook_v2_and_maybe_provision,
         )
@@ -1332,11 +1352,19 @@ def kickoff_portal(
         console.print(f"[yellow]kickoff portal:[/yellow] {res.skipped_reason}")
         raise typer.Exit(0)
     s = res.summary
-    console.print(
-        f"[bold]Kickoff portal[/bold] — {name}  "
-        f"([green]{s.get('confirmed', 0)} confirmed[/green], [red]{s.get('gaps', 0)} gaps[/red] "
-        f"of {s.get('fields', 0)} fields, {s.get('panels', 0)} panels)"
-    )
+    if s.get("dynamic"):  # the v2 cockpit summary (M3 default) — audience/snapshot/proposals shape
+        snap = s.get("snapshot", "absent")
+        console.print(
+            f"[bold]Kickoff cockpit[/bold] — {name}  "
+            f"([cyan]{s.get('audience', 'intermediate')}[/cyan], {s.get('fields', 0)} fields, "
+            f"snapshot: {snap}, {s.get('proposals', 0)} proposals)"
+        )
+    else:  # the classic board summary
+        console.print(
+            f"[bold]Kickoff portal[/bold] — {name}  "
+            f"([green]{s.get('confirmed', 0)} confirmed[/green], [red]{s.get('gaps', 0)} gaps[/red] "
+            f"of {s.get('fields', 0)} fields, {s.get('panels', 0)} panels)"
+        )
     console.print(f"  dashboard JSON: [cyan]{res.json_path}[/cyan]")
     if res.provisioned_url:
         console.print(f"  Grafana: [cyan]{res.provisioned_url}[/cyan]")
@@ -1344,6 +1372,77 @@ def kickoff_portal(
         console.print(
             "  [dim]run again with[/dim] --provision http://localhost:3000 [dim]to push to Grafana[/dim]"
         )
+
+
+@kickoff_kernel_app.command("cockpit")
+def kickoff_cockpit(
+    project_root: Path = typer.Argument(
+        Path("."),
+        help="Project to render the cockpit for (default: current dir). Read-only.",
+    ),
+    plain: bool = typer.Option(
+        False, "--plain", help="No color/ANSI (pipe-friendly)."
+    ),
+) -> None:
+    """Render the agentic cockpit in the terminal — Status / Assistant / Proposals.
+
+    The same read-model the Grafana board (`kickoff portal --dynamic`) mirrors, so you get readiness +
+    next step, the session at a glance + transcript tail, and the pending proposals with copy-safe
+    confirm commands — **without a running Grafana**. Read-only: it shows the confirm commands, it
+    never applies them (the CLI is the sole writer).
+    """
+    from .kickoff_experience.agentic_view import build_agentic_view
+    from .kickoff_experience.cockpit_view import cockpit_to_text, render_cockpit
+
+    view = build_agentic_view(project_root)
+    # Record a progress point too (Tier 3 burndown) — checking the cockpit is a measurement moment.
+    try:
+        from .kickoff_experience.metrics import record_from_view
+
+        record_from_view(view, Path(project_root).resolve().name)
+    except Exception:  # pragma: no cover - metrics never break the view
+        pass
+    if plain or not console.is_terminal:
+        print(cockpit_to_text(view, width=console.width or 100, color=False))
+    else:
+        console.print(render_cockpit(view))
+
+
+@kickoff_kernel_app.command("readout")
+def kickoff_readout(
+    project_root: Path = typer.Argument(
+        Path("."),
+        help="Project to render the readout for (default: current dir). Read-only.",
+    ),
+    fmt: str = typer.Option("md", "--format", help="md|html"),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="write to a file instead of stdout"
+    ),
+) -> None:
+    """Export a shareable, self-contained kickoff readout (Markdown or HTML).
+
+    A static-file parity of the terminal `cockpit`: it renders the SAME `AgenticView` read-model the
+    Grafana board and the cockpit render (Status / Assistant / Proposals), so a founder can email a
+    stakeholder or attach a ticket a document that matches the live view. Read-only, `$0`: it shows
+    the confirm commands, it never applies them (the CLI is the sole writer).
+    """
+    from .kickoff_experience.agentic_view import build_agentic_view
+    from .kickoff_experience.readout import render_html, render_markdown
+
+    normalized = fmt.strip().lower()
+    if normalized not in ("md", "html"):
+        console.print(f"[red]Invalid --format {fmt!r}: expected 'md' or 'html'.[/red]")
+        raise typer.Exit(2)
+
+    view = build_agentic_view(project_root)
+    text = render_markdown(view) if normalized == "md" else render_html(view)
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        console.print(f"  readout written: [cyan]{out}[/cyan]")
+    else:
+        print(text)
 
 
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------

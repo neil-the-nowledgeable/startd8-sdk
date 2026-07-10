@@ -130,9 +130,26 @@ def _height(fields: List[Any]) -> int:
     return min(24, 4 + len(fields))
 
 
+#: Grafana caps dashboard UIDs at 40 chars — a longer UID makes `provision_v2` fail. The fixed
+#: prefix+suffix (`cc-portal-kickoff-` + `-v2`) is 21 chars, leaving a 19-char slug budget.
+_UID_MAX = 40
+_UID_SLUG_BUDGET = _UID_MAX - len("cc-portal-kickoff--v2")  # 19
+
+
 def workbook_v2_uid(project: str) -> str:
-    """The v2 board's UID — a distinct ``-v2`` suffix so it coexists with the classic Workbook (no clobber)."""
-    return f"cc-portal-kickoff-{slugify_project(project)}-v2"
+    """The v2 board's UID — a distinct ``-v2`` suffix so it coexists with the classic Workbook (no clobber).
+
+    Guaranteed ≤ 40 chars (Grafana's limit; Tier-1 #6). A slug that fits is used verbatim (short names
+    are byte-identical to before); a longer slug is deterministically shortened to ``<slug12>-<hash6>``
+    so it stays unique and stable across runs rather than silently failing to provision.
+    """
+    slug = slugify_project(project)
+    if len(slug) > _UID_SLUG_BUDGET:
+        import hashlib
+
+        digest = hashlib.sha1(slug.encode("utf-8")).hexdigest()[:6]
+        slug = f"{slug[: _UID_SLUG_BUDGET - 7]}-{digest}"  # 12 + '-' + 6 = 19
+    return f"cc-portal-kickoff-{slug}-v2"
 
 
 # --------------------------------------------------------------------------- agentic cockpit (M3)
@@ -143,6 +160,80 @@ _TRANSCRIPT_TAIL_CAP = 14
 
 #: The Loki datasource uid the FR-6b logs panel binds to (the pre-provisioned Grafana datasource).
 _LOKI_DATASOURCE = "loki"
+#: The Mimir (Prometheus) datasource uid the readiness-burndown timeseries binds to.
+_MIMIR_DATASOURCE = "mimir"
+
+
+def _timeseries_panel(pid: int, title: str, promql: str, *, unit: str = "percent") -> V2Panel:
+    """A Mimir/Prometheus-datasource ``timeseries`` panel — the readiness burndown (roadmap Tier 3).
+
+    Additive + graceful-degrade like the FR-6b logs panel: an empty result (Mimir absent / no points
+    yet) renders an empty graph, never an error. The PromQL is static (baked). Binds the pre-
+    provisioned ``mimir`` uid — not a new startd8 endpoint (FR-11 gate uncrossed)."""
+    return V2Panel(
+        id=pid,
+        title=title,
+        viz_config={
+            "kind": "timeseries",
+            "spec": {
+                "options": {
+                    "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True},
+                    "tooltip": {"mode": "multi", "sort": "none"},
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": unit,
+                        "custom": {
+                            "drawStyle": "line",
+                            "lineWidth": 2,
+                            "fillOpacity": 10,
+                            "showPoints": "auto",
+                            "spanNulls": True,
+                        },
+                    },
+                    "overrides": [],
+                },
+            },
+        },
+        data={
+            "kind": "QueryGroup",
+            "spec": {
+                "queries": [
+                    {
+                        "kind": "PanelQuery",
+                        "spec": {
+                            "refId": "A",
+                            "hidden": False,
+                            "query": {
+                                "kind": "DataQuery",
+                                "version": "v0",
+                                "group": "mimir",
+                                "datasource": {"name": _MIMIR_DATASOURCE},
+                                "spec": {"expr": promql, "queryType": "range"},
+                            },
+                        },
+                    }
+                ],
+                "transformations": [],
+                "queryOptions": {},
+            },
+        },
+    )
+
+
+def _promql_project(project: str) -> str:
+    """PromQL-escape a project name for a label matcher."""
+    return str(project).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _readiness_promql(project: str) -> str:
+    """The readiness-burndown PromQL for one project (agrees with the metrics.py `project` label)."""
+    return f'kickoff_readiness_percent{{project="{_promql_project(project)}"}}'
+
+
+def _cost_promql(project: str) -> str:
+    """The cost-over-time PromQL for one project (the `kickoff.session.cost_usd` gauge)."""
+    return f'kickoff_session_cost_usd{{project="{_promql_project(project)}"}}'
 
 
 def _logs_panel(pid: int, title: str, logql: str) -> V2Panel:
@@ -205,13 +296,56 @@ def _transcript_logql(session_id: str) -> str:
 
 _ROLE_LABEL = {"user": "🧑 you", "assistant": "🤖 assistant", "tool": "🔧 tool"}
 
+def _stop_reason_note(reason: Optional[str]) -> Optional[str]:
+    """Dashboard-flavored stop note (Tier-1 #4) — wraps the shared `stop_reason_hint` (parity)."""
+    from .session_snapshot import stop_reason_hint
+
+    hint = stop_reason_hint(reason)
+    return f"⏸️ **{hint}**" if hint else None
+
+
+_ATTENTION_LABELS = (("ok", "ok"), ("review", "review"), ("blocked", "blocked"), ("backlog", "backlog"))
+
+
+def _status_overview_markdown(state: Any, view: Any) -> str:
+    """The Status-tab 'At a glance' panel (Tier-1 #1+#2): a readiness headline + the next step."""
+    parts: List[str] = []
+    counts = state.attention_counts
+    total = sum(counts.values())
+    if total:
+        pct = round(100 * counts.get("ok", 0) / total)
+        breakdown = " · ".join(f"{counts.get(k, 0)} {label}" for k, label in _ATTENTION_LABELS)
+        parts.append(f"## {pct}% ready\n\n{breakdown} — {total} input" + ("" if total == 1 else "s"))
+    else:
+        parts.append("## Getting started\n\nNo kickoff inputs yet.")
+
+    na = getattr(view, "next_action", None) if view is not None else None
+    if na is None:  # view absent → compute from state alone (readiness-independent tiers still apply)
+        try:
+            from .ranking import next_action
+
+            na = next_action(state, None)
+        except Exception:  # pragma: no cover
+            na = None
+    if na is not None:
+        detail = f" — {na.detail}" if getattr(na, "detail", "") else ""
+        parts.append(f"**➡️ Your next step:** {na.title}{detail}")
+    return "\n\n".join(parts)
+
 
 def _transcript_markdown(snapshot: Any) -> str:
-    """Render the capped-tail transcript as markdown (FR-6). The full depth lives in the logs panel."""
+    """Render the capped-tail transcript as markdown (FR-6). The full depth lives in the logs panel.
+
+    Leads with the deterministic 'session at a glance' summary (Tier-1 #3) + a stop-reason note
+    (Tier-1 #4) so the tab is scannable before you read a single turn."""
     turns = list(snapshot.turns)
     header = (
+        f"**Session at a glance:** {snapshot.at_a_glance()}\n\n"
         f"_{snapshot.disclosure} · {snapshot.cost_line()} · generated {snapshot.generated_at}_\n\n"
     )
+    note = _stop_reason_note(getattr(snapshot, "stop_reason", None))
+    if note:
+        header += note + "\n\n"
     hidden = max(0, len(turns) - _TRANSCRIPT_TAIL_CAP)
     shown = turns[-_TRANSCRIPT_TAIL_CAP:] if hidden else turns
     lines: List[str] = [header]
@@ -266,6 +400,72 @@ def _proposals_markdown_simple(view: Any) -> str:
     return "\n".join(lines)
 
 
+def _truncate(text: Any, n: int) -> str:
+    s = str(text or "")
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _stakeholders_markdown(view: Any) -> str:
+    """The Stakeholders tab (convergence M2): roster size + the latest panel-run answers."""
+    answers = (getattr(view, "panel_answers", None) or []) if view is not None else []
+    summary = view.stakeholder_summary() if view is not None else None
+    if not summary and not answers:
+        return "_No stakeholder panel run yet — run `startd8 kickoff stakeholders`._"
+    lines = []
+    if summary:
+        lines.append(f"**{summary}**\n")
+    if answers:
+        lines.append("| Role | Question | Answer |")
+        lines.append("|---|---|---|")
+        for a in answers:
+            role = _md_cell(a.get("role_id") or a.get("role") or "?")
+            q = _md_cell(_truncate(a.get("question", ""), 60))
+            t = _md_cell(_truncate(a.get("text", ""), 140))
+            lines.append(f"| {role} | {q} | {t} |")
+    return "\n".join(lines)
+
+
+def _pipeline_markdown(view: Any) -> str:
+    """The Pipeline tab (convergence M2): the panel→bridge→VIPP funnel, read-only."""
+    pipe = getattr(view, "pipeline", None) if view is not None else None
+    if not pipe:
+        return "_No pipeline activity yet — proposals flow panel → bridge → VIPP here._"
+    lines = ["_The panel → bridge → VIPP funnel (read-only)._\n"]
+    staged = len(pipe.get("staged", []) or [])
+    inbox = pipe.get("inbox", {}) or {}
+    disp = pipe.get("dispositions", {}) or {}
+    lines.append(f"- **Staged recommendations:** {staged}")
+    if inbox.get("present"):
+        lines.append(
+            f"- **VIPP inbox:** {inbox.get('count', 0)} pending "
+            f"(envelope seq {inbox.get('envelope_seq', '?')})"
+        )
+    else:
+        lines.append("- **VIPP inbox:** empty")
+    if disp.get("present"):
+        c = disp.get("counts", {}) or {}
+        lines.append(
+            f"- **Dispositions:** {c.get('ACCEPT', 0)} accept · "
+            f"{c.get('REJECT', 0)} reject · {c.get('COUNTER', 0)} counter"
+        )
+        items = disp.get("items", []) or []
+        if items:
+            lines.append("\n### Dispositions\n")
+            lines.append("| Proposal | Decision | Reason |")
+            lines.append("|---|---|---|")
+            for d in items:
+                lines.append(
+                    f"| `{_md_cell(d.get('proposal_id', '?'))}` | {_md_cell(d.get('decision', '?'))} "
+                    f"| {_md_cell(_truncate(d.get('reason') or '', 100))} |"
+                )
+        adv = disp.get("advisories", []) or []
+        if adv:
+            lines.append("\n### Panel advisories\n")
+            for a in adv:
+                lines.append(f"- {_md_cell(_truncate(str(a), 160))}")
+    return "\n".join(lines)
+
+
 def build_workbook_v2(
     state: Any,
     project: str,
@@ -310,8 +510,42 @@ def build_workbook_v2(
         elements[key] = panel
         return key
 
-    # --- Status tab: the existing audience-personalized rows (byte-identical content; numbered first) --
+    # --- Status tab: the existing audience-personalized rows (numbered first) -------------------------
     status_rows: List[RowsLayoutRow] = []
+
+    # At a glance (Tier-1 #1+#2): a readiness headline + the single recommended next step, shown to
+    # every audience (audience-invariant → preserves FR-8 byte-identity). Leads the tab.
+    status_rows.append(
+        RowsLayoutRow(
+            title="At a glance",
+            items=[GridItem(element=_add("At a glance", _status_overview_markdown(state, view)), height=6)],
+        )
+    )
+
+    # Progress (roadmap Tier 3): the readiness burndown over time from the kickoff.readiness.percent
+    # metric (emitted by metrics.record_from_view on each cockpit build). Baked PromQL, mimir
+    # datasource, graceful-degrade (empty until points accrue). Audience-invariant → FR-8 holds.
+    status_rows.append(
+        RowsLayoutRow(
+            title="Progress",
+            items=[
+                GridItem(
+                    element=_add_panel(
+                        _timeseries_panel(0, "Readiness over time", _readiness_promql(project))
+                    ),
+                    x=0, width=12, height=8,
+                ),
+                GridItem(
+                    element=_add_panel(
+                        _timeseries_panel(
+                            0, "Cost over time", _cost_promql(project), unit="currencyUSD"
+                        )
+                    ),
+                    x=12, width=12, height=8,
+                ),
+            ],
+        )
+    )
 
     # Disclosure (OQ-6): Beginner plain-language intro + standard intro, conditionally rendered.
     status_rows.append(
@@ -460,11 +694,24 @@ def build_workbook_v2(
             ],
         )
 
+    # --- Stakeholders + Pipeline tabs (convergence M2): the cockpit is now a superset of the classic
+    # board. Always present with honest empty states (like Assistant/Proposals); audience-invariant. ---
+    stakeholders_tab = TabsLayoutTab(
+        title="Stakeholders",
+        items=[GridItem(element=_add("Stakeholders", _stakeholders_markdown(view)), height=12)],
+    )
+    pipeline_tab = TabsLayoutTab(
+        title="Pipeline",
+        items=[GridItem(element=_add("Pipeline", _pipeline_markdown(view)), height=12)],
+    )
+
     layout = TabsLayout(
         tabs=[
             TabsLayoutTab(title="Status", layout=RowsLayout(rows=status_rows)),
             assistant_tab,
             proposals_tab,
+            stakeholders_tab,
+            pipeline_tab,
         ]
     )
 

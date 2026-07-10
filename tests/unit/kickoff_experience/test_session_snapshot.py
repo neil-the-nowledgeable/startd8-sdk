@@ -169,6 +169,51 @@ def test_snapshot_round_trips_through_json():
     assert restored.pending_proposal_ids == ("p1", "p2")
 
 
+# --------------------------------------------------------------------------- Tier-1 #3/#4
+
+
+def test_at_a_glance_and_stop_reason_round_trip():
+    snap = ss.build_session_snapshot(
+        messages=[
+            {"role": "user", "content": "q"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "a"},
+                    {"type": "tool_use", "id": "t1", "name": "survey", "input": {}},
+                    {"type": "tool_use", "id": "t2", "name": "assess", "input": {}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "t3", "name": "survey", "input": {}}],
+            },
+        ],
+        model="m", input_tokens=10, output_tokens=5, total_tokens=15, cost_usd=0.0031,
+        posture="concierge · propose-only", project="p", session_id="s", generated_at="t",
+        pending_proposal_ids=("a", "b"),
+        stop_reason="budget",
+    )
+    assert snap.tool_call_counts() == {"survey": 2, "assess": 1}
+    glance = snap.at_a_glance()
+    assert "survey ×2" in glance and "assess ×1" in glance
+    assert "2 proposals pending" in glance and "cost ≈$0.0031" in glance
+    assert "stopped: budget" in glance
+    # stop_reason survives the JSON round-trip
+    restored = ss.AgenticSessionSnapshot.from_dict(json.loads(snap.to_json()))
+    assert restored.stop_reason == "budget"
+
+
+def test_at_a_glance_omits_stop_reason_when_completed():
+    snap = ss.build_session_snapshot(
+        messages=[{"role": "assistant", "content": [{"type": "text", "text": "done"}]}],
+        model="m", input_tokens=0, output_tokens=0, total_tokens=0, cost_usd=0.0,
+        posture="kickoff · read-only", project="p", session_id="s", generated_at="t",
+        stop_reason="completed",
+    )
+    assert "stopped" not in snap.at_a_glance()
+
+
 # --------------------------------------------------------------------------- presence gating (FR-1)
 
 

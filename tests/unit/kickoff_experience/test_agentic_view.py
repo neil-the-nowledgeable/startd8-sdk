@@ -149,6 +149,36 @@ def test_malformed_inbox_degrades_to_empty_not_error(tmp_path):
 # --------------------------------------------------------------------------- parity (FR-3)
 
 
+def test_convergence_folds_classic_state_absent_by_default(tmp_path):
+    # M1: an empty project folds no stakeholder/pipeline/roster state (best-effort → None).
+    view = av.build_agentic_view(tmp_path)
+    assert view.pipeline is None and view.panel_answers is None and view.roster is None
+    assert view.pipeline_summary() is None and view.stakeholder_summary() is None
+
+
+def test_convergence_summaries_from_folded_state():
+    # M1: AgenticView is the superset oracle — it summarizes the panel→bridge→VIPP funnel + stakeholders.
+    view = av.AgenticView(
+        project_root="p",
+        state=None,
+        snapshot=None,
+        snapshot_status=av.SNAPSHOT_ABSENT,
+        proposals=(),
+        proposals_present=False,
+        pipeline={
+            "staged": [{}, {}],
+            "inbox": {"present": True, "count": 3},
+            "dispositions": {"present": True, "counts": {"ACCEPT": 2, "REJECT": 1, "COUNTER": 0}},
+        },
+        panel_answers=[{"text": "a"}, {"text": "b"}],
+        roster=["p1", "p2", "p3"],
+    )
+    ps = view.pipeline_summary()
+    assert "2 staged" in ps and "3 in VIPP inbox" in ps and "2 accept" in ps
+    ss = view.stakeholder_summary()
+    assert "3 personas" in ss and "2 answers" in ss
+
+
 def test_view_is_deterministic_single_oracle(tmp_path):
     _write_snapshot(tmp_path)
     _write_inbox(tmp_path, [("capture", {"value_path": "a.b", "value": "c"}, "id-1")])

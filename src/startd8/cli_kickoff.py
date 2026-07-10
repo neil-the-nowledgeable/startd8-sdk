@@ -64,8 +64,13 @@ def _persist_kickoff_snapshot(project: Path, chat: object) -> None:
         return
     if path is not None:
         console.print(
-            "[dim]snapshot: session mirrored to .startd8/kickoff/agentic-session.json "
-            "(view in the Workbook cockpit: `startd8 kickoff portal --dynamic`).[/dim]"
+            "[dim]snapshot: session mirrored to .startd8/kickoff/agentic-session.json[/dim]"
+        )
+        console.print(
+            "[dim]  → see it in the agentic cockpit (Status / Assistant / Proposals):[/dim]"
+        )
+        console.print(
+            "[cyan]     startd8 kickoff portal --dynamic --provision http://localhost:3000[/cyan]"
         )
 
 

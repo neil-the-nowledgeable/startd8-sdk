@@ -150,6 +150,7 @@ def test_no_shielded_no_subsection_no_badge():
     assert not any(
         "🛡️" in e["spec"]["vizConfig"]["spec"]["options"]["content"]
         for e in board["spec"]["elements"].values()
+        if e["spec"]["vizConfig"]["kind"] == "text"  # non-text panels (timeseries/logs) carry no content
     )
 
 
@@ -172,28 +173,67 @@ _PRE_REFACTOR_GOLDEN = (
 )
 
 
-def test_cockpit_has_three_tabs():
-    # FR-5: the v2 board is now a Status / Assistant / Proposals TabsLayout cockpit.
+def test_cockpit_tabs():
+    # FR-5 + convergence M2: Status / Assistant / Proposals / Stakeholders / Pipeline.
     board = build_workbook_v2(_state(), "demo", provenance=_PROV)
     assert board["spec"]["layout"]["kind"] == "TabsLayout"
-    assert [t["spec"]["title"] for t in _tabs(board)] == ["Status", "Assistant", "Proposals"]
+    assert [t["spec"]["title"] for t in _tabs(board)] == [
+        "Status", "Assistant", "Proposals", "Stakeholders", "Pipeline",
+    ]
 
 
-def test_status_tab_content_byte_identical_to_pre_refactor_golden():
-    # R1-S4: the Status tab's rows + its referenced panels are byte-identical to the pre-refactor board
-    # (the committed golden captured BEFORE the TabsLayout refactor). Proves "wrap, don't rewrite".
+def test_stakeholders_and_pipeline_empty_states_without_view():
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV)  # no view
+    els = board["spec"]["elements"]
+    stake = next(e for e in els.values() if e["spec"]["title"] == "Stakeholders")
+    assert "No stakeholder panel run yet" in stake["spec"]["vizConfig"]["spec"]["options"]["content"]
+    pipe = next(e for e in els.values() if e["spec"]["title"] == "Pipeline")
+    assert "No pipeline activity yet" in pipe["spec"]["vizConfig"]["spec"]["options"]["content"]
+
+
+def test_stakeholders_and_pipeline_render_folded_state():
+    # M2: the cockpit is a superset — it surfaces the stakeholder answers + VIPP dispositions the
+    # classic board showed, now from the AgenticView oracle.
+    from startd8.kickoff_experience.agentic_view import AgenticView, SNAPSHOT_ABSENT
+
+    view = AgenticView(
+        project_root="p", state=_state(), snapshot=None, snapshot_status=SNAPSHOT_ABSENT,
+        proposals=(), proposals_present=False,
+        panel_answers=[{"role_id": "cfo", "question": "budget?", "text": "keep it lean"}],
+        pipeline={
+            "staged": [{}],
+            "inbox": {"present": True, "count": 2, "envelope_seq": 3},
+            "dispositions": {"present": True, "counts": {"ACCEPT": 1, "REJECT": 1, "COUNTER": 0},
+                             "items": [{"proposal_id": "P-1", "decision": "ACCEPT", "reason": "ok"}],
+                             "advisories": ["watch scope"]},
+        },
+        roster=["cfo", "cto"],
+    )
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV, view=view)
+    els = board["spec"]["elements"]
+    stake = next(e for e in els.values() if e["spec"]["title"] == "Stakeholders")["spec"]["vizConfig"]["spec"]["options"]["content"]
+    assert "cfo" in stake and "keep it lean" in stake and "2 personas" in stake
+    pipe = next(e for e in els.values() if e["spec"]["title"] == "Pipeline")["spec"]["vizConfig"]["spec"]["options"]["content"]
+    assert "2 pending" in pipe and "1 accept" in pipe and "P-1" in pipe and "watch scope" in pipe
+
+
+def test_status_tab_preserves_pre_refactor_field_content():
+    # R1-S4 (content-preservation form): the M3 refactor proved wrap-not-rewrite via byte-identity;
+    # Tier-1 legitimately ADDS an "At a glance" panel, so panel keys shift. What must still hold is
+    # that every original intro/field-table panel's CONTENT survives verbatim (nothing was rewritten).
     import json
 
     pre = json.loads(_PRE_REFACTOR_GOLDEN.read_text(encoding="utf-8"))
     board = build_workbook_v2(
         _state(), "demo", audience=KickoffAudience.INTERMEDIATE, provenance=_PROV
     )
-    # rows unchanged
-    assert _rows(board) == pre["spec"]["layout"]["spec"]["rows"]
-    # every Status panel (panel-1..panel-N) is byte-identical in content
-    status_keys = pre["spec"]["elements"].keys()
-    for key in status_keys:
-        assert board["spec"]["elements"][key] == pre["spec"]["elements"][key]
+    new_contents = {
+        e["spec"]["vizConfig"]["spec"]["options"]["content"]
+        for e in board["spec"]["elements"].values()
+        if e["spec"]["vizConfig"]["kind"] == "text"
+    }
+    for e in pre["spec"]["elements"].values():
+        assert e["spec"]["vizConfig"]["spec"]["options"]["content"] in new_contents
 
 
 def test_assistant_and_proposals_empty_states_without_view():
@@ -377,6 +417,79 @@ def test_proposals_table_neutralizes_backticks_in_host_content(tmp_path):
     table_lines = [ln for ln in content.splitlines() if ln.startswith("|")]
     assert any("a.ʼevilʼ.b" in ln for ln in table_lines)  # neutralized in the table
     assert all(ln.count("`") % 2 == 0 for ln in table_lines)  # balanced code spans
+
+
+def test_status_at_a_glance_shows_readiness_and_next_step():
+    # Tier-1 #1+#2: the Status tab leads with a readiness headline + the recommended next step.
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV)
+    status_rows = _rows(board)
+    assert status_rows[0]["spec"]["title"] == "At a glance"  # leads the tab
+    glance = next(
+        e for e in board["spec"]["elements"].values() if e["spec"]["title"] == "At a glance"
+    )
+    content = glance["spec"]["vizConfig"]["spec"]["options"]["content"]
+    # _state() has 2 ok / 1 blocked out of 3 → 67% ready
+    assert "67% ready" in content
+    assert "Your next step" in content and "/goal" in content  # the blocked field is the next step
+
+
+def test_assistant_tab_leads_with_session_glance_and_stop_reason(tmp_path):
+    # Tier-1 #3+#4: the Assistant transcript leads with the at-a-glance summary + a stop-reason note.
+    from startd8.kickoff_experience import session_snapshot as ss
+    from startd8.kickoff_experience.agentic_view import build_agentic_view
+
+    snap = ss.build_session_snapshot(
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"},
+                                              {"type": "tool_use", "id": "t", "name": "assess", "input": {}}]},
+        ],
+        model="m", input_tokens=1, output_tokens=1, total_tokens=2, cost_usd=0.0,
+        posture="concierge · propose-only", project=str(tmp_path), session_id="sid",
+        generated_at="2026-07-09T00:00:00+00:00", stop_reason="budget",
+    )
+    ss.write_snapshot(tmp_path, snap)
+    view = build_agentic_view(tmp_path)
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV, view=view)
+    transcript = next(e for e in board["spec"]["elements"].values() if "transcript" in e["spec"]["title"])
+    content = transcript["spec"]["vizConfig"]["spec"]["options"]["content"]
+    assert "Session at a glance:" in content and "assess ×1" in content
+    assert "budget cap" in content  # the friendly stop-reason note
+
+
+def test_status_has_readiness_and_cost_burndown_panels():
+    # Tier 3: the Status tab carries Mimir-datasource timeseries for readiness AND cost.
+    board = build_workbook_v2(_state(), "demo demo", provenance=_PROV)
+    status_rows = _rows(board)
+    assert any(r["spec"]["title"] == "Progress" for r in status_rows)
+    ts = [
+        e for e in board["spec"]["elements"].values() if e["spec"]["vizConfig"]["kind"] == "timeseries"
+    ]
+    exprs = {e["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]["expr"] for e in ts}
+    assert all(
+        e["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]["datasource"]["name"] == "mimir"
+        for e in ts
+    )
+    # both burndowns, project-scoped + escaped (project name with a space)
+    assert 'kickoff_readiness_percent{project="demo demo"}' in exprs
+    assert 'kickoff_session_cost_usd{project="demo demo"}' in exprs
+    # cost panel is currency-formatted
+    cost = next(
+        e for e in ts
+        if e["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]["expr"].startswith("kickoff_session_cost")
+    )
+    assert cost["spec"]["vizConfig"]["spec"]["fieldConfig"]["defaults"]["unit"] == "currencyUSD"
+
+
+def test_uid_length_guard_for_long_project_names():
+    # Tier-1 #6: a long name still yields a ≤40-char, deterministic, unique UID (Grafana limit).
+    long_name = "a-very-long-enterprise-project-name-that-blows-the-uid-budget"
+    uid = workbook_v2_uid(long_name)
+    assert len(uid) <= 40
+    assert uid.startswith("cc-portal-kickoff-") and uid.endswith("-v2")
+    assert workbook_v2_uid(long_name) == uid  # deterministic
+    # a different long name → a different uid (hash suffix keeps them unique)
+    assert workbook_v2_uid(long_name + "-x") != uid
 
 
 def test_distinct_uid_coexists_with_classic():

@@ -30,11 +30,12 @@ import inspect
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from ..logging_config import get_logger
 from ..models import AgenticTurn, ToolCallRequest
 from ..otel import ProjectContext, add_project_context_to_span
+from .session_snapshot import AgenticSessionSnapshot, build_snapshot
 from .agentic_otel import set_attributes as otel_set_attributes
 from .agentic_otel import span as otel_span
 from .base import BaseAgent
@@ -408,6 +409,40 @@ class AgenticSession:
         """Append a user message and run the loop to a terminal state."""
         self.messages.append({"role": "user", "content": user_message})
         return await self._run()
+
+    def to_snapshot(
+        self,
+        *,
+        project: str,
+        session_id: str,
+        generated_at: str,
+        posture: str = "agentic",
+        pending_proposal_ids: Sequence[str] = (),
+        stop_reason: Optional[str] = None,
+        redactor: Optional[Callable[[str], str]] = None,
+    ) -> AgenticSessionSnapshot:
+        """Serialize this session into a durable, dashboard-consumable snapshot (roadmap Tier 3).
+
+        The one reusable primitive so ANY agentic surface (kickoff concierge, multi-model
+        consultation, future Prime sessions) gets a durable session for free — transcript (role/text/
+        tool-call names), per-session cost, and ``stop_reason``. ``redactor`` (a ``str -> str``
+        scrubber) is applied to every persisted string — pass one for surfaces that persist untrusted
+        transcript text (the kickoff layer passes ``fde.redaction.redact``)."""
+        return build_snapshot(
+            messages=self.messages,
+            model=getattr(self.agent, "model", None),
+            input_tokens=self.total_input_tokens,
+            output_tokens=self.total_output_tokens,
+            total_tokens=self.total_tokens,
+            cost_usd=self.total_cost_usd,
+            posture=posture,
+            project=project,
+            session_id=session_id,
+            generated_at=generated_at,
+            pending_proposal_ids=pending_proposal_ids,
+            stop_reason=stop_reason,
+            redactor=redactor,
+        )
 
     async def _run(self) -> AgenticResult:
         # FR-18: a root session span wraps the whole loop; the outcome is stamped on return.
