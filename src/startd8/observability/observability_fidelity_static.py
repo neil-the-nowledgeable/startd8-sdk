@@ -84,7 +84,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, Optional, Set, Tuple
 
 # Reuse the live fidelity harness rather than reinventing extraction (Mottainai).
 from .validate_promql import (
@@ -421,3 +421,77 @@ def static_fidelity(emitted: Set[str], referenced: Set[str]) -> Dict[str, object
         "bound": sorted(bound),
         "unbound": sorted(unbound),
     }
+
+
+# ─────────── emitted: manifest / MetricDescriptor (G2 — the accuracy win) ────
+
+
+def emitted_from_descriptor(descriptor) -> Set[str]:
+    """Metrics the resolved :class:`MetricDescriptor` expects (family-expanded).
+
+    Closes the spike's G2 gap: the span-metrics RED surface (``calls_total`` /
+    ``duration_milliseconds*``) is produced by the OTel **collector**, not the service
+    source — a pure source scan false-negatives it. But the manifest's ``metricsProfile``
+    *declares* that surface, and the descriptor is the SAME resolution the generator ran
+    (Mottainai). Folding it into the emitted set makes the check *manifest-aware* — it
+    now flags only genuinely-unbindable references, not profile-convention differences.
+    """
+    out: Set[str] = set()
+    for name in (
+        getattr(descriptor, "throughput_metric", ""),
+        getattr(descriptor, "latency_bucket_metric", ""),
+    ):
+        if not name:
+            continue
+        base = name[: -len("_bucket")] if name.endswith("_bucket") else name
+        out |= _expand_family(base)
+        out.add(name)
+    return out
+
+
+def emitted_from_onboarding(onboarding_metadata: Path) -> Dict[str, Set[str]]:
+    """Per-service descriptor-expected metrics, via the generator's own resolution.
+
+    Reuses ``validate_promql.reconstruct_descriptors`` (the exact FR-8 rebuild the live
+    harness uses) so the emitted side and the generator agree by construction.
+    """
+    from .validate_promql import reconstruct_descriptors
+
+    return {
+        svc: emitted_from_descriptor(d)
+        for svc, d in reconstruct_descriptors(Path(onboarding_metadata)).items()
+    }
+
+
+def score_services(
+    *,
+    artifacts_dir: Path,
+    onboarding_metadata: Optional[Path] = None,
+    source_roots: Optional[Dict[str, Path]] = None,
+) -> Dict[str, Dict[str, object]]:
+    """Per-service static fidelity with a manifest-aware emitted set.
+
+    ``emitted = descriptor-expected (from onboarding) ∪ source-scanned (per service)``.
+    Provide ``onboarding_metadata`` (recommended — the accurate, deployment-aware source),
+    ``source_roots`` ({service_id: path}), or both. Each per-service result also records
+    which emitted sources fed it, so a low score can be triaged as real gap vs. blind spot.
+    """
+    referenced = extract_referenced_metrics(Path(artifacts_dir))
+    desc_emitted = (
+        emitted_from_onboarding(Path(onboarding_metadata)) if onboarding_metadata else {}
+    )
+    source_roots = source_roots or {}
+
+    out: Dict[str, Dict[str, object]] = {}
+    for svc, refs in referenced.items():
+        emitted: Set[str] = set(desc_emitted.get(svc, set()))
+        root = source_roots.get(svc)
+        if root is not None:
+            emitted |= extract_emitted_metrics(Path(root))
+        result = static_fidelity(emitted, refs)
+        result["emitted_sources"] = {
+            "descriptor": svc in desc_emitted,
+            "source_scan": root is not None,
+        }
+        out[svc] = result
+    return out

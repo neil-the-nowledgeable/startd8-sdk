@@ -11,15 +11,20 @@ Covers the three moving parts:
 
 from __future__ import annotations
 
+import json
+
 import yaml
 
 from startd8.observability.observability_fidelity_static import (
     bare_metrics_from_expr,
+    emitted_from_descriptor,
     extract_emitted_metrics,
     extract_referenced_metrics,
+    score_services,
     sniff_transports,
     static_fidelity,
 )
+from startd8.observability.metric_descriptor import profile_for
 
 
 # ─────────────────────────── emitted: Python ───────────────────────────────
@@ -163,3 +168,47 @@ def test_static_fidelity_no_silent_green_on_empty():
     # Empty referenced or empty emitted → unknown, NEVER pass.
     assert static_fidelity({"a"}, set())["verdict"] == "unknown"
     assert static_fidelity(set(), {"a"})["verdict"] == "unknown"
+
+
+# ─────────────── G2: manifest / MetricDescriptor emitted side ───────────────
+
+
+def test_emitted_from_descriptor_span_metrics():
+    # The span-metrics profile's RED surface — produced by the collector, declared by
+    # the profile — must appear in the emitted set (closes the source-only false neg).
+    emitted = emitted_from_descriptor(profile_for("span-metrics-connector"))
+    assert "calls_total" in emitted
+    assert "duration_milliseconds_bucket" in emitted
+    # family expansion of the throughput base
+    assert "calls_total_bucket" in emitted or "calls_total" in emitted
+
+
+def test_emitted_from_descriptor_semconv_grpc():
+    emitted = emitted_from_descriptor(profile_for("semconv-grpc"))
+    assert "rpc_server_duration_count" in emitted
+    assert "rpc_server_duration_bucket" in emitted
+
+
+def test_score_services_descriptor_fold_binds_red(tmp_path):
+    """G2 end-to-end: alerts referencing span-metrics RED bind via the descriptor even
+    with no service source (the collector produces them; the profile declares them)."""
+    alerts = tmp_path / "art" / "alerts"
+    alerts.mkdir(parents=True)
+    doc = {"groups": [{"name": "checkout.slo", "rules": [
+        {"alert": "Err", "expr": 'rate(calls_total{service_name="checkoutservice",'
+                                  'status_code="STATUS_CODE_ERROR"}[5m]) > 0.01'},
+        {"alert": "Lat", "expr": 'histogram_quantile(0.99, rate('
+                                 'duration_milliseconds_bucket{service_name="checkoutservice"}[5m])) > 500'},
+    ]}]}
+    (alerts / "checkoutservice-alerts.yaml").write_text(yaml.dump(doc))
+    onboarding = tmp_path / "onboarding-metadata.json"
+    onboarding.write_text(json.dumps({"instrumentation_hints": {"checkoutservice": {
+        "transport": "grpc",
+        "metrics": {"convention_based": [], "convention_profile": "span-metrics-connector"},
+    }}}))
+
+    got = score_services(artifacts_dir=tmp_path / "art", onboarding_metadata=onboarding)
+    v = got["checkoutservice"]
+    assert v["verdict"] == "pass"          # both RED metrics bind via the descriptor
+    assert v["coverage"] == 1.0
+    assert v["emitted_sources"] == {"descriptor": True, "source_scan": False}
