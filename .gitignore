@@ -180,3 +180,6 @@ docs/design/otel-demo-corpus/bringup-manifest.json
 docs/design/otel-demo-corpus/bringup-images.txt
 docs/design/otel-demo-corpus/coverage-attestation.json
 docs/design/otel-demo-corpus/startup-capture.json
+
+# Runtime observability smoke — vendored collector binary (large, reproducible)
+.cache/
