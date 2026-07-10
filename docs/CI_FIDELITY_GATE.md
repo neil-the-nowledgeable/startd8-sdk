@@ -98,5 +98,9 @@ add a **manual-stage** hook so it only runs on demand:
   and, if the series exist, scored `bound_no_data` (counts toward `binding_coverage`, not
   against it). The staleness still shows up in the low `data_coverage`, so you see it — it
   just doesn't fail a correctness gate. Set `--bind-window` to tune the tolerance.
-- **Exclude non-applicable artifact types** (e.g. `service_monitor` on an OTLP-push target)
-  from the artifacts dir you gate, so they don't drag coverage down.
+- **Non-applicable artifacts are excluded, honestly.** The replay only touches PromQL
+  (`alerts/` `slos/` `dashboards/`); sibling artifacts (`service-monitors/`, `loki-rules/`,
+  `notifications/`, `runbooks/`) are enumerated in the report's `excluded_artifacts` — seen and
+  excluded by design, never counted against `binding_coverage`. Use `--exclude-kinds` (e.g.
+  `--exclude-kinds dashboard`) to scope the replay further; excluded queries appear under
+  `excluded_by_reason`, not as failures.

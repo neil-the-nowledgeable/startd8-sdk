@@ -68,6 +68,12 @@ def validate_promql(
         help="Wider range window used to re-probe an empty query before calling it a "
         "binding failure — tolerates stale-but-present data (FR-3).",
     ),
+    exclude_kinds: str = typer.Option(
+        "",
+        "--exclude-kinds",
+        help="Comma list of artifact kinds to exclude from replay (alert|slo|dashboard). "
+        "Excluded queries are reported, not counted against binding_coverage (A1).",
+    ),
     allow_prod: bool = typer.Option(
         False,
         "--allow-prod",
@@ -98,6 +104,7 @@ def validate_promql(
         prometheus_url=prometheus,
         min_coverage=min_coverage,
         bind_window=bind_window,
+        exclude_kinds={k.strip() for k in exclude_kinds.split(",") if k.strip()} or None,
         allow_prod=allow_prod,
         dry_run=dry_run,
         auth=auth,

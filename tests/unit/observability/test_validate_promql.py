@@ -386,6 +386,77 @@ def test_connection_error_still_flips_to_unknown(tmp_path):
     assert report.status == "unknown"
 
 
+# ───────────────────── A1: exclusion taxonomy ──────────────────────────────
+
+
+def test_scan_excluded_artifacts(tmp_path):
+    from startd8.observability.validate_promql import scan_excluded_artifacts
+
+    art = tmp_path / "art"
+    (art / "service-monitors").mkdir(parents=True)
+    (art / "service-monitors" / "a-servicemonitor.yaml").write_text("x")
+    (art / "service-monitors" / "b-servicemonitor.yaml").write_text("x")
+    (art / "loki-rules").mkdir()
+    (art / "loki-rules" / "a-loki.yaml").write_text("x")
+    (art / "alerts").mkdir()  # replayable — must NOT be counted as excluded
+    got = scan_excluded_artifacts(art)
+    assert got == {"service_monitor": 2, "loki_rule": 1}
+
+
+def test_report_enumerates_excluded_artifacts(tmp_path):
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice", {"A": "rate(x[5m])"})
+    (artifacts / "loki-rules").mkdir()
+    (artifacts / "loki-rules" / "checkoutservice-loki.yaml").write_text("groups: []")
+    onboarding = _semconv_onboarding(tmp_path)
+
+    report = run_validation(
+        artifacts_dir=artifacts, onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090", min_coverage=1.0, auth=Auth(),
+        query_fn=lambda *a, **k: 1,
+    )
+    assert report.excluded_artifacts == {"loki_rule": 1}
+    # excluded artifacts do not lower binding_coverage
+    assert report.binding_coverage == 1.0
+    assert report.to_dict()["excluded_artifacts"] == {"loki_rule": 1}
+
+
+def test_exclude_kinds_removes_from_denominator(tmp_path):
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice", {"A": "rate(x[5m])"})
+    _write_dashboard(artifacts, "checkoutservice", "rate(y[5m])")
+    onboarding = _semconv_onboarding(tmp_path)
+
+    report = run_validation(
+        artifacts_dir=artifacts, onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090", min_coverage=1.0, auth=Auth(),
+        query_fn=lambda *a, **k: 1, exclude_kinds={"dashboard"},
+    )
+    assert report.queries_replayed == 1  # dashboard expr excluded from replay
+    assert report.excluded_by_reason == {"kind_excluded:dashboard": 1}
+    assert report.to_dict()["queries_excluded"] == 1
+
+
+def test_template_var_skip_folds_into_excluded_by_reason(tmp_path):
+    (art := tmp_path / "art" / "dashboards").mkdir(parents=True)
+    doc = {"panels": [
+        {"title": "A", "expr": 'rate(calls_total{service_name="checkoutservice"}[5m])'},
+        {"title": "B", "expr": 'rate(calls_total{service_name="$svc"}[5m])'},  # template var
+    ]}
+    (art / "checkoutservice-dashboard.yaml").write_text(yaml.dump(doc))
+    onboarding = _onboarding(tmp_path, {"checkoutservice": {
+        "transport": "grpc",
+        "metrics": {"convention_based": [{"name": "rpc.server.duration", "type": "histogram"}]},
+    }})
+    report = run_validation(
+        artifacts_dir=tmp_path / "art", onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090", min_coverage=0.0, auth=Auth(),
+        query_fn=lambda base, expr, **k: 0 if "$" in expr else 1,
+    )
+    assert report.queries_skipped == 1
+    assert report.excluded_by_reason.get("unresolved_template_var") == 1
+
+
 # ───────────── bound_no_data verdict + binding vs data coverage ─────────────
 
 

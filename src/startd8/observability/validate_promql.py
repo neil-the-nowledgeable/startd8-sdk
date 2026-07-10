@@ -266,6 +266,37 @@ def extract_exprs(artifacts_dir: Path) -> List[ExtractedExpr]:
     return exprs
 
 
+# Sibling artifact dirs the fidelity replay deliberately does NOT touch: they are
+# not PromQL and/or not applicable to a Prometheus backend (A1 exclusion taxonomy —
+# mirrors the benchmark's degrade-honest "always present, marked excluded", FR-32).
+# Enumerated so the report states they were SEEN and excluded by design, never
+# silently ignored (and never counted against binding_coverage).
+_EXCLUDED_ARTIFACT_DIRS: Dict[str, str] = {
+    "service-monitors": "service_monitor",   # Prometheus-Operator scrape config, not PromQL
+    "loki-rules": "loki_rule",               # LogQL, not PromQL
+    "notifications": "notification_policy",  # Alertmanager routing, not a query
+    "runbooks": "runbook",                   # prose, not a query
+}
+
+
+def scan_excluded_artifacts(artifacts_dir: Path) -> Dict[str, int]:
+    """Count artifacts present but excluded-by-design from the PromQL replay.
+
+    Returns ``{artifact_type: file_count}`` for the non-replayable sibling dirs that
+    exist. These are *not* fidelity failures — they carry no PromQL to bind — so the
+    report enumerates them to prove the harness saw and deliberately excluded them.
+    """
+    counts: Dict[str, int] = {}
+    for subdir, artifact_type in _EXCLUDED_ARTIFACT_DIRS.items():
+        base = Path(artifacts_dir) / subdir
+        if not base.is_dir():
+            continue
+        n = sum(1 for _ in base.glob("*.*"))
+        if n:
+            counts[artifact_type] = n
+    return counts
+
+
 # ─────────────────── expected identity (from the descriptor) ────────────────
 
 
@@ -480,11 +511,14 @@ class ExprVerdict:
     expr: str
     source_file: str
     live_result_count: int
-    verdict: str  # "pass" | "fail"
+    verdict: str  # "pass" | "fail" | "bound_no_data" | "error" | "excluded"
     mismatched_axes: List[str] = field(default_factory=list)
     expected_metric: str = ""
     remediation: str = ""
     suggested_profile: str = ""  # the metricsProfile the live backend matches (quick-win #1)
+    #: A1: why this query was excluded from the fidelity denominator (e.g.
+    #: "unresolved_template_var", "kind_excluded:dashboard"). Empty unless verdict=="excluded".
+    exclusion_reason: str = ""
     #: The expression actually replayed — set only when it differs from ``expr``
     #: (e.g. a trailing alert threshold was stripped so replay tests metric binding,
     #: not alert-firing state). Empty ⇒ replayed verbatim.
@@ -509,8 +543,16 @@ class FidelityReport:
     bound_no_data: int = 0
     #: Exprs skipped as non-replayable (unresolved dashboard template vars after
     #: Grafana-macro substitution). Not counted in coverage — they carry no fidelity
-    #: signal — but surfaced so the skip is never silent.
+    #: signal — but surfaced so the skip is never silent. (Alias of the
+    #: unresolved_template_var entry in ``excluded_by_reason``, kept for back-compat.)
     queries_skipped: int = 0
+    #: A1: queries excluded from the fidelity denominator, keyed by reason (e.g.
+    #: {"unresolved_template_var": 3, "kind_excluded:dashboard": 12}). Excluded ≠ fail.
+    excluded_by_reason: Dict[str, int] = field(default_factory=dict)
+    #: A1: non-replayable artifacts present but excluded by design (not PromQL / not
+    #: applicable to a Prometheus backend), keyed by type: {"loki_rule": 13, ...}.
+    #: Enumerated so the harness proves it saw them and excluded them, degrade-honest.
+    excluded_artifacts: Dict[str, int] = field(default_factory=dict)
     verdicts: List[ExprVerdict] = field(default_factory=list)
     per_service: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     per_axis: Dict[str, int] = field(default_factory=dict)
@@ -530,6 +572,9 @@ class FidelityReport:
             "reason": self.reason,
             "queries_replayed": self.queries_replayed,
             "queries_skipped": self.queries_skipped,
+            "queries_excluded": sum(self.excluded_by_reason.values()),
+            "excluded_by_reason": self.excluded_by_reason,
+            "excluded_artifacts": self.excluded_artifacts,
             "coverage": round(self.coverage, 4),
             "binding_coverage": round(self.binding_coverage, 4),
             "data_coverage": round(self.data_coverage, 4),
@@ -552,6 +597,7 @@ class FidelityReport:
                     "remediation": v.remediation,
                     "suggested_profile": v.suggested_profile,
                     "replayed_expr": v.replayed_expr,
+                    "exclusion_reason": v.exclusion_reason,
                     "axis_detail": v.axis_detail,
                 }
                 for v in self.verdicts
@@ -600,6 +646,7 @@ def run_validation(
     dry_run: bool = False,
     query_budget: int = DEFAULT_QUERY_BUDGET,
     bind_window: str = "1h",
+    exclude_kinds: Optional[set] = None,
     auth: Optional[Auth] = None,
     query_fn: Optional[Callable[..., int]] = None,
     list_names_fn: Optional[Callable[..., List[str]]] = None,
@@ -630,6 +677,23 @@ def run_validation(
 
     exprs = extract_exprs(Path(artifacts_dir))
 
+    # A1: enumerate non-replayable artifacts (service_monitor / loki_rule / ...) so the
+    # report proves they were seen and excluded by design, not silently ignored.
+    excluded_artifacts = scan_excluded_artifacts(Path(artifacts_dir))
+    excluded_by_reason: Dict[str, int] = {}
+
+    # A1: operator-declared kind exclusion (--exclude-kinds). Excluded exprs leave the
+    # replay set and are reported by reason — never counted against binding_coverage.
+    if exclude_kinds:
+        kept: List[ExtractedExpr] = []
+        for e in exprs:
+            if e.source_kind in exclude_kinds:
+                key = f"kind_excluded:{e.source_kind}"
+                excluded_by_reason[key] = excluded_by_reason.get(key, 0) + 1
+            else:
+                kept.append(e)
+        exprs = kept
+
     # FR-10: zero queries to replay (empty artifact tree) is a distinct non-pass.
     if not exprs:
         return FidelityReport(
@@ -638,6 +702,8 @@ def run_validation(
             queries_replayed=0,
             coverage=0.0,
             min_coverage=min_coverage,
+            excluded_by_reason=excluded_by_reason,
+            excluded_artifacts=excluded_artifacts,
         )
 
     # FR-8c dry-run: report the query count / estimated series and exit.
@@ -808,6 +874,10 @@ def run_validation(
             )
         )
 
+    # A1: fold template-var skips into the unified exclusion surface (one taxonomy).
+    if skipped:
+        excluded_by_reason["unresolved_template_var"] = skipped
+
     # FR-10: unreachable backend ⇒ distinct non-pass (never pass), even if some
     # queries had already succeeded.
     if backend_unreachable:
@@ -819,6 +889,8 @@ def run_validation(
             coverage=0.0,
             min_coverage=min_coverage,
             verdicts=verdicts,
+            excluded_by_reason=excluded_by_reason,
+            excluded_artifacts=excluded_artifacts,
         )
 
     if replayed == 0:
@@ -832,6 +904,8 @@ def run_validation(
             queries_skipped=skipped,
             coverage=0.0,
             min_coverage=min_coverage,
+            excluded_by_reason=excluded_by_reason,
+            excluded_artifacts=excluded_artifacts,
         )
 
     # FR-2: two coverage numbers. data_coverage = queries that returned live data
@@ -898,4 +972,6 @@ def run_validation(
         per_service=per_service,
         per_axis=per_axis,
         suggested_metrics_profile=suggested_metrics_profile,
+        excluded_by_reason=excluded_by_reason,
+        excluded_artifacts=excluded_artifacts,
     )
