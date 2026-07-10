@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.17.0"
+version: "1.18.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1796,6 +1796,9 @@ capabilities:
         ref: src/startd8/kickoff_experience/metrics.py
         description: "readiness/cost/proposals OTel gauges → Mimir (auto_configure_otel, best-effort no-op)"
       - type: code
+        ref: src/startd8/kickoff_experience/momentum.py
+        description: "Tier-D close-the-loop: readiness_trend (rising/stalled/falling from the activation ledger) + leverage_groups (highest-leverage batch) + leverage_nudge; folded additively into the oracle to_dict"
+      - type: code
         ref: src/startd8/kickoff_experience/portal_build.py
         description: "build_workbook_v2_and_maybe_provision + build_index (v2, no jsonnet); the default `kickoff portal` + confirm/instantiate auto-refresh"
       - type: test
@@ -1924,6 +1927,10 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.18.0"
+    date: "2026-07-10"
+    changes:
+      - "Tier D (close-the-loop) folded into startd8.kickoff.workbook_cockpit: new momentum.py adds readiness_trend (rising/stalled/falling slope read back from the Tier-B activation ledger — closing the loop the ledger opened) + leverage_groups (ranks the not-ok field CLASSES by how many fields each would clear) + leverage_nudge ('resolve `conventions` — clears 3 fields · readiness stalled at 60%'). Folded additively into the AgenticView oracle to_dict (momentum/leverage/leverage_nudge keys, same startd8.kickoff.status.v1 schema) so CLI/JSON/MCP/readout all get it; `kickoff status` prints the nudge + a 📈/⏸️/📉 momentum line. Does NOT mutate the deterministic ranking.next_action parity contract. 648 kickoff tests green."
   - version: "1.17.0"
     date: "2026-07-10"
     changes:

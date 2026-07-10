@@ -131,6 +131,9 @@ class AgenticView:
     panel_answers: Any = None  # latest stakeholder-panel run answers (list[dict]) | None
     pipeline: Any = None  # {staged, inbox, dispositions} panel→bridge→VIPP funnel | None
     roster: Any = None  # stakeholder roster (personas) | None
+    # Convergence Tier-D — the activation-ledger transition history, folded so momentum (readiness
+    # slope) can be derived from the SAME oracle (best-effort; () on absence).
+    ledger_entries: Tuple[dict, ...] = ()
 
     # --- FR-10 honest empty/unavailable messaging -------------------------------------------------
 
@@ -194,6 +197,26 @@ class AgenticView:
             )
         return " · ".join(parts) if parts else None
 
+    # --- convergence Tier-D: close-the-loop momentum + leverage -----------------------------------
+
+    def momentum(self) -> Any:
+        """Readiness slope (rising/stalled/falling) from the folded activation ledger (Tier-D)."""
+        from .momentum import readiness_trend
+
+        return readiness_trend(self.ledger_entries)
+
+    def leverage(self) -> Tuple[Any, ...]:
+        """The not-ok field classes ranked by how many fields resolving each would clear (Tier-D)."""
+        from .momentum import leverage_groups
+
+        return leverage_groups(self.state)
+
+    def leverage_nudge(self) -> Optional[str]:
+        """One-line highest-leverage next-batch nudge + momentum framing, or ``None`` (Tier-D)."""
+        from .momentum import leverage_nudge
+
+        return leverage_nudge(self.state, self.momentum())
+
     def stakeholder_summary(self) -> Optional[str]:
         """One-line stakeholder summary (roster size + latest-run answer count), or ``None``."""
         parts = []
@@ -230,6 +253,10 @@ class AgenticView:
             "panel_answers": self.panel_answers,  # list[dict] (JSON-native) or None
             "roster_size": _roster_size(self.roster),
             "stakeholder_summary": self.stakeholder_summary(),
+            # Tier-D close-the-loop: momentum (readiness slope) + leverage (highest-leverage batch).
+            "momentum": self.momentum().to_dict(),
+            "leverage": [g.to_dict() for g in self.leverage()],
+            "leverage_nudge": self.leverage_nudge(),
             "hints": {  # honest empty/unavailable messaging (FR-10)
                 "assistant": self.assistant_message(),
                 "proposals": self.proposals_message(),
@@ -370,6 +397,16 @@ def _compute_next_action(state: Any, readiness: Any) -> Any:
         return None
 
 
+def _load_ledger_entries(project_root: Path) -> Tuple[dict, ...]:
+    """Best-effort read of the Tier-B activation ledger (feeds Tier-D momentum). () on any absence."""
+    try:
+        from .activation import ActivationLedger
+
+        return tuple(ActivationLedger(project_root).entries())
+    except Exception:  # pragma: no cover - momentum degrades independently
+        return ()
+
+
 def build_agentic_view(project_root: str | Path) -> AgenticView:
     """Fold KickoffState + FR-1 snapshot + FR-2 inbox into the one cockpit read-model (FR-3).
 
@@ -403,6 +440,7 @@ def build_agentic_view(project_root: str | Path) -> AgenticView:
         panel_answers=panel_answers,
         pipeline=pipeline,
         roster=roster,
+        ledger_entries=_load_ledger_entries(root),
     )
 
 

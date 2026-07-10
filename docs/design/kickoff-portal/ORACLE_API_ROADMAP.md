@@ -21,7 +21,7 @@
 | **C1** | `startd8_kickoff_status` MCP tool (read-only, `startd8.kickoff.status.v1`) | ✅ Shipped (`869d5dc5`) |
 | **B** | Activation surface — `kickoff check` gate + `kickoff.activation.*` gauges + activation ledger | ✅ Shipped |
 | C2/C3 | Decision-log + retrospective built on the oracle payload | ⏳ Planned |
-| D | Close-the-loop — readiness/burndown → next-action nudges | ⏳ Planned |
+| **D** | Close-the-loop — momentum (readiness slope) + highest-leverage batch nudge | ✅ Shipped |
 | E | Promotion dividend — oracle payload as the exemplar/promotion input | ⏳ Planned |
 
 ---
@@ -90,11 +90,26 @@ Build on the C1 payload: a **decision log** (what was proposed, what was applied
 a **retrospective view** that diffs the first snapshot against the ready-state snapshot — both are pure
 reads over the oracle + VIPP dispositions, no new generation.
 
-## Tier D — Close the loop (PLANNED)
+## Tier D — Close the loop (SHIPPED)
 
-Feed `readiness_percent` / burndown slope back into `next_action` so the cockpit nudges the *highest-leverage*
-next step (the field class that most moves readiness), closing the observe→act loop the oracle currently
-only half-serves.
+The oracle now feeds its *own history* back into the recommendation, so the cockpit **directs**
+progress instead of only reporting it — the observe→act loop the oracle previously only half-served.
+Both halves are pure, deterministic reads over data the oracle already holds
+(`src/startd8/kickoff_experience/momentum.py`), and neither mutates the byte-stable
+`ranking.next_action` (the web/TUI parity contract) — they *enrich* alongside it.
+
+- **Momentum (the readiness slope).** `readiness_trend(ledger_entries)` reads the Tier-B activation
+  ledger's readiness observations and returns **rising / stalled / falling** with a human summary
+  ("readiness stalled at 60%"). This is where the Tier-B ledger pays off: `kickoff check --record`
+  writes the transitions, and Tier-D reads them back as slope. Closed loop.
+- **Leverage (the highest-leverage batch).** `leverage_groups(state)` groups the not-yet-ok fields by
+  their class (value-path head) and ranks the classes by how many fields resolving each would clear.
+  The top class is the highest-leverage next batch. `leverage_nudge()` combines it with momentum into
+  one line: *"resolve `conventions` — clears 3 fields · readiness stalled at 60%"*.
+- **Surfaced everywhere via the oracle.** `AgenticView` folds the ledger (`ledger_entries`) and
+  `to_dict()` gains additive `momentum` / `leverage` / `leverage_nudge` keys (same
+  `startd8.kickoff.status.v1` schema — additive, so CLI/JSON/MCP/readout all get it for free).
+  `kickoff status` prints the leverage nudge + a 📈/⏸️/📉 momentum line.
 
 ## Tier E — Promotion dividend (PLANNED)
 
@@ -116,8 +131,9 @@ payload is already the structured fingerprint this would key on.
 
 ## Evidence
 
-- Code: `src/startd8/kickoff_experience/agentic_view.py` (`to_dict`, `kickoff_status`),
+- Code: `src/startd8/kickoff_experience/agentic_view.py` (`to_dict`, `kickoff_status`, momentum fold),
   `src/startd8/kickoff_experience/activation.py` (`evaluate_activation`, `ActivationLedger`),
+  `src/startd8/kickoff_experience/momentum.py` (`readiness_trend`, `leverage_groups`, `leverage_nudge`),
   `src/startd8/kickoff_experience/metrics.py` (`record_activation`),
   `src/startd8/cli_concierge.py` (`kickoff status|proposals|readout|check|ledger`),
   `mcp/startd8-mcp-builder/startd8_mcp.py` (`startd8_kickoff_status`).
@@ -125,5 +141,7 @@ payload is already the structured fingerprint this would key on.
   `tests/unit/kickoff_experience/test_agentic_view.py`,
   `tests/unit/kickoff_experience/test_activation.py`,
   `tests/unit/kickoff_experience/test_check_ledger_cli.py`,
+  `tests/unit/kickoff_experience/test_momentum.py`,
+  `tests/unit/kickoff_experience/test_momentum_oracle.py`,
   `mcp/startd8-mcp-builder/tests/test_16_kickoff_status.py`.
-- Commits: `aa658ebb` (A1+A2), `869d5dc5` (C1), Tier B (this change).
+- Commits: `aa658ebb` (A1+A2), `869d5dc5` (C1), `e55ff4d6` (Tier B), Tier D (this change).

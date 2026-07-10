@@ -1457,6 +1457,12 @@ def kickoff_status_cmd(
     if na:
         detail = f" — {na['detail']}" if na.get("detail") else ""
         console.print(f"  ➡️  next: {na.get('title')}{detail}")
+    if s.get("leverage_nudge"):
+        console.print(f"  🎯  highest leverage: {s['leverage_nudge']}")
+    mom = s.get("momentum") or {}
+    if mom.get("trend") and mom.get("trend") != "unknown":
+        icon = {"rising": "📈", "stalled": "⏸️", "falling": "📉"}.get(mom["trend"], "•")
+        console.print(f"  {icon}  {mom.get('summary')}")
     if s.get("stakeholder_summary"):
         console.print(f"  stakeholders: {s['stakeholder_summary']}")
     if s.get("pipeline_summary"):
