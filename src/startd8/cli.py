@@ -60,6 +60,7 @@ from .cli_requirements import requirements_app
 from .cli_screens import screens_app
 from .cli_vipp import vipp_app
 from .cli_deploy import deploy_app
+from .observability.cli import observability_app
 from .cli_wireframe import wireframe as _wireframe_command
 
 app = typer.Typer(
@@ -1263,6 +1264,7 @@ app.add_typer(manifest_app, name="manifest")
 app.add_typer(generate_app, name="generate")
 app.add_typer(openapi_app, name="openapi")
 app.add_typer(consult_app, name="consult")
+app.add_typer(observability_app, name="observability")
 app.add_typer(kickoff_panel_app, name="kickoff-panel")
 
 
