@@ -32,6 +32,14 @@ Effort key: 🟢 quick (<½ day) · 🟡 medium (1–2 days) · 🔴 bigger bet.
 | 2 | **"Which mode?" in-panel guidance** — mode radio reframed as a decision aid (Run = survey / Facilitate = workshop / Apply = write gate) + clearer option labels. | `grafana-plugins/.../module.ts` |
 | 3 | **Plugin CI typecheck/build gate** — GH Action runs lint + `tsc --noEmit` + vitest + webpack build on any plugin change, so the TS (uncovered by pytest) can't rot silently. | `.github/workflows/grafana-plugin.yml` |
 
+## ✅ Shipped — the ⭐ loop-closer + more hardening
+
+| # | Item | Anchor |
+|---|------|--------|
+| ⭐ | **Grafana Triage panel mode** — routes a finished synthesis into typed candidates + the paid extract → disposition → serialize write path (composes with Apply). CRP caught 3 shipped-route correctness bugs (domain, double-spend, undrained-inbox). | PR #185; `components/TriagePanel.tsx`, `stakeholder_run_server.py` |
+| #4 | **Configurable concurrency cap** — `MAX_CONCURRENT_FACILITATIONS` overridable via env `STARTD8_MAX_CONCURRENT_FACILITATIONS`. | `facilitate_run.py:_max_concurrent_facilitations` |
+| #5 | **Outside-view cache (Mottainai)** — reuse the R0 reference-class forecast across re-runs (keyed on objective+strategy+model); env opt-out `STARTD8_OUTSIDE_VIEW_NOCACHE`. | `facilitation.py:_ov_cache_*` |
+
 ---
 
 ## ⭐ The loop-closer (highest value)
