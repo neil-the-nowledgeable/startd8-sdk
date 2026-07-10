@@ -247,9 +247,12 @@ class SpanMetricsCollector:
         deadline = time.monotonic() + max(settle_s, cap_s)
         tp = descriptor.throughput_metric
         while time.monotonic() < deadline:
-            parsed = parse_prometheus_text(self.scrape() or "")
-            if _has_nonzero_throughput(self.scrape() or "", tp):
-                return check_descriptor_binding(parsed, descriptor, service_id)
+            # One scrape per poll: the nonzero gate and the bind-check MUST read the same
+            # snapshot (else a bound verdict could be computed from a different scrape than
+            # the one that passed the gate), and it halves the HTTP load.
+            text = self.scrape() or ""
+            if _has_nonzero_throughput(text, tp):
+                return check_descriptor_binding(parse_prometheus_text(text), descriptor, service_id)
             time.sleep(0.2)
         return RuntimeBinding(outcome="no_telemetry", coverage=None,
                               reason=f"no non-zero {tp!r} within {cap_s}s (service emitted no usable telemetry)")
