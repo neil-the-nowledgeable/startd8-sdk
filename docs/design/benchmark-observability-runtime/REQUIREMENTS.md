@@ -1,8 +1,10 @@
 # Runtime Observability-Fidelity Benchmark Dimension — Requirements
 
-**Version:** 0.3.1 (Post design-principle hardening — ready for CRP)
+**Version:** 0.3.1 (Post design-principle hardening)
 **Date:** 2026-07-10
-**Status:** Draft (reflective loop; pre-CRP)
+**Status:** ✅ Implemented (startd8 `ea7aeb3e`) — CRP skipped by choice. Core + wiring + scorecard
+shipped, opt-in (default off), fully fixture-tested; the live-collector path runs where
+`otelcol-contrib` is provisioned (`OTELCOL_CONTRIB_BIN`/PATH), CI degrades honestly.
 **Relates to:** `ContextCore/docs/design/FIDELITY_BENCHMARK_CONVERGENCE.md` (B1 runtime form); the shipped **static** form (`observability_fidelity_static.service_observability_coverage`, `CellResult.observability_coverage`, scorecard D6); `metric_descriptor` / `validate_promql` (Group C fidelity harness).
 
 ---
