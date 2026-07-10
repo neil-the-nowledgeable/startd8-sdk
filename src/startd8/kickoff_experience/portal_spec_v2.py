@@ -130,9 +130,26 @@ def _height(fields: List[Any]) -> int:
     return min(24, 4 + len(fields))
 
 
+#: Grafana caps dashboard UIDs at 40 chars — a longer UID makes `provision_v2` fail. The fixed
+#: prefix+suffix (`cc-portal-kickoff-` + `-v2`) is 21 chars, leaving a 19-char slug budget.
+_UID_MAX = 40
+_UID_SLUG_BUDGET = _UID_MAX - len("cc-portal-kickoff--v2")  # 19
+
+
 def workbook_v2_uid(project: str) -> str:
-    """The v2 board's UID — a distinct ``-v2`` suffix so it coexists with the classic Workbook (no clobber)."""
-    return f"cc-portal-kickoff-{slugify_project(project)}-v2"
+    """The v2 board's UID — a distinct ``-v2`` suffix so it coexists with the classic Workbook (no clobber).
+
+    Guaranteed ≤ 40 chars (Grafana's limit; Tier-1 #6). A slug that fits is used verbatim (short names
+    are byte-identical to before); a longer slug is deterministically shortened to ``<slug12>-<hash6>``
+    so it stays unique and stable across runs rather than silently failing to provision.
+    """
+    slug = slugify_project(project)
+    if len(slug) > _UID_SLUG_BUDGET:
+        import hashlib
+
+        digest = hashlib.sha1(slug.encode("utf-8")).hexdigest()[:6]
+        slug = f"{slug[: _UID_SLUG_BUDGET - 7]}-{digest}"  # 12 + '-' + 6 = 19
+    return f"cc-portal-kickoff-{slug}-v2"
 
 
 # --------------------------------------------------------------------------- agentic cockpit (M3)
@@ -205,13 +222,66 @@ def _transcript_logql(session_id: str) -> str:
 
 _ROLE_LABEL = {"user": "🧑 you", "assistant": "🤖 assistant", "tool": "🔧 tool"}
 
+# Friendly, actionable explanation of a non-"completed" stop (Tier-1 #4). Mirrors AgenticResult's
+# stop_reason vocabulary (agents/agentic.py).
+_STOP_REASON_NOTE = {
+    "budget": "⏸️ **Stopped at the cost/token budget cap** — raise `--max-cost` / "
+    "`--max-total-tokens`, or continue in a new `kickoff chat` session.",
+    "max_turns": "⏸️ **Hit the turn limit** — continue in a new `kickoff chat` session.",
+    "repeated_calls": "⏸️ **The assistant was repeating a tool call** and stopped — try rephrasing.",
+    "context_overflow": "⏸️ **The conversation outgrew the context window** even after compaction.",
+    "stream_error": "⚠️ **Ended on a stream error** — the transcript may be incomplete.",
+}
+
+
+def _stop_reason_note(reason: Optional[str]) -> Optional[str]:
+    if not reason or reason == "completed":
+        return None
+    return _STOP_REASON_NOTE.get(reason, f"⏸️ **Stopped:** {reason}")
+
+
+_ATTENTION_LABELS = (("ok", "ok"), ("review", "review"), ("blocked", "blocked"), ("backlog", "backlog"))
+
+
+def _status_overview_markdown(state: Any, view: Any) -> str:
+    """The Status-tab 'At a glance' panel (Tier-1 #1+#2): a readiness headline + the next step."""
+    parts: List[str] = []
+    counts = state.attention_counts
+    total = sum(counts.values())
+    if total:
+        pct = round(100 * counts.get("ok", 0) / total)
+        breakdown = " · ".join(f"{counts.get(k, 0)} {label}" for k, label in _ATTENTION_LABELS)
+        parts.append(f"## {pct}% ready\n\n{breakdown} — {total} input" + ("" if total == 1 else "s"))
+    else:
+        parts.append("## Getting started\n\nNo kickoff inputs yet.")
+
+    na = getattr(view, "next_action", None) if view is not None else None
+    if na is None:  # view absent → compute from state alone (readiness-independent tiers still apply)
+        try:
+            from .ranking import next_action
+
+            na = next_action(state, None)
+        except Exception:  # pragma: no cover
+            na = None
+    if na is not None:
+        detail = f" — {na.detail}" if getattr(na, "detail", "") else ""
+        parts.append(f"**➡️ Your next step:** {na.title}{detail}")
+    return "\n\n".join(parts)
+
 
 def _transcript_markdown(snapshot: Any) -> str:
-    """Render the capped-tail transcript as markdown (FR-6). The full depth lives in the logs panel."""
+    """Render the capped-tail transcript as markdown (FR-6). The full depth lives in the logs panel.
+
+    Leads with the deterministic 'session at a glance' summary (Tier-1 #3) + a stop-reason note
+    (Tier-1 #4) so the tab is scannable before you read a single turn."""
     turns = list(snapshot.turns)
     header = (
+        f"**Session at a glance:** {snapshot.at_a_glance()}\n\n"
         f"_{snapshot.disclosure} · {snapshot.cost_line()} · generated {snapshot.generated_at}_\n\n"
     )
+    note = _stop_reason_note(getattr(snapshot, "stop_reason", None))
+    if note:
+        header += note + "\n\n"
     hidden = max(0, len(turns) - _TRANSCRIPT_TAIL_CAP)
     shown = turns[-_TRANSCRIPT_TAIL_CAP:] if hidden else turns
     lines: List[str] = [header]
@@ -310,8 +380,17 @@ def build_workbook_v2(
         elements[key] = panel
         return key
 
-    # --- Status tab: the existing audience-personalized rows (byte-identical content; numbered first) --
+    # --- Status tab: the existing audience-personalized rows (numbered first) -------------------------
     status_rows: List[RowsLayoutRow] = []
+
+    # At a glance (Tier-1 #1+#2): a readiness headline + the single recommended next step, shown to
+    # every audience (audience-invariant → preserves FR-8 byte-identity). Leads the tab.
+    status_rows.append(
+        RowsLayoutRow(
+            title="At a glance",
+            items=[GridItem(element=_add("At a glance", _status_overview_markdown(state, view)), height=6)],
+        )
+    )
 
     # Disclosure (OQ-6): Beginner plain-language intro + standard intro, conditionally rendered.
     status_rows.append(

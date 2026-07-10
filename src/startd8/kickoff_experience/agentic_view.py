@@ -124,12 +124,28 @@ class AgenticView:
     snapshot_status: str
     proposals: Tuple[ProposalRow, ...]
     proposals_present: bool  # the inbox file was readable (independent of whether it has rows)
+    readiness: Any = None  # ReadinessView | None (cascade readiness; best-effort)
+    next_action: Any = None  # NextAction | None — the single recommended next step (Tier-1 #1)
 
     # --- FR-10 honest empty/unavailable messaging -------------------------------------------------
 
     @property
     def has_snapshot(self) -> bool:
         return self.snapshot is not None and self.snapshot_status == SNAPSHOT_PRESENT
+
+    def readiness_percent(self) -> Optional[int]:
+        """Field-level readiness as a whole percent (ok / total), from the folded state (Tier-1 #2).
+
+        Uses the always-available field attention counts rather than the cascade score, so a stat
+        renders even before the $0 cascade is assessable. ``None`` when there are no fields yet."""
+        state = self.state
+        if state is None:
+            return None
+        counts = state.attention_counts  # {ok, review, blocked, backlog}
+        total = sum(counts.values())
+        if total == 0:
+            return None
+        return round(100 * counts.get("ok", 0) / total)
 
     def assistant_message(self) -> Optional[str]:
         """The honest Assistant-tab hint when there is nothing to render (else ``None``)."""
@@ -244,6 +260,28 @@ def _load_state(project_root: Path) -> Any:
         return None
 
 
+def _load_readiness(project_root: Path) -> Any:
+    """Best-effort cascade readiness (feeds the Tier-1 #1 next-action). None on any absence."""
+    try:
+        from .readiness import build_readiness
+
+        return build_readiness(project_root)
+    except Exception:  # pragma: no cover - readiness degrades independently
+        return None
+
+
+def _compute_next_action(state: Any, readiness: Any) -> Any:
+    """The single deterministic recommendation (Tier-1 #1) — the same oracle `field_states` uses."""
+    if state is None:
+        return None
+    try:
+        from .ranking import next_action
+
+        return next_action(state, readiness)
+    except Exception:  # pragma: no cover
+        return None
+
+
 def build_agentic_view(project_root: str | Path) -> AgenticView:
     """Fold KickoffState + FR-1 snapshot + FR-2 inbox into the one cockpit read-model (FR-3).
 
@@ -252,11 +290,15 @@ def build_agentic_view(project_root: str | Path) -> AgenticView:
     root = Path(project_root)
     snapshot, status = _load_snapshot(root)
     proposals, present = _load_proposals(root)
+    state = _load_state(root)
+    readiness = _load_readiness(root)
     return AgenticView(
         project_root=str(root),
-        state=_load_state(root),
+        state=state,
         snapshot=snapshot,
         snapshot_status=status,
         proposals=proposals,
         proposals_present=present,
+        readiness=readiness,
+        next_action=_compute_next_action(state, readiness),
     )

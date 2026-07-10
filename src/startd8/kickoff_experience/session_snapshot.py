@@ -136,11 +136,40 @@ class AgenticSessionSnapshot:
     cost: SnapshotCost
     pending_proposal_ids: Tuple[str, ...] = ()
     disclosure: str = SNAPSHOT_DISCLOSURE
+    # Why the loop stopped last (AgenticResult.stop_reason): completed | max_turns | repeated_calls |
+    # budget | context_overflow | stream_error. Surfaced so the cockpit can explain a non-"completed"
+    # stop (e.g. a budget cap) instead of leaving the user guessing (Tier-1 #4).
+    stop_reason: Optional[str] = None
 
     @property
     def turn_count(self) -> int:
         """Number of assistant turns (the model's replies) — the ``turns=`` in the cost line."""
         return sum(1 for t in self.turns if t.role == "assistant")
+
+    def tool_call_counts(self) -> "dict[str, int]":
+        """Per-tool call tallies across the session (for the 'session at a glance' summary, Tier-1 #3)."""
+        counts: dict[str, int] = {}
+        for turn in self.turns:
+            for name in turn.tool_calls:
+                counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def at_a_glance(self) -> str:
+        """A deterministic one-line session summary ($0) — far more scannable than the raw transcript.
+
+        e.g. "5 replies · survey ×2, assess ×1 · 3 proposals pending · cost ≈$0.0031 · stopped: budget".
+        """
+        parts = [f"{self.turn_count} repl" + ("y" if self.turn_count == 1 else "ies")]
+        tools = self.tool_call_counts()
+        if tools:
+            parts.append(", ".join(f"{k} ×{v}" for k, v in sorted(tools.items())))
+        if self.pending_proposal_ids:
+            n = len(self.pending_proposal_ids)
+            parts.append(f"{n} proposal" + ("" if n == 1 else "s") + " pending")
+        parts.append(f"cost ≈${self.cost.cost_usd:.4f}")
+        if self.stop_reason and self.stop_reason != "completed":
+            parts.append(f"stopped: {self.stop_reason}")
+        return " · ".join(parts)
 
     def cost_line(self) -> str:
         """The FR-4 per-session cost line, matching ``chat.py:cost_line()``'s shape."""
@@ -157,6 +186,7 @@ class AgenticSessionSnapshot:
             "session_id": self.session_id,
             "posture": self.posture,
             "disclosure": self.disclosure,
+            "stop_reason": self.stop_reason,
             "cost": self.cost.to_dict(),
             "pending_proposal_ids": list(self.pending_proposal_ids),
             "turns": [t.to_dict() for t in self.turns],
@@ -179,6 +209,7 @@ class AgenticSessionSnapshot:
             cost=SnapshotCost.from_dict(d.get("cost", {}) or {}),
             pending_proposal_ids=tuple(d.get("pending_proposal_ids", ()) or ()),
             disclosure=str(d.get("disclosure", SNAPSHOT_DISCLOSURE)),
+            stop_reason=(str(d["stop_reason"]) if d.get("stop_reason") else None),
         )
 
 
@@ -279,6 +310,7 @@ def build_session_snapshot(
     session_id: str,
     generated_at: str,
     pending_proposal_ids: Sequence[str] = (),
+    stop_reason: Optional[str] = None,
 ) -> AgenticSessionSnapshot:
     """Build a redacted snapshot from a session's raw state. Every persisted string is redacted."""
     raw_turns = normalize_messages(messages)
@@ -307,6 +339,7 @@ def build_session_snapshot(
             cost_usd=float(cost_usd),
         ),
         pending_proposal_ids=tuple(pending_proposal_ids),
+        stop_reason=stop_reason,
     )
 
 
@@ -422,6 +455,7 @@ def persist_snapshot_for_chat(
             session_id=session_id,
             generated_at=generated_at,
             pending_proposal_ids=pending_ids,
+            stop_reason=getattr(chat, "last_stop_reason", None),
         )
         if not snap.turns:  # nothing was said → presence-gated: no artifact
             return None

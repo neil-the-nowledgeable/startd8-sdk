@@ -179,21 +179,23 @@ def test_cockpit_has_three_tabs():
     assert [t["spec"]["title"] for t in _tabs(board)] == ["Status", "Assistant", "Proposals"]
 
 
-def test_status_tab_content_byte_identical_to_pre_refactor_golden():
-    # R1-S4: the Status tab's rows + its referenced panels are byte-identical to the pre-refactor board
-    # (the committed golden captured BEFORE the TabsLayout refactor). Proves "wrap, don't rewrite".
+def test_status_tab_preserves_pre_refactor_field_content():
+    # R1-S4 (content-preservation form): the M3 refactor proved wrap-not-rewrite via byte-identity;
+    # Tier-1 legitimately ADDS an "At a glance" panel, so panel keys shift. What must still hold is
+    # that every original intro/field-table panel's CONTENT survives verbatim (nothing was rewritten).
     import json
 
     pre = json.loads(_PRE_REFACTOR_GOLDEN.read_text(encoding="utf-8"))
     board = build_workbook_v2(
         _state(), "demo", audience=KickoffAudience.INTERMEDIATE, provenance=_PROV
     )
-    # rows unchanged
-    assert _rows(board) == pre["spec"]["layout"]["spec"]["rows"]
-    # every Status panel (panel-1..panel-N) is byte-identical in content
-    status_keys = pre["spec"]["elements"].keys()
-    for key in status_keys:
-        assert board["spec"]["elements"][key] == pre["spec"]["elements"][key]
+    new_contents = {
+        e["spec"]["vizConfig"]["spec"]["options"]["content"]
+        for e in board["spec"]["elements"].values()
+        if e["spec"]["vizConfig"]["kind"] == "text"
+    }
+    for e in pre["spec"]["elements"].values():
+        assert e["spec"]["vizConfig"]["spec"]["options"]["content"] in new_contents
 
 
 def test_assistant_and_proposals_empty_states_without_view():
@@ -377,6 +379,55 @@ def test_proposals_table_neutralizes_backticks_in_host_content(tmp_path):
     table_lines = [ln for ln in content.splitlines() if ln.startswith("|")]
     assert any("a.ʼevilʼ.b" in ln for ln in table_lines)  # neutralized in the table
     assert all(ln.count("`") % 2 == 0 for ln in table_lines)  # balanced code spans
+
+
+def test_status_at_a_glance_shows_readiness_and_next_step():
+    # Tier-1 #1+#2: the Status tab leads with a readiness headline + the recommended next step.
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV)
+    status_rows = _rows(board)
+    assert status_rows[0]["spec"]["title"] == "At a glance"  # leads the tab
+    glance = next(
+        e for e in board["spec"]["elements"].values() if e["spec"]["title"] == "At a glance"
+    )
+    content = glance["spec"]["vizConfig"]["spec"]["options"]["content"]
+    # _state() has 2 ok / 1 blocked out of 3 → 67% ready
+    assert "67% ready" in content
+    assert "Your next step" in content and "/goal" in content  # the blocked field is the next step
+
+
+def test_assistant_tab_leads_with_session_glance_and_stop_reason(tmp_path):
+    # Tier-1 #3+#4: the Assistant transcript leads with the at-a-glance summary + a stop-reason note.
+    from startd8.kickoff_experience import session_snapshot as ss
+    from startd8.kickoff_experience.agentic_view import build_agentic_view
+
+    snap = ss.build_session_snapshot(
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"},
+                                              {"type": "tool_use", "id": "t", "name": "assess", "input": {}}]},
+        ],
+        model="m", input_tokens=1, output_tokens=1, total_tokens=2, cost_usd=0.0,
+        posture="concierge · propose-only", project=str(tmp_path), session_id="sid",
+        generated_at="2026-07-09T00:00:00+00:00", stop_reason="budget",
+    )
+    ss.write_snapshot(tmp_path, snap)
+    view = build_agentic_view(tmp_path)
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV, view=view)
+    transcript = next(e for e in board["spec"]["elements"].values() if "transcript" in e["spec"]["title"])
+    content = transcript["spec"]["vizConfig"]["spec"]["options"]["content"]
+    assert "Session at a glance:" in content and "assess ×1" in content
+    assert "budget cap" in content  # the friendly stop-reason note
+
+
+def test_uid_length_guard_for_long_project_names():
+    # Tier-1 #6: a long name still yields a ≤40-char, deterministic, unique UID (Grafana limit).
+    long_name = "a-very-long-enterprise-project-name-that-blows-the-uid-budget"
+    uid = workbook_v2_uid(long_name)
+    assert len(uid) <= 40
+    assert uid.startswith("cc-portal-kickoff-") and uid.endswith("-v2")
+    assert workbook_v2_uid(long_name) == uid  # deterministic
+    # a different long name → a different uid (hash suffix keeps them unique)
+    assert workbook_v2_uid(long_name + "-x") != uid
 
 
 def test_distinct_uid_coexists_with_classic():
