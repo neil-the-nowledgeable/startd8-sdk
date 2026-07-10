@@ -48,18 +48,23 @@ SDK's bucket boundary).
 - **`startd8 kickoff proposals` — list + numbered apply.** The Proposals tab shows the two-step
   `negotiate && apply`; a CLI helper that lists pending proposals and applies your pick closes the
   confirm loop from "copy-paste a command" to "pick #2." (CLI stays sole writer — NR-2 intact.)
-- **Shareable "kickoff readout" export** (static HTML/Markdown from the `AgenticView`): readiness,
-  decision summary, pending items with confirm commands. The **higher-value output** — turns an
-  ephemeral session into something you can email a stakeholder or attach to a ticket.
+- **Shareable "kickoff readout" export — ✅ SHIPPED.** `kickoff_experience/readout.py` +
+  `startd8 kickoff readout [--format md|html] [--out FILE]`: a self-contained Markdown/HTML doc
+  rendering the same `AgenticView` (readiness, next step, session summary, pending items + confirm
+  commands). XSS-safe HTML (every model/session value `html.escape`'d). The higher-value output — an
+  emailable/attachable deliverable.
 
 ---
 
 ## Tier 3 — Architectural leverage (higher payoff, bigger lift)
 
-- **Promote the session snapshot to the `AgenticSession` layer** (`agents/agentic.py`). We solved a
-  *general* problem ("AgenticSession has no `save`/`to_dict`") in a *specific* place (kickoff).
-  Lifting `to_snapshot()` up means **every agentic surface** (consultation, concierge, future Prime)
-  gets durable, dashboard-able sessions for free. Biggest leverage item.
+- **Promote the session snapshot to the `AgenticSession` layer — ✅ SHIPPED.** The presentation-
+  neutral core (model + transcript normalization + generic builder) moved to
+  `agents/session_snapshot.py` (stdlib-only, no cycle); `kickoff_experience/session_snapshot.py`
+  re-exports it (compat) and adds the kickoff policy (redaction, Loki, on-disk persistence).
+  `AgenticSession.to_snapshot(*, redactor=…)` is the reusable primitive — **any agentic surface**
+  (consultation, concierge, future Prime) now gets a durable, dashboard-able session for free, with
+  redaction dependency-injected. Biggest leverage item; 1313 tests green after the relocation.
 - **First-class v2 `logs`/datasource panel constructor** in `dashboard_creator/v2`. Today the Loki
   panel is a hardcoded dict inside `portal_spec_v2`. The v2 module only ships `text`/`table`;
   extracting a tested `logs_panel(...)` **broadens the entire dynamic-dashboards capability** — every
