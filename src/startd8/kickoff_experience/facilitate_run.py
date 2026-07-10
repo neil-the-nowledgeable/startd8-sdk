@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,7 +38,25 @@ from .stakeholder_run import (
     roster_version,
 )
 
-MAX_CONCURRENT_FACILITATIONS = 4  # H-5 — bound worker threads / event loops / premium fleets
+MAX_CONCURRENT_FACILITATIONS = 4  # H-5 default — bound worker threads / event loops / premium fleets
+_CAP_ENV = "STARTD8_MAX_CONCURRENT_FACILITATIONS"
+
+
+def _max_concurrent_facilitations() -> int:
+    """Resolve the concurrency cap: the ``STARTD8_MAX_CONCURRENT_FACILITATIONS`` env override, else the
+    module default (#4 — operators tune per host without a code change). Read at CALL time. A non-int or
+    negative value falls back to the default — the cap is never silently unbounded, and the existing
+    tests that monkeypatch ``MAX_CONCURRENT_FACILITATIONS`` still take effect (they set the fallback)."""
+    raw = os.environ.get(_CAP_ENV)
+    if raw is None:
+        return MAX_CONCURRENT_FACILITATIONS
+    try:
+        val = int(raw)
+    except ValueError:
+        return MAX_CONCURRENT_FACILITATIONS
+    return val if val >= 0 else MAX_CONCURRENT_FACILITATIONS
+
+
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT: set[str] = set()  # run_keys with a live worker (in-process; the concurrency cap)
 _CANCEL_REQUESTED: set[str] = set()  # session_ids cancelled before the worker registered (race-close)
@@ -212,10 +231,11 @@ def start_facilitation(
     # From here we OWN a fresh reservation — any failure before the worker takes over MUST roll it back
     # (else a retry dedupes to a run that never executes, until the TTL silently expires — the cap-leak).
     try:
-        with _INFLIGHT_LOCK:  # H-5 — concurrency cap
-            if len(_INFLIGHT) >= MAX_CONCURRENT_FACILITATIONS:
+        with _INFLIGHT_LOCK:  # H-5 — concurrency cap (env-configurable, #4)
+            cap = _max_concurrent_facilitations()
+            if len(_INFLIGHT) >= cap:
                 raise FacilitationCapError(
-                    f"{MAX_CONCURRENT_FACILITATIONS} facilitations already in flight — try again shortly")
+                    f"{cap} facilitations already in flight — try again shortly")
             _INFLIGHT.add(run_key)
         fac = F.KickoffFacilitator(
             cfg, roster=roster, session_id=session_id, cost_tracker=cost_tracker,

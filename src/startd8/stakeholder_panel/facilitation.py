@@ -41,7 +41,9 @@ Hardening (GE-M3b, on THIS module, per parent FR-13c / FR-GE-10 H1/H2/H3 + FR-GE
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -150,6 +152,66 @@ _SYNTH_SYS = (
 
 # Transcript contract (FR-UX-1): the exact path the observability-UX viewer polls.
 TRANSCRIPT_SUBDIR = ".startd8/kickoff-panel"
+
+# ── #5 Outside-view cache (Mottainai) ────────────────────────────────────────────────────────────────
+# The R0 outside-view is a reference-class base-rate forecast — a pure function of (objective, strategy,
+# model). It does NOT depend on the roster, the question, the desc, or the grounding, so it is identical
+# across re-runs of the same project and re-paying the premium LLM call is waste. Cache it keyed on a
+# hash of exactly those inputs (so a changed objective/strategy or a tier switch → fresh key → recompute).
+_OV_CACHE_FILE = "outside-view-cache.json"
+_OV_NOCACHE_ENV = "STARTD8_OUTSIDE_VIEW_NOCACHE"
+
+
+def _ov_cache_disabled() -> bool:
+    """Opt-out escape hatch: set STARTD8_OUTSIDE_VIEW_NOCACHE=1 to always recompute (never load-bearing)."""
+    return os.environ.get(_OV_NOCACHE_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
+def _ov_cache_key(objective: str, strategy: str, model: str) -> str:
+    """Bind the cache entry to the EXACT inputs the forecast derives from (model included so a
+    premium↔cheap tier switch can't reuse the other tier's forecast)."""
+    blob = "\x00".join([objective or "", strategy or "", model or ""])
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _ov_cache_path(project) -> Path:
+    return Path(project).expanduser() / TRANSCRIPT_SUBDIR / _OV_CACHE_FILE
+
+
+def _ov_cache_load(project, key: str) -> Optional[str]:
+    """Return the cached outside-view text for *key*, or None (miss/corrupt/absent — best-effort)."""
+    path = _ov_cache_path(project)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        val = data.get(key)
+        return val if isinstance(val, str) and val else None
+    except Exception:  # noqa: BLE001 — a corrupt cache is a miss, never a failure
+        return None
+
+
+def _ov_cache_store(project, key: str, text: str) -> None:
+    """Persist the outside-view under *key* (best-effort; a cache write must never break the run)."""
+    if not text:
+        return
+    path = _ov_cache_path(project)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    data = {}
+            except Exception:  # noqa: BLE001 — corrupt existing cache → start fresh
+                data = {}
+        data[key] = text
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, path)  # atomic
+    except Exception:  # noqa: BLE001 — never load-bearing
+        pass
 
 
 # ============================ prompt builders =================================
@@ -1082,18 +1144,26 @@ class KickoffFacilitator:
                         )
 
             if cfg.outside_view:
-                o = self._facilitator_agent(OUTSIDE_VIEW_SPEC, "outside-view", _NEUTRAL_SYS)
-                # Reference class DERIVED from this project's objective/strategy (not hardcoded — the
-                # old fixed Online-Boutique class silently mis-forecast every non-OB project).
-                r = await o.agenerate(
-                    "Take the OUTSIDE VIEW (reference-class forecasting) for THIS initiative:\n"
-                    f"OBJECTIVE: {cfg.objective}\nSTRATEGY: {cfg.strategy}\n\n"
-                    "First, NAME the general reference class this initiative belongs to (ignore its "
-                    "specifics). Then give the rough BASE RATE of initiatives in that class clearly "
-                    "succeeding, and the 3-4 most COMMON FAILURE MODES for initiatives like this. Be "
-                    "candid about typical disappointment."
-                )
-                prep["outside_view"] = self._agent_text(r)
+                # #5 (Mottainai): the outside view is a pure fn of (objective, strategy, model) — reuse a
+                # cached forecast for identical inputs instead of re-paying the premium call.
+                ov_key = _ov_cache_key(cfg.objective, cfg.strategy, OUTSIDE_VIEW_SPEC)
+                cached_ov = None if _ov_cache_disabled() else _ov_cache_load(cfg.project, ov_key)
+                if cached_ov is not None:
+                    prep["outside_view"] = cached_ov  # cache hit — no LLM call
+                else:
+                    o = self._facilitator_agent(OUTSIDE_VIEW_SPEC, "outside-view", _NEUTRAL_SYS)
+                    # Reference class DERIVED from this project's objective/strategy (not hardcoded — the
+                    # old fixed Online-Boutique class silently mis-forecast every non-OB project).
+                    r = await o.agenerate(
+                        "Take the OUTSIDE VIEW (reference-class forecasting) for THIS initiative:\n"
+                        f"OBJECTIVE: {cfg.objective}\nSTRATEGY: {cfg.strategy}\n\n"
+                        "First, NAME the general reference class this initiative belongs to (ignore its "
+                        "specifics). Then give the rough BASE RATE of initiatives in that class clearly "
+                        "succeeding, and the 3-4 most COMMON FAILURE MODES for initiatives like this. Be "
+                        "candid about typical disappointment."
+                    )
+                    prep["outside_view"] = self._agent_text(r)
+                    _ov_cache_store(cfg.project, ov_key, prep["outside_view"])
                 self._emit_prep("outside_view", OUTSIDE_VIEW_SPEC, prep["outside_view"])
 
             # R1 individual means-ends (challengers get challenger framing; posture picks the framing)
