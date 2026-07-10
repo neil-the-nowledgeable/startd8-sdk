@@ -78,6 +78,24 @@
 
 ---
 
+## 0.3 Spike Validation (2026-07-10)
+
+> The collector-in-sandbox spike (throwaway prototype + report on its worktree branch)
+> confirmed the load-bearing feasibility and corrected one requirement:
+
+- **Feasible, no `sandbox.py` change.** `otelcol-contrib` runs under the repo's own
+  `run_service_sandboxed` seatbelt loopback-only profile; OTLP receive (4317) + prometheus
+  export (8889) on 127.0.0.1 work while **egress stays denied** (proven with a negative
+  control: in-sandbox connect to `1.1.1.1:443` → `PermissionError`; loopback succeeds).
+- **RED surface binds 4/4** against the real `span-metrics-connector` profile:
+  `calls_total{service_name="checkoutservice",status_code="STATUS_CODE_ERROR"}` +
+  `...OK}` + `duration_milliseconds_bucket`. Scrape-and-match (FR-4) viable with a ~20-line
+  text parser; `extract_service_hints` confirmed importable.
+- **FR-8 corrected** → poll for **non-zero** throughput (see FR-8).
+- **Config is load-bearing:** 4 non-obvious knobs separate "binds" from "silently unbound"
+  (`namespace: ""`, no explicit `span.kind` dimension, `resource_to_telemetry_conversion`,
+  `telemetry.metrics.level: none`). Ship the spike's config verbatim (Step 0).
+
 ## 1. Problem Statement
 
 The shipped **static** observability-readiness term (B1) reads the generated *source* and is
@@ -151,9 +169,12 @@ degrade-honest, on loopback inside the existing sandbox.
   Mirrors the benchmark's `degraded` vs `model_fault` split (FR-32) and the fidelity harness's
   `unknown` vs `fail`.
 
-- **FR-8 — Convergence gate.** After the suite generates traffic, **poll** the query surface until
-  the throughput metric appears (span-metrics settle) or a bounded timeout; a timeout with zero
-  metrics ⇒ `no-telemetry` (FR-7), never a false pass.
+- **FR-8 — Convergence gate (poll for NON-ZERO throughput).** After the suite generates traffic,
+  **poll** the query surface until the throughput metric is **present AND non-zero** (spike finding:
+  the first scrape can read `calls_total 0` for a beat — the counter delta hasn't accumulated — while
+  the histogram is already correct; a present-only check would false-early) or a bounded timeout.
+  Timeout with zero throughput ⇒ `no-telemetry` (FR-7), never a false pass. **Settle default 8s /
+  cap 15s** (convergence measured at median 2.7s, max 3.8s cold).
 
 - **FR-9 — Bounded added cost.** Collector boot + settle + replay must stay within the cell budget
   (`per_run_timeout_s`); target ≤ +30s/cell. The whole dimension is opt-in (FR-1), so the default
@@ -185,11 +206,9 @@ degrade-honest, on loopback inside the existing sandbox.
   resource caps (Python `opentelemetry-instrument`, Node `--require`). Java/C# agents are heavier.
   Go is deferred (NR-5). What fraction of the OB suite is thereby covered in v1? (Python services
   only — quantify.)
-- **OQ-4 — Collector binary provisioning:** vendor `otelcol-contrib` (~80 MB, has the span-metrics
-  connector) per platform at prepare time (like the Go stubs), or require it present. Size/boot
-  budget under the sandbox.
-- **OQ-5 — Settle timeout (FR-8):** span-metrics convergence is ~1–3s after first span with default
-  batching; pick a default + cap and confirm empirically.
+- **OQ-4 → resolved (spike):** vendor `otelcol-contrib` **v0.156.0** per platform at prepare time.
+  Boot median 0.32s (max 1.5s cold), RSS ~136 MB — within the sandbox's 2 GB / timeouts.
+- **OQ-5 → resolved (spike):** settle default **8s / cap 15s** (convergence median 2.7s).
 
 ---
 
