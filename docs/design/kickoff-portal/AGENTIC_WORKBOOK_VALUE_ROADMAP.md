@@ -1,0 +1,103 @@
+# Agentic Workbook — Value Roadmap (post-ship enhancement backlog)
+
+**Date:** 2026-07-09
+**Status:** Backlog / advisory
+**Context:** The Agentic Workbook cockpit (M1–M5) shipped to `origin/main` (`04fb891e`). This doc
+captures the discovered value/quick-win/architectural backlog so it isn't lost (Mottainai).
+**Relates to:** `AGENTIC_WORKBOOK_REQUIREMENTS.md`, `AGENTIC_WORKBOOK_PLAN.md`.
+
+---
+
+## Core value gap
+
+The cockpit today shows **state and history** (field tables, raw transcript, pending queue). It does
+**not** yet tell the user **what to do next**, show **progress over time**, or hand them a
+**shareable output**. Almost everything below closes one of those three gaps using data we already
+persist in the `AgenticView` / session snapshot. **Nearly all of it is $0 deterministic** (bucket 1);
+the only cost-bearing idea is an *optional*, gated LLM session summary. None of it generates the
+user's real content — it surfaces and routes the user's **own** decisions and state (inside the
+SDK's bucket boundary).
+
+> The single most underused fact: the Assistant tab renders a *raw transcript* — the lowest
+> value-per-pixel surface — when the snapshot already contains everything needed for a
+> "session at a glance."
+
+---
+
+## Tier 1 — Quick wins (≈½ day total, $0, no new stores) — **IN PROGRESS**
+
+| # | Suggestion | User value | Reuses |
+|---|---|---|---|
+| 1 | **"Your next step" callout** on the Status tab (and empty states) | Tells the user what to *do*, not just what *is* — the biggest UX gap | `ranking.next_action(state, readiness)` (already used by `field_states`) folded into `build_agentic_view` |
+| 2 | **Readiness "big number"** panel ("62% ready · 3 blocked · 5 ok") | At-a-glance progress; markdown big-number = embed-consistent | `KickoffState.attention_counts` / `counts` |
+| 3 | **"Session at a glance"** deterministic summary heading the transcript ("2 surveys, 1 assess, 3 proposals, 2 blockers, cost ≈$0.003") | Turns the least-valuable panel into the most-scannable | derived from `snapshot.turns` (tool-call names + roles we already store) |
+| 4 | **Surface `stop_reason`** ("stopped at budget cap — raise `--max-cost`") | Transparency about *why* the assistant stopped | thread the last `AgenticResult.stop_reason` into the snapshot |
+| 5 | **Actionable session-end hint** — print the exact `kickoff portal --dynamic --provision …` command | Adoption: users don't know the cockpit exists or how to refresh it | extend `_persist_kickoff_snapshot` |
+| 6 | **UID length preflight + hash-suffix** | Reliability — we *hit* this (>40-char UID silently fails to provision) | `workbook_v2_uid` |
+
+---
+
+## Tier 2 — Functional capabilities (≈1–2 days each, $0)
+
+- **`startd8 kickoff cockpit` — a CLI/TUI parity view.** FR-3 promised the read-model is the single
+  oracle "so the dashboard *and any CLI/TUI view* derive from the same oracle" — but only the
+  dashboard consumer shipped. A Rich terminal render of the same `AgenticView` delivers the cockpit's
+  value **without a running Grafana**. Read-model is done; this is pure rendering.
+- **`startd8 kickoff proposals` — list + numbered apply.** The Proposals tab shows the two-step
+  `negotiate && apply`; a CLI helper that lists pending proposals and applies your pick closes the
+  confirm loop from "copy-paste a command" to "pick #2." (CLI stays sole writer — NR-2 intact.)
+- **Shareable "kickoff readout" export** (static HTML/Markdown from the `AgenticView`): readiness,
+  decision summary, pending items with confirm commands. The **higher-value output** — turns an
+  ephemeral session into something you can email a stakeholder or attach to a ticket.
+
+---
+
+## Tier 3 — Architectural leverage (higher payoff, bigger lift)
+
+- **Promote the session snapshot to the `AgenticSession` layer** (`agents/agentic.py`). We solved a
+  *general* problem ("AgenticSession has no `save`/`to_dict`") in a *specific* place (kickoff).
+  Lifting `to_snapshot()` up means **every agentic surface** (consultation, concierge, future Prime)
+  gets durable, dashboard-able sessions for free. Biggest leverage item.
+- **First-class v2 `logs`/datasource panel constructor** in `dashboard_creator/v2`. Today the Loki
+  panel is a hardcoded dict inside `portal_spec_v2`. The v2 module only ships `text`/`table`;
+  extracting a tested `logs_panel(...)` **broadens the entire dynamic-dashboards capability** — every
+  future v2 dashboard can bind a live datasource.
+- **Fix the OTel Meter→Mimir metrics path** (a *known* broken path: "`emit()`=0 Mimir metrics").
+  Emitting `kickoff.readiness.percent`, `kickoff.session.cost_usd`, `kickoff.proposals.pending` as
+  real gauges unlocks a **readiness burndown + cost-over-time** panel — the most *motivating*
+  visualization (progress). Both a bug fix and a value unlock.
+- **Snapshot `schema_version` upgrade seam** (`_upgrade(dict)` registry). We built the *degrade*
+  contract; add an *upgrade* path so old snapshots keep rendering after a bump (Mottainai).
+
+---
+
+## Operational & governance
+
+- **Session-history ledger** (`.startd8/kickoff/sessions.jsonl`, compact — cost/readiness/counts, not
+  transcripts) → enables **"you went 40% → 62% this session"** (Kaizen progress delta). Same kickoff
+  dir, no store-philosophy violation.
+- **Audit/activity feed** from the transcript-logger pattern (proposals made / confirmed / discarded
+  as structured Loki events) → a trust/provenance surface + the basis for a **shared founder ↔
+  FDE/VIPP collaboration view** on the Proposals queue.
+- **Retention/purge** (`kickoff cockpit --purge`) + documented Loki retention — the redacted
+  transcript is still a persistent surface; give users a clean-up lever.
+- **Grafana alert** ("proposal pending > 24h" / "readiness stalled") once metrics exist — turns the
+  passive board into an active nudge.
+
+---
+
+## Higher-value outputs
+
+- **Shareable kickoff readout** (Tier 2) — the primary "communicable deliverable" win.
+- **Decision log** — the confirmed proposals (VIPP dispositions + `docs/kickoff/confirmed.yaml`) are a
+  decision record; "here's what you've decided so far" is high narrative value.
+- **(Optional, cost-bearing, gated) LLM session summary** for the Assistant tab — one cheap pass
+  ("resolved X, Y; open: Z"). Arguably bucket-3 integration, not bucket-4 content; **gate it**.
+
+---
+
+## Recommended sequence
+
+1. **Tier-1 bundle (#1–#6)** — one ½-day increment, all $0, immediately visible value. *(started here)*
+2. **`startd8 kickoff cockpit` CLI parity view** — delivers value to non-Grafana users; pays off FR-3.
+3. **Meter→Mimir fix → readiness burndown** — one bug fix that unlocks the progress story.
