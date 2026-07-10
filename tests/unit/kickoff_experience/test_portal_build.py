@@ -265,10 +265,14 @@ def test_index_spec_is_a_dashlist_by_workbook_tag():
 
 
 def test_index_compiles_empty_portfolio():
+    # M4: the portfolio index is now a pure-Python v2 dashlist (no jsonnet toolchain).
     res = build_index(_proj())  # zero Workbooks anywhere — must still render
     assert res.ok, res.skipped_reason
     d = json.loads(Path(res.json_path).read_text())
-    assert d["uid"] == INDEX_UID and d["panels"][0]["type"] == "dashlist"
+    assert d["metadata"]["name"] == INDEX_UID
+    panel = list(d["spec"]["elements"].values())[0]
+    assert panel["spec"]["vizConfig"]["kind"] == "dashlist"
+    assert panel["spec"]["vizConfig"]["spec"]["options"]["tags"] == ["workbook"]
 
 
 def test_index_provision_to_shared_url_needs_confirmation():

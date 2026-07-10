@@ -18,7 +18,6 @@ from .portal_spec import (
     INDEX_UID,
     WorkbookSlugError,
     build_kickoff_portal_spec,
-    build_workbook_index_spec,
     workbook_uid,
 )
 
@@ -391,19 +390,41 @@ def build_index(
                 "(--yes) — the portfolio index is global (NR-6)"
             ),
         )
-    if (reason := _toolchain_reason()) is not None:
-        return PortalResult(uid=INDEX_UID, skipped_reason=reason)
+    # Convergence M4: the index is now a pure-Python v2 dashlist (no jsonnet toolchain).
     try:
-        spec = build_workbook_index_spec()
+        from ..dashboard_creator.v2 import persist_v2_dashboard, provision_v2
+        from .portal_spec_v2 import build_index_v2
+
+        board = build_index_v2()
         dest = (
             Path(out_dir).expanduser()
             if out_dir
             else (root / ".startd8" / "dashboards")
         )
-        result = _run_workflow(spec, dest, provision_url)
+        pres = persist_v2_dashboard(board, output_dir=dest)
+        summary: Dict[str, Any] = {"schema": "kickoff.portal-index.v2", "uid": INDEX_UID}
+        provisioned_url: Optional[str] = None
+        if provision_url:
+            from ..dashboard_creator.grafana_client import GrafanaClient
+
+            client = GrafanaClient(
+                provision_url, allow_insecure=provision_url.startswith("http://")
+            )
+            r = provision_v2(client, board)
+            if not r.success:
+                return PortalResult(
+                    uid=INDEX_UID,
+                    json_path=str(pres.json_path),
+                    summary=summary,
+                    skipped_reason=r.skipped_reason or r.error,
+                )
+            provisioned_url = f"{provision_url.rstrip('/')}/d/{INDEX_UID}"
+        return PortalResult(
+            uid=INDEX_UID,
+            json_path=str(pres.json_path),
+            provisioned_url=provisioned_url,
+            summary=summary,
+        )
     except Exception as exc:  # pragma: no cover - degrade
         logger.warning("Workbook index generation failed: %s", exc)
         return PortalResult(uid=INDEX_UID, skipped_reason=f"generation failed: {exc}")
-    return _persist(
-        result, provision_url, {"schema": "kickoff.portal-index.v1", "uid": INDEX_UID}
-    )

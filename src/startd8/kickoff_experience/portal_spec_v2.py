@@ -33,6 +33,7 @@ from ..dashboard_creator.v2 import (
     ConditionalRendering,
     CustomVariable,
     GridItem,
+    GridLayout,
     RowsLayout,
     RowsLayoutRow,
     TabsLayout,
@@ -44,6 +45,8 @@ from ..dashboard_creator.v2 import (
     text_panel,
 )
 from .portal_spec import (
+    INDEX_TITLE,
+    INDEX_UID,
     WORKBOOK_TAG,
     _ATTENTION_DISPLAY,
     _ATTENTION_SORT,
@@ -464,6 +467,49 @@ def _pipeline_markdown(view: Any) -> str:
             for a in adv:
                 lines.append(f"- {_md_cell(_truncate(str(a), 160))}")
     return "\n".join(lines)
+
+
+def _dashlist_panel(pid: int, title: str, tags: List[str]) -> V2Panel:
+    """A ``dashlist`` panel that link-lists dashboards by tag (the portfolio index; no datasource)."""
+    return V2Panel(
+        id=pid,
+        title=title,
+        viz_config={
+            "kind": "dashlist",
+            "spec": {
+                "options": {
+                    "tags": list(tags),
+                    "showHeadings": True,
+                    "showSearch": False,
+                    "showRecentlyViewed": False,
+                    "showStarred": False,
+                    "maxItems": 100,
+                },
+                "fieldConfig": {"defaults": {}, "overrides": []},
+            },
+        },
+    )
+
+
+def build_index_v2() -> Dict[str, Any]:
+    """The portfolio-index board as a pure-Python v2 dashboard (convergence M4 — no jsonnet).
+
+    A single ``dashlist`` filtered to the ``workbook`` tag: self-updating (Grafana resolves the tag at
+    view time), a global singleton at the canonical ``INDEX_UID``. Discovers every project's cockpit
+    (and any legacy classic board still tagged ``workbook``). Deterministic, ``$0``."""
+    elements = {"panel-1": _dashlist_panel(1, "Project Workbooks", [WORKBOOK_TAG])}
+    return emit_v2_dashboard(
+        name=INDEX_UID,
+        title=INDEX_TITLE,
+        description=(
+            "Portfolio index of every project's Digital Project Workbook — a Grafana dashlist filtered "
+            f"to the '{WORKBOOK_TAG}' tag; stays current automatically as projects are created "
+            "($0, deterministic; no per-project registry)."
+        ),
+        tags=["portal", "kickoff", WORKBOOK_TAG, "index"],
+        elements=elements,
+        layout=GridLayout(items=[GridItem(element="panel-1", height=24)]),
+    )
 
 
 def build_workbook_v2(
