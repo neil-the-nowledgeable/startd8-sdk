@@ -18,6 +18,8 @@ import yaml  # noqa: F401
 
 from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
 from .artifact_generator_models import *  # noqa: F401,F403
+from .metric_descriptor import MetricDescriptor, profile_for_transport
+from .spec import Receiver
 
 try:
     from startd8.logging_config import get_logger
@@ -51,15 +53,20 @@ _INSTRUMENT_TO_PANEL: Dict[str, str] = {
 }
 
 
+# PromQL query templates keyed by instrument type. The ``{selector}`` slot is a
+# full ``{...}`` label selector built from the resolved MetricDescriptor (FR-4),
+# so the service-identity label key (``service`` vs ``service_name``) and any
+# compound matchers flow in rather than being hardcoded. For the semconv default
+# the selector is ``{service="<svc>"}`` — byte-identical to the prior templates.
 _INSTRUMENT_TO_QUERY: Dict[str, str] = {
     "histogram": (
         "histogram_quantile(0.99, "
-        'rate({metric}_bucket{{service="{service}"}}[$__rate_interval]))'
+        "rate({metric}_bucket{selector}[$__rate_interval]))"
     ),
-    "counter": 'rate({metric}_total{{service="{service}"}}[$__rate_interval])',
-    "gauge": '{metric}{{service="{service}"}}',
-    "up_down_counter": '{metric}{{service="{service}"}}',
-    "observable_gauge": '{metric}{{service="{service}"}}',
+    "counter": "rate({metric}_total{selector}[$__rate_interval])",
+    "gauge": "{metric}{selector}",
+    "up_down_counter": "{metric}{selector}",
+    "observable_gauge": "{metric}{selector}",
 }
 
 
@@ -154,6 +161,22 @@ def _metric_unit(metric_name: str) -> str:
     return ""
 
 
+def _descriptor_for(
+    service: ServiceHints, descriptor: Optional[MetricDescriptor]
+) -> MetricDescriptor:
+    """Resolve the effective MetricDescriptor for a service (Step 3, FR-4).
+
+    The orchestrator (``artifact_generator.py``) builds the descriptor once per
+    service via ``resolve_descriptor`` and threads it in. When a generator is
+    called standalone (tests, older call sites) with ``descriptor=None``, fall
+    back to the transport default (``semconv-{transport}``), which reproduces the
+    pre-Step-3 hardcoded behavior byte-for-byte.
+    """
+    if descriptor is not None:
+        return descriptor
+    return profile_for_transport(service.transport)
+
+
 def _derivation_comment(derivations: List[DerivationTrace]) -> str:
     """Build a YAML comment block documenting derivation traces."""
     lines = ["# Derivation:"]
@@ -165,33 +188,46 @@ def _derivation_comment(derivations: List[DerivationTrace]) -> str:
 def generate_alert_rules(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate Prometheus alert rules for a single service.
 
     Creates alerts for duration metrics (latency) and request count metrics
-    (availability) using convention-based metrics from service hints.
+    (availability) using the resolved :class:`MetricDescriptor` (FR-4). The
+    descriptor supplies metric names, the service-identity label, the error
+    selector, and the latency unit; ``descriptor=None`` falls back to the
+    transport default (``semconv-{transport}``) for byte-identical back-compat.
     """
+    descriptor = _descriptor_for(service, descriptor)
     derivations: List[DerivationTrace] = []
     severity = _severity_for(business, derivations)
     rules: List[Dict[str, Any]] = []
+
+    # Descriptor-sourced metric shapes (FR-4): names, selectors, unit.
+    latency_bucket = descriptor.latency_bucket_metric
+    throughput_metric = descriptor.throughput_metric
+    total_selector = descriptor.selector(service.service_id)
+    error_selector = descriptor.selector(service.service_id, error=True)
 
     # Resolve thresholds
     latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
     avail_raw, _ = _resolve_threshold("availability", business, derivations)
 
     for metric in service.convention_metrics:
-        prom = _prom_name(metric.name)
-
         # Duration/histogram metrics → latency alert
         if metric.type == "histogram" and "duration" in metric.name and latency_raw:
-            threshold_sec = _parse_duration_to_seconds(latency_raw)
+            # FR-4a: emit the threshold in the descriptor's native unit
+            # (500ms → 0.5 for seconds descriptors, 500 for millisecond ones).
+            threshold = descriptor.scale_threshold_seconds(
+                _parse_duration_to_seconds(latency_raw)
+            )
             rules.append(
                 {
                     "alert": _alert_name(service.service_id, "LatencyP99High"),
                     "expr": (
                         f"histogram_quantile(0.99,\n"
-                        f'  rate({prom}_bucket{{service="{service.service_id}"}}[5m])\n'
-                        f") > {threshold_sec}"
+                        f'  rate({latency_bucket}{total_selector}[5m])\n'
+                        f") > {threshold}"
                     ),
                     "for": "5m",
                     "labels": {
@@ -218,7 +254,6 @@ def generate_alert_rules(
             and avail_raw
             and not any(r.get("alert", "").endswith("ErrorRateHigh") for r in rules)
         ):
-            error_filter = _error_filter_for_protocol(service.transport)
             avail_frac = _parse_availability_to_fraction(avail_raw)
             error_threshold = round(1.0 - avail_frac, 4)
             rules.append(
@@ -226,8 +261,8 @@ def generate_alert_rules(
                     "alert": _alert_name(service.service_id, "ErrorRateHigh"),
                     "expr": (
                         f"(\n"
-                        f'  rate({prom}_count{{service="{service.service_id}",{error_filter}}}[5m])\n'
-                        f'  / rate({prom}_count{{service="{service.service_id}"}}[5m])\n'
+                        f'  rate({throughput_metric}{error_selector}[5m])\n'
+                        f'  / rate({throughput_metric}{total_selector}[5m])\n'
                         f") > {error_threshold}"
                     ),
                     "for": "5m",
@@ -255,15 +290,14 @@ def generate_alert_rules(
             and avail_raw
             and not any(r.get("alert", "").endswith("AvailabilityLow") for r in rules)
         ):
-            error_filter = _error_filter_for_protocol(service.transport)
             avail_frac = _parse_availability_to_fraction(avail_raw)
             rules.append(
                 {
                     "alert": _alert_name(service.service_id, "AvailabilityLow"),
                     "expr": (
                         f"(\n"
-                        f'  1 - rate({prom}_count{{service="{service.service_id}",{error_filter}}}[5m])\n'
-                        f'    / rate({prom}_count{{service="{service.service_id}"}}[5m])\n'
+                        f'  1 - rate({throughput_metric}{error_selector}[5m])\n'
+                        f'    / rate({throughput_metric}{total_selector}[5m])\n'
                         f") < {avail_frac}"
                     ),
                     "for": "5m",
@@ -344,40 +378,59 @@ def _alert_name(service_id: str, suffix: str) -> str:
 def _error_filter_for_protocol(transport: str) -> str:
     """Return the PromQL label filter for error responses by protocol.
 
+    Delegates to the transport's default convention profile
+    (``profile_for_transport(...).error_selector``) — the single source of
+    truth for error selectors (FR-4). Retained as a thin shim so existing
+    call sites and tests that import it keep working; new code SHOULD read
+    ``descriptor.error_selector`` directly.
+
     gRPC codes per OTel semantic conventions (server-side failures only):
-    - Unavailable (14): service not reachable
-    - Internal (13): unhandled server error
-    - Unimplemented (12): method not supported
-    - DataLoss (15): unrecoverable data loss
-    Unknown (2) is excluded — it is ambiguous and often client-side.
+    Unavailable/Internal/Unimplemented/DataLoss; Unknown is excluded as
+    ambiguous. HTTP uses ``status=~"5.."``.
     """
-    if transport == "grpc":
-        return 'grpc_code=~"Unavailable|Internal|Unimplemented|DataLoss"'
-    # HTTP
-    return 'status=~"5.."'
+    return profile_for_transport(transport).error_selector
 
 
 def generate_dashboard_spec(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate a DashboardSpec YAML for a single service.
 
     Produces one panel per convention metric with panel type derived from
-    instrument type. Output is compatible with DashboardCreatorWorkflow.
+    instrument type. Query selectors bind to the resolved
+    :class:`MetricDescriptor` (FR-4); ``descriptor=None`` falls back to the
+    transport default for byte-identical back-compat. Output is compatible with
+    DashboardCreatorWorkflow.
     """
+    descriptor = _descriptor_for(service, descriptor)
+    selector = descriptor.selector(service.service_id)
     derivations: List[DerivationTrace] = []
     panels: List[Dict[str, Any]] = []
 
+    # Base name the histogram_quantile ``_bucket`` templates build on. For a
+    # duration histogram this is the descriptor's latency metric (span-metrics:
+    # ``duration_milliseconds``; semconv: ``rpc_server_duration`` — byte-identical
+    # to the old ``_prom_name(metric.name)`` for the semconv default).
+    latency_base = descriptor.latency_bucket_metric
+    if latency_base.endswith("_bucket"):
+        latency_base = latency_base[: -len("_bucket")]
+
     for metric in service.convention_metrics:
         prom = _prom_name(metric.name)
+        is_latency = metric.type == "histogram" and "duration" in metric.name
+        metric_base = latency_base if is_latency else prom
         panel_type = _INSTRUMENT_TO_PANEL.get(metric.type, "timeseries")
         query_tpl = _INSTRUMENT_TO_QUERY.get(metric.type)
         if not query_tpl:
             continue
 
-        query = query_tpl.format(metric=prom, service=service.service_id)
-        unit = _metric_unit(metric.name)
+        query = query_tpl.format(metric=metric_base, selector=selector)
+        # FR-4a: latency panels carry the descriptor's native unit (s vs ms);
+        # non-latency panels keep name-inferred units. For the semconv default
+        # descriptor.latency_unit == "s", matching _metric_unit("*.duration").
+        unit = descriptor.latency_unit if is_latency else _metric_unit(metric.name)
 
         # Infer group from metric name
         group = _panel_group(metric.name)
@@ -394,10 +447,13 @@ def generate_dashboard_spec(
         if "duration" in metric.name and metric.type == "histogram":
             latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
             if latency_raw:
-                threshold_sec = _parse_duration_to_seconds(latency_raw)
+                # FR-4a: threshold in the descriptor's native unit.
+                threshold = descriptor.scale_threshold_seconds(
+                    _parse_duration_to_seconds(latency_raw)
+                )
                 panel["thresholds"] = [
                     {"value": None, "color": "green"},
-                    {"value": threshold_sec, "color": "red"},
+                    {"value": threshold, "color": "red"},
                 ]
 
         panels.append(panel)
@@ -408,7 +464,7 @@ def generate_dashboard_spec(
             for quantile, label in [(0.50, "p50"), (0.95, "p95")]:
                 q_query = (
                     f"histogram_quantile({quantile}, "
-                    f'rate({prom}_bucket{{service="{service.service_id}"}}[$__rate_interval]))'
+                    f"rate({metric_base}_bucket{selector}[$__rate_interval]))"
                 )
                 panels.append({
                     "type": "timeseries",
@@ -419,15 +475,15 @@ def generate_dashboard_spec(
                 })
 
     # Synthesize RED-completing panels if missing (REQ-KZ-OBS-200a)
-    _ensure_red_coverage(panels, service, business, derivations)
+    _ensure_red_coverage(panels, service, business, derivations, descriptor)
 
     # Closure 1 / Gap 1: add domain panels for manifest_declared metrics,
     # grouped by intent (Cost & Tokens, Sessions, Health, Progress). These are
     # additive — the convention-based RED panels above remain the baseline.
-    _add_domain_panels(panels, service, derivations)
+    _add_domain_panels(panels, service, derivations, descriptor)
 
     # REQ-OAG-107: DB latency panels when databases were detected.
-    _add_database_panels(panels, service, derivations)
+    _add_database_panels(panels, service, derivations, descriptor)
 
     if not panels:
         return ArtifactResult(
@@ -480,6 +536,29 @@ def generate_dashboard_spec(
             {"type": "prometheusDatasource", "name": "datasource", "label": "Datasource"}
         ],
     }
+
+    # Datasource UID binding (REQ_DATASOURCE_UID_BINDING FR-4): when ContextCore
+    # resolved a real Grafana datasource UID for this service, inject it via
+    # config_overrides (the supported path into the renderer's config.datasources)
+    # under a key the base config lacks — so panels bind to the real UID. No UID ⇒
+    # nothing is injected and the output is byte-identical to today's (FR-7).
+    _bound: Dict[str, Any] = {}
+    _prom_uid = (service.datasource_uids or {}).get("prometheus")
+    if _prom_uid:
+        _bound["prometheusBound"] = {"uid": _prom_uid, "type": "prometheus"}
+    _loki_uid = (service.datasource_uids or {}).get("loki")
+    if _loki_uid:
+        _bound["lokiBound"] = {"uid": _loki_uid, "type": "loki"}
+    if _bound:
+        spec_dict["config_overrides"] = {"datasources": _bound}
+        derivations.append(
+            DerivationTrace(
+                field="datasource_uid",
+                source="manifest.spec.observability.datasources (or per-target)",
+                transformation=", ".join(f"{k}={v['uid']}" for k, v in _bound.items()),
+                tier="manifest",
+            )
+        )
 
     header = (
         f"# Generated by startd8 observability artifact generator\n"
@@ -566,16 +645,27 @@ def _domain_unit(metric_name: str) -> str:
     return "short"
 
 
-def _domain_query(metric: ConventionMetric, service_id: str) -> str:
+def _domain_query(
+    metric: ConventionMetric,
+    service_id: str,
+    descriptor: Optional[MetricDescriptor] = None,
+) -> str:
     """Build a PromQL query for a declared metric.
 
     Counters become rate panels; gauges/ratios are read directly. Declared
     metric names are already Prometheus-style, so (unlike convention metrics)
     no ``_total`` suffix is appended to names that already carry it.
+
+    The service-identity selector is sourced from the resolved
+    :class:`MetricDescriptor` (FR-4); ``descriptor=None`` falls back to the
+    ``service=`` semconv key for byte-identical back-compat.
     """
     name = metric.name
     mtype = _domain_metric_type(metric)
-    label = f'{{service="{service_id}"}}'
+    if descriptor is not None:
+        label = descriptor.selector(service_id)
+    else:
+        label = f'{{service="{service_id}"}}'
     if mtype == "counter":
         target = name if name.endswith("_total") else f"{name}_total"
         return f"rate({target}{label}[$__rate_interval])"
@@ -592,12 +682,13 @@ def _add_domain_panels(
     panels: List[Dict[str, Any]],
     service: ServiceHints,
     derivations: List[DerivationTrace],
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> None:
     """Append a panel per manifest_declared metric (Closure 1 / Gap 1).
 
     Mutates ``panels`` in place. Skips declared metrics whose query already
     appears among existing panels (dedup against convention panels), so a
-    metric is never visualised twice.
+    metric is never visualised twice. Selectors bind to *descriptor* (FR-4).
     """
     if not service.declared_metrics:
         return
@@ -605,7 +696,7 @@ def _add_domain_panels(
     existing_exprs = {str(p.get("expr", "")) for p in panels}
     added = 0
     for metric in service.declared_metrics:
-        query = _domain_query(metric, service.service_id)
+        query = _domain_query(metric, service.service_id, descriptor)
         if query in existing_exprs:
             continue
         mtype = _domain_metric_type(metric)
@@ -645,19 +736,26 @@ def _add_database_panels(
     panels: List[Dict[str, Any]],
     service: ServiceHints,
     derivations: List[DerivationTrace],
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> None:
     """Add a DB latency panel per detected database (REQ-OAG-107).
 
     Only fires when the service has ``detected_databases``. Uses the OTel
-    ``db.client.operation.duration`` histogram scoped by ``db_system``.
+    ``db.client.operation.duration`` histogram scoped by the descriptor's
+    service-identity label and ``db_system`` label key (FR-1a);
+    ``descriptor=None`` falls back to ``service`` / ``db_system`` for
+    byte-identical back-compat.
     """
     if not service.detected_databases:
         return
+    descriptor = _descriptor_for(service, descriptor)
+    service_matcher = descriptor.service_matcher(service.service_id)
+    db_key = descriptor.db_system_label_key
     for db in service.detected_databases:
         expr = (
             "histogram_quantile(0.99, "
-            f'rate(db_client_operation_duration_bucket{{service="{service.service_id}",'
-            f'db_system="{db}"}}[$__rate_interval]))'
+            f'rate(db_client_operation_duration_bucket{{{service_matcher},'
+            f'{db_key}="{db}"}}[$__rate_interval]))'
         )
         panels.append(
             {
@@ -699,13 +797,17 @@ def _ensure_red_coverage(
     service: ServiceHints,
     business: BusinessContext,
     derivations: List[DerivationTrace],
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> None:
     """Synthesize missing Rate and Error panels for RED coverage (REQ-KZ-OBS-200a).
 
     Inspects existing panels to determine which RED signals are present,
-    then adds synthetic panels for any that are missing. Panels are derived
-    from the service's transport type (gRPC vs HTTP).
+    then adds synthetic panels for any that are missing. Metric names, the
+    service-identity selector, and the error selector are sourced from the
+    resolved :class:`MetricDescriptor` (FR-4); ``descriptor=None`` falls back to
+    the transport default for byte-identical back-compat.
     """
+    descriptor = _descriptor_for(service, descriptor)
     # Shared RED detection — single source of truth with the validator
     try:
         from startd8.validators.observability_artifact_checks import (
@@ -722,23 +824,22 @@ def _ensure_red_coverage(
     if has_rate and has_error:
         return  # Already have full RED coverage
 
-    # Determine metric prefix from transport
-    error_filter = _error_filter_for_protocol(service.transport)
-    if service.transport == "grpc":
-        duration_metric = "rpc_server_duration"
-    else:
-        duration_metric = "http_server_duration"
+    # Descriptor-sourced throughput metric + selectors (FR-4). For the semconv
+    # default this is rpc_server_duration_count / http_server_duration_count with
+    # a {service="..."} selector — byte-identical to the prior hardcoded branch.
+    throughput_metric = descriptor.throughput_metric
+    total_selector = descriptor.selector(service.service_id)
+    error_selector = descriptor.selector(service.service_id, error=True)
 
     rate_expr = (
-        f'sum(rate({duration_metric}_count'
-        f'{{service="{service.service_id}"}}[$__rate_interval]))'
+        f'sum(rate({throughput_metric}'
+        f'{total_selector}[$__rate_interval]))'
     )
     error_expr = (
-        f'sum(rate({duration_metric}_count'
-        f'{{service="{service.service_id}",'
-        f'{error_filter}}}[$__rate_interval]))\n'
-        f'/ sum(rate({duration_metric}_count'
-        f'{{service="{service.service_id}"}}[$__rate_interval]))'
+        f'sum(rate({throughput_metric}'
+        f'{error_selector}[$__rate_interval]))\n'
+        f'/ sum(rate({throughput_metric}'
+        f'{total_selector}[$__rate_interval]))'
     )
 
     if not has_rate:
@@ -775,16 +876,18 @@ def _ensure_red_coverage(
     if business.availability:
         try:
             avail_target = round(float(business.availability) / 100.0, 6)
+            # [1h] window is intentionally kept (context-specific, not a
+            # descriptor axis); only the metric name + selectors bind to the
+            # descriptor (FR-4).
             avail_gauge_expr = (
                 f"(\n"
-                f"  sum(rate({duration_metric}_count"
-                f'{{service="{service.service_id}"}}[1h]))\n'
-                f"  - sum(rate({duration_metric}_count"
-                f'{{service="{service.service_id}",'
-                f'{_error_filter_for_protocol(service.transport)}}}[1h]))\n'
+                f"  sum(rate({throughput_metric}"
+                f'{total_selector}[1h]))\n'
+                f"  - sum(rate({throughput_metric}"
+                f'{error_selector}[1h]))\n'
                 f")\n"
-                f"/ sum(rate({duration_metric}_count"
-                f'{{service="{service.service_id}"}}[1h]))\n'
+                f"/ sum(rate({throughput_metric}"
+                f'{total_selector}[1h]))\n'
                 f"or vector(1)"
             )
             panels.append({
@@ -805,13 +908,22 @@ def _ensure_red_coverage(
 def generate_slo_definitions(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate OpenSLO-format SLO definitions for a single service.
 
     Produces one SLO per applicable business requirement:
     - availability → ratio-based SLO (good/total requests)
     - latency_p99 → threshold-based SLO (P99 under threshold)
+
+    Metric names, selectors, error selector, and the latency threshold unit are
+    sourced from the resolved :class:`MetricDescriptor` (FR-4 / FR-4a);
+    ``descriptor=None`` falls back to the transport default for byte-identical
+    back-compat.
     """
+    descriptor = _descriptor_for(service, descriptor)
+    total_selector = descriptor.selector(service.service_id)
+    error_selector = descriptor.selector(service.service_id, error=True)
     derivations: List[DerivationTrace] = []
     documents: List[str] = []
 
@@ -857,13 +969,14 @@ def generate_slo_definitions(
 
     # Availability SLO
     if counter_metric and avail_raw:
-        prom = _prom_name(counter_metric.name)
-        # When the counter was derived from a histogram, the Prometheus name
-        # needs a _count suffix (e.g. rpc_server_duration_count) — same
-        # pattern the alert generator uses for error rate and availability.
-        if "duration" in counter_metric.name and not prom.endswith("_count"):
-            prom = f"{prom}_count"
-        error_filter = _error_filter_for_protocol(service.transport)
+        # Throughput counter from the descriptor (FR-4). When the counter was
+        # derived from a duration histogram, the semconv default resolves to
+        # ``*_duration_count`` — the same name the prior _prom_name+_count path
+        # produced; span-metrics resolves to ``calls_total``.
+        if "duration" in counter_metric.name:
+            prom = descriptor.throughput_metric
+        else:
+            prom = _prom_name(counter_metric.name)
         avail_target = float(avail_raw)
 
         slo = {
@@ -894,7 +1007,7 @@ def generate_slo_definitions(
                                     "spec": {
                                         "query": (
                                             f'rate({prom}'
-                                            f'{{service="{service.service_id}"}}[5m])'
+                                            f'{total_selector}[5m])'
                                         ),
                                     },
                                 },
@@ -905,9 +1018,7 @@ def generate_slo_definitions(
                                     "spec": {
                                         "query": (
                                             f'rate({prom}'
-                                            f'{{service="{service.service_id}",'
-                                            f"{error_filter}"
-                                            f"}}[5m])"
+                                            f'{error_selector}[5m])'
                                         ),
                                     },
                                 },
@@ -931,8 +1042,16 @@ def generate_slo_definitions(
 
     # Latency SLO
     if histogram_metric and latency_raw:
-        prom = _prom_name(histogram_metric.name)
-        threshold_sec = _parse_duration_to_seconds(latency_raw)
+        # Latency histogram bucket base from the descriptor (FR-4). Byte-identical
+        # to _prom_name(histogram_metric.name) for the semconv default.
+        latency_bucket_base = descriptor.latency_bucket_metric
+        if latency_bucket_base.endswith("_bucket"):
+            latency_bucket_base = latency_bucket_base[: -len("_bucket")]
+        prom = latency_bucket_base
+        # FR-4a: threshold in the descriptor's native unit (s vs ms).
+        threshold = descriptor.scale_threshold_seconds(
+            _parse_duration_to_seconds(latency_raw)
+        )
 
         slo = {
             "apiVersion": "openslo/v1",
@@ -962,11 +1081,11 @@ def generate_slo_definitions(
                                     "query": (
                                         f"histogram_quantile(0.99, "
                                         f"rate({prom}_bucket"
-                                        f'{{service="{service.service_id}"}}[5m]))'
+                                        f'{total_selector}[5m]))'
                                     ),
                                 },
                             },
-                            "threshold": threshold_sec,
+                            "threshold": threshold,
                             "operator": "lte",
                         },
                     },
@@ -1083,91 +1202,200 @@ def generate_service_monitor(
     )
 
 
-# A channel identifier shaped like an email routes to email_configs, not slack_configs
-# (REQ-CDP-OBS-005 allows Slack names, PagerDuty keys, or email addresses).
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# REQ_NOTIFICATION_POLICY FR-4 — the single type→receiver renderer, keyed on the
+# DECLARED `Receiver.type` (NOT guessed from string shape). Per OQ-1a the per-type target
+# is carried by overloading the single `Receiver.target` string; each renderer maps it to
+# that type's correct Alertmanager field. Adding a type is a dict entry, not an if/elif
+# branch (R1-F2 / the Accidental-Complexity anti-principle). Every entry references the
+# secret via `Receiver.target` (`${VAR}`) — never fabricated (NR-2).
+def _cfg_slack(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    # For slack the receiver `name` IS the channel id (#chan); `target` is the api_url secret.
+    return "slack_configs", {"channel": r.name, "api_url": r.target, "send_resolved": True}
+
+
+def _cfg_email(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "email_configs", {"to": r.target}
+
+
+def _cfg_pagerduty(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "pagerduty_configs", {"routing_key": r.target, "send_resolved": True}
+
+
+def _cfg_opsgenie(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "opsgenie_configs", {"api_key": r.target, "send_resolved": True}
+
+
+def _cfg_webhook(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "webhook_configs", {"url": r.target, "send_resolved": True}
+
+
+def _cfg_msteams(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "msteams_configs", {"webhook_url": r.target, "send_resolved": True}
+
+
+# type (declared, lowercased) → renderer. Absent/`""`/unknown ⇒ UNRESOLVED-REQUIRED (FR-3).
+_RECEIVER_RENDERERS: Dict[str, Any] = {
+    "slack": _cfg_slack,
+    "email": _cfg_email,
+    "pagerduty": _cfg_pagerduty,
+    "opsgenie": _cfg_opsgenie,
+    "webhook": _cfg_webhook,
+    "msteams": _cfg_msteams,
+}
+
+# The exact loud placeholder prefix (FR-3/FR-3a, R1-F7) — reused verbatim, never reinvented.
+_UNRESOLVED_PREFIX = "# UNRESOLVED REQUIRED PARAM:"
+
+
+def _receiver_applies_to(receiver: Receiver, severity: str) -> bool:
+    """FR-7 tiering from the AUTHORED `Receiver.severities`. An empty `severities`
+    means the receiver applies to ALL severities (OQ-3 default — no surprising
+    filtering); otherwise it applies only to the listed severities."""
+    if not receiver.severities:
+        return True
+    return severity in receiver.severities
 
 
 def generate_notification_policy(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
-    """Generate an Alertmanager routing policy scoped to a service.
+    """Generate an Alertmanager routing policy scoped to a service (REQ_NOTIFICATION_POLICY).
 
-    Routes to the manifest's `spec.observability.alertChannels` (FR-CONS-1), falling
-    back to `metadata.owners[].slack`. Owner emails (and email-shaped channels) become
-    `email_configs`. The channel is the per-project input; the Slack webhook *transport*
-    is an environment secret (OQ-6), referenced as `${SLACK_API_URL}` — NOT a fabricated
-    `REPLACE_WITH_WEBHOOK_URL`. With no channels resolvable, the receiver carries no
-    transport and `alertChannels` is recorded as unresolved REQUIRED (REQ-CDP-INT-007).
+    Binds to the AUTHORED `Receiver{name,type,target,severities}` (`spec.py`, parsed by the
+    single canonical entry point `from_observability_yaml` and threaded via
+    `business.receivers`). For each routed channel id (FR-6: `alertChannels` →
+    `owners[].slack` fallback via `routing_channels()`; the contacts roster is a future
+    input, not built here) the DECLARED `type` selects the correct `*_configs`, pulling the
+    secret from `Receiver.target` (FR-4/FR-5).
+
+    Loud-fail (FR-3/FR-3a), NEVER a silent Slack default:
+      * a routed channel with no matching receiver (dangling ref), OR
+      * a receiver whose `type` is `""` (parser default), OR an unknown type
+    is emitted as `# UNRESOLVED REQUIRED PARAM:` — reference-secrets-never-fabricate (NR-2).
+
+    Routes are tiered by severity (FR-7) from `Receiver.severities`; the matcher label is the
+    descriptor's `service_label_key` (FR-8: `service` vs `service_name` for span-metrics).
     """
+    descriptor = _descriptor_for(service, descriptor)
+    label_key = descriptor.service_label_key
     derivations: List[DerivationTrace] = []
     severity = _severity_for(business, derivations)
-    receiver = f"{service.service_id}-{severity}"
 
+    by_name = {r.name: r for r in business.receivers}
     channels = business.routing_channels()
-    slack_channels = [c for c in channels if not _EMAIL_RE.match(c)]
-    channel_emails = [c for c in channels if _EMAIL_RE.match(c)]
-    owner_emails = [
-        str(o["email"]) for o in business.owners
-        if isinstance(o, dict) and o.get("email")
-    ]
-    all_emails = list(dict.fromkeys(owner_emails + channel_emails))
 
-    receiver_doc: Dict[str, Any] = {"name": receiver}
-    if slack_channels:
-        receiver_doc["slack_configs"] = [
-            {"channel": ch, "api_url": "${SLACK_API_URL}", "send_resolved": True}
-            for ch in slack_channels
-        ]
-    if channels:
+    # Grouping (FR-9): overridable from business.notification_grouping, not hardcoded literals.
+    grouping = business.notification_grouping or {}
+    group_by = grouping.get("group_by")
+    group_by = list(group_by) if isinstance(group_by, list) else [label_key, "alertname"]
+    group_wait = str(grouping.get("group_wait")) if grouping.get("group_wait") else "30s"
+    repeat_interval = (
+        str(grouping.get("repeat_interval")) if grouping.get("repeat_interval") else "4h"
+    )
+
+    # Resolve each routed channel ONCE (FR-3/FR-3a/FR-4): channel id → (config_key, config,
+    # receiver), or record it UNRESOLVED-REQUIRED. Never a silent Slack default. Resolving up
+    # front (rather than per tier) avoids re-work and a dedup hack, and lets each tier just
+    # filter the already-resolved set by `Receiver.severities`.
+    resolved: List[Tuple[str, Dict[str, Any], Receiver]] = []
+    unresolved: List[str] = []
+    for ch in dict.fromkeys(channels):  # de-dup channel ids, preserve order
+        receiver = by_name.get(ch)
+        if receiver is None:  # dangling ref: routed but not declared (FR-3a)
+            unresolved.append(f"{ch} (no matching receiver in alerting.receivers)")
+            continue
+        renderer = _RECEIVER_RENDERERS.get(receiver.type.strip().lower())
+        if renderer is None:  # type=="" (parser default) or unknown type (FR-3)
+            unresolved.append(f"{ch} (unresolvable channel type {receiver.type or '(none declared)'!r})")
+            continue
+        key, cfg = renderer(receiver)
+        resolved.append((key, cfg, receiver))
+
+    # FR-7 tiering: the alert generator labels EVERY alert for this service with the single
+    # `_severity_for(business)` value — there is no per-alert warning/critical split today — so
+    # we emit exactly ONE route, at that severity. A synthetic `warning` tier would be a route
+    # that no generated alert can ever match (a silently-dead route). The tiering that DOES work
+    # is per-receiver filtering: `Receiver.severities` decides which channels apply (a receiver
+    # declaring `severities: [critical]` pages on a critical service; a chat-only receiver with
+    # no `severities` always applies). Multi-severity route tiers are forward-looking — they
+    # become meaningful only if/when alerts carry varied severities.
+    tiers = [severity]
+
+    receiver_docs: List[Dict[str, Any]] = []
+    routes: List[Dict[str, Any]] = []
+    for tier in tiers:
+        applicable = [(k, cfg) for (k, cfg, r) in resolved if _receiver_applies_to(r, tier)]
+        if not applicable:
+            continue  # no channel applies to this severity → no empty-receiver route
+        rname = f"{service.service_id}-{tier}"
+        rdoc: Dict[str, Any] = {"name": rname}
+        for key, cfg in applicable:
+            rdoc.setdefault(key, []).append(cfg)
+        receiver_docs.append(rdoc)
+        routes.append({
+            "matchers": [f"{label_key} = {service.service_id}", f"severity = {tier}"],
+            "receiver": rname,
+            "group_by": list(group_by),  # fresh list per route → no YAML anchor/alias
+            "group_wait": group_wait,
+            "repeat_interval": repeat_interval,
+            "continue": True,
+        })
         derivations.append(DerivationTrace(
-            field="alert_channels", source="manifest.spec.observability.alertChannels",
-            transformation=f"slack={slack_channels} email={channel_emails}", tier="manifest",
-        ))
-    else:
-        derivations.append(DerivationTrace(
-            field="alert_channels", source="manifest.spec.observability.alertChannels",
-            transformation="unresolved_required (REQ-CDP-INT-007) — no transport emitted",
-            tier="default",
-        ))
-    if all_emails:
-        receiver_doc["email_configs"] = [{"to": e} for e in all_emails]
-        derivations.append(DerivationTrace(
-            field="owner_contacts",
-            source="manifest.metadata.owners[].email + email-shaped alertChannels",
-            transformation=f"email → {all_emails}", tier="manifest",
+            field="alert_channels",
+            source="observability.yaml alerting.receivers (declared type+target)",
+            transformation=f"tier={tier} matcher={label_key}={service.service_id}",
+            tier="manifest",
         ))
 
-    doc: Dict[str, Any] = {
-        "route": {
-            "routes": [
-                {
-                    "matchers": [f"service = {service.service_id}"],
-                    "receiver": receiver,
-                    "group_by": ["alertname", "service"],
-                    "group_wait": "30s",
-                    "repeat_interval": "4h",
-                }
-            ]
-        },
-        "receivers": [receiver_doc],
-    }
+    seen_resolved = bool(receiver_docs)
+
+    doc: Dict[str, Any] = {"route": {"routes": routes}, "receivers": receiver_docs}
+
     header_lines = [
         "# Generated by startd8 observability artifact generator",
         f"# Service: {service.service_id} — notification routing by severity",
     ]
-    if channels:
+    if seen_resolved:
         header_lines.append(
-            "# Channels from manifest; set the SLACK_API_URL secret at deploy time "
-            "(the webhook transport is environment config, not a per-project input)."
+            "# Channels bound to authored alerting.receivers (declared type + ${SECRET} "
+            "target); secrets are referenced, never fabricated, and set at deploy time."
         )
-    else:
+    if unresolved:
+        for u in unresolved:
+            header_lines.append(f"{_UNRESOLVED_PREFIX} {u} — declare it in "
+                                "observability.yaml alerting.receivers with a known "
+                                "type (slack/email/pagerduty/opsgenie/webhook/msteams) "
+                                "and an env-indirected target. No transport was fabricated.")
+        derivations.append(DerivationTrace(
+            field="alert_channels", source="routing_channels ↔ alerting.receivers join",
+            transformation=f"unresolved_required (FR-3/FR-3a): {unresolved}", tier="default",
+        ))
+    if not channels:
         header_lines.append(
-            "# UNRESOLVED REQUIRED PARAM: no alertChannels (or owners[].slack) in the "
-            "manifest — receiver has no transport. Populate spec.observability.alertChannels "
-            "upstream (REQ-CDP-OBS-005). No webhook URL was fabricated."
+            f"{_UNRESOLVED_PREFIX} no alertChannels (or owners[].slack) in the manifest — "
+            "no channels to route. Populate spec.observability.alertChannels upstream."
         )
+        derivations.append(DerivationTrace(
+            field="alert_channels", source="manifest.spec.observability.alertChannels",
+            transformation="unresolved_required — no channels", tier="default",
+        ))
+    elif resolved and not receiver_docs:
+        # Channels resolved to receivers, but none declare `severities` matching this
+        # service's alert severity — so nothing routes. Flag it loudly, don't emit a
+        # silent empty policy (Context-Correctness — no silent gap).
+        header_lines.append(
+            f"{_UNRESOLVED_PREFIX} all resolved receivers are filtered out for severity "
+            f"'{severity}' (their Receiver.severities do not include it) — no channel would "
+            f"be notified. Add '{severity}' to a receiver's severities, or leave it empty to "
+            "apply to all severities."
+        )
+        derivations.append(DerivationTrace(
+            field="alert_channels", source="Receiver.severities filter",
+            transformation=f"all_filtered_for_severity={severity}", tier="default",
+        ))
+
     header = "\n".join(header_lines) + f"\n{_derivation_comment(derivations)}\n\n"
     return ArtifactResult(
         artifact_type="notification_policy",
@@ -1182,12 +1410,17 @@ def generate_notification_policy(
 def generate_loki_rule(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate a Loki ruler alerting rule for a service's error logs.
 
     Log selector derived from `spec.targets[].name` (FR-CONS-1, REQ-CDP-OBS-006),
-    falling back to the service_id.
+    falling back to the service_id. The LogQL *stream label key* comes from the
+    descriptor (FR-1a) — it may differ from the PromQL label key. ``descriptor=
+    None`` falls back to the ``service`` key for byte-identical back-compat.
     """
+    descriptor = _descriptor_for(service, descriptor)
+    stream_key = descriptor.logql_stream_key()
     derivations: List[DerivationTrace] = []
     severity = _severity_for(business, derivations)
     target = _target_for(service.service_id, business.targets)
@@ -1195,10 +1428,10 @@ def generate_loki_rule(
     if target and target.get("name"):
         derivations.append(DerivationTrace(
             field="loki.selector", source="manifest.spec.targets[].name",
-            transformation=f'service="{selector_name}"', tier="manifest",
+            transformation=f'{stream_key}="{selector_name}"', tier="manifest",
         ))
     expr = (
-        f'sum(rate({{service="{selector_name}"}} |= "error" [5m])) > 0'
+        f'sum(rate({{{stream_key}="{selector_name}"}} |= "error" [5m])) > 0'
     )
     doc: Dict[str, Any] = {
         "groups": [

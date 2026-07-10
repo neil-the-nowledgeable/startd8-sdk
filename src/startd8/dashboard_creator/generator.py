@@ -96,10 +96,21 @@ def generate_dashboard_jsonnet(
     lines.append("local sel = config.selectors;")
     lines.append("")
 
-    # Datasource shortcuts
-    lines.append("local mimirDatasource = { type: 'prometheus', uid: '${datasource}' };")
+    # Datasource shortcuts. A bound datasource UID (REQ_DATASOURCE_UID_BINDING FR-4),
+    # injected via config_overrides under a key the base config lacks
+    # (``prometheusBound``/``lokiBound``), pins the panel datasource to the target
+    # Grafana's real UID. Absent ⇒ the ``${...}`` variable, byte-identical to prior output.
+    lines.append(
+        "local mimirDatasource = { type: 'prometheus', uid: "
+        "(if std.objectHas(ds, 'prometheusBound') then ds.prometheusBound.uid "
+        "else '${datasource}') };"
+    )
     lines.append("local tempoDatasource = { type: 'tempo', uid: '${tempo}' };")
-    lines.append("local lokiDatasource = { type: 'loki', uid: '${loki}' };")
+    lines.append(
+        "local lokiDatasource = { type: 'loki', uid: "
+        "(if std.objectHas(ds, 'lokiBound') then ds.lokiBound.uid "
+        "else '${loki}') };"
+    )
     lines.append("")
 
     # Base dashboard

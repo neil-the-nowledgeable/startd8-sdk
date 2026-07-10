@@ -87,7 +87,9 @@ def render_backend(
         ),
         (
             CANONICAL_LAYOUT["sqlmodel-tables"],
-            render_sqlmodel_tables(schema_text, source_file=source_file).text,
+            render_sqlmodel_tables(
+                schema_text, source_file=source_file, human_inputs_text=human_inputs_text
+            ).text,
         ),
         (
             CANONICAL_LAYOUT["fastapi-routers"],
@@ -128,6 +130,7 @@ def render_backend(
         schema_text, source_file, pages_text, views_text, display_text,
         tenant_owner_field=tenant_owner_field,
         form_prose_text=form_prose_text,
+        human_inputs_text=human_inputs_text,  # F-12: owned-field policy drops owned cols from human write surfaces
     ))
     # Always-on default top nav: app/nav.py + app/templates/_nav.html (FR-13). base.html includes the
     # partial tolerantly, so suppressing nav (--no-nav) just omits these two files — base.html is

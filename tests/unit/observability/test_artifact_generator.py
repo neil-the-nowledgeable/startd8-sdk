@@ -1,5 +1,6 @@
 """Tests for startd8.observability.artifact_generator."""
 
+import dataclasses
 import json
 import textwrap
 from pathlib import Path
@@ -1345,8 +1346,15 @@ class TestExtendedGenerators:
 
     def test_notification_policy_routes_by_service(self, grpc_service, business):
         from startd8.observability.artifact_generator import generate_notification_policy
+        from startd8.observability.spec import Receiver
 
-        result = generate_notification_policy(grpc_service, business)
+        # A route is only emitted for a channel that resolves to an authored receiver
+        # (no silent-Slack default). Supply one.
+        biz = dataclasses.replace(
+            business, alert_channels=["#oncall"],
+            receivers=[Receiver(name="#oncall", type="slack", target="${SLACK_API_URL}")],
+        )
+        result = generate_notification_policy(grpc_service, biz)
         doc = yaml.safe_load(result.content)
         route = doc["route"]["routes"][0]
         assert "service = checkout-api" in route["matchers"]
@@ -1472,27 +1480,43 @@ class TestDeliveryFieldConsumption:
     ContextCore manifest instead of emitting placeholders (FR-CONS-1)."""
 
     def test_notification_routes_to_alert_channels_no_placeholder(self, grpc_service):
+        # REQ_NOTIFICATION_POLICY behavior change: routed channels resolve against the
+        # AUTHORED receivers (declared type + ${target}); string-shape guessing is gone.
+        from startd8.observability.spec import Receiver
         biz = BusinessContext(
+            criticality="high",
             alert_channels=["#alerts", "#oncall"],
             owners=[{"team": "platform", "email": "ops@acme.io", "slack": "#ignored"}],
+            receivers=[
+                Receiver(name="#alerts", type="slack", target="${SLACK_URL}"),
+                Receiver(name="#oncall", type="slack", target="${SLACK_URL}"),
+            ],
         )
         result = generate_notification_policy(grpc_service, biz)
         assert "REPLACE_WITH_WEBHOOK_URL" not in result.content
         doc = yaml.safe_load(
             "\n".join(ln for ln in result.content.splitlines() if not ln.startswith("#"))
         )
-        recv = doc["receivers"][0]
+        recv = next(r for r in doc["receivers"] if r["name"] == "checkout-api-critical")
         chans = [c["channel"] for c in recv["slack_configs"]]
         assert chans == ["#alerts", "#oncall"]            # alertChannels wins over owners[].slack
-        assert recv["email_configs"][0]["to"] == "ops@acme.io"
+        assert recv["slack_configs"][0]["api_url"] == "${SLACK_URL}"
 
     def test_notification_falls_back_to_owner_slack(self, grpc_service):
-        biz = BusinessContext(owners=[{"team": "platform", "slack": "#startd8-dev"}])
+        # FR-6 fallback: alertChannels absent → owners[].slack drives routing; the channel
+        # id must still be declared as a receiver to resolve its type.
+        from startd8.observability.spec import Receiver
+        biz = BusinessContext(
+            criticality="high",
+            owners=[{"team": "platform", "slack": "#startd8-dev"}],
+            receivers=[Receiver(name="#startd8-dev", type="slack", target="${SLACK_URL}")],
+        )
         result = generate_notification_policy(grpc_service, biz)
         doc = yaml.safe_load(
             "\n".join(ln for ln in result.content.splitlines() if not ln.startswith("#"))
         )
-        chans = [c["channel"] for c in doc["receivers"][0]["slack_configs"]]
+        recv = next(r for r in doc["receivers"] if r["name"] == "checkout-api-critical")
+        chans = [c["channel"] for c in recv["slack_configs"]]
         assert chans == ["#startd8-dev"]
 
     def test_notification_unresolved_when_no_channels(self, grpc_service):
@@ -1502,8 +1526,8 @@ class TestDeliveryFieldConsumption:
         doc = yaml.safe_load(
             "\n".join(ln for ln in result.content.splitlines() if not ln.startswith("#"))
         )
-        recv = doc["receivers"][0]
-        assert "slack_configs" not in recv and "webhook_configs" not in recv  # no fabrication
+        for recv in doc["receivers"]:
+            assert "slack_configs" not in recv and "webhook_configs" not in recv  # no fabrication
 
     def test_service_monitor_uses_metrics_interval_and_namespace(self, grpc_service):
         biz = BusinessContext(
@@ -1647,27 +1671,39 @@ class TestOQ8Precedence:
 
 
 class TestChannelBackendRouting:
-    """Code-review fix: email-shaped channels route to email_configs, not slack_configs."""
+    """REQ_NOTIFICATION_POLICY behavior change: the email-regex/else⇒slack classifier is
+    DELETED. Channel type comes from the DECLARED Receiver.type, not string shape. An
+    email destination now requires an authored `type: email` receiver; a routed channel
+    with no matching receiver is UNRESOLVED-REQUIRED (FR-3/FR-3a), never silently guessed."""
 
-    def test_email_channel_not_in_slack(self, grpc_service):
-        biz = BusinessContext(alert_channels=["#alerts", "ops@acme.io"])
+    def test_email_channel_requires_declared_email_receiver(self, grpc_service):
+        from startd8.observability.spec import Receiver
+        biz = BusinessContext(
+            criticality="high",
+            alert_channels=["#alerts", "email-ops"],
+            receivers=[
+                Receiver(name="#alerts", type="slack", target="${SLACK_URL}"),
+                Receiver(name="email-ops", type="email", target="ops@acme.io"),
+            ],
+        )
         result = generate_notification_policy(grpc_service, biz)
         doc = yaml.safe_load(
             "\n".join(ln for ln in result.content.splitlines() if not ln.startswith("#"))
         )
-        recv = doc["receivers"][0]
-        slack = [c["channel"] for c in recv.get("slack_configs", [])]
-        emails = [c["to"] for c in recv.get("email_configs", [])]
-        assert slack == ["#alerts"]
-        assert "ops@acme.io" in emails
-        assert "ops@acme.io" not in slack
+        recv = next(r for r in doc["receivers"] if r["name"] == "checkout-api-critical")
+        assert [c["channel"] for c in recv["slack_configs"]] == ["#alerts"]
+        assert [c["to"] for c in recv["email_configs"]] == ["ops@acme.io"]
+        assert "UNRESOLVED REQUIRED PARAM" not in result.content
 
-    def test_all_email_channels_no_slack_block(self, grpc_service):
-        biz = BusinessContext(alert_channels=["a@x.io", "b@y.io"])
+    def test_email_shaped_channel_without_receiver_is_unresolved(self, grpc_service):
+        # Previously an email-shaped id was silently classified email; now, absent an
+        # authored receiver, it is a dangling ref → UNRESOLVED-REQUIRED (loud).
+        biz = BusinessContext(criticality="high", alert_channels=["a@x.io", "b@y.io"])
+        result = generate_notification_policy(grpc_service, biz)
+        assert "UNRESOLVED REQUIRED PARAM" in result.content
+        assert "a@x.io" in result.content and "b@y.io" in result.content
         doc = yaml.safe_load(
-            "\n".join(ln for ln in generate_notification_policy(grpc_service, biz).content.splitlines()
-                      if not ln.startswith("#"))
+            "\n".join(ln for ln in result.content.splitlines() if not ln.startswith("#"))
         )
-        recv = doc["receivers"][0]
-        assert "slack_configs" not in recv
-        assert {c["to"] for c in recv["email_configs"]} == {"a@x.io", "b@y.io"}
+        for recv in doc["receivers"]:
+            assert "slack_configs" not in recv and "email_configs" not in recv

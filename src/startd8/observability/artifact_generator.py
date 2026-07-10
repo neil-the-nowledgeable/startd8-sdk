@@ -24,6 +24,10 @@ from .taxonomy_enums import Category, Orientation, RouteState
 # here so existing `from ...artifact_generator import ArtifactResult` keeps working.
 from .artifact_generator_models import *  # noqa: F401,F403
 
+# Target Metric Binding (REQ_TARGET_METRIC_BINDING Step 3): resolve one
+# MetricDescriptor per service and thread it into the descriptor-aware generators.
+from .metric_descriptor import MetricDescriptor, resolve_descriptor
+
 # Context + generator clusters extracted to sibling modules (Tier-2 step 2);
 # re-exported so the orchestrator and external consumers keep their import paths.
 from .artifact_generator_context import (  # noqa: F401
@@ -281,21 +285,43 @@ def _repair_and_validate(
     return result
 
 
+# Generators that accept a resolved MetricDescriptor as their 3rd positional arg
+# (REQ_TARGET_METRIC_BINDING Step 3, FR-4/FR-1a). notification_policy joined this set
+# per REQ_NOTIFICATION_POLICY FR-8: its route matcher label is metric-shape-DEPENDENT
+# (`service` vs `service_name` for span-metrics), so it must read
+# `descriptor.service_label_key` rather than hardcoding `service`. The remaining
+# per-service generators (service_monitor, runbook) stay (service, business).
+_DESCRIPTOR_AWARE_GENERATORS = frozenset({
+    generate_alert_rules,
+    generate_slo_definitions,
+    generate_dashboard_spec,
+    generate_loki_rule,
+    generate_notification_policy,
+})
+
+
 def _generate_one(
     gen_fn: Any,
     service: ServiceHints,
     business: BusinessContext,
     artifact_type: str,
     output_prefix: str,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Generate, validate, and score a single artifact. Catches exceptions.
 
     Central taxonomy assignment site (REQ-OAT-023): every result is stamped with
     category/orientation/declared_type/runtime_type from the registry here, so the
     ~7 generator functions never hand-set those axes.
+
+    ``descriptor`` (the per-service resolved MetricDescriptor) is forwarded only
+    to the descriptor-aware generators; the others keep their 2-arg signature.
     """
     try:
-        result = gen_fn(service, business)
+        if descriptor is not None and gen_fn in _DESCRIPTOR_AWARE_GENERATORS:
+            result = gen_fn(service, business, descriptor)
+        else:
+            result = gen_fn(service, business)
         result = _repair_and_validate(result, business, transport=service.transport)
         return _stamp_taxonomy(result)
     except Exception:
@@ -437,6 +463,19 @@ def generate_observability_artifacts(
     services = extract_service_hints(metadata)
     business = load_business_context(manifest_path, metadata)
 
+    # REQ_NOTIFICATION_POLICY FR-1: thread the authored `alerting.receivers` into the
+    # business context BEFORE per-service generation, so notification_policy binds to the
+    # DECLARED channel type+secret (Receiver.target) instead of guessing from string shape.
+    # Parsed once here via the single canonical entry point (from_observability_yaml) and
+    # reused by the domain-alert path below (no double parse). Absent path ⇒ no receivers ⇒
+    # routed channels with no matching receiver become UNRESOLVED-REQUIRED (FR-3/FR-3a).
+    _obs_spec = None
+    if observability_yaml_path is not None and Path(observability_yaml_path).exists():
+        from .spec import from_observability_yaml
+        _obs = yaml.safe_load(Path(observability_yaml_path).read_text(encoding="utf-8")) or {}
+        _obs_spec = from_observability_yaml(_obs)
+        business.receivers = list(_obs_spec.receivers)
+
     report = GenerationReport(
         project_id=business.project_id,
         generated_at=_utc_now_iso(),
@@ -453,10 +492,27 @@ def generate_observability_artifacts(
         (generate_slo_definitions, "slo_definition", "slos"),
     ]
 
+    # Build the effective MetricDescriptor once per service (Step 3, FR-7
+    # terminus). ServiceHints carries the profile + per-axis overrides that
+    # ContextCore resolved from the manifest via onboarding metadata; an empty
+    # profile falls back to semconv-{transport} (byte-identical to prior output).
+    descriptors: Dict[str, MetricDescriptor] = {
+        service.service_id: resolve_descriptor(
+            profile=service.metric_profile or None,
+            transport=service.transport,
+            overrides=service.descriptor_overrides,
+        )
+        for service in services
+    }
+
     for service in services:
+        descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
             report.artifacts.append(
-                _generate_one(gen_fn, service, business, artifact_type, output_prefix)
+                _generate_one(
+                    gen_fn, service, business, artifact_type, output_prefix,
+                    descriptor,
+                )
             )
 
     report.services_processed = len(services)
@@ -483,7 +539,10 @@ def generate_observability_artifacts(
             continue
         for service in services:
             report.artifacts.append(
-                _generate_one(gen_fn, service, business, atype, output_prefix)
+                _generate_one(
+                    gen_fn, service, business, atype, output_prefix,
+                    descriptors[service.service_id],
+                )
             )
 
     # Closure 3A / Gap 2 + REQ-OAT-052: record declared-but-unproduced types as
@@ -515,12 +574,10 @@ def generate_observability_artifacts(
     # rules — closing the gap the convention path leaves as `_domain_alert_todo_block` stubs. Strictly
     # additive + opt-in: an absent observability_yaml_path ⇒ no new artifact and RED output stays
     # byte-identical. The renderer is taxonomy-free; the _stamp_taxonomy pass below stamps the result.
-    if observability_yaml_path is not None and Path(observability_yaml_path).exists():
+    if _obs_spec is not None:
         from .alert_renderer import render_domain_alert_rules
         from .dashboard_renderer import render_domain_dashboard
-        from .spec import from_observability_yaml
-        _obs = yaml.safe_load(Path(observability_yaml_path).read_text(encoding="utf-8")) or {}
-        _spec = from_observability_yaml(_obs)
+        _spec = _obs_spec  # parsed once above (single from_observability_yaml call)
         _pid = business.project_id or "domain"
         # E1: the SAME observability.yaml drives both — domain alert rules AND a domain dashboard.
         # Both additive/opt-in; the renderers are taxonomy-free (the _stamp_taxonomy pass stamps them).
