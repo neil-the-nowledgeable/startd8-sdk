@@ -23,6 +23,7 @@ from pathlib import Path
 import typer
 
 from .bind_and_verify import bind_and_verify
+from .contrast import build_contrast, render_markdown
 from .metric_descriptor import match_profiles, profile_signatures
 from .prometheus_query import Auth, list_metric_names
 from .validate_promql import redact, run_validation
@@ -279,3 +280,57 @@ def bind_and_verify_cmd(
         typer.echo(payload)
 
     raise typer.Exit(code=result.exit_code())
+
+
+@observability_app.command("contrast")
+def contrast_cmd(
+    manifest: Path = typer.Option(
+        ..., "--manifest", "-m",
+        help="ContextCore manifest — generated ungoverned (bindings stripped) and governed.",
+    ),
+    output: Path = typer.Option(
+        ..., "--output", "-o",
+        help="Output dir (holds ungoverned/ + governed/ + before-after-contrast.md).",
+    ),
+    prometheus: str = typer.Option(
+        "http://localhost:9090", "--prometheus",
+        help="Prometheus base URL both variants are replayed against.",
+    ),
+    min_coverage: float = typer.Option(
+        0.9, "--min-coverage",
+        help="binding_coverage floor for each variant's gate status.",
+    ),
+    allow_prod: bool = typer.Option(
+        False, "--allow-prod", help="Opt in to a non-demo/non-localhost backend.",
+    ),
+    export_cmd: str = typer.Option(
+        "contextcore manifest export --no-strict-quality", "--export-cmd",
+        help="Command that runs ContextCore export (override if not on PATH).",
+    ),
+) -> None:
+    """Generate + replay the manifest two ways and write a before/after contrast artifact.
+
+    Ungoverned = the manifest with its `metricsProfile` / `datasources` stripped (naive
+    semconv defaults, unbound datasource). Governed = the manifest as authored. Both are
+    replayed against the live backend, so the contrast is grounded in fidelity numbers.
+    Writes `before-after-contrast.md` (+ the JSON report) to the output dir.
+    """
+    report = build_contrast(
+        manifest_path=manifest,
+        prometheus_url=prometheus,
+        output_dir=output,
+        min_coverage=min_coverage,
+        allow_prod=allow_prod,
+        auth=Auth.from_env(),
+        export_cmd=export_cmd.split(),
+    )
+    md = render_markdown(report)
+    md_path = Path(output) / "before-after-contrast.md"
+    md_path.write_text(md + "\n")
+    json_path = Path(output) / "before-after-contrast.json"
+    json_path.write_text(json.dumps(report.to_dict(), indent=2) + "\n")
+    typer.echo(
+        f"contrast written to {md_path} "
+        f"(ungoverned binds {report.ungoverned.binding_coverage:.0%} → "
+        f"governed {report.governed.binding_coverage:.0%})"
+    )
