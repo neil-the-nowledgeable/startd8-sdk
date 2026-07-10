@@ -12,9 +12,9 @@ checking" fallback signal) when a threshold is exceeded — advisory telemetry, 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 # R5-S3 performance budgets (milliseconds). Advisory: exceeding a budget sets a flag + a
 # user-facing "large project" fallback signal; it never raises.
