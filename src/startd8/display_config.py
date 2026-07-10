@@ -7,6 +7,7 @@ Controls what information is shown when displaying prompts and responses in the 
 import json
 import yaml
 from pathlib import Path
+from .paths import default_config_dir
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 
@@ -90,7 +91,7 @@ class DisplayConfigManager:
             config_dir: Configuration directory (default: ~/.startd8)
         """
         if config_dir is None:
-            config_dir = Path.home() / ".startd8"
+            config_dir = default_config_dir()
         
         self.config_dir = Path(config_dir)
         self.config_file = self.config_dir / self.CONFIG_FILENAME

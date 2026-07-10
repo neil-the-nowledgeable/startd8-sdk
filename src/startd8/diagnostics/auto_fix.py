@@ -9,6 +9,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+from ..paths import default_config_dir
 from typing import Callable, Dict, List, Optional
 
 from .models import DiagnosticReport, HealthCheck, HealthStatus
@@ -36,7 +37,7 @@ def register_fix(fix_hint: str) -> Callable:
 
 def _get_startd8_data_dir() -> Path:
     """Get the startd8 data directory."""
-    return Path.home() / ".startd8"
+    return default_config_dir()
 
 
 def _get_startd8_log_dir() -> Path:

@@ -6,6 +6,7 @@ Extracted verbatim from ``tui_improved.py`` (Pass A refactor).
 import json
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from pathlib import Path
+from ..paths import default_config_dir
 
 from ..agents import MockAgent, ClaudeAgent, GPT4Agent, OpenAICompatibleAgent, BaseAgent
 
@@ -105,7 +106,7 @@ class CustomAgentManager:
                 factory. When None, those methods fall back to direct creation.
         """
         if storage_dir is None:
-            storage_dir = Path.home() / ".startd8"
+            storage_dir = default_config_dir()
         self.storage_dir = Path(storage_dir)
         self.config_file = self.storage_dir / self.CONFIG_FILENAME
         self.framework = framework

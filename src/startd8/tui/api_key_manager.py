@@ -7,6 +7,7 @@ import os
 import json
 from typing import Optional, List, Dict, Any
 from pathlib import Path
+from ..paths import default_config_dir
 
 
 class APIKeyManager:
@@ -17,7 +18,7 @@ class APIKeyManager:
     def __init__(self, storage_dir: Optional[Path] = None):
         """Initialize API key manager"""
         if storage_dir is None:
-            storage_dir = Path.home() / ".startd8"
+            storage_dir = default_config_dir()
         self.storage_dir = Path(storage_dir)
         self.config_file = self.storage_dir / self.CONFIG_FILENAME
         self._ensure_storage_dir()

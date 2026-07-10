@@ -8,6 +8,7 @@ import os
 import sqlite3
 import time
 from pathlib import Path
+from ...paths import default_config_dir
 from typing import Any, Dict, List, Optional
 
 from ..models import CheckCategory, HealthCheck, HealthStatus
@@ -16,7 +17,7 @@ from . import register_check
 
 def _get_default_db_path() -> Path:
     """Get the default cost database path."""
-    return Path.home() / ".startd8" / "costs.db"
+    return default_config_dir() / "costs.db"
 
 
 @register_check(

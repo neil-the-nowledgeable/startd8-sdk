@@ -158,10 +158,10 @@ class ImprovedTUI(
         
         # Initialize config manager
         try:
-            self.config_manager = ConfigManager(storage_dir or Path.home() / ".startd8")
+            self.config_manager = ConfigManager(storage_dir or default_config_dir())
         except Exception as e:
             console.print(f"[yellow]Warning: Failed to load config: {e}[/yellow]", style="yellow")
-            self.config_manager = ConfigManager(storage_dir or Path.home() / ".startd8")
+            self.config_manager = ConfigManager(storage_dir or default_config_dir())
         
         # Initialize help system
         try:
@@ -185,7 +185,7 @@ class ImprovedTUI(
             self.tour_guide = None
 
         # TUI settings file for tracking first-run and preferences
-        self._tui_settings_file = (self.storage_dir or Path.home() / ".startd8") / "tui_settings.json"
+        self._tui_settings_file = (self.storage_dir or default_config_dir()) / "tui_settings.json"
         self._tui_settings = self._load_tui_settings()
     
     

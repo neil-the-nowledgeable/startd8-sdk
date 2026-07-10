@@ -3,11 +3,12 @@ Prompt Builder Configuration
 """
 
 from pathlib import Path
+from ..paths import default_config_dir
 
 PROMPT_BUILDER_CONFIG = {
     # Template locations
     "builtin_templates_dir": Path(__file__).parent / "templates",
-    "user_templates_dir": Path.home() / ".startd8" / "templates",
+    "user_templates_dir": default_config_dir() / "templates",
     
     # Placeholder syntax: {{VAR}} or {{VAR|default="value"}}
     "placeholder_pattern": r"\{\{(\w+)(?:\|default=\"([^\"]*)\")?\}\}",

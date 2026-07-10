@@ -9,6 +9,7 @@ import logging
 import os
 from typing import Dict, List, Optional, Set, Any
 from pathlib import Path
+from .paths import default_config_dir
 from datetime import datetime, timedelta
 
 import httpx
@@ -26,7 +27,7 @@ class _JsonFileStore:
 
     def __init__(self, config_dir: Optional[Path], filename: str):
         if config_dir is None:
-            config_dir = Path.home() / ".startd8"
+            config_dir = default_config_dir()
         self.config_dir = Path(config_dir)
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.config_dir / filename

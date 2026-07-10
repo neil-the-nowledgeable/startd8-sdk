@@ -1,6 +1,7 @@
 """JobQueueMixin: extracted from tui_improved.py ImprovedTUI (Pass B)."""
 
 from ._shared import *  # noqa: F401,F403
+from ..paths import default_config_dir
 
 
 # Relocated lazy-loader state (was module-level in tui_improved.py)
@@ -50,7 +51,7 @@ def _load_job_queue():
 class JobQueueMixin:
     def _get_queue_config_path(self) -> Path:
         """Get path to queue config file"""
-        return (self.storage_dir or Path.home() / ".startd8") / "queue" / "config.json"
+        return (self.storage_dir or default_config_dir()) / "queue" / "config.json"
 
     def _load_queue_config(self) -> Optional[Any]:
         """Load queue configuration"""

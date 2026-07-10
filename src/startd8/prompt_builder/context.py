@@ -4,6 +4,7 @@ Project Context - Detect project structure and suggest variable values
 
 import logging
 from pathlib import Path
+from ..paths import default_config_dir
 from typing import Dict, Any, Optional, List
 import os
 
@@ -162,7 +163,7 @@ class ProjectContext:
         self._extract_name_from_config(suggestions)
         
         # Load global policy if exists (Concern 1 & 3 & 4)
-        policy_path = Path.home() / ".startd8" / "policy.json"
+        policy_path = default_config_dir() / "policy.json"
         policy_str = ""
         if policy_path.exists():
             try:

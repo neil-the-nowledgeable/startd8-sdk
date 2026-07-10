@@ -24,7 +24,7 @@ import logging
 import os
 import socket
 from dataclasses import dataclass, field
-from pathlib import Path
+from .paths import default_config_dir
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -476,7 +476,7 @@ def _resolve_config_endpoint() -> Optional[str]:
     absent, unparseable, or the value is not set.
     """
     import json as _json
-    config_path = Path.home() / ".startd8" / "config.json"
+    config_path = default_config_dir() / "config.json"
     try:
         with open(config_path, "r") as fh:
             data = _json.load(fh)
@@ -495,7 +495,7 @@ def _resolve_config_mode() -> Optional[str]:
     is not set.
     """
     import json as _json
-    config_path = Path.home() / ".startd8" / "config.json"
+    config_path = default_config_dir() / "config.json"
     try:
         with open(config_path, "r") as fh:
             data = _json.load(fh)

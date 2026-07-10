@@ -10,7 +10,7 @@ Example:
     >>> response = await agent.agenerate("Add achievement system")
 """
 
-from pathlib import Path
+from ..paths import default_config_dir
 
 from .agent import SkillAgent, SkillAgentConfig
 
@@ -37,7 +37,7 @@ def _build_cost_tracker():
         from ..costs import PricingService
         from ..costs.store import CostStore
 
-        db = Path.home() / ".startd8" / "skill-costs.db"
+        db = default_config_dir() / "skill-costs.db"
         db.parent.mkdir(parents=True, exist_ok=True)
         return CostTracker(CostStore(db), PricingService())
     except Exception:  # noqa: BLE001 - cost tracking is optional; never block agent creation

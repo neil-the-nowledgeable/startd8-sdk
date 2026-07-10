@@ -3,6 +3,7 @@ Task Loader - Load evaluation tasks from built-in and user directories
 """
 
 from pathlib import Path
+from ..paths import default_config_dir
 from typing import Dict, List, Optional
 import logging
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Directory constants
 BUILTIN_CORPUS_DIR = Path(__file__).parent / "corpus"
-USER_CORPUS_DIR = Path.home() / ".startd8" / "evaluation"
+USER_CORPUS_DIR = default_config_dir() / "evaluation"
 
 
 class TaskLoader:

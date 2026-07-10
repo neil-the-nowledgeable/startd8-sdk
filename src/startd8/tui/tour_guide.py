@@ -6,6 +6,7 @@ Extracted verbatim from ``tui_improved.py`` (Pass A refactor).
 import json
 from typing import Optional, Dict, Any
 from pathlib import Path
+from ..paths import default_config_dir
 
 from rich.console import Console
 from rich.panel import Panel
@@ -176,7 +177,7 @@ without incurring API costs.
     def __init__(self, storage_dir: Optional[Path] = None):
         """Initialize tour guide"""
         if storage_dir is None:
-            storage_dir = Path.home() / ".startd8"
+            storage_dir = default_config_dir()
         self.storage_dir = Path(storage_dir)
         self.config_file = self.storage_dir / self.TOUR_SEEN_FILE
         self.console = Console()

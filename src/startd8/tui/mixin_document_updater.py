@@ -1,6 +1,7 @@
 """DocumentUpdaterMixin: extracted from tui_improved.py ImprovedTUI (Pass B)."""
 
 from ._shared import *  # noqa: F401,F403
+from ..paths import default_config_dir
 
 class DocumentUpdaterMixin:
     def enhance_prompt_file_menu(self):
@@ -872,7 +873,7 @@ class DocumentUpdaterMixin:
 
     def _load_document_updater_config(self) -> Dict[str, Any]:
         """Load document updater configuration"""
-        config_file = (self.storage_dir or Path.home() / ".startd8") / "document_updater.json"
+        config_file = (self.storage_dir or default_config_dir()) / "document_updater.json"
         if config_file.exists():
             try:
                 with open(config_file, 'r') as f:
@@ -883,7 +884,7 @@ class DocumentUpdaterMixin:
 
     def _save_document_updater_config(self, config: Dict[str, Any]):
         """Save document updater configuration"""
-        config_file = (self.storage_dir or Path.home() / ".startd8") / "document_updater.json"
+        config_file = (self.storage_dir or default_config_dir()) / "document_updater.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
