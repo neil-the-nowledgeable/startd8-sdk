@@ -3223,6 +3223,60 @@ async def startd8_concierge(params: ConciergeInput) -> str:
         return _handle_error(e)
 
 
+class KickoffStatusInput(BaseModel):
+    """Input for the kickoff-status tool (read-only, $0)."""
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
+
+    project_root: Optional[str] = Field(
+        default=None,
+        description="Path to the project to report kickoff status for (default: server PROJECT_ROOT). Read-only.",
+    )
+
+
+@mcp.tool(
+    name="startd8_kickoff_status",
+    annotations={
+        "title": "Startd8 Kickoff Status (Digital Project Workbook, read-only)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def startd8_kickoff_status(params: KickoffStatusInput) -> str:
+    """Where does this project's kickoff stand? — the whole Digital Project Workbook oracle as JSON.
+
+    Read-only, $0, no LLM. Returns the single ``AgenticView`` read-model the Grafana cockpit / terminal
+    / readout all render: readiness %, the recommended next step, the session snapshot (redacted
+    transcript + cost + stop_reason), pending proposals (with copy-safe confirm commands), the
+    panel→bridge→VIPP pipeline, and stakeholders. Schema ``startd8.kickoff.status.v1``. It never writes —
+    proposals are applied only at CLI human privilege (``startd8 kickoff proposals --apply``)."""
+    request_id = _new_request_id()
+    started = time.perf_counter()
+    project_root = params.project_root or str(DEFAULT_PROJECT_ROOT)
+    _emit_event({
+        "event": "tool.start", "tool": "startd8_kickoff_status", "request_id": request_id,
+        "params": {"project_root": project_root},
+    })
+    try:
+        with _redirect_stdout_to_stderr():
+            _ensure_sdk_available()
+            from startd8.kickoff_experience.agentic_view import kickoff_status
+            result = kickoff_status(project_root)
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_kickoff_status", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000), "status": "ok",
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_kickoff_status", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "status": "error", "error_type": type(e).__name__, "error": str(e),
+        })
+        return _handle_error(e)
+
+
 @mcp.tool(
     name="startd8_check_deploy_coherence",
     annotations={
