@@ -3,6 +3,7 @@ import { PanelProps } from '@grafana/data';
 import { Alert, Button, ConfirmModal, Field, Input, RadioButtonGroup, Spinner, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 import {
+  ConsensusSignal,
   FacilitateDryRunResult,
   FacilitateStartResult,
   FacilitateStatusResult,
@@ -293,6 +294,35 @@ const TERMINAL_LABEL: Record<string, string> = {
   unknown: 'Not visible yet',
 };
 
+const CONSENSUS_SEVERITY: Record<string, 'success' | 'warning' | 'error'> = {
+  high: 'success',
+  mixed: 'warning',
+  low: 'error',
+};
+
+// #6 — the synthetic lexical-consensus signal over the independent R1 answers. Shown only when it's
+// rateable (≥2 non-challenger personas); the caveat text keeps it honest (divergence in wording, not
+// proven semantic agreement).
+const ConsensusChip: React.FC<{
+  consensus?: ConsensusSignal;
+  styles: ReturnType<typeof getStyles>;
+}> = ({ consensus, styles }) => {
+  if (!consensus || consensus.label === 'n/a') {
+    return null;
+  }
+  const sev = CONSENSUS_SEVERITY[consensus.label] ?? 'warning';
+  return (
+    <Alert severity={sev} title={`Consensus: ${consensus.label.toUpperCase()} (n=${consensus.n})`}>
+      <span className={styles.dim}>
+        Synthetic, lexical signal ({consensus.basis}
+        {typeof consensus.score === 'number' ? `, score ${consensus.score.toFixed(2)}` : ''}) — how
+        similarly the personas framed their independent R1 takes. Low = worth a closer read, not a
+        verdict; it is not proven semantic agreement.
+      </span>
+    </Alert>
+  );
+};
+
 const StatusView: React.FC<{
   status: FacilitateStatusResult;
   styles: ReturnType<typeof getStyles>;
@@ -312,6 +342,8 @@ const StatusView: React.FC<{
         <span className={styles.dim}> · ~${status.cost_so_far_usd.toFixed(4)}</span>
       )}
     </div>
+
+    <ConsensusChip consensus={status.consensus} styles={styles} />
 
     <Alert severity="warning" title="Synthetic &amp; unratified">
       Role-played stand-ins, not real stakeholders. Confirm with a human before relying on this synthesis.

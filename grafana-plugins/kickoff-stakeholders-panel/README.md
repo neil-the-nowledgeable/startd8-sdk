@@ -25,7 +25,10 @@ Set the panel option **Panel mode** to pick a surface (all share the same dataso
   (`completed` / `cancelled` / `error`), rendering the synthesis (or the assumptions-gate **halt**) under
   a persistent **SYNTHETIC & UNRATIFIED** banner. A **Cancel** button signals the in-flight run by its
   `session_id`; rounds that already completed persist. Posture/tier chosen in the panel body override the
-  panel-option defaults (which only seed the initial values).
+  panel-option defaults (which only seed the initial values). A **Consensus** chip (high/mixed/low) shows
+  how similarly the non-challenger personas framed their independent R1 takes — a **synthetic, lexical**
+  signal ($0, deterministic), decision-support not a verdict (low = worth a closer read; not proven
+  semantic agreement).
 - **Triage** — routes a **finished facilitation synthesis** into typed, lane-sorted candidates and
   drives the write path from the dashboard, handing off to Apply mode for the final commit. Flow inside
   the panel:

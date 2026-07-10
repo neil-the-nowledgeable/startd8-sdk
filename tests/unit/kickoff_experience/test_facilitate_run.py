@@ -64,6 +64,21 @@ def test_start_completes_with_deterministic_session_id(tmp_path, roster):
     assert status["synthesis"]  # a completed run has synthesis text
 
 
+# ── #6 consensus signal on the poll payload ──────────────────────────────────
+def test_status_carries_consensus(tmp_path, roster):
+    res = _start_sync(_cfg(tmp_path), roster)
+    c = FR.facilitate_status(tmp_path, res["session_id"])["consensus"]
+    assert c["basis"] == "lexical-r1"
+    assert c["label"] in {"high", "mixed", "low", "n/a"}
+    assert c["n"] >= 2 and c["label"] != "n/a"  # 2 non-challenger personas → a real signal
+    assert set(c) == {"label", "score", "n", "basis"}
+
+
+def test_status_consensus_na_for_unknown_session(tmp_path):
+    # An unknown session short-circuits before the transcript load → no consensus key (status "unknown").
+    assert "consensus" not in FR.facilitate_status(tmp_path, "kp-nope")
+
+
 # ── H-1/H-4 single-flight — a duplicate run_key does NOT re-spawn ─────────────
 def test_single_flight_dedupes(tmp_path, roster):
     first = _start_sync(_cfg(tmp_path), roster)
