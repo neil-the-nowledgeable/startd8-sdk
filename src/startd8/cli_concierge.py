@@ -1410,6 +1410,12 @@ def kickoff_readout(
         help="Project to render the readout for (default: current dir). Read-only.",
     ),
     fmt: str = typer.Option("md", "--format", help="md|html|json"),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help="Richer, shareable artifact: status + 'how it got here' (retrospective) + "
+        "'what's left' (activation). Additive — the default readout is unchanged.",
+    ),
     out: Optional[Path] = typer.Option(
         None, "--out", help="write to a file instead of stdout"
     ),
@@ -1420,10 +1426,12 @@ def kickoff_readout(
     Grafana board and the cockpit render, so a founder can email a stakeholder or attach a ticket a
     document that matches the live view. `--format json` emits the full oracle (the platform-API
     surface — the same payload as `kickoff status --json` and the `startd8_kickoff_status` MCP tool).
-    Read-only, `$0`: it shows the confirm commands, it never applies them (the CLI is the sole writer).
+    `--full` adds "how it got here" (retrospective) + "what's left" (activation) for a single richer
+    artifact (JSON gets the combined `startd8.kickoff.readout.v1` payload; the default JSON stays
+    byte-identical to `status --json`). Read-only, `$0`: it shows confirm commands, never applies them.
     """
     from .kickoff_experience.agentic_view import build_agentic_view, kickoff_status
-    from .kickoff_experience.readout import render_html, render_markdown
+    from .kickoff_experience.readout import build_full_readout, render_html, render_markdown
 
     normalized = fmt.strip().lower()
     if normalized not in ("md", "html", "json"):
@@ -1431,10 +1439,11 @@ def kickoff_readout(
         raise typer.Exit(2)
 
     if normalized == "json":
-        text = json.dumps(kickoff_status(project_root), indent=2, ensure_ascii=False)
+        payload = build_full_readout(project_root) if full else kickoff_status(project_root)
+        text = json.dumps(payload, indent=2, ensure_ascii=False)
     else:
         view = build_agentic_view(project_root)
-        text = render_markdown(view) if normalized == "md" else render_html(view)
+        text = render_markdown(view, full=full) if normalized == "md" else render_html(view, full=full)
 
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)

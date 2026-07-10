@@ -21,6 +21,7 @@
 | **C1** | `startd8_kickoff_status` MCP tool (read-only, `startd8.kickoff.status.v1`) | ✅ Shipped (`869d5dc5`) |
 | **B** | Activation surface — `kickoff check` gate + `kickoff.activation.*` gauges + activation ledger | ✅ Shipped |
 | **C2/C3** | Decision-log + retrospective (`kickoff retrospective`) built on the oracle payload | ✅ Shipped |
+| **C2/C3+** | Richer readout — `kickoff readout --full` (status + retrospective + activation; `startd8.kickoff.readout.v1`) | ✅ Shipped (additive; default readout unchanged) |
 | **D** | Close-the-loop — momentum (readiness slope) + highest-leverage batch nudge | ✅ Shipped |
 | **E** | Promotion dividend — `kickoff promote` / `exemplars` / `apply-exemplar` | ✅ Shipped |
 
@@ -102,6 +103,14 @@ folds (`src/startd8/kickoff_experience/retrospective.py`, `kickoff retrospective
   the event stream this needs, so no separate snapshot history is required (a cleaner substrate than
   the originally-envisioned first-vs-last snapshot diff). `kickoff retrospective` renders the journey
   milestones + the decision log; `--json` for tools.
+- **Richer readout (`kickoff readout --full`) — SHIPPED.** The originally-deferred "one shareable
+  artifact = status + how-we-got-here + what's-left" now ships behind an **additive `--full` flag**.
+  `--format json --full` emits a combined `startd8.kickoff.readout.v1` payload nesting the `status` /
+  `activation` / `retrospective` views (all fetched through `report.py`, none re-derived); md/html
+  `--full` append "How it got here" (retrospective milestones + decision log) and "What's left" (open
+  activation conditions) after the existing readout. **The default (non-`--full`) readout is byte-
+  identical to before** — `readout --format json` still equals `status --json` (invariant preserved,
+  `test_readout_json_matches_status`); the HTML path stays XSS-safe (every value through `html.escape`).
 
 This is where the whole roadmap compounds: Tier-B records the transitions, Tier-D reads them as slope,
 and Tier-C reads them as a narrative — all from the one oracle, no new generation.

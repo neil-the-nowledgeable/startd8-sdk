@@ -13,3 +13,6 @@ ACTIVATION = "startd8.kickoff.activation.v1"
 ACTIVATION_LEDGER = "startd8.kickoff.activation-ledger.v1"
 RETROSPECTIVE = "startd8.kickoff.retrospective.v1"
 EXEMPLAR = "startd8.kickoff.exemplar.v1"
+#: The combined, shareable single artifact `kickoff readout --full` emits: status + retrospective
+#: ("how we got here") + activation ("what's left"), each nested under its own key.
+READOUT = "startd8.kickoff.readout.v1"

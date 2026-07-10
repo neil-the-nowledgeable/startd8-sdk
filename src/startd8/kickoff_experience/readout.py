@@ -24,13 +24,35 @@ Safety:
 from __future__ import annotations
 
 import html
-from typing import Any, List
+from typing import Any, Dict, List
 
+from . import schemas
 from .session_snapshot import stop_reason_hint
 
 #: Transcript turns rendered inline (matches the terminal cockpit's tail depth).
 _TAIL = 12
 _ROLE_LABEL = {"user": "you", "assistant": "assistant", "tool": "tool"}
+
+
+# --------------------------------------------------------------------------- full (combined) readout
+
+
+def build_full_readout(project_root: Any) -> Dict[str, Any]:
+    """The combined ``startd8.kickoff.readout.v1`` payload: status + activation + retrospective.
+
+    The richer, shareable single artifact = the current status oracle plus *how we got here*
+    (retrospective) and *what's left* (activation). Built on the one dispatcher
+    :func:`~startd8.kickoff_experience.report.kickoff_report`, so no view is re-derived here.
+    Read-only, ``$0``. The default (non-``--full``) JSON stays byte-identical to ``status.v1``.
+    """
+    from .report import kickoff_report
+
+    return {
+        "schema": schemas.READOUT,
+        "status": kickoff_report(project_root, "status"),
+        "activation": kickoff_report(project_root, "activation"),
+        "retrospective": kickoff_report(project_root, "retrospective"),
+    }
 
 
 # --------------------------------------------------------------------------- markdown escaping
@@ -133,10 +155,67 @@ def _md_proposals(view: Any, lines: List[str]) -> None:
         lines.append(f"- `{_md_cell(r.id)}` ({_md_cell(r.kind)}):\n\n  ```\n  {r.confirm_command}\n  ```")
 
 
-def render_markdown(view: Any) -> str:
+def _md_retrospective(retro: Dict[str, Any], lines: List[str]) -> None:
+    """`--full`: "How it got here" — the journey milestones + adjudicated decision log."""
+    lines.append("## How it got here\n")
+    journey = retro.get("journey") or {}
+    summary = retro.get("summary")
+    if summary:
+        lines.append(f"{_md_cell(summary)}\n")
+    milestones = [m for m in (journey.get("milestones") or [])]
+    if milestones:
+        lines.append("**Journey milestones:**\n")
+        for m in milestones:
+            lines.append(f"- {_md_cell(m)}")
+        lines.append("")
+    else:
+        lines.append("_No journey milestones recorded yet._\n")
+
+    decisions = retro.get("decisions") or {}
+    items = decisions.get("items") or []
+    if items:
+        lines.append("**Decision log:**\n")
+        lines.append("| Proposal | Disposition | Rationale |")
+        lines.append("|---|---|---|")
+        for it in items:
+            pid = it.get("proposal_id", "")
+            disp = it.get("decision") or it.get("disposition") or ""
+            why = it.get("rationale") or it.get("reason") or ""
+            lines.append(f"| `{_md_cell(pid)}` | {_md_cell(disp)} | {_md_cell(why)} |")
+        lines.append("")
+    elif decisions.get("pending"):
+        lines.append(f"_{decisions.get('pending')} decision(s) pending — none adjudicated yet._\n")
+
+
+def _md_activation(activation: Dict[str, Any], lines: List[str]) -> None:
+    """`--full`: "What's left" — the open activation conditions gating readiness."""
+    lines.append("## What's left\n")
+    overall = activation.get("overall", "unknown")
+    ready = activation.get("ready", False)
+    open_conditions = activation.get("open") or []
+    if ready and not open_conditions:
+        lines.append("✅ **Activated** — no open conditions. Nothing left blocking readiness.\n")
+        return
+    lines.append(
+        f"**Status: {_md_cell(overall)}** — {len(open_conditions)} open condition(s) to clear.\n"
+    )
+    for c in open_conditions:
+        title = _md_cell(c.get("title", c.get("key", "")))
+        sev = _md_cell(c.get("severity", ""))
+        line = f"- **[{sev}]** {title}"
+        detail = c.get("detail")
+        if detail:
+            line += f"\n\n  > {_md_cell(detail)}"
+        lines.append(line)
+    lines.append("")
+
+
+def render_markdown(view: Any, full: bool = False) -> str:
     """Render *view* as a complete, self-contained Markdown readout (Status / Assistant / Proposals).
 
-    Pure, ``$0``, read-only. Host-controlled content is escaped via :func:`_md_cell`.
+    Pure, ``$0``, read-only. Host-controlled content is escaped via :func:`_md_cell`. When *full* is
+    set, the standard readout is followed by two additive sections — "How it got here" (retrospective
+    journey + decision log) and "What's left" (open activation conditions).
     """
     name = _md_cell(_project_name(view))
     lines: List[str] = [f"# Kickoff readout — {name}\n"]
@@ -154,6 +233,12 @@ def render_markdown(view: Any) -> str:
     _md_assistant(view, lines)
     _md_proposals(view, lines)
     _md_pipeline(view, lines)
+
+    if full:
+        from .report import kickoff_report
+
+        _md_retrospective(kickoff_report(view.project_root, "retrospective"), lines)
+        _md_activation(kickoff_report(view.project_root, "activation"), lines)
     return "\n".join(lines) + "\n"
 
 
@@ -278,11 +363,74 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 """.strip()
 
 
-def render_html(view: Any) -> str:
+def _html_retrospective(retro: Dict[str, Any], out: List[str]) -> None:
+    """`--full`: "How it got here" — journey milestones + decision log. Every value escaped (XSS gate)."""
+    out.append("<section><h2>How it got here</h2>")
+    journey = retro.get("journey") or {}
+    summary = retro.get("summary")
+    if summary:
+        out.append(f"<p>{_e(summary)}</p>")
+    milestones = [m for m in (journey.get("milestones") or [])]
+    if milestones:
+        out.append("<p><strong>Journey milestones:</strong></p><ul>")
+        for m in milestones:
+            out.append(f"<li>{_e(m)}</li>")
+        out.append("</ul>")
+    else:
+        out.append("<p class='muted'>No journey milestones recorded yet.</p>")
+
+    decisions = retro.get("decisions") or {}
+    items = decisions.get("items") or []
+    if items:
+        out.append("<p><strong>Decision log:</strong></p>")
+        out.append("<table><thead><tr><th>Proposal</th><th>Disposition</th><th>Rationale</th>"
+                   "</tr></thead><tbody>")
+        for it in items:
+            pid = it.get("proposal_id", "")
+            disp = it.get("decision") or it.get("disposition") or ""
+            why = it.get("rationale") or it.get("reason") or ""
+            out.append(
+                f"<tr><td><code>{_e(pid)}</code></td><td>{_e(disp)}</td><td>{_e(why)}</td></tr>"
+            )
+        out.append("</tbody></table>")
+    elif decisions.get("pending"):
+        out.append(f"<p class='muted'>{_e(decisions.get('pending'))} decision(s) pending — none "
+                   "adjudicated yet.</p>")
+    out.append("</section>")
+
+
+def _html_activation(activation: Dict[str, Any], out: List[str]) -> None:
+    """`--full`: "What's left" — the open activation conditions. Every value escaped (XSS gate)."""
+    out.append("<section><h2>What&#39;s left</h2>")
+    overall = activation.get("overall", "unknown")
+    ready = activation.get("ready", False)
+    open_conditions = activation.get("open") or []
+    if ready and not open_conditions:
+        out.append("<p>✅ <strong>Activated</strong> — no open conditions. Nothing left blocking "
+                   "readiness.</p></section>")
+        return
+    out.append(
+        f"<p><strong>Status: {_e(overall)}</strong> — {len(open_conditions)} open "
+        "condition(s) to clear.</p><ul>"
+    )
+    for c in open_conditions:
+        title = _e(c.get("title", c.get("key", "")))
+        sev = _e(c.get("severity", ""))
+        detail = c.get("detail")
+        body = f"<strong>[{sev}]</strong> {title}"
+        if detail:
+            body += f"<blockquote>{_e(detail)}</blockquote>"
+        out.append(f"<li>{body}</li>")
+    out.append("</ul></section>")
+
+
+def render_html(view: Any, full: bool = False) -> str:
     """Render *view* as a complete, standalone HTML document (no external assets, printable).
 
     Pure, ``$0``, read-only. **Every** model/session/proposal-originated value is escaped with
     :func:`html.escape`, so a planted ``<script>`` / ``<img onerror=…>`` payload is inert text.
+    When *full* is set, two additive sections follow — "How it got here" (retrospective) and
+    "What's left" (open activation conditions) — with the same escape gate on every value.
     """
     name = _e(_project_name(view))
     snap = view.snapshot
@@ -313,6 +461,12 @@ def render_html(view: Any) -> str:
     _html_assistant(view, out)
     _html_proposals(view, out)
     _html_pipeline(view, out)
+
+    if full:
+        from .report import kickoff_report
+
+        _html_retrospective(kickoff_report(view.project_root, "retrospective"), out)
+        _html_activation(kickoff_report(view.project_root, "activation"), out)
 
     out.append("</body></html>")
     return "\n".join(out) + "\n"

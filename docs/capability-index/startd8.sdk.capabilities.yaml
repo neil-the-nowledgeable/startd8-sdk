@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.21.0"
+version: "1.22.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1770,7 +1770,12 @@ capabilities:
         folds KickoffState + the FR-1 session snapshot + the VIPP inbox/dispositions + stakeholder
         answers + roster + readiness/next_action — the SAME oracle drives `startd8 kickoff cockpit`
         (Rich terminal parity view) and `startd8 kickoff readout --format md|html` (a shareable,
-        XSS-safe static export). Read-only (NR-2: shows confirm commands, never applies); redaction +
+        XSS-safe static export). `readout --full` upgrades that export to ONE richer artifact —
+        status + "how it got here" (retrospective milestones + decision log) + "what's left" (open
+        activation conditions); `--format json --full` emits the combined `startd8.kickoff.readout.v1`
+        payload (nesting the status/activation/retrospective views via `report.py`). The flag is
+        strictly additive: the default readout is unchanged, `readout --format json` stays byte-
+        identical to `status --json`. Read-only (NR-2: shows confirm commands, never applies); redaction +
         graceful-degrade (Loki/Mimir panels empty, never error, when the datasource is absent). The
         classic Era-1 jsonnet Workbook was retired; the general jsonnet generator is untouched.
       agent: |
@@ -1778,7 +1783,8 @@ capabilities:
         startd8 kickoff portal --index                             # portfolio dashlist of every project's Workbook
         startd8 kickoff cockpit                                     # same read-model in the terminal (no Grafana)
         startd8 kickoff readout --format html --out readout.html   # shareable static export (md|html, XSS-safe)
-    triggers: ["workbook", "cockpit", "project workbook", "kickoff dashboard", "kickoff portal", "readiness burndown", "digital project workbook", "stakeholder dashboard", "kickoff readout"]
+        startd8 kickoff readout --format json --full               # combined status+retrospective+activation (startd8.kickoff.readout.v1)
+    triggers: ["workbook", "cockpit", "project workbook", "kickoff dashboard", "kickoff portal", "readiness burndown", "digital project workbook", "stakeholder dashboard", "kickoff readout", "readout full"]
     evidence:
       - type: code
         ref: src/startd8/kickoff_experience/agentic_view.py
@@ -1791,7 +1797,10 @@ capabilities:
         description: "Rich terminal parity render of the same oracle"
       - type: code
         ref: src/startd8/kickoff_experience/readout.py
-        description: "shareable md/html export (XSS-safe via html.escape)"
+        description: "shareable md/html export (XSS-safe via html.escape); `--full` adds the combined startd8.kickoff.readout.v1 artifact (status + retrospective 'how it got here' + activation 'what's left') — additive, default readout byte-identical to `status --json`"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_readout_full.py
+        description: "`readout --full` json/md/html + the invariant guard (default readout json == status --json) + HTML XSS gate"
       - type: code
         ref: src/startd8/kickoff_experience/metrics.py
         description: "readiness/cost/proposals OTel gauges → Mimir (auto_configure_otel, best-effort no-op)"
@@ -2057,6 +2066,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.22.0"
+    date: "2026-07-10"
+    changes:
+      - "Enriched startd8.kickoff.workbook_cockpit (readout.py) with `kickoff readout --full` — the richer, shareable SINGLE artifact = status + 'how it got here' (retrospective milestones + decision log) + 'what's left' (open activation conditions). `--format json --full` emits a new combined `startd8.kickoff.readout.v1` payload nesting the status/activation/retrospective views (all via report.py — nothing re-derived); md/html `--full` append the two sections after the existing readout. Strictly ADDITIVE: the default readout is byte-identical — `readout --format json` still equals `status --json` (invariant re-guarded by test_readout_json_matches_status). HTML path stays XSS-safe (every value through html.escape). New schema constant schemas.READOUT. 682 kickoff tests green (11 new in test_readout_full.py)."
+      - "No capability count change (enriched evidence on an existing capability, not a new one)."
   - version: "1.21.0"
     date: "2026-07-10"
     changes:
