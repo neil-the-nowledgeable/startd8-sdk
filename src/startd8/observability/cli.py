@@ -22,6 +22,7 @@ from pathlib import Path
 
 import typer
 
+from .bind_and_verify import bind_and_verify
 from .metric_descriptor import match_profiles, profile_signatures
 from .prometheus_query import Auth, list_metric_names
 from .validate_promql import redact, run_validation
@@ -191,3 +192,82 @@ def detect_profile(
         typer.echo(out)
 
     raise typer.Exit(code=code)
+
+
+@observability_app.command("bind-and-verify")
+def bind_and_verify_cmd(
+    manifest: Path = typer.Option(
+        ...,
+        "--manifest",
+        "-m",
+        help="ContextCore manifest (.contextcore.yaml) to export + generate from.",
+    ),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="Output dir for export + generated artifacts (+ observability/ subdir).",
+    ),
+    prometheus: str = typer.Option(
+        "http://localhost:9090",
+        "--prometheus",
+        help="Prometheus base URL (read for detection + replayed for verification).",
+    ),
+    freeze: bool = typer.Option(
+        False,
+        "--freeze",
+        help="Persist the detected metricsProfile into the manifest (capture-then-"
+        "freeze). Default: use it for this run only, mutating nothing on disk.",
+    ),
+    min_coverage: float = typer.Option(
+        1.0,
+        "--min-coverage",
+        help="Minimum fraction of generated queries that must return live data.",
+    ),
+    allow_prod: bool = typer.Option(
+        False,
+        "--allow-prod",
+        help="Opt in to a non-demo/non-localhost backend (passed to verify).",
+    ),
+    export_cmd: str = typer.Option(
+        "contextcore manifest export",
+        "--export-cmd",
+        help="Command that runs ContextCore export (override if not on PATH).",
+    ),
+    report: Path = typer.Option(
+        None,
+        "--report",
+        help="Write the JSON bind-and-verify report here (default: stdout).",
+    ),
+) -> None:
+    """Detect → reconcile → bind → export+generate → verify, in one command.
+
+    Reads the live backend to detect the ``metricsProfile``, reconciles it against
+    the manifest (an authored profile wins; detection cross-checks), binds it via
+    capture-then-freeze, exports + generates the artifacts, then replays every
+    generated query against the live backend and reports fidelity + the exact fix.
+
+    Exit codes mirror the harness: 0 pass · 2 fidelity fail · 3 unknown (unreachable
+    backend, export/generate failure, or zero queries replayed). Credentials come
+    from the environment only and are redacted.
+    """
+    auth = Auth.from_env()
+    result = bind_and_verify(
+        manifest_path=manifest,
+        prometheus_url=prometheus,
+        output_dir=output,
+        freeze=freeze,
+        min_coverage=min_coverage,
+        allow_prod=allow_prod,
+        auth=auth,
+        export_cmd=export_cmd.split(),
+    )
+
+    payload = redact(json.dumps(result.to_dict(), indent=2), auth.redactions())
+    if report is not None:
+        Path(report).write_text(payload + "\n")
+        typer.echo(f"bind-and-verify report written to {report} (status={result.status})")
+    else:
+        typer.echo(payload)
+
+    raise typer.Exit(code=result.exit_code())
