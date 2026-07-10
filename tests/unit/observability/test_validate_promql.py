@@ -179,6 +179,70 @@ def test_span_metrics_mismatch_reports_all_axes(tmp_path, monkeypatch):
     assert report.per_axis  # rolled up
 
 
+def test_fidelity_report_suggests_metrics_profile(tmp_path, monkeypatch):
+    """Quick-win #1: a semconv-emitted run against a live span-metrics backend
+    names the exact metricsProfile fix, per-verdict and rolled up."""
+    artifacts = tmp_path / "art"
+    _write_alerts(
+        artifacts,
+        "checkoutservice",
+        {
+            "checkoutserviceLatencyP99High": (
+                'histogram_quantile(0.99, rate(http_server_duration_bucket'
+                '{service="checkoutservice"}[5m])) > 0.5'
+            ),
+        },
+    )
+    onboarding = _semconv_onboarding(tmp_path)  # expected identity = semconv-http
+
+    # Live backend runs the full span-metrics signature.
+    live_names = ["calls_total", "duration_milliseconds_bucket", "duration_milliseconds_count"]
+    monkeypatch.setattr(prometheus_query, "instant_query_count", lambda *a, **k: 0)
+    monkeypatch.setattr(prometheus_query, "list_metric_names", lambda *a, **k: live_names)
+    monkeypatch.setattr(prometheus_query, "label_values", lambda *a, **k: [])
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=1.0,
+        auth=Auth(),
+    )
+    assert report.status == "fail"
+    # Aggregate: the whole run's one-line fix.
+    assert report.suggested_metrics_profile == "span-metrics-connector"
+    # Per-verdict: the failing expr carries the same concrete suggestion.
+    failing = [v for v in report.verdicts if v.verdict == "fail"]
+    assert failing and all(v.suggested_profile == "span-metrics-connector" for v in failing)
+    # Remediation string names the profile + the manifest key to set.
+    joined = " ".join(v.remediation for v in failing)
+    assert "span-metrics-connector" in joined and "metricsProfile" in joined
+    # Serialized report exposes both surfaces.
+    d = report.to_dict()
+    assert d["suggested_metrics_profile"] == "span-metrics-connector"
+    assert d["verdicts"][0]["suggested_profile"] == "span-metrics-connector"
+
+
+def test_fidelity_report_no_profile_suggestion_when_all_pass(tmp_path, monkeypatch):
+    """A clean run suggests nothing — the field stays empty, not a false nudge."""
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice", {"ok": "rate(x[5m]) > 0.01"})
+    onboarding = _semconv_onboarding(tmp_path)
+    monkeypatch.setattr(prometheus_query, "instant_query_count", lambda *a, **k: 1)
+    monkeypatch.setattr(prometheus_query, "list_metric_names", lambda *a, **k: ["x"])
+    monkeypatch.setattr(prometheus_query, "label_values", lambda *a, **k: ["checkoutservice"])
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=1.0,
+        auth=Auth(),
+    )
+    assert report.status == "pass"
+    assert report.suggested_metrics_profile == ""
+
+
 def test_diagnosis_does_not_short_circuit_first_axis(tmp_path, monkeypatch):
     # A single expr whose descriptor misses on >1 axis must report >1.
     artifacts = tmp_path / "art"
@@ -469,3 +533,60 @@ def test_cli_validate_promql_exit_codes(tmp_path, monkeypatch):
     data = json.loads(report_path.read_text())
     assert data["status"] == "pass"
     assert "offline structural smoke" in data["static_gate_note"]
+
+
+# ─────────────────────── detect-profile CLI (quick-win #2) ──────────────────
+
+
+def _run_detect_profile(monkeypatch, live_names, extra_args=None):
+    typer_testing = pytest.importorskip("typer.testing")
+    from startd8.observability import cli as obs_cli
+
+    # cli.py binds `list_metric_names` at import; patch it on the cli module.
+    if isinstance(live_names, Exception):
+        def _boom(*a, **k):
+            raise live_names
+        monkeypatch.setattr(obs_cli, "list_metric_names", _boom)
+    else:
+        monkeypatch.setattr(obs_cli, "list_metric_names", lambda *a, **k: live_names)
+
+    runner = typer_testing.CliRunner()
+    return runner.invoke(
+        obs_cli.observability_app,
+        ["detect-profile", "--prometheus", "http://localhost:9090", *(extra_args or [])],
+    )
+
+
+def test_detect_profile_matches_span_metrics(monkeypatch):
+    result = _run_detect_profile(
+        monkeypatch,
+        ["calls_total", "duration_milliseconds_bucket", "up", "process_cpu"],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["status"] == "matched"
+    assert data["suggested_metrics_profile"] == "span-metrics-connector"
+    assert "span-metrics-connector" in data["matched_profiles"]
+    assert data["profiles"]["span-metrics-connector"]["matches"] is True
+    assert data["profiles"]["semconv-http"]["matches"] is False
+
+
+def test_detect_profile_no_match_exits_two(monkeypatch):
+    # Metrics exist but no profile's full signature is present.
+    result = _run_detect_profile(monkeypatch, ["calls_total", "up"])
+    assert result.exit_code == 2, result.output
+    data = json.loads(result.output)
+    assert data["status"] == "no-match"
+    assert data["suggested_metrics_profile"] == ""
+
+
+def test_detect_profile_empty_backend_is_unknown(monkeypatch):
+    result = _run_detect_profile(monkeypatch, [])
+    assert result.exit_code == 3, result.output
+    assert json.loads(result.output)["status"] == "unknown"
+
+
+def test_detect_profile_unreachable_is_unknown(monkeypatch):
+    result = _run_detect_profile(monkeypatch, RuntimeError("connection refused"))
+    assert result.exit_code == 3, result.output
+    assert json.loads(result.output)["status"] == "unknown"

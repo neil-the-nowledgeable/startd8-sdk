@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -360,21 +361,41 @@ def diagnose_axes(
     return findings
 
 
-def _remediation_hint(mismatched: List[AxisFinding], live_metric_names: List[str]) -> str:
-    """Actionable hint that names the real series when we can spot it (FR-10)."""
+def _suggested_profile(live_metric_names: List[str], emitted_profile: str = "") -> str:
+    """Which profile the live backend actually matches (≠ the emitted one), or ""."""
+    from .metric_descriptor import match_profiles
+
+    for p in match_profiles(live_metric_names):
+        if p != emitted_profile:
+            return p
+    return ""
+
+
+def _remediation_hint(
+    mismatched: List[AxisFinding],
+    live_metric_names: List[str],
+    emitted_profile: str = "",
+) -> str:
+    """Actionable hint naming the EXACT profile the live backend uses (quick-win #1).
+
+    Uses the canonical ``match_profiles`` matcher rather than an ad-hoc span-metrics
+    guess, so the suggestion is concrete for any convention and one grep from a fix.
+    """
     if not mismatched:
         return ""
-    span_metrics_shape = any(
-        n in {"calls_total"} or "duration_milliseconds" in n for n in live_metric_names
-    )
     axes = ", ".join(sorted(f.axis for f in mismatched))
-    if span_metrics_shape:
+    suggestion = _suggested_profile(live_metric_names, emitted_profile)
+    if suggestion:
         return (
-            f"mismatched axes [{axes}]; live series look like span-metrics "
-            "(calls_total{service_name=…}) — try convention_profile: "
-            "span-metrics-connector"
+            f"mismatched axes [{axes}]; the live backend emits the {suggestion!r} "
+            f"convention — set `spec.observability.metricsProfile: {suggestion}` in the "
+            "manifest (or a per-target override) and regenerate."
         )
-    return f"mismatched axes [{axes}]; emitted identity absent from live backend"
+    return (
+        f"mismatched axes [{axes}]; the emitted identity is absent from the live "
+        "backend and no built-in profile matches its series — declare a per-axis "
+        "`metrics` override on the target."
+    )
 
 
 # ───────────────────────────── report model ────────────────────────────────
@@ -391,6 +412,7 @@ class ExprVerdict:
     mismatched_axes: List[str] = field(default_factory=list)
     expected_metric: str = ""
     remediation: str = ""
+    suggested_profile: str = ""  # the metricsProfile the live backend matches (quick-win #1)
     axis_detail: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -404,6 +426,10 @@ class FidelityReport:
     verdicts: List[ExprVerdict] = field(default_factory=list)
     per_service: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     per_axis: Dict[str, int] = field(default_factory=dict)
+    # Quick-win #1: the single metricsProfile the live backend most consistently
+    # matches across failing queries — the one-line fix for the whole run. "" when
+    # nothing failed or no built-in profile matches (a per-axis override is needed).
+    suggested_metrics_profile: str = ""
     static_gate_note: str = (
         "The static coverage gate (observability_artifact_checks.py) is "
         "offline structural smoke — NOT a fidelity signal. This live-replay "
@@ -418,6 +444,7 @@ class FidelityReport:
             "coverage": round(self.coverage, 4),
             "min_coverage": self.min_coverage,
             "static_gate_note": self.static_gate_note,
+            "suggested_metrics_profile": self.suggested_metrics_profile,
             "per_service": self.per_service,
             "per_axis_mismatch_counts": self.per_axis,
             "verdicts": [
@@ -431,6 +458,7 @@ class FidelityReport:
                     "mismatched_axes": v.mismatched_axes,
                     "expected_metric": v.expected_metric,
                     "remediation": v.remediation,
+                    "suggested_profile": v.suggested_profile,
                     "axis_detail": v.axis_detail,
                 }
                 for v in self.verdicts
@@ -561,6 +589,7 @@ def run_validation(
         expected_metric = ""
         mismatched: List[str] = []
         remediation = ""
+        suggested_profile = ""
         axis_detail: List[Dict[str, Any]] = []
 
         if count > 0:
@@ -589,7 +618,10 @@ def run_validation(
                 )
                 mismatched_findings = [f for f in findings if f.mismatched]
                 mismatched = [f.axis for f in mismatched_findings]
-                remediation = _remediation_hint(mismatched_findings, live)
+                remediation = _remediation_hint(
+                    mismatched_findings, live, descriptor.profile
+                )
+                suggested_profile = _suggested_profile(live, descriptor.profile)
                 axis_detail = [
                     {
                         "axis": f.axis,
@@ -611,6 +643,7 @@ def run_validation(
                 mismatched_axes=mismatched,
                 expected_metric=expected_metric,
                 remediation=remediation,
+                suggested_profile=suggested_profile,
                 axis_detail=axis_detail,
             )
         )
@@ -664,6 +697,11 @@ def run_validation(
         if status == "pass"
         else f"coverage {coverage:.4f} < min {min_coverage}"
     )
+    # Quick-win #1: roll the per-verdict profile suggestions up into the single
+    # metricsProfile that best matches the live backend across all failing
+    # queries — the one-line fix for the whole run. Ties break on frequency.
+    _profile_votes = Counter(v.suggested_profile for v in verdicts if v.suggested_profile)
+    suggested_metrics_profile = _profile_votes.most_common(1)[0][0] if _profile_votes else ""
     return FidelityReport(
         status=status,
         reason=reason,
@@ -673,4 +711,5 @@ def run_validation(
         verdicts=verdicts,
         per_service=per_service,
         per_axis=per_axis,
+        suggested_metrics_profile=suggested_metrics_profile,
     )

@@ -11,8 +11,10 @@ import pytest
 from startd8.observability.metric_descriptor import (
     MetricDescriptor,
     available_profiles,
+    match_profiles,
     profile_for,
     profile_for_transport,
+    profile_signatures,
     resolve_descriptor,
     SEMCONV_PROFILES,
     SPAN_METRICS_PROFILE,
@@ -154,6 +156,31 @@ class TestNonRedFields:
 
     def test_db_system_label_default(self):
         assert profile_for("semconv-http").db_system_label_key == "db_system"
+
+
+# ── match_profiles / profile_signatures (quick-wins #1/#2 shared primitive) ─
+class TestMatchProfiles:
+    def test_matches_span_metrics_when_both_signatures_present(self):
+        names = ["calls_total", "duration_milliseconds_bucket", "up", "process_cpu"]
+        assert match_profiles(names) == ["span-metrics-connector"]
+
+    def test_matches_semconv_http(self):
+        names = ["http_server_duration_count", "http_server_duration_bucket"]
+        assert match_profiles(names) == ["semconv-http"]
+
+    def test_partial_signature_does_not_match(self):
+        # Throughput present but the latency bucket is missing ⇒ no match.
+        assert match_profiles(["calls_total"]) == []
+
+    def test_empty_input_matches_nothing(self):
+        assert match_profiles([]) == []
+
+    def test_signatures_cover_every_profile(self):
+        sigs = profile_signatures()
+        assert set(sigs) == set(available_profiles())
+        # Each profile's own signature metrics must match itself.
+        for name, (thru, bucket) in sigs.items():
+            assert name in match_profiles([thru, bucket])
 
 
 # ── descriptor is safe to share (frozen) ───────────────────────────────────

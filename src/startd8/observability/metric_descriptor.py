@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, fields, replace
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,40 @@ _TRANSPORT_DEFAULTS = {
 def available_profiles() -> Tuple[str, ...]:
     """Names of all built-in convention profiles."""
     return tuple(_PROFILES)
+
+
+def match_profiles(metric_names: Iterable[str]) -> List[str]:
+    """Which built-in profiles does a live backend's metric set actually match?
+
+    Given the metric names a running Prometheus emits, return the profiles whose
+    **signature metrics** — the throughput + latency-bucket names of the FR-5
+    table — are ALL present. In other words: which conventions is the target
+    *really* using. An empty result means no built-in profile matches (a per-axis
+    descriptor override is needed).
+
+    This is the single canonical profile-matcher, reused by the ``detect-profile``
+    CLI (an authoring aid) and by the ``validate-promql`` suggested-fix — so the
+    two never drift.
+    """
+    names = set(metric_names)
+    return [
+        name
+        for name, d in _PROFILES.items()
+        if d.throughput_metric in names and d.latency_bucket_metric in names
+    ]
+
+
+def profile_signatures() -> Dict[str, Tuple[str, str]]:
+    """``{profile_name: (throughput_metric, latency_bucket_metric)}`` for all profiles.
+
+    The signature metrics ``match_profiles`` keys on, exposed so authoring aids
+    (the ``detect-profile`` CLI) can show *which* series each profile needs and
+    which are present live — without reaching into the private ``_PROFILES`` map.
+    """
+    return {
+        name: (d.throughput_metric, d.latency_bucket_metric)
+        for name, d in _PROFILES.items()
+    }
 
 
 def profile_for(name: str) -> MetricDescriptor:
