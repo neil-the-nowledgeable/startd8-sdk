@@ -19,7 +19,7 @@
 | **A1** | `kickoff status [--json]` + `kickoff proposals [--json] [--apply --yes]` | ✅ Shipped (`aa658ebb`) |
 | **A2** | `AgenticView.to_dict()` + `kickoff_status()` callable + `readout --format json` | ✅ Shipped (`aa658ebb`) |
 | **C1** | `startd8_kickoff_status` MCP tool (read-only, `startd8.kickoff.status.v1`) | ✅ Shipped (`869d5dc5`) |
-| B | Activation surface — alerts + a decision/activation ledger from the oracle | ⏳ Planned |
+| **B** | Activation surface — `kickoff check` gate + `kickoff.activation.*` gauges + activation ledger | ✅ Shipped |
 | C2/C3 | Decision-log + retrospective built on the oracle payload | ⏳ Planned |
 | D | Close-the-loop — readiness/burndown → next-action nudges | ⏳ Planned |
 | E | Promotion dividend — oracle payload as the exemplar/promotion input | ⏳ Planned |
@@ -61,17 +61,28 @@ alongside the concierge floor guard in `test_15`).
 
 ---
 
-## Tier B — Activation surface (PLANNED)
+## Tier B — Activation surface (SHIPPED)
 
 The oracle already computes readiness %, attention counts, and a next action. Tier B turns those into
-**push**, not just pull:
+**push**, not just pull — a portable gate, stack-based alerting, and an audit trail:
 
-- **Alerts from the oracle.** A Grafana alert (or CLI check) that fires on `readiness_percent` stalling
-  or `attention_counts` for a blocking class staying > 0 past a threshold — sourced from the same
-  metrics the burndown already emits (OTel Meter → Mimir), so no new signal path.
-- **Activation/decision ledger.** Append-only record of oracle-derived state transitions (readiness
-  crossings, proposal applies, snapshot promotions) so a project has an audit trail of *how it got
-  ready*, not just its current state.
+- **`kickoff check` — the alert as a portable CLI gate.** `evaluate_activation(status)` scores the
+  oracle payload against activation conditions — `no_inputs`, `blocked_fields` (severity *blocked*),
+  `review_backlog`, `pending_proposals`, `readiness_below_target` — and yields an overall severity +
+  **exit code** (`0` ok · `1` attention · `3` blocked; the codebase's existing convention). So CI/cron
+  can gate on kickoff readiness *without* the Grafana stack. `--json` emits the
+  `startd8.kickoff.activation.v1` verdict; `--min-readiness N` sets the target; `--record` also writes
+  a ledger row. (`src/startd8/kickoff_experience/activation.py`, `kickoff check`.)
+- **Grafana alerting on the same conditions.** `kickoff check` emits two gauges via the existing OTel
+  Meter → Mimir path — `kickoff.activation.open` (count of firing conditions) and
+  `kickoff.activation.severity` (0/1/2). A Grafana alert can fire on `kickoff_activation_open > 0` or
+  `kickoff_activation_severity >= 2` — the *same* conditions the portable gate evaluates, so the two
+  paths never disagree. (Live-verified in Mimir: `kickoff_activation_open{project=…}`.)
+- **Activation ledger — how a project got ready.** `ActivationLedger` appends a row to
+  `.startd8/kickoff/activation-ledger.jsonl` **only when the oracle signature changes** (readiness
+  crossing, block/unblock, proposals applied, snapshot promotion) — a clean event stream, not a poll
+  log. `kickoff ledger [--json]` renders it. It is the only writer in Tier B and only ever appends;
+  it never touches kickoff inputs.
 
 ## Tier C2/C3 — Decision log + retrospective (PLANNED)
 
@@ -106,9 +117,13 @@ payload is already the structured fingerprint this would key on.
 ## Evidence
 
 - Code: `src/startd8/kickoff_experience/agentic_view.py` (`to_dict`, `kickoff_status`),
-  `src/startd8/cli_concierge.py` (`kickoff status|proposals|readout`),
+  `src/startd8/kickoff_experience/activation.py` (`evaluate_activation`, `ActivationLedger`),
+  `src/startd8/kickoff_experience/metrics.py` (`record_activation`),
+  `src/startd8/cli_concierge.py` (`kickoff status|proposals|readout|check|ledger`),
   `mcp/startd8-mcp-builder/startd8_mcp.py` (`startd8_kickoff_status`).
 - Tests: `tests/unit/kickoff_experience/test_status_proposals_cli.py`,
   `tests/unit/kickoff_experience/test_agentic_view.py`,
+  `tests/unit/kickoff_experience/test_activation.py`,
+  `tests/unit/kickoff_experience/test_check_ledger_cli.py`,
   `mcp/startd8-mcp-builder/tests/test_16_kickoff_status.py`.
-- Commits: `aa658ebb` (A1+A2), `869d5dc5` (C1).
+- Commits: `aa658ebb` (A1+A2), `869d5dc5` (C1), Tier B (this change).

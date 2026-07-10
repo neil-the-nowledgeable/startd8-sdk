@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.15.0"
+version: "1.17.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1848,6 +1848,56 @@ capabilities:
         description: "redactor injection, to_snapshot, re-export compat, no-cycle"
     confidence: 0.9
 
+  - capability_id: startd8.kickoff.activation
+    category: observe
+    maturity: stable
+    summary: "Turn the kickoff oracle's readiness/attention signal into a portable exit-coded check GATE + `kickoff.activation.*` Grafana gauges + an append-only activation ledger — the SAME conditions across stack and no-stack ($0)"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        Tier B of the oracle-as-API roadmap. `evaluate_activation(status)` scores the
+        `startd8.kickoff.status.v1` oracle payload against activation conditions — `no_inputs`,
+        `blocked_fields` (severity *blocked*), `review_backlog`, `pending_proposals`,
+        `readiness_below_target` — and yields an overall severity + **exit code** (`0` ok · `1`
+        attention · `3` blocked, the SDK's existing convention). `startd8 kickoff check` is the
+        portable GATE: CI/cron can fail on kickoff readiness WITHOUT the Grafana stack (`--json`
+        emits the verdict, `--min-readiness N` sets the target, `--record` appends a ledger row).
+        The SAME conditions drive two OTel gauges via the existing Meter→Mimir path —
+        `kickoff.activation.open` (firing-condition count) and `kickoff.activation.severity` (0/1/2)
+        — so a Grafana alert (`kickoff_activation_open > 0`) and the CLI gate never disagree.
+        `ActivationLedger` appends to `.startd8/kickoff/activation-ledger.jsonl` ONLY when the oracle
+        signature changes (readiness crossing, block/unblock, proposals applied, snapshot promotion)
+        — a clean transition stream, not a poll log; `kickoff ledger` renders it. Pure reads over the
+        oracle; the ledger is the only writer and only ever appends (never touches kickoff inputs).
+      agent: |
+        startd8 kickoff check                 # exit 0 ok / 1 attention / 3 blocked
+        startd8 kickoff check --json --record  # machine verdict + append a ledger transition
+        startd8 kickoff ledger                 # how this project got ready (transition history)
+        # Grafana alert: kickoff_activation_open > 0  (or kickoff_activation_severity >= 2)
+    triggers: ["kickoff check", "activation", "readiness gate", "kickoff alert", "activation ledger", "readiness alert", "kickoff ci gate", "activation surface"]
+    evidence:
+      - type: code
+        ref: src/startd8/kickoff_experience/activation.py
+        description: "evaluate_activation (conditions→severity→exit code) + ActivationLedger (append-on-change JSONL)"
+      - type: code
+        ref: src/startd8/kickoff_experience/metrics.py
+        description: "record_activation → kickoff.activation.open/severity gauges (Meter→Mimir, best-effort no-op)"
+      - type: code
+        ref: src/startd8/cli_concierge.py
+        description: "`kickoff check` (exit-coded gate + --record) and `kickoff ledger` commands"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_activation.py
+        description: "condition scoring, severity/exit mapping, ledger append-on-change + dedup + malformed-row tolerance"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_check_ledger_cli.py
+        description: "check exit codes + json verdict + --record→ledger round-trip"
+      - type: doc
+        ref: docs/design/kickoff-portal/ORACLE_API_ROADMAP.md
+        description: "Tier B — activation surface (gate + gauges + ledger); invariants"
+    confidence: 0.9
+    dependencies:
+      - startd8.kickoff.workbook_cockpit
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -1855,15 +1905,15 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 59   # v1.16.0: +kickoff.workbook_cockpit, +agentic.session_snapshot
+  total_capabilities: 60   # v1.17.0: +kickoff.activation (Tier B activation surface)
   by_maturity:
-    stable: 24     # v1.16.0: +2 (both new stable)
+    stable: 25     # v1.17.0: +1 (kickoff.activation stable)
     beta: 35       # reconciled to actual (prior summary undercounted)
-  by_category:                 # v1.16.0: reconciled to the actual parse (prior block undercounted)
+  by_category:                 # v1.17.0: +observe (kickoff.activation)
     action: 18     # +agentic.session_snapshot
     generate: 16   # +kickoff.workbook_cockpit
     validate: 7
-    observe: 6
+    observe: 7     # +kickoff.activation
     integration: 6
     query: 2
     transform: 2
@@ -1874,6 +1924,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.17.0"
+    date: "2026-07-10"
+    changes:
+      - "Added startd8.kickoff.activation (observe, stable, 0.9) — Tier B activation surface over the single AgenticView oracle: `evaluate_activation` scores the status payload into conditions (no_inputs / blocked_fields / review_backlog / pending_proposals / readiness_below_target) → severity + exit code (0 ok / 1 attention / 3 blocked); `startd8 kickoff check` is a portable CI/cron GATE that needs no Grafana stack; the SAME conditions emit `kickoff.activation.open`/`.severity` gauges (Meter→Mimir, live-verified in Mimir) so a Grafana alert and the CLI gate never disagree; `ActivationLedger` appends a `.startd8/kickoff/activation-ledger.jsonl` transition row only when the oracle signature changes (`kickoff ledger`). 631 kickoff tests green."
+      - "60 capabilities: 25 stable; observe 6→7. Fixed the manifest `version` field (was left at 1.15.0 while the v1.16.0 counts/changelog had already landed)."
   - version: "1.16.0"
     date: "2026-07-10"
     changes:

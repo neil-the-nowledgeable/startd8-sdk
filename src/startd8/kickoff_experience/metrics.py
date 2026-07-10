@@ -69,6 +69,14 @@ def _gauges() -> Optional[Dict[str, Any]]:
                 "kickoff.facilitation.cost_usd", unit="",
                 description="Latest facilitation cost (USD), labeled by posture + tier",
             ),
+            "activation_open": meter.create_gauge(
+                "kickoff.activation.open", unit="",
+                description="Open activation conditions (firing 'alerts') from the oracle",
+            ),
+            "activation_severity": meter.create_gauge(
+                "kickoff.activation.severity", unit="",
+                description="Overall activation severity (0=ok, 1=attention, 2=blocked)",
+            ),
         }
     except Exception as exc:  # pragma: no cover - metrics are never load-bearing
         logger.debug("kickoff metrics unavailable: %s", exc)
@@ -130,6 +138,30 @@ def record_facilitation_cost(
         return True
     except Exception as exc:  # pragma: no cover
         logger.debug("facilitation cost metric skipped: %s", exc)
+        return False
+
+
+def record_activation(
+    *,
+    project: str,
+    open_count: int,
+    severity_code: int,
+) -> bool:
+    """Emit the activation gauges from an :class:`ActivationReport` (best-effort). Returns True iff recorded.
+
+    ``severity_code`` is 0=ok / 1=attention / 2=blocked. A Grafana alert can fire on
+    ``kickoff_activation_open > 0`` or ``kickoff_activation_severity >= 2`` — the same conditions the
+    portable ``kickoff check`` gate evaluates, so stack and no-stack paths agree. Never load-bearing."""
+    gauges = _gauges()
+    if not gauges:
+        return False
+    try:
+        attrs = {"project": str(project)}
+        gauges["activation_open"].set(float(open_count), attrs)
+        gauges["activation_severity"].set(float(severity_code), attrs)
+        return True
+    except Exception as exc:  # pragma: no cover
+        logger.debug("activation metric skipped: %s", exc)
         return False
 
 

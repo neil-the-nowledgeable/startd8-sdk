@@ -1524,6 +1524,108 @@ def kickoff_proposals_cmd(
     console.print(f"[green]applied:[/green] {res.summary()}")
 
 
+_SEVERITY_CODE = {"ok": 0, "attention": 1, "blocked": 2}
+_SEVERITY_STYLE = {"ok": "green", "attention": "yellow", "blocked": "red"}
+
+
+@kickoff_kernel_app.command("check")
+def kickoff_check_cmd(
+    project_root: Path = typer.Argument(
+        Path("."), help="Project to check activation readiness for (default: current dir)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the activation verdict as JSON."),
+    min_readiness: int = typer.Option(
+        100, "--min-readiness", help="Readiness %% target below which an attention condition fires."
+    ),
+    record: bool = typer.Option(
+        False, "--record", help="Also append a transition row to the activation ledger."
+    ),
+) -> None:
+    """Is this project activated? — a portable readiness GATE over the single oracle (exit-coded).
+
+    Evaluates activation conditions (blocked fields, pending proposals, review backlog, readiness
+    below target, no inputs) and exits 0=ok · 1=attention · 3=blocked — so CI/cron can gate on
+    kickoff readiness without the Grafana stack. The same conditions drive the `kickoff.activation.*`
+    Grafana gauges. `--record` appends a row to the activation ledger when state changed. Read-only
+    unless `--record`; `$0`.
+    """
+    from .kickoff_experience.activation import evaluate_activation
+    from .kickoff_experience.agentic_view import kickoff_status
+
+    status = kickoff_status(project_root)
+    report = evaluate_activation(status, min_readiness=min_readiness)
+
+    # Best-effort activation gauges (no-op without a collector).
+    try:
+        from .kickoff_experience.metrics import record_activation
+
+        record_activation(
+            project=str(Path(project_root).resolve().name or "kickoff"),
+            open_count=len(report.open),
+            severity_code=_SEVERITY_CODE.get(report.overall, 1),
+        )
+    except Exception:  # never let telemetry break the gate
+        pass
+
+    if record:
+        try:
+            from .kickoff_experience.activation import ActivationLedger
+
+            ActivationLedger(project_root).record(status)
+        except Exception as exc:
+            console.print(f"[dim]ledger skipped: {exc}[/dim]")
+
+    if json_out:
+        _emit_json(report.to_dict())
+        raise typer.Exit(report.exit_code)
+
+    style = _SEVERITY_STYLE.get(report.overall, "yellow")
+    label = {"ok": "ACTIVATED", "attention": "ATTENTION", "blocked": "BLOCKED"}[report.overall]
+    console.print(f"[bold {style}]{label}[/bold {style}]  ({len(report.open)} open condition(s))")
+    for c in report.open:
+        cs = _SEVERITY_STYLE.get(c.severity, "yellow")
+        detail = f" — {c.detail}" if c.detail else ""
+        console.print(f"  [{cs}]•[/{cs}] {c.title}{detail}")
+    if report.ready:
+        console.print("  [green]•[/green] All activation conditions clear.")
+    raise typer.Exit(report.exit_code)
+
+
+@kickoff_kernel_app.command("ledger")
+def kickoff_ledger_cmd(
+    project_root: Path = typer.Argument(
+        Path("."), help="Project whose activation ledger to show (default: current dir). Read-only."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the ledger rows as JSON."),
+    limit: int = typer.Option(20, "--limit", help="Show at most this many most-recent rows (0=all)."),
+) -> None:
+    """The activation ledger — how this project got ready (append-only transition history).
+
+    Each row is a recorded oracle state transition (readiness crossing, block/unblock, proposals
+    applied, snapshot promotion). Rows are written by `kickoff check --record`. Read-only, `$0`.
+    """
+    from .kickoff_experience.activation import ActivationLedger
+
+    entries = ActivationLedger(project_root).entries()
+    if json_out:
+        _emit_json({"schema": "startd8.kickoff.activation-ledger.v1", "entries": entries, "count": len(entries)})
+        return
+    if not entries:
+        console.print("[dim]No activation history yet — run `startd8 kickoff check --record`.[/dim]")
+        return
+    shown = entries if limit <= 0 else entries[-limit:]
+    console.print(f"[bold]activation ledger[/bold] ({len(entries)} transition(s))")
+    for e in shown:
+        pct = e.get("readiness_percent")
+        ready = f"{pct}%" if pct is not None else "—"
+        changed = ", ".join(e.get("changed", [])) or "—"
+        console.print(
+            f"  [dim]{e.get('ts', '?')}[/dim]  readiness {ready}  "
+            f"[dim]blocked={e.get('blocked', 0)} proposals={e.get('proposals_pending', 0)}[/dim]  "
+            f"[cyan]Δ {changed}[/cyan]"
+        )
+
+
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------
 # `audience` is a lens over the one guided experience (orthogonal to `posture`): beginner /
 # intermediate / advanced. M1 is the persistence spine only — `set` writes ONLY the preference; it
