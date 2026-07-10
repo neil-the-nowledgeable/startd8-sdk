@@ -368,7 +368,7 @@ async def _facilitate_cancel(request: Request) -> JSONResponse:
     if (denied := _authorize(request, config)) is not None:
         return denied
     sid = request.path_params["session_id"]
-    ok = cancel_facilitation(sid)
+    ok = cancel_facilitation(config.project_root, sid)
     return JSONResponse({"session_id": sid, "cancelled": ok}, status_code=200 if ok else 404)
 
 

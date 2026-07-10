@@ -101,6 +101,40 @@ def test_status_unknown_session(tmp_path):
     assert FR.facilitate_status(tmp_path, "kp-nope")["status"] == "unknown"
 
 
+# ── /code-review CRITICAL: a cap-raise must ROLL BACK the reservation (no lost run) ──
+def test_cap_raise_releases_reservation_so_retry_respawns(tmp_path, roster, monkeypatch):
+    monkeypatch.setattr(FR, "MAX_CONCURRENT_FACILITATIONS", 0)
+    with pytest.raises(FR.FacilitationCapError):
+        _start_sync(_cfg(tmp_path), roster)
+    # the reservation was rolled back → a retry (cap freed) spawns for REAL, not deduped-to-nothing
+    monkeypatch.setattr(FR, "MAX_CONCURRENT_FACILITATIONS", 4)
+    res = _start_sync(_cfg(tmp_path), roster)
+    assert res["deduped"] is False
+    assert FR.facilitate_status(tmp_path, res["session_id"])["status"] == "completed"
+
+
+# ── /code-review MEDIUM: dedup during worker-startup reports in_progress, not `unknown` ──
+def test_dedup_before_transcript_reports_in_progress(tmp_path, roster):
+    from startd8.kickoff_experience.stakeholder_run import IdempotencyStore
+    cfg = _cfg(tmp_path)
+    rv = FR.roster_version(roster)
+    rk = FR.facilitate_run_key(posture=cfg.posture, tier=cfg.tier, cap=None, budget_usd=cfg.budget_usd, rv=rv)
+    ph = FR._params_hash(posture=cfg.posture, tier=cfg.tier, cap=None, budget_usd=cfg.budget_usd, rv=rv)
+    IdempotencyStore(tmp_path).reserve(rk, ph, session_id=FR.facilitate_session_id(rk))  # reserved, no run
+    res = FR.start_facilitation(  # dedups; transcript absent → must fall back to in_progress
+        cfg, roster, thread_starter=lambda target: None,
+        persona_agent_factory=_persona_factory(), facilitator_agent_factory=_facilitator_factory())
+    assert res["deduped"] is True and res["status"] == "in_progress"
+
+
+# ── /code-review MEDIUM: a corrupt transcript degrades the poll to `error`, not a 500 ──
+def test_status_corrupt_transcript_degrades(tmp_path):
+    d = tmp_path / ".startd8" / "kickoff-panel"
+    d.mkdir(parents=True)
+    (d / "kp-bad.json").write_text("{ not json", encoding="utf-8")
+    assert FR.facilitate_status(tmp_path, "kp-bad")["status"] == "error"
+
+
 # ── FR-8 e2e: facilitate → completed → the transcript feeds the synthesis-bridge triage ──
 def test_completed_facilitation_feeds_triage(tmp_path, roster):
     res = _start_sync(_cfg(tmp_path), roster)

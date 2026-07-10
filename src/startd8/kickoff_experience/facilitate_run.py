@@ -40,6 +40,7 @@ from .stakeholder_run import (
 MAX_CONCURRENT_FACILITATIONS = 4  # H-5 — bound worker threads / event loops / premium fleets
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT: set[str] = set()  # run_keys with a live worker (in-process; the concurrency cap)
+_CANCEL_REQUESTED: set[str] = set()  # session_ids cancelled before the worker registered (race-close)
 
 
 class FacilitationCapError(Startd8Error):
@@ -127,6 +128,12 @@ def _worker(fac: "F.KickoffFacilitator", run_key: str, idem: IdempotencyStore, s
         task = loop.create_task(fac.run())
         # H-9: register under the SESSION_ID (which the poller holds) so cancel-by-session works.
         _RUN_REGISTRY.register(session_id, loop, task)  # cancel via loop.call_soon_threadsafe
+        # Race-close (Medium): a cancel that arrived BEFORE we registered is honored now (else it'd
+        # 404 at the route and the run would spend on).
+        with _INFLIGHT_LOCK:
+            wants_cancel = session_id in _CANCEL_REQUESTED
+        if wants_cancel:
+            task.cancel()
         try:
             loop.run_until_complete(task)
             idem.mark_complete(run_key, session_id)
@@ -136,6 +143,14 @@ def _worker(fac: "F.KickoffFacilitator", run_key: str, idem: IdempotencyStore, s
             idem.mark_complete(run_key, session_id)  # terminal; don't let a retry re-spawn a crashed run
     finally:
         _RUN_REGISTRY.unregister(session_id)
+        with _INFLIGHT_LOCK:
+            _CANCEL_REQUESTED.discard(session_id)
+        try:  # drain any pending child tasks so `loop.close()` doesn't warn (LOW)
+            pending = asyncio.all_tasks(loop)
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:  # noqa: BLE001 — best-effort drain
+            pass
         try:
             loop.close()
         finally:
@@ -168,34 +183,65 @@ def start_facilitation(
     # H-1/H-4 — atomic single-flight gate: reserve; a duplicate/terminal run_key returns its session.
     existing = idem.reserve(run_key, ph, session_id=session_id)  # may raise RunKeyMismatchError (H-10)
     if existing is not None:
-        return {"session_id": session_id, "run_key": run_key,
-                "status": facilitate_status(cfg.project, session_id).get("status", "in_progress"),
-                "deduped": True}
+        # The transcript may not exist yet (reserved, worker still spinning up) → report the reservation's
+        # own status (`started`→`in_progress`), not a misleading `unknown`.
+        st = facilitate_status(cfg.project, session_id).get("status", "unknown")
+        if st == "unknown":
+            st = "in_progress" if existing.get("status") == "started" else "unknown"
+        return {"session_id": session_id, "run_key": run_key, "status": st, "deduped": True}
 
-    # H-5 — concurrency cap (after we own the reservation).
-    with _INFLIGHT_LOCK:
-        if len(_INFLIGHT) >= MAX_CONCURRENT_FACILITATIONS:
-            raise FacilitationCapError(
-                f"{MAX_CONCURRENT_FACILITATIONS} facilitations already in flight — try again shortly")
-        _INFLIGHT.add(run_key)
-
-    fac = F.KickoffFacilitator(
-        cfg, roster=roster, session_id=session_id, cost_tracker=cost_tracker,
-        persona_agent_factory=persona_agent_factory,
-        facilitator_agent_factory=facilitator_agent_factory,
-    )
-    starter = thread_starter or (lambda target: threading.Thread(target=target, daemon=True).start())
-    starter(lambda: _worker(fac, run_key, idem, session_id))
+    # From here we OWN a fresh reservation — any failure before the worker takes over MUST roll it back
+    # (else a retry dedupes to a run that never executes, until the TTL silently expires — the cap-leak).
+    try:
+        with _INFLIGHT_LOCK:  # H-5 — concurrency cap
+            if len(_INFLIGHT) >= MAX_CONCURRENT_FACILITATIONS:
+                raise FacilitationCapError(
+                    f"{MAX_CONCURRENT_FACILITATIONS} facilitations already in flight — try again shortly")
+            _INFLIGHT.add(run_key)
+        fac = F.KickoffFacilitator(
+            cfg, roster=roster, session_id=session_id, cost_tracker=cost_tracker,
+            persona_agent_factory=persona_agent_factory,
+            facilitator_agent_factory=facilitator_agent_factory,
+        )
+        starter = thread_starter or (lambda target: threading.Thread(target=target, daemon=True).start())
+        starter(lambda: _worker(fac, run_key, idem, session_id))
+    except BaseException:
+        with _INFLIGHT_LOCK:
+            _INFLIGHT.discard(run_key)
+        idem.release(run_key)  # roll back the orphaned reservation so a retry re-spawns
+        raise
     return {"session_id": session_id, "run_key": run_key, "status": "in_progress", "deduped": False}
 
 
 # ── cancel (H-9) ─────────────────────────────────────────────────────────────
-def cancel_facilitation(session_id: str) -> bool:
+def _live_reservation_sessions(project: Path | str) -> set:
+    """session_ids of reservations still ``started`` (reserved; a worker may be spinning up)."""
+    try:
+        data = IdempotencyStore(project)._load()
+    except Exception:  # noqa: BLE001
+        return set()
+    return {r.get("session_id") for r in data.values() if isinstance(r, dict) and r.get("status") == "started"}
+
+
+def cancel_facilitation(project: Path | str, session_id: str) -> bool:
     """Signal an in-flight facilitation to abort (H-9, keyed by the session_id the poller holds).
 
-    Already-completed rounds persist; the facilitator ends the transcript `cancelled` (H-8). Returns
-    False if no live run matches (already terminal / unknown)."""
-    return cancel_run(session_id)
+    Records the intent FIRST so a cancel racing a still-spinning-up worker is honored at registration
+    (else it would 404 and the run would spend on). Already-completed rounds persist; the facilitator
+    ends the transcript `cancelled` (H-8). Returns True if a live/starting run was signalled, else False.
+    """
+    with _INFLIGHT_LOCK:
+        _CANCEL_REQUESTED.add(session_id)
+    if cancel_run(session_id):  # a registered task was signalled
+        return True
+    # Not (yet) registered — is a run genuinely live/starting? then the recorded intent will be honored.
+    if facilitate_status(project, session_id).get("status") == "in_progress":
+        return True
+    if session_id in _live_reservation_sessions(project):
+        return True
+    with _INFLIGHT_LOCK:  # nothing to cancel — don't leave a stale intent
+        _CANCEL_REQUESTED.discard(session_id)
+    return False
 
 
 # ── status poll (H-15) ───────────────────────────────────────────────────────
@@ -207,6 +253,8 @@ def facilitate_status(project: Path | str, session_id: str) -> Dict[str, Any]:
         t = KickoffViewService(str(project)).load(session_id)
     except (FileNotFoundError, KeyError):
         return {"session_id": session_id, "status": "unknown"}
+    except Exception as exc:  # noqa: BLE001 — a corrupt/torn transcript degrades to a clean signal, not a 500
+        return {"session_id": session_id, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
     synthesis = getattr(t, "synthesis", None)
     return {
         "session_id": session_id,

@@ -254,6 +254,15 @@ class IdempotencyStore:
             self._save(data)
             return None
 
+    def release(self, run_key: str) -> None:
+        """Delete a reservation (roll back a :meth:`reserve` that never spawned — e.g. the concurrency
+        cap raised or the worker failed to start). Without this a retry would dedupe to a run that will
+        never execute, until the TTL silently expires."""
+        with self._locked():
+            data = self._load()
+            if data.pop(run_key, None) is not None:
+                self._save(data)
+
     def mark_complete(self, run_key: str, session_id: str, *, now: Optional[float] = None) -> None:
         with self._locked():
             data = self._load()
