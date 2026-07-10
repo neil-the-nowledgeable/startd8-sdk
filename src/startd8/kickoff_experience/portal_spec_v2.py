@@ -222,22 +222,12 @@ def _transcript_logql(session_id: str) -> str:
 
 _ROLE_LABEL = {"user": "🧑 you", "assistant": "🤖 assistant", "tool": "🔧 tool"}
 
-# Friendly, actionable explanation of a non-"completed" stop (Tier-1 #4). Mirrors AgenticResult's
-# stop_reason vocabulary (agents/agentic.py).
-_STOP_REASON_NOTE = {
-    "budget": "⏸️ **Stopped at the cost/token budget cap** — raise `--max-cost` / "
-    "`--max-total-tokens`, or continue in a new `kickoff chat` session.",
-    "max_turns": "⏸️ **Hit the turn limit** — continue in a new `kickoff chat` session.",
-    "repeated_calls": "⏸️ **The assistant was repeating a tool call** and stopped — try rephrasing.",
-    "context_overflow": "⏸️ **The conversation outgrew the context window** even after compaction.",
-    "stream_error": "⚠️ **Ended on a stream error** — the transcript may be incomplete.",
-}
-
-
 def _stop_reason_note(reason: Optional[str]) -> Optional[str]:
-    if not reason or reason == "completed":
-        return None
-    return _STOP_REASON_NOTE.get(reason, f"⏸️ **Stopped:** {reason}")
+    """Dashboard-flavored stop note (Tier-1 #4) — wraps the shared `stop_reason_hint` (parity)."""
+    from .session_snapshot import stop_reason_hint
+
+    hint = stop_reason_hint(reason)
+    return f"⏸️ **{hint}**" if hint else None
 
 
 _ATTENTION_LABELS = (("ok", "ok"), ("review", "review"), ("blocked", "blocked"), ("backlog", "backlog"))

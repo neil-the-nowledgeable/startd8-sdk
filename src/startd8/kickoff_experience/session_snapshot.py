@@ -49,6 +49,25 @@ SNAPSHOT_SCHEMA_VERSION = 1
 # not a live agent.
 SNAPSHOT_DISCLOSURE = "snapshot — not a live agent"
 
+# Canonical, presentation-neutral explanation of a non-"completed" stop (mirrors AgenticResult's
+# stop_reason vocabulary in agents/agentic.py). ONE source so the Grafana cockpit and the terminal
+# cockpit explain a stop identically (parity). Each surface wraps/styles it as it sees fit.
+STOP_REASON_HINT = {
+    "budget": "stopped at the cost/token budget cap — raise `--max-cost` / `--max-total-tokens`, "
+    "or continue in a new `kickoff chat` session",
+    "max_turns": "hit the turn limit — continue in a new `kickoff chat` session",
+    "repeated_calls": "the assistant was repeating a tool call and stopped — try rephrasing",
+    "context_overflow": "the conversation outgrew the context window even after compaction",
+    "stream_error": "ended on a stream error — the transcript may be incomplete",
+}
+
+
+def stop_reason_hint(reason: Optional[str]) -> Optional[str]:
+    """Human explanation for a non-"completed" ``stop_reason`` (``None`` when it completed cleanly)."""
+    if not reason or reason == "completed":
+        return None
+    return STOP_REASON_HINT.get(reason, f"stopped: {reason}")
+
 _SNAPSHOT_RELPATH = (".startd8", "kickoff", "agentic-session.json")
 
 

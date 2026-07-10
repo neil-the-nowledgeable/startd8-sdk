@@ -1346,6 +1346,33 @@ def kickoff_portal(
         )
 
 
+@kickoff_kernel_app.command("cockpit")
+def kickoff_cockpit(
+    project_root: Path = typer.Argument(
+        Path("."),
+        help="Project to render the cockpit for (default: current dir). Read-only.",
+    ),
+    plain: bool = typer.Option(
+        False, "--plain", help="No color/ANSI (pipe-friendly)."
+    ),
+) -> None:
+    """Render the agentic cockpit in the terminal — Status / Assistant / Proposals.
+
+    The same read-model the Grafana board (`kickoff portal --dynamic`) mirrors, so you get readiness +
+    next step, the session at a glance + transcript tail, and the pending proposals with copy-safe
+    confirm commands — **without a running Grafana**. Read-only: it shows the confirm commands, it
+    never applies them (the CLI is the sole writer).
+    """
+    from .kickoff_experience.agentic_view import build_agentic_view
+    from .kickoff_experience.cockpit_view import cockpit_to_text, render_cockpit
+
+    view = build_agentic_view(project_root)
+    if plain or not console.is_terminal:
+        print(cockpit_to_text(view, width=console.width or 100, color=False))
+    else:
+        console.print(render_cockpit(view))
+
+
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------
 # `audience` is a lens over the one guided experience (orthogonal to `posture`): beginner /
 # intermediate / advanced. M1 is the persistence spine only — `set` writes ONLY the preference; it

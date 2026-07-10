@@ -39,10 +39,12 @@ SDK's bucket boundary).
 
 ## Tier 2 — Functional capabilities (≈1–2 days each, $0)
 
-- **`startd8 kickoff cockpit` — a CLI/TUI parity view.** FR-3 promised the read-model is the single
-  oracle "so the dashboard *and any CLI/TUI view* derive from the same oracle" — but only the
-  dashboard consumer shipped. A Rich terminal render of the same `AgenticView` delivers the cockpit's
-  value **without a running Grafana**. Read-model is done; this is pure rendering.
+- **`startd8 kickoff cockpit` — a CLI/TUI parity view. — ✅ SHIPPED.** A Rich terminal render of the
+  same `AgenticView` (Status / Assistant / Proposals) delivers the cockpit's value **without a running
+  Grafana** — realizing FR-3's "the dashboard *and any CLI/TUI view* derive from the same oracle."
+  `kickoff_experience/cockpit_view.py` + `startd8 kickoff cockpit [--plain]`; a parity test asserts the
+  terminal and the board agree on the next step + proposal ids. The stop-reason explanation was pulled
+  into one canonical `session_snapshot.stop_reason_hint` (used by both surfaces).
 - **`startd8 kickoff proposals` — list + numbered apply.** The Proposals tab shows the two-step
   `negotiate && apply`; a CLI helper that lists pending proposals and applies your pick closes the
   confirm loop from "copy-paste a command" to "pick #2." (CLI stays sole writer — NR-2 intact.)
