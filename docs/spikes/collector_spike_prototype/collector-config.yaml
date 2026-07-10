@@ -1,0 +1,51 @@
+# Span-metrics spike collector config — loopback only.
+# OTLP/gRPC receiver -> spanmetrics connector -> prometheus exporter (/metrics).
+# Target RED surface (span-metrics-connector profile):
+#   calls_total{service_name="...",status_code="STATUS_CODE_ERROR"}
+#   duration_milliseconds_bucket{...}
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+
+connectors:
+  spanmetrics:
+    # Drop the default "traces.span.metrics" namespace so the emitted names are
+    # exactly calls_total / duration_milliseconds_* (the span-metrics-connector
+    # descriptor profile expects unprefixed names).
+    namespace: ""
+    # Histogram unit ms -> metric name duration_milliseconds
+    histogram:
+      explicit:
+        buckets: [2ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s]
+    # Dimensions become extra labels on calls_total / duration.
+    # service.name is promoted to a resource-derived dimension automatically;
+    # status.code -> status_code label + span.name/span.kind are default dimensions.
+    # Emit resource attrs (service.name) as metric labels.
+    metrics_flush_interval: 1s
+    # namespace left empty so metric is exactly "calls_total" (no prefix).
+
+exporters:
+  prometheus:
+    endpoint: 127.0.0.1:8889
+    # Keep OTel-style metric+label names so they match the descriptor profile
+    # (service_name, status_code, span_kind) instead of being sanitized away.
+    resource_to_telemetry_conversion:
+      enabled: true
+    enable_open_metrics: false
+    add_metric_suffixes: true
+
+service:
+  telemetry:
+    metrics:
+      level: none
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [spanmetrics]
+    metrics:
+      receivers: [spanmetrics]
+      exporters: [prometheus]
