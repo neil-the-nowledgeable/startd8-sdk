@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.18.0"
+version: "1.19.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1901,6 +1901,45 @@ capabilities:
     dependencies:
       - startd8.kickoff.workbook_cockpit
 
+  - capability_id: startd8.kickoff.retrospective
+    category: observe
+    maturity: stable
+    summary: "The 'how this project got ready' story — a VIPP decision log (proposed vs accepted/rejected/countered) + a journey retrospective reconstructed from the activation ledger's transitions — from the single oracle ($0)"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        Tier C2/C3 of the oracle-as-API roadmap. `startd8 kickoff retrospective` (schema
+        `startd8.kickoff.retrospective.v1`) combines two read-only views over data the oracle already
+        folds: (C2) `decision_log(status)` reads the oracle payload's `pipeline.dispositions` (the
+        persisted VIPP report) — what the concierge proposed and what was **adjudicated** (ACCEPT /
+        REJECT / COUNTER + reason) — cross-referenced with the live inbox for what is still **pending**;
+        (C3) `build_retrospective(status, ledger_entries)` reconstructs the journey from the Tier-B
+        activation ledger's transition history as ordered **milestones** (readiness start→now, blockers
+        cleared, proposals applied, snapshot promoted). The ledger IS the event stream, so no separate
+        snapshot history is needed. This closes the roadmap's compounding loop: Tier-B records the
+        transitions, Tier-D reads them as slope, Tier-C reads them as narrative — all one oracle, no
+        new generation. `--json` for tools; degrades cleanly with no dispositions / no ledger.
+      agent: |
+        startd8 kickoff retrospective          # journey milestones + decision log
+        startd8 kickoff retrospective --json    # startd8.kickoff.retrospective.v1 payload
+    triggers: ["retrospective", "decision log", "kickoff history", "how it got ready", "proposal decisions", "kickoff journey", "postmortem", "audit trail"]
+    evidence:
+      - type: code
+        ref: src/startd8/kickoff_experience/retrospective.py
+        description: "decision_log (C2, from pipeline.dispositions + inbox) + build_retrospective (C3, milestones from the activation ledger) + kickoff_retrospective callable"
+      - type: code
+        ref: src/startd8/cli_concierge.py
+        description: "`kickoff retrospective` command (journey + decisions, --json)"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_retrospective.py
+        description: "decision-log adjudicated/pending split + degrade; ledger milestone derivation; callable + CLI round-trip"
+      - type: doc
+        ref: docs/design/kickoff-portal/ORACLE_API_ROADMAP.md
+        description: "Tier C2/C3 — decision log + retrospective"
+    confidence: 0.9
+    dependencies:
+      - startd8.kickoff.activation
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -1908,15 +1947,15 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 60   # v1.17.0: +kickoff.activation (Tier B activation surface)
+  total_capabilities: 61   # v1.19.0: +kickoff.retrospective (Tier C2/C3)
   by_maturity:
-    stable: 25     # v1.17.0: +1 (kickoff.activation stable)
+    stable: 26     # v1.19.0: +1 (kickoff.retrospective stable)
     beta: 35       # reconciled to actual (prior summary undercounted)
-  by_category:                 # v1.17.0: +observe (kickoff.activation)
+  by_category:                 # v1.19.0: +observe (kickoff.retrospective)
     action: 18     # +agentic.session_snapshot
     generate: 16   # +kickoff.workbook_cockpit
     validate: 7
-    observe: 7     # +kickoff.activation
+    observe: 8     # +kickoff.activation, +kickoff.retrospective
     integration: 6
     query: 2
     transform: 2
@@ -1927,6 +1966,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.19.0"
+    date: "2026-07-10"
+    changes:
+      - "Added startd8.kickoff.retrospective (observe, stable, 0.9) — Tier C2/C3: `startd8 kickoff retrospective` (schema startd8.kickoff.retrospective.v1) tells the 'how this project got ready' story from the single oracle. C2 decision_log reads pipeline.dispositions (the persisted VIPP report: proposed vs ACCEPT/REJECT/COUNTER + reason) cross-referenced with the live inbox for pending; C3 build_retrospective reconstructs the journey from the Tier-B activation ledger's transitions as ordered milestones (readiness start→now, blockers cleared, proposals applied, snapshot promoted). Closes the compounding loop: Tier-B records transitions, Tier-D reads them as slope, Tier-C as narrative — one oracle, no new generation. 654 kickoff tests green."
+      - "61 capabilities: 26 stable; observe 7→8."
   - version: "1.18.0"
     date: "2026-07-10"
     changes:

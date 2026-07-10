@@ -20,7 +20,7 @@
 | **A2** | `AgenticView.to_dict()` + `kickoff_status()` callable + `readout --format json` | ✅ Shipped (`aa658ebb`) |
 | **C1** | `startd8_kickoff_status` MCP tool (read-only, `startd8.kickoff.status.v1`) | ✅ Shipped (`869d5dc5`) |
 | **B** | Activation surface — `kickoff check` gate + `kickoff.activation.*` gauges + activation ledger | ✅ Shipped |
-| C2/C3 | Decision-log + retrospective built on the oracle payload | ⏳ Planned |
+| **C2/C3** | Decision-log + retrospective (`kickoff retrospective`) built on the oracle payload | ✅ Shipped |
 | **D** | Close-the-loop — momentum (readiness slope) + highest-leverage batch nudge | ✅ Shipped |
 | E | Promotion dividend — oracle payload as the exemplar/promotion input | ⏳ Planned |
 
@@ -84,11 +84,25 @@ The oracle already computes readiness %, attention counts, and a next action. Ti
   log. `kickoff ledger [--json]` renders it. It is the only writer in Tier B and only ever appends;
   it never touches kickoff inputs.
 
-## Tier C2/C3 — Decision log + retrospective (PLANNED)
+## Tier C2/C3 — Decision log + retrospective (SHIPPED)
 
-Build on the C1 payload: a **decision log** (what was proposed, what was applied/declined, by whom) and
-a **retrospective view** that diffs the first snapshot against the ready-state snapshot — both are pure
-reads over the oracle + VIPP dispositions, no new generation.
+The "how this project got ready" story — two read-only views assembled from data the oracle already
+folds (`src/startd8/kickoff_experience/retrospective.py`, `kickoff retrospective`, schema
+`startd8.kickoff.retrospective.v1`):
+
+- **Decision log (C2).** `decision_log(status)` reads the oracle payload's `pipeline.dispositions`
+  (the persisted VIPP report) — what the concierge proposed and what was **adjudicated** (ACCEPT /
+  REJECT / COUNTER, with the reason) — cross-referenced with the live inbox to also report what is
+  still **pending**. Degrades cleanly: no dispositions ⇒ empty adjudicated set, pending still counts.
+- **Retrospective (C3).** `build_retrospective(status, ledger_entries)` reconstructs the journey from
+  the **Tier-B activation ledger's transition history** — readiness start→now, blockers cleared,
+  proposals applied, snapshot promoted — as an ordered list of **milestones**. The ledger is exactly
+  the event stream this needs, so no separate snapshot history is required (a cleaner substrate than
+  the originally-envisioned first-vs-last snapshot diff). `kickoff retrospective` renders the journey
+  milestones + the decision log; `--json` for tools.
+
+This is where the whole roadmap compounds: Tier-B records the transitions, Tier-D reads them as slope,
+and Tier-C reads them as a narrative — all from the one oracle, no new generation.
 
 ## Tier D — Close the loop (SHIPPED)
 
@@ -134,8 +148,9 @@ payload is already the structured fingerprint this would key on.
 - Code: `src/startd8/kickoff_experience/agentic_view.py` (`to_dict`, `kickoff_status`, momentum fold),
   `src/startd8/kickoff_experience/activation.py` (`evaluate_activation`, `ActivationLedger`),
   `src/startd8/kickoff_experience/momentum.py` (`readiness_trend`, `leverage_groups`, `leverage_nudge`),
+  `src/startd8/kickoff_experience/retrospective.py` (`decision_log`, `build_retrospective`, `kickoff_retrospective`),
   `src/startd8/kickoff_experience/metrics.py` (`record_activation`),
-  `src/startd8/cli_concierge.py` (`kickoff status|proposals|readout|check|ledger`),
+  `src/startd8/cli_concierge.py` (`kickoff status|proposals|readout|check|ledger|retrospective`),
   `mcp/startd8-mcp-builder/startd8_mcp.py` (`startd8_kickoff_status`).
 - Tests: `tests/unit/kickoff_experience/test_status_proposals_cli.py`,
   `tests/unit/kickoff_experience/test_agentic_view.py`,
@@ -143,5 +158,6 @@ payload is already the structured fingerprint this would key on.
   `tests/unit/kickoff_experience/test_check_ledger_cli.py`,
   `tests/unit/kickoff_experience/test_momentum.py`,
   `tests/unit/kickoff_experience/test_momentum_oracle.py`,
+  `tests/unit/kickoff_experience/test_retrospective.py`,
   `mcp/startd8-mcp-builder/tests/test_16_kickoff_status.py`.
-- Commits: `aa658ebb` (A1+A2), `869d5dc5` (C1), `e55ff4d6` (Tier B), Tier D (this change).
+- Commits: `aa658ebb` (A1+A2), `869d5dc5` (C1), `e55ff4d6` (Tier B), `e680aa55` (Tier D), C2/C3 (this change).

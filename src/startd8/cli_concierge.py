@@ -1632,6 +1632,46 @@ def kickoff_ledger_cmd(
         )
 
 
+@kickoff_kernel_app.command("retrospective")
+def kickoff_retrospective_cmd(
+    project_root: Path = typer.Argument(
+        Path("."), help="Project to retrospect (default: current dir). Read-only."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the retrospective as JSON."),
+) -> None:
+    """How this project got ready — the decision log + the journey from first-touch to ready-state.
+
+    Combines the VIPP **decision log** (what was proposed, and accepted/rejected/countered — with
+    reasons) with the **journey** reconstructed from the activation ledger (readiness start→now,
+    blockers cleared, proposals applied, snapshot promoted). Read-only, `$0`; schema
+    `startd8.kickoff.retrospective.v1`.
+    """
+    from .kickoff_experience.retrospective import kickoff_retrospective
+
+    retro = kickoff_retrospective(project_root)
+    if json_out:
+        _emit_json(retro)
+        return
+    console.print(f"[bold]retrospective[/bold] — {retro['summary']}")
+    j = retro["journey"]
+    if j["milestones"]:
+        console.print("  [bold]journey[/bold]")
+        for m in j["milestones"]:
+            console.print(f"    [cyan]•[/cyan] {m}")
+    elif j["transitions"] == 0:
+        console.print("  [dim]no activation history yet — run `startd8 kickoff check --record`.[/dim]")
+    d = retro["decisions"]
+    if d["adjudicated"] or d["pending"]:
+        console.print("  [bold]decisions[/bold]")
+        for it in d["items"]:
+            reason = f" — {it['reason']}" if it.get("reason") else ""
+            console.print(
+                f"    [cyan]{it.get('decision')}[/cyan] {it.get('proposal_id')}{reason}"
+            )
+        if d["pending"]:
+            console.print(f"    [yellow]{d['pending']} pending[/yellow] (not yet adjudicated)")
+
+
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------
 # `audience` is a lens over the one guided experience (orthogonal to `posture`): beginner /
 # intermediate / advanced. M1 is the persistence spine only — `set` writes ONLY the preference; it
