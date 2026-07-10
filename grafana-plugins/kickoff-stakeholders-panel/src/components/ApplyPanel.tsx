@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { PanelProps } from '@grafana/data';
 import { Alert, Button, Checkbox, Field, TextArea, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
-import { ApplyPreviewResult, ApplyResultView, StakeholdersPanelOptions } from '../types';
+import { ApplyPreviewResult, ApplyResultView, ConsensusSignal, StakeholdersPanelOptions } from '../types';
 import { errText, proxyPost } from '../api';
 
 type Props = PanelProps<StakeholdersPanelOptions>;
@@ -118,6 +118,7 @@ export const ApplyPanel: React.FC<Props> = ({ options, width, height }) => {
       {/* Screen 1 result — the would-apply set + the challenge to copy. */}
       {preview && phase !== 'done' && (
         <div className={styles.section}>
+          <ConsensusNote consensus={preview.consensus} styles={styles} />
           {preview.would_apply.length === 0 ? (
             <div className={styles.dim}>Nothing would apply (no accepted, un-applied proposals at this seq).</div>
           ) : (
@@ -176,6 +177,42 @@ export const ApplyPanel: React.FC<Props> = ({ options, width, height }) => {
         </div>
       )}
     </div>
+  );
+};
+
+const CONSENSUS_SEVERITY: Record<string, 'success' | 'warning' | 'error'> = {
+  high: 'success',
+  mixed: 'warning',
+  low: 'error',
+};
+
+// #8 — the source facilitation's consensus, shown on the apply preview so a low-consensus (contentious)
+// set is flagged before it's committed. Unlike FacilitatePanel's chip, this ALSO shows n/a (R2-F4): the
+// operator should know consensus was attempted, not silently absent. The binding is unverified metadata.
+const ConsensusNote: React.FC<{
+  consensus?: ConsensusSignal;
+  styles: ReturnType<typeof getStyles>;
+}> = ({ consensus, styles }) => {
+  if (!consensus) {
+    return null;
+  }
+  if (consensus.label === 'n/a') {
+    return (
+      <div className={styles.dim}>
+        Consensus: n/a — no source facilitation could be linked to this inbox (or ≤1 rateable persona).
+      </div>
+    );
+  }
+  const sev = CONSENSUS_SEVERITY[consensus.label] ?? 'warning';
+  return (
+    <Alert severity={sev} title={`Consensus: ${consensus.label.toUpperCase()} (n=${consensus.n})`}>
+      <span className={styles.dim}>
+        Synthetic, lexical ({consensus.basis}
+        {typeof consensus.score === 'number' ? `, score ${consensus.score.toFixed(2)}` : ''}) — how
+        similarly the personas framed their independent R1 takes. Low = read closely before committing,
+        not a verdict; the source-session binding is unverified metadata (token-gated, not human-proof).
+      </span>
+    </Alert>
   );
 };
 

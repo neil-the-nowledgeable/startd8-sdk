@@ -38,6 +38,8 @@ export interface ApplyPreviewResult {
   challenge: string;
   expires_in_seconds: number;
   posture: string;
+  /** #8 — consensus of the source facilitation (always present; label "n/a" when uncomputable). */
+  consensus?: ConsensusSignal;
 }
 
 /** One per-proposal apply outcome — mirrors ApplyResult.outcomes[]. */

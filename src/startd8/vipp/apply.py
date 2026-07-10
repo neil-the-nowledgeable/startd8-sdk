@@ -108,6 +108,7 @@ class PreviewResult:
     content_hash: str = ""  # canonical hash of {seq + would-apply set} — the challenge binds this
     stale: bool = False
     refused_reason: str = ""
+    source_session_id: str = ""  # #8 provenance passthrough (NOT hashed); the route computes consensus
 
     def summary(self) -> str:
         if self.refused_reason:
@@ -186,7 +187,8 @@ def preview_dispositions(project_root: Any) -> PreviewResult:
         )
 
     return PreviewResult(
-        envelope_seq=seq, would_apply=would_apply, content_hash=_content_hash(seq, would_apply)
+        envelope_seq=seq, would_apply=would_apply, content_hash=_content_hash(seq, would_apply),
+        source_session_id=envelope.source_session_id,  # #8 passthrough — the route computes consensus
     )
 
 

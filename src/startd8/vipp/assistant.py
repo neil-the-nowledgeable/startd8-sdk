@@ -79,11 +79,12 @@ def run_vipp_negotiate(
             f"{envelope.protocol_version!r} (ours {PROTOCOL_VERSION}) — upgrade the SDK"
         )
 
-    # Idempotency key (FR-18): inbox content EXCLUDING the volatile generated_at/envelope_seq, so a
-    # re-serialize of unchanged proposals is a no-op (B-S1) + ground-truth checksum + SDK version.
+    # Idempotency key (FR-18): inbox content EXCLUDING the volatile generated_at/envelope_seq (and #8's
+    # source_session_id — provenance metadata, not proposal content), so a re-serialize of unchanged
+    # proposals is a no-op (B-S1) + ground-truth checksum + SDK version.
     parts = {
         "inbox": context.checksum_json_excluding(
-            inbox_path, exclude_keys=("generated_at", "envelope_seq")
+            inbox_path, exclude_keys=("generated_at", "envelope_seq", "source_session_id")
         ),
         "ground_truth": context.ground_truth_checksum(project_root),
         "sdk_version": sdk_version,

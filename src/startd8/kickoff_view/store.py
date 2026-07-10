@@ -17,6 +17,18 @@ from .models import KickoffTranscript
 TRANSCRIPT_SUBDIR = ".startd8/kickoff-panel"
 
 
+def _safe_session_component(session_id: str) -> str:
+    """Reject a session_id that could escape the kickoff-panel dir (path-traversal guard).
+
+    Mirrors ``TranscriptStore._safe_session_component`` — added because #8 threads a ``source_session_id``
+    read from the durable VIPP inbox into ``load()``; an attacker-influenced value like ``../../etc/x``
+    must not resolve outside the project (the apply route degrades the resulting ValueError to n/a).
+    """
+    if not session_id or "/" in session_id or "\\" in session_id or session_id in (".", ".."):
+        raise ValueError(f"unsafe session_id: {session_id!r}")
+    return session_id
+
+
 class KickoffPanelStore:
     """List and load facilitation transcripts under a project's ``.startd8/kickoff-panel/``."""
 
@@ -25,7 +37,7 @@ class KickoffPanelStore:
         self.root = self.project_root / TRANSCRIPT_SUBDIR
 
     def _path(self, session_id: str) -> Path:
-        return self.root / f"{session_id}.json"
+        return self.root / f"{_safe_session_component(session_id)}.json"
 
     def list_sessions(self) -> list[str]:
         """Session ids present on disk, **newest-first by mtime** (FR-UX-1)."""

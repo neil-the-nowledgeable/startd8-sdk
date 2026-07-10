@@ -63,6 +63,9 @@ from .stakeholder_run import (
     execute_run,
     roster_version,
 )
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Char budget for the extract prompt scaffold (the fixed instructions + allow-list wrapped around the
 # synthesis) — folded into the pre-call token estimate so it isn't a systematic under-count.
@@ -825,6 +828,41 @@ def _confined_apply_root(config: RunServerConfig) -> Any:
         return _err(403, f"confinement refused: {exc}")
 
 
+def _apply_consensus(project_root: Any, source_session_id: str) -> dict:
+    """#8 — the source facilitation's consensus for the apply preview (FLAG). ALWAYS returns a consensus
+    dict ({label, score, n, basis}); degrades to n/a on any problem and warns ONLY on a genuine exception
+    so a silently-broken signal stays observable (FR-1/FR-2a/FR-6). Lazy imports keep `startd8.vipp` free
+    of any facilitation dependency (the consensus lives on the route side, not in vipp)."""
+    from startd8.kickoff_view import KickoffViewService
+    from startd8.kickoff_view.store import _safe_session_component
+    from startd8.stakeholder_panel.consensus import ConsensusResult, compute_consensus
+    from startd8.stakeholder_panel.facilitation import CHALLENGER_IDS
+
+    na = ConsensusResult(label="n/a", score=None, n=0, basis="lexical-r1").to_dict()
+    sid = (source_session_id or "").strip()
+    if not sid:
+        return na  # pre-#8 inbox / mixed-session (empty by FR-2b) → benign n/a
+    try:
+        _safe_session_component(sid)  # FR-2a — path-traversal guard BEFORE any filesystem load
+    except ValueError:
+        logger.warning("apply preview: refusing unsafe source_session_id %r for consensus", sid)
+        return na
+    try:
+        transcript = KickoffViewService(str(project_root)).load(sid)
+    except (FileNotFoundError, KeyError):
+        return na  # benign — missing/absent transcript
+    except Exception as exc:  # noqa: BLE001 — never break the preview; but surface a real failure
+        logger.warning("apply preview: transcript load failed for %r: %s", sid, exc)
+        return na
+    try:
+        return compute_consensus(
+            getattr(transcript, "rounds", []) or [], exclude_role_ids=frozenset(CHALLENGER_IDS)
+        ).to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("apply preview: consensus compute failed for %r: %s", sid, exc)
+        return na
+
+
 async def _apply_preview(request: Request) -> JSONResponse:
     """FR-R7 preview — PURE reconstruct of the would-apply set + a stateless HMAC challenge. No writes."""
     config: RunServerConfig = request.app.state.config
@@ -847,6 +885,9 @@ async def _apply_preview(request: Request) -> JSONResponse:
         )
 
     challenge = _issue_challenge(_apply_hmac_key(config), preview.envelope_seq, preview.content_hash)
+    # #8 — best-effort consensus of the SOURCE facilitation, in a SEPARATE inner path AFTER the preview
+    # succeeded (FR-6): a consensus failure degrades to n/a and never turns into a 502.
+    consensus = await run_in_threadpool(_apply_consensus, root, getattr(preview, "source_session_id", ""))
     return JSONResponse(
         {
             "would_apply": preview.would_apply,
@@ -855,6 +896,7 @@ async def _apply_preview(request: Request) -> JSONResponse:
             "challenge": challenge,
             "expires_in_seconds": _CHALLENGE_TTL_SECONDS,
             "posture": "token-gated, not human-proof — any holder of the endpoint token can ratify",
+            "consensus": consensus,  # FR-1 always present; FR-9 source_session_id is NOT echoed
         }
     )
 
