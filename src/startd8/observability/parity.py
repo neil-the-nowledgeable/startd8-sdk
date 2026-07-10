@@ -97,12 +97,30 @@ def exported_name(metric_name: str, prometheus_name: Optional[str] = None) -> st
     return metric_name.replace(".", "_")
 
 
+# Modules that *analyze* metric-instrument constructors (fidelity harness) rather than
+# *emit* SDK metrics. Their docstrings/patterns contain instrument-constructor examples
+# by design — they are the exact thing these modules recognize — so the emitter scan
+# must skip them or it flags analyzer examples as undeclared emissions.
+_NON_EMITTER_MODULES = frozenset({
+    "observability_fidelity_static.py",  # static fidelity: recognizes instrument ctors
+})
+
+# Path segments that hold non-shipping fixture code (fake services the fidelity spike
+# instruments to demo detection). They contain real ``create_counter`` calls but are not
+# SDK emitters — never part of the declared/emitted bijection.
+_NON_EMITTER_DIRS = frozenset({"_spike_fixtures"})
+
+
 def scan_emitted_metric_names(root: Optional[Path] = None) -> Dict[str, List[str]]:
     """Scan the SDK source for ``meter.create_*`` sites → {metric_name: [files]}."""
     root = root or _src_root()
     found: Dict[str, List[str]] = {}
     for py in root.rglob("*.py"):
-        if "__pycache__" in py.parts:
+        if (
+            "__pycache__" in py.parts
+            or py.name in _NON_EMITTER_MODULES
+            or _NON_EMITTER_DIRS & set(py.parts)
+        ):
             continue
         try:
             text = py.read_text(encoding="utf-8")

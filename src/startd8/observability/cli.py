@@ -24,6 +24,7 @@ import typer
 
 from .bind_and_verify import bind_and_verify
 from .contrast import build_contrast, render_markdown
+from .fidelity_scorecard import build_fidelity_scorecard
 from .metric_descriptor import match_profiles, profile_signatures
 from .prometheus_query import Auth, list_metric_names
 from .validate_promql import redact, run_validation
@@ -341,3 +342,28 @@ def contrast_cmd(
         f"(ungoverned binds {report.ungoverned.binding_coverage:.0%} → "
         f"governed {report.governed.binding_coverage:.0%})"
     )
+
+
+@observability_app.command("scorecard")
+def scorecard_cmd(
+    report: Path = typer.Option(
+        ..., "--report", "-r",
+        help="fidelity-report.json (from `validate-promql --report`) to render.",
+    ),
+    output: Path = typer.Option(
+        None, "--output", "-o",
+        help="Write the markdown scorecard here (default: stdout).",
+    ),
+) -> None:
+    """Render a persisted fidelity report as an inverted-pyramid markdown scorecard (A2).
+
+    Decoupled from running the harness, so a CI job can attach the scorecard as a build
+    artifact next to the JSON report.
+    """
+    data = json.loads(Path(report).read_text())
+    md = build_fidelity_scorecard(data)
+    if output is not None:
+        Path(output).write_text(md)
+        typer.echo(f"scorecard written to {output} (status={data.get('status')})")
+    else:
+        typer.echo(md)

@@ -908,14 +908,17 @@ def run_validation(
             excluded_artifacts=excluded_artifacts,
         )
 
-    # FR-2: two coverage numbers. data_coverage = queries that returned live data
-    # (liveness); binding_coverage = queries that bind to the live metric surface
-    # (fidelity = pass + bound_no_data). `coverage` is the fidelity headline and the
-    # gate metric, kept as an alias of binding_coverage for back-compat.
-    passes = sum(1 for v in verdicts if v.verdict == "pass")
+    # FR-2: two coverage numbers, computed through the shared verification core so
+    # fidelity and the benchmark can't drift on the denominator. data_coverage =
+    # queries that returned live data (liveness); binding_coverage = queries that bind
+    # (fidelity = pass + bound_no_data). `coverage` is the headline / gate metric.
+    from ..verification.coverage import compute_coverage
+
+    _cov = compute_coverage(v.verdict for v in verdicts)  # excluded queries aren't verdicts
+    passes = _cov.data
     bound_no_data = sum(1 for v in verdicts if v.verdict == "bound_no_data")
-    data_coverage = passes / replayed
-    binding_coverage = (passes + bound_no_data) / replayed
+    data_coverage = _cov.data_coverage
+    binding_coverage = _cov.binding_coverage
     coverage = binding_coverage
 
     # Rollups (FR-10): per-service coverage (binding view — pass + bound_no_data) and
