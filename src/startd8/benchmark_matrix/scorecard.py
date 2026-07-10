@@ -350,6 +350,38 @@ def _behavioral_section(cells: List[CellResult]) -> str:
     return f"{head}\n\n" + "\n".join(rows)
 
 
+def _observability_readiness_section(cells: List[CellResult]) -> str:
+    """B1 — does each model's generated service present an observable RED surface?
+
+    Reported-not-scored (Scorecard Principle 7): $0-recomputable from the persisted
+    ``observability_coverage`` (static, zero-runtime), and it does NOT alter the
+    Scoreboard ranking. A net-new axis — the benchmark otherwise measures whether the
+    code works, never whether the service is *observable*.
+    """
+    head = "## Observability readiness (reported-not-scored)"
+    ran = [c for c in cells if c.observability_coverage is not None]
+    if not ran:
+        return f"{head}\n\n" + _NOT_COMPUTED.format(
+            why="no `observability_coverage` persisted (needs cells.json from a post-B1 run)"
+        )
+    by_model: Dict[str, List[float]] = {}
+    for c in ran:
+        by_model.setdefault(c.model, []).append(c.observability_coverage)
+    rows = [
+        "> Fraction of the RED metric surface (throughput + latency) that standard",
+        "> observability would query which the generated service actually emits —",
+        "> explicit instruments + transport-implied auto-instrumentation, vs the",
+        "> descriptor's semconv metrics. Static, $0. Does NOT affect quality/ranking.",
+        "",
+        "| Model | observability readiness (mean) | cells |",
+        "|---|---:|---:|",
+    ]
+    for m in sorted(by_model, key=lambda m: -_st.mean(by_model[m])):
+        v = by_model[m]
+        rows.append(f"| `{m}` | {_f(_st.mean(v))} | {len(v)} |")
+    return f"{head}\n\n" + "\n".join(rows)
+
+
 def _is_pricing(c: CellResult) -> bool:
     return c.service in PRICING_LANE
 
@@ -734,6 +766,7 @@ def build_scorecard(run_dir, *, now: Optional[datetime] = None) -> str:
         _pricing_discriminators_section(cells),  # D3 — per-case discriminators (FR-4)
         _checkout_frontier_section(cells),     # D4 — checkout integration frontier (FR-CO-20/CQ-4)
         _checkout_steps_section(cells),        # D5 — per-step PlaceOrder breakdown (FR-CO-19)
+        _observability_readiness_section(cells),  # D6 — observability readiness (B1, reported-not-scored)
         _speed_section(agg),       # E — speed (two time measures), FR-SPEED-4
         _determinism_section(comparison),
         _refinement_trajectory_section(run_dir, cells),  # G — advisory, omitted if no sidecar

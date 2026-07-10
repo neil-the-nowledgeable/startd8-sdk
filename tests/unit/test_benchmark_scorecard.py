@@ -548,3 +548,34 @@ def test_checkout_in_html(tmp_path):
     assert "Checkout integration frontier" in html
     assert "Checkout orchestration steps" in html
     assert "payment_charged" in html and "email_confirmed" in html
+
+
+# ------------------------------------------------------- D6: observability readiness (B1)
+
+
+def _obs_cell(model, oc):
+    return CellResult(
+        cell_id=f"{model}-obs", service="s1", model=model, language="go",
+        repetition=1, status=STATUS_OK, quality=0.9, observability_coverage=oc,
+    )
+
+
+def test_observability_readiness_section_reported_not_scored(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, [
+        _obs_cell("anthropic:claude-fable-5", 1.0),
+        _obs_cell("openai:gpt-5.5", 0.0),
+    ])
+    md = build_scorecard(tmp_path, now=_NOW)
+    assert "Observability readiness (reported-not-scored)" in md
+    assert "does NOT affect quality" in md.replace("\n", " ").lower() or "reported-not-scored" in md
+    # per-model values present; higher-readiness model listed first
+    assert md.index("anthropic:claude-fable-5") < md.index("openai:gpt-5.5", md.index("Observability readiness"))
+
+
+def test_observability_readiness_degrade_honest_when_absent(tmp_path):
+    _write_spec(tmp_path)
+    _write_cells(tmp_path, [_cell("anthropic:claude-opus-4-8", quality=0.9)])  # no observability_coverage
+    md = build_scorecard(tmp_path, now=_NOW)
+    assert "Observability readiness" in md
+    assert "Not computed for this run" in md
