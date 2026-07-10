@@ -209,6 +209,40 @@ def kickoff_view_cmd(
         webbrowser.open(target.resolve().as_uri())
 
 
+def _resolve_report(project: Optional[Path], session_id: Optional[str], source: str):
+    """Load a TriageReport, auto-detecting the store (FR-6): a facilitation session (kickoff-panel) →
+    ``build_triage``; an ask-all session (stakeholder-panel) → ``triage_ask_all``. Returns (report, sid)."""
+    from .stakeholder_panel.synthesis_bridge import (
+        build_triage,
+        is_ask_all_session,
+        list_ask_all_sessions,
+        load_ask_all_session,
+        triage_ask_all,
+    )
+
+    proj = project or Path(".")
+    if source == "ask-all":
+        use_ask_all = True
+    elif source == "facilitation":
+        use_ask_all = False
+    elif session_id:  # auto with an explicit id → detect by which store has the file
+        use_ask_all = is_ask_all_session(proj, session_id)
+    else:  # auto, newest → prefer facilitation; fall back to ask-all only if no facilitation sessions
+        use_ask_all = not _service(project).latest_session_id() and bool(list_ask_all_sessions(proj))
+
+    if use_ask_all:
+        answers, question = load_ask_all_session(proj, session_id)
+        if not answers:
+            console.print("[red]no ask-all session found[/red]")
+            raise typer.Exit(1)
+        sid = session_id or list_ask_all_sessions(proj)[0]
+        return triage_ask_all(answers, session_id=sid, question=question), sid
+
+    service = _service(project)
+    sid = _resolve_session_or_exit(service, session_id)
+    return build_triage(_load_or_exit(service, sid)), sid
+
+
 @kickoff_panel_app.command("triage")
 def kickoff_triage(
     session_id: Optional[str] = typer.Argument(
@@ -218,22 +252,19 @@ def kickoff_triage(
     project: Optional[Path] = typer.Option(
         None, "--project", help="Project root (default: cwd)."
     ),
+    source: str = typer.Option(
+        "auto", "--source", help="Session store: auto | facilitation | ask-all."),
 ) -> None:
-    """Triage a synthesis into a NON-DECIDABLE routing report ($0, read-only).
+    """Triage a panel session into a typed routing report ($0, read-only).
 
-    Extracts the synthesis's discrete items (recommendations, open questions, risks, tensions) and
-    routes each: NON-DECIDABLE items (narrative / governance / human-decision) get a reason + a
-    suggested owner; FIELD-LEVEL items (an allow-listed ``entity.field``) are flagged as candidates
-    for a VIPP ``capture`` proposal (staged in increment 2). Nothing is silently dropped.
+    Auto-detects the source: a multi-round **facilitation** synthesis (sectioned) or a single-question
+    **ask-all** (one role-tagged candidate per persona answer). NON-DECIDABLE items get a reason + owner;
+    FIELD-LEVEL items (an allow-listed ``entity.field``) are flagged for a VIPP ``capture`` proposal.
+    Nothing is silently dropped.
     """
     import json as _json
 
-    from .stakeholder_panel.synthesis_bridge import build_triage
-
-    service = _service(project)
-    sid = _resolve_session_or_exit(service, session_id)
-    transcript = _load_or_exit(service, sid)
-    report = build_triage(transcript)
+    report, _sid = _resolve_report(project, session_id, source)
     if json_out:
         console.print_json(_json.dumps(report.to_dict()))
     else:
@@ -248,25 +279,24 @@ def kickoff_backlog(
     append: Optional[Path] = typer.Option(
         None, "--append", help="Guard-append into an EXISTING backlog doc (preview unless --yes)."),
     yes: bool = typer.Option(False, "--yes", help="With --append: actually write (else preview + diff)."),
+    source: str = typer.Option(
+        "auto", "--source", help="Session store: auto | facilitation | ask-all."),
 ) -> None:
-    """Fold a panel synthesis into a requirements-backlog section ($0, deterministic).
+    """Fold a panel session into a requirements-backlog section ($0, deterministic).
 
-    Default prints the section. ``--out FILE`` writes a new file. ``--append FILE`` guard-appends into an
-    existing ``ENHANCEMENTS_BACKLOG.md`` (idempotent by session marker, append-only, atomic, fail-closed);
+    Auto-detects a facilitation synthesis or a single-question ask-all. Default prints the section;
+    ``--out FILE`` writes a new file; ``--append FILE`` guard-appends into an existing
+    ``ENHANCEMENTS_BACKLOG.md`` (idempotent by session marker, append-only, atomic, fail-closed) —
     without ``--yes`` it previews and exits 0 (in sync) or 2 (a write is pending).
     """
     from .stakeholder_panel.synthesis_bridge import (
         BacklogAppendError,
         append_backlog,
-        build_triage,
         render_backlog_section,
     )
 
-    service = _service(project)
-    sid = _resolve_session_or_exit(service, session_id)
-    transcript = _load_or_exit(service, sid)
-    report = build_triage(transcript)
-    section = render_backlog_section(report, project=getattr(transcript, "project", ""))
+    report, sid = _resolve_report(project, session_id, source)
+    section = render_backlog_section(report, project=str(project or ""))
 
     if not section.strip():
         console.print("[yellow]No candidates — nothing to fold into the backlog.[/yellow]")

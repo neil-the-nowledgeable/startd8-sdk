@@ -18,6 +18,12 @@ Design: ``docs/design/panel-synthesis-bridge/`` (requirements v0.3 + plan v1.0).
 
 from __future__ import annotations
 
+from .ask_all import (
+    is_ask_all_session,
+    list_ask_all_sessions,
+    load_ask_all_session,
+    triage_ask_all,
+)
 from .backlog import (
     AppendResult,
     BacklogAppendError,
@@ -42,6 +48,11 @@ __all__ = [
     "classify",
     "health_check",
     "build_triage",
+    # Q1 — ask-all triage unification (typed, role-tagged)
+    "triage_ask_all",
+    "list_ask_all_sessions",
+    "load_ask_all_session",
+    "is_ask_all_session",
     # E — residual capture + backlog render/append (FR-6/FR-7/FR-14)
     "render_backlog_section",
     "append_backlog",

@@ -55,6 +55,7 @@ class Candidate:
     suggested_owner: str = ""  # who acts on it (human / requirements-build / VIPP)
     value_path: Optional[str] = None  # set only if a FIELD-LEVEL ``entity.field`` was detected
     input_kind: InputKind = InputKind.uncategorized  # FR-4 — type of input (orthogonal to lane)
+    role: str = ""  # FR-4 (ask-all) — the persona that voiced it (provenance); "" for synthesis items
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -66,6 +67,7 @@ class Candidate:
             "suggested_owner": self.suggested_owner,
             "value_path": self.value_path,
             "input_kind": self.input_kind.value,
+            "role": self.role,
         }
 
 
