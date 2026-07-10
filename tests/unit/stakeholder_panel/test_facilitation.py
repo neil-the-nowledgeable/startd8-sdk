@@ -144,10 +144,11 @@ def test_session_top_level_schema(tmp_path, small_roster):
         "cost_total_usd",
         # GE-M3b hardening: first-class halt state (H2/H3) + budget ceiling surface (H3)
         "status", "halt", "budget_usd",
-        # posture that produced the transcript (scrutiny|prototype)
-        "posture",
+        # posture (scrutiny|prototype) + tier (premium|cheap) that produced the transcript
+        "posture", "tier",
     }
     assert session["posture"] == "scrutiny"  # default posture recorded
+    assert session["tier"] == "premium"  # default tier recorded
     assert session["adversaries"] == ["adversary-exploit", "adversary-discredit"]
     assert session["session_id"].startswith("kp-")
     # a clean full run completes and is not halted
@@ -210,8 +211,9 @@ def test_persistence_routes_through_safe_write(tmp_path, small_roster, monkeypat
 
     monkeypatch.setattr(sw, "apply_write_plan", counting)
     _run(tmp_path, small_roster)
-    # 4 rounds + 1 final synthesis flush = 5 safe-write calls
-    assert calls["n"] == 5
+    # 1 initial in_progress write (t=0, so a fire-and-poll caller sees the transcript immediately)
+    # + 4 rounds + 1 final synthesis flush = 6 safe-write calls
+    assert calls["n"] == 6
 
 
 # ── equivalence-by-construction: the script delegates to the module ──────────

@@ -24,7 +24,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -231,6 +231,37 @@ class IdempotencyStore:
             data[run_key] = {"params_hash": params_hash, "started_at": now, "status": "started",
                              "session_id": None}
             self._save(data)
+
+    def reserve(self, run_key: str, params_hash: str, *, session_id: Optional[str] = None,
+                now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """Atomic check-and-set single-flight gate (facilitation H-1/H-4).
+
+        If *run_key* is absent/expired, write the start marker and return ``None`` (freshly reserved →
+        the caller spawns). If present + unexpired, return the existing record (already in-flight or
+        terminal → the caller returns its session_id, no double-spawn). Raises ``RunKeyMismatchError`` on
+        a forged/stale key. One ``_locked`` region closes the two-POST race.
+        """
+        now = time.time() if now is None else now
+        with self._locked():
+            data = self._load()
+            rec = data.get(run_key)
+            if rec is not None and now - float(rec.get("started_at", 0)) <= self.ttl:
+                if rec.get("params_hash") != params_hash:
+                    raise RunKeyMismatchError(f"run_key {run_key[:8]}… replayed with different params")
+                return rec
+            data[run_key] = {"params_hash": params_hash, "started_at": now, "status": "started",
+                             "session_id": session_id}
+            self._save(data)
+            return None
+
+    def release(self, run_key: str) -> None:
+        """Delete a reservation (roll back a :meth:`reserve` that never spawned — e.g. the concurrency
+        cap raised or the worker failed to start). Without this a retry would dedupe to a run that will
+        never execute, until the TTL silently expires."""
+        with self._locked():
+            data = self._load()
+            if data.pop(run_key, None) is not None:
+                self._save(data)
 
     def mark_complete(self, run_key: str, session_id: str, *, now: Optional[float] = None) -> None:
         with self._locked():

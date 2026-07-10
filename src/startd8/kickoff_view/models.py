@@ -119,6 +119,7 @@ class KickoffTranscript(BaseModel):
     objective: str = ""
     strategy: str = ""
     posture: str = "scrutiny"  # FR-8/H-11 — maps the session-JSON key (#174); default covers old transcripts
+    tier: str = "premium"  # FR-10 — the model tier (premium|cheap) that produced the transcript
     prep: Optional[PanelPrep] = None
     model_assignment: dict[str, str] = Field(default_factory=dict)
     adversaries: list[str] = Field(default_factory=list)
@@ -143,8 +144,11 @@ class KickoffTranscript(BaseModel):
 
     @property
     def is_done(self) -> bool:
-        """Terminal state for live-follow (FR-UX-17) — the run won't write again."""
-        return self.status in ("completed", "done") or self.is_halted
+        """Terminal state for live-follow (FR-UX-17) — the run won't write again.
+
+        H-6: `cancelled` + `error` are terminal too (a fire-and-poll cancel/crash must not spin forever).
+        """
+        return self.status in ("completed", "done", "cancelled", "error") or self.is_halted
 
     def active_round_id(self) -> Optional[str]:
         """The round currently being filled (FR-UX-18), or ``None`` when idle/complete.

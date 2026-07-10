@@ -9,6 +9,24 @@ SDK's secured run endpoint (`src/startd8/kickoff_experience/stakeholder_run_serv
 persistent **SYNTHETIC & UNRATIFIED** banner. A `deduped` status means the `run_key` already ran (not
 re-charged).
 
+## Panel modes
+
+Set the panel option **Panel mode** to pick a surface (all share the same datasource proxy + token):
+
+- **Run** — the single-question paid Q&A (above).
+- **Apply** — the FR-R7 write gate (preview → paste challenge → ratify) that writes the project source of record.
+- **Facilitate** — the multi-round facilitation (F1). Because it runs for **minutes**, this mode is
+  **fire-and-poll**, not one blocking request: pick a **Posture** (`scrutiny` = strategic red-team;
+  `prototype` = constructive early-stage UX) and **Model tier** (`premium` = opus/gpt-5.5/gemini-pro;
+  `cheap` = haiku/mini/flash) → **Preview cost** (dry-run, $0, round-weighted estimate + `run_key`) →
+  **confirm modal** → **Run** POSTs the confirm **echoing the `run_key`**; the server spawns a background
+  worker and returns a `session_id`. The panel then **polls** `GET /stakeholders/facilitate/{session_id}`
+  every ~5s (bounded; it gives up with a **Check again** button after ~10 min) until a terminal state
+  (`completed` / `cancelled` / `error`), rendering the synthesis (or the assumptions-gate **halt**) under
+  a persistent **SYNTHETIC & UNRATIFIED** banner. A **Cancel** button signals the in-flight run by its
+  `session_id`; rounds that already completed persist. Posture/tier chosen in the panel body override the
+  panel-option defaults (which only seed the initial values).
+
 ## Security — the token is NOT in this panel (FR-2 / S-3)
 
 The bearer token would be **world-readable in the dashboard JSON** if it were a panel option, so it is

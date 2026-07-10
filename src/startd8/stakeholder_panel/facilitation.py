@@ -75,8 +75,32 @@ FAMILIES = {
     "gemini": "gemini:gemini-3.1-pro-preview",
 }
 FAMILY_ORDER = ["claude", "gpt", "gemini"]
-FACILITATOR_SPEC = FAMILIES["claude"]  # facilitator / synthesizer / grounding / assumptions
-OUTSIDE_VIEW_SPEC = FAMILIES["gpt"]    # de-correlate the base-rate estimate
+FACILITATOR_SPEC = FAMILIES["claude"]  # facilitator / synthesizer / grounding / assumptions (premium)
+OUTSIDE_VIEW_SPEC = FAMILIES["gpt"]    # de-correlate the base-rate estimate (premium)
+
+# FR-10 (folds roadmap Q4): a cheap de-correlated trio (~10× cheaper) — same family slots, cheap models.
+# Ids are the model_catalog canonicals (CLAUDE_HAIKU_LATEST / GPT_MINI_LATEST / GEMINI_FLASH_LATEST).
+CHEAP_FAMILIES = {
+    "claude": "anthropic:claude-haiku-4-5-20251001",
+    "gpt": "openai:gpt-5.4-mini",
+    "gemini": "gemini:gemini-2.5-flash",
+}
+_FAMILY_SETS = {"premium": FAMILIES, "cheap": CHEAP_FAMILIES}
+TIERS = ("premium", "cheap")
+
+
+def families_for(tier: str) -> Dict[str, str]:
+    """The family→model-spec map for a tier (de-correlation preserved). Unknown tier → premium."""
+    return _FAMILY_SETS.get(tier, FAMILIES)
+
+
+def facilitator_spec_for(tier: str) -> str:
+    return families_for(tier)["claude"]
+
+
+def outside_view_spec_for(tier: str) -> str:
+    return families_for(tier)["gpt"]
+
 
 ADVERSARY_IDS = {"adversary-exploit", "adversary-discredit"}
 
@@ -418,12 +442,17 @@ def _adversary_briefs() -> List[PersonaBrief]:
 
 
 # ============================ helpers ========================================
-def assign_models(briefs: List[PersonaBrief]) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """Round-robin the personas across independent model families (spec §4 de-correlation)."""
+def assign_models(briefs: List[PersonaBrief], *, tier: str = "premium") -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Round-robin the personas across independent model families (spec §4 de-correlation).
+
+    ``tier`` selects the family→model set (FR-10): ``premium`` (default) or ``cheap`` — de-correlation
+    (one family per participant) is preserved in both.
+    """
+    family_specs = families_for(tier)
     specs, fams = {}, {}
     for i, b in enumerate(briefs):
         fam = FAMILY_ORDER[i % len(FAMILY_ORDER)]
-        specs[b.role_id] = FAMILIES[fam]
+        specs[b.role_id] = family_specs[fam]
         fams[b.role_id] = fam
     return specs, fams
 
@@ -762,6 +791,9 @@ class FacilitationConfig:
     # early-stage UX-improvement). Prototype reframes every round + synthesis and makes the
     # assumptions gate a non-blocking readiness note. See POSTURES.
     posture: str = POSTURE_SCRUTINY
+    # Tier: "premium" (default, opus-4.8/gpt-5.5/gemini-3.1-pro) or "cheap" (haiku/mini/flash, ~10×
+    # cheaper). Selects the de-correlated model-family set for personas + facilitator + outside-view (FR-10).
+    tier: str = "premium"
     cap: int = 0
     ground: bool = True
     assumptions: bool = True
@@ -779,6 +811,8 @@ class FacilitationConfig:
     def __post_init__(self) -> None:
         if self.posture not in POSTURES:
             raise ValueError(f"posture must be one of {POSTURES}, got {self.posture!r}")
+        if self.tier not in TIERS:
+            raise ValueError(f"tier must be one of {TIERS}, got {self.tier!r}")
 
     @property
     def resolved_project_name(self) -> str:
@@ -808,12 +842,17 @@ class KickoffFacilitator:
         on_prep: Optional[PrepHook] = None,
         on_round: Optional[RoundHook] = None,
         on_synthesis: Optional[SynthHook] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         self.config = config
         self._roster = roster
+        self._session_id = session_id  # H-2 — injected so the HTTP kickoff can return it synchronously
         self._persona_agent_factory = persona_agent_factory
         self._facilitator_agent_factory = facilitator_agent_factory
         self._model_assigner = model_assigner
+        # FR-10: tier-resolved facilitator/outside-view specs (cheap tier uses cheap models too).
+        self._fac_spec = facilitator_spec_for(config.tier)
+        self._ov_spec = outside_view_spec_for(config.tier)
         self._budget_preflight = budget_preflight
         self._cost_tracker = cost_tracker
         self._hydrate = hydrate
@@ -926,6 +965,10 @@ class KickoffFacilitator:
     # -- the run --------------------------------------------------------------
     async def run(self) -> dict:
         cfg = self.config
+        # FR-10: tier-resolved facilitator/outside-view specs (local shadows → every in-method
+        # reference uses the tier's model, cheap or premium).
+        FACILITATOR_SPEC = self._fac_spec
+        OUTSIDE_VIEW_SPEC = self._ov_spec
         # Only hydrate secrets when using real (production) agents — injected factories are $0.
         if self._persona_agent_factory is None:
             hydrate_fn = self._hydrate
@@ -935,7 +978,10 @@ class KickoffFacilitator:
 
         pname = cfg.resolved_project_name
         briefs_all = build_briefs(cfg, self._roster)
-        specs, fams = self._model_assigner(briefs_all)
+        try:  # thread tier through the default assigner; injected $0 doubles keep their (briefs) signature
+            specs, fams = self._model_assigner(briefs_all, tier=cfg.tier)
+        except TypeError:
+            specs, fams = self._model_assigner(briefs_all)
         briefs = {b.role_id: b for b in briefs_all}
         adv_ids = [b.role_id for b in briefs_all if b.role_id in ADVERSARY_IDS]
 
@@ -946,24 +992,29 @@ class KickoffFacilitator:
             # scrutiny roster carries no skeptic, so scrutiny behavior is unchanged.
             return rid in CHALLENGER_IDS
 
-        panel = self._build_panel(briefs_all, specs)
+        panel = None  # built inside the try so a build failure becomes a first-class `error` transcript
         # Session scaffold up front so H2/H3 halts are FIRST-CLASS transcript states the
         # observability-UX viewer renders (status="halted", halt={...}), not silent skips.
         prep = {"grounded_context": "", "key_assumptions": "", "outside_view": ""}
         session = {
-            "session_id": f"kp-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}",
+            "session_id": self._session_id  # H-2 — injected id (HTTP kickoff) or minted (CLI)
+            or f"kp-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "project": Path(cfg.project).name, "objective": cfg.objective, "strategy": cfg.strategy,
             # posture that produced this transcript — self-describing so a consumer (e.g. the
             # synthesis-bridge/viewer) can tell a prototype synthesis from a scrutiny one.
             "posture": cfg.posture,
+            "tier": cfg.tier,  # FR-10 — the model tier that produced this transcript
             "prep": prep, "model_assignment": specs, "adversaries": adv_ids,
-            "facilitator_model": FACILITATOR_SPEC,
+            "facilitator_model": FACILITATOR_SPEC,  # tier-resolved (local shadow)
             "status": "in_progress", "halt": None,
             "budget_usd": float(cfg.budget_usd),
             "rounds": [], "synthesis": None, "cost_total_usd": 0.0,
         }
+        # Persist immediately so a fire-and-poll caller sees `in_progress` from t=0 (FR-1/FR-3).
+        self._persist(session)
         try:
+            panel = self._build_panel(briefs_all, specs)  # inside try → build failure → `error` transcript
             # ---- R0 prep (grounding + assumptions + outside view) ----------
             grounded = ""
             if cfg.ground:
@@ -1109,8 +1160,21 @@ class KickoffFacilitator:
             self._persist(session)
             self._emit_synthesis(FACILITATOR_SPEC, synth_text)
             return session
+        except asyncio.CancelledError:
+            # H-8: a cross-thread cancel → a first-class `cancelled` transcript, partial rounds kept.
+            session["status"] = "cancelled"
+            self._recompute_cost(session)
+            self._persist(session)
+            raise
+        except Exception as exc:  # noqa: BLE001 — H-7: any crash → first-class `error`, never stuck in_progress
+            session["status"] = "error"
+            session["error"] = f"{type(exc).__name__}: {exc}"
+            self._recompute_cost(session)
+            self._persist(session)
+            raise
         finally:
-            panel.close()
+            if panel is not None:
+                panel.close()
 
     # -- round landing + hardening gates --------------------------------------
     def _land_round(self, session: dict, rnd: dict) -> None:
@@ -1178,6 +1242,11 @@ __all__ = [
     "FAMILY_ORDER",
     "FACILITATOR_SPEC",
     "OUTSIDE_VIEW_SPEC",
+    "CHEAP_FAMILIES",
+    "TIERS",
+    "families_for",
+    "facilitator_spec_for",
+    "outside_view_spec_for",
     "ADVERSARY_IDS",
     "SKEPTIC_IDS",
     "CHALLENGER_IDS",

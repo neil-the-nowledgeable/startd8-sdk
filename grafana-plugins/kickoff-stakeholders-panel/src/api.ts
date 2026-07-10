@@ -21,6 +21,17 @@ export async function proxyPost<T>(dsUid: string, path: string, body: unknown): 
   });
 }
 
+/**
+ * GET through the Grafana datasource proxy — used to poll the facilitate status (fire-and-poll). Same
+ * token-added-server-side guarantee as {@link proxyPost}; a fresh `X-Nonce` rides each poll so a strict
+ * endpoint accepts it (the status route treats the nonce as informational — it does not consume one).
+ */
+export async function proxyGet<T>(dsUid: string, path: string): Promise<T> {
+  return getBackendSrv().get(`/api/datasources/proxy/uid/${dsUid}/${path}`, undefined, undefined, {
+    headers: { 'X-Nonce': newNonce() },
+  });
+}
+
 /** Best-effort human message from a Grafana backend error (covers both `error` and `refused_reason`). */
 export function errText(err: unknown): string {
   if (err && typeof err === 'object') {

@@ -96,6 +96,7 @@ async def orchestrate(args: argparse.Namespace) -> None:
         desc=ctx.desc,
         project_name=args.project_name,
         posture=args.posture,
+        tier=args.tier,
         cap=args.cap,
         ground=args.ground,
         assumptions=args.assumptions,
@@ -109,15 +110,15 @@ async def orchestrate(args: argparse.Namespace) -> None:
     roster = load_roster(roster_path)
 
     briefs_all = F.build_briefs(cfg, roster)
-    specs, fams = F.assign_models(briefs_all)
+    specs, fams = F.assign_models(briefs_all, tier=cfg.tier)
     challenger_ids = [b.role_id for b in briefs_all if b.role_id in F.CHALLENGER_IDS]
     n = len(briefs_all)
     persona_rounds = 4 if cfg.final_judgment else 3
     projected = F.projected_calls(cfg, n)
 
     challenger_word = "skeptic" if cfg.posture == F.POSTURE_PROTOTYPE else "adversary"
-    print(f"Kickoff Panel orchestrator (v0.2 / Tier-1) — posture={cfg.posture} — {n} participants "
-          f"({len(challenger_ids)} {challenger_word}), {persona_rounds} persona rounds + synthesis")
+    print(f"Kickoff Panel orchestrator (v0.2 / Tier-1) — posture={cfg.posture} tier={cfg.tier} — "
+          f"{n} participants ({len(challenger_ids)} {challenger_word}), {persona_rounds} persona rounds + synthesis")
     if cfg.posture == F.POSTURE_PROTOTYPE:
         print("  prototype posture: constructive UX-improvement framing; assumptions check is a "
               "NON-BLOCKING readiness note (no premise-halt).")
@@ -196,6 +197,9 @@ def main(argv=None):
                          "constructive early-stage UX mode — one skeptical-new-user (no attack adversaries), "
                          "assumptions check is a NON-BLOCKING readiness note, rounds + synthesis reframed "
                          "around improving the end-user experience.")
+    ap.add_argument("--tier", choices=list(F.TIERS), default="premium",
+                    help="Model tier. 'premium' (default): opus-4.8/gpt-5.5/gemini-3.1-pro. 'cheap': a "
+                         "de-correlated haiku/mini/flash trio (~10× cheaper) for frequent early-stage runs.")
     ap.add_argument("--run", action="store_true", help="Actually call models (spends money). Default: dry-run.")
     # Tier-1 additions (default ON; use --no-<flag> to disable)
     ap.add_argument("--ground", action=argparse.BooleanOptionalAction, default=True)

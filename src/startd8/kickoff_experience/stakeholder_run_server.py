@@ -44,6 +44,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from .facilitate_run import (
+    FacilitationCapError,
+    cancel_facilitation,
+    facilitate_dry_run,
+    facilitate_run_key,
+    facilitate_status,
+    start_facilitation,
+)
 from .stakeholder_run import (
     BudgetNotConfiguredError,
     IdempotencyStore,
@@ -53,6 +61,7 @@ from .stakeholder_run import (
     dry_run,
     ensure_blocking_budget,
     execute_run,
+    roster_version,
 )
 
 # Char budget for the extract prompt scaffold (the fixed instructions + allow-list wrapped around the
@@ -121,8 +130,13 @@ async def _json_body(request: Request) -> Any:
     return body
 
 
-def _authorize(request: Request, config: RunServerConfig) -> Optional[JSONResponse]:
-    """Return an error response if the request is not authorized, else None."""
+def _authorize(request: Request, config: RunServerConfig, *, consume_nonce: bool = True) -> Optional[JSONResponse]:
+    """Return an error response if the request is not authorized, else None.
+
+    ``consume_nonce=False`` (H-14) checks the nonce is present + valid but does NOT burn it — the caller
+    consumes it only after a successful spawn (via :func:`_consume_nonce`), so a spawn failure doesn't
+    deny the retry with the same nonce.
+    """
     provided: Optional[str] = None
     auth = request.headers.get("authorization", "")
     if auth[:7].lower() == "bearer ":
@@ -136,9 +150,20 @@ def _authorize(request: Request, config: RunServerConfig) -> Optional[JSONRespon
         if config.allowed_origins and origin not in config.allowed_origins:
             return _err(403, "origin not allowed")
         nonce = request.headers.get("x-nonce")
-        if not nonce or not config.nonces.use(nonce):
+        if not nonce:
+            return _err(403, "missing nonce")
+        if consume_nonce and not config.nonces.use(nonce):
             return _err(403, "missing or replayed nonce")
     return None
+
+
+def _consume_nonce(request: Request, config: RunServerConfig) -> None:
+    """Burn the request's nonce after a successful spawn (H-14). Best-effort; the single-flight gate is
+    the real double-spend guard, so a lost race here can't double-charge."""
+    if config.strict:
+        nonce = request.headers.get("x-nonce")
+        if nonce:
+            config.nonces.use(nonce)
 
 
 def _load_roster(config: RunServerConfig) -> Any:
@@ -251,6 +276,100 @@ async def _cancel(request: Request) -> JSONResponse:
     run_key = request.path_params["run_key"]
     ok = cancel_run(run_key)  # signals the in-flight run (FR-12); already-answered personas persist
     return JSONResponse({"run_key": run_key, "cancelled": ok}, status_code=200 if ok else 404)
+
+
+# --------------------------------------------------------------------------- F1: facilitation over HTTP
+
+
+def _build_facilitation_config(config: "RunServerConfig", *, posture: str, tier: str, cap: Any, budget_usd: float, body: dict) -> Any:
+    from startd8.stakeholder_panel.context_resolver import resolve_context
+    from startd8.stakeholder_panel.facilitation import FacilitationConfig
+
+    root = Path(config.project_root).expanduser()
+    ctx = resolve_context(root, desc=body.get("desc"), objective=body.get("objective"),
+                          strategy=body.get("strategy"))
+    return FacilitationConfig(
+        project=root, objective=ctx.objective, strategy=ctx.strategy, desc=ctx.desc,
+        posture=posture, tier=tier, cap=int(cap) if cap else 0, budget_usd=budget_usd,
+    )
+
+
+async def _facilitate(request: Request) -> JSONResponse:
+    """FR-1/FR-2 — kick off (or preview) a multi-round facilitation. Fire-and-poll; async."""
+    from startd8.stakeholder_panel.facilitation import POSTURES, TIERS
+
+    config: RunServerConfig = request.app.state.config
+    is_dry = False
+    body = await _json_body(request)
+    if isinstance(body, JSONResponse):
+        return body
+    is_dry = bool(body.get("dry_run"))
+    # H-14: a confirm authorizes WITHOUT burning the nonce (consumed only on a successful spawn).
+    denied = _authorize(request, config, consume_nonce=is_dry)
+    if denied is not None:
+        return denied
+
+    posture = str(body.get("posture") or "scrutiny")
+    tier = str(body.get("tier") or "premium")
+    if posture not in POSTURES:
+        return _err(400, f"posture must be one of {sorted(POSTURES)}")
+    if tier not in TIERS:
+        return _err(400, f"tier must be one of {sorted(TIERS)}")
+    roster = _load_roster(config)
+    if roster is None or not getattr(roster, "personas", None):
+        return _err(400, "no stakeholder roster — run `startd8 kickoff instantiate` first")
+    cfg = _build_facilitation_config(config, posture=posture, tier=tier, cap=body.get("cap"),
+                                     budget_usd=float(body.get("budget_usd") or 0.0), body=body)
+
+    # H-13: the dry-run also runs the fail-closed budget check (a green preview must not precede a 412).
+    manager = config.budget_manager or _default_manager(config)
+    try:
+        ensure_blocking_budget(manager, scope_project=config.scope_project)
+    except BudgetNotConfiguredError as exc:
+        return _err(412, str(exc))
+
+    if is_dry:
+        return JSONResponse(facilitate_dry_run(cfg, roster, pricing=config.pricing).to_dict())
+
+    run_key = body.get("run_key")
+    if not run_key:
+        return _err(400, "run_key is required for a confirmed facilitation (obtain it from a dry_run)")
+    # H-10: the confirm's params must match the previewed run_key (a cheap preview can't run premium).
+    expected = facilitate_run_key(posture=cfg.posture, tier=cfg.tier, cap=(cfg.cap or None),
+                                  budget_usd=cfg.budget_usd, rv=roster_version(roster))
+    if run_key != expected:
+        return _err(409, "run_key does not match posture/tier/params — re-preview (dry_run)")
+
+    tracker = config.cost_tracker if config.cost_tracker is not None else _default_cost_tracker(config)
+    try:
+        result = await run_in_threadpool(start_facilitation, cfg, roster, cost_tracker=tracker)
+    except FacilitationCapError as exc:
+        return _err(429, str(exc))
+    except RunKeyMismatchError as exc:
+        return _err(409, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        return _err(502, f"facilitate failed: {exc}")
+    _consume_nonce(request, config)  # H-14 — burn the nonce only now (spawn succeeded / deduped)
+    return JSONResponse(result)
+
+
+async def _facilitate_status(request: Request) -> JSONResponse:
+    """FR-3 — poll the facilitation transcript (reads the kickoff-panel store, H-15)."""
+    config: RunServerConfig = request.app.state.config
+    if (denied := _authorize(request, config)) is not None:
+        return denied
+    sid = request.path_params["session_id"]
+    return JSONResponse(await run_in_threadpool(facilitate_status, config.project_root, sid))
+
+
+async def _facilitate_cancel(request: Request) -> JSONResponse:
+    """FR-6/H-9 — cancel by the session_id the poller holds."""
+    config: RunServerConfig = request.app.state.config
+    if (denied := _authorize(request, config)) is not None:
+        return denied
+    sid = request.path_params["session_id"]
+    ok = cancel_facilitation(config.project_root, sid)
+    return JSONResponse({"session_id": sid, "cancelled": ok}, status_code=200 if ok else 404)
 
 
 # --------------------------------------------------------------------------- pipeline drive ($0)
@@ -798,6 +917,11 @@ def build_stakeholder_run_app(config: RunServerConfig) -> Starlette:
             Route("/stakeholders/run", _run, methods=["POST"]),
             Route("/stakeholders/run/{run_key}/cancel", _cancel, methods=["POST"]),
             Route("/stakeholders/run/{session_id}", _status, methods=["GET"]),
+            # F1 — facilitation over HTTP (fire-and-poll). Distinct `/facilitate/` prefix (no collision
+            # with `/run/{session_id}`). Static `/facilitate` registered before the `{session_id}` param.
+            Route("/stakeholders/facilitate", _facilitate, methods=["POST"]),
+            Route("/stakeholders/facilitate/{session_id}/cancel", _facilitate_cancel, methods=["POST"]),
+            Route("/stakeholders/facilitate/{session_id}", _facilitate_status, methods=["GET"]),
             # Increment 3 pipeline drive ($0; narrative negotiate spends its own ceiling) — FR-R1..R6.
             Route("/stakeholders/triage", _triage, methods=["POST"]),
             Route("/stakeholders/disposition", _disposition, methods=["POST"]),

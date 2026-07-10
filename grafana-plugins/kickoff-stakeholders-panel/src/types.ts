@@ -10,8 +10,15 @@ export interface StakeholdersPanelOptions {
   datasourceUid: string;
   /** Default cap (max personas queried). Empty = all. */
   defaultCap?: number;
-  /** Which surface this panel shows: the paid Q&A run, or the FR-R7 apply gate. Default `run`. */
-  mode?: 'run' | 'apply';
+  /**
+   * Which surface this panel shows: the paid single-question Q&A run, the FR-R7 apply gate, or the
+   * multi-round `facilitate` (fire-and-poll) facilitation. Default `run`.
+   */
+  mode?: 'run' | 'apply' | 'facilitate';
+  /** Facilitate posture: `scrutiny` (strategic red-team) or `prototype` (constructive early-stage UX). */
+  posture?: 'scrutiny' | 'prototype';
+  /** Facilitate model tier: `premium` (opus/gpt-5.5/gemini-pro) or `cheap` (haiku/mini/flash). */
+  tier?: 'premium' | 'cheap';
 }
 
 /** One proposal the apply gate WOULD write — mirrors an item of PreviewResult.would_apply. */
@@ -76,4 +83,41 @@ export interface RunResult {
   run_key: string;
   answers: PanelAnswerView[];
   note?: string;
+}
+
+/** Facilitate dry-run preview (no spend) — mirrors facilitate_run.FacilitateDryRun.to_dict(). */
+export interface FacilitateDryRunResult {
+  run_key: string;
+  posture: string;
+  tier: string;
+  n_participants: number;
+  projected_calls: number;
+  estimated_cost: number;
+  models: Record<string, string>;
+  note: string;
+}
+
+/** Confirmed facilitate spawn (fire-and-poll) — mirrors start_facilitation()'s return dict. */
+export interface FacilitateStartResult {
+  session_id: string;
+  run_key: string;
+  status: string; // "in_progress" | "completed" (deduped-to-terminal)
+  deduped: boolean;
+}
+
+/**
+ * Facilitate poll payload — mirrors facilitate_run.facilitate_status(). `is_terminal` gates the poll:
+ * completed | cancelled | error are terminal; unknown means the transcript isn't visible yet.
+ */
+export interface FacilitateStatusResult {
+  session_id: string;
+  status: string; // "in_progress" | "completed" | "cancelled" | "error" | "unknown"
+  posture?: string;
+  tier?: string;
+  rounds_completed?: number;
+  cost_so_far_usd?: number;
+  synthesis?: string;
+  halt?: string | null;
+  is_terminal?: boolean;
+  error?: string;
 }

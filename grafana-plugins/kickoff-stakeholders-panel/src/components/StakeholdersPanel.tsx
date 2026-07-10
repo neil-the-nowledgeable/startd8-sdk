@@ -4,6 +4,7 @@ import { Alert, Button, ConfirmModal, Field, Input, TextArea, useStyles2 } from 
 import { css } from '@emotion/css';
 import { DryRunResult, PanelAnswerView, RunResult, StakeholdersPanelOptions } from '../types';
 import { ApplyPanel } from './ApplyPanel';
+import { FacilitatePanel } from './FacilitatePanel';
 import { errText, proxyPost } from '../api';
 
 type Props = PanelProps<StakeholdersPanelOptions>;
@@ -11,9 +12,13 @@ type Props = PanelProps<StakeholdersPanelOptions>;
 type Phase = 'idle' | 'previewing' | 'confirm' | 'running' | 'done';
 
 export const StakeholdersPanel: React.FC<Props> = (props) => {
-  // The registered panel dispatches to the FR-R7 apply gate when the panel is configured for it.
+  // The registered panel dispatches to the FR-R7 apply gate or the multi-round facilitation surface
+  // when configured for them; otherwise it shows the single-question paid Q&A run.
   if (props.options.mode === 'apply') {
     return <ApplyPanel {...props} />;
+  }
+  if (props.options.mode === 'facilitate') {
+    return <FacilitatePanel {...props} />;
   }
   return <RunPanel {...props} />;
 };
