@@ -1391,28 +1391,32 @@ def kickoff_readout(
         Path("."),
         help="Project to render the readout for (default: current dir). Read-only.",
     ),
-    fmt: str = typer.Option("md", "--format", help="md|html"),
+    fmt: str = typer.Option("md", "--format", help="md|html|json"),
     out: Optional[Path] = typer.Option(
         None, "--out", help="write to a file instead of stdout"
     ),
 ) -> None:
-    """Export a shareable, self-contained kickoff readout (Markdown or HTML).
+    """Export a shareable, self-contained kickoff readout (Markdown, HTML, or machine-readable JSON).
 
     A static-file parity of the terminal `cockpit`: it renders the SAME `AgenticView` read-model the
-    Grafana board and the cockpit render (Status / Assistant / Proposals), so a founder can email a
-    stakeholder or attach a ticket a document that matches the live view. Read-only, `$0`: it shows
-    the confirm commands, it never applies them (the CLI is the sole writer).
+    Grafana board and the cockpit render, so a founder can email a stakeholder or attach a ticket a
+    document that matches the live view. `--format json` emits the full oracle (the platform-API
+    surface — the same payload as `kickoff status --json` and the `startd8_kickoff_status` MCP tool).
+    Read-only, `$0`: it shows the confirm commands, it never applies them (the CLI is the sole writer).
     """
-    from .kickoff_experience.agentic_view import build_agentic_view
+    from .kickoff_experience.agentic_view import build_agentic_view, kickoff_status
     from .kickoff_experience.readout import render_html, render_markdown
 
     normalized = fmt.strip().lower()
-    if normalized not in ("md", "html"):
-        console.print(f"[red]Invalid --format {fmt!r}: expected 'md' or 'html'.[/red]")
+    if normalized not in ("md", "html", "json"):
+        console.print(f"[red]Invalid --format {fmt!r}: expected 'md', 'html', or 'json'.[/red]")
         raise typer.Exit(2)
 
-    view = build_agentic_view(project_root)
-    text = render_markdown(view) if normalized == "md" else render_html(view)
+    if normalized == "json":
+        text = json.dumps(kickoff_status(project_root), indent=2, ensure_ascii=False)
+    else:
+        view = build_agentic_view(project_root)
+        text = render_markdown(view) if normalized == "md" else render_html(view)
 
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1420,6 +1424,104 @@ def kickoff_readout(
         console.print(f"  readout written: [cyan]{out}[/cyan]")
     else:
         print(text)
+
+
+@kickoff_kernel_app.command("status")
+def kickoff_status_cmd(
+    project_root: Path = typer.Argument(
+        Path("."), help="Project to report status for (default: current dir). Read-only."
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the full machine-readable oracle (the platform-API payload)."
+    ),
+) -> None:
+    """Where does this project stand? — a compact kickoff status from the single AgenticView oracle.
+
+    `--json` emits the full status payload (readiness, next step, snapshot, proposals, pipeline,
+    stakeholders) — the SAME payload `kickoff readout --format json` and the `startd8_kickoff_status`
+    MCP tool return, so tools / CI / agents read one canonical 'project state' surface. Read-only, `$0`.
+    """
+    from .kickoff_experience.agentic_view import kickoff_status
+
+    s = kickoff_status(project_root)
+    if json_out:
+        _emit_json(s)
+        return
+    pct = s.get("readiness_percent")
+    ready = f"{pct}% ready" if pct is not None else "no kickoff inputs yet"
+    console.print(
+        f"[bold]{ready}[/bold]  ({s.get('field_count', 0)} fields · "
+        f"{len(s.get('proposals', []))} proposals · snapshot: {s.get('snapshot_status')})"
+    )
+    na = s.get("next_action")
+    if na:
+        detail = f" — {na['detail']}" if na.get("detail") else ""
+        console.print(f"  ➡️  next: {na.get('title')}{detail}")
+    if s.get("stakeholder_summary"):
+        console.print(f"  stakeholders: {s['stakeholder_summary']}")
+    if s.get("pipeline_summary"):
+        console.print(f"  pipeline: {s['pipeline_summary']}")
+
+
+@kickoff_kernel_app.command("proposals")
+def kickoff_proposals_cmd(
+    project_root: Path = typer.Argument(
+        Path("."), help="Project whose pending proposals to list (read-only unless --apply)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the pending proposals as JSON."),
+    apply: bool = typer.Option(
+        False, "--apply", help="Adjudicate + apply the pending proposals (VIPP negotiate → apply) at your privilege."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirm prompt for --apply (non-interactive)."),
+) -> None:
+    """List the pending kickoff proposals — and optionally apply them without the two-step VIPP dance.
+
+    Proposals are recommendations the agentic concierge made (propose → you confirm); this surfaces the
+    VIPP inbox from the SAME oracle the cockpit shows, with the exact confirm command per proposal.
+    `--apply` runs the whole VIPP adjudication (negotiate → apply) at your privilege — the CLI is the
+    sole writer; the loop and the dashboard never write.
+    """
+    from .kickoff_experience.agentic_view import build_agentic_view
+
+    view = build_agentic_view(project_root)
+    props = view.proposals
+    if json_out:
+        _emit_json({"proposals": [r.to_dict() for r in props], "count": len(props)})
+        return
+    if not props:
+        console.print("[dim]No proposals awaiting confirmation.[/dim]")
+        return
+    console.print(f"[bold]{len(props)} proposal(s) awaiting confirmation[/bold]")
+    for i, r in enumerate(props, 1):
+        console.print(f"  [cyan]{i}.[/cyan] {r.kind} · [cyan]{r.target}[/cyan] — {r.summary}  [dim]({r.id})[/dim]")
+    if not apply:
+        console.print("\n[dim]Apply all with:[/dim] [cyan]startd8 kickoff proposals --apply[/cyan]")
+        return
+
+    # --apply: adjudicate (negotiate) then apply the whole envelope at project human privilege.
+    if not yes and not typer.confirm(
+        f"Adjudicate + apply {len(props)} proposal(s) at your privilege?", default=False
+    ):
+        console.print("[yellow]aborted.[/yellow]")
+        raise typer.Exit(0)
+    try:
+        from .kickoff_experience.vipp_seam import inbox_path
+        from .vipp import apply_dispositions, run_vipp_negotiate
+
+        root = Path(project_root)
+        neg = run_vipp_negotiate(inbox_path(root), project_root=root)
+        c = neg.report.counts()
+        console.print(
+            f"[dim]VIPP negotiate: ACCEPT {c['ACCEPT']} · REJECT {c['REJECT']} · COUNTER {c['COUNTER']}[/dim]"
+        )
+        res = apply_dispositions(root, confirm=lambda action, disp: True)  # top-level gate already given
+    except Exception as exc:  # never leave the user with a traceback
+        console.print(f"[red]apply failed:[/red] {exc}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    if getattr(res, "refused_reason", None):
+        console.print(f"[red]apply refused:[/red] {res.refused_reason}")
+        raise typer.Exit(_EXIT_BLOCKED)
+    console.print(f"[green]applied:[/green] {res.summary()}")
 
 
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------

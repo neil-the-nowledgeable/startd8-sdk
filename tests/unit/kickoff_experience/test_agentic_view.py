@@ -268,3 +268,26 @@ def test_build_agentic_view_folds_real_on_disk_stores(tmp_path):
     assert view.panel_answers and view.panel_answers[0]["role_id"] == "cfo"
     ss = view.stakeholder_summary()
     assert "2 personas" in ss and "answers" in ss
+
+
+# --------------------------------------------------------------------------- oracle-as-API (A1)
+
+
+def test_to_dict_is_json_serializable_with_schema(tmp_path):
+    import json as _json
+
+    _write_snapshot(tmp_path)
+    _write_inbox(tmp_path, [("capture", {"value_path": "a.b", "value": "c"}, "id-1")])
+    d = av.build_agentic_view(tmp_path).to_dict()
+    # round-trips through JSON (the platform-API contract)
+    blob = _json.dumps(d)
+    assert d["schema"] == "startd8.kickoff.status.v1"
+    assert d["has_snapshot"] is True and d["snapshot"]["turns"]
+    assert d["proposals"][0]["id"] == "id-1"
+    assert "readiness_percent" in d and "next_action" in d and "hints" in d
+    assert _json.loads(blob)["schema"] == "startd8.kickoff.status.v1"
+
+
+def test_kickoff_status_callable_matches_view_to_dict(tmp_path):
+    _write_inbox(tmp_path, [("capture", {"value_path": "a.b", "value": "c"}, "id-1")])
+    assert av.kickoff_status(tmp_path) == av.build_agentic_view(tmp_path).to_dict()

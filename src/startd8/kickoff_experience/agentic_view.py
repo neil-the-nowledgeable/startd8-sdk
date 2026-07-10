@@ -204,6 +204,39 @@ class AgenticView:
             parts.append(f"{len(self.panel_answers)} answers (latest run)")
         return " · ".join(parts) if parts else None
 
+    def to_dict(self) -> dict:
+        """A single machine-readable snapshot of the whole oracle — the platform-API surface.
+
+        Everything the Grafana/terminal/readout surfaces render, as one JSON-serializable dict, so a
+        tool/agent/CI can read "where does this project stand" from the same oracle instead of
+        re-deriving it. Read-only, ``$0``, deterministic."""
+        counts = dict(self.state.attention_counts) if self.state is not None else {}
+        d: dict = {
+            "schema": "startd8.kickoff.status.v1",
+            "project_root": self.project_root,
+            "readiness_percent": self.readiness_percent(),
+            "attention_counts": counts,
+            "field_count": sum(counts.values()),
+            "next_action": self.next_action.to_dict() if self.next_action is not None else None,
+            "snapshot_status": self.snapshot_status,
+            "has_snapshot": self.has_snapshot,
+            "snapshot": self.snapshot.to_dict() if self.has_snapshot else None,
+            "at_a_glance": self.snapshot.at_a_glance() if self.has_snapshot else None,
+            "cost_line": self.snapshot.cost_line() if self.has_snapshot else None,
+            "proposals": [r.to_dict() for r in self.proposals],
+            "proposals_present": self.proposals_present,
+            "pipeline": self.pipeline,  # plain dict (staged/inbox/dispositions) or None
+            "pipeline_summary": self.pipeline_summary(),
+            "panel_answers": self.panel_answers,  # list[dict] (JSON-native) or None
+            "roster_size": _roster_size(self.roster),
+            "stakeholder_summary": self.stakeholder_summary(),
+            "hints": {  # honest empty/unavailable messaging (FR-10)
+                "assistant": self.assistant_message(),
+                "proposals": self.proposals_message(),
+            },
+        }
+        return d
+
 
 # --------------------------------------------------------------------------- loaders
 
@@ -371,3 +404,12 @@ def build_agentic_view(project_root: str | Path) -> AgenticView:
         pipeline=pipeline,
         roster=roster,
     )
+
+
+def kickoff_status(project_root: str | Path) -> dict:
+    """The MCP/CLI-agnostic machine-readable kickoff project status — the oracle as an API.
+
+    One callable behind three front doors (``kickoff status --json``, ``kickoff readout --format json``,
+    and the ``startd8_kickoff_status`` MCP tool) so they can't drift. Read-only, ``$0``, never raises
+    (the oracle degrades every source independently)."""
+    return build_agentic_view(project_root).to_dict()
