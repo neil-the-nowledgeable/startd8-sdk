@@ -1240,8 +1240,14 @@ def kickoff_portal(
     dynamic: bool = typer.Option(
         False,
         "--dynamic",
-        help="Build the audience-personalized v2 DYNAMIC Workbook (Grafana ≥13.1): flip the `audience` "
-        "variable to switch persona in-browser, no regen/no write. Separate `-v2` board (coexists).",
+        help="[now the default] Build the v2 agentic cockpit (Grafana ≥13.1). Kept for back-compat; "
+        "the cockpit is built by default — this flag is a no-op.",
+    ),
+    classic: bool = typer.Option(
+        False,
+        "--classic",
+        help="Build the legacy Era-1 classic Workbook instead of the cockpit (one-release escape "
+        "hatch; the classic board will be retired). Needs the jsonnet toolchain.",
     ),
     yes: bool = typer.Option(
         False,
@@ -1257,8 +1263,11 @@ def kickoff_portal(
 
     The "Digital Project Workbook" is a dynamic, query-based evolution of Brooks' (static) workbook
     (*The Mythical Man-Month*) — the shared, whole-project view of the foundational decisions, generated
-    live from project state. PRESENTATION only — never edits kickoff inputs. Read-only by default (writes
-    just the dashboard JSON); pass `--provision URL` to push to Grafana. `--index` builds the portfolio
+    live from project state. **By default this now builds the agentic COCKPIT** (Status / Assistant /
+    Proposals / Stakeholders / Pipeline — one board, derived from the single `AgenticView` oracle).
+    PRESENTATION only — never edits kickoff inputs. Read-only by default (writes just the dashboard
+    JSON); pass `--provision URL` to push to Grafana. `--classic` builds the legacy Era-1 board (a
+    one-release escape hatch; `--session` applies to `--classic` only). `--index` builds the portfolio
     index (a self-updating link-list of every project's Workbook) instead of one project's board.
     """
     from .kickoff_experience.portal_build import build_and_maybe_provision, build_index
@@ -1305,7 +1314,10 @@ def kickoff_portal(
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     name = project or root.resolve().name
-    if dynamic:
+    # M3: the agentic cockpit is the DEFAULT Digital Project Workbook now (Status / Assistant /
+    # Proposals / Stakeholders / Pipeline — a superset of the classic board). `--classic` is the
+    # one-release escape hatch to the legacy Era-1 board. `--dynamic` is a back-compat no-op.
+    if not classic:
         from .kickoff_experience.portal_build import (
             build_workbook_v2_and_maybe_provision,
         )
@@ -1332,11 +1344,19 @@ def kickoff_portal(
         console.print(f"[yellow]kickoff portal:[/yellow] {res.skipped_reason}")
         raise typer.Exit(0)
     s = res.summary
-    console.print(
-        f"[bold]Kickoff portal[/bold] — {name}  "
-        f"([green]{s.get('confirmed', 0)} confirmed[/green], [red]{s.get('gaps', 0)} gaps[/red] "
-        f"of {s.get('fields', 0)} fields, {s.get('panels', 0)} panels)"
-    )
+    if s.get("dynamic"):  # the v2 cockpit summary (M3 default) — audience/snapshot/proposals shape
+        snap = s.get("snapshot", "absent")
+        console.print(
+            f"[bold]Kickoff cockpit[/bold] — {name}  "
+            f"([cyan]{s.get('audience', 'intermediate')}[/cyan], {s.get('fields', 0)} fields, "
+            f"snapshot: {snap}, {s.get('proposals', 0)} proposals)"
+        )
+    else:  # the classic board summary
+        console.print(
+            f"[bold]Kickoff portal[/bold] — {name}  "
+            f"([green]{s.get('confirmed', 0)} confirmed[/green], [red]{s.get('gaps', 0)} gaps[/red] "
+            f"of {s.get('fields', 0)} fields, {s.get('panels', 0)} panels)"
+        )
     console.print(f"  dashboard JSON: [cyan]{res.json_path}[/cyan]")
     if res.provisioned_url:
         console.print(f"  Grafana: [cyan]{res.provisioned_url}[/cyan]")

@@ -45,9 +45,16 @@ as the single oracle every surface derives from.** (User decision, 2026-07-09.)
   `AgenticView` with `panel_answers`, `pipeline`, `roster` (best-effort); surface a compact
   Stakeholders + Pipeline summary in the **terminal cockpit + readout** (proves the oracle end-to-end,
   no dead code). Classic board byte-identical. *(this increment)*
-- **M2 — Cockpit Stakeholders + Pipeline tabs (CR-3).** Add the two Grafana tabs to `build_workbook_v2`
-  from the M1 oracle fields; audience-conditional; golden regen; the cockpit is now a superset.
-- **M3 — Flip the default (CR-4).** `kickoff portal` → cockpit; `--classic` escape hatch; update the
-  portfolio index + docs to point at the cockpit.
-- **M4 — Retire the classic path.** After the release window: remove `build_kickoff_portal_spec` /
-  the jsonnet classic path, or keep as a thin `--classic` alias. (Gated on M3 soak.)
+- **M2 — Cockpit Stakeholders + Pipeline tabs (CR-3). — ✅ SHIPPED.** `build_workbook_v2` gained
+  **Stakeholders** (roster + latest panel-run answers) and **Pipeline** (staged / VIPP inbox /
+  dispositions + advisories) tabs from the M1 oracle. Always-present with honest empty states,
+  audience-invariant (FR-8 byte-identity holds). 5 tabs live-verified on Grafana 13.1.0.
+- **M3 — Flip the default (CR-4). — ✅ SHIPPED.** `kickoff portal` now builds the **cockpit by
+  default** (no jsonnet needed); `--classic` is the one-release escape hatch to the legacy board;
+  `--dynamic` is a back-compat no-op. Summary print is cockpit-aware. The portfolio index is
+  tag-based, so it already discovers both boards.
+- **M3.1 (residual) — auto-refresh triggers.** `kickoff confirm` / `instantiate --portal` still
+  regenerate the **classic** board (they call `build_and_maybe_provision`). Route them through the
+  cockpit too before M4, so a confirm refreshes the default board.
+- **M4 — Retire the classic path.** After the release window + M3.1: remove `build_kickoff_portal_spec`
+  / the jsonnet classic path, or keep as a thin `--classic` alias. (Gated on soak.)

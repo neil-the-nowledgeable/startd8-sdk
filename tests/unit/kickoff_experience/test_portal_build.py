@@ -45,6 +45,32 @@ def _instantiate(proj: Path, *args: str):
     )
 
 
+# --------------------------------------------------------------------------- convergence M3 (default flip)
+
+
+def test_portal_default_builds_the_cockpit():
+    # M3: a plain `kickoff portal` now builds the v2 cockpit (no jsonnet needed), not the classic board.
+    proj = _proj()
+    _instantiate(proj, "--no-portal")  # scaffold docs/kickoff
+    out = runner.invoke(kickoff_kernel_app, ["portal", str(proj)])
+    assert out.exit_code == 0, out.output
+    dash = proj / ".startd8" / "dashboards"
+    assert dash.is_dir() and list(dash.glob("cc-portal-kickoff-*-v2.json"))  # the -v2 cockpit board
+    assert "cockpit" in out.output.lower()
+
+
+def test_portal_classic_escape_hatch_does_not_build_v2():
+    # M3: `--classic` routes to the legacy board (which may skip without the jsonnet toolchain) — it must
+    # NOT emit the v2 cockpit board.
+    proj = _proj()
+    _instantiate(proj, "--no-portal")
+    out = runner.invoke(kickoff_kernel_app, ["portal", str(proj), "--classic"])
+    assert out.exit_code == 0, out.output
+    dash = proj / ".startd8" / "dashboards"
+    v2 = list(dash.glob("cc-portal-kickoff-*-v2.json")) if dash.is_dir() else []
+    assert not v2  # classic path (built or skipped) never writes the -v2 board
+
+
 # --------------------------------------------------------------------------- agentic cockpit (M5 wiring)
 
 
