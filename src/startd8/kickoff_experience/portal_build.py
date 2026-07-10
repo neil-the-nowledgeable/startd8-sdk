@@ -1,9 +1,9 @@
-"""Shared Digital Project Workbook build+provision helper (FR-1/FR-10).
+"""Digital Project Workbook build+provision helper (FR-1/FR-10).
 
-ONE path for both `startd8 kickoff portal` and `kickoff instantiate --portal`, so the two entry points
-cannot drift. Deterministic ($0) generation via the startd8-mixin jsonnet pipeline; provisioning is
-opt-in. The helper never raises for an absent/broken toolchain or a provision failure — it returns a
-:class:`PortalResult` with a ``skipped_reason`` so callers can degrade non-fatally (FR-6/FR-7).
+Post-M4 convergence: the Workbook is the pure-Python **v2 cockpit** — ``build_workbook_v2_and_maybe_
+provision`` (per project) and ``build_index`` (the portfolio dashlist), both emitting Grafana v2 JSON
+with **no jsonnet toolchain**. The classic Era-1 board + its jsonnet compile path were retired. Every
+helper degrades to a :class:`PortalResult` with a ``skipped_reason`` rather than raising (FR-6/FR-7).
 """
 
 from __future__ import annotations
@@ -14,21 +14,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 from ..logging_config import get_logger
-from .portal_spec import (
-    INDEX_UID,
-    WorkbookSlugError,
-    build_kickoff_portal_spec,
-    workbook_uid,
-)
-
-# The Workbook data loaders live in one shared home now (convergence M1) so AgenticView + the classic
-# path derive from the SAME sources. Aliased to the historical private names to keep the classic board
-# byte-identical.
-from .workbook_sources import (
-    load_panel_run as _load_panel_run,
-    load_pipeline_state as _load_pipeline_state,
-    load_roster as _roster,
-)
+from .portal_spec import INDEX_UID
 
 logger = get_logger(__name__)
 
@@ -57,214 +43,10 @@ class PortalResult:
         return line
 
 
-# --------------------------------------------------------------------------- toolchain gate (FR-6)
 
-
-def _toolchain_reason() -> Optional[str]:
-    """Return None if the jsonnet toolchain is available, else a concise, actionable skip reason."""
-    try:
-        from ..dashboard_creator.discovery import detect_toolchain
-
-        detect_toolchain()
-        return None
-    except Exception:  # ConfigurationError (absent) — degrade, never raise (FR-6a)
-        return (
-            "no jsonnet toolchain — install jsonnet or `pip install gojsonnet`, "
-            "then run `startd8 kickoff portal`"
-        )
-
-
-
-# --------------------------------------------------------------------------- generation
-
-
-def _provision_collision_reason(
-    provision_url: str, uid: str, title: str
-) -> Optional[str]:
-    """FR-5 provision-time collision guard: return a refusal reason if ``uid`` already belongs to a
-    DIFFERENT project on the target Grafana, else None. Best-effort — a check that cannot run (network,
-    auth) does not block; the provision itself surfaces real connectivity/auth errors. Only a positive
-    hit (a same-UID board with a *different* title) refuses, so two distinct projects that slugify to
-    the same UID never silently clobber each other on a shared instance.
-    """
-    try:
-        from ..dashboard_creator.grafana_client import GrafanaClient
-
-        client = GrafanaClient(
-            provision_url, allow_insecure=provision_url.startswith("http://")
-        )
-        resp = client.get_dashboard(uid)
-    except (
-        Exception
-    ):  # pragma: no cover - can't check → don't block (provision surfaces real errors)
-        return None
-    if getattr(resp, "success", False):
-        existing = ((resp.data or {}).get("dashboard") or {}).get("title", "")
-        if existing and existing != title:
-            return (
-                f"UID {uid} already belongs to {existing!r} on {provision_url} — refusing to overwrite "
-                f"a different project's Workbook (FR-5). Rename this project or its board."
-            )
-    return None
-
-
-def _run_workflow(
-    spec: Dict[str, Any], out_dir: Path, provision_url: Optional[str]
-) -> Any:
-    from ..dashboard_creator.workflow import DashboardCreatorWorkflow
-
-    config: Dict[str, Any] = {"spec": spec, "output_dir": str(out_dir)}
-    if provision_url:
-        config.update(
-            provision=True,
-            grafana_url=provision_url,
-            allow_insecure=provision_url.startswith("http://"),
-        )
-    return DashboardCreatorWorkflow().run(config)
-
-
-def _persist(
-    result: Any, provision_url: Optional[str], summary: Dict[str, Any]
-) -> PortalResult:
-    """Turn a workflow result into a PortalResult; a compile/provision failure degrades (FR-6b/FR-7)."""
-    if not getattr(result, "success", False):
-        reason = (
-            f"generation failed: {getattr(result, 'error', None) or 'unknown error'}"
-        )
-        logger.warning("Workbook %s", reason)
-        return PortalResult(
-            uid=summary.get("uid", ""), summary=summary, skipped_reason=reason
-        )
-    output = result.output if isinstance(result.output, dict) else {}
-    json_path = output.get("json_path")
-    # NB: the dashboard JSON is written by DashboardCreatorWorkflow (a derived artifact under
-    # .startd8/dashboards/, NOT the kickoff source-of-record). This module performs no direct
-    # filesystem write itself — it must not (FR-GE-13 guided-experience write-audit).
-    summary = {
-        **summary,
-        "json_path": json_path,
-        "dashboard_url": output.get("dashboard_url"),
-        "provisioned": bool(provision_url),
-    }
-    return PortalResult(
-        uid=summary.get("uid", ""),
-        json_path=json_path,
-        provisioned_url=output.get("dashboard_url"),
-        summary=summary,
-    )
-
-
-def build_and_maybe_provision(
-    project_root: Path,
-    project: Optional[str] = None,
-    *,
-    out_dir: Optional[Path] = None,
-    provision_url: Optional[str] = None,
-    session: Optional[str] = None,
-) -> PortalResult:
-    """Build the project's Workbook dashboard JSON (optionally provision). Never raises (FR-6/FR-7).
-
-    Returns a :class:`PortalResult`. A missing kickoff package, absent/broken toolchain, slug collision,
-    or compile/provision failure all degrade to ``skipped_reason`` — the caller decides how loud to be.
-    """
-    root = Path(project_root).expanduser()
-    name = project or root.resolve().name
-
-    try:
-        uid = workbook_uid(name)
-    except WorkbookSlugError as exc:  # FR-5 reserved/empty slug
-        logger.warning("Workbook slug rejected: %s", exc)
-        return PortalResult(skipped_reason=str(exc))
-
-    if (reason := _toolchain_reason()) is not None:
-        return PortalResult(uid=uid, skipped_reason=reason)
-
-    # FR-4: the Workbook is generated from the moment the kickoff PACKAGE exists, even before any
-    # authoring — a fresh project yields an empty *skeleton* board (0 fields) that fills in as the human
-    # authors + confirms. We skip only when there is no kickoff package at all (nothing to show).
-    if not (root / "docs" / "kickoff").is_dir():
-        return PortalResult(
-            uid=uid,
-            skipped_reason="no kickoff package — run `startd8 kickoff instantiate` first",
-        )
-
-    # Audience personalization (Era 1): resolve the disclosure tier + read the confirmation ledger with
-    # their OWN tolerant guard, OUTSIDE the main try (R2-S7). A config/ledger read error must degrade to
-    # the byte-identical default board (Intermediate tier, no shields) with a logged warning — never be
-    # swallowed by the broad `except` below into a misleading "generation failed" skip.
-    audience_value = None
-    tier = "light"
-    provenance: dict = {}
-    try:
-        from ..concierge.audience import disclosure_tier, resolve_audience_preference
-        from ..concierge.confirmation import load_ledger
-
-        res = resolve_audience_preference(root)
-        audience_value = res.value  # a KickoffAudience enum (AudienceResolution.value)
-        tier = disclosure_tier(res.value)
-        provenance = load_ledger(root)
-    except (
-        Exception
-    ) as exc:  # noqa: BLE001 — degrade to defaults, board still generates
-        logger.warning(
-            "Workbook audience/ledger resolution failed; using defaults: %s", exc
-        )
-
-    try:
-        from .docs import live_schema_text, load_kickoff_docs
-        from .state import build_kickoff_state
-
-        docs = load_kickoff_docs(
-            root
-        )  # may be empty pre-authoring → an empty skeleton board (FR-4)
-        state = build_kickoff_state(docs, live_schema_text=live_schema_text(root))
-        spec = build_kickoff_portal_spec(
-            state,
-            name,
-            roster=_roster(root),
-            panel_results=_load_panel_run(root, session_id=session),
-            pipeline=_load_pipeline_state(root),
-            audience=audience_value,
-            tier=tier,
-            provenance=provenance,
-        )
-        dest = (
-            Path(out_dir).expanduser()
-            if out_dir
-            else (root / ".startd8" / "dashboards")
-        )
-        ac = state.attention_counts
-        summary = {
-            "schema": "kickoff.portal.v1",
-            "uid": spec["uid"],
-            "panels": len(spec["panels"]),
-            "fields": len(state.fields),
-            "confirmed": ac.get("ok", 0),
-            "gaps": ac.get("blocked", 0),
-        }
-        # FR-5: before pushing to a shared Grafana, refuse if this UID already belongs to a *different*
-        # project (two names slugging to the same UID) — never silently clobber. Disk-only gen can't
-        # collide (each project owns its own file), so the guard is provision-path only.
-        if provision_url and (
-            reason := _provision_collision_reason(
-                provision_url, spec["uid"], spec["title"]
-            )
-        ):
-            return PortalResult(uid=uid, summary=summary, skipped_reason=reason)
-        result = _run_workflow(spec, dest, provision_url)
-    except (
-        Exception
-    ) as exc:  # broken toolchain / unexpected — degrade, never propagate (FR-6b/FR-7)
-        logger.warning("Workbook generation failed: %s", exc)
-        return PortalResult(uid=uid, skipped_reason=f"generation failed: {exc}")
-
-    return _persist(result, provision_url, summary)
-
-
-# ------------------------------------------------- dynamic (v2) Workbook — dynamic-dashboards M6/CLI
-# The audience-personalized v2 dynamic board (`kickoff portal --dynamic`). Additive + SEPARATE from the
-# classic path above (its own `-v2` UID; coexists, R2-F5): pure-Python v2 emit (no jsonnet toolchain
-# needed), then optional provision via `provision_v2` (version-gated + collision-guarded).
+# ------------------------------------------------- the Digital Project Workbook (v2 cockpit) — default
+# The audience-personalized v2 cockpit (`kickoff portal`, default post-M4). Pure-Python v2 emit (no
+# jsonnet toolchain), then optional provision via `provision_v2` (version-gated + collision-guarded).
 
 
 def build_workbook_v2_and_maybe_provision(

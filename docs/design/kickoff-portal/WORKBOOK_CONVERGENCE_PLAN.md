@@ -57,5 +57,16 @@ as the single oracle every surface derives from.** (User decision, 2026-07-09.)
   refresh the **cockpit** (`build_workbook_v2_and_maybe_provision`), matching `kickoff portal`'s
   default — so every auto-refresh tracks the same board, and (bonus) needs no jsonnet toolchain. The
   only remaining `build_and_maybe_provision` caller is the explicit `kickoff portal --classic`.
-- **M4 — Retire the classic path.** After the release window + M3.1: remove `build_kickoff_portal_spec`
-  / the jsonnet classic path, or keep as a thin `--classic` alias. (Gated on soak.)
+- **M4 — Retire the classic path (Full). — ✅ SHIPPED.** The Workbook feature is now **100% jsonnet-
+  free**:
+  - **M4a** — the portfolio index is a pure-Python v2 dashlist (`build_index_v2`); `build_index` emits
+    v2 (no toolchain gate).
+  - **M4c** — deleted the classic per-project builder (`build_kickoff_portal_spec` + all section
+    builders + `workbook_uid` + the classic index spec), `build_and_maybe_provision` + its jsonnet
+    helpers (`_run_workflow`/`_persist`/`_toolchain_reason`/`_provision_collision_reason`), and the
+    `--classic`/`--session` CLI options. `portal_spec.py` shrank 583→66 lines (shared primitives only:
+    tag, UIDs, slug, attention display/sort, domain↔manifest maps, value snippet). `--dynamic` remains
+    a back-compat no-op.
+  - The whole kickoff suite now runs **without `jb install` / the jsonnet vendor**. The general-purpose
+    jsonnet generator (`DashboardCreatorWorkflow`) is untouched — it stays for its other (classic-
+    schema) consumers. UID kept as `-v2` (no reclamation — zero-risk). Live-verified on 13.1.0.

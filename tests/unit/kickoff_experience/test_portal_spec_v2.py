@@ -497,16 +497,13 @@ def test_distinct_uid_coexists_with_classic():
     assert workbook_v2_uid("My App") == "cc-portal-kickoff-my-app-v2"
 
 
-def test_m6_v2_path_is_separate_from_the_classic_builder():
-    # R2-F5: M6 is additive — `build_workbook_v2` is a SEPARATE module and neither calls nor mutates the
-    # classic `build_kickoff_portal_spec`. (Post-Era-1 the classic builder DOES carry `audience` params —
-    # that is Era 1's classic audience port, an independent feature; M6 neither added them nor depends on
-    # them. So we verify structural separateness, not the absence of the word "audience".)
-    from startd8.kickoff_experience.portal_spec import build_kickoff_portal_spec
+def test_classic_builder_is_retired():
+    # Convergence M4: the classic Era-1 jsonnet board builder is GONE. portal_spec is now the shared-
+    # primitives module only — the cockpit is the one Workbook.
+    import startd8.kickoff_experience.portal_spec as ps
 
-    assert build_workbook_v2.__module__ == "startd8.kickoff_experience.portal_spec_v2"
-    assert (
-        build_kickoff_portal_spec.__module__ == "startd8.kickoff_experience.portal_spec"
-    )
-    # the v2 builder never *calls* the classic spec builder (bytecode name refs — no docstring false-match)
-    assert "build_kickoff_portal_spec" not in build_workbook_v2.__code__.co_names
+    assert not hasattr(ps, "build_kickoff_portal_spec")
+    assert not hasattr(ps, "build_workbook_index_spec")
+    assert not hasattr(ps, "workbook_uid")
+    # the shared primitives the cockpit consumes remain
+    assert hasattr(ps, "slugify_project") and hasattr(ps, "_value_snippet")

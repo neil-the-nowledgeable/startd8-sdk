@@ -1234,11 +1234,6 @@ def kickoff_portal(
         "--out",
         help="Output dir for the dashboard JSON (default: <root>/.startd8/dashboards).",
     ),
-    session: Optional[str] = typer.Option(
-        None,
-        "--session",
-        help="Render a SPECIFIC stakeholder-run session (default: the most recent).",
-    ),
     index: bool = typer.Option(
         False,
         "--index",
@@ -1248,14 +1243,7 @@ def kickoff_portal(
     dynamic: bool = typer.Option(
         False,
         "--dynamic",
-        help="[now the default] Build the v2 agentic cockpit (Grafana ≥13.1). Kept for back-compat; "
-        "the cockpit is built by default — this flag is a no-op.",
-    ),
-    classic: bool = typer.Option(
-        False,
-        "--classic",
-        help="Build the legacy Era-1 classic Workbook instead of the cockpit (one-release escape "
-        "hatch; the classic board will be retired). Needs the jsonnet toolchain.",
+        help="[deprecated no-op] The cockpit is the default Workbook now; kept for back-compat.",
     ),
     yes: bool = typer.Option(
         False,
@@ -1274,11 +1262,10 @@ def kickoff_portal(
     live from project state. **By default this now builds the agentic COCKPIT** (Status / Assistant /
     Proposals / Stakeholders / Pipeline — one board, derived from the single `AgenticView` oracle).
     PRESENTATION only — never edits kickoff inputs. Read-only by default (writes just the dashboard
-    JSON); pass `--provision URL` to push to Grafana. `--classic` builds the legacy Era-1 board (a
-    one-release escape hatch; `--session` applies to `--classic` only). `--index` builds the portfolio
-    index (a self-updating link-list of every project's Workbook) instead of one project's board.
+    JSON); pass `--provision URL` to push to Grafana. `--index` builds the portfolio index (a
+    self-updating link-list of every project's Workbook) instead of one project's board.
     """
-    from .kickoff_experience.portal_build import build_and_maybe_provision, build_index
+    from .kickoff_experience.portal_build import build_index
 
     if not json_out:
         render_intro_banner()
@@ -1322,21 +1309,16 @@ def kickoff_portal(
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     name = project or root.resolve().name
-    # M3: the agentic cockpit is the DEFAULT Digital Project Workbook now (Status / Assistant /
-    # Proposals / Stakeholders / Pipeline — a superset of the classic board). `--classic` is the
-    # one-release escape hatch to the legacy Era-1 board. `--dynamic` is a back-compat no-op.
-    if not classic:
-        from .kickoff_experience.portal_build import (
-            build_workbook_v2_and_maybe_provision,
-        )
+    # The Digital Project Workbook is the pure-Python v2 cockpit (Status / Assistant / Proposals /
+    # Stakeholders / Pipeline — one board, derived from the single AgenticView oracle). Post-M4 the
+    # classic Era-1 jsonnet board is retired; this is the only per-project path.
+    from .kickoff_experience.portal_build import (
+        build_workbook_v2_and_maybe_provision,
+    )
 
-        res = build_workbook_v2_and_maybe_provision(
-            root, name, out_dir=dest, provision_url=provision
-        )
-    else:
-        res = build_and_maybe_provision(
-            root, name, out_dir=dest, provision_url=provision, session=session
-        )
+    res = build_workbook_v2_and_maybe_provision(
+        root, name, out_dir=dest, provision_url=provision
+    )
     if json_out:
         _emit_json(
             {
@@ -1352,19 +1334,12 @@ def kickoff_portal(
         console.print(f"[yellow]kickoff portal:[/yellow] {res.skipped_reason}")
         raise typer.Exit(0)
     s = res.summary
-    if s.get("dynamic"):  # the v2 cockpit summary (M3 default) — audience/snapshot/proposals shape
-        snap = s.get("snapshot", "absent")
-        console.print(
-            f"[bold]Kickoff cockpit[/bold] — {name}  "
-            f"([cyan]{s.get('audience', 'intermediate')}[/cyan], {s.get('fields', 0)} fields, "
-            f"snapshot: {snap}, {s.get('proposals', 0)} proposals)"
-        )
-    else:  # the classic board summary
-        console.print(
-            f"[bold]Kickoff portal[/bold] — {name}  "
-            f"([green]{s.get('confirmed', 0)} confirmed[/green], [red]{s.get('gaps', 0)} gaps[/red] "
-            f"of {s.get('fields', 0)} fields, {s.get('panels', 0)} panels)"
-        )
+    snap = s.get("snapshot", "absent")
+    console.print(
+        f"[bold]Kickoff cockpit[/bold] — {name}  "
+        f"([cyan]{s.get('audience', 'intermediate')}[/cyan], {s.get('fields', 0)} fields, "
+        f"snapshot: {snap}, {s.get('proposals', 0)} proposals)"
+    )
     console.print(f"  dashboard JSON: [cyan]{res.json_path}[/cyan]")
     if res.provisioned_url:
         console.print(f"  Grafana: [cyan]{res.provisioned_url}[/cyan]")
