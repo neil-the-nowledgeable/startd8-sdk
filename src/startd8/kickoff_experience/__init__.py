@@ -77,6 +77,7 @@ from .state import (
     build_kickoff_state,
     classify_ambiguity,
     field_states,
+    resolve_kickoff_state,
     source_inventory,
 )
 from .telemetry import FUNNEL_EVENTS, KickoffEvent, emit, kickoff_span, record_events
@@ -91,6 +92,7 @@ __all__ = [
     "build_kickoff_state",
     "classify_ambiguity",
     "field_states",
+    "resolve_kickoff_state",
     "source_inventory",
     # M2 — readiness
     "BUDGET_INITIAL_MS",

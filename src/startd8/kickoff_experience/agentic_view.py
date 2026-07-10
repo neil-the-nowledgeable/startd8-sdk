@@ -367,11 +367,9 @@ def _load_proposals(project_root: Path) -> Tuple[Tuple[ProposalRow, ...], bool]:
 def _load_state(project_root: Path) -> Any:
     """Best-effort fold of the KickoffState Status oracle. None on any absence (never raises)."""
     try:
-        from .docs import live_schema_text, load_kickoff_docs
-        from .state import build_kickoff_state
+        from .state import resolve_kickoff_state
 
-        docs = load_kickoff_docs(str(project_root))
-        return build_kickoff_state(docs, live_schema_text=live_schema_text(str(project_root)))
+        return resolve_kickoff_state(project_root)
     except Exception:  # pragma: no cover - Status degrades independently
         return None
 

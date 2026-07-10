@@ -27,11 +27,10 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from .capture import CaptureCode, CaptureError, apply_capture, build_capture_plan
-from .docs import live_schema_text, load_kickoff_docs
 from .manifest import KickoffExperienceConfig, default_config
 from .ranking import next_action
 from .readiness import build_readiness
-from .state import KickoffState, build_kickoff_state
+from .state import KickoffState, resolve_kickoff_state
 
 # Bump when the renderer's output contract changes (part of the freshness fingerprint, R5-S1).
 RENDERER_VERSION = "kickoff-web-v1"
@@ -143,8 +142,7 @@ class _SessionStore:
 
 
 def load_state(project_root: str | Path) -> KickoffState:
-    docs = load_kickoff_docs(project_root)
-    return build_kickoff_state(docs, live_schema_text=live_schema_text(project_root))
+    return resolve_kickoff_state(project_root)
 
 
 # --- HTML rendering (server-rendered, themed) --------------------------------------------------

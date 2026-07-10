@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 
 from ..manifest_extraction import extract_manifests
@@ -302,3 +303,17 @@ def build_kickoff_state(
         grammar_version=result.grammar_version,
         contract_diff=tuple(result.contract_diff),
     )
+
+
+def resolve_kickoff_state(project_root: str | Path) -> KickoffState:
+    """Derive the canonical :class:`KickoffState` for a project from its on-disk kickoff docs.
+
+    The ONE home for the ``load_kickoff_docs`` → ``build_kickoff_state(…, live_schema_text=…)``
+    derivation every surface needs (cockpit oracle, web, chat, portal). Previously this three-line
+    incantation was re-typed per surface; a caller that dropped ``live_schema_text=`` silently got a
+    degraded state. Accepts ``str`` or ``Path`` (both underlying loaders do). ``$0``, pure per docs.
+    """
+    from .docs import live_schema_text, load_kickoff_docs
+
+    docs = load_kickoff_docs(project_root)
+    return build_kickoff_state(docs, live_schema_text=live_schema_text(project_root))

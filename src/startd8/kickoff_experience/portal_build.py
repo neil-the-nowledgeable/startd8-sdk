@@ -72,11 +72,10 @@ def build_workbook_v2_and_maybe_provision(
         from ..concierge.audience import resolve_audience_preference
         from ..concierge.confirmation import load_ledger
         from ..dashboard_creator.v2 import persist_v2_dashboard, provision_v2
-        from .docs import live_schema_text, load_kickoff_docs
-        from .state import build_kickoff_state
+        from .state import resolve_kickoff_state
 
-        docs = load_kickoff_docs(root)  # empty pre-authoring → skeleton board (FR-4)
-        state = build_kickoff_state(docs, live_schema_text=live_schema_text(root))
+        # empty pre-authoring → skeleton board (FR-4)
+        state = resolve_kickoff_state(root)
         audience = resolve_audience_preference(root).value
         provenance = load_ledger(root)
         # Agentic cockpit read-model (M2): fold the FR-1 session snapshot + VIPP inbox so the

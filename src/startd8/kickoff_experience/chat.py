@@ -23,10 +23,9 @@ from typing import Callable, Optional
 from ..agents.agentic import AgenticResult, AgenticSession, SessionConfig, ToolRegistry, ToolSpec
 from ..agents.base import BaseAgent
 from ..concierge.core import handle_concierge_read
-from .docs import live_schema_text, load_kickoff_docs
 from .ranking import next_action
 from .readiness import build_readiness
-from .state import build_kickoff_state
+from .state import resolve_kickoff_state
 
 # The complete read-only allow-list for the kickoff conversation (OQ-8). `red_carpet_state` is the
 # Red Carpet conductor's staged view (read-only) — only registered for the RCT chat (FR-RCT-2).
@@ -123,8 +122,7 @@ class KickoffChatError(ValueError):
 
 def _field_states_payload(project_root: str | Path) -> dict:
     """The read-only field_states tool result: canonical state + readiness + next action."""
-    docs = load_kickoff_docs(project_root)
-    state = build_kickoff_state(docs, live_schema_text=live_schema_text(project_root))
+    state = resolve_kickoff_state(project_root)
     try:
         readiness = build_readiness(project_root)
     except Exception:  # readiness degrades independently; never break field_states on its account
