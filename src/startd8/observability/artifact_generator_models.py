@@ -47,6 +47,11 @@ class ServiceHints:
     # default (semconv-{transport}). Consumed by metric_descriptor.resolve_descriptor.
     metric_profile: str = ""
     descriptor_overrides: Dict[str, Any] = field(default_factory=dict)
+    # Datasource UID binding (REQ_DATASOURCE_UID_BINDING FR-3): the effective Grafana
+    # datasource UIDs ContextCore resolved for this service, keyed by kind
+    # (prometheus|loki|tempo). {} => fall back to today's name-based binding (FR-7).
+    # Consumed by the dashboard renderer to emit `datasource: {type, uid}`.
+    datasource_uids: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

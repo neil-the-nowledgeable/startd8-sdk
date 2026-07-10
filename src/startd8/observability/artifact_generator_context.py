@@ -314,6 +314,16 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
         if not isinstance(descriptor_overrides, dict):
             descriptor_overrides = {}
 
+        # Datasource UID binding (REQ_DATASOURCE_UID_BINDING FR-3): sits at the
+        # hint top level (a service concern, not a metric-set one). Absent/malformed
+        # => {} => today's name-based render (FR-7 back-compat).
+        datasource_uids = hint.get("datasources", {})
+        if not isinstance(datasource_uids, dict):
+            datasource_uids = {}
+        datasource_uids = {
+            str(k): str(v) for k, v in datasource_uids.items() if isinstance(v, str) and v.strip()
+        }
+
         services.append(
             ServiceHints(
                 service_id=svc_id,
@@ -324,6 +334,7 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 declared_metrics=declared_metrics,
                 metric_profile=metric_profile,
                 descriptor_overrides=descriptor_overrides,
+                datasource_uids=datasource_uids,
             )
         )
 
