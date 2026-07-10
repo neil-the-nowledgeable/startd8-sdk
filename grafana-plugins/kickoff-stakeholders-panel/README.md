@@ -14,7 +14,11 @@ re-charged).
 Set the panel option **Panel mode** to pick a surface (all share the same datasource proxy + token):
 
 - **Run** — the single-question paid Q&A (above).
-- **Apply** — the FR-R7 write gate (preview → paste challenge → ratify) that writes the project source of record.
+- **Apply** — the FR-R7 write gate (preview → paste challenge → ratify) that writes the project source of
+  record. The preview screen shows a **Consensus** chip (#8) for the source facilitation — high/mixed/low,
+  a *synthetic, lexical* signal ($0), so a low-consensus (contentious) set is flagged before you commit.
+  It shows **n/a** when the inbox has no recoverable source session (pre-#8 inbox, ask-all source, or a
+  mixed-session serialize); the source-session binding is unverified metadata (token-gated, not human-proof).
 - **Facilitate** — the multi-round facilitation (F1). Because it runs for **minutes**, this mode is
   **fire-and-poll**, not one blocking request: pick a **Posture** (`scrutiny` = strategic red-team;
   `prototype` = constructive early-stage UX) and **Model tier** (`premium` = opus/gpt-5.5/gemini-pro;
