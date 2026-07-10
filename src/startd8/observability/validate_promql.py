@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import urllib.error
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -151,6 +152,59 @@ def _iter_exprs_in_obj(obj: Any) -> List[Tuple[str, str]]:
 
     _walk(obj, "")
     return found
+
+
+# A trailing top-level comparison against a scalar literal (``> 500.0``,
+# ``> 0.001``, ``< 0.999``, optional ``bool`` modifier, optional exponent). Alert
+# rules end in one; SLO/dashboard metric exprs do not.
+_TOP_LEVEL_THRESHOLD_RE = re.compile(
+    r"\s*(?:>=|<=|==|!=|>|<)\s*(?:bool\s+)?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\s*$"
+)
+
+
+# Grafana dashboard macros → concrete replay values. Dashboard panel exprs are
+# Grafana-templated, not raw PromQL; Prometheus 400s on ``$__rate_interval`` even
+# though the underlying metric binds fine. Longer keys first so ``$__interval_ms``
+# is replaced before ``$__interval``.
+_GRAFANA_MACROS = (
+    ("$__rate_interval", "5m"),
+    ("$__interval_ms", "60000"),
+    ("$__interval", "1m"),
+    ("$__range_ms", "3600000"),
+    ("$__range_s", "3600"),
+    ("$__range", "1h"),
+)
+
+#: A residual ``$var`` / ``${var}`` after macro substitution = a dashboard template
+#: variable that cannot be resolved without dashboard context → not replayable.
+_TEMPLATE_VAR_RE = re.compile(r"\$(?:\{[A-Za-z0-9_]+\}|[A-Za-z_][A-Za-z0-9_]*)")
+
+
+def substitute_grafana_macros(expr: str) -> str:
+    """Replace the well-known ``$__*`` Grafana macros with concrete durations."""
+    for macro, value in _GRAFANA_MACROS:
+        expr = expr.replace(macro, value)
+    return expr
+
+
+def has_unresolved_template_var(expr: str) -> bool:
+    """True if the expr still carries a ``$var`` that macro substitution can't resolve."""
+    return bool(_TEMPLATE_VAR_RE.search(expr))
+
+
+def strip_threshold(expr: str) -> str:
+    """Drop a trailing ``<op> <scalar>`` so replay tests metric *binding*, not alert state.
+
+    Fidelity = "does this metric selection resolve against live series." An alert
+    expr like ``rate(...err...) / rate(...) > 0.001`` returns **empty** whenever no
+    series currently breaches the threshold — a *healthy, non-firing alert*, which is
+    orthogonal to whether the metric binds. Replaying the stripped expression tests
+    the thing the harness is actually for. Metric-only exprs (SLO/dashboard) have no
+    trailing comparison and are returned unchanged; if stripping would empty the
+    expression, the original is kept (fail-safe).
+    """
+    stripped = _TOP_LEVEL_THRESHOLD_RE.sub("", expr)
+    return stripped if stripped.strip() else expr
 
 
 def extract_exprs(artifacts_dir: Path) -> List[ExtractedExpr]:
@@ -413,6 +467,10 @@ class ExprVerdict:
     expected_metric: str = ""
     remediation: str = ""
     suggested_profile: str = ""  # the metricsProfile the live backend matches (quick-win #1)
+    #: The expression actually replayed — set only when it differs from ``expr``
+    #: (e.g. a trailing alert threshold was stripped so replay tests metric binding,
+    #: not alert-firing state). Empty ⇒ replayed verbatim.
+    replayed_expr: str = ""
     axis_detail: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -423,6 +481,10 @@ class FidelityReport:
     queries_replayed: int
     coverage: float
     min_coverage: float
+    #: Exprs skipped as non-replayable (unresolved dashboard template vars after
+    #: Grafana-macro substitution). Not counted in coverage — they carry no fidelity
+    #: signal — but surfaced so the skip is never silent.
+    queries_skipped: int = 0
     verdicts: List[ExprVerdict] = field(default_factory=list)
     per_service: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     per_axis: Dict[str, int] = field(default_factory=dict)
@@ -441,6 +503,7 @@ class FidelityReport:
             "status": self.status,
             "reason": self.reason,
             "queries_replayed": self.queries_replayed,
+            "queries_skipped": self.queries_skipped,
             "coverage": round(self.coverage, 4),
             "min_coverage": self.min_coverage,
             "static_gate_note": self.static_gate_note,
@@ -459,6 +522,7 @@ class FidelityReport:
                     "expected_metric": v.expected_metric,
                     "remediation": v.remediation,
                     "suggested_profile": v.suggested_profile,
+                    "replayed_expr": v.replayed_expr,
                     "axis_detail": v.axis_detail,
                 }
                 for v in self.verdicts
@@ -571,14 +635,52 @@ def run_validation(
 
     verdicts: List[ExprVerdict] = []
     replayed = 0
+    skipped = 0
     backend_unreachable = False
 
     for e in exprs:
         if replayed >= query_budget:
             logger.warning("per-run query budget %d reached; stopping", query_budget)
             break
+        # Fidelity tests metric *binding*, not alert-firing state or dashboard
+        # templating: strip any trailing threshold comparison (a non-firing alert
+        # would otherwise return empty) and resolve known Grafana macros.
+        replay_expr = substitute_grafana_macros(strip_threshold(e.expr))
+        if has_unresolved_template_var(replay_expr):
+            # A dashboard template var we can't resolve without dashboard context —
+            # not replayable, so skip it (and never count it against coverage).
+            skipped += 1
+            logger.info("skipping non-replayable expr (template var): %s", replay_expr)
+            continue
+        replayed_note = replay_expr if replay_expr != e.expr else ""
         try:
-            count = q_count(prometheus_url, e.expr, auth=auth)
+            count = q_count(prometheus_url, replay_expr, auth=auth)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (400, 422):
+                # The backend REJECTED the query (bad/unsupported PromQL). That's a
+                # real per-expr defect — but NOT an unreachable backend, so record it
+                # and keep going rather than nuking the whole run to `unknown`.
+                logger.warning("backend rejected query (HTTP %s): %s", exc.code, replay_expr)
+                replayed += 1
+                verdicts.append(
+                    ExprVerdict(
+                        service=e.service,
+                        signal=e.signal,
+                        expr=e.expr,
+                        source_file=e.source_file,
+                        live_result_count=0,
+                        verdict="error",
+                        remediation=(
+                            f"backend rejected this PromQL (HTTP {exc.code}) — the emitted "
+                            "expression does not parse/execute against this backend; inspect it."
+                        ),
+                        replayed_expr=replayed_note,
+                    )
+                )
+                continue
+            logger.warning("query failed (backend unreachable?): %s", exc)
+            backend_unreachable = True
+            break
         except Exception as exc:  # FR-10: unreachable backend ⇒ distinct non-pass
             logger.warning("query failed (backend unreachable?): %s", exc)
             backend_unreachable = True
@@ -644,6 +746,7 @@ def run_validation(
                 expected_metric=expected_metric,
                 remediation=remediation,
                 suggested_profile=suggested_profile,
+                replayed_expr=replayed_note,
                 axis_detail=axis_detail,
             )
         )
@@ -655,6 +758,7 @@ def run_validation(
             status="unknown",
             reason="Prometheus backend unreachable during replay (fail-loud, not pass)",
             queries_replayed=replayed,
+            queries_skipped=skipped,
             coverage=0.0,
             min_coverage=min_coverage,
             verdicts=verdicts,
@@ -663,8 +767,12 @@ def run_validation(
     if replayed == 0:
         return FidelityReport(
             status="unknown",
-            reason="no queries were replayed",
+            reason=(
+                "no queries were replayed"
+                + (f" ({skipped} skipped as non-replayable template exprs)" if skipped else "")
+            ),
             queries_replayed=0,
+            queries_skipped=skipped,
             coverage=0.0,
             min_coverage=min_coverage,
         )
@@ -706,6 +814,7 @@ def run_validation(
         status=status,
         reason=reason,
         queries_replayed=replayed,
+        queries_skipped=skipped,
         coverage=coverage,
         min_coverage=min_coverage,
         verdicts=verdicts,

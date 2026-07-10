@@ -202,7 +202,10 @@ def bind_and_verify(
     manifest_path = Path(manifest_path)
     output_dir = Path(output_dir)
     auth = auth or Auth()
-    export_cmd = export_cmd or ["contextcore", "manifest", "export"]
+    # bind-and-verify runs the *fidelity* workflow, not the traceability one, so the
+    # default export skips the strict-quality gate (which otherwise demands
+    # --task-mapping). Override --export-cmd to supply your own base + flags.
+    export_cmd = export_cmd or ["contextcore", "manifest", "export", "--no-strict-quality"]
     list_names_fn = list_names_fn or list_metric_names
     export_fn = export_fn or (lambda m, o, c=export_cmd: _default_export(m, o, c))
     generate_fn = generate_fn or _default_generate

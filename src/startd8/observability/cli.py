@@ -230,9 +230,10 @@ def bind_and_verify_cmd(
         help="Opt in to a non-demo/non-localhost backend (passed to verify).",
     ),
     export_cmd: str = typer.Option(
-        "contextcore manifest export",
+        "contextcore manifest export --no-strict-quality",
         "--export-cmd",
-        help="Command that runs ContextCore export (override if not on PATH).",
+        help="Command that runs ContextCore export (override if not on PATH). The "
+        "default skips the strict-quality gate, which requires --task-mapping.",
     ),
     report: Path = typer.Option(
         None,

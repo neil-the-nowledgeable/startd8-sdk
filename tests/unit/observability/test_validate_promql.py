@@ -243,6 +243,149 @@ def test_fidelity_report_no_profile_suggestion_when_all_pass(tmp_path, monkeypat
     assert report.suggested_metrics_profile == ""
 
 
+# ─────────── replay normalization: threshold / macros / template vars ───────
+
+
+def test_strip_threshold():
+    from startd8.observability.validate_promql import strip_threshold
+
+    assert strip_threshold("rate(x[5m]) > 0.001") == "rate(x[5m])"
+    assert strip_threshold("histogram_quantile(0.99, rate(x[5m])) > 500.0").endswith("))")
+    assert strip_threshold("( 1 - a / b ) < 0.999").endswith(")")
+    # metric-only exprs (no trailing comparison) are unchanged
+    assert strip_threshold("rate(calls_total[5m])") == "rate(calls_total[5m])"
+    # stripping that would empty the expr is a no-op (fail-safe)
+    assert strip_threshold("> 5") == "> 5"
+
+
+def test_substitute_grafana_macros_and_template_vars():
+    from startd8.observability.validate_promql import (
+        has_unresolved_template_var,
+        substitute_grafana_macros,
+    )
+
+    assert "5m" in substitute_grafana_macros("rate(x[$__rate_interval])")
+    assert "60000" in substitute_grafana_macros("x offset $__interval_ms")
+    # $__interval_ms must not be mangled into 1m + "_ms"
+    assert substitute_grafana_macros("y[$__interval_ms]") == "y[60000]"
+    assert not has_unresolved_template_var("rate(calls_total[5m])")
+    assert has_unresolved_template_var("rate(x{svc=\"$service\"}[5m])")
+    assert has_unresolved_template_var("rate(x[${range}])")
+
+
+def test_alert_threshold_not_a_fidelity_fail(tmp_path):
+    """A non-firing alert (threshold not met) must not be scored as a binding miss:
+    the query is replayed with the trailing comparison stripped."""
+    artifacts = tmp_path / "art"
+    _write_alerts(
+        artifacts,
+        "checkoutservice",
+        {"HighErr": 'rate(http_server_duration_count{service="checkoutservice"}[5m]) > 0.01'},
+    )
+    onboarding = _semconv_onboarding(tmp_path)
+
+    seen = {}
+
+    def _q(base, expr, **k):
+        seen["expr"] = expr
+        # The metric resolves; only the '> 0.01' comparison would have emptied it.
+        return 3
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=1.0,
+        auth=Auth(),
+        query_fn=_q,
+    )
+    assert report.status == "pass"
+    assert "> 0.01" not in seen["expr"]  # threshold stripped before replay
+    assert report.verdicts[0].replayed_expr  # recorded, since it differed
+
+
+def test_dashboard_template_var_is_skipped_not_failed(tmp_path):
+    """A dashboard expr with an unresolvable $var is skipped (not counted), while
+    its $__rate_interval sibling is macro-substituted and replayed."""
+    from startd8.observability.validate_promql import run_validation as _rv
+
+    (artifacts := tmp_path / "art" / "dashboards").mkdir(parents=True)
+    doc = {"panels": [
+        {"title": "A", "expr": 'rate(calls_total{service_name="checkoutservice"}[$__rate_interval])'},
+        {"title": "B", "expr": 'rate(calls_total{service_name="$service"}[5m])'},
+    ]}
+    (artifacts / "checkoutservice-dashboard.yaml").write_text(yaml.dump(doc))
+    onboarding = _onboarding(tmp_path, {"checkoutservice": {
+        "transport": "grpc",
+        "metrics": {"convention_based": [{"name": "rpc.server.duration", "type": "histogram"}]},
+    }})
+
+    report = _rv(
+        artifacts_dir=tmp_path / "art",
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=lambda base, expr, **k: (0 if "$" in expr else 1),
+    )
+    assert report.queries_skipped == 1          # panel B skipped
+    assert report.queries_replayed == 1          # panel A replayed (macro resolved)
+    assert "$__rate_interval" not in report.verdicts[0].replayed_expr
+
+
+def test_rejected_query_is_error_not_unreachable(tmp_path):
+    """A backend HTTP 400 on one expr records a per-expr 'error' verdict and keeps
+    going — it does NOT flip the whole run to unknown/unreachable."""
+    import urllib.error
+
+    artifacts = tmp_path / "art"
+    _write_alerts(
+        artifacts,
+        "checkoutservice",
+        {"A": "rate(x[5m])", "B": "this is not promql"},
+    )
+    onboarding = _semconv_onboarding(tmp_path)
+
+    def _q(base, expr, **k):
+        if "not promql" in expr:
+            raise urllib.error.HTTPError(base, 400, "bad_data", {}, None)
+        return 2
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=_q,
+    )
+    assert report.status != "unknown"  # not flipped to unreachable
+    verdicts = {v.verdict for v in report.verdicts}
+    assert "error" in verdicts
+    err = next(v for v in report.verdicts if v.verdict == "error")
+    assert "HTTP 400" in err.remediation
+
+
+def test_connection_error_still_flips_to_unknown(tmp_path):
+    """A genuine connection error (not an HTTP status) is still fail-loud unknown."""
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice", {"A": "rate(x[5m])"})
+    onboarding = _semconv_onboarding(tmp_path)
+
+    def _q(base, expr, **k):
+        raise ConnectionRefusedError("no backend")
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=_q,
+    )
+    assert report.status == "unknown"
+
+
 def test_diagnosis_does_not_short_circuit_first_axis(tmp_path, monkeypatch):
     # A single expr whose descriptor misses on >1 axis must report >1.
     artifacts = tmp_path / "art"
