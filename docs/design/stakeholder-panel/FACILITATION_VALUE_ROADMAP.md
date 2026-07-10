@@ -44,52 +44,29 @@ Effort key: 🟢 quick (<½ day) · 🟡 medium (1–2 days) · 🔴 bigger bet.
 | #6 | **Consensus / divergence signal** — deterministic $0 lexical-divergence over the independent R1 answers (challengers excluded) → high/mixed/low on the poll payload + Grafana chip + CLI. Honestly framed (lexical, not semantic); embeddings-ready `method` seam. **Unblocks #8.** | `stakeholder_panel/consensus.py`; `facilitate_run.facilitate_status`; `FacilitatePanel.tsx` |
 | #8 | **Confidence-gated apply (FLAG)** — surfaces the #6 consensus on the apply **preview** (chip; n/a-visible) so a low-consensus set is flagged before commit. CRP caught 2 security bugs: a path-traversal read via an inbox-controlled `source_session_id`, and an M2 fingerprint cache-bust. Provenance threaded serialize→envelope→preview (top-level, outside every hash). | `_apply_preview` + `_apply_consensus`; `vipp_seam`/`vipp.models`/`vipp.apply`; `ApplyPanel.tsx` |
 | #7 | **Live per-round progress** — `facilitate_status` returns bounded per-round summaries (excerpt-capped, challengers flagged) derived on read from the persisted rounds; the FacilitatePanel renders a live accordion that grows as rounds land (latest expanded) instead of a bare spinner. Additive, $0. | `facilitate_run._round_summaries`; `FacilitatePanel.tsx` |
+| #9 | **Stale-run staleness report (observer)** — `facilitate_status` reports `stalled` when a non-terminal run's transcript hasn't advanced in `STARTD8_FACILITATION_STALE_SECS` (default 600s); the panel warns + points to Check-again. Observer-only (no reservation reap → no double-spend). | `facilitate_run.facilitate_status`/`_stale_after_secs`; `kickoff_view.mtime`; `FacilitatePanel.tsx` |
+| #10 | **Cumulative facilitation-cost counter + documented alert** — `kickoff.facilitation.cost_usd_total` counter (labels project/posture/tier) emitted at the existing cost-emission point; PromQL alert documented (`increase(...[30d]) > CEILING`). Provisioning = operator/grafana-skill; distinct from the fail-closed budget. | `metrics.py:record_facilitation_cost` |
 
 ---
 
-## 🟡 Higher-value capabilities (remaining)
+## 🎉 Roadmap complete — all higher-value + operational items shipped
 
-*(all shipped — see the ✅ tables above)*
+Every item #1–#10 + ⭐ is shipped. The only remaining **non-code** follow-ons:
 
----
-
-## 🔧 Operational & reliability hardening (remaining)
-
-### Re-enable GitHub Actions  🟢 (infra decision — owner: repo admin)
-Actions is **disabled repo-wide**, so the plugin CI gate (#3, shipped) and the Python CI are dormant.
-Re-enabling (Settings → Actions → Allow) activates the `tsc --noEmit` + build gate on every plugin
-change automatically — until then the plugin TS is only verified when someone builds it manually.
-**Anchor:** repo settings; `.github/workflows/grafana-plugin.yml`.
-
-### #9 — Stale-run reaper / heartbeat staleness  🟡
-A hard server restart kills the worker thread but leaves the `IdempotencyStore` reservation
-`in_progress` until TTL. The client bounded-poll (H-16) hides it from the user, but the server-side
-reservation leaks. Add a staleness check in `facilitate_status` (transcript last-write older than N min
-→ report `stalled`). **Anchor:** `facilitate_run.py:facilitate_status`, `stakeholder_run.py:IdempotencyStore`.
-
-### #10 — Per-project facilitation budget + Grafana alert  🟡
-With #1's gauge in place, add a cumulative **counter** for facilitation spend + an alert rule when a
-project crosses a monthly ceiling. Cost governance for the one expensive path.
-**Anchor:** `metrics.py`; a Grafana alert rule / dashboard.
-
-### (minor) Readout includes the facilitation synthesis narrative  🟢
-`readout.py` renders Status / Assistant / Proposals / Pipeline but not the synthesis *text*. Arguable —
-proposals (downstream) are already there. **Anchor:** `readout.py`.
+- **Re-enable GitHub Actions**  🟢 (infra decision — repo admin). Actions is disabled repo-wide, so the
+  plugin CI gate (#3) + Python CI are dormant; re-enabling activates `tsc --noEmit` + build on every
+  plugin change. **Anchor:** repo settings; `.github/workflows/grafana-plugin.yml`.
+- **(optional/minor) Readout includes the facilitation synthesis narrative**  🟢 — `readout.py` renders
+  Status/Assistant/Proposals/Pipeline but not the synthesis text (arguable; proposals are already there).
+- **(operator) Provision the #10 cost alert** in Grafana from the documented PromQL (grafana skill).
 
 ---
 
 ## Suggested sequence (remaining)
 
-> The theme of what's left: #1–#5 + ⭐ made facilitation *drivable and cheap*; #6–#10 make it
+> The arc, now complete: #1–#5 + ⭐ made facilitation *drivable and cheap*; #6–#10 made it
 > *trustworthy* — believe the output (#6/#8), watch it happen (#7), aren't lied to when it breaks (#9),
-> aren't surprised by the bill (#10).
+> aren't surprised by the bill (#10). **All shipped.**
 
-1. ~~#6 consensus / divergence signal~~ — **SHIPPED** (unblocked #8).
-2. ~~#8 confidence-gated apply~~ — **SHIPPED** (FLAG; consensus on the apply preview).
-3. ~~#7 live per-round progress~~ — **SHIPPED** (live round accordion).
-4. **#9 stale-run reaper** + **#10 budget alert** — **next**; reliability + cost governance once
-   facilitation sees real usage.
-5. **Re-enable GitHub Actions** — whenever the repo admin is ready (activates the dormant CI gate).
-
-*(The minor readout item is optional / arguable — pick up only if the shareable readout needs the
-synthesis narrative.)*
+The only open follow-ons are non-code (see the section above): re-enable GitHub Actions (repo admin),
+provision the #10 alert in Grafana (operator), and the optional readout-synthesis item.

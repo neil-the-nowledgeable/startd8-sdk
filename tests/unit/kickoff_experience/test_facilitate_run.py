@@ -4,6 +4,10 @@
 """F1 M2 — the facilitate core: dry-run estimate, single-flight, session_id, terminal states (H-1..H-14)."""
 from __future__ import annotations
 
+import json
+import os
+import time
+
 import pytest
 
 from startd8.kickoff_experience import facilitate_run as FR
@@ -105,6 +109,52 @@ def test_status_carries_rounds(tmp_path, roster):
     assert r1 is not None and r1["entries"]
     e = r1["entries"][0]
     assert set(e) == {"role_id", "display_name", "excerpt", "grounding", "is_challenger"}
+
+
+# ── #9 stale-run staleness report (observer) ─────────────────────────────────
+def _write_transcript(tmp_path, sid, status):
+    d = tmp_path / ".startd8" / "kickoff-panel"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{sid}.json"
+    p.write_text(json.dumps({"session_id": sid, "status": status, "rounds": []}), encoding="utf-8")
+    return p
+
+
+def test_stale_after_secs_resolver(monkeypatch):
+    monkeypatch.delenv(FR._STALE_ENV, raising=False)
+    assert FR._stale_after_secs() == float(FR.STALE_AFTER_SECS)  # default
+    monkeypatch.setenv(FR._STALE_ENV, "120")
+    assert FR._stale_after_secs() == 120.0  # env override
+    monkeypatch.setenv(FR._STALE_ENV, "nope")
+    assert FR._stale_after_secs() == float(FR.STALE_AFTER_SECS)  # non-numeric → default
+    monkeypatch.setenv(FR._STALE_ENV, "0")
+    assert FR._stale_after_secs() == float(FR.STALE_AFTER_SECS)  # non-positive → default (never disabled)
+
+
+def test_nonterminal_old_transcript_is_stalled(tmp_path):
+    p = _write_transcript(tmp_path, "s1", "in_progress")
+    os.utime(p, (0, time.time() - 700))  # last write 700s ago (> 600 default)
+    st = FR.facilitate_status(tmp_path, "s1")
+    assert st["status"] == "in_progress" and st["stalled"] is True and st["is_terminal"] is False
+
+
+def test_nonterminal_fresh_transcript_not_stalled(tmp_path):
+    _write_transcript(tmp_path, "s1", "in_progress")  # just written → fresh
+    assert FR.facilitate_status(tmp_path, "s1")["stalled"] is False
+
+
+def test_terminal_run_never_stalled(tmp_path):
+    p = _write_transcript(tmp_path, "s1", "completed")
+    os.utime(p, (0, time.time() - 9999))  # ancient, but terminal → never stalled
+    st = FR.facilitate_status(tmp_path, "s1")
+    assert st["is_terminal"] is True and st["stalled"] is False
+
+
+def test_stale_threshold_env_override(tmp_path, monkeypatch):
+    p = _write_transcript(tmp_path, "s1", "in_progress")
+    os.utime(p, (0, time.time() - 30))  # 30s old
+    monkeypatch.setenv(FR._STALE_ENV, "10")  # threshold 10s → 30s-old is stalled
+    assert FR.facilitate_status(tmp_path, "s1")["stalled"] is True
 
 
 # ── #6 consensus signal on the poll payload ──────────────────────────────────
@@ -293,21 +343,26 @@ def test_error_terminal_state(tmp_path, roster):
 
 # ── #1 the facilitation cost gauge ───────────────────────────────────────────
 def test_record_facilitation_cost_labels_project_posture_tier(monkeypatch):
-    """The gauge is set with {project, posture, tier} labels so Grafana can break spend down."""
+    """The gauge is set AND the cumulative counter (#10) is add()ed, both with {project,posture,tier}."""
     from startd8.kickoff_experience import metrics as M
 
     captured = {}
 
     class _FakeGauge:
         def set(self, value, attrs):
-            captured["value"] = value
-            captured["attrs"] = attrs
+            captured["gauge"] = (value, attrs)
 
-    monkeypatch.setattr(M, "_gauges", lambda: {"facilitation_cost": _FakeGauge()})
+    class _FakeCounter:
+        def add(self, value, attrs):
+            captured["counter"] = (value, attrs)  # #10 cumulative spend
+
+    monkeypatch.setattr(M, "_gauges", lambda: {"facilitation_cost": _FakeGauge(),
+                                               "facilitation_cost_total": _FakeCounter()})
     ok = M.record_facilitation_cost(project="household", cost_usd=0.43, posture="prototype", tier="cheap")
     assert ok is True
-    assert captured["value"] == 0.43
-    assert captured["attrs"] == {"project": "household", "posture": "prototype", "tier": "cheap"}
+    labels = {"project": "household", "posture": "prototype", "tier": "cheap"}
+    assert captured["gauge"] == (0.43, labels)
+    assert captured["counter"] == (0.43, labels)  # #10 — counter got the same spend + labels
 
 
 def test_record_facilitation_cost_noop_without_collector(monkeypatch):
