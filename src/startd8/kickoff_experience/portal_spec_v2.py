@@ -221,10 +221,19 @@ def _timeseries_panel(pid: int, title: str, promql: str, *, unit: str = "percent
     )
 
 
+def _promql_project(project: str) -> str:
+    """PromQL-escape a project name for a label matcher."""
+    return str(project).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _readiness_promql(project: str) -> str:
-    """The burndown PromQL for one project (agrees with the metrics.py `project` label)."""
-    proj = str(project).replace("\\", "\\\\").replace('"', '\\"')
-    return f'kickoff_readiness_percent{{project="{proj}"}}'
+    """The readiness-burndown PromQL for one project (agrees with the metrics.py `project` label)."""
+    return f'kickoff_readiness_percent{{project="{_promql_project(project)}"}}'
+
+
+def _cost_promql(project: str) -> str:
+    """The cost-over-time PromQL for one project (the `kickoff.session.cost_usd` gauge)."""
+    return f'kickoff_session_cost_usd{{project="{_promql_project(project)}"}}'
 
 
 def _logs_panel(pid: int, title: str, logql: str) -> V2Panel:
@@ -458,8 +467,16 @@ def build_workbook_v2(
                     element=_add_panel(
                         _timeseries_panel(0, "Readiness over time", _readiness_promql(project))
                     ),
-                    height=8,
-                )
+                    x=0, width=12, height=8,
+                ),
+                GridItem(
+                    element=_add_panel(
+                        _timeseries_panel(
+                            0, "Cost over time", _cost_promql(project), unit="currencyUSD"
+                        )
+                    ),
+                    x=12, width=12, height=8,
+                ),
             ],
         )
     )

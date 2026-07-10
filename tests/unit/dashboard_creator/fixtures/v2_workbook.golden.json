@@ -40,6 +40,36 @@
           }
         }
       },
+      "panel-10": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "",
+          "id": 10,
+          "links": [],
+          "title": "Proposals \u2014 awaiting confirmation",
+          "vizConfig": {
+            "kind": "text",
+            "spec": {
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "options": {
+                "content": "_The loop recommends; you confirm. This board never acts._\n\nNo proposals awaiting confirmation.",
+                "mode": "markdown"
+              }
+            }
+          }
+        }
+      },
       "panel-2": {
         "kind": "Panel",
         "spec": {
@@ -112,7 +142,27 @@
           "data": {
             "kind": "QueryGroup",
             "spec": {
-              "queries": [],
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {
+                        "name": "mimir"
+                      },
+                      "group": "mimir",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "expr": "kickoff_session_cost_usd{project=\"demo\"}",
+                        "queryType": "range"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
               "queryOptions": {},
               "transformations": []
             }
@@ -120,17 +170,33 @@
           "description": "",
           "id": 3,
           "links": [],
-          "title": "Getting Started",
+          "title": "Cost over time",
           "vizConfig": {
-            "kind": "text",
+            "kind": "timeseries",
             "spec": {
               "fieldConfig": {
-                "defaults": {},
+                "defaults": {
+                  "custom": {
+                    "drawStyle": "line",
+                    "fillOpacity": 10,
+                    "lineWidth": 2,
+                    "showPoints": "auto",
+                    "spanNulls": true
+                  },
+                  "unit": "currencyUSD"
+                },
                 "overrides": []
               },
               "options": {
-                "content": "### Your Project Workbook\n\nThis board is a **live picture of your project's setup** \u2014 the handful of foundational decisions the build needs before it can create your app. Each row is one **input**; the colored marker shows where it stands. Nothing here is final and you can't break anything \u2014 the board just reflects what's on disk. Use the **audience** selector at the top to switch how much detail you see. Start with the \ud83d\udd34 gaps.",
-                "mode": "markdown"
+                "legend": {
+                  "displayMode": "list",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "mode": "multi",
+                  "sort": "none"
+                }
               }
             }
           }
@@ -150,7 +216,7 @@
           "description": "",
           "id": 4,
           "links": [],
-          "title": "Digital Project Workbook",
+          "title": "Getting Started",
           "vizConfig": {
             "kind": "text",
             "spec": {
@@ -159,7 +225,7 @@
                 "overrides": []
               },
               "options": {
-                "content": "The **Digital Project Workbook** \u2014 the shared, whole-project view of the foundational kickoff decisions. A dynamic, query-based evolution of Brooks' workbook (_The Mythical Man-Month_), which was static (paper/microfiche); this one is generated from live project state. Flip the **audience** variable (top of the board) to switch persona in-browser \u2014 no regeneration, no write.",
+                "content": "### Your Project Workbook\n\nThis board is a **live picture of your project's setup** \u2014 the handful of foundational decisions the build needs before it can create your app. Each row is one **input**; the colored marker shows where it stands. Nothing here is final and you can't break anything \u2014 the board just reflects what's on disk. Use the **audience** selector at the top to switch how much detail you see. Start with the \ud83d\udd34 gaps.",
                 "mode": "markdown"
               }
             }
@@ -180,7 +246,7 @@
           "description": "",
           "id": 5,
           "links": [],
-          "title": "Business targets",
+          "title": "Digital Project Workbook",
           "vizConfig": {
             "kind": "text",
             "spec": {
@@ -189,7 +255,7 @@
                 "overrides": []
               },
               "options": {
-                "content": "| Field | State | Value |\n|---|---|---|\n| `/kpi` | \u2705 confirmed | 95% |",
+                "content": "The **Digital Project Workbook** \u2014 the shared, whole-project view of the foundational kickoff decisions. A dynamic, query-based evolution of Brooks' workbook (_The Mythical Man-Month_), which was static (paper/microfiche); this one is generated from live project state. Flip the **audience** variable (top of the board) to switch persona in-browser \u2014 no regeneration, no write.",
                 "mode": "markdown"
               }
             }
@@ -210,7 +276,7 @@
           "description": "",
           "id": 6,
           "links": [],
-          "title": "Business targets \u2014 safe defaults",
+          "title": "Business targets",
           "vizConfig": {
             "kind": "text",
             "spec": {
@@ -219,7 +285,7 @@
                 "overrides": []
               },
               "options": {
-                "content": "| Field | State | Value |\n|---|---|---|\n| `/goal` | \ud83d\udee1\ufe0f safe default set for you | _\u2014_ |",
+                "content": "| Field | State | Value |\n|---|---|---|\n| `/kpi` | \u2705 confirmed | 95% |",
                 "mode": "markdown"
               }
             }
@@ -240,7 +306,7 @@
           "description": "",
           "id": 7,
           "links": [],
-          "title": "Technology conventions",
+          "title": "Business targets \u2014 safe defaults",
           "vizConfig": {
             "kind": "text",
             "spec": {
@@ -249,7 +315,7 @@
                 "overrides": []
               },
               "options": {
-                "content": "| Field | State | Value |\n|---|---|---|\n| `/lang` | \u2705 confirmed | python |",
+                "content": "| Field | State | Value |\n|---|---|---|\n| `/goal` | \ud83d\udee1\ufe0f safe default set for you | _\u2014_ |",
                 "mode": "markdown"
               }
             }
@@ -270,7 +336,7 @@
           "description": "",
           "id": 8,
           "links": [],
-          "title": "Assistant",
+          "title": "Technology conventions",
           "vizConfig": {
             "kind": "text",
             "spec": {
@@ -279,7 +345,7 @@
                 "overrides": []
               },
               "options": {
-                "content": "_snapshot \u2014 not a live agent._\n\nNo session yet \u2014 run `startd8 kickoff chat` to begin.",
+                "content": "| Field | State | Value |\n|---|---|---|\n| `/lang` | \u2705 confirmed | python |",
                 "mode": "markdown"
               }
             }
@@ -300,7 +366,7 @@
           "description": "",
           "id": 9,
           "links": [],
-          "title": "Proposals \u2014 awaiting confirmation",
+          "title": "Assistant",
           "vizConfig": {
             "kind": "text",
             "spec": {
@@ -309,7 +375,7 @@
                 "overrides": []
               },
               "options": {
-                "content": "_The loop recommends; you confirm. This board never acts._\n\nNo proposals awaiting confirmation.",
+                "content": "_snapshot \u2014 not a live agent._\n\nNo session yet \u2014 run `startd8 kickoff chat` to begin.",
                 "mode": "markdown"
               }
             }
@@ -371,8 +437,21 @@
                                     "name": "panel-2"
                                   },
                                   "height": 8,
-                                  "width": 24,
+                                  "width": 12,
                                   "x": 0,
+                                  "y": 0
+                                }
+                              },
+                              {
+                                "kind": "GridLayoutItem",
+                                "spec": {
+                                  "element": {
+                                    "kind": "ElementReference",
+                                    "name": "panel-3"
+                                  },
+                                  "height": 8,
+                                  "width": 12,
+                                  "x": 12,
                                   "y": 0
                                 }
                               }
@@ -412,7 +491,7 @@
                                 "spec": {
                                   "element": {
                                     "kind": "ElementReference",
-                                    "name": "panel-3"
+                                    "name": "panel-4"
                                   },
                                   "height": 8,
                                   "width": 24,
@@ -456,7 +535,7 @@
                                 "spec": {
                                   "element": {
                                     "kind": "ElementReference",
-                                    "name": "panel-4"
+                                    "name": "panel-5"
                                   },
                                   "height": 6,
                                   "width": 24,
@@ -483,7 +562,7 @@
                                 "spec": {
                                   "element": {
                                     "kind": "ElementReference",
-                                    "name": "panel-5"
+                                    "name": "panel-6"
                                   },
                                   "height": 5,
                                   "width": 24,
@@ -527,7 +606,7 @@
                                 "spec": {
                                   "element": {
                                     "kind": "ElementReference",
-                                    "name": "panel-6"
+                                    "name": "panel-7"
                                   },
                                   "height": 5,
                                   "width": 24,
@@ -554,7 +633,7 @@
                                 "spec": {
                                   "element": {
                                     "kind": "ElementReference",
-                                    "name": "panel-7"
+                                    "name": "panel-8"
                                   },
                                   "height": 5,
                                   "width": 24,
@@ -586,7 +665,7 @@
                       "spec": {
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-8"
+                          "name": "panel-9"
                         },
                         "height": 6,
                         "width": 24,
@@ -612,7 +691,7 @@
                       "spec": {
                         "element": {
                           "kind": "ElementReference",
-                          "name": "panel-9"
+                          "name": "panel-10"
                         },
                         "height": 12,
                         "width": 24,

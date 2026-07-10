@@ -420,18 +420,28 @@ def test_assistant_tab_leads_with_session_glance_and_stop_reason(tmp_path):
     assert "budget cap" in content  # the friendly stop-reason note
 
 
-def test_status_has_readiness_burndown_panel():
-    # Tier 3: the Status tab carries a Mimir-datasource timeseries querying kickoff_readiness_percent.
+def test_status_has_readiness_and_cost_burndown_panels():
+    # Tier 3: the Status tab carries Mimir-datasource timeseries for readiness AND cost.
     board = build_workbook_v2(_state(), "demo demo", provenance=_PROV)
     status_rows = _rows(board)
     assert any(r["spec"]["title"] == "Progress" for r in status_rows)
-    ts = next(
+    ts = [
         e for e in board["spec"]["elements"].values() if e["spec"]["vizConfig"]["kind"] == "timeseries"
+    ]
+    exprs = {e["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]["expr"] for e in ts}
+    assert all(
+        e["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]["datasource"]["name"] == "mimir"
+        for e in ts
     )
-    q = ts["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]
-    assert q["datasource"]["name"] == "mimir"
-    # PromQL is project-scoped + escaped (project name with a space)
-    assert q["spec"]["expr"] == 'kickoff_readiness_percent{project="demo demo"}'
+    # both burndowns, project-scoped + escaped (project name with a space)
+    assert 'kickoff_readiness_percent{project="demo demo"}' in exprs
+    assert 'kickoff_session_cost_usd{project="demo demo"}' in exprs
+    # cost panel is currency-formatted
+    cost = next(
+        e for e in ts
+        if e["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]["spec"]["expr"].startswith("kickoff_session_cost")
+    )
+    assert cost["spec"]["vizConfig"]["spec"]["fieldConfig"]["defaults"]["unit"] == "currencyUSD"
 
 
 def test_uid_length_guard_for_long_project_names():
