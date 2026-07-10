@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import platform
-import subprocess
 import sys
 import tarfile
 import tempfile
