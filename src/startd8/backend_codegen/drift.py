@@ -88,6 +88,17 @@ _FORMS_KINDS: frozenset = frozenset(
     }
 )
 
+# F-12: kinds whose drift derives from two inputs (schema + human_inputs.yaml). The owned-field policy
+# from ``human_inputs.yaml`` now reaches the human write surfaces of the generated backend, so these
+# artifacts exclude owned columns and must re-render WITH human_inputs. ``sqlmodel-tables`` (tables.py)
+# drops owned fields from the *Create/*Update DTOs; ``htmx-form`` (form.html) renders no editable input
+# for them. ``fastapi-web``/``fastapi-web-forms`` (web.py) also depend on human_inputs but stay in their
+# existing dep-sets (_TENANT_AWARE_KINDS / _FORMS_KINDS), which were extended with the human hash rather
+# than moved here — each keeps its own extra input (tenant / views) alongside human_inputs. They carry a
+# ``human-inputs-sha256`` header (reusing the AI layer's sha) so stale is caught cheaply and tampered by
+# a full re-render (mirrors _AI_KINDS, but with schema + human_inputs only).
+_HUMAN_INPUTS_KINDS: frozenset = frozenset({"sqlmodel-tables", "htmx-form"})
+
 # settings.py derives from the schema + a SELF-EMBEDDED mode (FR-CFG-7a). Unlike the manifest-backed
 # kinds above, its extra input (the mode) lives in the file's own header, so it needs no external
 # input at drift time — the schema-only skip-hook can verify it.
@@ -120,6 +131,7 @@ def _renderers(
     contexts_text: Optional[str] = None,
     project_root: Optional[str] = None,
     form_prose_text: Optional[str] = None,
+    human_inputs_text: Optional[str] = None,
 ) -> Dict[str, Callable[[str, str, Optional[str]], str]]:
     """Map artifact-kind → a ``(schema_text, source_file, entity) -> text`` renderer.
 
@@ -183,6 +195,13 @@ def _renderers(
             return None
         return parse_display(display_text, _pps(s))[0].get(e)
 
+    # F-12: form.html re-render must apply the SAME human_inputs owned-field policy generate used, or a
+    # policy-configured form false-flags drift. Parsed once here from the threaded raw text; the raw text
+    # is also passed through so the `human-inputs-sha256` header hash matches byte-for-byte.
+    from .ai_layer import parse_human_inputs as _parse_human_inputs
+
+    _human_only = _parse_human_inputs(human_inputs_text).human_only_fields
+
     from .form_prose import parse_form_prose as _parse_form_prose
 
     def _fp(s, e):
@@ -221,8 +240,10 @@ def _renderers(
         "pydantic-models": lambda s, sf, e: render_pydantic_models(
             s, source_file=sf
         ).text,
+        # F-12: tables.py re-render must thread human_inputs so owned fields drop from the *Create/
+        # *Update DTOs (else --check false-flags a policy-configured file as tampered).
         "sqlmodel-tables": lambda s, sf, e: render_sqlmodel_tables(
-            s, source_file=sf
+            s, source_file=sf, human_inputs_text=human_inputs_text
         ).text,
         "fastapi-routers": lambda s, sf, e: render_routers(s, sf),
         "fastapi-db": lambda s, sf, e: render_db(s, sf),
@@ -254,7 +275,9 @@ def _renderers(
         "htmx-row": lambda s, sf, e: render_row_template(s, sf, e, _disp(s, e)),
         "htmx-confirm": lambda s, sf, e: render_confirm_template(s, sf, e),
         "htmx-detail": lambda s, sf, e: render_detail_template(s, sf, e, _disp(s, e)),
-        "htmx-form": lambda s, sf, e: render_form_template(s, sf, e, _fp(s, e)),
+        "htmx-form": lambda s, sf, e: render_form_template(
+            s, sf, e, _fp(s, e), _human_only, human_inputs_text
+        ),
         "python-export": lambda s, sf, e: render_export(s, sf),
         "python-ai-schemas": lambda s, sf, e: render_ai_schemas(s, sf),
         "python-completeness": lambda s, sf, e: render_completeness(s, sf, manifest=_cmpl),
@@ -459,9 +482,16 @@ def embedded_tenant_field(ondisk_text: str) -> Optional[str]:
 _TENANT_AWARE_KINDS: frozenset = frozenset({"fastapi-routers", "fastapi-web"})
 
 
-def _check_tenant_aware_drift(schema_text, ondisk_text, source_file, kind) -> DriftResult:
+def _check_tenant_aware_drift(
+    schema_text, ondisk_text, source_file, kind, human_inputs_text=None
+) -> DriftResult:
     """Drift for a possibly tenant-scoped file (routers.py / web.py): stale if the schema changed; else
-    byte re-render using the **self-embedded owner FK** from the file's own header — no ``app.yaml``."""
+    byte re-render using the **self-embedded owner FK** from the file's own header — no ``app.yaml``.
+
+    F-12: ``fastapi-web`` (web.py WITHOUT views) additionally derives from human_inputs.yaml — it carries
+    a ``human-inputs-sha256`` header and excludes owned columns from the ``_rules`` coercion, so drift
+    also compares that hash (stale if it changed) and threads *human_inputs_text* into the re-render.
+    ``fastapi-routers`` carries no human hash and is unaffected (routers.py is not a human write surface)."""
     current_sha = schema_sha256(schema_text)
     embedded = embedded_schema_sha(ondisk_text)
     if embedded is None:
@@ -471,13 +501,27 @@ def _check_tenant_aware_drift(schema_text, ondisk_text, source_file, kind) -> Dr
             "stale", DRIFT,
             f"schema changed (header {embedded[:12]}… != current {current_sha[:12]}…) — regenerate",
         )
+    if kind == "fastapi-web":  # web.py's second input (F-12): stale if the owned-field policy changed.
+        current_human = schema_sha256(human_inputs_text or "")
+        embedded_human = embedded_human_sha(ondisk_text)
+        if embedded_human is None:
+            return DriftResult("tampered", DRIFT, "missing human_inputs-sha256 header")
+        if embedded_human != current_human:
+            return DriftResult(
+                "stale", DRIFT,
+                f"human_inputs changed (header {embedded_human[:12]}… != current "
+                f"{current_human[:12]}…) — regenerate",
+            )
     tenant = embedded_tenant_field(ondisk_text)  # None → unscoped (today's output)
     from .crud_generator import render_routers
     from .htmx_generator import render_web
 
     builders = {
         "fastapi-routers": lambda: render_routers(schema_text, source_file, tenant_owner_field=tenant),
-        "fastapi-web": lambda: render_web(schema_text, source_file, None, tenant_owner_field=tenant),
+        "fastapi-web": lambda: render_web(
+            schema_text, source_file, None, tenant_owner_field=tenant,
+            human_inputs_text=human_inputs_text,
+        ),
     }
     rendered = builders[kind]()
     if rendered != ondisk_text:
@@ -812,12 +856,16 @@ def forms_stale_reason(
     return None
 
 
-def _forms_renderers(tenant: Optional[str] = None):
+def _forms_renderers(tenant: Optional[str] = None, human_inputs_text: Optional[str] = None):
     """Map forms-configured kind → a ``(schema, forms, source_file, entity) -> text`` renderer.
 
     *tenant* (the self-embedded owner FK) threads Tier-B scoping into the forms-configured web.py
     re-render (``fastapi-web-forms`` queries the DB and must be row-scoped, FR-TEN-2); every other
-    kind is a template/aggregator and is unscoped (server-side enforcement lives in web.py)."""
+    kind is a template/aggregator and is unscoped (server-side enforcement lives in web.py).
+
+    F-12: *human_inputs_text* threads the owned-field policy into the ``fastapi-web-forms`` web.py
+    re-render so owned columns drop from the ``_rules`` coercion (else --check false-flags drift). The
+    other forms-configured kinds have no owned-field write surface and ignore it."""
     from .htmx_generator import render_created_template, render_web
     from .flow_generator import (
         render_flow_aggregator,
@@ -831,7 +879,9 @@ def _forms_renderers(tenant: Optional[str] = None):
     )
 
     return {
-        "fastapi-web-forms": lambda s, f, sf, e: render_web(s, sf, f, tenant_owner_field=tenant),
+        "fastapi-web-forms": lambda s, f, sf, e: render_web(
+            s, sf, f, tenant_owner_field=tenant, human_inputs_text=human_inputs_text
+        ),
         "htmx-created": lambda s, f, sf, e: render_created_template(s, sf, e, f),
         # flows (FR-ED-15): `e` is the flow NAME from the startd8-entity slot; aggregator ignores it.
         "fastapi-flow": lambda s, f, sf, e: render_named_flow_router(s, f, e),
@@ -845,9 +895,14 @@ def _forms_renderers(tenant: Optional[str] = None):
 
 
 def _check_forms_drift(
-    schema_text, forms_text, ondisk_text, source_file, kind
+    schema_text, forms_text, ondisk_text, source_file, kind, human_inputs_text=None
 ) -> DriftResult:
-    """Drift for a forms-configured file: stale if schema or views.yaml changed; else byte re-render."""
+    """Drift for a forms-configured file: stale if schema or views.yaml changed; else byte re-render.
+
+    F-12: ``fastapi-web-forms`` (web.py WITH views) additionally derives from human_inputs.yaml — it
+    carries a third ``human-inputs-sha256`` header and excludes owned columns from the ``_rules``
+    coercion, so drift also compares that hash (stale if it changed) and threads *human_inputs_text*
+    into the re-render. The other forms-configured kinds carry no human hash and are unaffected."""
     if forms_text is None:
         return DriftResult(
             "error", ERROR, "forms drift check requires the views manifest (`forms:` section)"
@@ -857,10 +912,23 @@ def _check_forms_drift(
         schema_sha=schema_sha256(schema_text),
         forms_sha=schema_sha256(forms_text),
     )
+    if reason is None and kind == "fastapi-web-forms":
+        # web.py's third input (F-12): stale if the owned-field policy changed since generate.
+        current_human = schema_sha256(human_inputs_text or "")
+        embedded_human = embedded_human_sha(ondisk_text)
+        if embedded_human is None:
+            reason = "missing human_inputs-sha256 header"
+        elif embedded_human != current_human:
+            reason = (
+                f"human_inputs changed (header {embedded_human[:12]}… != current "
+                f"{current_human[:12]}…) — regenerate"
+            )
     if reason is not None:
         status = "tampered" if "missing" in reason else "stale"
         return DriftResult(status, DRIFT, reason)
-    renderer = _forms_renderers(embedded_tenant_field(ondisk_text)).get(kind)
+    renderer = _forms_renderers(
+        embedded_tenant_field(ondisk_text), human_inputs_text=human_inputs_text
+    ).get(kind)
     if renderer is None:
         return DriftResult("tampered", DRIFT, f"unknown forms-configured kind ({kind!r})")
     rendered = renderer(schema_text, forms_text, source_file, embedded_entity(ondisk_text))
@@ -871,6 +939,68 @@ def _check_forms_drift(
             "owned forms-configured file was hand-edited (differs from a fresh render of the unchanged inputs)",
         )
     return DriftResult("in_sync", IN_SYNC, "owned forms-configured file matches schema + forms")
+
+
+def human_inputs_stale_reason(
+    ondisk_text: str, *, schema_sha: str, human_sha: str
+) -> Optional[str]:
+    """For a human_inputs-configured file, why it is **stale**, or ``None`` if both inputs match (F-12).
+
+    An owned-field-policy artifact (``sqlmodel-tables`` / ``htmx-form``) derives from two inputs (schema +
+    human_inputs.yaml), so it is stale if **either** embedded hash differs from the current input hash. A
+    missing embedded hash counts as stale (header predates the F-12 format). The hash covers the whole
+    ``human_inputs.yaml`` text (the AI-layer precedent) — an absent/empty policy yields the canonical
+    empty-input sha, so a project generated without ``--human-inputs`` round-trips clean.
+    """
+    checks = (
+        ("schema", embedded_schema_sha(ondisk_text), schema_sha),
+        ("human_inputs", embedded_human_sha(ondisk_text), human_sha),
+    )
+    for label, embedded, current in checks:
+        if embedded is None:
+            return f"missing {label}-sha256 header"
+        if embedded != current:
+            return (
+                f"{label} changed (header {embedded[:12]}… != current {current[:12]}…) — regenerate"
+            )
+    return None
+
+
+def _check_human_inputs_drift(
+    schema_text, human_inputs_text, ondisk_text, source_file, kind, form_prose_text=None
+) -> DriftResult:
+    """Drift for an owned-field-policy file (F-12): stale if schema or human_inputs.yaml changed; else a
+    byte re-render WITH the policy (owned fields excluded). *human_inputs_text* may be ``None`` — the
+    empty-policy sha is stable, so a project without ``--human-inputs`` verifies clean here too.
+
+    ``htmx-form`` also consumes *form_prose_text* (the SOTTO form-Words layer) so the re-render matches
+    a prose-configured form's structure (help/intro includes) — like the default renderer path did.
+    form_prose is not a drift *hash* input (editing words never drifts), only a re-render input."""
+    reason = human_inputs_stale_reason(
+        ondisk_text,
+        schema_sha=schema_sha256(schema_text),
+        human_sha=schema_sha256(human_inputs_text or ""),
+    )
+    if reason is not None:
+        status = "tampered" if "missing" in reason else "stale"
+        return DriftResult(status, DRIFT, reason)
+    renderer = _renderers(
+        human_inputs_text=human_inputs_text, form_prose_text=form_prose_text
+    ).get(kind)
+    if renderer is None:
+        return DriftResult("tampered", DRIFT, f"unknown human_inputs-configured kind ({kind!r})")
+    rendered = renderer(schema_text, source_file, embedded_entity(ondisk_text))
+    if rendered != ondisk_text:
+        return DriftResult(
+            "tampered",
+            DRIFT,
+            "owned human_inputs-configured file differs from a fresh render of the unchanged inputs — "
+            "hand-edited, or generated by a different invocation (different flags or manifests than "
+            "this check)",
+        )
+    return DriftResult(
+        "in_sync", IN_SYNC, "owned human_inputs-configured file matches schema + human-inputs"
+    )
 
 
 def imports_stale_reason(
@@ -1225,8 +1355,20 @@ def check_drift(
         # 3-input nav (schema + views.yaml [forms_text] + pages.yaml). owned_file_in_sync already
         # threads BOTH manifests, so the skip-hook recognizes this with no new plumbing.
         return _check_nav_drift(schema_text, forms_text, pages_text, ondisk_text, source_file, kind)
+    if kind in _HUMAN_INPUTS_KINDS:
+        # F-12: schema + human_inputs.yaml owned-field policy (tables.py / form.html). Stale on either
+        # hash; else re-render WITH the policy so owned columns stay excluded (else false "tampered").
+        # form_prose_text threads the SOTTO form-Words layer into the form.html re-render (structure,
+        # not a hash input) so a prose-configured form still round-trips — matching the old default path.
+        return _check_human_inputs_drift(
+            schema_text, human_inputs_text, ondisk_text, source_file, kind,
+            form_prose_text=form_prose_text,
+        )
     if kind in _FORMS_KINDS:
-        return _check_forms_drift(schema_text, forms_text, ondisk_text, source_file, kind)
+        return _check_forms_drift(
+            schema_text, forms_text, ondisk_text, source_file, kind,
+            human_inputs_text=human_inputs_text,  # F-12: fastapi-web-forms also depends on human_inputs
+        )
     if kind in _IMPORTS_KINDS:
         return _check_imports_drift(schema_text, imports_text, ondisk_text, source_file, kind)
     if kind in _CONTEXT_CLIENT_KINDS:
@@ -1272,8 +1414,11 @@ def check_drift(
         # is the ONLY mode-varying file, and it needs no app.yaml to verify.
         return _check_settings_drift(schema_text, ondisk_text, source_file, kind)
     if kind in _TENANT_AWARE_KINDS:
-        # Tier B: re-derive the owner FK from the file's own header (FR-TEN-2); schema-only.
-        return _check_tenant_aware_drift(schema_text, ondisk_text, source_file, kind)
+        # Tier B: re-derive the owner FK from the file's own header (FR-TEN-2); schema-only for
+        # routers.py. F-12: fastapi-web (web.py, no views) also depends on the human_inputs policy.
+        return _check_tenant_aware_drift(
+            schema_text, ondisk_text, source_file, kind, human_inputs_text=human_inputs_text
+        )
 
     current_sha = schema_sha256(schema_text)
     embedded = embedded_schema_sha(ondisk_text)
@@ -1305,6 +1450,7 @@ def check_drift(
         contexts_text=contexts_text,
         project_root=project_root,
         form_prose_text=form_prose_text,
+        human_inputs_text=human_inputs_text,  # F-12: threaded so tables.py/form.html re-render with policy
     ).get(kind or "")
     if renderer is None:
         return DriftResult(

@@ -11,6 +11,8 @@ headers (previously the block was copy-pasted in ``crud_generator`` and ``derive
 
 from __future__ import annotations
 
+from typing import Optional
+
 
 def header_standard(source_file: str, sha: str, kind: str) -> str:
     """The spine/derived provenance header (source of truth: the Prisma schema)."""
@@ -219,6 +221,7 @@ def header_forms(
     forms_sha: str,
     kind: str,
     entity: str = "",
+    human_sha: Optional[str] = None,
 ) -> str:
     """Form-behavior provenance header — derives from two inputs (schema + views.yaml), two hashes.
 
@@ -230,6 +233,12 @@ def header_forms(
     ``entity`` (optional) carries a name in the ``startd8-entity`` slot so a per-name artifact (e.g. a
     per-flow router ``app/flows/<name>.py`` or a per-editor router) can be re-rendered by-name in drift.
     Omitted → no entity line, byte-identical to the app-wide form (``fastapi-web-forms`` is unaffected).
+
+    F-12: ``human_sha`` (optional) adds a third ``# human-inputs-sha256:`` line for
+    ``fastapi-web-forms`` — ``app/web.py`` WITH views now ALSO excludes the ``human_inputs.yaml`` owned
+    fields from the ``_rules`` coercion, so it derives from schema + views + human_inputs (stale if any
+    changes). The other forms-configured kinds (``htmx-created``, flows, editors) pass ``None`` and stay
+    byte-identical (no owned-field write surface).
     """
     lines = [
         f"# GENERATED from {source_file} (+ views.yaml) — do not edit by hand; "
@@ -241,6 +250,8 @@ def header_forms(
     lines.append("# Source of truth: the Prisma schema and the forms manifest.")
     lines.append(f"# schema-sha256: {schema_sha}")
     lines.append(f"# forms-sha256: {forms_sha}")
+    if human_sha is not None:
+        lines.append(f"# human-inputs-sha256: {human_sha}")
     return "\n".join(lines)
 
 
@@ -267,6 +278,60 @@ def header_forms_tmpl(
     lines.append("# Source of truth: the Prisma schema and the forms manifest.")
     lines.append(f"# schema-sha256: {schema_sha}")
     lines.append(f"# forms-sha256: {forms_sha}")
+    lines.append("#}")
+    return "\n".join(lines)
+
+
+def header_human_inputs(
+    source_file: str,
+    schema_sha: str,
+    human_sha: str,
+    kind: str,
+) -> str:
+    """Owned-field-policy provenance header — two inputs (schema + human_inputs.yaml), two hashes.
+
+    F-12: ``app/tables.py`` (``sqlmodel-tables``) and ``app/web.py`` (``fastapi-web``, no views) now
+    exclude the ``human_inputs.yaml`` owned fields from their human write surfaces (the ``*Create``/
+    ``*Update`` DTOs; the ``_rules`` coercion), so those columns can only be written by privileged
+    paths. That makes the artifact derive from the schema **and** the owned-field policy — stale if
+    **either** changes (see :func:`startd8.backend_codegen.drift.human_inputs_stale_reason`). The
+    ``human-inputs-sha256`` line reuses the exact hash the AI layer stamps (``header_ai_layer``); an
+    absent/empty ``human_inputs.yaml`` yields the canonical empty-input sha, so a project generated
+    without ``--human-inputs`` still round-trips clean (no owned fields excluded).
+    """
+    return (
+        f"# GENERATED from {source_file} (+ human_inputs.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# Source of truth: the Prisma schema and the human-inputs owned-field policy.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# human-inputs-sha256: {human_sha}"
+    )
+
+
+def header_human_inputs_tmpl(
+    source_file: str,
+    schema_sha: str,
+    human_sha: str,
+    kind: str,
+    entity: str = "",
+) -> str:
+    """:func:`header_human_inputs` wrapped in a Jinja ``{# … #}`` comment for the ``htmx-form`` template.
+
+    Same two-hash provenance as :func:`header_human_inputs`, but invisible at render time. ``entity``
+    carries the entity name in the ``startd8-entity`` slot so drift re-renders the right form (F-12).
+    """
+    lines = [
+        "{#",
+        f"# GENERATED from {source_file} (+ human_inputs.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.",
+        f"# startd8-artifact: {kind}",
+    ]
+    if entity:
+        lines.append(f"# startd8-entity: {entity}")
+    lines.append("# Source of truth: the Prisma schema and the human-inputs owned-field policy.")
+    lines.append(f"# schema-sha256: {schema_sha}")
+    lines.append(f"# human-inputs-sha256: {human_sha}")
     lines.append("#}")
     return "\n".join(lines)
 

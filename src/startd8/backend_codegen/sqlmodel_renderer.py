@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ..frontend_codegen.schema_renderer import (
     UnrenderableField,
@@ -306,6 +306,23 @@ def _render_table_field(
             unrenderable,
         )
 
+    # Scalar Json: SQLModel cannot map `Any` to a column, so it needs an explicit JSON column
+    # (mirrors the list branch above). Without this the emitted `Optional[Any] = None` raises at
+    # import: "typing.Any has no matching SQLAlchemy type" (client-logged friction F-11).
+    if field.type == "Json":
+        needs.add("sqlalchemy")
+        if field.is_optional:
+            needs.add("Optional")
+            return (
+                f"    {field.name}: Optional[{base}] = "
+                f"Field(default=None, sa_column=Column(JSON))",
+                unrenderable,
+            )
+        return (
+            f"    {field.name}: {base} = Field(sa_column=Column(JSON))",
+            unrenderable,
+        )
+
     # Compose Field(...) args from primary-key + foreign-key + a translated Prisma @default.
     default_arg = _default_field_arg(field, needs)
     args: List[str] = []
@@ -444,18 +461,10 @@ def _render_enum_class(name: str, values: Tuple[str, ...]) -> str:
     return "\n".join(lines)
 
 
-_HEADER_TEMPLATE = (
-    "# GENERATED from {source_file} — do not edit by hand; "
-    "regenerate via `startd8 generate backend`.\n"
-    "# startd8-artifact: sqlmodel-tables\n"
-    "# Source of truth: the Prisma schema.\n"
-    "# schema-sha256: {sha}"
-)
-
-
 def render_sqlmodel_tables(
     schema_text: str,
     source_file: str = "prisma/schema.prisma",
+    human_inputs_text: Optional[str] = None,
 ) -> SQLModelRenderResult:
     """Assemble the SQLModel-tables file from a ``.prisma`` schema (FR-2).
 
@@ -468,6 +477,12 @@ def render_sqlmodel_tables(
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     composites = composite_type_names(schema_text)
+    # F-12: the human_inputs owned-field policy must reach the API write DTOs too, not just the
+    # AI edge schema — otherwise the generic PATCH endpoint (via <Name>Update) can still overwrite
+    # an attorney-gate/verification-pipeline field. Read DTO keeps them (owned != hidden from view).
+    from .ai_layer import parse_human_inputs
+
+    human_only = parse_human_inputs(human_inputs_text).human_only_fields
 
     needs: Set[str] = set()
     enums_used: Set[str] = set()
@@ -536,8 +551,16 @@ def render_sqlmodel_tables(
         # API DTOs (OQ-3): Create hides server-set (@default) fields; Read is the full view;
         # Update makes every non-PK field optional (partial PATCH). The table class above stays
         # the persistence truth and is unchanged.
-        create_fields = [f for f in scalars if not _server_set(f)]
-        update_fields = [f for f in scalars if not f.is_id]
+        create_fields = [
+            f
+            for f in scalars
+            if not _server_set(f) and (name, f.name) not in human_only
+        ]
+        update_fields = [
+            f
+            for f in scalars
+            if not f.is_id and (name, f.name) not in human_only
+        ]
         blocks.append(
             _dto_block(name, "Create", create_fields, schema, needs, enums_used)
         )
@@ -563,7 +586,15 @@ def render_sqlmodel_tables(
         if name in enums_used
     ]
 
-    header = _HEADER_TEMPLATE.format(source_file=source_file, sha=sha)
+    # F-12: tables.py now derives from schema + human_inputs (the owned-field policy drops owned
+    # columns from the *Create/*Update DTOs), so it carries a `human-inputs-sha256` header alongside
+    # the schema hash — reusing the SAME sha the AI layer stamps (empty/absent policy → canonical
+    # empty-input sha, so a project without --human-inputs still round-trips clean).
+    from ._headers import header_human_inputs
+
+    header = header_human_inputs(
+        source_file, sha, schema_sha256(human_inputs_text or ""), "sqlmodel-tables"
+    )
     imports = _import_block(needs)
 
     # Default-factory helpers (emitted only when a translated @default needs them).

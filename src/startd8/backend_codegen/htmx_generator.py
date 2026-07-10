@@ -54,16 +54,6 @@ from .tenancy import scoped_entities as _scoped_entities
 # ----------------------------------------------------------------------------- #
 
 
-def _py_header(source_file: str, sha: str, kind: str) -> str:
-    return (
-        f"# GENERATED from {source_file} — do not edit by hand; "
-        f"regenerate via `startd8 generate backend`.\n"
-        f"# startd8-artifact: {kind}\n"
-        f"# Source of truth: the Prisma schema.\n"
-        f"# schema-sha256: {sha}"
-    )
-
-
 def _tmpl_header(source_file: str, sha: str, kind: str, entity: str = "") -> str:
     """A Jinja ``{# … #}`` comment wrapping the standard ``#`` provenance lines (drift-compatible)."""
     lines = [
@@ -111,7 +101,9 @@ def form_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
     return list(schema.scalar_fields(name))
 
 
-def writable_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
+def writable_fields(
+    schema: PrismaSchema, name: str, human_only: frozenset = frozenset()
+) -> List[PrismaField]:
     """Scalar fields a *human* authors in a form (FR-PG-5).
 
     Drops the PK and the server-managed provenance/timestamp columns so users are never asked to
@@ -119,11 +111,19 @@ def writable_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
     applies (``ai_layer._PROVENANCE_OMIT`` + ``f.is_id``) — same policy, not a new one. These columns
     are auto-managed on create (id cuid default, ``ownerId``/``source``/``confirmed``/timestamps via
     table defaults), exactly as the AI ``_persist`` path relies on.
+
+    F-12: *human_only* is the ``human_inputs.yaml`` owned-field policy
+    (``ai_layer.HumanInputs.human_only_fields``, a frozenset of ``(Entity, field)`` tuples). Those
+    columns are written ONLY by privileged paths (fold-back adapters / the attorney gate), never by
+    the generic HTMX write surfaces — so they are dropped here too, mirroring the AI edge schema.
+    The default empty set keeps existing callers (e.g. wireframe, read/display paths) byte-identical.
     """
     return [
         f
         for f in schema.scalar_fields(name)
-        if not f.is_id and f.name not in _PROVENANCE_OMIT
+        if not f.is_id
+        and f.name not in _PROVENANCE_OMIT
+        and (name, f.name) not in human_only  # F-12: owned-field policy drops human write surfaces
     ]
 
 
@@ -538,16 +538,31 @@ def render_form_template(
     source_file: str,
     entity: str,
     form_prose: Optional[FormProse] = None,
+    human_only: frozenset = frozenset(),
+    human_inputs_text: Optional[str] = None,
 ) -> str:
     """The owned ``<entity>/form.html``. *form_prose* (the form Words layer) adds a per-form intro
     include + per-field help/placeholder; absent ⇒ byte-identical to today (FR-FH-4). The include lines
-    are content-independent (they name ids, never the copy), so editing words never drifts this file."""
+    are content-independent (they name ids, never the copy), so editing words never drifts this file.
+
+    F-12: *human_only* (the ``human_inputs.yaml`` owned-field policy) drops owned fields from the
+    editable form inputs — they stay read-only on the detail page but get no editable widget here.
+    *human_inputs_text* is the RAW ``human_inputs.yaml`` text (source of *human_only*); it is hashed
+    into the ``human-inputs-sha256`` header so drift re-renders match byte-for-byte."""
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     e = entity.lower()
     pk = _pk_field(schema, entity)
-    fields = _writable_fields(schema, entity)  # forms expose only human-authored fields (FR-PG-5)
-    head = _tmpl_header(source_file, sha, "htmx-form", entity)
+    fields = _writable_fields(schema, entity, human_only)  # forms expose only human-authored fields (FR-PG-5)
+    # F-12: form.html now derives from schema + human_inputs (owned fields get no editable widget), so
+    # it carries a `human-inputs-sha256` header — the hash is of the RAW human_inputs.yaml text (the SAME
+    # sha the AI layer stamps), so drift re-render matches byte-for-byte. Absent/empty policy → canonical
+    # empty-input sha, so a project without --human-inputs still round-trips clean.
+    from ._headers import header_human_inputs_tmpl
+
+    head = header_human_inputs_tmpl(
+        source_file, sha, schema_sha256(human_inputs_text or ""), "htmx-form", entity
+    )
 
     # One template serves create (item is None) and edit (item set); action differs.
     if pk is not None:
@@ -775,10 +790,14 @@ def _list_query_lines(
 def _entity_routes(
     schema: PrismaSchema, name: str, on_create: str = ON_CREATE_DEFAULT,
     efilter: Optional[EntityFilter] = None, owner_field: Optional[str] = None,
+    human_only: frozenset = frozenset(),
 ) -> str:
     e = name.lower()
     pk = _pk_field(schema, name)
-    fields = _writable_fields(schema, name)  # create/update + validation cover human-authored fields only
+    # F-12: create/update + validation cover human-authored fields only; the owned-field policy
+    # (human_only) additionally drops owned columns from the _rules dict so neither create nor update
+    # coercion (both iterate _{e}_rules) can write them from the HTMX surface.
+    fields = _writable_fields(schema, name, human_only)
     # field -> (kind, required) rules; list scalars use the "text-list" coercion kind.
     rule_items = []
     for f in fields:
@@ -978,6 +997,7 @@ def render_web(
     source_file: str = "prisma/schema.prisma",
     forms_text: Optional[str] = None,
     tenant_owner_field: Optional[str] = None,
+    human_inputs_text: Optional[str] = None,
 ) -> str:
     """Render ``app/web.py`` — HTML-serving routes + the inline-validation endpoint.
 
@@ -985,10 +1005,18 @@ def render_web(
     entity's post-create destination (FR-FS-4). With it, the artifact derives from two inputs —
     kind ``fastapi-web-forms``, 2-hash header; without it, the schema-only ``fastapi-web``
     (the ``fastapi-web``/``fastapi-web-forms`` precedent: a distinct kind per dep-set).
+
+    F-12: *human_inputs_text* (``human_inputs.yaml``) is the owned-field policy — parsed once here via
+    the shared ``ai_layer.parse_human_inputs`` and threaded to each entity's routes so owned columns
+    drop from the ``_rules`` dict (and thus from create + update coercion). Absent ⇒ empty set ⇒
+    byte-identical output.
     """
+    from .ai_layer import parse_human_inputs
+
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     names = _model_names(schema, schema_text)
+    human_only = parse_human_inputs(human_inputs_text).human_only_fields
     forms = parse_forms(forms_text, known_entities=frozenset(names))
     filters = parse_filters(forms_text, known_entities=frozenset(names))
     _validate_filter_fields(schema, filters)       # P0-2: facet/search fields must be real columns
@@ -996,14 +1024,21 @@ def render_web(
     scoped = (
         set(_scoped_entities(schema_text, tenant_owner_field)) if tenant_owner_field else set()
     )
+    # F-12: web.py excludes the human_inputs owned fields from every entity's `_rules` (create + update
+    # coercion), so BOTH variants now derive from human_inputs too and carry a `human-inputs-sha256`
+    # header — reusing the SAME sha the AI layer stamps (absent/empty policy → canonical empty-input
+    # sha, so a project without --human-inputs still round-trips clean).
+    human_sha = schema_sha256(human_inputs_text or "")
     if forms_text is not None:
         from ._headers import header_forms
 
         header = header_forms(
-            source_file, sha, schema_sha256(forms_text), "fastapi-web-forms"
+            source_file, sha, schema_sha256(forms_text), "fastapi-web-forms", human_sha=human_sha
         )
     else:
-        header = _py_header(source_file, sha, "fastapi-web")
+        from ._headers import header_human_inputs
+
+        header = header_human_inputs(source_file, sha, human_sha, "fastapi-web")
     if tenant_owner_field:  # self-described owner FK so the skip-hook re-renders the scoped file
         header += f"\n# startd8-tenant: {tenant_owner_field}"
     imports = (
@@ -1026,6 +1061,7 @@ def render_web(
         _entity_routes(
             schema, n, forms.get(n, ON_CREATE_DEFAULT), filters.get(n),
             owner_field=(tenant_owner_field if n in scoped else None),
+            human_only=human_only,  # F-12: owned-field policy drops owned cols from _rules
         )
         for n in names
     ]
@@ -1041,6 +1077,7 @@ def render_ui(
     display_text: Optional[str] = None,
     tenant_owner_field: Optional[str] = None,
     form_prose_text: Optional[str] = None,
+    human_inputs_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """All UI artifacts as ``(relative_path, text)`` pairs: web.py + base/error + per-entity templates.
 
@@ -1050,17 +1087,26 @@ def render_ui(
     *display_text* (``display.yaml``) drives per-entity list columns/labels/order + detail sections
     (FR-DM); absent ⇒ today's all-scalars behavior (opt-in).
     *form_prose_text* (``form_prose.yaml``) is the form Words layer: per-field help/placeholder + a
-    per-form intro rendered into the form (+ untracked help/intro fragments); absent ⇒ byte-identical."""
+    per-form intro rendered into the form (+ untracked help/intro fragments); absent ⇒ byte-identical.
+    *human_inputs_text* (``human_inputs.yaml``) is the F-12 owned-field policy: parsed once here via
+    the shared ``ai_layer.parse_human_inputs`` and threaded to the web.py routes + form templates so
+    owned columns drop from every human write surface (``_rules`` / create+update coercion / form
+    inputs) while staying read-only visible on list/detail; absent ⇒ empty set ⇒ byte-identical."""
+    from .ai_layer import parse_human_inputs
+
     schema = parse_prisma_schema(schema_text)
     composites = composite_type_names(schema_text)
     names = [n for n in schema.models if n not in composites]
     forms = parse_forms(forms_text, known_entities=frozenset(names))
     filters = parse_filters(forms_text, known_entities=frozenset(names))
     displays, _ = parse_display(display_text, schema)
+    human_only = parse_human_inputs(human_inputs_text).human_only_fields
     # Form Words layer: strict-validate field targets against each entity's writable (form) fields so a
-    # help entry for a non-form field is a loud, sourced error (FR-FH-5), not silently dropped.
+    # help entry for a non-form field is a loud, sourced error (FR-FH-5), not silently dropped. F-12:
+    # owned fields are excluded here too, so a help entry targeting an owned (non-form) field is the
+    # same loud error — consistent with the form no longer rendering an input for it.
     known_form_fields = {
-        n: frozenset(f.name for f in _writable_fields(schema, n)) for n in names
+        n: frozenset(f.name for f in _writable_fields(schema, n, human_only)) for n in names
     }
     form_proses = parse_form_prose(
         form_prose_text,
@@ -1069,7 +1115,7 @@ def render_ui(
     )
 
     out: List[Tuple[str, str]] = [
-        ("app/web.py", render_web(schema_text, source_file, forms_text, tenant_owner_field)),
+        ("app/web.py", render_web(schema_text, source_file, forms_text, tenant_owner_field, human_inputs_text)),
         ("app/templates/base.html", render_base_template(schema_text, source_file, pages_text)),
         (
             "app/templates/_field_error.html",
@@ -1101,7 +1147,7 @@ def render_ui(
         out.append(
             (
                 f"app/templates/{e}/form.html",
-                render_form_template(schema_text, source_file, n, fp),
+                render_form_template(schema_text, source_file, n, fp, human_only, human_inputs_text),
             )
         )
         out.extend(render_form_prose_fragments(n, fp))  # headerless help/intro fragments (skipped by --check)
