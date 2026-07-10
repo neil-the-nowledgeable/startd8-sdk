@@ -81,7 +81,7 @@ def test_dynamic_cockpit_folds_snapshot_and_inbox():
     assert res.summary["proposals"] == 1
     board = json.loads(Path(res.json_path).read_text(encoding="utf-8"))
     titles = [t["spec"]["title"] for t in board["spec"]["layout"]["spec"]["tabs"]]
-    assert titles == ["Status", "Assistant", "Proposals"]
+    assert titles == ["Status", "Assistant", "Proposals", "Stakeholders", "Pipeline"]
     blob = json.dumps(board)
     assert "two inputs remain" in blob and "MP-1" in blob  # snapshot + proposal folded into the board
 

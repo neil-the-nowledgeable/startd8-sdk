@@ -173,11 +173,48 @@ _PRE_REFACTOR_GOLDEN = (
 )
 
 
-def test_cockpit_has_three_tabs():
-    # FR-5: the v2 board is now a Status / Assistant / Proposals TabsLayout cockpit.
+def test_cockpit_tabs():
+    # FR-5 + convergence M2: Status / Assistant / Proposals / Stakeholders / Pipeline.
     board = build_workbook_v2(_state(), "demo", provenance=_PROV)
     assert board["spec"]["layout"]["kind"] == "TabsLayout"
-    assert [t["spec"]["title"] for t in _tabs(board)] == ["Status", "Assistant", "Proposals"]
+    assert [t["spec"]["title"] for t in _tabs(board)] == [
+        "Status", "Assistant", "Proposals", "Stakeholders", "Pipeline",
+    ]
+
+
+def test_stakeholders_and_pipeline_empty_states_without_view():
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV)  # no view
+    els = board["spec"]["elements"]
+    stake = next(e for e in els.values() if e["spec"]["title"] == "Stakeholders")
+    assert "No stakeholder panel run yet" in stake["spec"]["vizConfig"]["spec"]["options"]["content"]
+    pipe = next(e for e in els.values() if e["spec"]["title"] == "Pipeline")
+    assert "No pipeline activity yet" in pipe["spec"]["vizConfig"]["spec"]["options"]["content"]
+
+
+def test_stakeholders_and_pipeline_render_folded_state():
+    # M2: the cockpit is a superset — it surfaces the stakeholder answers + VIPP dispositions the
+    # classic board showed, now from the AgenticView oracle.
+    from startd8.kickoff_experience.agentic_view import AgenticView, SNAPSHOT_ABSENT
+
+    view = AgenticView(
+        project_root="p", state=_state(), snapshot=None, snapshot_status=SNAPSHOT_ABSENT,
+        proposals=(), proposals_present=False,
+        panel_answers=[{"role_id": "cfo", "question": "budget?", "text": "keep it lean"}],
+        pipeline={
+            "staged": [{}],
+            "inbox": {"present": True, "count": 2, "envelope_seq": 3},
+            "dispositions": {"present": True, "counts": {"ACCEPT": 1, "REJECT": 1, "COUNTER": 0},
+                             "items": [{"proposal_id": "P-1", "decision": "ACCEPT", "reason": "ok"}],
+                             "advisories": ["watch scope"]},
+        },
+        roster=["cfo", "cto"],
+    )
+    board = build_workbook_v2(_state(), "demo", provenance=_PROV, view=view)
+    els = board["spec"]["elements"]
+    stake = next(e for e in els.values() if e["spec"]["title"] == "Stakeholders")["spec"]["vizConfig"]["spec"]["options"]["content"]
+    assert "cfo" in stake and "keep it lean" in stake and "2 personas" in stake
+    pipe = next(e for e in els.values() if e["spec"]["title"] == "Pipeline")["spec"]["vizConfig"]["spec"]["options"]["content"]
+    assert "2 pending" in pipe and "1 accept" in pipe and "P-1" in pipe and "watch scope" in pipe
 
 
 def test_status_tab_preserves_pre_refactor_field_content():

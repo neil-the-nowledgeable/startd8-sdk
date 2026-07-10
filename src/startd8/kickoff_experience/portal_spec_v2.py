@@ -400,6 +400,72 @@ def _proposals_markdown_simple(view: Any) -> str:
     return "\n".join(lines)
 
 
+def _truncate(text: Any, n: int) -> str:
+    s = str(text or "")
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _stakeholders_markdown(view: Any) -> str:
+    """The Stakeholders tab (convergence M2): roster size + the latest panel-run answers."""
+    answers = (getattr(view, "panel_answers", None) or []) if view is not None else []
+    summary = view.stakeholder_summary() if view is not None else None
+    if not summary and not answers:
+        return "_No stakeholder panel run yet — run `startd8 kickoff stakeholders`._"
+    lines = []
+    if summary:
+        lines.append(f"**{summary}**\n")
+    if answers:
+        lines.append("| Role | Question | Answer |")
+        lines.append("|---|---|---|")
+        for a in answers:
+            role = _md_cell(a.get("role_id") or a.get("role") or "?")
+            q = _md_cell(_truncate(a.get("question", ""), 60))
+            t = _md_cell(_truncate(a.get("text", ""), 140))
+            lines.append(f"| {role} | {q} | {t} |")
+    return "\n".join(lines)
+
+
+def _pipeline_markdown(view: Any) -> str:
+    """The Pipeline tab (convergence M2): the panel→bridge→VIPP funnel, read-only."""
+    pipe = getattr(view, "pipeline", None) if view is not None else None
+    if not pipe:
+        return "_No pipeline activity yet — proposals flow panel → bridge → VIPP here._"
+    lines = ["_The panel → bridge → VIPP funnel (read-only)._\n"]
+    staged = len(pipe.get("staged", []) or [])
+    inbox = pipe.get("inbox", {}) or {}
+    disp = pipe.get("dispositions", {}) or {}
+    lines.append(f"- **Staged recommendations:** {staged}")
+    if inbox.get("present"):
+        lines.append(
+            f"- **VIPP inbox:** {inbox.get('count', 0)} pending "
+            f"(envelope seq {inbox.get('envelope_seq', '?')})"
+        )
+    else:
+        lines.append("- **VIPP inbox:** empty")
+    if disp.get("present"):
+        c = disp.get("counts", {}) or {}
+        lines.append(
+            f"- **Dispositions:** {c.get('ACCEPT', 0)} accept · "
+            f"{c.get('REJECT', 0)} reject · {c.get('COUNTER', 0)} counter"
+        )
+        items = disp.get("items", []) or []
+        if items:
+            lines.append("\n### Dispositions\n")
+            lines.append("| Proposal | Decision | Reason |")
+            lines.append("|---|---|---|")
+            for d in items:
+                lines.append(
+                    f"| `{_md_cell(d.get('proposal_id', '?'))}` | {_md_cell(d.get('decision', '?'))} "
+                    f"| {_md_cell(_truncate(d.get('reason') or '', 100))} |"
+                )
+        adv = disp.get("advisories", []) or []
+        if adv:
+            lines.append("\n### Panel advisories\n")
+            for a in adv:
+                lines.append(f"- {_md_cell(_truncate(str(a), 160))}")
+    return "\n".join(lines)
+
+
 def build_workbook_v2(
     state: Any,
     project: str,
@@ -628,11 +694,24 @@ def build_workbook_v2(
             ],
         )
 
+    # --- Stakeholders + Pipeline tabs (convergence M2): the cockpit is now a superset of the classic
+    # board. Always present with honest empty states (like Assistant/Proposals); audience-invariant. ---
+    stakeholders_tab = TabsLayoutTab(
+        title="Stakeholders",
+        items=[GridItem(element=_add("Stakeholders", _stakeholders_markdown(view)), height=12)],
+    )
+    pipeline_tab = TabsLayoutTab(
+        title="Pipeline",
+        items=[GridItem(element=_add("Pipeline", _pipeline_markdown(view)), height=12)],
+    )
+
     layout = TabsLayout(
         tabs=[
             TabsLayoutTab(title="Status", layout=RowsLayout(rows=status_rows)),
             assistant_tab,
             proposals_tab,
+            stakeholders_tab,
+            pipeline_tab,
         ]
     )
 
