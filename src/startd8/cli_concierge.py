@@ -482,9 +482,13 @@ def concierge_instantiate(
     # --check paths return earlier and never reach here.
     if portal:
         try:
-            from .kickoff_experience.portal_build import build_and_maybe_provision
+            # Convergence M3.1: refresh the DEFAULT board — the cockpit ($0, no jsonnet), matching
+            # `kickoff portal`. (The classic board is only built on explicit `kickoff portal --classic`.)
+            from .kickoff_experience.portal_build import (
+                build_workbook_v2_and_maybe_provision,
+            )
 
-            pres = build_and_maybe_provision(
+            pres = build_workbook_v2_and_maybe_provision(
                 project_root, out_dir=None, provision_url=provision
             )
             if not json_out:
@@ -1076,9 +1080,13 @@ def _workbook_refresh(
     confirmed field. Reuses the shared helper (FR-10) — `$0`, non-fatal, silent under `--json`.
     """
     try:
-        from .kickoff_experience.portal_build import build_and_maybe_provision
+        # Convergence M3.1: refresh the DEFAULT board — the cockpit ($0, no jsonnet), so a confirm
+        # tracks the newly confirmed field on the same board `kickoff portal` builds.
+        from .kickoff_experience.portal_build import (
+            build_workbook_v2_and_maybe_provision,
+        )
 
-        res = build_and_maybe_provision(
+        res = build_workbook_v2_and_maybe_provision(
             project_root, out_dir=None, provision_url=provision
         )
         if not json_out:

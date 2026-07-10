@@ -59,6 +59,29 @@ def test_portal_default_builds_the_cockpit():
     assert "cockpit" in out.output.lower()
 
 
+def test_instantiate_autorefresh_builds_the_cockpit_no_jsonnet():
+    # M3.1: `instantiate` (default --portal) now refreshes the DEFAULT board — the -v2 cockpit — which
+    # needs no jsonnet toolchain (proves the reroute off the classic path).
+    proj = _proj()
+    out = _instantiate(proj)  # default portal refresh
+    assert out.exit_code == 0, out.output
+    dash = proj / ".startd8" / "dashboards"
+    assert dash.is_dir() and list(dash.glob("cc-portal-kickoff-*-v2.json"))  # cockpit board written
+
+
+def test_confirm_autorefresh_builds_the_cockpit_no_jsonnet():
+    # M3.1: a confirm refreshes the -v2 cockpit (not the classic board), no jsonnet needed.
+    proj = _proj()
+    _instantiate(proj, "--no-portal")
+    out = runner.invoke(
+        kickoff_kernel_app,
+        ["confirm", _confirmable_field(proj), "--as-is", "--project", str(proj)],
+    )
+    assert out.exit_code == 0, out.output
+    dash = proj / ".startd8" / "dashboards"
+    assert dash.is_dir() and list(dash.glob("cc-portal-kickoff-*-v2.json"))
+
+
 def test_portal_classic_escape_hatch_does_not_build_v2():
     # M3: `--classic` routes to the legacy board (which may skip without the jsonnet toolchain) — it must
     # NOT emit the v2 cockpit board.

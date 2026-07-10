@@ -53,8 +53,9 @@ as the single oracle every surface derives from.** (User decision, 2026-07-09.)
   default** (no jsonnet needed); `--classic` is the one-release escape hatch to the legacy board;
   `--dynamic` is a back-compat no-op. Summary print is cockpit-aware. The portfolio index is
   tag-based, so it already discovers both boards.
-- **M3.1 (residual) — auto-refresh triggers.** `kickoff confirm` / `instantiate --portal` still
-  regenerate the **classic** board (they call `build_and_maybe_provision`). Route them through the
-  cockpit too before M4, so a confirm refreshes the default board.
+- **M3.1 — auto-refresh triggers. — ✅ SHIPPED.** `kickoff confirm` and `instantiate --portal` now
+  refresh the **cockpit** (`build_workbook_v2_and_maybe_provision`), matching `kickoff portal`'s
+  default — so every auto-refresh tracks the same board, and (bonus) needs no jsonnet toolchain. The
+  only remaining `build_and_maybe_provision` caller is the explicit `kickoff portal --classic`.
 - **M4 — Retire the classic path.** After the release window + M3.1: remove `build_kickoff_portal_spec`
   / the jsonnet classic path, or keep as a thin `--classic` alias. (Gated on soak.)
