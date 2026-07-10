@@ -64,6 +64,49 @@ def test_start_completes_with_deterministic_session_id(tmp_path, roster):
     assert status["synthesis"]  # a completed run has synthesis text
 
 
+# ── #7 live per-round progress ───────────────────────────────────────────────
+def test_round_summaries_shape_and_excerpt():
+    long = "x" * 500
+    rounds = [{"round_id": "R1", "title": "Individual analysis", "kind": "means-ends",
+               "entries": [{"role_id": "po", "display_name": "PO", "text": long, "grounding": "grounded"},
+                           {"role_id": "adversary-exploit", "display_name": "Adv", "text": "short"}]}]
+    out = FR._round_summaries(rounds)
+    assert out[0]["round_id"] == "R1" and out[0]["title"] == "Individual analysis"
+    e0 = out[0]["entries"][0]
+    assert len(e0["excerpt"]) == FR.EXCERPT_CHARS + 1 and e0["excerpt"].endswith("…")  # truncated + ellipsis
+    assert e0["is_challenger"] is False and e0["display_name"] == "PO"
+    assert out[0]["entries"][1]["is_challenger"] is True  # adversary flagged
+    assert out[0]["entries"][1]["excerpt"] == "short"  # short text not truncated / no ellipsis
+
+
+def test_round_summaries_partial_and_empty():
+    assert FR._round_summaries([]) == []
+    assert FR._round_summaries(None) == []
+    partial = [{"round_id": "R2", "title": "t", "kind": "k", "entries": []}]  # mid-round: 0 entries
+    assert FR._round_summaries(partial)[0]["entries"] == []
+
+
+def test_round_summaries_accepts_objects():
+    class _E:
+        def __init__(self, **k):
+            self.__dict__.update(k)
+    class _R:
+        def __init__(self, entries):
+            self.round_id, self.title, self.kind, self.entries = "R1", "t", "k", entries
+    out = FR._round_summaries([_R([_E(role_id="eu", display_name="EU", text="hi", grounding="g")])])
+    assert out[0]["entries"][0]["role_id"] == "eu" and out[0]["entries"][0]["excerpt"] == "hi"
+
+
+def test_status_carries_rounds(tmp_path, roster):
+    res = _start_sync(_cfg(tmp_path), roster)
+    rounds = FR.facilitate_status(tmp_path, res["session_id"])["rounds"]
+    assert isinstance(rounds, list) and rounds  # a completed run has persona rounds
+    r1 = next((r for r in rounds if r["round_id"] == "R1"), None)
+    assert r1 is not None and r1["entries"]
+    e = r1["entries"][0]
+    assert set(e) == {"role_id", "display_name", "excerpt", "grounding", "is_challenger"}
+
+
 # ── #6 consensus signal on the poll payload ──────────────────────────────────
 def test_status_carries_consensus(tmp_path, roster):
     res = _start_sync(_cfg(tmp_path), roster)

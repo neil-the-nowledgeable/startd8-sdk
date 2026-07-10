@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { PanelProps } from '@grafana/data';
-import { Alert, Button, ConfirmModal, Field, Input, RadioButtonGroup, Spinner, useStyles2 } from '@grafana/ui';
+import { Alert, Button, Collapse, ConfirmModal, Field, Input, RadioButtonGroup, Spinner, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 import {
   ConsensusSignal,
   FacilitateDryRunResult,
   FacilitateStartResult,
   FacilitateStatusResult,
+  RoundSummary,
   StakeholdersPanelOptions,
 } from '../types';
 import { errText, proxyGet, proxyPost } from '../api';
@@ -323,6 +324,50 @@ const ConsensusChip: React.FC<{
   );
 };
 
+// #7 — the live per-round accordion. Grows as rounds land; the latest round is expanded by default so
+// the operator watches the freshest contributions fill in. Excerpts are bounded previews (synthetic).
+const RoundsView: React.FC<{
+  rounds?: RoundSummary[];
+  styles: ReturnType<typeof getStyles>;
+}> = ({ rounds, styles }) => {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  if (!rounds || rounds.length === 0) {
+    return null;
+  }
+  const lastId = rounds[rounds.length - 1].round_id;
+  return (
+    <div className={styles.rounds}>
+      {rounds.map((r) => {
+        const isOpen = open[r.round_id] ?? r.round_id === lastId; // latest expanded by default
+        return (
+          <Collapse
+            key={r.round_id}
+            label={`${r.round_id}${r.title ? ` — ${r.title}` : ''} · ${r.entries.length} contribution(s)`}
+            isOpen={isOpen}
+            onToggle={() => setOpen((o) => ({ ...o, [r.round_id]: !isOpen }))}
+            collapsible
+          >
+            {r.entries.length === 0 ? (
+              <div className={styles.dim}>…waiting for contributions…</div>
+            ) : (
+              r.entries.map((e, i) => (
+                <div key={i} className={styles.answer}>
+                  <div className={styles.answerHead}>
+                    <b>{e.display_name || e.role_id}</b>
+                    {e.is_challenger && <span className={styles.dim}> · challenger</span>}
+                    {e.grounding && <span className={styles.dim}> · {e.grounding}</span>}
+                  </div>
+                  <div className={styles.pre}>{e.excerpt}</div>
+                </div>
+              ))
+            )}
+          </Collapse>
+        );
+      })}
+    </div>
+  );
+};
+
 const StatusView: React.FC<{
   status: FacilitateStatusResult;
   styles: ReturnType<typeof getStyles>;
@@ -348,6 +393,8 @@ const StatusView: React.FC<{
     <Alert severity="warning" title="Synthetic &amp; unratified">
       Role-played stand-ins, not real stakeholders. Confirm with a human before relying on this synthesis.
     </Alert>
+
+    <RoundsView rounds={status.rounds} styles={styles} />
 
     {status.status === 'error' && (
       <Alert severity="error" title="Facilitation errored">{status.error || 'The run ended in an error state.'}</Alert>
@@ -405,9 +452,18 @@ const getStyles = () => ({
     background: var(--background-secondary, rgba(255, 255, 255, 0.03));
     border-radius: 4px;
   `,
+  answerHead: css`
+    margin-bottom: 4px;
+    font-size: 12px;
+  `,
   pre: css`
     white-space: pre-wrap;
     font-family: inherit;
     margin: 0;
+  `,
+  rounds: css`
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   `,
 });
