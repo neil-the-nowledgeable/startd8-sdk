@@ -119,6 +119,7 @@ class KickoffTranscript(BaseModel):
     objective: str = ""
     strategy: str = ""
     posture: str = "scrutiny"  # FR-8/H-11 — maps the session-JSON key (#174); default covers old transcripts
+    tier: str = "premium"  # FR-10 — the model tier (premium|cheap) that produced the transcript
     prep: Optional[PanelPrep] = None
     model_assignment: dict[str, str] = Field(default_factory=dict)
     adversaries: list[str] = Field(default_factory=list)
