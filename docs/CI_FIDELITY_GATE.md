@@ -16,9 +16,21 @@ authoritative *fidelity* signal (FR-10).
 
 | validate-promql | meaning | gate result |
 |---|---|---|
-| `0` pass | coverage ≥ `--min-coverage`, ≥1 query replayed | build **passes** |
-| `2` fail | coverage below the floor | build **fails** |
+| `0` pass | `binding_coverage` ≥ `--min-coverage`, ≥1 query replayed | build **passes** |
+| `2` fail | `binding_coverage` below the floor | build **fails** |
 | `3` unknown | backend unreachable / zero queries replayed | build **fails** (set `FAIL_ON_UNKNOWN=false` to warn instead) |
+
+**Two coverage numbers (know which you're gating on).** The gate defaults to
+`binding_coverage` — the fraction of queries that **bind** to the live metric surface
+(`pass` + `bound_no_data`), i.e. *are the generated queries correct*. It's stable
+regardless of whether the target has fresh traffic. `data_coverage` (the `pass`-only
+fraction) answers the different question *is the backend emitting data right now* and
+swings with traffic recency — don't gate CI on it unless that's genuinely what you want.
+
+A query that binds but returned nothing in-window is `bound_no_data` (healthy service /
+no errors / stale), not a failure. If you want an all-bound-but-silent backend to fail
+the build (queries correct, nothing flowing), set `FAIL_ON_NO_DATA=true` — the gate then
+fails a binding-pass whose `data_coverage` is 0.
 
 Fidelity failures point at the fix: the report's `suggested_metrics_profile` names the
 one-line `metricsProfile` change, and each verdict's `remediation` names the mismatched
@@ -81,11 +93,10 @@ add a **manual-stage** hook so it only runs on demand:
 
 ## Notes / limits
 
-- **Demo-data freshness matters.** Replay uses the emitted `rate(...[5m])` windows, so a
-  target whose load generator has been idle for >5 minutes will show low coverage even
-  though the metrics bind — the queries are correct, the recent data is just absent.
-  Widen the load window or point at a live-traffic backend for a representative gate.
-  (Widening the replay rate-window to tolerate stale-but-present data is a tracked harness
-  refinement.)
+- **Demo-data freshness is handled — but visible.** An idle load generator no longer tanks
+  the gate: an empty `rate(...[5m])` is re-probed at a wider `--bind-window` (default `1h`)
+  and, if the series exist, scored `bound_no_data` (counts toward `binding_coverage`, not
+  against it). The staleness still shows up in the low `data_coverage`, so you see it — it
+  just doesn't fail a correctness gate. Set `--bind-window` to tune the tolerance.
 - **Exclude non-applicable artifact types** (e.g. `service_monitor` on an OTLP-push target)
   from the artifacts dir you gate, so they don't drag coverage down.

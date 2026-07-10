@@ -59,7 +59,13 @@ def validate_promql(
     min_coverage: float = typer.Option(
         1.0,
         "--min-coverage",
-        help="Minimum fraction of expressions that must return live data (FR-10).",
+        help="Minimum binding_coverage (pass + bound_no_data) / replayed (FR-2/FR-10).",
+    ),
+    bind_window: str = typer.Option(
+        "1h",
+        "--bind-window",
+        help="Wider range window used to re-probe an empty query before calling it a "
+        "binding failure — tolerates stale-but-present data (FR-3).",
     ),
     allow_prod: bool = typer.Option(
         False,
@@ -90,6 +96,7 @@ def validate_promql(
         onboarding_metadata=onboarding_metadata,
         prometheus_url=prometheus,
         min_coverage=min_coverage,
+        bind_window=bind_window,
         allow_prod=allow_prod,
         dry_run=dry_run,
         auth=auth,

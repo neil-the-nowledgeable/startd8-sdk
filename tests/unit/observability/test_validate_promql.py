@@ -386,6 +386,107 @@ def test_connection_error_still_flips_to_unknown(tmp_path):
     assert report.status == "unknown"
 
 
+# ───────────── bound_no_data verdict + binding vs data coverage ─────────────
+
+
+def test_widen_rate_window():
+    from startd8.observability.validate_promql import widen_rate_window
+
+    assert widen_rate_window("rate(x[5m])") == "rate(x[1h])"
+    assert widen_rate_window("rate(x[30s]) / rate(y[5m])") == "rate(x[1h]) / rate(y[1h])"
+    assert widen_rate_window("rate(x[5m])", "6h") == "rate(x[6h])"
+    assert widen_rate_window("sum(up)") == "sum(up)"  # no window → unchanged
+
+
+def test_stale_data_is_bound_no_data_via_wide_probe(tmp_path):
+    """FR-3: empty at [5m] but present at [1h] ⇒ bound_no_data (staleness), not fail."""
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice",
+                  {"Thru": 'rate(http_server_duration_count{service="checkoutservice"}[5m])'})
+    onboarding = _semconv_onboarding(tmp_path)
+
+    def _q(base, expr, **k):
+        return 1 if "[1h]" in expr else 0  # narrow empty, wide resolves
+
+    report = run_validation(
+        artifacts_dir=artifacts, onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090", min_coverage=1.0, auth=Auth(), query_fn=_q,
+    )
+    v = report.verdicts[0]
+    assert v.verdict == "bound_no_data"
+    assert "[1h]" in v.replayed_expr
+    assert report.binding_coverage == 1.0 and report.data_coverage == 0.0
+    assert report.status == "pass"                      # gates on binding_coverage
+    assert "WARNING" in report.reason and "silent" in report.reason  # FR-5a
+
+
+def test_no_data_all_axes_present_is_bound_no_data(tmp_path):
+    """FR-1: empty even at the wide window, but every descriptor axis present live ⇒
+    bound_no_data (healthy service, no series now), decided by two-sided diagnosis."""
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice",
+                  {"Thru": 'rate(http_server_duration_count{service="checkoutservice"}[5m])'})
+    onboarding = _semconv_onboarding(tmp_path)
+
+    report = run_validation(
+        artifacts_dir=artifacts, onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090", min_coverage=1.0, auth=Auth(),
+        query_fn=lambda base, expr, **k: 0,  # empty at every window
+        # all axes present: both metric names live, and the service label has the value
+        list_names_fn=lambda *a, **k: ["http_server_duration_count", "http_server_duration_bucket"],
+        label_values_fn=lambda *a, **k: ["checkoutservice"],
+    )
+    v = report.verdicts[0]
+    assert v.verdict == "bound_no_data", v.verdict
+    assert not v.mismatched_axes
+
+
+def test_absent_axis_stays_fail_not_bound_no_data(tmp_path):
+    """FR-4: a genuinely absent metric must stay `fail`, never softened to bound_no_data."""
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice",
+                  {"Thru": 'rate(http_server_duration_count{service="checkoutservice"}[5m])'})
+    onboarding = _semconv_onboarding(tmp_path)
+
+    report = run_validation(
+        artifacts_dir=artifacts, onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090", min_coverage=1.0, auth=Auth(),
+        query_fn=lambda base, expr, **k: 0,
+        list_names_fn=lambda *a, **k: ["calls_total"],       # emitted metric ABSENT
+        label_values_fn=lambda *a, **k: [],
+    )
+    v = report.verdicts[0]
+    assert v.verdict == "fail"
+    assert v.mismatched_axes
+
+
+def test_binding_vs_data_coverage_math(tmp_path):
+    """FR-2: data_coverage counts only pass; binding_coverage adds bound_no_data."""
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice", {
+        "A": 'rate(http_server_duration_count{service="checkoutservice"}[5m])',   # pass
+        "B": 'rate(http_server_duration_bucket{service="checkoutservice"}[5m])',  # bound_no_data (stale)
+    })
+    onboarding = _semconv_onboarding(tmp_path)
+
+    def _q(base, expr, **k):
+        if "bucket" in expr:
+            return 1 if "[1h]" in expr else 0   # B: stale → bound_no_data
+        return 3                                 # A: live data → pass
+
+    report = run_validation(
+        artifacts_dir=artifacts, onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090", min_coverage=0.5, auth=Auth(), query_fn=_q,
+    )
+    assert report.queries_replayed == 2
+    assert report.bound_no_data == 1
+    assert report.data_coverage == 0.5       # 1 pass / 2
+    assert report.binding_coverage == 1.0    # (1 pass + 1 bound) / 2
+    assert report.coverage == report.binding_coverage  # back-compat alias
+    d = report.to_dict()
+    assert d["data_coverage"] == 0.5 and d["binding_coverage"] == 1.0 and d["bound_no_data"] == 1
+
+
 def test_diagnosis_does_not_short_circuit_first_axis(tmp_path, monkeypatch):
     # A single expr whose descriptor misses on >1 axis must report >1.
     artifacts = tmp_path / "art"

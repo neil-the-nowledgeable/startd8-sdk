@@ -207,6 +207,24 @@ def strip_threshold(expr: str) -> str:
     return stripped if stripped.strip() else expr
 
 
+# A range-vector window inside a selector: ``[5m]``, ``[30s]``, ``[1h]`` (with an
+# optional offset we leave untouched). The third replay normalizer, alongside
+# strip_threshold + Grafana-macro substitution: test whether the series *exist*, not
+# whether they have data in the emitted (narrow) window.
+_RATE_WINDOW_RE = re.compile(r"\[(\d+)(ms|s|m|h|d|w|y)\]")
+
+
+def widen_rate_window(expr: str, window: str = "1h") -> str:
+    """Rewrite every range-vector window to *window* so stale-but-present data resolves.
+
+    ``rate(calls_total{...}[5m])`` returns empty when the target's last sample is older
+    than 5 minutes, though the series plainly exist (``rate(...[1h])`` returns them).
+    For a *binding* test that staleness is noise. Returns the expr unchanged when it has
+    no range window (nothing to widen), so callers can detect "no-op".
+    """
+    return _RATE_WINDOW_RE.sub(f"[{window}]", expr)
+
+
 def extract_exprs(artifacts_dir: Path) -> List[ExtractedExpr]:
     """Walk ``alerts/`` ``slos/`` ``dashboards/`` and pull every PromQL expr.
 
@@ -479,8 +497,16 @@ class FidelityReport:
     status: str  # "pass" | "fail" | "unknown"
     reason: str
     queries_replayed: int
+    #: Fidelity headline = binding_coverage (alias, kept for back-compat).
     coverage: float
     min_coverage: float
+    #: FR-2: queries that returned live data now (liveness) vs queries that bind to the
+    #: live metric surface (fidelity = pass + bound_no_data). data ≤ binding always.
+    data_coverage: float = 0.0
+    binding_coverage: float = 0.0
+    #: Count of queries that BIND (all descriptor axes present live) but returned no
+    #: data in-window — healthy service / no errors / stale (FR-1). Not a fidelity fail.
+    bound_no_data: int = 0
     #: Exprs skipped as non-replayable (unresolved dashboard template vars after
     #: Grafana-macro substitution). Not counted in coverage — they carry no fidelity
     #: signal — but surfaced so the skip is never silent.
@@ -505,6 +531,9 @@ class FidelityReport:
             "queries_replayed": self.queries_replayed,
             "queries_skipped": self.queries_skipped,
             "coverage": round(self.coverage, 4),
+            "binding_coverage": round(self.binding_coverage, 4),
+            "data_coverage": round(self.data_coverage, 4),
+            "bound_no_data": self.bound_no_data,
             "min_coverage": self.min_coverage,
             "static_gate_note": self.static_gate_note,
             "suggested_metrics_profile": self.suggested_metrics_profile,
@@ -570,6 +599,7 @@ def run_validation(
     allow_prod: bool = False,
     dry_run: bool = False,
     query_budget: int = DEFAULT_QUERY_BUDGET,
+    bind_window: str = "1h",
     auth: Optional[Auth] = None,
     query_fn: Optional[Callable[..., int]] = None,
     list_names_fn: Optional[Callable[..., List[str]]] = None,
@@ -699,8 +729,28 @@ def run_validation(
             if descriptor is not None:
                 expected_metric = descriptor.throughput_metric
         else:
+            # Empty at the emitted window. Before calling it a binding failure, decide
+            # whether the query actually *binds* — an empty result also means "healthy
+            # service, no matching series now" or "data present but stale > window".
             verdict = "fail"
-            if descriptor is not None:
+
+            # FR-3: second-chance probe at a wider window. If the SAME query resolves at
+            # [bind_window], the series exist and the narrow-window emptiness was just
+            # staleness (bound_no_data) — direct proof of binding, no diagnosis needed.
+            wide_expr = widen_rate_window(replay_expr, bind_window)
+            if wide_expr != replay_expr:
+                try:
+                    if q_count(prometheus_url, wide_expr, auth=auth) > 0:
+                        verdict = "bound_no_data"
+                        replayed_note = wide_expr
+                except urllib.error.HTTPError:
+                    pass  # a rejected wide probe is inconclusive; fall through
+                except Exception as exc:
+                    logger.warning("query failed (backend unreachable?): %s", exc)
+                    backend_unreachable = True
+                    break
+
+            if verdict == "fail" and descriptor is not None:
                 expected_metric = descriptor.throughput_metric
                 try:
                     live = _live_names()
@@ -720,10 +770,17 @@ def run_validation(
                 )
                 mismatched_findings = [f for f in findings if f.mismatched]
                 mismatched = [f.axis for f in mismatched_findings]
-                remediation = _remediation_hint(
-                    mismatched_findings, live, descriptor.profile
-                )
-                suggested_profile = _suggested_profile(live, descriptor.profile)
+                # FR-1/FR-4: every descriptor axis present in the live backend ⇒ the
+                # query BINDS; the empty result is a data-availability artifact, not a
+                # fidelity failure. Any absent/mismatched axis ⇒ stays `fail` (never
+                # mask a real miss as "no data").
+                if not mismatched_findings:
+                    verdict = "bound_no_data"
+                else:
+                    remediation = _remediation_hint(
+                        mismatched_findings, live, descriptor.profile
+                    )
+                    suggested_profile = _suggested_profile(live, descriptor.profile)
                 axis_detail = [
                     {
                         "axis": f.axis,
@@ -777,34 +834,51 @@ def run_validation(
             min_coverage=min_coverage,
         )
 
+    # FR-2: two coverage numbers. data_coverage = queries that returned live data
+    # (liveness); binding_coverage = queries that bind to the live metric surface
+    # (fidelity = pass + bound_no_data). `coverage` is the fidelity headline and the
+    # gate metric, kept as an alias of binding_coverage for back-compat.
     passes = sum(1 for v in verdicts if v.verdict == "pass")
-    coverage = passes / replayed
+    bound_no_data = sum(1 for v in verdicts if v.verdict == "bound_no_data")
+    data_coverage = passes / replayed
+    binding_coverage = (passes + bound_no_data) / replayed
+    coverage = binding_coverage
 
-    # Rollups (FR-10): per-service coverage and per-axis mismatch counts.
+    # Rollups (FR-10): per-service coverage (binding view — pass + bound_no_data) and
+    # per-axis mismatch counts.
     per_service: Dict[str, Dict[str, Any]] = {}
     per_axis: Dict[str, int] = {}
+    _bound_verdicts = {"pass", "bound_no_data"}
     for v in verdicts:
         svc = per_service.setdefault(
             v.service, {"total": 0, "passed": 0, "signals": {}}
         )
         svc["total"] += 1
-        if v.verdict == "pass":
+        if v.verdict in _bound_verdicts:
             svc["passed"] += 1
         sig = svc["signals"].setdefault(v.signal, {"total": 0, "passed": 0})
         sig["total"] += 1
-        if v.verdict == "pass":
+        if v.verdict in _bound_verdicts:
             sig["passed"] += 1
         for axis in v.mismatched_axes:
             per_axis[axis] = per_axis.get(axis, 0) + 1
     for svc in per_service.values():
         svc["coverage"] = round(svc["passed"] / svc["total"], 4) if svc["total"] else 0.0
 
-    status = "pass" if coverage >= min_coverage else "fail"
+    status = "pass" if binding_coverage >= min_coverage else "fail"
     reason = (
-        f"coverage {coverage:.4f} >= min {min_coverage}"
+        f"binding_coverage {binding_coverage:.4f} >= min {min_coverage}"
         if status == "pass"
-        else f"coverage {coverage:.4f} < min {min_coverage}"
+        else f"binding_coverage {binding_coverage:.4f} < min {min_coverage}"
     )
+    # FR-5a — no silent green: queries bind but the backend emitted nothing in-window.
+    # Surface it explicitly so a correct-but-silent target is never a clean pass.
+    if passes == 0 and bound_no_data > 0:
+        reason += (
+            f" — WARNING: all {bound_no_data} replayed queries BIND but returned no live "
+            "data (data_coverage 0.0); your queries are correct but the backend is silent "
+            "in-window (idle load / stale data)."
+        )
     # Quick-win #1: roll the per-verdict profile suggestions up into the single
     # metricsProfile that best matches the live backend across all failing
     # queries — the one-line fix for the whole run. Ties break on frequency.
@@ -816,6 +890,9 @@ def run_validation(
         queries_replayed=replayed,
         queries_skipped=skipped,
         coverage=coverage,
+        data_coverage=data_coverage,
+        binding_coverage=binding_coverage,
+        bound_no_data=bound_no_data,
         min_coverage=min_coverage,
         verdicts=verdicts,
         per_service=per_service,

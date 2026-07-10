@@ -37,6 +37,9 @@ PROMETHEUS_URL="${PROMETHEUS_URL:-http://localhost:9090}"
 MIN_COVERAGE="${MIN_COVERAGE:-1.0}"
 ALLOW_PROD="${ALLOW_PROD:-false}"
 FAIL_ON_UNKNOWN="${FAIL_ON_UNKNOWN:-true}"
+# FR-5a: fail a binding-pass run where the backend returned NO live data at all
+# (every query binds but data_coverage is 0) — "correct queries, silent backend".
+FAIL_ON_NO_DATA="${FAIL_ON_NO_DATA:-false}"
 REPORT="${REPORT:-fidelity-report.json}"
 
 args=(
@@ -57,7 +60,16 @@ code=$?
 
 case "$code" in
   0)
-    echo "✓ fidelity gate PASS (coverage ≥ $MIN_COVERAGE)"
+    # FR-5a no-silent-green: a binding pass with zero live data is not truly healthy.
+    if [ "$FAIL_ON_NO_DATA" = "true" ] && [ -f "$REPORT" ]; then
+      data_cov=$(python3 -c "import json;print(json.load(open('$REPORT')).get('data_coverage',1))" 2>/dev/null || echo 1)
+      if [ "$data_cov" = "0.0" ] || [ "$data_cov" = "0" ]; then
+        echo "✗ fidelity gate: queries BIND but data_coverage is 0 — backend emitted no live"
+        echo "  data in-window (idle load / stale). Failing (FAIL_ON_NO_DATA=true)."
+        exit 1
+      fi
+    fi
+    echo "✓ fidelity gate PASS (binding_coverage ≥ $MIN_COVERAGE)"
     exit 0
     ;;
   2)
