@@ -1751,6 +1751,103 @@ capabilities:
         description: "user guide (markdown + styled offline HTML twin)"
     confidence: 0.9
 
+  - capability_id: startd8.kickoff.workbook_cockpit
+    category: generate
+    maturity: stable
+    summary: "The Digital Project Workbook as a read-only agentic cockpit — Status/Assistant/Proposals/Stakeholders/Pipeline tabs mirroring a kickoff session across Grafana v2 + terminal + shareable readout, from ONE AgenticView oracle ($0, no jsonnet)"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        `startd8 kickoff portal` (default post-M4 convergence) builds the v2 agentic COCKPIT — a
+        pure-Python Grafana v2 dynamic board (`dashboard.grafana.app/v2`, ≥13.1) with five read-only
+        tabs: **Status** (audience-conditional field tables + readiness "at a glance" + next-step +
+        readiness/cost **burndown** timeseries), **Assistant** (session-at-a-glance + capped transcript
+        + a Loki full-depth `logs` panel), **Proposals** (VIPP inbox + copy-safe, id-bound confirm
+        commands), **Stakeholders** (roster + latest panel answers), **Pipeline** (panel→bridge→VIPP
+        funnel + dispositions). All five surfaces + the `dashlist` portfolio index emit as v2 JSON with
+        NO jsonnet toolchain. The board flips the `audience` variable in-browser (no regen); FR-8
+        byte-identity across audiences. Everything derives from ONE `build_agentic_view` oracle that
+        folds KickoffState + the FR-1 session snapshot + the VIPP inbox/dispositions + stakeholder
+        answers + roster + readiness/next_action — the SAME oracle drives `startd8 kickoff cockpit`
+        (Rich terminal parity view) and `startd8 kickoff readout --format md|html` (a shareable,
+        XSS-safe static export). Read-only (NR-2: shows confirm commands, never applies); redaction +
+        graceful-degrade (Loki/Mimir panels empty, never error, when the datasource is absent). The
+        classic Era-1 jsonnet Workbook was retired; the general jsonnet generator is untouched.
+      agent: |
+        startd8 kickoff portal --provision http://localhost:3000   # build+push the cockpit (default board)
+        startd8 kickoff portal --index                             # portfolio dashlist of every project's Workbook
+        startd8 kickoff cockpit                                     # same read-model in the terminal (no Grafana)
+        startd8 kickoff readout --format html --out readout.html   # shareable static export (md|html, XSS-safe)
+    triggers: ["workbook", "cockpit", "project workbook", "kickoff dashboard", "kickoff portal", "readiness burndown", "digital project workbook", "stakeholder dashboard", "kickoff readout"]
+    evidence:
+      - type: code
+        ref: src/startd8/kickoff_experience/agentic_view.py
+        description: "the single AgenticView oracle: folds state+snapshot+inbox+dispositions+roster+readiness+next_action"
+      - type: code
+        ref: src/startd8/kickoff_experience/portal_spec_v2.py
+        description: "build_workbook_v2 (5-tab v2 cockpit) + build_index_v2 (dashlist) + _timeseries/_logs/_dashlist panels; workbook_v2_uid length guard"
+      - type: code
+        ref: src/startd8/kickoff_experience/cockpit_view.py
+        description: "Rich terminal parity render of the same oracle"
+      - type: code
+        ref: src/startd8/kickoff_experience/readout.py
+        description: "shareable md/html export (XSS-safe via html.escape)"
+      - type: code
+        ref: src/startd8/kickoff_experience/metrics.py
+        description: "readiness/cost/proposals OTel gauges → Mimir (auto_configure_otel, best-effort no-op)"
+      - type: code
+        ref: src/startd8/kickoff_experience/portal_build.py
+        description: "build_workbook_v2_and_maybe_provision + build_index (v2, no jsonnet); the default `kickoff portal` + confirm/instantiate auto-refresh"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_portal_spec_v2.py
+        description: "tabs, audience byte-identity, confirm round-trip, burndown panels, empty states, golden"
+      - type: doc
+        ref: docs/design/kickoff-portal/WORKBOOK_CONVERGENCE_PLAN.md
+        description: "CR-1..4 + M1-M4: single-oracle convergence + classic-path retirement (jsonnet-free)"
+      - type: doc
+        ref: docs/design/kickoff-portal/AGENTIC_WORKBOOK_VALUE_ROADMAP.md
+        description: "Tier 1-3 value roadmap (next-step/readiness/glance/stop-reason, CLI cockpit, readout, burndown, promotion)"
+    confidence: 0.9
+    dependencies:
+      - startd8.agentic.session_snapshot
+
+  - capability_id: startd8.agentic.session_snapshot
+    category: action
+    maturity: stable
+    summary: "Serialize any AgenticSession into a durable, dashboard-consumable snapshot (redacted transcript + per-session cost + stop_reason) via AgenticSession.to_snapshot — neutral agents-layer core, redactor dependency-injected"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        `AgenticSession.to_snapshot(*, project, session_id, generated_at, posture, pending_proposal_ids,
+        stop_reason, redactor)` turns any agentic session into an `AgenticSessionSnapshot` — ordered
+        turns (role, text, tool-call NAMES only — never free-text args), per-session cost (model/tokens/
+        USD), `stop_reason`, and a `schema_version`. The presentation-neutral core lives in
+        `agents/session_snapshot.py` (stdlib-only, NO cycle); redaction is DEPENDENCY-INJECTED via a
+        `str->str` callable so the layer stays policy-free (the kickoff layer injects `fde.redaction.
+        redact`; other surfaces pass their own or none). `at_a_glance()`/`cost_line()`/`tool_call_counts`
+        are $0 summaries. The kickoff layer (`kickoff_experience/session_snapshot.py`) re-exports the
+        core (compat) and adds on-disk persistence (`.startd8/kickoff/agentic-session.json`, temp-then-
+        rename) + a Loki full-transcript emit. Promotion means ANY agentic surface (kickoff concierge,
+        multi-model consultation, future Prime) gets a durable, mirror-able session for free.
+      agent: |
+        snap = session.to_snapshot(project="p", session_id="s", generated_at=ts, redactor=redact)
+        snap.at_a_glance()   # "5 replies · survey ×2, assess ×1 · 3 proposals pending · cost ≈$0.0031 · stopped: budget"
+    triggers: ["session snapshot", "agentic snapshot", "to_snapshot", "transcript persistence", "session mirror", "durable session"]
+    evidence:
+      - type: code
+        ref: src/startd8/agents/session_snapshot.py
+        description: "neutral core: AgenticSessionSnapshot model + normalize + redactor-injected build_snapshot (stdlib-only, no cycle)"
+      - type: code
+        ref: src/startd8/agents/agentic.py
+        description: "AgenticSession.to_snapshot (the reusable promotion)"
+      - type: code
+        ref: src/startd8/kickoff_experience/session_snapshot.py
+        description: "kickoff layer: re-export + fde redaction + temp-then-rename persist + Loki emit"
+      - type: test
+        ref: tests/unit/agents/test_session_snapshot_promotion.py
+        description: "redactor injection, to_snapshot, re-export compat, no-cycle"
+    confidence: 0.9
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -1758,25 +1855,31 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 57   # v1.15.0: +consult.multi_model
+  total_capabilities: 59   # v1.16.0: +kickoff.workbook_cockpit, +agentic.session_snapshot
   by_maturity:
-    stable: 22     # v1.15.0: +consult.multi_model
+    stable: 24     # v1.16.0: +2 (both new stable)
     beta: 35       # reconciled to actual (prior summary undercounted)
-  by_category:
-    action: 12     # v1.15.0: +consult.multi_model
-    observe: 4     # +agentic.observability (v1.9.0)
-    validate: 6    # +benchmark.matrix, +deploy.local_harness
-    generate: 14   # +cloud_native_deploy, +deploy_environments (v1.8.0)
-    integration: 6 # +agentic.contextcore_integration (v1.9.0)
-    query: 2       # model_catalog, wireframe_summary
-    transform: 2   # +repair.pipeline
-    security: 2    # security_prime.gate, +deploy.coherence_gate (v1.8.0)
+  by_category:                 # v1.16.0: reconciled to the actual parse (prior block undercounted)
+    action: 18     # +agentic.session_snapshot
+    generate: 16   # +kickoff.workbook_cockpit
+    validate: 7
+    observe: 6
+    integration: 6
+    query: 2
+    transform: 2
+    security: 2
 
 # ==============================================================================
 # CHANGELOG
 # ==============================================================================
 
 changelog:
+  - version: "1.16.0"
+    date: "2026-07-10"
+    changes:
+      - "Added startd8.kickoff.workbook_cockpit (generate, stable, 0.9) — the Digital Project Workbook as a read-only agentic COCKPIT: a pure-Python Grafana v2 board (Status/Assistant/Proposals/Stakeholders/Pipeline tabs + readiness/cost burndown) + a v2 dashlist portfolio index, PLUS a Rich terminal parity view (`kickoff cockpit`) and a shareable XSS-safe md/html export (`kickoff readout`) — all from ONE `build_agentic_view` oracle. Default `kickoff portal` (M4 convergence); classic Era-1 jsonnet board retired (Workbook is now jsonnet-free); confirm/instantiate auto-refresh the cockpit. Live-verified on Grafana 13.1.0; readiness/cost land in Mimir; 1200+ tests green without the jsonnet vendor."
+      - "Added startd8.agentic.session_snapshot (action, stable, 0.9) — AgenticSession.to_snapshot serializes any agentic session into a durable, dashboard-consumable snapshot (redacted transcript + per-session cost + stop_reason + schema_version); neutral stdlib-only agents-layer core (no import cycle) with redaction dependency-injected; kickoff layer re-exports + adds temp-then-rename persist + Loki full-transcript emit. Reusable across every agentic surface."
+      - "59 capabilities: 24 stable; generate 14→15, action 12→13. Independent requirements audit: all CR-1..4 / M1-M4 / Tier-1..3 SATISFIED."
   - version: "1.15.0"
     date: "2026-07-04"
     changes:
