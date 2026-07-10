@@ -79,6 +79,7 @@ def serialize_accepted_to_vipp(
     buffer = ProposalBuffer()
     staged: List[str] = []
     rejected: List[Tuple[str, str]] = []
+    staged_sessions: set = set()  # #8: the source session(s) of the proposals actually serialized
 
     for rec in recommendations:
         if accepted_only and rec.disposition != "accepted":
@@ -91,12 +92,21 @@ def serialize_accepted_to_vipp(
             )
             buffer.add(action)
             staged.append(rec.value_path)
+            sid = getattr(rec, "session_id", "") or ""
+            if sid:
+                staged_sessions.add(sid)
         except ValueError as exc:  # ConciergeInputError/CaptureError (allow-list, round-trip) → report,
             rejected.append((rec.value_path, f"{type(exc).__name__}: {exc}"))  # never drop; other errors propagate
+
+    # #8 FR-2b: provenance is derived from the actually-serialized recs (Genchi Genbutsu). Exactly ONE
+    # source session → carry it; >1 (a mixed inbox) → leave empty so the apply preview shows n/a rather
+    # than a misleading label pinned to an arbitrary session.
+    source_session_id = next(iter(staged_sessions)) if len(staged_sessions) == 1 else ""
 
     write = None
     inbox = None
     if staged:
-        write = serialize_buffer(buffer, project_root)
+        write = serialize_buffer(buffer, project_root, source_session_id=source_session_id)
         inbox = str(inbox_path(project_root))  # vipp_seam owns the inbox path — don't hardcode it (DRY)
-    return {"staged": staged, "rejected": rejected, "write": write, "inbox": inbox}
+    return {"staged": staged, "rejected": rejected, "write": write, "inbox": inbox,
+            "source_session_id": source_session_id}

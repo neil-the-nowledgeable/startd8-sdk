@@ -183,6 +183,7 @@ def serialize_buffer(
     project_root: Any,
     *,
     project_id: Optional[str] = None,
+    source_session_id: str = "",
     force: bool = False,
 ) -> WriteResult:
     """Serialize ``buffer``'s pending proposals to the confined inbox. No-clobber-of-undrained.
@@ -190,6 +191,10 @@ def serialize_buffer(
     If a pending inbox already exists it is **not** overwritten (unless ``force``) — the on-disk
     analogue of the buffer's reject-don't-evict rule (R3-S4); the returned result reports it as
     skipped. On a fresh write the inbox is chmod 0600 and a ``.gitignore`` is ensured.
+
+    ``source_session_id`` (#8) is provenance metadata: a **top-level** envelope field, deliberately kept
+    OUT of ``content_checksum`` (proposals only) and the M2 fingerprint (excluded in assistant.py) and the
+    ratify content hash — so it can't affect any signed/idempotency payload (FR-7/FR-8).
     """
     root = resolve_confined_root(project_root)
     ip = _vipp_dir(root) / INBOX_NAME
@@ -221,6 +226,7 @@ def serialize_buffer(
         "project_id": project_id or Path(root).name,
         "envelope_seq": _next_seq(root),
         "generated_at": _utcnow(),
+        "source_session_id": source_session_id,  # #8 provenance — outside content_checksum (proposals only)
         "content_checksum": _content_checksum(proposals),
         "proposals": proposals,
     }

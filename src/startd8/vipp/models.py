@@ -150,6 +150,7 @@ class ProposalEnvelope:
     proposals: List[EnvelopedProposal] = field(default_factory=list)
     content_checksum: str = ""
     protocol_version: str = PROTOCOL_VERSION
+    source_session_id: str = ""  # #8 provenance — the facilitation session; "" on pre-#8 inboxes
 
     def checksum_payload(self) -> List[Dict[str, Any]]:
         """The content ``content_checksum`` is computed over (proposals only; seq/ts excluded)."""
@@ -162,6 +163,7 @@ class ProposalEnvelope:
             "project_id": self.project_id,
             "envelope_seq": self.envelope_seq,
             "generated_at": self.generated_at,
+            "source_session_id": self.source_session_id,  # #8 provenance (outside content_checksum)
             "content_checksum": self.content_checksum,
             "proposals": [p.to_dict() for p in self.proposals],
         }
@@ -174,6 +176,7 @@ class ProposalEnvelope:
             envelope_seq=int(d.get("envelope_seq", 0)),
             generated_at=d.get("generated_at", ""),
             content_checksum=d.get("content_checksum", ""),
+            source_session_id=d.get("source_session_id", ""),  # #8 — "" on pre-#8 inboxes (graceful)
             proposals=[EnvelopedProposal.from_dict(p) for p in d.get("proposals", [])],
             protocol_version=d.get("protocol_version", PROTOCOL_VERSION),
         )
