@@ -22,7 +22,9 @@
 | **B** | Activation surface — `kickoff check` gate + `kickoff.activation.*` gauges + activation ledger | ✅ Shipped |
 | **C2/C3** | Decision-log + retrospective (`kickoff retrospective`) built on the oracle payload | ✅ Shipped |
 | **D** | Close-the-loop — momentum (readiness slope) + highest-leverage batch nudge | ✅ Shipped |
-| E | Promotion dividend — oracle payload as the exemplar/promotion input | ⏳ Planned |
+| **E** | Promotion dividend — `kickoff promote` / `exemplars` / `apply-exemplar` | ✅ Shipped |
+
+> **Roadmap complete.** Every tier (A1 · A2 · C1 · B · D · C2/C3 · E) has shipped to `origin/main`.
 
 ---
 
@@ -125,11 +127,31 @@ Both halves are pure, deterministic reads over data the oracle already holds
   `startd8.kickoff.status.v1` schema — additive, so CLI/JSON/MCP/readout all get it for free).
   `kickoff status` prints the leverage nudge + a 📈/⏸️/📉 momentum line.
 
-## Tier E — Promotion dividend (PLANNED)
+## Tier E — Promotion dividend (SHIPPED)
 
-Use the oracle payload as the **exemplar/promotion input**: a project that reached ready-state with a
-clean snapshot + applied-proposal history is a candidate template. The `startd8.kickoff.status.v1`
-payload is already the structured fingerprint this would key on.
+The compounding payoff: a ready-state kickoff becomes a reusable **exemplar** so new projects start
+from a proven setup instead of a blank slate. All built on the oracle
+(`src/startd8/kickoff_experience/promotion.py`):
+
+- **Eligibility.** `promotion_eligibility(status)` gates on *clean enough to promote* — readiness at
+  target, zero blocked fields, zero pending proposals, has inputs. Tier-C's history is exactly what
+  makes "clean" answerable.
+- **Promote.** `startd8 kickoff promote` captures the project's **settled conventions** (the
+  value-path→value pairs that reached `ok`) + provenance + decision summary into a portable
+  `startd8.kickoff.exemplar.v1` record, saved to a cross-project registry
+  (`~/.startd8/kickoff-exemplars/`, `$STARTD8_KICKOFF_EXEMPLARS_DIR` override). The id is
+  content-derived, so re-promoting an unchanged project is idempotent. `--force` records a non-ready
+  project anyway. `startd8 kickoff exemplars` lists the library.
+- **Apply (the dividend) — the safe bridge.** `startd8 kickoff apply-exemplar <id> [target]` seeds a
+  new project. Crucially it reuses the **vetted VIPP producer path** (`build_proposal` →
+  `serialize_buffer`): it emits `capture` *proposals* into the target's inbox, so the target human
+  reviews with `kickoff proposals` and applies through the existing confirm gate. Preview by default;
+  `--emit` writes the inbox. A convention the target's manifest can't accept is skipped honestly
+  (per-target validation), never forced. **No new write path**, every invariant preserved.
+
+*This was the longest-horizon tier — and it only became clean because B/C/D landed first: eligibility
+reads C's history, the exemplar captures D's settled state, and apply rides the same VIPP path the
+whole system already trusts.*
 
 ---
 
@@ -149,8 +171,9 @@ payload is already the structured fingerprint this would key on.
   `src/startd8/kickoff_experience/activation.py` (`evaluate_activation`, `ActivationLedger`),
   `src/startd8/kickoff_experience/momentum.py` (`readiness_trend`, `leverage_groups`, `leverage_nudge`),
   `src/startd8/kickoff_experience/retrospective.py` (`decision_log`, `build_retrospective`, `kickoff_retrospective`),
+  `src/startd8/kickoff_experience/promotion.py` (`promotion_eligibility`, `build_exemplar`, `ExemplarRegistry`, `apply_plan`, `emit_to_inbox`),
   `src/startd8/kickoff_experience/metrics.py` (`record_activation`),
-  `src/startd8/cli_concierge.py` (`kickoff status|proposals|readout|check|ledger|retrospective`),
+  `src/startd8/cli_concierge.py` (`kickoff status|proposals|readout|check|ledger|retrospective|promote|exemplars|apply-exemplar`),
   `mcp/startd8-mcp-builder/startd8_mcp.py` (`startd8_kickoff_status`).
 - Tests: `tests/unit/kickoff_experience/test_status_proposals_cli.py`,
   `tests/unit/kickoff_experience/test_agentic_view.py`,
@@ -159,5 +182,7 @@ payload is already the structured fingerprint this would key on.
   `tests/unit/kickoff_experience/test_momentum.py`,
   `tests/unit/kickoff_experience/test_momentum_oracle.py`,
   `tests/unit/kickoff_experience/test_retrospective.py`,
+  `tests/unit/kickoff_experience/test_promotion.py`,
   `mcp/startd8-mcp-builder/tests/test_16_kickoff_status.py`.
-- Commits: `aa658ebb` (A1+A2), `869d5dc5` (C1), `e55ff4d6` (Tier B), `e680aa55` (Tier D), C2/C3 (this change).
+- Commits: `aa658ebb` (A1+A2), `869d5dc5` (C1), `e55ff4d6` (Tier B), `e680aa55` (Tier D),
+  `87699721` (Tier C2/C3), Tier E (this change).

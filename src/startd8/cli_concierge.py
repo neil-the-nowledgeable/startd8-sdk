@@ -1672,6 +1672,115 @@ def kickoff_retrospective_cmd(
             console.print(f"    [yellow]{d['pending']} pending[/yellow] (not yet adjudicated)")
 
 
+@kickoff_kernel_app.command("promote")
+def kickoff_promote_cmd(
+    project_root: Path = typer.Argument(
+        Path("."), help="Ready-state project to promote into a reusable exemplar (default: cwd)."
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the promotion result as JSON."),
+    min_readiness: int = typer.Option(100, "--min-readiness", help="Readiness %% required to promote."),
+    force: bool = typer.Option(False, "--force", help="Promote even if not fully ready (records anyway)."),
+) -> None:
+    """Promote a proven kickoff into a reusable exemplar — so new projects start ahead, not blank.
+
+    Gates on eligibility (ready-state: readiness at target, zero blocked, zero pending) then captures
+    the project's settled conventions into the cross-project exemplar registry. Apply one later with
+    `startd8 kickoff apply-exemplar <id>`. Read-only except the registry write; `$0`.
+    """
+    from .kickoff_experience.promotion import promote
+
+    res = promote(project_root, min_readiness=min_readiness, force=force)
+    if json_out:
+        _emit_json(res)
+        raise typer.Exit(0 if res["promoted"] else _EXIT_BLOCKED)
+    if not res["promoted"]:
+        console.print("[yellow]not promoted[/yellow] — project isn't ready:")
+        for r in res["eligibility"]["reasons"]:
+            console.print(f"  [yellow]•[/yellow] {r}")
+        console.print("[dim]Promote anyway with[/dim] [cyan]--force[/cyan].")
+        raise typer.Exit(_EXIT_BLOCKED)
+    ex = res["exemplar"]
+    tag = " [yellow](forced)[/yellow]" if res.get("forced") else ""
+    console.print(f"[green]promoted[/green]{tag}: [cyan]{ex['id']}[/cyan] — {ex['summary']}")
+    console.print(f"  [dim]{ex['convention_count']} conventions → {res['path']}[/dim]")
+
+
+@kickoff_kernel_app.command("exemplars")
+def kickoff_exemplars_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Emit the registry as JSON."),
+) -> None:
+    """List promoted kickoff exemplars — the cross-project library new projects can start from."""
+    from .kickoff_experience.promotion import ExemplarRegistry
+
+    items = ExemplarRegistry().list()
+    if json_out:
+        _emit_json({"schema": "startd8.kickoff.exemplar.v1", "exemplars": items, "count": len(items)})
+        return
+    if not items:
+        console.print("[dim]No exemplars yet — promote a ready project with `startd8 kickoff promote`.[/dim]")
+        return
+    console.print(f"[bold]{len(items)} exemplar(s)[/bold]")
+    for e in items:
+        console.print(
+            f"  [cyan]{e.get('id')}[/cyan] — {e.get('summary')}  "
+            f"[dim]({e.get('convention_count', 0)} conventions)[/dim]"
+        )
+
+
+@kickoff_kernel_app.command("apply-exemplar")
+def kickoff_apply_exemplar_cmd(
+    exemplar_id: str = typer.Argument(..., help="The exemplar id to seed from (see `kickoff exemplars`)."),
+    target_root: Path = typer.Argument(Path("."), help="Target project to seed (default: cwd)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the plan/result as JSON."),
+    emit: bool = typer.Option(
+        False, "--emit", help="Write the seed as VIPP proposals into the target inbox (else preview only)."
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite an undrained target inbox on --emit."),
+) -> None:
+    """Seed a new project from a proven exemplar — as reviewable proposals, not a forced write.
+
+    By default previews which conventions the target can accept (per-target validation). `--emit`
+    writes them as `capture` proposals into the target's VIPP inbox, so you then review with
+    `startd8 kickoff proposals` and apply through the normal confirm gate. `$0`.
+    """
+    from .kickoff_experience.promotion import ExemplarRegistry, apply_plan, emit_to_inbox
+
+    ex = ExemplarRegistry().get(exemplar_id)
+    if ex is None:
+        console.print(f"[red]no such exemplar:[/red] {exemplar_id}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    if emit:
+        res = emit_to_inbox(ex, target_root, force=force)
+        if json_out:
+            _emit_json(res)
+            return
+        if not res["emitted"]:
+            console.print(f"[yellow]nothing emitted[/yellow] — {res.get('reason', 'no applicable conventions')}")
+            for s in res.get("write_skipped", []):
+                console.print(f"  [dim]{s}[/dim]")
+            return
+        console.print(f"[green]seeded[/green] {len(res['seeded'])} proposal(s) into the target inbox")
+        console.print("[dim]Review with[/dim] [cyan]startd8 kickoff proposals[/cyan][dim], then apply with[/dim] [cyan]--apply[/cyan].")
+        if res["skipped"]:
+            console.print(f"  [yellow]{len(res['skipped'])} not applicable to target[/yellow]")
+        return
+
+    plan = apply_plan(ex, target_root)
+    if json_out:
+        _emit_json(plan)
+        return
+    console.print(
+        f"[bold]apply preview[/bold] — {plan['applicable_count']} applicable · {plan['skipped_count']} skipped"
+    )
+    for a in plan["applicable"]:
+        console.print(f"  [green]+[/green] {a['value_path']} = {a['value']!r}")
+    for s in plan["skipped"]:
+        console.print(f"  [dim]- {s['value_path']} ({s['reason']})[/dim]")
+    if plan["applicable_count"]:
+        console.print("\n[dim]Write these as proposals with[/dim] [cyan]--emit[/cyan].")
+
+
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------
 # `audience` is a lens over the one guided experience (orthogonal to `posture`): beginner /
 # intermediate / advanced. M1 is the persistence spine only — `set` writes ONLY the preference; it

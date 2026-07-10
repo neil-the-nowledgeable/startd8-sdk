@@ -40,6 +40,10 @@ _ENDPOINT_STATE_MODULES = {
     # Phase-2 stakeholder-run HTTP endpoint: writes the run idempotency/crash-marker ledger + an fcntl
     # lock file under .startd8/stakeholder-run/ (spend-safety state, not kickoff source-of-record).
     "stakeholder_run.py",
+    # Tier-E promotion dividend: writes the CROSS-PROJECT exemplar registry (~/.startd8/kickoff-exemplars/,
+    # atomic tmpfile+rename), not the project's kickoff source-of-record. Its project-touching apply path
+    # goes through the vetted VIPP producer (serialize_buffer), which is itself on the floor.
+    "promotion.py",
 }
 _EXPERIENCE_MODULES = sorted(
     p

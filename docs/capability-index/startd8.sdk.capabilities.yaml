@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.19.0"
+version: "1.20.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1940,6 +1940,50 @@ capabilities:
     dependencies:
       - startd8.kickoff.activation
 
+  - capability_id: startd8.kickoff.promotion
+    category: action
+    maturity: stable
+    summary: "Promote a ready-state kickoff into a reusable cross-project exemplar, and seed a NEW project from it as reviewable VIPP proposals (no new write path) — new projects start proven, not blank ($0)"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        Tier E of the oracle-as-API roadmap — the compounding dividend. Three pieces on the oracle:
+        (eligibility) `promotion_eligibility(status)` gates on 'clean enough to promote' — readiness at
+        target, zero blocked, zero pending, has inputs (Tier-C history is what makes 'clean'
+        answerable); (promote) `startd8 kickoff promote` captures the project's **settled conventions**
+        (value-path→value pairs that reached ok) + provenance into a portable
+        `startd8.kickoff.exemplar.v1` record saved to a cross-project registry (~/.startd8/kickoff-
+        exemplars/, $STARTD8_KICKOFF_EXEMPLARS_DIR override; content-derived id ⇒ idempotent);
+        `startd8 kickoff exemplars` lists the library; (apply — the dividend) `startd8 kickoff
+        apply-exemplar <id> [target]` seeds a new project by reusing the VETTED VIPP producer path
+        (build_proposal → serialize_buffer): it emits `capture` PROPOSALS into the target inbox so the
+        human reviews with `kickoff proposals` and applies via the existing confirm gate. Preview by
+        default; `--emit` writes. A convention the target's manifest can't accept is skipped honestly
+        (per-target validation), never forced. NO new write path; CLI-sole-writer / provenance /
+        human-confirm all preserved.
+      agent: |
+        startd8 kickoff promote                       # ready-state → exemplar (registry write; gated, --force to override)
+        startd8 kickoff exemplars                      # list the cross-project library
+        startd8 kickoff apply-exemplar <id> ./newproj  # preview seed (per-target validation)
+        startd8 kickoff apply-exemplar <id> ./newproj --emit   # write as reviewable VIPP proposals
+    triggers: ["promote kickoff", "exemplar", "kickoff template", "reuse kickoff", "start from proven", "apply exemplar", "promotion dividend", "seed new project"]
+    evidence:
+      - type: code
+        ref: src/startd8/kickoff_experience/promotion.py
+        description: "promotion_eligibility + settled_conventions + assemble_exemplar + ExemplarRegistry + apply_plan/emit_to_inbox (reuse build_proposal→serialize_buffer)"
+      - type: code
+        ref: src/startd8/cli_concierge.py
+        description: "`kickoff promote` (gated), `kickoff exemplars` (list), `kickoff apply-exemplar` (preview/--emit)"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_promotion.py
+        description: "eligibility reasons, settled-conventions selection, content-derived id, registry roundtrip, apply-plan per-target skip, emit no-op safety, CLI gate"
+      - type: doc
+        ref: docs/design/kickoff-portal/ORACLE_API_ROADMAP.md
+        description: "Tier E — promotion dividend (roadmap complete)"
+    confidence: 0.9
+    dependencies:
+      - startd8.kickoff.retrospective
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -1947,12 +1991,12 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 61   # v1.19.0: +kickoff.retrospective (Tier C2/C3)
+  total_capabilities: 62   # v1.20.0: +kickoff.promotion (Tier E — roadmap complete)
   by_maturity:
-    stable: 26     # v1.19.0: +1 (kickoff.retrospective stable)
+    stable: 27     # v1.20.0: +1 (kickoff.promotion stable)
     beta: 35       # reconciled to actual (prior summary undercounted)
-  by_category:                 # v1.19.0: +observe (kickoff.retrospective)
-    action: 18     # +agentic.session_snapshot
+  by_category:                 # v1.20.0: +action (kickoff.promotion)
+    action: 19     # +agentic.session_snapshot, +kickoff.promotion
     generate: 16   # +kickoff.workbook_cockpit
     validate: 7
     observe: 8     # +kickoff.activation, +kickoff.retrospective
@@ -1966,6 +2010,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.20.0"
+    date: "2026-07-10"
+    changes:
+      - "Added startd8.kickoff.promotion (action, stable, 0.9) — Tier E, the oracle-as-API roadmap's compounding dividend (roadmap COMPLETE: A1/A2/C1/B/D/C2-C3/E all shipped). `kickoff promote` gates a ready-state project (eligibility from the oracle) and captures its settled conventions into a portable startd8.kickoff.exemplar.v1 record in a cross-project registry (content-derived id, idempotent); `kickoff exemplars` lists; `kickoff apply-exemplar <id> [target]` seeds a NEW project by reusing the vetted VIPP producer path (build_proposal→serialize_buffer) — emits `capture` PROPOSALS the target reviews + confirms through the existing gate (preview default, --emit writes). No new write path; per-target validation skips incompatible conventions honestly. 666 kickoff tests green."
+      - "62 capabilities: 27 stable; action 18→19."
   - version: "1.19.0"
     date: "2026-07-10"
     changes:
