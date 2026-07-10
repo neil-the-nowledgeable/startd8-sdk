@@ -145,6 +145,25 @@ def _worker(fac: "F.KickoffFacilitator", run_key: str, idem: IdempotencyStore, s
         _RUN_REGISTRY.unregister(session_id)
         with _INFLIGHT_LOCK:
             _CANCEL_REQUESTED.discard(session_id)
+        # #1 — emit the facilitation cost once, at terminal state (cost is spent on cancel/error too).
+        # Best-effort + never load-bearing: the transcript is already persisted, so the status read is
+        # cheap and a metrics failure must not touch cleanup. Gives the Grafana cost panel the biggest
+        # single kickoff spend in near-real-time instead of only at the next portal rebuild.
+        try:
+            from pathlib import Path as _Path
+
+            from .metrics import record_facilitation_cost
+
+            cfg = fac.config
+            st = facilitate_status(cfg.project, session_id)
+            record_facilitation_cost(
+                project=_Path(str(cfg.project)).name or str(cfg.project),
+                cost_usd=float(st.get("cost_so_far_usd") or 0.0),
+                posture=getattr(cfg, "posture", None),
+                tier=getattr(cfg, "tier", None),
+            )
+        except Exception:  # noqa: BLE001 — metrics are never load-bearing
+            pass
         try:  # drain any pending child tasks so `loop.close()` doesn't warn (LOW)
             pending = asyncio.all_tasks(loop)
             if pending:

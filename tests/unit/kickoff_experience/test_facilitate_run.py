@@ -158,3 +158,42 @@ def test_error_terminal_state(tmp_path, roster):
         persona_agent_factory=boom_persona(), facilitator_agent_factory=_facilitator_factory())
     status = FR.facilitate_status(tmp_path, res["session_id"])
     assert status["status"] == "error" and status["is_terminal"] is True
+
+
+# ── #1 the facilitation cost gauge ───────────────────────────────────────────
+def test_record_facilitation_cost_labels_project_posture_tier(monkeypatch):
+    """The gauge is set with {project, posture, tier} labels so Grafana can break spend down."""
+    from startd8.kickoff_experience import metrics as M
+
+    captured = {}
+
+    class _FakeGauge:
+        def set(self, value, attrs):
+            captured["value"] = value
+            captured["attrs"] = attrs
+
+    monkeypatch.setattr(M, "_gauges", lambda: {"facilitation_cost": _FakeGauge()})
+    ok = M.record_facilitation_cost(project="household", cost_usd=0.43, posture="prototype", tier="cheap")
+    assert ok is True
+    assert captured["value"] == 0.43
+    assert captured["attrs"] == {"project": "household", "posture": "prototype", "tier": "cheap"}
+
+
+def test_record_facilitation_cost_noop_without_collector(monkeypatch):
+    """No collector → no gauges → best-effort no-op, never raises, returns False."""
+    from startd8.kickoff_experience import metrics as M
+
+    monkeypatch.setattr(M, "_gauges", lambda: None)
+    assert M.record_facilitation_cost(project="p", cost_usd=1.0) is False
+
+
+def test_worker_emits_facilitation_cost_at_completion(tmp_path, roster, monkeypatch):
+    """The worker emits the facilitation cost (labeled by posture/tier) once, at terminal state."""
+    from startd8.kickoff_experience import metrics as M
+
+    calls = []
+    monkeypatch.setattr(M, "record_facilitation_cost", lambda **kw: calls.append(kw) or True)
+    _start_sync(_cfg(tmp_path, posture="prototype", tier="cheap"), roster)
+    assert len(calls) == 1
+    assert calls[0]["posture"] == "prototype" and calls[0]["tier"] == "cheap"
+    assert calls[0]["cost_usd"] is not None  # cost read from the persisted transcript
