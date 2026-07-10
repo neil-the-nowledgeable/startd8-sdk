@@ -2,9 +2,11 @@
 
 **Version:** 0.3.1 (Post design-principle hardening)
 **Date:** 2026-07-10
-**Status:** ✅ Implemented (startd8 `ea7aeb3e`) — CRP skipped by choice. Core + wiring + scorecard
-shipped, opt-in (default off), fully fixture-tested; the live-collector path runs where
-`otelcol-contrib` is provisioned (`OTELCOL_CONTRIB_BIN`/PATH), CI degrades honestly.
+**Status:** ✅ Implemented (startd8 `ea7aeb3e`) + **live-verified** (`ffee7b5c`) — CRP skipped by
+choice. Core + wiring + scorecard shipped, opt-in (default off), fully fixture-tested. The
+end-to-end path is confirmed against a REAL collector by `make runtime-o11y-smoke`
+(`scripts/runtime_observability_smoke.py`): on darwin/arm64, outcome=bound, coverage=1.0, all 4 RED
+axes BOUND. CI degrades honestly where `otelcol-contrib` isn't provisioned.
 **Relates to:** `ContextCore/docs/design/FIDELITY_BENCHMARK_CONVERGENCE.md` (B1 runtime form); the shipped **static** form (`observability_fidelity_static.service_observability_coverage`, `CellResult.observability_coverage`, scorecard D6); `metric_descriptor` / `validate_promql` (Group C fidelity harness).
 
 ---
