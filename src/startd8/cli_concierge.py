@@ -1367,6 +1367,13 @@ def kickoff_cockpit(
     from .kickoff_experience.cockpit_view import cockpit_to_text, render_cockpit
 
     view = build_agentic_view(project_root)
+    # Record a progress point too (Tier 3 burndown) — checking the cockpit is a measurement moment.
+    try:
+        from .kickoff_experience.metrics import record_from_view
+
+        record_from_view(view, Path(project_root).resolve().name)
+    except Exception:  # pragma: no cover - metrics never break the view
+        pass
     if plain or not console.is_terminal:
         print(cockpit_to_text(view, width=console.width or 100, color=False))
     else:

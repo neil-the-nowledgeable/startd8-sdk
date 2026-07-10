@@ -160,6 +160,71 @@ _TRANSCRIPT_TAIL_CAP = 14
 
 #: The Loki datasource uid the FR-6b logs panel binds to (the pre-provisioned Grafana datasource).
 _LOKI_DATASOURCE = "loki"
+#: The Mimir (Prometheus) datasource uid the readiness-burndown timeseries binds to.
+_MIMIR_DATASOURCE = "mimir"
+
+
+def _timeseries_panel(pid: int, title: str, promql: str, *, unit: str = "percent") -> V2Panel:
+    """A Mimir/Prometheus-datasource ``timeseries`` panel — the readiness burndown (roadmap Tier 3).
+
+    Additive + graceful-degrade like the FR-6b logs panel: an empty result (Mimir absent / no points
+    yet) renders an empty graph, never an error. The PromQL is static (baked). Binds the pre-
+    provisioned ``mimir`` uid — not a new startd8 endpoint (FR-11 gate uncrossed)."""
+    return V2Panel(
+        id=pid,
+        title=title,
+        viz_config={
+            "kind": "timeseries",
+            "spec": {
+                "options": {
+                    "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True},
+                    "tooltip": {"mode": "multi", "sort": "none"},
+                },
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": unit,
+                        "custom": {
+                            "drawStyle": "line",
+                            "lineWidth": 2,
+                            "fillOpacity": 10,
+                            "showPoints": "auto",
+                            "spanNulls": True,
+                        },
+                    },
+                    "overrides": [],
+                },
+            },
+        },
+        data={
+            "kind": "QueryGroup",
+            "spec": {
+                "queries": [
+                    {
+                        "kind": "PanelQuery",
+                        "spec": {
+                            "refId": "A",
+                            "hidden": False,
+                            "query": {
+                                "kind": "DataQuery",
+                                "version": "v0",
+                                "group": "mimir",
+                                "datasource": {"name": _MIMIR_DATASOURCE},
+                                "spec": {"expr": promql, "queryType": "range"},
+                            },
+                        },
+                    }
+                ],
+                "transformations": [],
+                "queryOptions": {},
+            },
+        },
+    )
+
+
+def _readiness_promql(project: str) -> str:
+    """The burndown PromQL for one project (agrees with the metrics.py `project` label)."""
+    proj = str(project).replace("\\", "\\\\").replace('"', '\\"')
+    return f'kickoff_readiness_percent{{project="{proj}"}}'
 
 
 def _logs_panel(pid: int, title: str, logql: str) -> V2Panel:
@@ -379,6 +444,23 @@ def build_workbook_v2(
         RowsLayoutRow(
             title="At a glance",
             items=[GridItem(element=_add("At a glance", _status_overview_markdown(state, view)), height=6)],
+        )
+    )
+
+    # Progress (roadmap Tier 3): the readiness burndown over time from the kickoff.readiness.percent
+    # metric (emitted by metrics.record_from_view on each cockpit build). Baked PromQL, mimir
+    # datasource, graceful-degrade (empty until points accrue). Audience-invariant → FR-8 holds.
+    status_rows.append(
+        RowsLayoutRow(
+            title="Progress",
+            items=[
+                GridItem(
+                    element=_add_panel(
+                        _timeseries_panel(0, "Readiness over time", _readiness_promql(project))
+                    ),
+                    height=8,
+                )
+            ],
         )
     )
 

@@ -396,6 +396,14 @@ def build_workbook_v2_and_maybe_provision(
         board = build_workbook_v2(
             state, name, audience=audience, provenance=provenance, view=view
         )
+        # Emit a progress point (readiness/cost/proposals) so the cockpit's burndown accrues over
+        # time (roadmap Tier 3). Best-effort — a no-op without a metrics collector.
+        try:
+            from .metrics import record_from_view
+
+            record_from_view(view, name)
+        except Exception:  # pragma: no cover - metrics never break the build
+            pass
 
         dest = (
             Path(out_dir).expanduser()

@@ -64,10 +64,18 @@ SDK's bucket boundary).
   panel is a hardcoded dict inside `portal_spec_v2`. The v2 module only ships `text`/`table`;
   extracting a tested `logs_panel(...)` **broadens the entire dynamic-dashboards capability** — every
   future v2 dashboard can bind a live datasource.
-- **Fix the OTel Meter→Mimir metrics path** (a *known* broken path: "`emit()`=0 Mimir metrics").
-  Emitting `kickoff.readiness.percent`, `kickoff.session.cost_usd`, `kickoff.proposals.pending` as
-  real gauges unlocks a **readiness burndown + cost-over-time** panel — the most *motivating*
-  visualization (progress). Both a bug fix and a value unlock.
+- **Fix the OTel Meter→Mimir metrics path — ✅ SHIPPED (readiness burndown).** The "`emit()`=0 Mimir
+  metrics" gap is closed: `kickoff_experience/metrics.py` emits `kickoff.readiness.percent` /
+  `kickoff.session.cost_usd` / `kickoff.proposals.pending` / `kickoff.fields.blocked` as real OTel
+  **gauges** (labeled `project`), wired via the idempotent `auto_configure_otel()` (opt-in, auto-probes
+  `:4317`, no-op without a collector). Emitted on every cockpit build (`portal_build`) and every
+  `kickoff cockpit` run. The Status tab gained a **"Readiness over time"** timeseries panel bound to
+  the `mimir` datasource (`kickoff_readiness_percent{project="…"}`), additive + graceful-degrade.
+  **Live-verified end-to-end**: Meter → otel-collector (`:4317`) → Mimir (`:9009`) → Grafana `mimir`
+  datasource → series present (names are `kickoff_readiness_percent` etc. — dots→underscores, no unit
+  suffix). *Infra note:* the running dev stack already has the collector + Mimir + `mimir` datasource;
+  the repo's `docker-compose.loki-stack.yml` does not (logs-only) — a fuller compose is future ops work.
+  Remaining bonus: a cost-over-time panel (the `kickoff_session_cost_usd` gauge is already emitted).
 - **Snapshot `schema_version` upgrade seam** (`_upgrade(dict)` registry). We built the *degrade*
   contract; add an *upgrade* path so old snapshots keep rendering after a bump (Mottainai).
 

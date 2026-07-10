@@ -150,6 +150,7 @@ def test_no_shielded_no_subsection_no_badge():
     assert not any(
         "🛡️" in e["spec"]["vizConfig"]["spec"]["options"]["content"]
         for e in board["spec"]["elements"].values()
+        if e["spec"]["vizConfig"]["kind"] == "text"  # non-text panels (timeseries/logs) carry no content
     )
 
 
@@ -417,6 +418,20 @@ def test_assistant_tab_leads_with_session_glance_and_stop_reason(tmp_path):
     content = transcript["spec"]["vizConfig"]["spec"]["options"]["content"]
     assert "Session at a glance:" in content and "assess ×1" in content
     assert "budget cap" in content  # the friendly stop-reason note
+
+
+def test_status_has_readiness_burndown_panel():
+    # Tier 3: the Status tab carries a Mimir-datasource timeseries querying kickoff_readiness_percent.
+    board = build_workbook_v2(_state(), "demo demo", provenance=_PROV)
+    status_rows = _rows(board)
+    assert any(r["spec"]["title"] == "Progress" for r in status_rows)
+    ts = next(
+        e for e in board["spec"]["elements"].values() if e["spec"]["vizConfig"]["kind"] == "timeseries"
+    )
+    q = ts["spec"]["data"]["spec"]["queries"][0]["spec"]["query"]
+    assert q["datasource"]["name"] == "mimir"
+    # PromQL is project-scoped + escaped (project name with a space)
+    assert q["spec"]["expr"] == 'kickoff_readiness_percent{project="demo demo"}'
 
 
 def test_uid_length_guard_for_long_project_names():
