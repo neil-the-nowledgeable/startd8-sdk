@@ -31,7 +31,9 @@ except Exception:  # pragma: no cover - second server optional in some layouts
     pass
 
 # The read/preview floor: reads + preview-only writes. NO derive-contract, NO apply.
-READ_PREVIEW_ACTIONS = {"survey", "assess", "instantiate-kickoff", "log-friction"}
+# M0b rename: the canonical write action is `instantiate`; `instantiate-kickoff` is the retained
+# deprecated alias. Both are the same preview-only planned-write floor.
+READ_PREVIEW_ACTIONS = {"survey", "assess", "instantiate", "instantiate-kickoff", "log-friction"}
 # Core read actions that must always remain in the loop allow-list (it may grow with new READ tools).
 LOOP_READ_ACTIONS = {"survey", "assess", "field_states"}
 _WRITE_MARKERS = ("apply", "commit", "delete", "promote", "cascade")
