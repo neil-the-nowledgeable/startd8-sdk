@@ -24,16 +24,18 @@ export const plugin = new PanelPlugin<StakeholdersPanelOptions>(StakeholdersPane
       name: 'Panel mode',
       description:
         'Pick by what you need. Run = ask ALL personas ONE question → answers in seconds (cheap; the ' +
-        '“survey”). Facilitate = a multi-ROUND deliberation → a synthesis you can triage into the ' +
-        'backlog/pipeline (fire-and-poll, minutes, pricier; the “workshop”). Apply = the FR-R7 write ' +
-        'gate that commits proposals to the project source of record (preview → paste challenge → ' +
-        'ratify). Start with Run; use Facilitate when you need a synthesis, not just answers. All ' +
-        'token-gated, not human-proof; output is synthetic + unratified.',
+        '“survey”). Facilitate = a multi-ROUND deliberation → a synthesis (fire-and-poll, minutes, ' +
+        'pricier; the “workshop”). Triage = route a finished synthesis into typed candidates, then the ' +
+        'paid extract → accept/reject → serialize write path (fills the VIPP inbox). Apply = the FR-R7 ' +
+        'gate that commits the inbox to the project source of record (preview → paste challenge → ' +
+        'ratify). Flow: Run/Facilitate → Triage → Apply. All token-gated, not human-proof; output is ' +
+        'synthetic + unratified.',
       defaultValue: 'run',
       settings: {
         options: [
           { value: 'run', label: 'Run — 1 question, all personas' },
           { value: 'facilitate', label: 'Facilitate — multi-round synthesis' },
+          { value: 'triage', label: 'Triage — route synthesis → write path' },
           { value: 'apply', label: 'Apply — write gate' },
         ],
       },
