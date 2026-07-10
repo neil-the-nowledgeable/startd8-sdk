@@ -1,0 +1,106 @@
+# Observability fidelity gate — replay generated PromQL against a live Prometheus
+# and gate the build on the result (REQ_TARGET_METRIC_BINDING Group C, FR-10).
+#
+# Two entry points:
+#   * workflow_call  — reusable: another repo's CI can `uses:` this to gate its own
+#     generated artifacts against its own Prometheus (pass a URL + optional secrets).
+#   * workflow_dispatch — run it manually from the Actions tab for a one-off check.
+#
+# The gate wraps `startd8 observability validate-promql` via scripts/fidelity_gate.sh,
+# turning its exit codes into pass/fail: 0 pass · 2 fail (coverage below floor) ·
+# 3 unknown (unreachable / zero queries) — unknown fails unless fail_on_unknown=false.
+name: Observability Fidelity Gate
+
+on:
+  workflow_call:
+    inputs:
+      artifacts_dir:
+        description: Generated observability dir (alerts/ slos/ dashboards/).
+        required: true
+        type: string
+      onboarding_metadata:
+        description: Path to onboarding-metadata.json.
+        required: true
+        type: string
+      prometheus_url:
+        description: Prometheus base URL reachable from the runner.
+        required: false
+        type: string
+        default: http://localhost:9090
+      min_coverage:
+        description: Minimum fraction of queries that must bind to live data.
+        required: false
+        type: string
+        default: "1.0"
+      allow_prod:
+        description: Opt in to a non-demo/non-localhost backend.
+        required: false
+        type: boolean
+        default: false
+      fail_on_unknown:
+        description: Treat exit-3 (unreachable / zero queries) as a failure.
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      prometheus_bearer_token:
+        required: false
+      prometheus_org_id:
+        required: false
+  workflow_dispatch:
+    inputs:
+      artifacts_dir:
+        description: Generated observability dir.
+        required: true
+        type: string
+      onboarding_metadata:
+        description: Path to onboarding-metadata.json.
+        required: true
+        type: string
+      prometheus_url:
+        description: Prometheus base URL.
+        required: true
+        type: string
+      min_coverage:
+        description: Minimum coverage.
+        required: false
+        type: string
+        default: "1.0"
+
+jobs:
+  fidelity:
+    name: Live PromQL fidelity gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install startd8
+        run: pip install -e .
+
+      - name: Run fidelity gate
+        env:
+          ARTIFACTS_DIR: ${{ inputs.artifacts_dir }}
+          ONBOARDING_METADATA: ${{ inputs.onboarding_metadata }}
+          PROMETHEUS_URL: ${{ inputs.prometheus_url }}
+          MIN_COVERAGE: ${{ inputs.min_coverage }}
+          ALLOW_PROD: ${{ inputs.allow_prod }}
+          FAIL_ON_UNKNOWN: ${{ inputs.fail_on_unknown }}
+          REPORT: fidelity-report.json
+          # Credentials are read from the env only and redacted by the command.
+          PROMETHEUS_BEARER_TOKEN: ${{ secrets.prometheus_bearer_token }}
+          PROMETHEUS_ORG_ID: ${{ secrets.prometheus_org_id }}
+        run: bash scripts/fidelity_gate.sh
+
+      - name: Upload fidelity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fidelity-report
+          path: fidelity-report.json
+          if-no-files-found: ignore
