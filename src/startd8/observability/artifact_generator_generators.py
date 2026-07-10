@@ -19,6 +19,7 @@ import yaml  # noqa: F401
 from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
 from .artifact_generator_models import *  # noqa: F401,F403
 from .metric_descriptor import MetricDescriptor, profile_for_transport
+from .spec import Receiver
 
 try:
     from startd8.logging_config import get_logger
@@ -1178,91 +1179,200 @@ def generate_service_monitor(
     )
 
 
-# A channel identifier shaped like an email routes to email_configs, not slack_configs
-# (REQ-CDP-OBS-005 allows Slack names, PagerDuty keys, or email addresses).
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# REQ_NOTIFICATION_POLICY FR-4 — the single type→receiver renderer, keyed on the
+# DECLARED `Receiver.type` (NOT guessed from string shape). Per OQ-1a the per-type target
+# is carried by overloading the single `Receiver.target` string; each renderer maps it to
+# that type's correct Alertmanager field. Adding a type is a dict entry, not an if/elif
+# branch (R1-F2 / the Accidental-Complexity anti-principle). Every entry references the
+# secret via `Receiver.target` (`${VAR}`) — never fabricated (NR-2).
+def _cfg_slack(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    # For slack the receiver `name` IS the channel id (#chan); `target` is the api_url secret.
+    return "slack_configs", {"channel": r.name, "api_url": r.target, "send_resolved": True}
+
+
+def _cfg_email(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "email_configs", {"to": r.target}
+
+
+def _cfg_pagerduty(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "pagerduty_configs", {"routing_key": r.target, "send_resolved": True}
+
+
+def _cfg_opsgenie(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "opsgenie_configs", {"api_key": r.target, "send_resolved": True}
+
+
+def _cfg_webhook(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "webhook_configs", {"url": r.target, "send_resolved": True}
+
+
+def _cfg_msteams(r: Receiver) -> Tuple[str, Dict[str, Any]]:
+    return "msteams_configs", {"webhook_url": r.target, "send_resolved": True}
+
+
+# type (declared, lowercased) → renderer. Absent/`""`/unknown ⇒ UNRESOLVED-REQUIRED (FR-3).
+_RECEIVER_RENDERERS: Dict[str, Any] = {
+    "slack": _cfg_slack,
+    "email": _cfg_email,
+    "pagerduty": _cfg_pagerduty,
+    "opsgenie": _cfg_opsgenie,
+    "webhook": _cfg_webhook,
+    "msteams": _cfg_msteams,
+}
+
+# The exact loud placeholder prefix (FR-3/FR-3a, R1-F7) — reused verbatim, never reinvented.
+_UNRESOLVED_PREFIX = "# UNRESOLVED REQUIRED PARAM:"
+
+
+def _receiver_applies_to(receiver: Receiver, severity: str) -> bool:
+    """FR-7 tiering from the AUTHORED `Receiver.severities`. An empty `severities`
+    means the receiver applies to ALL severities (OQ-3 default — no surprising
+    filtering); otherwise it applies only to the listed severities."""
+    if not receiver.severities:
+        return True
+    return severity in receiver.severities
 
 
 def generate_notification_policy(
     service: ServiceHints,
     business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
-    """Generate an Alertmanager routing policy scoped to a service.
+    """Generate an Alertmanager routing policy scoped to a service (REQ_NOTIFICATION_POLICY).
 
-    Routes to the manifest's `spec.observability.alertChannels` (FR-CONS-1), falling
-    back to `metadata.owners[].slack`. Owner emails (and email-shaped channels) become
-    `email_configs`. The channel is the per-project input; the Slack webhook *transport*
-    is an environment secret (OQ-6), referenced as `${SLACK_API_URL}` — NOT a fabricated
-    `REPLACE_WITH_WEBHOOK_URL`. With no channels resolvable, the receiver carries no
-    transport and `alertChannels` is recorded as unresolved REQUIRED (REQ-CDP-INT-007).
+    Binds to the AUTHORED `Receiver{name,type,target,severities}` (`spec.py`, parsed by the
+    single canonical entry point `from_observability_yaml` and threaded via
+    `business.receivers`). For each routed channel id (FR-6: `alertChannels` →
+    `owners[].slack` fallback via `routing_channels()`; the contacts roster is a future
+    input, not built here) the DECLARED `type` selects the correct `*_configs`, pulling the
+    secret from `Receiver.target` (FR-4/FR-5).
+
+    Loud-fail (FR-3/FR-3a), NEVER a silent Slack default:
+      * a routed channel with no matching receiver (dangling ref), OR
+      * a receiver whose `type` is `""` (parser default), OR an unknown type
+    is emitted as `# UNRESOLVED REQUIRED PARAM:` — reference-secrets-never-fabricate (NR-2).
+
+    Routes are tiered by severity (FR-7) from `Receiver.severities`; the matcher label is the
+    descriptor's `service_label_key` (FR-8: `service` vs `service_name` for span-metrics).
     """
+    descriptor = _descriptor_for(service, descriptor)
+    label_key = descriptor.service_label_key
     derivations: List[DerivationTrace] = []
     severity = _severity_for(business, derivations)
-    receiver = f"{service.service_id}-{severity}"
 
+    by_name = {r.name: r for r in business.receivers}
     channels = business.routing_channels()
-    slack_channels = [c for c in channels if not _EMAIL_RE.match(c)]
-    channel_emails = [c for c in channels if _EMAIL_RE.match(c)]
-    owner_emails = [
-        str(o["email"]) for o in business.owners
-        if isinstance(o, dict) and o.get("email")
-    ]
-    all_emails = list(dict.fromkeys(owner_emails + channel_emails))
 
-    receiver_doc: Dict[str, Any] = {"name": receiver}
-    if slack_channels:
-        receiver_doc["slack_configs"] = [
-            {"channel": ch, "api_url": "${SLACK_API_URL}", "send_resolved": True}
-            for ch in slack_channels
-        ]
-    if channels:
+    # Grouping (FR-9): overridable from business.notification_grouping, not hardcoded literals.
+    grouping = business.notification_grouping or {}
+    group_by = grouping.get("group_by")
+    group_by = list(group_by) if isinstance(group_by, list) else [label_key, "alertname"]
+    group_wait = str(grouping.get("group_wait")) if grouping.get("group_wait") else "30s"
+    repeat_interval = (
+        str(grouping.get("repeat_interval")) if grouping.get("repeat_interval") else "4h"
+    )
+
+    # Resolve each routed channel ONCE (FR-3/FR-3a/FR-4): channel id → (config_key, config,
+    # receiver), or record it UNRESOLVED-REQUIRED. Never a silent Slack default. Resolving up
+    # front (rather than per tier) avoids re-work and a dedup hack, and lets each tier just
+    # filter the already-resolved set by `Receiver.severities`.
+    resolved: List[Tuple[str, Dict[str, Any], Receiver]] = []
+    unresolved: List[str] = []
+    for ch in dict.fromkeys(channels):  # de-dup channel ids, preserve order
+        receiver = by_name.get(ch)
+        if receiver is None:  # dangling ref: routed but not declared (FR-3a)
+            unresolved.append(f"{ch} (no matching receiver in alerting.receivers)")
+            continue
+        renderer = _RECEIVER_RENDERERS.get(receiver.type.strip().lower())
+        if renderer is None:  # type=="" (parser default) or unknown type (FR-3)
+            unresolved.append(f"{ch} (unresolvable channel type {receiver.type or '(none declared)'!r})")
+            continue
+        key, cfg = renderer(receiver)
+        resolved.append((key, cfg, receiver))
+
+    # FR-7 tiering: the alert generator labels EVERY alert for this service with the single
+    # `_severity_for(business)` value — there is no per-alert warning/critical split today — so
+    # we emit exactly ONE route, at that severity. A synthetic `warning` tier would be a route
+    # that no generated alert can ever match (a silently-dead route). The tiering that DOES work
+    # is per-receiver filtering: `Receiver.severities` decides which channels apply (a receiver
+    # declaring `severities: [critical]` pages on a critical service; a chat-only receiver with
+    # no `severities` always applies). Multi-severity route tiers are forward-looking — they
+    # become meaningful only if/when alerts carry varied severities.
+    tiers = [severity]
+
+    receiver_docs: List[Dict[str, Any]] = []
+    routes: List[Dict[str, Any]] = []
+    for tier in tiers:
+        applicable = [(k, cfg) for (k, cfg, r) in resolved if _receiver_applies_to(r, tier)]
+        if not applicable:
+            continue  # no channel applies to this severity → no empty-receiver route
+        rname = f"{service.service_id}-{tier}"
+        rdoc: Dict[str, Any] = {"name": rname}
+        for key, cfg in applicable:
+            rdoc.setdefault(key, []).append(cfg)
+        receiver_docs.append(rdoc)
+        routes.append({
+            "matchers": [f"{label_key} = {service.service_id}", f"severity = {tier}"],
+            "receiver": rname,
+            "group_by": list(group_by),  # fresh list per route → no YAML anchor/alias
+            "group_wait": group_wait,
+            "repeat_interval": repeat_interval,
+            "continue": True,
+        })
         derivations.append(DerivationTrace(
-            field="alert_channels", source="manifest.spec.observability.alertChannels",
-            transformation=f"slack={slack_channels} email={channel_emails}", tier="manifest",
-        ))
-    else:
-        derivations.append(DerivationTrace(
-            field="alert_channels", source="manifest.spec.observability.alertChannels",
-            transformation="unresolved_required (REQ-CDP-INT-007) — no transport emitted",
-            tier="default",
-        ))
-    if all_emails:
-        receiver_doc["email_configs"] = [{"to": e} for e in all_emails]
-        derivations.append(DerivationTrace(
-            field="owner_contacts",
-            source="manifest.metadata.owners[].email + email-shaped alertChannels",
-            transformation=f"email → {all_emails}", tier="manifest",
+            field="alert_channels",
+            source="observability.yaml alerting.receivers (declared type+target)",
+            transformation=f"tier={tier} matcher={label_key}={service.service_id}",
+            tier="manifest",
         ))
 
-    doc: Dict[str, Any] = {
-        "route": {
-            "routes": [
-                {
-                    "matchers": [f"service = {service.service_id}"],
-                    "receiver": receiver,
-                    "group_by": ["alertname", "service"],
-                    "group_wait": "30s",
-                    "repeat_interval": "4h",
-                }
-            ]
-        },
-        "receivers": [receiver_doc],
-    }
+    seen_resolved = bool(receiver_docs)
+
+    doc: Dict[str, Any] = {"route": {"routes": routes}, "receivers": receiver_docs}
+
     header_lines = [
         "# Generated by startd8 observability artifact generator",
         f"# Service: {service.service_id} — notification routing by severity",
     ]
-    if channels:
+    if seen_resolved:
         header_lines.append(
-            "# Channels from manifest; set the SLACK_API_URL secret at deploy time "
-            "(the webhook transport is environment config, not a per-project input)."
+            "# Channels bound to authored alerting.receivers (declared type + ${SECRET} "
+            "target); secrets are referenced, never fabricated, and set at deploy time."
         )
-    else:
+    if unresolved:
+        for u in unresolved:
+            header_lines.append(f"{_UNRESOLVED_PREFIX} {u} — declare it in "
+                                "observability.yaml alerting.receivers with a known "
+                                "type (slack/email/pagerduty/opsgenie/webhook/msteams) "
+                                "and an env-indirected target. No transport was fabricated.")
+        derivations.append(DerivationTrace(
+            field="alert_channels", source="routing_channels ↔ alerting.receivers join",
+            transformation=f"unresolved_required (FR-3/FR-3a): {unresolved}", tier="default",
+        ))
+    if not channels:
         header_lines.append(
-            "# UNRESOLVED REQUIRED PARAM: no alertChannels (or owners[].slack) in the "
-            "manifest — receiver has no transport. Populate spec.observability.alertChannels "
-            "upstream (REQ-CDP-OBS-005). No webhook URL was fabricated."
+            f"{_UNRESOLVED_PREFIX} no alertChannels (or owners[].slack) in the manifest — "
+            "no channels to route. Populate spec.observability.alertChannels upstream."
         )
+        derivations.append(DerivationTrace(
+            field="alert_channels", source="manifest.spec.observability.alertChannels",
+            transformation="unresolved_required — no channels", tier="default",
+        ))
+    elif resolved and not receiver_docs:
+        # Channels resolved to receivers, but none declare `severities` matching this
+        # service's alert severity — so nothing routes. Flag it loudly, don't emit a
+        # silent empty policy (Context-Correctness — no silent gap).
+        header_lines.append(
+            f"{_UNRESOLVED_PREFIX} all resolved receivers are filtered out for severity "
+            f"'{severity}' (their Receiver.severities do not include it) — no channel would "
+            f"be notified. Add '{severity}' to a receiver's severities, or leave it empty to "
+            "apply to all severities."
+        )
+        derivations.append(DerivationTrace(
+            field="alert_channels", source="Receiver.severities filter",
+            transformation=f"all_filtered_for_severity={severity}", tier="default",
+        ))
+
     header = "\n".join(header_lines) + f"\n{_derivation_comment(derivations)}\n\n"
     return ArtifactResult(
         artifact_type="notification_policy",

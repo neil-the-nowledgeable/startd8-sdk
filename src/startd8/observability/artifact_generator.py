@@ -286,14 +286,17 @@ def _repair_and_validate(
 
 
 # Generators that accept a resolved MetricDescriptor as their 3rd positional arg
-# (REQ_TARGET_METRIC_BINDING Step 3, FR-4/FR-1a). The remaining per-service
-# generators (service_monitor, notification_policy, runbook) are metric-shape-
-# agnostic and keep the (service, business) signature.
+# (REQ_TARGET_METRIC_BINDING Step 3, FR-4/FR-1a). notification_policy joined this set
+# per REQ_NOTIFICATION_POLICY FR-8: its route matcher label is metric-shape-DEPENDENT
+# (`service` vs `service_name` for span-metrics), so it must read
+# `descriptor.service_label_key` rather than hardcoding `service`. The remaining
+# per-service generators (service_monitor, runbook) stay (service, business).
 _DESCRIPTOR_AWARE_GENERATORS = frozenset({
     generate_alert_rules,
     generate_slo_definitions,
     generate_dashboard_spec,
     generate_loki_rule,
+    generate_notification_policy,
 })
 
 
@@ -460,6 +463,19 @@ def generate_observability_artifacts(
     services = extract_service_hints(metadata)
     business = load_business_context(manifest_path, metadata)
 
+    # REQ_NOTIFICATION_POLICY FR-1: thread the authored `alerting.receivers` into the
+    # business context BEFORE per-service generation, so notification_policy binds to the
+    # DECLARED channel type+secret (Receiver.target) instead of guessing from string shape.
+    # Parsed once here via the single canonical entry point (from_observability_yaml) and
+    # reused by the domain-alert path below (no double parse). Absent path ⇒ no receivers ⇒
+    # routed channels with no matching receiver become UNRESOLVED-REQUIRED (FR-3/FR-3a).
+    _obs_spec = None
+    if observability_yaml_path is not None and Path(observability_yaml_path).exists():
+        from .spec import from_observability_yaml
+        _obs = yaml.safe_load(Path(observability_yaml_path).read_text(encoding="utf-8")) or {}
+        _obs_spec = from_observability_yaml(_obs)
+        business.receivers = list(_obs_spec.receivers)
+
     report = GenerationReport(
         project_id=business.project_id,
         generated_at=_utc_now_iso(),
@@ -558,12 +574,10 @@ def generate_observability_artifacts(
     # rules — closing the gap the convention path leaves as `_domain_alert_todo_block` stubs. Strictly
     # additive + opt-in: an absent observability_yaml_path ⇒ no new artifact and RED output stays
     # byte-identical. The renderer is taxonomy-free; the _stamp_taxonomy pass below stamps the result.
-    if observability_yaml_path is not None and Path(observability_yaml_path).exists():
+    if _obs_spec is not None:
         from .alert_renderer import render_domain_alert_rules
         from .dashboard_renderer import render_domain_dashboard
-        from .spec import from_observability_yaml
-        _obs = yaml.safe_load(Path(observability_yaml_path).read_text(encoding="utf-8")) or {}
-        _spec = from_observability_yaml(_obs)
+        _spec = _obs_spec  # parsed once above (single from_observability_yaml call)
         _pid = business.project_id or "domain"
         # E1: the SAME observability.yaml drives both — domain alert rules AND a domain dashboard.
         # Both additive/opt-in; the renderers are taxonomy-free (the _stamp_taxonomy pass stamps them).

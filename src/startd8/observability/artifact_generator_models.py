@@ -12,6 +12,8 @@ import paths keep working.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple  # noqa: F401
 
+from .spec import Receiver
+
 @dataclass
 class ConventionMetric:
     """A single OTel convention-based metric expected for a service."""
@@ -66,6 +68,13 @@ class BusinessContext:
     # loki_rule / runbook. Shapes verified against real .contextcore.yaml (plan Phase 0).
     alert_channels: List[str] = field(default_factory=list)  # spec.observability.alertChannels
     owners: List[Dict[str, Any]] = field(default_factory=list)  # metadata.owners: [{team,slack?,email?}]
+    # Authored alert receivers from observability.yaml `alerting.receivers`, parsed by
+    # `spec.from_observability_yaml` (the ONE canonical receiver-parsing entry point —
+    # REQ_NOTIFICATION_POLICY FR-1/FR-2). Each Receiver{name,type,target,severities} carries
+    # the DECLARED channel type + env-indirected secret (`target`). notification_policy binds
+    # to this instead of guessing channel type from string shape. Empty ⇒ routed channels with
+    # no matching receiver are emitted UNRESOLVED-REQUIRED (FR-3/FR-3a), never silently Slack.
+    receivers: List[Receiver] = field(default_factory=list)
     metrics_interval: Optional[str] = None  # spec.observability.metricsInterval, e.g. "30s"
     targets: List[Dict[str, Any]] = field(default_factory=list)  # spec.targets: [{kind,name,namespace}]
     # OQ-8 resolved (pipeline-requirements R2-F1/F2): optional manifest fields, env-overridable.
@@ -77,6 +86,9 @@ class BusinessContext:
     severity_map: Optional[Dict[str, str]] = None        # criticality → alert severity
     default_thresholds: Optional[Dict[str, str]] = None  # SLO default thresholds
     quality_thresholds: Optional[Dict[str, float]] = None  # portal quality-gauge bands
+    # REQ_NOTIFICATION_POLICY FR-9: overridable Alertmanager route grouping. Keys:
+    # group_by (list), group_wait (str), repeat_interval (str). None ⇒ built-in defaults.
+    notification_grouping: Optional[Dict[str, Any]] = None
 
     def routing_channels(self) -> List[str]:
         """Channel identifiers for alert routing, with the Phase-0 fallback chain:
