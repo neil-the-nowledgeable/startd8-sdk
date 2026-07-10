@@ -110,6 +110,25 @@ def test_empty_states_are_honest(tmp_path):
     assert "No proposals" in out
 
 
+def test_pipeline_panel_shown_only_when_there_is_activity(tmp_path):
+    # M1: the terminal cockpit gains a Pipeline & Stakeholders panel from the folded oracle state.
+    view = _view(tmp_path)  # no pipeline/roster → panel absent
+    assert "Pipeline & Stakeholders" not in cockpit_to_text(view)
+    active = AgenticView(
+        project_root=str(tmp_path),
+        state=view.state,
+        snapshot=view.snapshot,
+        snapshot_status=view.snapshot_status,
+        proposals=view.proposals,
+        proposals_present=view.proposals_present,
+        next_action=view.next_action,
+        pipeline={"inbox": {"present": True, "count": 2}, "dispositions": {"present": False}, "staged": []},
+        roster=["p1"],
+    )
+    out = cockpit_to_text(active)
+    assert "Pipeline & Stakeholders" in out and "2 in VIPP inbox" in out
+
+
 # --------------------------------------------------------------------------- parity (FR-3)
 
 

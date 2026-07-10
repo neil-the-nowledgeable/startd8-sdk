@@ -126,6 +126,11 @@ class AgenticView:
     proposals_present: bool  # the inbox file was readable (independent of whether it has rows)
     readiness: Any = None  # ReadinessView | None (cascade readiness; best-effort)
     next_action: Any = None  # NextAction | None — the single recommended next step (Tier-1 #1)
+    # Convergence M1 — the state that only the classic Workbook surfaced, folded so AgenticView is the
+    # single oracle every surface derives from (best-effort; None on absence).
+    panel_answers: Any = None  # latest stakeholder-panel run answers (list[dict]) | None
+    pipeline: Any = None  # {staged, inbox, dispositions} panel→bridge→VIPP funnel | None
+    roster: Any = None  # stakeholder roster (personas) | None
 
     # --- FR-10 honest empty/unavailable messaging -------------------------------------------------
 
@@ -166,8 +171,58 @@ class AgenticView:
             return "No proposals awaiting confirmation."
         return None
 
+    # --- convergence M1: compact summaries of the folded classic-Workbook state -------------------
+
+    def pipeline_summary(self) -> Optional[str]:
+        """One-line panel→bridge→VIPP funnel summary, or ``None`` when there's no pipeline activity."""
+        p = self.pipeline
+        if not p:
+            return None
+        parts = []
+        staged = len(p.get("staged", []) or [])
+        if staged:
+            parts.append(f"{staged} staged")
+        inbox = p.get("inbox", {}) or {}
+        if inbox.get("present"):
+            parts.append(f"{inbox.get('count', 0)} in VIPP inbox")
+        disp = p.get("dispositions", {}) or {}
+        if disp.get("present"):
+            c = disp.get("counts", {}) or {}
+            parts.append(
+                f"dispositions {c.get('ACCEPT', 0)} accept · "
+                f"{c.get('REJECT', 0)} reject · {c.get('COUNTER', 0)} counter"
+            )
+        return " · ".join(parts) if parts else None
+
+    def stakeholder_summary(self) -> Optional[str]:
+        """One-line stakeholder summary (roster size + latest-run answer count), or ``None``."""
+        parts = []
+        n = _roster_size(self.roster)
+        if n:
+            parts.append(f"{n} persona" + ("" if n == 1 else "s"))
+        if self.panel_answers:
+            parts.append(f"{len(self.panel_answers)} answers (latest run)")
+        return " · ".join(parts) if parts else None
+
 
 # --------------------------------------------------------------------------- loaders
+
+
+def _roster_size(roster: Any) -> int:
+    """Defensive count of personas in a roster object (shape-agnostic)."""
+    if roster is None:
+        return 0
+    for attr in ("personas", "roster", "stakeholders"):
+        v = getattr(roster, attr, None)
+        if v is not None:
+            try:
+                return len(v)
+            except TypeError:
+                pass
+    try:
+        return len(roster)
+    except TypeError:
+        return 0
 
 
 def _load_snapshot(project_root: Path) -> Tuple[Optional[AgenticSessionSnapshot], str]:
@@ -292,6 +347,17 @@ def build_agentic_view(project_root: str | Path) -> AgenticView:
     proposals, present = _load_proposals(root)
     state = _load_state(root)
     readiness = _load_readiness(root)
+    # Convergence M1 — fold the stakeholder/pipeline/roster state the classic Workbook surfaced, from
+    # the shared loader home, so this one oracle is a superset of both boards (best-effort, never raises).
+    panel_answers = pipeline = roster = None
+    try:
+        from .workbook_sources import load_panel_run, load_pipeline_state, load_roster
+
+        panel_answers = load_panel_run(root)
+        pipeline = load_pipeline_state(root)
+        roster = load_roster(root)
+    except Exception:  # pragma: no cover - the classic-state fold degrades independently
+        pass
     return AgenticView(
         project_root=str(root),
         state=state,
@@ -301,4 +367,7 @@ def build_agentic_view(project_root: str | Path) -> AgenticView:
         proposals_present=present,
         readiness=readiness,
         next_action=_compute_next_action(state, readiness),
+        panel_answers=panel_answers,
+        pipeline=pipeline,
+        roster=roster,
     )

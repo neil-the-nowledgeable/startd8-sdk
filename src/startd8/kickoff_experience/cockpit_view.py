@@ -13,7 +13,7 @@ Kept presentation-only: all facts (`next_action`, `readiness_percent`, `snapshot
 from __future__ import annotations
 
 from io import StringIO
-from typing import Any
+from typing import Any, Optional
 
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -115,9 +115,29 @@ def _proposals_panel(view: Any) -> Panel:
     return Panel(Group(table, cmds), title="Proposals", border_style="yellow", title_align="left")
 
 
+def _pipeline_panel(view: Any) -> Optional[Panel]:
+    """The panel→bridge→VIPP funnel + stakeholders (convergence M1) — shown only when there's activity."""
+    pipe = view.pipeline_summary()
+    stake = view.stakeholder_summary()
+    if not pipe and not stake:
+        return None
+    body = Text()
+    if stake:
+        body.append("Stakeholders: ", style="bold")
+        body.append(stake + "\n")
+    if pipe:
+        body.append("Pipeline: ", style="bold")
+        body.append(pipe + "\n")
+    return Panel(body, title="Pipeline & Stakeholders", border_style="blue", title_align="left")
+
+
 def render_cockpit(view: Any) -> Group:
-    """The three cockpit sections (Status / Assistant / Proposals) as a Rich renderable."""
-    return Group(_status_panel(view), _assistant_panel(view), _proposals_panel(view))
+    """The cockpit sections (Status / Assistant / Proposals [/ Pipeline]) as a Rich renderable."""
+    panels = [_status_panel(view), _assistant_panel(view), _proposals_panel(view)]
+    pipeline = _pipeline_panel(view)
+    if pipeline is not None:
+        panels.append(pipeline)
+    return Group(*panels)
 
 
 def cockpit_to_text(view: Any, *, width: int = 100, color: bool = False) -> str:

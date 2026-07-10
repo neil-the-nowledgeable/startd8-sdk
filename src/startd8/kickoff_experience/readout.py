@@ -153,7 +153,21 @@ def render_markdown(view: Any) -> str:
     _md_status(view, lines)
     _md_assistant(view, lines)
     _md_proposals(view, lines)
+    _md_pipeline(view, lines)
     return "\n".join(lines) + "\n"
+
+
+def _md_pipeline(view: Any, lines: List[str]) -> None:
+    """Convergence M1: the panel→bridge→VIPP funnel + stakeholders — only when there's activity."""
+    pipe = view.pipeline_summary()
+    stake = view.stakeholder_summary()
+    if not pipe and not stake:
+        return
+    lines.append("## Pipeline & stakeholders\n")
+    if stake:
+        lines.append(f"**Stakeholders:** {_md_cell(stake)}\n")
+    if pipe:
+        lines.append(f"**Pipeline:** {_md_cell(pipe)}\n")
 
 
 # --------------------------------------------------------------------------- html
@@ -298,6 +312,21 @@ def render_html(view: Any) -> str:
     _html_status(view, out)
     _html_assistant(view, out)
     _html_proposals(view, out)
+    _html_pipeline(view, out)
 
     out.append("</body></html>")
     return "\n".join(out) + "\n"
+
+
+def _html_pipeline(view: Any, out: List[str]) -> None:
+    """Convergence M1: the panel→bridge→VIPP funnel + stakeholders — only when there's activity."""
+    pipe = view.pipeline_summary()
+    stake = view.stakeholder_summary()
+    if not pipe and not stake:
+        return
+    out.append("<section><h2>Pipeline &amp; stakeholders</h2>")
+    if stake:
+        out.append(f"<p><strong>Stakeholders:</strong> {_e(stake)}</p>")
+    if pipe:
+        out.append(f"<p><strong>Pipeline:</strong> {_e(pipe)}</p>")
+    out.append("</section>")
