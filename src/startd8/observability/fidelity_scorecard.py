@@ -78,11 +78,30 @@ def _exclusions(r: Dict[str, Any]) -> Section:
     return Section("Excluded, honestly", body)
 
 
+def _target_drift(report: Dict[str, Any]) -> Section:
+    """Declared-but-absent services — a whole-service gap, distinct from per-query fails."""
+    drift = report.get("target_drift") or {}
+    absent = drift.get("declared_absent") or []
+    if not drift.get("checked"):
+        body = "_Not checked (backend label values unavailable)._"
+    elif not absent:
+        body = "_No drift — every declared service is present in the backend._"
+    else:
+        body = (
+            "The manifest declares these services but the backend has never emitted them "
+            "(every one of their queries fails on the same axis). **Deploy them** (a real "
+            "gap) or **`--exclude-services`** them (intentionally out of scope here):\n\n"
+            + table(["declared-but-absent service"], [[s] for s in absent])
+        )
+    return Section("Target drift (declared vs deployed)", body)
+
+
 def build_fidelity_scorecard(report: Dict[str, Any]) -> str:
     """Render a fidelity report dict (``FidelityReport.to_dict()``) as markdown."""
     sections = [
         _leaderboard(report),
         _axes(report),
+        _target_drift(report),
         _exclusions(report),
     ]
     footer = (

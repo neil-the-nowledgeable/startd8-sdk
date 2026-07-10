@@ -43,7 +43,7 @@ import urllib.error
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import yaml
 
@@ -295,6 +295,48 @@ def scan_excluded_artifacts(artifacts_dir: Path) -> Dict[str, int]:
         if n:
             counts[artifact_type] = n
     return counts
+
+
+def detect_target_drift(
+    services: Iterable[str],
+    descriptors: Dict[str, MetricDescriptor],
+    label_values_fn: Callable[[str], List[str]],
+) -> Dict[str, Any]:
+    """Reconcile the manifest's declared services against the backend's actual ones.
+
+    A service whose identity-label value (e.g. ``service_name="accountingservice"``) is
+    entirely absent from the backend's label values is **declared-but-absent** — the
+    generator produced artifacts for a service the target doesn't run. That is a
+    whole-service *target drift*, not scattered per-query failures: EVERY one of its
+    queries fails on the same axis. Surfaced distinctly so the operator can act — deploy
+    the service (a real gap) or ``--exclude-services`` it (intentionally out of scope).
+
+    Returns ``{"declared_absent": [...], "checked": bool}``. Degrade-honest: an
+    unreachable ``label_values`` for a key marks the run inconclusive for that key, never
+    a false drift.
+    """
+    by_key: Dict[str, Optional[set]] = {}
+    absent: List[str] = []
+    checked = False
+    for svc in sorted(set(services)):
+        d = descriptors.get(svc)
+        if d is None:
+            continue
+        key = d.service_label_key
+        if key not in by_key:
+            try:
+                by_key[key] = set(label_values_fn(key))
+            except Exception as exc:  # inconclusive for this key, not a false drift
+                logger.warning("target-drift label_values(%s) failed: %s", key, exc)
+                by_key[key] = None
+        values = by_key[key]
+        if values is None:
+            continue
+        checked = True
+        expected = d.service_label_value_tpl.format(service_id=svc)
+        if expected not in values:
+            absent.append(svc)
+    return {"declared_absent": absent, "checked": checked}
 
 
 # ─────────────────── expected identity (from the descriptor) ────────────────
@@ -553,6 +595,10 @@ class FidelityReport:
     #: applicable to a Prometheus backend), keyed by type: {"loki_rule": 13, ...}.
     #: Enumerated so the harness proves it saw them and excluded them, degrade-honest.
     excluded_artifacts: Dict[str, int] = field(default_factory=dict)
+    #: Target drift: {"declared_absent": [service, ...], "checked": bool}. Services the
+    #: manifest declares but the backend has never emitted — a whole-service gap to deploy
+    #: or --exclude-services, distinct from a per-query binding miss.
+    target_drift: Dict[str, Any] = field(default_factory=dict)
     verdicts: List[ExprVerdict] = field(default_factory=list)
     per_service: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     per_axis: Dict[str, int] = field(default_factory=dict)
@@ -575,6 +621,7 @@ class FidelityReport:
             "queries_excluded": sum(self.excluded_by_reason.values()),
             "excluded_by_reason": self.excluded_by_reason,
             "excluded_artifacts": self.excluded_artifacts,
+            "target_drift": self.target_drift,
             "coverage": round(self.coverage, 4),
             "binding_coverage": round(self.binding_coverage, 4),
             "data_coverage": round(self.data_coverage, 4),
@@ -647,6 +694,7 @@ def run_validation(
     query_budget: int = DEFAULT_QUERY_BUDGET,
     bind_window: str = "1h",
     exclude_kinds: Optional[set] = None,
+    exclude_services: Optional[set] = None,
     auth: Optional[Auth] = None,
     query_fn: Optional[Callable[..., int]] = None,
     list_names_fn: Optional[Callable[..., List[str]]] = None,
@@ -682,13 +730,17 @@ def run_validation(
     excluded_artifacts = scan_excluded_artifacts(Path(artifacts_dir))
     excluded_by_reason: Dict[str, int] = {}
 
-    # A1: operator-declared kind exclusion (--exclude-kinds). Excluded exprs leave the
-    # replay set and are reported by reason — never counted against binding_coverage.
-    if exclude_kinds:
+    # A1 + target-drift: operator-declared kind (--exclude-kinds) and service
+    # (--exclude-services) exclusion. Excluded exprs leave the replay set and are
+    # reported by reason — never counted against binding_coverage.
+    if exclude_kinds or exclude_services:
         kept: List[ExtractedExpr] = []
         for e in exprs:
-            if e.source_kind in exclude_kinds:
+            if exclude_kinds and e.source_kind in exclude_kinds:
                 key = f"kind_excluded:{e.source_kind}"
+                excluded_by_reason[key] = excluded_by_reason.get(key, 0) + 1
+            elif exclude_services and e.service in exclude_services:
+                key = f"service_excluded:{e.service}"
                 excluded_by_reason[key] = excluded_by_reason.get(key, 0) + 1
             else:
                 kept.append(e)
@@ -720,6 +772,16 @@ def run_validation(
         )
 
     descriptors = reconstruct_descriptors(Path(onboarding_metadata))
+
+    # Target drift: which declared services are ABSENT from the backend entirely — a
+    # whole-service gap (every query fails on the same axis), distinct from a per-query
+    # binding miss. Surfaced so the operator can deploy the service or exclude it, rather
+    # than reading N scattered fails. Degrade-honest (unreachable ⇒ inconclusive).
+    target_drift = detect_target_drift(
+        {e.service for e in exprs},
+        descriptors,
+        lambda key: label_vals(prometheus_url, key, auth=auth),
+    )
 
     # Lazily discovered live series (one probe, reused across diagnoses).
     live_names_cache: Dict[str, List[str]] = {}
@@ -891,6 +953,7 @@ def run_validation(
             verdicts=verdicts,
             excluded_by_reason=excluded_by_reason,
             excluded_artifacts=excluded_artifacts,
+            target_drift=target_drift,
         )
 
     if replayed == 0:
@@ -906,6 +969,7 @@ def run_validation(
             min_coverage=min_coverage,
             excluded_by_reason=excluded_by_reason,
             excluded_artifacts=excluded_artifacts,
+            target_drift=target_drift,
         )
 
     # FR-2: two coverage numbers, computed through the shared verification core so
@@ -956,6 +1020,15 @@ def run_validation(
             "data (data_coverage 0.0); your queries are correct but the backend is silent "
             "in-window (idle load / stale data)."
         )
+    # Target drift: name whole services the manifest declares but the backend never ran,
+    # so the operator resolves the gap (deploy) or scopes it (--exclude-services) rather
+    # than chasing N per-query fails. NOT auto-excluded — absence may be a real gap.
+    _absent = target_drift.get("declared_absent") or []
+    if _absent:
+        reason += (
+            f" — TARGET DRIFT: {len(_absent)} declared service(s) absent from the backend "
+            f"({', '.join(_absent)}); deploy them, or `--exclude-services` if out of scope here."
+        )
     # Quick-win #1: roll the per-verdict profile suggestions up into the single
     # metricsProfile that best matches the live backend across all failing
     # queries — the one-line fix for the whole run. Ties break on frequency.
@@ -977,4 +1050,5 @@ def run_validation(
         suggested_metrics_profile=suggested_metrics_profile,
         excluded_by_reason=excluded_by_reason,
         excluded_artifacts=excluded_artifacts,
+        target_drift=target_drift,
     )

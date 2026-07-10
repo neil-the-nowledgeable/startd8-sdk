@@ -75,6 +75,12 @@ def validate_promql(
         help="Comma list of artifact kinds to exclude from replay (alert|slo|dashboard). "
         "Excluded queries are reported, not counted against binding_coverage (A1).",
     ),
+    exclude_services: str = typer.Option(
+        "",
+        "--exclude-services",
+        help="Comma list of services to exclude — for services intentionally not deployed "
+        "to this backend (see the report's target_drift). Excluded, not counted as fail.",
+    ),
     allow_prod: bool = typer.Option(
         False,
         "--allow-prod",
@@ -106,6 +112,7 @@ def validate_promql(
         min_coverage=min_coverage,
         bind_window=bind_window,
         exclude_kinds={k.strip() for k in exclude_kinds.split(",") if k.strip()} or None,
+        exclude_services={s.strip() for s in exclude_services.split(",") if s.strip()} or None,
         allow_prod=allow_prod,
         dry_run=dry_run,
         auth=auth,

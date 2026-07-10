@@ -457,6 +457,73 @@ def test_template_var_skip_folds_into_excluded_by_reason(tmp_path):
     assert report.excluded_by_reason.get("unresolved_template_var") == 1
 
 
+# ─────────────── target drift + service-level exclusion ────────────────────
+
+
+def test_detect_target_drift_lists_absent_services():
+    from startd8.observability.validate_promql import detect_target_drift
+    from startd8.observability.metric_descriptor import profile_for
+
+    descriptors = {
+        "checkout": profile_for("span-metrics-connector"),
+        "cart": profile_for("span-metrics-connector"),
+    }
+    # backend knows "cart" but has never emitted "checkout"
+    drift = detect_target_drift(["checkout", "cart"], descriptors, lambda key: ["cart"])
+    assert drift["declared_absent"] == ["checkout"]
+    assert drift["checked"] is True
+
+
+def test_detect_target_drift_unreachable_is_inconclusive_not_false_drift():
+    from startd8.observability.validate_promql import detect_target_drift
+    from startd8.observability.metric_descriptor import profile_for
+
+    def _boom(key):
+        raise RuntimeError("backend down")
+
+    drift = detect_target_drift(["x"], {"x": profile_for("semconv-http")}, _boom)
+    assert drift["declared_absent"] == [] and drift["checked"] is False
+
+
+def test_run_validation_surfaces_target_drift(tmp_path):
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "accountingservice",
+                  {"Thru": 'rate(calls_total{service_name="accountingservice"}[5m])'})
+    onboarding = _onboarding(tmp_path, {"accountingservice": {
+        "transport": "grpc",
+        "metrics": {"convention_based": [], "convention_profile": "span-metrics-connector"},
+    }})
+    report = run_validation(
+        artifacts_dir=artifacts, onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090", min_coverage=1.0, auth=Auth(),
+        query_fn=lambda *a, **k: 0,
+        list_names_fn=lambda *a, **k: ["calls_total"],   # metric exists
+        label_values_fn=lambda *a, **k: ["frontend"],    # but accountingservice absent
+    )
+    assert report.target_drift["declared_absent"] == ["accountingservice"]
+    assert "TARGET DRIFT" in report.reason
+
+
+def test_exclude_services_removes_from_denominator(tmp_path):
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice", {"A": "rate(x[5m])"})
+    _write_alerts(artifacts, "accountingservice", {"B": "rate(y[5m])"})
+    onboarding = _onboarding(tmp_path, {
+        "checkoutservice": {"transport": "grpc", "metrics": {"convention_based": []}},
+        "accountingservice": {"transport": "grpc", "metrics": {"convention_based": []}},
+    })
+    report = run_validation(
+        artifacts_dir=artifacts, onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090", min_coverage=1.0, auth=Auth(),
+        query_fn=lambda *a, **k: 1, label_values_fn=lambda *a, **k: ["checkoutservice"],
+        exclude_services={"accountingservice"},
+    )
+    assert report.queries_replayed == 1  # accountingservice's query excluded
+    assert report.excluded_by_reason == {"service_excluded:accountingservice": 1}
+    # an excluded service is not reported as drift
+    assert "accountingservice" not in report.target_drift.get("declared_absent", [])
+
+
 # ───────────── bound_no_data verdict + binding vs data coverage ─────────────
 
 
