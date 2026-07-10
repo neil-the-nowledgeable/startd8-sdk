@@ -27,7 +27,9 @@ Set the panel option **Panel mode** to pick a surface (all share the same dataso
   worker and returns a `session_id`. The panel then **polls** `GET /stakeholders/facilitate/{session_id}`
   every ~5s (bounded; it gives up with a **Check again** button after ~10 min) until a terminal state
   (`completed` / `cancelled` / `error`), rendering the synthesis (or the assumptions-gate **halt**) under
-  a persistent **SYNTHETIC & UNRATIFIED** banner. A **Cancel** button signals the in-flight run by its
+  a persistent **SYNTHETIC & UNRATIFIED** banner. A **live per-round accordion** (#7) grows as each round
+  lands — per-persona **excerpts** (bounded previews; challengers labelled), latest round expanded — so
+  you watch the deliberation unfold instead of a bare spinner. A **Cancel** button signals the in-flight run by its
   `session_id`; rounds that already completed persist. Posture/tier chosen in the panel body override the
   panel-option defaults (which only seed the initial values). A **Consensus** chip (high/mixed/low) shows
   how similarly the non-challenger personas framed their independent R1 takes — a **synthetic, lexical**

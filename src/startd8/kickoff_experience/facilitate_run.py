@@ -284,6 +284,45 @@ def cancel_facilitation(project: Path | str, session_id: str) -> bool:
 
 
 # ── status poll (H-15) ───────────────────────────────────────────────────────
+#7 — per-round live progress. Excerpt-bound each persona entry so the ~5s poll payload stays small
+# (full text is the final synthesis + the CLI's job); the deliberation is what the operator watches fill in.
+EXCERPT_CHARS = 240
+
+
+def _round_summaries(rounds: Any) -> list:
+    """#7 — a bounded per-round summary derived from the persisted transcript rounds (lazy, $0).
+
+    Each round → ``{round_id, title, kind, entries: [{role_id, display_name, excerpt, grounding,
+    is_challenger}]}``. Excerpts are capped at ``EXCERPT_CHARS`` (+ ellipsis). Tolerant of dict OR typed
+    (PanelRound/PanelEntry) rounds; partial rounds (fewer entries than the roster) render as-is."""
+    from startd8.stakeholder_panel.facilitation import CHALLENGER_IDS
+
+    def _g(obj, key, default=""):
+        return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+    out = []
+    for rnd in rounds or []:
+        entries = []
+        for e in _g(rnd, "entries", []) or []:
+            text = _g(e, "text", "") or ""
+            excerpt = text[:EXCERPT_CHARS] + ("…" if len(text) > EXCERPT_CHARS else "")
+            role_id = _g(e, "role_id", "")
+            entries.append({
+                "role_id": role_id,
+                "display_name": _g(e, "display_name", "") or role_id,
+                "excerpt": excerpt,
+                "grounding": _g(e, "grounding", ""),
+                "is_challenger": role_id in CHALLENGER_IDS,
+            })
+        out.append({
+            "round_id": _g(rnd, "round_id", ""),
+            "title": _g(rnd, "title", ""),
+            "kind": _g(rnd, "kind", ""),
+            "entries": entries,
+        })
+    return out
+
+
 def facilitate_status(project: Path | str, session_id: str) -> Dict[str, Any]:
     """Read the kickoff-panel transcript (NOT the ask-all store) → the poll payload (FR-3/H-15)."""
     from startd8.kickoff_view import KickoffViewService
@@ -309,6 +348,7 @@ def facilitate_status(project: Path | str, session_id: str) -> Dict[str, Any]:
         "cost_so_far_usd": round(float(getattr(t, "cost_total_usd", 0.0) or 0.0), 6),
         "synthesis": getattr(synthesis, "text", "") if synthesis is not None else "",
         "consensus": consensus.to_dict(),
+        "rounds": _round_summaries(getattr(t, "rounds", []) or []),  # #7 live per-round progress
         "halt": getattr(t, "halt", None),
         "is_terminal": bool(getattr(t, "is_done", False)),
     }

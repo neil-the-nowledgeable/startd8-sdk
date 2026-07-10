@@ -43,16 +43,13 @@ Effort key: 🟢 quick (<½ day) · 🟡 medium (1–2 days) · 🔴 bigger bet.
 | #5 | **Outside-view cache (Mottainai)** — reuse the R0 reference-class forecast across re-runs (keyed on objective+strategy+model); env opt-out `STARTD8_OUTSIDE_VIEW_NOCACHE`. | `facilitation.py:_ov_cache_*` |
 | #6 | **Consensus / divergence signal** — deterministic $0 lexical-divergence over the independent R1 answers (challengers excluded) → high/mixed/low on the poll payload + Grafana chip + CLI. Honestly framed (lexical, not semantic); embeddings-ready `method` seam. **Unblocks #8.** | `stakeholder_panel/consensus.py`; `facilitate_run.facilitate_status`; `FacilitatePanel.tsx` |
 | #8 | **Confidence-gated apply (FLAG)** — surfaces the #6 consensus on the apply **preview** (chip; n/a-visible) so a low-consensus set is flagged before commit. CRP caught 2 security bugs: a path-traversal read via an inbox-controlled `source_session_id`, and an M2 fingerprint cache-bust. Provenance threaded serialize→envelope→preview (top-level, outside every hash). | `_apply_preview` + `_apply_consensus`; `vipp_seam`/`vipp.models`/`vipp.apply`; `ApplyPanel.tsx` |
+| #7 | **Live per-round progress** — `facilitate_status` returns bounded per-round summaries (excerpt-capped, challengers flagged) derived on read from the persisted rounds; the FacilitatePanel renders a live accordion that grows as rounds land (latest expanded) instead of a bare spinner. Additive, $0. | `facilitate_run._round_summaries`; `FacilitatePanel.tsx` |
 
 ---
 
 ## 🟡 Higher-value capabilities (remaining)
 
-### #7 — Live per-round progress instead of a spinner  🟡 · **next**
-The transcript already persists **per round** and `facilitate_status` returns `rounds_completed`, but
-the UI shows a spinner until the *final* synthesis. Surface each round's summary as it lands → the user
-watches the deliberation unfold over the minutes-long run. Data's already there.
-**Anchor:** extend `facilitate_status` to return round summaries; render them in `FacilitatePanel.tsx`.
+*(all shipped — see the ✅ tables above)*
 
 ---
 
@@ -89,9 +86,9 @@ proposals (downstream) are already there. **Anchor:** `readout.py`.
 
 1. ~~#6 consensus / divergence signal~~ — **SHIPPED** (unblocked #8).
 2. ~~#8 confidence-gated apply~~ — **SHIPPED** (FLAG; consensus on the apply preview).
-3. **#7 live per-round progress** — **next**; the UX win (data already persisted per round).
-4. **#9 stale-run reaper** + **#10 budget alert** — reliability + cost governance once facilitation
-   sees real usage.
+3. ~~#7 live per-round progress~~ — **SHIPPED** (live round accordion).
+4. **#9 stale-run reaper** + **#10 budget alert** — **next**; reliability + cost governance once
+   facilitation sees real usage.
 5. **Re-enable GitHub Actions** — whenever the repo admin is ready (activates the dormant CI gate).
 
 *(The minor readout item is optional / arguable — pick up only if the shareable readout needs the

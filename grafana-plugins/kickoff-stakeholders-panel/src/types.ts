@@ -122,9 +122,28 @@ export interface FacilitateStatusResult {
   synthesis?: string;
   /** #6 — synthetic lexical-divergence signal over the independent R1 answers (see ConsensusView). */
   consensus?: ConsensusSignal;
+  /** #7 — per-round summaries that grow as rounds land (excerpt-bounded; live progress). */
+  rounds?: RoundSummary[];
   halt?: string | null;
   is_terminal?: boolean;
   error?: string;
+}
+
+/** #7 — one persona's bounded contribution within a round. */
+export interface RoundEntry {
+  role_id: string;
+  display_name: string;
+  excerpt: string; // first N chars of the text (+ ellipsis) — not the full contribution
+  grounding: string;
+  is_challenger: boolean; // adversary/skeptic — prompted to diverge
+}
+
+/** #7 — one facilitation round's live summary (mirrors facilitate_run._round_summaries). */
+export interface RoundSummary {
+  round_id: string;
+  title: string;
+  kind: string;
+  entries: RoundEntry[];
 }
 
 /** Consensus signal — mirrors stakeholder_panel.consensus.ConsensusResult.to_dict(). */
