@@ -28,16 +28,30 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..logging_config import get_logger
+from . import schemas
 
 logger = get_logger(__name__)
 
-ACTIVATION_SCHEMA = "startd8.kickoff.activation.v1"
-LEDGER_SCHEMA = "startd8.kickoff.activation-ledger.v1"
+ACTIVATION_SCHEMA = schemas.ACTIVATION
+LEDGER_SCHEMA = schemas.ACTIVATION_LEDGER
+
+# Activation-ledger row field names — the ONE definition the producer (`_signature`/`record`) and the
+# consumers (momentum, retrospective) share, so the row contract can't drift silently across modules.
+LR_READINESS = "readiness_percent"
+LR_BLOCKED = "blocked"
+LR_REVIEW = "review"
+LR_BACKLOG = "backlog"
+LR_OK = "ok"
+LR_PROPOSALS = "proposals_pending"
+LR_SNAPSHOT = "snapshot_status"
+LR_NEXT_ACTION = "next_action_key"
+LR_TS = "ts"
 
 # Default readiness target below which the gate raises an attention condition. 100 = "fully ready".
 DEFAULT_MIN_READINESS = 100
 
-# Severity ordering (internal rank → the higher wins for the overall verdict).
+# Severity ordering (internal rank → the higher wins for the overall verdict). The rank IS the
+# 0/1/2 severity code surfaced to metrics (see ``ActivationReport.severity_code``).
 _SEV_OK = "ok"
 _SEV_ATTENTION = "attention"
 _SEV_BLOCKED = "blocked"
@@ -97,6 +111,11 @@ class ActivationReport:
     @property
     def exit_code(self) -> int:
         return _SEV_EXIT[self.overall]
+
+    @property
+    def severity_code(self) -> int:
+        """The 0=ok / 1=attention / 2=blocked code (for the ``kickoff.activation.severity`` gauge)."""
+        return _SEV_RANK[self.overall]
 
     def to_dict(self) -> dict:
         return {
@@ -180,14 +199,7 @@ def evaluate_activation(
 
 # The signature fields whose change constitutes a recordable state transition.
 _SIGNATURE_KEYS = (
-    "readiness_percent",
-    "blocked",
-    "review",
-    "backlog",
-    "ok",
-    "proposals_pending",
-    "snapshot_status",
-    "next_action_key",
+    LR_READINESS, LR_BLOCKED, LR_REVIEW, LR_BACKLOG, LR_OK, LR_PROPOSALS, LR_SNAPSHOT, LR_NEXT_ACTION,
 )
 
 
@@ -201,15 +213,30 @@ def _signature(status: Dict[str, Any]) -> Dict[str, Any]:
     counts = status.get("attention_counts") or {}
     na = status.get("next_action") or {}
     return {
-        "readiness_percent": status.get("readiness_percent"),
-        "blocked": int(counts.get("blocked", 0) or 0),
-        "review": int(counts.get("review", 0) or 0),
-        "backlog": int(counts.get("backlog", 0) or 0),
-        "ok": int(counts.get("ok", 0) or 0),
-        "proposals_pending": len(status.get("proposals") or []),
-        "snapshot_status": status.get("snapshot_status"),
-        "next_action_key": (na.get("key") or na.get("title")) if isinstance(na, dict) else None,
+        LR_READINESS: status.get("readiness_percent"),
+        LR_BLOCKED: int(counts.get("blocked", 0) or 0),
+        LR_REVIEW: int(counts.get("review", 0) or 0),
+        LR_BACKLOG: int(counts.get("backlog", 0) or 0),
+        LR_OK: int(counts.get("ok", 0) or 0),
+        LR_PROPOSALS: len(status.get("proposals") or []),
+        LR_SNAPSHOT: status.get("snapshot_status"),
+        LR_NEXT_ACTION: (na.get("key") or na.get("title")) if isinstance(na, dict) else None,
     }
+
+
+def readiness_readings(entries: Any) -> List[int]:
+    """The ordered readiness observations from ledger rows — the ONE ledger-series extraction both
+    momentum (slope) and the retrospective (journey) consume, so the row is parsed in one place."""
+    out: List[int] = []
+    for e in entries or ():
+        v = e.get(LR_READINESS) if isinstance(e, dict) else None
+        if v is None:
+            continue
+        try:
+            out.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 @dataclass

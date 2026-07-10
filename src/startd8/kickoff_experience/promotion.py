@@ -30,10 +30,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..logging_config import get_logger
+from . import schemas
 
 logger = get_logger(__name__)
 
-EXEMPLAR_SCHEMA = "startd8.kickoff.exemplar.v1"
+EXEMPLAR_SCHEMA = schemas.EXEMPLAR
 DEFAULT_MIN_READINESS = 100
 
 

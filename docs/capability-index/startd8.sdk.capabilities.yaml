@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.20.0"
+version: "1.21.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1984,6 +1984,53 @@ capabilities:
     dependencies:
       - startd8.kickoff.retrospective
 
+  - capability_id: startd8.kickoff.report
+    category: query
+    maturity: stable
+    summary: "One dispatcher over every read-only kickoff view (status/activation/retrospective/exemplars) — CLI, JSON, and a single generic MCP tool — so agents get all views through one door, not N"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        The unified machine-readable surface for the kickoff read-model (the oracle-as-API refinement
+        pass). `kickoff_report(project_root, view)` dispatches over `REPORT_VIEWS`
+        {status, activation, retrospective, exemplars} — each a $0 read-only projection carrying its own
+        `schema`. Surfaced three ways from ONE registry: `startd8 kickoff report` (list views) /
+        `report <view>` (emit that view's JSON), and the `startd8_kickoff_report` MCP tool
+        (readOnlyHint, one tool for all views — not N tools × 2 servers). Adding a view to REPORT_VIEWS
+        surfaces it on every dispatch surface at once; this is the spine that stops N views × M surfaces
+        becoming N×M call sites. `report status` is byte-identical to `status --json` (parity, tested).
+        Part of the same pass that centralized every schema string in `schemas.py`, gave the activation
+        ledger a single-source row contract + `readiness_readings()` (momentum & retrospective consume
+        it), and wired passive `_record_transition` at every state-changing write so momentum /
+        retrospective / promotion-history populate as the user works instead of needing `check --record`.
+      agent: |
+        startd8 kickoff report                     # list views + their schemas
+        startd8 kickoff report retrospective ./p    # emit one view's JSON (same payload as the MCP tool)
+        # MCP: startd8_kickoff_report(view="activation")  # every view through one read-only tool
+    triggers: ["kickoff report", "kickoff views", "machine readable kickoff", "kickoff json api", "kickoff mcp", "oracle api", "report dispatcher"]
+    evidence:
+      - type: code
+        ref: src/startd8/kickoff_experience/report.py
+        description: "kickoff_report + REPORT_VIEWS + VIEW_SCHEMAS (the one view registry)"
+      - type: code
+        ref: src/startd8/kickoff_experience/schemas.py
+        description: "single home for every startd8.kickoff.* schema id (kills the CLI literal drift)"
+      - type: code
+        ref: mcp/startd8-mcp-builder/startd8_mcp.py
+        description: "startd8_kickoff_report — one read-only MCP tool for all views"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_report_dispatcher.py
+        description: "view↔schema alignment, per-view schema tag, dispatcher==dedicated-callable parity, unknown-view, CLI list/emit"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_auto_record.py
+        description: "passive _record_transition append + dedup + never-raises"
+      - type: doc
+        ref: docs/design/kickoff-portal/ORACLE_API_ROADMAP.md
+        description: "Refinement pass — distillation + self-fueling ledger + report dispatcher"
+    confidence: 0.9
+    dependencies:
+      - startd8.kickoff.workbook_cockpit
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -1991,17 +2038,17 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 62   # v1.20.0: +kickoff.promotion (Tier E — roadmap complete)
+  total_capabilities: 63   # v1.21.0: +kickoff.report (oracle-as-API refinement pass)
   by_maturity:
-    stable: 27     # v1.20.0: +1 (kickoff.promotion stable)
+    stable: 28     # v1.21.0: +1 (kickoff.report stable)
     beta: 35       # reconciled to actual (prior summary undercounted)
-  by_category:                 # v1.20.0: +action (kickoff.promotion)
+  by_category:                 # v1.21.0: +query (kickoff.report)
     action: 19     # +agentic.session_snapshot, +kickoff.promotion
     generate: 16   # +kickoff.workbook_cockpit
     validate: 7
     observe: 8     # +kickoff.activation, +kickoff.retrospective
     integration: 6
-    query: 2
+    query: 3       # +kickoff.report
     transform: 2
     security: 2
 
@@ -2010,6 +2057,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.21.0"
+    date: "2026-07-10"
+    changes:
+      - "Added startd8.kickoff.report (query, stable, 0.9) — the oracle-as-API REFINEMENT pass. One dispatcher (report.py: kickoff_report/REPORT_VIEWS) puts every read-only view {status, activation, retrospective, exemplars} behind `startd8 kickoff report` + a single generic `startd8_kickoff_report` MCP tool (one tool for all views, not N). `report status` == `status --json` (parity, tested). Same pass DISTILLED accrued accidental complexity: all schema strings → schemas.py (killed CLI literal drift); the activation-ledger row got a single-source contract + readiness_readings() consumed by both momentum & retrospective (was duplicated); ActivationReport.severity_code dedups a severity map. And it CLOSED the dormant-ledger gap: passive _record_transition now fires at every state-changing write (confirm/apply/apply-exemplar), so momentum/retrospective/promotion-history populate as the user works instead of needing `check --record`. 676 kickoff tests green; pure-refactor parts behaviour-identical."
+      - "63 capabilities: 28 stable; query 2→3."
   - version: "1.20.0"
     date: "2026-07-10"
     changes:

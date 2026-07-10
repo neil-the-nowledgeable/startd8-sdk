@@ -90,6 +90,19 @@ def _emit_json(result: dict) -> None:
     sys.stdout.write(json.dumps(result, indent=2) + "\n")
 
 
+def _record_transition(project_root: "Path") -> None:
+    """Best-effort: append an activation-ledger row after a state-changing kickoff write, so the
+    momentum / retrospective / promotion-history surfaces populate passively as the user works
+    (the ledger's dedup guard means an unchanged signature writes nothing). Never breaks the write."""
+    try:
+        from .kickoff_experience.activation import ActivationLedger
+        from .kickoff_experience.agentic_view import kickoff_status
+
+        ActivationLedger(project_root).record(kickoff_status(project_root))
+    except Exception:  # telemetry-grade — a ledger hiccup must never fail the user's write
+        pass
+
+
 @concierge_app.command("survey")
 def concierge_survey(
     project_root: Path = typer.Argument(
@@ -1001,6 +1014,8 @@ def _kickoff_confirm_guided(project_root: Path, json_out: bool) -> None:
         read_input=_read,
         emit_line=lambda s: console.print(s, markup=False, highlight=False),
     )
+    if summary["confirmed"]:
+        _record_transition(project_root)
     console.print(
         f"\n[bold]Done[/bold] — {len(summary['confirmed'])} confirmed this session · "
         f"{summary['remaining']} still awaiting."
@@ -1038,6 +1053,7 @@ def _kickoff_confirm_all(
         if not dry_run and yes:
             payload["confirmed"] = apply_confirm_all(project_root, plan)
             payload["applied"] = True
+            _record_transition(project_root)
         _emit_json(payload)
         return
 
@@ -1070,6 +1086,7 @@ def _kickoff_confirm_all(
         )
         return
     applied = apply_confirm_all(project_root, plan)
+    _record_transition(project_root)
     console.print(f"  [green]✓ confirmed {len(applied)} field(s) as-is.[/green]")
 
 
@@ -1184,6 +1201,7 @@ def kickoff_confirm(
     except ConfirmError as exc:
         console.print(f"[red]kickoff confirm:[/red] {exc}")
         raise typer.Exit(_EXIT_FATAL_INPUTS)
+    _record_transition(project_root)  # passive activation-ledger capture (Tier-D/C/E fuel)
 
     if json_out:
         _emit_json({"schema": "kickoff.confirm.v1", "action": "confirm", **result})
@@ -1527,10 +1545,11 @@ def kickoff_proposals_cmd(
     if getattr(res, "refused_reason", None):
         console.print(f"[red]apply refused:[/red] {res.refused_reason}")
         raise typer.Exit(_EXIT_BLOCKED)
+    _record_transition(Path(project_root))
     console.print(f"[green]applied:[/green] {res.summary()}")
 
 
-_SEVERITY_CODE = {"ok": 0, "attention": 1, "blocked": 2}
+# Presentation only — severity→code lives on ActivationReport.severity_code (single source).
 _SEVERITY_STYLE = {"ok": "green", "attention": "yellow", "blocked": "red"}
 
 
@@ -1568,7 +1587,7 @@ def kickoff_check_cmd(
         record_activation(
             project=str(Path(project_root).resolve().name or "kickoff"),
             open_count=len(report.open),
-            severity_code=_SEVERITY_CODE.get(report.overall, 1),
+            severity_code=report.severity_code,
         )
     except Exception:  # never let telemetry break the gate
         pass
@@ -1614,7 +1633,9 @@ def kickoff_ledger_cmd(
 
     entries = ActivationLedger(project_root).entries()
     if json_out:
-        _emit_json({"schema": "startd8.kickoff.activation-ledger.v1", "entries": entries, "count": len(entries)})
+        from .kickoff_experience import schemas
+
+        _emit_json({"schema": schemas.ACTIVATION_LEDGER, "entries": entries, "count": len(entries)})
         return
     if not entries:
         console.print("[dim]No activation history yet — run `startd8 kickoff check --record`.[/dim]")
@@ -1714,7 +1735,9 @@ def kickoff_exemplars_cmd(
 
     items = ExemplarRegistry().list()
     if json_out:
-        _emit_json({"schema": "startd8.kickoff.exemplar.v1", "exemplars": items, "count": len(items)})
+        from .kickoff_experience import schemas
+
+        _emit_json({"schema": schemas.EXEMPLAR, "exemplars": items, "count": len(items)})
         return
     if not items:
         console.print("[dim]No exemplars yet — promote a ready project with `startd8 kickoff promote`.[/dim]")
@@ -1760,6 +1783,7 @@ def kickoff_apply_exemplar_cmd(
             for s in res.get("write_skipped", []):
                 console.print(f"  [dim]{s}[/dim]")
             return
+        _record_transition(Path(target_root))
         console.print(f"[green]seeded[/green] {len(res['seeded'])} proposal(s) into the target inbox")
         console.print("[dim]Review with[/dim] [cyan]startd8 kickoff proposals[/cyan][dim], then apply with[/dim] [cyan]--apply[/cyan].")
         if res["skipped"]:
@@ -1779,6 +1803,36 @@ def kickoff_apply_exemplar_cmd(
         console.print(f"  [dim]- {s['value_path']} ({s['reason']})[/dim]")
     if plan["applicable_count"]:
         console.print("\n[dim]Write these as proposals with[/dim] [cyan]--emit[/cyan].")
+
+
+@kickoff_kernel_app.command("report")
+def kickoff_report_cmd(
+    view: Optional[str] = typer.Argument(
+        None, help="Which machine-readable view (status|activation|retrospective|exemplars). Omit to list."
+    ),
+    project_root: Path = typer.Argument(Path("."), help="Project to report on (default: cwd)."),
+    json_out: bool = typer.Option(True, "--json/--no-json", help="Emit JSON (default) or a compact line."),
+) -> None:
+    """The one machine-readable surface — every read-only kickoff view behind a single dispatcher.
+
+    `startd8 kickoff report` lists the views; `startd8 kickoff report <view>` emits that view's JSON
+    (the SAME payload the dedicated commands and the `startd8_kickoff_report` MCP tool return). Read-only, `$0`.
+    """
+    from .kickoff_experience.report import VIEW_SCHEMAS, kickoff_report, report_views
+
+    if not view:
+        if json_out:
+            _emit_json({"views": report_views(), "schemas": VIEW_SCHEMAS})
+            return
+        console.print("[bold]kickoff report views[/bold]")
+        for v in report_views():
+            console.print(f"  [cyan]{v}[/cyan] — [dim]{VIEW_SCHEMAS[v]}[/dim]")
+        return
+    result = kickoff_report(project_root, view)
+    if "error" in result:
+        console.print(f"[red]{result['error']}[/red] — views: {', '.join(result['views'])}")
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    _emit_json(result)
 
 
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------

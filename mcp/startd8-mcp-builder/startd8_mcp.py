@@ -3277,6 +3277,64 @@ async def startd8_kickoff_status(params: KickoffStatusInput) -> str:
         return _handle_error(e)
 
 
+class KickoffReportInput(BaseModel):
+    """Input for the generic kickoff-report tool (read-only, $0)."""
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
+
+    view: Optional[str] = Field(
+        default="status",
+        description="Which read-only view: status | activation | retrospective | exemplars. Omit ⇒ status.",
+    )
+    project_root: Optional[str] = Field(
+        default=None,
+        description="Path to the project (default: server PROJECT_ROOT). Read-only.",
+    )
+
+
+@mcp.tool(
+    name="startd8_kickoff_report",
+    annotations={
+        "title": "Startd8 Kickoff Report (all read-only views, one tool)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def startd8_kickoff_report(params: KickoffReportInput) -> str:
+    """Every read-only kickoff view behind one tool — select ``view`` to get the JSON projection.
+
+    Read-only, $0, no LLM. ``view`` ∈ {status (the whole Digital Project Workbook oracle),
+    activation (the readiness gate verdict — conditions + severity), retrospective (how the project
+    got ready — decision log + journey), exemplars (the cross-project promoted-kickoff library)}. Each
+    view carries its own ``schema``. An unknown view returns the list of valid views. It never writes."""
+    request_id = _new_request_id()
+    started = time.perf_counter()
+    view = params.view or "status"
+    project_root = params.project_root or str(DEFAULT_PROJECT_ROOT)
+    _emit_event({
+        "event": "tool.start", "tool": "startd8_kickoff_report", "request_id": request_id,
+        "params": {"view": view, "project_root": project_root},
+    })
+    try:
+        with _redirect_stdout_to_stderr():
+            _ensure_sdk_available()
+            from startd8.kickoff_experience.report import kickoff_report
+            result = kickoff_report(project_root, view)
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_kickoff_report", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000), "status": "ok",
+        })
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        _emit_event({
+            "event": "tool.end", "tool": "startd8_kickoff_report", "request_id": request_id,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "status": "error", "error_type": type(e).__name__, "error": str(e),
+        })
+        return _handle_error(e)
+
+
 @mcp.tool(
     name="startd8_check_deploy_coherence",
     annotations={

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from ..logging_config import get_logger
+from . import schemas
 from .session_snapshot import (
     SNAPSHOT_SCHEMA_VERSION,
     AgenticSessionSnapshot,
@@ -235,7 +236,7 @@ class AgenticView:
         re-deriving it. Read-only, ``$0``, deterministic."""
         counts = dict(self.state.attention_counts) if self.state is not None else {}
         d: dict = {
-            "schema": "startd8.kickoff.status.v1",
+            "schema": schemas.STATUS,
             "project_root": self.project_root,
             "readiness_percent": self.readiness_percent(),
             "attention_counts": counts,

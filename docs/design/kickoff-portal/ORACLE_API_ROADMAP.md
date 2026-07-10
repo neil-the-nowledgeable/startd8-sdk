@@ -155,11 +155,38 @@ whole system already trusts.*
 
 ---
 
+## Refinement pass (post-E) — distill the accidental complexity, make the value self-fueling
+
+After all tiers landed, a critical read of the accreted code found three pieces of accidental
+complexity and one design gap. Fixed together, guarded by the full suite:
+
+- **Distillation (pure refactor, zero behaviour change).** (1) All `startd8.kickoff.*` schema strings
+  now live in one `schemas.py` — the CLI had drifted into re-hardcoding literals that module
+  constants already defined. (2) The activation-ledger **row was an untyped contract** smeared across
+  three modules (activation *wrote* keys; momentum + retrospective *read* them via raw `.get()`);
+  activation now owns the row-field constants + a single `readiness_readings()`, and momentum +
+  retrospective consume it — so the "readiness series from the ledger", previously implemented twice,
+  is computed once. (3) `ActivationReport.severity_code` replaces a duplicated severity→code map.
+- **Make it self-fueling (the design gap).** The whole B→D→C→E value chain runs on the activation
+  ledger — but the ledger only filled when someone ran `kickoff check --record`, so on a normal
+  project momentum / retrospective / promotion-history were **permanently dormant**. A best-effort
+  `_record_transition` now fires at every state-changing write (`confirm` single/batch/guided,
+  `proposals --apply`, `apply-exemplar --emit`); the ledger's dedup guard means only real transitions
+  are recorded. The back half now populates passively as the user works.
+- **One machine-readable surface (`report.py`).** `kickoff_report(root, view)` +
+  `startd8 kickoff report` + the `startd8_kickoff_report` MCP tool put **every** read-only view
+  (status / activation / retrospective / exemplars) behind ONE dispatcher — so agents get all views
+  through one tool, not N, and the N views × M surfaces stop threatening N×M call sites. `report
+  status` is byte-identical to `status --json` (dispatcher parity, verified).
+
+---
+
 ## Invariants to preserve across all tiers
 
 1. **One oracle, one schema.** Every surface (CLI, JSON, MCP, Grafana, readout) reads
-   `build_agentic_view` → `to_dict()`; never re-derive status from raw stores. Bump the `schema`
-   string on any breaking payload change; keep the version-degrade contract.
+   `build_agentic_view` → `to_dict()`; never re-derive status from raw stores. Schema strings live in
+   `schemas.py` (one source); the machine-readable views dispatch through `report.py`. Bump the
+   `schema` string on any breaking payload change; keep the version-degrade contract.
 2. **Read-only by default.** The only writer is the explicit, `--yes`-gated `proposals --apply`
    (envelope flow). The MCP tool has **no** apply affordance and stays behind the read-only floor.
 3. **$0 / bucket-1.** No tier introduces new LLM generation. Apply reuses the existing VIPP path.
@@ -167,14 +194,16 @@ whole system already trusts.*
 
 ## Evidence
 
-- Code: `src/startd8/kickoff_experience/agentic_view.py` (`to_dict`, `kickoff_status`, momentum fold),
-  `src/startd8/kickoff_experience/activation.py` (`evaluate_activation`, `ActivationLedger`),
+- Code: `src/startd8/kickoff_experience/schemas.py` (one home for every `startd8.kickoff.*` schema),
+  `src/startd8/kickoff_experience/report.py` (`kickoff_report`, `REPORT_VIEWS` — the view dispatcher),
+  `src/startd8/kickoff_experience/agentic_view.py` (`to_dict`, `kickoff_status`, momentum fold),
+  `src/startd8/kickoff_experience/activation.py` (`evaluate_activation`, `ActivationLedger`, `readiness_readings`, row constants),
   `src/startd8/kickoff_experience/momentum.py` (`readiness_trend`, `leverage_groups`, `leverage_nudge`),
   `src/startd8/kickoff_experience/retrospective.py` (`decision_log`, `build_retrospective`, `kickoff_retrospective`),
   `src/startd8/kickoff_experience/promotion.py` (`promotion_eligibility`, `build_exemplar`, `ExemplarRegistry`, `apply_plan`, `emit_to_inbox`),
   `src/startd8/kickoff_experience/metrics.py` (`record_activation`),
-  `src/startd8/cli_concierge.py` (`kickoff status|proposals|readout|check|ledger|retrospective|promote|exemplars|apply-exemplar`),
-  `mcp/startd8-mcp-builder/startd8_mcp.py` (`startd8_kickoff_status`).
+  `src/startd8/cli_concierge.py` (`kickoff status|proposals|readout|check|ledger|retrospective|promote|exemplars|apply-exemplar|report` + `_record_transition`),
+  `mcp/startd8-mcp-builder/startd8_mcp.py` (`startd8_kickoff_status`, `startd8_kickoff_report`).
 - Tests: `tests/unit/kickoff_experience/test_status_proposals_cli.py`,
   `tests/unit/kickoff_experience/test_agentic_view.py`,
   `tests/unit/kickoff_experience/test_activation.py`,

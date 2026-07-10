@@ -19,7 +19,7 @@ byte-stable); they *enrich* the recommendation alongside it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
 # Attention classes that are NOT yet "ok" (resolving any of them raises readiness = ok / total).
 _ACTIONABLE = ("blocked", "review")
@@ -57,14 +57,9 @@ def readiness_trend(ledger_entries: Sequence[dict]) -> ReadinessTrend:
 
     Uses the last two readiness-bearing observations; ``delta == 0`` across them reads as *stalled*
     (readiness didn't move even though something changed). Degrades to ``unknown`` with < 2 points."""
-    readings: List[int] = []
-    for e in ledger_entries or ():
-        v = e.get("readiness_percent") if isinstance(e, dict) else None
-        if v is not None:
-            try:
-                readings.append(int(v))
-            except (TypeError, ValueError):
-                continue
+    from .activation import readiness_readings
+
+    readings = readiness_readings(ledger_entries)
     points = len(readings)
     if points == 0:
         return ReadinessTrend(TREND_UNKNOWN, None, None, None, 0, "no readiness history yet")
