@@ -124,6 +124,8 @@ export interface FacilitateStatusResult {
   consensus?: ConsensusSignal;
   /** #7 — per-round summaries that grow as rounds land (excerpt-bounded; live progress). */
   rounds?: RoundSummary[];
+  /** #9 — heuristic: no transcript progress in ~N min (the worker may have died). Not terminal. */
+  stalled?: boolean;
   halt?: string | null;
   is_terminal?: boolean;
   error?: string;

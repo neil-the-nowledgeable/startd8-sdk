@@ -396,6 +396,13 @@ const StatusView: React.FC<{
 
     <RoundsView rounds={status.rounds} styles={styles} />
 
+    {status.stalled && !status.is_terminal && (
+      <Alert severity="warning" title="Possibly stalled">
+        No progress in a while — the facilitation worker may have died (e.g. a server restart). Try{' '}
+        <b>Check again</b>; if it stays stalled, re-run it.
+      </Alert>
+    )}
+
     {status.status === 'error' && (
       <Alert severity="error" title="Facilitation errored">{status.error || 'The run ended in an error state.'}</Alert>
     )}

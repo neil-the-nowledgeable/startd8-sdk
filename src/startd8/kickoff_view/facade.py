@@ -34,6 +34,10 @@ class KickoffViewService:
     def load_latest(self) -> Optional[KickoffTranscript]:
         return self.store.load_latest()
 
+    def mtime(self, session_id: str) -> float:
+        """Transcript file mtime — the cheap progress signal #9 uses to detect a stalled worker."""
+        return self.store.mtime(session_id)
+
     def render_html(
         self, session_id: str, *, live_reload_secs: "Optional[int]" = None
     ) -> str:

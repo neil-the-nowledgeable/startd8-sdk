@@ -57,6 +57,26 @@ def _max_concurrent_facilitations() -> int:
     return val if val >= 0 else MAX_CONCURRENT_FACILITATIONS
 
 
+# #9 — a non-terminal run whose transcript file hasn't advanced in this long is (heuristically) stalled: a
+# hard restart killed the worker, leaving the reservation `started` until TTL. Generous by design — a live
+# worker persists the transcript every round (~1–2 min), so 10 min of no writes is very likely dead.
+STALE_AFTER_SECS = 600
+_STALE_ENV = "STARTD8_FACILITATION_STALE_SECS"
+
+
+def _stale_after_secs() -> float:
+    """Resolve the staleness threshold: env override else the default (read at call time; non-numeric or
+    non-positive → default, so the check is never disabled by a bad value)."""
+    raw = os.environ.get(_STALE_ENV)
+    if raw is None:
+        return float(STALE_AFTER_SECS)
+    try:
+        val = float(raw)
+    except ValueError:
+        return float(STALE_AFTER_SECS)
+    return val if val > 0 else float(STALE_AFTER_SECS)
+
+
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT: set[str] = set()  # run_keys with a live worker (in-process; the concurrency cap)
 _CANCEL_REQUESTED: set[str] = set()  # session_ids cancelled before the worker registered (race-close)
@@ -327,13 +347,25 @@ def facilitate_status(project: Path | str, session_id: str) -> Dict[str, Any]:
     """Read the kickoff-panel transcript (NOT the ask-all store) → the poll payload (FR-3/H-15)."""
     from startd8.kickoff_view import KickoffViewService
 
+    service = KickoffViewService(str(project))
     try:
-        t = KickoffViewService(str(project)).load(session_id)
+        t = service.load(session_id)
     except (FileNotFoundError, KeyError):
         return {"session_id": session_id, "status": "unknown"}
     except Exception as exc:  # noqa: BLE001 — a corrupt/torn transcript degrades to a clean signal, not a 500
         return {"session_id": session_id, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
     synthesis = getattr(t, "synthesis", None)
+    is_terminal = bool(getattr(t, "is_done", False))
+    # #9 — observer staleness (best-effort): a NON-terminal run whose transcript hasn't advanced in
+    # STALE_AFTER_SECS likely lost its worker to a restart. Report `stalled` (a heuristic, NOT terminal —
+    # the client keeps its bounded poll / Check-again); a stat failure just omits the flag.
+    stalled = False
+    if not is_terminal:
+        try:
+            import time
+            stalled = (time.time() - service.mtime(session_id)) > _stale_after_secs()
+        except Exception:  # noqa: BLE001 — never let #9 break the poll
+            stalled = False
     # #6 — derive the consensus signal on read from the persisted R1 entries (lazy, $0, no new schema).
     from startd8.stakeholder_panel.consensus import compute_consensus
     from startd8.stakeholder_panel.facilitation import CHALLENGER_IDS
@@ -349,6 +381,7 @@ def facilitate_status(project: Path | str, session_id: str) -> Dict[str, Any]:
         "synthesis": getattr(synthesis, "text", "") if synthesis is not None else "",
         "consensus": consensus.to_dict(),
         "rounds": _round_summaries(getattr(t, "rounds", []) or []),  # #7 live per-round progress
+        "stalled": stalled,  # #9 — no transcript progress in N min (heuristic; not terminal)
         "halt": getattr(t, "halt", None),
-        "is_terminal": bool(getattr(t, "is_done", False)),
+        "is_terminal": is_terminal,
     }

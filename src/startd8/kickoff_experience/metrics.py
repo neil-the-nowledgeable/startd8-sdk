@@ -12,6 +12,10 @@ burndown + cost-over-time panels:
   carries ``posture`` + ``tier`` labels so Grafana can break spend down by scrutiny/prototype and
   premium/cheap. Emitted at facilitation completion (see ``facilitate_run._worker``) — without it the
   cost-over-time panel is blind to the biggest single kickoff spend until a portal rebuild.
+- ``kickoff.facilitation.cost_usd_total`` — **cumulative** facilitation spend (#10; monotonic counter,
+  same labels), for after-the-fact cost-governance alerts, e.g. ``increase(
+  kickoff_facilitation_cost_usd_total{project="X"}[30d]) > CEILING``. Provisioning the alert is the
+  operator's job (grafana skill); this is distinct from the fail-closed pre-spend budget gate.
 
 Each carries a ``project`` label. In Prometheus/Mimir these become ``kickoff_readiness_percent`` etc.
 (verified live: dots→underscores, no unit suffix). Emission is **best-effort + opt-in**: it calls the
@@ -69,6 +73,14 @@ def _gauges() -> Optional[Dict[str, Any]]:
                 "kickoff.facilitation.cost_usd", unit="",
                 description="Latest facilitation cost (USD), labeled by posture + tier",
             ),
+            # #10 — cumulative facilitation spend for cost-governance alerting (monotonic Counter, add()).
+            # In Prometheus/Mimir this becomes ``kickoff_facilitation_cost_usd_total``; alert with e.g.
+            # ``increase(kickoff_facilitation_cost_usd_total{project="X"}[30d]) > CEILING`` — an *after-the-
+            # fact* monthly-spend alert (distinct from the fail-closed pre-spend ``ensure_blocking_budget``).
+            "facilitation_cost_total": meter.create_counter(
+                "kickoff.facilitation.cost_usd_total", unit="",
+                description="Cumulative facilitation spend (USD), labeled by posture + tier",
+            ),
             "activation_open": meter.create_gauge(
                 "kickoff.activation.open", unit="",
                 description="Open activation conditions (firing 'alerts') from the oracle",
@@ -121,10 +133,11 @@ def record_facilitation_cost(
     posture: Optional[str] = None,
     tier: Optional[str] = None,
 ) -> bool:
-    """Emit the facilitation cost gauge at run completion (best-effort). Returns True iff recorded.
+    """Emit the facilitation cost at run completion (best-effort). Returns True iff recorded.
 
-    Labeled ``{project, posture, tier}`` so the cost panel can break facilitation spend down by
-    scrutiny/prototype and premium/cheap. Never load-bearing — any failure is swallowed."""
+    Records BOTH the latest-cost **gauge** and the cumulative-spend **counter** (#10) — the single
+    emission point for facilitation cost (Mottainai). Labeled ``{project, posture, tier}`` so panels +
+    alerts can break spend down by scrutiny/prototype and premium/cheap. Never load-bearing."""
     gauges = _gauges()
     if not gauges:
         return False
@@ -135,6 +148,7 @@ def record_facilitation_cost(
         if tier is not None:
             attrs["tier"] = str(tier)
         gauges["facilitation_cost"].set(float(cost_usd), attrs)
+        gauges["facilitation_cost_total"].add(float(cost_usd), attrs)  # #10 cumulative spend
         return True
     except Exception as exc:  # pragma: no cover
         logger.debug("facilitation cost metric skipped: %s", exc)

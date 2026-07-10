@@ -29,7 +29,9 @@ Set the panel option **Panel mode** to pick a surface (all share the same dataso
   (`completed` / `cancelled` / `error`), rendering the synthesis (or the assumptions-gate **halt**) under
   a persistent **SYNTHETIC & UNRATIFIED** banner. A **live per-round accordion** (#7) grows as each round
   lands — per-persona **excerpts** (bounded previews; challengers labelled), latest round expanded — so
-  you watch the deliberation unfold instead of a bare spinner. A **Cancel** button signals the in-flight run by its
+  you watch the deliberation unfold instead of a bare spinner. If a non-terminal run stops advancing for
+  ~10 min (a **possibly stalled** worker — e.g. a server restart; #9), the panel warns and points to
+  **Check again** / re-run. A **Cancel** button signals the in-flight run by its
   `session_id`; rounds that already completed persist. Posture/tier chosen in the panel body override the
   panel-option defaults (which only seed the initial values). A **Consensus** chip (high/mixed/low) shows
   how similarly the non-challenger personas framed their independent R1 takes — a **synthetic, lexical**
