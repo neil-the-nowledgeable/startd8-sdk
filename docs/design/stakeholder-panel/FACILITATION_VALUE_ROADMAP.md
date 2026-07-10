@@ -41,17 +41,11 @@ Effort key: 🟢 quick (<½ day) · 🟡 medium (1–2 days) · 🔴 bigger bet.
 | ⭐ | **Grafana Triage panel mode** — routes a finished synthesis into typed candidates + the paid extract → disposition → serialize write path (composes with Apply). CRP caught 3 shipped-route correctness bugs (domain, double-spend, undrained-inbox). | PR #185; `components/TriagePanel.tsx`, `stakeholder_run_server.py` |
 | #4 | **Configurable concurrency cap** — `MAX_CONCURRENT_FACILITATIONS` overridable via env `STARTD8_MAX_CONCURRENT_FACILITATIONS`. | `facilitate_run.py:_max_concurrent_facilitations` |
 | #5 | **Outside-view cache (Mottainai)** — reuse the R0 reference-class forecast across re-runs (keyed on objective+strategy+model); env opt-out `STARTD8_OUTSIDE_VIEW_NOCACHE`. | `facilitation.py:_ov_cache_*` |
+| #6 | **Consensus / divergence signal** — deterministic $0 lexical-divergence over the independent R1 answers (challengers excluded) → high/mixed/low on the poll payload + Grafana chip + CLI. Honestly framed (lexical, not semantic); embeddings-ready `method` seam. **Unblocks #8.** | `stakeholder_panel/consensus.py`; `facilitate_run.facilitate_status`; `FacilitatePanel.tsx` |
 
 ---
 
 ## 🟡 Higher-value capabilities (remaining)
-
-### #6 — Consensus / divergence signal on the synthesis  🟡
-Today the synthesis carries no measure of whether the personas *agreed*. Add a **deterministic $0**
-divergence metric (lexical or embedding distance across the R1 persona answers) → "consensus:
-high / mixed / low". Turns the output from a narrative into decision-support; cheap.
-**Anchor:** `stakeholder_panel/facilitation.py` (R1 answers in the transcript); surface on the poll
-payload (`facilitate_status`) + the `FacilitatePanel` header.
 
 ### #7 — Live per-round progress instead of a spinner  🟡
 The transcript already persists **per round** and `facilitate_status` returns `rounds_completed`, but
@@ -59,11 +53,12 @@ the UI shows a spinner until the *final* synthesis. Surface each round's summary
 watches the deliberation unfold over the minutes-long run. Data's already there.
 **Anchor:** extend `facilitate_status` to return round summaries; render them in `FacilitatePanel.tsx`.
 
-### #8 — Confidence-gated apply (depends on #6)  🟡
-Surface the consensus/divergence score **and** the UNRATIFIED banner in the `apply/preview` screen, so
-a low-consensus synthesis is visibly flagged *before* it's written to the project source of record.
+### #8 — Confidence-gated apply (#6 shipped → now UNBLOCKED)  🟡 · **next**
+Surface the #6 consensus score **and** the UNRATIFIED banner in the `apply/preview` screen, so a
+low-consensus synthesis is visibly flagged *before* it's written to the project source of record.
+Reuse `stakeholder_panel.consensus.compute_consensus` (the shared helper #6 built).
 Reinforces VIPP's "ground truth adjudicates, never originates" at the write boundary.
-**Anchor:** `_apply_preview` route; `ApplyPanel.tsx`.
+**Anchor:** `_apply_preview` route; `ApplyPanel.tsx`; `consensus.compute_consensus`.
 
 ---
 
@@ -98,8 +93,9 @@ proposals (downstream) are already there. **Anchor:** `readout.py`.
 > *trustworthy* — believe the output (#6/#8), watch it happen (#7), aren't lied to when it breaks (#9),
 > aren't surprised by the bill (#10).
 
-1. **#6 consensus / divergence signal** — highest output-quality-per-effort; **unblocks #8**.
-2. **#8 confidence-gated apply** — the guardrail #6 enables at the write boundary.
+1. ~~#6 consensus / divergence signal~~ — **SHIPPED** (unblocked #8).
+2. **#8 confidence-gated apply** — **next**; the guardrail #6 enables at the write boundary (reuses
+   the `compute_consensus` helper).
 3. **#7 live per-round progress** — the UX win (data already persisted per round).
 4. **#9 stale-run reaper** + **#10 budget alert** — reliability + cost governance once facilitation
    sees real usage.

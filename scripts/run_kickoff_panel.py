@@ -165,6 +165,17 @@ async def orchestrate(args: argparse.Namespace) -> None:
     if session.get("status") == "halted":  # H2/H3 first-class halted state
         h = session["halt"]
         print(f"\n{'!'*78}\n## HALTED ({h['reason']})\n{'!'*78}\n{h['message']}")
+    else:
+        # #6 — the consensus signal over the independent R1 answers (synthetic, lexical — decision-support,
+        # not a decision). Excludes challengers (they are prompted to diverge).
+        from startd8.stakeholder_panel.consensus import compute_consensus
+        from startd8.stakeholder_panel.facilitation import CHALLENGER_IDS
+
+        c = compute_consensus(session.get("rounds", []), exclude_role_ids=frozenset(CHALLENGER_IDS))
+        if c.label != "n/a":
+            print(f"\nConsensus (synthetic, lexical): {c.label.upper()} "
+                  f"(score {c.score:.2f}, n={c.n}) — how similarly the {c.n} non-challenger personas "
+                  "framed their independent R1 takes; low = worth a closer read, not a verdict.")
     if cost_tracker is None:
         # Honesty guard: a real $0 (nothing spent) must not be confused with "not tracked".
         print("\nSession cost: NOT TRACKED (no cost tracker wired; real spend was not recorded)")

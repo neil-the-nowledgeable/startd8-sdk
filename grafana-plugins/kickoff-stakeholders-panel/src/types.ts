@@ -118,9 +118,19 @@ export interface FacilitateStatusResult {
   rounds_completed?: number;
   cost_so_far_usd?: number;
   synthesis?: string;
+  /** #6 — synthetic lexical-divergence signal over the independent R1 answers (see ConsensusView). */
+  consensus?: ConsensusSignal;
   halt?: string | null;
   is_terminal?: boolean;
   error?: string;
+}
+
+/** Consensus signal — mirrors stakeholder_panel.consensus.ConsensusResult.to_dict(). */
+export interface ConsensusSignal {
+  label: 'high' | 'mixed' | 'low' | 'n/a';
+  score: number | null; // null when n/a
+  n: number; // rateable (non-challenger) personas
+  basis: string; // the scorer, e.g. "lexical-r1"
 }
 
 // ─────────────────────────────── Triage mode (synthesis → write path) ───────────────────────────────

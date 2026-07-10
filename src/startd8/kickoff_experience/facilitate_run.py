@@ -295,6 +295,11 @@ def facilitate_status(project: Path | str, session_id: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — a corrupt/torn transcript degrades to a clean signal, not a 500
         return {"session_id": session_id, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
     synthesis = getattr(t, "synthesis", None)
+    # #6 — derive the consensus signal on read from the persisted R1 entries (lazy, $0, no new schema).
+    from startd8.stakeholder_panel.consensus import compute_consensus
+    from startd8.stakeholder_panel.facilitation import CHALLENGER_IDS
+
+    consensus = compute_consensus(getattr(t, "rounds", []) or [], exclude_role_ids=frozenset(CHALLENGER_IDS))
     return {
         "session_id": session_id,
         "status": t.status or "in_progress",
@@ -303,6 +308,7 @@ def facilitate_status(project: Path | str, session_id: str) -> Dict[str, Any]:
         "rounds_completed": len(getattr(t, "rounds", []) or []),
         "cost_so_far_usd": round(float(getattr(t, "cost_total_usd", 0.0) or 0.0), 6),
         "synthesis": getattr(synthesis, "text", "") if synthesis is not None else "",
+        "consensus": consensus.to_dict(),
         "halt": getattr(t, "halt", None),
         "is_terminal": bool(getattr(t, "is_done", False)),
     }
