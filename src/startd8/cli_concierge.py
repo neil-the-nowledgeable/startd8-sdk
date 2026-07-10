@@ -1380,6 +1380,43 @@ def kickoff_cockpit(
         console.print(render_cockpit(view))
 
 
+@kickoff_kernel_app.command("readout")
+def kickoff_readout(
+    project_root: Path = typer.Argument(
+        Path("."),
+        help="Project to render the readout for (default: current dir). Read-only.",
+    ),
+    fmt: str = typer.Option("md", "--format", help="md|html"),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="write to a file instead of stdout"
+    ),
+) -> None:
+    """Export a shareable, self-contained kickoff readout (Markdown or HTML).
+
+    A static-file parity of the terminal `cockpit`: it renders the SAME `AgenticView` read-model the
+    Grafana board and the cockpit render (Status / Assistant / Proposals), so a founder can email a
+    stakeholder or attach a ticket a document that matches the live view. Read-only, `$0`: it shows
+    the confirm commands, it never applies them (the CLI is the sole writer).
+    """
+    from .kickoff_experience.agentic_view import build_agentic_view
+    from .kickoff_experience.readout import render_html, render_markdown
+
+    normalized = fmt.strip().lower()
+    if normalized not in ("md", "html"):
+        console.print(f"[red]Invalid --format {fmt!r}: expected 'md' or 'html'.[/red]")
+        raise typer.Exit(2)
+
+    view = build_agentic_view(project_root)
+    text = render_markdown(view) if normalized == "md" else render_html(view)
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        console.print(f"  readout written: [cyan]{out}[/cyan]")
+    else:
+        print(text)
+
+
 # --- Kickoff audience (fluency) — M1 (FR-1/FR-2/FR-3) --------------------------------------------
 # `audience` is a lens over the one guided experience (orthogonal to `posture`): beginner /
 # intermediate / advanced. M1 is the persistence spine only — `set` writes ONLY the preference; it
