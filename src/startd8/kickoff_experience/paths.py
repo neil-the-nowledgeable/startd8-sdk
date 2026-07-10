@@ -13,10 +13,9 @@ rather than re-typing ``.startd8``. This module does not centralise filenames a 
 
 from __future__ import annotations
 
-from pathlib import Path
-
-#: The project-local store root. One definition; do not re-type the literal elsewhere.
-STARTD8_DIRNAME = ".startd8"
+# The store root name + root helper are owned SDK-wide by ``startd8.paths`` — re-exported here so the
+# kickoff subsystem has one import for its store layout without duplicating the ``.startd8`` literal.
+from ..paths import STARTD8_DIRNAME, startd8_dir  # noqa: F401  (re-exported for the feature group)
 
 # Well-known subdir names under the store root (each used by ≥1 subsystem). Filenames stay with their
 # owning module.
@@ -28,8 +27,3 @@ KICKOFF_PANEL = "kickoff-panel"           # facilitator synthesis transcripts
 KICKOFF_SCRATCH = "kickoff-scratch"       # serve scratch space
 STAKEHOLDER_PANEL = "stakeholder-panel"   # panel proposals
 STAKEHOLDER_RUN = "stakeholder-run"       # stakeholder-run endpoint state
-
-
-def startd8_dir(project_root: str | Path) -> Path:
-    """The ``.startd8`` store root for a project. The one place that names the store root."""
-    return Path(project_root) / STARTD8_DIRNAME

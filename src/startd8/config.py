@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any
 import stat
 
 from .model_catalog import get_latest_model
+from .paths import default_config_dir
 
 
 def _bare_model_id(agent_spec: Optional[str], fallback: str) -> str:
@@ -35,8 +36,8 @@ class ConfigManager:
             config_dir: Directory for config file (default: ~/.startd8)
         """
         if config_dir is None:
-            config_dir = Path.home() / ".startd8"
-        
+            config_dir = default_config_dir()
+
         self.config_dir = Path(config_dir)
         self.config_file = self.config_dir / "config.json"
         self._ensure_config_dir()

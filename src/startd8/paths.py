@@ -12,15 +12,27 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+#: The one name for the Startd8 store directory. Every ``.startd8`` path in the SDK should build on
+#: this (via ``startd8_dir`` or the ``default_*_dir`` helpers) rather than re-typing the literal.
+STARTD8_DIRNAME = ".startd8"
+
+
+def startd8_dir(base: Path) -> Path:
+    """The ``.startd8`` directory under *base* — the single place that names the store dir.
+
+    ``base`` is the containing dir: ``Path.cwd()`` for project data, ``Path.home()`` for user config,
+    or a project root. The ``default_*_dir`` helpers below are the two conventional bases."""
+    return Path(base) / STARTD8_DIRNAME
+
 
 def default_data_dir() -> Path:
     """Default directory for project-scoped data."""
-    return Path.cwd() / ".startd8"
+    return startd8_dir(Path.cwd())
 
 
 def default_config_dir() -> Path:
     """Default directory for user-scoped configuration."""
-    return Path.home() / ".startd8"
+    return startd8_dir(Path.home())
 
 
 def resolve_data_dir(data_dir: Optional[Path]) -> Path:
@@ -41,7 +53,7 @@ def controlled_corpus_path(project_root: Optional[Path] = None) -> Path:
     here, so callers pass ``project_root`` (not the data dir). Live-run fix: previously
     wrote to ``<project_root>/controlled-corpus.json`` (root pollution).
     """
-    base = (Path(project_root) if project_root is not None else Path.cwd()) / ".startd8"
+    base = startd8_dir(project_root if project_root is not None else Path.cwd())
     return base / "controlled-corpus.json"
 
 
@@ -50,7 +62,7 @@ def corpus_content_dir(project_root: Optional[Path] = None) -> Path:
 
     Project-scoped, sibling to controlled-corpus.json under ``<project_root>/.startd8/``.
     """
-    base = (Path(project_root) if project_root is not None else Path.cwd()) / ".startd8"
+    base = startd8_dir(project_root if project_root is not None else Path.cwd())
     return base / "corpus-content"
 
 

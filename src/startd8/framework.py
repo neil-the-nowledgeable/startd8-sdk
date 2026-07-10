@@ -14,6 +14,7 @@ from .models import (
     ResponseComparison, BenchmarkReport, PaginatedResult, ResponseMetadata
 )
 from .storage import StorageBackend, FileSystemStorage
+from .paths import default_data_dir
 from .logging_config import get_logger
 from .exceptions import ValidationError
 from .utils.file_operations import atomic_write_json
@@ -91,7 +92,7 @@ class AgentFramework:
             logger.debug("Secrets hydration skipped: %s", e)
 
         if storage_dir is None:
-            storage_dir = Path.cwd() / ".startd8"
+            storage_dir = default_data_dir()
 
         self.storage: StorageBackend = FileSystemStorage(storage_dir)
 
