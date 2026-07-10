@@ -9,7 +9,7 @@ to the folder where startd8 is being run from.
 import json
 from pathlib import Path
 from typing import Optional, Dict, Any
-from .paths import default_data_dir
+from .paths import startd8_dir
 
 
 class ProjectConfigManager:
@@ -26,7 +26,7 @@ class ProjectConfigManager:
             project_root = Path.cwd()
         
         self.project_root = Path(project_root).resolve()
-        self.config_dir = self.project_root / ".startd8"
+        self.config_dir = startd8_dir(self.project_root)
         self.config_file = self.config_dir / "project_config.json"
         self._ensure_config_dir()
         self._config = self._load_config()

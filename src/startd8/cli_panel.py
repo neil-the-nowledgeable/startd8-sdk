@@ -17,6 +17,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from .paths import startd8_dir
 from typing import List, Optional
 
 import typer
@@ -380,7 +381,7 @@ def panel_serve(
     root = project_root.expanduser()
 
     # Fail-closed spend safety: a DAILY blocking budget must exist before the endpoint accepts runs.
-    manager = BudgetManager(CostStore(root / ".startd8" / "costs.db"))
+    manager = BudgetManager(CostStore(startd8_dir(root) / "costs.db"))
     ensure_daily_ceiling(manager, limit_usd=daily_ceiling)
 
     # FR-R7 c: the apply write gate is MANDATORY-strict. Refuse the footgun of --enable-apply without

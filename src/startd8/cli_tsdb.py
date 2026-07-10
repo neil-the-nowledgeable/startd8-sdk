@@ -21,6 +21,7 @@ Exit codes: 0 success · 1 refused (gate/confirmation/empty) · 2 input/read err
 from __future__ import annotations
 
 from pathlib import Path
+from .paths import startd8_dir
 from typing import Optional
 
 import typer
@@ -151,7 +152,7 @@ def promote_tsdb(
         raise typer.Exit(EXIT_OK)
 
     # M4 — gate + promote.
-    run_dir = project / ".startd8" / "tsdb-run"
+    run_dir = startd8_dir(project) / "tsdb-run"
     outcome = gate_and_promote(
         result, spec, metric=metric, project_root=project, run_dir=run_dir,
         require_confirmed=not force,

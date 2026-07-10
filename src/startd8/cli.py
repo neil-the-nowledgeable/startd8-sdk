@@ -11,6 +11,7 @@ import os
 import typer
 from typing import Optional, List
 from pathlib import Path
+from .paths import default_data_dir
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -102,7 +103,7 @@ def _bootstrap(
 @app.command()
 def init(
     storage_dir: Path = typer.Option(
-        Path.cwd() / ".startd8",
+        default_data_dir(),
         "--dir",
         "-d",
         help="Storage directory for startd8 data",

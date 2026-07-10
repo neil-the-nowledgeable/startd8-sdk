@@ -7,6 +7,7 @@ from typing import Optional, List
 from typing import Optional, List
 from rich.panel import Panel
 from pathlib import Path
+from .paths import default_data_dir
 from rich.table import Table
 import typer
 from .cli_shared import console, get_framework, logger
@@ -21,7 +22,7 @@ queue_app = typer.Typer(
 def _get_queue_config_path(storage_dir: Optional[Path] = None) -> Path:
     """Get path to queue config file"""
     # Decision C: queue is project-scoped (store config alongside project data).
-    base = storage_dir or Path.cwd() / ".startd8"
+    base = storage_dir or default_data_dir()
     return base / "queue" / "config.json"
 
 

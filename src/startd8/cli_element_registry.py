@@ -5,6 +5,7 @@
 
 from typing import Optional, List
 from pathlib import Path
+from .paths import default_data_dir
 from rich.table import Table
 import typer
 from .cli_shared import console
@@ -20,7 +21,7 @@ def _get_element_registry(state_dir: Optional[Path] = None):
     """Create an ElementRegistry pointing at the project state directory."""
     from .element_registry import ElementRegistry
 
-    base = state_dir or Path.cwd() / ".startd8" / "state"
+    base = state_dir or default_data_dir() / "state"
     return ElementRegistry(state_dir=base)
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from .paths import startd8_dir
 from typing import List, Optional
 
 import typer
@@ -137,7 +138,7 @@ def wireframe(
     if not no_write:
         persist_plan(
             plan,
-            Path(project) / ".startd8" / "wireframe",
+            startd8_dir(project) / "wireframe",
             emit_context="cli",
             linkage=linkage,
         )
