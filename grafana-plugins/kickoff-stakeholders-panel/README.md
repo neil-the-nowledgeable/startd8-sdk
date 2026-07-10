@@ -26,6 +26,22 @@ Set the panel option **Panel mode** to pick a surface (all share the same dataso
   a persistent **SYNTHETIC & UNRATIFIED** banner. A **Cancel** button signals the in-flight run by its
   `session_id`; rounds that already completed persist. Posture/tier chosen in the panel body override the
   panel-option defaults (which only seed the initial values).
+- **Triage** — routes a **finished facilitation synthesis** into typed, lane-sorted candidates and
+  drives the write path from the dashboard, handing off to Apply mode for the final commit. Flow inside
+  the panel:
+  1. **Triage** (read-only, $0): enter a `session_id` (empty = latest) → renders per-lane candidates
+     (FIELD_LEVEL / NON_DECIDABLE / UNSTRUCTURED — the last a distinct "preserved" group), a per-kind
+     count, health warnings, and a collapsible **backlog preview** (`render_backlog_section`).
+  2. **Extract** (**paid**, only when there are field-level candidates): **Preview extract cost**
+     (dry-run, $0) → confirm modal → the confirm closes on the first click (double-click can't double-
+     spend) and stages field-level recommendations. An idempotent replay shows "$0 — already extracted".
+  3. **Disposition** ($0): Accept / Reject each staged rec.
+  4. **Serialize** ($0): pushes the **accepted** recs to the VIPP inbox and shows any **not-allow-listed
+     rejects**; then switch to **Apply** mode (same `session_id`) to preview → ratify. If the inbox is
+     already occupied, serialize returns a clear "ratify in Apply mode first" state rather than silently
+     overwriting nothing.
+
+  The whole surface is **SYNTHETIC & UNRATIFIED**; only Apply mode writes the project source of record.
 
 ## Security — the token is NOT in this panel (FR-2 / S-3)
 
