@@ -443,9 +443,18 @@ def emitted_from_descriptor(descriptor) -> Set[str]:
     ):
         if not name:
             continue
-        base = name[: -len("_bucket")] if name.endswith("_bucket") else name
-        out |= _expand_family(base)
-        out.add(name)
+        # A histogram-derived series (``*_count`` / ``*_bucket`` / ``*_sum``) implies its
+        # whole family; a bare counter (``calls_total``) is standalone. Derive the base by
+        # stripping the histogram suffix — NOT double-suffixing an already-derived name.
+        base = None
+        for suf in _HISTOGRAM_SUFFIXES:
+            if name.endswith(suf):
+                base = name[: -len(suf)]
+                break
+        if base is not None:
+            out |= {base + s for s in _HISTOGRAM_SUFFIXES}
+        else:
+            out.add(name)  # standalone counter/gauge
     return out
 
 
@@ -495,3 +504,53 @@ def score_services(
         }
         out[svc] = result
     return out
+
+
+# ───────────── benchmark: is a generated service *observable*? (B1) ─────────
+
+
+def service_observability_coverage(
+    service_source: Path, *, profile: Optional[str] = None
+) -> Dict[str, object]:
+    """Does a generated service emit the RED metrics standard observability needs?
+
+    The benchmark-facing flip of static fidelity: instead of "do the generated alerts
+    bind to the service", it asks "does the generated **service** present the RED surface
+    (throughput + latency) that any observability for it would query" — a net-new,
+    zero-runtime *observability-readiness* signal for a benchmarked service.
+
+    * ``referenced`` = the descriptor's RED metrics for the service's convention
+      (``profile`` if given, else ``semconv-{sniffed transport}`` — benchmarked services
+      are OTel-instrumented). This is what observability *needs*.
+    * ``emitted``    = the metrics the service SOURCE emits (explicit instrument
+      constructors + transport-implied auto-instrumentation).
+
+    Reported-not-scored: it measures observability-readiness, NOT code correctness — a
+    low number flags a service with no observable surface (no server transport, no
+    instruments), the outlier worth seeing.
+    """
+    from .metric_descriptor import profile_for, profile_for_transport
+
+    root = Path(service_source)
+    transports: Set[str] = set()
+    if root.is_file():
+        transports |= sniff_transports(root.read_text(errors="ignore"))
+    elif root.is_dir():
+        for p, _lang in _iter_source_files(root):
+            try:
+                transports |= sniff_transports(p.read_text(errors="ignore"))
+            except OSError:  # pragma: no cover
+                continue
+
+    emitted = extract_emitted_metrics(root)
+    if profile:
+        descriptor = profile_for(profile)
+    else:
+        transport = "grpc" if "grpc" in transports else "http"
+        descriptor = profile_for_transport(transport)
+    referenced = emitted_from_descriptor(descriptor)
+
+    result = static_fidelity(emitted, referenced)
+    result["profile"] = descriptor.profile
+    result["transports"] = sorted(transports)
+    return result

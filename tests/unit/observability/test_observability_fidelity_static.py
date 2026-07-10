@@ -21,6 +21,7 @@ from startd8.observability.observability_fidelity_static import (
     extract_emitted_metrics,
     extract_referenced_metrics,
     score_services,
+    service_observability_coverage,
     sniff_transports,
     static_fidelity,
 )
@@ -212,3 +213,44 @@ def test_score_services_descriptor_fold_binds_red(tmp_path):
     assert v["verdict"] == "pass"          # both RED metrics bind via the descriptor
     assert v["coverage"] == 1.0
     assert v["emitted_sources"] == {"descriptor": True, "source_scan": False}
+
+
+# ──────── B1: service observability-readiness (benchmark-facing flip) ────────
+
+
+def test_emitted_from_descriptor_no_double_suffix():
+    # rpc_server_duration_count is a histogram-derived series → its family, NOT
+    # rpc_server_duration_count_bucket (double-suffix bug).
+    from startd8.observability.metric_descriptor import profile_for
+    ref = emitted_from_descriptor(profile_for("semconv-grpc"))
+    assert ref == {"rpc_server_duration_count", "rpc_server_duration_bucket", "rpc_server_duration_sum"}
+    span = emitted_from_descriptor(profile_for("span-metrics-connector"))
+    assert "calls_total" in span and "calls_total_bucket" not in span  # counter is standalone
+
+
+def test_service_observability_coverage_instrumented(tmp_path):
+    # A gRPC service that wires up a server → transport-implied rpc_server_duration →
+    # covers the semconv-grpc RED surface observability needs.
+    svc = tmp_path / "main.go"
+    svc.write_text('import "google.golang.org/grpc"\nfunc main(){ grpc.NewServer() }\n')
+    r = service_observability_coverage(svc)
+    assert r["profile"] == "semconv-grpc"
+    assert r["verdict"] == "pass" and r["coverage"] == 1.0
+
+
+def test_service_observability_coverage_no_surface_is_unknown(tmp_path):
+    # A service with no server transport and no metric instruments → nothing emitted →
+    # unknown (no silent green), the outlier a benchmark reviewer wants flagged.
+    svc = tmp_path / "app.py"
+    svc.write_text("def add(a, b):\n    return a + b\n")
+    r = service_observability_coverage(svc)
+    assert r["verdict"] == "unknown"
+    assert r["emitted_count"] == 0
+
+
+def test_service_observability_coverage_explicit_profile(tmp_path):
+    svc = tmp_path / "app.py"
+    svc.write_text('meter.create_counter("calls_total")\n')
+    r = service_observability_coverage(svc, profile="span-metrics-connector")
+    assert r["profile"] == "span-metrics-connector"
+    assert "calls_total" in r["bound"]

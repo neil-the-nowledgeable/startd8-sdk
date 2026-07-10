@@ -134,6 +134,10 @@ class CellResult:
     defects_by_category: Optional[Dict[str, int]] = None  # FR-B3: per-category contribution
     functional_coverage: Optional[float] = None  # FR-T2-COMPOSITE: behavioral coverage (None = not run)
     behavioral: Optional[Dict] = None         # FR-T2-PROV: suite results + isolation provenance
+    # B1 (reported-not-scored): does the generated service present the RED metric surface
+    # standard observability would query? Static, $0. NEVER folded into quality/composite.
+    observability_coverage: Optional[float] = None
+    observability: Optional[Dict] = None      # provenance: profile / transports / unbound
 
     @property
     def tokens_per_sec(self) -> Optional[float]:
@@ -388,6 +392,8 @@ class SubprocessCellExecutor:
         functional_degraded = False
         functional_model_fault = False
         behavioral_prov = None
+        observability_coverage = None  # B1 (reported-not-scored): observability-readiness
+        observability_prov = None
 
         # M4 compile gate (FR-11/FR-29/FR-44): only for cells that actually generated.
         # Run the language's syntax/compile check on the generated file inside the sandbox;
@@ -435,6 +441,18 @@ class SubprocessCellExecutor:
                     quality = composite.value
                     compile_ok = composite.compile_ok
                     degraded = composite.degraded
+                    # B1 (reported-not-scored): does the generated service present the
+                    # RED surface standard observability would query? Static, $0, and it
+                    # NEVER touches `quality` — a net-new observability-readiness signal.
+                    try:
+                        from ..observability.observability_fidelity_static import (
+                            service_observability_coverage,
+                        )
+                        _obs = service_observability_coverage(gen_file)
+                        observability_coverage = _obs.get("coverage")
+                        observability_prov = _obs
+                    except Exception:  # noqa: BLE001 — an advisory term never blocks a cell
+                        pass
             except Exception as exc:  # noqa: BLE001 — scoring must not crash a run
                 sandbox_violation = f"scoring error: {type(exc).__name__}: {exc}"
 
@@ -455,6 +473,7 @@ class SubprocessCellExecutor:
             error=None if status == STATUS_OK else (err_text or status),
             defect_total=defect_total, defects_by_category=defects_by_category,
             functional_coverage=functional_coverage, behavioral=behavioral_prov,
+            observability_coverage=observability_coverage, observability=observability_prov,
         )
 
     @staticmethod
