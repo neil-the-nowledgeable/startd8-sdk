@@ -106,6 +106,23 @@ def test_triage_unknown_session_is_404(tmp_path, monkeypatch):
     assert client.post("/stakeholders/triage", json={"session_id": "nope"}, headers=_auth()).status_code == 404
 
 
+def test_triage_carries_backlog_markdown_superset(tmp_path, monkeypatch):
+    # M1a (FR-4/R1-S6): the triage response gains `backlog_markdown` (a str), and stays a SUPERSET —
+    # every pre-existing key still present so the additive field can't mask a shape change.
+    _patch_service(monkeypatch, transcripts={"s1": _FakeTranscript("s1", "We should set the budget.")})
+    body = _client(tmp_path).post("/stakeholders/triage", json={}, headers=_auth()).json()
+    prior_keys = {"kind", "session_id", "counts", "kind_counts", "health", "candidates", "synthesis_present"}
+    assert prior_keys <= set(body)  # superset — no key dropped
+    assert "backlog_markdown" in body and isinstance(body["backlog_markdown"], str)
+
+
+def test_triage_backlog_markdown_empty_when_no_synthesis(tmp_path, monkeypatch):
+    # No synthesis → no candidates → the renderer returns "" (H-5), not an error.
+    _patch_service(monkeypatch, transcripts={"s1": _FakeTranscript("s1", None)})
+    body = _client(tmp_path).post("/stakeholders/triage", json={"session_id": "s1"}, headers=_auth()).json()
+    assert body["backlog_markdown"] == ""
+
+
 # --------------------------------------------------------------------------- FR-R4 disposition
 
 
@@ -221,6 +238,30 @@ def test_serialize_none_accepted_is_409(tmp_path):
                              "domain": "conventions"}])  # staged as draft, none accepted
     client = _client(tmp_path)
     assert client.post("/stakeholders/serialize", json={"session_id": "s1"}, headers=_auth()).status_code == 409
+
+
+def test_serialize_undrained_inbox_is_409_no_clobber(tmp_path, monkeypatch):
+    # M1d (FR-10b): the FIRST serialize writes the inbox; a SECOND serialize while it's undrained must
+    # 409 (not a silent 200) and leave the inbox byte-identical — else Apply mode ratifies a stale set.
+    from startd8.kickoff_experience import proposals as kp
+
+    def fake_build_proposal(args, *, project_root, config=None):
+        return kp.ProposedAction("capture", {"value_path": args["value_path"], "value": args["value"]},
+                                 id="p1", base_sha="deadbeef")
+
+    monkeypatch.setattr(kp, "build_proposal", fake_build_proposal)
+    _stage(tmp_path, "s1", [{"value_path": "business-targets.budget.target", "value": "$8,000"}])
+    from startd8.stakeholder_panel.proposals import ProposalStore
+
+    ProposalStore(tmp_path, "s1").update_disposition("", "business-targets.budget.target", "accepted")
+    client = _client(tmp_path)
+    first = client.post("/stakeholders/serialize", json={"session_id": "s1"}, headers=_auth())
+    assert first.status_code == 200
+    inbox = tmp_path / ".startd8" / "vipp" / "proposals-inbox.json"
+    before = inbox.read_bytes()
+    second = client.post("/stakeholders/serialize", json={"session_id": "s1"}, headers=_auth())
+    assert second.status_code == 409 and "undrained" in second.json()["error"].lower()
+    assert inbox.read_bytes() == before  # no-clobber — the existing inbox is untouched
 
 
 # --------------------------------------------------------------------------- FR-R6 negotiate

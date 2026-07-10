@@ -392,7 +392,7 @@ async def _triage(request: Request) -> JSONResponse:
         return body
 
     from startd8.kickoff_view import KickoffViewService
-    from startd8.stakeholder_panel.synthesis_bridge import build_triage
+    from startd8.stakeholder_panel.synthesis_bridge import build_triage, render_backlog_section
 
     service = KickoffViewService(str(config.project_root))
     sid = str(body.get("session_id") or "").strip() or service.latest_session_id()
@@ -408,7 +408,14 @@ async def _triage(request: Request) -> JSONResponse:
     report = build_triage(transcript)  # tolerates an absent synthesis (empty candidates) — degrade clean
     synthesis = getattr(transcript, "synthesis", None)
     synthesis_present = bool(getattr(synthesis, "text", "") if synthesis is not None else "")
-    return JSONResponse({**report.to_dict(), "synthesis_present": synthesis_present})
+    # M1a (FR-4): reuse the tested renderer server-side so the Triage panel previews the backlog without
+    # re-implementing it in TS (Mottainai). `""` when there are no candidates. Additive field (M1a test
+    # asserts the response stays a superset of the prior keys).
+    project_name = Path(config.project_root).expanduser().name
+    backlog_markdown = render_backlog_section(report, project=project_name)
+    return JSONResponse(
+        {**report.to_dict(), "synthesis_present": synthesis_present, "backlog_markdown": backlog_markdown}
+    )
 
 
 async def _disposition(request: Request) -> JSONResponse:
@@ -484,6 +491,13 @@ async def _serialize(request: Request) -> JSONResponse:
         )
     except SafeWriteError as exc:  # confinement / symlink refusal
         return _err(403, f"serialize blocked: {exc}")
+    # M1d (FR-10b): `serialize_buffer` is no-clobber — an existing UNDRAINED inbox is skipped, not
+    # overwritten, and nothing is written. Returning 200 here (as before) told the operator serialize
+    # succeeded while the inbox held stale content; Apply mode would then ratify the wrong set. Surface
+    # the skip as a 409 so the operator drains (ratifies) it in Apply mode first.
+    write = result.get("write")
+    if write is not None and getattr(write, "skipped", None):
+        return _err(409, "undrained inbox — consume it in Apply mode (preview → ratify) before re-serializing")
     return JSONResponse(
         {"staged": result["staged"], "rejected": result["rejected"], "inbox": result["inbox"]}
     )
@@ -673,7 +687,9 @@ async def _extract(request: Request) -> JSONResponse:
         recs = await run_in_threadpool(ProposalStore(config.project_root, sid).load)
         return JSONResponse(
             {"session_id": sid, "status": "deduped",
-             "staged": [{"value_path": r.value_path, "value": r.recommended_value} for r in recs],
+             # M1b (FR-9a): `domain` is required to build a /disposition (domain, value_path) call.
+             "staged": [{"domain": r.domain, "value_path": r.value_path, "value": r.recommended_value}
+                        for r in recs],
              "synthesis_checksum": checksum,
              "note": "idempotent replay — prior extraction returned, no re-charge"}
         )
@@ -689,12 +705,34 @@ async def _extract(request: Request) -> JSONResponse:
     if max_cost is not None and estimated > float(max_cost):
         return _err(412, f"estimated ${estimated:.4f} exceeds max_cost_usd ${float(max_cost):.4f} — refusing")
 
-    store.record_start(extract_key, checksum)  # spend marker BEFORE the provider call (crash-safety)
+    # M1c (FR-8a): atomically CLAIM the spend. `reserve()` writes the marker AND detects a concurrent
+    # confirm in ONE locked region — `record_start` was not atomic vs the earlier `lookup`, so two
+    # confirms sharing an `extract_key` could both pass and both spend. Placed AFTER the budget/ceiling
+    # checks, so a 412 never leaves a reservation (mirrors the original record_start ordering).
+    try:
+        claim = store.reserve(extract_key, checksum)
+    except RunKeyMismatchError as exc:
+        return _err(409, str(exc))
+    if claim is not None:  # a concurrent confirm won the race between our lookup and here
+        if claim.get("status") == "completed":
+            from startd8.stakeholder_panel.proposals import ProposalStore
+
+            recs = await run_in_threadpool(ProposalStore(config.project_root, sid).load)
+            return JSONResponse(
+                {"session_id": sid, "status": "deduped",
+                 "staged": [{"domain": r.domain, "value_path": r.value_path, "value": r.recommended_value}
+                            for r in recs],
+                 "synthesis_checksum": checksum,
+                 "note": "idempotent replay — a concurrent extraction returned, no re-charge"}
+            )
+        return _err(409, "extraction already in progress for this synthesis — retry shortly")
+
     spent: dict = {"cost": 0.0, "input_tokens": 0, "output_tokens": 0}
     mapper = _tracked_extract_mapper(config.model, config.cost_tracker, pricing, spent)
     try:
         mappings = await run_in_threadpool(extract_field_mappings, synthesis_text, allowed, mapper=mapper)
-    except Exception as exc:  # provider/mapper failure — do NOT mark complete (a retry may re-run)
+    except Exception as exc:  # provider/mapper failure — release the claim so a retry can re-run
+        store.release(extract_key)
         return _err(502, f"extraction failed: {exc}")
 
     recs = await run_in_threadpool(stage_recommendations, config.project_root, sid, mappings)
@@ -704,7 +742,9 @@ async def _extract(request: Request) -> JSONResponse:
     ceiling_exceeded = max_cost is not None and float(spent["cost"]) > float(max_cost)
     return JSONResponse(
         {"session_id": sid, "status": "staged",
-         "staged": [{"value_path": r.value_path, "value": r.recommended_value} for r in recs],
+         # M1b (FR-9a): `domain` per staged row so the panel can build the /disposition call.
+         "staged": [{"domain": r.domain, "value_path": r.value_path, "value": r.recommended_value}
+                    for r in recs],
          "synthesis_checksum": checksum, "actual_cost": round(float(spent["cost"]), 6),
          "input_tokens": spent["input_tokens"], "output_tokens": spent["output_tokens"],
          "ceiling_exceeded": ceiling_exceeded,

@@ -175,7 +175,9 @@ def test_extract_confirm_stages_and_records_actual_cost(tmp_path, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "staged"
-    assert body["staged"] == [{"value_path": "conventions.yaml#/language", "value": "python"}]
+    # M1b (FR-9a): staged rows now carry `domain` (here "" — MAP_JSON gave no explicit domain) so the
+    # panel can build a valid /disposition (domain, value_path) call.
+    assert body["staged"] == [{"domain": "", "value_path": "conventions.yaml#/language", "value": "python"}]
     assert body["actual_cost"] == 0.002 and body["input_tokens"] == 100 and body["output_tokens"] == 50
     # FR-9: the paid call was recorded to the CostTracker with the real token counts.
     assert tracker.calls and tracker.calls[0]["input_tokens"] == 100
@@ -227,3 +229,72 @@ def test_extract_precall_ceiling_refuses_412(tmp_path, monkeypatch):
         headers=_auth(),
     )
     assert r.status_code == 412
+
+
+# --------------------------------------------------------------------------- M1b/M1c (CRP hardening)
+
+
+def test_extract_staged_rows_carry_domain(tmp_path, monkeypatch):
+    """M1b (FR-9a): a disposition built SOLELY from an extract staged row must succeed — proving
+    `domain` is present. Without it the panel would send domain='' and 404/mis-match."""
+    _patch_service(monkeypatch, transcripts={"s1": _FakeTranscript("s1", "Use python everywhere.")})
+    _patch_agent(monkeypatch)
+    client = _client(tmp_path)
+    checksum = client.post("/stakeholders/extract", json={"dry_run": True},
+                           headers=_auth()).json()["synthesis_checksum"]
+    staged = client.post("/stakeholders/extract",
+                         json={"session_id": "s1", "confirm_checksum": checksum},
+                         headers=_auth()).json()["staged"]
+    row = staged[0]
+    assert set(row) >= {"domain", "value_path", "value"}  # domain present
+    # Build the disposition request from ONLY the extract row → must resolve the staged rec.
+    r = client.post("/stakeholders/disposition",
+                    json={"session_id": "s1", "domain": row["domain"], "value_path": row["value_path"],
+                          "disposition": "accepted"}, headers=_auth())
+    assert r.status_code == 200 and r.json()["updated"] is True
+
+
+def test_extract_confirm_in_progress_is_409_no_spend(tmp_path, monkeypatch):
+    """M1c (FR-8a): a confirm while another confirm holds the reservation (status 'started', not
+    'completed') returns 409 and does NOT spend — closing the double-spend window."""
+    from startd8.kickoff_experience.stakeholder_run import IdempotencyStore
+
+    _patch_service(monkeypatch, transcripts={"s1": _FakeTranscript("s1", "Use python everywhere.")})
+    calls = []
+    _patch_agent(monkeypatch, counter=calls)
+    client = _client(tmp_path)
+    checksum = client.post("/stakeholders/extract", json={"dry_run": True},
+                           headers=_auth()).json()["synthesis_checksum"]
+    # Simulate a concurrent confirm already in flight: reserve the extract_key as 'started'.
+    ek = srv._derive_extract_key("s1", checksum)
+    IdempotencyStore(tmp_path).reserve(ek, checksum)
+    r = client.post("/stakeholders/extract",
+                    json={"session_id": "s1", "confirm_checksum": checksum}, headers=_auth())
+    assert r.status_code == 409 and "in progress" in r.json()["error"].lower()
+    assert calls == []  # the model never ran — no second spend
+
+
+def test_extract_provider_failure_releases_reservation_so_retry_reruns(tmp_path, monkeypatch):
+    """M1c: a provider failure must RELEASE the reservation, else a retry would 409-wedge forever."""
+    _patch_service(monkeypatch, transcripts={"s1": _FakeTranscript("s1", "Use python everywhere.")})
+
+    state = {"fail_next": True}
+
+    class _FlakyAgent(_FakeAgent):
+        async def agenerate(self, prompt, **kw):
+            if state["fail_next"]:
+                state["fail_next"] = False
+                raise RuntimeError("provider blip")
+            return await super().agenerate(prompt, **kw)
+
+    import startd8.utils.agent_resolution as ar
+    monkeypatch.setattr(ar, "resolve_agent_spec", lambda *a, **k: _FlakyAgent(MAP_JSON))
+
+    client = _client(tmp_path)
+    checksum = client.post("/stakeholders/extract", json={"dry_run": True},
+                           headers=_auth()).json()["synthesis_checksum"]
+    body = {"session_id": "s1", "confirm_checksum": checksum}
+    first = client.post("/stakeholders/extract", json=body, headers=_auth())
+    assert first.status_code == 502  # provider blew up
+    retry = client.post("/stakeholders/extract", json=body, headers=_auth())
+    assert retry.status_code == 200 and retry.json()["status"] == "staged"  # reservation was released
