@@ -610,7 +610,9 @@ def load_latest_deepen_session(project_root: str | Path) -> Optional[Dict[str, A
     any IO/parse error degrades to ``None`` (the Deepen phase falls back to the pointer, never crashes
     the guided view). Does NOT import the facilitator (avoids pulling the LLM stack into a $0 read).
     """
-    d = Path(project_root).expanduser() / ".startd8" / "kickoff-panel"
+    from .paths import KICKOFF_PANEL, startd8_dir
+
+    d = startd8_dir(Path(project_root).expanduser()) / KICKOFF_PANEL
     if not d.is_dir():
         return None
     try:

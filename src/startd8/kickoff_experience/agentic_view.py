@@ -338,7 +338,9 @@ def _proposal_summary(kind: str, params: dict) -> str:
 
 def _load_proposals(project_root: Path) -> Tuple[Tuple[ProposalRow, ...], bool]:
     """Load pending proposals from the existing VIPP inbox (FR-2). Never raises."""
-    inbox = project_root / ".startd8" / "vipp" / "proposals-inbox.json"
+    from .vipp_seam import inbox_path
+
+    inbox = inbox_path(project_root)
     if not inbox.is_file() or inbox.is_symlink():
         return (), False
     try:

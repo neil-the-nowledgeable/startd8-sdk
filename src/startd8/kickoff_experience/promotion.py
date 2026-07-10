@@ -150,8 +150,10 @@ def build_exemplar(project_root: str | Path) -> Dict[str, Any]:
 
 def exemplars_dir() -> Path:
     """The cross-project exemplar registry dir (``$STARTD8_KICKOFF_EXEMPLARS_DIR`` or ~/.startd8/…)."""
+    from .paths import EXEMPLARS, startd8_dir
+
     override = os.environ.get("STARTD8_KICKOFF_EXEMPLARS_DIR")
-    return Path(override) if override else (Path.home() / ".startd8" / "kickoff-exemplars")
+    return Path(override) if override else (startd8_dir(Path.home()) / EXEMPLARS)
 
 
 @dataclass

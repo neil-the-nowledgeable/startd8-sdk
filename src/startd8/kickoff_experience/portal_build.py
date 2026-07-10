@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 from ..logging_config import get_logger
+from .paths import DASHBOARDS, startd8_dir
 from .portal_spec import INDEX_UID
 
 logger = get_logger(__name__)
@@ -102,7 +103,7 @@ def build_workbook_v2_and_maybe_provision(
         dest = (
             Path(out_dir).expanduser()
             if out_dir
-            else (root / ".startd8" / "dashboards")
+            else (startd8_dir(root) / DASHBOARDS)
         )
         pres = persist_v2_dashboard(board, output_dir=dest)
         summary: Dict[str, Any] = {
@@ -180,7 +181,7 @@ def build_index(
         dest = (
             Path(out_dir).expanduser()
             if out_dir
-            else (root / ".startd8" / "dashboards")
+            else (startd8_dir(root) / DASHBOARDS)
         )
         pres = persist_v2_dashboard(board, output_dir=dest)
         summary: Dict[str, Any] = {"schema": "kickoff.portal-index.v2", "uid": INDEX_UID}

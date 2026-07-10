@@ -47,12 +47,11 @@ logger = get_logger(__name__)
 # and the dashboard LogQL builder agree on one selector.
 TRANSCRIPT_LOGGER_NAME = "startd8.kickoff.transcript"
 
-_SNAPSHOT_RELPATH = (".startd8", "kickoff", "agentic-session.json")
-
-
 def snapshot_path(project_root: str | os.PathLike[str]) -> Path:
     """Canonical snapshot location for *project_root* (last-session-only; OQ-1)."""
-    return Path(project_root).joinpath(*_SNAPSHOT_RELPATH)
+    from .paths import KICKOFF, startd8_dir
+
+    return startd8_dir(project_root) / KICKOFF / "agentic-session.json"
 
 
 def _redact(text: str) -> str:

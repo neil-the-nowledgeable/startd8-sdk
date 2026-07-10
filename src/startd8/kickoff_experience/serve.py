@@ -148,7 +148,9 @@ def preflight(
 
 
 def _scratch_root(project_root: Path) -> Path:
-    return project_root / ".startd8" / "kickoff-scratch"
+    from .paths import KICKOFF_SCRATCH, startd8_dir
+
+    return startd8_dir(project_root) / KICKOFF_SCRATCH
 
 
 def scratch_dir_for(project_root: str | Path, fingerprint: str) -> Path:

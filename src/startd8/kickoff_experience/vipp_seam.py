@@ -45,6 +45,7 @@ from ..concierge.safe_write import (
     resolve_confined_root,
 )
 from ..logging_config import get_logger
+from .paths import STARTD8_DIRNAME, VIPP
 from .proposals import ProposalBuffer
 
 logger = get_logger(__name__)
@@ -54,8 +55,9 @@ logger = get_logger(__name__)
 PROTOCOL_VERSION = "1.0"
 ENVELOPE_KIND = "vipp-proposal-envelope"
 
-VIPP_DIR = ".startd8/vipp"
+VIPP_DIR = f"{STARTD8_DIRNAME}/{VIPP}"
 INBOX_NAME = "proposals-inbox.json"
+DISPOSITIONS_NAME = "dispositions.json"
 SEQ_NAME = "inbox-seq"
 GITIGNORE_NAME = ".gitignore"
 GITIGNORE_CONTENT = "*\n"  # the inbox tree is a runtime store — never tracked
@@ -77,6 +79,12 @@ def _vipp_dir(root: Path) -> Path:
 
 def inbox_path(project_root: Any) -> Path:
     return _vipp_dir(project_root) / INBOX_NAME
+
+
+def dispositions_path(project_root: Any) -> Path:
+    """The VIPP dispositions report path — the owner-provided location Workbook readers should use
+    instead of re-typing ``.startd8/vipp/dispositions.json`` (which bypassed this home)."""
+    return _vipp_dir(project_root) / DISPOSITIONS_NAME
 
 
 def vipp_opted_in(project_root: Any) -> bool:

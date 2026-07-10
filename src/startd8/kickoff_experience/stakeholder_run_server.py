@@ -64,6 +64,7 @@ from .stakeholder_run import (
     roster_version,
 )
 from ..logging_config import get_logger
+from .paths import STAKEHOLDER_RUN, STARTD8_DIRNAME
 
 logger = get_logger(__name__)
 
@@ -77,7 +78,7 @@ _NONCE_TTL_SECONDS = 900
 # signing key is persisted per-project (survives restart) and single-use is enforced via the reused
 # IdempotencyStore. Short-lived: a preview must be ratified promptly or re-taken.
 _CHALLENGE_TTL_SECONDS = 300
-_APPLY_KEY_REL = Path(".startd8") / "stakeholder-run" / "apply-hmac.key"
+_APPLY_KEY_REL = Path(STARTD8_DIRNAME) / STAKEHOLDER_RUN / "apply-hmac.key"
 
 
 class _NonceStore:

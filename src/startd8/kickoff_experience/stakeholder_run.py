@@ -30,13 +30,15 @@ from typing import Any, Callable, Dict, List, Optional
 
 from startd8.exceptions import Startd8Error
 
+from .paths import STAKEHOLDER_RUN, STARTD8_DIRNAME
+
 # Conservative per-persona-question token assumption for the pre-spend estimate (real cost is only
 # known post-call). Deliberately generous so the estimate does not under-promise.
 _EST_INPUT_TOKENS = 2500
 _EST_OUTPUT_TOKENS = 600
 _FALLBACK_PER_QUESTION_USD = 0.02  # when pricing has no entry for the model
 _IDEMPOTENCY_TTL_SECONDS = 3600
-_RUN_STATE_REL = Path(".startd8") / "stakeholder-run"
+_RUN_STATE_REL = Path(STARTD8_DIRNAME) / STAKEHOLDER_RUN
 
 # Process-wide lock serializing IdempotencyStore load-modify-save across concurrent threadpool
 # requests (H1). Module-level because a fresh store instance is created per run.

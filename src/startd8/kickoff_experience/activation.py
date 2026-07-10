@@ -205,7 +205,9 @@ _SIGNATURE_KEYS = (
 
 def ledger_path(project_root: str | Path) -> Path:
     """Location of the append-only activation ledger for a project."""
-    return Path(project_root) / ".startd8" / "kickoff" / "activation-ledger.jsonl"
+    from .paths import KICKOFF, startd8_dir
+
+    return startd8_dir(project_root) / KICKOFF / "activation-ledger.jsonl"
 
 
 def _signature(status: Dict[str, Any]) -> Dict[str, Any]:

@@ -12,6 +12,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .paths import STAKEHOLDER_PANEL, startd8_dir
+from .vipp_seam import dispositions_path, inbox_path
+
 
 def load_panel_run(
     project_root: Path, session_id: Optional[str] = None
@@ -24,7 +27,7 @@ def load_panel_run(
             return [
                 a.to_dict() for a in TranscriptStore(project_root, session_id).load()
             ] or None
-        tdir = project_root / ".startd8" / "stakeholder-panel"
+        tdir = startd8_dir(project_root) / STAKEHOLDER_PANEL
         if not tdir.is_dir():
             return None
         sessions = sorted(
@@ -47,7 +50,7 @@ def load_pipeline_state(project_root: Path) -> Optional[dict]:
     """Assemble the panel→bridge→VIPP funnel for the Workbook (best-effort, $0). None if no activity."""
     try:
         staged: List[dict] = []
-        pdir = project_root / ".startd8" / "stakeholder-panel" / "proposals"
+        pdir = startd8_dir(project_root) / STAKEHOLDER_PANEL / "proposals"
         if pdir.is_dir():
             from ..stakeholder_panel.proposals import ProposalStore
 
@@ -58,11 +61,11 @@ def load_pipeline_state(project_root: Path) -> Optional[dict]:
                 )
 
         inbox: Dict[str, Any] = {"present": False}
-        inbox_path = project_root / ".startd8" / "vipp" / "proposals-inbox.json"
-        if inbox_path.is_file() and not inbox_path.is_symlink():
+        ip = inbox_path(project_root)
+        if ip.is_file() and not ip.is_symlink():
             from ..vipp.models import ProposalEnvelope
 
-            env = ProposalEnvelope.from_json(inbox_path.read_text(encoding="utf-8"))
+            env = ProposalEnvelope.from_json(ip.read_text(encoding="utf-8"))
             inbox = {
                 "present": True,
                 "count": len(env.proposals),
@@ -70,7 +73,7 @@ def load_pipeline_state(project_root: Path) -> Optional[dict]:
             }
 
         dispositions: Dict[str, Any] = {"present": False}
-        disp_path = project_root / ".startd8" / "vipp" / "dispositions.json"
+        disp_path = dispositions_path(project_root)
         if disp_path.is_file() and not disp_path.is_symlink():
             from ..vipp.models import VippReport
 
