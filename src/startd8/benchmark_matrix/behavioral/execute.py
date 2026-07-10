@@ -266,6 +266,8 @@ def run_behavioral_cell(
     cfg: Optional[SandboxConfig] = None,
     port: Optional[int] = None,
     tier: str = "baseline",
+    runtime_observability: bool = False,
+    language: str = "",
 ) -> BehavioralResult:
     """Execute ``service``'s behavioral suite against the generated code in ``workdir``.
 
@@ -312,7 +314,8 @@ def run_behavioral_cell(
     argv, extra_env = serve
     return _provision_launch_and_score(
         seed, workdir, service, target_files, argv, extra_env, port, suite_fn,
-        port_source=port_source, cfg=cfg)
+        port_source=port_source, cfg=cfg,
+        runtime_observability=runtime_observability, language=language)
 
 
 def _provision_launch_and_score(
@@ -328,6 +331,8 @@ def _provision_launch_and_score(
     port_source: str = "injected",
     cfg: Optional[SandboxConfig] = None,
     extra_provenance: Optional[Dict] = None,
+    runtime_observability: bool = False,
+    language: str = "",
 ) -> BehavioralResult:
     """Shared provision → sandboxed-launch → degrade/model-fault/score core (FR-T2-DEPS/DEPS2).
 
@@ -402,13 +407,39 @@ def _provision_launch_and_score(
     # already needed it for binary startup) to recover slow-binding cells; genuine crashes (rc=1) exit
     # immediately and are unaffected.
     readiness = 30.0
-    sr = run_service_sandboxed(argv, Path(workdir), port, client, cfg=cfg, extra_env=extra_env,
-                               readiness_timeout_s=readiness,
-                               readiness_mode=readiness_mode, health_path=health_path)
+
+    def _launch(_argv, _env):
+        return run_service_sandboxed(_argv, Path(workdir), port, client, cfg=cfg, extra_env=_env,
+                                     readiness_timeout_s=readiness,
+                                     readiness_mode=readiness_mode, health_path=health_path)
+
+    # B1 runtime observability (opt-in, guarded, reported-not-scored). Wrap the launch in a
+    # span-metrics collector so the service's OWN live telemetry can be bind-checked. Any
+    # failure (no collector binary / non-instrumentable language / no telemetry) degrades
+    # honestly and NEVER changes the behavioral launch or score.
+    runtime_obs = None
+    if runtime_observability:
+        try:
+            from ..observability.metric_descriptor import profile_for_transport
+            from ..observability.runtime_fidelity import probe_service_runtime_observability
+            _transport = "grpc" if readiness_mode != "http" else "http"
+            sr, runtime_obs = probe_service_runtime_observability(
+                service_id=service, language=language,
+                descriptor=profile_for_transport(_transport), workdir=Path(workdir),
+                argv=argv, extra_env=extra_env, run_service=_launch,
+            )
+        except Exception as exc:  # noqa: BLE001 — an advisory term never breaks the cell
+            runtime_obs = {"outcome": "degraded", "coverage": None, "reason": f"probe error: {exc}"}
+            sr = _launch(argv, extra_env)
+    else:
+        sr = _launch(argv, extra_env)
+
     prov: Dict = {"ready": sr.ready, "isolation_level": sr.isolation_level,
                   "network_isolated": sr.network_isolated, "violation": sr.violation,
                   "port_source": port_source,  # R2-S2: "injected" or "hardcoded:<n>"
                   "server_stderr_tail": (sr.server_stderr or "")[-400:]}
+    if runtime_obs is not None:
+        prov["runtime_observability"] = runtime_obs
     if local_assets and local_asset_key:
         prov[local_asset_key] = local_assets
     if extra_provenance:

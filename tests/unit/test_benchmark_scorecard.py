@@ -579,3 +579,17 @@ def test_observability_readiness_degrade_honest_when_absent(tmp_path):
     md = build_scorecard(tmp_path, now=_NOW)
     assert "Observability readiness" in md
     assert "Not computed for this run" in md
+
+
+def test_observability_runtime_column_appears_when_present(tmp_path):
+    _write_spec(tmp_path)
+    c1 = CellResult(cell_id="a", service="payment", model="anthropic:claude-fable-5",
+                    language="python", repetition=1, status=STATUS_OK, quality=0.9,
+                    observability_coverage=1.0, runtime_observability_coverage=0.5)
+    c2 = CellResult(cell_id="b", service="ad", model="openai:gpt-5.5",
+                    language="python", repetition=1, status=STATUS_OK, quality=0.9,
+                    observability_coverage=1.0)  # static only
+    _write_cells(tmp_path, [c1, c2])
+    md = build_scorecard(tmp_path, now=_NOW)
+    assert "runtime fidelity" in md
+    assert "static-high / runtime-low" in md

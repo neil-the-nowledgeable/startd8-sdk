@@ -367,19 +367,36 @@ def _observability_readiness_section(cells: List[CellResult]) -> str:
     by_model: Dict[str, List[float]] = {}
     for c in ran:
         by_model.setdefault(c.model, []).append(c.observability_coverage)
+    # B1 runtime (opt-in): per-model runtime fidelity, when the collector-bind ran.
+    rt_by_model: Dict[str, List[float]] = {}
+    for c in cells:
+        rv = getattr(c, "runtime_observability_coverage", None)
+        if rv is not None:
+            rt_by_model.setdefault(c.model, []).append(rv)
+    has_rt = bool(rt_by_model)
     rows = [
-        "> Fraction of the RED metric surface (throughput + latency) that standard",
-        "> observability would query which the generated service actually emits —",
-        "> explicit instruments + transport-implied auto-instrumentation, vs the",
-        "> descriptor's semconv metrics. Static, $0. Does NOT affect quality/ranking.",
+        "> Static: fraction of the RED metric surface (throughput + latency) that standard",
+        "> observability would query which the generated service emits (source + transport",
+        "> implication). Runtime (opt-in): the same, bind-checked against the service's OWN",
+        "> live telemetry via a span-metrics collector. Both $0-recomputable, do NOT affect ranking.",
         "",
-        "| Model | observability readiness (mean) | cells |",
-        "|---|---:|---:|",
+        ("| Model | static readiness | runtime fidelity | cells |" if has_rt
+         else "| Model | observability readiness (mean) | cells |"),
+        ("|---|---:|---:|---:|" if has_rt else "|---|---:|---:|"),
     ]
     for m in sorted(by_model, key=lambda m: -_st.mean(by_model[m])):
         v = by_model[m]
-        rows.append(f"| `{m}` | {_f(_st.mean(v))} | {len(v)} |")
-    return f"{head}\n\n" + "\n".join(rows)
+        if has_rt:
+            rt = rt_by_model.get(m)
+            rt_cell = _f(_st.mean(rt)) if rt else "—"
+            rows.append(f"| `{m}` | {_f(_st.mean(v))} | {rt_cell} | {len(v)} |")
+        else:
+            rows.append(f"| `{m}` | {_f(_st.mean(v))} | {len(v)} |")
+    note = ""
+    if has_rt:
+        note = ("\n\n> A **static-high / runtime-low** gap = wired for observability but not actually "
+                "emitting when run — the insight only the runtime form can surface.")
+    return f"{head}\n\n" + "\n".join(rows) + note
 
 
 def _is_pricing(c: CellResult) -> bool:

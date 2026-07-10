@@ -138,6 +138,10 @@ class CellResult:
     # standard observability would query? Static, $0. NEVER folded into quality/composite.
     observability_coverage: Optional[float] = None
     observability: Optional[Dict] = None      # provenance: profile / transports / unbound
+    # B1 runtime (reported-not-scored, opt-in): the service's OWN live telemetry bind-checked
+    # through a span-metrics collector. None unless runtime_observability ran + bound.
+    runtime_observability_coverage: Optional[float] = None
+    observability_runtime: Optional[Dict] = None  # {outcome, coverage, axes, profile, reason}
 
     @property
     def tokens_per_sec(self) -> Optional[float]:
@@ -248,6 +252,7 @@ class SubprocessCellExecutor:
                  workdir_root: Optional[Path] = None,
                  repair_mode: str = "apply", expose_defects: bool = False,
                  behavioral: bool = False,
+                 runtime_observability: bool = False,
                  operator_callback: Optional[Callable[[str, str, MatrixCell], None]] = None):
         self.seeds_dir = Path(seeds_dir)
         self.per_run_timeout_s = per_run_timeout_s
@@ -260,6 +265,9 @@ class SubprocessCellExecutor:
         # term. Default OFF — turning it on is the paymentservice pilot (spends LLM only via the
         # generation step; the suite itself is $0). Off ⇒ scoring path is byte-identical to today.
         self.behavioral = behavioral
+        # B1 runtime (opt-in, requires behavioral): bind-check the service's OWN live telemetry
+        # via a span-metrics collector. Reported-not-scored; degrades honestly without a collector.
+        self.runtime_observability = runtime_observability
         self.operator_callback = operator_callback
 
     def __call__(self, cell: MatrixCell, spec: BenchmarkRunSpec, language: str) -> CellResult:
@@ -394,6 +402,8 @@ class SubprocessCellExecutor:
         behavioral_prov = None
         observability_coverage = None  # B1 (reported-not-scored): observability-readiness
         observability_prov = None
+        runtime_observability_coverage = None  # B1 runtime (reported-not-scored, opt-in)
+        observability_runtime = None
 
         # M4 compile gate (FR-11/FR-29/FR-44): only for cells that actually generated.
         # Run the language's syntax/compile check on the generated file inside the sandbox;
@@ -420,12 +430,22 @@ class SubprocessCellExecutor:
                         seed_data = _load_json(seed) or {}
                         tfs = ((seed_data.get("tasks") or [{}])[0].get("config", {})
                                .get("context", {}).get("target_files")) or []
-                        bres = run_behavioral_cell(seed_data, workdir, cell.service, tfs, tier=tier)
+                        bres = run_behavioral_cell(
+                            seed_data, workdir, cell.service, tfs, tier=tier,
+                            runtime_observability=self.runtime_observability, language=language)
                         if bres.has_suite:
                             functional_coverage = bres.functional
                             functional_degraded = bres.degraded
                             functional_model_fault = getattr(bres, "model_fault", False)
                             behavioral_prov = bres.provenance
+                            # B1 runtime (reported-not-scored): lift the collector-bind result out of
+                            # provenance onto the cell. `bound` ⇒ a coverage; degraded/no-telemetry ⇒
+                            # None (excluded, never 0.0 that reads as a model failure — FR-7).
+                            _rt = (bres.provenance or {}).get("runtime_observability")
+                            if _rt is not None:
+                                observability_runtime = _rt
+                                if _rt.get("outcome") == "bound":
+                                    runtime_observability_coverage = _rt.get("coverage")
                     composite = score_file(gen_file, profile, structural=structural,
                                            functional=functional_coverage,
                                            functional_degraded=functional_degraded,
@@ -474,6 +494,8 @@ class SubprocessCellExecutor:
             defect_total=defect_total, defects_by_category=defects_by_category,
             functional_coverage=functional_coverage, behavioral=behavioral_prov,
             observability_coverage=observability_coverage, observability=observability_prov,
+            runtime_observability_coverage=runtime_observability_coverage,
+            observability_runtime=observability_runtime,
         )
 
     @staticmethod
