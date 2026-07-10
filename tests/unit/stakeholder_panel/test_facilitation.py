@@ -211,8 +211,9 @@ def test_persistence_routes_through_safe_write(tmp_path, small_roster, monkeypat
 
     monkeypatch.setattr(sw, "apply_write_plan", counting)
     _run(tmp_path, small_roster)
-    # 4 rounds + 1 final synthesis flush = 5 safe-write calls
-    assert calls["n"] == 5
+    # 1 initial in_progress write (t=0, so a fire-and-poll caller sees the transcript immediately)
+    # + 4 rounds + 1 final synthesis flush = 6 safe-write calls
+    assert calls["n"] == 6
 
 
 # ── equivalence-by-construction: the script delegates to the module ──────────

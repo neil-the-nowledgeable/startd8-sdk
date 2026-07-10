@@ -144,8 +144,11 @@ class KickoffTranscript(BaseModel):
 
     @property
     def is_done(self) -> bool:
-        """Terminal state for live-follow (FR-UX-17) — the run won't write again."""
-        return self.status in ("completed", "done") or self.is_halted
+        """Terminal state for live-follow (FR-UX-17) — the run won't write again.
+
+        H-6: `cancelled` + `error` are terminal too (a fire-and-poll cancel/crash must not spin forever).
+        """
+        return self.status in ("completed", "done", "cancelled", "error") or self.is_halted
 
     def active_round_id(self) -> Optional[str]:
         """The round currently being filled (FR-UX-18), or ``None`` when idle/complete.

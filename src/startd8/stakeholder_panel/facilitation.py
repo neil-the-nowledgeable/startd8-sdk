@@ -842,9 +842,11 @@ class KickoffFacilitator:
         on_prep: Optional[PrepHook] = None,
         on_round: Optional[RoundHook] = None,
         on_synthesis: Optional[SynthHook] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         self.config = config
         self._roster = roster
+        self._session_id = session_id  # H-2 — injected so the HTTP kickoff can return it synchronously
         self._persona_agent_factory = persona_agent_factory
         self._facilitator_agent_factory = facilitator_agent_factory
         self._model_assigner = model_assigner
@@ -990,12 +992,13 @@ class KickoffFacilitator:
             # scrutiny roster carries no skeptic, so scrutiny behavior is unchanged.
             return rid in CHALLENGER_IDS
 
-        panel = self._build_panel(briefs_all, specs)
+        panel = None  # built inside the try so a build failure becomes a first-class `error` transcript
         # Session scaffold up front so H2/H3 halts are FIRST-CLASS transcript states the
         # observability-UX viewer renders (status="halted", halt={...}), not silent skips.
         prep = {"grounded_context": "", "key_assumptions": "", "outside_view": ""}
         session = {
-            "session_id": f"kp-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}",
+            "session_id": self._session_id  # H-2 — injected id (HTTP kickoff) or minted (CLI)
+            or f"kp-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "project": Path(cfg.project).name, "objective": cfg.objective, "strategy": cfg.strategy,
             # posture that produced this transcript — self-describing so a consumer (e.g. the
@@ -1008,7 +1011,10 @@ class KickoffFacilitator:
             "budget_usd": float(cfg.budget_usd),
             "rounds": [], "synthesis": None, "cost_total_usd": 0.0,
         }
+        # Persist immediately so a fire-and-poll caller sees `in_progress` from t=0 (FR-1/FR-3).
+        self._persist(session)
         try:
+            panel = self._build_panel(briefs_all, specs)  # inside try → build failure → `error` transcript
             # ---- R0 prep (grounding + assumptions + outside view) ----------
             grounded = ""
             if cfg.ground:
@@ -1154,8 +1160,21 @@ class KickoffFacilitator:
             self._persist(session)
             self._emit_synthesis(FACILITATOR_SPEC, synth_text)
             return session
+        except asyncio.CancelledError:
+            # H-8: a cross-thread cancel → a first-class `cancelled` transcript, partial rounds kept.
+            session["status"] = "cancelled"
+            self._recompute_cost(session)
+            self._persist(session)
+            raise
+        except Exception as exc:  # noqa: BLE001 — H-7: any crash → first-class `error`, never stuck in_progress
+            session["status"] = "error"
+            session["error"] = f"{type(exc).__name__}: {exc}"
+            self._recompute_cost(session)
+            self._persist(session)
+            raise
         finally:
-            panel.close()
+            if panel is not None:
+                panel.close()
 
     # -- round landing + hardening gates --------------------------------------
     def _land_round(self, session: dict, rnd: dict) -> None:
