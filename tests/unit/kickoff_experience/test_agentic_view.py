@@ -188,3 +188,83 @@ def test_view_is_deterministic_single_oracle(tmp_path):
     assert v1.snapshot == v2.snapshot
     assert v1.proposals == v2.proposals
     assert v1.snapshot_status == v2.snapshot_status
+
+
+# --------------------------------------------------------------------------- convergence loaders (integration)
+
+
+def test_build_agentic_view_folds_real_on_disk_stores(tmp_path):
+    """MUST-FIX (audit): exercise workbook_sources' actual store-reading loaders — not injected dicts —
+    so CR-1/CR-2's load-bearing on-disk folding (dispositions parse, inbox parse, roster YAML, panel
+    transcript) is covered end-to-end through build_agentic_view."""
+    from startd8.stakeholder_panel.models import Grounding, PanelAnswer
+    from startd8.stakeholder_panel.transcript import TranscriptStore
+    from startd8.vipp.models import (
+        Decision,
+        EnvelopedProposal,
+        ProposalEnvelope,
+        VippDisposition,
+        VippReport,
+    )
+
+    root = tmp_path
+
+    # 1) VIPP inbox (proposals-inbox.json)
+    ip = root / ".startd8" / "vipp" / "proposals-inbox.json"
+    ip.parent.mkdir(parents=True, exist_ok=True)
+    ip.write_text(
+        json.dumps(
+            ProposalEnvelope(
+                project_id="p", envelope_seq=4,
+                proposals=[EnvelopedProposal(kind="capture", params={"value_path": "a.b"}, id="P-1")],
+            ).to_dict()
+        ),
+        encoding="utf-8",
+    )
+
+    # 2) VIPP dispositions.json (the richest loader branch)
+    disp = root / ".startd8" / "vipp" / "dispositions.json"
+    disp.write_text(
+        json.dumps(
+            VippReport(
+                project_id="p", envelope_seq=4,
+                dispositions=[
+                    VippDisposition(proposal_id="P-1", decision=Decision.ACCEPT, reason="fits"),
+                    VippDisposition(proposal_id="P-2", decision=Decision.REJECT, reason="off-scope"),
+                ],
+                panel_advisories=[{"text": "watch scope"}],
+            ).to_dict()
+        ),
+        encoding="utf-8",
+    )
+
+    # 3) stakeholder-panel transcript (latest run answers) via the real store
+    TranscriptStore(root, "sess-1").append(
+        PanelAnswer(role_id="cfo", question="budget?", text="keep it lean", grounding=Grounding.GROUNDED)
+    )
+
+    # 4) roster (stakeholders.yaml)
+    rp = root / "docs" / "kickoff" / "inputs" / "stakeholders.yaml"
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text(
+        "domain: stakeholders\nprovenance_default: authored\npersonas:\n"
+        "  - role_id: cfo\n    display_name: CFO\n    goals: [profitability]\n"
+        "  - role_id: cto\n    display_name: CTO\n    goals: [reliability]\n",
+        encoding="utf-8",
+    )
+
+    view = av.build_agentic_view(root)
+
+    # inbox + dispositions folded from disk
+    assert view.pipeline is not None
+    assert view.pipeline["inbox"]["present"] and view.pipeline["inbox"]["count"] == 1
+    assert view.pipeline["dispositions"]["present"]
+    assert view.pipeline["dispositions"]["counts"]["ACCEPT"] == 1
+    assert view.pipeline["dispositions"]["counts"]["REJECT"] == 1
+    assert view.pipeline_summary() and "1 accept" in view.pipeline_summary()
+
+    # roster + panel answers folded from disk
+    assert view.roster is not None and av._roster_size(view.roster) == 2
+    assert view.panel_answers and view.panel_answers[0]["role_id"] == "cfo"
+    ss = view.stakeholder_summary()
+    assert "2 personas" in ss and "answers" in ss

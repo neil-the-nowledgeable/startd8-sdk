@@ -1280,7 +1280,9 @@ def kickoff_portal(
         if json_out:
             _emit_json(
                 {
-                    "schema": "kickoff.portal-index.v1",
+                    # Use the builder's own schema string so the CLI envelope never drifts from it
+                    # (post-M4 the index is v2 — `kickoff.portal-index.v2`).
+                    "schema": res.summary.get("schema", "kickoff.portal-index.v2"),
                     "uid": res.uid,
                     "json_path": res.json_path,
                     "dashboard_url": res.provisioned_url,
