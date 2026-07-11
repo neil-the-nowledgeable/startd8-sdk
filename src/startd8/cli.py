@@ -1304,6 +1304,10 @@ app.add_typer(requirements_app, name="requirements")
 app.add_typer(screens_app, name="screens")
 app.add_typer(vipp_app, name="vipp")
 
+from .cli_cloud_grant import cloud_grant_app  # noqa: E402
+
+app.add_typer(cloud_grant_app, name="cloud-grant")
+
 
 # =============================================================================
 # OTel Telemetry Commands
