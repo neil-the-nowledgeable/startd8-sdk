@@ -297,6 +297,9 @@ def serve_kickoff(
     cloud: bool = False,
     api_key: Optional[str] = None,
     mirror_cockpit: bool = False,
+    grant_store: "Optional[object]" = None,
+    deployment_id: str = "",
+    cloud_origins: "frozenset[str]" = frozenset(),
 ) -> None:  # pragma: no cover - blocking I/O; covered indirectly via build_kickoff_app + preflight
     """Serve the kickoff web app on the loopback (R1-S8). Blocks until interrupted.
 
@@ -322,14 +325,18 @@ def serve_kickoff(
 
     gc_stale_scratch(project_root, app_fingerprint(cfg, theme=theme))
     chat_factory = None
-    if agent_spec and not cloud:  # GE-M5: no LLM-invoking panel on a cloud read-only serve
+    # The agentic panel is enabled for a LOCAL serve, or for a grant-capable CLOUD serve (M2/M5): a
+    # grant store means the cloud chat is gated per-request by the FR-14 trust chain, not disabled.
+    if agent_spec and (not cloud or grant_store is not None):
         resolution = resolve_chat_panel(project_root, agent_spec, red_carpet=red_carpet)
         chat_factory = resolution.factory
         if chat_factory is None:
             logger.warning("agentic chat panel disabled: %s", resolution.reason)
     app = build_kickoff_app(project_root, config=cfg, theme=theme, mode=mode,
                             chat_factory=chat_factory, cloud=cloud, api_key=api_key,
-                            mirror_cockpit=mirror_cockpit and not cloud)
+                            mirror_cockpit=mirror_cockpit and not cloud,
+                            grant_store=grant_store, deployment_id=deployment_id,
+                            cloud_origins=cloud_origins)
     bind_port = port or find_free_port(host)
 
     import uvicorn

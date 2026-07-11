@@ -146,10 +146,17 @@ effective-posture resolution the grant plugs into (not six edited call sites).
   DB/service backend** and **convention-level with a shared file store** — choose per deployment,
   document the file-store caveat. **Append-only audit with control-plane-actor + issuer-label + timestamp
   (R1-S6); audit-write failure ⇒ action denies** — fault test: audit sink down → issuance/consume denies.
-- **M5 — Serve/CLI wiring + per-trigger fail-closed matrix.** `kickoff start --cloud` accepts a grant
-  store. **Per-trigger integration matrix (R1-S5):** one case each for {absent, expired, exhausted,
-  revoked, store-unavailable, clock-untrusted} → strict 501 + no mirror write + no token spend. Happy
-  path: valid grant → 1 session of chat-write + populated cockpit.
+- **M5 — Serve/CLI wiring + per-trigger fail-closed matrix.** ✅ **SHIPPED — FEATURE COMPLETE.**
+  `serve_kickoff(..., grant_store, deployment_id, cloud_origins)` threads the store into the app and
+  resolves the chat factory for a **grant-capable cloud serve** (not just local). `kickoff start --cloud
+  --grant-store <path> --api-key <k> --deployment-id <id> --cloud-origin <url>` builds a `FileGrantStore`
+  (+ `AuditLog`) and refuses at launch if the trust-chain config is un-satisfiable (missing key/deployment/
+  origin). **Per-trigger fail-closed matrix (R1-S5):** {absent, expired, exhausted, revoked,
+  store-unavailable, clock-untrusted} each → chat unavailable, no session, no spend (store-unavailable now
+  a clean deny, not a 500 — `resolve_and_consume`/`revalidate` catch a `_sync` failure). Happy path: valid
+  grant → session created + consumed. All M0–M5 milestones done; the OQ-6 chat-write parity path is
+  complete end-to-end (issue via CLI → grant-capable cloud serve → trust chain → per-turn revalidation →
+  apply + redacted mirror).
 
 ---
 
