@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """Supported kickoff-input domains for the proactive recommendation pass (Teian, FR-KIR-2/3/4).
 

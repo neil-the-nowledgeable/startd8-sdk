@@ -1,21 +1,71 @@
-MIT License
+Functional Source License, Version 1.1, ALv2 Future License
 
-Copyright (c) 2025 StartDate Contributors
+Copyright 2026 Force Multiplier Labs
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## Terms and Conditions
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+### Licensor
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Force Multiplier Labs
+
+### Licensed Work
+
+startd8 SDK. The Licensed Work is (c) 2026 Force Multiplier Labs.
+
+### Additional Use Grant
+
+None.
+
+### Change Date
+
+Two years from the date the Licensed Work is made available under this License, or such other date as the Licensor may specify in writing.
+
+### Change License
+
+Apache License, Version 2.0
+
+### Notice
+
+The Functional Source License, Version 1.1, ALv2 Future License (this document, or the "License") is not an Open Source license. However, the Licensed Work will eventually be made available under an Open Source License, as stated in this License.
+
+## License Text
+
+### 1. Grant of Rights
+
+**1.1 Grant.** Subject to the terms and conditions of this License, Licensor hereby grants You a non-exclusive, worldwide, non-transferable, non-sublicensable license during the Term to use, copy, modify, create derivative works of, and redistribute the Licensed Work for any Permitted Purpose.
+
+**1.2 Permitted Purpose.** A "Permitted Purpose" is any purpose other than a Competing Use. A "Competing Use" means making the Licensed Work available to third parties as a commercial product or service that substitutes for the Licensed Work. For clarity, a Competing Use does not include:
+
+(a) Using the Licensed Work for internal purposes, including development, testing, or production use;
+
+(b) Using the Licensed Work to provide a product or service that is not a substitute for the Licensed Work;
+
+(c) Using or distributing the Licensed Work as part of a larger product or service that provides significant additional functionality beyond the Licensed Work.
+
+### 2. Patents
+
+Licensor grants You a license, under any patent claims Licensor can license or becomes able to license, to make, have made, use, sell, offer for sale, import, and otherwise transfer the Licensed Work. This patent license applies only to patent claims that are necessarily infringed by the Licensed Work as provided by Licensor; it does not cover any claims that would be infringed only as a consequence of modifications You make to the Licensed Work.
+
+### 3. Redistribution
+
+Redistribution is permitted, provided that:
+
+(a) Any copy of the Licensed Work that You redistribute includes a copy of this License;
+
+(b) You provide clear notice that the Licensed Work is licensed under this License, and provide a copy of this License to the recipient;
+
+(c) You do not remove or modify any license notices (including copyright notices, patent notices, disclaimers of warranty, or limitations of liability) contained within the Licensed Work.
+
+### 4. Disclaimer
+
+THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE LICENSED WORK OR THE USE OR OTHER DEALINGS IN THE LICENSED WORK.
+
+### 5. Trademarks
+
+This License does not grant You any right in the trademarks, service marks, brand names, or logos of Licensor.
+
+### 6. Grant of Future License
+
+Licensor hereby irrevocably grants You an additional license to use the Licensed Work under the Change License, effective on the Change Date. On the Change Date, the terms of the Change License will apply to the Licensed Work, and this License (including the grant in Section 1 and the restrictions of Competing Use) will terminate.
+
+If the Licensor makes the Licensed Work available under a later version of the Functional Source License, You may use the Licensed Work under the terms of that later version.

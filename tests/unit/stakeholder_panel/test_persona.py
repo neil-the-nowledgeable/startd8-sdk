@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """Persona tests (FR-5/FR-6/FR-7/FR-16): prompt bounding, grounding parse, history, failure degrade."""
 

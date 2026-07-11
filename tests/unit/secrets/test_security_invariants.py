@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """Security invariants: child-process token confinement (FR-15a) and
 no-secret-at-rest (FR-14 / Step 10)."""

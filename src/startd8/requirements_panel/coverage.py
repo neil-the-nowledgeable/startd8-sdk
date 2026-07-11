@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """Advisory readiness / coverage score (FR-RP-11 — resolves OQ-RP-8).
 

@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """Load and validate the stakeholder roster from ``docs/kickoff/inputs/stakeholders.yaml`` (FR-1/FR-4).
 

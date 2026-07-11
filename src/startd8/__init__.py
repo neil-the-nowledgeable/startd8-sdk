@@ -1,15 +1,12 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 #
-# Licensed under the Equitable Use License, Version 1.0.
-# You may obtain a copy of the License at: LICENSE.md
+# Licensed under the Functional Source License, Version 1.1, ALv2 Future License.
+# The Licensed Work converts to the Apache License, Version 2.0 on its Change Date.
+# You may obtain a copy of the License at: LICENSE (and LICENSE-APACHE).
 #
 # This software is provided "AS IS" without warranties of any kind.
-#
-# IMPORTANT: Use by government agencies (federal, state, local), fossil fuel
-# companies, military contractors, private prisons, investment banks, and
-# organizations using forced ranking systems is subject to the Maximum Fee.
-# See LICENSE.md for complete terms including worker protection provisions.
+# See LICENSE for complete terms.
 
 """
 StartDate (startd8) SDK - Multi-LLM Agent Framework

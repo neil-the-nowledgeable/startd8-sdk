@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """Runtime rotation (FR-ROT-1..6): refresh overwrites SDK-owned keys only,
 preserves user env, lazy TTL, and fail-open-preserving refresh."""

@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """SecretsManager hydration matrix: precedence, deny-list, allowlist, fail modes,
 source attribution, and thread-safety (FR-4, FR-4a, FR-4b, FR-5a, FR-6a, FR-13)."""

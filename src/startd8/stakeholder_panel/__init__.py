@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """Stakeholder Panel (codename *Kaigi*) — synthetic stakeholder agents kept available to answer
 questions VIPP raises during kickoff preparation.

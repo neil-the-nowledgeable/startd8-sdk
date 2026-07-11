@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """F1 M2 — the facilitate core: dry-run estimate, single-flight, session_id, terminal states (H-1..H-14)."""
 from __future__ import annotations

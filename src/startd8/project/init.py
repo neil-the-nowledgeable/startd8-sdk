@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """Deterministic ($0, no-LLM) setup entrypoint for the un-bundled VIPP / ground-truth-adjudication
 capability — ``startd8 project init`` (FR-1a/FR-14 scope-out, OQ-8 RESOLVED).
