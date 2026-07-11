@@ -169,3 +169,51 @@ def test_blocked_required_input_folds_into_state_and_gates(tmp_path):
     for f in reqd:
         assert f.value_path in blocked_vps
     assert st.attention_counts["blocked"] >= len(reqd)
+
+
+# --- data_model.money is now OPTIONAL (doesn't gate) + the "intentionally N/A" affordance -----------
+
+_MONEY_VP = "conventions.yaml#/data_model.money"
+
+
+def _write_conventions(root, body):
+    conv = root / "docs" / "kickoff" / "inputs" / "conventions.yaml"
+    conv.parent.mkdir(parents=True, exist_ok=True)
+    conv.write_text(body, encoding="utf-8")
+
+
+def test_is_not_applicable_recognizes_sentinels():
+    from startd8.kickoff_experience.value_inputs import is_not_applicable
+
+    for v in ["n/a", "N/A", "not applicable", "not-applicable", "None", " - ", "n.a."]:
+        assert is_not_applicable(v), v
+    for v in ["cents", "python", "", None, "n/a stuff", 0]:
+        assert not is_not_applicable(v), v
+
+
+def test_optional_money_absent_does_not_block(tmp_path):
+    # money is optional now — a project that never declares it is NOT blocked on it (and it doesn't gate)
+    (tmp_path / "docs" / "kickoff" / "inputs").mkdir(parents=True)
+    money = [f for f in value_input_field_states(tmp_path) if f.value_path == _MONEY_VP]
+    assert all(f.attention != Attention.BLOCKED for f in money)  # never blocked (typically omitted)
+
+
+def test_optional_money_declared_is_ok(tmp_path):
+    _write_conventions(tmp_path, "data_model:\n  money: cents\n")
+    money = [f for f in value_input_field_states(tmp_path) if f.value_path == _MONEY_VP]
+    assert money and money[0].attention == Attention.OK and money[0].value == "cents"
+
+
+def test_not_applicable_declares_a_decision_ok_with_distinct_status(tmp_path):
+    _write_conventions(tmp_path, "data_model:\n  money: not-applicable\n")
+    money = [f for f in value_input_field_states(tmp_path) if f.value_path == _MONEY_VP]
+    assert money and money[0].attention == Attention.OK and money[0].status == "not_applicable"
+
+
+def test_required_field_declared_na_is_an_intentional_ok_not_blocked(tmp_path):
+    # N/A is the escape hatch for a GENUINELY-required convention too: declaring it n/a satisfies it.
+    _write_conventions(tmp_path, "language: not-applicable\nstack:\n  framework: not-applicable\n")
+    fields = value_input_field_states(tmp_path)
+    required = {f.value_path for f in _required_fields()}
+    req_fields = [f for f in fields if f.value_path in required]
+    assert req_fields and all(f.attention == Attention.OK for f in req_fields)

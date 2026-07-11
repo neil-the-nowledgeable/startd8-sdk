@@ -23,6 +23,17 @@ from typing import List
 
 from .state import Ambiguity, Attention, FieldState
 
+#: Recognized "intentionally not applicable" values — a first-class way for a project to say a
+#: convention doesn't apply to it (e.g. a money-less app declaring ``money: not-applicable``). An N/A
+#: value is a *decision*, so it reads as ``ok`` (satisfied), never ``blocked`` (required) or ``review``
+#: (awaiting) — but with a distinct ``not_applicable`` status so it renders as "N/A", not a real value.
+_NOT_APPLICABLE = frozenset({"n/a", "na", "n.a.", "none", "not applicable", "not-applicable", "-"})
+
+
+def is_not_applicable(value: object) -> bool:
+    """True iff *value* is a recognized "intentionally N/A" marker (case-insensitive)."""
+    return value is not None and str(value).strip().lower() in _NOT_APPLICABLE
+
 
 def value_input_field_states(project_root: str | Path) -> List[FieldState]:
     """Derive :class:`FieldState`\\ s from the value-input / ``confirmed.yaml`` layout.
@@ -36,7 +47,14 @@ def value_input_field_states(project_root: str | Path) -> List[FieldState]:
       value is **absent** (domain file / key missing, or an unfilled ``<…>`` placeholder) → ``blocked``
       (author-actionable, gates activation); a required value that IS provided → ``ok``. These are the
       fields ``confirmable_fields()`` deliberately excludes (no safe default to ratify), so without this
-      branch a project missing a required input read "review/ready" instead of blocked (FR-2).
+      branch a project missing a required input read "review/ready" instead of blocked (FR-2);
+    * an **optional authored** convention (``required=False``, non-defaulted — e.g.
+      ``conventions.yaml#/data_model.money``, which many apps don't use) → tracked as ``ok`` only when
+      the project DECLARES it; when absent it is simply omitted, so an optional convention never gates
+      readiness (it is neither a review nor a blocker);
+    * an explicit **N/A** value (``not-applicable`` / ``n/a`` — see :func:`is_not_applicable`) on ANY of
+      the above → ``ok`` with a distinct ``not_applicable`` status: a project's *decision* that a
+      convention doesn't apply to it, so it reads as done, never blocked or awaiting.
 
     ``$0``, read-only, degrade-not-fail (returns ``[]`` if the value-input model is unavailable).
 
@@ -71,11 +89,12 @@ def value_input_field_states(project_root: str | Path) -> List[FieldState]:
             entry = ledger.get(vp)
             confirmed = entry is not None and not is_audience_default(entry)
             value = entry.get("value") if entry else None
+            na = confirmed and is_not_applicable(value)  # confirmed as "not applicable" → still ok
             out.append(
                 FieldState(
                     manifest=f.get("domain", ""),
                     value_path=vp,
-                    status="extracted" if confirmed else "defaulted",
+                    status=("not_applicable" if na else "extracted") if confirmed else "defaulted",
                     attention=Attention.OK if confirmed else Attention.REVIEW,
                     ambiguity=Ambiguity.NONE,
                     value=str(value) if value is not None else None,
@@ -94,32 +113,56 @@ def value_input_field_states(project_root: str | Path) -> List[FieldState]:
         #     but the guard keeps identities unique).
         emitted = {fs.value_path for fs in out}
         confirmable_vps = {f["value_path"] for f in confirmable_fields()}
+
+        def _domain(fdef) -> str:
+            wt = fdef.write_target
+            return (wt.file[:-5] if wt and wt.file.endswith(".yaml") else (wt.file if wt else "")) or ""
+
         for fdef in default_config().writable_fields():
-            if not fdef.required or fdef.value_path in confirmable_vps:
+            if fdef.value_path in confirmable_vps or fdef.value_path in emitted:
                 continue
-            if fdef.value_path in emitted:
+            # Only authored conventions participate here (required + optional). Arbitrary writables and
+            # the confirmable/defaulted set are handled above; this keeps the value-input surface to the
+            # human-authored conventions a project declares.
+            if getattr(fdef, "provenance_default", None) != "authored":
                 continue
-            domain = (
-                fdef.write_target.file[:-5]
-                if fdef.write_target and fdef.write_target.file.endswith(".yaml")
-                else (fdef.write_target.file if fdef.write_target else "")
-            )
             current = field_current_value(project_root, fdef.value_path)
-            provided = current is not None and not _is_placeholder(current)
-            out.append(
-                FieldState(
-                    manifest=domain,
-                    value_path=fdef.value_path,
-                    status="extracted" if provided else "not_extracted",
-                    attention=Attention.OK if provided else Attention.BLOCKED,
-                    # A blocked required-input is a MALFORMED_BLOCK (the required line/value is absent),
-                    # matching how the markdown grammar labels a missing required row.
-                    ambiguity=Ambiguity.NONE if provided else Ambiguity.MALFORMED_BLOCK,
-                    value=str(current) if provided else None,
-                    reason=None if provided else "required value-input absent (unprovided)",
-                    source_doc=domain or None,
+            na = is_not_applicable(current)
+            provided = current is not None and not _is_placeholder(current)  # N/A counts as provided
+            domain = _domain(fdef)
+
+            if fdef.required:
+                # (2) REQUIRED authored field (e.g. conventions.yaml#/language) — FR-2's blocked case:
+                #     absent/placeholder → blocked (author-actionable, gates activation); a real value or
+                #     an explicit N/A decision → ok.
+                status = "not_applicable" if na else ("extracted" if provided else "not_extracted")
+                out.append(
+                    FieldState(
+                        manifest=domain,
+                        value_path=fdef.value_path,
+                        status=status,
+                        attention=Attention.OK if provided else Attention.BLOCKED,
+                        ambiguity=Ambiguity.NONE if provided else Ambiguity.MALFORMED_BLOCK,
+                        value=str(current) if provided else None,
+                        reason=None if provided else "required value-input absent (unprovided)",
+                        source_doc=domain or None,
+                    )
                 )
-            )
+            elif provided:
+                # (3) OPTIONAL authored convention (e.g. conventions.yaml#/data_model.money) — tracked
+                #     only when the project DECLARES it (a real value or an explicit N/A) → ok; when
+                #     absent it is simply omitted, so an optional convention never gates readiness.
+                out.append(
+                    FieldState(
+                        manifest=domain,
+                        value_path=fdef.value_path,
+                        status="not_applicable" if na else "extracted",
+                        attention=Attention.OK,
+                        ambiguity=Ambiguity.NONE,
+                        value=str(current),
+                        source_doc=domain or None,
+                    )
+                )
         return out
     except Exception:  # pragma: no cover - value-input coverage never breaks the oracle
         return []

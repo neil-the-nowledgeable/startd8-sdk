@@ -298,7 +298,9 @@ def default_config() -> KickoffExperienceConfig:
                 value_path=_vp(conv, "data_model.money"),
                 grammar_help="How money is stored. 'cents' = integer minor units (exact sums).",
                 provenance_default="authored",
-                required=True,
+                required=False,  # OPTIONAL — many apps handle no money; declaring it is a convention,
+                # not a build blocker. A money app declares cents/float (tracked as ok); a money-less app
+                # omits it (non-gating) or declares `not-applicable` (an explicit N/A decision → ok).
                 write_target=WriteTarget(conv, "data_model.money"),
                 value_help="Prevents the generator from inventing a money type per entity.",
             ),

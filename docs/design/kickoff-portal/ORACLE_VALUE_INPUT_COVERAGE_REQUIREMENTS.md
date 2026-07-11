@@ -254,3 +254,27 @@ Verified: portal `status` 0→**3 fields**, readiness None→**100%**, `check` A
 **Deferred (optional):** the M1.5 relocation of the confirmable-field/ledger readers into
 `kickoff_experience/` for layering purity — not needed for correctness (no cycle), track only if the
 `kickoff_experience → concierge` direction becomes a problem for other reasons.
+
+---
+
+## Follow-on refinement (2026-07-10) — optional conventions + intentional N/A
+
+The fleet sweep surfaced a data-model question the oracle merely *reflected*: `data_model.money` was
+`required=True`, but the reference app itself declares it "not used by this app" — so FR-2 (correctly,
+per the model) blocked money-less apps (e.g. `navig8`) on a convention they don't use. That's a
+data-model call, not an oracle bug. Resolved two ways:
+
+- **`data_model.money` → `required=False` (optional).** In `manifest.py`. An optional authored
+  convention is tracked as `ok` only when a project **declares** it (money app → `money: cents` → ok);
+  when absent it is simply omitted, so it never gates readiness. `value_inputs.py` grew an optional-
+  authored branch for exactly this class (declared → ok; absent → skip).
+- **Intentional N/A — a first-class "not applicable" value.** `value_inputs.is_not_applicable()` +
+  `_NOT_APPLICABLE` recognize `not-applicable` / `n/a` / `none` / `-` (case-insensitive). Declaring a
+  convention N/A (a real *decision*) → `ok` with a distinct `not_applicable` status on ANY field class
+  — confirmable, required, or optional. So a project can say "I'm not doing money/monetization" and it
+  reads as **done**, never blocked or awaiting. (The escape hatch even covers a genuinely-required
+  convention: `language: not-applicable` satisfies it, since the human made an explicit call.)
+
+Live-verified: `navig8` blocked → un-blocked; `contextcore-demo-retail` now blocks only on genuinely-
+required `language`/`stack.framework` (not money); the portal stays 100%; `money: not-applicable` →
+`ok`/`not_applicable`. 5 new tests; full kickoff suite **713** green.
