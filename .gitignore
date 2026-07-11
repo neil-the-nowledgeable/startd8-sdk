@@ -80,7 +80,6 @@ out/
 
 # Run reports and scratch docs
 KNOWN_ISSUES.md
-OTEL_INTEGRATION_GUIDE.md
 PHASE5_RUN_REPORT.md
 PLAN-auto-decompose.md
 docs/GEMINI_SAFETY_FILTER_SEQUENTIAL_WORKFLOW_FIX.md

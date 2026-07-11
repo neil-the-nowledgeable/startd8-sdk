@@ -191,7 +191,7 @@ Guides: [PRIME_CONTRACTOR_WORKFLOW_GUIDE](docs/PRIME_CONTRACTOR_WORKFLOW_GUIDE.m
 
 Deeper reference: [SDK_ARCHITECTURE_v1](docs/SDK_ARCHITECTURE_v1.md) ·
 [API_REFERENCE_v1](docs/API_REFERENCE_v1.md) ·
-[PROVIDER_PLUGIN_GUIDE](PROVIDER_PLUGIN_GUIDE.md) ·
+[PROVIDER_PLUGIN_GUIDE](docs/PROVIDER_PLUGIN_GUIDE.md) ·
 [COST_TRACKING_USER_GUIDE](docs/COST_TRACKING_USER_GUIDE.md)
 
 ---
@@ -211,7 +211,7 @@ Default storage is a `.startd8/` directory in the project root (JSON file storag
 via `AgentFramework(storage_dir=...)` or `--dir` on the CLI).
 
 Observability setup: [LOKI_SETUP_GUIDE](docs/LOKI_SETUP_GUIDE.md) ·
-[OTEL_INTEGRATION_GUIDE](OTEL_INTEGRATION_GUIDE.md).
+[OTEL_INTEGRATION_GUIDE](docs/OTEL_INTEGRATION_GUIDE.md).
 
 ---
 
