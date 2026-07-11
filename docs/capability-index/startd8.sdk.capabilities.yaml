@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.23.0"
+version: "1.24.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1791,7 +1791,7 @@ capabilities:
         description: "the single AgenticView oracle: folds state+snapshot+inbox+dispositions+roster+readiness+next_action"
       - type: code
         ref: src/startd8/kickoff_experience/value_inputs.py
-        description: "value-input coverage: folds the docs/kickoff/inputs+confirmed.yaml layout (assess's model) into resolve_kickoff_state so the oracle reflects value-input-driven projects, not just markdown-authored ones"
+        description: "value-input coverage: folds the docs/kickoff/inputs+confirmed.yaml layout (assess's model) into resolve_kickoff_state so the oracle reflects value-input-driven projects, not just markdown-authored ones. Three field classes: confirmable (defaulted) confirmed->ok / awaiting->review; required (authored) provided->ok / absent->blocked (FR-2); optional (authored, required=False, e.g. data_model.money) declared->ok / absent->omitted. First-class intentional N/A (`not-applicable`/`n/a`) -> ok on any class (an explicit 'not applicable' decision, never blocked/awaiting)"
       - type: code
         ref: src/startd8/kickoff_experience/portal_spec_v2.py
         description: "build_workbook_v2 (5-tab v2 cockpit) + build_index_v2 (dashlist) + _timeseries/_logs/_dashlist panels; workbook_v2_uid length guard"
@@ -2069,6 +2069,10 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.24.0"
+    date: "2026-07-11"
+    changes:
+      - "Completed startd8.kickoff.workbook_cockpit value-input coverage (extends v1.23.0's confirmed->ok / awaiting->review): (a) FR-2 required-absent->blocked (135308d2) — FieldDef.required is a first-class flag distinct from provenance_default; a required, non-derivable convention (conventions.yaml#/language, #/stack.framework) that is absent/placeholder -> blocked (gates activation), provided -> ok; validated fleet-wide (partial kickoffs correctly gate, the portal ACTIVATED). (b) data_model.money made OPTIONAL (required=False, eec2d266) — the reference app declares it 'not used by this app', so FR-2 was correctly-per-the-model blocking money-less apps (navig8) on a convention they don't use; a data-model call surfaced by the fleet retrospective, not an oracle bug. An optional authored convention is tracked ok only when declared, else omitted (never gates). (c) First-class intentional N/A (`not-applicable`/`n/a`/`none`/`-`, case-insensitive) -> ok with a distinct not_applicable status on ANY field class (confirmable/required/optional) — a project's explicit 'this doesn't apply to me' decision reads as done, never blocked/awaiting; even a genuinely-required convention can be N/A'd. Live-verified: navig8 blocked->un-blocked; contextcore-demo-retail blocks only on genuinely-required language/stack.framework; portal 100%. Full kickoff suite 713 green (13 value-input tests). The retrospective->data-model bookend in action. Spec: docs/design/kickoff-portal/ORACLE_VALUE_INPUT_COVERAGE_REQUIREMENTS.md."
   - version: "1.23.0"
     date: "2026-07-10"
     changes:
