@@ -133,8 +133,13 @@ effective-posture resolution the grant plugs into (not six edited call sites).
   consume denies with **no debit** (R1-F7/R1-S6). No message text (FR-WM2-14a). Exempted in the
   guided-experience write-floor audit as endpoint/spend-safety state (same pattern as `stakeholder_run.py`).
   **M4b (next): the operator CLI** (`startd8 cloud-grant issue|revoke|list`) on top of this store.
-- **M4 — Control-plane issuance + revocation + audit fail-closed (OQ-4 resolved).** Issuance/revocation
-  is a **control-plane CLI** — `startd8 cloud-grant issue|revoke` — run with the **platform's identity**,
+- **M4b — Operator `cloud-grant` CLI.** ✅ **SHIPPED.** `startd8 cloud-grant issue|revoke|list`
+  (`cli_cloud_grant.py`, registered in `cli.py`) on top of the M4a store: `issue --deployment --project
+  --issued-by [--capability chat-write] [--uses 1] [--ttl 900] --store --audit` (fail-closed — an
+  un-writable store/audit aborts with no grant); `revoke <id>`; `list`. Round-trip tested: what the CLI
+  issues out-of-band, a `FileGrantStore` (the served app) consumes.
+- **M4 — Control-plane issuance + revocation + audit fail-closed (OQ-4 resolved).** ✅ **SHIPPED** (M4a + M4b).
+  Issuance/revocation is a **control-plane CLI** — `startd8 cloud-grant issue|revoke|list` — run with the **platform's identity**,
   writing the grant store **out-of-band**; the **served app has NO mint route** (consume-only; NR-6) and
   the issuance credential is **distinct from the consumer `--api-key`**. **Store-backend privilege split:**
   issuance (create-with-N-uses) vs consumption (decrement-existing) is **cleanly enforceable with a
