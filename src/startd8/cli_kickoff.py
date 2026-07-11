@@ -520,6 +520,14 @@ def start_cmd(
         "--api-key",
         help="Static X-API-Key gating POSTs when serving --cloud (coarse cloud auth, not tenancy).",
     ),
+    mirror_cockpit: bool = typer.Option(
+        True,
+        "--mirror-cockpit/--no-mirror-cockpit",
+        help="Mirror this LOCAL agentic session (redacted) to the .startd8 cockpit store so the "
+        "Grafana Assistant/Proposals tabs populate. On by default for local; forced off under "
+        "--cloud (FR-WM2-5d stays strict for hosted). Use --no-mirror-cockpit for a pure-ephemeral "
+        "session (no chat artifact on disk).",
+    ),
 ) -> None:
     """Serve the interactive kickoff web app on the loopback (preflight first; teardown on exit).
 
@@ -559,6 +567,7 @@ def start_cmd(
             "  [yellow]•[/yellow] cloud read/preview-only: writes + paid facilitation refused "
             "(cloud-write deferred, OQ-GE-7)"
         )
+    mirror = bool(mirror_cockpit) and not cloud
     if panel_spec:
         resolution = resolve_chat_panel(project, panel_spec, red_carpet=red_carpet)
         flavor = "Red Carpet build conductor" if red_carpet else "Concierge"
@@ -566,6 +575,13 @@ def start_cmd(
             console.print(
                 f"  [green]✓[/green] agentic chat ({flavor}): "
                 f"enabled ({panel_spec}, source: {source})"
+            )
+            console.print(
+                "  [green]✓[/green] cockpit mirror: on — this local session is persisted "
+                "(redacted) to .startd8 for the Grafana cockpit (`--no-mirror-cockpit` to disable)"
+                if mirror
+                else "  [yellow]•[/yellow] cockpit mirror: off — session stays ephemeral "
+                "(no chat artifact on disk)"
             )
         else:
             console.print(
@@ -584,6 +600,7 @@ def start_cmd(
         red_carpet=red_carpet,
         cloud=cloud,
         api_key=api_key,
+        mirror_cockpit=mirror,
     )
 
 
