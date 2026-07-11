@@ -96,12 +96,17 @@ effective-posture resolution the grant plugs into (not six edited call sites).
   the build-time factory decision to consult it. **Behavior-preserving when no grant store is configured**
   (golden: cloud-without-grant == today, byte-for-byte). **Structural default-deny guard (R1-S2):** a
   synthetic write route **not** wired to the seam must return 501, not 200.
-- **M2 — Grant-capable build + trust chain.** `build_kickoff_app(..., cloud=True, grant_store=…)` builds
-  *with* a chat_factory; wire the api-key + grant + Origin trust chain; consume at session creation.
-  **Tasks/tests:** (a) **trust-chain 2⁴ truth table (R1-S1)** — only all-of {api-key, grant-resolves,
-  uses>0/unexpired/unrevoked, Origin∈configured} allows; all 15 partial rows 501; (b) **caps-present
-  gate (R1-S3)** — grant session with caps unset/zeroed → creation denies, caps not request-raisable;
-  (c) **pre-message surface (R1-S7)** — cloud+no-grant → chat page GET = strict-deny, `chats.put` denies.
+- **M2 — Grant-capable build + trust chain.** ✅ **SHIPPED** (core). `build_kickoff_app(..., cloud=True,
+  grant_store=…, deployment_id=…, project_id=…, cloud_origins=…)` builds *with* a chat_factory; the
+  `_cloud_capability` seam resolves the FR-14 trust chain; session creation (chat page GET) consumes one
+  use (FR-15). **Done:** (a) **trust-chain 2⁴ truth table (R1-S1)** — `cloud_grant.evaluate_trust_chain`,
+  ordered AND-gate (api-key → Origin → live grant), api-key/Origin short-circuit before consume; only
+  all-present allows, 15 partial rows deny; (c) **pre-message surface (R1-S7)** — cloud+no-grant → chat
+  page unavailable + no session; full chain → session created + grant consumed; missing factor → no
+  session, no spend. **Deferred to M3 (correct sequencing):** (b) **caps-present gate (R1-S3)** — the
+  turn/rate/budget caps live on the chat-turn path M3 enables, so the caps gate lands with it. **New
+  (OQ-12):** session creation is a **GET**, so a bare browser can't present `X-API-Key` — an
+  authenticated *client* (proxy/CLI) can; human-browser cloud UX is a later concern.
 - **M3 — Chat-write + mirror under grant.** Enable `/concierge/chat/*` + proposal-apply + redacted
   mirror when permitted; assert redaction + safe-writer hold; audit each consume. **Per-turn
   re-validation (R1-S9):** create at T, expire/revoke at T+ε, next turn → deny despite use consumed.

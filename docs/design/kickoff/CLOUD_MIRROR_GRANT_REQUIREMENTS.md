@@ -251,6 +251,11 @@ fail-closed. This is a **narrow authorization primitive**, deliberately *not* th
 - **OQ-11 (NEW) — Cloud Origin/Host validation.** FR-14 replaces the loopback-Host check with
   validation against the *configured cloud origin* — confirm the exact allowed-Origin/Host policy and
   how it's configured for a real deployment (paired with the api-key).
+- **OQ-12 (NEW, from M2) — Session-creation auth surface / human-browser UX.** M2 consumes the grant at
+  the chat-page **GET** (session creation), which reads `X-API-Key`/`Origin` headers — an authenticated
+  *client* (reverse proxy / CLI) can present them, but a **bare browser navigating the URL cannot**. So
+  the current cloud chat is reachable only by a header-presenting client. Decide the human-browser cloud
+  flow (an auth-injecting reverse proxy? a login → session-mint POST?) before a human-facing cloud UX.
 
 > **Note (scope discipline):** this is an *authorization* primitive, not a durable-execution one — it
 > does **not** require Temporal or any workflow engine (see the prior Temporal NO-GO). Keep it small.
