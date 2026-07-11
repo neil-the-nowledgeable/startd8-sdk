@@ -342,3 +342,65 @@ def test_snapshot_write_failure_is_isolated_in_persist(tmp_path, monkeypatch):
     monkeypatch.setattr(ss, "write_snapshot", _boom)
     path = ss.persist_snapshot_for_chat(tmp_path, _Chat(), session_id="s", generated_at="t")
     assert path is None  # swallowed, not raised
+
+
+# --------------------------------------------------------------------------- FR-6b Loki best-effort
+
+
+def test_loki_emit_failure_is_swallowed(monkeypatch):
+    # FR-6b: a logging failure in the transcript emit must never propagate — the Loki push is
+    # best-effort and can never break session exit.
+    snap = ss.build_session_snapshot(
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        ],
+        model=None,
+        input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        cost_usd=0.0,
+        posture="kickoff · read-only",
+        project="proj",
+        session_id="s",
+        generated_at="t",
+    )
+
+    class _BoomLogger:
+        def info(self, *a, **k):
+            raise RuntimeError("loki push down")
+
+    # Every get_logger() call inside the emit returns a logger whose .info raises.
+    monkeypatch.setattr(ss, "get_logger", lambda *a, **k: _BoomLogger())
+    # Must not raise; returns the count emitted before the failure (0 — the first turn already fails).
+    assert ss.emit_transcript_to_loki(snap) == 0
+
+
+def test_persist_writes_snapshot_even_if_loki_emit_raises(tmp_path, monkeypatch):
+    # FR-6b: a Loki-emit failure must not block or undo the snapshot write (the snapshot is persisted
+    # BEFORE the emit step). Even if emit_transcript_to_loki itself raised, the file survives.
+    class _Session:
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        ]
+        total_tokens = 1
+        total_cost_usd = 0.0
+        agent = type("A", (), {"model": "m"})()
+
+    class _Chat:
+        session = _Session()
+        buffer = None
+        agentic = False
+        red_carpet = False
+
+    def _boom(*a, **k):
+        raise RuntimeError("loki down")
+
+    monkeypatch.setattr(ss, "emit_transcript_to_loki", _boom)
+    ss.persist_snapshot_for_chat(tmp_path, _Chat(), session_id="s", generated_at="t")
+
+    # The snapshot was written before the emit step, so it survives the emit failure.
+    p = ss.snapshot_path(tmp_path)
+    assert p.is_file()
+    assert "hello" in p.read_text(encoding="utf-8")
