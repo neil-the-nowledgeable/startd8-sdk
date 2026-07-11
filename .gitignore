@@ -182,3 +182,18 @@ docs/design/otel-demo-corpus/startup-capture.json
 
 # Runtime observability smoke — vendored collector binary (large, reproducible)
 .cache/
+
+# ---------------------------------------------------------------------------
+# Repo-root scratch — regenerated artifacts that used to litter the root.
+# Root-anchored (leading /) so intentional copies under docs/archive/ or
+# subdirs stay tracked; only the recurring root scratch is ignored.
+# ---------------------------------------------------------------------------
+# Convergent-review / CRP prompt scaffolds, regenerated into root by the
+# new-cnvrg-rvw-prmpt skill each run (historical ones live in docs/archive/).
+/convergent-review-prompt-*.md
+/crp-*.md
+# One-off run/scratch configs (personal absolute paths, step configs).
+/config.json
+/step2_config.json
+/step2_retry_config.json
+/code-manifest-arc-review-config.json
