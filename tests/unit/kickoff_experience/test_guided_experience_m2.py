@@ -44,6 +44,10 @@ _ENDPOINT_STATE_MODULES = {
     # atomic tmpfile+rename), not the project's kickoff source-of-record. Its project-touching apply path
     # goes through the vetted VIPP producer (serialize_buffer), which is itself on the floor.
     "promotion.py",
+    # Cloud-authorization grant store (M4/OQ-4): the FileGrantStore + append-only AuditLog own the
+    # cloud-grant spend-safety state under .startd8/ (atomic tmpfile+rename + an fcntl lock file), the same
+    # endpoint-state pattern as stakeholder_run.py — NOT a kickoff source-of-record write surface.
+    "cloud_grant.py",
 }
 _EXPERIENCE_MODULES = sorted(
     p
