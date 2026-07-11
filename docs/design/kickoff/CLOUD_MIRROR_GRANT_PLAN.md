@@ -115,10 +115,16 @@ effective-posture resolution the grant plugs into (not six edited call sites).
   FR-14). **Caps (R1-S3):** the per-session message rate-limit (`sessions.rate_ok`) + the AgenticSession
   turn/budget caps bound spend within the use and are **not request-raisable** (no such param) — present
   by construction on any grant session; this codebase has **no caps-disable path**, so the "caps-unset →
-  deny" branch is unreachable (documented, not a vacuous gate). **Deferred to M3b (the WRITE half, isolated
-  for careful review):** proposal-apply under grant (`chat/confirm` → `apply_proposal`, still the same
-  safe-writer, FR-16) + the redacted cockpit mirror on cloud (FR-WM2-5d-under-grant). Tests: turn works
-  live; no re-consume; denied after expiry/revocation/wrong-Origin/no-binding.
+  deny" branch is unreachable (documented, not a vacuous gate). Tests: turn works live; no re-consume;
+  denied after expiry/revocation/wrong-Origin/no-binding.
+- **M3b — the WRITE half (proposal-apply + mirror under grant).** ✅ **SHIPPED.** `chat/confirm` is enabled
+  on cloud under a grant via the **same per-turn revalidation** (no re-consume) and reaches the
+  **UNCHANGED `apply_proposal` safe-writer** (FR-16) — the loopback-Host + local-CSRF chain replaced by
+  grant + api-key + Origin (FR-14); local keeps `_concierge_write_gate`. The **redacted cockpit mirror** is
+  allowed for a grant-authorized cloud session (the grant temporarily lifts the hosted-strict no-disk
+  posture for that session) — **still redacted** (FR-9): a planted secret never reaches disk. Tests:
+  confirm reaches the safe-writer under grant / denied after expiry / deferred with no grant; mirror
+  written + redacted; no-grant → no mirror. Completes the OQ-6 chat-write path (chat + apply + mirror).
 - **M4 — Control-plane issuance + revocation + audit fail-closed (OQ-4 resolved).** Issuance/revocation
   is a **control-plane CLI** — `startd8 cloud-grant issue|revoke` — run with the **platform's identity**,
   writing the grant store **out-of-band**; the **served app has NO mint route** (consume-only; NR-6) and

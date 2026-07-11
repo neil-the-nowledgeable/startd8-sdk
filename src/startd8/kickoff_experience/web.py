@@ -1309,7 +1309,10 @@ def build_kickoff_app(
                                         status_code=200, headers=dict(_FRAME_DENY_HEADERS))
                 proposals = [{"id": a.id, "kind": a.kind, "summary": a.summary()}
                              for a in chat.buffer.pending()]
-                if mirror_cockpit:   # FR-WM2-5d softened (local only): feed the cockpit, best-effort
+                # Mirror (redacted) → cockpit. Locally: the FR-WM2-5d-softened opt-in. On cloud: allowed
+                # only for a GRANT-authorized session (M3b) — the grant temporarily lifts the hosted-strict
+                # no-disk posture for exactly this session; still redacted (FR-9), so no secret hits disk.
+                if mirror_cockpit or (cloud and (kickoff_chat or "") in _session_grants):
                     _mirror_session_to_cockpit(root, chat)
                 emit(EV_CHAT_TURN, turns=getattr(result, "turns", None),
                      tokens=getattr(result, "total_tokens", None),
@@ -1329,12 +1332,21 @@ def build_kickoff_app(
     @app.post("/concierge/chat/confirm")
     def chat_confirm(proposal_id: str = Form(...), csrf: str = Form(...),
                      host: Optional[str] = Header(default=None),
+                     origin: Optional[str] = Header(default=None),
                      kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         from .proposals import apply_proposal
         from .telemetry import EV_PROPOSAL_CONFIRMED, emit
-        gate = _concierge_write_gate(host, csrf, clock())   # csrf is distinct from the chat sid
-        if gate is not None:
-            return gate
+        # M3b: proposal-apply is a WRITE. On cloud it is permitted only by REVALIDATING the session's
+        # grant (no re-consume, R1-S9); the loopback-Host + local-CSRF chain is replaced by grant +
+        # api-key (APIKeyMiddleware) + Origin (FR-14). Local keeps the full _concierge_write_gate. The
+        # apply below is UNCHANGED — the same `apply_proposal` safe-writer + validation (FR-16).
+        if cloud:
+            if not _cloud_revalidate(kickoff_chat, origin):
+                return _cloud_deferred()
+        else:
+            gate = _concierge_write_gate(host, csrf, clock())   # csrf is distinct from the chat sid
+            if gate is not None:
+                return gate
         chat = _chat_for(kickoff_chat)
         if chat is None:
             return JSONResponse({"ok": False, "code": "chat_session_expired"}, status_code=403)
