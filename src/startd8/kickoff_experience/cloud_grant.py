@@ -25,11 +25,16 @@ trust its clock passes ``clock_trusted=False`` → deny (FR-5).
 
 from __future__ import annotations
 
+import json
+import os
 import secrets
+import tempfile
 import threading
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Callable, Dict, Optional
 
 
 # --------------------------------------------------------------------------- scope + record
@@ -117,14 +122,37 @@ class GrantStore:
     with no use debited (FR-7 store-unavailable-mid-consume).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, audit: "Optional[Callable[[dict], None]]" = None) -> None:
         self._grants: Dict[str, CloudGrant] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._audit_cb = audit
 
     # -- persistence seam (no-op for the in-memory reference; a file/db backend overrides) --
     def _persist(self, grant: CloudGrant) -> None:  # pragma: no cover - overridden by real backends
         """Durably write *grant*. Raise :class:`StoreUnavailable` if it cannot be written."""
         return None
+
+    # -- op bracket (M4): every state op runs under the thread lock + an inter-process lock, and
+    #    re-syncs from the durable backend first, so a CLI-issued grant is visible and consume is atomic
+    #    across processes (the anti-replay guarantee holds for multi-instance, not just multi-thread). --
+    def _interprocess_lock(self):  # pragma: no cover - overridden by the file backend
+        return nullcontext()
+
+    def _sync(self) -> None:  # pragma: no cover - overridden by the file backend
+        """Reload the durable state (no-op for the in-memory reference)."""
+        return None
+
+    @contextmanager
+    def _op(self):
+        with self._lock, self._interprocess_lock():
+            self._sync()
+            yield
+
+    def _audit(self, **event) -> None:
+        """Record an audit event (FR-10). **Fail-closed:** if the callback raises, it propagates —
+        issuance/consume/revoke must NOT proceed on an un-auditable elevation (R1-F7/R1-S6)."""
+        if self._audit_cb is not None:
+            self._audit_cb(dict(event))
 
     # -- issuance (M4 wires the human/operator surface; the primitive lives here) --
     def issue(
@@ -150,24 +178,29 @@ class GrantStore:
             issued_by=issued_by,
             issued_at=now,
         )
-        with self._lock:
+        with self._op():
+            # audit BEFORE persist — an un-auditable issuance must not create a grant (fail-closed).
+            self._audit(event="issue", grant_id=grant.id, deployment_id=target.deployment_id,
+                        project_id=target.project_id, capability=target.capability,
+                        uses=int(uses), expires_at=grant.expires_at, issued_by=issued_by, at=now)
             self._persist(grant)           # fail-closed: no in-memory entry unless persisted
             self._grants[grant.id] = grant
         return grant
 
     def revoke(self, grant_id: str) -> bool:
         """Immediately void a grant (FR-4). Returns False if unknown. Idempotent."""
-        with self._lock:
+        with self._op():
             g = self._grants.get(grant_id)
             if g is None:
                 return False
             revoked = replace(g, revoked=True)
+            self._audit(event="revoke", grant_id=grant_id, at_uses_remaining=g.uses_remaining)
             self._persist(revoked)
             self._grants[grant_id] = revoked
             return True
 
     def get(self, grant_id: str) -> Optional[CloudGrant]:
-        with self._lock:
+        with self._op():
             return self._grants.get(grant_id)
 
     # -- the atomic resolve+consume (session creation, FR-7/FR-15) --
@@ -182,7 +215,7 @@ class GrantStore:
         every failure mode is a typed deny with **no debit** (FR-5/FR-7)."""
         if not clock_trusted:
             return GrantDecision.deny(GrantDeny.CLOCK_UNTRUSTED)
-        with self._lock:
+        with self._op():
             grant = self._find_for_target(target)
             if grant is None:
                 return GrantDecision.deny(GrantDeny.ABSENT)
@@ -193,6 +226,9 @@ class GrantStore:
                 return GrantDecision.deny(GrantDeny.EXHAUSTED)
             consumed = replace(grant, uses_remaining=grant.uses_remaining - 1)
             try:
+                # audit BEFORE persist; an un-auditable consume denies with no debit (R1-S6 fail-closed).
+                self._audit(event="consume", grant_id=grant.id,
+                            uses_remaining_after=consumed.uses_remaining, at=now)
                 self._persist(consumed)                 # may raise StoreUnavailable
             except StoreUnavailable:
                 return GrantDecision.deny(GrantDeny.STORE_UNAVAILABLE)  # no debit — rollback
@@ -215,7 +251,7 @@ class GrantStore:
         second use. Also enforces target binding (a grant id bound to a different target → deny, FR-8)."""
         if not clock_trusted:
             return GrantDecision.deny(GrantDeny.CLOCK_UNTRUSTED)
-        with self._lock:
+        with self._op():
             grant = self._grants.get(grant_id)
             if grant is None:
                 return GrantDecision.deny(GrantDeny.ABSENT)
@@ -279,3 +315,126 @@ def evaluate_trust_chain(
         return GrantDecision.deny(GrantDeny.ORIGIN_REJECTED)
     # (2)(3) a live grant resolves for target+capability → consume one use (single-atomic).
     return store.resolve_and_consume(target, now=now, clock_trusted=clock_trusted)
+
+
+# --------------------------------------------------------------------------- serialization (M4)
+
+
+def _grant_to_dict(g: CloudGrant) -> dict:
+    return {
+        "id": g.id,
+        "deployment_id": g.target.deployment_id,
+        "project_id": g.target.project_id,
+        "capability": g.target.capability,
+        "uses_remaining": g.uses_remaining,
+        "expires_at": g.expires_at,
+        "issued_by": g.issued_by,
+        "issued_at": g.issued_at,
+        "revoked": bool(g.revoked),
+    }
+
+
+def _grant_from_dict(d: dict) -> CloudGrant:
+    return CloudGrant(
+        id=str(d["id"]),
+        target=GrantTarget(str(d["deployment_id"]), str(d["project_id"]), str(d["capability"])),
+        uses_remaining=int(d["uses_remaining"]),
+        expires_at=float(d["expires_at"]),
+        issued_by=str(d.get("issued_by", "")),
+        issued_at=float(d.get("issued_at", 0.0)),
+        revoked=bool(d.get("revoked", False)),
+    )
+
+
+# --------------------------------------------------------------------------- durable store + audit (M4)
+
+
+class AuditLog:
+    """Append-only JSONL audit sink (FR-10). Every issuance/consume/revoke is one line. **Fail-closed:**
+    a write failure raises :class:`StoreUnavailable`, so the caller (the grant op) denies rather than
+    perform an un-auditable elevation (R1-F7/R1-S6). No message text is recorded (FR-WM2-14a)."""
+
+    def __init__(self, path: "str | os.PathLike") -> None:
+        self._path = Path(path)
+
+    def __call__(self, event: dict) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(event, sort_keys=True, ensure_ascii=False)
+            with open(self._path, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+        except OSError as exc:
+            raise StoreUnavailable(f"audit write failed: {exc}") from exc
+
+
+class FileGrantStore(GrantStore):
+    """The out-of-band, **control-plane** grant store (OQ-4): a JSON file the operator's issuance CLI
+    writes and the served app reads + consumes. Each op **reloads** the file (so a CLI-issued grant is
+    visible) under an **inter-process flock** (so consume is atomic across app instances — the anti-replay
+    guarantee, FR-7, holds multi-process). Persist is atomic (temp-then-rename + fsync).
+
+    The served app should hold this **consume-only** (NR-6); issuance is the CLI. The
+    issuance-vs-consumption *privilege* split is convention here (a shared file); a DB/service backend
+    can enforce it (the app gets only a decrement capability).
+    """
+
+    def __init__(self, path: "str | os.PathLike", audit: "Optional[Callable[[dict], None]]" = None) -> None:
+        super().__init__(audit=audit)
+        self._path = Path(path)
+        self._lockpath = Path(str(self._path) + ".lock")
+        self._sync()
+
+    def _interprocess_lock(self):
+        import fcntl
+        from contextlib import contextmanager as _cm
+
+        @_cm
+        def _flock():
+            self._lockpath.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(self._lockpath), os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)   # exclusive across processes for the whole op
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+        return _flock()
+
+    def _sync(self) -> None:
+        if not self._path.is_file():
+            self._grants = {}
+            return
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise StoreUnavailable(f"grant store unreadable: {exc}") from exc
+        if not isinstance(data, dict):
+            raise StoreUnavailable("grant store is not a JSON object")
+        self._grants = {gid: _grant_from_dict(g) for gid, g in data.items()}
+
+    def _persist(self, grant: CloudGrant) -> None:
+        merged = {**self._grants, grant.id: grant}
+        payload = json.dumps({gid: _grant_to_dict(g) for gid, g in merged.items()}, sort_keys=True)
+        d = self._path.parent
+        d.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".grants.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self._path)         # atomic on POSIX
+        except OSError as exc:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise StoreUnavailable(f"grant store persist failed: {exc}") from exc
+
+    def all_grants(self):
+        """A read-only snapshot of all grants (for the CLI `list`). Reloads first."""
+        with self._op():
+            return list(self._grants.values())

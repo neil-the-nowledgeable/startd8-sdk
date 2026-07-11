@@ -125,6 +125,14 @@ effective-posture resolution the grant plugs into (not six edited call sites).
   posture for that session) — **still redacted** (FR-9): a planted secret never reaches disk. Tests:
   confirm reaches the safe-writer under grant / denied after expiry / deferred with no grant; mirror
   written + redacted; no-grant → no mirror. Completes the OQ-6 chat-write path (chat + apply + mirror).
+- **M4a — Durable FileGrantStore + append-only AuditLog.** ✅ **SHIPPED.** `FileGrantStore` (JSON on
+  disk): each op **reloads** the file (a CLI-issued grant is visible to the served app) under an
+  **inter-process `fcntl` lock** (consume is atomic across app instances — FR-7 anti-replay holds
+  multi-process), atomic temp-then-rename persist. `AuditLog` = append-only JSONL; the store audits
+  issue/consume/revoke **before** committing and is **fail-closed** — an un-auditable issuance raises /
+  consume denies with **no debit** (R1-F7/R1-S6). No message text (FR-WM2-14a). Exempted in the
+  guided-experience write-floor audit as endpoint/spend-safety state (same pattern as `stakeholder_run.py`).
+  **M4b (next): the operator CLI** (`startd8 cloud-grant issue|revoke|list`) on top of this store.
 - **M4 — Control-plane issuance + revocation + audit fail-closed (OQ-4 resolved).** Issuance/revocation
   is a **control-plane CLI** — `startd8 cloud-grant issue|revoke` — run with the **platform's identity**,
   writing the grant store **out-of-band**; the **served app has NO mint route** (consume-only; NR-6) and
