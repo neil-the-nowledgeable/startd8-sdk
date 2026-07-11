@@ -107,9 +107,18 @@ effective-posture resolution the grant plugs into (not six edited call sites).
   turn/rate/budget caps live on the chat-turn path M3 enables, so the caps gate lands with it. **New
   (OQ-12):** session creation is a **GET**, so a bare browser can't present `X-API-Key` — an
   authenticated *client* (proxy/CLI) can; human-browser cloud UX is a later concern.
-- **M3 — Chat-write + mirror under grant.** Enable `/concierge/chat/*` + proposal-apply + redacted
-  mirror when permitted; assert redaction + safe-writer hold; audit each consume. **Per-turn
-  re-validation (R1-S9):** create at T, expire/revoke at T+ε, next turn → deny despite use consumed.
+- **M3 — Chat turns under grant + per-turn re-validation.** ✅ **SHIPPED** (conversation half). The
+  **chat message turn** is enabled on cloud under a grant: the session's grant is **bound at creation**
+  and each turn **re-validates liveness without re-consuming** (`_cloud_revalidate` → `store.revalidate`,
+  R1-S9), so a session created just before expiry/revocation is denied on its **next** turn. The
+  loopback-Host check is bypassed on the cloud path (grant + api-key middleware + Origin is the substrate,
+  FR-14). **Caps (R1-S3):** the per-session message rate-limit (`sessions.rate_ok`) + the AgenticSession
+  turn/budget caps bound spend within the use and are **not request-raisable** (no such param) — present
+  by construction on any grant session; this codebase has **no caps-disable path**, so the "caps-unset →
+  deny" branch is unreachable (documented, not a vacuous gate). **Deferred to M3b (the WRITE half, isolated
+  for careful review):** proposal-apply under grant (`chat/confirm` → `apply_proposal`, still the same
+  safe-writer, FR-16) + the redacted cockpit mirror on cloud (FR-WM2-5d-under-grant). Tests: turn works
+  live; no re-consume; denied after expiry/revocation/wrong-Origin/no-binding.
 - **M4 — Control-plane issuance + revocation + audit fail-closed (OQ-4 resolved).** Issuance/revocation
   is a **control-plane CLI** — `startd8 cloud-grant issue|revoke` — run with the **platform's identity**,
   writing the grant store **out-of-band**; the **served app has NO mint route** (consume-only; NR-6) and
