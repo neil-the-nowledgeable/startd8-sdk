@@ -671,6 +671,11 @@ def build_kickoff_app(
     cloud: bool = False,
     api_key: Optional[str] = None,
     mirror_cockpit: bool = False,
+    grant_store: "Optional[object]" = None,
+    deployment_id: str = "",
+    project_id: Optional[str] = None,
+    cloud_origins: "frozenset[str]" = frozenset(),
+    grant_clock: "Optional[Callable[[], float]]" = None,
 ):
     """Build the kickoff web app (FastAPI). Pure function of *project_root* + config + theme.
 
@@ -693,19 +698,33 @@ def build_kickoff_app(
 
     cfg = config or default_config()
     root = str(project_root)
-    # M1 (FR-13): the ONE effective-posture decision. Today no grant store is wired, so on cloud it is
-    # a strict deny — byte-identical to the previous scattered `if cloud:` gates. M2 threads a
-    # `grant_store` and replaces the cloud branch with "resolve + consume a grant for `capability`".
-    _grant_store = None   # M2: build_kickoff_app(..., grant_store=...)
+    # M2 (FR-13/FR-14): the ONE effective-posture decision. local → allow; cloud + no grant store →
+    # strict deny (== today); cloud + a grant store + a request trust-chain context → the FR-14 ordered
+    # AND-gate (api-key ∧ Origin ∧ live-grant), consuming one use on allow (session-creation, FR-15).
+    _grant_store = grant_store
+    _deployment_id = deployment_id
+    _project_id = project_id if project_id is not None else Path(root).name
+    _cloud_origins = cloud_origins
+    _grant_clock = grant_clock or time.time
+    _NO_CTX = object()   # sentinel: a gate that supplies no trust-chain context (M2: not grant-authorized)
 
-    def _cloud_capability(capability: str) -> bool:
-        """Is *capability* permitted for this request's posture (FR-13)? The single source of the
-        cloud/local decision every chat/write gate consults."""
+    def _cloud_capability(capability: str, *, req_api_key=_NO_CTX, req_origin=_NO_CTX) -> bool:
+        """Is *capability* permitted for this request's posture (FR-13)? The single source every chat/write
+        gate consults. A cloud gate that supplies NO trust-chain context denies (M2 enables only the
+        session-creation gate; M3 threads context into the per-turn gates)."""
         if not cloud:
             return True                       # local → allow (today's behavior)
         if _grant_store is None:
             return False                      # cloud, no grant store → strict deny (== today)
-        return False                          # M2: resolve + consume `_grant_store` for `capability`
+        if req_api_key is _NO_CTX:            # cloud + grant store but no context supplied → deny
+            return False
+        from .cloud_grant import GrantTarget, TrustChainInputs, evaluate_trust_chain
+        target = GrantTarget(deployment_id=_deployment_id, project_id=_project_id, capability=capability)
+        inputs = TrustChainInputs(
+            api_key_expected=api_key, api_key_presented=req_api_key,
+            allowed_origins=_cloud_origins, origin_presented=req_origin,
+        )
+        return evaluate_trust_chain(_grant_store, target, inputs, now=_grant_clock()).allowed
 
     # GE-M5 cloud read-only guard: with no grant store, cloud disables the LLM-invoking agentic panel at
     # build time (an un-metered spend surface). M2's grant-capable build keeps the factory + gates
@@ -1151,19 +1170,23 @@ def build_kickoff_app(
 
     # --- agentic chat panel (web agentic surface) ----------------------------------------------
 
+    def _chat_unavailable_cloud() -> HTMLResponse:
+        # GE-M5 (FR-GE-8): the agentic chat spends LLM tokens — disabled on cloud unless a valid grant +
+        # trust chain (FR-14) authorizes it. Byte-identical to the prior cloud-unavailable view.
+        return HTMLResponse(
+            _page("Concierge — chat",
+                  "<p><a href='/concierge'>← Concierge</a></p><h1>Chat unavailable on cloud</h1>"
+                  "<p>This is a cloud read/preview-only surface — the conversational Concierge "
+                  "and the paid facilitation panel are disabled (OQ-GE-7). Use a local install "
+                  "to author, or download the kickoff templates and write locally.</p>",
+                  stylesheet),
+            headers=dict(_FRAME_DENY_HEADERS))
+
     @app.get("/concierge/chat", response_class=HTMLResponse)
-    def chat_page() -> HTMLResponse:
-        if not _cloud_capability("chat"):
-            # GE-M5 (FR-GE-8): the agentic/facilitation chat spends LLM tokens — disabled on cloud
-            # (un-metered spend/abuse under a tenancy-less static key). Deferred to OQ-GE-7.
-            return HTMLResponse(
-                _page("Concierge — chat",
-                      "<p><a href='/concierge'>← Concierge</a></p><h1>Chat unavailable on cloud</h1>"
-                      "<p>This is a cloud read/preview-only surface — the conversational Concierge "
-                      "and the paid facilitation panel are disabled (OQ-GE-7). Use a local install "
-                      "to author, or download the kickoff templates and write locally.</p>",
-                      stylesheet),
-                headers=dict(_FRAME_DENY_HEADERS))
+    def chat_page(x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+                  origin: Optional[str] = Header(default=None)) -> HTMLResponse:
+        if cloud and _grant_store is None:
+            return _chat_unavailable_cloud()   # cloud + no grant store → strict (== today)
         if chat_factory is None:
             return HTMLResponse(
                 _page("Concierge — chat",
@@ -1182,6 +1205,13 @@ def build_kickoff_app(
                       "Concierge spends LLM tokens and is disabled. Serve in write mode to enable it.</p>",
                       stylesheet),
                 headers=dict(_FRAME_DENY_HEADERS))
+        if cloud:
+            # Grant-capable cloud build: creating a session requires the full FR-14 trust chain and
+            # CONSUMES one use (FR-15). Checked here (session creation / pre-message surface, R1-S7) so no
+            # live chat surface exists before a grant is validated. A missing factor → unavailable, no
+            # session, no use spent (the trust chain short-circuits before consume on api-key/Origin).
+            if not _cloud_capability("chat-write", req_api_key=x_api_key, req_origin=origin):
+                return _chat_unavailable_cloud()
         now = clock()
         # FR-WM2-5a: the chat SESSION id and the CSRF/write token are SEPARATE secrets in SEPARATE
         # httponly cookies. The chat sid keys _ChatStore (+ message rate); csrf gates the write path.

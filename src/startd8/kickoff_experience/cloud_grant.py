@@ -80,6 +80,9 @@ class GrantDeny(str, Enum):
     TARGET_MISMATCH = "target_mismatch"   # a grant id was presented but bound to a different target
     STORE_UNAVAILABLE = "store_unavailable"
     CLOCK_UNTRUSTED = "clock_untrusted"
+    # M2 trust-chain factors that fail BEFORE the grant is touched (FR-14):
+    API_KEY_INVALID = "api_key_invalid"   # (1) consumer --api-key absent/mismatched
+    ORIGIN_REJECTED = "origin_rejected"   # (4) Host/Origin not in the configured cloud origin
 
 
 @dataclass(frozen=True)
@@ -234,3 +237,45 @@ class GrantStore:
             if g.target == target and (best is None or g.issued_at > best.issued_at):
                 best = g
         return best
+
+
+# --------------------------------------------------------------------------- FR-14 trust chain (M2)
+
+
+@dataclass(frozen=True)
+class TrustChainInputs:
+    """The per-request factors of the cloud-write trust chain (FR-14). Assembled from the request +
+    the served app's config; the grant is a separate factor resolved from the store."""
+
+    api_key_expected: Optional[str]     # the served app's configured consumer --api-key
+    api_key_presented: Optional[str]    # the request's X-API-Key
+    allowed_origins: frozenset          # the configured cloud origin(s)
+    origin_presented: Optional[str]     # the request's Origin/Host
+
+
+def evaluate_trust_chain(
+    store: Optional[GrantStore],
+    target: GrantTarget,
+    inputs: TrustChainInputs,
+    *,
+    now: float,
+    clock_trusted: bool = True,
+) -> GrantDecision:
+    """The **ordered AND-gate** (FR-14, R1-F1): a cloud write is honored **iff ALL of** —
+    (1) api-key valid **AND** (4) Origin ∈ configured **AND** (2)(3) a live grant resolves — and the
+    grant is **consumed** (this is the session-creation trust chain). Absence/failure of **any** factor
+    ⇒ a typed deny with **no consume** (factors 1 & 4 short-circuit before the grant is touched).
+
+    Note the ordering: api-key and Origin are checked **before** the store so a bad-key / bad-Origin
+    request never spends a use (and never even probes the grant store — no existence oracle).
+    """
+    if store is None:
+        return GrantDecision.deny(GrantDeny.ABSENT)              # not grant-capable → deny
+    # (1) consumer api-key — required and matched.
+    if not inputs.api_key_expected or inputs.api_key_presented != inputs.api_key_expected:
+        return GrantDecision.deny(GrantDeny.API_KEY_INVALID)
+    # (4) Origin/Host ∈ configured cloud origin.
+    if not inputs.allowed_origins or inputs.origin_presented not in inputs.allowed_origins:
+        return GrantDecision.deny(GrantDeny.ORIGIN_REJECTED)
+    # (2)(3) a live grant resolves for target+capability → consume one use (single-atomic).
+    return store.resolve_and_consume(target, now=now, clock_trusted=clock_trusted)
