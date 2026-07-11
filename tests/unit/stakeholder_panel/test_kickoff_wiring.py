@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """M0 kickoff wiring: instantiate projects the roster template and the download manifest exposes it
 (FR-1/FR-3). The authoring surface (roster template) is retained for reuse by the later guided

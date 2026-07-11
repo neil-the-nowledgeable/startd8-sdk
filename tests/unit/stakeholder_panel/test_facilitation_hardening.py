@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """GE-M3b hardening tests for the promoted facilitation orchestrator (FR-GE-10 H1/H2/H3 +
 FR-GE-12), parent-owned by PROJECT_START_REQUIREMENTS FR-13c.

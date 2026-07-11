@@ -7,7 +7,7 @@ name = "startd8"
 version = "0.4.0"
 description = "startd8-SDK: a software-engineering harness for LLM-assisted development — Requirements-to-Capabilities delivery, deterministic ($0) code generation, plus multi-LLM benchmarking and cloud/edge model evaluation"
 readme = "README.md"
-license = {file = "LICENSE.md"}
+license = {text = "FSL-1.1-ALv2"}
 requires-python = ">=3.9"
 authors = [
     {name = "StartDate Contributors", email = "contributors@startdate.dev"}

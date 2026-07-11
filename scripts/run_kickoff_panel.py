@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 """Kickoff Panel — facilitated multi-round orchestrator (thin CLI over the package module).
 
 The orchestration itself was **promoted** (GE-M3a / FR-GE-11a) into

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 #
 # CI fidelity gate: replay generated observability PromQL against a live Prometheus
 # and gate the build on the result. A thin, portable wrapper over

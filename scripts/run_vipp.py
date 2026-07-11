@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """VIPP post-serialize shim (VIPP FR-15 cap-dev-pipe / host hook).
 

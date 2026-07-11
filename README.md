@@ -236,18 +236,18 @@ architecture map).
 
 ## License
 
-This software is licensed under the **Equitable Use License v1.0** (see [LICENSE.md](LICENSE.md)).
+This software is licensed under the **Functional Source License, Version 1.1, ALv2 Future
+License** (`FSL-1.1-ALv2`) — see [LICENSE](LICENSE). This matches the license used across the
+ContextCore umbrella that startd8 rolls up under.
 
-Free for individuals, small businesses (<$1M revenue), non-profits, educational institutions,
-worker cooperatives, open-source projects, and founders from historically excluded communities
-(Restorative Access). Large corporations and for-profit healthcare pay an equitable fee
-(5–15% of documented value); government agencies, fossil-fuel companies, military contractors,
-private-prison operators, investment banks, and lobbyists pay the maximum fee permissible.
+FSL grants broad rights to use, modify, and redistribute the Licensed Work for any **Permitted
+Purpose** — including internal, development, and production use — with the sole restriction being
+a **Competing Use** (offering the Licensed Work to third parties as a substitute commercial
+product or service). Two years after each release is made available, that version automatically
+converts to the **Apache License 2.0** (see [LICENSE-APACHE](LICENSE-APACHE)).
 
-The license also requires that efficiency gains from automation benefit workers (50% of
-documented savings to affected workers, 25% to retraining); using this software to eliminate
-jobs violates the license. Prohibited uses include fascism, genocide, weapons, and surveillance.
-Full terms in [LICENSE.md](LICENSE.md).
+FSL is not an OSI-approved open-source license, but every release becomes Apache-2.0 on its
+Change Date. Full terms in [LICENSE](LICENSE).
 
 ---
 

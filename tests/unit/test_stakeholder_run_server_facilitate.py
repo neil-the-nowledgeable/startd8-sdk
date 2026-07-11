@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """F1 M3 — the facilitate HTTP routes: dry-run, confirm (run_key/budget/nonce), status, cancel."""
 from __future__ import annotations

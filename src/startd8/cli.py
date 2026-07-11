@@ -1,7 +1,6 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
-# See LICENSE.md for complete terms. Government agencies, fossil fuel companies,
-# military contractors, and organizations using forced ranking are subject to Maximum Fee.
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
+# See LICENSE for complete terms.
 
 """
 Command-line interface for StartDate Agent Framework

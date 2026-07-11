@@ -1,5 +1,5 @@
-# Copyright 2026 StartD8 Contributors
-# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
 
 """FR-12 — opt-in LLM input_kind refinement: index-alignment, enum-validation, fail-open (H-13..H-15)."""
 from __future__ import annotations
