@@ -23,7 +23,9 @@ def test_confirm_command_round_trips_with_spaces_and_quotes():
     assert parsed["kind"] == "capture"
     assert parsed["path"] == tricky  # survived shlex escaping byte-for-byte
     # the command itself is a real, runnable two-step (no invented flags)
-    assert cmd.startswith("startd8 vipp negotiate && startd8 vipp apply --apply --yes")
+    assert cmd.startswith("startd8 vipp negotiate && startd8 vipp apply --apply")
+    # FR-7 posture: never auto-confirm — the human confirms each proposal at apply time.
+    assert "--yes" not in cmd
 
 
 def test_parse_confirm_command_absent_annotation_is_empty():

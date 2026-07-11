@@ -385,7 +385,12 @@ def _proposals_markdown(view: Any) -> str:
         lines.append(
             f"| {_md_cell(r.kind)} | `{_md_cell(r.target)}` | {_md_cell(r.summary)} | `{_md_cell(r.id)}` |"
         )
-    lines.append("\n**Confirm commands** (copy-paste to act on a proposal):\n")
+    lines.append(
+        "\n**Review & apply** — each command runs `vipp negotiate` then an **interactive** "
+        "`vipp apply --apply` over the **whole pending inbox** (you confirm each proposal at apply "
+        "time; nothing auto-applies). The `# startd8-proposal:` annotation identifies this row's "
+        "inbox entry:\n"
+    )
     for r in rows:
         lines.append(f"- `{r.id}` ({r.kind}):\n\n  ```\n  {r.confirm_command}\n  ```")
     return "\n".join(lines)
@@ -396,7 +401,7 @@ def _proposals_markdown_simple(view: Any) -> str:
     moment — no raw table / ids / targets. Not hidden (confirm is still shown), just gentler."""
     lines = [
         "_The assistant **recommends** these — nothing happens until you confirm. "
-        "Copy a command below to apply it yourself._\n",
+        "Copy a command below to review & apply the pending proposals yourself (you confirm each)._\n",
     ]
     for r in view.proposals:
         lines.append(f"**{_md_cell(r.summary)}**\n\n```\n{r.confirm_command}\n```")

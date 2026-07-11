@@ -55,20 +55,23 @@ _CONFIRM_MARKER = "startd8-proposal:"
 
 
 def confirm_command(proposal_id: str, *, kind: str = "", value_path: Optional[str] = None) -> str:
-    """Render the real, copy-safe, id-bound command to act on one inbox proposal (FR-7 / R1-F4).
+    """Render the real, copy-safe command to review + apply the pending inbox (FR-7 / R1-F4).
 
-    The VIPP inbox is adjudicated + applied at the **envelope** level, so the actionable command is
-    the real two-step ``negotiate`` → ``apply --apply``. The specific proposal is bound via a
-    shell-safe trailing annotation (``# startd8-proposal: id=… kind=… path=…``) so a copy-paste both
-    runs correctly *and* is traceable to exactly this proposal. Any ``value_path`` (host-controlled,
-    may contain spaces/quotes) is ``shlex``-escaped.
+    **Honest about blast radius:** VIPP adjudicates + applies at the **envelope** level — there is no
+    per-proposal apply — so the command is the two-step ``negotiate`` → ``apply --apply`` over the
+    *whole pending inbox*. It is deliberately **interactive** (no ``--yes``): at apply time VIPP
+    prompts the human to confirm **each** proposal, so a copy-paste never silently auto-applies
+    un-confirmed proposals (preserves the propose→confirm posture). The trailing
+    ``# startd8-proposal: id=… kind=… path=…`` annotation binds *this row* to its inbox entry for
+    traceability (parsed back by :func:`parse_confirm_command`); it does not scope the action. Any
+    ``value_path`` (host-controlled, may contain spaces/quotes) is ``shlex``-escaped.
     """
     ann = f"{_CONFIRM_MARKER} id={shlex.quote(proposal_id)}"
     if kind:
         ann += f" kind={shlex.quote(kind)}"
     if value_path is not None:
         ann += f" path={shlex.quote(str(value_path))}"
-    return f"startd8 vipp negotiate && startd8 vipp apply --apply --yes  # {ann}"
+    return f"startd8 vipp negotiate && startd8 vipp apply --apply  # {ann}"
 
 
 def parse_confirm_command(command: str) -> dict:
