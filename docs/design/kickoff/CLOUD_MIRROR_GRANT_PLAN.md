@@ -1,9 +1,9 @@
 # Temporary Cloud Authorization Grant — Implementation Plan
 
-**Version:** 1.1 (Post-CRP R1 triage)
+**Version:** 1.2 (OQ-4 issuer model resolved)
 **Date:** 2026-07-11
-**Status:** Draft (CRP R1 applied)
-**Requirements:** `CLOUD_MIRROR_GRANT_REQUIREMENTS.md` (v0.4)
+**Status:** Draft — CRP R1 applied + OQ-4 resolved (control-plane issuance). M0 shipped (PR #198).
+**Requirements:** `CLOUD_MIRROR_GRANT_REQUIREMENTS.md` (v0.5)
 **Direction:** the grant re-enables the **agentic chat-write path** that `--cloud` fully disables
 (not merely the disk mirror).
 
@@ -61,8 +61,11 @@ effective-posture resolution the grant plugs into (not six edited call sites).
 ### 2.3 Cloud-write trust chain (the loopback problem)
 - The local write chain is **loopback-Host + local-session CSRF** (`_host_ok`, `sessions.valid`). On a
   **non-loopback** cloud surface `_host_ok` fails regardless of the grant. So the grant path needs its
-  **own** trust chain: **`--api-key` (coarse operator door, `server/auth.py`) + a valid grant + scope
+  **own** trust chain: **`--api-key` (the CONSUMER door, `server/auth.py`) + a valid grant + scope
   binding**, with Host/Origin validated against the *configured cloud origin* instead of loopback.
+- **Consume-only served app (OQ-4/NR-6):** the served app never *mints* — it only reads/consumes/validates
+  grants. Issuance is out-of-band control-plane (M4), and the consumer `--api-key` is **distinct from the
+  issuance credential**, so a leaked consumer key can knock but never create a grant.
 - The grant **layers on** the api-key (api-key = who may knock; grant = metered, expiring permission
   to do the elevated thing). Full per-principal tenancy stays **OQ-GE-7 deferred**.
 
@@ -102,9 +105,14 @@ effective-posture resolution the grant plugs into (not six edited call sites).
 - **M3 — Chat-write + mirror under grant.** Enable `/concierge/chat/*` + proposal-apply + redacted
   mirror when permitted; assert redaction + safe-writer hold; audit each consume. **Per-turn
   re-validation (R1-S9):** create at T, expire/revoke at T+ε, next turn → deny despite use consumed.
-- **M4 — Issuance + revocation + audit fail-closed.** Human `issue`/`revoke` (operator-credential gated;
-  CLI/admin). **Append-only audit with issuer-label + issuance-source (R1-S6); audit-write failure ⇒
-  action denies** (no unauditable elevation) — fault test: audit sink down → issuance/consume denies.
+- **M4 — Control-plane issuance + revocation + audit fail-closed (OQ-4 resolved).** Issuance/revocation
+  is a **control-plane CLI** — `startd8 cloud-grant issue|revoke` — run with the **platform's identity**,
+  writing the grant store **out-of-band**; the **served app has NO mint route** (consume-only; NR-6) and
+  the issuance credential is **distinct from the consumer `--api-key`**. **Store-backend privilege split:**
+  issuance (create-with-N-uses) vs consumption (decrement-existing) is **cleanly enforceable with a
+  DB/service backend** and **convention-level with a shared file store** — choose per deployment,
+  document the file-store caveat. **Append-only audit with control-plane-actor + issuer-label + timestamp
+  (R1-S6); audit-write failure ⇒ action denies** — fault test: audit sink down → issuance/consume denies.
 - **M5 — Serve/CLI wiring + per-trigger fail-closed matrix.** `kickoff start --cloud` accepts a grant
   store. **Per-trigger integration matrix (R1-S5):** one case each for {absent, expired, exhausted,
   revoked, store-unavailable, clock-untrusted} → strict 501 + no mirror write + no token spend. Happy
@@ -146,8 +154,11 @@ effective-posture resolution the grant plugs into (not six edited call sites).
   cloud-without-grant is byte-identical to today.
 - **R3 — The token-spend surface.** Re-enabling chat = un-metered LLM spend risk. *Mitigation:* the
   grant's use-count + expiry + the session's inner turn/rate/budget caps (FR-15); audit every consume.
-- **R4 — Issuer trust (OQ-4).** A weak issuer undoes the whole bound. *Mitigation:* operator-credential
-  gate + audit; full identity explicitly deferred (OQ-GE-7) and called out as the residual risk.
+- **R4 — Issuer trust (OQ-4, RESOLVED).** A weak issuer undoes the whole bound. *Resolution:* issuance is
+  **out-of-band control-plane**, bound to the platform's real identity (SSH/IAM/CI); the served app has
+  **no mint route** and the consumer `--api-key` ≠ the issuance credential — so the served surface carries
+  no grant-creation path. *Residual:* per-*person* attribution is only as fine as the control-plane
+  identity until OQ-GE-7 (accepted); the audit field is shaped for a later IdP drop-in.
 - **R5 — Loopback-chain assumptions leak.** Reusing local CSRF/Host on a cloud surface would either
   break or falsely trust. *Mitigation:* FR-14's distinct cloud-write trust chain; test a non-loopback
   Host is accepted only with api-key + grant.
@@ -177,6 +188,11 @@ M1 structural default-deny guard (S2); M2 2⁴ trust-chain table + caps-present 
 (S1/S3/S7); M3 per-turn re-validation (S9); M4 audit-fail-closed + issuer-label (S6); M5 6-trigger
 fail-closed matrix (S5); §2.2 typed Decision + consume-inside-seam (S8). §6 validation restructured. See
 Appendix A.*
+
+*v1.2 — OQ-4 resolved (out-of-band control-plane issuance). M4 reshaped: issuance/revocation is a
+control-plane CLI bound to platform identity (not a served route); served app consume-only (NR-6);
+issuance credential ≠ consumer `--api-key`; store-backend issuance/consumption privilege split noted
+(DB-enforceable / file-convention). §2.3 + R4 updated. M0 already shipped (PR #198); M1 is the next build.*
 
 ---
 

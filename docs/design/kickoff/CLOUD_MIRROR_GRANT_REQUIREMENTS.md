@@ -1,9 +1,10 @@
 # Temporary Cloud Authorization Grant — Cockpit-Mirror Parity Bridge (DRAFT)
 
-**Version:** 0.4 (Post-CRP R1 triage)
+**Version:** 0.5 (OQ-4 issuer model resolved)
 **Date:** 2026-07-11
-**Status:** Draft — CRP R1 applied. Mechanism resolved (server-side grant record); scope resolved
-(the agentic **chat-write** path, per explicit direction). Residual opens: OQ-3/4/8/10/11.
+**Status:** Draft — CRP R1 applied + OQ-4 resolved (out-of-band control-plane issuance; served app
+consume-only). Mechanism = server-side grant record; scope = the agentic **chat-write** path. M0 shipped.
+Residual opens: OQ-3/8/10/11 (defaults, clock tolerance, granularity, Origin policy).
 **Owner doc for:** the human-driven, temporary, use-limited, expiring authorization that grants a
 **cloud** deployment the local-only agentic **chat-write** path (Concierge chat + proposal-apply +
 redacted cockpit mirror), for parity — in a strictly bounded way.
@@ -121,12 +122,16 @@ fail-closed. This is a **narrow authorization primitive**, deliberately *not* th
   `cloud_write_deferred` 501 **with no mirror write and no token spend** — verified one case per trigger:
   **{absent, expired, exhausted (uses=0), revoked, store-unavailable, clock-untrusted / skew-exceeded}**
   (clock row parameterized by OQ-8's tolerance). No partial success on any trigger.
-- **FR-6 — Human-in-the-loop issuance only + explicit attribution gap (R1-F6).** Only a human can
-  **mint** a grant; the cloud process/agent **cannot self-issue** or self-extend. **Accepted residual
-  (stated, not buried in OQ-4):** issuance is gated by a **shared static `--api-key`**, so "human-issued"
-  and FR-10's `who` are attributable to the **credential holder, not a specific person**; true
-  per-principal attribution needs OQ-GE-7. Mitigation: the audit record MUST capture **issuance-source
-  (CLI/admin path) + timestamp + a caller-supplied issuer label** (FR-10).
+- **FR-6 — Human-in-the-loop issuance, out-of-band via the control plane (OQ-4 resolved).** A grant is
+  minted **only** by a human running a **control-plane action** (`startd8 cloud-grant issue …`) with the
+  **deployment platform's own identity** (SSH / cloud IAM / kubectl / CI) — issuance is **not** a route on
+  the served app, and the cloud process/agent **cannot self-issue** or self-extend. Issuer trust binds to
+  the *real, already-existing* platform identity substrate rather than a home-rolled secret. The
+  **issuance credential is DISTINCT from the served app's consumer `--api-key`** (a leaked consumer key
+  can never mint). **Accepted residual:** per-*person* attribution is only as fine as the control-plane
+  identity provides — the audit record captures **control-plane actor (platform-provided) + a required
+  issuer label + issuance timestamp** (FR-10); a verified per-principal identity awaits OQ-GE-7, and the
+  audit field is shaped so real IdP identity drops in later without redesign.
 - **FR-7 — Single-consumption / anti-replay + ordering (R1-F4).** `resolve`+`consume` is a **single
   atomic operation** (not resolve-then-later-consume). **Consume-before-act**; if the authorized action
   then fails, the use is **forfeit** (not silently refunded — a refund path is a replay vector). A
@@ -175,8 +180,10 @@ fail-closed. This is a **narrow authorization primitive**, deliberately *not* th
   **AND** (3) that grant has **uses>0, unexpired, unrevoked** **AND** (4) **Host/Origin ∈ configured
   cloud origin**. **Absence or failure of ANY factor ⇒ 501**, and **no factor may be skipped by any
   endpoint**. Explicitly: api-key alone (no grant) denies; grant alone (no api-key) denies. The local
-  loopback-Host + local-session-CSRF chain does not apply on a non-loopback surface. **AC:** a 2⁴
-  factor-present/absent truth table — only the all-present row allows; all 15 others return 501.
+  loopback-Host + local-session-CSRF chain does not apply on a non-loopback surface. Here the `--api-key`
+  is the **consumer door only** — it is **distinct from the issuance credential** (FR-6, OQ-4), and the
+  served app **only consumes/validates** grants; it can never mint one. **AC:** a 2⁴ factor-present/absent
+  truth table — only the all-present row allows; all 15 others return 501.
 - **FR-15 — Unit of use = one agentic session, with non-defeatable caps + per-action re-validation
   (R1-F3/R1-F10).** A "use" is consumed **atomically at session creation** (default 1, FR-2). Token
   spend **within** the use is bounded by the session's turn-cap, per-session rate-limit, and budget —
@@ -200,6 +207,10 @@ fail-closed. This is a **narrow authorization primitive**, deliberately *not* th
 - **NR-2 — Not a standing/always-on cloud mirror.** Parity is transient by construction (use-limited +
   expiring). There is no "just leave it on for cloud" mode.
 - **NR-3 — No self-service issuance by the agent or cloud process** (FR-6).
+- **NR-6 — The served cloud app has no mint/issuance endpoint (OQ-4).** It only **reads + consumes +
+  validates** grants. Issuance (and revocation) is a **control-plane** action bound to platform identity,
+  never a route on the served surface — so the served app's attack surface carries no privileged
+  grant-creation path, and the consumer `--api-key` can never mint.
 - **NR-4 — Does not weaken redaction or telemetry privacy** (FR-9) — softens *placement*, not scrubbing.
 - **NR-5 — The concrete mechanism is out of scope of THIS draft** — see §4 OQ-1 (that's the
   "to be determined" the title calls out; it's resolved in the planning pass, not asserted here).
@@ -214,10 +225,14 @@ fail-closed. This is a **narrow authorization primitive**, deliberately *not* th
 - **OQ-2 → RESOLVED (planning): enforced server-side** (per-request resolve + atomic consume).
 - **OQ-3 — Defaults (still open).** Expiration window (lean: 15 min) and use-count (fixed at 1, or
   configurable ≥1?). Decide in CRP/impl.
-- **OQ-4 — Who may issue (partially open — the crux).** Lean: issuance is gated by the **operator
-  `--api-key`** (or an out-of-band admin CLI that writes the grant record); the "human" = whoever holds
-  the operator credential. Full per-principal identity stays **OQ-GE-7 deferred** — the residual risk
-  (R4). Confirm the issuance surface in CRP.
+- **OQ-4 → RESOLVED (user decision): out-of-band control-plane issuance.** Issuance is a **control-plane
+  CLI** (`startd8 cloud-grant issue`) bound to the **deployment platform's own identity** (SSH / cloud
+  IAM / kubectl / CI); the served app has **no mint route** (consume-only); the **issuance credential is
+  distinct from the consumer `--api-key`**. Issuer trust reuses the real platform identity substrate
+  (Genchi Genbutsu), not a home-rolled secret (FR-6, NR-6). **Residual (accepted, not open):** per-person
+  attribution is only as fine as the control-plane identity until **OQ-GE-7** wires a real IdP into the
+  issuer field. Store-backend nuance: issuance-vs-consumption privilege split is **cleanly enforceable
+  with a DB/service backend**, **convention-level with a shared file store** (a plan/M4 decision).
 - **OQ-5 — Scope binding (lean).** Bound to **deployment + project + capability**; consumption is
   **session-scoped** (FR-15). Confirm the exact bound identifier in impl.
 - **OQ-6 → RESOLVED (explicit direction): the agentic chat-write path** — chat turns + proposal-apply +
@@ -265,6 +280,12 @@ consume-inside-seam (F2/S8); FR-15 → non-defeatable caps + per-action re-valid
 acceptance matrix (F5); FR-6/FR-10 → the shared-key attribution gap as an accepted shippable condition +
 issuer-label + audit-write fail-closed (F6/F7); FR-8 → normative scope fields + wrong-target-denies (F8);
 FR-12 → the pre-message chat-page/session-create surface must consult the seam (F9). See Appendix A.*
+
+*v0.5 — OQ-4 (the issuer crux) resolved by user decision: **out-of-band control-plane issuance**. FR-6
+rewritten (control-plane CLI bound to platform identity; issuance credential ≠ consumer `--api-key`);
+FR-14 clarified (`--api-key` = consumer door only; served app consume-only); new **NR-6** (no mint route
+on the served app); OQ-4 moved from open to resolved. Reshapes plan M4. Residual per-person attribution
+until OQ-GE-7 (accepted). M0 (CloudGrant primitive) already shipped (PR #198).*
 
 ---
 
