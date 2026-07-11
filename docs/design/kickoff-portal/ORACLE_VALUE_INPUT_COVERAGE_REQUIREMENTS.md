@@ -56,6 +56,21 @@ the blindness. **There are two kickoff state models — markdown-extraction and 
 - **FR-2 — Provenance → attention.** A value-input's confirmed/awaiting/absent state MUST map onto the
   oracle's attention model: confirmed → `ok`; awaiting-a-decision → `review`/`backlog`; a required
   value absent → `blocked`. (Exact mapping — see OQ-4.)
+  > **FR-2 completeness (blocked case) — RESOLVED 2026-07-10.** The first fix covered only
+  > `confirmed → ok` / `awaiting|audience-default → review`, because it iterated `confirmable_fields()`
+  > — the DEFAULTED, ratifiable fields, which by definition always have a fallback default and so can
+  > never be "required-but-absent." **The blocked sub-case is real and was distinct**: the SDK config
+  > (`kickoff_experience/manifest.default_config`) also declares **`required=True`, non-defaulted**
+  > fields (`conventions.yaml#/language`, `#/stack.framework`, `#/data_model.money`) — non-derivable
+  > values a project MUST provide, with `provenance_default="authored"` — which `confirmable_fields()`
+  > deliberately EXCLUDES (there is no safe default to ratify). A value-input project missing one (domain
+  > file/key absent, or an unfilled `<…>` placeholder) previously read "review/ready" instead of
+  > blocked. `value_input_field_states` now emits a **`blocked`** `FieldState`
+  > (`Attention.BLOCKED` / `Ambiguity.MALFORMED_BLOCK`) for such a field, and `ok` once a real value is
+  > present — so `kickoff check` correctly gates and `blocked_fields()`/`attention_counts` reflect it.
+  > A correctly-instantiated package (e.g. `examples/welcome-mat`, whose `conventions.yaml` provides all
+  > three) maps them to `ok` — no regression. The layout-presence gate (FR-4) is unchanged, so bare/
+  > markdown projects never see these phantom blocked fields.
 - **FR-3 — Combine, don't double-count.** When BOTH markdown-extraction fields and value-input fields
   are present, readiness MUST combine them coherently with a defined precedence and no double-count.
 - **FR-4 — No regression for markdown projects (SOTTO).** For a project with authoring markdown and no
@@ -207,6 +222,31 @@ What landed:
 - **Tests** (`tests/unit/kickoff_experience/test_value_inputs.py`): bare-project-stays-empty (FR-4),
   confirmed→ok + folds into state (FR-1/2), inputs-present-but-unconfirmed→review-not-empty (FR-5/7),
   audience-default→review.
+
+### FR-2 blocked case (follow-up, 2026-07-10 — `feat/oracle-value-input-fr2`)
+
+The initial fix mapped confirmed→ok / awaiting→review but produced **no `blocked` fields**, leaving
+FR-2's "required value absent → blocked" sub-case unaddressed. Investigation confirmed the blocked case
+is **real and distinct** (not N/A):
+- `FieldDef.required` is a first-class flag **distinct** from `provenance_default`
+  (`kickoff_experience/manifest.py`). `default_config()` declares `required=True` fields
+  (`conventions.yaml#/{language, stack.framework, data_model.money}`) with `provenance_default="authored"`.
+- `confirmable_fields()` filters to `_CONFIRMABLE_PROVENANCE = {estimate, config-default}`
+  (`concierge/confirmation.py:78,140`), so it **never yields** the required-authored fields — the initial
+  loop was structurally incapable of blocking on them.
+- Domain-level `assess` (`_assess_kickoff_inputs`, `core.py:440`) reports a missing `inputs/<domain>.yaml`
+  as `status:"absent"` but does **not** distinguish required vs optional, and is domain-level not
+  field-level — so it too never surfaced a required-absent value as a gating condition.
+
+**Change:** `value_input_field_states` now, after the confirmable loop, iterates
+`default_config().writable_fields()` for `required` fields NOT in the confirmable set, reads the on-disk
+value via `concierge.confirmation.field_current_value` (public), and emits `Attention.BLOCKED`
+(`Ambiguity.MALFORMED_BLOCK`) when the value is absent/key-missing/an unfilled `<…>` placeholder
+(reusing `confirmation._is_placeholder`, the canonical placeholder grammar), else `Attention.OK`. Added
+4 tests (absent→blocked, placeholder→blocked, provided→ok, folds-into-state-and-gates); adjusted the
+`inputs-present-but-unconfirmed` test to scope its `all(...==review)` assertion to the confirmable set
+(the required fields are now correctly blocked there). **Tests UNRUN** in the authoring sandbox (Bash/
+startd8 import denied) — the main session must verify with `tests/unit/kickoff_experience/`.
 
 Verified: portal `status` 0→**3 fields**, readiness None→**100%**, `check` ATTENTION→**ACTIVATED**,
 `promote` blocked→**promotable** — matching `assess`. Full kickoff suite **704 passed**; MCP tool green.

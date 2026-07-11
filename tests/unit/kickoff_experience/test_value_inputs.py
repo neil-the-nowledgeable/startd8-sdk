@@ -9,7 +9,8 @@ from __future__ import annotations
 import pytest
 
 from startd8.concierge.confirmation import confirmable_fields
-from startd8.kickoff_experience.state import Attention, resolve_kickoff_state
+from startd8.kickoff_experience.manifest import default_config
+from startd8.kickoff_experience.state import Ambiguity, Attention, resolve_kickoff_state
 from startd8.kickoff_experience.value_inputs import value_input_field_states
 
 pytestmark = pytest.mark.unit
@@ -19,6 +20,23 @@ def _confirmable_value_paths():
     vps = [f["value_path"] for f in confirmable_fields()]
     assert vps, "SDK config must have confirmable fields for these tests to mean anything"
     return vps
+
+
+def _required_fields():
+    """The required, NON-confirmable writable fields (FR-2's blocked candidates)."""
+    confirmable = {f["value_path"] for f in confirmable_fields()}
+    reqd = [
+        f
+        for f in default_config().writable_fields()
+        if f.required and f.value_path not in confirmable
+    ]
+    assert reqd, "SDK config must have required non-confirmable fields for these tests to mean anything"
+    return reqd
+
+
+def _touch_inputs(root):
+    """Make the project read as a value-input project (inputs/ dir present)."""
+    (root / "docs" / "kickoff" / "inputs").mkdir(parents=True, exist_ok=True)
 
 
 def _write_confirmed(root, value_path, value="X"):
@@ -61,12 +79,15 @@ def test_confirmed_value_input_is_ok_and_folds_into_state(tmp_path):
 # --- FR-5/FR-7: a project WITH the inputs layout is never "no inputs", even before confirmation ------
 
 def test_inputs_layout_present_but_unconfirmed_shows_review_not_empty(tmp_path):
-    # inputs/ dir present (value-input project) but confirmed.yaml absent → all confirmable → review,
-    # NOT "no inputs / 0 fields". This is the FR-5 consistency + FR-7 parity fix.
+    # inputs/ dir present (value-input project) but confirmed.yaml absent → confirmable fields → review,
+    # NOT "no inputs / 0 fields". This is the FR-5 consistency + FR-7 parity fix. (Required inputs, with
+    # no on-disk value here, are blocked — asserted separately below; here we pin the confirmable set.)
     (tmp_path / "docs" / "kickoff" / "inputs").mkdir(parents=True)
     fields = value_input_field_states(tmp_path)
     assert fields, "a project with the inputs/ layout must not read as 'no inputs'"
-    assert all(f.attention == Attention.REVIEW for f in fields)
+    confirmable = set(_confirmable_value_paths())
+    review = [f for f in fields if f.value_path in confirmable]
+    assert review and all(f.attention == Attention.REVIEW for f in review)
 
 
 # --- Gate: audience-default is not ok (don't over-report machine defaults) --------------------------
@@ -83,3 +104,68 @@ def test_audience_default_is_review_not_ok(tmp_path):
     )
     by = {f.value_path: f for f in value_input_field_states(tmp_path)}
     assert by[vps[0]].attention == Attention.REVIEW  # a machine default the human hasn't ratified
+
+
+# --- FR-2 blocked case: a REQUIRED, non-defaulted value-input that is absent → blocked --------------
+
+
+def _write_input_value(root, write_target, value):
+    """Set the dotted key in the domain's inputs/<file>.yaml (a real provided value)."""
+    import yaml
+
+    path = root / "docs" / "kickoff" / "inputs" / write_target.file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if path.is_file():
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    node = data
+    parts = write_target.key.split(".")
+    for p in parts[:-1]:
+        node = node.setdefault(p, {})
+    node[parts[-1]] = value
+    path.write_text(yaml.safe_dump(data, sort_keys=True), encoding="utf-8")
+
+
+def test_required_input_absent_is_blocked(tmp_path):
+    # value-input project (inputs/ present) but a required, non-confirmable input's on-disk value is
+    # absent (domain file missing) → that field is BLOCKED, not review/ok. This is FR-2's blocked case:
+    # a project missing a required, non-derivable input must gate, not read "ready".
+    _touch_inputs(tmp_path)
+    reqd = _required_fields()
+    by = {f.value_path: f for f in value_input_field_states(tmp_path)}
+    for f in reqd:
+        assert f.value_path in by, f"required field {f.value_path} must be surfaced"
+        assert by[f.value_path].attention == Attention.BLOCKED
+        assert by[f.value_path].ambiguity == Ambiguity.MALFORMED_BLOCK
+
+
+def test_required_input_placeholder_is_blocked(tmp_path):
+    # an unfilled <…> placeholder on a required input is NOT a provided value → still blocked.
+    _touch_inputs(tmp_path)
+    f = _required_fields()[0]
+    _write_input_value(tmp_path, f.write_target, "<python | …>")
+    by = {fs.value_path: fs for fs in value_input_field_states(tmp_path)}
+    assert by[f.value_path].attention == Attention.BLOCKED
+
+
+def test_required_input_provided_is_ok(tmp_path):
+    # a real on-disk value for a required input → ok (not blocked).
+    _touch_inputs(tmp_path)
+    f = _required_fields()[0]
+    real = f.choices[0] if f.choices else "python"
+    _write_input_value(tmp_path, f.write_target, real)
+    by = {fs.value_path: fs for fs in value_input_field_states(tmp_path)}
+    assert by[f.value_path].attention == Attention.OK
+    assert by[f.value_path].value == str(real)
+
+
+def test_blocked_required_input_folds_into_state_and_gates(tmp_path):
+    # the blocked required input is folded into resolve_kickoff_state → the oracle's blocked_fields()
+    # worklist and attention_counts reflect it, so kickoff check gates (activation blocked).
+    _touch_inputs(tmp_path)
+    reqd = _required_fields()
+    st = resolve_kickoff_state(tmp_path)
+    blocked_vps = {f.value_path for f in st.blocked_fields()}
+    for f in reqd:
+        assert f.value_path in blocked_vps
+    assert st.attention_counts["blocked"] >= len(reqd)
