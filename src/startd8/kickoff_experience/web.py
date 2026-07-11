@@ -611,6 +611,34 @@ def _render_guided(view: dict, stylesheet: str) -> str:
 # --- the app factory ----------------------------------------------------------------------------
 
 
+def _mirror_session_to_cockpit(project_root: str, chat: object) -> None:
+    """Persist this LOCAL agentic session so the read-only cockpit can mirror it (the loop-closer).
+
+    FR-WM2-5d **softened for local single-user** (loopback, non-cloud): the strict RAM-only/no-disk
+    contract still governs the hosted/``--cloud`` posture (which disables chat entirely, so this is
+    never reached there), but a *local* user's own session MAY be persisted — **redacted** — to their
+    own project ``.startd8/`` so the Assistant + Proposals cockpit tabs populate. Writes:
+      * the redacted FR-1 snapshot (transcript + cost + pending ids) via ``persist_snapshot_for_chat``;
+      * the VIPP inbox (``serialize_buffer(force=True)``) so the Proposals tab has the current buffer
+        (last-writer-wins, matching the snapshot's last-session-only semantic).
+    Fully best-effort — a mirror hiccup never breaks the chat turn.
+    """
+    try:
+        from .session_snapshot import persist_snapshot_for_chat
+
+        persist_snapshot_for_chat(project_root, chat)
+    except Exception:  # pragma: no cover - mirror is never load-bearing
+        pass
+    try:
+        from .vipp_seam import serialize_buffer
+
+        buf = getattr(chat, "buffer", None)
+        if buf is not None:
+            serialize_buffer(buf, project_root, force=True)
+    except Exception:  # pragma: no cover - mirror is never load-bearing
+        pass
+
+
 def build_kickoff_app(
     project_root: str | Path,
     *,
@@ -621,6 +649,7 @@ def build_kickoff_app(
     chat_factory: "Optional[Callable[[], object]]" = None,
     cloud: bool = False,
     api_key: Optional[str] = None,
+    mirror_cockpit: bool = False,
 ):
     """Build the kickoff web app (FastAPI). Pure function of *project_root* + config + theme.
 
@@ -647,6 +676,7 @@ def build_kickoff_app(
     # spend/abuse surface under a tenancy-less static key). Reads remain fully available.
     if cloud:
         chat_factory = None
+        mirror_cockpit = False   # hosted stays strict (FR-WM2-5d): no chat, no disk mirror
 
     def _cloud_deferred(what: str = "write") -> "JSONResponse":
         """The explicit OQ-GE-7 refusal: cloud is read/preview-only; *what* is deferred (501)."""
@@ -1168,6 +1198,8 @@ def build_kickoff_app(
                                         status_code=200, headers=dict(_FRAME_DENY_HEADERS))
                 proposals = [{"id": a.id, "kind": a.kind, "summary": a.summary()}
                              for a in chat.buffer.pending()]
+                if mirror_cockpit:   # FR-WM2-5d softened (local only): feed the cockpit, best-effort
+                    _mirror_session_to_cockpit(root, chat)
                 emit(EV_CHAT_TURN, turns=getattr(result, "turns", None),
                      tokens=getattr(result, "total_tokens", None),
                      cost_usd=getattr(result, "total_cost_usd", None),

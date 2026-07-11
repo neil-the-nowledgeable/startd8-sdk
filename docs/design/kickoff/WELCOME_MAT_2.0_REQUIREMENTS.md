@@ -218,6 +218,23 @@ on the web** — it lives behind a CLI command. Three concrete gaps:
   **sanitized** typed `chat_error` (no key substrings / raw provider body), never a 500.
 - **FR-WM2-5d — Memory-wipe on idle expiry** ✅ **DELIVERED 2026-06-26** *(R3-F5/R3-S5)*. Beyond evict-oldest, destroy the
   `AgenticSession` message list on idle TTL; history stays RAM-only, never on disk.
+  - **AMENDMENT 2026-07-11 — posture softened + scoped to the hosted threat model (`--mirror-cockpit`).**
+    The original "never on disk" contract was written for the *hosted/multi-tenant* threat model
+    ("stateful sessions carry sensitive project context" on a **shared server**). That model does **not**
+    apply to **local single-user** serve (loopback, your own machine, your own project) — there it was
+    overly restrictive and blocked a legitimate feature (feeding the read-only agentic cockpit). The
+    contract is therefore **narrowed to where the threat lives**:
+    - **Hosted / `--cloud` / multi-tenant → unchanged, strict.** The RAM-only/no-disk rule still holds
+      verbatim. (Mechanically automatic: `--cloud` sets `chat_factory = None`, so there is *no* chat
+      session to persist — `mirror_cockpit` is force-set `False`.)
+    - **Local single-user (loopback, non-cloud) → MAY persist a *redacted* mirror.** With
+      `--mirror-cockpit` (default **on** via `startd8 kickoff start`; `--no-mirror-cockpit` opts back
+      into pure-ephemeral), each chat turn writes the **redacted** FR-1 snapshot + the VIPP inbox to the
+      project's `.startd8/` so the cockpit's Assistant/Proposals tabs populate. Redaction
+      (`fde.redaction.redact`) still scrubs secrets before any byte is written; the **telemetry** privacy
+      contract (FR-WM2-14a — no message text in spans/logs) is **untouched**. The in-RAM idle-wipe is
+      also retained (hygiene). Rationale: local disk = the user's own data on their own machine; the
+      sensitivity that motivated the strict rule is a *shared-server* property, deferred with hosting.
 - **FR-WM2-14a — Turn/refusal funnel events** ✅ **DELIVERED 2026-06-26** *(R2-F4)*. Emit `chat_turn`
   (turns/tokens/cost/`stop_reason`, **no** message text) + the refusal events (`chat_rate_limited`,
   `chat_budget_exceeded`, `chat_session_expired`, `chat_busy`, `message_too_long`,

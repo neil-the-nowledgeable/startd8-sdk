@@ -296,6 +296,7 @@ def serve_kickoff(
     red_carpet: bool = False,
     cloud: bool = False,
     api_key: Optional[str] = None,
+    mirror_cockpit: bool = False,
 ) -> None:  # pragma: no cover - blocking I/O; covered indirectly via build_kickoff_app + preflight
     """Serve the kickoff web app on the loopback (R1-S8). Blocks until interrupted.
 
@@ -327,7 +328,8 @@ def serve_kickoff(
         if chat_factory is None:
             logger.warning("agentic chat panel disabled: %s", resolution.reason)
     app = build_kickoff_app(project_root, config=cfg, theme=theme, mode=mode,
-                            chat_factory=chat_factory, cloud=cloud, api_key=api_key)
+                            chat_factory=chat_factory, cloud=cloud, api_key=api_key,
+                            mirror_cockpit=mirror_cockpit and not cloud)
     bind_port = port or find_free_port(host)
 
     import uvicorn
