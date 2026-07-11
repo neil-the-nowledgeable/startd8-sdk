@@ -1,7 +1,7 @@
 # Requirements + Plan — Agentic oracle value-input coverage
 
-> **Status:** DRAFT (reflective-requirements; open questions to be resolved by a parallel spike on the
-> benchmark portal, findings folded back before implementation).
+> **Status:** READY (reflective-requirements; a parallel spike on the benchmark portal validated the
+> fix shape end-to-end and resolved OQ-1..5 — findings folded in below; implementation not yet done).
 > **Origin:** surfaced by walking the agentic kickoff experience over the Summer2026 benchmark portal
 > (`benchmarking/Summer2026/portal/internal`) — 2026-07-10.
 
@@ -115,5 +115,71 @@ the blindness. **There are two kickoff state models — markdown-extraction and 
 
 ## Spike findings (folded in — 2026-07-10)
 
-*(Pending — the parallel spike on the portal proves the fix shape, resolves OQ-1..5, and surfaces
-gotchas; its results replace this section before implementation.)*
+A parallel spike (source-read by a sub-agent whose sandbox denied executing anything importing
+`startd8`, + a **runtime apply→measure→revert** run in the main environment which *can* run it)
+**validated the fix shape end-to-end.** No code was kept.
+
+### Runtime proof — the portal, before → after the minimal fix
+
+| Surface | Before | After |
+|---|---|---|
+| `kickoff status` | "no kickoff inputs yet (0 fields)" | **100% ready · 3 fields** |
+| `report status` | `field_count 0`, `readiness None` | **`field_count 3`, `readiness 100`, `{ok:3}`** |
+| `kickoff check` | ATTENTION, exit 1 | **ACTIVATED, exit 0** |
+| `kickoff promote` | not ready, exit 3 | **promoted, readiness 100%** |
+
+The 3 fields = the 3 confirmed value-input domains in `confirmed.yaml` — **matching `assess` exactly**
+("1 of 1 confirmed" × 3). The whole experience flips from false-empty to correctly-populated with the
+fields sourced at `resolve_kickoff_state`.
+
+### The minimal fix (validated)
+
+In `state.resolve_kickoff_state`: run the markdown path as today; **if `state.fields` is empty**, build
+`FieldState`s from the value-input layout and return `replace(state, fields=…)`. The value-input source
+reuses `assess`'s model directly — `concierge.confirmation.{confirmable_fields(), load_ledger(root),
+is_audience_default(entry)}` — and joins with **zero translation** because a confirmable field's
+`value_path` (`<file>#/<dotted-key>`) is already the exact `FieldState.value_path` identity shape.
+Mapping: confirmed → `ok`; awaiting / audience-default / placeholder → `review`.
+
+### Open questions — resolved
+
+- **OQ-1 (integration point):** ✅ `resolve_kickoff_state` (state.py), gated on the markdown path being
+  empty. Fixing it at the `state` layer fixes *every* surface at once (readiness/next_action/check/
+  promote all hang off `state`). NOT `load_kickoff_docs` (shoehorns structured YAML through the
+  markdown-extraction grammar — wrong tool); NOT `build_agentic_view` (too late).
+- **OQ-2 (field mapping):** ✅ Value-inputs map cleanly onto `FieldState` (frozen dataclass; construct
+  directly, or add a `FieldState.from_value_input(...)` classmethod to keep derivation single-sourced).
+  `value_path` is already the exact identity — clean join.
+- **OQ-3 (combine both):** For a project with BOTH authoring markdown AND value-inputs, **union by
+  `value_path` identity** — value-input fields fill only the identities the extraction path didn't
+  produce. `readiness_percent` already counts `ok/total`, so the union is numerically correct once
+  identities don't collide. (Spike used empty-fallback; the real fix should adopt the fill-gaps union.)
+- **OQ-4 (provenance modes):** ✅ `mode: as-is | value` are both real confirmations → `ok`;
+  `provenance: audience-default:*` → `review` (use `is_audience_default`); placeholder values
+  (`<…>`, matched by `confirm-all`'s `_PLACEHOLDER_RE`) → `review`, never `ok`.
+- **OQ-5 (next_action):** ✅ With value-input fields all `ok`, the "Ready to build" done-branch fires
+  correctly (verified live).
+
+### Gotchas for the production fix
+
+- **Layering / import cycle (the main one).** `state.py` currently imports nothing from `concierge/`,
+  and `concierge` imports back into `kickoff_experience.manifest` — so a naïve top-level
+  `state → concierge.confirmation` import risks a cycle. The spike dodged it with a **lazy import**
+  inside the function. **Recommended production move:** relocate the confirmable-field/ledger readers
+  (`confirmable_fields`, `load_ledger`, `domain_confirmation`, `is_audience_default`) **down into
+  `kickoff_experience/`** (e.g. a `value_inputs.py`) and have BOTH `concierge` and the oracle consume
+  them. That makes the oracle and `assess` literally read the **same loader** — killing the
+  "two sources of truth" at the root (FR-6) instead of mirroring it. (Bigger than a spike, but it is
+  the DRY-correct fix and the reason the inconsistency existed at all.)
+- **`stakeholders.yaml` is deliberately NOT a kernel input domain** (`concierge/core.py`
+  `KICKOFF_INPUT_DOMAINS` excludes it) — do not fold it into readiness, or the oracle diverges from
+  `assess`. (The roster surface reads it separately; that's correct.)
+- **Placeholders count as `review`, never `ok`** — otherwise readiness over-reports un-filled defaults.
+
+### Revised plan delta
+
+M0–M4 stand, with M2's integration point fixed to `resolve_kickoff_state` and a **new M1.5**: relocate
+the confirmable-field/ledger readers into `kickoff_experience/` so oracle + assess share one loader
+(resolves the layering gotcha and FR-6 at the root). Acceptance is the portal before→after table above,
+pinned as the FR-7 parity guard.
+
