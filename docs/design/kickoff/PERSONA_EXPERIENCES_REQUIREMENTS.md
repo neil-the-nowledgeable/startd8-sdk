@@ -1,6 +1,6 @@
 # Kickoff Persona Experiences — Requirements
 
-**Version:** 0.8 (Post-CRP R3/R4 — builder's-eye integration hardening)
+**Version:** 0.9 (FR-16/FR-17 formally deferred post-v1 — see §3.3)
 **Date:** 2026-07-06
 **Status:** Draft
 **Owners:** kickoff kernel (`concierge/`, `kickoff_experience/`)
@@ -223,15 +223,15 @@ ends of one slider.
   experience MUST surface a **plain-language reassurance moment**: "we filled in N things for you —
   here's where to see and change them." The mechanism (FR-6/FR-13) is not enough; the *user-facing
   communication* is itself a requirement.
-- **FR-16** *(Beginner B4)* A user MUST have an **in-session escape hatch to expand the surface now**
-  ("show me everything") — reversing the reduced-surface shielding for the current session, distinct
-  from changing the audience preference for the *next* session (FR-3). Reversal converts
-  audience-default fields back to `awaiting` (or re-prompts them); it never clobbers an `explicit`
-  value (FR-5).
-- **FR-17** *(Intermediate I4)* The confirm **walk itself** — not only `assess` after the fact — MUST
-  render a **live per-value provenance indicator** distinguishing an audience-defaulted value from
-  one the user explicitly accepted, at the prompt where the decision is made. (Ledger provenance FR-6
-  is the data; this is its surfacing at the point of decision.)
+- **FR-16** *(Beginner B4)* **⏸ DEFERRED (post-v1) — see §3.3.** A user should have an **in-session
+  escape hatch to expand the surface now** ("show me everything") — reversing the reduced-surface
+  shielding for the current session, distinct from changing the audience preference for the *next*
+  session (FR-3). Reversal converts audience-default fields back to `awaiting` (or re-prompts them);
+  it never clobbers an `explicit` value (FR-5).
+- **FR-17** *(Intermediate I4)* **⏸ DEFERRED (post-v1) — see §3.3.** The confirm **walk itself** — not
+  only `assess` after the fact — should render a **live per-value provenance indicator** distinguishing
+  an audience-defaulted value from one the user explicitly accepted, at the prompt where the decision
+  is made. (Ledger provenance FR-6 is the data; this is its surfacing at the point of decision.)
 - **FR-18** *(Advanced A4)* The Advanced **confirm-all** path (FR-12) MUST offer a **pre-commit
   preview / `--dry-run`**: show the full field→value table that will be batch-written and require a
   single explicit confirmation before `apply_confirm` runs. A blind bulk sweep over `awaiting_fields`
@@ -368,6 +368,33 @@ ends of one slider.
   `audience-default`" is one edit at that single writer: emit `v1` unless the map contains an
   `audience-default` entry, else `v2`. Test: an all-explicit ledger serializes `schema:
   kickoff.confirmed.v1` byte-for-byte as today.
+
+## 3.3 Deferred (post-v1) — FR-16 + FR-17 (refreshed 2026-07-10)
+
+> **FR-16 (in-session expand-surface escape hatch) and FR-17 (live in-walk provenance indicator) are
+> formally DEFERRED post-v1.** M1–M5 shipped without them; this section resolves the doc-vs-code drift
+> (the spec previously claimed them for M3). Reassessed against `main` after ~248 commits of kickoff
+> evolution — they are **still applicable and not superseded**, but their value has dropped. Build the
+> pair *only if* the Beginner in-session un-shield flow is prioritized.
+
+- **Still applicable (premise intact).** Beginner shielding still exists (`apply_audience_defaults`
+  fires at walk-start, shielded fields drop from `awaiting_fields`), and the confirm **walk is still
+  the primary place a user decides values**. Nothing built since supersedes either FR.
+- **They are a coupled pair — ship together or not at all.** FR-17 has **nothing to render today**:
+  a Beginner's shielded fields are dropped *out* of the walk, and Intermediate/Advanced have no
+  audience-defaults — so an in-walk provenance indicator is **inert until FR-16 re-opens** shielded
+  fields into the walk. FR-16, in turn, isn't safely usable unless the user can *see* which fields are
+  shielded (FR-17). Neither makes sense alone.
+- **The oracle/agentic layer added since drafting shrank FR-17's value.** The read-only
+  oracle/agentic/`assess` surfaces now already show the aggregate `audience_defaulted` count (what the
+  machine pre-filled). FR-17's remaining delta is narrow — *per-field, at the prompt* vs. an aggregate
+  you check separately — i.e. **polish, not a gap**.
+- **FR-16 target is unchanged: the walk/CLI.** It cannot move to the oracle surface — that surface is
+  deliberately **read-only (CLI is the sole writer)**, and re-open *writes* (deletes ledger entries).
+  So the original walk/CLI targeting stands; no reframing needed.
+- **Reduced-priority rationale, one line:** *still coherent, premise intact, but must ship as a pair
+  and the oracle layer already covers most of the underlying visibility need — hence LOW priority,
+  post-v1.*
 
 ## 4. Non-Requirements
 
