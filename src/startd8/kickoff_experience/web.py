@@ -56,6 +56,27 @@ _MAX_CHAT_MESSAGE_CHARS = 4096
 # `.startd8/kickoff-panel/*` sessions via `build_guided_view(load_deepen=True)` and invokes no LLM.
 CLOUD_WRITE_DEFERRED_CODE = "cloud_write_deferred"
 
+# M1 (FR-13 / R1-S2) — the structural default-deny registry. On cloud, a POST must be classified as
+# EITHER a read/preview route (allowed) OR a write/chat route that consults the `_cloud_capability` seam
+# (which decides allow/deny). Any POST in neither set is an **un-classified write → deny 501** (a new
+# route that forgets the seam fails CLOSED, not open). Keep in lockstep with the actual routes — a test
+# asserts every `@app.post` is in exactly one set.
+_CLOUD_READONLY_POSTS = frozenset({
+    "/capture/preview",
+    "/concierge/instantiate/preview",
+    "/concierge/chat/pending",
+    "/concierge/chat/discard",
+})
+_CLOUD_SEAM_GATED_POSTS = frozenset({
+    "/capture/apply",
+    "/audience/set",
+    "/concierge/instantiate",
+    "/concierge/friction",
+    "/concierge/chat/message",
+    "/concierge/chat/confirm",
+    "/concierge/chat/reset",
+})
+
 # stop_reason → typed /chat code (FR-WM2-8b); `completed` is the only non-refusal outcome.
 _CHAT_STOP_CODE = {
     "budget": "chat_budget_exceeded",
@@ -672,9 +693,24 @@ def build_kickoff_app(
 
     cfg = config or default_config()
     root = str(project_root)
-    # GE-M5 cloud read-only guard: no LLM-invoking agentic panel on cloud (an un-metered
-    # spend/abuse surface under a tenancy-less static key). Reads remain fully available.
-    if cloud:
+    # M1 (FR-13): the ONE effective-posture decision. Today no grant store is wired, so on cloud it is
+    # a strict deny — byte-identical to the previous scattered `if cloud:` gates. M2 threads a
+    # `grant_store` and replaces the cloud branch with "resolve + consume a grant for `capability`".
+    _grant_store = None   # M2: build_kickoff_app(..., grant_store=...)
+
+    def _cloud_capability(capability: str) -> bool:
+        """Is *capability* permitted for this request's posture (FR-13)? The single source of the
+        cloud/local decision every chat/write gate consults."""
+        if not cloud:
+            return True                       # local → allow (today's behavior)
+        if _grant_store is None:
+            return False                      # cloud, no grant store → strict deny (== today)
+        return False                          # M2: resolve + consume `_grant_store` for `capability`
+
+    # GE-M5 cloud read-only guard: with no grant store, cloud disables the LLM-invoking agentic panel at
+    # build time (an un-metered spend surface). M2's grant-capable build keeps the factory + gates
+    # per-request; in M1 `_grant_store is None`, so this is exactly the previous `if cloud:` behavior.
+    if cloud and _grant_store is None:
         chat_factory = None
         mirror_cockpit = False   # hosted stays strict (FR-WM2-5d): no chat, no disk mirror
 
@@ -703,6 +739,18 @@ def build_kickoff_app(
     chat_locks: Dict[str, asyncio.Lock] = {}   # FR-WM2-5c: one in-flight turn per chat session
     app.state.kickoff_agentic_enabled = chat_factory is not None
     app.state.kickoff_cloud = cloud  # GE-M5 read-only posture (introspectable by preflight/tests)
+
+    @app.middleware("http")
+    async def _cloud_write_default_deny(request, call_next):
+        """Structural default-deny (R1-S2): on cloud, a POST that is neither a known read/preview route
+        nor a seam-gated write route is an **un-classified write → 501**. Existing routes are covered by
+        the two sets (unaffected, byte-identical); a NEW write route that forgets the `_cloud_capability`
+        seam fails CLOSED. A pure pass-through for non-cloud + for GET."""
+        if cloud and request.method == "POST":
+            p = request.url.path
+            if p not in _CLOUD_READONLY_POSTS and p not in _CLOUD_SEAM_GATED_POSTS:
+                return _cloud_deferred("write")
+        return await call_next(request)
 
     def _capture_error(exc: CaptureError, http_status: int = 400) -> JSONResponse:
         return JSONResponse(
@@ -769,8 +817,8 @@ def build_kickoff_app(
         value: str = Form(...),
         csrf: str = Form(...),
     ) -> JSONResponse:
-        # GE-M5 cloud read-only gate (FR-GE-8): cloud never writes — deferred to OQ-GE-7.
-        if cloud:
+        # GE-M5 cloud read-only gate (FR-GE-8) via the M1 seam: cloud never writes — deferred to OQ-GE-7.
+        if not _cloud_capability("capture"):
             return _cloud_deferred("capture")
         # Feature-mode gate (R4-F5): preview/inspect modes cannot reach apply_write_plan.
         if mode in ("preview", "inspect"):
@@ -912,7 +960,7 @@ def build_kickoff_app(
 
     def _concierge_write_gate(host: Optional[str], csrf: str, now: float):
         """Shared gate for Concierge write POSTs: cloud, mode, loopback Host, CSRF, rate-limit."""
-        if cloud:  # GE-M5 (FR-GE-8): cloud is read/preview-only — write deferred to OQ-GE-7.
+        if not _cloud_capability("concierge-write"):  # GE-M5 via the M1 seam — write deferred (OQ-GE-7)
             return _cloud_deferred()
         if mode in ("preview", "inspect"):
             return JSONResponse({"ok": False, "code": "preview_only",
@@ -1105,7 +1153,7 @@ def build_kickoff_app(
 
     @app.get("/concierge/chat", response_class=HTMLResponse)
     def chat_page() -> HTMLResponse:
-        if cloud:
+        if not _cloud_capability("chat"):
             # GE-M5 (FR-GE-8): the agentic/facilitation chat spends LLM tokens — disabled on cloud
             # (un-metered spend/abuse under a tenancy-less static key). Deferred to OQ-GE-7.
             return HTMLResponse(
@@ -1160,7 +1208,7 @@ def build_kickoff_app(
     async def chat_message(message: str = Form(...), host: Optional[str] = Header(default=None),
                            kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         from .telemetry import EV_CHAT_TURN, emit, kickoff_span
-        if cloud:                                    # GE-M5 (FR-GE-8): no LLM spend on cloud — OQ-GE-7
+        if not _cloud_capability("chat"):            # GE-M5 via the M1 seam: no LLM spend on cloud
             return _cloud_deferred("chat")
         if mode in ("preview", "inspect"):           # FR-WM2-8a — never spend in read/preview modes
             return _chat_refused("preview_only", 403)
@@ -1258,7 +1306,7 @@ def build_kickoff_app(
                    kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         # R4-F6 — new conversation: destroy the current session's history and mint a fresh one. $0,
         # no provider call, no chat_turn event. CSRF-protected (it mutates server state).
-        if cloud:  # GE-M5: chat is disabled on cloud (OQ-GE-7)
+        if not _cloud_capability("chat"):  # GE-M5 via the M1 seam: chat disabled on cloud (OQ-GE-7)
             return _cloud_deferred("chat")
         if chat_factory is None:
             return JSONResponse({"ok": False, "code": "chat_disabled"}, status_code=409,
