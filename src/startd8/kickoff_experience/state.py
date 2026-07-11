@@ -316,4 +316,23 @@ def resolve_kickoff_state(project_root: str | Path) -> KickoffState:
     from .docs import live_schema_text, load_kickoff_docs
 
     docs = load_kickoff_docs(project_root)
-    return build_kickoff_state(docs, live_schema_text=live_schema_text(project_root))
+    state = build_kickoff_state(docs, live_schema_text=live_schema_text(project_root))
+    # Fold the value-input / confirmed.yaml layout (assess's model) so the ONE oracle also reflects
+    # value-input-driven projects (instantiated packages / the benchmark portal), which the markdown
+    # extraction above is blind to. Union by value_path IDENTITY — value-input fields fill only the
+    # identities the markdown path didn't already produce (FR-3), so a markdown project is byte-identical
+    # (no value-inputs ⇒ nothing added; FR-4). Best-effort: never breaks the markdown path.
+    try:
+        from dataclasses import replace
+
+        from .value_inputs import value_input_field_states
+
+        existing = {f.value_path for f in state.fields}
+        extra = tuple(
+            f for f in value_input_field_states(project_root) if f.value_path not in existing
+        )
+        if extra:
+            return replace(state, fields=state.fields + extra)
+    except Exception:  # pragma: no cover - value-input coverage is additive, never load-bearing
+        pass
+    return state

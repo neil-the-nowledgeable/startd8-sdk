@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.22.0"
+version: "1.23.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -1790,6 +1790,9 @@ capabilities:
         ref: src/startd8/kickoff_experience/agentic_view.py
         description: "the single AgenticView oracle: folds state+snapshot+inbox+dispositions+roster+readiness+next_action"
       - type: code
+        ref: src/startd8/kickoff_experience/value_inputs.py
+        description: "value-input coverage: folds the docs/kickoff/inputs+confirmed.yaml layout (assess's model) into resolve_kickoff_state so the oracle reflects value-input-driven projects, not just markdown-authored ones"
+      - type: code
         ref: src/startd8/kickoff_experience/portal_spec_v2.py
         description: "build_workbook_v2 (5-tab v2 cockpit) + build_index_v2 (dashlist) + _timeseries/_logs/_dashlist panels; workbook_v2_uid length guard"
       - type: code
@@ -2066,6 +2069,10 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.23.0"
+    date: "2026-07-10"
+    changes:
+      - "Fixed startd8.kickoff.workbook_cockpit value-input coverage: the oracle's field/readiness source (build_kickoff_state <- load_kickoff_docs) read authoring MARKDOWN only, so it reported false-empty ('no inputs, 0 fields, readiness None, not ready') for value-input-driven projects (docs/kickoff/inputs/*.yaml + confirmed.yaml — the canonical instantiated-package layout), while `assess` (which reads that layout) saw them. Surfaced by walking the agentic kickoff experience over the Summer2026 benchmark portal (0 fields / not-ready, yet assess showed 4 confirmed domains + a 13-entity app). New `kickoff_experience/value_inputs.py` folds the value-input/confirmed.yaml layout into `resolve_kickoff_state` (union by value_path identity; gated on the layout's presence so bare/markdown projects are byte-identical; reuses assess's confirmable_fields/load_ledger/is_audience_default — one shared loader, not a mirror; confirmed->ok, awaiting/audience-default->review). Portal now: status 0->3 fields, readiness None->100%, check ATTENTION->ACTIVATED, promote blocked->promotable, matching assess. Bounded fix (grounding showed the spike-feared import cycle isn't real — concierge.confirmation defers its kickoff_experience imports and kickoff_experience already imports it); the M1.5 reader-relocation deferred as optional layering purity. 4 new tests; full kickoff suite 704 green; reflective-requirements + parallel spike: docs/design/kickoff-portal/ORACLE_VALUE_INPUT_COVERAGE_REQUIREMENTS.md."
   - version: "1.22.0"
     date: "2026-07-10"
     changes:

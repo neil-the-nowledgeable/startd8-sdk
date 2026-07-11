@@ -1,7 +1,7 @@
 # Requirements + Plan — Agentic oracle value-input coverage
 
-> **Status:** READY (reflective-requirements; a parallel spike on the benchmark portal validated the
-> fix shape end-to-end and resolved OQ-1..5 — findings folded in below; implementation not yet done).
+> **Status:** IMPLEMENTED (2026-07-10). `kickoff_experience/value_inputs.py` + `resolve_kickoff_state`
+> fold; 4 tests + full kickoff suite green (704); portal live-verified. See "Implementation notes".
 > **Origin:** surfaced by walking the agentic kickoff experience over the Summer2026 benchmark portal
 > (`benchmarking/Summer2026/portal/internal`) — 2026-07-10.
 
@@ -183,3 +183,34 @@ the confirmable-field/ledger readers into `kickoff_experience/` so oracle + asse
 (resolves the layering gotcha and FR-6 at the root). Acceptance is the portal before→after table above,
 pinned as the FR-7 parity guard.
 
+
+---
+
+## Implementation notes (2026-07-10)
+
+Shipped the **bounded** version, not the M1.5 relocation — and grounding is why (confirm, don't assert):
+the spike's source-read feared an import cycle, but `concierge/confirmation.py` defers its
+`kickoff_experience` imports (all lazy), so it is import-safe, and `kickoff_experience/` **already**
+imports `concierge.confirmation` (`portal_spec_v2.py` top-level). So there is **no cycle**, and reusing
+the readers already gives one shared loader (FR-6). The full relocation would be Zero-Value-Precision —
+marginal layering purity for a broad refactor across ~7 consumers.
+
+What landed:
+- **`kickoff_experience/value_inputs.py`** — `value_input_field_states(root)`: derives `FieldState`s from
+  the value-input/`confirmed.yaml` layout, reusing `concierge.confirmation.{confirmable_fields,
+  load_ledger, is_audience_default}`. **Gated** on the layout being present (`docs/kickoff/inputs/` dir
+  OR `confirmed.yaml`) so the SDK's confirmable *template* can't leak phantom `review` fields into a
+  bare/markdown project (the one non-obvious correctness point — FR-4). Mapping: confirmed → `ok`;
+  awaiting / audience-default → `review`.
+- **`state.resolve_kickoff_state`** folds them by **value_path identity union** (fills only identities the
+  markdown path didn't produce — FR-3), best-effort, byte-identical when absent (FR-4).
+- **Tests** (`tests/unit/kickoff_experience/test_value_inputs.py`): bare-project-stays-empty (FR-4),
+  confirmed→ok + folds into state (FR-1/2), inputs-present-but-unconfirmed→review-not-empty (FR-5/7),
+  audience-default→review.
+
+Verified: portal `status` 0→**3 fields**, readiness None→**100%**, `check` ATTENTION→**ACTIVATED**,
+`promote` blocked→**promotable** — matching `assess`. Full kickoff suite **704 passed**; MCP tool green.
+
+**Deferred (optional):** the M1.5 relocation of the confirmable-field/ledger readers into
+`kickoff_experience/` for layering purity — not needed for correctness (no cycle), track only if the
+`kickoff_experience → concierge` direction becomes a problem for other reasons.
