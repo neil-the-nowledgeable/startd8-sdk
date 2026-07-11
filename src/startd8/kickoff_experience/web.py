@@ -1381,7 +1381,10 @@ def build_kickoff_app(
                    kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         # R4-F6 — new conversation: destroy the current session's history and mint a fresh one. $0,
         # no provider call, no chat_turn event. CSRF-protected (it mutates server state).
-        if not _cloud_capability("chat").allowed:  # GE-M5 via the seam: chat disabled on cloud (OQ-GE-7)
+        # reset MINTS A NEW session, so on cloud it is INTENTIONALLY denied even under a grant — allowing
+        # it would create an un-metered session that never traversed the FR-14 trust chain / consumed a
+        # use. A grant user opens a fresh conversation via `/concierge/chat` (which consumes a use).
+        if not _cloud_capability("chat").allowed:  # cloud: reset denied by design (open a new session)
             return _cloud_deferred("chat")
         if chat_factory is None:
             return JSONResponse({"ok": False, "code": "chat_disabled"}, status_code=409,

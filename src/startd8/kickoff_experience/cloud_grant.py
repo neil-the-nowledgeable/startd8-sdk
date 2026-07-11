@@ -215,6 +215,12 @@ class GrantStore:
         every failure mode is a typed deny with **no debit** (FR-5/FR-7)."""
         if not clock_trusted:
             return GrantDecision.deny(GrantDeny.CLOCK_UNTRUSTED)
+        try:
+            return self._resolve_and_consume(target, now)
+        except StoreUnavailable:                        # a durable-backend read failure (`_sync`) → deny
+            return GrantDecision.deny(GrantDeny.STORE_UNAVAILABLE)
+
+    def _resolve_and_consume(self, target: GrantTarget, now: float) -> GrantDecision:
         with self._op():
             grant = self._find_for_target(target)
             if grant is None:
@@ -251,6 +257,12 @@ class GrantStore:
         second use. Also enforces target binding (a grant id bound to a different target → deny, FR-8)."""
         if not clock_trusted:
             return GrantDecision.deny(GrantDeny.CLOCK_UNTRUSTED)
+        try:
+            return self._revalidate(grant_id, target, now)
+        except StoreUnavailable:                        # a durable-backend read failure (`_sync`) → deny
+            return GrantDecision.deny(GrantDeny.STORE_UNAVAILABLE)
+
+    def _revalidate(self, grant_id: str, target: GrantTarget, now: float) -> GrantDecision:
         with self._op():
             grant = self._grants.get(grant_id)
             if grant is None:

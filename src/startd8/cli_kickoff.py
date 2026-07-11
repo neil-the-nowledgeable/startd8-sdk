@@ -520,6 +520,20 @@ def start_cmd(
         "--api-key",
         help="Static X-API-Key gating POSTs when serving --cloud (coarse cloud auth, not tenancy).",
     ),
+    grant_store: Optional[Path] = typer.Option(
+        None,
+        "--grant-store",
+        help="Path to a cloud-authorization grant store (the file `startd8 cloud-grant issue` writes). "
+        "With --cloud, makes the serve GRANT-CAPABLE: the agentic chat-write path is enabled only for a "
+        "valid grant (FR-14 trust chain), consumed per session. Requires --api-key, --deployment-id, "
+        "and at least one --cloud-origin.",
+    ),
+    deployment_id: str = typer.Option(
+        "", "--deployment-id", help="This deployment's id — grants are bound to it (with --grant-store)."
+    ),
+    cloud_origin: Optional[List[str]] = typer.Option(
+        None, "--cloud-origin", help="Allowed cloud Origin (repeatable) — the FR-14 Origin factor."
+    ),
     mirror_cockpit: bool = typer.Option(
         True,
         "--mirror-cockpit/--no-mirror-cockpit",
@@ -560,12 +574,38 @@ def start_cmd(
     # The agentic panel spends tokens, so it stays opt-in: enable it only on an EXPLICIT agent choice
     # — the --agent flag or a configured `concierge_agent` (project/global) — never the bare default.
     # GE-M5: a --cloud serve is read/preview-only, so the LLM panel is force-disabled regardless.
+    grant_capable = bool(cloud and grant_store is not None)
     spec, source = resolve_concierge_agent_spec(project, agent)
-    panel_spec = None if cloud else (spec if source != "default" else None)
-    if cloud:
+    # Cloud is read-only UNLESS grant-capable (a grant store gates chat-write per-request via the FR-14
+    # trust chain). Local always allows the panel when an agent is configured.
+    panel_spec = (spec if source != "default" else None) if (not cloud or grant_capable) else None
+    # M5: build the out-of-band grant store the served app CONSUMES (NR-6 — the app never mints).
+    grant_store_obj = None
+    origins = frozenset(cloud_origin or ())
+    if grant_capable:
+        missing = [n for n, v in (("--api-key", api_key), ("--deployment-id", deployment_id)) if not v]
+        if not origins:
+            missing.append("--cloud-origin")
+        if missing:
+            console.print(
+                f"[red]--grant-store requires {', '.join(missing)}[/red] — "
+                "the FR-14 trust chain (api-key ∧ Origin ∧ grant) can never be satisfied without them."
+            )
+            raise typer.Exit(_EXIT_FATAL)
+        from .kickoff_experience.cloud_grant import AuditLog, FileGrantStore
+        try:
+            grant_store_obj = FileGrantStore(grant_store, audit=AuditLog(grant_store.parent / "audit.jsonl"))
+        except Exception as exc:
+            console.print(f"[red]could not open grant store {grant_store}:[/red] {exc}")
+            raise typer.Exit(_EXIT_FATAL)
+        console.print(
+            f"  [green]✓[/green] grant-capable cloud serve: chat-write enabled per valid grant "
+            f"(store: {grant_store}, deployment: {deployment_id}, origins: {len(origins)})"
+        )
+    elif cloud:
         console.print(
             "  [yellow]•[/yellow] cloud read/preview-only: writes + paid facilitation refused "
-            "(cloud-write deferred, OQ-GE-7)"
+            "(cloud-write deferred, OQ-GE-7). Pass --grant-store to enable grant-gated chat-write."
         )
     mirror = bool(mirror_cockpit) and not cloud
     if panel_spec:
@@ -601,6 +641,9 @@ def start_cmd(
         cloud=cloud,
         api_key=api_key,
         mirror_cockpit=mirror,
+        grant_store=grant_store_obj,
+        deployment_id=deployment_id,
+        cloud_origins=origins,
     )
 
 
