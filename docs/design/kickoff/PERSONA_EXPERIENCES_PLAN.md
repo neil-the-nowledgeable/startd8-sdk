@@ -1,6 +1,6 @@
 # Kickoff Persona Experiences — Implementation Plan
 
-**Version:** 1.3 (Post-CRP R3/R4)
+**Version:** 1.4 (FR-16/FR-17 deferred post-v1 — reqs §3.3)
 **Date:** 2026-07-06
 **Requirements:** `PERSONA_EXPERIENCES_REQUIREMENTS.md` (v0.8)
 
@@ -102,8 +102,10 @@ gate for FR-19** (riskiest surface; consult `--serve` precedent).
 
 - **Milestone remap (R1-S1)** — the four panel FRs are now placed:
   - **FR-15** (beginner reassurance moment) → **M4** (needs plain-language wording).
-  - **FR-16** (in-session expand-surface escape hatch, mechanics per A-FR16) → **M3** (owns the pre-pass it reverses).
-  - **FR-17** (live in-walk provenance, parity-bound per A-FR17) → **M2 → M3 boundary** (data in M2, rendered in M3 walk).
+  - **FR-16** (in-session expand-surface escape hatch) → **⏸ DEFERRED post-v1** (was mapped to M3; M3
+    shipped without it). See reqs §3.3 — coupled with FR-17; build the pair only if prioritized.
+  - **FR-17** (live in-walk provenance) → **⏸ DEFERRED post-v1** (was mapped to M2→M3; not built).
+    Inert without FR-16; the oracle/`assess` layer already covers the aggregate visibility. See reqs §3.3.
   - **FR-18** (confirm-all `--dry-run`/preview, mandatory) → **M5 gate on FR-12** (two-phase collect-then-apply, A-FR12).
 - **M2 hardened (R1-S4, R2-S20, A-FR6)** — conditional `v1→v2` bump (only on first audience-default write); provenance-absence ⇒ explicit; add v1-ledger-load fixture + rollback tolerance; add **`test_assess_no_audience_regression`** as an **M2 merge gate** (A-FR13).
 - **M3 hardened (R2-S21, A-FR16)** — pre-pass idempotency test (2nd run writes nothing, no `at` bump); encode the un-shield/no-re-shield + broaden-audience-re-opens contract.
@@ -204,8 +206,8 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | FR-13 | M2 | Covered; non-regression test missing (R2-F26) |
 | FR-14 | M5 | Covered; `persona`→`audience` key (R2-F27) |
 | **FR-15** | **none → map to M3/M4** | **GAP (R1-S1)** |
-| **FR-16** | **none → map to M3** | **GAP (R1-S1) + mechanics undefined (R2-F24)** |
-| **FR-17** | **none → map to M2→M3** | **GAP (R1-S1) + parity binding (R1-F6)** |
+| **FR-16** | **⏸ DEFERRED post-v1** | Not built; reqs §3.3 (coupled w/ FR-17, LOW priority) |
+| **FR-17** | **⏸ DEFERRED post-v1** | Not built; reqs §3.3 (inert without FR-16; oracle covers aggregate) |
 | **FR-18** | M5 (partial) | **PARTIAL — dry-run/preview not a gate (R1-S1)** |
 
 No orphan plan steps. All gaps are one-directional (v0.4 panel FRs unmapped because the plan is still keyed to v0.2).
