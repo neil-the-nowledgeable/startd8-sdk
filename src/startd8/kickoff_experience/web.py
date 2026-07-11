@@ -706,25 +706,44 @@ def build_kickoff_app(
     _project_id = project_id if project_id is not None else Path(root).name
     _cloud_origins = cloud_origins
     _grant_clock = grant_clock or time.time
-    _NO_CTX = object()   # sentinel: a gate that supplies no trust-chain context (M2: not grant-authorized)
+    _NO_CTX = object()   # sentinel: a gate that supplies no trust-chain context (not grant-authorized)
+    _session_grants: "Dict[str, tuple]" = {}   # M3: chat_sid -> (grant_id, GrantTarget) for revalidation
 
-    def _cloud_capability(capability: str, *, req_api_key=_NO_CTX, req_origin=_NO_CTX) -> bool:
-        """Is *capability* permitted for this request's posture (FR-13)? The single source every chat/write
-        gate consults. A cloud gate that supplies NO trust-chain context denies (M2 enables only the
-        session-creation gate; M3 threads context into the per-turn gates)."""
+    def _cloud_capability(capability: str, *, req_api_key=_NO_CTX, req_origin=_NO_CTX):
+        """The ONE effective-posture decision (FR-13), returning a `GrantDecision`. local → allow;
+        cloud + no grant store / no context → deny; cloud + context → the FR-14 trust chain, which
+        **CONSUMES one use** on allow (session creation, FR-15). The returned `grant_id` binds the session
+        for M3 per-turn revalidation. Per-turn gates use :func:`_cloud_revalidate` (no consume)."""
+        from .cloud_grant import (
+            GrantDecision, GrantDeny, GrantTarget, TrustChainInputs, evaluate_trust_chain,
+        )
         if not cloud:
-            return True                       # local → allow (today's behavior)
-        if _grant_store is None:
-            return False                      # cloud, no grant store → strict deny (== today)
-        if req_api_key is _NO_CTX:            # cloud + grant store but no context supplied → deny
-            return False
-        from .cloud_grant import GrantTarget, TrustChainInputs, evaluate_trust_chain
+            return GrantDecision(True)        # local → allow (today's behavior)
+        if _grant_store is None or req_api_key is _NO_CTX:
+            return GrantDecision.deny(GrantDeny.ABSENT)   # cloud + no store / no context → strict deny
         target = GrantTarget(deployment_id=_deployment_id, project_id=_project_id, capability=capability)
         inputs = TrustChainInputs(
             api_key_expected=api_key, api_key_presented=req_api_key,
             allowed_origins=_cloud_origins, origin_presented=req_origin,
         )
-        return evaluate_trust_chain(_grant_store, target, inputs, now=_grant_clock()).allowed
+        return evaluate_trust_chain(_grant_store, target, inputs, now=_grant_clock())
+
+    def _cloud_revalidate(kickoff_chat: Optional[str], req_origin: Optional[str]) -> bool:
+        """M3 per-turn re-validation (R1-S9/FR-15): a cloud chat turn/apply is permitted iff the session's
+        bound grant is **still live** (no consume) AND the Origin is configured. api-key is enforced by
+        `APIKeyMiddleware` on the POST. So a session created just before expiry/revocation is denied on its
+        next action — consuming the use at creation buys no unbounded post-expiry session."""
+        if not cloud:
+            return True
+        if _grant_store is None:
+            return False
+        if not _cloud_origins or req_origin not in _cloud_origins:
+            return False
+        binding = _session_grants.get(kickoff_chat or "")
+        if binding is None:
+            return False                      # a cloud session with no grant binding → deny
+        grant_id, target = binding
+        return _grant_store.revalidate(grant_id, target, now=_grant_clock()).allowed
 
     # GE-M5 cloud read-only guard: with no grant store, cloud disables the LLM-invoking agentic panel at
     # build time (an un-metered spend surface). M2's grant-capable build keeps the factory + gates
@@ -837,7 +856,7 @@ def build_kickoff_app(
         csrf: str = Form(...),
     ) -> JSONResponse:
         # GE-M5 cloud read-only gate (FR-GE-8) via the M1 seam: cloud never writes — deferred to OQ-GE-7.
-        if not _cloud_capability("capture"):
+        if not _cloud_capability("capture").allowed:
             return _cloud_deferred("capture")
         # Feature-mode gate (R4-F5): preview/inspect modes cannot reach apply_write_plan.
         if mode in ("preview", "inspect"):
@@ -979,7 +998,7 @@ def build_kickoff_app(
 
     def _concierge_write_gate(host: Optional[str], csrf: str, now: float):
         """Shared gate for Concierge write POSTs: cloud, mode, loopback Host, CSRF, rate-limit."""
-        if not _cloud_capability("concierge-write"):  # GE-M5 via the M1 seam — write deferred (OQ-GE-7)
+        if not _cloud_capability("concierge-write").allowed:  # GE-M5 via the seam — deferred (OQ-GE-7)
             return _cloud_deferred()
         if mode in ("preview", "inspect"):
             return JSONResponse({"ok": False, "code": "preview_only",
@@ -1205,19 +1224,27 @@ def build_kickoff_app(
                       "Concierge spends LLM tokens and is disabled. Serve in write mode to enable it.</p>",
                       stylesheet),
                 headers=dict(_FRAME_DENY_HEADERS))
+        _grant_binding = None
         if cloud:
             # Grant-capable cloud build: creating a session requires the full FR-14 trust chain and
             # CONSUMES one use (FR-15). Checked here (session creation / pre-message surface, R1-S7) so no
             # live chat surface exists before a grant is validated. A missing factor → unavailable, no
             # session, no use spent (the trust chain short-circuits before consume on api-key/Origin).
-            if not _cloud_capability("chat-write", req_api_key=x_api_key, req_origin=origin):
+            from .cloud_grant import GrantTarget
+            _decision = _cloud_capability("chat-write", req_api_key=x_api_key, req_origin=origin)
+            if not _decision.allowed:
                 return _chat_unavailable_cloud()
+            # Bind the consumed grant to the session so per-turn actions REVALIDATE it (M3, no re-consume).
+            _grant_binding = (_decision.grant_id,
+                              GrantTarget(_deployment_id, _project_id, "chat-write"))
         now = clock()
         # FR-WM2-5a: the chat SESSION id and the CSRF/write token are SEPARATE secrets in SEPARATE
         # httponly cookies. The chat sid keys _ChatStore (+ message rate); csrf gates the write path.
         chat_sid = sessions.issue(now)
         csrf = sessions.issue(now)
         chats.put(chat_sid, chat_factory())
+        if _grant_binding is not None:
+            _session_grants[chat_sid] = _grant_binding
         resp = HTMLResponse(_render_chat_page(csrf, stylesheet), headers=dict(_FRAME_DENY_HEADERS))
         resp.set_cookie("kickoff_chat", chat_sid, httponly=True, samesite="strict")
         resp.set_cookie("kickoff_csrf", csrf, httponly=True, samesite="strict")
@@ -1236,13 +1263,19 @@ def build_kickoff_app(
 
     @app.post("/concierge/chat/message")
     async def chat_message(message: str = Form(...), host: Optional[str] = Header(default=None),
+                           origin: Optional[str] = Header(default=None),
                            kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         from .telemetry import EV_CHAT_TURN, emit, kickoff_span
-        if not _cloud_capability("chat"):            # GE-M5 via the M1 seam: no LLM spend on cloud
-            return _cloud_deferred("chat")
+        # Cloud posture (M3): a turn is permitted only by REVALIDATING the session's grant — no re-consume
+        # (R1-S9), so a session created just before expiry/revocation is denied HERE on its next action.
+        # The loopback-Host check is a LOCAL trust factor; on cloud the substrate is grant + api-key
+        # (APIKeyMiddleware) + Origin (revalidate), so `_host_ok` is bypassed for the cloud path (FR-14).
+        if cloud:
+            if not _cloud_revalidate(kickoff_chat, origin):
+                return _cloud_deferred("chat")
         if mode in ("preview", "inspect"):           # FR-WM2-8a — never spend in read/preview modes
             return _chat_refused("preview_only", 403)
-        if not _host_ok(host):
+        if not cloud and not _host_ok(host):
             return JSONResponse({"ok": False, "code": "forbidden_host"}, status_code=403)
         if len(message) > _MAX_CHAT_MESSAGE_CHARS:   # FR-WM2-5b — reject before any provider call
             return _chat_refused("message_too_long", 400)
@@ -1336,7 +1369,7 @@ def build_kickoff_app(
                    kickoff_chat: Optional[str] = Cookie(default=None)) -> JSONResponse:
         # R4-F6 — new conversation: destroy the current session's history and mint a fresh one. $0,
         # no provider call, no chat_turn event. CSRF-protected (it mutates server state).
-        if not _cloud_capability("chat"):  # GE-M5 via the M1 seam: chat disabled on cloud (OQ-GE-7)
+        if not _cloud_capability("chat").allowed:  # GE-M5 via the seam: chat disabled on cloud (OQ-GE-7)
             return _cloud_deferred("chat")
         if chat_factory is None:
             return JSONResponse({"ok": False, "code": "chat_disabled"}, status_code=409,
