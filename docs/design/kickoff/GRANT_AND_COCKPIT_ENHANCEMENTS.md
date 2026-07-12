@@ -111,9 +111,12 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
   The gap was **"what was captured"** — the report showed readiness *counts*, not the actual input
   *values*. Added a **"What was captured"** section (md + HTML, XSS-escaped, additive/byte-preserving
   when empty) listing the captured field values — the substance a project owner actually shares.
-- **FR-E15 (M, P1) — Packaged "remote onboarding" workflow (mostly docs/assembly).** Operator issues a
-  bounded/audited grant → remote stakeholder runs a session → mirrored + audited → operator reviews
-  proposals in the cockpit → applies via VIPP. The pieces exist; package + document the headline flow.
+- **FR-E15 (M, P1) — Packaged "remote onboarding" workflow. ✅ SHIPPED.** `startd8 cloud-grant invite`
+  assembles the operator's side in one command: issues a bounded/audited grant + one-time link,
+  generates the consumer key, and prints the **operator playbook** — the exact `kickoff start --cloud …`
+  serve command, the link to send, and how to review (cockpit/proposals/readout) + apply (VIPP). Pure
+  assembly of shipped pieces (grant issuance, FR-E12 human door, `--mirror-cockpit`, audit). The
+  headline flow is documented in **`REMOTE_ONBOARDING_GUIDE.md`**.
 - **FR-E16 (M, P2) — Richer portfolio view** — `kickoff portal --index` → a real multi-project readiness
   board (who's stuck, who's build-ready).
 - **FR-E18 (S–M, P2) — Generalize the grant to more capabilities** — the `capability` string is already
