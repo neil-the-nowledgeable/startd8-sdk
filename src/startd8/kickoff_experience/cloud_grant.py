@@ -422,8 +422,10 @@ def evaluate_trust_chain(
     """
     if store is None:
         return GrantDecision.deny(GrantDeny.ABSENT)              # not grant-capable → deny
-    # (1) consumer api-key — required and matched.
-    if not inputs.api_key_expected or inputs.api_key_presented != inputs.api_key_expected:
+    # (1) consumer api-key — required and matched in CONSTANT TIME (E19 conformance: no timing oracle,
+    # parity with the stakeholder/consult surfaces' compare_digest).
+    _expected, _presented = inputs.api_key_expected, inputs.api_key_presented
+    if not _expected or not _presented or not secrets.compare_digest(str(_presented), str(_expected)):
         return store._denied(GrantDeny.API_KEY_INVALID)          # FR-E4: count the auth-layer deny too
     # (4) Origin/Host ∈ configured cloud origin.
     if not inputs.allowed_origins or inputs.origin_presented not in inputs.allowed_origins:
