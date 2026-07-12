@@ -614,9 +614,13 @@ def start_cmd(
                 "the FR-14 trust chain (api-key ∧ Origin ∧ grant) can never be satisfied without them."
             )
             raise typer.Exit(_EXIT_FATAL)
-        from .kickoff_experience.cloud_grant import AuditLog, FileGrantStore
+        from .kickoff_experience.cloud_grant import AuditLog, FileGrantStore, GrantMetrics
         try:
-            grant_store_obj = FileGrantStore(grant_store, audit=AuditLog(grant_store.parent / "audit.jsonl"))
+            grant_store_obj = FileGrantStore(
+                grant_store,
+                audit=AuditLog(grant_store.parent / "audit.jsonl"),
+                metrics=GrantMetrics(),   # FR-E4: consume/deny counters for the served app (fail-open)
+            )
         except Exception as exc:
             console.print(f"[red]could not open grant store {grant_store}:[/red] {exc}")
             raise typer.Exit(_EXIT_FATAL)

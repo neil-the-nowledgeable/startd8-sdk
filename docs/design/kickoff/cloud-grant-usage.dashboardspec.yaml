@@ -1,0 +1,88 @@
+# FR-E5 — Cloud Grant Usage dashboard (DashboardSpec — the /dbrd-cr8r pipeline input).
+#
+# This is the SANCTIONED input artifact. Do NOT hand-write the Grafana JSON — feed this spec to the
+# /dbrd-cr8r pipeline (or `startd8` dashboard-create), which generates the JSON and provisions it.
+# It renders the FR-E4 cloud-grant lifecycle counters:
+#   startd8.cloud_grant.issued | .consumed | .denied{reason} | .revoked
+# (Prometheus/Mimir mangles the dots to underscores + a _total suffix on counters — hence the
+#  `startd8_cloud_grant_*_total` metric names in the exprs below.)
+#
+# Provision:  /dbrd-cr8r  →  spec: docs/design/kickoff/cloud-grant-usage.dashboardspec.yaml
+title: "Cloud Grant Usage"
+uid: cc-kickoff-cloud-grant-usage
+description: >
+  Human-issued cloud authorization grants for the kickoff agentic chat-write path (FR-14 trust
+  chain): issuance, consumption, live count, and denials by reason. The denial-by-reason series is
+  the security signal — an origin_rejected/api_key_invalid spike reads very differently from
+  exhausted/expired.
+tags: [kickoff, cloud-grant, security, startd8]
+objective: "Who is elevating the cloud chat-write path, how often, and what's being turned away"
+banner: true
+density: operational
+
+panels:
+  - type: stat
+    title: "Grants issued (24h)"
+    expr: "increase(startd8_cloud_grant_issued_total[24h])"
+    datasource: mimir
+    unit: short
+    group: "Lifecycle"
+
+  - type: stat
+    title: "Uses consumed (24h)"
+    expr: "increase(startd8_cloud_grant_consumed_total[24h])"
+    datasource: mimir
+    unit: short
+    group: "Lifecycle"
+
+  - type: stat
+    title: "Grants revoked (24h)"
+    expr: "increase(startd8_cloud_grant_revoked_total[24h])"
+    datasource: mimir
+    unit: short
+    group: "Lifecycle"
+
+  - type: stat
+    title: "Denials (24h)"
+    expr: "increase(startd8_cloud_grant_denied_total[24h])"
+    datasource: mimir
+    unit: short
+    thresholds:
+      - { value: 0, color: green }
+      - { value: 1, color: yellow }
+      - { value: 20, color: red }
+    group: "Lifecycle"
+
+  - type: timeseries
+    title: "Issue vs consume rate"
+    datasource: mimir
+    unit: "ops"
+    group: "Trend"
+    targets:
+      - expr: "sum(rate(startd8_cloud_grant_issued_total[5m]))"
+        legendFormat: "issued/s"
+      - expr: "sum(rate(startd8_cloud_grant_consumed_total[5m]))"
+        legendFormat: "consumed/s"
+
+  - type: timeseries
+    title: "Denials by reason"
+    description: >
+      The discriminating series. origin_rejected / api_key_invalid → misconfig or probing;
+      exhausted / expired → a grant lived its natural life; store_unavailable / clock_untrusted →
+      an infra problem, not the caller.
+    datasource: mimir
+    unit: "ops"
+    group: "Trend"
+    targets:
+      - expr: "sum by (reason) (rate(startd8_cloud_grant_denied_total[5m]))"
+        legendFormat: "{{reason}}"
+
+  - type: barchart
+    title: "Denials by reason (24h total)"
+    datasource: mimir
+    unit: short
+    group: "Trend"
+    targets:
+      - expr: "sum by (reason) (increase(startd8_cloud_grant_denied_total[24h]))"
+        legendFormat: "{{reason}}"
+        instant: true
