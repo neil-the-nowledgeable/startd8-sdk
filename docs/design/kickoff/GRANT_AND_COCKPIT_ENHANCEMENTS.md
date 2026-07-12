@@ -138,9 +138,16 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
   makes the store object structurally unable to `issue()` — the privilege split stops being convention.
   Row-per-grant (no full-file rewrite). Passes the same resolve/consume/revalidate/redeem/revoke/prune
   contract. **OQ-E3 resolved: SQLite is worth it** (stdlib, no new dependency).
-- **FR-E19 (M, P3) — Lift `_cloud_capability` + the trust chain into a reusable served-surface
-  middleware** — reuse for `stakeholder_run_server` and `consult --serve` instead of each re-implementing
-  cloud posture.
+- **FR-E19 (M, P3) — Lift the trust chain into a reusable middleware. ✅ INVESTIGATED → REJECTED
+  (consolidate the contract, not the code); see `ADR_E19_SURFACE_AUTH.md`.** The three surfaces' auth
+  only *looks* shared — kickoff (api-key ∧ Origin ∧ **grant/consume**), stakeholder (**bearer** ∧ nonce
+  ∧ budget), consult (**per-run token** ∧ loopback-socket ∧ CSP) have **deliberately divergent** security
+  semantics (empty-Origin → reject vs allow; `localhost` accepted vs rejected — two `_host_ok`s with
+  *opposite* behavior; three different replay models). A shared middleware would be a false unification
+  (over-abstraction + security-regression risk). Instead: **`test_surface_auth_conformance.py`** guards
+  the ONE universal invariant (constant-time credential rejection) across all three. **That guard
+  immediately caught a real drift** — kickoff's api-key used `!=`; fixed to `secrets.compare_digest`
+  (behavior-preserving, closes a timing side-channel, now on parity with the other two surfaces).
 
 ---
 
