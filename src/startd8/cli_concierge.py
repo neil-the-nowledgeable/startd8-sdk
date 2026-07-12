@@ -1269,6 +1269,11 @@ def kickoff_portal(
         help="With --index --provision to a SHARED (non-loopback) Grafana: confirm the "
         "portfolio-wide write (NR-6).",
     ),
+    scan: Optional[Path] = typer.Option(
+        None, "--scan", metavar="WORKSPACE",
+        help="With --index: scan a workspace of projects and print a $0 readiness board "
+        "(who's build-ready, who's stuck) — offline, no Grafana (FR-E16).",
+    ),
     json_out: bool = typer.Option(
         False, "--json", help="Emit a JSON result summary to stdout."
     ),
@@ -1290,6 +1295,23 @@ def kickoff_portal(
 
     root = project_root.expanduser()
     dest = out_dir.expanduser() if out_dir else None
+
+    if index and scan is not None:
+        # FR-E16: the $0 readiness board — scan a workspace, rank projects by readiness. Offline, no
+        # Grafana; the real "who's stuck / who's build-ready" view the dashlist index can't give.
+        from .kickoff_experience.portfolio import (
+            portfolio_to_dict,
+            render_portfolio_markdown,
+            scan_portfolio,
+        )
+
+        workspace = scan.expanduser()
+        entries = scan_portfolio(workspace)
+        if json_out:
+            _emit_json(portfolio_to_dict(workspace, entries))
+            return
+        console.print(render_portfolio_markdown(workspace, entries))
+        return
 
     if index:
         res = build_index(

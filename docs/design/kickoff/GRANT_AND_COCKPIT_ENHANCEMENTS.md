@@ -117,8 +117,14 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
   serve command, the link to send, and how to review (cockpit/proposals/readout) + apply (VIPP). Pure
   assembly of shipped pieces (grant issuance, FR-E12 human door, `--mirror-cockpit`, audit). The
   headline flow is documented in **`REMOTE_ONBOARDING_GUIDE.md`**.
-- **FR-E16 (M, P2) — Richer portfolio view** — `kickoff portal --index` → a real multi-project readiness
-  board (who's stuck, who's build-ready).
+- **FR-E16 (M, P2) — Richer portfolio view. ✅ SHIPPED.** The existing `kickoff portal --index` built a
+  Grafana *dashlist* (link-list of Workbooks) with no readiness. Added `kickoff portal --index --scan
+  <workspace>`: a **$0, offline** scan (`portfolio.py`) that discovers every project (a dir with a
+  `docs/kickoff` package), computes each one's readiness from the same `AgenticView` oracle the
+  cockpit/readout use, and renders a **ranked readiness board** — build-ready first, stuck flagged —
+  with a summary line + `--json`. The real "who's stuck / who's build-ready" view the dashlist couldn't
+  give; complements (doesn't replace) the Grafana index. Best-effort per project (a broken one → an
+  honest `unreadable` row, never a failed scan).
 - **FR-E18 (S–M, P2) — Generalize the grant to more capabilities. ✅ SHIPPED.** `capture` and
   `instantiate` are now grantable on cloud via the SAME FR-14 trust chain as chat-write: the request's
   `X-API-Key` + `Origin` are threaded into `capture_apply` and (via a `capability`-parameterized
