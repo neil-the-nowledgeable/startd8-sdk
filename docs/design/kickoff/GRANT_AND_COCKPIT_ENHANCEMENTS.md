@@ -81,9 +81,13 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
 
 ### Tier 2 — M-effort higher-value outputs
 
-- **FR-E12 (M, P1) — Close OQ-12 (human cloud door).** A documented **auth-injecting reverse-proxy
-  recipe** and/or a `login → session-mint POST` so a browser can open a grant session. Un-strands the
-  cloud grant's value.
+- **FR-E12 (M, P1) — Close OQ-12 (human cloud door). ✅ SHIPPED (magic-link).** Resolved toward the
+  **magic-link one-time session** (not the reverse-proxy recipe — see the decision in
+  `CLOUD_HUMAN_DOOR_REQUIREMENTS.md`): `cloud-grant issue --with-link` mints a one-time bearer bound
+  to the grant; `GET /kickoff/enter?t=…` redeems it (consume + burn, atomic), mints the same session
+  `chat_page` does, and drops the human straight into the granted chat — no CLI, no X-API-Key header.
+  Host-confined, no-oracle failures, revoke kills the door, per-turn revalidation unchanged. Minimal
+  local-cloud scope (single-user); multi-user/IdP deferred. Un-strands the cloud grant's value.
 - **FR-E13 (M, P1) — Real readiness + cost burndown in the cockpit.** Emit `kickoff_completeness_ratio`
   + per-session cost to Mimir (the designed kickoff-portal M1 seam) so the cockpit's time-series panels
   show **real progress**, not baked `vector()` values.

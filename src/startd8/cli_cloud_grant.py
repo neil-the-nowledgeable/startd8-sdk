@@ -88,6 +88,16 @@ def issue(
     ),
     uses: int = typer.Option(1, "--uses", help="Max uses (default 1)."),
     ttl: str = typer.Option("15m", "--ttl", help="Lifetime — seconds or human (900, 15m, 1h, 2h30m, 1d)."),
+    with_link: bool = typer.Option(
+        False, "--with-link",
+        help="FR-E12: also mint a ONE-TIME magic link a human clicks to open the granted chat "
+        "(no CLI/header needed). Prints the URL once — treat it as a secret.",
+    ),
+    serve_url: Optional[str] = typer.Option(
+        None, "--serve-url",
+        help="Base URL of the served app for the --with-link URL (e.g. https://app.example). "
+        "Defaults to the single --cloud-origin if unambiguous.",
+    ),
     store: Path = typer.Option(
         Path(_DEFAULT_STORE), "--store", envvar="STARTD8_GRANT_STORE",
         help="Grant store path (the served app reads THIS file).",
@@ -107,12 +117,26 @@ def issue(
     if not deployment:
         console.print("[red]provide --deployment (or set STARTD8_DEPLOYMENT_ID)[/red]")
         raise typer.Exit(2)
+    # FR-E12: derive the entry URL base BEFORE minting (fail fast on a bad --with-link invocation so we
+    # don't leave an un-linkable grant on disk).
+    link_base: Optional[str] = None
+    if with_link:
+        link_base = (serve_url or "").rstrip("/") or None
+        if link_base is None:
+            console.print(
+                "[red]--with-link needs --serve-url <base-url>[/red] (e.g. https://app.example) — the "
+                "base of the served app so the printed link is clickable."
+            )
+            raise typer.Exit(2)
+    import secrets as _secrets
+    link_token = _secrets.token_urlsafe(32) if with_link else None
     try:
         ttl_seconds = _parse_ttl(ttl)
         s = _open_store(store, audit)
         g = s.issue(
             GrantTarget(deployment, project, capability),
             uses=uses, ttl_seconds=ttl_seconds, now=time.time(), issued_by=issued_by,
+            link_token=link_token,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -126,6 +150,15 @@ def issue(
         f"expires={_fmt_expiry(g.expires_at)}  by={issued_by}"
     )
     console.print(f"[dim]store: {store}  ·  the served app consumes this on session creation.[/dim]")
+    if link_token is not None:
+        url = f"{link_base}/kickoff/enter?t={link_token}"
+        console.print("")
+        console.print("[bold]human door (FR-E12) — send this ONE-TIME link to the user:[/bold]")
+        console.print(f"  [cyan]{url}[/cyan]")
+        console.print(
+            "[yellow]  ⚠ one-time + expiring + revocable — treat it as a secret (it is the credential). "
+            "Serve over HTTPS; it is not printed again.[/yellow]"
+        )
 
 
 @cloud_grant_app.command("revoke")
