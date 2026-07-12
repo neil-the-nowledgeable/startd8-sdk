@@ -100,6 +100,15 @@ def _bootstrap(
 
 
 @app.command()
+def doctor() -> None:
+    """Environment self-check (FR-E10): which startd8 you're running (editable vs a maybe-stale install),
+    Python, provider keys, doppler. Exits non-zero if something warrants action."""
+    from .cli_doctor import run_doctor
+
+    raise typer.Exit(run_doctor(console))
+
+
+@app.command()
 def init(
     storage_dir: Path = typer.Option(
         default_data_dir(),

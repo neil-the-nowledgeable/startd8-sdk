@@ -46,7 +46,7 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
   require, so the operator issues a matching grant. *(Fixes the confirmed silent-mismatch footgun.)*
 - **FR-E2 (S, P0) — `cloud-grant issue --for-serve <project-root>`** derives `deployment_id`/`project_id`
   from the served project (dir name / config) so issue and serve **cannot drift**. Complements FR-E1.
-- **FR-E3 (S, P1) — Auto-provision the cockpit on session end (opt-in).** After a `kickoff chat` /
+- **FR-E3 (S, P1) — Auto-provision the cockpit on session end (opt-in). ✅ SHIPPED.** After a `kickoff chat` /
   concierge session, call `build_workbook_v2_and_maybe_provision` beside the existing snapshot persist
   (gated by a `--provision <url>` / config), so the cockpit refreshes without a manual step.
 - **FR-E4 (S–M, P1) — Grant events → OTel metrics.** Behind the `_audit` hook, emit
@@ -61,7 +61,7 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
 - **FR-E8 (S, P2) — Human `--ttl` (`15m`/`1h`) + env-var defaults** (`STARTD8_GRANT_STORE`,
   `_API_KEY`, `_DEPLOYMENT_ID`) so the operator doesn't retype five flags.
 - **FR-E9 (S, P2) — `cloud-grant list --live-only` + near-expiry warnings.**
-- **FR-E10 (S, P1) — `startd8 doctor`** — flags the **venv-vs-global `startd8` version drift** (a
+- **FR-E10 (S, P1) — `startd8 doctor`. ✅ SHIPPED.** — flags the **venv-vs-global `startd8` version drift** (a
   recurring pain), plus store/audit reachability. Pure friction removal.
 - **FR-E11 (S, P2) — Cockpit Assistant deep-link** → "continue in `kickoff start`", so the read-only
   transcript becomes a jumping-off point.
@@ -122,4 +122,4 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
 ---
 
 *v0.2 — Post-planning. 22 enhancements across 3 tiers, feasibility-verified against the shipped seams;
-the silent-mismatch footgun (FR-E1/E2) surfaced as the top P0. S-tier being implemented incrementally.*
+the silent-mismatch footgun (FR-E1/E2) surfaced as the top P0. S-tier being implemented incrementally — shipped so far: FR-E1/E2/E6/E7/E8/E9 (operator ergonomics) + FR-E3/E10 (close-the-loop + doctor).*

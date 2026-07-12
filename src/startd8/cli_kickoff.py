@@ -48,8 +48,27 @@ _EXIT_FATAL = 2
 _GENERATOR_GAP_MARKER = "generator-gap"
 
 
-def _persist_kickoff_snapshot(project: Path, chat: object) -> None:
-    """Persist a durable session snapshot for the agentic Workbook cockpit (FR-1).
+def _maybe_provision_cockpit(project: Path, provision_url: Optional[str]) -> None:
+    """FR-E3 — auto-refresh the agentic cockpit after a session (best-effort). Closes the loop so the
+    user never re-runs `kickoff portal` by hand. Any failure is swallowed (never breaks session exit)."""
+    if not provision_url:
+        return
+    try:
+        from .kickoff_experience.portal_build import build_workbook_v2_and_maybe_provision
+
+        res = build_workbook_v2_and_maybe_provision(project, provision_url=provision_url)
+        if getattr(res, "skipped_reason", None):
+            console.print(f"[dim]cockpit: not refreshed — {res.skipped_reason}[/dim]")
+        else:
+            console.print(f"[green]cockpit refreshed[/green] → {provision_url} (uid: {res.uid})")
+    except Exception as exc:  # never break session exit on a provision hiccup
+        console.print(f"[dim]cockpit refresh skipped: {exc}[/dim]")
+
+
+def _persist_kickoff_snapshot(project: Path, chat: object,
+                              provision_url: Optional[str] = None) -> None:
+    """Persist a durable session snapshot for the agentic Workbook cockpit (FR-1), and — when
+    *provision_url* is given (FR-E3) — auto-refresh the cockpit so the loop closes without a manual step.
 
     Fully best-effort and self-contained: any failure is swallowed so a snapshot hiccup can never
     break session exit. Prints a dim confirmation only when a snapshot is actually written (a session
@@ -66,12 +85,15 @@ def _persist_kickoff_snapshot(project: Path, chat: object) -> None:
         console.print(
             "[dim]snapshot: session mirrored to .startd8/kickoff/agentic-session.json[/dim]"
         )
-        console.print(
-            "[dim]  → see it in the agentic cockpit (Status / Assistant / Proposals):[/dim]"
-        )
-        console.print(
-            "[cyan]     startd8 kickoff portal --dynamic --provision http://localhost:3000[/cyan]"
-        )
+        if provision_url:
+            _maybe_provision_cockpit(project, provision_url)   # FR-E3: close the loop automatically
+        else:
+            console.print(
+                "[dim]  → see it in the agentic cockpit (Status / Assistant / Proposals):[/dim]"
+            )
+            console.print(
+                "[cyan]     startd8 kickoff portal --dynamic --provision http://localhost:3000[/cyan]"
+            )
 
 
 def _is_conformance_failure(record: ExtractionRecord) -> bool:
@@ -665,6 +687,11 @@ def chat_cmd(
         "--agent",
         help="Agent spec provider:model (default: balanced catalog model).",
     ),
+    provision: Optional[str] = typer.Option(
+        None, "--provision",
+        help="Grafana URL to auto-refresh the agentic cockpit after the session (FR-E3) — closes the "
+        "loop so you don't run `kickoff portal` by hand.",
+    ),
 ) -> None:
     """Conversational, READ-ONLY kickoff assistant (spends LLM tokens).
 
@@ -707,8 +734,8 @@ def chat_cmd(
     )
 
     # Durable session snapshot (FR-1) — mirror this read-only transcript to the agentic Workbook
-    # cockpit. Best-effort; a snapshot hiccup never breaks session exit.
-    _persist_kickoff_snapshot(project, chat)
+    # cockpit. Best-effort; a snapshot hiccup never breaks session exit. --provision auto-refreshes it.
+    _persist_kickoff_snapshot(project, chat, provision_url=provision)
 
 
 @kickoff_app.command("concierge-chat")
@@ -720,6 +747,11 @@ def concierge_chat_cmd(
         None,
         "--agent",
         help="Agent spec provider:model (default: balanced catalog model).",
+    ),
+    provision: Optional[str] = typer.Option(
+        None, "--provision",
+        help="Grafana URL to auto-refresh the agentic cockpit after the session (FR-E3) — closes the "
+        "loop so you don't run `kickoff portal` by hand.",
     ),
 ) -> None:
     """Agentic Concierge — conversational onboarding that RECOMMENDS actions you confirm.
@@ -794,8 +826,8 @@ def concierge_chat_cmd(
 
     # Durable session snapshot (FR-1), AFTER the inbox handoff (R1-S1 ordering: inbox first, then
     # snapshot). temp-then-rename means a snapshot failure leaves the inbox intact and no partial
-    # agentic-session.json. Best-effort — never breaks session exit.
-    _persist_kickoff_snapshot(project, chat)
+    # agentic-session.json. Best-effort — never breaks session exit. --provision auto-refreshes cockpit.
+    _persist_kickoff_snapshot(project, chat, provision_url=provision)
 
 
 @kickoff_app.command("concierge")
