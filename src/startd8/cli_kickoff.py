@@ -602,6 +602,14 @@ def start_cmd(
             f"  [green]✓[/green] grant-capable cloud serve: chat-write enabled per valid grant "
             f"(store: {grant_store}, deployment: {deployment_id}, origins: {len(origins)})"
         )
+        # FR-E1 — surface the EXACT grant target this serve requires (project_id = the served dir name).
+        # A mismatched grant silently never resolves, so print a ready-to-copy, drift-proof issue command.
+        console.print(
+            f"  [dim]grant target required: deployment=[cyan]{deployment_id}[/cyan] "
+            f"project=[cyan]{project.resolve().name}[/cyan] capability=[cyan]chat-write[/cyan]. Issue one:\n"
+            f"    startd8 cloud-grant issue --deployment {deployment_id} --for-serve {project} "
+            f"--store {grant_store} --issued-by <you>[/dim]"
+        )
     elif cloud:
         console.print(
             "  [yellow]•[/yellow] cloud read/preview-only: writes + paid facilitation refused "

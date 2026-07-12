@@ -203,6 +203,22 @@ class GrantStore:
         with self._op():
             return self._grants.get(grant_id)
 
+    def _flush(self) -> None:  # pragma: no cover - overridden by the file backend
+        """Durably write the WHOLE current grant set (used by :meth:`prune`, which removes records)."""
+        return None
+
+    def prune(self, now: float) -> int:
+        """GC: drop expired / exhausted / revoked grants. Best-effort (a flush failure leaves the dead
+        records on disk — harmless, they deny anyway). Returns the count removed."""
+        with self._op():
+            dead = [gid for gid, g in self._grants.items()
+                    if g.revoked or g.uses_remaining <= 0 or now >= g.expires_at]
+            for gid in dead:
+                self._grants.pop(gid, None)
+            if dead:
+                self._flush()
+            return len(dead)
+
     # -- the atomic resolve+consume (session creation, FR-7/FR-15) --
     def resolve_and_consume(
         self,
@@ -428,8 +444,13 @@ class FileGrantStore(GrantStore):
         self._grants = {gid: _grant_from_dict(g) for gid, g in data.items()}
 
     def _persist(self, grant: CloudGrant) -> None:
-        merged = {**self._grants, grant.id: grant}
-        payload = json.dumps({gid: _grant_to_dict(g) for gid, g in merged.items()}, sort_keys=True)
+        self._write({**self._grants, grant.id: grant})
+
+    def _flush(self) -> None:
+        self._write(self._grants)               # prune removed records; write the whole current set
+
+    def _write(self, grants: "Dict[str, CloudGrant]") -> None:
+        payload = json.dumps({gid: _grant_to_dict(g) for gid, g in grants.items()}, sort_keys=True)
         d = self._path.parent
         d.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".grants.", suffix=".tmp")
