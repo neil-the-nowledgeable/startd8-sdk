@@ -80,3 +80,58 @@ def test_revoke_marks_revoked_and_unknown_id_exits_2(tmp_path):
     assert json.loads(Path(store).read_text())[gid]["revoked"] is True
     missing = runner.invoke(cloud_grant_app, ["revoke", "nope", "--store", store, "--audit", audit])
     assert missing.exit_code == 2
+
+
+def test_for_serve_derives_project_from_dir_name(tmp_path):
+    proj = tmp_path / "my-deployment"
+    proj.mkdir()
+    store, audit = _paths(tmp_path)
+    r = runner.invoke(cloud_grant_app, ["issue", "--deployment", "d", "--for-serve", str(proj),
+                                        "--issued-by", "op", "--store", store, "--audit", audit])
+    assert r.exit_code == 0
+    g = next(iter(json.loads(Path(store).read_text()).values()))
+    assert g["project_id"] == "my-deployment"   # derived from the dir name (matches serve default)
+
+
+def test_human_ttl_and_env_deployment(tmp_path, monkeypatch):
+    monkeypatch.setenv("STARTD8_DEPLOYMENT_ID", "dep-from-env")
+    store, audit = _paths(tmp_path)
+    r = runner.invoke(cloud_grant_app, ["issue", "--project", "p", "--ttl", "30m",
+                                        "--issued-by", "op", "--store", store, "--audit", audit])
+    assert r.exit_code == 0
+    g = next(iter(json.loads(Path(store).read_text()).values()))
+    assert g["deployment_id"] == "dep-from-env"                 # env default used
+    assert abs((g["expires_at"] - g["issued_at"]) - 1800.0) < 1.0   # 30m == 1800s
+
+
+def test_issue_requires_project_or_for_serve(tmp_path):
+    store, audit = _paths(tmp_path)
+    r = runner.invoke(cloud_grant_app, ["issue", "--deployment", "d", "--issued-by", "op",
+                                        "--store", store, "--audit", audit])
+    assert r.exit_code == 2 and "--project or --for-serve" in r.output
+
+
+def test_status_summarizes_audit(tmp_path):
+    r, store, audit = _issue(tmp_path)
+    from startd8.kickoff_experience.cloud_grant import FileGrantStore as _FS, AuditLog as _AL
+    import time as _t
+    _FS(store, audit=_AL(audit)).resolve_and_consume(TGT, now=_t.time())   # a consume event
+    out = runner.invoke(cloud_grant_app, ["status", "--audit", audit])
+    assert out.exit_code == 0 and "issue=1" in out.output and "consume=1" in out.output
+
+
+def test_gc_prunes_revoked(tmp_path):
+    r, store, audit = _issue(tmp_path)
+    gid = next(iter(json.loads(Path(store).read_text())))
+    runner.invoke(cloud_grant_app, ["revoke", gid, "--store", store, "--audit", audit])
+    out = runner.invoke(cloud_grant_app, ["gc", "--store", store])
+    assert out.exit_code == 0 and "pruned 1" in out.output
+    assert json.loads(Path(store).read_text()) == {}
+
+
+def test_list_live_only(tmp_path):
+    r, store, audit = _issue(tmp_path)
+    gid = next(iter(json.loads(Path(store).read_text())))
+    runner.invoke(cloud_grant_app, ["revoke", gid, "--store", store, "--audit", audit])
+    out = runner.invoke(cloud_grant_app, ["list", "--store", store, "--live-only"])
+    assert out.exit_code == 0 and "no grants" in out.output   # the only grant is revoked → filtered out

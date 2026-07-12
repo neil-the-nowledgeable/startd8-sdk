@@ -109,3 +109,17 @@ def test_audit_write_failure_denies_consume_with_no_debit(tmp_path):
     assert d.reason is GrantDeny.STORE_UNAVAILABLE          # un-auditable consume → deny
     # no debit: a fresh store still has the use
     assert FileGrantStore(path).resolve_and_consume(TGT, now=T0 + 2).allowed is True
+
+
+def test_prune_drops_dead_grants_keeps_live(tmp_path):
+    path = tmp_path / "grants.json"
+    s = FileGrantStore(path)
+    live = s.issue(TGT, uses=1, ttl_seconds=900.0, now=T0, issued_by="op")
+    dead_exp = s.issue(TGT, uses=1, ttl_seconds=100.0, now=T0, issued_by="op")   # expires at T0+100
+    dead_rev = s.issue(TGT, uses=1, ttl_seconds=900.0, now=T0, issued_by="op")
+    s.revoke(dead_rev.id)
+    removed = FileGrantStore(path).prune(now=T0 + 200)     # past dead_exp's expiry
+    assert removed == 2
+    ids = {g.id for g in FileGrantStore(path).all_grants()}
+    assert ids == {live.id}                                # only the live grant survives
+    assert dead_exp.id not in ids and dead_rev.id not in ids
