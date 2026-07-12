@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.24.0"
+version: "1.25.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -2043,6 +2043,168 @@ capabilities:
     dependencies:
       - startd8.kickoff.workbook_cockpit
 
+  # ============================================================================
+  # KICKOFF — Cloud Authorization Grant (temporarily re-enable cloud writes)
+  # ============================================================================
+
+  - capability_id: startd8.kickoff.cloud_grant
+    category: security
+    maturity: stable
+    summary: "Human-issued, use-limited, expiring, revocable, audited authorization that temporarily re-enables a --cloud kickoff deployment's otherwise-disabled agentic chat-write / capture / instantiate paths"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        A `--cloud` kickoff serve is read/preview-only by default (no per-tenant trust substrate). The
+        Cloud Authorization Grant lets an operator TEMPORARILY authorize specific write capabilities
+        without standing up full tenancy. Core (`kickoff_experience/cloud_grant.py`): a `GrantTarget
+        {deployment_id, project_id, capability}`-bound `CloudGrant` (default 1 use, TTL-bounded, revocable)
+        resolved by the FR-14 ORDERED AND-gate `evaluate_trust_chain` — a write is honored iff (api-key
+        valid, constant-time) AND (Origin ∈ configured) AND (a live grant resolves), consuming ONE use at
+        session creation (FR-7 single-atomic, consume-before-act, no refund) and REVALIDATING each turn
+        without re-consuming (FR-15). Issuance is out-of-band (the operator `cloud-grant` CLI with the
+        platform's identity, NR-6); the served app holds the store CONSUME-ONLY. Backends: JSON
+        `FileGrantStore` (fcntl flock) or `SqliteGrantStore` (`BEGIN IMMEDIATE` = the lock, `CHECK(uses>=0)`
+        floor, `consumer_only=True` structurally blocks `issue()`), chosen by store-path suffix via
+        `open_grant_store()`. The HUMAN DOOR (FR-E12): `cloud-grant issue --with-link` mints a one-time
+        magic link; `GET /kickoff/enter?t=…` redeems it (consume + burn, atomic) and drops a browser user
+        straight into the granted chat — no CLI, no X-API-Key header. Capabilities are parameterized:
+        `chat-write`, `capture`, and `instantiate` are each independently grantable (a grant for one never
+        authorizes another). Observability: fail-open OTel counters `startd8.cloud_grant.{issued,consumed,
+        denied{reason},revoked}` (FR-E4), a `cloud-grant-usage.dashboardspec.yaml` board (FR-E5), and
+        Prometheus denial-reason alert rules (FR-E22). Every issue/consume/redeem/revoke is appended to a
+        fail-closed JSONL audit log. `cloud-grant invite` packages the whole remote-onboarding flow in one
+        command (grant + link + serve command + review/apply playbook).
+      agent: |
+        # operator (out-of-band, platform identity):
+        startd8 cloud-grant issue --for-serve ./proj --deployment prod-1 --capability chat-write --with-link --serve-url https://app
+        startd8 cloud-grant invite --for-serve ./proj --serve-url https://app --cloud-origin https://app --deployment prod-1 --issued-by you  # one-command playbook
+        startd8 cloud-grant list|status|revoke <id>|gc
+        # served app consumes (never issues): kickoff start --cloud --api-key … --grant-store … --deployment-id … --cloud-origin …
+        # trust chain: api-key ∧ Origin ∧ live-grant → consume 1 use at session creation, revalidate per turn (no re-consume)
+    triggers: ["cloud grant", "cloud-grant", "temporary authorization", "magic link", "remote onboarding", "kickoff enter", "grant store", "cloud chat write", "use-limited token", "expiring grant", "human door"]
+    inputs:
+      type: object
+      required: [deployment_id, project_id, capability]
+      properties:
+        deployment_id: { type: string }
+        project_id: { type: string }
+        capability: { type: string, enum: ["chat-write", "capture", "instantiate"] }
+        uses: { type: integer, default: 1 }
+        ttl_seconds: { type: number }
+    outputs:
+      type: object
+      properties:
+        allowed: { type: boolean }
+        reason: { type: string, description: "typed GrantDeny on denial (absent/expired/exhausted/revoked/target_mismatch/store_unavailable/clock_untrusted/api_key_invalid/origin_rejected)" }
+        grant_id: { type: string }
+        uses_remaining_after: { type: integer }
+    evidence:
+      - type: code
+        ref: src/startd8/kickoff_experience/cloud_grant.py
+        description: "CloudGrant, GrantStore/FileGrantStore/SqliteGrantStore, evaluate_trust_chain, redeem_link, GrantMetrics, AuditLog"
+      - type: code
+        ref: src/startd8/cli_cloud_grant.py
+        description: "operator control-plane CLI — issue/revoke/list/status/gc/invite (--with-link, --for-serve)"
+      - type: code
+        ref: src/startd8/kickoff_experience/cloud_grant_alerts.py
+        description: "FR-E22 Prometheus denial-reason alert rules (source of truth + renderer)"
+      - type: code
+        ref: src/startd8/kickoff_experience/web.py
+        description: "_cloud_capability seam + _cloud_revalidate + GET /kickoff/enter human door + capability-parameterized write gates"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_cloud_trust_chain.py
+        description: "the FR-14 ordered AND-gate truth table"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_cloud_human_door.py
+        description: "magic-link redeem (consume+burn), one-time, host-confined, no-oracle, route absent on non-grant build"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_cloud_grant_capabilities.py
+        description: "capture/instantiate grantable via the same chain; capability isolation; consume-one-use"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_cloud_grant_sqlite.py
+        description: "SQLite backend — DB-as-lock, CHECK floor, consumer_only cannot issue"
+      - type: doc
+        ref: docs/design/kickoff/CLOUD_MIRROR_GRANT_REQUIREMENTS.md
+        description: "grant primitive + trust chain spec"
+      - type: doc
+        ref: docs/design/kickoff/REMOTE_ONBOARDING_GUIDE.md
+        description: "the packaged headline flow (FR-E15)"
+      - type: adr
+        ref: docs/design/kickoff/ADR_E19_SURFACE_AUTH.md
+        description: "why the trust chain is NOT lifted into a shared middleware (surfaces diverge); conformance test instead"
+    confidence: 0.95
+    anti_patterns:
+      - "Never issue grants from the served app — issuance is the operator CLI (NR-6); the served app is consume-only."
+      - "Don't refund a consumed use — a refund is a replay vector (forfeit-on-failure is the anti-replay guarantee)."
+      - "Don't treat a magic link as reusable — it is one-time (burned on redemption) + expiring; serve over HTTPS."
+    dependencies:
+      - startd8.kickoff.workbook_cockpit
+
+  # ============================================================================
+  # KICKOFF — Portfolio readiness board (multi-project)
+  # ============================================================================
+
+  - capability_id: startd8.kickoff.portfolio
+    category: query
+    maturity: stable
+    summary: "$0 offline scan of a workspace of projects that ranks each by readiness (build-ready / in-progress / stuck / not-started) from the shared AgenticView oracle"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        `kickoff portal --index` builds a Grafana dashlist (a link-list of Workbooks) with no readiness.
+        The portfolio board (`kickoff_experience/portfolio.py`) adds the missing half: `discover_projects()`
+        finds every directory under a workspace holding a `docs/kickoff` package; `entry_from_view()` derives
+        each project's readiness from the SAME `AgenticView` read-model the cockpit/readout use (one oracle,
+        no drift) — classifying build-ready / in-progress / stuck / not-started and ranking build-ready first,
+        stuck flagged. Rendered as a shareable markdown table + a summary line, or a `kickoff.portfolio.v1`
+        JSON payload. $0, offline, deterministic; best-effort per project (a broken one → an honest
+        `unreadable` row, never a failed scan). Surfaced via `kickoff portal --index --scan <workspace>
+        [--json]`; additive — `--index` without `--scan` is the unchanged Grafana dashlist.
+      agent: |
+        startd8 kickoff portal --index --scan /path/to/workspace          # ranked markdown readiness board
+        startd8 kickoff portal --index --scan /path/to/workspace --json    # kickoff.portfolio.v1 payload
+    triggers: ["portfolio", "portfolio index", "multi-project", "readiness board", "who is stuck", "build-ready", "workspace scan", "kickoff index scan"]
+    evidence:
+      - type: code
+        ref: src/startd8/kickoff_experience/portfolio.py
+        description: "discover_projects, entry_from_view, scan_portfolio, render_portfolio_markdown, portfolio_to_dict"
+      - type: test
+        ref: tests/unit/kickoff_experience/test_portfolio.py
+        description: "classification, ranking, render (summary+rows), empty workspace, discover+scan integration"
+    confidence: 0.9
+    dependencies:
+      - startd8.kickoff.workbook_cockpit
+
+  # ============================================================================
+  # DEVELOPER TOOLING — environment self-check
+  # ============================================================================
+
+  - capability_id: startd8.sdk.doctor
+    category: observe
+    maturity: stable
+    summary: "`startd8 doctor` — environment self-check: which startd8 is actually running (editable vs a maybe-stale install), Python, provider keys (names only), doppler; non-zero exit on an actionable warning"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        A fast diagnostic (`cli_doctor.py`) motivated by the recurring venv-vs-global staleness trap: a
+        globally-installed `startd8` on PATH can be stale while an editable venv tracks the live source, so
+        a new flag/command "doesn't exist." Doctor surfaces which `startd8` is actually running (editable
+        live-source vs an installed copy, resolved from `startd8.__file__`), whether a nearby editable venv
+        would differ from the one on PATH, the Python interpreter, provider-key presence (names only, never
+        values), and doppler availability. Exits 0 when clean, 1 on an actionable warning (stale install /
+        no provider key).
+      agent: |
+        startd8 doctor    # exit 0 = clean; exit 1 = an actionable warning (stale install / no provider key)
+    triggers: ["doctor", "startd8 doctor", "environment check", "which startd8", "editable vs installed", "venv drift", "self-check", "diagnose"]
+    evidence:
+      - type: code
+        ref: src/startd8/cli_doctor.py
+        description: "run_doctor — install-kind detection, provider-key presence (names only), doppler probe"
+      - type: test
+        ref: tests/unit/test_cli_doctor.py
+        description: "reports version/install-kind; warns+exits-1 without a provider key"
+    confidence: 0.9
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -2050,25 +2212,29 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 63   # v1.21.0: +kickoff.report (oracle-as-API refinement pass)
+  total_capabilities: 66   # v1.25.0: +kickoff.cloud_grant, +kickoff.portfolio, +sdk.doctor
   by_maturity:
-    stable: 28     # v1.21.0: +1 (kickoff.report stable)
+    stable: 31     # v1.25.0: +3 (cloud_grant, portfolio, doctor all stable)
     beta: 35       # reconciled to actual (prior summary undercounted)
-  by_category:                 # v1.21.0: +query (kickoff.report)
+  by_category:                 # v1.25.0: +security/query/observe
     action: 19     # +agentic.session_snapshot, +kickoff.promotion
     generate: 16   # +kickoff.workbook_cockpit
     validate: 7
-    observe: 8     # +kickoff.activation, +kickoff.retrospective
+    observe: 9     # v1.25.0: +sdk.doctor
     integration: 6
-    query: 3       # +kickoff.report
+    query: 4       # v1.25.0: +kickoff.portfolio
     transform: 2
-    security: 2
+    security: 3    # v1.25.0: +kickoff.cloud_grant
 
 # ==============================================================================
 # CHANGELOG
 # ==============================================================================
 
 changelog:
+  - version: "1.25.0"
+    date: "2026-07-12"
+    changes:
+      - "+3 capabilities from clearing the Cloud-Authorization-Grant enhancements backlog E1–E22 (21 gate-verified PRs #198–218). (1) NEW startd8.kickoff.cloud_grant (security/stable, conf 0.95): a human-issued, use-limited, expiring, revocable, audited authorization that temporarily re-enables a --cloud kickoff deployment's otherwise-disabled agentic chat-write / capture / instantiate paths. FR-14 ordered AND-gate trust chain (api-key ∧ Origin ∧ live-grant, constant-time api-key compare after E19), FR-7 single-atomic consume + FR-15 per-turn revalidation, out-of-band operator issuance (NR-6) with a consume-only served app, JSON or SQLite backend (open_grant_store suffix-dispatch; SQLite adds BEGIN IMMEDIATE lock + CHECK(uses>=0) floor + consumer_only that structurally blocks issue()), the FR-E12 one-time MAGIC-LINK human door (GET /kickoff/enter — no CLI/api-key for the browser user), capability parameterization (chat-write/capture/instantiate independently grantable, no cross-authorization), fail-open OTel metrics (FR-E4) + dashboard spec (FR-E5) + denial-reason alerts (FR-E22), fail-closed JSONL audit, and a one-command `cloud-grant invite` remote-onboarding playbook (FR-E15). (2) NEW startd8.kickoff.portfolio (query/stable, conf 0.9): `kickoff portal --index --scan <workspace>` — a $0 offline scan ranking projects by readiness (build-ready/in-progress/stuck/not-started) from the shared AgenticView oracle; markdown board or kickoff.portfolio.v1 JSON (FR-E16). (3) NEW startd8.sdk.doctor (observe/stable, conf 0.9): `startd8 doctor` environment self-check — editable-vs-stale-install detection, provider-key presence (names only), python/doppler; non-zero exit on an actionable warning (FR-E10). Also (evidence-only, no count change): startd8.kickoff.workbook_cockpit gained E3 auto-provision-on-session-end + E13 verified/hardened readiness+cost burndown (real OTel Meter→Mimir, panel↔metric name-drift guard); startd8.kickoff.report/readout gained the FR-E14 'What was captured' field-value section. ADR: docs/design/kickoff/ADR_E19_SURFACE_AUTH.md (trust chain deliberately NOT lifted into a shared middleware — the 3 served surfaces diverge; a conformance test guards the one universal invariant instead, and caught a real != timing oracle). Verified: 21 PRs #198–218 on origin/main, main never drifted; 848 kickoff + 945 cross-surface tests green."
   - version: "1.24.0"
     date: "2026-07-11"
     changes:
