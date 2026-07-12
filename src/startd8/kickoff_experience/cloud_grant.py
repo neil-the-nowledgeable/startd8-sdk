@@ -62,6 +62,8 @@ class CloudGrant:
     issued_by: str             # issuer label (FR-6/FR-10) — attributable to the credential holder
     issued_at: float
     revoked: bool = False
+    link_token: Optional[str] = None   # FR-E12: a one-time browser bearer that authorizes redeeming
+    #                                    this grant via the human door (`--with-link`). None = no door.
 
     def is_live(self, now: float) -> Optional["GrantDeny"]:
         """None if live; otherwise the specific deny reason (FR-5). Does not consider uses."""
@@ -183,9 +185,13 @@ class GrantStore:
         ttl_seconds: float,
         now: float,
         issued_by: str,
+        link_token: "Optional[str]" = None,
     ) -> CloudGrant:
         """Mint a grant (default **1 use**, FR-2) expiring at ``now + ttl_seconds`` (FR-3). Persisted
-        before it is observable; a persist failure raises (issuance fails closed, FR-10)."""
+        before it is observable; a persist failure raises (issuance fails closed, FR-10).
+
+        *link_token* (FR-E12) binds a one-time browser bearer so the grant can be redeemed via the
+        human door; omit it for the programmatic (api-key + Origin) path — behavior is unchanged."""
         if uses < 1:
             raise ValueError("a grant must have at least 1 use")
         if ttl_seconds <= 0:
@@ -197,6 +203,7 @@ class GrantStore:
             expires_at=now + ttl_seconds,
             issued_by=issued_by,
             issued_at=now,
+            link_token=link_token,
         )
         with self._op():
             # audit BEFORE persist — an un-auditable issuance must not create a grant (fail-closed).
@@ -281,6 +288,63 @@ class GrantStore:
             return GrantDecision(
                 True, grant_id=grant.id, uses_remaining_after=consumed.uses_remaining
             )
+
+    # -- the human-door redemption (FR-E12): consume + BURN the one-time link token, atomically --
+    def redeem_link(
+        self,
+        token: str,
+        target: GrantTarget,
+        *,
+        now: float,
+        clock_trusted: bool = True,
+    ) -> GrantDecision:
+        """Redeem a one-time link *token* for *target*: resolve the grant it is bound to, **consume one
+        use AND burn the token** in a single locked critical section, and bind the returned ``grant_id``
+        to the browser session (per-turn actions then REVALIDATE it, no re-consume). Every failure —
+        unknown/burned token, wrong target, expired/revoked/exhausted grant — is a typed deny with **no
+        debit and no token burn** (the caller shows one generic message; no existence oracle, FR-6)."""
+        if not token or not clock_trusted:
+            return self._denied(GrantDeny.CLOCK_UNTRUSTED if token else GrantDeny.ABSENT)
+        try:
+            return self._redeem_link(token, target, now)
+        except StoreUnavailable:
+            return self._denied(GrantDeny.STORE_UNAVAILABLE)
+
+    def _redeem_link(self, token: str, target: GrantTarget, now: float) -> GrantDecision:
+        with self._op():
+            grant = self._find_by_link_token(token)
+            if grant is None:
+                return self._denied(GrantDeny.ABSENT)          # unknown or already-burned token
+            if grant.target != target:
+                return self._denied(GrantDeny.TARGET_MISMATCH)  # token for a different deployment/cap
+            live = grant.is_live(now)
+            if live is not None:
+                return self._denied(live)
+            if grant.uses_remaining <= 0:
+                return self._denied(GrantDeny.EXHAUSTED)
+            # consume one use AND burn the token together — the link is strictly one-time even if the
+            # grant has uses left; a re-click finds no token (ABSENT), never a partially-applied state.
+            redeemed = replace(grant, uses_remaining=grant.uses_remaining - 1, link_token=None)
+            try:
+                self._audit(event="redeem_link", grant_id=grant.id,
+                            uses_remaining_after=redeemed.uses_remaining, at=now)
+                self._persist(redeemed)                         # may raise StoreUnavailable
+            except StoreUnavailable:
+                return self._denied(GrantDeny.STORE_UNAVAILABLE)  # no debit, no burn — rollback
+            self._grants[grant.id] = redeemed                   # commit only after persist
+            self._emit_metric("consume")                        # FR-E4 (a session was created)
+            return GrantDecision(
+                True, grant_id=grant.id, uses_remaining_after=redeemed.uses_remaining
+            )
+
+    def _find_by_link_token(self, token: str) -> Optional[CloudGrant]:
+        """The grant whose (unburned) link token equals *token*, compared in constant time to avoid a
+        timing oracle. Returns None if none match (unknown or already-burned)."""
+        match: Optional[CloudGrant] = None
+        for g in self._grants.values():
+            if g.link_token is not None and secrets.compare_digest(g.link_token, token):
+                match = g
+        return match
 
     # -- per-action re-validation (per-turn/apply; NO consume, FR-15/OQ-7) --
     def revalidate(
@@ -424,7 +488,7 @@ class GrantMetrics:
 
 
 def _grant_to_dict(g: CloudGrant) -> dict:
-    return {
+    d = {
         "id": g.id,
         "deployment_id": g.target.deployment_id,
         "project_id": g.target.project_id,
@@ -435,6 +499,9 @@ def _grant_to_dict(g: CloudGrant) -> dict:
         "issued_at": g.issued_at,
         "revoked": bool(g.revoked),
     }
+    if g.link_token is not None:   # FR-E12: absent key ⇒ byte-identical to a pre-FR-E12 grant (FR-8)
+        d["link_token"] = g.link_token
+    return d
 
 
 def _grant_from_dict(d: dict) -> CloudGrant:
@@ -446,6 +513,7 @@ def _grant_from_dict(d: dict) -> CloudGrant:
         issued_by=str(d.get("issued_by", "")),
         issued_at=float(d.get("issued_at", 0.0)),
         revoked=bool(d.get("revoked", False)),
+        link_token=(str(d["link_token"]) if d.get("link_token") is not None else None),
     )
 
 

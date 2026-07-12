@@ -691,7 +691,7 @@ def build_kickoff_app(
     static ``server/auth.py`` ``X-API-Key`` middleware gates mutation (POST) requests — reused as
     the coarse cloud auth, **not** a new tenancy model (OQ-GE-7).
     """
-    from fastapi import Cookie, FastAPI, Form, Header
+    from fastapi import Cookie, FastAPI, Form, Header, Query
     from fastapi.responses import HTMLResponse, JSONResponse, Response
 
     from ..presentation_polish import get_theme, render_stylesheet
@@ -1249,6 +1249,55 @@ def build_kickoff_app(
         resp.set_cookie("kickoff_chat", chat_sid, httponly=True, samesite="strict")
         resp.set_cookie("kickoff_csrf", csrf, httponly=True, samesite="strict")
         return resp
+
+    # FR-E12 — the human door. Only registered on a grant-capable cloud build (byte-identical route
+    # table otherwise). Lets a human CLICK a one-time link to open the granted chat without crafting the
+    # X-API-Key header the programmatic path needs: possession of the link is the authorization proof.
+    if cloud and _grant_store is not None:
+        def _redeem_host_ok(host_header: Optional[str]) -> bool:
+            """FR-5: confine redemption to a configured/loopback host (a leaked link can't be redeemed
+            against an unexpected host)."""
+            if _host_ok(host_header):                    # loopback always allowed (local cloud)
+                return True
+            if not host_header:
+                return False
+            from urllib.parse import urlsplit
+            req = host_header.split(":", 1)[0].strip().lower()
+            return any((urlsplit(o).hostname or "").lower() == req for o in _cloud_origins)
+
+        def _link_invalid_page() -> HTMLResponse:
+            """FR-6: ONE generic response for every failure — no oracle distinguishing unknown vs used
+            vs expired vs wrong-host."""
+            return HTMLResponse(
+                _page("Kickoff — link",
+                      "<h1>This link is invalid, expired, or already used</h1>"
+                      "<p>Magic links are one-time and short-lived. Ask your operator for a fresh "
+                      "link (<code>startd8 cloud-grant issue --with-link</code>).</p>", stylesheet),
+                status_code=403, headers=dict(_FRAME_DENY_HEADERS))
+
+        @app.get("/kickoff/enter", response_class=HTMLResponse)
+        def kickoff_enter(t: str = Query(default=""),
+                          host: Optional[str] = Header(default=None)) -> HTMLResponse:
+            if chat_factory is None or mode in ("preview", "inspect"):
+                return _link_invalid_page()              # nothing to open → same generic page (no oracle)
+            if not _redeem_host_ok(host):
+                return _link_invalid_page()
+            from .cloud_grant import GrantTarget
+            target = GrantTarget(_deployment_id, _project_id, "chat-write")
+            decision = _grant_store.redeem_link(t, target, now=_grant_clock())
+            if not decision.allowed:
+                return _link_invalid_page()
+            # Mint the SAME session chat_page mints — but on the human's behalf (they never sent api-key).
+            # The link burn + grant consume already happened atomically; the token in the URL is now dead.
+            now = clock()
+            chat_sid = sessions.issue(now)
+            csrf = sessions.issue(now)
+            chats.put(chat_sid, chat_factory())
+            _session_grants[chat_sid] = (decision.grant_id, target)   # per-turn REVALIDATES (no re-consume)
+            resp = HTMLResponse(_render_chat_page(csrf, stylesheet), headers=dict(_FRAME_DENY_HEADERS))
+            resp.set_cookie("kickoff_chat", chat_sid, httponly=True, samesite="strict")
+            resp.set_cookie("kickoff_csrf", csrf, httponly=True, samesite="strict")
+            return resp
 
     def _chat_for(kickoff_chat: Optional[str]):
         """Resolve the live chat from the `kickoff_chat` cookie (FR-WM2-5a). A missing/unknown cookie
