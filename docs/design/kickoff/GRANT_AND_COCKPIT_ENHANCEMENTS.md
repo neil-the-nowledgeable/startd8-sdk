@@ -119,8 +119,14 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
   headline flow is documented in **`REMOTE_ONBOARDING_GUIDE.md`**.
 - **FR-E16 (M, P2) — Richer portfolio view** — `kickoff portal --index` → a real multi-project readiness
   board (who's stuck, who's build-ready).
-- **FR-E18 (S–M, P2) — Generalize the grant to more capabilities** — the `capability` string is already
-  parameterized; wire `capture`/`instantiate` under a grant to extend the parity story.
+- **FR-E18 (S–M, P2) — Generalize the grant to more capabilities. ✅ SHIPPED.** `capture` and
+  `instantiate` are now grantable on cloud via the SAME FR-14 trust chain as chat-write: the request's
+  `X-API-Key` + `Origin` are threaded into `capture_apply` and (via a `capability`-parameterized
+  `_concierge_write_gate`) `instantiate`, so a grant for that capability resolves + **consumes one use**
+  per write. On cloud the trust chain replaces the local loopback-Host/CSRF chain (parity with
+  chat-write); **local is byte-identical** and un-opted-in writes (friction/audience) still defer. A
+  grant for one capability never authorizes another. Operators grant them with the existing
+  `cloud-grant issue --capability capture|instantiate` (no CLI change needed).
 
 ### Tier 3 — architectural
 

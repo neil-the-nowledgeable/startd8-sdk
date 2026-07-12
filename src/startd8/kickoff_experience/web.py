@@ -854,9 +854,12 @@ def build_kickoff_app(
         value_path: str = Form(...),
         value: str = Form(...),
         csrf: str = Form(...),
+        x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+        origin: Optional[str] = Header(default=None),
     ) -> JSONResponse:
-        # GE-M5 cloud read-only gate (FR-GE-8) via the M1 seam: cloud never writes — deferred to OQ-GE-7.
-        if not _cloud_capability("capture").allowed:
+        # E18: on cloud, writing a captured value is grantable under the `capture` capability
+        # (api-key ∧ Origin ∧ grant, one use consumed). Without a grant it stays deferred (OQ-GE-7).
+        if not _cloud_capability("capture", req_api_key=x_api_key, req_origin=origin).allowed:
             return _cloud_deferred("capture")
         # Feature-mode gate (R4-F5): preview/inspect modes cannot reach apply_write_plan.
         if mode in ("preview", "inspect"):
@@ -866,16 +869,19 @@ def build_kickoff_app(
                 status_code=403,
             )
         now = clock()
-        if not sessions.valid(csrf, now):
-            return JSONResponse(
-                {"ok": False, "code": "session_expired", "message": "invalid or expired token"},
-                status_code=403,
-            )
-        if not sessions.rate_ok(csrf, now):
-            return JSONResponse(
-                {"ok": False, "code": "rate_limited", "message": "too many captures; slow down"},
-                status_code=429,
-            )
+        # The CSRF + rate chain is a LOCAL browser defense (cookie-keyed); on cloud the api-key + Origin
+        # + grant IS the auth and the grant's use-limit is the rate bound, so it is skipped there.
+        if not cloud:
+            if not sessions.valid(csrf, now):
+                return JSONResponse(
+                    {"ok": False, "code": "session_expired", "message": "invalid or expired token"},
+                    status_code=403,
+                )
+            if not sessions.rate_ok(csrf, now):
+                return JSONResponse(
+                    {"ok": False, "code": "rate_limited", "message": "too many captures; slow down"},
+                    status_code=429,
+                )
         from .telemetry import EV_CAPTURE_FAILED, EV_GAP_CLOSED, emit, kickoff_span
 
         with kickoff_span("kickoff.capture", value_path=value_path):
@@ -996,10 +1002,24 @@ def build_kickoff_app(
     )
     from .concierge_view import build_concierge_view
 
-    def _concierge_write_gate(host: Optional[str], csrf: str, now: float):
-        """Shared gate for Concierge write POSTs: cloud, mode, loopback Host, CSRF, rate-limit."""
-        if not _cloud_capability("concierge-write").allowed:  # GE-M5 via the seam — deferred (OQ-GE-7)
-            return _cloud_deferred()
+    def _concierge_write_gate(host: Optional[str], csrf: str, now: float, *,
+                              capability: str = "concierge-write",
+                              req_api_key=_NO_CTX, req_origin=_NO_CTX):
+        """Shared gate for Concierge write POSTs.
+
+        **Local:** the full mode / loopback-Host / CSRF / rate chain (byte-identical to before).
+        **Cloud (E18):** the loopback-Host + local-CSRF chain is a LOCAL trust factor, replaced by the
+        FR-14 trust chain — a write is permitted iff a live grant for *capability* resolves
+        (api-key ∧ Origin ∧ grant), **consuming one use** (parity with chat-write). A caller that
+        supplies no ``req_api_key`` context denies on cloud, exactly as today (so friction/audience,
+        which don't opt in, stay deferred)."""
+        if cloud:
+            if not _cloud_capability(capability, req_api_key=req_api_key, req_origin=req_origin).allowed:
+                return _cloud_deferred()
+            if mode in ("preview", "inspect"):
+                return JSONResponse({"ok": False, "code": "preview_only",
+                                     "message": f"mode {mode!r} is read/preview only"}, status_code=403)
+            return None
         if mode in ("preview", "inspect"):
             return JSONResponse({"ok": False, "code": "preview_only",
                                  "message": f"mode {mode!r} is read/preview only"}, status_code=403)
@@ -1123,10 +1143,15 @@ def build_kickoff_app(
 
     @app.post("/concierge/instantiate")
     def instantiate(posture: str = Form("prototype"), csrf: str = Form(...),
-                    intent: str = Form(...), host: Optional[str] = Header(default=None)) -> JSONResponse:
+                    intent: str = Form(...), host: Optional[str] = Header(default=None),
+                    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+                    origin: Optional[str] = Header(default=None)) -> JSONResponse:
         from .telemetry import EV_CONCIERGE_WRITE_REFUSED, EV_KICKOFF_INSTANTIATED, emit, kickoff_span
 
-        gate = _concierge_write_gate(host, csrf, clock())
+        # E18: on cloud, scaffolding the kickoff package is grantable under the `instantiate` capability
+        # (api-key ∧ Origin ∧ grant, one use consumed); local keeps the loopback-Host + CSRF chain.
+        gate = _concierge_write_gate(host, csrf, clock(), capability="instantiate",
+                                     req_api_key=x_api_key, req_origin=origin)
         if gate is not None:
             return gate
         try:
