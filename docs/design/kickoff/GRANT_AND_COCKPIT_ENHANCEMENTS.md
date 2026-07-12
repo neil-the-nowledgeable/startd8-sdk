@@ -77,7 +77,11 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
 - **FR-E20 (S, P2) — Health/readiness endpoint** on the cloud serve for a load balancer.
 - **FR-E21 (S, P2) — `kickoff serve-cloud` wrapper** — grant-capable serve with sane defaults that prints
   the operator's next step (`cloud-grant issue --for-serve .`). Ties the operator flow together.
-- **FR-E22 (S, P2) — Grant alerts** (depends on FR-E4): near-expiry, denial-rate spike (misconfig/abuse).
+- **FR-E22 (S, P2) — Grant alerts. ✅ SHIPPED.** `cloud_grant_alerts.py` (source of truth) +
+  `cloud-grant-alerts.rules.yaml` (committed Prometheus rule group, drift-guarded by test). 6 rules on
+  the FR-E4 `denied{reason}` counter: origin/api-key **probing** (critical), **store-unavailable** infra
+  (critical), aggregate **denial spike** (warning), and **expired/exhausted-in-use** reissue signals
+  (the near-expiry proxy — fires when expiry actually bites, no new gauge needed). Self-contained.
 
 ### Tier 2 — M-effort higher-value outputs
 

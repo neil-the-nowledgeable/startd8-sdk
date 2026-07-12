@@ -1,0 +1,83 @@
+# FR-E22 — Cloud Authorization Grant alert rules.
+# GENERATED from startd8.kickoff_experience.cloud_grant_alerts — do not hand-edit; edit the
+# module + re-render. Fires on the FR-E4 startd8_cloud_grant_denied_total{reason} counter.
+# Provision into Prometheus/Mimir alerting (loaded like any rule file).
+
+groups:
+- name: cloud-grant.alerts
+  rules:
+  - alert: CloudGrantOriginProbing
+    expr: sum(rate(startd8_cloud_grant_denied_total{reason="origin_rejected"}[5m]))
+      > 0.1
+    for: 5m
+    labels:
+      severity: critical
+      component: cloud-grant
+    annotations:
+      summary: Cloud-grant requests from an unconfigured Origin
+      description: "Sustained origin_rejected denials \u2014 a leaked or guessed /kickoff/enter\
+        \ endpoint is being probed from an Origin not in the configured allow-list.\
+        \ Investigate the source; rotate the link/grant if a token leaked."
+      source: startd8.cloud_grant (FR-E4 metrics)
+  - alert: CloudGrantApiKeyProbing
+    expr: sum(rate(startd8_cloud_grant_denied_total{reason="api_key_invalid"}[5m]))
+      > 0.1
+    for: 5m
+    labels:
+      severity: critical
+      component: cloud-grant
+    annotations:
+      summary: Cloud-grant requests with an invalid API key
+      description: "Sustained api_key_invalid denials \u2014 credential guessing against\
+        \ the programmatic grant path. Confirm the consumer key hasn't leaked; consider\
+        \ rotating it."
+      source: startd8.cloud_grant (FR-E4 metrics)
+  - alert: CloudGrantStoreUnavailable
+    expr: sum(rate(startd8_cloud_grant_denied_total{reason="store_unavailable"}[5m]))
+      > 0
+    for: 5m
+    labels:
+      severity: critical
+      component: cloud-grant
+    annotations:
+      summary: Cloud-grant store cannot be read/written
+      description: "store_unavailable denials mean the grant store (file/SQLite) is\
+        \ failing \u2014 an INFRA fault, not the caller. Grants fail closed (deny),\
+        \ so the door is down. Check the store path, permissions, and disk."
+      source: startd8.cloud_grant (FR-E4 metrics)
+  - alert: CloudGrantDenialSpike
+    expr: sum(rate(startd8_cloud_grant_denied_total[5m])) > 0.2
+    for: 10m
+    labels:
+      severity: warning
+      component: cloud-grant
+    annotations:
+      summary: Elevated cloud-grant denial rate
+      description: "Aggregate denial rate is elevated across all reasons \u2014 misconfiguration\
+        \ or abuse. Break down by `reason` (see the Cloud Grant Usage dashboard) to\
+        \ classify."
+      source: startd8.cloud_grant (FR-E4 metrics)
+  - alert: CloudGrantExpiredInUse
+    expr: sum(rate(startd8_cloud_grant_denied_total{reason="expired"}[5m])) > 0
+    for: 5m
+    labels:
+      severity: warning
+      component: cloud-grant
+    annotations:
+      summary: A client is hitting an expired cloud grant (reissue)
+      description: expired denials while the deployment is in use = a session/link
+        outlived its grant (the near-expiry signal). Issue a fresh grant/link (`cloud-grant
+        issue`).
+      source: startd8.cloud_grant (FR-E4 metrics)
+  - alert: CloudGrantExhaustedInUse
+    expr: sum(rate(startd8_cloud_grant_denied_total{reason="exhausted"}[5m])) > 0
+    for: 5m
+    labels:
+      severity: info
+      component: cloud-grant
+    annotations:
+      summary: A client is hitting an exhausted cloud grant (reissue)
+      description: exhausted denials = the grant's uses are spent while clients still
+        arrive. Issue a fresh grant, or raise `--uses` when the workload warrants
+        it.
+      source: startd8.cloud_grant (FR-E4 metrics)
