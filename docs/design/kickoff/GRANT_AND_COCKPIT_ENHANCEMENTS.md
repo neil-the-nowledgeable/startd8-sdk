@@ -104,8 +104,13 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
   separately" (unautomated). This PR adds the missing tests — view→gauge (unmocked), an OTel in-memory
   export smoke, and a **name-drift guard** tying the panel PromQL to the emitted gauge names (the single
   failure that silently blanks the burndown).
-- **FR-E14 (M, P2) — Exportable kickoff report** — "what was captured, what's blocked, proposed next
-  actions" as shareable markdown/PDF. A tangible artifact for the project owner.
+- **FR-E14 (M, P2) — Exportable kickoff report. ✅ SHIPPED (was mostly built; completed).** The
+  `startd8 kickoff readout` command + `readout.py` already exported a self-contained shareable document
+  (Markdown / printable HTML → PDF-via-print / JSON, `--out`, `--full` for "how it got here" + "what's
+  left"), covering **what's blocked** (activation) and **proposed next actions** (Proposals + Next step).
+  The gap was **"what was captured"** — the report showed readiness *counts*, not the actual input
+  *values*. Added a **"What was captured"** section (md + HTML, XSS-escaped, additive/byte-preserving
+  when empty) listing the captured field values — the substance a project owner actually shares.
 - **FR-E15 (M, P1) — Packaged "remote onboarding" workflow (mostly docs/assembly).** Operator issues a
   bounded/audited grant → remote stakeholder runs a session → mirrored + audited → operator reviews
   proposals in the cockpit → applies via VIPP. The pieces exist; package + document the headline flow.

@@ -66,6 +66,28 @@ def _md_cell(text: str) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ").replace("`", "ʼ")
 
 
+def _snippet(value: Any, limit: int = 160) -> str:
+    """A compact one-line string for a captured field value (dict/list/scalar), truncated for a table."""
+    s = " ".join(str(value).split())
+    return s if len(s) <= limit else s[: limit - 1] + "…"
+
+
+def _captured_fields(view: Any) -> list:
+    """The kickoff inputs that actually have a value (what the owner *captured*), value_path-sorted."""
+    state = view.state
+    fields = getattr(state, "fields", None) if state is not None else None
+    if not fields:
+        return []
+    return sorted((f for f in fields if getattr(f, "value", None) is not None),
+                  key=lambda f: f.value_path)
+
+
+def _unset_count(view: Any) -> int:
+    state = view.state
+    fields = getattr(state, "fields", None) if state is not None else None
+    return sum(1 for f in (fields or []) if getattr(f, "value", None) is None)
+
+
 def _project_name(view: Any) -> str:
     """A human-friendly project label from the view (snapshot project, else the root basename)."""
     snap = view.snapshot
@@ -102,6 +124,24 @@ def _md_status(view: Any, lines: List[str]) -> None:
         if detail:
             line += f"\n\n> {_md_cell(detail)}"
         lines.append(line + "\n")
+
+
+def _md_captured(view: Any, lines: List[str]) -> None:
+    """"What was captured" — the actual field values, the substance of the artifact (FR-E14). Additive:
+    emitted only when at least one input has a value, so an empty session is byte-identical to before."""
+    captured = _captured_fields(view)
+    if not captured:
+        return
+    lines.append("## What was captured\n")
+    lines.append("| Input | Value |")
+    lines.append("|---|---|")
+    for f in captured:
+        lines.append(f"| `{_md_cell(f.value_path)}` | {_md_cell(_snippet(f.value))} |")
+    unset = _unset_count(view)
+    if unset:
+        lines.append(f"\n_{unset} input(s) not yet captured — run with `--full` to see what's left._\n")
+    else:
+        lines.append("")
 
 
 def _md_assistant(view: Any, lines: List[str]) -> None:
@@ -230,6 +270,7 @@ def render_markdown(view: Any, full: bool = False) -> str:
         lines.append("_No kickoff inputs yet._\n")
 
     _md_status(view, lines)
+    _md_captured(view, lines)
     _md_assistant(view, lines)
     _md_proposals(view, lines)
     _md_pipeline(view, lines)
@@ -285,6 +326,23 @@ def _html_status(view: Any, out: List[str]) -> None:
         detail = getattr(na, "detail", "")
         if detail:
             out.append(f"<blockquote>{_e(detail)}</blockquote>")
+    out.append("</section>")
+
+
+def _html_captured(view: Any, out: List[str]) -> None:
+    """"What was captured" — the field values (FR-E14). Every value html.escape'd (XSS gate). Additive."""
+    captured = _captured_fields(view)
+    if not captured:
+        return
+    out.append("<section><h2>What was captured</h2>")
+    out.append("<table><thead><tr><th>Input</th><th>Value</th></tr></thead><tbody>")
+    for f in captured:
+        out.append(f"<tr><td><code>{_e(f.value_path)}</code></td><td>{_e(_snippet(f.value))}</td></tr>")
+    out.append("</tbody></table>")
+    unset = _unset_count(view)
+    if unset:
+        out.append(f"<p class='muted'>{unset} input(s) not yet captured — use <code>--full</code> "
+                   "to see what's left.</p>")
     out.append("</section>")
 
 
@@ -458,6 +516,7 @@ def render_html(view: Any, full: bool = False) -> str:
         out.append("<p class='muted'>No kickoff inputs yet.</p>")
 
     _html_status(view, out)
+    _html_captured(view, out)
     _html_assistant(view, out)
     _html_proposals(view, out)
     _html_pipeline(view, out)
