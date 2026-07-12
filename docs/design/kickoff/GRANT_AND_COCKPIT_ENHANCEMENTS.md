@@ -92,9 +92,18 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
   `chat_page` does, and drops the human straight into the granted chat — no CLI, no X-API-Key header.
   Host-confined, no-oracle failures, revoke kills the door, per-turn revalidation unchanged. Minimal
   local-cloud scope (single-user); multi-user/IdP deferred. Un-strands the cloud grant's value.
-- **FR-E13 (M, P1) — Real readiness + cost burndown in the cockpit.** Emit `kickoff_completeness_ratio`
-  + per-session cost to Mimir (the designed kickoff-portal M1 seam) so the cockpit's time-series panels
-  show **real progress**, not baked `vector()` values.
+- **FR-E13 (M, P1) — Real readiness + cost burndown in the cockpit. ✅ SHIPPED (was already built;
+  verified + hardened).** Investigation found the live-data path is **complete**, contrary to the old
+  spike note: `metrics.py` emits `kickoff.readiness.percent` (the completeness ratio — shipped under
+  this name, not the doc's placeholder `kickoff_completeness_ratio`) + `kickoff.session.cost_usd`
+  (+ proposals/blocked/facilitation) as real OTel gauges; `_gauges()` calls `auto_configure_otel()`
+  (MeterProvider→OTLP→Mimir); `record_from_view` fires on **every** `build_workbook_v2_and_maybe_provision`
+  (so E3's auto-provision now drives it); and the v2 cockpit's **"Readiness over time" + "Cost over
+  time"** Mimir timeseries panels query `kickoff_readiness_percent` / `kickoff_session_cost_usd`. **No
+  baked `vector()` anywhere.** The real gap was *coverage*: the emit→export path was "live-verified
+  separately" (unautomated). This PR adds the missing tests — view→gauge (unmocked), an OTel in-memory
+  export smoke, and a **name-drift guard** tying the panel PromQL to the emitted gauge names (the single
+  failure that silently blanks the burndown).
 - **FR-E14 (M, P2) — Exportable kickoff report** — "what was captured, what's blocked, proposed next
   actions" as shareable markdown/PDF. A tangible artifact for the project owner.
 - **FR-E15 (M, P1) — Packaged "remote onboarding" workflow (mostly docs/assembly).** Operator issues a
