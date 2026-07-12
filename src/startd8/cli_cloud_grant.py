@@ -163,6 +163,98 @@ def issue(
         )
 
 
+@cloud_grant_app.command("invite")
+def invite(
+    for_serve: Path = typer.Option(
+        ..., "--for-serve",
+        help="Served project root — project_id is its directory name (issue↔serve can't drift, FR-E1).",
+    ),
+    serve_url: str = typer.Option(
+        ..., "--serve-url", help="Base URL the remote user reaches (e.g. https://app.example).",
+    ),
+    cloud_origin: str = typer.Option(
+        ..., "--cloud-origin", help="The allowed cloud Origin (the FR-14 Origin factor).",
+    ),
+    issued_by: str = typer.Option(..., "--issued-by", help="Issuer label (attribution)."),
+    deployment: str = typer.Option(
+        "", "--deployment", envvar="STARTD8_DEPLOYMENT_ID", help="Deployment id the grant binds to.",
+    ),
+    agent: str = typer.Option(
+        "anthropic:claude-sonnet-4-6", "--agent", help="Agent spec for the served chat panel.",
+    ),
+    api_key: Optional[str] = typer.Option(
+        None, "--api-key", help="Consumer api-key the server requires (a random one is generated if omitted).",
+    ),
+    uses: int = typer.Option(1, "--uses", help="Max uses (default 1)."),
+    ttl: str = typer.Option("1h", "--ttl", help="Lifetime — seconds or human (900, 15m, 1h, 1d)."),
+    capability: str = typer.Option(_DEFAULT_CAPABILITY, "--capability", help="Granted capability."),
+    store: Path = typer.Option(
+        Path(_DEFAULT_STORE), "--store", envvar="STARTD8_GRANT_STORE", help="Grant store path.",
+    ),
+    audit: Path = typer.Option(
+        Path(_DEFAULT_AUDIT), "--audit", envvar="STARTD8_GRANT_AUDIT", help="Append-only audit log.",
+    ),
+) -> None:
+    """FR-E15 — package the whole remote-onboarding flow in one step.
+
+    Issues a bounded/audited grant + a one-time magic link, generates the consumer key, and prints the
+    **operator playbook**: the exact serve command, the link to send the stakeholder, and how to review
+    (cockpit) + apply (VIPP). Nothing new under the hood — it assembles the shipped pieces (grant
+    issuance, the FR-E12 human door, --mirror-cockpit, audit) so the operator runs one command instead
+    of stitching together the grant CLI + serve flags. See `docs/design/kickoff/REMOTE_ONBOARDING_GUIDE.md`.
+    """
+    import secrets as _secrets
+
+    from .kickoff_experience.cloud_grant import GrantTarget
+
+    project = for_serve.resolve().name
+    if not deployment:
+        console.print("[red]provide --deployment (or set STARTD8_DEPLOYMENT_ID)[/red]")
+        raise typer.Exit(2)
+    key = api_key or ("sk-kickoff-" + _secrets.token_urlsafe(24))
+    link_token = _secrets.token_urlsafe(32)
+    base = serve_url.rstrip("/")
+    try:
+        ttl_seconds = _parse_ttl(ttl)
+        s = _open_store(store, audit)
+        g = s.issue(
+            GrantTarget(deployment, project, capability),
+            uses=uses, ttl_seconds=ttl_seconds, now=time.time(), issued_by=issued_by,
+            link_token=link_token,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    except Exception as exc:
+        console.print(f"[red]invite failed[/red] (fail-closed — no grant written): {exc}")
+        raise typer.Exit(1)
+
+    link = f"{base}/kickoff/enter?t={link_token}"
+    serve_cmd = (
+        f"startd8 kickoff start {for_serve} --cloud --agent {agent} --api-key {key} "
+        f"--grant-store {store} --deployment-id {deployment} --cloud-origin {cloud_origin}"
+    )
+    console.print("[bold]Remote onboarding invite ready (FR-E15)[/bold]")
+    console.print(
+        f"[dim]grant {g.id} · target {deployment}/{project}/{capability} · uses={g.uses_remaining} · "
+        f"expires {_fmt_expiry(g.expires_at)}[/dim]\n"
+    )
+    console.print("[bold]1. Start the server[/bold] (you, on the deployment host):")
+    console.print(f"   [cyan]{serve_cmd}[/cyan]\n")
+    console.print("[bold]2. Send this ONE-TIME link to the stakeholder[/bold] "
+                  "(opens the chat — no CLI, no key on their side):")
+    console.print(f"   [cyan]{link}[/cyan]\n")
+    console.print("[bold]3. Review what they proposed[/bold] (their session mirrors to the cockpit):")
+    console.print(f"   [cyan]startd8 kickoff proposals {for_serve}[/cyan]   ·   "
+                  "or the Grafana cockpit (`kickoff portal --dynamic --provision <grafana>`)\n")
+    console.print("[bold]4. Apply the ones you accept[/bold] (human-gated writes):")
+    console.print("   [cyan]startd8 vipp negotiate[/cyan]  →  [cyan]startd8 vipp apply[/cyan]\n")
+    console.print(
+        f"[yellow]⚠ the link AND the api-key are secrets (serve over HTTPS). One-time, expiring, "
+        f"revocable:[/yellow] [cyan]startd8 cloud-grant revoke {g.id}[/cyan]"
+    )
+
+
 @cloud_grant_app.command("revoke")
 def revoke(
     grant_id: str = typer.Argument(..., help="The grant id to revoke (immediately void)."),
