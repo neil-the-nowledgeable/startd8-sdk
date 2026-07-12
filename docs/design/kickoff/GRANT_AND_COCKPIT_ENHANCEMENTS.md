@@ -49,11 +49,20 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
 - **FR-E3 (S, P1) — Auto-provision the cockpit on session end (opt-in). ✅ SHIPPED.** After a `kickoff chat` /
   concierge session, call `build_workbook_v2_and_maybe_provision` beside the existing snapshot persist
   (gated by a `--provision <url>` / config), so the cockpit refreshes without a manual step.
-- **FR-E4 (S–M, P1) — Grant events → OTel metrics.** Behind the `_audit` hook, emit
-  `cloud_grant_issued_total`, `_consumed_total`, `_denied_total{reason}`, `_expired_total`,
-  `_uses_remaining` — reusing `costs/otel_metrics.py`. Fail-open (never breaks the grant).
-- **FR-E5 (S, P2) — Grant-usage Grafana panel** (depends on FR-E4): issued/consumed/denied-by-reason
-  over time, live-grant count. Via the dashboard pipeline (no raw JSON).
+- **FR-E4 (S–M, P1) — Grant events → OTel metrics. ✅ SHIPPED.** A `GrantMetrics` sink
+  (`cloud_grant.py`) wired as the `GrantStore(metrics=…)` callback emits four counters:
+  `startd8.cloud_grant.{issued,consumed,denied,revoked}` — `denied` **labelled by `reason`** (the
+  `GrantDeny` value: `absent`/`expired`/`exhausted`/`revoked`/`target_mismatch`/`store_unavailable`/
+  `clock_untrusted`/`api_key_invalid`/`origin_rejected`), captured at every deny path (incl. the
+  trust-chain auth-layer denials) via a single `_denied()` choke point. **Fail-OPEN** (distinct from
+  the fail-CLOSED audit hook): a telemetry error never affects a grant. Wired in the issuance CLI
+  (`cli_cloud_grant._open_store` → issue/revoke) and the served app (`cli_kickoff.start_cmd` →
+  consume/deny). A no-op if OTel has no MeterProvider configured.
+- **FR-E5 (S, P2) — Grant-usage Grafana panel. ✅ SHIPPED (spec).** `cloud-grant-usage.dashboardspec.yaml`
+  (validated against the real `DashboardSpec` model): issued/consumed/revoked/denied stats +
+  issue-vs-consume rate + **denials-by-reason** timeseries & bar. It is the sanctioned `/dbrd-cr8r`
+  pipeline input — provision it with the pipeline (no raw JSON). Mimir mangles the counter names to
+  `startd8_cloud_grant_*_total` (dots→underscores + `_total`); the spec's exprs already use that form.
 - **FR-E6 (S, P1) — `cloud-grant status` / `audit`** — read the audit JSONL → "who consumed what, when,
   uses left, denials." The operator's missing visibility (offline, no metrics stack required).
 - **FR-E7 (S, P2) — `cloud-grant gc`** (or prune-on-write) — drop expired/exhausted grants so the file

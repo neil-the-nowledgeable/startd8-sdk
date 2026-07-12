@@ -32,10 +32,11 @@ _DEFAULT_TTL = 900.0   # 15 min (OQ-3 lean)
 
 
 def _open_store(store: Path, audit: Optional[Path]):
-    from .kickoff_experience.cloud_grant import AuditLog, FileGrantStore
+    from .kickoff_experience.cloud_grant import AuditLog, FileGrantStore, GrantMetrics
 
     audit_cb = AuditLog(audit) if audit is not None else None
-    return FileGrantStore(store, audit=audit_cb)
+    # FR-E4: emit issue/revoke counters (fail-open — a no-op if OTel isn't configured for the CLI).
+    return FileGrantStore(store, audit=audit_cb, metrics=GrantMetrics())
 
 
 def _fmt_expiry(expires_at: float) -> str:

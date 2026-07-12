@@ -122,10 +122,30 @@ class GrantStore:
     with no use debited (FR-7 store-unavailable-mid-consume).
     """
 
-    def __init__(self, audit: "Optional[Callable[[dict], None]]" = None) -> None:
+    def __init__(self, audit: "Optional[Callable[[dict], None]]" = None,
+                 metrics: "Optional[Callable[[str, Optional[str]], None]]" = None) -> None:
         self._grants: Dict[str, CloudGrant] = {}
         self._lock = threading.RLock()
         self._audit_cb = audit
+        # FR-E4: optional OTel metrics sink, called (event, reason). Distinct from _audit: audit is
+        # FAIL-CLOSED (an un-auditable elevation must not proceed); metrics are FAIL-OPEN (a telemetry
+        # hiccup must NEVER affect a grant decision) — the two concerns must not be conflated.
+        self._metrics_cb = metrics
+
+    def _emit_metric(self, event: str, reason: "Optional[str]" = None) -> None:
+        """FR-E4 — record a lifecycle metric. Fail-open by construction: any error is swallowed."""
+        if self._metrics_cb is None:
+            return
+        try:
+            self._metrics_cb(event, reason)
+        except Exception:  # metrics must never break a grant decision
+            pass
+
+    def _denied(self, reason: "GrantDeny") -> "GrantDecision":
+        """Emit a denial metric (by reason) and return the typed deny — a single choke point so every
+        deny path is counted without rewriting each return."""
+        self._emit_metric("deny", reason.value)
+        return GrantDecision.deny(reason)
 
     # -- persistence seam (no-op for the in-memory reference; a file/db backend overrides) --
     def _persist(self, grant: CloudGrant) -> None:  # pragma: no cover - overridden by real backends
@@ -185,6 +205,7 @@ class GrantStore:
                         uses=int(uses), expires_at=grant.expires_at, issued_by=issued_by, at=now)
             self._persist(grant)           # fail-closed: no in-memory entry unless persisted
             self._grants[grant.id] = grant
+        self._emit_metric("issue")         # FR-E4 (fail-open, after the grant is durable)
         return grant
 
     def revoke(self, grant_id: str) -> bool:
@@ -197,6 +218,7 @@ class GrantStore:
             self._audit(event="revoke", grant_id=grant_id, at_uses_remaining=g.uses_remaining)
             self._persist(revoked)
             self._grants[grant_id] = revoked
+            self._emit_metric("revoke")    # FR-E4
             return True
 
     def get(self, grant_id: str) -> Optional[CloudGrant]:
@@ -230,22 +252,22 @@ class GrantStore:
         """Atomically resolve a live grant for *target* and **consume one use**. One allow per use;
         every failure mode is a typed deny with **no debit** (FR-5/FR-7)."""
         if not clock_trusted:
-            return GrantDecision.deny(GrantDeny.CLOCK_UNTRUSTED)
+            return self._denied(GrantDeny.CLOCK_UNTRUSTED)
         try:
             return self._resolve_and_consume(target, now)
         except StoreUnavailable:                        # a durable-backend read failure (`_sync`) → deny
-            return GrantDecision.deny(GrantDeny.STORE_UNAVAILABLE)
+            return self._denied(GrantDeny.STORE_UNAVAILABLE)
 
     def _resolve_and_consume(self, target: GrantTarget, now: float) -> GrantDecision:
         with self._op():
             grant = self._find_for_target(target)
             if grant is None:
-                return GrantDecision.deny(GrantDeny.ABSENT)
+                return self._denied(GrantDeny.ABSENT)
             live = grant.is_live(now)
             if live is not None:
-                return GrantDecision.deny(live)
+                return self._denied(live)
             if grant.uses_remaining <= 0:
-                return GrantDecision.deny(GrantDeny.EXHAUSTED)
+                return self._denied(GrantDeny.EXHAUSTED)
             consumed = replace(grant, uses_remaining=grant.uses_remaining - 1)
             try:
                 # audit BEFORE persist; an un-auditable consume denies with no debit (R1-S6 fail-closed).
@@ -253,8 +275,9 @@ class GrantStore:
                             uses_remaining_after=consumed.uses_remaining, at=now)
                 self._persist(consumed)                 # may raise StoreUnavailable
             except StoreUnavailable:
-                return GrantDecision.deny(GrantDeny.STORE_UNAVAILABLE)  # no debit — rollback
+                return self._denied(GrantDeny.STORE_UNAVAILABLE)  # no debit — rollback
             self._grants[grant.id] = consumed           # commit only after persist
+            self._emit_metric("consume")                # FR-E4 (one use spent, session created)
             return GrantDecision(
                 True, grant_id=grant.id, uses_remaining_after=consumed.uses_remaining
             )
@@ -272,22 +295,22 @@ class GrantStore:
         session created just before expiry/revocation is denied on its next action, without spending a
         second use. Also enforces target binding (a grant id bound to a different target → deny, FR-8)."""
         if not clock_trusted:
-            return GrantDecision.deny(GrantDeny.CLOCK_UNTRUSTED)
+            return self._denied(GrantDeny.CLOCK_UNTRUSTED)
         try:
             return self._revalidate(grant_id, target, now)
         except StoreUnavailable:                        # a durable-backend read failure (`_sync`) → deny
-            return GrantDecision.deny(GrantDeny.STORE_UNAVAILABLE)
+            return self._denied(GrantDeny.STORE_UNAVAILABLE)
 
     def _revalidate(self, grant_id: str, target: GrantTarget, now: float) -> GrantDecision:
         with self._op():
             grant = self._grants.get(grant_id)
             if grant is None:
-                return GrantDecision.deny(GrantDeny.ABSENT)
+                return self._denied(GrantDeny.ABSENT)
             if grant.target != target:
-                return GrantDecision.deny(GrantDeny.TARGET_MISMATCH)
+                return self._denied(GrantDeny.TARGET_MISMATCH)
             live = grant.is_live(now)
             if live is not None:
-                return GrantDecision.deny(live)
+                return self._denied(live)
             return GrantDecision(
                 True, grant_id=grant.id, uses_remaining_after=grant.uses_remaining
             )
@@ -337,12 +360,64 @@ def evaluate_trust_chain(
         return GrantDecision.deny(GrantDeny.ABSENT)              # not grant-capable → deny
     # (1) consumer api-key — required and matched.
     if not inputs.api_key_expected or inputs.api_key_presented != inputs.api_key_expected:
-        return GrantDecision.deny(GrantDeny.API_KEY_INVALID)
+        return store._denied(GrantDeny.API_KEY_INVALID)          # FR-E4: count the auth-layer deny too
     # (4) Origin/Host ∈ configured cloud origin.
     if not inputs.allowed_origins or inputs.origin_presented not in inputs.allowed_origins:
-        return GrantDecision.deny(GrantDeny.ORIGIN_REJECTED)
+        return store._denied(GrantDeny.ORIGIN_REJECTED)
     # (2)(3) a live grant resolves for target+capability → consume one use (single-atomic).
     return store.resolve_and_consume(target, now=now, clock_trusted=clock_trusted)
+
+
+# --------------------------------------------------------------------------- FR-E4 OTel metrics
+
+
+class GrantMetrics:
+    """FR-E4 — OTel counters for the cloud-grant lifecycle, usable as a :class:`GrantStore` ``metrics``
+    sink (it is callable as ``(event, reason)``). Four counters:
+
+    - ``startd8.cloud_grant.issued`` — grants minted (emitted by the issuance CLI process).
+    - ``startd8.cloud_grant.consumed`` — uses spent at session creation (the served app).
+    - ``startd8.cloud_grant.denied`` — write attempts denied, **labelled by ``reason``** (the
+      :class:`GrantDeny` value): the panel's discriminating series (a spike in ``origin_rejected`` vs
+      ``exhausted`` vs ``expired`` tells very different stories).
+    - ``startd8.cloud_grant.revoked`` — grants voided by a human.
+
+    **Fail-open by construction:** if OpenTelemetry isn't installed or no ``MeterProvider`` is
+    configured, construction/record degrade to silent no-ops — a metrics gap never touches a grant."""
+
+    def __init__(self, meter: object = None) -> None:
+        self._ready = False
+        try:
+            if meter is None:
+                from opentelemetry import metrics as _otel_metrics
+
+                meter = _otel_metrics.get_meter("startd8.cloud_grant")
+            self._issued = meter.create_counter(
+                "startd8.cloud_grant.issued", description="Cloud grants issued")
+            self._consumed = meter.create_counter(
+                "startd8.cloud_grant.consumed", description="Cloud grant uses consumed (session creation)")
+            self._denied = meter.create_counter(
+                "startd8.cloud_grant.denied", description="Cloud grant write attempts denied, by reason")
+            self._revoked = meter.create_counter(
+                "startd8.cloud_grant.revoked", description="Cloud grants revoked")
+            self._ready = True
+        except Exception:  # OTel absent / no provider — degrade to a no-op sink
+            self._ready = False
+
+    def __call__(self, event: str, reason: "Optional[str]" = None) -> None:
+        if not self._ready:
+            return
+        try:
+            if event == "issue":
+                self._issued.add(1)
+            elif event == "consume":
+                self._consumed.add(1)
+            elif event == "revoke":
+                self._revoked.add(1)
+            elif event == "deny":
+                self._denied.add(1, {"reason": reason or "unknown"})
+        except Exception:  # never let a telemetry error escape into a grant path
+            pass
 
 
 # --------------------------------------------------------------------------- serialization (M4)
@@ -408,8 +483,9 @@ class FileGrantStore(GrantStore):
     can enforce it (the app gets only a decrement capability).
     """
 
-    def __init__(self, path: "str | os.PathLike", audit: "Optional[Callable[[dict], None]]" = None) -> None:
-        super().__init__(audit=audit)
+    def __init__(self, path: "str | os.PathLike", audit: "Optional[Callable[[dict], None]]" = None,
+                 metrics: "Optional[Callable[[str, Optional[str]], None]]" = None) -> None:
+        super().__init__(audit=audit, metrics=metrics)
         self._path = Path(path)
         self._lockpath = Path(str(self._path) + ".lock")
         self._sync()
