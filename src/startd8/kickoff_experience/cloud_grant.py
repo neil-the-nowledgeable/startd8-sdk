@@ -615,3 +615,160 @@ class FileGrantStore(GrantStore):
         """A read-only snapshot of all grants (for the CLI `list`). Reloads first."""
         with self._op():
             return list(self._grants.values())
+
+
+class SqliteGrantStore(GrantStore):
+    """FR-E17 — a SQLite durable backend. More **structural** than the JSON file:
+
+    - **The DB is the cross-process lock.** ``_interprocess_lock`` opens a ``BEGIN IMMEDIATE``
+      transaction (a RESERVED write lock) for the whole op, so the resolve→decrement→persist critical
+      section is serialized across processes by SQLite itself — no companion ``.lock`` flock file.
+    - **The floor is a DB constraint.** ``CHECK(uses_remaining >= 0)`` means a decrement below zero is
+      rejected by the engine, not merely by app code (a corrupt/racing writer cannot over-spend).
+    - **Consume-only is enforceable by construction.** ``consumer_only=True`` (what the served app uses,
+      NR-6) makes the store object structurally incapable of issuance — ``issue`` raises. The privilege
+      split stops being convention.
+
+    Row-per-grant (no full-file rewrite on each persist). Behavior is otherwise identical to
+    :class:`FileGrantStore` — it passes the same resolve/consume/revalidate/redeem/revoke/prune contract.
+    """
+
+    _DDL = (
+        "CREATE TABLE IF NOT EXISTS grants ("
+        " id TEXT PRIMARY KEY,"
+        " deployment_id TEXT NOT NULL, project_id TEXT NOT NULL, capability TEXT NOT NULL,"
+        " uses_remaining INTEGER NOT NULL CHECK(uses_remaining >= 0),"
+        " expires_at REAL NOT NULL, issued_by TEXT NOT NULL, issued_at REAL NOT NULL,"
+        " revoked INTEGER NOT NULL DEFAULT 0, link_token TEXT"
+        ")"
+    )
+
+    def __init__(self, path: "str | os.PathLike", *,
+                 audit: "Optional[Callable[[dict], None]]" = None,
+                 metrics: "Optional[Callable[[str, Optional[str]], None]]" = None,
+                 consumer_only: bool = False) -> None:
+        super().__init__(audit=audit, metrics=metrics)
+        self._path = Path(path)
+        self._consumer_only = consumer_only
+        self._conn = None   # the per-op connection, set while the interprocess lock is held
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with self._connect() as c:
+                c.execute("PRAGMA journal_mode=WAL")
+                c.execute(self._DDL)
+        except Exception as exc:  # noqa: BLE001 - surface any DB open/DDL failure as store-unavailable
+            raise StoreUnavailable(f"grant db init failed: {exc}") from exc
+        self._sync()
+
+    def _connect(self):
+        import sqlite3
+        conn = sqlite3.connect(str(self._path), timeout=30.0, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def issue(self, *args, **kwargs):
+        """NR-6 (structural): a consume-only store cannot mint grants — issuance is the operator CLI's."""
+        if self._consumer_only:
+            raise PermissionError(
+                "this grant store is consume-only (NR-6): issuance is the operator CLI, not the served app"
+            )
+        return super().issue(*args, **kwargs)
+
+    def _interprocess_lock(self):
+        from contextlib import contextmanager as _cm
+
+        @_cm
+        def _tx():
+            conn = self._connect()
+            try:
+                conn.execute("BEGIN IMMEDIATE")   # RESERVED lock — one writer across processes
+                self._conn = conn
+                yield
+                conn.execute("COMMIT")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
+            finally:
+                self._conn = None
+                conn.close()
+
+        return _tx()
+
+    def _sync(self) -> None:
+        # Uses the per-op connection when inside _op(); else a short-lived read connection.
+        conn = self._conn or self._connect()
+        close = self._conn is None
+        try:
+            rows = conn.execute("SELECT * FROM grants").fetchall()
+        except Exception as exc:  # noqa: BLE001
+            raise StoreUnavailable(f"grant db unreadable: {exc}") from exc
+        finally:
+            if close:
+                conn.close()
+        self._grants = {r["id"]: _grant_from_dict(_row_to_dict(r)) for r in rows}
+
+    def _persist(self, grant: CloudGrant) -> None:
+        if self._conn is None:  # persist only ever runs inside _op() (lock held)
+            raise StoreUnavailable("grant db persist called outside a transaction")
+        d = _grant_to_dict(grant)
+        try:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO grants"
+                " (id, deployment_id, project_id, capability, uses_remaining, expires_at,"
+                "  issued_by, issued_at, revoked, link_token)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (d["id"], d["deployment_id"], d["project_id"], d["capability"], d["uses_remaining"],
+                 d["expires_at"], d["issued_by"], d["issued_at"], int(d["revoked"]),
+                 d.get("link_token")),
+            )
+        except Exception as exc:  # noqa: BLE001 - incl. the CHECK(uses_remaining>=0) floor
+            raise StoreUnavailable(f"grant db persist failed: {exc}") from exc
+
+    def _flush(self) -> None:
+        # Rewrite the whole set (prune removed rows). Runs inside _op().
+        if self._conn is None:
+            raise StoreUnavailable("grant db flush called outside a transaction")
+        keep = set(self._grants)
+        try:
+            existing = {r["id"] for r in self._conn.execute("SELECT id FROM grants").fetchall()}
+            for gid in existing - keep:
+                self._conn.execute("DELETE FROM grants WHERE id=?", (gid,))
+            for g in self._grants.values():
+                self._persist(g)
+        except StoreUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise StoreUnavailable(f"grant db flush failed: {exc}") from exc
+
+    def all_grants(self):
+        with self._op():
+            return list(self._grants.values())
+
+
+def _row_to_dict(row) -> dict:
+    """A sqlite3.Row → the dict shape `_grant_from_dict` expects (link_token omitted when NULL)."""
+    d = {
+        "id": row["id"], "deployment_id": row["deployment_id"], "project_id": row["project_id"],
+        "capability": row["capability"], "uses_remaining": row["uses_remaining"],
+        "expires_at": row["expires_at"], "issued_by": row["issued_by"],
+        "issued_at": row["issued_at"], "revoked": bool(row["revoked"]),
+    }
+    if row["link_token"] is not None:
+        d["link_token"] = row["link_token"]
+    return d
+
+
+def open_grant_store(path: "str | os.PathLike", *,
+                     audit: "Optional[Callable[[dict], None]]" = None,
+                     metrics: "Optional[Callable[[str, Optional[str]], None]]" = None,
+                     consumer_only: bool = False) -> GrantStore:
+    """Pick the durable backend by path suffix (FR-E17): ``.db``/``.sqlite``/``.sqlite3`` →
+    :class:`SqliteGrantStore` (structural), else :class:`FileGrantStore` (the default JSON, unchanged).
+    ``consumer_only`` is honored only by the SQLite backend (the file backend has no way to enforce it)."""
+    suffix = Path(path).suffix.lower()
+    if suffix in (".db", ".sqlite", ".sqlite3"):
+        return SqliteGrantStore(path, audit=audit, metrics=metrics, consumer_only=consumer_only)
+    return FileGrantStore(path, audit=audit, metrics=metrics)
