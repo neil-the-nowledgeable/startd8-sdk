@@ -614,12 +614,14 @@ def start_cmd(
                 "the FR-14 trust chain (api-key ∧ Origin ∧ grant) can never be satisfied without them."
             )
             raise typer.Exit(_EXIT_FATAL)
-        from .kickoff_experience.cloud_grant import AuditLog, FileGrantStore, GrantMetrics
+        from .kickoff_experience.cloud_grant import AuditLog, GrantMetrics, open_grant_store
         try:
-            grant_store_obj = FileGrantStore(
+            grant_store_obj = open_grant_store(
                 grant_store,
                 audit=AuditLog(grant_store.parent / "audit.jsonl"),
                 metrics=GrantMetrics(),   # FR-E4: consume/deny counters for the served app (fail-open)
+                consumer_only=True,       # FR-E17/NR-6: the served app CONSUMES; it cannot issue (SQLite
+                #                           backend enforces structurally; the JSON backend ignores it).
             )
         except Exception as exc:
             console.print(f"[red]could not open grant store {grant_store}:[/red] {exc}")

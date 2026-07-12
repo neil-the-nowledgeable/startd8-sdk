@@ -103,10 +103,14 @@ re-provision (→ FR-E3), and the cloud grant's value is stranded behind OQ-12 (
 
 ### Tier 3 — architectural
 
-- **FR-E17 (M, P1) — SQLite `GrantStore` backend.** **Structurally enforces NR-6** (the served app holds
-  a *decrement-only* capability; issuance needs another grant), ACID cross-process for free (simpler +
-  more correct than the fcntl lock), GC via SQL. Drop-in behind the existing `GrantStore` interface —
-  converts the "convention-level privilege split" into an enforced one.
+- **FR-E17 (M, P1) — SQLite `GrantStore` backend. ✅ SHIPPED.** `SqliteGrantStore(GrantStore)` +
+  `open_grant_store()` suffix-dispatch factory (`.db`/`.sqlite`/`.sqlite3` → SQLite, else the JSON
+  `FileGrantStore`, unchanged). Structural wins over the file backend: (1) **`BEGIN IMMEDIATE` is the
+  cross-process lock** (the DB serializes writers — no companion `.lock` flock); (2) **`CHECK(uses_remaining
+  >= 0)`** makes the floor a DB constraint; (3) **`consumer_only=True`** (what the served app opens, NR-6)
+  makes the store object structurally unable to `issue()` — the privilege split stops being convention.
+  Row-per-grant (no full-file rewrite). Passes the same resolve/consume/revalidate/redeem/revoke/prune
+  contract. **OQ-E3 resolved: SQLite is worth it** (stdlib, no new dependency).
 - **FR-E19 (M, P3) — Lift `_cloud_capability` + the trust chain into a reusable served-surface
   middleware** — reuse for `stakeholder_run_server` and `consult --serve` instead of each re-implementing
   cloud posture.
