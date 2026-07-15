@@ -6,6 +6,14 @@
 > scan over-reported ~40 hits; grounding deflated them to the loops here and corrected two
 > "dead code" false-positives in both directions.
 
+> **Coverage correction (2026-07-15, data-artifact pass):** the initial scan swept code
+> value-paths and **under-inventoried data artifacts** — it missed the SDK's corpus files
+> entirely (`golden_corpus/corpus.json`, `.startd8/controlled-corpus.json`). That is a
+> **scoped-coverage false-negative** — looking only at code, and (earlier) searching a
+> *consuming* project (`online-boutique-demo`) instead of system-wide for where the data
+> actually lives — the mirror image of the false-*positives* the grounding pass corrected.
+> The corpus inventory now lives in "Corpus / data artifacts" below.
+
 **Maturity of this repo:** **L2** — *set by the lowest open loop (CL-2 dead CLI flag / CL-3 un-wired adapter). The core generation pipeline is L4-live; the L2 items are isolated, minor surfaces — but honesty = lowest open loop, no rounding up.*
 **Loops in flight:** 0 — *WIP=1: pick one, close or park it, before opening another.*
 **Last grounded:** 2026-07-15
@@ -52,6 +60,28 @@
 
 ---
 
+## Corpus / data artifacts (inventory — added by the data-artifact pass)
+
+> Not code loops, but load-bearing *data* the scan first missed. **Three** corpus artifacts,
+> **two** schemas, one reserved stub — grounded to their real readers so nobody re-conflates them.
+
+| Artifact | Schema | Written by | Read by (live?) | Ledger tie |
+|----------|--------|-----------|-----------------|------------|
+| `tests/evaluation/golden_corpus/corpus.json` (146 KB, 47 entries) | file → imports + AST elements | `scripts/mine_corpus_from_manifest.py` (default `CORPUS_PATH`), `scripts/grow_eval_corpus.py` | **eval only** — readers are `scripts/run_eval_ollama.py:67` + `grow_eval_corpus.py:385`; **no `src/` reader** | evaluation/golden reference; not a live path |
+| `<project_root>/.startd8/controlled-corpus.json` | term_id → maturity/class | `extract_corpus_from_run` accumulation (postmortem) | **live, flag-gated** — `prime_contractor.py:4021` `ControlledCorpusRegistry.load(controlled_corpus_path(...))`, behind `STARTD8_CORPUS_DETERMINISTIC` | **CL-4** — this IS the serve-time registry |
+| `<config>/corpus/shared-corpus.json` | (reserved — unspecified) | nothing (stub) | **stub** — `paths.py:75`: "v1 does NOT implement shared-corpus promotion… reserves the location" (OQ-5) | parked future-seam (like P-1) |
+
+> **Clarifying fact — do NOT re-conflate:** the **micro-prime** path reads **neither** corpus.
+> Its determinism is template composition + seed metadata (sibling-file AST): `go.mod` /
+> `package.json` / `.csproj` / `requirements.in` from `prime_adapter.py:2334-2734` +
+> `clause_mapper.py`. The corpus-serving shortcut is a **prime_contractor** feature; micro-prime
+> is a parallel, corpus-free determinism engine. (Live registries also exist in sibling
+> worktrees: `startd8-ctxseed/.startd8/`, `startd8-agentic-workbook/.startd8/`, and under
+> `.startd8/bias_audit/benchmark-runs/.../sandboxes/` — expected, since the registry is
+> project-scoped and accumulates per run.)
+
+---
+
 ## Closing by DEPRECATION — do not invest (removal is the closure)
 
 > These were surfaced by the scan as open loops (untested code + open plan requirements),
@@ -86,6 +116,7 @@
 - **Every new dormant path lands here the moment it's built-but-unwired** — that's the defect report.
 - **Advertise honestly.** A repo's maturity = its lowest open loop in this table (currently L2).
 - **Ground, don't inflate.** A docs-derived ledger over-reports; grounding against code deflates it. This scan started at ~40 hits and grounded to 7 real loops + 2 intentional parks + 3 deprecation-closures. If it grows without closing, you're formalizing debt instead of retiring it.
+- **Inventory data, not just code — and search system-wide.** The scan first missed the corpus *files* by sweeping only code paths, and earlier missed the corpus by searching a *consuming* project (`online-boutique-demo`) instead of grepping system-wide for where the data lives. When something seems absent, widen the search before concluding it's missing — a **scoped-search false-negative** is the exact mirror of the scoped-report false-positives (CL-3…CL-7) grounding already corrected.
 
 ---
 
