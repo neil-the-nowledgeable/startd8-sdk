@@ -76,9 +76,11 @@ def content_store_resolver(corpus, store: ContentStore, source_checksum: str) ->
 def populate_from_run(report: Any, source_checksum: str, store: ContentStore) -> int:
     """Copy proven content from a completed run's features into the durable store.
 
-    Standalone (NOT wired into the live postmortem in v1 — I3). For each successful feature
-    with a target_file + readable generated content, store it keyed by (term_id, source_checksum).
-    Returns the number of files stored. Best-effort; never raises on a single bad file.
+    Wiring (I3 — corrected 2026-07): this IS wired into the live postmortem —
+    `prime_postmortem._extract_corpus` (contractors/prime_postmortem.py) imports and calls
+    `populate_from_run` per run. Prior docstring said "NOT wired ... in v1" — stale. For each
+    successful feature with a target_file + readable generated content, store it keyed by
+    (term_id, source_checksum). Returns the number of files stored. Best-effort; never raises.
     """
     stored = 0
     for fpm in getattr(report, "features", []) or []:

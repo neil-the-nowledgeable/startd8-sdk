@@ -8,8 +8,12 @@ Safety (FR-1): NEVER routes `false_pass_risk` (or any unproven class). Content c
 pluggable resolver (FR-2) so exemplar / golden / cache backends compose. v1 emits content
 verbatim (NR-1) and validates it structurally before accepting (FR-5).
 
-This module is standalone (not yet wired into the live drafter — FR-7 is phased). It proves
-the route→emit→fall-through mechanism; live wiring is gated on the validation run.
+Wiring (FR-7 — corrected 2026-07): this IS wired into the live path —
+`prime_contractor._try_corpus_deterministic_shortcut` (contractors/prime_contractor.py)
+builds this provider and serves proven files "$0.00 (no LLM)" — but it is **gated behind
+the default-off `STARTD8_CORPUS_DETERMINISTIC` env flag**. What remains open is not wiring
+but *live enablement*: flip the flag on and run the validation run (prove serving proven
+files does not regress quality). Prior docstring said "standalone / not yet wired" — stale.
 """
 from __future__ import annotations
 
