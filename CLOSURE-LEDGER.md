@@ -6,13 +6,16 @@
 > scan over-reported ~40 hits; grounding deflated them to the loops here and corrected two
 > "dead code" false-positives in both directions.
 
-> **Coverage correction (2026-07-15, data-artifact pass):** the initial scan swept code
-> value-paths and **under-inventoried data artifacts** — it missed the SDK's corpus files
-> entirely (`golden_corpus/corpus.json`, `.startd8/controlled-corpus.json`). That is a
-> **scoped-coverage false-negative** — looking only at code, and (earlier) searching a
-> *consuming* project (`online-boutique-demo`) instead of system-wide for where the data
-> actually lives — the mirror image of the false-*positives* the grounding pass corrected.
-> The corpus inventory now lives in "Corpus / data artifacts" below.
+> **Coverage correction (2026-07-15) — a three-strike false-negative, now owned.** The scan
+> first swept only code value-paths and missed the corpus **files**. I then framed that as
+> "under-inventoried data artifacts" — also wrong: a canonical
+> **`docs/design/controlled-corpus/CORPUS_INVENTORY.md` (2026-06-03)** had existed for six
+> weeks. The miss was never "no inventory exists"; it was **failing to ground against the
+> existing inventory + git history** before asserting (and, earlier, searching a *consuming*
+> project instead of the whole tree). This is the mirror of the CL-3…CL-7 false-*positives*.
+> **Sharper standard: before calling something missing/un-inventoried, grep the whole tree AND
+> read the commit history — the canonical index may already be there.** The corpus inventory
+> is NOT restated here; it defers to that doc + `dev-os/CORPUS-REGISTRY.md` (see below).
 
 **Maturity of this repo:** **L2** — *set by the lowest open loop (CL-2 dead CLI flag / CL-3 un-wired adapter). The core generation pipeline is L4-live; the L2 items are isolated, minor surfaces — but honesty = lowest open loop, no rounding up.*
 **Loops in flight:** 0 — *WIP=1: pick one, close or park it, before opening another.*
@@ -60,25 +63,24 @@
 
 ---
 
-## Corpus / data artifacts (inventory — added by the data-artifact pass)
+## Corpus / data artifacts (pointer — defers to the canonical inventory, RE-OS-11)
 
-> Not code loops, but load-bearing *data* the scan first missed. **Three** corpus artifacts,
-> **two** schemas, one reserved stub — grounded to their real readers so nobody re-conflates them.
-
-| Artifact | Schema | Written by | Read by (live?) | Ledger tie |
-|----------|--------|-----------|-----------------|------------|
-| `tests/evaluation/golden_corpus/corpus.json` (146 KB, 47 entries) | file → imports + AST elements | `scripts/mine_corpus_from_manifest.py` (default `CORPUS_PATH`), `scripts/grow_eval_corpus.py` | **eval only** — readers are `scripts/run_eval_ollama.py:67` + `grow_eval_corpus.py:385`; **no `src/` reader** | evaluation/golden reference; not a live path |
-| `<project_root>/.startd8/controlled-corpus.json` | term_id → maturity/class | `extract_corpus_from_run` accumulation (postmortem) | **live, flag-gated** — `prime_contractor.py:4021` `ControlledCorpusRegistry.load(controlled_corpus_path(...))`, behind `STARTD8_CORPUS_DETERMINISTIC` | **CL-4** — this IS the serve-time registry |
-| `<config>/corpus/shared-corpus.json` | (reserved — unspecified) | nothing (stub) | **stub** — `paths.py:75`: "v1 does NOT implement shared-corpus promotion… reserves the location" (OQ-5) | parked future-seam (like P-1) |
-
-> **Clarifying fact — do NOT re-conflate:** the **micro-prime** path reads **neither** corpus.
-> Its determinism is template composition + seed metadata (sibling-file AST): `go.mod` /
-> `package.json` / `.csproj` / `requirements.in` from `prime_adapter.py:2334-2734` +
-> `clause_mapper.py`. The corpus-serving shortcut is a **prime_contractor** feature; micro-prime
-> is a parallel, corpus-free determinism engine. (Live registries also exist in sibling
-> worktrees: `startd8-ctxseed/.startd8/`, `startd8-agentic-workbook/.startd8/`, and under
-> `.startd8/bias_audit/benchmark-runs/.../sandboxes/` — expected, since the registry is
-> project-scoped and accumulates per run.)
+> **The corpus is fully inventoried elsewhere — cite, don't duplicate:**
+> - **`docs/design/controlled-corpus/CORPUS_INVENTORY.md`** (2026-06-03) — location · quantity ·
+>   quality · reproduce commands. The canonical deep index (v0 155 KB → bootstrap 64 KB/88 terms
+>   → `scr-labeled-replay-set-v2.json` the oracle; 14 `deterministic_candidate` terms).
+> - **`dev-os/CORPUS-REGISTRY.md`** — the cross-repo census (**5** real runtime corpora; the
+>   other ~793 `find` hits are benchmark/worktree/`out/` copies) + the three-"corpus"-noun map.
+>
+> **Ledger-local facts only** (what a closure reader needs in-context; everything else → above):
+> - `.startd8/controlled-corpus.json` is the **live, flag-gated serve-time registry**, read at
+>   `prime_contractor.py:4021` behind `STARTD8_CORPUS_DETERMINISTIC` → this is **CL-4**.
+> - The **micro-prime path reads NEITHER corpus** — its determinism is seed-AST + templates
+>   (`prime_adapter.py:2334-2734`, `clause_mapper.py`). Don't re-conflate the two mechanisms.
+> - `online-boutique-demo` is the **source trove** (`.cap-dev-pipe/pipeline-output/`, ~37 mined
+>   runs, 5 languages), **not** a runtime consumer — its last run was $0.51 (partial-deterministic).
+> - `golden_corpus/corpus.json` (147 KB, 47 files) is the Micro-Prime **eval** sibling — read only
+>   by `scripts/` (`run_eval_ollama.py`, `grow_eval_corpus.py`), never by `src/`.
 
 ---
 
@@ -116,7 +118,7 @@
 - **Every new dormant path lands here the moment it's built-but-unwired** — that's the defect report.
 - **Advertise honestly.** A repo's maturity = its lowest open loop in this table (currently L2).
 - **Ground, don't inflate.** A docs-derived ledger over-reports; grounding against code deflates it. This scan started at ~40 hits and grounded to 7 real loops + 2 intentional parks + 3 deprecation-closures. If it grows without closing, you're formalizing debt instead of retiring it.
-- **Inventory data, not just code — and search system-wide.** The scan first missed the corpus *files* by sweeping only code paths, and earlier missed the corpus by searching a *consuming* project (`online-boutique-demo`) instead of grepping system-wide for where the data lives. When something seems absent, widen the search before concluding it's missing — a **scoped-search false-negative** is the exact mirror of the scoped-report false-positives (CL-3…CL-7) grounding already corrected.
+- **Inventory data, not just code — and ground against existing inventories + git history.** The corpus miss was a *three-strike* false-negative: swept only code paths → then claimed "un-inventoried" when a canonical `CORPUS_INVENTORY.md` had existed for six weeks → earlier searched a *consuming* project instead of the whole tree. Before calling something missing, grep the whole tree AND read the commit history — the canonical index may already be there. A **scoped-search false-negative** is the exact mirror of the scoped-report false-positives (CL-3…CL-7).
 
 ---
 
