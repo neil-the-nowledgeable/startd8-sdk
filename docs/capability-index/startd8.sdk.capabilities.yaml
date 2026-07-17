@@ -295,6 +295,9 @@ capabilities:
       agent: |
         tracker = get_session_tracker(). sid = tracker.start_session(agent_name="claude", model="...").
         tracker.record_request(sid, input_tokens=100, output_tokens=50, response_time_ms=1200, cost=0.002).
+    wont: |
+      Graceful no-op when OTel is not installed — never crashes the host. Metrics only —
+      not a tracer/sampler. Thread-safe (no state corruption under concurrency).
     triggers: ["session tracking", "active sessions", "context usage", "session metrics"]
     evidence:
       - type: code
@@ -317,6 +320,9 @@ capabilities:
       agent: |
         from startd8.costs import CostTracker, BudgetManager.
         tracker = CostTracker(). tracker.record(model, input_tokens, output_tokens).
+    wont: |
+      Provider-agnostic — never hardcodes a provider's pricing (rates come from PricingService).
+      Does not block calls unless UsageLimitManager is configured (BudgetManager warns by default).
     triggers: ["cost tracking", "budget", "token cost", "pricing", "usage limit"]
     evidence:
       - type: code
@@ -346,6 +352,9 @@ capabilities:
         Anti-pattern: logging.getLogger() silently misses Loki because OTel handler is never attached.
       agent: |
         from startd8.logging_config import get_logger. logger = get_logger(__name__).
+    wont: |
+      logging.getLogger() silently misses Loki — the OTel handler is never attached. Always
+      use get_logger(). (The anti-pattern IS the floor.)
     triggers: ["otel logging", "loki", "log bridge", "get_logger"]
     evidence:
       - type: code
