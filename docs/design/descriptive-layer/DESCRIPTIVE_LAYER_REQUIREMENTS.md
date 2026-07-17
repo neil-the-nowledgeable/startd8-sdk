@@ -1,6 +1,6 @@
 # Descriptive Layer — Requirements
 
-**Version:** 0.4 (Draft — post-CRP R1 triaged: 7 F-suggestions accepted, `confidence`-on-record rejected)
+**Version:** 0.4.1 (Draft — post-taxonomy: added FR-DL-11, the 3 orthogonal axes incl. `route_state`)
 **Date:** 2026-07-17
 **Status:** Draft
 **Stable key:** `FR-DL-*` (concept-keyed; the presentation name "descriptive layer / meta layer" is a mutable alias — [[concept-key-not-presentation-name]])
@@ -145,6 +145,23 @@ record/template that produced it (auditable/testable). (3xl-kcui provenance-by-c
 `wont`, `lives`) **by reference**. The descriptive layer *adds* `why/do/next` + workflow grounding
 — it is "how to present a Node to a human"; NODE-SCHEMA is "what a Node is." Cite, never copy
 (Mottainai).
+
+**FR-DL-11 — The three orthogonal axes (`category` / `orientation` / `route_state`).** Each record
+MAY carry the three facets from NODE-SCHEMA v0.2 (cite `startd8-sdk/src/startd8/observability/taxonomy_enums.py`
+— the canonical vocabulary; never restate its value lists):
+- **`category`** — *what domain* the unit belongs to (the grouping / fsn pedestal).
+- **`orientation`** — `system | human | bridge`; **supersedes the FR-DL-1 `audience` field**
+  (attorney→`human`, agent→`system`-leaning; `bridge` = serves both at once, e.g. a cited card).
+- **`route_state`** — `sdk_emitted | owned_elsewhere | declared_unimplemented | external_convention`;
+  **supersedes the scalar status + `ships_when`** and reconciles `degrade{by-status}`: a
+  `not_defined` section = `declared_unimplemented`; a section owned by another manifest =
+  `owned_elsewhere` (cite, don't restate — FR-DL-10); the attorney `curated/auto/skipped` classifier
+  is this same axis. **`owned_elsewhere` + `declared_unimplemented` are honest-skips excluded from
+  the coverage denominator** — they never drag down roll-up.
+
+The three are **orthogonal** — never infer one from another (NODE-SCHEMA invariant 5) — and are
+**facets**, so a node is reachable by facet-filter and search, not only by drill (NODE-SCHEMA §3a).
+Deterministic; no LLM (FR-DL-8).
 
 ## 3. Non-Requirements
 
