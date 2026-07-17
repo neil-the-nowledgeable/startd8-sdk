@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.25.0"
+version: "1.26.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -53,6 +53,9 @@ capabilities:
       agent: |
         agent = resolve_agent_spec("anthropic:claude-sonnet-4-5-20250929", system_prompt="You are a reviewer.").
         result = await agent.agenerate("Review this code", system_prompt="Be strict.").
+    wont: |
+      Per-call None preserves the instance default — never silently clears it. Not a
+      provider-neutral single format: each provider maps system_prompt to its own field.
     triggers: ["system prompt", "system message", "instruction", "persona"]
     evidence:
       - type: code
@@ -86,6 +89,9 @@ capabilities:
       agent: |
         result = await agent.agenerate(prompt). result.text, result.time_ms, result.token_usage.
         Backward-compatible: text, t, u = result still works.
+    wont: |
+      Does not break existing bare-tuple unpacking — IS a tuple subclass, so
+      `text, time_ms, usage = await agent.agenerate(...)` still works unchanged.
     triggers: ["generate result", "agenerate return", "named tuple"]
     evidence:
       - type: code
@@ -114,6 +120,9 @@ capabilities:
       agent: |
         agent = resolve_agent_spec("anthropic:claude-sonnet-4-5-20250929",
           timeout_config=TimeoutConfig(read=600.0), retry_config=RetryConfig(max_attempts=5)).
+    wont: |
+      timeout_config / retry_config are keyword-only — not accepted positionally.
+      Resolves spec strings to instances; not a runtime agent-lifecycle manager.
     triggers: ["resolve agent", "agent spec", "create agent", "timeout config", "retry config"]
     evidence:
       - type: code
@@ -142,6 +151,9 @@ capabilities:
       agent: |
         ProviderRegistry.discover(). ProviderRegistry.get_provider("anthropic").
         ProviderRegistry.list_providers() -> ["anthropic", "openai", "ollama", "gemini", "mistral", "mock"].
+    wont: |
+      Only surfaces providers registered as pyproject.toml entry points — an
+      unregistered provider is not discovered. Each provider must implement the protocol.
     triggers: ["provider", "registry", "discover providers", "list models"]
     evidence:
       - type: code
@@ -168,6 +180,9 @@ capabilities:
       agent: |
         from startd8.model_catalog import Models. Models.CLAUDE_SONNET_LATEST = "anthropic:claude-sonnet-4-5-20250929".
         get_latest_model("gemini", tier="fast"). list_models_by_tier("flagship").
+    wont: |
+      A static catalog of constants — it does not live-query provider APIs for
+      newly-released models. Replaces scattered hardcoded model strings, not runtime discovery.
     triggers: ["model catalog", "model constants", "latest model", "model tier"]
     evidence:
       - type: code
@@ -194,6 +209,9 @@ capabilities:
       agent: |
         from startd8.utils.code_extraction import extract_code_from_response.
         code = extract_code_from_response(llm_response, language="python").
+    wont: |
+      Never raises on unfenced input — falls back to returning the raw response.
+      Language-aware for Python/TS/Go/Rust/C/C++/YAML only; not a universal parser.
     triggers: ["extract code", "code block", "markdown fence", "code from response"]
     evidence:
       - type: code
@@ -217,6 +235,9 @@ capabilities:
       agent: |
         from startd8.truncation_detection import detect_truncation, estimate_output_size.
         result = detect_truncation(text). result.is_truncated, result.confidence, result.indicators.
+    wont: |
+      A confidence heuristic, not a certainty — below CONFIDENCE_IS_TRUNCATED (0.5) it
+      reports not-truncated. Thresholds are centralized constants, not per-call tunables.
     triggers: ["truncation", "truncated response", "max tokens", "finish reason"]
     evidence:
       - type: code
@@ -245,6 +266,9 @@ capabilities:
       agent: |
         from startd8.resilience import ResilienceConfig, ResilienceLevel.
         config = ResilienceConfig.from_level(ResilienceLevel.STANDARD).
+    wont: |
+      Configuration only — declares retry/circuit-breaker/error-strategy settings; it
+      does not itself execute the resilience behavior. OFF level disables all of it.
     triggers: ["resilience", "circuit breaker", "error strategy", "self-healing"]
     evidence:
       - type: code
@@ -267,6 +291,9 @@ capabilities:
         from startd8.ratelimit import RateLimiter, RateLimitConfig, get_rate_limiter.
         limiter = get_rate_limiter("anthropic", provider="anthropic").
         async with limiter.acquire(estimated_tokens=1000): ...
+    wont: |
+      Async-only (context manager / decorator) — no synchronous acquire path. Under the
+      REJECT backpressure strategy it raises rather than waiting; SHED drops oldest.
     triggers: ["rate limit", "token bucket", "backpressure", "requests per minute"]
     evidence:
       - type: code
@@ -383,6 +410,9 @@ capabilities:
       agent: |
         from startd8.diagnostics import run_diagnostics, analyze_report, apply_safe_fixes.
         report = run_diagnostics(). analysis = analyze_report(report, agent=my_agent).
+    wont: |
+      AutoFixer applies only safe, reversible fixes — never risky or irreversible ones.
+      Failure analysis requires an LLM agent; without one you get the raw report only.
     triggers: ["diagnostics", "health check", "self-diagnostic", "auto-fix"]
     evidence:
       - type: code
@@ -403,6 +433,9 @@ capabilities:
         Used by all workflow and contractor test suites.
       agent: |
         agent = resolve_agent_spec("mock:mock-model"). Or MockAgent(responses=["Hello"]).
+    wont: |
+      For deterministic testing only — makes no real API calls and returns no live model
+      output; responses are the ones you supply (or a simulated error).
     triggers: ["mock agent", "mock provider", "test agent", "deterministic test"]
     evidence:
       - type: code
@@ -434,6 +467,9 @@ capabilities:
         from startd8.integrations.contextcore import ContextCoreWorkflowAdapter, ContextCoreTaskSource.
         adapter = ContextCoreWorkflowAdapter(workflow, config=ContextCoreConfig(...)).
         source = ContextCoreTaskSource(project_id); tasks = source.get_pending_tasks().
+    wont: |
+      An adapter/runner over ContextCore state files — it does not itself store project
+      state; it reads/wraps the existing ~/.contextcore/state/ layout.
     triggers: ["contextcore", "task tracking", "project tracking", "otel spans", "task discovery"]
     evidence:
       - type: code
@@ -460,6 +496,9 @@ capabilities:
       agent: |
         MCP tool: startd8_workflow. Actions: list, describe, run.
         Input: {action: "run", workflow_id: "pipeline", config: {...}}.
+    wont: |
+      A gateway, not an unbounded bridge — access is rate limited and audit logged.
+      Dispatches the fixed list/describe/run actions, not arbitrary SDK method calls.
     triggers: ["mcp", "mcp tool", "agent tool", "skill agent"]
     evidence:
       - type: code
@@ -490,6 +529,9 @@ capabilities:
         from startd8.capdevpipe_installer import CapDevPipeInstaller, InstallConfig, InstallMethod
         CapDevPipeInstaller().execute(InstallConfig(source_path=..., target_root=..., method=InstallMethod.SYMLINK, pipeline_env={...})).
         Or via the TUI: ImprovedTUI.install_capdevpipe_flow(config_dict) (headless).
+    wont: |
+      pipeline.env detection blocks on empty rather than guessing (0600); confined to the
+      TOCTOU-checked parent dir. Embeds only the curated 17-entry golden set, not arbitrary files.
     triggers: ["install cap-dev-pipe", "capdevpipe", "embed pipeline", "project setup", "cap-dev-pipe installer"]
     evidence:
       - type: code
@@ -525,6 +567,9 @@ capabilities:
         from startd8.languages.manifest_adapter import build_multilang_file_manifest
         manifest = build_multilang_file_manifest(rel_path, source)  # carries .parser_tier
         # tiers: authoritative (py/cs/java → error) | advisory (go/node/vue → warning) | None
+    wont: |
+      Never raises — a parser that throws degrades to an empty parser_tier=None manifest,
+      not a failed run. Go/Node/Vue are advisory (regex) tier, never authoritative errors.
     triggers: ["manifest validation", "multilang manifest", "forward manifest", "parser tier", "element validation", "import validation"]
     evidence:
       - type: code
@@ -559,6 +604,9 @@ capabilities:
         # Draft-time: forward-manifest P0 section auto-injected by implementation_engine/spec_builder.py
         from startd8.forward_manifest import ForwardManifest
         result = manifest.validate_implementation(target_files)  # review-time contract check
+    wont: |
+      Injects the contract as a P0 prompt section and validates against it — it does not
+      itself generate the code. Seeds defaults only for known framework config files.
     triggers: ["forward manifest", "draft time injection", "spec prompt", "framework conventions", "contract validation", "interface contract"]
     evidence:
       - type: code
@@ -598,6 +646,9 @@ capabilities:
         report = generate_observability_artifacts(metadata, output_dir)  # alerts + dashboards + SLOs + index
         # CLI: scripts/generate_observability_artifacts.py [--check]
         # beta: convention-only metrics; manifest_declared domain metrics not yet consumed
+    wont: |
+      Beta: reads only convention_based metrics — ignores manifest_declared domain metrics
+      (R1-F1). Emits 3 artifact types, not the declared 8; semantic relevance stays low.
     triggers: ["observability artifacts", "alert rules", "dashboard spec", "slo definition", "drift detection", "onboarding artifacts", "manifest declared metrics"]
     evidence:
       - type: code
@@ -640,6 +691,9 @@ capabilities:
         from startd8.backend_codegen import render_backend
         for rel, content in render_backend(open("prisma/schema.prisma").read()):
             ...  # write rel -> content; each owned/$0.00-skip + build-gateable
+    wont: |
+      No LLM ($0) — never calls a model; output is fully determined by the .prisma contract.
+      All-Python only; deferred: completeness domain-manifest, polyglot output.
     triggers: ["generate backend", "prisma to python", "sqlmodel generation", "fastapi crud generation", "htmx generation", "schema to app", "deterministic codegen", "contract codegen"]
     evidence:
       - type: code
@@ -676,6 +730,9 @@ capabilities:
           --contexts prisma/contexts.yaml --out .
         # Producer contract publish
         ./scripts/openapi_role3_publish_contract.sh /path/to/producer catalog
+    wont: |
+      $0 LLM — deterministic emission from contexts.yaml, no model call. Pinned contracts
+      are filtered to exclude consumer-Prisma overlap; TS/gRPC clients are opt-in, not default.
     triggers: ["inter-context", "contexts.yaml", "outbound client", "contract-sha256", "cross-context smoke", "export-openapi", "openapi role 3", "bounded context split", "grpc inter-context", "context graph"]
     evidence:
       - type: code
@@ -727,6 +784,9 @@ capabilities:
       agent: |
         from startd8.backend_codegen import render_backend  # emits imports.yaml + app/importer.py
         # generated app then exposes POST /import (from_json) + paste/upload UI
+    wont: |
+      $0, no LLM. Strict single-outer-transaction atomicity — a released savepoint does not
+      survive an outer rollback; partial imports never half-commit. Emitter is importer.py, not import.py.
     triggers: ["import path", "imports.yaml", "from_json", "importer", "paste import", "upload import", "round-trip import"]
     evidence:
       - type: code
@@ -768,6 +828,9 @@ capabilities:
         plan = build_wireframe_plan(load_assembly_inputs(project_root=root))
         plan.readiness  # {"scaffold": "ready", "backend": "...", "views": "blocked(...)"}
         plan.sections   # statuses: planned|defaults|placeholder|not_defined|invalid
+    wont: |
+      Read-only preview — no generation, no LLM, no app-file writes; the cap-dev-pipe shim
+      never blocks (crash → wireframe-error.json). It describes what WILL build, never builds it.
     triggers: ["wireframe", "assembly summary", "what will be built", "planned vs not defined", "pre-generation preview", "cascade readiness", "assembly inputs", "wireframe-plan.json"]
     evidence:
       - type: code
@@ -808,6 +871,9 @@ capabilities:
       agent: |
         from startd8.presentation_polish import apply_polish, PolishConfig
         apply_polish(PolishConfig(project_root=root, theme="professional"))  # $0; writes css + theme partials
+    wont: |
+      $0, no LLM. Non-destructive — skips user-authored files lacking the STARTD8-POLISH marker
+      and never clobbers them. Only the 3 curated AA-gated themes; deferred: bespoke Tier 2, theme preview.
     triggers: ["polish", "presentation polish", "design theme", "make it presentable", "style the app", "accessible ui", "css generation"]
     evidence:
       - type: code
@@ -842,6 +908,9 @@ capabilities:
         from startd8.view_codegen import render_views
         for rel, content in render_views(schema_text, views_text, display_text, view_prose_text):
             ...  # write rel -> content; each owned/$0.00-skip + --check drift-checkable
+    wont: |
+      $0, no LLM. Projects only the CLOSED archetype vocabulary (dashboard/board/workspace/
+      detail-compose/export-package/import-flow/computed-panel) — an unknown archetype is not accepted.
     triggers: ["generate views", "composite views", "value map", "dashboard view", "views.yaml", "detail-compose", "computed-panel", "import-flow"]
     evidence:
       - type: code
@@ -869,6 +938,9 @@ capabilities:
       agent: |
         from startd8.view_codegen.view_prose import parse_view_prose
         prose = parse_view_prose(open("prisma/view_prose.yaml").read())  # {view: ViewProse}
+    wont: |
+      $0, no LLM — renders authored copy only, never invents it: absent ⇒ byte-identical,
+      editing copy never trips --check (kept OUTSIDE the drift hash). Fragments are header-less/untracked.
     triggers: ["view prose", "view copy", "view_prose.yaml", "title intro empty", "view chrome", "no screen shows a raw machine name"]
     evidence:
       - type: code
@@ -911,6 +983,9 @@ capabilities:
         from startd8.micro_prime.engine import MicroPrimeEngine
         from startd8.languages import resolve_language
         profile = resolve_language(["src/main.go"])  # -> GoLanguageProfile; 5 langs supported
+    wont: |
+      LLM-driven (NOT the $0 deterministic path) and scoped to the 5 supported languages.
+      Non-Python generation is NOT deferred on this path — that stale note is false here.
     triggers: ["polyglot generation", "multi-language codegen", "go generation", "java generation", "csharp generation", "nodejs generation", "micro prime", "element-level generation", "online boutique"]
     evidence:
       - type: code
@@ -941,6 +1016,9 @@ capabilities:
       agent: |
         from startd8.languages import LanguageRegistry, resolve_language
         LanguageRegistry.discover()  # call before use, like ProviderRegistry
+    wont: |
+      Only the 7 registered profiles are discoverable (via entry points); an unregistered
+      language is not resolved. resolve_language() falls back to Python, never raises on unknown.
     triggers: ["language profile", "resolve language", "language registry", "go.mod generation", "package.json generation", "build.gradle generation", "csproj generation"]
     evidence:
       - type: code
@@ -972,6 +1050,9 @@ capabilities:
         post-merge repair.
       agent: |
         from startd8.repair.orchestrator import run_file_repair  # post-gen syntax/lint/import/semantic repair
+    wont: |
+      Post-generation repair only — fixes already-generated code; it does not generate or
+      re-architect. Steps are organized per supported language, not a universal fixer.
     triggers: ["code repair", "post-generation repair", "import repair", "syntax repair", "contamination strip", "repair pipeline", "goimports", "eslint autofix"]
     evidence:
       - type: code
@@ -998,6 +1079,9 @@ capabilities:
         scores disk quality (contract_compliance/import_completeness/stub/semantic) and feeds Kaizen.
       agent: |
         from startd8.contractors.prime_contractor import PrimeContractorWorkflow  # multi-feature construction
+    wont: |
+      The ONLY active construction path — Artisan is ON HOLD, not an alternative here.
+      Not create-only: edit mode auto-detects on-disk targets rather than overwriting them.
     triggers: ["prime contractor", "multi-feature generation", "code construction", "integration engine", "edit mode", "checkpoint resume", "post-mortem"]
     evidence:
       - type: code
@@ -1023,6 +1107,9 @@ capabilities:
         adherence injection that reaches the Prime lead/drafter path is bypassed on the micro-prime tier.
       agent: |
         from startd8.complexity.classifier import classify_tier  # -> TRIVIAL|SIMPLE|MODERATE|COMPLEX
+    wont: |
+      TRIVIAL routes to NO LLM — it never spends a model call on trivial work. CAVEAT (RUN-028):
+      the micro-prime tier bypasses the project_knowledge convention-adherence injection.
     triggers: ["complexity tier", "classify tier", "task routing", "complexity classification", "cost routing"]
     evidence:
       - type: code
@@ -1045,6 +1132,9 @@ capabilities:
         kaizen-metrics.json.
       agent: |
         from startd8.security_prime.scorer import compute_security_score  # -> SecurityScoreResult
+    wont: |
+      Orchestration, not new checks — it wires query_prime's verify_file() into the pipeline,
+      not a fresh scanner. Scores injection/credentials/lifecycle only, not all security classes.
     triggers: ["security prime", "security gate", "security contract", "injection check", "credential leak", "anzen gate", "security score"]
     evidence:
       - type: code
@@ -1070,6 +1160,9 @@ capabilities:
         Prime wires into the broader pipeline.
       agent: |
         from startd8.query_prime.engine import QueryPrimeEngine  # tiered secure query gen
+    wont: |
+      DB query generation only — scoped to the 5 pattern DBs (Redis/MySQL/SQLite/Spanner/
+      PostgreSQL); an unlisted engine has no patterns. T1 uses a template, not an LLM.
     triggers: ["query prime", "secure query generation", "sql injection prevention", "database query gen", "query tier"]
     evidence:
       - type: code
@@ -1096,6 +1189,9 @@ capabilities:
         sections; dual scoring compute_disk_quality_score(). Cross-run trends/correlation artifacts.
       agent: |
         from startd8.exemplars.registry import ExemplarRegistry  # proven-exemplar lookup/promotion
+    wont: |
+      Mines ONLY perfect-score (1.00) features as templates — imperfect runs are not
+      promoted. Feeds hints as P1 prompt sections; it does not itself regenerate the code.
     triggers: ["exemplar", "proven exemplar", "kaizen", "quality feedback", "template promotion", "disk quality score", "cross-run improvement"]
     evidence:
       - type: code
@@ -1124,6 +1220,9 @@ capabilities:
         model_comparison.py (compare-models) is the reusable single-seed→N-models core it builds on.
       agent: |
         from startd8.model_comparison import ...  # compare-models core; benchmark_matrix builds the grid
+    wont: |
+      Measures model SKILL with deterministic+micro-prime OFF — not the assisted pipeline.
+      An infra failure (e.g. missing key) is classified infra_fail, never charged as the model's 0.
     triggers: ["benchmark", "model benchmark", "compare models", "behavioral scoring", "track 2", "model skill", "rescore", "matrix"]
     evidence:
       - type: code
@@ -1156,6 +1255,9 @@ capabilities:
         structural: only executed journey behavior discriminates.
       agent: |
         startd8 benchmark-round3 --roster roster.yaml --out ./round3-out  # omit --roster = ref self-test
+    wont: |
+      A downstream service break is never charged to the entry orchestrator (honest per-service
+      attribution). The frontend bonus is capped/additive — it never rank-flips the backend score.
     triggers: ["round 3", "round3", "system benchmark", "fleet benchmark", "online boutique", "user journey", "fault attribution", "frontend gate", "benchmark-round3"]
     evidence:
       - type: code
@@ -1184,6 +1286,9 @@ capabilities:
         (venv+subprocess+loopback+rlimits+process-group teardown; Docker=v2). Feeds the benchmark.
       agent: |
         # startd8 deploy local --app <workdir> ; startd8 deploy batch --batch-root <dir>
+    wont: |
+      v1 live-boots installed mode ONLY — deployed apps are skipped (needs Postgres), not booted.
+      Local-only harness; Docker isolation is deferred to v2. Trust boundary sits at pip install.
     triggers: ["deploy local", "local deploy harness", "boot generated app", "health poll", "smoke test", "graded validation", "deploy batch"]
     evidence:
       - type: code
@@ -1211,6 +1316,9 @@ capabilities:
         $0 without app.yaml. M0→M3 feature-complete for the deterministic path; PG-env proofs remain.
       agent: |
         # startd8 generate backend --mode deployed --app-manifest app.yaml
+    wont: |
+      $0 deterministic — same inputs incl. mode → byte-identical. settings.py is the ONLY
+      mode-varying file; main.py stays byte-identical. PG-env runtime proofs remain open.
     triggers: ["deployment mode", "installed vs deployed", "deployed app", "tenancy scoping", "auth seam", "settings.py", "mode-derived bind"]
     evidence:
       - type: code
@@ -1243,6 +1351,9 @@ capabilities:
         block to app.yaml (trust_gateway/secrets.backend/target_cloud/...).
       agent: |
         from startd8.scaffold_codegen.deploy_renderer import render_deploy_tree  # deployed mode → deploy/ pairs
+    wont: |
+      Vendor-neutral apiVersions ONLY — no Gloo/cloud CRDs in the core (FR-CND-28). Operator
+      values bind at deploy, never baked; HTTPRoute hostnames are explicit, never '*'. Deployed mode only.
     triggers: ["deploy to kubernetes", "eks", "gke", "agentgateway", "gateway api", "external secrets", "k8s manifests", "infra-contract", "cloud native deploy"]
     evidence:
       - type: code
@@ -1266,6 +1377,9 @@ capabilities:
       overlay ExternalSecret ref, never the base (FR-ENV-7). infra-contract gains a per-env section;
       coherence WARNs on inconsistent secret scope. Absent → no overlays, byte-identical (SOTTO).
       installed + environments → build error. `@env`-suffixed kinds keep per-env files $0 drift-owned.
+    wont: |
+      installed + environments is a BUILD ERROR — overlays are deployed-mode only; absent →
+      no overlays, byte-identical. The Doppler config lives only in the overlay, never the base.
     triggers: ["dev test prod", "environments", "kustomize overlays", "per-environment config", "doppler config per env"]
     evidence:
       - type: code
@@ -1289,6 +1403,9 @@ capabilities:
       findings[], unbound_bindings} — fail-closed on malformed app.yaml. The cap-dev-pipe
       deploy-coherence gate consumes this without importing SDK code (REQ-CDP-DEPLOY-6/7/10). The
       decode-only-no-gateway-ack security ERROR fires when deployed + auth seam + not trust_gateway.
+    wont: |
+      Fail-closed — a malformed app.yaml is a hard verdict, never a pass. A security-tier ERROR
+      is HARD and non-overridable downstream; the cap-dev-pipe gate consumes it without importing SDK code.
     triggers: ["deploy coherence", "is this deployable", "fail closed", "auth bypass", "deploy gate", "check_deploy_coherence", "severity tier"]
     evidence:
       - type: code
@@ -1313,6 +1430,9 @@ capabilities:
       actions go through a single safe-writer chokepoint (the MCP path only previews, never writes).
       Deployment-awareness (mode/deploy/environments/coherence readiness) now ships as a sibling
       capability — see startd8.concierge.deployment_awareness.
+    wont: |
+      The MCP path only PREVIEWS, never writes; all writes go through the single CLI safe-writer
+      chokepoint. instantiate-kickoff previews by default — it does not write without --apply.
     triggers: ["concierge", "onboard project", "kickoff", "survey project", "onboarding readiness", "instantiate kickoff"]
     evidence:
       - type: code
@@ -1342,6 +1462,9 @@ capabilities:
       `--json`; returncode→verdict; missing/unstartable→structured `hard`). Single source of truth:
       readiness + verdict + count come from one `evaluate_deploy_coherence`; secret VALUES are never
       surfaced (names/counts/status only). Assist-not-operate: never runs the deploy or records a gate.
+    wont: |
+      Assist-not-operate — never runs the deploy or records a gate; read-only + $0/no-LLM.
+      Secret VALUES are never surfaced (names/counts/status only). Declared mode always wins over the seeded default.
     triggers: ["deployment readiness", "is this deployable", "check deploy coherence", "deployment posture", "deploy mode", "installed vs deployed"]
     evidence:
       - type: code
@@ -1369,6 +1492,9 @@ capabilities:
       TRUSTED inbox (kind/base_sha never amendable by a disposition), the human-confirm being the sole
       content gate. Deterministic and $0 (an opt-in LLM narrative is the only paid surface). VIPP mints
       only OBSERVED(project) claims — it cannot forge SDK-mechanism authority.
+    wont: |
+      Mints only OBSERVED(project) claims — cannot forge SDK-mechanism authority. When ground
+      truth is absent it OMIT-defaults to a labeled ACCEPT, never fabricating. Preview by default; --apply writes.
     triggers: ["vipp", "project counterpart", "negotiate proposals", "apply dispositions", "project-side onboarding", "VIPP"]
     evidence:
       - type: code
@@ -1404,6 +1530,9 @@ capabilities:
       project-content write rides the confined `apply_write_plan`; idempotent + byte-identical-when-absent
       (SOTTO); posture-encoding exit codes (0/1/2/3). Assist-not-operate: never runs the cascade, records
       a gate, or auto-applies.
+    wont: |
+      Never invents content — ground truth adjudicates, it never originates; a healthy brownfield
+      project is inbox-ready, not inbox-produced. Assist-not-operate: never runs the cascade or auto-applies.
     triggers: ["project init", "onboard directory", "make this an SDK project", "produce vipp inbox", "non-interactive inbox", "inbox ready", "issue 76"]
     evidence:
       - type: code
@@ -1437,6 +1566,9 @@ capabilities:
       only — never a gate (removing it does not change `cascade_offerable`); bounded/leak-free (no
       absolute paths, capped strings) and safe over telemetry (a numeric-only `red_carpet_advice`
       event). Built requirements-first (reflective-requirements → CRP R1 → 3 batches).
+    wont: |
+      Advisory ONLY — never a gate (removing it does not change cascade_offerable); read-only, $0/no-LLM.
+      Bounded/leak-free: no absolute paths, capped strings; telemetry is numeric-only.
     triggers: ["red carpet", "kickoff advisor", "next steps", "what should I do next", "readiness diagnosis", "schema insights", "missing foreign key", "red_carpet_state", "kickoff guidance", "red-carpet --check"]
     evidence:
       - type: code
@@ -1475,6 +1607,9 @@ capabilities:
       agent: |
         session = AgenticSession(agent, ToolRegistry([...])); result = await session.send("...").
         result.stop_reason ∈ completed|max_turns|repeated_calls|budget|context_overflow|stream_error.
+    wont: |
+      Effect-class default-deny — only read tools run unless allow-listed; a write tool never
+      fires by default. The token/cost budget is fail-closed, checked before each model call.
     triggers: ["agentic loop", "tool use loop", "multi-turn agent", "AgenticSession", "tool calling", "agent runtime"]
     evidence:
       - type: code
@@ -1509,6 +1644,9 @@ capabilities:
       agent: |
         if agent.supports_tool_use(): turn = await agent.agenerate_tools(messages, tools).
         turn.tool_calls: list[ToolCallRequest(id, name, arguments: dict)].
+    wont: |
+      NOT a provider Protocol change — additive opt-in (supports_tool_use default False), so most
+      providers stay untouched. Only Claude and OpenAI implement it; others return no tool calls.
     triggers: ["agenerate_tools", "tool use", "function calling", "AgenticTurn", "supports_tool_use"]
     evidence:
       - type: code
@@ -1541,6 +1679,9 @@ capabilities:
       agent: |
         async for ev in session.stream("..."): handle(ev)  # ends with RunComplete(result).
         sync: for ev in stream_sync(session.stream("...")): ...
+    wont: |
+      Per-token streaming is Claude/OpenAI only — a non-streaming agent falls back to one
+      TextDelta + synthesized tool events, not real token-by-token output.
     triggers: ["streaming", "stream", "token streaming", "TextDelta", "tee", "live render", "ToolCallDelta", "reasoning delta"]
     evidence:
       - type: code
@@ -1571,6 +1712,9 @@ capabilities:
       agent: |
         Automatic within stream()/send(); surfaces CompactionEvent (and StreamReset on the streaming
         path) to consumers. is_context_window_error() maps provider errors to one type.
+    wont: |
+      Compaction NEVER orphans a tool_use from its tool_result (the load-bearing invariant).
+      When the transcript can't be compacted further it ends gracefully (context_overflow), never a crash.
     triggers: ["compaction", "context window", "context overflow", "summarize history", "token ceiling"]
     evidence:
       - type: code
@@ -1595,6 +1739,9 @@ capabilities:
         AND TypeError, no-ops when absent), and a guard test asserts the core loop never imports it.
       agent: |
         adapter = ContextCoreAgenticAdapter(session, project_id, task_id); result = await adapter.run("...").
+    wont: |
+      A PURE outer layer — the core loop imports nothing from ContextCore (a guard test asserts it).
+      No-ops when ContextCore is absent (catches ImportError AND TypeError), never breaking the run.
     triggers: ["contextcore", "task tracking", "progress observer", "spanstate", "agent task"]
     evidence:
       - type: code
@@ -1621,6 +1768,9 @@ capabilities:
       agent: |
         Automatic; pass project_context=ProjectContext(...) to attribute a run. collect_span_descriptors()
         returns the agentic.session descriptor.
+    wont: |
+      No-op when OTel is absent/unconfigured — never a hard dependency. The auto-derived
+      dashboard's datasource/live-data wiring is still pending; io.contextcore.* attrs are optional.
     triggers: ["agentic observability", "otel spans", "agentic.session span", "gen_ai", "span descriptor", "agentic dashboard"]
     evidence:
       - type: code
@@ -1652,6 +1802,9 @@ capabilities:
         never an authority on product intent (bucket-4 boundary). Built on the persona_drafting toolkit.
       agent: |
         startd8 requirements elicit [--roles] --brief brief.md ; synthesize ; review [--json] ; approve OUT.md.
+    wont: |
+      Drafts estimate-provenance requirements FOR human approval — never an authority on product
+      intent (bucket-4 boundary). The persona pass is optional/paid; the baseline is $0.
     triggers: ["requirements panel", "elicit requirements", "startd8 requirements", "requirements drafting"]
     evidence:
       - type: code
@@ -1677,6 +1830,9 @@ capabilities:
         authoring doc (a 2nd screen never clobbers the 1st). Bucket-1 structure only. persona_drafting toolkit.
       agent: |
         startd8 screens suggest [--roles] ; review [--json] ; approve --all|--name X ; reject --name X.
+    wont: |
+      Bucket-1 structure ONLY — suggests screens for human review, not product decisions. Persona
+      pass is optional/paid; the baseline is $0. A 2nd approved screen never clobbers the 1st.
     triggers: ["manifest suggester", "suggest screens", "startd8 screens", "which screens", "composite views"]
     evidence:
       - type: code
@@ -1700,6 +1856,9 @@ capabilities:
         advisor's ranked playbook as a cost-labeled ($0/paid/gate) guided greenfield walkthrough (read-only).
       agent: |
         startd8 kickoff plan [--json] ; startd8 kickoff next [--json].
+    wont: |
+      Shared primitives, not a workflow — the session store has a traversal guard and headings
+      are injection-sanitized. The kickoff orchestrator is read-only ($0); it does not run the cascade.
     triggers: ["persona drafting toolkit", "kickoff plan", "kickoff orchestrator", "run_paid_pass"]
     evidence:
       - type: code
@@ -1735,6 +1894,9 @@ capabilities:
         startd8 consult reply <id> --to all --prompt "Which is safest?"
         startd8 consult web <id> --open        # offline HTML comparison with dollar-cost badges
         startd8 consult cost <id>              # per-model + total USD
+    wont: |
+      Human evaluation — NO auto-judge; it compares, it does not rank or pick a winner. Max 2 images
+      per prompt; per-model failure is isolated (one model failing never fails the run).
     triggers: ["consult", "multi-model", "compare models", "second opinion", "ask several models", "model panel", "council"]
     evidence:
       - type: code
@@ -1793,6 +1955,9 @@ capabilities:
         startd8 kickoff cockpit                                     # same read-model in the terminal (no Grafana)
         startd8 kickoff readout --format html --out readout.html   # shareable static export (md|html, XSS-safe)
         startd8 kickoff readout --format json --full               # combined status+retrospective+activation (startd8.kickoff.readout.v1)
+    wont: |
+      Read-only (NR-2) — shows confirm commands, never applies them. No jsonnet toolchain.
+      Loki/Mimir panels degrade to empty (never error) when the datasource is absent.
     triggers: ["workbook", "cockpit", "project workbook", "kickoff dashboard", "kickoff portal", "readiness burndown", "digital project workbook", "stakeholder dashboard", "kickoff readout", "readout full"]
     evidence:
       - type: code
@@ -1856,6 +2021,9 @@ capabilities:
       agent: |
         snap = session.to_snapshot(project="p", session_id="s", generated_at=ts, redactor=redact)
         snap.at_a_glance()   # "5 replies · survey ×2, assess ×1 · 3 proposals pending · cost ≈$0.0031 · stopped: budget"
+    wont: |
+      Serializes tool-call NAMES only — never free-text args. Policy-free core: redaction is
+      dependency-injected, not baked in. stdlib-only, no import cycle; it does not run the session.
     triggers: ["session snapshot", "agentic snapshot", "to_snapshot", "transcript persistence", "session mirror", "durable session"]
     evidence:
       - type: code
@@ -1898,6 +2066,9 @@ capabilities:
         startd8 kickoff check --json --record  # machine verdict + append a ledger transition
         startd8 kickoff ledger                 # how this project got ready (transition history)
         # Grafana alert: kickoff_activation_open > 0  (or kickoff_activation_severity >= 2)
+    wont: |
+      Pure reads over the oracle — the ledger is the ONLY writer and ONLY ever appends; it never
+      touches kickoff inputs. Appends only on oracle-signature change (a transition stream, not a poll log).
     triggers: ["kickoff check", "activation", "readiness gate", "kickoff alert", "activation ledger", "readiness alert", "kickoff ci gate", "activation surface"]
     evidence:
       - type: code
@@ -1943,6 +2114,9 @@ capabilities:
       agent: |
         startd8 kickoff retrospective          # journey milestones + decision log
         startd8 kickoff retrospective --json    # startd8.kickoff.retrospective.v1 payload
+    wont: |
+      Two READ-ONLY views over data the oracle already folds — no new generation, $0. The ledger
+      IS the event stream, so no separate snapshot history exists; degrades cleanly with no dispositions/ledger.
     triggers: ["retrospective", "decision log", "kickoff history", "how it got ready", "proposal decisions", "kickoff journey", "postmortem", "audit trail"]
     evidence:
       - type: code
@@ -1987,6 +2161,9 @@ capabilities:
         startd8 kickoff exemplars                      # list the cross-project library
         startd8 kickoff apply-exemplar <id> ./newproj  # preview seed (per-target validation)
         startd8 kickoff apply-exemplar <id> ./newproj --emit   # write as reviewable VIPP proposals
+    wont: |
+      NO new write path — reuses the vetted VIPP producer + human-confirm gate; preview by default,
+      --emit writes. Promotion is GATED on clean-enough; a convention the target can't accept is skipped, never forced.
     triggers: ["promote kickoff", "exemplar", "kickoff template", "reuse kickoff", "start from proven", "apply exemplar", "promotion dividend", "seed new project"]
     evidence:
       - type: code
@@ -2028,6 +2205,9 @@ capabilities:
         startd8 kickoff report                     # list views + their schemas
         startd8 kickoff report retrospective ./p    # emit one view's JSON (same payload as the MCP tool)
         # MCP: startd8_kickoff_report(view="activation")  # every view through one read-only tool
+    wont: |
+      One read-only dispatcher, not N tools — each view is a $0 read-only projection, never a
+      mutation. `report status` is byte-identical to `status --json`; it re-derives nothing.
     triggers: ["kickoff report", "kickoff views", "machine readable kickoff", "kickoff json api", "kickoff mcp", "oracle api", "report dispatcher"]
     evidence:
       - type: code
@@ -2090,6 +2270,9 @@ capabilities:
         startd8 cloud-grant list|status|revoke <id>|gc
         # served app consumes (never issues): kickoff start --cloud --api-key … --grant-store … --deployment-id … --cloud-origin …
         # trust chain: api-key ∧ Origin ∧ live-grant → consume 1 use at session creation, revalidate per turn (no re-consume)
+    wont: |
+      Never issues grants from the served app — issuance is the operator CLI (NR-6); the app is
+      consume-only. A consumed use is never refunded (forfeit-on-failure); magic links are one-time, not reusable.
     triggers: ["cloud grant", "cloud-grant", "temporary authorization", "magic link", "remote onboarding", "kickoff enter", "grant store", "cloud chat write", "use-limited token", "expiring grant", "human door"]
     inputs:
       type: object
@@ -2172,6 +2355,9 @@ capabilities:
       agent: |
         startd8 kickoff portal --index --scan /path/to/workspace          # ranked markdown readiness board
         startd8 kickoff portal --index --scan /path/to/workspace --json    # kickoff.portfolio.v1 payload
+    wont: |
+      $0, offline, deterministic — best-effort per project: a broken one becomes an honest
+      `unreadable` row, never a failed scan. `--index` without `--scan` is the unchanged dashlist (additive).
     triggers: ["portfolio", "portfolio index", "multi-project", "readiness board", "who is stuck", "build-ready", "workspace scan", "kickoff index scan"]
     evidence:
       - type: code
@@ -2204,6 +2390,9 @@ capabilities:
         no provider key).
       agent: |
         startd8 doctor    # exit 0 = clean; exit 1 = an actionable warning (stale install / no provider key)
+    wont: |
+      Reports provider-key PRESENCE only (names, never values). A read-only self-check — it
+      diagnoses the environment, it does not fix or reinstall. Exit 1 flags an actionable warning.
     triggers: ["doctor", "startd8 doctor", "environment check", "which startd8", "editable vs installed", "venv drift", "self-check", "diagnose"]
     evidence:
       - type: code
@@ -2240,8 +2429,10 @@ summary:
 # ==============================================================================
 
 changelog:
-  - version: "1.25.0"
-    date: "2026-07-12"
+  - version: "1.26.0"
+    date: "2026-07-16"
+    changes:
+      - "Added the `wont` field (negative-space / floor / non-goal) to all 66 capabilities — the additive first half of the CL-13 migration toward the dev-os NODE-SCHEMA legibility primitive (one node grammar rendering requirement/capability/signal at every altitude). Each `wont` is grounded in the entry's OWN summary/description prose (floors, $0/read-only, never/only, fail-closed semantics, scope boundaries), not fabricated — 0 TODO/author-confirm flags. Additive/non-breaking: no existing field changed or reordered; unknown-key-tolerant parsers unaffected; the derived agent-card.json/mcp-tools.json source from startd8.agent.yaml (NOT this manifest, grounded) so are unaffected. `status` intentionally NOT stored — it is render-derived from evidence×maturity per NODE-SCHEMA finding #1 (maturity kept as a distinct axis). Started as a 3-observability-cap pilot (v1.25.0→prior commit) then rolled to all 66. Rehearsal + field mapping: docs/capability-index/README.md; ledger: dev-os CLOSURE-LEDGER.md CL-13."
     changes:
       - "+3 capabilities from clearing the Cloud-Authorization-Grant enhancements backlog E1–E22 (21 gate-verified PRs #198–218). (1) NEW startd8.kickoff.cloud_grant (security/stable, conf 0.95): a human-issued, use-limited, expiring, revocable, audited authorization that temporarily re-enables a --cloud kickoff deployment's otherwise-disabled agentic chat-write / capture / instantiate paths. FR-14 ordered AND-gate trust chain (api-key ∧ Origin ∧ live-grant, constant-time api-key compare after E19), FR-7 single-atomic consume + FR-15 per-turn revalidation, out-of-band operator issuance (NR-6) with a consume-only served app, JSON or SQLite backend (open_grant_store suffix-dispatch; SQLite adds BEGIN IMMEDIATE lock + CHECK(uses>=0) floor + consumer_only that structurally blocks issue()), the FR-E12 one-time MAGIC-LINK human door (GET /kickoff/enter — no CLI/api-key for the browser user), capability parameterization (chat-write/capture/instantiate independently grantable, no cross-authorization), fail-open OTel metrics (FR-E4) + dashboard spec (FR-E5) + denial-reason alerts (FR-E22), fail-closed JSONL audit, and a one-command `cloud-grant invite` remote-onboarding playbook (FR-E15). (2) NEW startd8.kickoff.portfolio (query/stable, conf 0.9): `kickoff portal --index --scan <workspace>` — a $0 offline scan ranking projects by readiness (build-ready/in-progress/stuck/not-started) from the shared AgenticView oracle; markdown board or kickoff.portfolio.v1 JSON (FR-E16). (3) NEW startd8.sdk.doctor (observe/stable, conf 0.9): `startd8 doctor` environment self-check — editable-vs-stale-install detection, provider-key presence (names only), python/doppler; non-zero exit on an actionable warning (FR-E10). Also (evidence-only, no count change): startd8.kickoff.workbook_cockpit gained E3 auto-provision-on-session-end + E13 verified/hardened readiness+cost burndown (real OTel Meter→Mimir, panel↔metric name-drift guard); startd8.kickoff.report/readout gained the FR-E14 'What was captured' field-value section. ADR: docs/design/kickoff/ADR_E19_SURFACE_AUTH.md (trust chain deliberately NOT lifted into a shared middleware — the 3 served surfaces diverge; a conformance test guards the one universal invariant instead, and caught a real != timing oracle). Verified: 21 PRs #198–218 on origin/main, main never drifted; 848 kickoff + 945 cross-surface tests green."
   - version: "1.24.0"
