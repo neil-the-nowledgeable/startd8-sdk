@@ -1,0 +1,818 @@
+{
+  "_meta": {
+    "emit_context": "cli",
+    "generated_at": "2026-06-23T22:07:28.429955+00:00",
+    "project_root": "/Users/neilyashinsky/Documents/dev/startd8-sdk/tests/fixtures/wireframe",
+    "startd8_version": "0.4.0"
+  },
+  "claimed_paths": [
+    ".env.example",
+    "Dockerfile",
+    "alembic.ini",
+    "alembic/env.py",
+    "alembic/script.py.mako",
+    "alembic/versions/.gitkeep",
+    "app/__init__.py",
+    "app/ai/__init__.py",
+    "app/ai/edge_schemas.py",
+    "app/ai/routes.py",
+    "app/ai/service.py",
+    "app/ai/suggest_notes.py",
+    "app/ai_schemas.py",
+    "app/completeness.py",
+    "app/db.py",
+    "app/export.py",
+    "app/health.py",
+    "app/logging_config.py",
+    "app/main.py",
+    "app/models.py",
+    "app/openapi_contract.py",
+    "app/pages.py",
+    "app/routers.py",
+    "app/server.py",
+    "app/tables.py",
+    "app/templates/_field_error.html",
+    "app/templates/base.html",
+    "app/templates/metric/_row.html",
+    "app/templates/metric/detail.html",
+    "app/templates/metric/form.html",
+    "app/templates/metric/list.html",
+    "app/templates/note/_row.html",
+    "app/templates/note/detail.html",
+    "app/templates/note/form.html",
+    "app/templates/note/list.html",
+    "app/templates/pages/about.html",
+    "app/templates/pages/home.html",
+    "app/templates/profile/_row.html",
+    "app/templates/profile/detail.html",
+    "app/templates/profile/form.html",
+    "app/templates/profile/list.html",
+    "app/templates/views/profile_dashboard.html",
+    "app/views/__init__.py",
+    "app/views/profile_dashboard.py",
+    "app/views/routes.py",
+    "app/web.py",
+    "clients/__init__.py",
+    "clients/http_client.py",
+    "pyproject.toml",
+    "requirements.txt",
+    "run.sh",
+    "tests/test_ai_passes.py",
+    "tests/test_completeness.py",
+    "tests/test_contract.py",
+    "tests/test_cost_logging.py",
+    "tests/test_edge_privacy.py",
+    "tests/test_health.py",
+    "tests/test_keyless_boot.py",
+    "tests/test_openapi_contract.py",
+    "tests/test_route_smoke.py",
+    "tests/test_views.py"
+  ],
+  "content_completeness": {
+    "ai_prompts": {
+      "authored": 1,
+      "ratio": 1.0,
+      "total": 1
+    },
+    "overall": {
+      "authored": 2,
+      "ratio": 0.5,
+      "total": 4
+    },
+    "page_bodies": {
+      "authored": 1,
+      "ratio": 0.5,
+      "total": 2
+    },
+    "view_copy": {
+      "authored": 0,
+      "ratio": 0.0,
+      "total": 1
+    }
+  },
+  "delivery_inventory": [
+    {
+      "items": [
+        {
+          "detail": "package=app, python=3.11",
+          "label": "app: wfdemo",
+          "section": "scaffold",
+          "status": "planned"
+        },
+        {
+          "detail": "SQLite ./data/wfdemo.db (WAL), log ./data/logs/app.log",
+          "label": "persistence",
+          "section": "scaffold",
+          "status": "planned"
+        },
+        {
+          "detail": "run.sh \u2014 bind 127.0.0.1 (loopback)",
+          "label": "run: local",
+          "section": "scaffold",
+          "status": "planned"
+        },
+        {
+          "detail": "",
+          "label": "container: Dockerfile",
+          "section": "scaffold",
+          "status": "planned"
+        },
+        {
+          "detail": "",
+          "label": "migrations: alembic",
+          "section": "scaffold",
+          "status": "planned"
+        },
+        {
+          "detail": "installed",
+          "label": "mode",
+          "section": "deployment",
+          "status": "planned"
+        },
+        {
+          "detail": "local-first SQLite (WAL, single writer)",
+          "label": "persistence",
+          "section": "deployment",
+          "status": "planned"
+        },
+        {
+          "detail": "127.0.0.1 (loopback; local run.sh)",
+          "label": "bind",
+          "section": "deployment",
+          "status": "planned"
+        },
+        {
+          "detail": "create_all on startup",
+          "label": "schema-init",
+          "section": "deployment",
+          "status": "planned"
+        },
+        {
+          "detail": "local backend",
+          "label": "secrets-default",
+          "section": "deployment",
+          "status": "planned"
+        },
+        {
+          "detail": "local rotating file logs",
+          "label": "observability",
+          "section": "deployment",
+          "status": "planned"
+        },
+        {
+          "detail": "single implicit owner (no auth)",
+          "label": "identity",
+          "section": "deployment",
+          "status": "planned"
+        },
+        {
+          "detail": "JSON CRUD + lifespan",
+          "label": "FastAPI app",
+          "section": "services",
+          "status": "planned"
+        },
+        {
+          "detail": "",
+          "label": "HTMX web mount",
+          "section": "services",
+          "status": "planned"
+        },
+        {
+          "detail": "",
+          "label": "export endpoints",
+          "section": "services",
+          "status": "planned"
+        },
+        {
+          "detail": "3 entities",
+          "label": "contract models",
+          "section": "entities",
+          "status": "planned"
+        },
+        {
+          "detail": "routes: list/get/create/update/delete",
+          "label": "Profile",
+          "section": "entities",
+          "status": "planned"
+        },
+        {
+          "detail": "routes: list/get/create/update/delete",
+          "label": "Metric",
+          "section": "entities",
+          "status": "planned"
+        },
+        {
+          "detail": "routes: list/get/create/update/delete",
+          "label": "Note",
+          "section": "entities",
+          "status": "planned"
+        }
+      ],
+      "iteration": 1,
+      "title": "\u2460 framework + persistence"
+    },
+    {
+      "items": [
+        {
+          "detail": "nav: from nav_label",
+          "label": "pages router",
+          "section": "pages",
+          "status": "planned"
+        },
+        {
+          "detail": "content: pages/home.md, nav=Home",
+          "label": "/ \u2014 Home",
+          "section": "pages",
+          "status": "planned"
+        },
+        {
+          "detail": "content: pages/about.md, nav=About",
+          "label": "/about \u2014 About",
+          "section": "pages",
+          "status": "planned"
+        },
+        {
+          "detail": "fields: name, bio | omitted \u2014 server-managed: createdAt, id",
+          "label": "Profile create/edit form",
+          "section": "forms",
+          "status": "planned"
+        },
+        {
+          "detail": "fields: label, kind, profileId | omitted \u2014 server-managed: id; owned: value",
+          "label": "Metric create/edit form",
+          "section": "forms",
+          "status": "planned"
+        },
+        {
+          "detail": "fields: title, body | omitted \u2014 server-managed: id",
+          "label": "Note create/edit form",
+          "section": "forms",
+          "status": "planned"
+        },
+        {
+          "detail": "view copy: 0/1 authored",
+          "label": "views package",
+          "section": "views",
+          "status": "planned"
+        },
+        {
+          "detail": "/views/profiles root=Profile \u00b7 copy: raw",
+          "label": "profile_dashboard (dashboard)",
+          "section": "views",
+          "status": "planned"
+        },
+        {
+          "detail": "min_rows=3, weight=2",
+          "label": "signal: Metric",
+          "section": "completeness",
+          "status": "planned"
+        },
+        {
+          "detail": "min_rows=1",
+          "label": "signal: Profile",
+          "section": "completeness",
+          "status": "planned"
+        },
+        {
+          "detail": "Note",
+          "label": "excluded",
+          "section": "completeness",
+          "status": "planned"
+        }
+      ],
+      "iteration": 2,
+      "title": "\u2461 display + business logic"
+    },
+    {
+      "items": [
+        {
+          "detail": "",
+          "label": "AI schemas + requirements",
+          "section": "services",
+          "status": "planned"
+        },
+        {
+          "detail": "1 pass(es)",
+          "label": "AI service",
+          "section": "services",
+          "status": "planned"
+        },
+        {
+          "detail": "/ai/suggest-notes \u2192 Note",
+          "label": "AI pass: suggest_notes",
+          "section": "services",
+          "status": "planned"
+        },
+        {
+          "detail": "for / \u2014 no page body at generate time",
+          "label": "page body: app/pages/home.md",
+          "section": "content",
+          "status": "not_defined"
+        },
+        {
+          "detail": "for /about",
+          "label": "page body: app/pages/about.md",
+          "section": "content",
+          "status": "planned"
+        },
+        {
+          "detail": "for pass suggest_notes",
+          "label": "prompt: prompts/suggest_notes.md",
+          "section": "content",
+          "status": "planned"
+        }
+      ],
+      "iteration": 3,
+      "title": "\u2462 integration + content"
+    }
+  ],
+  "input_provenance": {
+    "ai_passes": {
+      "path": "prisma/ai_passes.yaml",
+      "resolved_path": "prisma/ai_passes.yaml",
+      "source": "convention",
+      "status": "planned",
+      "status_override": null
+    },
+    "api": {
+      "path": "prisma/api.yaml",
+      "resolved_path": "prisma/api.yaml",
+      "source": "convention",
+      "status": "not_defined",
+      "status_override": null
+    },
+    "app": {
+      "path": "app.yaml",
+      "resolved_path": "app.yaml",
+      "source": "flag",
+      "status": "planned",
+      "status_override": null
+    },
+    "completeness": {
+      "path": "prisma/completeness.yaml",
+      "resolved_path": "prisma/completeness.yaml",
+      "source": "convention",
+      "status": "planned",
+      "status_override": null
+    },
+    "contexts": {
+      "path": "prisma/contexts.yaml",
+      "resolved_path": "prisma/contexts.yaml",
+      "source": "convention",
+      "status": "not_defined",
+      "status_override": null
+    },
+    "human_inputs": {
+      "path": "prisma/human_inputs.yaml",
+      "resolved_path": "prisma/human_inputs.yaml",
+      "source": "convention",
+      "status": "planned",
+      "status_override": null
+    },
+    "imports": {
+      "path": "prisma/imports.yaml",
+      "resolved_path": "prisma/imports.yaml",
+      "source": "convention",
+      "status": "not_defined",
+      "status_override": null
+    },
+    "pages": {
+      "path": "prisma/pages.yaml",
+      "resolved_path": "prisma/pages.yaml",
+      "source": "convention",
+      "status": "planned",
+      "status_override": null
+    },
+    "schema": {
+      "path": "prisma/schema.prisma",
+      "resolved_path": "prisma/schema.prisma",
+      "source": "flag",
+      "status": "planned",
+      "status_override": null
+    },
+    "view_prose": {
+      "path": "prisma/view_prose.yaml",
+      "resolved_path": "prisma/view_prose.yaml",
+      "source": "convention",
+      "status": "defaults",
+      "status_override": null
+    },
+    "views": {
+      "path": "prisma/views.yaml",
+      "resolved_path": "prisma/views.yaml",
+      "source": "flag",
+      "status": "planned",
+      "status_override": null
+    }
+  },
+  "inputs_fingerprint": "2f270a0782107cdac69106cfe1e94afe2d4daa4039d1c38719e63ec82fec3696",
+  "merge_warnings": [],
+  "readiness": {
+    "backend": "ready",
+    "scaffold": "ready",
+    "views": "ready"
+  },
+  "schema_version": 2,
+  "sections": [
+    {
+      "consequence": "",
+      "error": "",
+      "error_truncated": false,
+      "items": [
+        {
+          "detail": "package=app, python=3.11",
+          "label": "app: wfdemo",
+          "paths": [
+            "pyproject.toml",
+            "app/logging_config.py",
+            ".env.example"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "SQLite ./data/wfdemo.db (WAL), log ./data/logs/app.log",
+          "label": "persistence",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "run.sh \u2014 bind 127.0.0.1 (loopback)",
+          "label": "run: local",
+          "paths": [
+            "run.sh"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "",
+          "label": "container: Dockerfile",
+          "paths": [
+            "Dockerfile"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "",
+          "label": "migrations: alembic",
+          "paths": [
+            "alembic.ini",
+            "alembic/env.py",
+            "alembic/script.py.mako",
+            "alembic/versions/.gitkeep"
+          ],
+          "status": "planned"
+        }
+      ],
+      "key": "scaffold",
+      "status": "planned",
+      "title": "Scaffold / Container"
+    },
+    {
+      "consequence": "",
+      "error": "",
+      "error_truncated": false,
+      "items": [
+        {
+          "detail": "installed",
+          "label": "mode",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "local-first SQLite (WAL, single writer)",
+          "label": "persistence",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "127.0.0.1 (loopback; local run.sh)",
+          "label": "bind",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "create_all on startup",
+          "label": "schema-init",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "local backend",
+          "label": "secrets-default",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "local rotating file logs",
+          "label": "observability",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "single implicit owner (no auth)",
+          "label": "identity",
+          "paths": [],
+          "status": "planned"
+        }
+      ],
+      "key": "deployment",
+      "status": "planned",
+      "title": "Deployment mode"
+    },
+    {
+      "consequence": "",
+      "error": "",
+      "error_truncated": false,
+      "items": [
+        {
+          "detail": "JSON CRUD + lifespan",
+          "label": "FastAPI app",
+          "paths": [
+            "app/__init__.py",
+            "app/main.py",
+            "app/db.py",
+            "app/routers.py",
+            "app/health.py",
+            "app/openapi_contract.py",
+            "clients/__init__.py",
+            "clients/http_client.py"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "",
+          "label": "HTMX web mount",
+          "paths": [
+            "app/web.py",
+            "app/templates/base.html",
+            "app/templates/_field_error.html"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "",
+          "label": "export endpoints",
+          "paths": [
+            "app/export.py"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "",
+          "label": "AI schemas + requirements",
+          "paths": [
+            "app/ai_schemas.py",
+            "requirements.txt",
+            "tests/test_contract.py",
+            "tests/test_health.py",
+            "tests/test_openapi_contract.py",
+            "tests/test_route_smoke.py"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "1 pass(es)",
+          "label": "AI service",
+          "paths": [
+            "app/ai/__init__.py",
+            "app/ai/service.py",
+            "app/ai/edge_schemas.py",
+            "app/ai/routes.py",
+            "app/server.py",
+            "tests/test_edge_privacy.py",
+            "tests/test_ai_passes.py",
+            "tests/test_keyless_boot.py",
+            "tests/test_cost_logging.py"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "/ai/suggest-notes \u2192 Note",
+          "label": "AI pass: suggest_notes",
+          "paths": [
+            "app/ai/suggest_notes.py"
+          ],
+          "status": "planned"
+        }
+      ],
+      "key": "services",
+      "status": "planned",
+      "title": "Services"
+    },
+    {
+      "consequence": "",
+      "error": "",
+      "error_truncated": false,
+      "items": [
+        {
+          "detail": "3 entities",
+          "label": "contract models",
+          "paths": [
+            "app/models.py",
+            "app/tables.py",
+            "app/completeness.py",
+            "tests/test_completeness.py"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "routes: list/get/create/update/delete",
+          "label": "Profile",
+          "paths": [
+            "app/templates/profile/list.html",
+            "app/templates/profile/_row.html",
+            "app/templates/profile/detail.html"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "routes: list/get/create/update/delete",
+          "label": "Metric",
+          "paths": [
+            "app/templates/metric/list.html",
+            "app/templates/metric/_row.html",
+            "app/templates/metric/detail.html"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "routes: list/get/create/update/delete",
+          "label": "Note",
+          "paths": [
+            "app/templates/note/list.html",
+            "app/templates/note/_row.html",
+            "app/templates/note/detail.html"
+          ],
+          "status": "planned"
+        }
+      ],
+      "key": "entities",
+      "status": "planned",
+      "title": "Entities & CRUD"
+    },
+    {
+      "consequence": "",
+      "error": "",
+      "error_truncated": false,
+      "items": [
+        {
+          "detail": "nav: from nav_label",
+          "label": "pages router",
+          "paths": [
+            "app/pages.py"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "content: pages/home.md, nav=Home",
+          "label": "/ \u2014 Home",
+          "paths": [
+            "app/templates/pages/home.html"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "content: pages/about.md, nav=About",
+          "label": "/about \u2014 About",
+          "paths": [
+            "app/templates/pages/about.html"
+          ],
+          "status": "planned"
+        }
+      ],
+      "key": "pages",
+      "status": "planned",
+      "title": "Pages & Nav"
+    },
+    {
+      "consequence": "",
+      "error": "",
+      "error_truncated": false,
+      "items": [
+        {
+          "detail": "fields: name, bio | omitted \u2014 server-managed: createdAt, id",
+          "label": "Profile create/edit form",
+          "paths": [
+            "app/templates/profile/form.html"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "fields: label, kind, profileId | omitted \u2014 server-managed: id; owned: value",
+          "label": "Metric create/edit form",
+          "paths": [
+            "app/templates/metric/form.html"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "fields: title, body | omitted \u2014 server-managed: id",
+          "label": "Note create/edit form",
+          "paths": [
+            "app/templates/note/form.html"
+          ],
+          "status": "planned"
+        }
+      ],
+      "key": "forms",
+      "status": "planned",
+      "title": "Forms"
+    },
+    {
+      "consequence": "",
+      "error": "",
+      "error_truncated": false,
+      "items": [
+        {
+          "detail": "view copy: 0/1 authored",
+          "label": "views package",
+          "paths": [
+            "app/views/__init__.py",
+            "app/views/routes.py",
+            "tests/test_views.py"
+          ],
+          "status": "planned"
+        },
+        {
+          "detail": "/views/profiles root=Profile \u00b7 copy: raw",
+          "label": "profile_dashboard (dashboard)",
+          "paths": [
+            "app/views/profile_dashboard.py",
+            "app/templates/views/profile_dashboard.html"
+          ],
+          "status": "planned"
+        }
+      ],
+      "key": "views",
+      "status": "planned",
+      "title": "Composite Views"
+    },
+    {
+      "consequence": "placeholder content is the intended starting state \u2014 never gated, honestly scored",
+      "error": "",
+      "error_truncated": false,
+      "items": [
+        {
+          "detail": "for / \u2014 no page body at generate time",
+          "label": "page body: app/pages/home.md",
+          "paths": [],
+          "status": "not_defined"
+        },
+        {
+          "detail": "for /about",
+          "label": "page body: app/pages/about.md",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "for pass suggest_notes",
+          "label": "prompt: prompts/suggest_notes.md",
+          "paths": [],
+          "status": "planned"
+        }
+      ],
+      "key": "content",
+      "status": "not_defined",
+      "title": "Content Inputs (buckets 2/4 \u2014 visibility only)"
+    },
+    {
+      "consequence": "",
+      "error": "",
+      "error_truncated": false,
+      "items": [
+        {
+          "detail": "min_rows=3, weight=2",
+          "label": "signal: Metric",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "min_rows=1",
+          "label": "signal: Profile",
+          "paths": [],
+          "status": "planned"
+        },
+        {
+          "detail": "Note",
+          "label": "excluded",
+          "paths": [],
+          "status": "planned"
+        }
+      ],
+      "key": "completeness",
+      "status": "planned",
+      "title": "Completeness"
+    }
+  ],
+  "shape": {
+    "ai_passes": 1,
+    "crud_routes": 15,
+    "entities": 3,
+    "pages": 2,
+    "views": 1
+  },
+  "status_counts": {
+    "not_defined": 1,
+    "planned": 8
+  }
+}

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Get Started with StartD8</title>
+<style>
+  :root{
+    --ink:#0f172a; --ink-soft:#475569; --ink-mute:#94a3b8;
+    --line:#e2e8f0; --panel:#ffffff; --bg:#f6f8fb;
+    --brand:#f97316; --brand-2:#fbbf24; --accent:#0ea5b7; --accent-deep:#155e75;
+    --persona:#7c3aed; --persona-tint:#f5f3ff;
+    --ok:#16a34a; --tint:#fff7ed;
+    --shadow:0 1px 2px rgba(15,23,42,.04), 0 12px 30px rgba(15,23,42,.06);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6;-webkit-font-smoothing:antialiased}
+  code,.mono{font-family:'SF Mono','Fira Code',ui-monospace,monospace}
+  .wrap{max-width:940px;margin:0 auto;padding:0 1.4rem}
+
+  /* Hero */
+  .hero{background:linear-gradient(135deg,#155e75 0%,#0ea5b7 45%,#f97316 100%);color:#fff;padding:4rem 0 4.5rem;position:relative;overflow:hidden}
+  .hero::after{content:"";position:absolute;inset:0;background:radial-gradient(1200px 300px at 80% -10%,rgba(255,255,255,.18),transparent)}
+  .hero .wrap{position:relative;z-index:1}
+  .eyebrow{font-size:.8rem;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.85);font-weight:600}
+  .hero h1{font-size:2.9rem;font-weight:700;line-height:1.1;margin:.6rem 0 .8rem;letter-spacing:-.01em}
+  .hero p{font-size:1.2rem;color:rgba(255,255,255,.92);max-width:660px}
+  .hero .pills{margin-top:1.6rem;display:flex;gap:.5rem;flex-wrap:wrap}
+  .pill{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.25);padding:.35rem .8rem;border-radius:999px;font-size:.85rem;font-weight:500}
+
+  /* Intro band */
+  .intro{margin:-2.2rem auto 0;position:relative;z-index:2}
+  .intro .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:1.6rem 1.8rem}
+  .intro h2{font-size:1.15rem;margin-bottom:.35rem}
+  .intro p{color:var(--ink-soft)}
+  .intro strong{color:var(--ink)}
+  .map{margin-top:.8rem;color:var(--ink);font-weight:600;line-height:1.9}
+  .map .free{color:var(--brand)}
+
+  /* Section heading */
+  h2.section{font-size:.82rem;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-deep);font-weight:700;margin:3rem 0 .4rem}
+  .section-sub{color:var(--ink-soft);margin-bottom:1.6rem}
+
+  /* Journey rail */
+  .journey{position:relative}
+  .journey::before{content:"";position:absolute;left:26px;top:8px;bottom:8px;width:2px;background:linear-gradient(var(--accent),var(--persona),var(--brand));opacity:.32}
+  .step{display:grid;grid-template-columns:54px 1fr;gap:1.1rem;margin-bottom:1.1rem;position:relative}
+  .step .n{width:54px;height:54px;border-radius:14px;background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.25rem;color:var(--accent-deep);position:relative;z-index:1}
+  .step.persona .n{color:var(--persona)}
+  .step .body{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:1.1rem 1.3rem}
+  .step .kicker{font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--brand);font-weight:700}
+  .step.persona .kicker{color:var(--persona)}
+  .step h3{font-size:1.28rem;margin:.15rem 0 .55rem}
+  .step .pv{display:grid;grid-template-columns:1fr;gap:.35rem;margin-bottom:.7rem}
+  .step .pv .lbl{font-weight:700;font-size:.78rem;letter-spacing:.04em;text-transform:uppercase}
+  .step .pv .prob .lbl{color:var(--ink-mute)}
+  .step .pv .val .lbl{color:var(--ok)}
+  .step .pv p{color:var(--ink-soft)}
+  .step .pv .val p{color:var(--ink)}
+  .step .do{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-top:.4rem;padding-top:.7rem;border-top:1px dashed var(--line)}
+  .step .do .lbl{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-mute);font-weight:700}
+  .step .cmd{background:#0b1220;color:#8be9fd;border-radius:8px;padding:.4rem .7rem;font-size:.86rem;overflow-x:auto}
+  .step .cmd .c{color:#64748b}
+  .badge-free{background:var(--tint);color:#c2410c;border:1px solid #fed7aa;font-size:.72rem;font-weight:700;padding:.12rem .5rem;border-radius:6px}
+
+  /* engine/cockpit two-liner */
+  .split{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:.7rem .9rem;margin:.2rem 0 .7rem;font-size:.92rem;color:var(--ink-soft)}
+  .split b{color:var(--ink)}
+
+  /* persona sub-cards */
+  .trio{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.7rem;margin:.3rem 0 .5rem}
+  .trio .t{background:var(--persona-tint);border:1px solid #ddd6fe;border-radius:10px;padding:.75rem .85rem}
+  .trio .t h4{font-size:.98rem;color:#5b21b6;margin-bottom:.15rem}
+  .trio .t .what{font-size:.85rem;color:var(--ink-soft);margin-bottom:.4rem}
+  .trio .t code{font-size:.78rem;background:#0b1220;color:#c4b5fd;padding:.12rem .4rem;border-radius:5px}
+
+  /* aside note */
+  .aside{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:.65rem .9rem;margin-top:.6rem;font-size:.86rem;color:#854d0e}
+  .aside b{color:#713f12}
+
+  /* Why different strip */
+  .why{background:linear-gradient(135deg,#0f172a,#155e75);color:#fff;border-radius:18px;padding:2rem 2rem 2.2rem;margin-top:1.2rem;box-shadow:var(--shadow)}
+  .why h2{font-size:1.4rem;margin-bottom:1.2rem}
+  .why .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1.2rem}
+  .why .g h4{font-size:1.02rem;margin-bottom:.25rem;color:var(--brand-2)}
+  .why .g p{color:rgba(255,255,255,.85);font-size:.93rem}
+
+  footer{color:var(--ink-mute);font-size:.85rem;text-align:center;margin:3rem 0 4rem}
+  footer .draft{display:inline-block;background:#fef9c3;color:#854d0e;border:1px solid #fde68a;border-radius:8px;padding:.3rem .8rem;font-weight:600;margin-bottom:.7rem}
+  a{color:var(--accent-deep)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">StartD8 SDK · Getting Started</div>
+    <h1>From an idea to a working app — one guided path.</h1>
+    <p>StartD8 walks your team from an empty folder to a real, running application. AI stakeholder personas
+       help you decide <em>what to build</em>; a deterministic engine then <strong>builds most of it for free</strong> —
+       and you approve every change along the way.</p>
+    <div class="pills">
+      <span class="pill">🧑‍🤝‍🧑 AI personas draft your inputs</span>
+      <span class="pill">💸 ~89% of your app for $0</span>
+      <span class="pill">✅ You approve every change</span>
+    </div>
+  </div>
+</header>
+
+<div class="intro wrap">
+  <div class="card">
+    <h2>The whole journey, at a glance</h2>
+    <p>There's a natural order to getting started — each tool hands off to the next. You don't need to learn them
+       all up front; just follow the path. Here's the map, then a short "why it matters" for each stop.</p>
+    <div class="map">
+      <strong>1 Set up →&nbsp; 2 Understand →&nbsp; 3 Get guided →&nbsp;
+      4 Draft with AI personas →&nbsp; 5 <span class="free">Build (free)</span> →&nbsp;
+      6 Approve →&nbsp; 7 Ship</strong>
+    </div>
+  </div>
+</div>
+
+<main class="wrap">
+  <h2 class="section">The path — in the order you'll use it</h2>
+  <p class="section-sub">Each step: the problem it removes, the value you get, and the one command to run.</p>
+
+  <div class="journey">
+
+    <!-- 1 -->
+    <div class="step">
+      <div class="n">1</div>
+      <div class="body">
+        <div class="kicker">Set up your project</div>
+        <h3>Make it a StartD8 project</h3>
+        <div class="pv">
+          <div class="prob"><span class="lbl">The problem</span><p>You have a folder and an idea — but no clear "start here."</p></div>
+          <div class="val"><span class="lbl">What you get</span><p>One command turns your directory into a set-up StartD8 project — ready to build on, safe to re-run, and <span class="badge-free">$0</span>.</p></div>
+        </div>
+        <div class="do"><span class="lbl">Do</span><div class="cmd">startd8 project init</div></div>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="step">
+      <div class="n">2</div>
+      <div class="body">
+        <div class="kicker">Understand your project</div>
+        <h3>Concierge &amp; Kickoff</h3>
+        <div class="split">
+          <b>Two names, one job.</b> The <b>Concierge</b> is the engine — it surveys your project, tells you what's ready,
+          and scaffolds the inputs your app needs. <b>Kickoff</b> is your cockpit over it — chat, terminal, or web.
+          You'll usually just open Kickoff; the Concierge does the work underneath.
+        </div>
+        <div class="pv">
+          <div class="prob"><span class="lbl">The problem</span><p>The SDK needs to know what your app is <em>for</em> — its goals, conventions, and who its stakeholders are.</p></div>
+          <div class="val"><span class="lbl">What you get</span><p>A plain read on what's ready vs. missing, and a scaffolded starting point — including the <em>stakeholder roster</em> that powers the AI personas in the next step.</p></div>
+        </div>
+        <div class="do"><span class="lbl">Do</span><div class="cmd">startd8 concierge assess <span class="c"># the engine · or open the cockpit:</span> startd8 kickoff</div></div>
+        <div class="aside">👩‍💻 <b>For your engineers:</b> <code>startd8 concierge</code> is the deterministic front door; <code>startd8 kickoff concierge</code> / <code>concierge-chat</code> are interactive surfaces over the <em>same</em> engine.</div>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="step">
+      <div class="n">3</div>
+      <div class="body">
+        <div class="kicker">Never wonder "what's next?"</div>
+        <h3>The Red Carpet</h3>
+        <div class="pv">
+          <div class="prob"><span class="lbl">The problem</span><p>Big projects are overwhelming — what do I do first, then next?</p></div>
+          <div class="val"><span class="lbl">What you get</span><p>A guided, staged conductor that always shows your next best action — and the exact command to run it. It's the through-line that sequences everything below.</p></div>
+        </div>
+        <div class="do"><span class="lbl">Do</span><div class="cmd">startd8 kickoff red-carpet</div></div>
+      </div>
+    </div>
+
+    <!-- 4 — persona panels -->
+    <div class="step persona">
+      <div class="n">4</div>
+      <div class="body">
+        <div class="kicker">Let AI personas draft what your app needs</div>
+        <h3>The Persona Panels</h3>
+        <div class="pv">
+          <div class="prob"><span class="lbl">The problem</span><p>Blank-page paralysis: what are our goals, our requirements, our screens? Getting stakeholders in a room is slow.</p></div>
+          <div class="val"><span class="lbl">What you get</span><p>Three sibling tools spin up <strong>synthetic stakeholder personas</strong> (AI agents role-playing your roster) that <em>draft</em> the inputs for you to approve. Free to start, opt-in AI for the drafting pass — and they draft <em>structure and spec, never your real content</em>.</p></div>
+        </div>
+        <div class="trio">
+          <div class="t">
+            <h4>Stakeholder Panel</h4>
+            <div class="what">Personas draft your <b>value inputs</b> — goals, conventions, targets.</div>
+            <code>startd8 panel recommend</code>
+          </div>
+          <div class="t">
+            <h4>Requirements Panel</h4>
+            <div class="what">Role-based personas draft candidate <b>requirements</b> (a spec to approve).</div>
+            <code>startd8 requirements elicit</code>
+          </div>
+          <div class="t">
+            <h4>Manifest Suggester</h4>
+            <div class="what">A designer persona drafts your <b>screens</b> — dashboards &amp; pages.</div>
+            <code>startd8 screens suggest</code>
+          </div>
+        </div>
+        <div class="aside" style="background:#f5f3ff;border-color:#ddd6fe;color:#5b21b6">🖊️ <b>You stay the author.</b> Every persona output is a labeled draft staged for your review — approve, edit, or reject. Nothing ships without your yes.</div>
+      </div>
+    </div>
+
+    <!-- 5 -->
+    <div class="step">
+      <div class="n">5</div>
+      <div class="body">
+        <div class="kicker">Build the real thing — for free</div>
+        <h3>The $0 Generate Cascade</h3>
+        <div class="pv">
+          <div class="prob"><span class="lbl">The problem</span><p>Generating an app is usually slow and expensive — every step burns AI cost.</p></div>
+          <div class="val"><span class="lbl">What you get</span><p>From a single data contract, StartD8 builds a real, working app — data model, pages, forms, CRUD, dashboards — <strong>deterministically, at <span class="badge-free">$0</span> AI cost.</strong> That's roughly <strong>89% of your app</strong> with no per-run bill.</p></div>
+        </div>
+        <div class="do"><span class="lbl">Do</span><div class="cmd">startd8 generate backend <span class="c"># then: scaffold · views · polish</span></div></div>
+      </div>
+    </div>
+
+    <!-- 6 -->
+    <div class="step">
+      <div class="n">6</div>
+      <div class="body">
+        <div class="kicker">Stay in control</div>
+        <h3>VIPP — approve changes on your terms</h3>
+        <div class="pv">
+          <div class="prob"><span class="lbl">The problem</span><p>Automated changes to your project can feel risky — what exactly is being changed?</p></div>
+          <div class="val"><span class="lbl">What you get</span><p>Proposed changes land in an inbox <em>you</em> control. Preview everything, then apply only what you approve — at your privilege, with nothing hidden. (It can even consult the stakeholder personas as it goes.)</p></div>
+        </div>
+        <div class="do"><span class="lbl">Do</span><div class="cmd">startd8 vipp negotiate <span class="c">→</span> startd8 vipp apply</div></div>
+      </div>
+    </div>
+
+    <!-- 7 -->
+    <div class="step">
+      <div class="n">7</div>
+      <div class="body">
+        <div class="kicker">Go live</div>
+        <h3>Deploy — ship it</h3>
+        <div class="pv">
+          <div class="prob"><span class="lbl">The problem</span><p>Getting from "runs on my machine" to actually deployed is its own project.</p></div>
+          <div class="val"><span class="lbl">What you get</span><p>A graded path installs, boots, health-checks, and smoke-tests your app — so you ship with confidence, not crossed fingers.</p></div>
+        </div>
+        <div class="do"><span class="lbl">Do</span><div class="cmd">startd8 deploy local</div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Why different -->
+  <div class="why">
+    <h2>Why teams choose StartD8</h2>
+    <div class="grid">
+      <div class="g">
+        <h4>🧑‍🤝‍🧑 AI where it adds value</h4>
+        <p>Synthetic stakeholder personas draft your goals, requirements, and screens — so you start from a strong draft, not a blank page.</p>
+      </div>
+      <div class="g">
+        <h4>💸 Mostly free to build</h4>
+        <p>The heavy lifting — data model, pages, forms, dashboards — is generated deterministically at $0 AI cost. You pay for AI only where it truly helps.</p>
+      </div>
+      <div class="g">
+        <h4>🧭 Guided, not guesswork</h4>
+        <p>Every step hands off to the next and tells you what to do. New team members ramp up fast; nobody stares at a blank page.</p>
+      </div>
+      <div class="g">
+        <h4>✅ You're always in control</h4>
+        <p>Nothing changes your project without your say-so. Preview, approve, apply — on your terms, with a full trail.</p>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="draft">DRAFT · for review — not yet published</div><br>
+    StartD8 SDK · Getting Started · high-level overview ·
+    companion to the <a href="kickoff/ONBOARDING_HARBOR_TOUR.html">onboarding harbor tour</a>
+  </footer>
+</main>
+
+</body>
+</html>
