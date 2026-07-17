@@ -14,7 +14,7 @@
 
 manifest_id: startd8.agent
 name: StartD8 LLM Orchestration Capabilities
-version: "2.0.0"
+version: "2.1.0"
 description: |
   Multi-LLM provider abstraction framework with cost tracking, workflow
   orchestration, multi-phase code generation, and OpenTelemetry observability.
@@ -138,6 +138,9 @@ capabilities:
         ref: src/startd8/providers/protocol.py
         description: Provider protocol interface
     confidence: 0.95
+    anti_patterns:
+      - Never hardcode the provider list — call ProviderRegistry.list_providers() so entry-point-registered providers are seen
+      - Don't instantiate provider classes directly — use get_provider()/create_agent() after discover()
     discovery_paths:
       - If you need to add a new LLM provider, implement the Provider protocol and register via entry points.
       - If you need to check which providers are available, use ProviderRegistry.list_providers().
@@ -169,6 +172,9 @@ capabilities:
         ref: src/startd8/model_catalog.py
         description: Models constants, ModelInfo, get_latest_model(), list_models_by_tier()
     confidence: 0.90
+    anti_patterns:
+      - Never hardcode model-id strings — use Models.* constants, the single source of truth
+      - Don't pick a model by name when a tier will do — use get_latest_model(provider, tier=...) for cost-optimized routing
     discovery_paths:
       - If you need a model ID string, check the model catalog instead of hardcoding.
 
@@ -202,6 +208,9 @@ capabilities:
         ref: tests/unit/test_agent_resolution.py
         description: 16+ tests covering spec formats, config forwarding, error cases
     confidence: 0.90
+    anti_patterns:
+      - Never parse "provider:model" spec strings yourself — resolve_agent_spec() handles aliases and bare model IDs
+      - Don't construct agents without forwarding timeout_config/retry_config — all 5 providers accept them and skipping loses resilience
 
   # ===========================================================================
   # COST INTELLIGENCE — Track, budget, and forecast LLM spending
@@ -264,6 +273,9 @@ capabilities:
         ref: tests/costs/
         description: Cost tracking test suite
     confidence: 0.90
+    anti_patterns:
+      - Never compute LLM cost by hand — CostTracker.record() knows per-model pricing via PricingService
+      - Don't track cost in isolation — wire it into BudgetManager so limits are actually enforced
     discovery_paths:
       - If you need to know how much an LLM call cost, CostTracker records it automatically.
       - If you need cost data in Grafana, enable OTel metrics export.
@@ -297,6 +309,9 @@ capabilities:
         ref: src/startd8/costs/usage_limits.py
         description: UsageLimitManager for per-user/team quotas
     confidence: 0.85
+    anti_patterns:
+      - Never let spend run unbounded — set warn and max thresholds; BudgetManager raises BudgetExceeded at the limit
+      - Don't swallow BUDGET_WARNING/BudgetExceeded events — route them to alerting before the max is hit
 
   - capability_id: startd8.cost.analytics
     category: query
@@ -322,6 +337,9 @@ capabilities:
         ref: src/startd8/costs/analytics.py
         description: CostAnalytics for aggregation and forecasting
     confidence: 0.85
+    anti_patterns:
+      - Never treat a forecast as a hard number — analytics.forecast() extrapolates from usage trends, not commitments
+      - Don't aggregate raw call logs yourself — use by_provider()/by_model() on a populated CostTracker
 
   # ===========================================================================
   # WORKFLOW ORCHESTRATION — Multi-agent pipeline execution
@@ -378,6 +396,9 @@ capabilities:
         ref: src/startd8/workflows/base.py
         description: WorkflowBase protocol and execution engine
     confidence: 0.95
+    anti_patterns:
+      - Never run a workflow without a validated config — arun_workflow validates config before execution for a reason
+      - Don't assume success — check result.success and result.steps rather than trusting a returned object
     discovery_paths:
       - If you need to chain multiple agents, use the workflow system instead of manual orchestration.
       - If you need a specific capability, search workflows by capability tag first.
@@ -411,6 +432,9 @@ capabilities:
         ref: .startd8/workflows/_index.yaml
         description: Lightweight YAML index for token-efficient discovery
     confidence: 0.95
+    anti_patterns:
+      - Never hardcode a workflow list — use list_workflows()/search_workflows() so entry-point workflows are included
+      - Don't pull full metadata when scanning — use the lightweight index first and list_workflow_metadata() only on demand
 
   - capability_id: startd8.workflow.scaffold
     category: action
@@ -438,6 +462,9 @@ capabilities:
         ref: src/startd8/workflows/templates/
         description: Jinja2 templates for basic, pipeline, multi_agent, async
     confidence: 0.90
+    anti_patterns:
+      - Never hand-write a new workflow skeleton — scaffold from a template so protocol compliance and test stubs come for free
+      - Don't invent a template name — only basic, pipeline, multi_agent, and async are supported
 
   - capability_id: startd8.workflow.pipeline
     category: action
@@ -464,6 +491,9 @@ capabilities:
         ref: src/startd8/orchestration.py
         description: Pipeline, PipelineStep, PipelineResult classes
     confidence: 0.95
+    anti_patterns:
+      - Never chain agents with ad-hoc glue code — use Pipeline/PipelineStep so per-step metrics and success flags are captured
+      - Don't drop the transform_fn between steps — that hook is how each step reshapes input for the next agent
 
   # ===========================================================================
   # BUILTIN WORKFLOWS — 11 ready-to-use multi-agent workflows
@@ -495,6 +525,9 @@ capabilities:
         ref: src/startd8/workflows/builtin/lead_contractor_workflow.py
         description: LeadContractorWorkflow with spec/generate split
     confidence: 0.85
+    anti_patterns:
+      - Never run the expensive lead agent for the whole job — the pattern reserves it for the spec and delegates code to the cheap drafter
+      - Don't swap lead and drafter roles — routing all work to the senior model forfeits the 60-80% cost saving
 
   - capability_id: startd8.workflow.builtin.artisan
     category: action
@@ -526,6 +559,9 @@ capabilities:
         ref: docs/ARTISAN_WORKFLOW_GUIDE.md
         description: Comprehensive guide with phases, scripts, configuration
     confidence: 0.85
+    anti_patterns:
+      - Never skip the INTEGRATE/TEST phases to save time — the implement half relies on them for validation and rollback
+      - Don't run design and implement as one opaque pass when human review is needed — use the design handoff between halves
 
   - capability_id: startd8.workflow.builtin.architectural_review
     category: action
@@ -556,6 +592,9 @@ capabilities:
         ref: tests/unit/test_architectural_review_triage.py
         description: 87 unit tests for triage, coverage, dual-doc
     confidence: 0.90
+    anti_patterns:
+      - Never treat one review pass as final — CRP is iterative, converging on 7-domain coverage
+      - Don't manually re-litigate triaged suggestions — enable_triage classifies them ACCEPT/REJECT for you
 
   - capability_id: startd8.workflow.builtin.iterative_dev
     category: action
@@ -580,6 +619,9 @@ capabilities:
         ref: src/startd8/workflows/builtin/iterative_dev_workflow.py
         description: Iterative dev-review-fix workflow
     confidence: 0.90
+    anti_patterns:
+      - Never run the dev-review loop without a max_iterations bound — it iterates until the reviewer approves and can otherwise loop indefinitely
+      - Don't use the same agent as reviewer and developer — the loop depends on independent reviewer feedback
 
   - capability_id: startd8.workflow.builtin.doc_enhancement
     category: action
@@ -604,6 +646,9 @@ capabilities:
         ref: src/startd8/workflows/builtin/doc_enhancement_workflow.py
         description: Multi-agent document refinement chain
     confidence: 0.90
+    anti_patterns:
+      - Never run enhancement agents in parallel here — this chain is sequential, each building on the prior agent's edits
+      - Don't expect independent critiques — for that use critical-review, not doc-enhancement
 
   - capability_id: startd8.workflow.builtin.policy_analysis
     category: action
@@ -628,6 +673,9 @@ capabilities:
         ref: src/startd8/workflows/builtin/policy_analysis_workflow.py
         description: Parallel multi-criteria policy analysis
     confidence: 0.80
+    anti_patterns:
+      - Never collapse the 7 criteria into one prompt — the workflow scores them separately then synthesizes
+      - Don't use this to rewrite a policy — it analyzes and scores, it does not edit the document
 
   - capability_id: startd8.workflow.builtin.plan_ingestion
     category: action
@@ -659,6 +707,9 @@ capabilities:
         ref: tests/unit/test_plan_ingestion_workflow.py
         description: 55+ unit tests
     confidence: 0.85
+    anti_patterns:
+      - Never route a plan to a contractor by hand — the LLM scores 7 dimensions and routes to Prime (simple) or Artisan (complex)
+      - Don't skip the parse/assess phases and jump to transform — the 5-phase order is what makes routing correct
 
   - capability_id: startd8.workflow.builtin.design_polish
     category: action
@@ -680,6 +731,9 @@ capabilities:
         ref: src/startd8/workflows/builtin/design_polish_workflow.py
         description: 3-stage design document refinement
     confidence: 0.85
+    anti_patterns:
+      - Never conflate design-polish with content review — its 3 stages refine structure, content, and clarity of a design doc, not correctness
+      - "Don't run it on code — it is a design-document refinement workflow # TODO(anti_patterns): author-confirm"
 
   - capability_id: startd8.workflow.builtin.critical_review
     category: action
@@ -703,6 +757,9 @@ capabilities:
         ref: src/startd8/workflows/builtin/critical_review_workflow.py
         description: Multi-agent review with analysis reports
     confidence: 0.85
+    anti_patterns:
+      - Never merge the reviewers' outputs before reading them — each agent reviews independently and reports by severity
+      - Don't expect sequential improvement — for a building chain use doc-enhancement, not critical-review
 
   - capability_id: startd8.workflow.builtin.plain_language
     category: action
@@ -726,6 +783,9 @@ capabilities:
         ref: src/startd8/workflows/builtin/plain_language_workflow.py
         description: Content simplification workflow
     confidence: 0.75
+    anti_patterns:
+      - Never omit target_reading_level — the simplification is calibrated to a specified reading level
+      - Don't rely on it to preserve technical precision — it trades nuance for accessibility by design
 
   # ===========================================================================
   # CODE GENERATION CONTRACTS — Size estimation and truncation prevention
@@ -760,6 +820,9 @@ capabilities:
         ref: docs/PATTERN-truncation-detection.md
         description: Truncation detection pattern documentation
     confidence: 0.90
+    anti_patterns:
+      - Never assume a complete response — run detect_truncation() and check confidence before consuming code output
+      - Don't wait for truncation to happen — use estimate_output_size() pre-flight to size the request first
     discovery_paths:
       - If generated code looks incomplete, run truncation detection before re-generating.
       - If tasks are large, estimate output size before generation to avoid waste.
@@ -790,6 +853,9 @@ capabilities:
         ref: src/startd8/utils/code_extraction.py
         description: extract_code_from_response(), extract_multi_file_code()
     confidence: 0.85
+    anti_patterns:
+      - Never feed a raw fenced LLM response to a compiler — extract_code_from_response() strips fences, preamble, and notes first
+      - Don't hand-split multi-file responses — use extract_multi_file_code() so per-file boundaries are parsed correctly
 
   - capability_id: startd8.codegen.design_handoff
     category: action
@@ -819,6 +885,9 @@ capabilities:
         ref: tests/unit/contractors/test_handoff.py
         description: 13 tests for round-trip, error cases, schema versioning
     confidence: 0.85
+    anti_patterns:
+      - Never share design state across processes via ad-hoc files — write_design_handoff() preserves decisions, context, and scaffold
+      - Don't load a handoff from a newer schema — version 1 has reject-future semantics and will refuse it
 
   - capability_id: startd8.codegen.domain_preflight
     category: action
@@ -852,6 +921,9 @@ capabilities:
         ref: tests/unit/test_prime_task_enrichment.py
         description: 17 tests for extraction and enrichment
     confidence: 0.80
+    anti_patterns:
+      - Never hand-edit prompts to enforce project rules — DomainChecklist injects import/dependency/ordering constraints automatically
+      - Don't merge generated code before validate_generated_code() runs — post-validation catches violations pre-integration
 
   # ===========================================================================
   # RESILIENCE — Fault tolerance and rate control
@@ -884,6 +956,9 @@ capabilities:
         ref: src/startd8/resilience/__init__.py
         description: ResilienceConfig, ResilienceLevel, RetrySettings, CircuitBreakerSettings
     confidence: 0.85
+    anti_patterns:
+      - Never build retry/circuit-breaker settings by hand — use ResilienceConfig.from_level() with a preset (OFF..AGGRESSIVE)
+      - Don't leave ErrorStrategy implicit — choose STOP, RETRY, SKIP, or FALLBACK so failure behavior is explicit
     discovery_paths:
       - If LLM calls are failing intermittently, increase resilience level.
       - Start with STANDARD level and tune from there.
@@ -916,6 +991,9 @@ capabilities:
         ref: src/startd8/ratelimit/__init__.py
         description: RateLimiter, TokenBucket, BackpressureStrategy, get_rate_limiter
     confidence: 0.85
+    anti_patterns:
+      - Never fire provider calls without acquiring the limiter — dual buckets guard both requests/min and tokens/min
+      - Don't ignore the backpressure choice — QUEUE waits, REJECT errors, SHED drops; the wrong one silently loses work
 
   # ===========================================================================
   # OBSERVABILITY — OTel integration for LLM operations
@@ -946,6 +1024,9 @@ capabilities:
         ref: src/startd8/otel.py
         description: configure_otel(), configure_tracing(), resource detection
     confidence: 0.90
+    anti_patterns:
+      - Never configure Tempo/Mimir/Loki exporters piecemeal — configure_otel() wires the full stack in one call
+      - Don't emit spans without project context — add_project_context_to_span keeps ContextCore correlation intact
 
   - capability_id: startd8.observability.tracked_agent
     category: action
@@ -979,6 +1060,9 @@ capabilities:
         ref: tests/unit/test_tracked_genai.py
         description: 15 tests for TrackedAgentMixin
     confidence: 0.90
+    anti_patterns:
+      - Never hand-instrument agent calls — TrackedAgentMixin auto-wraps agenerate()/generate() with gen_ai spans
+      - Don't strip the agent.* attributes assuming gen_ai.* is enough — spans dual-emit both intentionally
 
   - capability_id: startd8.observability.session_tracking
     category: action
@@ -1007,6 +1091,9 @@ capabilities:
         ref: src/startd8/session_tracking.py
         description: SessionTracker with 7 OTel metrics
     confidence: 0.80
+    anti_patterns:
+      - Never derive session metrics from logs — record_request() emits the 7 canonical OTel metrics directly
+      - Don't record requests against an unstarted session — call start_session() to get the sid first
 
   - capability_id: startd8.observability.otel_logging
     category: integration
@@ -1034,6 +1121,9 @@ capabilities:
         ref: src/startd8/logging_otel.py
         description: OpenTelemetry log bridge implementation
     confidence: 0.90
+    anti_patterns:
+      - Never use logging.getLogger() in the SDK — it misses the Loki handler; use get_logger() instead
+      - Don't assume a message reached Loki without the OTel handler attached via get_logger()
 
   - capability_id: startd8.observability.workflow_events
     category: action
@@ -1062,6 +1152,9 @@ capabilities:
         ref: src/startd8/events/types.py
         description: EventType enum and EventBus implementation
     confidence: 0.85
+    anti_patterns:
+      - Never poll for workflow state — subscribe to the EventBus for pipeline, truncation, and budget events
+      - Don't invent event names — subscribe only to defined EventType members like PIPELINE_COMPLETE or BUDGET_EXCEEDED
 
   # ===========================================================================
   # AGENT INTEGRATION — MCP, ContextCore, and skill agents
@@ -1095,6 +1188,9 @@ capabilities:
         ref: src/startd8/skills/agent.py
         description: SkillAgent for Claude Skills via MCP
     confidence: 0.85
+    anti_patterns:
+      - Never expose each workflow as its own MCP tool — all workflows route through the single startd8_workflow tool
+      - Don't bypass the gateway's rate limiting and audit logging by calling workflows out-of-band
     discovery_paths:
       - If you're an AI agent, use the startd8_workflow MCP tool to access all capabilities.
 
@@ -1127,6 +1223,9 @@ capabilities:
         ref: src/startd8/workflows/builtin/task_tracking_emitter.py
         description: emit_task_tracking_artifacts() for ContextCore state files
     confidence: 0.85
+    anti_patterns:
+      - Never bolt OTel tracking onto a workflow by hand — wrap it with ContextCoreWorkflowAdapter
+      - Don't hardcode a task list — ContextCoreTaskSource discovers pending tasks from ContextCore state files
 
   - capability_id: startd8.integration.skill_agents
     category: action
@@ -1153,6 +1252,9 @@ capabilities:
         ref: src/startd8/skills/agent.py
         description: SkillAgent with factory functions
     confidence: 0.75
+    anti_patterns:
+      - Never re-implement domain prompts inline — use the pre-built skill-agent factories (e.g. create_code_reviewer_agent)
+      - Don't wrap skill agents in a nonstandard interface — they already expose the standard agenerate() surface
 
   # ===========================================================================
   # DEVELOPER TOOLS — CLI, benchmarking, diagnostics
@@ -1185,6 +1287,9 @@ capabilities:
         ref: src/startd8/cli.py
         description: run-benchmark and compare CLI commands
     confidence: 0.85
+    anti_patterns:
+      - Never judge a model on a single run — use run-benchmark/compare across models for quality, cost, and timing
+      - Don't compare models on different prompts — the comparison assumes the same prompt-id across agents
 
   - capability_id: startd8.cli.prompt_management
     category: action
@@ -1212,6 +1317,9 @@ capabilities:
         ref: src/startd8/framework.py
         description: AgentFramework prompt management
     confidence: 0.85
+    anti_patterns:
+      - Never edit a prompt in place without versioning — create-prompt uses semantic versions so history is preserved
+      - Don't lose provenance by omitting --version/--tag — they are how prompt lifecycle is tracked
 
   - capability_id: startd8.cli.tui
     category: action
@@ -1236,6 +1344,9 @@ capabilities:
         ref: src/startd8/cli.py
         description: tui command launching interactive interface
     confidence: 0.75
+    anti_patterns:
+      - Never script automation against the TUI — it is an interactive terminal UI, not a programmatic API
+      - "Don't reach for the TUI in CI — use the non-interactive CLI/workflow commands there # TODO(anti_patterns): author-confirm"
 
   - capability_id: startd8.diagnostics.runner
     category: action
@@ -1261,6 +1372,9 @@ capabilities:
         ref: src/startd8/diagnostics/__init__.py
         description: DiagnosticRunner, DiagnosticAnalyzer, AutoFixer
     confidence: 0.70
+    anti_patterns:
+      - Never apply auto-fixes blindly — apply_safe_fixes only covers the safe subset; review the analysis first
+      - Don't skip analyze_report() — the LLM-based analysis is what explains a failing health check
 
   - capability_id: startd8.testing.mock_provider
     category: action
@@ -1289,6 +1403,9 @@ capabilities:
         ref: src/startd8/agents/mock.py
         description: MockAgent implementation with response queuing
     confidence: 0.95
+    anti_patterns:
+      - Never hit real provider APIs in unit tests — resolve "mock:mock-model" for deterministic, zero-cost responses
+      - Don't forget failure paths — use MockAgent(error=...) to exercise error handling, not just the happy path
 
   # ===========================================================================
   # QUEUE SYSTEM — Batch job processing
@@ -1318,6 +1435,9 @@ capabilities:
         ref: src/startd8/cli.py
         description: Queue CLI commands (add, run, watch, status, list, configure)
     confidence: 0.75
+    anti_patterns:
+      - Never process batch jobs with ad-hoc scripts — use the queue so status tracking and retries are handled
+      - Don't run and watch the same folder simultaneously — queue-run and queue-watch are distinct processing modes
 
   # ===========================================================================
   # SERVER — REST API for workflow execution
@@ -1347,6 +1467,9 @@ capabilities:
         ref: src/startd8/server/
         description: Starlette-based REST API server
     confidence: 0.70
+    anti_patterns:
+      - Never call the async Starlette server synchronously — POST /workflows/{id}/run expects a JSON config body over async HTTP
+      - Don't expose the workflow API without the gateway's protections when remote — it executes arbitrary registered workflows
 
   # ===========================================================================
   # DETERMINISTIC CODEGEN ($0, no-LLM) — one .prisma contract -> all-Python app
@@ -1382,6 +1505,9 @@ capabilities:
         ref: src/startd8/cli_generate.py
         description: startd8 generate backend command
     confidence: 0.85
+    anti_patterns:
+      - Never pay an LLM to scaffold a CRUD app — this path is deterministic, $0, and needs no model
+      - Don't hand-edit generated artifacts — every file is $0.00-skippable and drift-checked, so edits will flag as drift
 
   - capability_id: startd8.codegen.import_path
     category: generate
@@ -1412,6 +1538,9 @@ capabilities:
         ref: src/startd8/backend_codegen/imports_manifest.py
         description: imports.yaml grammar parse/validate
     confidence: 0.85
+    anti_patterns:
+      - Never write a bespoke importer — from_json is the byte-for-byte inverse of export; use it to round-trip
+      - Don't import with per-record transactions — strict atomicity means one outer transaction, all-or-nothing
 
   - capability_id: startd8.codegen.wireframe
     category: query
@@ -1440,6 +1569,9 @@ capabilities:
         ref: src/startd8/cli_wireframe.py
         description: startd8 wireframe command
     confidence: 0.85
+    anti_patterns:
+      - Never treat wireframe output as authoritative — it is read-only, $0, and advisory only
+      - Don't run the full cascade to see what it would build — wireframe previews entities/routes/pages without writes
 
   - capability_id: startd8.codegen.presentation_polish
     category: generate
@@ -1468,6 +1600,9 @@ capabilities:
         ref: src/startd8/cli_polish.py
         description: startd8 polish command
     confidence: 0.80
+    anti_patterns:
+      - Never restyle a generated app with hand-written CSS — polish emits WCAG-AA design tokens deterministically at $0
+      - Don't fear re-running it — apply is idempotent and non-destructive over an already-generated app
 
   - capability_id: startd8.codegen.composite_views
     category: generate
@@ -1492,6 +1627,9 @@ capabilities:
         ref: src/startd8/view_codegen/
         description: CompositeViewProvider view generation
     confidence: 0.80
+    anti_patterns:
+      - Never hand-build dashboard/board/workspace pages — generate them from views.yaml deterministically at $0
+      - Don't hand-edit generated composite pages — they are owned, $0.00-skippable, and drift-checked
 
   - capability_id: startd8.codegen.deployment_mode
     category: generate
@@ -1520,6 +1658,9 @@ capabilities:
         ref: docs/design/deployment-mode/
         description: requirements + plan (M0-M3 shipped)
     confidence: 0.80
+    anti_patterns:
+      - Never fork the app for local vs deployed — a single mode-varying settings.py differs only where security demands
+      - Don't hand-edit the embedded startd8-mode header — it is verified at $0 by the schema-only skip-hook
 
   - capability_id: startd8.codegen.cloud_native_deploy
     category: generate
@@ -1547,6 +1688,9 @@ capabilities:
         ref: docs/design/cloud-native-deploy/
         description: cloud-native deploy requirements
     confidence: 0.80
+    anti_patterns:
+      - Never hand-write K8s manifests for a deployed app — generation emits a vendor-neutral deploy/ tree with Gateway API and ESO
+      - Don't hardcode per-env config — dev/test/prod differ via kustomize overlays, not edited base manifests
 
   # ===========================================================================
   # DEPLOY & VALIDATION HARNESSES
@@ -1578,6 +1722,9 @@ capabilities:
         ref: docs/design/cloud-native-deploy/CLOUD_NATIVE_DEPLOY_REQUIREMENTS.md
         description: FR-CND-30
     confidence: 0.80
+    anti_patterns:
+      - Never ship a deployed app without the coherence gate — it is fail-closed and HARD failures must block the build
+      - Don't downgrade a security->HARD verdict to a warning — only operational issues are SOFT
 
   - capability_id: startd8.deploy.local_harness
     category: validate
@@ -1603,6 +1750,9 @@ capabilities:
         ref: docs/design/local-deploy-harness/
         description: M0-M3 requirements + plan
     confidence: 0.80
+    anti_patterns:
+      - Never treat a boot failure as a harness bug by default — the graded ladder is a real code-quality/SDK-defect signal
+      - Don't run untrusted generated apps outside the harness's trust boundary — it isolates via venv, subprocess, loopback, and rlimits
 
   # ===========================================================================
   # LLM-DRIVEN POLYGLOT CONSTRUCTION (path 2) — 5 languages, microservice fleets
@@ -1636,6 +1786,9 @@ capabilities:
         ref: src/startd8/languages/
         description: 5 LanguageProfiles + parsers/splicers
     confidence: 0.90
+    anti_patterns:
+      - Never route a polyglot fleet through the $0 Python-only cascade — this LLM-driven path is the one that spans 5 languages
+      - Don't assume it is free — unlike the deterministic path, element-level generation across languages uses LLMs
 
   - capability_id: startd8.contractors.prime
     category: action
@@ -1663,6 +1816,9 @@ capabilities:
         ref: docs/PRIME_CONTRACTOR_WORKFLOW_GUIDE.md
         description: prime contractor guide
     confidence: 0.85
+    anti_patterns:
+      - Never re-run a batch from scratch after a failure — PrimeContractorWorkflow supports per-phase checkpoint/resume
+      - Don't overwrite existing files unintentionally — edit mode auto-detects on-disk targets, so confirm create vs edit intent
 
   - capability_id: startd8.repair.pipeline
     category: transform
@@ -1690,6 +1846,9 @@ capabilities:
         ref: src/startd8/repair/steps/
         description: per-language repair steps
     confidence: 0.85
+    anti_patterns:
+      - Never skip repair before merge — the ~45 steps run inside IntegrationEngine pre- and post-merge for a reason
+      - Don't apply repair steps out of language order — they are organized by language and staging is atomic
 
   - capability_id: startd8.complexity.tier_routing
     category: action
@@ -1713,6 +1872,9 @@ capabilities:
         ref: src/startd8/complexity/classifier.py
         description: classify_tier
     confidence: 0.85
+    anti_patterns:
+      - Never send a TRIVIAL task to an LLM — the classifier routes it to the no-LLM path to save cost
+      - Don't bypass classify_tier() and pick a generator by hand — routing to the cheapest capable path is the whole point
 
   - capability_id: startd8.security_prime.gate
     category: action
@@ -1741,6 +1903,9 @@ capabilities:
         ref: docs/design/security-prime/
         description: security prime requirements
     confidence: 0.80
+    anti_patterns:
+      - Never accept generated code before the Anzen gate — the GateVerdictReport is what admits or rejects it
+      - Don't skip verify_file() wiring — the security score depends on injection/credential/lifecycle checks running in-pipeline
 
   - capability_id: startd8.query_prime.secure_generation
     category: generate
@@ -1769,6 +1934,9 @@ capabilities:
         ref: docs/design/query-prime/
         description: query prime requirements
     confidence: 0.80
+    anti_patterns:
+      - Never hand-write DB queries alongside this path — it generates them secure-by-construction with verify_file() checks
+      - Don't force one model for every query — tiers route T1 template / T2 Haiku / T3 Sonnet to use the cheapest capable model
 
   # ===========================================================================
   # AGENTIC LOOP — multi-turn tool-use runtime on the SDK's own provider layer
@@ -1801,6 +1969,9 @@ capabilities:
         ref: tests/unit/agents/test_agentic_session.py
         description: agentic session tests
     confidence: 0.85
+    anti_patterns:
+      - Never run the tool-use loop without safety bounds — max_turns, per-turn cap, and fail-closed budget are load-bearing
+      - Don't allow-list tools by default — the policy is effect-class default-deny; grant explicitly
 
   # ===========================================================================
   # BENCHMARKS — model-skill grid + system-level fleet benchmark
@@ -1833,6 +2004,9 @@ capabilities:
         ref: src/startd8/model_comparison.py
         description: compare-models core
     confidence: 0.80
+    anti_patterns:
+      - Never score a missing API key as 0 — that is an infra_fail, distinct from a real model failure
+      - Don't re-run to rescore — results persist-then-rescore ($0 Mottainai) rather than regenerating
 
   - capability_id: startd8.benchmark.round3_system
     category: validate
@@ -1863,6 +2037,9 @@ capabilities:
         ref: docs/design/round3-full-app/BENCHMARK_METHODOLOGY.md
         description: how the shipped system works
     confidence: 0.80
+    anti_patterns:
+      - Never charge a downstream service's fault to the orchestrator — per-service attribution keeps that honest
+      - Don't score without the frontend gate — the journey-based scoring depends on a reachable frontend, with only a capped bonus
 
   # ===========================================================================
   # ONBOARDING & LANGUAGE SUPPORT
@@ -1895,6 +2072,9 @@ capabilities:
         ref: docs/design/kickoff/
         description: concierge requirements + friction log
     confidence: 0.80
+    anti_patterns:
+      - Never let the concierge MCP tool write files — its posture is assist (MCP is read/preview-only, the CLI is sole writer)
+      - Don't skip survey/assess before instantiate-kickoff — the kickoff is grounded in the repo assessment
 
   - capability_id: startd8.languages.profiles
     category: integration
@@ -1922,6 +2102,9 @@ capabilities:
         ref: pyproject.toml
         description: 5 language entry points
     confidence: 0.90
+    anti_patterns:
+      - Never hardcode which language a file set uses — resolve_language(files) returns the dominant profile
+      - Don't assume a sixth language works — only python/go/nodejs/java/csharp profiles are registered via entry points
 
 # =============================================================================
 # DESIGN PRINCIPLES (10 total)
@@ -2237,6 +2420,10 @@ gaps_identified:
 # =============================================================================
 
 changelog:
+  - version: "2.1.0"
+    date: "2026-07-16"
+    changes:
+      - "Populated `anti_patterns` (this manifest's native negative-space / 'wont' concept — it renders as the 'Avoid:' bullets in the derived mcp-tools.json / agent-card.json) on the 61 of 62 capabilities that lacked it. Grounded in each entry's own summary/description prose (imperative Never/Don't/Avoid); 0 fabricated, 2 flagged `# TODO(anti_patterns): author-confirm` (design_polish, cli.tui). Additive/non-breaking: 183 insertions / 0 deletions, YAML re-parses, no existing field changed or reordered. This is the CL-13 NODE-SCHEMA rollout applied to THIS manifest via its NATIVE field rather than a duplicate `wont` — grounding caught that wont = anti_patterns = the JSON 'Avoid:' section (one concept, three presentation names; the concept-key≠presentation-name lesson at field level). On the next capability-index regen the derived JSONs pick up the new Avoid: bullets — closing the derived-artifact loop. Ledger: dev-os CLOSURE-LEDGER.md CL-13."
   - version: "1.0.0"
     date: "2026-02-18"
     changes:
