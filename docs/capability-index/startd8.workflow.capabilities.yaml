@@ -11,7 +11,7 @@
 
 manifest_id: startd8.workflow.capabilities
 name: StartD8 Workflow System Capabilities
-version: "2.8.0"
+version: "2.9.0"
 description: |
   Capabilities for StartD8 SDK workflow system.
   Protocol-based multi-agent orchestration with cost tracking and observability.
@@ -53,6 +53,8 @@ capabilities:
     audiences: [workflow_developer, sdk_architect]
     user_benefit: "Consistent workflow interface across all implementations"
     delivers_benefit: workflow.authoring.protocol_clarity
+    wont: |
+      Defines the interface only — never implements execution; concrete workflows supply behavior.
     evidence:
       - type: code
         ref: src/startd8/workflows/base.py
@@ -65,6 +67,8 @@ capabilities:
     audiences: [workflow_developer, ai_agent]
     user_benefit: "Self-describing workflows without code inspection"
     delivers_benefit: workflow.authoring.metadata_rich
+    wont: |
+      Describes a workflow — does not run it; metadata never triggers execution.
     evidence:
       - type: code
         ref: src/startd8/workflows/models.py
@@ -77,6 +81,8 @@ capabilities:
     audiences: [workflow_developer, workflow_user]
     user_benefit: "Catch config errors before execution starts"
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Validates config only — never mutates or executes it; returns errors, does not halt.
     evidence:
       - type: code
         ref: src/startd8/workflows/base.py
@@ -98,6 +104,8 @@ capabilities:
         startd8 workflow templates  # list available templates
       agent: |
         CLI: startd8 workflow new <name> --template [basic|pipeline|multi_agent|async].
+    wont: |
+      Scaffolds structure only — never fills in business logic; generated workflows still need implementation.
     evidence:
       - type: code
         ref: src/startd8/workflows/scaffold.py
@@ -120,6 +128,8 @@ capabilities:
     audiences: [workflow_developer, sdk_architect]
     user_benefit: "Third-party workflows work automatically after pip install"
     delivers_benefit: workflow.reusability.plugin_ecosystem
+    wont: |
+      Discovers registered entry points only — never imports arbitrary or unregistered modules.
     evidence:
       - type: code
         ref: src/startd8/workflows/registry.py
@@ -132,6 +142,8 @@ capabilities:
     audiences: [workflow_user, ai_agent]
     user_benefit: "Discover all available workflows programmatically"
     delivers_benefit: workflow.discovery.registry_central
+    wont: |
+      Lists registered workflows only — never discovers unregistered/filesystem ones.
     evidence:
       - type: code
         ref: src/startd8/workflows/registry.py
@@ -144,6 +156,8 @@ capabilities:
     audiences: [workflow_user, ai_agent]
     user_benefit: "Execute any workflow with consistent interface"
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Runs a registered workflow by ID — never an unregistered or config-invalid one (validation gates first).
     evidence:
       - type: code
         ref: src/startd8/workflows/registry.py
@@ -156,6 +170,8 @@ capabilities:
     audiences: [workflow_user, ai_agent]
     user_benefit: "Filter workflows by what they can do"
     delivers_benefit: workflow.discovery.search_filter
+    wont: |
+      Exact, case-insensitive tag match only — never fuzzy or substring matching.
     evidence:
       - type: code
         ref: src/startd8/workflows/registry.py
@@ -172,6 +188,8 @@ capabilities:
     audiences: [ai_agent, sdk_architect]
     user_benefit: "95% token reduction for workflow discovery"
     delivers_benefit: workflow.discovery.progressive_disclosure
+    wont: |
+      A discovery index only — never the execution source of truth; does not load Python.
     evidence:
       - type: doc
         ref: .startd8/workflows/_index.yaml
@@ -184,6 +202,8 @@ capabilities:
     audiences: [workflow_developer, ai_agent]
     user_benefit: "Agents can read workflow definitions without loading Python"
     delivers_benefit: workflow.discovery.progressive_disclosure
+    wont: |
+      Exports definitions for reading — never executable code; agents read, they do not run from it.
     evidence:
       - type: code
         ref: src/startd8/workflows/filesystem.py
@@ -200,6 +220,8 @@ capabilities:
     audiences: [workflow_developer, workflow_user]
     user_benefit: "Chain multiple agents with data transformation between steps"
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Sequential only — never runs steps concurrently (see execution.parallel); each step feeds the next.
     evidence:
       - type: code
         ref: src/startd8/orchestration.py
@@ -212,6 +234,8 @@ capabilities:
     audiences: [workflow_user, integration_developer]
     user_benefit: "Know workflow is progressing during long runs"
     delivers_benefit: workflow.execution.progress_tracking
+    wont: |
+      Reports progress only — never alters execution or pauses it.
     evidence:
       - type: code
         ref: src/startd8/workflows/base.py
@@ -224,6 +248,8 @@ capabilities:
     audiences: [workflow_developer, integration_developer]
     user_benefit: "Integrate workflows with async applications"
     delivers_benefit: workflow.execution.async_native
+    wont: |
+      Bridges sync/async — never changes workflow semantics; results identical to sync.
     evidence:
       - type: code
         ref: src/startd8/workflows/base.py
@@ -240,6 +266,8 @@ capabilities:
     audiences: [workflow_user, ai_agent]
     user_benefit: "Know exact cost of every workflow run"
     delivers_benefit: workflow.observability.cost_tracking
+    wont: |
+      Tracks and reports cost — never enforces a budget or blocks a run (that is the contractor's gate).
     evidence:
       - type: code
         ref: src/startd8/workflows/models.py
@@ -252,6 +280,8 @@ capabilities:
     audiences: [integration_developer, sdk_architect]
     user_benefit: "Build real-time dashboards and integrations"
     delivers_benefit: workflow.observability.event_stream
+    wont: |
+      Emits lifecycle events — never controls flow; subscribers observe, they do not gate.
     evidence:
       - type: code
         ref: src/startd8/events/types.py
@@ -264,6 +294,8 @@ capabilities:
     audiences: [workflow_developer, workflow_user]
     user_benefit: "Debug failures by inspecting each step"
     delivers_benefit: workflow.observability.step_debugging
+    wont: |
+      Records step results for inspection — never replays or re-runs a step.
     evidence:
       - type: code
         ref: src/startd8/workflows/models.py
@@ -280,6 +312,8 @@ capabilities:
     audiences: [workflow_user]
     user_benefit: "Discover workflows without writing code"
     delivers_benefit: workflow.discovery.cli_exploration
+    wont: |
+      Lists only — never executes; a discovery surface, not a run command.
     evidence:
       - type: code
         ref: src/startd8/cli.py
@@ -292,6 +326,8 @@ capabilities:
     audiences: [workflow_user, ai_agent]
     user_benefit: "Understand workflow requirements without reading code"
     delivers_benefit: workflow.discovery.cli_exploration
+    wont: |
+      Shows metadata only — never runs the workflow or reads its source.
     evidence:
       - type: code
         ref: src/startd8/cli.py
@@ -304,6 +340,8 @@ capabilities:
     audiences: [workflow_user]
     user_benefit: "Execute workflows from command line"
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Executes a validated workflow — never one that fails config validation.
     evidence:
       - type: code
         ref: src/startd8/cli.py
@@ -320,6 +358,8 @@ capabilities:
     audiences: [workflow_developer]
     user_benefit: "Fast, deterministic workflow tests"
     delivers_benefit: workflow.testing.mock_agents
+    wont: |
+      For tests only — never calls a real provider; deterministic, not representative of live latency/cost.
     evidence:
       - type: code
         ref: src/startd8/providers/mock.py
@@ -343,6 +383,8 @@ capabilities:
       agent: |
         MCP tool: startd8_workflow. Actions: list, describe, run.
         Input: {action: "run", workflow_id: "pipeline", config: {...}}.
+    wont: |
+      Exposes list/describe/run — never arbitrary code execution; bounded to the registered surface.
     evidence:
       - type: code
         ref: src/startd8/mcp/gateway.py
@@ -363,6 +405,8 @@ capabilities:
       agent: |
         Config: {project_context: {project_id: "P1", task_id: "T1"}}.
         Result: result.project_context.to_labels() for Grafana queries.
+    wont: |
+      Carries project metadata for correlation — never drives execution; absent context degrades tracking, not the run.
     evidence:
       - type: code
         ref: src/startd8/workflows/models.py
@@ -381,6 +425,8 @@ capabilities:
     summary: "Sequential multi-agent pipeline workflow"
     audiences: [workflow_user, ai_agent]
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Sequential builtin — never parallel; for concurrency use execution.parallel.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/pipeline_workflow.py
@@ -391,6 +437,8 @@ capabilities:
     summary: "Dev-review-fix loop with feedback iteration"
     audiences: [workflow_user, ai_agent]
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Iterates dev-review-fix — never ships without a review pass; bounded by max iterations.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/iterative_dev_workflow.py
@@ -401,6 +449,8 @@ capabilities:
     summary: "Multi-agent document refinement chain"
     audiences: [workflow_user, ai_agent]
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Refines an existing document — never authors from scratch; an input document is required.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/doc_enhancement_workflow.py
@@ -411,6 +461,8 @@ capabilities:
     summary: "3-stage design document refinement"
     audiences: [workflow_user, ai_agent]
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Refines design documents only — never runs on code (a design-doc workflow, not code review).
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/design_polish_workflow.py
@@ -421,6 +473,8 @@ capabilities:
     summary: "Multi-agent document review with analysis reports"
     audiences: [workflow_user, ai_agent]
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Produces review/analysis — never edits the reviewed document; advisory, not a rewrite.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/critical_review_workflow.py
@@ -431,6 +485,8 @@ capabilities:
     summary: "Cost-efficient multi-agent orchestration with lead/contractor pattern"
     audiences: [workflow_developer, ai_agent]
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Cost-efficient orchestration — never routes every task to the priciest agent; the lead delegates to cheaper contractors.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/lead_contractor_workflow.py
@@ -441,6 +497,8 @@ capabilities:
     summary: "Multi-agent parallel critical policy analysis with 7-criteria scoring"
     audiences: [workflow_user, ai_agent]
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Analyzes and scores policy — never sets policy or makes the decision; advisory 7-criteria scoring.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/policy_analysis_workflow.py
@@ -451,6 +509,8 @@ capabilities:
     summary: "Complex content simplification into plain language"
     audiences: [workflow_user, ai_agent]
     delivers_benefit: workflow.execution.validated_run
+    wont: |
+      Trades technical precision for accessibility by design — never preserves full nuance; calibrated to a target reading level.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/plain_language_workflow.py
@@ -483,6 +543,8 @@ capabilities:
         complexity_threshold, assessor_agent, transformer_agent, generate_task_tracking, project_id,
         sprint_id, install_to_contextcore, emit_ndjson_events}. Returns PlanIngestionResult.
         result.output["task_tracking"] contains emitted artifact paths when enabled.
+    wont: |
+      Parses and routes plans — never executes the generated tasks; emits artifacts, ContextCore tasks optional.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/plan_ingestion_workflow.py
@@ -539,6 +601,8 @@ capabilities:
         max_suggestions, scope, enable_triage, substantially_addressed_threshold, max_cost_usd,
         warn_cost_usd, context_files, gemini_safety_settings, feature_requirements, quality_tier}.
         Triage output in result.output["triage"]. Dual-doc: S-prefix → plan appendices, F-prefix → feature appendices.
+    wont: |
+      Reviews toward domain-coverage convergence — never rewrites the design; persists accept/reject, does not auto-apply.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/architectural_review_log_workflow.py
@@ -591,6 +655,8 @@ capabilities:
         register_handler(phase, handler). execute(context={"enriched_seed_path": "..."}). Returns
         WorkflowResult with per-phase cost, status, duration. Phases configurable via HandlerConfig.
         Context keys: architectural_context (manifest-derived), design_calibration (per-task depth tiers).
+    wont: |
+      Budget-bounded and checkpoint-gated — never exceeds the cost budget or skips the explicit review-before-implementation gate.
     evidence:
       - type: code
         ref: src/startd8/contractors/artisan_contractor.py
@@ -632,6 +698,8 @@ capabilities:
         write_design_handoff(output_dir, enriched_seed_path, project_root, workflow_id, ...) -> Path.
         load_design_handoff(path_or_dir) -> HandoffData. DESIGN_HANDOFF_FILENAME = "design-handoff.json".
         Schema version 1. Raises FileNotFoundError, ValueError for missing/invalid files.
+    wont: |
+      Splits design/implementation across processes — never auto-proceeds past the human review between halves.
     evidence:
       - type: code
         ref: src/startd8/contractors/handoff.py
@@ -667,6 +735,8 @@ capabilities:
         Auto-wired via PrimeContractor._get_domain_enrichment(). gen_context["domain_constraints"] = enrichment.prompt_constraints.
         Post-validation: validate_generated_code(code, enrichment) -> PostValidationResult.
         Utility: extract_target_files(description) -> List[str]. enrich_prime_yaml(input, root, output) -> EnrichmentReport.
+    wont: |
+      Injects domain rules automatically (allowlists, no relative imports) — never requires manual prompt editing, never invents rules.
     evidence:
       - type: code
         ref: src/startd8/contractors/prime_contractor.py
@@ -734,6 +804,8 @@ capabilities:
       implements_frs: [FR-110, FR-111, FR-112]
       breaking_change: false
 
+    wont: |
+      Generates validation from input defs — never hand-written boilerplate; only as complete as the WorkflowInput definitions.
   - capability_id: startd8.workflow.discovery.search
     category: query
     maturity: beta
@@ -791,6 +863,8 @@ capabilities:
       implements_frs: [FR-200, FR-201, FR-210, FR-211, FR-212]
       breaking_change: false
 
+    wont: |
+      Searches registered workflow metadata — never source code; a filter surface, not execution.
   - capability_id: startd8.workflow.testing.assertions
     category: validate
     maturity: beta
@@ -841,6 +915,8 @@ capabilities:
       implements_frs: [FR-500, FR-501, FR-502, FR-503, FR-504]
       breaking_change: false
 
+    wont: |
+      Assertion helpers for tests — never used in production paths.
   - capability_id: startd8.workflow.execution.async_audit
     category: action
     maturity: beta
@@ -887,6 +963,8 @@ capabilities:
   # PHASE 2 CAPABILITIES (Core Orchestration - Beta)
   # ============================================================================
 
+    wont: |
+      Adds native async to builtins — never changes their sync results; async parity, not new behavior.
   - capability_id: startd8.workflow.execution.retry
     category: action
     maturity: beta
@@ -943,6 +1021,8 @@ capabilities:
       implements_frs: [FR-100, FR-101, FR-300, FR-301, FR-302, FR-410, FR-411, FR-511]
       breaking_change: false
 
+    wont: |
+      Retries transient/classified errors only — never a deterministic failure; bounded attempts with backoff.
   - capability_id: startd8.workflow.execution.mixed_steps
     category: action
     maturity: beta
@@ -991,6 +1071,8 @@ capabilities:
       breaking_change: false
       note: "Critical refactor that unlocks three capabilities simultaneously"
 
+    wont: |
+      Dispatches step types — never changes a step's own semantics; conditional/parallel/workflow steps compose, not mutate.
   - capability_id: startd8.workflow.execution.conditional
     category: action
     maturity: beta
@@ -1039,6 +1121,8 @@ capabilities:
       implements_frs: [FR-311, FR-312]
       breaking_change: false
 
+    wont: |
+      Branches on a predicate over intermediate results — never on external state; deterministic given the inputs.
   - capability_id: startd8.workflow.execution.parallel
     category: action
     maturity: beta
@@ -1082,6 +1166,8 @@ capabilities:
       implements_frs: [FR-320, FR-321, FR-322]
       breaking_change: false
 
+    wont: |
+      Concurrent with a configurable failure policy — never silently drops a failed branch; aggregation honors the policy.
   - capability_id: startd8.workflow.reusability.compose
     category: action
     maturity: beta
@@ -1131,6 +1217,8 @@ capabilities:
   # PHASE 3 CAPABILITIES (Observability & Simulation - Beta)
   # ============================================================================
 
+    wont: |
+      Composes workflows as steps — never flattens their metrics; sub-workflow metrics aggregate, not vanish.
   - capability_id: startd8.workflow.execution.dry_run
     category: validate
     maturity: beta
@@ -1186,6 +1274,8 @@ capabilities:
       implements_frs: [FR-102, FR-103, FR-340, FR-341, FR-510]
       breaking_change: false
 
+    wont: |
+      Simulates and estimates only — never calls a provider or produces real output; a plan + cost estimate, not a run.
   - capability_id: startd8.workflow.observability.otel
     category: observe
     maturity: beta
@@ -1238,6 +1328,8 @@ capabilities:
       implements_frs: [FR-400, FR-401, FR-402, FR-403]
       breaking_change: false
 
+    wont: |
+      Emits spans — never gates execution; a no-op when OTel is not installed, never a crash.
   - capability_id: startd8.observability.manifest
     category: observe
     maturity: beta
@@ -1245,6 +1337,8 @@ capabilities:
     audiences: [integration_developer, sdk_architect]
     user_benefit: "Downstream tools discover telemetry surface without source inspection"
     delivers_benefit: workflow.observability.manifest_discovery
+    wont: |
+      Describes the signal surface — never emits the signals itself; a manifest, not an exporter.
     evidence:
       - type: doc
         ref: docs/capability-index/startd8.observability.manifest.yaml
@@ -1312,6 +1406,8 @@ capabilities:
   # PHASE 4 CAPABILITY (Enterprise - Beta)
   # ============================================================================
 
+    wont: |
+      Renders structure/results as a diagram — never executes or alters the workflow.
   - capability_id: startd8.workflow.integration.http
     category: action
     maturity: beta
@@ -1370,6 +1466,8 @@ capabilities:
 # RISK FLAGS
 # ==============================================================================
 
+    wont: |
+      Webhook-triggered with API-key auth — never an unauthenticated endpoint; auth required, not optional.
 risk_flags:
   - id: risk:pre-1.0-breaking-changes
     description: "SDK is pre-1.0, breaking changes possible in MINOR versions"
@@ -1412,6 +1510,10 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "2.9.0"
+    date: "2026-07-16"
+    changes:
+      - "Added the `wont` field (negative-space / floor / non-goal — the NODE-SCHEMA canonical name, matching sibling startd8.sdk.capabilities.yaml; agent manifest uses its native `anti_patterns` alias, all three mapped in dev-os/NODE-SCHEMA.md) to all 49 capabilities, which had NO negative-space field. Each is grounded in the entry's own summary/user_benefit/delivers_benefit prose (declarative 'X only — never Y' floors: sequential-not-parallel, advisory-not-gating, describes-not-runs, no-op-when-OTel-absent, etc.). Additive/non-breaking: 49/49 populated, 0 deletions, YAML re-parses, no existing field changed. Completes the CL-13 NODE-SCHEMA rollout across the three capability manifests (sdk `wont` / agent `anti_patterns` / workflow `wont`). Ledger: dev-os CLOSURE-LEDGER.md CL-13."
   - version: "2.8.0"
     date: "2026-02-10"
     changes:
