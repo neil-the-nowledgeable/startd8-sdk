@@ -93,8 +93,11 @@ def _end_user_rendered_strings(vm: dict) -> list:
     """Every string the end_user template actually renders — hidden raw detail and `technical` items
     (which the template drops for end_user) are excluded, mirroring the renderer."""
     s = vm["summary"]
-    out = list(s.get("meta", [])) + [s["plain_status"], s["plain_shape"], s["plain_content"],
-                                     s.get("why", ""), s.get("do", "")]
+    out = list(s.get("meta", [])) + list(s.get("steps", [])) + [
+        s.get("headline", ""), s.get("lead", ""), s.get("closing", ""),
+        s.get("plain_status", ""), s.get("plain_shape", ""), s.get("plain_content", ""),
+        s.get("plain_ready", ""), s.get("why", ""), s.get("do", ""),
+    ]
     for sec in vm["sections"]:
         out.append(sec["title"])
         out += list(sec.get("need_items", []))
@@ -122,6 +125,21 @@ def test_end_user_rendered_surface_has_no_banned_jargon(golden_root: Path) -> No
     vm = compose(_plan(golden_root), role="end_user", fluency="intermediate")
     for text in _end_user_rendered_strings(vm):
         assert not has_jargon(text), f"FR-AUD-C1 banned jargon reached the end_user surface: {text!r}"
+
+
+def test_end_user_surface_has_no_process_meta(golden_root: Path) -> None:
+    """R2-F1 — the end_user surface must not narrate the tool/process: no filesystem paths, no
+    build-pipeline framing. The app's own NAME is shown instead of its path."""
+    from startd8.wireframe_view import compose
+
+    vm = compose(_plan(golden_root), role="end_user", fluency="intermediate")
+    blob = " ".join(_end_user_rendered_strings(vm) + [vm.get("app_name", "")])
+    assert "/Users/" not in blob and vm["project_root"] not in blob   # no path leaks
+    low = blob.lower()
+    for phrase in ("about to build", "line of code", "generat", "pipeline", "deterministic", "$0", "no llm"):
+        assert phrase not in low, f"process-meta phrase reached the end_user surface: {phrase!r}"
+    # app name is shown (not a path); project_root stays in the embed for provenance only
+    assert vm["app_name"] and "/" not in vm["app_name"]
 
 
 def test_cli_html_flag_writes_preview(tmp_path: Path, golden_root: Path) -> None:

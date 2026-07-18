@@ -105,6 +105,20 @@ def _item_view(section_key: str, item) -> dict:
     }
 
 
+def _app_name(plan: WireframePlan) -> str:
+    """The app's own name for the end-user masthead (R2-F1: never the filesystem path). Reads the
+    scaffold `app:` item; falls back to the project folder name (a plain word, not an absolute path)."""
+    for s in plan.sections:
+        if s.key == "scaffold":
+            for it in s.items:
+                if it.label.lower().startswith("app:"):
+                    name = it.label.split(":", 1)[1].strip()
+                    if name:
+                        return name
+    base = str(plan.project_root).rstrip("/").rsplit("/", 1)[-1]
+    return base or "your app"
+
+
 def _plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
@@ -139,6 +153,14 @@ def _plain_status(counts: dict) -> str:
     if not issues:
         return "Everything's planned — nothing missing or broken."
     return "Worth a look: " + "; ".join(issues) + "."
+
+
+def _plain_ready(readiness: dict) -> str:
+    """A jargon-free 'can it be built?' line for the end-user band (deterministic)."""
+    blocked = [k for k, v in readiness.items() if v != "ready"]
+    if not blocked:
+        return "Yes — everything's ready to build."
+    return "Not yet — a few things need finishing first."
 
 
 def _plain_content(cov) -> str:
@@ -180,15 +202,20 @@ def compose(
         })
 
     return {
-        "project_root": plan.project_root,
+        "project_root": plan.project_root,  # provenance in the embed only — NOT rendered to end_user (R2-F1)
+        "app_name": _app_name(plan),        # the app's own name for the masthead
         "schema_version": SCHEMA_VERSION,
         "audience": {"role": role, "fluency": fluency},  # FR-AUD: which voice this view-model speaks
         "summary": {
             # The inverted-pyramid band — same text the terminal footer renders (FR-WV-2), plus the
             # structured figures behind it (for badges) and the authored meaning (FR-WV-5 / FR-DL-12).
-            # tool-level what/why/how (FR-SV-13): architect base from WIREFRAME_META, or the
-            # audience-keyed intro authored on the summary record (FR-AUD-C4).
-            "meta": summary_narr.get("meta") or list(WIREFRAME_META),
+            # Architect tool-meta (WIREFRAME_META = process framing) is NEVER shown to the end_user (R2-F1);
+            # the end_user gets a benefit-first, actionable intro instead (headline/lead/steps, FR-AUD-C4/R2-F2).
+            "meta": summary_narr.get("meta") or (list(WIREFRAME_META) if role == "architect" else []),
+            "headline": summary_narr.get("headline", ""),
+            "lead": summary_narr.get("lead", ""),
+            "steps": summary_narr.get("steps", []),
+            "closing": summary_narr.get("closing", ""),
             "counts": counts,
             "shape": shape_line,
             "content": content,
@@ -199,6 +226,7 @@ def compose(
             "plain_shape": _plain_shape(plan.shape),    # jargon-free band values for end_user (gap-3)
             "plain_status": _plain_status(plan.status_counts),
             "plain_content": _plain_content(plan.content_coverage),
+            "plain_ready": _plain_ready(plan.readiness),
             "why": summary_narr.get("why", ""),
             "do": summary_narr.get("do", ""),
         },

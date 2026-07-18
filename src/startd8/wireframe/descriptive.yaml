@@ -193,16 +193,15 @@ records:
     do: "Read top-down — healthy (Status), right size/shape (Shape + core/derived), content-ready (Content), runnable (Cascade)? Approve if yes; if a number surprises you, drill the section below."
     audience:
       end_user:
-        meta:
-          - "A preview of the app we're about to build for you — before anyone writes a single line of code."
-          - "Why: it's far cheaper and easier to change things now, on paper, than after it's built."
-          - "How: this is put together straight from what you asked for — nothing here is guesswork."
-        why: "This is the app we're about to build for you. Look it over like a blueprint before the walls go up — it's far easier to change here than after it's built."
-        do: "Go top to bottom and ask: are the right things tracked, the right screens there, the right boxes on each form? If anything's missing or surprising, open that section to look closer."
+        headline: "Let's make sure this is the app you want."
+        lead: "Below is everything your app will include, in plain language. Read down the page and check it matches what you had in mind — changing something now is quick and free; changing it once it's built is neither."
+        steps:
+          - "Check the things your app remembers are all here."
+          - "Open a form and make sure no box you need is missing."
+          - "Look for anything marked “needs you” — that's your short to-do."
+        closing: "One last thing: is anything you expected NOT here at all? This list only shows what's been planned so far, so if something's missing entirely, now's the moment to say so. If it all looks right, you're ready to go ahead."
         fluency:
           beginner:
-            why: "This is a preview of the app we're about to build for you — a bit like an architect's drawing before a house goes up. Take your time looking it over: it's much easier and cheaper to move a wall on paper than once it's built."
-            do: "Work down the page slowly. For each part, ask yourself: is this what I pictured? Is anything I expected missing? Don't worry about the technical-sounding bits — if something looks off or absent, open that section and take a closer look."
+            lead: "Below is everything your app will include, written in plain language — no technical terms. Think of it like looking over the drawings for a house before it's built. Read slowly from the top and, for each part, ask yourself one simple question: is this what I pictured? Changing anything now is quick and free."
           advanced:
-            why: "A pre-build preview — the cheapest point to change anything."
-            do: "Scan top to bottom; open anything that looks off or missing."
+            lead: "Everything your app will include, in plain language. Skim it, confirm it matches what you intended, and flag anything missing — cheapest to fix now."

@@ -135,13 +135,17 @@ def describe_summary(
     if not rec:
         return None
     pick = _variant(rec, role, fluency)
-    result = {
-        "why": _fill((pick("why") or "").strip(), {}, section_key="summary"),
-        "do": _fill((pick("do") or "").strip(), {}, section_key="summary"),
-    }
-    meta = pick("meta")  # optional audience-keyed tool-level intro (FR-AUD-C4); a list of lines
+    result: dict = {}
+    for field in ("why", "do", "headline", "lead", "closing"):  # scalar intro fields (FR-AUD-C4)
+        val = pick(field)
+        if val:
+            result[field] = _fill(val.strip(), {}, section_key="summary")
+    meta = pick("meta")  # architect tool-level intro; a list of lines
     if meta is not None:
         result["meta"] = list(meta)
+    steps = pick("steps")  # the end_user actionable "what to do" list (R2-F2)
+    if steps is not None:
+        result["steps"] = [_fill(str(s).strip(), {}, section_key="summary") for s in steps]
     return result
 
 
