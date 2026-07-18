@@ -236,8 +236,25 @@ def render_delivery_inventory(plan: WireframePlan, console: Console, *, max_item
     console.print(tree)
 
 
-def footer_lines(plan: WireframePlan) -> Tuple[str, str, str]:
-    """The three footer lines (FR-W9): counts, shape summary, cascade readiness."""
+def _content_line(plan: WireframePlan) -> str:
+    """FR-WCI-2 glance signal: overall authored-% + per-surface authored/total. Honest-skip —
+    surfaces with ``total == 0`` are omitted; an all-empty plan reads ``n/a`` (no divide-by-zero)."""
+    cc = plan.content_coverage
+    surfaces = (
+        ("pages", cc.page_bodies),
+        ("view-copy", cc.view_copy),
+        ("prompts", cc.ai_prompts),
+        ("form-help", cc.form_help),
+    )
+    parts = [f"{label} {st.authored}/{st.total}" for label, st in surfaces if st.total > 0]
+    overall = cc.overall
+    if overall.total == 0:
+        return "n/a"
+    return f"{round(overall.ratio * 100)}% authored — " + " · ".join(parts)
+
+
+def footer_lines(plan: WireframePlan) -> Tuple[str, str, str, str]:
+    """The four footer lines (FR-W9, FR-WCI-2): counts, shape summary, content coverage, cascade."""
     c = plan.status_counts
     counts = (
         f"{c.get(Status.PLANNED, 0)} planned / {c.get(Status.DEFAULTS, 0)} defaults / "
@@ -249,8 +266,9 @@ def footer_lines(plan: WireframePlan) -> Tuple[str, str, str]:
         f"Entities: {s['entities']} | CRUD routes: {s['crud_routes']} | Pages: {s['pages']} | "
         f"Views: {s['views']} | AI passes: {s['ai_passes']}"
     )
+    content = _content_line(plan)
     readiness = " | ".join(f"{k}: {v}" for k, v in plan.readiness.items())
-    return counts, shape, readiness
+    return counts, shape, content, readiness
 
 
 def render_plan(
@@ -269,9 +287,10 @@ def render_plan(
             continue
         _section_node(tree, section, max_items=max_items)
     console.print(tree)
-    counts, shape, readiness = footer_lines(plan)
+    counts, shape, content, readiness = footer_lines(plan)
     console.print(f"\n[bold]Status:[/bold]  {counts}")
     console.print(f"[bold]Shape:[/bold]   {shape}")
+    console.print(f"[bold]Content:[/bold] {content}")
     console.print(f"[bold]Cascade:[/bold] {readiness}")
     for w in plan.merge_warnings:
         console.print(f"[yellow]warning:[/yellow] {_warning_text(w)}")
@@ -307,8 +326,11 @@ def plan_to_markdown(plan: WireframePlan) -> str:
             detail = f" — {item.detail}" if item.detail else ""
             lines.append(f"- {item.label} `[{_STATUS_LABEL[item.status]}]`{detail}")
         lines.append("")
-    counts, shape, readiness = footer_lines(plan)
-    lines.extend([f"**Status:** {counts}", f"**Shape:** {shape}", f"**Cascade:** {readiness}"])
+    counts, shape, content, readiness = footer_lines(plan)
+    lines.extend([
+        f"**Status:** {counts}", f"**Shape:** {shape}",
+        f"**Content:** {content}", f"**Cascade:** {readiness}",
+    ])
     for w in plan.merge_warnings:
         lines.append(f"- WARNING: {_warning_text(w)}")
     lines.append("")
