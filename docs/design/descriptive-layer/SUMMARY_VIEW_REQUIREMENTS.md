@@ -1,6 +1,6 @@
 # Summary View — Requirements (the Architect's glance-approve sheet)
 
-**Version:** 0.2 (Draft — + FR-SV-9..13 (audit inventory, orphan/FK, inverted-pyramid, tool-meta); 6/7 signal-classes built)
+**Version:** 0.2.1 (Draft — FR-SV-12/13 built: inverted-pyramid + tool-meta now render; 6/7 signals + presentation live)
 **Persona:** the **Architect** at the DATA MODEL front bookend (HITM §3.3).
 **Purpose:** the *one screen* an architect reads to approve the convention manifest + contract
 **without** reading `schema.prisma` — the summary altitude of the visualization layer.
@@ -51,6 +51,10 @@ stays `--json`-only or inline-only.**
   correction; getting the contract wrong is the most expensive to fix"; **HOW** — "deterministic
   projection from the contract + conventions; no LLM." So a first-time architect knows *what the
   wireframe is* before reading its output. One-to-three lines, authored + single-sourced (FR-DL).
+
+**Build status:** FR-SV-12 + FR-SV-13 both **✅ BUILT** — `render.py` now emits `title → meta →
+Status/Shape/Content/Cascade (header) → Details ▾ (tree)`; `WIREFRAME_META` single-sourced; verified
+on strtd8, 123 tests pass, `--json` byte-identical.
 
 ## 2. How it's shown (grammar, cited)
 

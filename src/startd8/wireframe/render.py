@@ -49,6 +49,14 @@ _STATUS_LABEL = {
     Status.INVALID: "INVALID",
 }
 
+# FR-SV-13: tool-level meta header — single-sourced for both the Rich and markdown renderers.
+# What the wireframe IS, why it's the cheapest correction point, and how it's produced.
+WIREFRAME_META = (
+    "Previews the deterministic $0 generation your manifests will produce — before any code is written.",
+    "Why: approve the shape here (the DATA MODEL bookend) — the cheapest correction; a wrong contract is the most expensive to fix.",
+    "How: deterministic projection from the contract + conventions. No LLM.",
+)
+
 
 # --------------------------------------------------------------------------- #
 # JSON (FR-W10, FR-W12)
@@ -278,15 +286,15 @@ def render_plan(
     only_issues: bool = False,
     max_items: int = 25,
 ) -> None:
-    """Render the Rich tree + footer (FR-W9). ``only_issues`` hides `planned` sections; the
-    footer always reports full-plan totals (R2-F4)."""
+    """Render the inverted pyramid (FR-SV-12): title → tool-meta (FR-SV-13) → summary block →
+    detail tree. ``only_issues`` hides `planned` sections; the summary always reports full-plan
+    totals (R2-F4)."""
     console = console or Console()
-    tree = Tree(f"[bold]Wireframe[/bold] — {plan.project_root}")
-    for section in plan.sections:
-        if only_issues and section.status == Status.PLANNED:
-            continue
-        _section_node(tree, section, max_items=max_items)
-    console.print(tree)
+    # Title + tool-level meta header (FR-SV-13) — what this is, up top.
+    console.print(f"[bold]Wireframe[/bold] — {plan.project_root}")
+    for line in WIREFRAME_META:
+        console.print(f"[dim italic]{line}[/dim italic]")
+    # Summary block first (FR-SV-12) — counts, shape, content, readiness before the details.
     counts, shape, content, readiness = footer_lines(plan)
     console.print(f"\n[bold]Status:[/bold]  {counts}")
     console.print(f"[bold]Shape:[/bold]   {shape}")
@@ -294,6 +302,14 @@ def render_plan(
     console.print(f"[bold]Cascade:[/bold] {readiness}")
     for w in plan.merge_warnings:
         console.print(f"[yellow]warning:[/yellow] {_warning_text(w)}")
+    # Detail tree below the summary, behind a visual separator.
+    console.print()
+    tree = Tree("[bold]Details ▾[/bold] [dim](per-section shape)[/dim]")
+    for section in plan.sections:
+        if only_issues and section.status == Status.PLANNED:
+            continue
+        _section_node(tree, section, max_items=max_items)
+    console.print(tree)
 
 
 def _warning_text(w: Dict[str, str]) -> str:
@@ -304,8 +320,22 @@ def _warning_text(w: Dict[str, str]) -> str:
 
 
 def plan_to_markdown(plan: WireframePlan) -> str:
-    """Human-readable summary for pipeline output (R1-S3)."""
+    """Human-readable summary for pipeline output (R1-S3). Inverted pyramid (FR-SV-12): meta
+    header + summary first, section detail below."""
     lines: List[str] = [f"# Wireframe — {plan.project_root}", ""]
+    # Tool-level meta header (FR-SV-13) — single-sourced from WIREFRAME_META.
+    for line in WIREFRAME_META:
+        lines.append(f"_{line}_")
+    lines.append("")
+    # Summary block first (FR-SV-12).
+    counts, shape, content, readiness = footer_lines(plan)
+    lines.extend([
+        f"**Status:** {counts}", f"**Shape:** {shape}",
+        f"**Content:** {content}", f"**Cascade:** {readiness}",
+    ])
+    for w in plan.merge_warnings:
+        lines.append(f"- WARNING: {_warning_text(w)}")
+    lines.append("")
     lines.append("## Delivery inventory (per iteration — the walkthrough)")
     lines.append("")
     for group in delivery_inventory(plan):
@@ -326,14 +356,6 @@ def plan_to_markdown(plan: WireframePlan) -> str:
             detail = f" — {item.detail}" if item.detail else ""
             lines.append(f"- {item.label} `[{_STATUS_LABEL[item.status]}]`{detail}")
         lines.append("")
-    counts, shape, content, readiness = footer_lines(plan)
-    lines.extend([
-        f"**Status:** {counts}", f"**Shape:** {shape}",
-        f"**Content:** {content}", f"**Cascade:** {readiness}",
-    ])
-    for w in plan.merge_warnings:
-        lines.append(f"- WARNING: {_warning_text(w)}")
-    lines.append("")
     return "\n".join(lines)
 
 
