@@ -1,6 +1,6 @@
 # Audience & Content Layer — Requirements (speaking the app to its non-technical author)
 
-**Version:** 0.3.1 (Draft — post-planning + lessons + principle hardening; pre-CRP)
+**Version:** 0.6 (Draft — CRP R1+R2 triaged & applied; /frontend-design UI/UX pass)
 **Date:** 2026-07-18
 **Status:** Draft
 **Concept key:** `FR-AUD` (Audience). The axis is **(role × fluency)**; values are populated incrementally.
@@ -114,10 +114,19 @@ enough to catch those gaps at requirements cost.
 
 > These define the CONTENT to be authored (the prose lands next pass; here is the bar it must clear).
 
+> **Framing principle (R2-F8).** Every `end_user` string serves the *author's goal* — help them
+> **approve, curate, or supply** — never a narration of the tool's own steps. Copy is benefit-first and
+> **actionable** (tell them *what to do and why*), not process-descriptive.
+
 - **FR-AUD-C1 — Plain language, zero SDK jargon.** The `end_user` voice MUST avoid implementation vocabulary:
   no *entity, CRUD, schema, prisma, AI pass, manifest, cascade, FastAPI, endpoint, foreign key*. Speak the
   author's domain: *the things your app keeps track of, the pages people visit, the forms they fill in, the
-  parts the computer fills in for you*.
+  parts the computer fills in for you*. Enforced by the banned-token acceptance test (R1-F7).
+- **FR-AUD-C1b — No process-meta (R2-F1).** Distinct from the jargon ban: the `end_user` surface MUST NOT
+  render **tool/process meta** — absolute or relative **filesystem paths**, internal identifiers, or
+  **build-pipeline framing** ("we're about to build", "before a single line of code", "$0 / no-LLM /
+  deterministic generation"). Show the app's *own name*, not its path. Enforced by a path + phrase
+  acceptance check on the rendered surface.
 - **FR-AUD-C2 — The DOES / WON'T / NEED framing.** Each section's end-user narration answers three questions,
   not one: **DOES** — what you're getting; **WON'T** — what this deliberately does *not* include (set
   expectations, prevent silent surprise); **NEED** — what *you* must provide (content to write, fields to
@@ -126,12 +135,17 @@ enough to catch those gaps at requirements cost.
   minimum, the **plan-derived gaps** — items the plan itself flags `not_defined`/`placeholder`/`invalid`
   (surfaced as the `need_items` list) — with authored prose layered on top. Authored text alone can
   silently under-report an omission; the computed floor cannot, since it reads the actual plan.
-- **FR-AUD-C3 — Surface omissions, don't imply them.** The content MUST make "obvious once seen" gaps
-  *explicit*: forms name what they do **not** collect; content sections name what is **unwritten**; empty
-  states are called out. The goal: the author notices "where's the phone number?" *here*, not after the build.
-- **FR-AUD-C4 — An introduction, not a report.** The top of the HTML frames the review task for a first-time
-  viewer: *"Here's the app we're about to build for you — does it match what you pictured? What's missing?"*
-  — before any counts or sections.
+- **FR-AUD-C3 — Surface omissions, don't imply them (scoped, R2-F3/F4).** Two kinds of gap, honestly
+  distinguished: (a) **modeled-but-incomplete** — items the plan flags `not_defined`/`placeholder`/`invalid`
+  — are surfaced *automatically* under NEED (the computed floor, FR-AUD-C2); (b) **unmodeled** wants — a
+  thing the author expected that was never captured at all — have **no plan node and cannot be shown**, so
+  the surface MUST instead *prompt* for them: a standing, audience-agnostic closing question ("Is anything
+  you expected **not here at all**?"). Framed as an **invitation to confirm completeness**, never a warning
+  (R2-F9) — on a zero-gap plan it reads "if it all looks right, you're ready," not "you missed something."
+  The doc MUST NOT claim the tool *detects* unmodeled gaps.
+- **FR-AUD-C4 — An introduction, not a report.** The top of the surface frames the review task for a
+  first-time viewer in **benefit-first, actionable** terms — *what to do and why* (a headline + plain lead +
+  a short "what to do" list) — before any counts or sections. It MUST NOT narrate the tool's process (C1b).
 - **FR-AUD-C5 — Authored + data-filled, deterministic.** End-user narration is authored per section and
   filled with the author's **real** names (their record types, their field labels), never LLM-generated and
   never generic placeholders. $0, no-LLM, byte-stable (FR-WV-6 preserved).
@@ -146,6 +160,14 @@ enough to catch those gaps at requirements cost.
   module — it builds FR-DL-1 and reuses the rest.
 - **NR-5 — Not hi-fi / not content generation.** Surfaces what's planned + what's missing; never writes the
   app's real content for the author.
+- **NR-6 — Accessibility: a *baseline* is in scope, a full audit is not (R2-F6).** The render MUST meet a
+  minimal bar — semantic landmarks (`header`/`main`/`section`/`footer`, headings), a `lang` attribute,
+  keyboard-operable disclosure (native `details`/`summary` + visible focus), AA-ish contrast, and
+  `prefers-reduced-motion` respect. A full WCAG audit / screen-reader certification is deferred.
+- **NR-7 — Internationalization is deferred, but cheap by construction (R2-F7).** Authored strings are
+  English-only for now. Because the words live single-sourced in `descriptive.yaml` (the renderer holds
+  none — §0.1), locale variants are a low-cost future hook (Mottainai — the externalization cost is already
+  paid); this is an explicit *decision*, not an oversight. No i18n machinery is built now.
 
 ## 4. Open Questions
 
@@ -216,8 +238,27 @@ byte-identical, live-verified on strtd8 (0 console errors, 0 banned jargon in th
 - **R1-F2 (partial-reject):** item *labels* keep the user's real record names (FR-AUD-C5) rather than an
   audience rename; the reader-visibility rule + technical-item hiding covers the jargon concern instead.
 
+### 5.2 CRP R2 triage applied (v0.6, 2026-07-18) — with the `/frontend-design` UI/UX pass
+
+R2 (10 suggestions) triaged (Appendix A). Most landed together with a UI redesign of the preview
+("warm editorial blueprint"). **154 tests pass; terminal `--describe` byte-identical; live on strtd8
+(0 console errors, 0 jargon, 0 process-meta on the rendered surface):**
+
+- **R2-F1 — process-meta ban (FR-AUD-C1b).** Absolute path replaced by the app's own name; `WIREFRAME_META`
+  is architect-only; acceptance test asserts no path / build-pipeline phrasing reaches the end_user.
+- **R2-F2/F8 — benefit-first, actionable framing.** New `§2b` framing principle (approve/curate/supply); the
+  tool-narration intro replaced by a headline + plain lead + a 3-step "what to do" list (authored, fluency-varied).
+- **R2-F3/F4/F9 — omission claim scoped + unmodeled-wants prompt.** FR-AUD-C3 now distinguishes
+  modeled-incomplete (auto-surfaced) from unmodeled (prompted), with a closing confirmation framed as invitation.
+- **R2-F5 — progressive disclosure.** Collapsed sections; each header shows a status dot + one-liner + a
+  "N needs you" chip / "✓ looks set"; narration leads with What-you-get then the highlighted NEED.
+- **R2-F6/F7 — a11y baseline in scope (NR-6), i18n deferred (NR-7).** Semantic landmarks, `lang`,
+  focus-visible, reduced-motion, AA-ish contrast shipped; i18n noted as a cheap future hook.
+
 ---
 
+*v0.6 — CRP R2 triage + /frontend-design UI/UX pass (§5.2): process-meta ban, benefit-first intro, scoped*
+*omission claim + unmodeled-wants prompt, progressive disclosure, a11y baseline.*
 *v0.5 — CRP R1 triage applied (§5.1): computed NEED floor, leak fix, jargon-ban enforcement, empty-project fix.*
 *v0.4 — Abstraction + end-user content both built (§5). Grounded on the three real audience abstractions.*
 *v0.3.1 — Post planning + lessons + principle hardening. Grounded on the three real audience abstractions.
@@ -252,6 +293,15 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | R1-F2 | FR-AUD-4 reader-visibility rule | CRP R1 | *(partial — the rule)* FR-AUD-4 now: every end_user-rendered string obeys FR-AUD-C1; raw detail + technical items hidden. Label-rename half → Appendix B | 2026-07-18 |
 | R1-F8 | Reconcile OQ-AUD-3 with §5 | CRP R1 | OQ-AUD-3 marked resolved; §5.1 | 2026-07-18 |
 | R1-F9 | Pin the byte-identity anchor | CRP R1 | Documented: `test_default_audience_is_byte_identical_base` + committed `--describe` shasum gate (7d1b212…) | 2026-07-18 |
+| R2-F1 | Process-meta ban (paths, build-pipeline framing) | CRP R2 | FR-AUD-C1b added; `app_name` replaces path; `WIREFRAME_META` architect-only; `test_end_user_surface_has_no_process_meta` | 2026-07-18 |
+| R2-F2/F8 | Benefit-first, actionable framing + principle | CRP R2 | §2b framing principle; intro → headline/lead/steps (authored, fluency-varied); FR-AUD-C4 reworded | 2026-07-18 |
+| R2-F3 | Scope the omission claim to modeled-incomplete | CRP R2 | FR-AUD-C3 rewritten (modeled vs unmodeled); §1 claim no longer implies detecting unmodeled gaps | 2026-07-18 |
+| R2-F4/F9 | Unmodeled-wants prompt, framed as confirmation | CRP R2 | Summary `closing` ("is anything NOT here at all?… if it all looks right, you're ready"); rendered as end_user footer | 2026-07-18 |
+| R2-F5 | Progressive disclosure / cognitive load | CRP R2 | Redesign: collapsed sections, per-header "N needs you"/"✓ looks set", ordered narration (get→need→won't→check) | 2026-07-18 |
+| R2-F6 | Accessibility posture | CRP R2 | NR-6 (baseline in scope): landmarks, `lang`, focus-visible, reduced-motion, contrast — shipped in the redesign | 2026-07-18 |
+| R2-F7 | i18n posture | CRP R2 | NR-7 (deferred; single-home strings make it cheap) | 2026-07-18 |
+
+*(R2-F9/F10 were the adversarial pass; F9 — frame the unmodeled-wants prompt as confirmation, not warning — is folded into the R2-F4/F9 row above. Any residual R2 item remains in the Appendix C R2 block for a later pass.)*
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
