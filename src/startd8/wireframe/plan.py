@@ -419,6 +419,7 @@ def _services_section(
     schema_state: _ManifestState,
     ai_state: _ManifestState,
     contexts_state: Optional[_ManifestState] = None,
+    human_state: Optional[_ManifestState] = None,
 ) -> WireframeSection:
     # Composition (R6-F3 / R2-S3): schema always contributes; ai_passes contributes its
     # degradation states (invalid/placeholder). Mere absence of the *optional* AI manifest scopes
@@ -528,11 +529,42 @@ def _services_section(
             )
         )
         for p in passes:
+            detail = f"{p.route_path} → {', '.join(p.output_entities)}"
+            # FR-DL-13: surface each pass's READS (input_entities) and provenance source-binding,
+            # not just its writes — the input→output shape is the architect signal for the AI edge.
+            if p.input_entities:
+                detail += f" · reads {', '.join(p.input_entities)}"
+            # `source_binding: none` is the explicit opt-out sentinel (kept as the string "none" by
+            # the parser, not normalized to None) — it means "deliberately UNBOUND", so it is not a
+            # source-bound signal. Only a real provenance field counts.
+            if p.source_binding and p.source_binding.strip().lower() != "none":
+                detail += f" · source-bound: {p.source_binding}"
             items.append(
                 WireframeItem(
                     f"AI pass: {p.name}", Status.PLANNED,
-                    detail=f"{p.route_path} → {', '.join(p.output_entities)}",
+                    detail=detail,
                     paths=(f"app/ai/{p.module}.py",),
+                )
+            )
+        # FR-DL-13: the AI boundary — fields authored_by:human are omitted from the AI edge schema
+        # (the AI never writes them). Surfaced as its own signal here, not just as inline "owned:"
+        # tags in Forms. Honest-skip when human_inputs is absent (no boundary declared).
+        human_owned = (
+            human_state.parsed.human_only_fields
+            if human_state is not None
+            and human_state.status == Status.PLANNED
+            and human_state.parsed is not None
+            else frozenset()
+        )
+        if human_owned:
+            owned = ", ".join(f"{ent}.{fld}" for ent, fld in sorted(human_owned))
+            items.append(
+                WireframeItem(
+                    "AI boundary", Status.PLANNED,
+                    detail=(
+                        f"{len(human_owned)} human-owned field(s) the AI never writes "
+                        f"(omitted from the AI edge schema): {owned}"
+                    ),
                 )
             )
     elif ai_state.status != Status.PLANNED:
@@ -1030,9 +1062,16 @@ def _completeness_section(
             error_truncated=state.error_truncated,
         )
     items: List[WireframeItem] = []
+    # FR-DL-13: the scored-entities-vs-exclude split IS the core/derived signal boundary. Label it
+    # with a summary consequence line (N scored signals · M excluded derived/AI-output) so the split
+    # already listed below reads as an architect signal, not just two lists.
+    core_derived: str = ""
     if state.status == Status.PLANNED and isinstance(state.parsed, dict):
         cfg = state.parsed.get("entities") or {}
         excluded = state.parsed.get("exclude") or []
+        core_derived = (
+            f"{len(cfg)} core signals (scored) · {len(excluded)} excluded (derived/AI-output)"
+        )
         for ent in sorted(cfg):
             spec = cfg[ent] if isinstance(cfg[ent], dict) else {}
             items.append(
@@ -1054,7 +1093,7 @@ def _completeness_section(
             )
     return WireframeSection(
         "completeness", "Completeness", state.status, tuple(items),
-        consequence=_consequence(state),
+        consequence=core_derived or _consequence(state),
     )
 
 
@@ -1259,7 +1298,9 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     sections = (
         _scaffold_section(states["app"]),
         _deployment_section(states["app"], inputs.project_root),
-        _services_section(schema_state, states["ai_passes"], states.get("contexts")),
+        _services_section(
+            schema_state, states["ai_passes"], states.get("contexts"), states["human_inputs"]
+        ),
         _entities_section(schema_state),
         _pages_section(states["pages"], authoring=authoring),
         _forms_section(schema_state, states["human_inputs"], texts["views"][0], states["form_prose"]),
