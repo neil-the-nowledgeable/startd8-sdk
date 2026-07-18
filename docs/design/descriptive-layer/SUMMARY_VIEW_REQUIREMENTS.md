@@ -19,14 +19,14 @@ stays `--json`-only or inline-only.**
 | # | Signal | Answers | Source | Built? |
 |---|---|---|---|---|
 | FR-SV-1 | **Key-object counts** — entities · CRUD · pages · forms · views · AI passes | "how big?" | SV-2 · FR-W9 shape | ✅ |
-| FR-SV-2 | **Core vs. derived** entities (the human-judged inputs vs generated) | "what do I actually decide?" | SV-4 (completeness signals vs `excluded`) | ⚠️ data present; label pending |
+| FR-SV-2 | **Core vs. derived** entities (the human-judged inputs vs generated) | "what do I actually decide?" | SV-4 (completeness signals vs `excluded`) | ✅ (Completeness: "6 core · 10 excluded") |
 | FR-SV-3 | **Health roll-up** — `N planned / defaults / placeholder / not-defined / invalid` + worst-glyph | "is anything broken/missing?" | SV-5 · FR-W9 counts | ✅ |
 | FR-SV-4 | **Content-authoring readiness %** — pages/view-copy/prompts/form-help authored/total | "is it ready for content handoff?" | SV-8 · FR-WCI-2 | ✅ (footer) |
 | FR-SV-5 | **Presentation / display layer** — per-entity title/sections/label/omitted-ids | "are the UI groupings right?" | SV-8 · display.yaml | ✅ (Display section) |
-| FR-SV-6 | **AI boundary** — which fields are human-authored vs AI-generated | "where does the model stop?" | SV-8 · `human_inputs` | ❌ inline-only → surface |
+| FR-SV-6 | **AI boundary** — which fields are human-authored vs AI-generated | "where does the model stop?" | SV-8 · `human_inputs` | ✅ (Services: "AI boundary — N human-owned fields") |
 | FR-SV-7 | **Manifest provenance / override** — convention vs flag vs declared | "where did each input come from?" | SV-8 · `input_provenance`/`status_override` | ❌ `--json`-only → surface |
 | FR-SV-8 | **Readiness** — cascade `scaffold/backend/views: ready\|blocked(reason)` | "can I run the cascade?" | SV-6 · FR-W9 | ✅ |
-| FR-SV-9 | **AI-pass input graph** — `reads X → writes Y` + `source_binding` per pass | "what feeds the model?" | `ai_passes` `input_entities`/`source_binding` | ⚠️ outputs shown, inputs buried → surface |
+| FR-SV-9 | **AI-pass input graph** — `reads X → writes Y` + `source_binding` per pass | "what feeds the model?" | `ai_passes` `input_entities`/`source_binding` | ✅ (Services: "reads X → writes Y") |
 | FR-SV-10 | **Orphan entities / FK relation graph** — entities with no view/page; the relation shape | "is anything stranded / how do they connect?" | needs new compute over the schema | ❌ not computed (high effort — deferred) |
 | FR-SV-11 | **AI-pass ordering / dependency** — pass execution order + which passes depend on which | "is the AI pipeline sequenced right?" | `ai_passes` `trigger`/`input_entities` | ❌ order shown flat, deps buried |
 
