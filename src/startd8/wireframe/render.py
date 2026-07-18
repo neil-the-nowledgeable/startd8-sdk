@@ -173,8 +173,16 @@ def _status_tag(status: str) -> str:
     return f"[{_STATUS_STYLE[status]}]\\[{_STATUS_LABEL[status]}][/{_STATUS_STYLE[status]}]"
 
 
-def _section_node(tree: Tree, section: WireframeSection, *, max_items: int) -> None:
+def _section_node(
+    tree: Tree, section: WireframeSection, *, max_items: int, described: Optional[dict] = None
+) -> None:
     node = tree.add(f"[bold]{section.title}[/bold] {_status_tag(section.status)}")
+    # FR-DL-6/7: the authored WHAT · WHY · DO narration (opt-in --describe), single-sourced from
+    # descriptive.yaml — printed under the section header, BEFORE items, in one consistent shape.
+    if described:
+        node.add(f"[dim italic]WHAT: {described['what']}[/dim italic]")
+        node.add(f"[dim italic]WHY:  {described['why']}[/dim italic]")
+        node.add(f"[dim italic]DO:   {described['do']}[/dim italic]")
     if section.consequence:
         node.add(f"[italic]→ {section.consequence}[/italic]")
     if section.error:
@@ -285,10 +293,15 @@ def render_plan(
     *,
     only_issues: bool = False,
     max_items: int = 25,
+    describe: bool = False,
 ) -> None:
     """Render the inverted pyramid (FR-SV-12): title → tool-meta (FR-SV-13) → summary block →
     detail tree. ``only_issues`` hides `planned` sections; the summary always reports full-plan
-    totals (R2-F4)."""
+    totals (R2-F4).
+
+    ``describe`` (opt-in, FR-DL-*) augments each section with its authored WHAT · WHY · DO
+    narration from ``descriptive.yaml`` — additive; the default (``describe=False``) output is
+    byte-identical to before this flag existed."""
     console = console or Console()
     # Title + tool-level meta header (FR-SV-13) — what this is, up top.
     console.print(f"[bold]Wireframe[/bold] — {plan.project_root}")
@@ -305,11 +318,30 @@ def render_plan(
     # Detail tree below the summary, behind a visual separator.
     console.print()
     tree = Tree("[bold]Details ▾[/bold] [dim](per-section shape)[/dim]")
+    described_by_key = _describe_sections(plan) if describe else {}
     for section in plan.sections:
         if only_issues and section.status == Status.PLANNED:
             continue
-        _section_node(tree, section, max_items=max_items)
+        _section_node(
+            tree, section, max_items=max_items,
+            described=described_by_key.get(section.key),
+        )
     console.print(tree)
+
+
+def _describe_sections(plan: WireframePlan) -> Dict[str, dict]:
+    """FR-DL-*: compose the authored narration for every section, keyed by section key.
+
+    Deterministic, no-LLM (the composer is pure). Imported lazily so the descriptive layer is a
+    strictly opt-in dependency of the ``--describe`` path — the default render never loads it."""
+    from .describe import describe as describe_section
+
+    out: Dict[str, dict] = {}
+    for section in plan.sections:
+        composed = describe_section(section, plan)
+        if composed is not None:
+            out[section.key] = composed
+    return out
 
 
 def _warning_text(w: Dict[str, str]) -> str:

@@ -67,6 +67,12 @@ def wireframe(
     only_issues: bool = typer.Option(
         False, "--only-issues", help="Render only non-`planned` sections (footer keeps full totals)."
     ),
+    describe: bool = typer.Option(
+        False,
+        "--describe",
+        help="Augment each section with its authored WHAT/WHY/DO narration (the descriptive "
+        "layer, FR-DL-*). Deterministic, no-LLM; opt-in — default output is unchanged.",
+    ),
     max_items: int = typer.Option(
         25, "--max-items", help="Per-section item cap in the tree (0 = unlimited)."
     ),
@@ -125,9 +131,9 @@ def wireframe(
         # Machine contract (R4-F1): stdout is parseable JSON only; tree only with --verbose.
         sys.stdout.write(plan_to_json(plan, emit_context="cli", linkage=linkage))
         if verbose:
-            render_plan(plan, console, only_issues=only_issues, max_items=max_items)
+            render_plan(plan, console, only_issues=only_issues, max_items=max_items, describe=describe)
     else:
-        render_plan(plan, console, only_issues=only_issues, max_items=max_items)
+        render_plan(plan, console, only_issues=only_issues, max_items=max_items, describe=describe)
 
     # FR-WPI-9: the walkthrough artifact — default-on when consuming a run.
     if (inventory or from_run is not None) and not json_out:

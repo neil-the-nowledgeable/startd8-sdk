@@ -1,0 +1,75 @@
+# Descriptive layer — the "meta layer" over `startd8 wireframe` (FR-DL-*).
+#
+# ONE authored record per wireframe SECTION KEY (keyed on the stable `WireframeSection.key`,
+# NOT its display title — [[concept-key-not-presentation-name]]). Each carries three terse,
+# authored clauses:
+#   what — one clause: what this section shows.
+#   why  — why it matters to the ARCHITECT at the DATA MODEL bookend (the cheapest correction
+#          point; a wrong contract is the most expensive thing to fix).
+#   do   — what to check / approve before letting the $0 cascade build it.
+#
+# This file is the SINGLE SOURCE of the wireframe's section narration (FR-DL-5): the renderer
+# holds no narration strings; it reads them from here. Deterministic, authored, NO LLM (FR-DL-8,
+# Hitsuzen). Placeholders `{{count}}` (len(section.items)) / `{{status}}` (section.status) are
+# filled from the live section by describe.py; an unfillable placeholder is a typed error (CCbC),
+# never silent blank text.
+#
+# Grounded to what each section's builder in plan.py actually emits (read the builders before
+# editing — the what/do must be factual, not aspirational).
+#
+# Spec: startd8-sdk/docs/design/descriptive-layer/DESCRIPTIVE_LAYER_REQUIREMENTS.md
+#       (FR-DL-1 record schema · FR-DL-5 single-sourced fill · FR-DL-7 consistent grammar ·
+#        FR-DL-8 deterministic/no-LLM). MVP scope: what/why/do per section; no audience variants,
+#        no next[] affordances, no 3-axis facets yet (M-DL2/M-DL3/FR-DL-11 deferred).
+
+records:
+
+  scaffold:
+    what: "The container shell the cascade builds: pyproject, package, persistence, run.sh, and (optionally) Dockerfile + alembic migrations."
+    why: "This is the frame every other artifact lands in — its Python version, package name, and DB path are decided here and fixed for the whole app."
+    do: "Confirm the package name, Python version, and SQLite path are right; check whether the container + migrations toggles match how you'll ship."
+
+  deployment:
+    what: "The declared deployment mode ({{status}}) and its per-dimension posture: persistence, bind address, schema-init, secrets, observability, and identity."
+    why: "Installed-vs-deployed flips loopback→public, SQLite→pooled, create_all→migrations, and no-auth→auth-seam — one switch that reshapes runtime posture and any FR-CFG-5 coherence findings."
+    do: "Confirm the mode is the one you intend to ship; scan for any coherence:* findings — an incoherent config makes `generate backend` refuse the build."
+
+  services:
+    what: "The always-on service layer: the FastAPI JSON-CRUD app, HTMX web mount, export endpoints, OpenAPI contract, and any declared AI passes and their read/write entity edges."
+    why: "This is the running backend the contract projects into — the AI passes and their source-bound / human-owned boundaries are where the app's edge behavior lives."
+    do: "Confirm the AI passes read and write the entities you expect, and that the AI boundary (human-owned fields the AI never writes) is drawn where you want it."
+
+  entities:
+    what: "The contract models the schema declares ({{count}} rows: the entity summary plus the relation graph, orphan check, and one row per entity's CRUD)."
+    why: "The entity set IS the data model — the DATA MODEL bookend you're here to approve. Foreign-key connectivity and stranded (orphan) entities are the shape signals that are cheapest to fix now."
+    do: "Confirm the entity list is complete and correctly named; check the relation graph reads right and that no entity is stranded (orphan) unless you meant it to be raw-CRUD only."
+
+  pages:
+    what: "The navigation the cascade always ships (top nav + home/index + live-toggle admin, auto-derived from the schema) plus any custom content pages declared in pages.yaml."
+    why: "Nav ships whether or not you author pages.yaml — so this tells you what the app's front door looks like by default, and which custom pages sit on top of it."
+    do: "Confirm the default nav is acceptable; check any custom pages point at real content files (their bodies are scored in the Content section)."
+
+  forms:
+    what: "The create/edit form the cascade renders per entity ({{count}} rows), with each form's shown fields and the fields it omits (server-managed and human-owned)."
+    why: "The form is the human write-surface — which fields a user can set, and which are withheld (server-managed or AI/human-owned), is a data-integrity decision made here."
+    do: "Confirm each form shows the fields a user should set and omits the ones they shouldn't; check the per-form help coverage if you author form_prose."
+
+  views:
+    what: "The composite views declared in views.yaml ({{count}} rows: the views package plus one row per view), each with its route, root entity, panels, and whether its copy is authored or raw."
+    why: "Views are the read-side composition beyond raw CRUD — they're how related entities surface together, and unauthored (raw) copy is the words-layer gap you can close cheaply now."
+    do: "Confirm the views cover the entities that need composite surfaces; note which views still render raw machine-name copy (view_prose not yet authored)."
+
+  display:
+    what: "The presentation-structure overlay from display.yaml ({{status}}): per-entity title/section/column bindings and which machine-id columns are hidden — visibility only, emits no new files."
+    why: "Display shapes how entities and views READ (labels, column order, hidden ids) without changing the contract — absent, generators fall back to raw field order and ids-as-labels."
+    do: "If present, confirm the column omissions and label fields match how you want records to read; if absent, decide whether the raw defaults are good enough to ship."
+
+  content:
+    what: "The optional content inputs the manifests reference ({{status}}): page bodies and AI prompt files, each scored authored / placeholder / not-defined — visibility only, never gated."
+    why: "This is the words layer for pages and prompts — placeholder or missing content is the intended starting state, but it's also the authoring work still outstanding before handoff."
+    do: "Scan for not-defined or placeholder bodies/prompts you intended to author; this is honestly scored, never a gate, so treat it as a to-do list, not a blocker."
+
+  completeness:
+    what: "The completeness signals ({{status}}): the scored (core) entities the human must judge vs. the excluded (derived / AI-output) set that's scored automatically."
+    why: "The core-vs-derived split is what makes 'is the shape right?' glance-approvable — it separates the counts you must judge from the ones the cascade derives for you."
+    do: "Confirm the scored (core) signals are the entities whose completeness actually matters, and that the excluded set is genuinely derived/AI-output, not something you forgot to score."
