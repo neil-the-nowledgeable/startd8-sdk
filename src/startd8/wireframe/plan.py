@@ -81,6 +81,7 @@ _ABSENT_STATUS = {
     "completeness": Status.DEFAULTS,
     "view_prose": Status.DEFAULTS,   # absent ⇒ raw machine-name view chrome (today's behavior)
     "form_prose": Status.DEFAULTS,   # absent ⇒ bare forms, no per-field help (FR-FH-9, opt-in)
+    "display": Status.NOT_DEFINED,   # absent ⇒ no presentation overrides, generators use defaults (FR-DM-1, opt-in)
     "imports": Status.NOT_DEFINED,   # absent ⇒ no import owned-kind (FR-IMP-3, opt-in)
     "api": Status.NOT_DEFINED,       # absent ⇒ Role 1 schema-only contract (Role 2 opt-in)
     "contexts": Status.NOT_DEFINED,  # absent ⇒ no inter-context consumer clients (Role 3 opt-in)
@@ -94,6 +95,7 @@ _ABSENT_CONSEQUENCE = {
     "ai_passes": "no AI service/passes",
     "human_inputs": "only server-managed omissions apply",
     "completeness": "scored by presence rules (no completeness manifest)",
+    "display": "no presentation overrides → generators use defaults (raw field order, ids as labels)",
     "imports": "no bulk-import owned-kind (app/importer.py) or paste/upload surface",
     "api": "schema-only OpenAPI contract (no api.yaml overlay merge)",
     "contexts": "no per-producer inter-context consumer clients",
@@ -934,6 +936,90 @@ def _content_coverage(
     )
 
 
+def _display_section(
+    state: _ManifestState, schema_state: _ManifestState
+) -> WireframeSection:
+    """FR-DM-1: the ② display presentation-STRUCTURE overlay — visibility only (no emitted paths).
+
+    Surfaces, per configured entity, that a display binding exists and its shape (title override,
+    detail-section count/titles, list column count, row ``label_field``, and which schema fields are
+    omitted from columns — the machine-link ids the overlay hides). Absent display.yaml → the whole
+    section is ``not_defined`` with the "generators use defaults" consequence. Never gates, never
+    claims a file — display.yaml modifies existing artifacts, it doesn't add new ones (keeps FR-W14
+    green)."""
+    if state.status == Status.INVALID:
+        return WireframeSection(
+            "display", "Display (presentation structure — visibility only)", Status.INVALID,
+            consequence=_consequence(state), error=state.error,
+            error_truncated=state.error_truncated,
+        )
+    # parsed is (entities, views); None covers absent / override-placeholder.
+    entity_displays: Dict[str, object] = {}
+    view_displays: Dict[str, object] = {}
+    if state.status in (Status.PLANNED, Status.PLACEHOLDER) and state.parsed:
+        entity_displays, view_displays = state.parsed
+    if not entity_displays and not view_displays:
+        return WireframeSection(
+            "display", "Display (presentation structure — visibility only)", state.status,
+            consequence=_consequence(state),
+        )
+
+    # Schema fields per entity, to report which columns the overlay omits (the FR-CO-6 story:
+    # machine-link ids like companyId are deliberately not shown).
+    schema: Optional[PrismaSchema] = (
+        schema_state.parsed
+        if schema_state.status in (Status.PLANNED, Status.PLACEHOLDER) and schema_state.parsed
+        else None
+    )
+
+    items: List[WireframeItem] = []
+    for name in sorted(entity_displays):
+        ed = entity_displays[name]
+        bits: List[str] = []
+        if getattr(ed, "title", ""):
+            bits.append(f"title={ed.title!r}")
+        n_sections = len(getattr(ed, "sections", ()))
+        if n_sections:
+            titles = ", ".join(s.title for s in ed.sections)
+            bits.append(f"{n_sections} section(s) ({titles})")
+        n_cols = len(getattr(ed, "columns", ()))
+        if n_cols:
+            bits.append(f"{n_cols} column(s)")
+        if getattr(ed, "label_field", ""):
+            bits.append(f"label={ed.label_field}")
+        # Omitted-from-columns: schema fields the overlay leaves out of the list columns (machine ids).
+        if schema is not None and n_cols:
+            model = schema.model(name)
+            if model is not None:
+                shown = {c.field for c in ed.columns}
+                omitted = [f.name for f in model.fields if f.name not in shown and f.name.endswith("Id")]
+                if omitted:
+                    bits.append(f"omitted from columns: {', '.join(omitted)}")
+        items.append(
+            WireframeItem(name, Status.PLANNED, detail=" · ".join(bits) if bits else "display config")
+        )
+    for vname in sorted(view_displays):
+        vd = view_displays[vname]
+        vbits: List[str] = []
+        if getattr(vd, "root_label_field", ""):
+            vbits.append(f"root_label={vd.root_label_field}")
+        n_rels = len(getattr(vd, "relations", ()))
+        if n_rels:
+            vbits.append(f"{n_rels} relation binding(s)")
+        items.append(
+            WireframeItem(f"view: {vname}", Status.PLANNED, detail=" · ".join(vbits) if vbits else "view bindings")
+        )
+
+    return WireframeSection(
+        "display", "Display (presentation structure — visibility only)", state.status,
+        tuple(items),
+        consequence=(
+            "placeholder display overlay — output would be stub-shaped"
+            if state.status == Status.PLACEHOLDER else ""
+        ),
+    )
+
+
 def _completeness_section(
     state: _ManifestState, schema_state: _ManifestState
 ) -> WireframeSection:
@@ -1126,6 +1212,24 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         "form_prose", *texts["form_prose"],
         lambda t: parse_form_prose(t, known_entities=known, known_fields=_known_form_fields),
     )
+    # FR-DM-1: display.yaml presentation-structure overlay (bindings). Parsed with the generators'
+    # own parser (consumer parity — a bad field/format ref is INVALID here exactly as `generate
+    # backend --display` would reject it). Needs the parsed schema; degrades to NOT_DEFINED when the
+    # schema is unusable (no entities to validate against — same posture as views/imports).
+    from ..backend_codegen.display_manifest import parse_display
+
+    _display_schema = (
+        schema_state.parsed
+        if schema_state.status in (Status.PLANNED, Status.PLACEHOLDER) and schema_state.parsed
+        else None
+    )
+    if _display_schema is not None:
+        states["display"] = _yaml_state(
+            "display", *texts["display"], lambda t: parse_display(t, _display_schema)
+        )
+    else:
+        # No usable schema → nothing to validate the overlay against; report absence semantics.
+        states["display"] = _ManifestState("display", _ABSENT_STATUS["display"])
     # FR-IMP-3: import declarations. Keyed/validated against the schema entities (degrade, don't
     # crash, when the schema is unusable — same posture as views).
     states["imports"] = _yaml_state(
@@ -1160,6 +1264,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         _pages_section(states["pages"], authoring=authoring),
         _forms_section(schema_state, states["human_inputs"], texts["views"][0], states["form_prose"]),
         _views_section(schema_state, states["views"], states["view_prose"]),
+        _display_section(states["display"], schema_state),
         content_section,
         _completeness_section(states["completeness"], schema_state),
     )

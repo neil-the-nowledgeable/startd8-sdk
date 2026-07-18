@@ -1,6 +1,6 @@
 # Descriptive Layer — Requirements
 
-**Version:** 0.4.2 (Draft — + FR-DL-12, the summary record / aggregate counts, NODE-SCHEMA §3b)
+**Version:** 0.4.3 (Draft — + FR-DL-13, surface the buried signals / anti-`--json`-only, CL-14)
 **Date:** 2026-07-17
 **Status:** Draft
 **Stable key:** `FR-DL-*` (concept-keyed; the presentation name "descriptive layer / meta layer" is a mutable alias — [[concept-key-not-presentation-name]])
@@ -181,6 +181,19 @@ New placeholders (extend the FR-DL-5 table): `{{counts}}` ← `footer_lines()`; 
 **speakable** (SV-7, FR-DL-8); each count **drills to its section** (SV-1). This lifts the wireframe's
 FR-W9 footer into the descriptive layer and gives the numbers *meaning*. Worked example (real data):
 `kickoff/kits/architect/example-strtd8-summary.md`.
+
+**FR-DL-13 — Surface the buried signals (the anti-`--json`-only requirement).** The descriptive
+layer's job includes rendering *computed-but-hidden* data as node meaning, not side-effects
+(NODE-SCHEMA SV-8 / CL-14 audit). Specifically:
+- `content_coverage` (FR-WCI-2) → the summary's **content-readiness %** (via FR-DL-12) — "X% of
+  pages/views/prompts/form-help authored," the handoff signal (today `--json`-only).
+- the `human_inputs` human-authored set → a per-entity **AI boundary** note ("AI edge stops at:
+  `Metric.value`, `ProofPoint.sourceDocumentId`"), not just an inline "omitted" tag.
+- `display.yaml` (now catalogued by the wireframe, CL-14 gate 1) → the **Display** section's what/why.
+- `input_provenance` / `status_override` → each node's **provenance** (convention / flag / declared).
+
+Rule: a signal the plan computes *and the architect needs* is a `lives`/meta field on its node —
+**never `--json`-only or a side-effect tag.** The SV-4 core/derived split was the first instance.
 
 ## 3. Non-Requirements
 

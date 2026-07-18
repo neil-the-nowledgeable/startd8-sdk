@@ -37,6 +37,7 @@ CONVENTION_PATHS: Dict[str, str] = {
     "views": "prisma/views.yaml",
     "view_prose": "prisma/view_prose.yaml",   # FR-WCI-1: the WORDS layer (view copy) — optional
     "form_prose": "prisma/form_prose.yaml",   # FR-FH-9: the WORDS layer (form help) — optional
+    "display": "prisma/display.yaml",         # FR-DM-1: presentation STRUCTURE overlay (bindings) — optional
     "imports": "prisma/imports.yaml",         # FR-IMP-3: per-entity import declarations — optional
     "api": "prisma/api.yaml",                 # Role 2: OpenAPI surface overlay — optional
     "contexts": "prisma/contexts.yaml",       # Role 3: outbound producer contexts — optional

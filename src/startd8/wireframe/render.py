@@ -187,7 +187,7 @@ def _section_node(tree: Tree, section: WireframeSection, *, max_items: int) -> N
 # don't need them). AI-layer items within Services belong to iteration ③ (integration+content).
 _ITERATION_BY_SECTION = {
     "scaffold": 1, "services": 1, "entities": 1, "deployment": 1,  # ① framework + persistence
-    "forms": 2, "pages": 2, "views": 2, "completeness": 2,  # ② display + business logic
+    "forms": 2, "pages": 2, "views": 2, "display": 2, "completeness": 2,  # ② display + business logic
     "content": 3,                                           # ③ integration + content
 }
 _ITERATION_TITLES = {
