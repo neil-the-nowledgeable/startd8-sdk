@@ -364,6 +364,56 @@ def _entity_names(schema: PrismaSchema, schema_text: str) -> List[str]:
     return [n for n in schema.models if n not in composites]
 
 
+def _fk_relations(
+    schema: PrismaSchema, names: List[str]
+) -> List[Tuple[str, str]]:
+    """Directional entity→entity foreign-key edges (FR-SV-10).
+
+    An edge is the FK-*owning* side: a non-list relation field carrying an explicit
+    ``@relation(fields: [...], references: [...])`` — the model that physically holds the FK
+    column, pointing at the model it references. The back-reference (a ``Model[]`` list on the
+    parent) is the same edge from the other end, so counting only the owning side gives one edge
+    per real FK, not two. Restricted to concrete entities (composite types are excluded upstream)."""
+    entity_set = set(names)
+    edges: List[Tuple[str, str]] = []
+    for src in names:
+        m = schema.models[src]
+        for f in m.fields:
+            if (
+                f.has_relation_attr
+                and not f.is_list
+                and schema.is_relation_field(f)
+                and f.type in entity_set
+            ):
+                edges.append((src, f.type))
+    return edges
+
+
+def _view_referenced_entities(specs: "Tuple[ViewSpec, ...]", names: List[str]) -> set:
+    """The set of entities any composite view touches (FR-SV-10 orphan input).
+
+    Collects every entity-shaped reference a ViewSpec can carry: the ``root``, an entity-backed
+    board's ``columns_from``, each aggregate's ``of``, each resolved relation's ``from`` (``frm``),
+    and — for polymorphic workspaces — the polymorphic ``of`` plus every entity in its ``type_map``.
+    Intersected with concrete entity names so a stray/non-entity ref can't mask a real orphan."""
+    entity_set = set(names)
+    referenced: set = set()
+    for v in specs:
+        if v.root:
+            referenced.add(v.root)
+        if v.columns_from:
+            referenced.add(v.columns_from)
+        for a in v.aggregates:
+            referenced.add(a.of)
+        for r in v.relations:
+            referenced.add(r.frm)
+        if v.polymorphic is not None:
+            referenced.add(v.polymorphic.of)
+            for _val, ent in v.polymorphic.type_map:
+                referenced.add(ent)
+    return referenced & entity_set
+
+
 def _scaffold_section(state: _ManifestState) -> WireframeSection:
     if state.status == Status.INVALID:
         return WireframeSection(
@@ -580,7 +630,9 @@ def _services_section(
     )
 
 
-def _entities_section(state: _ManifestState) -> WireframeSection:
+def _entities_section(
+    state: _ManifestState, views_state: Optional[_ManifestState] = None
+) -> WireframeSection:
     # `parsed is None` covers the override-placeholder case (declared ahead of authoring).
     if state.status not in (Status.PLANNED, Status.PLACEHOLDER) or state.parsed is None:
         return WireframeSection(
@@ -602,6 +654,66 @@ def _entities_section(state: _ManifestState) -> WireframeSection:
             ),
         )
     ]
+
+    # FR-SV-10: two architect signals computed over the parsed schema (+ views) — visibility only,
+    # no owned paths (claimed_paths unchanged, FR-W14 green). Placed immediately after the summary
+    # item (not appended) so they survive the tree's per-section item cap — the point is the signal,
+    # not entity #26. Both are honest-skip aware.
+    #
+    # 1) Relation graph: how connected the entity graph is. Count the FK-owning edges and, when any
+    #    exist, name the most-connected entities (by outbound FK count) so "connected" is concrete.
+    edges = _fk_relations(schema, names)
+    if edges:
+        from collections import Counter
+
+        out_deg = Counter(src for src, _dst in edges)
+        n_connected = len({e for pair in edges for e in pair})
+        top = ", ".join(f"{ent} (→{cnt})" for ent, cnt in out_deg.most_common(3))
+        items.append(
+            WireframeItem(
+                "relation graph", state.status,
+                detail=(
+                    f"{len(edges)} foreign-key relation(s) across {n_connected} of "
+                    f"{len(names)} entities · most-connected: {top}"
+                ),
+            )
+        )
+    else:
+        items.append(
+            WireframeItem(
+                "relation graph", state.status,
+                detail="no foreign-key relations declared (flat entity set)",
+            )
+        )
+
+    # 2) Orphan entities: entities in NO composite view — raw CRUD only, unsurfaced in any composite
+    #    UI. Answers the architect's "is anything stranded?". Honest-skip when views are unusable
+    #    (can't tell what's referenced) and when the orphan set is empty.
+    if views_state is not None and views_state.status in (Status.PLANNED, Status.PLACEHOLDER):
+        specs: Tuple[ViewSpec, ...] = (
+            views_state.parsed if views_state.parsed else ()
+        )
+        referenced = _view_referenced_entities(specs, names)
+        orphans = [n for n in names if n not in referenced]
+        if orphans:
+            listed = ", ".join(orphans)
+            items.append(
+                WireframeItem(
+                    "orphan entities", state.status,
+                    detail=(
+                        f"{len(orphans)} entity(ies) in no composite view "
+                        f"(raw CRUD only): {listed}"
+                    ),
+                )
+            )
+        else:
+            items.append(
+                WireframeItem(
+                    "orphan entities", state.status,
+                    detail="none — every entity appears in a composite view",
+                )
+            )
+
     for n in names:
         e = n.lower()
         paths = [
@@ -617,6 +729,7 @@ def _entities_section(state: _ManifestState) -> WireframeSection:
         items.append(
             WireframeItem(n, state.status, detail=detail, paths=tuple(paths))
         )
+
     return WireframeSection(
         "entities", "Entities & CRUD", state.status, tuple(items),
         consequence=_consequence(state),
@@ -1301,7 +1414,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         _services_section(
             schema_state, states["ai_passes"], states.get("contexts"), states["human_inputs"]
         ),
-        _entities_section(schema_state),
+        _entities_section(schema_state, states["views"]),
         _pages_section(states["pages"], authoring=authoring),
         _forms_section(schema_state, states["human_inputs"], texts["views"][0], states["form_prose"]),
         _views_section(schema_state, states["views"], states["view_prose"]),

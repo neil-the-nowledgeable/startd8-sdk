@@ -1,6 +1,6 @@
 # Summary View — Requirements (the Architect's glance-approve sheet)
 
-**Version:** 0.1 (Draft — consolidation)
+**Version:** 0.2 (Draft — + FR-SV-9..13 (audit inventory, orphan/FK, inverted-pyramid, tool-meta); 6/7 signal-classes built)
 **Persona:** the **Architect** at the DATA MODEL front bookend (HITM §3.3).
 **Purpose:** the *one screen* an architect reads to approve the convention manifest + contract
 **without** reading `schema.prisma` — the summary altitude of the visualization layer.
@@ -27,13 +27,30 @@ stays `--json`-only or inline-only.**
 | FR-SV-7 | **Manifest provenance / override** — convention vs flag vs declared | "where did each input come from?" | SV-8 · `input_provenance`/`status_override` | ❌ `--json`-only → surface |
 | FR-SV-8 | **Readiness** — cascade `scaffold/backend/views: ready\|blocked(reason)` | "can I run the cascade?" | SV-6 · FR-W9 | ✅ |
 | FR-SV-9 | **AI-pass input graph** — `reads X → writes Y` + `source_binding` per pass | "what feeds the model?" | `ai_passes` `input_entities`/`source_binding` | ✅ (Services: "reads X → writes Y") |
-| FR-SV-10 | **Orphan entities / FK relation graph** — entities with no view/page; the relation shape | "is anything stranded / how do they connect?" | needs new compute over the schema | ❌ not computed (high effort — deferred) |
+| FR-SV-10 | **Orphan entities / FK relation graph** — entities with no view/page; the relation shape | "is anything stranded / how do they connect?" | new compute over schema + views | ✅ built (Entities: "N FK relations · K orphan entities" — surfaced strtd8's stranded 10-entity Resume subsystem) |
 | FR-SV-11 | **AI-pass ordering / dependency** — pass execution order + which passes depend on which | "is the AI pipeline sequenced right?" | `ai_passes` `trigger`/`input_entities` | ❌ order shown flat, deps buried |
 
 > **Audit (2026-07-18, direct):** ranked buried set = **AI boundary (FR-SV-6)** + **core/derived
 > label (FR-SV-2)** [both HIGH, low effort → surfacing now] · **AI-pass inputs (FR-SV-9)** [MED,
 > small → surfacing now] · provenance/override (FR-SV-7) [MED, quiet — surface only on override] ·
 > orphan/FK graph (FR-SV-10) [HIGH, high effort — deferred].
+
+## 1a. Presentation — inverted pyramid + tool-level meta
+
+- **FR-SV-12 — Inverted-pyramid ordering (summary-first).** The output MUST open with the summary
+  (tool-meta → counts → health → readiness), detail tree *below* — most-general → most-specific
+  (SV-1). **The wireframe today renders the Status/Shape/Content/Cascade block as a bottom footer; it
+  MUST be reordered to a header.** Rationale: the architect *decides* from the summary; burying it
+  under a 60-line tree forces a scroll-to-bottom to answer "is it healthy / right / ready?"
+  *(Build: reorder `render_plan()` to emit `footer_lines()` first — a header — then the tree. `--json`
+  unchanged.)*
+- **FR-SV-13 — Tool-level meta (what / why / how).** Above the counts, a brief orienting header
+  states, at the *tool* level (not per-section — the descriptive-layer WHAT/WHY applied to the whole
+  command): **WHAT** — "previews the deterministic \$0 generation the manifests will produce, before
+  any code is written"; **WHY** — "approve the shape at the DATA MODEL bookend — the cheapest
+  correction; getting the contract wrong is the most expensive to fix"; **HOW** — "deterministic
+  projection from the contract + conventions; no LLM." So a first-time architect knows *what the
+  wireframe is* before reading its output. One-to-three lines, authored + single-sourced (FR-DL).
 
 ## 2. How it's shown (grammar, cited)
 
