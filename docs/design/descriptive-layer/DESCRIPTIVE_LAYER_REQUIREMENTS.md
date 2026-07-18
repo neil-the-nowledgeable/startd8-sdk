@@ -1,6 +1,6 @@
 # Descriptive Layer — Requirements
 
-**Version:** 0.4.1 (Draft — post-taxonomy: added FR-DL-11, the 3 orthogonal axes incl. `route_state`)
+**Version:** 0.4.2 (Draft — + FR-DL-12, the summary record / aggregate counts, NODE-SCHEMA §3b)
 **Date:** 2026-07-17
 **Status:** Draft
 **Stable key:** `FR-DL-*` (concept-keyed; the presentation name "descriptive layer / meta layer" is a mutable alias — [[concept-key-not-presentation-name]])
@@ -162,6 +162,25 @@ MAY carry the three facets from NODE-SCHEMA v0.2 (cite `startd8-sdk/src/startd8/
 The three are **orthogonal** — never infer one from another (NODE-SCHEMA invariant 5) — and are
 **facets**, so a node is reachable by facet-filter and search, not only by drill (NODE-SCHEMA §3a).
 Deterministic; no LLM (FR-DL-8).
+
+**FR-DL-12 — The summary record (aggregate counts; NODE-SCHEMA §3b).** In addition to per-section
+records, the manifest carries one **`summary`** record that renders the **summary altitude** *before*
+the per-section landscape (SV-1). It is a describable unit (what/why/do/next) whose body is the
+aggregate:
+- **Key-object counts (SV-2):** entities · CRUD routes · pages · forms · views · AI passes (+ content
+  inputs, completeness signals) — each with a one-clause WHAT and, if derived, its derivation (SV-3:
+  `155 CRUD = ~5 × 31 entities`).
+- **Core-vs-derived decomposition (SV-4):** the count the human must *judge* vs. what is derived —
+  filled from the completeness signals vs. the `excluded` set (`31 entities → 6 core + 25 derived`).
+  This is what makes "is the shape right?" glance-approvable.
+- **Health roll-up (SV-5)** (`worst()` over status counts) + **readiness (SV-6)** (the cascade lines,
+  with a *named blocker* when blocked — never silent zeros).
+
+New placeholders (extend the FR-DL-5 table): `{{counts}}` ← `footer_lines()`; `{{core}}` / `{{derived}}`
+← completeness signals vs `excluded`; `{{readiness}}` ← the cascade readiness lines. Deterministic +
+**speakable** (SV-7, FR-DL-8); each count **drills to its section** (SV-1). This lifts the wireframe's
+FR-W9 footer into the descriptive layer and gives the numbers *meaning*. Worked example (real data):
+`kickoff/kits/architect/example-strtd8-summary.md`.
 
 ## 3. Non-Requirements
 
