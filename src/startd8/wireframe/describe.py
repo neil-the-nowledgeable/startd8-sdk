@@ -64,41 +64,75 @@ def _fill(text: str, fills: dict, *, section_key: str) -> str:
     return _PLACEHOLDER_RE.sub(repl, text)
 
 
-def describe(section: WireframeSection, plan: WireframePlan) -> Optional[dict]:
-    """Compose the authored what/why/do narration for ``section`` (FR-DL-1).
+def _variant(rec: dict, role: str, fluency: str):
+    """Return a per-field picker resolving the (role × fluency) audience variant (FR-AUD-1).
 
-    Returns ``{"key", "what", "why", "do"}`` with placeholders filled from the live section, or
-    ``None`` when no record is authored for ``section.key`` (the section renders unnarrated rather
-    than blocking). Deterministic (FR-DL-8); provenance by construction — the ``key`` traces back
-    to the manifest record (FR-DL-9). ``plan`` is accepted for parity with the spec's
-    ``describe(section, plan)`` signature and for future plan-level fills; the MVP fills from the
-    section alone.
+    Sparse + degrading: each field falls back ``(role, fluency)`` → ``(role, ·)`` → **base** (the
+    record's top-level fields = architect/intermediate). An absent cell is never an error, and the
+    default ``("architect", "intermediate")`` returns base verbatim ⇒ byte-identical (FR-AUD-2).
+    """
+    aud = rec.get("audience") or {}
+    role_v = aud.get(role) or {}
+    fluency_v = (role_v.get("fluency") or {}).get(fluency) or {}
+
+    def pick(field: str):
+        for src in (fluency_v, role_v, rec):  # most-specific → base
+            val = src.get(field)
+            if val is not None:
+                return val
+        return None
+
+    return pick
+
+
+def describe(
+    section: WireframeSection,
+    plan: WireframePlan,
+    *,
+    role: str = "architect",
+    fluency: str = "intermediate",
+) -> Optional[dict]:
+    """Compose the authored what/why/do/next narration for ``section`` (FR-DL-1 / FR-AUD-1).
+
+    Returns ``{"key", "what", "why", "do", "next"}`` with placeholders filled from the live section,
+    or ``None`` when no record is authored for ``section.key``. The ``role``/``fluency`` select an
+    audience variant (FR-AUD): the default ``("architect", "intermediate")`` resolves to the record's
+    base fields, byte-identical to the pre-audience output. Deterministic (FR-DL-8); provenance by
+    construction (FR-DL-9).
     """
     rec = _records().get(section.key)
     if not rec:
         return None
     fills = _fills(section)
+    pick = _variant(rec, role, fluency)
     return {
         "key": section.key,  # provenance-by-construction (FR-DL-9)
-        "what": _fill((rec.get("what") or "").strip(), fills, section_key=section.key),
-        "why": _fill((rec.get("why") or "").strip(), fills, section_key=section.key),
-        "do": _fill((rec.get("do") or "").strip(), fills, section_key=section.key),
-        "next": _fill((rec.get("next") or "").strip(), fills, section_key=section.key),  # FR-DL-3 drill hint
+        "what": _fill((pick("what") or "").strip(), fills, section_key=section.key),
+        "why": _fill((pick("why") or "").strip(), fills, section_key=section.key),
+        "do": _fill((pick("do") or "").strip(), fills, section_key=section.key),
+        "next": _fill((pick("next") or "").strip(), fills, section_key=section.key),  # FR-DL-3 drill hint
     }
 
 
-def describe_summary(plan: WireframePlan) -> Optional[dict]:
+def describe_summary(
+    plan: WireframePlan, *, role: str = "architect", fluency: str = "intermediate"
+) -> Optional[dict]:
     """Compose the aggregate `summary` record's narration (FR-DL-12) — the *meaning* of the
     Status/Shape/Content/Cascade header, routed through the descriptive layer. Authored without live
-    placeholders (the figures live in the header lines); returns ``{"why", "do"}`` or ``None``.
-    Deterministic (FR-DL-8)."""
+    placeholders (the figures live in the header lines); returns ``{"why", "do"}`` or ``None``. The
+    ``role``/``fluency`` select an audience variant (FR-AUD); default resolves to base. Deterministic."""
     rec = _records().get("summary")
     if not rec:
         return None
-    return {
-        "why": _fill((rec.get("why") or "").strip(), {}, section_key="summary"),
-        "do": _fill((rec.get("do") or "").strip(), {}, section_key="summary"),
+    pick = _variant(rec, role, fluency)
+    result = {
+        "why": _fill((pick("why") or "").strip(), {}, section_key="summary"),
+        "do": _fill((pick("do") or "").strip(), {}, section_key="summary"),
     }
+    meta = pick("meta")  # optional audience-keyed tool-level intro (FR-AUD-C4); a list of lines
+    if meta is not None:
+        result["meta"] = list(meta)
+    return result
 
 
 def all_keys() -> list[str]:

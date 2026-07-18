@@ -102,6 +102,63 @@ def test_compose_attaches_form_mockups_only_where_derivable(golden_root: Path) -
         assert it["mockup"] is None
 
 
+# --- FR-AUD: the (role × fluency) audience abstraction ------------------------------------------
+
+def test_default_audience_is_byte_identical_base(golden_root: Path) -> None:
+    """The default (architect, intermediate) MUST resolve to base — no regression to today (FR-AUD-2)."""
+    from startd8.wireframe.describe import describe, describe_summary
+
+    plan = _plan(golden_root)
+    for s in plan.sections:
+        assert describe(s, plan) == describe(s, plan, role="architect", fluency="intermediate")
+    assert describe_summary(plan) == describe_summary(plan, role="architect", fluency="intermediate")
+
+
+def test_end_user_variant_overrides_where_authored_and_degrades_elsewhere(golden_root: Path) -> None:
+    from startd8.wireframe.describe import describe
+
+    plan = _plan(golden_root)
+    by_key = {s.key: s for s in plan.sections}
+
+    # 'entities' has an authored end_user variant — it must differ from base AND drop the jargon.
+    ent_base = describe(by_key["entities"], plan)["what"]
+    ent_eu = describe(by_key["entities"], plan, role="end_user", fluency="beginner")["what"]
+    assert ent_eu != ent_base
+    low = ent_eu.lower()
+    for jargon in ("entity", "crud", "schema", "prisma", "foreign-key"):
+        assert jargon not in low, f"end_user voice must avoid {jargon!r} (FR-AUD-C1)"
+
+    # 'deployment' has NO end_user variant yet — it MUST degrade to base, not go blank (FR-AUD-1).
+    dep_base = describe(by_key["deployment"], plan)
+    dep_eu = describe(by_key["deployment"], plan, role="end_user", fluency="beginner")
+    assert dep_eu == dep_base
+
+
+def test_audience_changes_only_wording_not_shape(golden_root: Path) -> None:
+    """Switching audience changes narration only — shape, items, statuses, mockups identical (FR-AUD-4)."""
+    plan = _plan(golden_root)
+    base = compose(plan)
+    eu = compose(plan, role="end_user", fluency="beginner")
+
+    assert base["audience"] == {"role": "architect", "fluency": "intermediate"}
+    assert eu["audience"] == {"role": "end_user", "fluency": "beginner"}
+    # strip narration, compare everything else
+    def skeleton(vm):
+        return {
+            "sections": [
+                {"key": s["key"], "status": s["status"],
+                 "items": s["items"]}  # labels, statuses, mockups
+                for s in vm["sections"]
+            ],
+            "summary_shape": vm["summary"]["shape_data"],
+        }
+    assert skeleton(base) == skeleton(eu)
+    # but at least one section's narration DID change (the end_user voice is live)
+    changed = [b["key"] for b, e in zip(base["sections"], eu["sections"])
+               if b["narration"] != e["narration"]]
+    assert "entities" in changed
+
+
 def test_compose_preserves_raw_detail_and_narration(golden_root: Path) -> None:
     vm = compose(_plan(golden_root))
     entities = next(s for s in vm["sections"] if s["key"] == "entities")

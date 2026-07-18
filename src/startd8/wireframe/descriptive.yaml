@@ -30,6 +30,12 @@ records:
     why: "This is the frame every other artifact lands in — its Python version, package name, and DB path are decided here and fixed for the whole app."
     do: "Confirm the package name, Python version, and SQLite path are right; check whether the container + migrations toggles match how you'll ship."
     next: "→ then the data model (Entities) — the contract that fills this shell."
+    audience:
+      end_user:
+        what: "The basic shell your app lives in — the plumbing that makes everything else run."
+        why: "You don't need to change anything here; it's the foundation, and it's already handled."
+        do: "Nothing to decide — this is just confirmation the groundwork is in place."
+        next: "→ next, the real heart of your app: the things it keeps track of."
 
   deployment:
     what: "The declared deployment mode ({{status}}) and its per-dimension posture: persistence, bind address, schema-init, secrets, observability, and identity."
@@ -42,24 +48,48 @@ records:
     why: "This is the running backend the contract projects into — the AI passes and their source-bound / human-owned boundaries are where the app's edge behavior lives."
     do: "Confirm the AI passes read and write the entities you expect, and that the AI boundary (human-owned fields the AI never writes) is drawn where you want it."
     next: "→ drill the AI passes' entities, or Entities for the full model."
+    audience:
+      end_user:
+        what: "The clever parts the computer handles for you automatically — like writing first drafts or summaries."
+        why: "These do work on their own. It's worth knowing what the computer fills in versus what stays under your control."
+        do: "Check that the automatic parts are things you're comfortable letting the computer do on your behalf."
+        next: "→ see exactly which details the computer writes and which are yours."
 
   entities:
     what: "The contract models the schema declares ({{count}} rows: the entity summary plus the relation graph, orphan check, and one row per entity's CRUD)."
     why: "The entity set IS the data model — the DATA MODEL bookend you're here to approve. Foreign-key connectivity and stranded (orphan) entities are the shape signals that are cheapest to fix now."
     do: "Confirm the entity list is complete and correctly named; check the relation graph reads right and that no entity is stranded (orphan) unless you meant it to be raw-CRUD only."
     next: "→ drill any entity to its schema.prisma model; then Views, which surface them."
+    audience:
+      end_user:
+        what: "The kinds of things your app remembers — like people, jobs, and companies. This is the heart of your app."
+        why: "If something you care about is missing from this list, the app won't be able to keep track of it. Now is the cheapest time to catch that."
+        do: "Read the list out loud — is everything your app should remember here, and named the way you'd say it? Anything missing you'll want to look up later?"
+        next: "→ open any one to see the details it keeps about it."
 
   pages:
     what: "The navigation the cascade always ships (top nav + home/index + live-toggle admin, auto-derived from the schema) plus any custom content pages declared in pages.yaml."
     why: "Nav ships whether or not you author pages.yaml — so this tells you what the app's front door looks like by default, and which custom pages sit on top of it."
     do: "Confirm the default nav is acceptable; check any custom pages point at real content files (their bodies are scored in the Content section)."
     next: "→ Content, for which page bodies are authored."
+    audience:
+      end_user:
+        what: "The screens people land on when they open your app — the front door and the menu that gets them around."
+        why: "This is what a visitor sees first. If a screen you expected isn't here, it won't exist unless you ask for it."
+        do: "Picture opening the app for the first time — is the starting screen and the menu what you'd expect to see?"
+        next: "→ see which screens still need their words written."
 
   forms:
     what: "The create/edit form the cascade renders per entity ({{count}} rows), with each form's shown fields and the fields it omits (server-managed and human-owned)."
     why: "The form is the human write-surface — which fields a user can set, and which are withheld (server-managed or AI/human-owned), is a data-integrity decision made here."
     do: "Confirm each form shows the fields a user should set and omits the ones they shouldn't; check the per-form help coverage if you author form_prose."
     next: "→ Services' AI boundary, for which fields the AI writes vs the human."
+    audience:
+      end_user:
+        what: "The forms people fill in to add or change information — and exactly which boxes they'll see on each one."
+        why: "If a box you need — like a phone number — isn't listed, no one will be able to enter it. Missing boxes are easiest to spot right here, before it's built."
+        do: "For each form, check every box you'd want someone to fill in is there — and that nothing private is showing that shouldn't be."
+        next: "→ some boxes are filled in automatically; those are listed as 'managed for you'."
 
   views:
     what: "The composite views declared in views.yaml ({{count}} rows: the views package plus one row per view), each with its route, root entity, panels, and whether its copy is authored or raw."
@@ -78,6 +108,12 @@ records:
     why: "This is the words layer for pages and prompts — placeholder or missing content is the intended starting state, but it's also the authoring work still outstanding before handoff."
     do: "Scan for not-defined or placeholder bodies/prompts you intended to author; this is honestly scored, never a gate, so treat it as a to-do list, not a blocker."
     next: "→ Completeness, the scored data-readiness signals."
+    audience:
+      end_user:
+        what: "The parts of the app that need real words — page text and instructions — that only you can write."
+        why: "The app can be built, but these stay blank until someone writes them. Think of it as your writing to-do list before launch."
+        do: "Note which pieces still say 'placeholder' or nothing at all — those are yours to fill in."
+        next: "→ see how much is written versus still blank."
 
   completeness:
     what: "The completeness signals ({{status}}): the scored (core) entities the human must judge vs. the excluded (derived / AI-output) set that's scored automatically."
@@ -93,3 +129,11 @@ records:
     what: "The whole planned app at a glance — the counts, health, content-readiness, and cascade readiness above."
     why: "These are your glance-approve: the entity count IS the contract (~89% of the app), the core-vs-derived split (Completeness) is the one real decision, and the content % is handoff-readiness."
     do: "Read top-down — healthy (Status), right size/shape (Shape + core/derived), content-ready (Content), runnable (Cascade)? Approve if yes; if a number surprises you, drill the section below."
+    audience:
+      end_user:
+        meta:
+          - "A preview of the app we're about to build for you — before anyone writes a single line of code."
+          - "Why: it's far cheaper and easier to change things now, on paper, than after it's built."
+          - "How: this is put together straight from what you asked for — nothing here is guesswork."
+        why: "This is the app we're about to build for you. Look it over like a blueprint before the walls go up — it's far easier to change here than after it's built."
+        do: "Go top to bottom and ask: are the right things tracked, the right screens there, the right boxes on each form? If anything's missing or surprising, open that section to look closer."

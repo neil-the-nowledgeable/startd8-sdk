@@ -26,9 +26,23 @@ def _embed_json(obj: dict) -> str:
     return json.dumps(obj, ensure_ascii=True, sort_keys=True).replace("<", "\\u003c")
 
 
-def render_html(plan: WireframePlan) -> str:
-    """The standalone offline HTML preview for ``plan`` — deterministic, no external assets."""
-    view_model = compose(plan)
+# The end-user is the primary reader of the HTML preview (FR-AUD-2), so it defaults to the plain,
+# non-technical voice; the terminal `--describe` keeps the architect base. Where an end_user variant
+# isn't authored yet, the resolver degrades to base (FR-AUD-1) — no blank narration.
+DEFAULT_HTML_ROLE = "end_user"
+DEFAULT_HTML_FLUENCY = "beginner"
+
+
+def render_html(
+    plan: WireframePlan,
+    *,
+    role: str = DEFAULT_HTML_ROLE,
+    fluency: str = DEFAULT_HTML_FLUENCY,
+) -> str:
+    """The standalone offline HTML preview for ``plan`` — deterministic, no external assets.
+
+    Defaults to the end-user audience (FR-AUD-2); ``role``/``fluency`` change only the wording."""
+    view_model = compose(plan, role=role, fluency=fluency)
     return (
         WIREFRAME_VIEW_TEMPLATE
         .replace("__EXPECTED_SCHEMA__", str(EXPECTED_SCHEMA_VERSION))
@@ -36,11 +50,17 @@ def render_html(plan: WireframePlan) -> str:
     )
 
 
-def render_to_file(plan: WireframePlan, path: Path) -> Path:
+def render_to_file(
+    plan: WireframePlan,
+    path: Path,
+    *,
+    role: str = DEFAULT_HTML_ROLE,
+    fluency: str = DEFAULT_HTML_FLUENCY,
+) -> Path:
     """Write the preview atomically (temp + rename); create the parent dir. Returns the path."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(render_html(plan), encoding="utf-8")
+    tmp.write_text(render_html(plan, role=role, fluency=fluency), encoding="utf-8")
     os.replace(tmp, path)
     return path

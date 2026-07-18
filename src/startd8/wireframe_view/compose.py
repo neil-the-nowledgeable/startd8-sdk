@@ -86,10 +86,16 @@ def _item_view(section_key: str, item) -> dict:
     }
 
 
-def compose(plan: WireframePlan) -> dict:
-    """Pure, deterministic, JSON-safe view-model for the wireframe-visual preview (FR-WV-6)."""
+def compose(
+    plan: WireframePlan, *, role: str = "architect", fluency: str = "intermediate"
+) -> dict:
+    """Pure, deterministic, JSON-safe view-model for the wireframe-visual preview (FR-WV-6).
+
+    ``role``/``fluency`` select the audience variant of the narration (FR-AUD); they change ONLY the
+    wording — the shape, items, statuses, and mockups are identical across audiences (FR-AUD-4). The
+    default ``("architect", "intermediate")`` resolves to base narration, byte-identical."""
     counts, shape_line, content, readiness = footer_lines(plan)
-    summary_narr = describe_summary(plan) or {}
+    summary_narr = describe_summary(plan, role=role, fluency=fluency) or {}
 
     sections = [
         {
@@ -97,7 +103,7 @@ def compose(plan: WireframePlan) -> dict:
             "title": s.title,
             "status": s.status,
             "consequence": s.consequence,
-            "narration": describe(s, plan),  # {key, what, why, do, next} or None (unnarrated section)
+            "narration": describe(s, plan, role=role, fluency=fluency),  # audience-keyed; None if unnarrated
             "items": [_item_view(s.key, it) for it in s.items],
         }
         for s in plan.sections
@@ -106,10 +112,13 @@ def compose(plan: WireframePlan) -> dict:
     return {
         "project_root": plan.project_root,
         "schema_version": SCHEMA_VERSION,
+        "audience": {"role": role, "fluency": fluency},  # FR-AUD: which voice this view-model speaks
         "summary": {
             # The inverted-pyramid band — same text the terminal footer renders (FR-WV-2), plus the
             # structured figures behind it (for badges) and the authored meaning (FR-WV-5 / FR-DL-12).
-            "meta": list(WIREFRAME_META),  # tool-level what/why/how (FR-SV-13), single-sourced
+            # tool-level what/why/how (FR-SV-13): architect base from WIREFRAME_META, or the
+            # audience-keyed intro authored on the summary record (FR-AUD-C4).
+            "meta": summary_narr.get("meta") or list(WIREFRAME_META),
             "counts": counts,
             "shape": shape_line,
             "content": content,
