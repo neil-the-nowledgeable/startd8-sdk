@@ -76,6 +76,12 @@ def wireframe(
     max_items: int = typer.Option(
         25, "--max-items", help="Per-section item cap in the tree (0 = unlimited)."
     ),
+    html: Optional[Path] = typer.Option(
+        None,
+        "--html",
+        help="Write a self-contained end-user HTML preview to this path (FR-WV): an inverted-pyramid "
+        "summary that drills into lo-fi page/form/list mockups. Offline, no CDN, deterministic.",
+    ),
     no_write: bool = typer.Option(
         False, "--no-write", help="Skip persisting .startd8/wireframe/wireframe-plan.json."
     ),
@@ -140,6 +146,17 @@ def wireframe(
         from .wireframe.render import render_delivery_inventory
 
         render_delivery_inventory(plan, console, max_items=max_items)
+
+    # FR-WV: the end-user visual preview. Advisory — a write failure degrades to a warning, exit 0.
+    if html is not None:
+        from .wireframe_view import render_to_file
+
+        try:
+            written = render_to_file(plan, html)
+            if not json_out:
+                console.print(f"[green]wireframe:[/green] wrote HTML preview → {written}")
+        except OSError as exc:
+            console.print(f"[yellow]warning:[/yellow] could not write --html preview: {exc}")
 
     if not no_write:
         persist_plan(

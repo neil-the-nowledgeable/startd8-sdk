@@ -10,5 +10,12 @@ M-WV0 (this module): ``compose(plan) -> view-model`` + the form-field ``detail``
 from __future__ import annotations
 
 from .compose import compose, parse_form_detail
+from .view import EXPECTED_SCHEMA_VERSION, render_html, render_to_file
 
-__all__ = ["compose", "parse_form_detail"]
+__all__ = [
+    "compose",
+    "parse_form_detail",
+    "render_html",
+    "render_to_file",
+    "EXPECTED_SCHEMA_VERSION",
+]

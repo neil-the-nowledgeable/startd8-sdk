@@ -78,6 +78,7 @@ def test_compose_covers_every_section_and_carries_summary(golden_root: Path) -> 
     assert composed_keys == [s.key for s in plan.sections], "outline maps 1:1 to plan.sections (FR-WV-3)"
     summary = vm["summary"]
     assert summary["counts"] and summary["shape"] and summary["readiness"]  # inverted-pyramid band
+    assert summary["meta"] and isinstance(summary["meta"], list)            # tool-level what/why/how (FR-SV-13)
     assert summary["why"] and summary["do"]                                 # FR-DL-12 meaning (FR-WV-5)
     assert isinstance(summary["shape_data"], dict) and summary["shape_data"]  # figures behind the badges
 

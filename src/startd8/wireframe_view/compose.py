@@ -16,7 +16,7 @@ from typing import Optional
 
 from ..wireframe.describe import describe, describe_summary
 from ..wireframe.plan import WireframePlan
-from ..wireframe.render import SCHEMA_VERSION, footer_lines
+from ..wireframe.render import SCHEMA_VERSION, WIREFRAME_META, footer_lines
 
 
 def parse_form_detail(detail: str) -> Optional[dict]:
@@ -109,6 +109,7 @@ def compose(plan: WireframePlan) -> dict:
         "summary": {
             # The inverted-pyramid band — same text the terminal footer renders (FR-WV-2), plus the
             # structured figures behind it (for badges) and the authored meaning (FR-WV-5 / FR-DL-12).
+            "meta": list(WIREFRAME_META),  # tool-level what/why/how (FR-SV-13), single-sourced
             "counts": counts,
             "shape": shape_line,
             "content": content,

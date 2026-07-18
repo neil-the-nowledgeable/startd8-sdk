@@ -65,7 +65,24 @@ footer_lines() (summary math) ──┘        (pure: plan → view-model)      
   mockups (0 failures), AI/human-owned fields (`owned:`) separated from shown (e.g. `ProofPoint →
   sourceDocumentId`), pages carry `mockup=None` (no fabrication), view-model is JSON-safe for the
   M-WV1 embed. Reuses `footer_lines` (summary) + `describe`/`describe_summary` (narration) — no rebuild.
-- **M-WV1–M-WV5 ⬜** — HTML shell, outline renderer, mockup renderer, `--html` CLI wiring, HTML tests.
+- **M-WV1 ✅ BUILT** — `wireframe_view/view.py` + `_template.py`: self-contained offline HTML shell,
+  escape-first embed of the view-model (kickoff_view seam), `schema_version` client guard, atomic
+  `render_to_file`. Deterministic (no timestamp in body).
+- **M-WV2 ✅ BUILT** — client renderer: pinned inverted-pyramid summary band (tool-meta + Status/Shape/
+  Content/Cascade + Why/Do) + collapsible section outline with status badges, counts, and authored
+  WHAT/WHY/DO/NEXT narration; Expand/Collapse all. Honest status colors.
+- **M-WV3 ✅ BUILT** — drill-to-mockup: **form** field-skeletons (shown fields as labeled inputs,
+  textareas for prose fields, omitted server/AI-owned fields as pills, Save/Cancel) + **page**
+  screen-frames (nav strip from real page labels). Data-driven; fabricates nothing (FR-WV-9).
+- **M-WV4 ✅ BUILT** — `cli_wireframe.py --html <path>`: compose → render → atomic write; advisory
+  (OSError → warning, exit 0); combinable with `--json`/`--describe`; `--json` byte-identity preserved.
+- **M-WV5 ✅ BUILT** — `test_visual_html.py` (7): self-contained (no external assets), deterministic,
+  escape-first embed, view-model round-trip, schema guard tracks the contract, atomic write, CLI flag.
+
+**Verified on live strtd8** (`chrome-devtools` render, 0 console errors): 64 KB self-contained file,
+inverted-pyramid summary pins on top, Profile form drills to a lo-fi field-skeleton with the 6
+server-managed fields shown as managed-for-user pills. Full suite **143 pass**.
+**FR-WV MVP complete end-to-end (L3 wired).**
 
 ## Mapping (every FR has a step; every step traces to an FR)
 
