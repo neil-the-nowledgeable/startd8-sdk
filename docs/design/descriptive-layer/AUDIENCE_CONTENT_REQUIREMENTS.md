@@ -171,8 +171,17 @@ enough to catch those gaps at requirements cost.
   raw item `detail`** (`fields: … | omitted …`) when a mockup already shows it — the visual is the plain form.
 - **Verified live on strtd8** (chrome-devtools, 0 console errors): band + titles + section framing all render
   in plain language; un-authored *roles* still degrade to base (sparse invariant holds).
-- **Residual (next):** the `Ready to build?` value + item labels (`X create/edit form`) are lightly technical;
-  fluency variants (beginner/advanced depth) not yet authored (OQ-AUD-1); no `--audience` CLI flag yet (OQ-AUD-2).
+- **Fluency axis ✅ (OQ-AUD-1 resolved: reuse beginner/intermediate/advanced).** Authored for the
+  **`end_user` role ONLY** (single-role, per sponsor) on the highest-depth-value spots — `forms` +
+  `entities` (full framing) + the `summary` intro. Default `intermediate` = the standard content
+  (unchanged); `beginner` = fuller/with-analogy, `advanced` = terse. Other roles ignore fluency;
+  un-authored sections degrade to the end_user standard. Zero new machinery — the `_variant` resolver
+  already handled `(role,fluency)`.
+- **CLI flags ✅ (OQ-AUD-2 resolved).** `wireframe --html <path> [--audience end_user|architect]
+  [--fluency intermediate|beginner|advanced]` — scoped to `--html`; unknown values degrade to base.
+  Verified live on strtd8: all three depths + the architect voice render (0 console errors).
+- **Residual (next):** the `Ready to build?` value + item labels (`X create/edit form`) are lightly
+  technical; fluency is authored on 3 spots (extend to more sections on demand — sparse invariant).
 
 ---
 

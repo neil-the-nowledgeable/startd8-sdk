@@ -159,6 +159,30 @@ def test_audience_changes_only_wording_not_shape(golden_root: Path) -> None:
     assert "entities" in changed
 
 
+def test_fluency_varies_depth_for_end_user_only(golden_root: Path) -> None:
+    """FR-AUD fluency axis: end_user forms get terser→fuller across advanced/intermediate/beginner;
+    the axis is authored for end_user ONLY — the architect role ignores fluency (degrades to base)."""
+    from startd8.wireframe.describe import describe
+
+    plan = _plan(golden_root)
+    forms = next(s for s in plan.sections if s.key == "forms")
+    adv = describe(forms, plan, role="end_user", fluency="advanced")["what"]
+    std = describe(forms, plan, role="end_user", fluency="intermediate")["what"]
+    beg = describe(forms, plan, role="end_user", fluency="beginner")["what"]
+    assert adv != std != beg and adv != beg          # three distinct depths
+    assert len(adv) < len(std) < len(beg)            # advanced tersest, beginner fullest
+
+    # Fluency is end_user-only: the architect role is unaffected by fluency (byte-identical to base).
+    arch_std = describe(forms, plan, role="architect", fluency="intermediate")
+    arch_adv = describe(forms, plan, role="architect", fluency="advanced")
+    assert arch_std == arch_adv
+
+    # A section without a fluency variant (scaffold) degrades to its end_user standard at any depth.
+    scaffold = next(s for s in plan.sections if s.key == "scaffold")
+    assert (describe(scaffold, plan, role="end_user", fluency="advanced")
+            == describe(scaffold, plan, role="end_user", fluency="intermediate"))
+
+
 def test_end_user_carries_does_wont_need_and_title(golden_root: Path) -> None:
     """FR-AUD-C2 — the end_user voice adds WON'T + NEED + a friendly title; architect base has none."""
     from startd8.wireframe.describe import describe

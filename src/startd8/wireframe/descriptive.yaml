@@ -80,6 +80,15 @@ records:
         need: "Confirm the list is complete and named the way you'd say it out loud."
         do: "Read it aloud — is everything here you'll want to look up later? Anything missing?"
         next: "→ open any one to see the details it keeps about it."
+        fluency:
+          beginner:
+            what: "The kinds of things your app remembers — for example the people it tracks, the jobs they've applied to, and the companies involved. Think of it like a set of filing cabinets, one drawer per kind of thing. This is the heart of your app."
+            wont: "Your app can only remember the kinds of things on this list. If a kind of thing you care about isn't here, the app has nowhere to keep it — so it simply won't exist in the app at all."
+            need: "Read the list slowly and picture using the app day to day. Is every kind of thing you'll want to look up later here? Is anything named in a way that might confuse someone else on your team?"
+          advanced:
+            what: "The core record types your app stores."
+            wont: "Only these types exist; unlisted ones won't."
+            need: "Confirm the list is complete and clearly named."
 
   pages:
     what: "The navigation the cascade always ships (top nav + home/index + live-toggle admin, auto-derived from the schema) plus any custom content pages declared in pages.yaml."
@@ -108,6 +117,15 @@ records:
         need: "Check every box you'd want is there (a phone number? a date?) — and that nothing private is exposed."
         do: "Go form by form and picture filling it in yourself — is anything you'd want to enter missing?"
         next: "→ some boxes are filled in for you automatically; those are shown as 'managed for you'."
+        fluency:
+          beginner:
+            what: "The forms people fill in to add or change information — like a paper form with boxes to complete. For each one, you'll see exactly which boxes appear, so you can spot anything missing before it's built."
+            wont: "The form can only show the boxes listed here. If a box isn't on the list, there's nowhere for someone to type that information — so a missing box means missing information later on."
+            need: "Go through each form as if you were filling it in yourself. Is every piece of information you'd want to collect there — a phone number, a date, a note? And is anything private showing that shouldn't be?"
+          advanced:
+            what: "The input forms and the boxes on each."
+            wont: "Unlisted boxes won't appear."
+            need: "Confirm each form's boxes; flag any missing."
 
   views:
     what: "The composite views declared in views.yaml ({{count}} rows: the views package plus one row per view), each with its route, root entity, panels, and whether its copy is authored or raw."
@@ -181,3 +199,10 @@ records:
           - "How: this is put together straight from what you asked for — nothing here is guesswork."
         why: "This is the app we're about to build for you. Look it over like a blueprint before the walls go up — it's far easier to change here than after it's built."
         do: "Go top to bottom and ask: are the right things tracked, the right screens there, the right boxes on each form? If anything's missing or surprising, open that section to look closer."
+        fluency:
+          beginner:
+            why: "This is a preview of the app we're about to build for you — a bit like an architect's drawing before a house goes up. Take your time looking it over: it's much easier and cheaper to move a wall on paper than once it's built."
+            do: "Work down the page slowly. For each part, ask yourself: is this what I pictured? Is anything I expected missing? Don't worry about the technical-sounding bits — if something looks off or absent, open that section and take a closer look."
+          advanced:
+            why: "A pre-build preview — the cheapest point to change anything."
+            do: "Scan top to bottom; open anything that looks off or missing."

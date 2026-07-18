@@ -27,10 +27,11 @@ def _embed_json(obj: dict) -> str:
 
 
 # The end-user is the primary reader of the HTML preview (FR-AUD-2), so it defaults to the plain,
-# non-technical voice; the terminal `--describe` keeps the architect base. Where an end_user variant
-# isn't authored yet, the resolver degrades to base (FR-AUD-1) — no blank narration.
+# non-technical voice at the STANDARD depth (intermediate = the approved role-base content). `beginner`
+# (fuller) and `advanced` (terse) are opt-in via --fluency; fluency is authored for end_user only.
+# Where a variant isn't authored, the resolver degrades to base (FR-AUD-1) — no blank narration.
 DEFAULT_HTML_ROLE = "end_user"
-DEFAULT_HTML_FLUENCY = "beginner"
+DEFAULT_HTML_FLUENCY = "intermediate"
 
 
 def render_html(

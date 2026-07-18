@@ -82,6 +82,18 @@ def wireframe(
         help="Write a self-contained end-user HTML preview to this path (FR-WV): an inverted-pyramid "
         "summary that drills into lo-fi page/form/list mockups. Offline, no CDN, deterministic.",
     ),
+    audience: str = typer.Option(
+        "end_user",
+        "--audience",
+        help="Voice for the --html preview (FR-AUD role): 'end_user' (plain, non-technical; default) "
+        "or 'architect' (technical). Unknown roles degrade to the architect base.",
+    ),
+    fluency: str = typer.Option(
+        "intermediate",
+        "--fluency",
+        help="Depth of the --html end-user voice (FR-AUD): 'intermediate' (standard; default), "
+        "'beginner' (fuller, with examples), or 'advanced' (terse). Authored for the end_user voice.",
+    ),
     no_write: bool = typer.Option(
         False, "--no-write", help="Skip persisting .startd8/wireframe/wireframe-plan.json."
     ),
@@ -152,9 +164,11 @@ def wireframe(
         from .wireframe_view import render_to_file
 
         try:
-            written = render_to_file(plan, html)
+            written = render_to_file(plan, html, role=audience, fluency=fluency)
             if not json_out:
-                console.print(f"[green]wireframe:[/green] wrote HTML preview → {written}")
+                console.print(
+                    f"[green]wireframe:[/green] wrote HTML preview ({audience}/{fluency}) → {written}"
+                )
         except OSError as exc:
             console.print(f"[yellow]warning:[/yellow] could not write --html preview: {exc}")
 

@@ -69,9 +69,9 @@ def test_embed_is_escape_first() -> None:
 
 def test_embedded_view_model_roundtrips(golden_root: Path) -> None:
     plan = _plan(golden_root)
-    html = render_html(plan)  # defaults to the end_user audience (FR-AUD-2)
-    assert _embedded_json(html) == compose(plan, role="end_user", fluency="beginner")
-    assert _embedded_json(html)["audience"] == {"role": "end_user", "fluency": "beginner"}
+    html = render_html(plan)  # defaults to end_user at the standard (intermediate) depth (FR-AUD-2)
+    assert _embedded_json(html) == compose(plan, role="end_user", fluency="intermediate")
+    assert _embedded_json(html)["audience"] == {"role": "end_user", "fluency": "intermediate"}
 
 
 def test_viewer_schema_tracks_the_contract(golden_root: Path) -> None:
