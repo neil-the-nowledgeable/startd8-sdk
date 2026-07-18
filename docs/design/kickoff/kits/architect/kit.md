@@ -18,6 +18,7 @@ any cascade run.
 | **(a) draft template** | convention manifest + contract + ADR skeleton | [`draft-template.md`](./draft-template.md) |
 | **(b) review checklist** | the architecture review (CRP-grounded) | [`review-checklist.md`](./review-checklist.md) |
 | **(c) validation artifact** | the **convention manifest + contract**, approved at the DATA MODEL bookend | [`validation.md`](./validation.md) |
+| **(c+) the visualization layer** *(how (c) is made glance-approvable)* | wireframe → descriptive layer → node navigator; + the visualization layer's own acceptance test | [`validation-visualization.md`](./validation-visualization.md) |
 
 ## Anti-fork (FR-KIT-4)
 This kit is a **view over** the canonical artifacts; it does not fork them. Each slot **cites** its

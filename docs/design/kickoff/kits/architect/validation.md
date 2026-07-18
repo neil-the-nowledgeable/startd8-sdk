@@ -32,6 +32,11 @@ the planned application shape and what's still undefined, so the approval is *in
 "advisory-CLI precedent" HITM names — and, fittingly, the artifact the whole `FR-KIT` question
 started from.
 
+**The wireframe alone is raw ("no meta layer").** *How* the architect actually reviews it — the
+**visualization layer** (wireframe → descriptive layer → node navigator) that makes the planned
+shape glance-approvable — is [`validation-visualization.md`](./validation-visualization.md). That is
+also where the visualization layer earns its **acceptance test**: can an architect approve at a glance?
+
 ---
 *This closes the Architect kit's triad (3/3). It is the DATA MODEL bookend given a named holder,
 a named artifact, a review, and a recorded approval.*
