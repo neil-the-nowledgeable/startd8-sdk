@@ -57,6 +57,16 @@ footer_lines() (summary math) ──┘        (pure: plan → view-model)      
   `src=`/`cdn` external refs** (grep the output); (d) `schema_version` mismatch → banner marker present;
   (e) golden: same plan → byte-stable HTML modulo timestamp.
 
+### Build status (2026-07-18)
+
+- **M-WV0 ✅ BUILT** — `src/startd8/wireframe_view/{__init__,compose}.py`: pure `compose(plan)`
+  view-model + `parse_form_detail` (FR-WV-9). `tests/unit/wireframe/test_visual.py` (7 tests) green;
+  full wireframe suite 136 pass. **Grounded on live strtd8:** all 31 forms parse to structured
+  mockups (0 failures), AI/human-owned fields (`owned:`) separated from shown (e.g. `ProofPoint →
+  sourceDocumentId`), pages carry `mockup=None` (no fabrication), view-model is JSON-safe for the
+  M-WV1 embed. Reuses `footer_lines` (summary) + `describe`/`describe_summary` (narration) — no rebuild.
+- **M-WV1–M-WV5 ⬜** — HTML shell, outline renderer, mockup renderer, `--html` CLI wiring, HTML tests.
+
 ## Mapping (every FR has a step; every step traces to an FR)
 
 | FR | Step |
