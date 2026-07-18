@@ -32,9 +32,11 @@ records:
     next: "→ then the data model (Entities) — the contract that fills this shell."
     audience:
       end_user:
-        what: "The basic shell your app lives in — the plumbing that makes everything else run."
-        why: "You don't need to change anything here; it's the foundation, and it's already handled."
-        do: "Nothing to decide — this is just confirmation the groundwork is in place."
+        title: "The basic setup"
+        what: "The basic shell your app lives in — the plumbing that makes everything run."
+        wont: "This isn't anything you'll see or click — it's behind-the-scenes groundwork, not a feature."
+        need: "Nothing from you here — it's already handled for you."
+        do: "Nothing to decide; this is just confirmation the foundation is in place."
         next: "→ next, the real heart of your app: the things it keeps track of."
 
   deployment:
@@ -42,6 +44,14 @@ records:
     why: "Installed-vs-deployed flips loopback→public, SQLite→pooled, create_all→migrations, and no-auth→auth-seam — one switch that reshapes runtime posture and any FR-CFG-5 coherence findings."
     do: "Confirm the mode is the one you intend to ship; scan for any coherence:* findings — an incoherent config makes `generate backend` refuse the build."
     next: "→ then Services, the layer this mode runs."
+    audience:
+      end_user:
+        title: "Where your app will run"
+        what: "Where your app lives and how people reach it — on your own computer to try it out, or online for others to use."
+        wont: "This doesn't change what the app does — only where it runs and who can get to it."
+        need: "Decide whether this is just for you to try, or ready for other people to use."
+        do: "Confirm this matches how you plan to share the app."
+        next: "→ next, the parts the computer handles for you."
 
   services:
     what: "The always-on service layer: the FastAPI JSON-CRUD app, HTMX web mount, export endpoints, OpenAPI contract, and any declared AI passes and their read/write entity edges."
@@ -50,10 +60,12 @@ records:
     next: "→ drill the AI passes' entities, or Entities for the full model."
     audience:
       end_user:
-        what: "The clever parts the computer handles for you automatically — like writing first drafts or summaries."
-        why: "These do work on their own. It's worth knowing what the computer fills in versus what stays under your control."
-        do: "Check that the automatic parts are things you're comfortable letting the computer do on your behalf."
-        next: "→ see exactly which details the computer writes and which are yours."
+        title: "What the computer does for you"
+        what: "The clever parts the computer handles automatically — like writing first drafts or summaries."
+        wont: "The computer won't invent facts or make decisions for you — it only drafts from what's already there."
+        need: "Decide which automatic helpers you're comfortable turning on."
+        do: "Check the automatic parts are things you're happy letting the computer do on your behalf."
+        next: "→ see exactly which details the computer writes and which stay yours."
 
   entities:
     what: "The contract models the schema declares ({{count}} rows: the entity summary plus the relation graph, orphan check, and one row per entity's CRUD)."
@@ -62,9 +74,11 @@ records:
     next: "→ drill any entity to its schema.prisma model; then Views, which surface them."
     audience:
       end_user:
+        title: "The things your app keeps track of"
         what: "The kinds of things your app remembers — like people, jobs, and companies. This is the heart of your app."
-        why: "If something you care about is missing from this list, the app won't be able to keep track of it. Now is the cheapest time to catch that."
-        do: "Read the list out loud — is everything your app should remember here, and named the way you'd say it? Anything missing you'll want to look up later?"
+        wont: "It won't remember anything that isn't on this list — a missing kind of thing simply won't exist in the app."
+        need: "Confirm the list is complete and named the way you'd say it out loud."
+        do: "Read it aloud — is everything here you'll want to look up later? Anything missing?"
         next: "→ open any one to see the details it keeps about it."
 
   pages:
@@ -74,9 +88,11 @@ records:
     next: "→ Content, for which page bodies are authored."
     audience:
       end_user:
+        title: "The screens people will see"
         what: "The screens people land on when they open your app — the front door and the menu that gets them around."
-        why: "This is what a visitor sees first. If a screen you expected isn't here, it won't exist unless you ask for it."
-        do: "Picture opening the app for the first time — is the starting screen and the menu what you'd expect to see?"
+        wont: "Only these screens will exist — a page you pictured but don't see here won't be built unless you ask for it."
+        need: "Picture your ideal first screen; note any screen you expected that isn't here."
+        do: "Imagine opening the app fresh — is the starting screen and the menu what you'd expect to see?"
         next: "→ see which screens still need their words written."
 
   forms:
@@ -86,22 +102,40 @@ records:
     next: "→ Services' AI boundary, for which fields the AI writes vs the human."
     audience:
       end_user:
+        title: "Where people type things in"
         what: "The forms people fill in to add or change information — and exactly which boxes they'll see on each one."
-        why: "If a box you need — like a phone number — isn't listed, no one will be able to enter it. Missing boxes are easiest to spot right here, before it's built."
-        do: "For each form, check every box you'd want someone to fill in is there — and that nothing private is showing that shouldn't be."
-        next: "→ some boxes are filled in automatically; those are listed as 'managed for you'."
+        wont: "Boxes not listed here won't appear — no one can enter something the form doesn't ask for."
+        need: "Check every box you'd want is there (a phone number? a date?) — and that nothing private is exposed."
+        do: "Go form by form and picture filling it in yourself — is anything you'd want to enter missing?"
+        next: "→ some boxes are filled in for you automatically; those are shown as 'managed for you'."
 
   views:
     what: "The composite views declared in views.yaml ({{count}} rows: the views package plus one row per view), each with its route, root entity, panels, and whether its copy is authored or raw."
     why: "Views are the read-side composition beyond raw CRUD — they're how related entities surface together, and unauthored (raw) copy is the words-layer gap you can close cheaply now."
     do: "Confirm the views cover the entities that need composite surfaces; note which views still render raw machine-name copy (view_prose not yet authored)."
     next: "→ Content, for which view copy is authored vs raw."
+    audience:
+      end_user:
+        title: "Ready-made overviews"
+        what: "Handy combined screens that pull related information together on one page — like a dashboard."
+        wont: "These are extras on top of the basic lists; without them, people still see each thing on its own."
+        need: "Note any overview you'd find useful that isn't here yet."
+        do: "Check whether the combined views cover the things you'd want to see together."
+        next: "→ see which of these still need their words written."
 
   display:
     what: "The presentation-structure overlay from display.yaml ({{status}}): per-entity title/section/column bindings and which machine-id columns are hidden — visibility only, emits no new files."
     why: "Display shapes how entities and views READ (labels, column order, hidden ids) without changing the contract — absent, generators fall back to raw field order and ids-as-labels."
     do: "If present, confirm the column omissions and label fields match how you want records to read; if absent, decide whether the raw defaults are good enough to ship."
     next: "→ Views, whose read-surfaces this styles."
+    audience:
+      end_user:
+        title: "How things are labelled and laid out"
+        what: "How your information is labelled and arranged on screen — the headings, the order of columns, what's shown or hidden."
+        wont: "This only affects how things look and read — it doesn't change what information is stored."
+        need: "Confirm the labels and layout read clearly to someone seeing them for the first time."
+        do: "Check the headings and column order make sense at a glance."
+        next: "→ next, the words that still need writing."
 
   content:
     what: "The optional content inputs the manifests reference ({{status}}): page bodies and AI prompt files, each scored authored / placeholder / not-defined — visibility only, never gated."
@@ -110,9 +144,11 @@ records:
     next: "→ Completeness, the scored data-readiness signals."
     audience:
       end_user:
+        title: "The words you'll need to write"
         what: "The parts of the app that need real words — page text and instructions — that only you can write."
-        why: "The app can be built, but these stay blank until someone writes them. Think of it as your writing to-do list before launch."
-        do: "Note which pieces still say 'placeholder' or nothing at all — those are yours to fill in."
+        wont: "The app won't write these for you; they stay blank until someone fills them in."
+        need: "Plan to write anything still marked 'placeholder' or left empty before you launch."
+        do: "Scan for blanks and placeholders — that's your writing to-do list."
         next: "→ see how much is written versus still blank."
 
   completeness:
@@ -120,6 +156,14 @@ records:
     why: "The core-vs-derived split is what makes 'is the shape right?' glance-approvable — it separates the counts you must judge from the ones the cascade derives for you."
     do: "Confirm the scored (core) signals are the entities whose completeness actually matters, and that the excluded set is genuinely derived/AI-output, not something you forgot to score."
     next: "→ last section — approve the contract above, or revise and re-run."
+    audience:
+      end_user:
+        title: "What's ready and what still needs you"
+        what: "A quick read on which parts are ready to go and which still need a decision or some information from you."
+        wont: "This won't fix anything for you — it just points out what's still waiting on you."
+        need: "Work through anything flagged as still needing your input."
+        do: "Treat the flagged items as a short to-do list before you give the go-ahead."
+        next: "→ that's the end — if it all looks right, you're ready to approve."
 
 
   # FR-DL-12: the SUMMARY record — the aggregate what/why for the counts (routed through --describe

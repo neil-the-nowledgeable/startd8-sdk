@@ -129,20 +129,29 @@ __PLAN_DATA__
   function badge(st){ return '<span class="badge b-'+esc(st)+'">'+esc(String(st).replace(/_/g," "))+'</span>'; }
   function el(html){ var t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstChild; }
   function basename(p){ var s=String(p||"").replace(/\/+$/,""); return s.substring(s.lastIndexOf("/")+1)||s; }
+  var ROLE = (data.audience && data.audience.role) || "architect";
+  var EU = ROLE === "end_user";   // the plain, non-technical voice (FR-AUD)
 
   // ---- summary band (inverted pyramid, pinned) ----
   function renderSummary(){
     var s=data.summary||{}, h=document.getElementById("summary");
     var meta=(s.meta||[]).map(function(m){ return '<div class="meta">'+esc(m)+'</div>'; }).join("");
+    // End-user band: plain labels + jargon-free values (FR-AUD gap-3); architect keeps the raw footer.
+    var L = EU ? {a:"Health",b:"Size",c:"Content",d:"Ready to build?"}
+               : {a:"Status",b:"Shape",c:"Content",d:"Cascade"};
+    var vStatus  = EU ? esc(s.plain_status)  : esc(s.counts);
+    var vShape   = EU ? esc(s.plain_shape)   : esc(s.shape);
+    var vContent = EU ? esc(s.plain_content) : esc(s.content);
     var band=
       '<div class="band">'+
-      '<b>Status</b><span>'+esc(s.counts)+'</span>'+
-      '<b>Shape</b><span>'+esc(s.shape)+'</span>'+
-      '<b>Content</b><span>'+esc(s.content)+'</span>'+
-      '<b>Cascade</b><span>'+esc(s.readiness)+'</span>'+
+      '<b>'+L.a+'</b><span>'+vStatus+'</span>'+
+      '<b>'+L.b+'</b><span>'+vShape+'</span>'+
+      '<b>'+L.c+'</b><span>'+vContent+'</span>'+
+      '<b>'+L.d+'</b><span>'+esc(s.readiness)+'</span>'+
       '</div>';
     var why = (s.why||s.do) ?
-      '<div class="why"><div><b>Why </b>'+esc(s.why)+'</div><div><b>Do </b>'+esc(s.do)+'</div></div>' : '';
+      '<div class="why"><div><b>'+(EU?"Start here ":"Why ")+'</b>'+esc(s.why)+'</div>'+
+      '<div><b>'+(EU?"Then ":"Do ")+'</b>'+esc(s.do)+'</div></div>' : '';
     h.innerHTML =
       '<h1>Wireframe Preview — '+esc(basename(data.project_root))+'</h1>'+
       '<div class="root">'+esc(data.project_root)+'</div>'+ meta + band + why +
@@ -198,9 +207,12 @@ __PLAN_DATA__
   // ---- outline (M-WV2) ----
   function renderItem(sectionKey, item, navLabels){
     var wrap=document.createElement("div"); wrap.className="item";
-    var det = item.detail ? '<div class="det mono">'+esc(item.detail)+'</div>' : '';
-    wrap.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+badge(item.status)+'</div>'+det;
     var mock = mockFor(sectionKey, item);
+    // End-user reads the visual mockup, not the raw "fields: … | omitted …" line — hide it when a
+    // mockup carries the same info (FR-AUD gap-3); architect keeps the technical detail.
+    var showDet = item.detail && !(EU && mock);
+    var det = showDet ? '<div class="det mono">'+esc(item.detail)+'</div>' : '';
+    wrap.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+badge(item.status)+'</div>'+det;
     var isPage = sectionKey==="pages";
     var isList = sectionKey==="entities" && /view|CRUD/i.test(item.detail||"");
     if(mock || isPage){
@@ -222,11 +234,21 @@ __PLAN_DATA__
     var body=document.createElement("div"); body.className="sec-body";
     if(sec.narration){
       var n=sec.narration;
-      body.appendChild(el('<div class="narr">'+
-        '<div><b>What </b>'+esc(n.what)+'</div>'+
-        '<div><b>Why </b>'+esc(n.why)+'</div>'+
-        '<div><b>Do </b>'+esc(n.do)+'</div>'+
-        (n.next?'<div><b>Next </b>'+esc(n.next)+'</div>':'')+'</div>'));
+      var rows;
+      if(EU){
+        // FR-AUD-C2 — the DOES / WON'T / NEED framing. Skip `why` (its base value is architect voice;
+        // the end_user records carry the stakes inside What/Need instead).
+        rows=[["What you get",n.what]];
+        if(n.wont) rows.push(["What it won't do",n.wont]);
+        if(n.need) rows.push(["What you'll provide",n.need]);
+        if(n.do)   rows.push(["Check",n.do]);
+        if(n.next) rows.push(["Next",n.next]);
+      } else {
+        rows=[["What",n.what],["Why",n.why],["Do",n.do]];
+        if(n.next) rows.push(["Next",n.next]);
+      }
+      body.appendChild(el('<div class="narr">'+rows.map(function(r){
+        return '<div><b>'+r[0]+' </b>'+esc(r[1])+'</div>'; }).join("")+'</div>'));
     }
     var navLabels=(sec.key==="pages")?(sec.items||[]).map(function(i){return i.label;}).slice(0,6):[];
     if(sec.items && sec.items.length){

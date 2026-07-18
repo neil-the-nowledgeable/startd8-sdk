@@ -128,10 +128,10 @@ def test_end_user_variant_overrides_where_authored_and_degrades_elsewhere(golden
     for jargon in ("entity", "crud", "schema", "prisma", "foreign-key"):
         assert jargon not in low, f"end_user voice must avoid {jargon!r} (FR-AUD-C1)"
 
-    # 'deployment' has NO end_user variant yet — it MUST degrade to base, not go blank (FR-AUD-1).
-    dep_base = describe(by_key["deployment"], plan)
-    dep_eu = describe(by_key["deployment"], plan, role="end_user", fluency="beginner")
-    assert dep_eu == dep_base
+    # An un-authored role (no 'backend' variant exists yet) MUST degrade to base, not go blank (FR-AUD-1).
+    ent_base_full = describe(by_key["entities"], plan)
+    ent_backend = describe(by_key["entities"], plan, role="backend", fluency="intermediate")
+    assert ent_backend == ent_base_full
 
 
 def test_audience_changes_only_wording_not_shape(golden_root: Path) -> None:
@@ -157,6 +157,28 @@ def test_audience_changes_only_wording_not_shape(golden_root: Path) -> None:
     changed = [b["key"] for b, e in zip(base["sections"], eu["sections"])
                if b["narration"] != e["narration"]]
     assert "entities" in changed
+
+
+def test_end_user_carries_does_wont_need_and_title(golden_root: Path) -> None:
+    """FR-AUD-C2 — the end_user voice adds WON'T + NEED + a friendly title; architect base has none."""
+    from startd8.wireframe.describe import describe
+
+    plan = _plan(golden_root)
+    forms = next(s for s in plan.sections if s.key == "forms")
+    base = describe(forms, plan)
+    eu = describe(forms, plan, role="end_user", fluency="beginner")
+
+    assert base["wont"] == "" and base["need"] == "" and base["title"] is None  # base = architect, unaffected
+    assert eu["wont"] and eu["need"] and eu["title"]                            # framing + title authored
+    for jargon in ("entity", "crud", "schema", "field"):
+        assert jargon not in eu["title"].lower()
+
+
+def test_compose_plain_summary_lines_are_jargon_free(golden_root: Path) -> None:
+    """FR-AUD gap-3 — the band gets deterministic plain-language shape/status for the end user."""
+    summary = compose(_plan(golden_root))["summary"]
+    assert "tracked" in summary["plain_shape"] and "route" not in summary["plain_shape"].lower()
+    assert summary["plain_status"]  # non-empty; reassures when clean, names gaps in plain words otherwise
 
 
 def test_compose_preserves_raw_detail_and_narration(golden_root: Path) -> None:

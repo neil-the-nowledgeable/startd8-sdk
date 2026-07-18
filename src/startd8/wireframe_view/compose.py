@@ -86,6 +86,45 @@ def _item_view(section_key: str, item) -> dict:
     }
 
 
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _plain_shape(shape: dict) -> str:
+    """A jargon-free restatement of the shape counts for the end-user band (FR-AUD gap-3, deterministic)."""
+    return " · ".join((
+        _plural(shape.get("entities", 0), "thing") + " tracked",
+        _plural(shape.get("pages", 0), "screen"),
+        _plural(shape.get("views", 0), "combined view"),
+        _plural(shape.get("ai_passes", 0), "automatic helper"),
+    ))
+
+
+def _plain_status(counts: dict) -> str:
+    """A jargon-free health line: reassure when clean, name the gaps in plain words when not."""
+    issues = []
+    if counts.get("not_defined"):
+        issues.append(_plural(counts["not_defined"], "part") + " not set up yet")
+    if counts.get("placeholder"):
+        issues.append(_plural(counts["placeholder"], "part") + " still rough")
+    if counts.get("invalid"):
+        issues.append(_plural(counts["invalid"], "part") + " to fix")
+    if not issues:
+        return "Everything's planned — nothing missing or broken."
+    return "Worth a look: " + "; ".join(issues) + "."
+
+
+def _plain_content(cov) -> str:
+    """A jargon-free reading of the content-authoring rollup for the end-user band (deterministic)."""
+    overall = cov.overall
+    if overall.total == 0:
+        return "No text to write yet."
+    pct = round(overall.ratio * 100)
+    if pct >= 100:
+        return "All the words are written."
+    return f"About {pct}% of the words are written — the rest is still yours to write before launch."
+
+
 def compose(
     plan: WireframePlan, *, role: str = "architect", fluency: str = "intermediate"
 ) -> dict:
@@ -97,17 +136,17 @@ def compose(
     counts, shape_line, content, readiness = footer_lines(plan)
     summary_narr = describe_summary(plan, role=role, fluency=fluency) or {}
 
-    sections = [
-        {
+    sections = []
+    for s in plan.sections:
+        narr = describe(s, plan, role=role, fluency=fluency)  # audience-keyed; None if unnarrated
+        sections.append({
             "key": s.key,
-            "title": s.title,
+            "title": (narr.get("title") if narr else None) or s.title,  # FR-AUD title override, else data
             "status": s.status,
             "consequence": s.consequence,
-            "narration": describe(s, plan, role=role, fluency=fluency),  # audience-keyed; None if unnarrated
+            "narration": narr,
             "items": [_item_view(s.key, it) for it in s.items],
-        }
-        for s in plan.sections
-    ]
+        })
 
     return {
         "project_root": plan.project_root,
@@ -126,6 +165,9 @@ def compose(
             "shape_data": dict(plan.shape),
             "status_counts": dict(plan.status_counts),
             "content_completeness": plan.content_coverage.as_dict(),
+            "plain_shape": _plain_shape(plan.shape),    # jargon-free band values for end_user (gap-3)
+            "plain_status": _plain_status(plan.status_counts),
+            "plain_content": _plain_content(plan.content_coverage),
             "why": summary_narr.get("why", ""),
             "do": summary_narr.get("do", ""),
         },

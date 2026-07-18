@@ -105,12 +105,18 @@ def describe(
         return None
     fills = _fills(section)
     pick = _variant(rec, role, fluency)
+    title = pick("title")  # optional audience-friendly section title (FR-AUD gap-3); base ⇒ None
     return {
         "key": section.key,  # provenance-by-construction (FR-DL-9)
+        "title": _fill(title.strip(), fills, section_key=section.key) if title else None,
         "what": _fill((pick("what") or "").strip(), fills, section_key=section.key),
         "why": _fill((pick("why") or "").strip(), fills, section_key=section.key),
         "do": _fill((pick("do") or "").strip(), fills, section_key=section.key),
         "next": _fill((pick("next") or "").strip(), fills, section_key=section.key),  # FR-DL-3 drill hint
+        # FR-AUD-C2 — the DOES / WON'T / NEED framing: `what` is DOES; these two are the expectation-set
+        # + the author's to-do. Empty for the architect base (never authored there) ⇒ not rendered.
+        "wont": _fill((pick("wont") or "").strip(), fills, section_key=section.key),
+        "need": _fill((pick("need") or "").strip(), fills, section_key=section.key),
     }
 
 

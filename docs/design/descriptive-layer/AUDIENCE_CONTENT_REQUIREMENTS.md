@@ -156,6 +156,27 @@ enough to catch those gaps at requirements cost.
 
 ---
 
+## 5. Build status (2026-07-18)
+
+**Abstraction + content both shipped** (full suite 148 pass; terminal `--describe` byte-identical):
+
+- **FR-AUD-1..4 ✅** — `_variant()` (role,fluency)→(role,·)→base resolver; `describe`/`describe_summary`/
+  `compose`/`render_html` thread `role`/`fluency`; default = base (byte-identical); HTML = `(end_user, beginner)`.
+- **FR-AUD-C1..C5 ✅ (content authored)** — end_user variants for **all 10 sections + the summary**, each
+  carrying the **DOES / WON'T / NEED** framing (`what` / `wont` / `need`) + a friendly `title` + plain
+  `do`/`next`. `why` is skipped in the end_user render (its base value is architect voice). No jargon.
+- **Gap-3 decision (FR-AUD-4 boundary):** *presentation* strings get an audience form — section **titles**
+  (audience `title` override) + the summary **band** (plain labels Health/Size/Content/Ready + deterministic
+  `plain_shape`/`plain_status`/`plain_content`). *Data* strings stay data, but the end_user HTML **hides the
+  raw item `detail`** (`fields: … | omitted …`) when a mockup already shows it — the visual is the plain form.
+- **Verified live on strtd8** (chrome-devtools, 0 console errors): band + titles + section framing all render
+  in plain language; un-authored *roles* still degrade to base (sparse invariant holds).
+- **Residual (next):** the `Ready to build?` value + item labels (`X create/edit form`) are lightly technical;
+  fluency variants (beginner/advanced depth) not yet authored (OQ-AUD-1); no `--audience` CLI flag yet (OQ-AUD-2).
+
+---
+
+*v0.4 — Abstraction + end-user content both built (§5). Grounded on the three real audience abstractions.*
 *v0.3.1 — Post planning + lessons + principle hardening. Grounded on the three real audience abstractions.
 Builds the adopted FR-DL-1 field as a sparse, degrading (role × fluency) axis; reuses the concierge ladder +
 byte-identical-default; defines the end-user DOES/WON'T/NEED content bar. Abstraction-first (this pass);
