@@ -1,6 +1,6 @@
 # Summary View — Requirements (the Architect's glance-approve sheet)
 
-**Version:** 0.2.1 (Draft — FR-SV-12/13 built: inverted-pyramid + tool-meta now render; 6/7 signals + presentation live)
+**Version:** 0.2.2 (Draft — FR-SV-12/13 + FR-DL-12 built: inverted-pyramid + tool-meta + summary-meaning-under-`--describe` render; 6/7 signals + presentation live)
 **Persona:** the **Architect** at the DATA MODEL front bookend (HITM §3.3).
 **Purpose:** the *one screen* an architect reads to approve the convention manifest + contract
 **without** reading `schema.prisma` — the summary altitude of the visualization layer.
@@ -61,6 +61,8 @@ on strtd8, 123 tests pass, `--json` byte-identical.
 - **Summary before detail, drillable** (SV-1): the summary is the collapsed root; every count drills
   to its section.
 - **Counts carry meaning** (SV-3): a WHAT + derivation (`155 CRUD = ~5 × 31`), never bare numbers.
+  *Built (FR-DL-12): under `--describe` the header carries the aggregate WHY/DO — the counts' meaning
+  ("the entity count IS the contract"), single-sourced from `descriptive.yaml`'s `summary` record.*
 - **Deterministic + speakable** (SV-7 / invariant 8): a pure function of the plan; the whole summary
   is renderable as one spoken line for a non-visual architect.
 - **Honest-skip** (SV-5/6 / route_state): `not-defined`/`owned-elsewhere` excluded from denominators;

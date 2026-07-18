@@ -73,6 +73,24 @@ manifest** and a **thin composer**, and **augments** (does not replace, NR-5) th
   the wireframe-CLI pilot's Hansei. Kept as a first-class step (not buried in Risks prose) so the
   "big lever" stays visible to execution tracking. Not in v1 scope (reqs §4 OQ-5 v1 boundary).
 
+### Build status (2026-07-18)
+
+MVP + first enrichments shipped and verified on strtd8 (129 wireframe tests green; `--json`
+byte-identical with/without `--describe` bar the per-run timestamp):
+
+- **M-DL0 ✅** — `descriptive.yaml`, 10 section records + the aggregate `summary` record.
+- **M-DL1 ✅** — `describe(section, plan)`, pure fill, typed `DescribeError` (CCbC). Live fill
+  subset: `{{count}}`/`{{status}}` (the rest of the R1-S2 table remains to wire as records use them).
+- **M-DL2 ~partial** — per-record `next` drill hint authored + rendered (FR-DL-3, the *affordance*);
+  the *derived* command-per-status ordering + `+K more` cap not yet computed.
+- **M-DL4 ✅** — `render.py` emits WHAT/WHY/DO/NEXT per section + routes the aggregate summary's
+  WHY/DO through the header (FR-DL-12), behind `--describe`. Promotion-to-default still pending the
+  R1-S6 real-user confirmation.
+- **M-DL5 ✅** — `tests/unit/wireframe/test_describe.py`: manifest parse + coverage, `describe`/
+  `describe_summary` determinism, `--describe` render, default-output-omits-narration guard.
+- **M-DL3 / M-DL3a / M-DL6** — not yet built (workflow-position inference, shared introspection
+  helper, navigator-README generation).
+
 ## Mapping (every FR has a step; every step traces to an FR)
 
 | FR | Step |

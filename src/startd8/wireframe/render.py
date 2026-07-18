@@ -183,6 +183,8 @@ def _section_node(
         node.add(f"[dim italic]WHAT: {described['what']}[/dim italic]")
         node.add(f"[dim italic]WHY:  {described['why']}[/dim italic]")
         node.add(f"[dim italic]DO:   {described['do']}[/dim italic]")
+        if described.get("next"):  # FR-DL-3 drill hint
+            node.add(f"[dim italic]NEXT: {described['next']}[/dim italic]")
     if section.consequence:
         node.add(f"[italic]→ {section.consequence}[/italic]")
     if section.error:
@@ -313,6 +315,12 @@ def render_plan(
     console.print(f"[bold]Shape:[/bold]   {shape}")
     console.print(f"[bold]Content:[/bold] {content}")
     console.print(f"[bold]Cascade:[/bold] {readiness}")
+    if describe:  # FR-DL-12: route the summary header through the descriptive layer — the counts' meaning
+        from .describe import describe_summary
+        _s = describe_summary(plan)
+        if _s:
+            console.print(f"[dim italic]WHY:  {_s['why']}[/dim italic]")
+            console.print(f"[dim italic]DO:   {_s['do']}[/dim italic]")
     for w in plan.merge_warnings:
         console.print(f"[yellow]warning:[/yellow] {_warning_text(w)}")
     # Detail tree below the summary, behind a visual separator.

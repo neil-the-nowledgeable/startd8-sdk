@@ -9,9 +9,9 @@ renderer holds no narration strings (FR-DL-5).
 Mirrors the proven attorney-portal composer (``work/legal/attorney-portal/app/descriptive.py``):
 a cached YAML load, a per-key record lookup, and a template-fill returning a plain dict.
 
-MVP scope (M-DL0/M-DL1/M-DL4): what/why/do per section. Not yet built — audience variants
-(FR-DL-1 optional), next[] affordances (M-DL2/FR-DL-3), workflow-position inference (M-DL3/FR-DL-4),
-or the 3-axis facets (FR-DL-11).
+Scope (M-DL0/M-DL1/M-DL2/M-DL4/M-DL5): what/why/do/next per section + the aggregate `summary`
+record (FR-DL-12, the header's meaning). Not yet built — audience variants (FR-DL-1 optional),
+workflow-position inference (M-DL3/FR-DL-4), or the 3-axis facets (FR-DL-11).
 """
 from __future__ import annotations
 
@@ -83,6 +83,21 @@ def describe(section: WireframeSection, plan: WireframePlan) -> Optional[dict]:
         "what": _fill((rec.get("what") or "").strip(), fills, section_key=section.key),
         "why": _fill((rec.get("why") or "").strip(), fills, section_key=section.key),
         "do": _fill((rec.get("do") or "").strip(), fills, section_key=section.key),
+        "next": _fill((rec.get("next") or "").strip(), fills, section_key=section.key),  # FR-DL-3 drill hint
+    }
+
+
+def describe_summary(plan: WireframePlan) -> Optional[dict]:
+    """Compose the aggregate `summary` record's narration (FR-DL-12) — the *meaning* of the
+    Status/Shape/Content/Cascade header, routed through the descriptive layer. Authored without live
+    placeholders (the figures live in the header lines); returns ``{"why", "do"}`` or ``None``.
+    Deterministic (FR-DL-8)."""
+    rec = _records().get("summary")
+    if not rec:
+        return None
+    return {
+        "why": _fill((rec.get("why") or "").strip(), {}, section_key="summary"),
+        "do": _fill((rec.get("do") or "").strip(), {}, section_key="summary"),
     }
 
 
