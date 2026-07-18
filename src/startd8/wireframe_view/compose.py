@@ -12,11 +12,28 @@ the outline and the lo-fi mockups from it. No LLM (Hitsuzen).
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from ..wireframe.describe import describe, describe_summary
 from ..wireframe.plan import WireframePlan
 from ..wireframe.render import SCHEMA_VERSION, WIREFRAME_META, footer_lines
+
+# FR-AUD-C1 banned register (R1-F7), word-boundary matched so domain names ("identity", "AiCall") don't
+# false-trip. A plan item whose LABEL carries this jargon (e.g. "FastAPI app", "export endpoints") is
+# infrastructure the non-technical reader shouldn't see — it is flagged `technical` and hidden from the
+# end_user render (the datum still rides in the embed for the architect voice). SINGLE SOURCE for the
+# ban — the acceptance test imports this same matcher.
+_JARGON_RE = re.compile(
+    r"\b(?:entit(?:y|ies)|cruds?|schemas?|prisma|manifests?|cascades?|fastapi|"
+    r"endpoints?|openapi|htmx|foreign[- ]keys?|ai pass(?:es)?)\b",
+    re.IGNORECASE,
+)
+
+
+def has_jargon(text: str) -> bool:
+    """True if *text* contains an FR-AUD-C1 banned term (word-boundary). The one ban matcher (R1-F7)."""
+    return bool(_JARGON_RE.search(text or ""))
 
 
 def parse_form_detail(detail: str) -> Optional[dict]:
@@ -83,6 +100,8 @@ def _item_view(section_key: str, item) -> dict:
         "detail": item.detail,
         "paths": list(item.paths),
         "mockup": mockup,
+        # R1-F7: an item whose label is infrastructure jargon is hidden from the end_user render.
+        "technical": has_jargon(item.label),
     }
 
 
@@ -100,8 +119,16 @@ def _plain_shape(shape: dict) -> str:
     ))
 
 
+# Item statuses that mean "this still needs the author's input" — the computed floor under NEED (R1-F1).
+GAP_STATUSES = {"not_defined", "placeholder", "invalid"}
+
+
 def _plain_status(counts: dict) -> str:
     """A jargon-free health line: reassure when clean, name the gaps in plain words when not."""
+    if sum(v for v in counts.values() if isinstance(v, int)) == 0:
+        # R1-F6: an empty plan must NOT read "nothing missing or broken" — that is false reassurance
+        # to a first-time author (FR-AUD-C4). Say it's empty instead.
+        return "Nothing's been set up yet — this project still looks empty."
     issues = []
     if counts.get("not_defined"):
         issues.append(_plural(counts["not_defined"], "part") + " not set up yet")
@@ -146,6 +173,10 @@ def compose(
             "consequence": s.consequence,
             "narration": narr,
             "items": [_item_view(s.key, it) for it in s.items],
+            # R1-F1: the computed floor under NEED — items the plan itself flags as not-yet-provided
+            # (not_defined / placeholder / invalid). Authored `need` prose layers on top; this ensures
+            # a real gap is never silently under-reported by relying on authored text alone.
+            "need_items": [it.label for it in s.items if it.status in GAP_STATUSES],
         })
 
     return {

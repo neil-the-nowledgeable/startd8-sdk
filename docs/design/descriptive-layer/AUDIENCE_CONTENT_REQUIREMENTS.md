@@ -36,7 +36,7 @@ about the SDK and must never need to. Secondary: the architect + other delivery 
 **Resolved open questions:**
 - **OQ-A → role × fluency, sparse.** The schema supports both axes but requires neither cell; resolution
   degrades (role,fluency) → (role,·) → base. You never author a full matrix.
-- **OQ-B → HTML defaults to `(end_user, beginner)`; terminal to base (architect).** Unset everywhere ⇒
+- **OQ-B → HTML defaults to `(end_user, intermediate)`; terminal to base (architect).** Unset everywhere ⇒
   today's architect text, byte-identical.
 
 ### 0.1 Lessons-Learned Hardening (v0.3)
@@ -89,17 +89,26 @@ enough to catch those gaps at requirements cost.
 ## 2. Requirements — the abstraction
 
 - **FR-AUD-1 — Audience-keyed record variants (role × fluency).** A descriptive record MAY carry an
-  `audience` map providing `what`/`why`/`do`/`next` variants keyed by `role` and, optionally, `fluency`.
-  **Sparse + degrading:** resolution is `(role, fluency)` → `(role, ·)` → **base** (the current top-level
-  fields = architect/intermediate). An absent cell is never an error. Keyed on the unit's stable key, not
-  its label. (Builds FR-DL-1.)
+  `audience` map providing `what`/`why`/`do`/`next`/`wont`/`need`/`title` variants keyed by `role` and,
+  optionally, `fluency`. **Sparse + degrading:** resolution is `(role, fluency)` → `(role, ·)` → **base**
+  (top-level fields = architect/intermediate). An absent cell is never an error. Keyed on the unit's stable
+  key, not its label. (Builds FR-DL-1.)
+  **Authored-variant self-containment (R1-F3):** when a role variant *is* authored, a field it doesn't
+  provide resolves to **empty**, NOT the architect base — so a partial `end_user` variant can never leak
+  the technical voice into one field. Only an **un-authored** role degrades wholesale to base; fluency
+  still inherits its own role's fields.
 - **FR-AUD-2 — Defaults preserve today.** Unset role/fluency ⇒ base ⇒ **byte-identical** terminal output.
-  The wireframe-visual HTML requests `(end_user, beginner)`; the terminal `--describe` stays base (architect).
+  The wireframe-visual HTML requests `(end_user, intermediate)`; the terminal `--describe` stays base (architect).
 - **FR-AUD-3 — Resolver mirrors the concierge ladder, distinct axis.** `describe(section, plan, *, role,
   fluency)` resolves per FR-AUD-1; a project/global default MAY be set via the same flag→project→global→default
   precedence `concierge/audience.py` uses — but on `FR-AUD`'s own key, never by overloading `KickoffAudience`.
-- **FR-AUD-4 — Audience is orthogonal to data.** Switching audience changes *only wording*; the shape, counts,
-  statuses, mockups, and the plan JSON are identical across audiences (audience is presentation, not content).
+- **FR-AUD-4 — Audience is a *rendering* choice over invariant data (reader-visibility, R1-F2/F7).** The
+  plan JSON, the item *set*, statuses, counts, and mockup structure are identical across audiences (the
+  view-model carries the architect data verbatim). What audience changes is what is *rendered*: the
+  `end_user` surface shows the audience narration/titles + plain band, **hides the raw item `detail`, and
+  hides items flagged `technical`** (labels carrying FR-AUD-C1 jargon, e.g. "FastAPI app", "endpoints").
+  **Testable rule:** every string rendered in the `end_user` view MUST pass the FR-AUD-C1 ban (§FR-AUD-C1,
+  enforced by the banned-word acceptance test).
 
 ## 2b. Requirements — the end-user content (what the words must do)
 
@@ -112,7 +121,11 @@ enough to catch those gaps at requirements cost.
 - **FR-AUD-C2 — The DOES / WON'T / NEED framing.** Each section's end-user narration answers three questions,
   not one: **DOES** — what you're getting; **WON'T** — what this deliberately does *not* include (set
   expectations, prevent silent surprise); **NEED** — what *you* must provide (content to write, fields to
-  confirm, decisions to make). (DOES/WON'T map to NODE-SCHEMA `does`/`wont`; NEED is the author's to-do.)
+  confirm, decisions to make). (DOES/WON'T map to NODE-SCHEMA `does`/`wont`.)
+  **NEED is a computed floor the author augments (R1-F1, resolves OQ-AUD-3):** NEED MUST include, at a
+  minimum, the **plan-derived gaps** — items the plan itself flags `not_defined`/`placeholder`/`invalid`
+  (surfaced as the `need_items` list) — with authored prose layered on top. Authored text alone can
+  silently under-report an omission; the computed floor cannot, since it reads the actual plan.
 - **FR-AUD-C3 — Surface omissions, don't imply them.** The content MUST make "obvious once seen" gaps
   *explicit*: forms name what they do **not** collect; content sections name what is **unwritten**; empty
   states are called out. The goal: the author notices "where's the phone number?" *here*, not after the build.
@@ -136,12 +149,14 @@ enough to catch those gaps at requirements cost.
 
 ## 4. Open Questions
 
-- **OQ-AUD-1 — Fluency values for reading.** Reuse `beginner/intermediate/advanced` labels, or a reading-specific
-  set (`plain/standard/detailed`)? (Lean: reuse the concierge labels to avoid a second vocabulary.)
-- **OQ-AUD-2 — Where do project/global audience defaults live** if the HTML default isn't enough — `build-preferences.yaml`
-  (concierge's home) or a wireframe-visual flag (`--audience end_user`)? (Lean: a `--audience` flag now; project pref later.)
-- **OQ-AUD-3 — NEED as data vs prose.** Is "what you must provide" derivable from the plan (unwritten content %,
-  unconfirmed fields) so it's partly *computed*, not only authored? (Investigate next pass; FR-AUD-C3 candidates.)
+- **OQ-AUD-1 — Fluency values for reading.** ✅ RESOLVED — reuse `beginner/intermediate/advanced` (concierge
+  labels), avoiding a second vocabulary. Default `intermediate`.
+- **OQ-AUD-2 — Where do project/global audience defaults live?** ✅ RESOLVED (v0.4) — a `--audience`/`--fluency`
+  flag on `--html` now; a `build-preferences.yaml` project pref is a future add if wanted.
+- **OQ-AUD-3 — NEED as data vs prose.** ✅ RESOLVED (R1-F1, v0.5) — NEED is a **computed floor** (the
+  plan-derived `need_items`: `not_defined`/`placeholder`/`invalid` items) with authored prose on top; see
+  FR-AUD-C2. Remaining sub-question deferred: whether to add *per-field* content-coverage % into NEED beyond
+  the summary band.
 
 ## Reference-Audit (all verified 2026-07-18)
 
@@ -161,7 +176,7 @@ enough to catch those gaps at requirements cost.
 **Abstraction + content both shipped** (full suite 148 pass; terminal `--describe` byte-identical):
 
 - **FR-AUD-1..4 ✅** — `_variant()` (role,fluency)→(role,·)→base resolver; `describe`/`describe_summary`/
-  `compose`/`render_html` thread `role`/`fluency`; default = base (byte-identical); HTML = `(end_user, beginner)`.
+  `compose`/`render_html` thread `role`/`fluency`; default = base (byte-identical); HTML = `(end_user, intermediate)`.
 - **FR-AUD-C1..C5 ✅ (content authored)** — end_user variants for **all 10 sections + the summary**, each
   carrying the **DOES / WON'T / NEED** framing (`what` / `wont` / `need`) + a friendly `title` + plain
   `do`/`next`. `why` is skipped in the end_user render (its base value is architect voice). No jargon.
@@ -180,11 +195,30 @@ enough to catch those gaps at requirements cost.
 - **CLI flags ✅ (OQ-AUD-2 resolved).** `wireframe --html <path> [--audience end_user|architect]
   [--fluency intermediate|beginner|advanced]` — scoped to `--html`; unknown values degrade to base.
   Verified live on strtd8: all three depths + the architect voice render (0 console errors).
-- **Residual (next):** the `Ready to build?` value + item labels (`X create/edit form`) are lightly
-  technical; fluency is authored on 3 spots (extend to more sections on demand — sparse invariant).
+- **Residual (next):** the `Ready to build?` value is lightly technical; fluency is authored on 3 spots
+  (extend on demand — sparse invariant).
+
+### 5.1 CRP R1 triage applied (v0.5, 2026-07-18)
+
+All 9 R1 suggestions actioned (dispositions in Appendix A/B); **153 tests pass, terminal `--describe`
+byte-identical, live-verified on strtd8 (0 console errors, 0 banned jargon in the rendered surface)**:
+
+- **R1-F1/F5 — computed NEED floor + falsifiable omission test.** `need_items` (plan-flagged gaps) renders
+  under NEED; a mutation test asserts a schema-only project surfaces a gap and a fully-planned section does not.
+- **R1-F3 — architect-leak closed generally.** Authored-variant self-containment (FR-AUD-1); no field falls
+  back to the technical voice.
+- **R1-F6 — empty-project false reassurance fixed.** `_plain_status` reads "still looks empty" at zero; edge table tested.
+- **R1-F7 (+F2) — jargon ban is now enforced.** Single-source `has_jargon` matcher; `technical` items (FastAPI/
+  endpoints/…) hidden from the end_user render; acceptance test asserts zero banned tokens on the rendered surface.
+- **R1-F4 — completeness bar.** Test asserts every section carries end_user DOES/WON'T/NEED (user-ready).
+- **R1-F8 — OQ-AUD-3 reconciled** with §5 (closed above). **R1-F9 — byte-identity anchor** documented (test
+  `test_default_audience_is_byte_identical_base` + the committed `--describe` shasum gate).
+- **R1-F2 (partial-reject):** item *labels* keep the user's real record names (FR-AUD-C5) rather than an
+  audience rename; the reader-visibility rule + technical-item hiding covers the jargon concern instead.
 
 ---
 
+*v0.5 — CRP R1 triage applied (§5.1): computed NEED floor, leak fix, jargon-ban enforcement, empty-project fix.*
 *v0.4 — Abstraction + end-user content both built (§5). Grounded on the three real audience abstractions.*
 *v0.3.1 — Post planning + lessons + principle hardening. Grounded on the three real audience abstractions.
 Builds the adopted FR-DL-1 field as a sparse, degrading (role × fluency) axis; reuses the concierge ladder +
@@ -209,13 +243,21 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F1 | NEED = computed floor + authored | CRP R1 | `need_items` (not_defined/placeholder/invalid) added to the view-model + rendered under NEED; FR-AUD-C2 updated; resolves OQ-AUD-3 | 2026-07-18 |
+| R1-F3 | Close the per-field architect leak generally | CRP R1 | `_variant` authored-variant self-containment (missing field ⇒ empty, not base); FR-AUD-1 updated | 2026-07-18 |
+| R1-F4 | end_user completeness bar as a gate | CRP R1 | `test_end_user_role_complete_across_all_sections` (all sections have DOES/WON'T/NEED); §5.1 | 2026-07-18 |
+| R1-F5 | Falsifiable omission-catching test | CRP R1 | `test_computed_need_surfaces_plan_gaps` (schema-only ⇒ gap; full ⇒ none) | 2026-07-18 |
+| R1-F6 | plain_* edge cases / empty-project | CRP R1 | `_plain_status` empty guard ("still looks empty"); `test_plain_summary_edge_cases` | 2026-07-18 |
+| R1-F7 | Automated jargon-ban check | CRP R1 | single-source `has_jargon`; `technical` items hidden from end_user; `test_end_user_rendered_surface_has_no_banned_jargon`; FR-AUD-4 reworded | 2026-07-18 |
+| R1-F2 | FR-AUD-4 reader-visibility rule | CRP R1 | *(partial — the rule)* FR-AUD-4 now: every end_user-rendered string obeys FR-AUD-C1; raw detail + technical items hidden. Label-rename half → Appendix B | 2026-07-18 |
+| R1-F8 | Reconcile OQ-AUD-3 with §5 | CRP R1 | OQ-AUD-3 marked resolved; §5.1 | 2026-07-18 |
+| R1-F9 | Pin the byte-identity anchor | CRP R1 | Documented: `test_default_audience_is_byte_identical_base` + committed `--describe` shasum gate (7d1b212…) | 2026-07-18 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
 | ID | Suggestion | Source | Rejection Rationale | Date |
 |----|------------|--------|---------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F2 (label-rename half) | Give item labels (`X create/edit form`) an audience `title`-style override | CRP R1 | Item labels are the user's **real record names** (Profile, Company, …) — FR-AUD-C5 mandates keeping real names, not renaming them. The genuine jargon (FastAPI/endpoints infra labels) is handled by hiding `technical` items (R1-F7), and non-technical labels carry no banned tokens. An audience label-rewrite would also make the item *set* audience-varying, muddying FR-AUD-4. Accepted the reader-visibility *rule*; rejected the label rewrite. | 2026-07-18 |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 

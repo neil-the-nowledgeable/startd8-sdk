@@ -205,6 +205,52 @@ def test_compose_plain_summary_lines_are_jargon_free(golden_root: Path) -> None:
     assert summary["plain_status"]  # non-empty; reassures when clean, names gaps in plain words otherwise
 
 
+def test_end_user_role_complete_across_all_sections(golden_root: Path) -> None:
+    """R1-F4 completeness bar: the end_user role carries DOES/WON'T/NEED for EVERY section (user-ready)."""
+    from startd8.wireframe.describe import describe
+
+    plan = _plan(golden_root)
+    for s in plan.sections:
+        n = describe(s, plan, role="end_user", fluency="intermediate")
+        assert n and n["what"] and n["wont"] and n["need"], f"{s.key}: end_user missing DOES/WON'T/NEED"
+
+
+def test_computed_need_surfaces_plan_gaps(golden_root: Path, mini_root: Path) -> None:
+    """R1-F1/F5 — the omission-catching thesis, made falsifiable: a plan-flagged gap appears under NEED;
+    a fully-planned section reports none. (mini_root is schema-only ⇒ has an unset AI layer.)"""
+    mini = compose(_plan(mini_root), role="end_user", fluency="intermediate")
+    assert any(s["need_items"] for s in mini["sections"]), "a schema-only project must surface a gap"
+
+    full = compose(_plan(golden_root), role="end_user", fluency="intermediate")
+    entities = next(s for s in full["sections"] if s["key"] == "entities")
+    assert entities["need_items"] == []           # nothing outstanding when it's all planned
+    # need_items is plan-derived, not audience-derived — identical across voices (FR-AUD-4).
+    arch = compose(_plan(mini_root), role="architect")
+    assert [s["need_items"] for s in arch["sections"]] == [s["need_items"] for s in mini["sections"]]
+
+
+def test_plain_summary_edge_cases() -> None:
+    """R1-F6 — the deterministic plain_* restatements across edge plans (no empty-project false comfort)."""
+    from types import SimpleNamespace
+
+    from startd8.wireframe_view.compose import _plain_content, _plain_shape, _plain_status
+
+    # Empty plan MUST NOT read "nothing missing/broken" — that's false reassurance (FR-AUD-C4).
+    assert "empty" in _plain_status({}).lower()
+    assert "empty" in _plain_status({"planned": 0, "not_defined": 0}).lower()
+    assert "not set up" in _plain_status({"not_defined": 3}).lower()
+    assert _plain_status({"planned": 5}) == "Everything's planned — nothing missing or broken."
+    # Shape pluralization + zeros.
+    assert _plain_shape({"entities": 1, "pages": 0, "views": 0, "ai_passes": 0}).startswith(
+        "1 thing tracked · 0 screens"
+    )
+    # Content: zero-total (no divide-by-zero), partial, complete.
+    cov = lambda a, t: SimpleNamespace(overall=SimpleNamespace(total=t, ratio=(a / t if t else 0.0)))
+    assert _plain_content(cov(0, 0)) == "No text to write yet."
+    assert "%" in _plain_content(cov(3, 10))
+    assert _plain_content(cov(10, 10)) == "All the words are written."
+
+
 def test_compose_preserves_raw_detail_and_narration(golden_root: Path) -> None:
     vm = compose(_plan(golden_root))
     entities = next(s for s in vm["sections"] if s["key"] == "entities")

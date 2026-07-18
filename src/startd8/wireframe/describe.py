@@ -67,20 +67,24 @@ def _fill(text: str, fills: dict, *, section_key: str) -> str:
 def _variant(rec: dict, role: str, fluency: str):
     """Return a per-field picker resolving the (role × fluency) audience variant (FR-AUD-1).
 
-    Sparse + degrading: each field falls back ``(role, fluency)`` → ``(role, ·)`` → **base** (the
-    record's top-level fields = architect/intermediate). An absent cell is never an error, and the
-    default ``("architect", "intermediate")`` returns base verbatim ⇒ byte-identical (FR-AUD-2).
+    Resolution ``(role, fluency)`` → ``(role, ·)`` → base, with one rule that closes the architect-leak
+    (R1-F3): an **authored** role variant is *self-contained* — a field it doesn't provide resolves to
+    ``None`` (empty), NOT to the architect base — so a partial ``end_user`` variant can never leak the
+    technical voice into one field. Only an **un-authored** role (no variant at all) degrades wholesale
+    to base. Fluency still inherits its own role's fields. The default ``("architect", "intermediate")``
+    has no ``audience.architect`` variant ⇒ resolves to base verbatim ⇒ byte-identical (FR-AUD-2).
     """
     aud = rec.get("audience") or {}
     role_v = aud.get(role) or {}
     fluency_v = (role_v.get("fluency") or {}).get(fluency) or {}
+    role_authored = bool(role_v)
 
     def pick(field: str):
-        for src in (fluency_v, role_v, rec):  # most-specific → base
+        for src in (fluency_v, role_v):  # fluency → role, within the authored voice
             val = src.get(field)
             if val is not None:
                 return val
-        return None
+        return rec.get(field) if not role_authored else None  # base ONLY when the role is un-authored
 
     return pick
 

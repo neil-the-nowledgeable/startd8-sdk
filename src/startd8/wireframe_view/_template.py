@@ -56,6 +56,9 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .sec-body{padding:4px 14px 14px}
   .narr{font-size:12.5px;color:#444;border-left:3px solid var(--line);padding:2px 0 2px 10px;margin:4px 0 12px}
   .narr div{margin:2px 0}.narr b{color:var(--dim)}
+  .needbox{font-size:12.5px;background:#fff8e6;border:1px solid #e6d38a;border-radius:6px;
+    padding:7px 10px;margin:2px 0 10px}
+  .needbox b{color:#8a6d00}
 
   /* ---- items ---- */
   .item{border-top:1px dashed var(--line);padding:9px 0}
@@ -191,13 +194,6 @@ __PLAN_DATA__
       '<div class="body"><div class="empty" style="min-height:70px">'+
       esc(item.detail||"page content")+'</div></div></div>';
   }
-  function listMock(item){
-    var head='<tr><th>#</th><th>columns defined in schema.prisma</th><th>&nbsp;</th></tr>';
-    var rows="";
-    for(var i=0;i<3;i++) rows+='<tr class="skelrow"><td>'+(i+1)+'</td><td><div></div></td><td><div></div></td></tr>';
-    return '<div class="mock">'+chrome(item.label+" — list")+
-      '<div class="body"><table class="tbl">'+head+rows+'</table></div></div>';
-  }
   function mockFor(sectionKey, item){
     if(item.mockup && item.mockup.kind==="form") return formMock(item.mockup);
     if(sectionKey==="pages") return null;   // pages get a section-level frame set (below)
@@ -208,13 +204,12 @@ __PLAN_DATA__
   function renderItem(sectionKey, item, navLabels){
     var wrap=document.createElement("div"); wrap.className="item";
     var mock = mockFor(sectionKey, item);
-    // End-user reads the visual mockup, not the raw "fields: … | omitted …" line — hide it when a
-    // mockup carries the same info (FR-AUD gap-3); architect keeps the technical detail.
-    var showDet = item.detail && !(EU && mock);
-    var det = showDet ? '<div class="det mono">'+esc(item.detail)+'</div>' : '';
+    // R1-F2/F7: the raw item detail is technical ("routes: …", "foreign-key relation(s)", "fields: …").
+    // It's the architect's under-the-hood view — hide it entirely for the end_user, whose meaning comes
+    // from the narration + mockups. Any string that reaches the end_user DOM must pass FR-AUD-C1.
+    var det = (item.detail && !EU) ? '<div class="det mono">'+esc(item.detail)+'</div>' : '';
     wrap.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+badge(item.status)+'</div>'+det;
     var isPage = sectionKey==="pages";
-    var isList = sectionKey==="entities" && /view|CRUD/i.test(item.detail||"");
     if(mock || isPage){
       var d=document.createElement("details");
       var sm=document.createElement("summary"); sm.className="drill"; sm.textContent="show mockup";
@@ -228,9 +223,12 @@ __PLAN_DATA__
   function renderSection(sec){
     var d=document.createElement("details"); d.className="sec";
     var what = (sec.narration&&sec.narration.what) ? sec.narration.what : "";
+    // R1-F7: the end_user never sees infrastructure items (FastAPI app, endpoints, …) — hide them; the
+    // count reflects what's shown. Architect sees everything.
+    var items = (sec.items||[]).filter(function(i){ return !(EU && i.technical); });
     d.innerHTML='<summary>'+esc(sec.title)+' '+badge(sec.status)+
       '<span class="what">'+esc(what)+'</span>'+
-      '<span class="count">'+(sec.items?sec.items.length:0)+'</span></summary>';
+      '<span class="count">'+items.length+'</span></summary>';
     var body=document.createElement("div"); body.className="sec-body";
     if(sec.narration){
       var n=sec.narration;
@@ -250,11 +248,17 @@ __PLAN_DATA__
       body.appendChild(el('<div class="narr">'+rows.map(function(r){
         return '<div><b>'+r[0]+' </b>'+esc(r[1])+'</div>'; }).join("")+'</div>'));
     }
-    var navLabels=(sec.key==="pages")?(sec.items||[]).map(function(i){return i.label;}).slice(0,6):[];
-    if(sec.items && sec.items.length){
-      sec.items.forEach(function(it){ body.appendChild(renderItem(sec.key, it, navLabels)); });
+    // R1-F1: the computed floor under NEED — plan-flagged gaps (not-yet-provided items), named so the
+    // author sees exactly what's outstanding rather than trusting the authored prose alone. end_user only.
+    if(EU && sec.need_items && sec.need_items.length){
+      body.appendChild(el('<div class="needbox"><b>Still needs you:</b> '+
+        sec.need_items.map(esc).join(", ")+'</div>'));
+    }
+    var navLabels=(sec.key==="pages")?items.map(function(i){return i.label;}).slice(0,6):[];
+    if(items.length){
+      items.forEach(function(it){ body.appendChild(renderItem(sec.key, it, navLabels)); });
     } else {
-      body.appendChild(el('<div class="empty">nothing defined for this section</div>'));
+      body.appendChild(el('<div class="empty">nothing to review here</div>'));
     }
     d.appendChild(body);
     return d;
