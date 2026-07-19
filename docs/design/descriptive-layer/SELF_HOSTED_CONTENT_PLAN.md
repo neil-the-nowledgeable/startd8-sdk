@@ -78,6 +78,20 @@ the "expected shape" is single-sourced (FR-SHC-1/2), not duplicated between vali
 4. **Fluency confirmed sparse/opt-in** (2 of 10 sections) → excluded from the denominator (NR-2 holds),
    reported informationally. **OQ-SHC-2 (denominator) → record-type schema × roles-in-use.**
 
+## Build status (2026-07-19)
+
+**M-SHC-0/1/2 ✅ BUILT** (`src/startd8/wireframe/descriptive_schema.py` + `test_descriptive_coverage.py`):
+
+- **M-SHC-0 ✅** — `SECTION_SCHEMA` + `SUMMARY_SCHEMA` declare the two record-type field sets per role
+  (the "data model" of our content, FR-SHC-2). Single-source; `describe.py` can adopt it over time.
+- **M-SHC-1 ✅** — `matrix_coverage()` reuses `CoverageStat` (Mottainai): `{by_role, overall, gaps,
+  fluency}`. Denominator = required fields × roles; fluency reported, not counted.
+- **M-SHC-2 ✅** — 5 tests incl. the **regression guard** (`test_expected_matrix_is_fully_authored`),
+  a guard-catches-a-gap test, and the two-record-types test. `format_report()` / `python -m
+  startd8.wireframe.descriptive_schema` prints the readout.
+- **Live:** architect **33/33**, end_user **44/44**, overall **77/77 (100%)**, 0 gaps — matches the spike.
+  Full suite **159 pass**. No telemetry, no new subsystem (right-sized Mieruka, FR-SHC-5).
+
 ## Review log
 *(scaffold — CRP suggestions land here as `#### Review Round R{n}` under Appendix C)*
 
