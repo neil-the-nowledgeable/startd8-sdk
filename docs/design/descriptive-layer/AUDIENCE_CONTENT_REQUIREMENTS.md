@@ -105,8 +105,10 @@ enough to catch those gaps at requirements cost.
 - **FR-AUD-4 — Audience is a *rendering* choice over invariant data (reader-visibility, R1-F2/F7).** The
   plan JSON, the item *set*, statuses, counts, and mockup structure are identical across audiences (the
   view-model carries the architect data verbatim). What audience changes is what is *rendered*: the
-  `end_user` surface shows the audience narration/titles + plain band, **hides the raw item `detail`, and
-  hides items flagged `technical`** (labels carrying FR-AUD-C1 jargon, e.g. "FastAPI app", "endpoints").
+  `end_user` surface shows the audience narration/titles + plain band, **hides the raw item `detail`,
+  hides items flagged `technical`** (labels carrying FR-AUD-C1 jargon, e.g. "FastAPI app", "endpoints"),
+  and **MAY reorder sections for relevance** (the end_user leads with the author-facing screens → forms →
+  content-needed, then the supporting sections; the architect keeps the plan's data-model order).
   **Testable rule:** every string rendered in the `end_user` view MUST pass the FR-AUD-C1 ban (§FR-AUD-C1,
   enforced by the banned-word acceptance test).
 

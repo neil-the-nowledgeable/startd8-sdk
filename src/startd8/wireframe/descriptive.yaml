@@ -162,7 +162,7 @@ records:
     next: "→ Completeness, the scored data-readiness signals."
     audience:
       end_user:
-        title: "The words you'll need to write"
+        title: "Content needed"
         what: "The parts of the app that need real words — page text and instructions — that only you can write."
         wont: "The app won't write these for you; they stay blank until someone fills them in."
         need: "Plan to write anything still marked 'placeholder' or left empty before you launch."

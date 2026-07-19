@@ -136,6 +136,14 @@ def _plain_shape(shape: dict) -> str:
 # Item statuses that mean "this still needs the author's input" — the computed floor under NEED (R1-F1).
 GAP_STATUSES = {"not_defined", "placeholder", "invalid"}
 
+# End-user section order: lead with what the author experiences (screens → forms → content they must
+# write → the things tracked), then the supporting/technical sections. Presentation only — the section
+# SET, statuses, and items are unchanged (FR-AUD-4); the architect keeps the plan's data-model order.
+_END_USER_ORDER = [
+    "pages", "forms", "content", "entities", "views",
+    "services", "display", "completeness", "deployment", "scaffold",
+]
+
 
 def _plain_status(counts: dict) -> str:
     """A jargon-free health line: reassure when clean, name the gaps in plain words when not."""
@@ -200,6 +208,10 @@ def compose(
             # a real gap is never silently under-reported by relying on authored text alone.
             "need_items": [it.label for it in s.items if it.status in GAP_STATUSES],
         })
+
+    if role == "end_user":  # lead with the author-facing sections (presentation only — FR-AUD-4)
+        rank = {k: i for i, k in enumerate(_END_USER_ORDER)}
+        sections.sort(key=lambda sec: rank.get(sec["key"], len(rank)))
 
     return {
         "project_root": plan.project_root,  # provenance in the embed only — NOT rendered to end_user (R2-F1)
