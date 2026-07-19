@@ -1,6 +1,6 @@
 # Self-Hosted Content — Requirements (maintain our own content like a wireframed project)
 
-**Version:** 0.2 (Post-planning — self-reflective update; spike-grounded)
+**Version:** 0.3.1 (Post planning + lessons + principle hardening; spike-grounded; pre-CRP)
 **Date:** 2026-07-19
 **Status:** Draft
 **Concept key:** `FR-SHC` (Self-Hosted Content). Stable prefix; the framing ("dogfooded content",
@@ -42,6 +42,43 @@
   coverage view is deferred until the matrix is big enough to warrant it (don't over-formalize).
 - **OQ-SHC-2 → the denominator is `record-type schema × roles-in-use`.** Fluency cells are reported, not
   counted. The "expected matrix" = what each record *type* requires, for each role actually in play.
+
+### 0.1 Lessons-Learned Hardening (v0.3)
+
+> Applied the SDK design-doc + knowledge-management lessons before CRP; each changed the draft:
+
+- **[KM: "Dogfooding Pattern — using your own system to manage its own context" (validated)]** — dogfooding
+  is a proven pattern, but its caution is *scope creep*. → M-SHC-2 dogfoods the **coverage idea** (a report/
+  test), NOT the whole cascade (the lesson confirms OQ-SHC-1's resolution).
+- **[KM Lesson 15: "Requirements Index Completeness Auditing"]** — coverage-auditing an authored corpus is a
+  known validated pattern → FR-SHC-3/4 is a *completeness audit* framed on that precedent, not invented.
+- **[KM Lesson 5: "Verify Derived Counts After Multi-Step Manifest Updates"]** — the spike's `40/40, 60/60`
+  are **derived counts**; trusting a one-time number is the trap → FR-SHC-4 makes coverage a **standing CI
+  assertion** (the regression guard), re-derived on every change.
+- **[KM Lesson 27 + Single-source ownership]** — a coverage tool that re-declares the field sets would couple
+  by *coincidence* (drift trap) → M-SHC-0 single-sources the record-type schema; the rollup and the resolver
+  both READ it, neither restates it.
+- **[Phantom-reference audit]** — the Reference-Audit honestly marks the two unbuilt pieces ⚠ (coverage
+  rollup, expected-matrix declaration); nothing is claimed to exist that doesn't.
+
+### 0.2 Design-Principle Hardening (v0.3.1)
+
+> Checked against the design-principle set; the load-bearing one is Mieruka:
+
+- **[Mieruka (見える化 — make visible)] — the principle FR-SHC embodies.** "You cannot improve what you
+  cannot see." A content gap today is *invisible* (an un-authored cell silently degrades to base); FR-SHC-3/4
+  make it visible + impossible-to-ignore. **BUT** the codebase's Mieruka is OTel-telemetry-heavy — FR-SHC MUST
+  NOT over-apply: **no telemetry for a 10-section matrix**; the report + test *is* the right-sized Mieruka
+  surface (tightened in FR-SHC-5 / NR-1).
+- **[Keiyaku (契約 — contract)]** — the declared record-*type* schema (FR-SHC-2) is a validated **contract**
+  the content is checked against, not prose; single-sourced.
+- **[Kaizen]** — Mieruka enables Kaizen: the coverage number, made a standing guard, stops drift from creeping
+  (FR-SHC-4) — improve what you can now see.
+- **[Mottainai]** — reuse `CoverageStat`/`ContentCoverageStats`; the spike proved no new scorer is needed.
+- **[Accidental-Complexity]** — reaffirmed: report + test, **not** a subsystem, CMS, telemetry pipeline, or a
+  literal cascade run (NR-1/NR-3). The spike's ~30 lines is the whole build.
+- **[Genchi Genbutsu]** — the update is spike-grounded in the real `descriptive.yaml`; the denominator binds
+  to the **roles actually in use**, never an assumed cartesian matrix.
 
 ---
 
@@ -100,6 +137,9 @@ see the gap until after it's built" failure the wireframe exists to prevent — 
   ideally by treating the descriptive manifest as a wireframe-able "project" whose *completeness* is the
   audience-cell coverage, or a lightweight `describe --coverage` report reusing the FR-WCI-2 rollup.
   **Reuse over rebuild.** If dogfooding would require a parallel subsystem, prefer the lightweight report.
+  **Right-sized Mieruka (§0.2):** the visibility surface is a **report + a CI regression-guard test** — NOT
+  telemetry/OTel emission (that is the codebase's Mieruka mechanism for *code structure at scale*, not a
+  10-section content matrix). Emitting metrics for this would be over-application, not compliance.
 - **FR-SHC-6 — Same invariants as project content.** Deterministic, authored, no-LLM, single-source,
   visibility-only (never a gate) — identical to FR-WCI-2 + FR-AUD-C5 + FR-DL-8.
 
@@ -146,10 +186,14 @@ see the gap until after it's built" failure the wireframe exists to prevent — 
 
 ---
 
-*v0.2 — Post-planning self-reflective update. A spike computed the real coverage (arch 40/40, end_user
-60/60 — 100%) and surfaced the two-record-types discovery; OQ-SHC-1 (lightweight report) and OQ-SHC-2
-(denominator = record-type schema × roles-in-use) resolved; FR-SHC-2 split by record type, FR-SHC-4
-reframed as a regression guard. Plan: `SELF_HOSTED_CONTENT_PLAN.md`. Next: lessons/principle hardening +
-optional CRP, then build M-SHC-0/1/2. Still WIP-parked behind CL-16.*
+*v0.3.1 — Post planning + lessons + principle hardening. Lessons applied: Dogfooding-Pattern,
+Completeness-Auditing (KM-15), Verify-Derived-Counts (KM-5), single-source/coupling-trap (KM-27),
+phantom-audit. Principles applied: **Mieruka** (FR-SHC embodies it — but right-sized to a report+test, no
+telemetry), Keiyaku (schema-as-contract), Kaizen, Mottainai, Accidental-Complexity, Genchi Genbutsu.
+Ready for CRP. Build (M-SHC-0/1/2) is a ~30-line report + guard, spike-proven. Still WIP-parked behind CL-16.*
+
+*v0.2 — Post-planning self-reflective update. Spike: real coverage (arch 40/40, end_user 60/60 — 100%);
+two-record-types discovery; OQ-SHC-1 (report) + OQ-SHC-2 (denominator) resolved; FR-SHC-2 split by type;
+FR-SHC-4 reframed as a regression guard. Plan: `SELF_HOSTED_CONTENT_PLAN.md`.*
 
 *v0.1 — Draft, pre-planning. Grounded on `CONVENTION_PATHS` + `ContentCoverageStats`.*
