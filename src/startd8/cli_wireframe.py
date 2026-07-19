@@ -94,6 +94,16 @@ def wireframe(
         help="Depth of the --html end-user voice (FR-AUD): 'intermediate' (standard; default), "
         "'beginner' (fuller, with examples), or 'advanced' (terse). Authored for the end_user voice.",
     ),
+    open_preview: bool = typer.Option(
+        False, "--open",
+        help="Open the HTML preview in your browser after writing it. Implies --html at the default "
+        "path (.startd8/wireframe/preview.html) if no --html path is given. (QW-2)",
+    ),
+    coverage: bool = typer.Option(
+        False, "--coverage",
+        help="Print the self-hosted descriptive-content coverage report (FR-SHC) and exit — the "
+        "audience-matrix authoring status of descriptive.yaml. Project-independent. (QW-4)",
+    ),
     no_write: bool = typer.Option(
         False, "--no-write", help="Skip persisting .startd8/wireframe/wireframe-plan.json."
     ),
@@ -110,6 +120,12 @@ def wireframe(
     (both read one `build_wireframe_plan`): assess shows the shape + "will build N files"; this shows
     every artifact path, per-section item, consequence, content-coverage, and merge/provenance detail.
     """
+    if coverage:  # QW-4 / FR-SHC: self-hosted content coverage — project-independent readout, then exit.
+        from .wireframe.descriptive_schema import format_report
+
+        console.print(format_report())
+        return
+
     overrides = {
         "schema": schema,
         "app": manifest,
@@ -160,6 +176,9 @@ def wireframe(
         render_delivery_inventory(plan, console, max_items=max_items)
 
     # FR-WV: the end-user visual preview. Advisory — a write failure degrades to a warning, exit 0.
+    # QW-2: --open implies --html at a conventional default path if none was given.
+    if html is None and open_preview:
+        html = startd8_dir(project) / "wireframe" / "preview.html"
     if html is not None:
         from .wireframe_view import render_to_file
 
@@ -167,8 +186,13 @@ def wireframe(
             written = render_to_file(plan, html, role=audience, fluency=fluency)
             if not json_out:
                 console.print(
-                    f"[green]wireframe:[/green] wrote HTML preview ({audience}/{fluency}) → {written}"
+                    f"[green]wireframe:[/green] wrote HTML preview ({audience}/{fluency}) → "
+                    f"[link=file://{written}]file://{written}[/link]"  # clickable in most terminals
                 )
+            if open_preview:  # QW-2: launch the browser on the just-written file
+                import webbrowser
+
+                webbrowser.open(f"file://{written}")
         except OSError as exc:
             console.print(f"[yellow]warning:[/yellow] could not write --html preview: {exc}")
 

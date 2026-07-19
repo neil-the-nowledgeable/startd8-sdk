@@ -34,6 +34,16 @@ DEFAULT_HTML_ROLE = "end_user"
 DEFAULT_HTML_FLUENCY = "intermediate"
 
 
+# QW-1: the audience variants embedded in every preview so the in-file toggle can switch voice/depth
+# live (no regenerate). Deterministic + small; the section shape is identical across them (FR-AUD-4).
+_EMBED_COMBOS = (
+    ("end_user", "beginner"),
+    ("end_user", "intermediate"),
+    ("end_user", "advanced"),
+    ("architect", "intermediate"),
+)
+
+
 def render_html(
     plan: WireframePlan,
     *,
@@ -42,12 +52,17 @@ def render_html(
 ) -> str:
     """The standalone offline HTML preview for ``plan`` — deterministic, no external assets.
 
-    Defaults to the end-user audience (FR-AUD-2); ``role``/``fluency`` change only the wording."""
-    view_model = compose(plan, role=role, fluency=fluency)
+    Embeds every audience variant (QW-1) with ``(role, fluency)`` as the default shown; the in-file
+    toggle switches between them. Defaults to the end-user voice (FR-AUD-2)."""
+    variants = {f"{r}|{f}": compose(plan, role=r, fluency=f) for r, f in _EMBED_COMBOS}
+    default = f"{role}|{fluency}"
+    if default not in variants:  # a requested combo we didn't pre-embed → include it
+        variants[default] = compose(plan, role=role, fluency=fluency)
+    payload = {"default": default, "variants": variants}
     return (
         WIREFRAME_VIEW_TEMPLATE
         .replace("__EXPECTED_SCHEMA__", str(EXPECTED_SCHEMA_VERSION))
-        .replace("__PLAN_DATA__", _embed_json(view_model))
+        .replace("__PLAN_DATA__", _embed_json(payload))
     )
 
 

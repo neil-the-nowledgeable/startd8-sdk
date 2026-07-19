@@ -161,10 +161,25 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
     margin:16px 0;font-size:13.5px;color:var(--ochre-ink)}
   .empty{color:var(--faint);font-size:13px;font-style:italic}
 
+  /* ---------- QW-3 to-do roll-up · QW-1 toggle · QW-5 legend ---------- */
+  .todos-box{background:var(--ochre-wash);border:1px solid #ecd9ad;border-radius:12px;padding:14px 16px;
+    margin:18px 0 0;font-size:14px;color:var(--ink)}
+  .todos-box b{color:var(--ochre-ink)} .todos-box ul{margin:6px 0 0;padding-left:20px} .todos-box li{margin:3px 0}
+  .toolbar{display:flex;align-items:center;gap:12px;margin:22px 0 6px;flex-wrap:wrap}
+  .toolbar .tg{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.07em;font-weight:700}
+  .toolbar select{font:inherit;font-size:13px;text-transform:none;letter-spacing:0;color:var(--ink);
+    border:1px solid var(--line2);background:var(--card);border-radius:8px;padding:4px 9px;margin-left:6px}
+  .toolbar button{font:inherit;font-size:12.5px;color:var(--ink2);border:1px solid var(--line2);
+    background:var(--card);border-radius:20px;padding:5px 13px;cursor:pointer}
+  .toolbar button:hover{border-color:var(--accent);color:var(--accent)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--faint);margin:0 0 2px}
+  .legend span{display:flex;align-items:center;gap:5px}
+  .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+
   /* ---------- motion ---------- */
   @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-  .mast,.glance,.rule,.controls,.section-lead,details.sec,.closing{animation:rise .5s cubic-bezier(.2,.7,.2,1) both}
-  .glance{animation-delay:.05s}.rule{animation-delay:.08s}.controls{animation-delay:.1s}
+  .mast,.glance,.rule,.toolbar,.section-lead,details.sec,.closing{animation:rise .5s cubic-bezier(.2,.7,.2,1) both}
+  .glance{animation-delay:.05s}.rule{animation-delay:.08s}.toolbar{animation-delay:.1s}
   #outline>details.sec:nth-child(1){animation-delay:.12s}
   #outline>details.sec:nth-child(2){animation-delay:.16s}
   #outline>details.sec:nth-child(3){animation-delay:.20s}
@@ -181,6 +196,9 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   <header class="mast" id="mast"></header>
   <div id="warn" role="status"></div>
   <section class="glance" id="glance" aria-label="At a glance"></section>
+  <div id="todos"></div>
+  <div class="toolbar" id="toolbar"></div>
+  <div class="legend" id="legend"></div>
   <hr class="rule">
   <p class="section-lead" id="seclead">What your app includes</p>
   <main id="outline"></main>
@@ -196,19 +214,18 @@ __PLAN_DATA__
 (function(){
   "use strict";
   var EXPECTED_SCHEMA = __EXPECTED_SCHEMA__;
-  var data;
-  try { data = JSON.parse(document.getElementById("plan-data").textContent); }
+  var payload;
+  try { payload = JSON.parse(document.getElementById("plan-data").textContent); }
   catch(e){ document.getElementById("outline").innerHTML =
     '<div class="banner">Could not read the preview data.</div>'; return; }
+  var VARS = payload.variants || {}, cur = payload.default;   // QW-1: embedded audience variants
+  var data, EU, s;   // (re)set by renderAll() for the currently-selected variant
 
   function esc(s){ return String(s==null?"":s)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
   function el(html){ var t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstChild; }
   function badge(st){ return '<span class="badge b-'+esc(st)+'">'+esc(String(st).replace(/_/g," "))+'</span>'; }
-  var ROLE=(data.audience&&data.audience.role)||"architect";
-  var EU=ROLE==="end_user";
-  var s=data.summary||{};
 
   // ---------- masthead ----------
   function renderMast(){
@@ -331,17 +348,57 @@ __PLAN_DATA__
     c.innerHTML='<b>Anything missing?</b>'+esc(s.closing);
   }
 
-  renderMast(); renderGlance();
-  if(!EU) document.getElementById("seclead").textContent="Per-section shape";
-  var m=document.getElementById("outline");
-  (data.sections||[]).forEach(function(sec){ m.appendChild(renderSection(sec)); });
-  renderClosing();
+  // ---------- QW-3: the "before launch" to-do roll-up (end_user only) ----------
+  function renderTodos(){
+    var box=document.getElementById("todos"); box.innerHTML="";
+    var t=(EU && data.todos) ? data.todos : [];
+    if(!t.length) return;
+    var lis=t.map(function(x){ return '<li>'+esc(x.item)+' <span class="muted">— '+esc(x.section)+'</span></li>'; }).join("");
+    box.innerHTML='<div class="todos-box"><b>Before you launch, '+t.length+' thing'+(t.length===1?'':'s')+
+      ' need'+(t.length===1?'s':'')+' you:</b><ul>'+lis+'</ul></div>';
+  }
 
-  document.getElementById("outline").insertAdjacentElement("beforebegin",
-    (function(){ var c=el('<div class="controls"><button id="ex">Open all</button>'+
-      '<button id="co">Close all</button></div>'); return c; })());
+  // ---------- render the whole document from the current variant (re-run on toggle, QW-1) ----------
+  function renderAll(){
+    data=VARS[cur]||VARS[payload.default];
+    EU=((data.audience&&data.audience.role)==="end_user"); s=data.summary||{};
+    ["mast","warn","glance","todos","outline"].forEach(function(id){ document.getElementById(id).innerHTML=""; });
+    var cl=document.getElementById("closing"); cl.innerHTML=""; cl.hidden=true;
+    renderMast(); renderGlance(); renderTodos();
+    document.getElementById("seclead").textContent = EU?"What your app includes":"Per-section shape";
+    var m=document.getElementById("outline");
+    (data.sections||[]).forEach(function(sec){ m.appendChild(renderSection(sec)); });
+    renderClosing();
+    // QW-5: status legend (plain meanings for the dots/badges)
+    document.getElementById("legend").innerHTML =
+      [["planned","ready to build"],["not_defined","not set up yet"],["placeholder","rough draft"],["invalid","needs fixing"]]
+      .map(function(a){ return '<span><i class="dot d-'+a[0]+'"></i>'+a[1]+'</span>'; }).join("");
+  }
+
+  // ---------- QW-1: the audience/fluency toggle + open/close controls ----------
+  var parts=(cur||"end_user|intermediate").split("|");
+  document.getElementById("toolbar").innerHTML=
+    '<label class="tg">View<select id="tg-role">'+
+      '<option value="end_user">Plain (for the owner)</option>'+
+      '<option value="architect">Technical (for the builder)</option></select></label>'+
+    '<label class="tg" id="tg-depth">Depth<select id="tg-flu">'+
+      '<option value="beginner">Fuller</option><option value="intermediate">Standard</option>'+
+      '<option value="advanced">Terser</option></select></label>'+
+    '<span style="flex:1"></span>'+
+    '<button id="ex">Open all</button><button id="co">Close all</button>';
+  var selRole=document.getElementById("tg-role"), selFlu=document.getElementById("tg-flu");
+  selRole.value=parts[0]; selFlu.value=parts[1]||"intermediate";
+  function syncDepth(){ document.getElementById("tg-depth").style.display = selRole.value==="architect"?"none":""; }
+  function onToggle(){
+    var role=selRole.value, flu=(role==="architect")?"intermediate":selFlu.value;
+    if(!VARS[role+"|"+flu]) flu="intermediate";
+    cur=role+"|"+flu; syncDepth(); renderAll();
+  }
+  selRole.onchange=onToggle; selFlu.onchange=onToggle; syncDepth();
   document.getElementById("ex").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=true;}); };
   document.getElementById("co").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=false;}); };
+
+  renderAll();
 })();
 </script>
 </body>

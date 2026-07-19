@@ -279,11 +279,15 @@ def compose(
         rank = {k: i for i, k in enumerate(_END_USER_ORDER)}
         sections.sort(key=lambda sec: rank.get(sec["key"], len(rank)))
 
+    # QW-3: the consolidated "before launch" to-do — every plan-flagged gap across sections, in one list.
+    todos = [{"section": sec["title"], "item": it} for sec in sections for it in sec["need_items"]]
+
     return {
         "project_root": plan.project_root,  # provenance in the embed only — NOT rendered to end_user (R2-F1)
         "app_name": _app_name(plan),        # the app's own name for the masthead
         "schema_version": SCHEMA_VERSION,
         "audience": {"role": role, "fluency": fluency},  # FR-AUD: which voice this view-model speaks
+        "todos": todos,                     # QW-3 roll-up (rendered as a banner for end_user)
         "summary": {
             # The inverted-pyramid band — same text the terminal footer renders (FR-WV-2), plus the
             # structured figures behind it (for badges) and the authored meaning (FR-WV-5 / FR-DL-12).

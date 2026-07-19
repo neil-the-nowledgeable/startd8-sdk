@@ -69,9 +69,11 @@ def test_embed_is_escape_first() -> None:
 
 def test_embedded_view_model_roundtrips(golden_root: Path) -> None:
     plan = _plan(golden_root)
-    html = render_html(plan)  # defaults to end_user at the standard (intermediate) depth (FR-AUD-2)
-    assert _embedded_json(html) == compose(plan, role="end_user", fluency="intermediate")
-    assert _embedded_json(html)["audience"] == {"role": "end_user", "fluency": "intermediate"}
+    payload = _embedded_json(render_html(plan))  # QW-1: {default, variants} — all audiences embedded
+    assert payload["default"] == "end_user|intermediate"                       # default shown (FR-AUD-2)
+    assert payload["variants"]["end_user|intermediate"] == compose(plan, role="end_user", fluency="intermediate")
+    assert payload["variants"]["architect|intermediate"] == compose(plan, role="architect")
+    assert payload["variants"]["end_user|beginner"] == compose(plan, role="end_user", fluency="beginner")
 
 
 def test_viewer_schema_tracks_the_contract(golden_root: Path) -> None:
