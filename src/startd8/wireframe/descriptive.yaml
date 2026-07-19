@@ -32,7 +32,7 @@ records:
     next: "→ then the data model (Entities) — the contract that fills this shell."
     audience:
       end_user:
-        title: "The basic setup"
+        title: "The basics"
         what: "The basic shell your app lives in — the plumbing that makes everything run."
         wont: "This isn't anything you'll see or click — it's behind-the-scenes groundwork, not a feature."
         need: "Nothing from you here — it's already handled for you."
@@ -46,7 +46,7 @@ records:
     next: "→ then Services, the layer this mode runs."
     audience:
       end_user:
-        title: "Where your app will run"
+        title: "Where it runs"
         what: "Where your app lives and how people reach it — on your own computer to try it out, or online for others to use."
         wont: "This doesn't change what the app does — only where it runs and who can get to it."
         need: "Decide whether this is just for you to try, or ready for other people to use."
@@ -60,7 +60,7 @@ records:
     next: "→ drill the AI passes' entities, or Entities for the full model."
     audience:
       end_user:
-        title: "What the computer does for you"
+        title: "Done for you"
         what: "The clever parts the computer handles automatically — like writing first drafts or summaries."
         wont: "The computer won't invent facts or make decisions for you — it only drafts from what's already there."
         need: "Decide which automatic helpers you're comfortable turning on."
@@ -74,7 +74,7 @@ records:
     next: "→ drill any entity to its schema.prisma model; then Views, which surface them."
     audience:
       end_user:
-        title: "The things your app keeps track of"
+        title: "What it tracks"
         what: "The kinds of things your app remembers — like people, jobs, and companies. This is the heart of your app."
         wont: "It won't remember anything that isn't on this list — a missing kind of thing simply won't exist in the app."
         need: "Confirm the list is complete and named the way you'd say it out loud."
@@ -97,7 +97,7 @@ records:
     next: "→ Content, for which page bodies are authored."
     audience:
       end_user:
-        title: "The screens people will see"
+        title: "Screens & menus"
         what: "The screens people land on when they open your app — the front door and the menu that gets them around."
         wont: "Only these screens will exist — a page you pictured but don't see here won't be built unless you ask for it."
         need: "Picture your ideal first screen; note any screen you expected that isn't here."
@@ -111,7 +111,7 @@ records:
     next: "→ Services' AI boundary, for which fields the AI writes vs the human."
     audience:
       end_user:
-        title: "Where people type things in"
+        title: "Forms"
         what: "The forms people fill in to add or change information — and exactly which boxes they'll see on each one."
         wont: "Boxes not listed here won't appear — no one can enter something the form doesn't ask for."
         need: "Check every box you'd want is there (a phone number? a date?) — and that nothing private is exposed."
@@ -134,7 +134,7 @@ records:
     next: "→ Content, for which view copy is authored vs raw."
     audience:
       end_user:
-        title: "Ready-made overviews"
+        title: "Overviews"
         what: "Handy combined screens that pull related information together on one page — like a dashboard."
         wont: "These are extras on top of the basic lists; without them, people still see each thing on its own."
         need: "Note any overview you'd find useful that isn't here yet."
@@ -148,7 +148,7 @@ records:
     next: "→ Views, whose read-surfaces this styles."
     audience:
       end_user:
-        title: "How things are labelled and laid out"
+        title: "Labels & layout"
         what: "How your information is labelled and arranged on screen — the headings, the order of columns, what's shown or hidden."
         wont: "This only affects how things look and read — it doesn't change what information is stored."
         need: "Confirm the labels and layout read clearly to someone seeing them for the first time."
@@ -176,7 +176,7 @@ records:
     next: "→ last section — approve the contract above, or revise and re-run."
     audience:
       end_user:
-        title: "What's ready and what still needs you"
+        title: "What's left"
         what: "A quick read on which parts are ready to go and which still need a decision or some information from you."
         wont: "This won't fix anything for you — it just points out what's still waiting on you."
         need: "Work through anything flagged as still needing your input."
