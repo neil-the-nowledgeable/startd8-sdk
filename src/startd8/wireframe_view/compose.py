@@ -87,7 +87,19 @@ def _form_entity(label: str) -> str:
     return label
 
 
-def _item_view(section_key: str, item) -> dict:
+# Tool-structural service items are scaffolding, not user data — so (unlike entity/form names, which we
+# KEEP verbatim, FR-AUD-C5) they get a plain label for the end_user. Keyed on the stable emitted label.
+_END_USER_ITEM_LABELS = {
+    "AI service": "What the app writes for you",
+    "AI boundary": "What you keep in your control",
+}
+
+
+def _display_label(label: str, role: str) -> str:
+    return _END_USER_ITEM_LABELS.get(label, label) if role == "end_user" else label
+
+
+def _item_view(section_key: str, item, role: str = "architect") -> dict:
     """One outline item + its mockup view-model where the composer can structure it (forms today)."""
     mockup = None
     if section_key == "forms":
@@ -95,7 +107,7 @@ def _item_view(section_key: str, item) -> dict:
         if parsed is not None:
             mockup = {"kind": "form", "entity": _form_entity(item.label), **parsed}
     return {
-        "label": item.label,
+        "label": _display_label(item.label, role),  # user-data names kept; structural labels plain-ified
         "status": item.status,
         "detail": item.detail,
         "paths": list(item.paths),
@@ -202,7 +214,7 @@ def compose(
             "status": s.status,
             "consequence": s.consequence,
             "narration": narr,
-            "items": [_item_view(s.key, it) for it in s.items],
+            "items": [_item_view(s.key, it, role) for it in s.items],
             # R1-F1: the computed floor under NEED — items the plan itself flags as not-yet-provided
             # (not_defined / placeholder / invalid). Authored `need` prose layers on top; this ensures
             # a real gap is never silently under-reported by relying on authored text alone.

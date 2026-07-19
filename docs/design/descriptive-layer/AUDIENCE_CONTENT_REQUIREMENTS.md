@@ -108,7 +108,10 @@ enough to catch those gaps at requirements cost.
   `end_user` surface shows the audience narration/titles + plain band, **hides the raw item `detail`,
   hides items flagged `technical`** (labels carrying FR-AUD-C1 jargon, e.g. "FastAPI app", "endpoints"),
   and **MAY reorder sections for relevance** (the end_user leads with the author-facing screens → forms →
-  content-needed, then the supporting sections; the architect keeps the plan's data-model order).
+  content-needed, then the supporting sections; the architect keeps the plan's data-model order). It MAY
+  also **plain-label tool-*structural* items** (e.g. the AI-service / AI-boundary summary rows → "What the
+  app writes for you" / "What you keep in your control") — but NOT the user's real data names (entity/form
+  labels stay verbatim, FR-AUD-C5). The item *set*, count, statuses, and mockup structure stay invariant.
   **Testable rule:** every string rendered in the `end_user` view MUST pass the FR-AUD-C1 ban (§FR-AUD-C1,
   enforced by the banned-word acceptance test).
 

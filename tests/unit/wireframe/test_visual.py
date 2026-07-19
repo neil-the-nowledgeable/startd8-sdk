@@ -144,9 +144,11 @@ def test_audience_changes_only_wording_not_shape(golden_root: Path) -> None:
     assert base["audience"] == {"role": "architect", "fluency": "intermediate"}
     assert eu["audience"] == {"role": "end_user", "fluency": "beginner"}
 
-    def skeleton(vm):  # key → (status, items); order-independent
-        return {s["key"]: (s["status"], s["items"]) for s in vm["sections"]}
-    assert skeleton(base) == skeleton(eu)               # same set, statuses, items
+    def skeleton(vm):  # key → (status, [(item status, mockup kind)]); order/label/narration-independent
+        return {s["key"]: (s["status"],
+                           [(it["status"], (it["mockup"] or {}).get("kind")) for it in s["items"]])
+                for s in vm["sections"]}
+    assert skeleton(base) == skeleton(eu)   # same section set, statuses, item count + shapes
 
     # end_user leads with the author-facing sections (presentation reorder); architect keeps plan order.
     assert [s["key"] for s in eu["sections"]][:3] == ["pages", "forms", "content"]
