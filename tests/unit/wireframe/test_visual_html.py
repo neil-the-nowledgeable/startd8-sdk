@@ -133,8 +133,14 @@ def test_end_user_surface_has_no_process_meta(golden_root: Path) -> None:
     from startd8.wireframe_view import compose
 
     vm = compose(_plan(golden_root), role="end_user", fluency="intermediate")
-    blob = " ".join(_end_user_rendered_strings(vm) + [vm.get("app_name", "")])
-    assert "/Users/" not in blob and vm["project_root"] not in blob   # no path leaks
+    # include every rendered item label too (structural labels are worded plain / path-free)
+    strings = _end_user_rendered_strings(vm) + [vm.get("app_name", "")]
+    for sec in vm["sections"]:
+        strings += [it["label"] for it in sec["items"] if not it.get("technical")]
+    blob = " ".join(strings)
+    assert "/Users/" not in blob and vm["project_root"] not in blob    # no absolute path
+    for frag in (".md", ".py", ".yaml", "app/", "prompts/", "templates/"):  # no relative filesystem path (R2-F1)
+        assert frag not in blob, f"filesystem path fragment reached the end_user surface: {frag!r}"
     low = blob.lower()
     for phrase in ("about to build", "line of code", "generat", "pipeline", "deterministic", "$0", "no llm"):
         assert phrase not in low, f"process-meta phrase reached the end_user surface: {phrase!r}"

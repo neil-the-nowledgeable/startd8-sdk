@@ -224,11 +224,11 @@ def test_computed_need_surfaces_plan_gaps(golden_root: Path, mini_root: Path) ->
     full = compose(_plan(golden_root), role="end_user", fluency="intermediate")
     entities = next(s for s in full["sections"] if s["key"] == "entities")
     assert entities["need_items"] == []           # nothing outstanding when it's all planned
-    # need_items is plan-derived, not audience-derived — identical across voices (compare by key,
-    # since end_user reorders sections for relevance — FR-AUD-4).
+    # need_items is plan-derived (labels are worded per audience) — the SAME sections carry gaps
+    # regardless of voice or order (FR-AUD-4).
     arch = compose(_plan(mini_root), role="architect")
-    assert {s["key"]: s["need_items"] for s in arch["sections"]} == \
-           {s["key"]: s["need_items"] for s in mini["sections"]}
+    assert {s["key"] for s in arch["sections"] if s["need_items"]} == \
+           {s["key"] for s in mini["sections"] if s["need_items"]}
 
 
 def test_plain_summary_edge_cases() -> None:

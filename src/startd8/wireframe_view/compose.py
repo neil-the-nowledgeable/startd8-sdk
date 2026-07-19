@@ -87,16 +87,70 @@ def _form_entity(label: str) -> str:
     return label
 
 
-# Tool-structural service items are scaffolding, not user data — so (unlike entity/form names, which we
-# KEEP verbatim, FR-AUD-C5) they get a plain label for the end_user. Keyed on the stable emitted label.
+# Tool-structural items are scaffolding, not user data — so (unlike entity/form names, which we KEEP
+# verbatim, FR-AUD-C5) they get plain, path-free wording for the end_user. Fixed structural labels →
+# plain; patterned labels (signal:/view:/prompt:/page body:/route/kind/form) → generic rules below.
 _END_USER_ITEM_LABELS = {
     "AI service": "What the app writes for you",
     "AI boundary": "What you keep in your control",
+    "default top nav": "The menu bar",
+    "nav live-toggle admin": "Menu editor",
+    "pages router": "Page navigation",
+    "authoring UI": "Content editor",
+    "home / index page": "Home page",
+    "views package": "The overviews",
+    "contract models": "The full list",
+    "relation graph": "How they connect",
+    "excluded": "Filled in automatically",
+    "mode": "Setup type",
+    "persistence": "Where your data is kept",
+    "bind": "Who can reach it",
+    "secrets-default": "Security keys",
+    "observability": "Monitoring",
+    "identity": "Sign-in",
+    "run: local": "Runs on your computer",
+    "container: Dockerfile": "Ready to run anywhere",
+    "migrations: alembic": "Automatic database updates",
 }
 
 
+def _humanize(token: str) -> str:
+    """A path/underscore token → plain Title-ish words: 'app/pages/how_it_works.md' → 'How it works'."""
+    token = token.rsplit("/", 1)[-1]
+    if token.endswith(".md"):
+        token = token[:-3]
+    token = token.replace("_", " ").replace("-", " ").strip()
+    return (token[:1].upper() + token[1:]) if token else token
+
+
+def _plain_item_label(label: str) -> str:
+    """Plain, path-free end_user wording for a structural item label (FR-AUD-C1/C1b). Real data names
+    (entities/forms) fall through unchanged (FR-AUD-C5)."""
+    if label in _END_USER_ITEM_LABELS:
+        return _END_USER_ITEM_LABELS[label]
+    if label.startswith("signal: "):
+        return label[len("signal: "):]                                  # keep the record name
+    if label.startswith("view: "):
+        return _humanize(label[len("view: "):])
+    if label.startswith("prompt: "):
+        return "Instructions: " + _humanize(label[len("prompt: "):])
+    if label.startswith("page body: "):
+        return _humanize(label[len("page body: "):]) + " page"
+    if label.startswith("app: "):
+        return "App name: " + label[len("app: "):]
+    if label.endswith(" create/edit form"):
+        return label[: -len(" create/edit form")] + " — add or edit"
+    m = re.match(r"^/\S*\s+—\s+(.+)$", label)                            # "/jobs — Jobs" → "Jobs"
+    if m:
+        return m.group(1)
+    m = re.match(r"^(.+?)\s+\([a-z0-9-]+\)$", label)                     # "value_map (detail-compose)" → "Value map"
+    if m:
+        return _humanize(m.group(1))
+    return label
+
+
 def _display_label(label: str, role: str) -> str:
-    return _END_USER_ITEM_LABELS.get(label, label) if role == "end_user" else label
+    return _plain_item_label(label) if role == "end_user" else label
 
 
 def _item_view(section_key: str, item, role: str = "architect") -> dict:
@@ -218,7 +272,7 @@ def compose(
             # R1-F1: the computed floor under NEED — items the plan itself flags as not-yet-provided
             # (not_defined / placeholder / invalid). Authored `need` prose layers on top; this ensures
             # a real gap is never silently under-reported by relying on authored text alone.
-            "need_items": [it.label for it in s.items if it.status in GAP_STATUSES],
+            "need_items": [_display_label(it.label, role) for it in s.items if it.status in GAP_STATUSES],
         })
 
     if role == "end_user":  # lead with the author-facing sections (presentation only — FR-AUD-4)
