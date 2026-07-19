@@ -60,7 +60,7 @@ records:
     next: "→ drill the AI passes' entities, or Entities for the full model."
     audience:
       end_user:
-        title: "Done for you"
+        title: "AI Assisted Writing"
         what: "The clever parts the computer handles automatically — like writing first drafts or summaries."
         wont: "The computer won't invent facts or make decisions for you — it only drafts from what's already there."
         need: "Decide which automatic helpers you're comfortable turning on."
