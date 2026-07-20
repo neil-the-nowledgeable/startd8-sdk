@@ -44,7 +44,7 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 
 ## 🚀 Enhanced capabilities
 
-- **EC-1 — `--diff` (planned-vs-built)** — `inputs_fingerprint` is already persisted *for exactly this*.
+- ✅ **EC-1 — `--diff` (planned-vs-built)** — `inputs_fingerprint` is already persisted *for exactly this*.
   "What changed since you approved" closes the loop: preview → approve → build → verify. Highest-value
   new capability. (OQ-8) — **M/L**
 - **EC-2 — Approve / annotate** — the preview is read-only; the requirements-preview capability's actual
@@ -63,4 +63,4 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 2. **LH-1** (real list/page mockups) — biggest fidelity jump.
 3. **EC-1** (`--diff`) — highest-value new capability; plumbing already exists.
 
-*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Next: EC-1 (`--diff`), LH-2 (`--view-json`), or AR-2 (extract the audience pattern).*
+*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Then EC-1 (`--diff` planned-vs-built) shipped — the verify half of preview→approve→build→verify. Next: LH-2 (`--view-json`), AR-2 (extract the audience pattern), or EC-2 (approve/annotate).*

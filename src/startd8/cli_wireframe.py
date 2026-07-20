@@ -104,6 +104,11 @@ def wireframe(
         help="Print the self-hosted descriptive-content coverage report (FR-SHC) and exit — the "
         "audience-matrix authoring status of descriptive.yaml. Project-independent. (QW-4)",
     ),
+    diff: bool = typer.Option(
+        False, "--diff",
+        help="Show what changed since the last saved preview (added/removed/changed items, shape + "
+        "content deltas) instead of the full tree — the 'verify against what you approved' view. (EC-1)",
+    ),
     no_write: bool = typer.Option(
         False, "--no-write", help="Skip persisting .startd8/wireframe/wireframe-plan.json."
     ),
@@ -160,6 +165,21 @@ def wireframe(
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     plan = build_wireframe_plan(resolved, authoring=pages_authoring)
+
+    if diff:  # EC-1: compare against the last saved preview instead of rendering the full tree.
+        from .wireframe.plan_diff import diff_plans, format_diff, load_baseline
+        from .wireframe.render import plan_body
+
+        baseline_path = startd8_dir(project) / "wireframe" / "wireframe-plan.json"
+        baseline = load_baseline(baseline_path)
+        if baseline is None:
+            console.print(
+                "[yellow]wireframe:[/yellow] no saved preview to compare against — run "
+                f"`startd8 wireframe` first (it saves {baseline_path})."
+            )
+            return
+        console.print(format_diff(diff_plans(baseline, plan_body(plan))))
+        return  # --diff does not persist, so the saved baseline stays the approved snapshot
 
     if json_out:
         # Machine contract (R4-F1): stdout is parseable JSON only; tree only with --verbose.
