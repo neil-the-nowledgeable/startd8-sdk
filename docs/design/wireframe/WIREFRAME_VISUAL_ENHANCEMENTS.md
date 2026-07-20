@@ -61,8 +61,12 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
   reviewed · K flagged") track progress. **Export sign-off** downloads a JSON artifact (app, audience,
   per-section status+note) — the sign-off that feeds the kickoff loop. Purely client-side (approve is
   user input, not derived): no composer/CLI change, determinism + self-contained preserved. — **M**
-- **EC-3 — Served / live-reload mode** — reuse the `kickoff_view` serve seam so the preview auto-updates
-  as manifests change (author-in-the-loop). — **M**
+- ✅ **EC-3 — Live-reload / watch mode** — `startd8 wireframe --watch` live-follows the manifests: on
+  every change it re-builds the plan + re-renders the preview, and an open browser auto-refreshes via an
+  injected meta-refresh + LIVE banner (no server — mirrors the `kickoff_view` `--watch` seam, Mottainai).
+  `ManifestWatcher` (poll/follow split, injectable sleep) watches the resolved input set; `render_html`
+  gains `live_reload_secs` (`None` ⇒ byte-identical static file — the offline determinism guarantee
+  holds). Author-in-the-loop: edit a manifest, watch the preview update. Live-verified end-to-end. — **M**
 - **EC-4 — The pattern → the delivery-role kits** — FR-AUD supports role × fluency; only architect +
   end_user are authored. The FR-J roles (BA/PM/backend…) each getting a wireframe voice is a straight
   extension. — **M**

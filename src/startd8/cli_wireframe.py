@@ -114,6 +114,14 @@ def wireframe(
         help="Emit the composed audience VIEW-MODEL as JSON to stdout (the FR-AUD benefit-first content, "
         "per --audience/--fluency) — for another surface (web app / portal) to render. (LH-2)",
     ),
+    watch: bool = typer.Option(
+        False, "--watch",
+        help="Live-follow the manifests: re-render the HTML preview on every change and auto-refresh the "
+        "open browser (no server). Implies --html at the default path if none is given; Ctrl-C to stop. (EC-3)",
+    ),
+    interval: float = typer.Option(
+        1.5, "--interval", help="Seconds between --watch polls (also the browser auto-refresh cadence). (EC-3)"
+    ),
     no_write: bool = typer.Option(
         False, "--no-write", help="Skip persisting .startd8/wireframe/wireframe-plan.json."
     ),
@@ -170,6 +178,44 @@ def wireframe(
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
     plan = build_wireframe_plan(resolved, authoring=pages_authoring)
+
+    if watch:  # EC-3: live-follow the manifests — re-render the preview on every change (no server).
+        from .wireframe_view import render_to_file
+        from .wireframe_view.watch import ManifestWatcher
+
+        target = html or (startd8_dir(project) / "wireframe" / "preview.html")
+        secs = max(1, round(interval))
+
+        def _rebuild() -> None:  # re-resolve + re-build so edited manifests take effect
+            fresh = load_assembly_inputs(
+                yaml_paths=list(inputs),
+                overrides={k: v for k, v in overrides.items() if v is not None},
+                project_root=project,
+                from_run=from_run,
+            )
+            render_to_file(
+                build_wireframe_plan(fresh, authoring=pages_authoring),
+                target, role=audience, fluency=fluency, live_reload_secs=secs,
+            )
+
+        watcher = ManifestWatcher(
+            lambda: [e.resolved_path for e in resolved.entries.values()], interval=interval
+        )
+        _rebuild()          # render once for the browser…
+        watcher.poll()      # …and prime the baseline so we don't immediately re-render
+        console.print(
+            f"[green]wireframe:[/green] watching {len(resolved.entries)} manifest(s) ({audience}/{fluency}) → "
+            f"[link=file://{target}]file://{target}[/link]  [dim]— Ctrl-C to stop[/dim]"
+        )
+        if open_preview:
+            import webbrowser
+
+            webbrowser.open(f"file://{target}")
+        try:
+            watcher.follow(lambda: (_rebuild(), console.print("[dim]wireframe: manifests changed — re-rendered.[/dim]")))
+        except KeyboardInterrupt:
+            console.print("\n[dim]wireframe: stopped watching.[/dim]")
+        return  # --watch is a terminal mode; it does not persist the plan JSON
 
     if diff:  # EC-1: compare against the last saved preview instead of rendering the full tree.
         from .wireframe.plan_diff import diff_plans, format_diff, load_baseline

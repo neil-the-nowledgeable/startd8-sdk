@@ -184,6 +184,43 @@ def test_signoff_scaffold_is_present_and_offline(golden_root: Path) -> None:
     assert "http://" not in html.lower() and "https://" not in html.lower()
 
 
+def test_watch_injects_live_reload_and_stays_self_contained(golden_root: Path) -> None:
+    """EC-3 — --watch injects a meta-refresh + LIVE banner; live_reload_secs=None is byte-identical to
+    the static file (the offline determinism guarantee is preserved), and the banner adds no external asset."""
+    plan = _plan(golden_root)
+    static = render_html(plan)
+    assert render_html(plan, live_reload_secs=None) == static      # static byte-identity
+    live = render_html(plan, live_reload_secs=3)
+    assert live != static
+    assert 'http-equiv="refresh"' in live and 'content="3"' in live
+    assert "● LIVE" in live
+    low = live.lower()
+    for external in ("http://", "https://", "src=", "<link", "cdn"):
+        assert external not in low, f"watch banner must add no external asset: {external!r}"
+
+
+def test_manifest_watcher_fires_only_on_change(tmp_path: Path) -> None:
+    """EC-3 — the watcher fires on the first tick (change from nothing) and again only when a watched
+    file's signature actually changes; a missing file is tolerated, not a crash."""
+    from startd8.wireframe_view.watch import ManifestWatcher
+
+    a = tmp_path / "schema.prisma"
+    a.write_text("x", encoding="utf-8")
+    watched = [a, tmp_path / "not_created_yet.yaml"]  # a real file + an absent one
+    calls: list = []
+    state = {"tick": 0}
+
+    def fake_sleep(_secs: float) -> None:
+        state["tick"] += 1
+        if state["tick"] == 2:                       # mutate between polls (size changes → sig changes)
+            a.write_text("a much longer body", encoding="utf-8")
+
+    ManifestWatcher(lambda: watched, interval=0).follow(
+        lambda: calls.append(1), sleep=fake_sleep, max_ticks=4
+    )
+    assert len(calls) == 2  # tick1: first-seen change; after the tick-2 mutation: tick3 fires again
+
+
 def test_cli_html_flag_writes_preview(tmp_path: Path, golden_root: Path) -> None:
     out = tmp_path / "wf.html"
     result = runner.invoke(app, ["--project", str(golden_root), "--html", str(out), "--no-write"])
