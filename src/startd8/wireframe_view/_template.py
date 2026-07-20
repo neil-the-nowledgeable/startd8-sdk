@@ -152,6 +152,10 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .acts .btn{border:1.5px solid var(--line2);border-radius:8px;padding:6px 16px;font-size:13px;
     background:var(--card2);color:var(--ink2)}
   .acts .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .mock table.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+  .mock table.tbl th,.mock table.tbl td{border:1px solid var(--line);padding:6px 9px;text-align:left}
+  .mock table.tbl th{background:var(--card2);color:var(--ink2);font-weight:600}
+  .mock .skel{height:9px;background:var(--line);border-radius:3px;opacity:.7}
 
   /* ---------- closing / misc ---------- */
   .closing{margin:34px 0 0;background:var(--accent-wash);border:1px solid #cfe0de;border-radius:13px;
@@ -282,8 +286,22 @@ __PLAN_DATA__
     return '<div class="mock">'+chrome(item.label)+n+'<div class="body"><div class="empty" style="min-height:64px">'+
       esc(EU?"this screen's content":(item.detail||"page content"))+'</div></div></div>';
   }
-  function mockFor(k,item){ if(item.mockup&&item.mockup.kind==="form") return formMock(item.mockup);
-    if(k==="pages") return null; return null; }
+  function listMock(m){  // LH-1: a list/table sketch with the entity's REAL columns
+    var cols=(m.columns||[]).slice(0,6);
+    if(!cols.length) return '<div class="mock">'+chrome((m.entity||"")+" — list")+
+      '<div class="body"><div class="empty">a simple list</div></div></div>';
+    var head='<tr><th style="width:34px">#</th>'+cols.map(function(c){return '<th>'+esc(c)+'</th>';}).join("")+'</tr>';
+    var rows="";
+    for(var i=0;i<3;i++){ rows+='<tr><td class="muted">'+(i+1)+'</td>'+
+      cols.map(function(){return '<td><div class="skel"></div></td>';}).join("")+'</tr>'; }
+    return '<div class="mock">'+chrome((m.entity||"")+" — list")+
+      '<div class="body"><table class="tbl">'+head+rows+'</table></div></div>';
+  }
+  function mockFor(k,item){
+    if(item.mockup&&item.mockup.kind==="form") return formMock(item.mockup);
+    if(item.mockup&&item.mockup.kind==="list") return listMock(item.mockup);
+    return null;
+  }
 
   // ---------- items ----------
   function renderItem(k,item,nav){

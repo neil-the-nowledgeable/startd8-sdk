@@ -153,13 +153,28 @@ def _display_label(label: str, role: str) -> str:
     return _plain_item_label(label) if role == "end_user" else label
 
 
-def _item_view(section_key: str, item, role: str = "architect") -> dict:
-    """One outline item + its mockup view-model where the composer can structure it (forms today)."""
+def _entity_columns(plan: WireframePlan) -> dict:
+    """LH-1: each entity's user-facing columns, harvested from the forms section (fields already parsed
+    from schema.prisma) — so a list mockup can show REAL columns, not a generic skeleton. Keyed by entity."""
+    cols: dict[str, list] = {}
+    for s in plan.sections:
+        if s.key == "forms":
+            for it in s.items:
+                parsed = parse_form_detail(it.detail)
+                if parsed is not None:
+                    cols[_form_entity(it.label)] = parsed["shown"]
+    return cols
+
+
+def _item_view(section_key: str, item, role: str = "architect", entity_cols: Optional[dict] = None) -> dict:
+    """One outline item + its mockup view-model where the composer can structure it (forms + lists)."""
     mockup = None
     if section_key == "forms":
         parsed = parse_form_detail(item.detail)
         if parsed is not None:
             mockup = {"kind": "form", "entity": _form_entity(item.label), **parsed}
+    elif section_key == "entities" and entity_cols and entity_cols.get(item.label):  # LH-1: list mockup
+        mockup = {"kind": "list", "entity": item.label, "columns": entity_cols[item.label]}
     return {
         "label": _display_label(item.label, role),  # user-data names kept; structural labels plain-ified
         "status": item.status,
@@ -258,6 +273,7 @@ def compose(
     default ``("architect", "intermediate")`` resolves to base narration, byte-identical."""
     counts, shape_line, content, readiness = footer_lines(plan)
     summary_narr = describe_summary(plan, role=role, fluency=fluency) or {}
+    entity_cols = _entity_columns(plan)  # LH-1: real columns for list mockups (from the parsed forms)
 
     sections = []
     for s in plan.sections:
@@ -268,7 +284,7 @@ def compose(
             "status": s.status,
             "consequence": s.consequence,
             "narration": narr,
-            "items": [_item_view(s.key, it, role) for it in s.items],
+            "items": [_item_view(s.key, it, role, entity_cols) for it in s.items],
             # R1-F1: the computed floor under NEED — items the plan itself flags as not-yet-provided
             # (not_defined / placeholder / invalid). Authored `need` prose layers on top; this ensures
             # a real gap is never silently under-reported by relying on authored text alone.

@@ -113,6 +113,7 @@ def _end_user_rendered_strings(vm: dict) -> list:
             if m:
                 out.append(m.get("entity", ""))
                 out += list(m.get("shown", []))
+                out += list(m.get("columns", []))  # LH-1 list mockup columns
                 out += list(m.get("omitted", {}).get("server_managed", []))
                 out += list(m.get("omitted", {}).get("owned", []))
     return out
