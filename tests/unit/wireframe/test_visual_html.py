@@ -222,6 +222,25 @@ def test_manifest_watcher_fires_only_on_change(tmp_path: Path) -> None:
     assert len(calls) == 2  # tick1: first-seen change; after the tick-2 mutation: tick3 fires again
 
 
+def test_terminal_describe_honors_audience(golden_root: Path) -> None:
+    """Round-2 defect fix — --audience/--fluency now voice the terminal --describe, not just --html/
+    --view-json. Default stays architect (tool-meta present, byte-identical); end_user is plain (no
+    process-meta leak, FR-AUD-C1b); a delivery-role kit shows its focus lens. Was: all three identical."""
+    flat = lambda s: " ".join(s.split())
+    arch = runner.invoke(app, ["--project", str(golden_root), "--describe", "--no-write"])
+    eu = runner.invoke(app, ["--project", str(golden_root), "--audience", "end_user", "--describe", "--no-write"])
+    pm = runner.invoke(app, ["--project", str(golden_root), "--audience", "pm", "--describe", "--no-write"])
+    assert arch.exit_code == eu.exit_code == pm.exit_code == 0
+    a, e, p = flat(arch.output), flat(eu.output), flat(pm.output)
+
+    assert e != a                                            # the flag actually changes the narration now
+    assert "No LLM" in a                                     # architect default keeps the tool-process meta…
+    for meta in ("No LLM", "deterministic projection", "glance-approve"):
+        assert meta not in e                                # …the plain voice must not leak it (R2-F1)
+    assert "Let's make sure this is the app you want" in e   # the end_user headline reaches the terminal
+    assert "FOCUS (pm)" in p                                 # a kit shows its focus lens on the terminal
+
+
 def test_cli_html_flag_writes_preview(tmp_path: Path, golden_root: Path) -> None:
     out = tmp_path / "wf.html"
     result = runner.invoke(app, ["--project", str(golden_root), "--html", str(out), "--no-write"])

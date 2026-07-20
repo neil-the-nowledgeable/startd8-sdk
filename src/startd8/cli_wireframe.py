@@ -82,13 +82,14 @@ def wireframe(
         help="Write a self-contained end-user HTML preview to this path (FR-WV): an inverted-pyramid "
         "summary that drills into lo-fi page/form/list mockups. Offline, no CDN, deterministic.",
     ),
-    audience: str = typer.Option(
-        "end_user",
+    audience: Optional[str] = typer.Option(
+        None,
         "--audience",
-        help="Voice for the preview (FR-AUD role): the base voices 'end_user' (plain; default) or "
-        "'architect' (technical), or an FR-J delivery-role kit — pm/ba/qa/customer-po (plain) · "
-        "backend-dev/frontend-dev/dba/ops/test-engineer/security (technical) — each adds a focus lens "
-        "over its base voice (EC-4). See `--coverage` for the full list.",
+        help="Voice for the narration (FR-AUD role): the base voices 'end_user' (plain) or 'architect' "
+        "(technical), or an FR-J delivery-role kit — pm/ba/qa/customer-po (plain) · backend-dev/"
+        "frontend-dev/dba/ops/test-engineer/security (technical), each adding a focus lens (EC-4). "
+        "Defaults per surface: the terminal --describe → architect; the --html/--view-json preview → "
+        "end_user. See `--coverage` for the full list.",
     ),
     fluency: str = typer.Option(
         "intermediate",
@@ -181,6 +182,12 @@ def wireframe(
 
     plan = build_wireframe_plan(resolved, authoring=pages_authoring)
 
+    # FR-AUD default resolves PER SURFACE (--audience is None unless given): the terminal --describe keeps
+    # its historical architect default (byte-identical); the --html/--view-json preview defaults to the
+    # plain owner voice (FR-AUD-2). An explicit --audience overrides whichever surface runs.
+    html_role = audience or "end_user"
+    term_role = audience or "architect"
+
     if watch:  # EC-3: live-follow the manifests — re-render the preview on every change (no server).
         from .wireframe_view import render_to_file
         from .wireframe_view.watch import ManifestWatcher
@@ -197,7 +204,7 @@ def wireframe(
             )
             render_to_file(
                 build_wireframe_plan(fresh, authoring=pages_authoring),
-                target, role=audience, fluency=fluency, live_reload_secs=secs,
+                target, role=html_role, fluency=fluency, live_reload_secs=secs,
             )
 
         watcher = ManifestWatcher(
@@ -206,7 +213,7 @@ def wireframe(
         _rebuild()          # render once for the browser…
         watcher.poll()      # …and prime the baseline so we don't immediately re-render
         console.print(
-            f"[green]wireframe:[/green] watching {len(resolved.entries)} manifest(s) ({audience}/{fluency}) → "
+            f"[green]wireframe:[/green] watching {len(resolved.entries)} manifest(s) ({html_role}/{fluency}) → "
             f"[link=file://{target}]file://{target}[/link]  [dim]— Ctrl-C to stop[/dim]"
         )
         if open_preview:
@@ -237,16 +244,18 @@ def wireframe(
     if view_json:  # LH-2: the audience view-model as data (stdout JSON only), then exit.
         from .wireframe_view import view_model_json
 
-        sys.stdout.write(view_model_json(plan, role=audience, fluency=fluency))
+        sys.stdout.write(view_model_json(plan, role=html_role, fluency=fluency))
         return
 
     if json_out:
         # Machine contract (R4-F1): stdout is parseable JSON only; tree only with --verbose.
         sys.stdout.write(plan_to_json(plan, emit_context="cli", linkage=linkage))
         if verbose:
-            render_plan(plan, console, only_issues=only_issues, max_items=max_items, describe=describe)
+            render_plan(plan, console, only_issues=only_issues, max_items=max_items, describe=describe,
+                        role=term_role, fluency=fluency)
     else:
-        render_plan(plan, console, only_issues=only_issues, max_items=max_items, describe=describe)
+        render_plan(plan, console, only_issues=only_issues, max_items=max_items, describe=describe,
+                    role=term_role, fluency=fluency)
 
     # FR-WPI-9: the walkthrough artifact — default-on when consuming a run.
     if (inventory or from_run is not None) and not json_out:
@@ -262,10 +271,10 @@ def wireframe(
         from .wireframe_view import render_to_file
 
         try:
-            written = render_to_file(plan, html, role=audience, fluency=fluency)
+            written = render_to_file(plan, html, role=html_role, fluency=fluency)
             if not json_out:
                 console.print(
-                    f"[green]wireframe:[/green] wrote HTML preview ({audience}/{fluency}) → "
+                    f"[green]wireframe:[/green] wrote HTML preview ({html_role}/{fluency}) → "
                     f"[link=file://{written}]file://{written}[/link]"  # clickable in most terminals
                 )
             if open_preview:  # QW-2: launch the browser on the just-written file

@@ -173,6 +173,19 @@ def _status_tag(status: str) -> str:
     return f"[{_STATUS_STYLE[status]}]\\[{_STATUS_LABEL[status]}][/{_STATUS_STYLE[status]}]"
 
 
+# FR-AUD terminal narration order + labels. Only non-empty fields render, so the architect voice
+# (what/why/do/next) is byte-identical to the pre-audience output and the end_user voice shows its own
+# DOES/WON'T/NEED framing. Spacing aligns the values to a common column.
+_DESCRIBE_FIELD_LABELS = (
+    ("what", "WHAT: "),
+    ("why", "WHY:  "),
+    ("wont", "WON'T: "),
+    ("need", "NEED:  "),
+    ("do", "DO:   "),
+    ("next", "NEXT: "),
+)
+
+
 def _section_node(
     tree: Tree, section: WireframeSection, *, max_items: int, described: Optional[dict] = None
 ) -> None:
@@ -180,11 +193,13 @@ def _section_node(
     # FR-DL-6/7: the authored WHAT · WHY · DO narration (opt-in --describe), single-sourced from
     # descriptive.yaml — printed under the section header, BEFORE items, in one consistent shape.
     if described:
-        node.add(f"[dim italic]WHAT: {described['what']}[/dim italic]")
-        node.add(f"[dim italic]WHY:  {described['why']}[/dim italic]")
-        node.add(f"[dim italic]DO:   {described['do']}[/dim italic]")
-        if described.get("next"):  # FR-DL-3 drill hint
-            node.add(f"[dim italic]NEXT: {described['next']}[/dim italic]")
+        # Voice-aware (FR-AUD): render whichever authored fields the audience actually carries, in a
+        # fixed order. The architect base authors what/why/do/next (wont/need empty ⇒ skipped) ⇒ output is
+        # byte-identical to before this became audience-aware; the end_user voice authors what/wont/need/do.
+        for field, label in _DESCRIBE_FIELD_LABELS:
+            val = described.get(field)
+            if val:
+                node.add(f"[dim italic]{label}{val}[/dim italic]")
     if section.consequence:
         node.add(f"[italic]→ {section.consequence}[/italic]")
     if section.error:
@@ -296,19 +311,25 @@ def render_plan(
     only_issues: bool = False,
     max_items: int = 25,
     describe: bool = False,
+    role: str = "architect",
+    fluency: str = "intermediate",
 ) -> None:
     """Render the inverted pyramid (FR-SV-12): title → tool-meta (FR-SV-13) → summary block →
     detail tree. ``only_issues`` hides `planned` sections; the summary always reports full-plan
     totals (R2-F4).
 
-    ``describe`` (opt-in, FR-DL-*) augments each section with its authored WHAT · WHY · DO
-    narration from ``descriptive.yaml`` — additive; the default (``describe=False``) output is
-    byte-identical to before this flag existed."""
+    ``describe`` (opt-in, FR-DL-*) augments each section with its authored narration from
+    ``descriptive.yaml``. ``role``/``fluency`` (FR-AUD) select the voice — the default
+    ``(architect, intermediate)`` is byte-identical to before either flag existed; ``end_user`` and the
+    delivery-role kits render their own plain / lensed narration on the terminal tree, not just ``--html``."""
     console = console or Console()
-    # Title + tool-level meta header (FR-SV-13) — what this is, up top.
+    # Title + tool-level meta header (FR-SV-13) — what this is, up top. The WIREFRAME_META lines are
+    # architect tool-process framing ($0/no-LLM/deterministic) — the exact FR-AUD-C1b process-meta the
+    # plain voices must not see (R2-F1); shown for the architect voice only, mirroring compose().
     console.print(f"[bold]Wireframe[/bold] — {plan.project_root}")
-    for line in WIREFRAME_META:
-        console.print(f"[dim italic]{line}[/dim italic]")
+    if role == "architect":
+        for line in WIREFRAME_META:
+            console.print(f"[dim italic]{line}[/dim italic]")
     # Summary block first (FR-SV-12) — counts, shape, content, readiness before the details.
     counts, shape, content, readiness = footer_lines(plan)
     console.print(f"\n[bold]Status:[/bold]  {counts}")
@@ -316,17 +337,29 @@ def render_plan(
     console.print(f"[bold]Content:[/bold] {content}")
     console.print(f"[bold]Cascade:[/bold] {readiness}")
     if describe:  # FR-DL-12: route the summary header through the descriptive layer — the counts' meaning
+        from .delivery_roles import lens_for
         from .describe import describe_summary
-        _s = describe_summary(plan)
+        lens = lens_for(role)  # FR-AUD/EC-4: a delivery-role kit's focus lens, shown on the terminal too
+        if lens:
+            console.print(f"[dim italic]FOCUS ({role}): {lens}[/dim italic]")
+        _s = describe_summary(plan, role=role, fluency=fluency)
         if _s:
-            console.print(f"[dim italic]WHY:  {_s['why']}[/dim italic]")
-            console.print(f"[dim italic]DO:   {_s['do']}[/dim italic]")
+            # Voice-aware: the architect base authors why/do (byte-identical); the end_user voice authors
+            # a headline/lead intro instead — render whichever the selected voice actually carries.
+            if _s.get("why"):
+                console.print(f"[dim italic]WHY:  {_s['why']}[/dim italic]")
+            if _s.get("do"):
+                console.print(f"[dim italic]DO:   {_s['do']}[/dim italic]")
+            if _s.get("headline"):
+                console.print(f"[dim italic]{_s['headline']}[/dim italic]")
+            if _s.get("lead"):
+                console.print(f"[dim italic]{_s['lead']}[/dim italic]")
     for w in plan.merge_warnings:
         console.print(f"[yellow]warning:[/yellow] {_warning_text(w)}")
     # Detail tree below the summary, behind a visual separator.
     console.print()
     tree = Tree("[bold]Details ▾[/bold] [dim](per-section shape)[/dim]")
-    described_by_key = _describe_sections(plan) if describe else {}
+    described_by_key = _describe_sections(plan, role=role, fluency=fluency) if describe else {}
     for section in plan.sections:
         if only_issues and section.status == Status.PLANNED:
             continue
@@ -337,8 +370,11 @@ def render_plan(
     console.print(tree)
 
 
-def _describe_sections(plan: WireframePlan) -> Dict[str, dict]:
-    """FR-DL-*: compose the authored narration for every section, keyed by section key.
+def _describe_sections(
+    plan: WireframePlan, *, role: str = "architect", fluency: str = "intermediate"
+) -> Dict[str, dict]:
+    """FR-DL-*: compose the authored narration for every section, keyed by section key, in the FR-AUD
+    ``role``/``fluency`` voice (default architect ⇒ byte-identical to the pre-audience output).
 
     Deterministic, no-LLM (the composer is pure). Imported lazily so the descriptive layer is a
     strictly opt-in dependency of the ``--describe`` path — the default render never loads it."""
@@ -346,7 +382,7 @@ def _describe_sections(plan: WireframePlan) -> Dict[str, dict]:
 
     out: Dict[str, dict] = {}
     for section in plan.sections:
-        composed = describe_section(section, plan)
+        composed = describe_section(section, plan, role=role, fluency=fluency)
         if composed is not None:
             out[section.key] = composed
     return out

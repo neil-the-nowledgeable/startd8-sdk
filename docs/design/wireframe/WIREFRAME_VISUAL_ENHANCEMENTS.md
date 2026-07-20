@@ -22,21 +22,21 @@ no-op on the default `--describe` terminal surface (runtime-proven below). I bel
 anywhere in `src/`+`tests/` — the wire's far end is unconnected. Both corrected the answer.
 
 1. **★ DEFECT (built-but-unwired) — `--audience`/`--fluency` silently no-op on the terminal `--describe`
-   surface.** `render_plan()` takes no `role`/`fluency` (`render.py:292`); it calls `describe_summary(plan)`
-   (`render.py:320`) and `_describe_sections(plan)`→`describe_section(section, plan)` (`render.py:340-351`),
-   both defaulting to `architect`. The CLI captures `--audience` but only threads it into `render_to_file`
-   / `view_model_json` (`cli_wireframe.py:200,240,265`), never into the two `render_plan()` calls
-   (`cli_wireframe.py:247,249`). **Runtime proof:** `--describe`, `--audience pm --describe`, and
-   `--audience end_user --describe` emit a byte-identical architect `WHY:` line. So a user asking for the
-   plain or PM voice in the terminal silently gets architect jargon — the FR-AUD layer is fully built and
-   reaches the HTML/JSON surfaces but never the *default* one. The plumbing all exists (`describe`,
-   `describe_summary` already accept `role`/`fluency`); it just isn't threaded through `render_plan`.
-   → so a terminal user can read the preview in the voice they asked for, instead of the flag lying. — **S**
-   *Closure-Ledger row:* `CL-WV-AUD-TERM | --audience/--fluency wired to --html/--view-json but not the
-   terminal --describe tree | Now: L2 (built + wired for 2 of 3 surfaces; silent no-op on the default one)
-   | Gate: thread role/fluency through render_plan + _describe_sections + describe_summary; add a test that
-   `--audience end_user --describe` ≠ architect | Value at L4: the audience layer works on every surface,
-   not just the opt-in ones.*
+   surface. ✅ FIXED (`render.py`, `cli_wireframe.py`; test `test_terminal_describe_honors_audience`).**
+   `render_plan()` took no `role`/`fluency`; it called `describe_summary(plan)` / `_describe_sections(plan)`,
+   both defaulting to `architect`, and the CLI threaded `--audience` only into `--html`/`--view-json`.
+   Runtime-proven: `--describe`, `--audience pm --describe`, `--audience end_user --describe` emitted a
+   byte-identical architect line. **Fix:** threaded `role`/`fluency` through `render_plan` →
+   `describe_summary`/`_describe_sections`; made the tree renderer voice-aware (renders whichever authored
+   fields the voice carries — `WON'T`/`NEED` for `end_user`, guarded so `end_user`'s missing `why` no longer
+   `KeyError`s); surfaced the EC-4 kit lens as a terminal `FOCUS` line.
+   **Deeper bug grounding surfaced during the fix (the real ore):** the CLI's `--audience` default was
+   `"end_user"` (for the HTML preview, FR-AUD-2), so naively threading it flipped the terminal's historical
+   *architect* default to `end_user` — not byte-identical — **and** the `WIREFRAME_META` header (`$0`/`No
+   LLM`) leaked process-meta to the plain voice. Real fix: `--audience` now defaults to **`None`** and each
+   surface resolves its own default (terminal→architect, `--html`/`--view-json`→end_user); `WIREFRAME_META`
+   shows for the architect voice only (mirrors `compose`). Architect `--describe` verified byte-identical
+   (190 lines); 171 tests. *CL-WV-AUD-TERM → L4 (closed).*
 
 2. **Validate `--audience`/`--fluency` against the known set (a typo silently degrades to architect).**
    `--audience` is a free `str` (`cli_wireframe.py:85`); an unknown value (`--audience pdm`, a typo) is
