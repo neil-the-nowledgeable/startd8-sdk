@@ -10,6 +10,71 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 
 ---
 
+## ★ Round 2 — Top findings (post-arc pass, 2026-07-19)
+
+*Run after the full arc shipped (QW/LH/AR/EC all ✅). Grounded in the as-built code, not the narrative.
+Lead item is a verified built-but-unwired defect; the rest wire what already exists.*
+
+**Grounding note (belief→actual corrections):** I believed `--audience`/`--fluency` were global flags
+that voiced *every* surface; grounding showed they reach `--html` + `--view-json` only and silently
+no-op on the default `--describe` terminal surface (runtime-proven below). I believed the EC-2 export
+"feeds the kickoff loop" (my own EC-2 commit says so); grounding found **no consumer** of a `*-signoff.json`
+anywhere in `src/`+`tests/` — the wire's far end is unconnected. Both corrected the answer.
+
+1. **★ DEFECT (built-but-unwired) — `--audience`/`--fluency` silently no-op on the terminal `--describe`
+   surface.** `render_plan()` takes no `role`/`fluency` (`render.py:292`); it calls `describe_summary(plan)`
+   (`render.py:320`) and `_describe_sections(plan)`→`describe_section(section, plan)` (`render.py:340-351`),
+   both defaulting to `architect`. The CLI captures `--audience` but only threads it into `render_to_file`
+   / `view_model_json` (`cli_wireframe.py:200,240,265`), never into the two `render_plan()` calls
+   (`cli_wireframe.py:247,249`). **Runtime proof:** `--describe`, `--audience pm --describe`, and
+   `--audience end_user --describe` emit a byte-identical architect `WHY:` line. So a user asking for the
+   plain or PM voice in the terminal silently gets architect jargon — the FR-AUD layer is fully built and
+   reaches the HTML/JSON surfaces but never the *default* one. The plumbing all exists (`describe`,
+   `describe_summary` already accept `role`/`fluency`); it just isn't threaded through `render_plan`.
+   → so a terminal user can read the preview in the voice they asked for, instead of the flag lying. — **S**
+   *Closure-Ledger row:* `CL-WV-AUD-TERM | --audience/--fluency wired to --html/--view-json but not the
+   terminal --describe tree | Now: L2 (built + wired for 2 of 3 surfaces; silent no-op on the default one)
+   | Gate: thread role/fluency through render_plan + _describe_sections + describe_summary; add a test that
+   `--audience end_user --describe` ≠ architect | Value at L4: the audience layer works on every surface,
+   not just the opt-in ones.*
+
+2. **Validate `--audience`/`--fluency` against the known set (a typo silently degrades to architect).**
+   `--audience` is a free `str` (`cli_wireframe.py:85`); an unknown value (`--audience pdm`, a typo) is
+   indistinguishable from `architect` — the resolver degrades unknown roles to base with no signal. The
+   known set is already enumerable (`delivery_roles.BASE_VOICES + KITS` + `end_user`). Reject/​warn on an
+   unknown role. → so a mistyped role fails loudly instead of silently showing the wrong voice. — **XS**
+
+3. **Latent (dormant trap) — a kit's authored section override would be invisible in the HTML toggle.**
+   `render_html` embeds only the base-voice variants (`view.py` `_EMBED_COMBOS`) + the CLI default; the
+   client `resolveVM` maps every kit to its base variant. So if someone later authors a `pm`-specific
+   section override in `descriptive.yaml`, `--view-json --audience pm` and `--audience pm --describe` (once
+   #1 lands) would honor it but the **HTML toggle would silently show the base voice**. Dormant today (no
+   kit override authored — EC-4 shipped lenses only), so it's a trap, not an active break: embed a kit
+   variant iff `compose(kit) != compose(base)`, or document kit overrides as CLI-only. — **S**
+
+<details>
+<summary>Round 2 — appendix (grounded, below the fold)</summary>
+
+- **🌱 Surface the delivery-role lens in the terminal.** The EC-4 lens (`delivery_roles.lens_for`) rides in
+  the compose audience block but `--describe` never calls `compose` — so `--audience pm --describe` shows no
+  lens. Once Top-#1 threads role through `render_plan`, add a one-line lens header for a kit role. — **XS**
+- **🚀 Sign-off importer — wire EC-2's far end.** The `Export sign-off` JSON (app/audience/per-section
+  status+note) is consumed by nothing (grep-confirmed). An importer that reads it into the kickoff/approve
+  loop is what makes "feeds the kickoff loop" true rather than aspirational. — **M**
+- **🚀 Connect approve ↔ diff (EC-2 ↔ EC-1).** The sign-off records the snapshot you approved; `--diff`
+  already computes planned-vs-built from `inputs_fingerprint`. Feed the sign-off's approved snapshot as
+  `--diff`'s baseline so "what changed since **you** approved" is literal, not "since last save". — **M**
+- **Honest gaps (decisions, not bugs):**
+  - **EC-2 export feeds nothing yet — by my own EC-2 scoping** ("importer beyond EC-2's M"). Confirm
+    export-only is the intended interim, or promote the importer above.
+  - **`--fluency` help already scopes to "the `--html` end-user voice"** (`cli_wireframe.py:91`), so the
+    terminal no-op may be *intended* for fluency — but `--audience` help says "the preview" (ambiguous).
+    Top-#1 assumes the default terminal surface *should* be audience-aware; confirm that's the intended shape
+    before wiring, or make both flags say "affects `--html`/`--view-json` only" and warn when combined with
+    a bare `--describe`.
+
+</details>
+
 ## ⚡ Quick wins (small, high-value — built on what exists)
 
 | # | Enhancement | Why it helps | Effort | Status |
