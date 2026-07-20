@@ -193,6 +193,36 @@ single-file, audience-keyed preview**. Reuse it for the next one (here or on a s
 because the seam has no consumers outside wireframe/ + the CLI's terminal `--describe` (verified separately),
 but a full-suite run belongs in the pre-merge gate.*
 
+## Hansei — the sign-off loop (code-grounded, 2026-07-20)
+
+Retrospective on the just-built sign-off loop (EC-2 export · `--signoff` importer · approve↔diff). Grounded
+in the code, not the commit messages. Five candidate surprises → **one root gap** + one dissolved on
+grounding (the loop working).
+
+**The root gap: the sign-off artifact is never bound to the plan it reviewed.**
+- `exportSign` emits `{app, audience, reviewed_at, sections}` — **no plan fingerprint / schema_version**
+  (`_template.py::exportSign`), even though the view-model carries both.
+- `signoff['app']` is display-only (`signoff.py`), and the 10 section keys are **generic to every wireframe
+  project** (fixed builders in `plan.py`). So `--diff --signoff` with a **foreign or stale** sign-off matches
+  by generic key and produces a confident-but-wrong approval check — no warning.
+- `reviewed_at` is decorative (report header only); staleness is purely *structural*, so a same-shape rebuild
+  reads as "your sign-off still holds."
+
+**The standard the pilot proved (extracted):** *a human-verdict artifact fed back into a build gate must
+carry, and the gate must enforce, the identity of what it reviewed — never cross-reference it by a
+non-unique key.* Provenance-by-construction for feedback artifacts. (Dissolved hypothesis, kept as evidence:
+"a removed approved section escapes the check" — false; the section set is fixed and a removed section is
+still diffed + caught.)
+
+**Next-round gates (dated, grounded — for the forward loop, not this WIP):**
+- **SO-1 — bind the sign-off to its plan.** Add `inputs_fingerprint` + `schema_version` to the export;
+  `--signoff` warns when they don't match the current plan ("this sign-off was made against a different
+  version — re-review"). Closes the false-approval-check gap (S5/S1). — **S**
+- **SO-2 — document the exit-code contract.** The command docstring says "exit 0 / 2 only"; `--signoff`
+  and `--diff --signoff` now exit **1** as a gate. Update the docstring (S4). — **XS**
+- **SO-3 — (optional) time-aware staleness.** Use `reviewed_at` vs the baseline as a cheap "sign-off older
+  than the plan" signal, complementing the structural diff (S2). — **S**
+
 ## Do-first shortlist
 1. **QW-1** (toggle) — biggest usability jump, small effort.
 2. **LH-1** (real list/page mockups) — biggest fidelity jump.
