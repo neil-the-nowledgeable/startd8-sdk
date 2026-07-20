@@ -35,9 +35,13 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 - ✅ **AR-1 — Single-source the record schema** — `describe.py`'s resolver still hardcodes its field list;
   FR-SHC now *declares* `SECTION_SCHEMA`/`SUMMARY_SCHEMA`. Have the resolver read the declaration
   (KM-27 residual / CL-17 L4 gate). Removes a drift seam. — **S**
-- **AR-2 — Extract the audience/onboarding pattern as a named capability** — applied twice now
-  (wireframe + portal `/start`); a small shared renderer + a documented pattern makes the next surface a
-  config away, not a rebuild (Yokoten). — **M**
+- **AR-2 — Extract the audience/onboarding pattern as a named capability** ✅ — applied *three* times
+  (wireframe FR-AUD · portal `/start` · concierge fluency). Named + documented as the **Audience-Keyed
+  Content Pattern** (`docs/design/descriptive-layer/AUDIENCE_CONTENT_PATTERN.md`): the four parts
+  (single-source config · sparse-degrading resolver · benefit-first framing rules · coverage guard), the
+  three reusable code seams cited (`describe._variant`, `compose.has_jargon`, `descriptive_schema`), and a
+  5-step apply recipe — so the next surface is a config away, not a rebuild (Yokoten). Doc, not new
+  machinery (Mottainai): the seams already exist; the pattern makes them discoverable. — **M**
 - **AR-3 — Lift the mockup renderers out of the HTML string** — the form/page/list drawers live in the
   template JS; the structured data is already in the view-model. A mockup spec lets a live app/portal
   draw the same sketches. — **M**
@@ -63,4 +67,4 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 2. **LH-1** (real list/page mockups) — biggest fidelity jump.
 3. **EC-1** (`--diff`) — highest-value new capability; plumbing already exists.
 
-*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Then EC-1 (`--diff` planned-vs-built) shipped — the verify half of preview→approve→build→verify. Next: LH-2 (`--view-json`), AR-2 (extract the audience pattern), or EC-2 (approve/annotate).*
+*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Then EC-1 (`--diff` planned-vs-built) shipped — the verify half of preview→approve→build→verify. Then LH-2 (`--view-json` — the audience view-model as data for a web app/portal) + AR-2 (the audience pattern named + documented as AUDIENCE_CONTENT_PATTERN.md — the Yokoten of a design used 3×) shipped. Next: AR-3 (mockup renderers as a spec), EC-2 (approve/annotate), or LH-3 (finish fluency coverage).*
