@@ -107,6 +107,12 @@ def wireframe(
         help="Print the self-hosted descriptive-content coverage report (FR-SHC) and exit — the "
         "audience-matrix authoring status of descriptive.yaml. Project-independent. (QW-4)",
     ),
+    signoff: Optional[Path] = typer.Option(
+        None, "--signoff",
+        help="Read an exported sign-off JSON (the owner's per-section approve/flag verdict from the HTML "
+        "preview's Export button) and report it, then exit — non-zero if any section is flagged. The gate "
+        "between preview-approval and build; closes the loop. Project-independent. (EC-2)",
+    ),
     diff: bool = typer.Option(
         False, "--diff",
         help="Show what changed since the last saved preview (added/removed/changed items, shape + "
@@ -146,6 +152,17 @@ def wireframe(
 
         console.print(format_report())
         return
+
+    if signoff is not None:  # EC-2: ingest the owner's exported sign-off, report it, gate on open flags.
+        from .wireframe.signoff import SignoffError, format_signoff, load_signoff, open_flags
+
+        try:
+            so = load_signoff(signoff)
+        except SignoffError as exc:
+            console.print(f"[red]wireframe:[/red] {exc}")
+            raise typer.Exit(_EXIT_FATAL_INPUTS)
+        console.print(format_signoff(so))
+        raise typer.Exit(1 if open_flags(so) else 0)  # gate: open flags block the handoff
 
     # Fail loudly on a mistyped voice/depth instead of silently degrading to the architect base (a
     # typo'd --audience was indistinguishable from `architect`). The known sets are the single source.

@@ -63,15 +63,18 @@ doubles as the "what voices exist and what each is for" readout.
 - **🌱 Surface the delivery-role lens in the terminal.** The EC-4 lens (`delivery_roles.lens_for`) rides in
   the compose audience block but `--describe` never calls `compose` — so `--audience pm --describe` shows no
   lens. Once Top-#1 threads role through `render_plan`, add a one-line lens header for a kit role. — **XS**
-- **🚀 Sign-off importer — wire EC-2's far end.** The `Export sign-off` JSON (app/audience/per-section
-  status+note) is consumed by nothing (grep-confirmed). An importer that reads it into the kickoff/approve
-  loop is what makes "feeds the kickoff loop" true rather than aspirational. — **M**
+- ✅ **🚀 Sign-off importer — wire EC-2's far end.** `startd8 wireframe --signoff <file>` reads the
+  exported sign-off JSON (`wireframe/signoff.py`), reports the owner's per-section verdict (approved /
+  flagged-with-note / unreviewed), and **gates** — exit 1 if any section is flagged, exit 2 on a garbled
+  file. The `Export sign-off` button is no longer a dead-end: preview→approve→**export→ingest**→build is a
+  closed loop, with the flagged notes as the developer's pre-build to-do. Verified end-to-end (real browser
+  export → CLI). 176 tests. — **M → done**
 - **🚀 Connect approve ↔ diff (EC-2 ↔ EC-1).** The sign-off records the snapshot you approved; `--diff`
   already computes planned-vs-built from `inputs_fingerprint`. Feed the sign-off's approved snapshot as
   `--diff`'s baseline so "what changed since **you** approved" is literal, not "since last save". — **M**
 - **Honest gaps (decisions, not bugs):**
-  - **EC-2 export feeds nothing yet — by my own EC-2 scoping** ("importer beyond EC-2's M"). Confirm
-    export-only is the intended interim, or promote the importer above.
+  - ~~**EC-2 export feeds nothing yet.**~~ RESOLVED — the `--signoff` importer (above) now consumes it;
+    the export→ingest→gate loop is closed and verified end-to-end.
   - **`--fluency` help already scopes to "the `--html` end-user voice"** (`cli_wireframe.py:91`), so the
     terminal no-op may be *intended* for fluency — but `--audience` help says "the preview" (ambiguous).
     Top-#1 assumes the default terminal surface *should* be audience-aware; confirm that's the intended shape
