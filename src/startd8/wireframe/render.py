@@ -337,11 +337,11 @@ def render_plan(
     console.print(f"[bold]Content:[/bold] {content}")
     console.print(f"[bold]Cascade:[/bold] {readiness}")
     if describe:  # FR-DL-12: route the summary header through the descriptive layer — the counts' meaning
-        from .delivery_roles import lens_for
+        from .delivery_roles import label_for, lens_for
         from .describe import describe_summary
         lens = lens_for(role)  # FR-AUD/EC-4: a delivery-role kit's focus lens, shown on the terminal too
         if lens:
-            console.print(f"[dim italic]FOCUS ({role}): {lens}[/dim italic]")
+            console.print(f"[dim italic]FOCUS ({label_for(role)}): {lens}[/dim italic]")
         _s = describe_summary(plan, role=role, fluency=fluency)
         if _s:
             # Voice-aware: the architect base authors why/do (byte-identical); the end_user voice authors

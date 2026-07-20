@@ -38,19 +38,24 @@ anywhere in `src/`+`tests/` — the wire's far end is unconnected. Both correcte
    shows for the architect voice only (mirrors `compose`). Architect `--describe` verified byte-identical
    (190 lines); 171 tests. *CL-WV-AUD-TERM → L4 (closed).*
 
-2. **Validate `--audience`/`--fluency` against the known set (a typo silently degrades to architect).**
-   `--audience` is a free `str` (`cli_wireframe.py:85`); an unknown value (`--audience pdm`, a typo) is
-   indistinguishable from `architect` — the resolver degrades unknown roles to base with no signal. The
-   known set is already enumerable (`delivery_roles.BASE_VOICES + KITS` + `end_user`). Reject/​warn on an
-   unknown role. → so a mistyped role fails loudly instead of silently showing the wrong voice. — **XS**
+2. **Validate `--audience`/`--fluency` against the known set. ✅ FIXED** (`cli_wireframe.py`,
+   `delivery_roles.known_roles/FLUENCIES`; test `test_cli_rejects_unknown_audience_and_fluency`).
+   `--audience` was a free `str`; a typo (`--audience pdm`) was indistinguishable from `architect` (silent
+   degrade). Now an unknown voice/depth exits 2 with the valid list — the known set is single-sourced from
+   `delivery_roles`.
 
-3. **Latent (dormant trap) — a kit's authored section override would be invisible in the HTML toggle.**
-   `render_html` embeds only the base-voice variants (`view.py` `_EMBED_COMBOS`) + the CLI default; the
-   client `resolveVM` maps every kit to its base variant. So if someone later authors a `pm`-specific
-   section override in `descriptive.yaml`, `--view-json --audience pm` and `--audience pm --describe` (once
-   #1 lands) would honor it but the **HTML toggle would silently show the base voice**. Dormant today (no
-   kit override authored — EC-4 shipped lenses only), so it's a trap, not an active break: embed a kit
-   variant iff `compose(kit) != compose(base)`, or document kit overrides as CLI-only. — **S**
+3. **~~Latent trap — a kit's authored section override would be invisible in the HTML toggle.~~ RESOLVED
+   (not a defect — grounding dissolved it).** Checked `render_html:79-80`: rendering with `--audience <kit>
+   --html` **already embeds `compose(kit)`** (the `if default not in variants` path), and `--view-json` /
+   the terminal honor kit overrides directly — so the only "gap" is that toggling to a kit *from a
+   base-voice-default render* shows the base voice + lens. With **no kit section-override authored** (EC-4
+   shipped lenses only), building a `compose(kit)!=compose(base)` differ into the default embed would be
+   feature-factory for content that doesn't exist. **Documented behavior:** kit overrides render when you
+   ask for that kit (`--audience <kit>`); the base-default toggle shows base voice + focus lens.
+
+**Two quick wins shipped alongside:** the terminal `FOCUS` line shows the human label
+(`FOCUS (Project Manager):`, not `pm`); `--coverage` now lists each delivery voice + its focus lens, so it
+doubles as the "what voices exist and what each is for" readout.
 
 <details>
 <summary>Round 2 — appendix (grounded, below the fold)</summary>

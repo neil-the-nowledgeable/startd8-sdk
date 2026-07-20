@@ -46,6 +46,15 @@ KITS: dict[str, dict] = {
 }
 
 
+# The fluency depths the audience layer authors (mirrors descriptive.yaml's variants + the HTML toggle).
+FLUENCIES = ("beginner", "intermediate", "advanced")
+
+
+def known_roles() -> tuple:
+    """Every valid ``--audience`` value: the two base voices + every delivery-role kit (FR-AUD/EC-4)."""
+    return BASE_VOICES + tuple(KITS)
+
+
 def is_kit(role: str) -> bool:
     """True if *role* is an FR-J delivery-role kit (an overlay on a base voice)."""
     return role in KITS

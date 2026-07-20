@@ -147,6 +147,22 @@ def wireframe(
         console.print(format_report())
         return
 
+    # Fail loudly on a mistyped voice/depth instead of silently degrading to the architect base (a
+    # typo'd --audience was indistinguishable from `architect`). The known sets are the single source.
+    from .wireframe.delivery_roles import FLUENCIES, known_roles
+
+    if audience is not None and audience not in known_roles():
+        console.print(
+            f"[red]error:[/red] unknown --audience '{audience}'. "
+            f"Valid voices: {', '.join(known_roles())}."
+        )
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+    if fluency not in FLUENCIES:
+        console.print(
+            f"[red]error:[/red] unknown --fluency '{fluency}'. Valid depths: {', '.join(FLUENCIES)}."
+        )
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
     overrides = {
         "schema": schema,
         "app": manifest,

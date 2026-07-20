@@ -238,7 +238,19 @@ def test_terminal_describe_honors_audience(golden_root: Path) -> None:
     for meta in ("No LLM", "deterministic projection", "glance-approve"):
         assert meta not in e                                # …the plain voice must not leak it (R2-F1)
     assert "Let's make sure this is the app you want" in e   # the end_user headline reaches the terminal
-    assert "FOCUS (pm)" in p                                 # a kit shows its focus lens on the terminal
+    assert "FOCUS (Project Manager)" in p                    # a kit shows its focus lens (human label) on the terminal
+
+
+def test_cli_rejects_unknown_audience_and_fluency(golden_root: Path) -> None:
+    """Round-2 quick win — a mistyped voice/depth fails loudly (exit 2 + valid list) instead of silently
+    degrading to the architect base; a real kit still passes."""
+    bad_role = runner.invoke(app, ["--project", str(golden_root), "--audience", "pdm", "--no-write"])
+    assert bad_role.exit_code == 2 and "unknown --audience 'pdm'" in bad_role.output
+    assert "pm" in bad_role.output and "backend-dev" in bad_role.output   # the valid list is shown
+    bad_flu = runner.invoke(app, ["--project", str(golden_root), "--fluency", "medium", "--no-write"])
+    assert bad_flu.exit_code == 2 and "unknown --fluency 'medium'" in bad_flu.output
+    ok = runner.invoke(app, ["--project", str(golden_root), "--audience", "pm", "--no-write"])
+    assert ok.exit_code == 0
 
 
 def test_cli_html_flag_writes_preview(tmp_path: Path, golden_root: Path) -> None:

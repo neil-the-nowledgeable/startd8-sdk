@@ -117,9 +117,12 @@ def format_report(records: Optional[dict] = None) -> str:
         depth = ", ".join(f"{k} ({'/'.join(v)})" for k, v in cov["fluency"].items())
         out += ["", f"  fluency depth (informational, sparse): {depth}"]
     # EC-4: the delivery-role kits are overlays on the two base voices above — a role a config away.
+    # List each with its base voice + focus lens so `--coverage` doubles as the "what voices exist and
+    # what each is for" readout (discoverability).
     from .delivery_roles import KITS
-    kits = ", ".join(f"{r}→{m['base']}" for r, m in KITS.items())
-    out += ["", f"  delivery kits (EC-4, overlay-only until authored): {kits}"]
+    out += ["", "  delivery-role voices (EC-4 — overlay a base voice + a focus lens):"]
+    for r, m in KITS.items():
+        out.append(f"    {r:<13} ({m['base']:<9}) — {m['lens']}")
     return "\n".join(out)
 
 
