@@ -69,9 +69,13 @@ doubles as the "what voices exist and what each is for" readout.
   file. The `Export sign-off` button is no longer a dead-end: preview→approve→**export→ingest**→build is a
   closed loop, with the flagged notes as the developer's pre-build to-do. Verified end-to-end (real browser
   export → CLI). 176 tests. — **M → done**
-- **🚀 Connect approve ↔ diff (EC-2 ↔ EC-1).** The sign-off records the snapshot you approved; `--diff`
-  already computes planned-vs-built from `inputs_fingerprint`. Feed the sign-off's approved snapshot as
-  `--diff`'s baseline so "what changed since **you** approved" is literal, not "since last save". — **M**
+- ✅ **🚀 Connect approve ↔ diff (EC-2 ↔ EC-1).** `startd8 wireframe --diff --signoff <file>` cross-references
+  the structural diff with the owner's verdict: a section that changed **and** was approved surfaces as a
+  **stale approval** ("⚠ N section(s) you approved changed since — re-review"), still-open flags are
+  carried through, and the gate exits non-zero on either. The full EC-1 diff renders below (reused). So
+  "what changed since **you** approved" is literal — approvals whose section moved are caught before build.
+  `signoff.stale_approvals` / `format_approval_check`; verified end-to-end (save baseline → sign off →
+  mutate → stale). 178 tests. — **M → done**
 - **Honest gaps (decisions, not bugs):**
   - ~~**EC-2 export feeds nothing yet.**~~ RESOLVED — the `--signoff` importer (above) now consumes it;
     the export→ingest→gate loop is closed and verified end-to-end.

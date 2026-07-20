@@ -64,6 +64,39 @@ def open_flags(signoff: dict) -> list:
     return [s for s in signoff["sections"] if s["status"] == "flag"]
 
 
+def stale_approvals(diff: dict, signoff: dict) -> list:
+    """approve↔diff: the sections the owner APPROVED (``ok``) that have since CHANGED in the plan — their
+    sign-off is stale and needs re-review. Takes an EC-1 :func:`plan_diff.diff_plans` result (whose
+    ``sections`` list holds only changed sections) and the loaded sign-off; returns the changed-section
+    dicts whose key was approved."""
+    approved = {s["key"] for s in signoff["sections"] if s["status"] == "ok"}
+    return [s for s in diff.get("sections", []) if s.get("key") in approved]
+
+
+def format_approval_check(diff: dict, signoff: dict) -> str:
+    """The approve↔diff headline: cross-references the structural diff with the owner's verdict so a change
+    to an approved section reads as 'changed since you approved it' (rendered above the full diff)."""
+    aud = signoff["audience"] or {}
+    who = aud.get("label") or aud.get("role") or "reviewer"
+    stale = stale_approvals(diff, signoff)
+    flagged = open_flags(signoff)
+    lines = [f"[bold]Approval check[/bold] [dim](you signed off as {who})[/dim]:"]
+    if stale:
+        lines.append(
+            f"  [bold red]⚠ {len(stale)} section(s) you approved changed since — "
+            "re-review before build:[/bold red]"
+        )
+        lines += [f"    ⚑ {s['title']}" for s in stale]
+    else:
+        lines.append("  [green]✓ none of the sections you approved have changed.[/green]")
+    if flagged:
+        lines.append(
+            "  [yellow]⚑ still flagged from your sign-off:[/yellow] "
+            + ", ".join(s["title"] for s in flagged)
+        )
+    return "\n".join(lines)
+
+
 def format_signoff(signoff: dict) -> str:
     """A plain-text report of the owner's verdict: counts, the flagged to-do (with notes), unreviewed."""
     secs = signoff["sections"]

@@ -153,7 +153,7 @@ def wireframe(
         console.print(format_report())
         return
 
-    if signoff is not None:  # EC-2: ingest the owner's exported sign-off, report it, gate on open flags.
+    if signoff is not None and not diff:  # EC-2: plain sign-off report (with --diff → approve↔diff, below).
         from .wireframe.signoff import SignoffError, format_signoff, load_signoff, open_flags
 
         try:
@@ -271,7 +271,23 @@ def wireframe(
                 f"`startd8 wireframe` first (it saves {baseline_path})."
             )
             return
-        console.print(format_diff(diff_plans(baseline, plan_body(plan))))
+        d = diff_plans(baseline, plan_body(plan))
+        if signoff is not None:  # approve↔diff: cross-reference the diff with the owner's sign-off.
+            from .wireframe.signoff import (
+                SignoffError, format_approval_check, load_signoff, open_flags, stale_approvals,
+            )
+
+            try:
+                so = load_signoff(signoff)
+            except SignoffError as exc:
+                console.print(f"[red]wireframe:[/red] {exc}")
+                raise typer.Exit(_EXIT_FATAL_INPUTS)
+            console.print(format_approval_check(d, so))   # the approval headline (stale approvals up top)…
+            console.print()
+            console.print(format_diff(d))                 # …then the full structural diff (EC-1, reused)
+            # gate: a changed approved section (stale) or a still-open flag blocks the build handoff
+            raise typer.Exit(1 if (stale_approvals(d, so) or open_flags(so)) else 0)
+        console.print(format_diff(d))
         return  # --diff does not persist, so the saved baseline stays the approved snapshot
 
     if view_json:  # LH-2: the audience view-model as data (stdout JSON only), then exit.

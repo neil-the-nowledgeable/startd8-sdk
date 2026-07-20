@@ -15,7 +15,14 @@ import typer
 from typer.testing import CliRunner
 
 from startd8.cli_wireframe import wireframe
-from startd8.wireframe.signoff import SignoffError, format_signoff, load_signoff, open_flags
+from startd8.wireframe.signoff import (
+    SignoffError,
+    format_approval_check,
+    format_signoff,
+    load_signoff,
+    open_flags,
+    stale_approvals,
+)
 
 app = typer.Typer()
 app.command()(wireframe)
@@ -76,6 +83,60 @@ def test_malformed_signoffs_raise(tmp_path: Path) -> None:
         load_signoff(nosec)
     with pytest.raises(SignoffError):
         load_signoff(tmp_path / "does-not-exist.json")
+
+
+def _signoff(sections: list) -> dict:
+    """A loaded/normalized sign-off (as load_signoff returns), for the pure approve↔diff functions."""
+    return {"app": "x", "audience": {"role": "end_user"}, "reviewed_at": "", "sections": sections}
+
+
+def _diff(*changed_keys: str) -> dict:
+    """A diff_plans-shaped result whose only changed sections are *changed_keys*."""
+    return {"unchanged": not changed_keys, "fingerprint_changed": True, "shape": {}, "content": None,
+            "sections": [{"key": k, "title": k.title(), "added": ["/x"], "removed": [],
+                          "status_changed": {}, "sec_status": None} for k in changed_keys]}
+
+
+def test_stale_approvals_flags_approved_sections_that_changed() -> None:
+    so = _signoff([
+        {"key": "pages", "title": "Screens", "status": "ok", "note": ""},
+        {"key": "forms", "title": "Forms", "status": "flag", "note": "add a date field"},
+        {"key": "entities", "title": "Things", "status": "ok", "note": ""},
+    ])
+    # 'pages' was approved AND changed → stale; 'entities' approved but unchanged → not stale.
+    stale = stale_approvals(_diff("pages"), so)
+    assert [s["key"] for s in stale] == ["pages"]
+    assert stale_approvals(_diff("entities"), so)[0]["key"] == "entities"
+    assert stale_approvals(_diff("forms"), so) == []          # 'forms' was flagged, not approved
+
+    report = format_approval_check(_diff("pages"), so)
+    assert "you approved changed since" in report and "Pages" in report     # stale headline (diff's title)
+    assert "still flagged" in report and "Forms" in report                  # the open flag persists
+
+    # a diff that changes only a NON-approved section (forms was flagged) → the approval still holds
+    holds = format_approval_check(_diff("forms"), so)
+    assert "none of the sections you approved have changed" in holds
+
+
+def test_cli_approve_diff_gates_on_stale_approval(golden_copy: Path, tmp_path: Path) -> None:
+    """Full approve↔diff: save a baseline, sign off approving a section, change that section's manifest,
+    then --diff --signoff flags the approval as stale and exits non-zero."""
+    runner.invoke(app, ["--project", str(golden_copy)])       # persist the baseline (the approved snapshot)
+
+    so = _write(tmp_path, _export([
+        {"key": "pages", "title": "Screens & menus", "status": "ok", "note": ""},   # owner approves pages…
+        {"key": "entities", "title": "What it tracks", "status": "ok", "note": ""},
+    ]))
+    pages_yaml = golden_copy / "prisma" / "pages.yaml"        # …then a page is added (pages changes)
+    pages_yaml.write_text(
+        pages_yaml.read_text(encoding="utf-8")
+        + "  - slug: /contact\n    title: Contact\n    content: pages/contact.md\n    nav_label: Contact\n",
+        encoding="utf-8",
+    )
+    r = runner.invoke(app, ["--project", str(golden_copy), "--diff", "--signoff", str(so), "--no-write"])
+    assert r.exit_code == 1                                   # stale approval blocks the handoff
+    assert "you approved changed since" in r.output
+    assert "Since the last saved preview" in r.output         # the full structural diff is shown too
 
 
 def test_cli_signoff_gates_on_open_flags(tmp_path: Path) -> None:
