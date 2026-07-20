@@ -180,6 +180,27 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .legend span{display:flex;align-items:center;gap:5px}
   .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
 
+  /* ---------- EC-2: per-section sign-off (approve / flag / annotate) ---------- */
+  .sig-mark{flex:none;font-size:12px;font-weight:700}
+  .sig-mark.ok{color:var(--planned)} .sig-mark.flag{color:var(--ochre-ink)}
+  .signoff{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:14px 0 2px;padding-top:12px;
+    border-top:1px dashed var(--line2)}
+  .signoff .slab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);font-weight:700}
+  .signoff button{font:inherit;font-size:12.5px;color:var(--ink2);border:1px solid var(--line2);background:var(--card);
+    border-radius:20px;padding:4px 12px;cursor:pointer}
+  .signoff button:hover{border-color:var(--accent);color:var(--accent)}
+  .signoff button.on-ok{background:var(--planned);border-color:var(--planned);color:#fff}
+  .signoff button.on-flag{background:var(--ochre);border-color:var(--ochre);color:#fff}
+  .signoff .so-note{display:none;flex-basis:100%;width:100%;margin-top:4px;font:inherit;font-size:13px;color:var(--ink);
+    border:1px solid var(--line2);border-radius:8px;padding:8px 10px;background:var(--card2);resize:vertical;min-height:42px}
+  .signoff.flagged .so-note{display:block}
+  .signbar{display:flex;align-items:center;gap:10px;margin:20px 0 0;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;padding:11px 15px;font-size:13.5px;color:var(--ink2)}
+  .signbar b{color:var(--accent)}
+  .signbar button{margin-left:auto;font:inherit;font-size:12.5px;color:#fff;background:var(--accent);
+    border:1px solid var(--accent);border-radius:20px;padding:6px 15px;cursor:pointer}
+  .signbar button:hover{background:var(--accent2)}
+
   /* ---------- motion ---------- */
   @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
   .mast,.glance,.rule,.toolbar,.section-lead,details.sec,.closing{animation:rise .5s cubic-bezier(.2,.7,.2,1) both}
@@ -206,6 +227,7 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   <hr class="rule">
   <p class="section-lead" id="seclead">What your app includes</p>
   <main id="outline"></main>
+  <div class="signbar" id="signbar"></div>
   <footer class="closing" id="closing" hidden></footer>
 </div>
 
@@ -230,6 +252,60 @@ __PLAN_DATA__
     .replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
   function el(html){ var t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstChild; }
   function badge(st){ return '<span class="badge b-'+esc(st)+'">'+esc(String(st).replace(/_/g," "))+'</span>'; }
+
+  // ---------- EC-2: per-section sign-off (approve / flag), persisted client-side ----------
+  // The preview's verb is *approve*: the owner marks each section "looks right" or flags it with a note.
+  // State lives in localStorage keyed by the app name (survives reload, offline); it is never in the
+  // rendered file (determinism preserved) and can be exported as JSON to feed the kickoff loop.
+  var APP="app", SKEY="", SIGN={};
+  function loadSign(){ try{ return JSON.parse(localStorage.getItem(SKEY))||{}; }catch(e){ return SIGN||{}; } }
+  function saveSign(){ try{ localStorage.setItem(SKEY,JSON.stringify(SIGN)); }catch(e){} }  // degrade: in-memory
+  function paintMark(mk,key){ var st=(SIGN[key]||{}).status;
+    mk.className="sig-mark"+(st?(" "+st):""); mk.textContent=(st==="ok")?"✓":(st==="flag")?"⚑":""; }
+  function signRow(sec,mk){
+    var w=document.createElement("div"); var st0=SIGN[sec.key]||{};
+    w.className="signoff"+(st0.status==="flag"?" flagged":"");
+    w.innerHTML='<span class="slab">Your call</span>'+
+      '<button type="button" class="so-ok'+(st0.status==="ok"?" on-ok":"")+'">✓ Looks right</button>'+
+      '<button type="button" class="so-flag'+(st0.status==="flag"?" on-flag":"")+'">⚑ Flag this</button>'+
+      '<textarea class="so-note" placeholder="What should change here? (optional)"></textarea>';
+    var ta=w.querySelector(".so-note"), ok=w.querySelector(".so-ok"), fl=w.querySelector(".so-flag");
+    ta.value=st0.note||"";
+    function set(status){
+      var cur=SIGN[sec.key]||{};
+      if(cur.status===status) delete SIGN[sec.key];                       // click the active choice → clear
+      else SIGN[sec.key]={status:status, note:(status==="flag")?(cur.note||ta.value||""):""};
+      saveSign();
+      var now=SIGN[sec.key]||{};
+      ok.classList.toggle("on-ok", now.status==="ok");
+      fl.classList.toggle("on-flag", now.status==="flag");
+      w.classList.toggle("flagged", now.status==="flag");
+      paintMark(mk,sec.key); renderSignbar();
+    }
+    ok.onclick=function(){ set("ok"); };
+    fl.onclick=function(){ set("flag"); };
+    ta.oninput=function(){ var c=SIGN[sec.key]; if(c&&c.status==="flag"){ c.note=ta.value; saveSign(); } };
+    return w;
+  }
+  function renderSignbar(){
+    var secs=(data.sections||[]), n=secs.length, done=0, fl=0;
+    secs.forEach(function(x){ var st=(SIGN[x.key]||{}).status; if(st==="ok"){done++;} else if(st==="flag"){done++;fl++;} });
+    var bar=document.getElementById("signbar");
+    bar.innerHTML='<span>Your sign-off: <b>'+done+'</b> of '+n+' reviewed'+
+      (fl?' · <b style="color:var(--ochre-ink)">'+fl+' flagged</b>':'')+'</span>'+
+      '<button type="button" id="so-export">Export sign-off</button>';
+    document.getElementById("so-export").onclick=exportSign;
+  }
+  function exportSign(){
+    var rows=(data.sections||[]).map(function(x){ var st=SIGN[x.key]||{};
+      return {key:x.key, title:x.title, status:st.status||"unreviewed", note:st.note||""}; });
+    var out={app:APP, audience:(data.audience||{}), reviewed_at:new Date().toISOString(), sections:rows};
+    var blob=new Blob([JSON.stringify(out,null,2)],{type:"application/json"});
+    var url=URL.createObjectURL(blob), a=document.createElement("a");
+    a.href=url; a.download=(APP||"app").replace(/[^a-z0-9_-]+/gi,"-").toLowerCase()+"-signoff.json";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },0);
+  }
 
   // ---------- masthead ----------
   function renderMast(){
@@ -331,8 +407,10 @@ __PLAN_DATA__
     d.innerHTML='<summary><span class="chev">▶</span>'+
       '<span class="dot d-'+esc(sec.status)+'"></span>'+
       '<span class="sec-title">'+esc(sec.title)+'</span>'+
-      '<span class="sec-one">'+esc(one)+'</span>'+ signal +'</summary>';
+      '<span class="sec-one">'+esc(one)+'</span>'+ signal +
+      '<span class="sig-mark"></span></summary>';    // EC-2: approve/flag marker
     var body=document.createElement("div"); body.className="sec-body";
+    var mk=d.querySelector(".sig-mark"); paintMark(mk,sec.key);
 
     if(sec.narration){
       var n=sec.narration,rows;
@@ -356,6 +434,7 @@ __PLAN_DATA__
     var nav=(sec.key==="pages")?items.map(function(i){return i.label;}).slice(0,6):[];
     if(items.length){ items.forEach(function(it){ body.appendChild(renderItem(sec.key,it,nav)); }); }
     else { body.appendChild(el('<div class="empty">nothing to review here</div>')); }
+    body.appendChild(signRow(sec,mk));   // EC-2: the approve/flag/annotate row
     d.appendChild(body);
     return d;
   }
@@ -381,6 +460,7 @@ __PLAN_DATA__
   function renderAll(){
     data=VARS[cur]||VARS[payload.default];
     EU=((data.audience&&data.audience.role)==="end_user"); s=data.summary||{};
+    APP=data.app_name||"app"; SKEY="startd8:wf-signoff:"+APP; SIGN=loadSign();   // EC-2: restore sign-off
     ["mast","warn","glance","todos","outline"].forEach(function(id){ document.getElementById(id).innerHTML=""; });
     var cl=document.getElementById("closing"); cl.innerHTML=""; cl.hidden=true;
     renderMast(); renderGlance(); renderTodos();
@@ -392,6 +472,7 @@ __PLAN_DATA__
     document.getElementById("legend").innerHTML =
       [["planned","ready to build"],["not_defined","not set up yet"],["placeholder","rough draft"],["invalid","needs fixing"]]
       .map(function(a){ return '<span><i class="dot d-'+a[0]+'"></i>'+a[1]+'</span>'; }).join("");
+    renderSignbar();   // EC-2: sign-off progress + export
   }
 
   // ---------- QW-1: the audience/fluency toggle + open/close controls ----------

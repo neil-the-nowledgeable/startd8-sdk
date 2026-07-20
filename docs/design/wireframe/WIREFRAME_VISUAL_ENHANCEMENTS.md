@@ -55,9 +55,12 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 - ✅ **EC-1 — `--diff` (planned-vs-built)** — `inputs_fingerprint` is already persisted *for exactly this*.
   "What changed since you approved" closes the loop: preview → approve → build → verify. Highest-value
   new capability. (OQ-8) — **M/L**
-- **EC-2 — Approve / annotate** — the preview is read-only; the requirements-preview capability's actual
-  verb is *approve*. Per-section "looks right / flag this" (localStorage or export) → sign-off that feeds
-  the kickoff loop. — **M**
+- ✅ **EC-2 — Approve / annotate** — the preview's verb is now *approve*. Every section carries a
+  "✓ Looks right / ⚑ Flag this" control + an optional note; state persists in `localStorage` (app-scoped,
+  offline, survives reload + audience toggle) and a header ✓/⚑ marker + a top sign-off bar ("N of M
+  reviewed · K flagged") track progress. **Export sign-off** downloads a JSON artifact (app, audience,
+  per-section status+note) — the sign-off that feeds the kickoff loop. Purely client-side (approve is
+  user input, not derived): no composer/CLI change, determinism + self-contained preserved. — **M**
 - **EC-3 — Served / live-reload mode** — reuse the `kickoff_view` serve seam so the preview auto-updates
   as manifests change (author-in-the-loop). — **M**
 - **EC-4 — The pattern → the delivery-role kits** — FR-AUD supports role × fluency; only architect +
@@ -71,4 +74,4 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 2. **LH-1** (real list/page mockups) — biggest fidelity jump.
 3. **EC-1** (`--diff`) — highest-value new capability; plumbing already exists.
 
-*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Then EC-1 (`--diff` planned-vs-built) shipped — the verify half of preview→approve→build→verify. Then LH-2 (`--view-json` — the audience view-model as data for a web app/portal) + AR-2 (the audience pattern named + documented as AUDIENCE_CONTENT_PATTERN.md — the Yokoten of a design used 3×) shipped. Next: AR-3 (mockup renderers as a spec), EC-2 (approve/annotate), or LH-3 (finish fluency coverage).*
+*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Then EC-1 (`--diff` planned-vs-built) shipped — the verify half of preview→approve→build→verify. Then LH-2 (`--view-json` — the audience view-model as data for a web app/portal) + AR-2 (the audience pattern named + documented as AUDIENCE_CONTENT_PATTERN.md — the Yokoten of a design used 3×) shipped. Then AR-3 (data-complete MOCKUP_SPEC.md + multiline lifted into the composer) + EC-2 (per-section approve/flag/annotate sign-off, localStorage + JSON export — the preview's `approve` verb) shipped; 167 tests pass, live-verified (0 console errors). Next: EC-3 (served/live-reload), EC-4 (delivery-role kits), or LH-3 (finish fluency coverage).*

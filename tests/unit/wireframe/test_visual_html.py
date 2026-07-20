@@ -169,6 +169,21 @@ def test_cli_view_json_emits_the_view_model(golden_root: Path) -> None:
     assert json.loads(ra.stdout)["audience"] == {"role": "architect", "fluency": "intermediate"}
 
 
+def test_signoff_scaffold_is_present_and_offline(golden_root: Path) -> None:
+    """EC-2 — the approve/flag/annotate sign-off is wired, persists client-side (localStorage, no server),
+    and exports a JSON artifact. Deterministic + self-contained is covered by the tests above; here we
+    guard the scaffold so a regression that drops it is caught."""
+    html = render_html(_plan(golden_root))
+    # per-section controls + summary bar + header marker
+    for hook in (".signoff", "so-ok", "so-flag", "so-note", 'id="signbar"', "sig-mark", "signRow("):
+        assert hook in html, f"EC-2 sign-off hook missing: {hook!r}"
+    # persisted client-side under an app-scoped key, never a network call
+    assert "startd8:wf-signoff:" in html and "localStorage" in html
+    # export produces a downloadable JSON artifact (feeds the kickoff loop), no external asset
+    assert "Export sign-off" in html and "signoff.json" in html and "application/json" in html
+    assert "http://" not in html.lower() and "https://" not in html.lower()
+
+
 def test_cli_html_flag_writes_preview(tmp_path: Path, golden_root: Path) -> None:
     out = tmp_path / "wf.html"
     result = runner.invoke(app, ["--project", str(golden_root), "--html", str(out), "--no-write"])
