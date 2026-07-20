@@ -183,10 +183,15 @@ def test_fluency_varies_depth_for_end_user_only(golden_root: Path) -> None:
     arch_adv = describe(forms, plan, role="architect", fluency="advanced")
     assert arch_std == arch_adv
 
-    # A section without a fluency variant (scaffold) degrades to its end_user standard at any depth.
+    # Per-field sparse degrade (FR-AUD-1): a fluency variant overrides some fields and the rest fall
+    # back to the end_user standard. Every section is now depth-authored (LH-3), but each authors only
+    # what/wont/need — so do/next degrade. scaffold is the witness.
     scaffold = next(s for s in plan.sections if s.key == "scaffold")
-    assert (describe(scaffold, plan, role="end_user", fluency="advanced")
-            == describe(scaffold, plan, role="end_user", fluency="intermediate"))
+    sc_adv = describe(scaffold, plan, role="end_user", fluency="advanced")
+    sc_std = describe(scaffold, plan, role="end_user", fluency="intermediate")
+    assert sc_adv["what"] != sc_std["what"]        # authored depth override
+    assert sc_adv["do"] == sc_std["do"]            # not overridden → degrades to the end_user standard
+    assert sc_adv["next"] == sc_std["next"]
 
 
 def test_end_user_carries_does_wont_need_and_title(golden_root: Path) -> None:

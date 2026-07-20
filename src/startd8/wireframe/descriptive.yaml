@@ -38,6 +38,15 @@ records:
         need: "Nothing from you here — it's already handled for you."
         do: "Nothing to decide; this is just confirmation the foundation is in place."
         next: "→ next, the real heart of your app: the things it keeps track of."
+        fluency:
+          beginner:
+            what: "The basic behind-the-scenes setup your app sits on — like the foundations and wiring of a house before any rooms go in. You won't see it directly, but everything else depends on it being here."
+            wont: "This isn't a feature anyone will click or look at — it's the groundwork that lets the visible parts work. There's nothing here for you to design."
+            need: "Nothing is needed from you here — this part is set up automatically. You can read straight past it."
+          advanced:
+            what: "The behind-the-scenes shell everything runs on."
+            wont: "Nothing visible; no feature to design here."
+            need: "Nothing needed — handled for you."
 
   deployment:
     what: "The declared deployment mode ({{status}}) and its per-dimension posture: persistence, bind address, schema-init, secrets, observability, and identity."
@@ -52,6 +61,15 @@ records:
         need: "Decide whether this is just for you to try, or ready for other people to use."
         do: "Confirm this matches how you plan to share the app."
         next: "→ next, the parts the computer handles for you."
+        fluency:
+          beginner:
+            what: "Where your app actually lives and how people get to it — either just on your own computer so you can try it privately, or put online so others can use it from anywhere. It's the difference between a private draft and something you've shared."
+            wont: "Choosing this doesn't change anything the app does or how it looks — only where it runs and who is able to reach it."
+            need: "Decide, for now, whether this is just for you to test on your own, or whether it should be ready for other people to use. You can always change your mind later."
+          advanced:
+            what: "Where it runs — your own computer, or online for others."
+            wont: "Doesn't change what the app does, only who can reach it."
+            need: "Decide: private trial, or ready for others."
 
   services:
     what: "The always-on service layer: the FastAPI JSON-CRUD app, HTMX web mount, export endpoints, OpenAPI contract, and any declared AI passes and their read/write entity edges."
@@ -66,6 +84,15 @@ records:
         need: "Decide which automatic helpers you're comfortable turning on."
         do: "Check the automatic parts are things you're happy letting the computer do on your behalf."
         next: "→ see exactly which details the computer writes and which stay yours."
+        fluency:
+          beginner:
+            what: "The parts where the computer helps out on its own — for example drafting a first version of some text, or writing a short summary of something you already entered. Think of it as a helpful assistant that does the first pass so you're never starting from a blank page."
+            wont: "The computer won't make things up or make choices for you. It only works from information that's already there — so it drafts and summarises, it doesn't decide."
+            need: "Decide which of these automatic helpers you'd like switched on, and which you'd rather do yourself. You stay in control of how much help it gives."
+          advanced:
+            what: "Where the computer drafts or summarises for you, automatically."
+            wont: "It won't invent facts or decide — only draft from what's already there."
+            need: "Pick which automatic helpers to turn on."
 
   entities:
     what: "The contract models the schema declares ({{count}} rows: the entity summary plus the relation graph, orphan check, and one row per entity's CRUD)."
@@ -103,6 +130,15 @@ records:
         need: "Picture your ideal first screen; note any screen you expected that isn't here."
         do: "Imagine opening the app fresh — is the starting screen and the menu what you'd expect to see?"
         next: "→ see which screens still need their words written."
+        fluency:
+          beginner:
+            what: "The screens people see when they open your app, and the menu that helps them move around — like the front door of a shop and the signs that point to each aisle. This is what someone meets first."
+            wont: "Only the screens shown here will be built. If you had a particular screen in mind and it isn't listed, it won't appear unless you ask for it — so it's worth checking now."
+            need: "Picture opening the app for the very first time. What screen would you want to land on? Make a note of any screen you expected that isn't here."
+          advanced:
+            what: "The screens people land on, plus the menu between them."
+            wont: "Only these screens exist; an unlisted one won't be built."
+            need: "Note any screen you expected that's missing."
 
   forms:
     what: "The create/edit form the cascade renders per entity ({{count}} rows), with each form's shown fields and the fields it omits (server-managed and human-owned)."
@@ -140,6 +176,15 @@ records:
         need: "Note any overview you'd find useful that isn't here yet."
         do: "Check whether the combined views cover the things you'd want to see together."
         next: "→ see which of these still need their words written."
+        fluency:
+          beginner:
+            what: "Extra screens that gather related information into one place, so you can see it all together instead of hopping between pages — a bit like the dashboard in a car showing several things at a glance."
+            wont: "These are helpful extras on top of the basic lists. Even without them, people can still see each thing on its own page — you just won't get the combined view."
+            need: "Think about what you'd like to see side by side on one screen. Note any combined overview that would be useful but isn't here yet."
+          advanced:
+            what: "Combined screens that show related things together, like a dashboard."
+            wont: "Extras on top of the basic lists; each thing is still viewable on its own."
+            need: "Note any useful overview that's missing."
 
   display:
     what: "The presentation-structure overlay from display.yaml ({{status}}): per-entity title/section/column bindings and which machine-id columns are hidden — visibility only, emits no new files."
@@ -154,6 +199,15 @@ records:
         need: "Confirm the labels and layout read clearly to someone seeing them for the first time."
         do: "Check the headings and column order make sense at a glance."
         next: "→ next, the words that still need writing."
+        fluency:
+          beginner:
+            what: "How your information is named and arranged on screen — the headings people read, which columns come first, and what's shown or tucked out of the way. It's the difference between a tidy, easy-to-read page and a cluttered one."
+            wont: "This only changes how things look and read on screen. It doesn't change what information is actually kept — nothing is added or lost, just presented differently."
+            need: "Imagine someone seeing these screens for the very first time. Do the headings and the order things appear in make sense to them straight away?"
+          advanced:
+            what: "How information is labelled and arranged — headings, column order, what's hidden."
+            wont: "Affects only how it reads, not what's stored."
+            need: "Confirm it reads clearly to a first-time viewer."
 
   content:
     what: "The optional content inputs the manifests reference ({{status}}): page bodies and AI prompt files, each scored authored / placeholder / not-defined — visibility only, never gated."
@@ -168,6 +222,15 @@ records:
         need: "Plan to write anything still marked 'placeholder' or left empty before you launch."
         do: "Scan for blanks and placeholders — that's your writing to-do list."
         next: "→ see how much is written versus still blank."
+        fluency:
+          beginner:
+            what: "The places in your app that still need real words written — things like the text on a page or the instructions people read. These are the parts only you (or your team) can write, because they're about what you want to say."
+            wont: "The app won't write this text for you. Anywhere that needs words will simply stay blank until a person fills it in — so a blank left here shows up as a blank in the finished app."
+            need: "Make a plan to write anything still marked as a rough draft ('placeholder') or left empty, before you launch. Think of it as your writing to-do list."
+          advanced:
+            what: "The parts that still need real words — page text and instructions — only you can write."
+            wont: "The app won't write them; blanks stay blank."
+            need: "Write anything still placeholder or empty before launch."
 
   completeness:
     what: "The completeness signals ({{status}}): the scored (core) entities the human must judge vs. the excluded (derived / AI-output) set that's scored automatically."
@@ -182,6 +245,15 @@ records:
         need: "Work through anything flagged as still needing your input."
         do: "Treat the flagged items as a short to-do list before you give the go-ahead."
         next: "→ that's the end — if it all looks right, you're ready to approve."
+        fluency:
+          beginner:
+            what: "A quick summary of which parts of your app are ready to go, and which ones are still waiting on a decision or a bit more information from you — like a checklist near the finish line showing what's ticked off and what isn't."
+            wont: "This part won't fix or finish anything by itself. It only points out what's still waiting on you, so nothing important slips through before you go ahead."
+            need: "Work through anything flagged as still needing your input. Once those are handled, you're in good shape to approve."
+          advanced:
+            what: "A quick read on what's ready and what still needs you."
+            wont: "It won't fix anything — just flags what's outstanding."
+            need: "Handle anything flagged as needing your input."
 
 
   # FR-DL-12: the SUMMARY record — the aggregate what/why for the counts (routed through --describe

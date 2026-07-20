@@ -27,8 +27,12 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
   Single biggest *fidelity* jump. (OQ-WV-2) — **M**
 - ✅ **LH-2 — Expose the audience view-model as JSON** (`--view-json`) so other surfaces (a web app, the
   portal) reuse the benefit-first content. Turns FR-AUD into a data capability, not just HTML. — **S**
-- **LH-3 — Finish fluency / other-role coverage** — fluency is authored on only 3 sections; either
-  author the rest or declare it intentionally sparse (content pass). — **S**
+- ✅ **LH-3 — Finish fluency coverage** — fluency (beginner "Fuller" / advanced "Terser") was authored on
+  only 3 of 11 records, so the depth toggle was a no-op on the other 8. Authored beginner + advanced for
+  all remaining sections (scaffold, deployment, services, pages, views, display, content, completeness) —
+  each overrides `what`/`wont`/`need` and lets `do`/`next`/`title` degrade (sparse per-field, FR-AUD-1).
+  Now every section changes with the toggle; verified jargon-free (FR-AUD-C1) across all depths; FR-SHC
+  coverage still 100% (fluency is optional enrichment). Content-only, no code. — **S**
 
 ## 🏗️ Architectural quick wins
 
@@ -78,4 +82,4 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 2. **LH-1** (real list/page mockups) — biggest fidelity jump.
 3. **EC-1** (`--diff`) — highest-value new capability; plumbing already exists.
 
-*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Then EC-1 (`--diff` planned-vs-built) shipped — the verify half of preview→approve→build→verify. Then LH-2 (`--view-json` — the audience view-model as data for a web app/portal) + AR-2 (the audience pattern named + documented as AUDIENCE_CONTENT_PATTERN.md — the Yokoten of a design used 3×) shipped. Then AR-3 (data-complete MOCKUP_SPEC.md + multiline lifted into the composer) + EC-2 (per-section approve/flag/annotate sign-off, localStorage + JSON export — the preview's `approve` verb) shipped; 167 tests pass, live-verified (0 console errors). Next: EC-3 (served/live-reload), EC-4 (delivery-role kits), or LH-3 (finish fluency coverage).*
+*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Then EC-1 (`--diff` planned-vs-built) shipped — the verify half of preview→approve→build→verify. Then LH-2 (`--view-json` — the audience view-model as data for a web app/portal) + AR-2 (the audience pattern named + documented as AUDIENCE_CONTENT_PATTERN.md — the Yokoten of a design used 3×) shipped. Then AR-3 (data-complete MOCKUP_SPEC.md + multiline lifted into the composer) + EC-2 (per-section approve/flag/annotate sign-off, localStorage + JSON export — the preview's `approve` verb) shipped; 167 tests pass, live-verified (0 console errors). Then EC-3 (`--watch` live-reload, mirroring the kickoff_view seam) + LH-3 (fluency authored for all 11 records — the depth toggle now bites everywhere) shipped; 169 tests pass, live-verified. Remaining: EC-4 (delivery-role kits — extend FR-AUD to the FR-J roles) is the last open item.*
