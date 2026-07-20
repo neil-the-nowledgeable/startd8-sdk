@@ -151,6 +151,24 @@ def test_end_user_surface_has_no_process_meta(golden_root: Path) -> None:
     assert vm["app_name"] and "/" not in vm["app_name"]
 
 
+def test_cli_view_json_emits_the_view_model(golden_root: Path) -> None:
+    """LH-2: --view-json emits the composed view-model as parseable JSON, honoring --audience/--fluency."""
+    import json
+
+    from startd8.wireframe import build_wireframe_plan, load_assembly_inputs
+    from startd8.wireframe_view import compose
+
+    # the CLI builds with authoring=False by default — compare against the same
+    plan = build_wireframe_plan(load_assembly_inputs(project_root=golden_root), authoring=False)
+    r = runner.invoke(app, ["--project", str(golden_root), "--view-json",
+                            "--audience", "end_user", "--fluency", "beginner"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout) == compose(plan, role="end_user", fluency="beginner")
+    # a different audience yields a different (architect) view-model
+    ra = runner.invoke(app, ["--project", str(golden_root), "--view-json", "--audience", "architect"])
+    assert json.loads(ra.stdout)["audience"] == {"role": "architect", "fluency": "intermediate"}
+
+
 def test_cli_html_flag_writes_preview(tmp_path: Path, golden_root: Path) -> None:
     out = tmp_path / "wf.html"
     result = runner.invoke(app, ["--project", str(golden_root), "--html", str(out), "--no-write"])

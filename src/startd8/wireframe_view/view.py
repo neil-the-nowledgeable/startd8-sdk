@@ -66,6 +66,18 @@ def render_html(
     )
 
 
+def view_model_json(
+    plan: WireframePlan,
+    *,
+    role: str = DEFAULT_HTML_ROLE,
+    fluency: str = DEFAULT_HTML_FLUENCY,
+) -> str:
+    """LH-2: the composed audience view-model as JSON — the FR-AUD benefit-first content *as data*, so
+    other surfaces (a web app, the portal) can render it without the HTML. Deterministic; one variant
+    per (role, fluency)."""
+    return json.dumps(compose(plan, role=role, fluency=fluency), indent=2, sort_keys=True) + "\n"
+
+
 def render_to_file(
     plan: WireframePlan,
     path: Path,

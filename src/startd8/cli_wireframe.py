@@ -109,6 +109,11 @@ def wireframe(
         help="Show what changed since the last saved preview (added/removed/changed items, shape + "
         "content deltas) instead of the full tree — the 'verify against what you approved' view. (EC-1)",
     ),
+    view_json: bool = typer.Option(
+        False, "--view-json",
+        help="Emit the composed audience VIEW-MODEL as JSON to stdout (the FR-AUD benefit-first content, "
+        "per --audience/--fluency) — for another surface (web app / portal) to render. (LH-2)",
+    ),
     no_write: bool = typer.Option(
         False, "--no-write", help="Skip persisting .startd8/wireframe/wireframe-plan.json."
     ),
@@ -180,6 +185,12 @@ def wireframe(
             return
         console.print(format_diff(diff_plans(baseline, plan_body(plan))))
         return  # --diff does not persist, so the saved baseline stays the approved snapshot
+
+    if view_json:  # LH-2: the audience view-model as data (stdout JSON only), then exit.
+        from .wireframe_view import view_model_json
+
+        sys.stdout.write(view_model_json(plan, role=audience, fluency=fluency))
+        return
 
     if json_out:
         # Machine contract (R4-F1): stdout is parseable JSON only; tree only with --verbose.

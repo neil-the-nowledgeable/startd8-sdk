@@ -25,7 +25,7 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 - ✅ **LH-1 — Expose entity `fields[]` in the plan JSON** → real **list mockups** (actual columns) + richer
   **page mockups**. Fields are already parsed from `schema.prisma`; they just don't reach the view-model.
   Single biggest *fidelity* jump. (OQ-WV-2) — **M**
-- **LH-2 — Expose the audience view-model as JSON** (`--view-json`) so other surfaces (a web app, the
+- ✅ **LH-2 — Expose the audience view-model as JSON** (`--view-json`) so other surfaces (a web app, the
   portal) reuse the benefit-first content. Turns FR-AUD into a data capability, not just HTML. — **S**
 - **LH-3 — Finish fluency / other-role coverage** — fluency is authored on only 3 sections; either
   author the rest or declare it intentionally sparse (content pass). — **S**
