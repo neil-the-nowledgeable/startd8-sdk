@@ -319,7 +319,10 @@ __PLAN_DATA__
   function exportSign(){
     var rows=(data.sections||[]).map(function(x){ var st=SIGN[x.key]||{};
       return {key:x.key, title:x.title, status:st.status||"unreviewed", note:st.note||""}; });
-    var out={app:APP, audience:(data.audience||{}), reviewed_at:new Date().toISOString(), sections:rows};
+    // SO-1: stamp the plan identity so --signoff can bind this verdict to the exact plan it reviewed.
+    var out={app:APP, audience:(data.audience||{}),
+      inputs_fingerprint:(payload.inputs_fingerprint||null), schema_version:(data.schema_version||null),
+      reviewed_at:new Date().toISOString(), sections:rows};
     var blob=new Blob([JSON.stringify(out,null,2)],{type:"application/json"});
     var url=URL.createObjectURL(blob), a=document.createElement("a");
     a.href=url; a.download=(APP||"app").replace(/[^a-z0-9_-]+/gi,"-").toLowerCase()+"-signoff.json";

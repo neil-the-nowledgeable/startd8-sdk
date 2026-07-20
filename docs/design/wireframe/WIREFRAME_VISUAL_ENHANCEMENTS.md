@@ -215,9 +215,12 @@ non-unique key.* Provenance-by-construction for feedback artifacts. (Dissolved h
 still diffed + caught.)
 
 **Next-round gates (dated, grounded — for the forward loop, not this WIP):**
-- **SO-1 — bind the sign-off to its plan.** Add `inputs_fingerprint` + `schema_version` to the export;
-  `--signoff` warns when they don't match the current plan ("this sign-off was made against a different
-  version — re-review"). Closes the false-approval-check gap (S5/S1). — **S**
+- ✅ **SO-1 — bind the sign-off to its plan. DONE.** The embed + `exportSign` now stamp the plan's
+  `inputs_fingerprint` (deterministic SHA-256) + `schema_version`; `--diff --signoff` **refuses** (exit 2) a
+  sign-off whose fingerprint ≠ this project's baseline — closing the false-approval-check gap (a foreign or
+  stale sign-off can no longer match by generic key). Pre-provenance exports (no fingerprint) proceed
+  best-effort with a warning (backward-compat). Verified: render determinism byte-identical, browser export
+  carries the matching fingerprint end-to-end, 181 tests, 0 regressions. — **S → done**
 - **SO-2 — document the exit-code contract.** The command docstring says "exit 0 / 2 only"; `--signoff`
   and `--diff --signoff` now exit **1** as a gate. Update the docstring (S4). — **XS**
 - **SO-3 — (optional) time-aware staleness.** Use `reviewed_at` vs the baseline as a cheap "sign-off older

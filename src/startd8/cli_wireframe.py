@@ -282,6 +282,23 @@ def wireframe(
             except SignoffError as exc:
                 console.print(f"[red]wireframe:[/red] {exc}")
                 raise typer.Exit(_EXIT_FATAL_INPUTS)
+            # SO-1 (Hansei): the approval check cross-references by GENERIC section keys, so a foreign or
+            # stale sign-off would silently match. Refuse unless the sign-off's stamped plan identity is the
+            # one it's being checked against (the baseline). Pre-provenance exports (no fingerprint) proceed
+            # best-effort with a warning, so old sign-offs still work.
+            so_fp, base_fp = so.get("inputs_fingerprint"), baseline.get("inputs_fingerprint")
+            if so_fp and base_fp and so_fp != base_fp:
+                console.print(
+                    "[red]wireframe:[/red] this sign-off was made against a DIFFERENT plan "
+                    f"(fingerprint {so_fp[:12]}… ≠ this project's {base_fp[:12]}…). The approval check "
+                    "would be meaningless — re-preview and re-sign-off against the current plan."
+                )
+                raise typer.Exit(_EXIT_FATAL_INPUTS)
+            if not so_fp:
+                console.print(
+                    "[yellow]wireframe:[/yellow] sign-off predates provenance stamping — cannot verify it "
+                    "matches this plan; proceeding best-effort."
+                )
             console.print(format_approval_check(d, so))   # the approval headline (stale approvals up top)…
             console.print()
             console.print(format_diff(d))                 # …then the full structural diff (EC-1, reused)

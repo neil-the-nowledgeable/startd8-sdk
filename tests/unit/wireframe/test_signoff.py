@@ -31,12 +31,15 @@ runner = CliRunner()
 
 def _export(sections: list, **over) -> dict:
     """A payload in the exact shape wireframe_view/_template.py::exportSign downloads."""
-    return {
+    out = {
         "app": over.get("app", "wfdemo"),
         "audience": over.get("audience", {"role": "end_user", "fluency": "intermediate"}),
         "reviewed_at": over.get("reviewed_at", "2026-07-20T01:19:40.369Z"),
         "sections": sections,
     }
+    if "inputs_fingerprint" in over:  # SO-1: stamp the plan identity (omit to model a pre-provenance export)
+        out["inputs_fingerprint"] = over["inputs_fingerprint"]
+    return out
 
 
 def _write(tmp_path: Path, payload: dict) -> Path:
@@ -137,6 +140,52 @@ def test_cli_approve_diff_gates_on_stale_approval(golden_copy: Path, tmp_path: P
     assert r.exit_code == 1                                   # stale approval blocks the handoff
     assert "you approved changed since" in r.output
     assert "Since the last saved preview" in r.output         # the full structural diff is shown too
+
+
+def _baseline_fingerprint(project: Path) -> str:
+    """The inputs_fingerprint of the persisted baseline plan (what a real sign-off would carry)."""
+    body = json.loads((project / ".startd8" / "wireframe" / "wireframe-plan.json").read_text(encoding="utf-8"))
+    return body["inputs_fingerprint"]
+
+
+def test_cli_approve_diff_rejects_a_foreign_signoff(golden_copy: Path, tmp_path: Path) -> None:
+    """SO-1 — a sign-off whose stamped plan identity doesn't match this project is REFUSED (exit 2), instead
+    of silently cross-referencing by generic section keys and reporting a confident-but-wrong approval check."""
+    runner.invoke(app, ["--project", str(golden_copy)])           # persist the baseline
+    foreign = _write(tmp_path, _export(
+        [{"key": "pages", "title": "Screens", "status": "ok", "note": ""}],
+        inputs_fingerprint="deadbeef" * 8,                        # a different plan's fingerprint
+    ))
+    r = runner.invoke(app, ["--project", str(golden_copy), "--diff", "--signoff", str(foreign), "--no-write"])
+    assert r.exit_code == 2 and "DIFFERENT plan" in r.output
+
+
+def test_cli_approve_diff_accepts_a_matching_signoff(golden_copy: Path, tmp_path: Path) -> None:
+    """SO-1 — a sign-off stamped with THIS plan's fingerprint passes the provenance gate (no warning) and the
+    approval check runs normally (a changed approved section → stale → exit 1)."""
+    runner.invoke(app, ["--project", str(golden_copy)])           # persist the baseline
+    so = _write(tmp_path, _export(
+        [{"key": "pages", "title": "Screens & menus", "status": "ok", "note": ""}],
+        inputs_fingerprint=_baseline_fingerprint(golden_copy),    # the RIGHT identity
+    ))
+    pages = golden_copy / "prisma" / "pages.yaml"                 # change the approved section
+    pages.write_text(
+        pages.read_text(encoding="utf-8")
+        + "  - slug: /c\n    title: C\n    content: pages/c.md\n    nav_label: C\n",
+        encoding="utf-8",
+    )
+    r = runner.invoke(app, ["--project", str(golden_copy), "--diff", "--signoff", str(so), "--no-write"])
+    assert r.exit_code == 1                                        # stale approval gate, not a provenance error
+    assert "DIFFERENT plan" not in r.output and "predates provenance" not in r.output
+    assert "you approved changed since" in r.output
+
+
+def test_cli_approve_diff_tolerates_pre_provenance_signoff(golden_copy: Path, tmp_path: Path) -> None:
+    """SO-1 backward-compat — an old export with no fingerprint proceeds best-effort with a warning."""
+    runner.invoke(app, ["--project", str(golden_copy)])
+    old = _write(tmp_path, _export([{"key": "entities", "title": "Things", "status": "ok", "note": ""}]))
+    r = runner.invoke(app, ["--project", str(golden_copy), "--diff", "--signoff", str(old), "--no-write"])
+    assert r.exit_code == 0 and "predates provenance" in r.output  # unverifiable but not blocked
 
 
 def test_cli_signoff_gates_on_open_flags(tmp_path: Path) -> None:

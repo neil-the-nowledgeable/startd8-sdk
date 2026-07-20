@@ -55,6 +55,9 @@ def load_signoff(path: Path) -> dict:
         "app": data.get("app") or "(unknown app)",
         "audience": data.get("audience") or {},
         "reviewed_at": data.get("reviewed_at") or "",
+        # SO-1: the plan identity the verdict was made against (None for pre-provenance exports).
+        "inputs_fingerprint": data.get("inputs_fingerprint") or None,
+        "schema_version": data.get("schema_version"),
         "sections": sections,
     }
 

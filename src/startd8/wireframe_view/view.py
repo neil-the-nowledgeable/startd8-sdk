@@ -14,7 +14,7 @@ from typing import Optional
 
 from ..wireframe.delivery_roles import KITS
 from ..wireframe.plan import WireframePlan
-from ..wireframe.render import SCHEMA_VERSION
+from ..wireframe.render import SCHEMA_VERSION, _inputs_fingerprint
 from ._template import WIREFRAME_VIEW_TEMPLATE
 from .compose import compose
 
@@ -81,7 +81,11 @@ def render_html(
     # EC-4: the delivery-role kits as metadata only (label + base voice + lens). A kit renders its base
     # voice's embedded variant + its lens banner, so the toggle offers 10 more roles with no embed bloat.
     kits = {r: {"label": m["label"], "base": m["base"], "lens": m["lens"]} for r, m in KITS.items()}
-    payload = {"default": default, "variants": variants, "kits": kits}
+    # SO-1 (Hansei): stamp the plan's identity into the embed so an exported sign-off can be bound to the
+    # exact plan it reviewed — the `--signoff` gate refuses a sign-off made against a different plan
+    # (fingerprint is deterministic — SHA-256 over inputs — so this preserves render-html determinism).
+    payload = {"default": default, "variants": variants, "kits": kits,
+               "inputs_fingerprint": _inputs_fingerprint(plan)}
     html = (
         WIREFRAME_VIEW_TEMPLATE
         .replace("__EXPECTED_SCHEMA__", str(EXPECTED_SCHEMA_VERSION))
