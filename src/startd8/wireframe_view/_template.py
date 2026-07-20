@@ -270,8 +270,9 @@ __PLAN_DATA__
   function chrome(t){ return '<div class="chrome"><span class="cdot"></span><span class="cdot"></span>'+
     '<span class="cdot"></span><span style="margin-left:5px">'+esc(t)+'</span></div>'; }
   function formMock(m){
+    var ml={}; (m.multiline||[]).forEach(function(x){ ml[x]=1; });  // AR-3: which fields are text areas (from data)
     var f=(m.shown&&m.shown.length)?m.shown.map(function(x){
-      var area=/summary|description|notes|body|content|bio|context/i.test(x)?" area":"";
+      var area=ml[x]?" area":"";
       return '<div class="fld'+area+'"><label>'+esc(x)+'</label><div class="box"></div></div>';
     }).join(""):'<div class="empty">no boxes for people to fill in</div>';
     var om=m.omitted||{},tags="";

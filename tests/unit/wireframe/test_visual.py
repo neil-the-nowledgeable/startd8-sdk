@@ -11,6 +11,7 @@ Guards the pure view-model that the M-WV1 HTML shell will embed:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from startd8.wireframe import build_wireframe_plan, load_assembly_inputs
@@ -96,6 +97,11 @@ def test_compose_attaches_form_mockups_only_where_derivable(golden_root: Path) -
         assert m["entity"] and "create/edit form" not in m["entity"]  # entity extracted from label
         assert isinstance(m["shown"], list)
         assert set(m["omitted"]) == {"server_managed", "owned"}
+        # AR-3: the multi-line marker is data (a subset of shown), so any surface draws the same areas.
+        assert isinstance(m["multiline"], list)
+        assert set(m["multiline"]) <= set(m["shown"])
+        assert all(re.search(r"summary|description|notes|body|content|bio|context", f, re.I)
+                   for f in m["multiline"])
 
     # A non-form section (pages) must carry no fabricated mockup.
     for it in by_key["pages"]["items"]:

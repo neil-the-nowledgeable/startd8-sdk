@@ -36,6 +36,18 @@ def has_jargon(text: str) -> bool:
     return bool(_JARGON_RE.search(text or ""))
 
 
+# AR-3: which form fields are drawn as a multi-line text area (vs a single-line box). This was a regex
+# living inside the HTML renderer; lifting it into the composer makes the mockup view-model self-sufficient
+# — any surface (a live app, the portal) can draw the same sketch from ``--view-json`` without re-deriving
+# it. SINGLE SOURCE for the heuristic (the template reads ``mockup.multiline``, it no longer guesses).
+_MULTILINE_RE = re.compile(r"summary|description|notes|body|content|bio|context", re.IGNORECASE)
+
+
+def _multiline_fields(shown: list) -> list:
+    """The subset of *shown* form fields that render as a text area (long-form free text)."""
+    return [f for f in shown if _MULTILINE_RE.search(f)]
+
+
 def parse_form_detail(detail: str) -> Optional[dict]:
     """Parse a forms-section item ``detail`` into a structured field skeleton (FR-WV-9).
 
@@ -172,7 +184,9 @@ def _item_view(section_key: str, item, role: str = "architect", entity_cols: Opt
     if section_key == "forms":
         parsed = parse_form_detail(item.detail)
         if parsed is not None:
-            mockup = {"kind": "form", "entity": _form_entity(item.label), **parsed}
+            # AR-3: carry the multi-line-field marker as data so any renderer draws the same sketch.
+            mockup = {"kind": "form", "entity": _form_entity(item.label),
+                      "multiline": _multiline_fields(parsed["shown"]), **parsed}
     elif section_key == "entities" and entity_cols and entity_cols.get(item.label):  # LH-1: list mockup
         mockup = {"kind": "list", "entity": item.label, "columns": entity_cols[item.label]}
     return {

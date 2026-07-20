@@ -42,9 +42,13 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
   three reusable code seams cited (`describe._variant`, `compose.has_jargon`, `descriptive_schema`), and a
   5-step apply recipe — so the next surface is a config away, not a rebuild (Yokoten). Doc, not new
   machinery (Mottainai): the seams already exist; the pattern makes them discoverable. — **M**
-- **AR-3 — Lift the mockup renderers out of the HTML string** — the form/page/list drawers live in the
-  template JS; the structured data is already in the view-model. A mockup spec lets a live app/portal
-  draw the same sketches. — **M**
+- **AR-3 — Lift the mockup renderers out of the HTML string** ✅ — the mockup *contract* is now a
+  documented, data-complete spec (`MOCKUP_SPEC.md`): the three kinds (form/list/page), their draw rules,
+  and how a live app/portal consumes them from `--view-json`. The one renderer-side derivation left in JS
+  — the multi-line-field regex — was lifted into the composer as `mockup.multiline` (`_multiline_fields`,
+  single source), verified behavior-preserving (rendered DOM byte-identical bar the regex→data read).
+  Page frames stay a *documented convention* over data the consumer already has (no fabricated mockup —
+  `test_visual` guards it; Accidental-Complexity: don't bloat the embed). — **M**
 
 ## 🚀 Enhanced capabilities
 
