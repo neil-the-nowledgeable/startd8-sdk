@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .describe import _records
 from .plan import CoverageStat
+# NB: `describe._records` is imported lazily inside matrix_coverage() to avoid an import cycle —
+# describe.py now reads SECTION_SCHEMA from here (AR-1), so this module must not import describe at load.
 
 # --- M-SHC-0: the declared record-type schemas (FR-SHC-2) — single source for "what a record must carry".
 # `architect` fields live at the record's top level; other roles under `audience.<role>`.
@@ -34,6 +35,18 @@ ROLES = ("architect", "end_user")
 def schema_for(record_key: str) -> dict:
     """The declared schema for a record — the aggregate ``summary`` is its own type (spike discovery)."""
     return SUMMARY_SCHEMA if record_key == "summary" else SECTION_SCHEMA
+
+
+def field_order(schema: dict) -> list:
+    """Ordered union of a record-type schema's fields across roles (required then optional) — the single
+    source of "what fields a record has", read by BOTH the coverage guard and describe.py's resolver (AR-1)."""
+    seen: list = []
+    for role in schema.values():
+        for group in ("required", "optional"):
+            for name in role[group]:
+                if name not in seen:
+                    seen.append(name)
+    return seen
 
 
 def _role_fields(record: dict, role: str) -> dict:
@@ -60,7 +73,9 @@ def matrix_coverage(records: Optional[dict] = None) -> dict:
     ``gaps`` is the authoring to-do list — the ``key.role.field`` cells the schema requires but that are
     un-authored. ``fluency`` is informational (which sections carry depth variants), never counted.
     """
-    records = _records() if records is None else records
+    if records is None:
+        from .describe import _records  # lazy — see the module-header note (AR-1 cycle break)
+        records = _records()
     tally = {r: [0, 0] for r in ROLES}   # role → [authored, total]
     gaps: list[str] = []
     fluency: dict[str, list[str]] = {}

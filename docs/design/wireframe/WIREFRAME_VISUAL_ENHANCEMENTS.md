@@ -22,7 +22,7 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 
 ## 🌱 Low-hanging fruit
 
-- **LH-1 — Expose entity `fields[]` in the plan JSON** → real **list mockups** (actual columns) + richer
+- ✅ **LH-1 — Expose entity `fields[]` in the plan JSON** → real **list mockups** (actual columns) + richer
   **page mockups**. Fields are already parsed from `schema.prisma`; they just don't reach the view-model.
   Single biggest *fidelity* jump. (OQ-WV-2) — **M**
 - **LH-2 — Expose the audience view-model as JSON** (`--view-json`) so other surfaces (a web app, the
@@ -32,7 +32,7 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 
 ## 🏗️ Architectural quick wins
 
-- **AR-1 — Single-source the record schema** — `describe.py`'s resolver still hardcodes its field list;
+- ✅ **AR-1 — Single-source the record schema** — `describe.py`'s resolver still hardcodes its field list;
   FR-SHC now *declares* `SECTION_SCHEMA`/`SUMMARY_SCHEMA`. Have the resolver read the declaration
   (KM-27 residual / CL-17 L4 gate). Removes a drift seam. — **S**
 - **AR-2 — Extract the audience/onboarding pattern as a named capability** — applied twice now
@@ -63,4 +63,4 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 2. **LH-1** (real list/page mockups) — biggest fidelity jump.
 3. **EC-1** (`--diff`) — highest-value new capability; plumbing already exists.
 
-*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Next candidates: LH-1 (real list/page mockups), AR-1 (single-source schema), EC-1 (`--diff`).*
+*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Next: EC-1 (`--diff`), LH-2 (`--view-json`), or AR-2 (extract the audience pattern).*

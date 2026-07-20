@@ -192,7 +192,7 @@ def test_end_user_carries_does_wont_need_and_title(golden_root: Path) -> None:
     base = describe(forms, plan)
     eu = describe(forms, plan, role="end_user", fluency="beginner")
 
-    assert base["wont"] == "" and base["need"] == "" and base["title"] is None  # base = architect, unaffected
+    assert base["wont"] == "" and base["need"] == "" and not base["title"]  # base = architect, unaffected
     assert eu["wont"] and eu["need"] and eu["title"]                            # framing + title authored
     for jargon in ("entity", "crud", "schema", "field"):
         assert jargon not in eu["title"].lower()

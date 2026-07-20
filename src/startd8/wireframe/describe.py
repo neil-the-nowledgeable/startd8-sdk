@@ -22,9 +22,14 @@ from typing import Optional
 
 import yaml
 
+from .descriptive_schema import SECTION_SCHEMA, field_order
 from .plan import WireframePlan, WireframeSection
 
 _PATH = Path(__file__).parent / "descriptive.yaml"
+
+# AR-1: the section record's fields come from the ONE declared schema (SECTION_SCHEMA), not a hardcoded
+# list here — so the resolver and the FR-SHC coverage guard can never drift apart (KM-27 / CL-17 L4 gate).
+_SECTION_FIELDS = field_order(SECTION_SCHEMA)  # e.g. what/why/do/next/title/wont/need
 
 # Placeholder vocabulary (subset of the FR-DL-5 fill table used by the MVP): each resolves from a
 # validated attribute of the live section. An unfillable placeholder is a typed error (CCbC), never
@@ -109,19 +114,13 @@ def describe(
         return None
     fills = _fills(section)
     pick = _variant(rec, role, fluency)
-    title = pick("title")  # optional audience-friendly section title (FR-AUD gap-3); base ⇒ None
-    return {
-        "key": section.key,  # provenance-by-construction (FR-DL-9)
-        "title": _fill(title.strip(), fills, section_key=section.key) if title else None,
-        "what": _fill((pick("what") or "").strip(), fills, section_key=section.key),
-        "why": _fill((pick("why") or "").strip(), fills, section_key=section.key),
-        "do": _fill((pick("do") or "").strip(), fills, section_key=section.key),
-        "next": _fill((pick("next") or "").strip(), fills, section_key=section.key),  # FR-DL-3 drill hint
-        # FR-AUD-C2 — the DOES / WON'T / NEED framing: `what` is DOES; these two are the expectation-set
-        # + the author's to-do. Empty for the architect base (never authored there) ⇒ not rendered.
-        "wont": _fill((pick("wont") or "").strip(), fills, section_key=section.key),
-        "need": _fill((pick("need") or "").strip(), fills, section_key=section.key),
-    }
+    # AR-1: resolve exactly the fields the declared SECTION_SCHEMA lists (single source). An un-authored
+    # field is "" (falsy) — `title` absent ⇒ "" ⇒ the renderer falls back to the section's own title;
+    # `wont`/`need` absent ⇒ "" ⇒ not rendered (the DOES/WON'T/NEED framing only shows where authored).
+    out = {"key": section.key}  # provenance-by-construction (FR-DL-9)
+    for name in _SECTION_FIELDS:
+        out[name] = _fill((pick(name) or "").strip(), fills, section_key=section.key)
+    return out
 
 
 def describe_summary(

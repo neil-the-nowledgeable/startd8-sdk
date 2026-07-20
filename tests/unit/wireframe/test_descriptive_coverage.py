@@ -60,6 +60,17 @@ def test_fluency_is_reported_not_counted() -> None:
     )
 
 
+def test_resolver_fields_are_single_sourced_from_schema() -> None:
+    """AR-1: describe()'s output fields ARE the declared SECTION_SCHEMA fields — no hardcoded drift.
+    Adding a field to the schema without teaching the resolver (or vice versa) fails here."""
+    from startd8.wireframe.describe import describe
+    from startd8.wireframe.descriptive_schema import SECTION_SCHEMA, field_order
+    from startd8.wireframe.plan import WireframeSection
+
+    out = describe(WireframeSection("entities", "Entities", "planned"), None)  # plan unused by the fill
+    assert set(out) - {"key"} == set(field_order(SECTION_SCHEMA))
+
+
 def test_report_renders() -> None:
     report = format_report()
     assert "coverage" in report.lower()
