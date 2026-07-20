@@ -82,6 +82,40 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 
 ---
 
+## Standard extracted (Hansei — grounded in the 14 shipped enhancements)
+
+The arc proved a repeatable shape for enhancing this class of surface — a **deterministic, offline,
+single-file, audience-keyed preview**. Reuse it for the next one (here or on a sibling surface):
+
+1. **Two invariants are the guardrails — never break them, and they let everything else grow safely.**
+   *Self-contained/offline* (no CDN/network — `test_html_is_self_contained`) and *deterministic* (same
+   plan ⇒ byte-identical HTML — `test_html_is_deterministic`). Every new capability that touches runtime
+   (EC-3 live-reload, EC-2 sign-off) is made **opt-in with a `None`/default-off path that stays
+   byte-identical**, so the guarantee holds. If a feature can't be made opt-in-preserving, redesign it.
+2. **The resolver (`describe._variant`) is the crux — every audience-axis change is a resolver change.**
+   It has been reworked 8+ times across the FR-AUD lineage and still broke on EC-4 (a kit leaked the
+   architect voice, against its own R1-F3 rule). So: **write the per-field sparse-degrade test _first_** —
+   assert the overlay inherits the base for authored fields **and** does not leak for base-omitted fields.
+3. **Push logic out of the template into `compose` (data), not the other way.** The single-file constraint
+   makes `_template.py` a complexity sink (client JS grew +87/+83/+56 lines across QW/EC-2/EC-4). AR-3
+   (mockup `multiline`) and LH-2 (`--view-json`) moved derivations into the composer so *other* surfaces
+   can consume them — keep doing that; resist adding client-side derivation.
+4. **"Byte-identical" must name its scope.** Rendered *narration* is pinned; *metadata* blocks (the
+   `audience` object) are expected to grow — subset-check them, don't assert exact equality (EC-4 broke 3
+   such assertions).
+5. **Ground before designing, and let the tests shrink the change.** AR-3 was made smaller by an existing
+   test (`pages carry no mockup`) that encoded a prior decision. Read the tests + grep the real blast
+   radius *first*; a suspected doc-drift dissolved the same way (it was ✅-placement, not drift).
+6. **The loop that worked, per enhancement:** name it in this backlog with an effort tag → ground the seam
+   (grep real consumers + read the guarding tests) → build the smallest coherent slice → live-verify
+   (devtools, 0 console errors) **and** run the self-contained blast radius (`tests/unit/wireframe/`) →
+   mark ✅ + append a dated line here. Ship in small, individually-verified units (14 of them, monotonic
+   test count 159→170), not one big drop.
+
+*Honest scope note: the suite run each step was `tests/unit/wireframe/` (170), not the whole SDK — adequate
+because the seam has no consumers outside wireframe/ + the CLI's terminal `--describe` (verified separately),
+but a full-suite run belongs in the pre-merge gate.*
+
 ## Do-first shortlist
 1. **QW-1** (toggle) — biggest usability jump, small effort.
 2. **LH-1** (real list/page mockups) — biggest fidelity jump.
