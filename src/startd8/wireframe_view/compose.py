@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from ..wireframe.delivery_roles import effective_voice, label_for, lens_for
 from ..wireframe.describe import describe, describe_summary
 from ..wireframe.plan import WireframePlan
 from ..wireframe.render import SCHEMA_VERSION, WIREFRAME_META, footer_lines
@@ -284,7 +285,12 @@ def compose(
 
     ``role``/``fluency`` select the audience variant of the narration (FR-AUD); they change ONLY the
     wording — the shape, items, statuses, and mockups are identical across audiences (FR-AUD-4). The
-    default ``("architect", "intermediate")`` resolves to base narration, byte-identical."""
+    default ``("architect", "intermediate")`` resolves to base narration, byte-identical.
+
+    EC-4: a delivery-role *kit* (e.g. ``pm``, ``backend-dev``) renders as its declared base voice — the
+    ``voice`` (plain/technical) drives the display/reorder decisions below, so a plain-base kit gets the
+    plain layout and a technical kit the technical one, while ``describe`` overlays any kit-specific text."""
+    voice = effective_voice(role)  # EC-4: the voice this role RENDERS as (end_user | architect)
     counts, shape_line, content, readiness = footer_lines(plan)
     summary_narr = describe_summary(plan, role=role, fluency=fluency) or {}
     entity_cols = _entity_columns(plan)  # LH-1: real columns for list mockups (from the parsed forms)
@@ -298,14 +304,14 @@ def compose(
             "status": s.status,
             "consequence": s.consequence,
             "narration": narr,
-            "items": [_item_view(s.key, it, role, entity_cols) for it in s.items],
+            "items": [_item_view(s.key, it, voice, entity_cols) for it in s.items],
             # R1-F1: the computed floor under NEED — items the plan itself flags as not-yet-provided
             # (not_defined / placeholder / invalid). Authored `need` prose layers on top; this ensures
             # a real gap is never silently under-reported by relying on authored text alone.
-            "need_items": [_display_label(it.label, role) for it in s.items if it.status in GAP_STATUSES],
+            "need_items": [_display_label(it.label, voice) for it in s.items if it.status in GAP_STATUSES],
         })
 
-    if role == "end_user":  # lead with the author-facing sections (presentation only — FR-AUD-4)
+    if voice == "end_user":  # lead with the author-facing sections (presentation only — FR-AUD-4)
         rank = {k: i for i, k in enumerate(_END_USER_ORDER)}
         sections.sort(key=lambda sec: rank.get(sec["key"], len(rank)))
 
@@ -316,7 +322,10 @@ def compose(
         "project_root": plan.project_root,  # provenance in the embed only — NOT rendered to end_user (R2-F1)
         "app_name": _app_name(plan),        # the app's own name for the masthead
         "schema_version": SCHEMA_VERSION,
-        "audience": {"role": role, "fluency": fluency},  # FR-AUD: which voice this view-model speaks
+        # FR-AUD / EC-4: which role this view-model speaks for, the voice it renders as (plain/technical),
+        # and — for a delivery-role kit — its focus lens + label (shown as a banner; "" for a base voice).
+        "audience": {"role": role, "fluency": fluency, "voice": voice,
+                     "lens": lens_for(role), "label": label_for(role)},
         "todos": todos,                     # QW-3 roll-up (rendered as a banner for end_user)
         "summary": {
             # The inverted-pyramid band — same text the terminal footer renders (FR-WV-2), plus the

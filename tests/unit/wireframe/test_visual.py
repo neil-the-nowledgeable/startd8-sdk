@@ -147,8 +147,11 @@ def test_audience_changes_only_wording_not_shape(golden_root: Path) -> None:
     base = compose(plan)
     eu = compose(plan, role="end_user", fluency="beginner")
 
-    assert base["audience"] == {"role": "architect", "fluency": "intermediate"}
-    assert eu["audience"] == {"role": "end_user", "fluency": "beginner"}
+    # EC-4: the audience block carries role/fluency + the rendered voice (+ kit lens/label, "" for base voices).
+    assert base["audience"]["role"] == "architect" and base["audience"]["fluency"] == "intermediate"
+    assert base["audience"]["voice"] == "architect" and base["audience"]["lens"] == ""
+    assert eu["audience"]["role"] == "end_user" and eu["audience"]["fluency"] == "beginner"
+    assert eu["audience"]["voice"] == "end_user"
 
     def skeleton(vm):  # key → (status, [(item status, mockup kind)]); order/label/narration-independent
         return {s["key"]: (s["status"],
@@ -192,6 +195,42 @@ def test_fluency_varies_depth_for_end_user_only(golden_root: Path) -> None:
     assert sc_adv["what"] != sc_std["what"]        # authored depth override
     assert sc_adv["do"] == sc_std["do"]            # not overridden → degrades to the end_user standard
     assert sc_adv["next"] == sc_std["next"]
+
+
+def test_ec4_delivery_kits_overlay_their_base_voice(golden_root: Path) -> None:
+    """EC-4 — a delivery-role kit renders as its declared base voice (plain vs technical), with zero
+    per-section authoring: a plain kit (pm) == end_user and a technical kit (backend-dev) == architect
+    for every field the base voice authors; the audience block carries the kit's voice/lens/label."""
+    import copy
+
+    from startd8.wireframe.delivery_roles import KITS, base_voice, effective_voice
+
+    plan = _plan(golden_root)
+    eu, arch = compose(plan, role="end_user"), compose(plan, role="architect")
+
+    def body(vm):  # everything except the (deliberately kit-specific) audience block
+        c = copy.deepcopy(vm)
+        c["audience"] = None
+        return c
+
+    pm = compose(plan, role="pm")                       # base = end_user (plain)
+    assert body(pm) == body(eu)                         # renders exactly as the plain voice…
+    assert pm["audience"]["voice"] == "end_user"        # …and declares it
+    assert pm["audience"]["lens"] and pm["audience"]["label"] == "Project Manager"
+
+    be = compose(plan, role="backend-dev")              # base = architect (technical)
+    assert be["audience"]["voice"] == "architect" and be["audience"]["lens"]
+    # backend-dev matches architect on all rendered content (the only intended gap is the architect-only
+    # tool-process meta lines, which a kit does not carry):
+    be_b, arch_b = body(be), body(arch)
+    be_b["summary"]["meta"] = arch_b["summary"]["meta"] = None
+    assert be_b == arch_b
+
+    # the registry stays coherent: every kit's base is a real base voice; architect is not a kit.
+    assert "architect" not in KITS
+    for role, meta in KITS.items():
+        assert meta["base"] in ("end_user", "architect")
+        assert effective_voice(role) == base_voice(role) == meta["base"]
 
 
 def test_end_user_carries_does_wont_need_and_title(golden_root: Path) -> None:

@@ -61,6 +61,17 @@ needs to speak to a non-expert should be **a config away, not a rebuild**.
    *rendered* strings; personalize to the signed-in principal where there is one.
 5. **Guard the matrix** — a coverage test over the expected cells, so gaps fail CI, not the user.
 
+## The promise, realized (EC-4 — delivery-role kits)
+
+The pattern's claim — *the next audience is a config away, not a rebuild* — is now demonstrated in the
+wireframe preview itself. `wireframe/delivery_roles.py` registers the 11 FR-J delivery roles (source:
+`HITM_ROLE_MODEL_REQUIREMENTS.md` §3, cited not restated) as **kits**: each declares a **base voice** it
+overlays (plain `end_user` / technical `architect`) + a one-line **lens**. The resolver (`_variant`) makes
+an unauthored kit inherit its base voice's authored content — so `--audience pm` renders the plain voice
+and `--audience backend-dev` the technical voice with **zero per-section authoring**, each with its focus
+lens. Ten new audiences arrived as a ~40-line registry + a resolver fallback + a toggle group — no content
+matrix, no rebuild. That is the sparse-degrading overlay doing exactly what it promised.
+
 ## When NOT to use it (anti-patterns)
 
 - **Over-application.** A one-off string for one audience needs no matrix. The layer is justified only

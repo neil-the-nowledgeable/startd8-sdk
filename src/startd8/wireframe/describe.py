@@ -70,26 +70,44 @@ def _fill(text: str, fills: dict, *, section_key: str) -> str:
 
 
 def _variant(rec: dict, role: str, fluency: str):
-    """Return a per-field picker resolving the (role × fluency) audience variant (FR-AUD-1).
+    """Return a per-field picker resolving the (role × fluency) audience variant (FR-AUD-1 / EC-4).
 
-    Resolution ``(role, fluency)`` → ``(role, ·)`` → base, with one rule that closes the architect-leak
-    (R1-F3): an **authored** role variant is *self-contained* — a field it doesn't provide resolves to
-    ``None`` (empty), NOT to the architect base — so a partial ``end_user`` variant can never leak the
-    technical voice into one field. Only an **un-authored** role (no variant at all) degrades wholesale
-    to base. Fluency still inherits its own role's fields. The default ``("architect", "intermediate")``
-    has no ``audience.architect`` variant ⇒ resolves to base verbatim ⇒ byte-identical (FR-AUD-2).
+    Resolution ``(role, fluency)`` → ``(role, ·)`` → [kit's base voice] → base, with one rule that closes
+    the architect-leak (R1-F3): an **authored base voice** variant is *self-contained* — a field it doesn't
+    provide resolves to ``None`` (empty), NOT to the architect base — so a partial ``end_user`` variant can
+    never leak the technical voice into one field.
+
+    EC-4 delivery kits are the one exception: a kit (e.g. ``pm``, base ``end_user``) is an **overlay** on
+    its base voice, so an unauthored kit field falls through to that base voice's authored variant (plain
+    vs technical) rather than to the architect root — a PM inherits the plain voice, a backend-dev the
+    technical one, with zero authoring. The default ``("architect", "intermediate")`` has no
+    ``audience.architect`` variant and no base voice ⇒ resolves to base verbatim ⇒ byte-identical (FR-AUD-2).
     """
+    from .delivery_roles import base_voice
+
     aud = rec.get("audience") or {}
     role_v = aud.get(role) or {}
     fluency_v = (role_v.get("fluency") or {}).get(fluency) or {}
     role_authored = bool(role_v)
 
+    base = base_voice(role)                       # EC-4: the voice a kit overlays (None for a base voice)
+    base_v = (aud.get(base) or {}) if base else {}
+    base_fluency_v = (base_v.get("fluency") or {}).get(fluency) or {}
+
     def pick(field: str):
-        for src in (fluency_v, role_v):  # fluency → role, within the authored voice
+        for src in (fluency_v, role_v):           # the role's own authored overrides (fluency → role)
             val = src.get(field)
             if val is not None:
                 return val
-        return rec.get(field) if not role_authored else None  # base ONLY when the role is un-authored
+        if base:                                  # EC-4 kit overlay → inherit its base voice…
+            for src in (base_fluency_v, base_v):
+                val = src.get(field)
+                if val is not None:
+                    return val
+            # …then mirror that base voice's own self-containment: fall to the architect root ONLY when the
+            # base voice is itself un-authored (backend-dev→architect shows `why`; pm→end_user does not leak it).
+            return rec.get(field) if not bool(base_v) else None
+        return rec.get(field) if not role_authored else None  # base voice: self-contained (anti-leak)
 
     return pick
 

@@ -71,9 +71,14 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
   `ManifestWatcher` (poll/follow split, injectable sleep) watches the resolved input set; `render_html`
   gains `live_reload_secs` (`None` ⇒ byte-identical static file — the offline determinism guarantee
   holds). Author-in-the-loop: edit a manifest, watch the preview update. Live-verified end-to-end. — **M**
-- **EC-4 — The pattern → the delivery-role kits** — FR-AUD supports role × fluency; only architect +
-  end_user are authored. The FR-J roles (BA/PM/backend…) each getting a wireframe voice is a straight
-  extension. — **M**
+- ✅ **EC-4 — The pattern → the delivery-role kits** — the 11 FR-J delivery roles now register as **kits**
+  (`wireframe/delivery_roles.py`, keyed on `HITM_ROLE_MODEL_REQUIREMENTS.md` §3 — cited, not restated).
+  Each declares a **base voice** it overlays (plain `end_user` / technical `architect`) + a one-line
+  **lens**; the resolver makes an unauthored kit inherit its base voice's content, so `--audience pm`
+  renders plain and `--audience backend-dev` technical with **zero per-section authoring**. Exposed via the
+  HTML role toggle (base voices + 10 kits, each with a focus-lens banner), `--audience`, and `--coverage`.
+  The AR-2 pattern's "a new audience is a config away" — proven: 10 audiences from a ~40-line registry +
+  a resolver fallback, no content matrix. 170 tests pass; live-verified. — **M**
 
 ---
 
@@ -82,4 +87,4 @@ Effort key: **XS** trivial · **S** small · **M** medium · **L** large.
 2. **LH-1** (real list/page mockups) — biggest fidelity jump.
 3. **EC-1** (`--diff`) — highest-value new capability; plumbing already exists.
 
-*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Then EC-1 (`--diff` planned-vs-built) shipped — the verify half of preview→approve→build→verify. Then LH-2 (`--view-json` — the audience view-model as data for a web app/portal) + AR-2 (the audience pattern named + documented as AUDIENCE_CONTENT_PATTERN.md — the Yokoten of a design used 3×) shipped. Then AR-3 (data-complete MOCKUP_SPEC.md + multiline lifted into the composer) + EC-2 (per-section approve/flag/annotate sign-off, localStorage + JSON export — the preview's `approve` verb) shipped; 167 tests pass, live-verified (0 console errors). Then EC-3 (`--watch` live-reload, mirroring the kickoff_view seam) + LH-3 (fluency authored for all 11 records — the depth toggle now bites everywhere) shipped; 169 tests pass, live-verified. Remaining: EC-4 (delivery-role kits — extend FR-AUD to the FR-J roles) is the last open item.*
+*2026-07-19: ⚡ quick wins QW-1..5 all shipped (`--open`/default path, `--coverage`, in-file audience/fluency toggle, before-launch to-do roll-up, status legend). 159 tests pass. Then LH-1 (real list mockups — 31 entities get real columns) + AR-1 (schema single-sourced into describe.py's resolver; drift-guard test; closes CL-17 L4) shipped. Then EC-1 (`--diff` planned-vs-built) shipped — the verify half of preview→approve→build→verify. Then LH-2 (`--view-json` — the audience view-model as data for a web app/portal) + AR-2 (the audience pattern named + documented as AUDIENCE_CONTENT_PATTERN.md — the Yokoten of a design used 3×) shipped. Then AR-3 (data-complete MOCKUP_SPEC.md + multiline lifted into the composer) + EC-2 (per-section approve/flag/annotate sign-off, localStorage + JSON export — the preview's `approve` verb) shipped; 167 tests pass, live-verified (0 console errors). Then EC-3 (`--watch` live-reload, mirroring the kickoff_view seam) + LH-3 (fluency authored for all 11 records — the depth toggle now bites everywhere) shipped; 169 tests pass, live-verified. Then EC-4 (the 11 FR-J delivery-role kits — overlays on the two base voices; `--audience pm/backend-dev/…`; the AR-2 "config away" promise proven) shipped; 170 tests pass, live-verified. **The wireframe-visual enhancement backlog is now fully shipped (QW-1..5, LH-1/2/3, AR-1/2/3, EC-1/2/3/4).***

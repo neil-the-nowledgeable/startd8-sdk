@@ -166,7 +166,8 @@ def test_cli_view_json_emits_the_view_model(golden_root: Path) -> None:
     assert json.loads(r.stdout) == compose(plan, role="end_user", fluency="beginner")
     # a different audience yields a different (architect) view-model
     ra = runner.invoke(app, ["--project", str(golden_root), "--view-json", "--audience", "architect"])
-    assert json.loads(ra.stdout)["audience"] == {"role": "architect", "fluency": "intermediate"}
+    aud = json.loads(ra.stdout)["audience"]
+    assert aud["role"] == "architect" and aud["fluency"] == "intermediate" and aud["voice"] == "architect"
 
 
 def test_signoff_scaffold_is_present_and_offline(golden_root: Path) -> None:

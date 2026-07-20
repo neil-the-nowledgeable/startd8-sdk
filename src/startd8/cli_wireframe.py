@@ -85,8 +85,10 @@ def wireframe(
     audience: str = typer.Option(
         "end_user",
         "--audience",
-        help="Voice for the --html preview (FR-AUD role): 'end_user' (plain, non-technical; default) "
-        "or 'architect' (technical). Unknown roles degrade to the architect base.",
+        help="Voice for the preview (FR-AUD role): the base voices 'end_user' (plain; default) or "
+        "'architect' (technical), or an FR-J delivery-role kit — pm/ba/qa/customer-po (plain) · "
+        "backend-dev/frontend-dev/dba/ops/test-engineer/security (technical) — each adds a focus lens "
+        "over its base voice (EC-4). See `--coverage` for the full list.",
     ),
     fluency: str = typer.Option(
         "intermediate",

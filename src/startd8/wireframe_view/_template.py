@@ -180,6 +180,13 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .legend span{display:flex;align-items:center;gap:5px}
   .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
 
+  /* ---------- EC-4: delivery-role lens banner ---------- */
+  .lens-banner{margin:12px 0 0;background:var(--accent-wash);border:1px solid #cfe0de;border-radius:11px;
+    padding:10px 15px;font-size:13.5px;color:var(--ink);line-height:1.5}
+  .lens-banner b{color:var(--accent);font-family:var(--serif);font-weight:600}
+  .lens-banner .lens-eyebrow{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);
+    font-weight:700;margin-right:8px}
+
   /* ---------- EC-2: per-section sign-off (approve / flag / annotate) ---------- */
   .sig-mark{flex:none;font-size:12px;font-weight:700}
   .sig-mark.ok{color:var(--planned)} .sig-mark.flag{color:var(--ochre-ink)}
@@ -224,6 +231,7 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   <div id="todos"></div>
   <div class="toolbar" id="toolbar"></div>
   <div class="legend" id="legend"></div>
+  <div class="lens-banner" id="lens" hidden></div>
   <hr class="rule">
   <p class="section-lead" id="seclead">What your app includes</p>
   <main id="outline"></main>
@@ -245,7 +253,19 @@ __PLAN_DATA__
   catch(e){ document.getElementById("outline").innerHTML =
     '<div class="banner">Could not read the preview data.</div>'; return; }
   var VARS = payload.variants || {}, cur = payload.default;   // QW-1: embedded audience variants
+  var KITS = payload.kits || {};                              // EC-4: delivery-role kits (overlay metadata)
   var data, EU, s;   // (re)set by renderAll() for the currently-selected variant
+
+  // EC-4: which base voice a role renders as (a kit → its declared base; a base voice → itself).
+  function voiceOf(role){ return (KITS[role] && KITS[role].base) || role; }
+  // EC-4: resolve a "role|fluency" key to an embedded view-model — a kit falls back to its base voice's
+  // variant (kits carry no embedded variant of their own; they render base voice + a lens banner).
+  function resolveVM(key){
+    if(VARS[key]) return VARS[key];
+    var p=key.split("|"), role=p[0], flu=p[1]||"intermediate", kit=KITS[role];
+    if(kit) return VARS[kit.base+"|"+flu] || VARS[kit.base+"|intermediate"];
+    return VARS[payload.default] || VARS[Object.keys(VARS)[0]];
+  }
 
   function esc(s){ return String(s==null?"":s)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
@@ -456,10 +476,19 @@ __PLAN_DATA__
       ' need'+(t.length===1?'s':'')+' you:</b><ul>'+lis+'</ul></div>';
   }
 
+  // ---------- EC-4: the delivery-role focus lens (shown only for a kit role) ----------
+  function renderLens(){
+    var box=document.getElementById("lens"), role=cur.split("|")[0], kit=KITS[role];
+    if(!kit){ box.hidden=true; box.innerHTML=""; return; }
+    box.hidden=false;
+    box.innerHTML='<span class="lens-eyebrow">Your view · '+esc(kit.label)+'</span><b>Focus:</b> '+esc(kit.lens);
+  }
+
   // ---------- render the whole document from the current variant (re-run on toggle, QW-1) ----------
   function renderAll(){
-    data=VARS[cur]||VARS[payload.default];
-    EU=((data.audience&&data.audience.role)==="end_user"); s=data.summary||{};
+    data=resolveVM(cur);                                       // EC-4: kit → its base voice's variant
+    EU=((data.audience&&data.audience.voice)==="end_user"); s=data.summary||{};
+    renderLens();                                              // EC-4: the delivery-role focus lens
     APP=data.app_name||"app"; SKEY="startd8:wf-signoff:"+APP; SIGN=loadSign();   // EC-2: restore sign-off
     ["mast","warn","glance","todos","outline"].forEach(function(id){ document.getElementById(id).innerHTML=""; });
     var cl=document.getElementById("closing"); cl.innerHTML=""; cl.hidden=true;
@@ -475,12 +504,21 @@ __PLAN_DATA__
     renderSignbar();   // EC-2: sign-off progress + export
   }
 
-  // ---------- QW-1: the audience/fluency toggle + open/close controls ----------
+  // ---------- QW-1 + EC-4: the role (base voice + delivery kits) / depth toggle + open/close ----------
   var parts=(cur||"end_user|intermediate").split("|");
+  function kitGroup(base,label){                              // EC-4: the kits that overlay one base voice
+    var opts=Object.keys(KITS).filter(function(r){ return KITS[r].base===base; })
+      .map(function(r){ return '<option value="'+r+'">'+esc(KITS[r].label)+'</option>'; }).join("");
+    return opts ? '<optgroup label="'+label+'">'+opts+'</optgroup>' : '';
+  }
   document.getElementById("toolbar").innerHTML=
     '<label class="tg">View<select id="tg-role">'+
-      '<option value="end_user">Plain (for the owner)</option>'+
-      '<option value="architect">Technical (for the builder)</option></select></label>'+
+      '<optgroup label="Base voices">'+
+        '<option value="end_user">Plain (for the owner)</option>'+
+        '<option value="architect">Technical (for the builder)</option></optgroup>'+
+      kitGroup("end_user","Delivery role · plain")+
+      kitGroup("architect","Delivery role · technical")+
+    '</select></label>'+
     '<label class="tg" id="tg-depth">Depth<select id="tg-flu">'+
       '<option value="beginner">Fuller</option><option value="intermediate">Standard</option>'+
       '<option value="advanced">Terser</option></select></label>'+
@@ -488,11 +526,11 @@ __PLAN_DATA__
     '<button id="ex">Open all</button><button id="co">Close all</button>';
   var selRole=document.getElementById("tg-role"), selFlu=document.getElementById("tg-flu");
   selRole.value=parts[0]; selFlu.value=parts[1]||"intermediate";
-  function syncDepth(){ document.getElementById("tg-depth").style.display = selRole.value==="architect"?"none":""; }
+  // depth only bites for a plain voice; a technical voice (architect or a technical kit) hides it.
+  function syncDepth(){ document.getElementById("tg-depth").style.display = voiceOf(selRole.value)==="architect"?"none":""; }
   function onToggle(){
-    var role=selRole.value, flu=(role==="architect")?"intermediate":selFlu.value;
-    if(!VARS[role+"|"+flu]) flu="intermediate";
-    cur=role+"|"+flu; syncDepth(); renderAll();
+    var role=selRole.value, flu=(voiceOf(role)==="architect")?"intermediate":selFlu.value;
+    cur=role+"|"+flu; syncDepth(); renderAll();               // resolveVM() maps a kit to its base variant
   }
   selRole.onchange=onToggle; selFlu.onchange=onToggle; syncDepth();
   document.getElementById("ex").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=true;}); };
