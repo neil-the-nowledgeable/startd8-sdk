@@ -1,9 +1,16 @@
 """`startd8 wireframe` — pre-generation summary of the deterministic cascade (FR-W9).
 
 Top-level command (OQ-1): not under `generate` (emits no app code), not under `assist` (that
-family is run-triage). Advisory: exit 0 regardless of plan statuses; exit 2 only on a fatal
-assembly-inputs problem (unreadable/non-UTF-8/garbled `--inputs` file, unknown keys, or a path
-escaping the project root — FR-W9/R2-F3/R3-F4).
+family is run-triage).
+
+Exit codes:
+  * **0** — the advisory default: the summary/preview/diff rendered; plan statuses never gate.
+  * **1** — a review GATE tripped (EC-2/approve↔diff): `--signoff` found open flags, or `--diff
+    --signoff` found a stale approval (an approved section that changed) or open flags. Lets a
+    handoff/CI step block on "the owner hasn't cleared everything".
+  * **2** — a fatal INPUT problem: an unreadable/non-UTF-8/garbled `--inputs` file, unknown keys, a
+    path escaping the project root (FR-W9/R2-F3/R3-F4), a bad `--audience`/`--fluency` value, an
+    unreadable `--signoff` file, or a `--signoff` whose stamped plan fingerprint ≠ this project (SO-1).
 """
 
 from __future__ import annotations

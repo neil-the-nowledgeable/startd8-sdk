@@ -221,10 +221,14 @@ still diffed + caught.)
   stale sign-off can no longer match by generic key). Pre-provenance exports (no fingerprint) proceed
   best-effort with a warning (backward-compat). Verified: render determinism byte-identical, browser export
   carries the matching fingerprint end-to-end, 181 tests, 0 regressions. — **S → done**
-- **SO-2 — document the exit-code contract.** The command docstring says "exit 0 / 2 only"; `--signoff`
-  and `--diff --signoff` now exit **1** as a gate. Update the docstring (S4). — **XS**
-- **SO-3 — (optional) time-aware staleness.** Use `reviewed_at` vs the baseline as a cheap "sign-off older
-  than the plan" signal, complementing the structural diff (S2). — **S**
+- ✅ **SO-2 — document the exit-code contract. DONE.** The command docstring now spells out exit 0
+  (advisory) / 1 (review gate: open flags or stale approval) / 2 (fatal input incl. a fingerprint-mismatched
+  sign-off) — S4 closed.
+- ✅ **SO-3 — time-aware staleness. DONE (right-sized).** `reviewed_at` is now surfaced in the
+  `--diff --signoff` approval-check header so the reader sees the verdict's age — *shown, not auto-gated*.
+  An automated time-gate would be **redundant machinery**: SO-1's fingerprint is a strictly stronger identity
+  check (a same-inputs plan is valid at any age; a changed one already fails SO-1), so a timestamp gate would
+  be accidental complexity. Making the age visible is the honest realization (S2).
 
 ## Do-first shortlist
 1. **QW-1** (toggle) — biggest usability jump, small effort.

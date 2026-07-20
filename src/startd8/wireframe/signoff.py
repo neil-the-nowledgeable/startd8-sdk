@@ -78,12 +78,17 @@ def stale_approvals(diff: dict, signoff: dict) -> list:
 
 def format_approval_check(diff: dict, signoff: dict) -> str:
     """The approve↔diff headline: cross-references the structural diff with the owner's verdict so a change
-    to an approved section reads as 'changed since you approved it' (rendered above the full diff)."""
+    to an approved section reads as 'changed since you approved it' (rendered above the full diff).
+
+    SO-3: the sign-off's ``reviewed_at`` is surfaced so the reader can judge the verdict's age. It is shown,
+    not auto-gated — plan *identity* is already enforced by the SO-1 fingerprint check (strictly stronger
+    than a timestamp: a same-inputs plan is valid at any age, a changed one already fails that gate)."""
     aud = signoff["audience"] or {}
     who = aud.get("label") or aud.get("role") or "reviewer"
+    when = f", {signoff['reviewed_at']}" if signoff.get("reviewed_at") else ""
     stale = stale_approvals(diff, signoff)
     flagged = open_flags(signoff)
-    lines = [f"[bold]Approval check[/bold] [dim](you signed off as {who})[/dim]:"]
+    lines = [f"[bold]Approval check[/bold] [dim](you signed off as {who}{when})[/dim]:"]
     if stale:
         lines.append(
             f"  [bold red]⚠ {len(stale)} section(s) you approved changed since — "

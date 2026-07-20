@@ -120,6 +120,10 @@ def test_stale_approvals_flags_approved_sections_that_changed() -> None:
     holds = format_approval_check(_diff("forms"), so)
     assert "none of the sections you approved have changed" in holds
 
+    # SO-3: the sign-off's age is surfaced in the header (shown, not auto-gated — SO-1 owns identity)
+    dated = dict(so, reviewed_at="2026-07-20T04:00:00Z")
+    assert "2026-07-20T04:00:00Z" in format_approval_check(_diff("pages"), dated)
+
 
 def test_cli_approve_diff_gates_on_stale_approval(golden_copy: Path, tmp_path: Path) -> None:
     """Full approve↔diff: save a baseline, sign off approving a section, change that section's manifest,
