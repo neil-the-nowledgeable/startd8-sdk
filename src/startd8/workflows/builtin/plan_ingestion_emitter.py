@@ -160,6 +160,76 @@ def _build_observability_contract(
     }
 
 
+def _enrich_tasks_with_observability(
+    tasks: Optional[List[Dict[str, Any]]],
+    observability_hints: Optional[Dict[str, Any]],
+) -> int:
+    """REQ-OPI-150/200/201: enrich each task's ``config.context`` from per-service hints.
+
+    Matches a task to a service by an already-set ``service_name`` (OPI-150) or, failing
+    that, by a target-file path segment (normalized lowercase / hyphen-stripped — OPI-151);
+    a matched task gets ``service_name`` + ``convention_metrics`` + ``transport`` +
+    ``language`` (+ ``sdk_packages`` / ``alert_thresholds`` / ``slo_targets`` when present).
+    An unmatched task is left untouched (OPI-201). Mutates ``tasks`` in place and returns
+    the count enriched. Extracted from ``emit()`` so it is unit-testable (issue #268 R1).
+    """
+    _obs_lookup: Dict[str, Dict[str, Any]] = {}
+    if observability_hints and isinstance(observability_hints, dict):
+        for svc_id, svc_hints in observability_hints.items():
+            if isinstance(svc_hints, dict):
+                _obs_lookup[svc_id.lower().replace("-", "")] = svc_hints
+    if not (_obs_lookup and tasks):
+        return 0
+
+    _enriched = 0
+    for task in tasks:
+        # Read-only view for inference; a fresh {} must NOT be mutated here (it would be
+        # discarded — the write-back bug). Materialize a writable context only on a match.
+        read_ctx = (task.get("config") or {}).get("context") or {}
+        # OPI-150: honor an already-set service_name, else infer from target files.
+        _svc_name = str(read_ctx.get("service_name") or "").lower().replace("-", "")
+        if _svc_name not in _obs_lookup:
+            _svc_name = ""
+        _target_files = read_ctx.get("target_files") or task.get("target_files", [])
+        if not _svc_name:
+            for tf in _target_files:
+                parts = Path(tf).parts
+                for p in parts:
+                    _norm = p.lower().replace("-", "")
+                    if _norm in _obs_lookup:
+                        _svc_name = _norm
+                        break
+                if _svc_name:
+                    break
+
+        if _svc_name and _svc_name in _obs_lookup:
+            cfg_dict = task.get("config")
+            if not isinstance(cfg_dict, dict):
+                cfg_dict = {}
+                task["config"] = cfg_dict
+            ctx = cfg_dict.get("context")
+            if not isinstance(ctx, dict):
+                ctx = {}
+                cfg_dict["context"] = ctx
+
+            hints = _obs_lookup[_svc_name]
+            ctx["service_name"] = _svc_name  # OPI-150: persist the inferred name
+            ctx["convention_metrics"] = hints.get("metrics", {}).get("convention_based", [])
+            ctx["transport"] = hints.get("transport", "")
+            ctx["language"] = hints.get("language", "")
+            _sdk = hints.get("sdk")
+            if _sdk:
+                ctx["sdk_packages"] = _sdk
+            _at = hints.get("alert_thresholds")
+            if _at:
+                ctx["alert_thresholds"] = _at
+            _slo = hints.get("slo_targets")
+            if _slo:
+                ctx["slo_targets"] = _slo
+            _enriched += 1
+    return _enriched
+
+
 # ---------------------------------------------------------------------------
 # PhaseEmitter
 # ---------------------------------------------------------------------------
@@ -360,83 +430,15 @@ class PhaseEmitter:
                     len(_pm_sc.get("databases", {})),
                 )
 
-        # REQ-OPI-200: Per-task observability enrichment from config hints
-        _obs_lookup: Dict[str, Dict[str, Any]] = {}
-        if cfg.observability_hints and isinstance(cfg.observability_hints, dict):
-            for svc_id, svc_hints in cfg.observability_hints.items():
-                if isinstance(svc_hints, dict):
-                    _obs_lookup[svc_id.lower().replace("-", "")] = svc_hints
-            if _obs_lookup:
-                logger.info(
-                    "Observability hints loaded: %d services for per-task enrichment",
-                    len(_obs_lookup),
-                )
-
-        # Enrich tasks with per-service observability context
-        if _obs_lookup and tasks:
-            _enriched = 0
-            for task in tasks:
-                # Read-only view for inference; a fresh {} here must NOT be mutated
-                # (it would be discarded — the write-back bug). We materialize a
-                # writable context only once a service match is confirmed.
-                read_ctx = (task.get("config") or {}).get("context") or {}
-                # REQ-OPI-150: honor an already-set service_name, else infer from
-                # target files (normalized: lowercase, hyphens stripped — OPI-151).
-                _svc_name = str(read_ctx.get("service_name") or "").lower().replace("-", "")
-                if _svc_name not in _obs_lookup:
-                    _svc_name = ""
-                _target_files = read_ctx.get("target_files") or task.get("target_files", [])
-                if not _svc_name:
-                    for tf in _target_files:
-                        parts = Path(tf).parts
-                        for p in parts:
-                            _norm = p.lower().replace("-", "")
-                            if _norm in _obs_lookup:
-                                _svc_name = _norm
-                                break
-                        if _svc_name:
-                            break
-
-                if _svc_name and _svc_name in _obs_lookup:
-                    # Materialize a writable config.context so enrichment persists
-                    # even for tasks that arrived without one (write-back fix).
-                    cfg_dict = task.get("config")
-                    if not isinstance(cfg_dict, dict):
-                        cfg_dict = {}
-                        task["config"] = cfg_dict
-                    ctx = cfg_dict.get("context")
-                    if not isinstance(ctx, dict):
-                        ctx = {}
-                        cfg_dict["context"] = ctx
-
-                    hints = _obs_lookup[_svc_name]
-                    # REQ-OPI-150: persist the inferred service_name (standalone value:
-                    # security-contract matching, per-service cost attribution).
-                    ctx["service_name"] = _svc_name
-                    ctx["convention_metrics"] = (
-                        hints.get("metrics", {}).get("convention_based", [])
-                    )
-                    ctx["transport"] = hints.get("transport", "")
-                    ctx["language"] = hints.get("language", "")
-                    _sdk = hints.get("sdk")
-                    if _sdk:
-                        ctx["sdk_packages"] = _sdk
-                    # REQ-OPI-200: alert thresholds + SLO targets (merged into hints
-                    # from observability-manifest.yaml derivation rules upstream).
-                    _at = hints.get("alert_thresholds")
-                    if _at:
-                        ctx["alert_thresholds"] = _at
-                    _slo = hints.get("slo_targets")
-                    if _slo:
-                        ctx["slo_targets"] = _slo
-                    _enriched += 1
-
-            if _enriched:
-                logger.info(
-                    "Enriched %d/%d tasks with observability context "
-                    "(service_name, convention_metrics, transport, thresholds)",
-                    _enriched, len(tasks),
-                )
+        # REQ-OPI-150/200/201: per-task observability enrichment from config hints
+        # (extracted to a unit-testable helper — issue #268 R1).
+        _enriched = _enrich_tasks_with_observability(tasks, cfg.observability_hints)
+        if _enriched:
+            logger.info(
+                "Enriched %d/%d tasks with observability context "
+                "(service_name, convention_metrics, transport, thresholds)",
+                _enriched, len(tasks or []),
+            )
 
         # REQ-OPI-600: build the observability_contract for the seed (top-level key,
         # consumed by the contractor prompt builder — OPI-300/601). Absent when no

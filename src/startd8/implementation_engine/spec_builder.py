@@ -733,6 +733,72 @@ def _build_security_guidance_section(context: Dict[str, Any]) -> str:
     return ""
 
 
+def _build_observability_guidance_section(context: Dict[str, Any]) -> str:
+    """REQ-OPI-300: instrumentation guidance from the observability contract (issue #268 R2).
+
+    When the task's service carries convention metrics, tell the LLM the EXACT OTel metric
+    names + instrument types to emit, the SDK packages to import (so imports are correct, not
+    generic), and the transport (so it picks the right interceptor). Absent metrics ⇒ ``""``
+    (REQ-OPI-302 — no injection, contractor operates exactly as today). Reads the per-task
+    ``convention_metrics`` (OPI-200) when present, else derives from the seed
+    ``observability_contract`` (OPI-601) via the task's ``service_name``.
+    """
+    metrics = context.get("convention_metrics")
+    transport = context.get("transport", "") or ""
+    language = context.get("language", "") or ""
+    sdk_packages = context.get("sdk_packages")
+    alert_thresholds = context.get("alert_thresholds")
+
+    if not metrics:  # fall back to the seed contract, keyed by the task's service (OPI-601)
+        contract = context.get("observability_contract") or {}
+        services = contract.get("services") or {}
+        _sn = str(context.get("service_name") or "").lower().replace("-", "")
+        svc = None
+        for k, v in services.items():
+            if isinstance(v, dict) and k.lower().replace("-", "") == _sn:
+                svc = v
+                break
+        if isinstance(svc, dict):
+            metrics = svc.get("convention_metrics")
+            transport = transport or svc.get("transport", "")
+            language = language or svc.get("language", "")
+            sdk_packages = sdk_packages or svc.get("sdk_packages")
+            alert_thresholds = alert_thresholds or svc.get("alert_thresholds")
+
+    if not metrics or not isinstance(metrics, list):
+        return ""  # REQ-OPI-302
+
+    lines = [
+        "## Observability Contract (REQ-OPI-300)",
+        "",
+        "This service has a defined instrumentation contract. Emit these OTel metrics with "
+        "the EXACT names and instrument types below — not generic or invented ones:",
+    ]
+    for m in metrics:
+        if not isinstance(m, dict):
+            continue
+        name = m.get("name", "?")
+        itype = m.get("type") or m.get("instrument") or "metric"
+        line = f"- `{name}` — {itype}"
+        if m.get("source"):
+            line += f" (convention: {m['source']})"
+        lines.append(line)
+    if transport:
+        lines.append(
+            f"- Transport is **{transport}** — use its idiomatic OTel instrumentation "
+            f"(the correct interceptor/middleware for {transport}), not a generic one."
+        )
+    if sdk_packages:
+        pkgs = (
+            ", ".join(str(p) for p in sdk_packages)
+            if isinstance(sdk_packages, list) else str(sdk_packages)
+        )
+        lines.append(f"- Import instrumentation from: {pkgs} (use these exact packages).")
+    if alert_thresholds:
+        lines.append(f"- Alert thresholds to honor: {alert_thresholds}")
+    return "\n".join(lines) + "\n"
+
+
 def _build_anti_pattern_section(context: Dict[str, Any], task_description: str) -> str:
     """REQ-SV2-1400: Anti-pattern guidance for environment variable handling.
 
@@ -1424,6 +1490,13 @@ def build_spec_prompt(
     corpus_authorities_section = _build_corpus_authorities_section(context)
     if corpus_authorities_section:
         prioritized.append((2, "corpus_authorities", corpus_authorities_section))
+
+    # P2: Observability instrumentation contract (REQ-OPI-300/301, issue #268 R2) — exact
+    # metric names + instrument types + SDK packages + transport, so the generated service
+    # emits the contract's telemetry with correct imports/interceptors, not generic ones.
+    observability_section = _build_observability_guidance_section(context)
+    if observability_section:
+        prioritized.append((2, "observability_guidance", observability_section))
 
     # P2: Within-run quality findings from accumulator (REQ-RFL-250)
     run_hints = context.pop("run_quality_hints", None)
