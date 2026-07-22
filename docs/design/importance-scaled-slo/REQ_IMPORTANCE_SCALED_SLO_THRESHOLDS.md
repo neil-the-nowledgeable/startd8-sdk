@@ -1,6 +1,6 @@
 # Importance-Scaled SLO Thresholds — Requirements
 
-**Version:** 0.5 (Post-pilot — added FR-10 non-fabrication requirement; see ContextCore ADR-004)
+**Version:** 0.6 (Both increments SHIPPED — Increment 2 deployment_mode axis done; OQ-A resolved)
 **Date:** 2026-07-22
 **Status:** Ready for CRP review
 **Owner:** StartD8 SDK / observability (artifact_generator) + ContextCore (manifest, init-from-plan)
@@ -178,6 +178,12 @@ declared/inferred) — with honest provenance, and without ever overriding autho
 - **FR-8 — Incremental delivery.** Increment 1 = criticality-scaled defaults (zero new plumbing;
   `criticality` already in context). Increment 2 = add the `deployment_mode` exposure axis
   (FR-1/4/5/6). Increment 1 must ship value on its own.
+  - **✅ STATUS (v0.6): both increments SHIPPED.** Increment 1 — startd8 PR #234 (merged): config-
+    driven criticality-scaled SLO defaults; ContextCore PR #27: criticality-scaled sampling/interval
+    (`observability_derivation.yaml`) + ADR-005 template de-fabrication (FR-10 family). Increment 2 —
+    startd8 PR #247: `BusinessContext.deployment_mode` + `installed`/`deployed` SLO rows; ContextCore
+    PR #27: `spec.deployment.mode` model (FR-4) + init-from-plan cue inference (FR-5) +
+    deployment-aware sampling/interval. Verified: `installed` yields extremely-forgiving SLOs/sampling.
 
 - **FR-9 — Determinism preserved.** Identical inputs ⇒ byte-identical artifacts. The importance
   table is a pure lookup; no timestamps/ordering/nondeterminism introduced (guards the pilot's
@@ -216,19 +222,32 @@ declared/inferred) — with honest provenance, and without ever overriding autho
 
 ## 4. Open Questions
 
-- **OQ-A — The exact number table.** *(CRP R1: structural issues resolved — see FR-2a. The
-  `installed+*` collapse is removed; criticality stays a live key; the table is monotonic. Only the
-  precise cell values remain open, and they are config, not code — FR-7.)* Starting point, with the
-  `installed+*` row **expanded** to keep criticality live and the `deployed+high→medium` latency
-  cliff smoothed: `deployed+critical → 99.95/200ms`, `deployed+high → 99.9/300ms`,
-  `deployed+medium → 99.5/400ms`, `installed+critical → 99.5/500ms`, `installed+high → 99/700ms`,
-  `installed+{medium,low} → 99/1s`, `no-signal → flat 99/500ms`. Needs an SRE sanity pass in code review.
+- **OQ-A — RESOLVED (v0.6).** Shipped in `config/importance_thresholds.yaml` (SLO) and ContextCore
+  `config/observability_derivation.yaml` (sampling/interval), config-overridable (FR-7). `installed`
+  is **extremely forgiving** per the operator directive ("a tool a person runs on their own machine
+  owes no production SLO"); `deployed`/no-signal keep the criticality scale. Cross-axis monotonic (FR-2a).
+
+  | criticality | **deployed** avail / p99 | **installed** avail / p99 | installed sampling / interval |
+  |---|---|---|---|
+  | critical | 99.9 / 300ms | 99 / 1s | 0.10 / 60s |
+  | high | 99.5 / 400ms | 97 / 2s | 0.05 / 120s |
+  | medium | 99 / 500ms | 95 / 3s | 0.01 / 300s |
+  | low | 99 / 1s | 90 / 5s | 0.005 / 300s |
+
+  (deployed sampling/interval = the criticality scale: critical 1.0/10s … low 0.01/120s.) The v0.4
+  proposal (`installed+critical → 99.5/500ms`, …) was superseded by the more-forgiving values above.
 - **OQ-B — RESOLVED (CRP R1 → FR-2b).** Availability + latency scale by importance; **throughput
   stays flat** unless authored (capacity ≠ importance).
 - **OQ-C — RESOLVED (CRP R1 → FR-5).** Confidence floor **C = 0.7**; below it `deployment_mode`
   stays unset (recorded). Conservative, because guessing `deployed` fabricates a tighter budget.
 
 ---
+
+*v0.6 — Both increments shipped. Increment 2 (deployment_mode axis) done: startd8 PR #247 (SLO
+`installed`/`deployed` rows + `BusinessContext.deployment_mode`) + ContextCore PR #27
+(`spec.deployment.mode` + cue inference + deployment-aware sampling/interval). OQ-A RESOLVED —
+`installed` extremely forgiving (critical 99/1s … low 90/5s; sampling 0.005–0.10). All config-driven
+(FR-7), cross-axis monotonic (FR-2a).*
 
 *v0.5 — Post-pilot reflective update. The pilot re-run falsified the "manifests omit thresholds"
 premise (they fabricated them), so importance scaling was masked. Added **FR-10** (pipeline must not
