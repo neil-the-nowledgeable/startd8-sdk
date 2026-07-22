@@ -8,6 +8,14 @@
 criticality (0.82) and the service graph (0.85) but **defaults** availability/latency/throughput to
 a flat innate table (`99% / 500ms / 100rps`) regardless of how important the service is.
 
+> **Composes with [`../observability-requirement-shaped/`](../observability-requirement-shaped/REQUIREMENTS.md) (#226).**
+> This doc owns the **importance** axes — `criticality × deployment_mode` (SLO *tightness*). #226 owns
+> the orthogonal **`signal_kind`** axis (which SLIs *exist* — freshness/queue_depth/… for non-request
+> services) and reshapes the generator to be requirement-shaped. **They share one table
+> (`config/importance_thresholds.yaml`) and one resolver (`_resolve_threshold`, generic over
+> `field_name`)** — signal_kind values are `field_name`s that slot under each `<criticality>.<mode>`
+> cell. Not rivals; composed by explicit decision (#226 §0.4). Read both before touching the threshold seam.
+
 ---
 
 ## 0. Planning Insights (Self-Reflective Update)
