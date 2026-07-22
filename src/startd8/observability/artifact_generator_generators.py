@@ -1017,9 +1017,25 @@ _FUNCTIONAL_SLI_TEMPLATES = {
     "saturation": (("resource_utilization_ratio",), "gauge_max", "percentunit"),
     "freshness": (("job_last_success_timestamp_seconds",), "age", "s"),
     "run_success": (("job_runs_total",), "ratio", "ratio"),
+    # AI-agent / LLM-integration signal_kinds (docs/design/ai-agent-observability, FR-1).
+    # UNLIKE the worker rows above these series are GROUNDED + live (verified in Mimir
+    # 2026-07-22) — the SDK already emits them under `category: ai_agent_observability`
+    # (costs/otel_metrics.py, session_tracking.py). Only the threshold VALUES stay deferred
+    # (OQ-1). They are project/model-scoped (see _PROJECT_SCOPED_SIGNAL_KINDS), not per-service.
+    "llm_cost_per_request": (("startd8_cost_per_request_USD",), "quantile", "USD"),
+    "token_throughput": (("startd8_cost_output_tokens_total",), "rate", "short"),
+    "context_saturation": (("startd8_context_usage_ratio",), "gauge_max", "percentunit"),
 }
 #: signal_kinds already covered by the convention triplet.
 _TRIPLET_SIGNAL_KINDS = frozenset({"availability", "latency", "throughput"})
+
+#: signal_kinds whose series are labeled model/provider/project (NOT the per-service
+#: identity) — the AI-agent family (FR-2a). Their SLO query must NOT carry a `{service=...}`
+#: selector (their series have no `service` label; it would match nothing), so they bind on
+#: an aggregate/project scope — matching the live-verified §6 PromQL.
+_PROJECT_SCOPED_SIGNAL_KINDS = frozenset(
+    {"llm_cost_per_request", "token_throughput", "context_saturation"}
+)
 
 
 def _select_functional_metric(candidates: Tuple[str, ...], service: ServiceHints) -> str:
@@ -1051,6 +1067,13 @@ def _functional_sli_query(shape: str, metric: str, selector: str) -> str:
         return f"time() - max({metric}{selector})"
     if shape == "ratio":
         return f"sum(rate({metric}{selector}[$__rate_interval]))"
+    if shape == "quantile":
+        # AI FR-1a: a latency-analog on a histogram — p99 of the `_bucket` series. Matches
+        # the live-verified §6 expression for llm_cost_per_request (cost/call p99).
+        return (
+            f"histogram_quantile(0.99, sum by (le) "
+            f"(rate({metric}_bucket{selector}[5m])))"
+        )
     return f"{metric}{selector}"
 
 
@@ -1093,7 +1116,10 @@ def generate_functional_slos(
         elif kind in _FUNCTIONAL_SLI_TEMPLATES and fr.target:
             candidates, shape, _unit = _FUNCTIONAL_SLI_TEMPLATES[kind]
             metric = _select_functional_metric(candidates, service)
-            query = _functional_sli_query(shape, metric, selector)
+            # FR-2a: AI-agent series are model/project-labeled, not per-service — a
+            # `{service=...}` selector would match nothing. Bind them on an aggregate scope.
+            _sel = "" if kind in _PROJECT_SCOPED_SIGNAL_KINDS else selector
+            query = _functional_sli_query(shape, metric, _sel)
         else:
             unfulfilled.append(
                 {"id": fr.id, "signal_kind": kind, "reason": "no groundable series/target"}
