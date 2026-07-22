@@ -25,6 +25,47 @@ def _worker(signal_kinds_targets):
     return ServiceHints(service_id="mailer", transport="", kinds=["async_worker"])
 
 
+class TestGroundedWorkerSeries:
+    """Grounded worker-series fix (evidence: live OTel-demo Kafka-consumer fleet, 2026-07-22).
+    A `lag` FR must bind to a series that REALLY exists, and prefer what the service declares."""
+
+    def _lag_business(self):
+        return BusinessContext(
+            functional_requirements=[
+                FunctionalRequirement(id="FR-LAG", signal_kind="lag", target="1000"),
+            ],
+        )
+
+    def test_lag_default_binds_to_the_verified_kafka_series_not_the_absent_semconv_name(self):
+        # A worker that reports no metrics (OQ-5) falls back to the PRIMARY candidate —
+        # which must be the series verified to exist, not messaging_client_* (returns 0).
+        svc = ServiceHints(service_id="fraud", transport="", kinds=["async_worker"])
+        result = generate_functional_slos(svc, self._lag_business())
+        assert result.status == "generated"
+        assert "kafka_consumer_records_lag_max" in result.content
+        assert "messaging_client_consumer_lag_messages" not in result.content
+
+    def test_lag_binds_to_the_metric_the_service_actually_declares(self):
+        # Service-declared series wins (FR-6a), dot/underscore-insensitive.
+        svc = ServiceHints(
+            service_id="fraud", transport="", kinds=["async_worker"],
+            convention_metrics=[ConventionMetric("kafka.consumer.records.lag", "gauge", "kafka_jmx")],
+        )
+        result = generate_functional_slos(svc, self._lag_business())
+        assert "kafka_consumer_records_lag" in result.content
+        assert "kafka_consumer_records_lag_max" not in result.content  # the exact declared one, not the default
+
+    def test_semconv_name_still_honored_when_a_service_emits_it(self):
+        # A service instrumented via OTel semconv (not JMX) still binds correctly —
+        # the candidate list is not Kafka-only overfit; what the service emits decides.
+        svc = ServiceHints(
+            service_id="w", transport="", kinds=["async_worker"],
+            declared_metrics=[ConventionMetric("messaging.client.consumer.lag.messages", "gauge", "otel")],
+        )
+        result = generate_functional_slos(svc, self._lag_business())
+        assert "messaging_client_consumer_lag_messages" in result.content
+
+
 class TestFunctionalEmission:
     def test_queue_depth_fr_emits_slo_on_convention_series(self):
         business = BusinessContext(

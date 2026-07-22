@@ -65,6 +65,18 @@ the surface is good on day one instead of showing a hint you immediately re-poli
 | ✅ **P3** | AQW-1 kind-vocab drift guard | S | dev — prevents a silent future regression | independent | **Delivered (PR #263)** |
 | **P4** | EC-1 OQ-5 grounding pilot | L | **highest ultimate** — closes #230/#231/#233 | **gated** on a real worker/batch/ML fleet + grounded values | a scheduled milestone, not a backlog quick-win |
 
+> **Fleet-grounded worker-series fix (2026-07-22 — PR #266, a partial-P4 spinoff):** a live OTel-demo
+> Kafka-consumer fleet on local Docker was queried as an OQ-5 subject. Finding: **every** assumed
+> `_FUNCTIONAL_SLI_TEMPLATES` series returned 0 — `messaging_client_consumer_lag_messages` etc. do
+> not exist; the real series are `kafka_consumer_records_lag*`. So a declared `lag` FR emitted a
+> **dead SLO** (verified: `max(messaging_client_consumer_lag_messages)` → NO DATA vs
+> `max(kafka_consumer_records_lag_max)` → 0). Fix: `_FUNCTIONAL_SLI_TEMPLATES` now carries
+> **candidate series** (preference-ordered) and `_select_functional_metric` binds to the series the
+> service actually declares (FR-6a), else the primary — with the *evidenced* Kafka series leading and
+> the unverified semconv name kept only as a fallback. This grounds the **`lag`/async_worker** family;
+> **batch/cron (#230/#233) and ml_inference (#231) remain un-grounded** — the OTel demo has no such
+> subjects (verified: no `job_*`/`cron`/GPU series scraped). P4 proper still needs those subjects.
+
 > **P2 spike verdict (2026-07-22 — grounded in cap-dev-pipe + ContextCore):** P2 is **real work, not
 > a no-op — but re-targeted.** Three consumers checked:
 > - **cap-dev-pipe** (`resolve-provenance.py:206`) already `yaml.safe_load`s the manifest but reads
