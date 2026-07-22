@@ -10,6 +10,7 @@ See docs/design/UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md for design.
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -168,6 +169,25 @@ _COMPOSITE_COVERAGE_WEIGHT = 0.3
 
 
 def _utc_now_iso() -> str:
+    """UTC timestamp for `generated_at` fields, honoring deterministic runs.
+
+    Under cap-dev-pipe's ``--deterministic-output``, the observability stage pins
+    ``CDP_DETERMINISTIC_RUN_TIMESTAMP`` (canonical format ``%Y%m%dT%H%M``) so the
+    generated meta files (manifest yaml, quality json, portal json) are
+    byte-identical across otherwise-identical runs (issue #224). When set, parse
+    and re-emit in the canonical ISO shape; if the value is unrecognized, return
+    it verbatim (still deterministic since it is pinned) — never fall back to
+    wall clock while the var is set. When unset, use wall clock as before.
+    """
+    pinned = os.environ.get("CDP_DETERMINISTIC_RUN_TIMESTAMP", "").strip()
+    if pinned:
+        for fmt in ("%Y%m%dT%H%M", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                dt = datetime.strptime(pinned, fmt).replace(tzinfo=timezone.utc)
+                return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                continue
+        return pinned
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 

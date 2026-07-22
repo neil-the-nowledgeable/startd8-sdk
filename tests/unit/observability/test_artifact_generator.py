@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import re
 import textwrap
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from startd8.observability.artifact_generator import (
     _parse_availability_to_fraction,
     _parse_duration_to_seconds,
     _prom_name,
+    _utc_now_iso,
     check_drift,
     extract_service_hints,
     generate_alert_rules,
@@ -1707,3 +1709,35 @@ class TestChannelBackendRouting:
         )
         for recv in doc["receivers"]:
             assert "slack_configs" not in recv and "email_configs" not in recv
+
+
+class TestDeterministicGeneratedAt:
+    """`generated_at` honors CDP_DETERMINISTIC_RUN_TIMESTAMP (issue #224)."""
+
+    _ENV = "CDP_DETERMINISTIC_RUN_TIMESTAMP"
+
+    def test_canonical_capdevpipe_format_normalized_to_iso(self, monkeypatch):
+        # cap-dev-pipe pins the run metadata timestamp (format %Y%m%dT%H%M)
+        monkeypatch.setenv(self._ENV, "20260722T1530")
+        assert _utc_now_iso() == "2026-07-22T15:30:00Z"
+
+    def test_deterministic_across_calls_when_pinned(self, monkeypatch):
+        monkeypatch.setenv(self._ENV, "20260722T1530")
+        assert _utc_now_iso() == _utc_now_iso()
+
+    def test_already_iso_value_returned_normalized(self, monkeypatch):
+        monkeypatch.setenv(self._ENV, "2026-07-22T15:30:00Z")
+        assert _utc_now_iso() == "2026-07-22T15:30:00Z"
+
+    def test_unrecognized_value_returned_verbatim_not_wall_clock(self, monkeypatch):
+        # Still deterministic across runs since the env value is pinned.
+        monkeypatch.setenv(self._ENV, "not-a-timestamp")
+        assert _utc_now_iso() == "not-a-timestamp"
+
+    def test_blank_env_falls_back_to_wall_clock_shape(self, monkeypatch):
+        monkeypatch.setenv(self._ENV, "   ")
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", _utc_now_iso())
+
+    def test_unset_env_uses_wall_clock_shape(self, monkeypatch):
+        monkeypatch.delenv(self._ENV, raising=False)
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", _utc_now_iso())
