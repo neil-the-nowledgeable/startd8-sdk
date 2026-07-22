@@ -389,6 +389,9 @@ def load_business_context(
     ctx.project_id = project.get("id") or metadata.get("project_id")
     ctx.project_name = project.get("name")
     ctx.criticality = business.get("criticality", "medium")
+    # Deployment mode (Increment 2): drives importance-scaled defaults toward extreme forgiveness for
+    # locally-installed apps. From spec.deployment.mode; absent ⇒ None ⇒ criticality-only.
+    ctx.deployment_mode = (spec.get("deployment") or {}).get("mode")
     ctx.owner = business.get("owner")
     ctx.dashboard_placement = observability.get("dashboardPlacement", "standard")
 

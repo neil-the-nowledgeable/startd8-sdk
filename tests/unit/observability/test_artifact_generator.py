@@ -1847,3 +1847,38 @@ class TestImportanceScaledThresholds:
     def test_deterministic(self):
         # FR-9: identical inputs ⇒ identical value + tier.
         assert self._resolve("high", "availability")[:2] == self._resolve("high", "availability")[:2]
+
+
+class TestDeploymentModeSLO:
+    """Increment 2: deployment_mode scales SLO thresholds; installed (local) is extremely forgiving."""
+
+    from startd8.observability.artifact_generator_generators import _resolve_threshold
+
+    def _val(self, criticality, mode, field):
+        b = BusinessContext(criticality=criticality, project_id="t", deployment_mode=mode)
+        return TestDeploymentModeSLO._resolve_threshold(field, b, [])[0]
+
+    def test_installed_more_forgiving_than_deployed(self):
+        # installed: lower availability + higher latency (more forgiving) at the same criticality.
+        assert _parse_availability_to_fraction(self._val("high", "installed", "availability")) \
+            < _parse_availability_to_fraction(self._val("high", "deployed", "availability"))
+        assert _parse_duration_to_seconds(self._val("high", "installed", "latency_p99")) \
+            > _parse_duration_to_seconds(self._val("high", "deployed", "latency_p99"))
+
+    def test_no_mode_equals_criticality_scale(self):
+        assert self._val("high", None, "availability") == self._val("high", "deployed", "availability")
+
+    def test_cross_axis_monotonic(self):
+        # deployed is never looser than installed at the same criticality (FR-2a cross-axis).
+        for c in ("critical", "high", "medium", "low"):
+            assert _parse_availability_to_fraction(self._val(c, "deployed", "availability")) \
+                >= _parse_availability_to_fraction(self._val(c, "installed", "availability"))
+            assert _parse_duration_to_seconds(self._val(c, "deployed", "latency_p99")) \
+                <= _parse_duration_to_seconds(self._val(c, "installed", "latency_p99"))
+
+    def test_installed_provenance_tier(self):
+        derivs = []
+        b = BusinessContext(criticality="critical", project_id="t", deployment_mode="installed")
+        _, tier = TestDeploymentModeSLO._resolve_threshold("availability", b, derivs)
+        assert tier == "default:importance"
+        assert any("installed" in d.transformation for d in derivs)
