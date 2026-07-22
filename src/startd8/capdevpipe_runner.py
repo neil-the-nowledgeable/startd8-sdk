@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from .capdevpipe_installer import EMBED_DIR_NAME
+from .capdevpipe_installer import EMBED_DIR_NAME, MANAGED_ENV_KEYS
 from .exceptions import ConfigurationError, ValidationError
 
 _PIPELINE_RUN_FLAGS = frozenset(
@@ -98,29 +98,111 @@ def ensure_pipeline_import(embed_dir: Path) -> None:
         sys.path.insert(0, embed_str)
 
 
+def resolve_run_config(embed_dir: Path, config_path: Path | None) -> Path | None:
+    """Resolve which ``pipeline.yaml`` a run should use, or ``None`` for a config-free run.
+
+    Precedence: an explicit ``config_path`` (from ``--config``) wins and MUST exist —
+    asking for a named config that is absent is a real error. Otherwise the embed's default
+    ``<embed>/pipeline.yaml`` is used when present. When neither exists the run falls back to
+    a **config-free** invocation (issue #220): the ``orchestrator`` embed profile ships
+    ``pipeline.env`` + the ``pipeline/`` package but no ``pipeline.yaml``, and the embedded
+    pipeline supports a config-free ``run`` (it resolves its script dir from the package
+    location and still reads ``pipeline.env``). A missing *default* is therefore not an error.
+    """
+    if config_path is not None:
+        resolved = config_path.expanduser().resolve()
+        if not resolved.is_file():
+            raise ValidationError(
+                f"Missing pipeline config: {resolved}. "
+                "Create it, point --config at an existing file, or omit --config to run "
+                "config-free (supply --plan/--requirements/--project as passthrough flags)."
+            )
+        return resolved
+    default = (embed_dir / "pipeline.yaml").resolve()
+    return default if default.is_file() else None
+
+
 def build_pipeline_run_argv(
     embed_dir: Path,
     extra_argv: Sequence[str] | None = None,
     *,
     config_path: Path | None = None,
 ) -> list[str]:
-    """Build ``pipeline run`` argv with embed defaults applied."""
-    embed_dir = embed_dir.resolve()
-    config = (config_path or embed_dir / "pipeline.yaml").resolve()
-    if not config.is_file():
-        raise ValidationError(
-            f"Missing pipeline config: {config}. "
-            f"Create {embed_dir / 'pipeline.yaml'} or pass --config."
-        )
+    """Build ``pipeline run`` argv with embed defaults applied.
 
+    Injects ``--config`` when a config is resolvable (explicit or the embed default) and the
+    caller has not already supplied ``--config`` in ``extra_argv``. When no config exists the
+    run proceeds config-free — the argv simply omits ``--config`` (issue #220).
+    """
+    embed_dir = embed_dir.resolve()
     extras = list(extra_argv or [])
     if not _argv_has_flag(extras, "--config"):
-        extras = ["--config", str(config), *extras]
+        config = resolve_run_config(embed_dir, config_path)
+        if config is not None:
+            extras = ["--config", str(config), *extras]
 
     argv = ["run", *extras]
-    if not _argv_has_flag(argv[1:], "--yes") and not _argv_has_flag(argv[1:], "--interactive"):
+    if not _argv_has_flag(argv[1:], "--yes") and not _argv_has_flag(
+        argv[1:], "--interactive"
+    ):
         argv.extend(["--yes"])
     return argv
+
+
+#: Managed ``pipeline.env`` keys → the ``pipeline run`` CLI flag that carries the same value.
+#: Used to guard against clobbering an explicit CLI flag: the embedded pipeline applies
+#: process-env *after* CLI args, so a blindly-exported env var would silently outrank a flag
+#: the user actually passed. Keys absent here (CONTEXTCORE_ROOT/SDK_ROOT) have no run flag.
+_ENV_KEY_TO_RUN_FLAG = {
+    "PROJECT_ROOT": "--project-root",
+    "PROJECT_NAME": "--project",
+}
+
+
+def _set_run_env_default(key: str, value: str, extras: Sequence[str]) -> None:
+    """``setdefault`` an env var unless the caller passed its equivalent CLI flag (issue #220).
+
+    Skips when *value* is blank, when the corresponding run flag is present in *extras* (env
+    would wrongly outrank an explicit CLI arg), or when the key is already set in the
+    environment (an explicit export stays authoritative).
+    """
+    if not value:
+        return
+    flag = _ENV_KEY_TO_RUN_FLAG.get(key)
+    if flag is not None and _argv_has_flag(extras, flag):
+        return
+    os.environ.setdefault(key, value)
+
+
+def _hydrate_env_from_pipeline_env(embed_dir: Path, extras: Sequence[str]) -> None:
+    """Export managed keys from ``<embed>/pipeline.env`` for a config-free run (issue #220).
+
+    A config-free run resolves the pipeline's script dir from the imported ``pipeline``
+    package. For a **symlink** embed that resolves through the symlink to the canonical
+    checkout, so the embed's ``pipeline.env`` is never loaded and ``--project`` would be
+    unset. The embedded pipeline honors these process-env keys, so hydrating them here makes a
+    bare ``capdevpipe run`` work on an orchestrator install whose profile ships no
+    ``pipeline.yaml``. Parsing mirrors cap-dev-pipe's ``load_pipeline_env``: plain
+    ``KEY=value`` (optionally quoted), ``#`` comments and blank lines skipped, no shell
+    sourcing.
+    """
+    env_path = embed_dir / "pipeline.env"
+    if not env_path.is_file():
+        return
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:  # pragma: no cover - unreadable env degrades to pipeline defaults
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key not in MANAGED_ENV_KEYS:
+            continue
+        value = value.strip().strip('"').strip("'")
+        _set_run_env_default(key, value, extras)
 
 
 def run_embedded_pipeline(
@@ -135,10 +217,19 @@ def run_embedded_pipeline(
     embed = resolve_embed_dir(workdir, embed_dir=embed_dir)
     ensure_pipeline_import(embed)
 
-    os.environ.setdefault("PROCESS_HOME", str(embed))
-    os.environ.setdefault("PROJECT_ROOT", str(workdir))
+    extras = list(extra_argv or [])
+    config_free = not _argv_has_flag(extras, "--config") and (
+        resolve_run_config(embed, config_path) is None
+    )
 
-    argv = build_pipeline_run_argv(embed, extra_argv, config_path=config_path)
+    os.environ.setdefault("PROCESS_HOME", str(embed))
+    if config_free:
+        # Load project identity from pipeline.env so a symlink embed (whose pipeline.env the
+        # config-free pipeline never reads) still resolves --project/--project-root.
+        _hydrate_env_from_pipeline_env(embed, extras)
+    _set_run_env_default("PROJECT_ROOT", str(workdir), extras)
+
+    argv = build_pipeline_run_argv(embed, extras, config_path=config_path)
 
     previous_cwd = Path.cwd()
     try:
@@ -149,8 +240,11 @@ def run_embedded_pipeline(
 
 
 def _invoke_pipeline_main(argv: list[str], *, embed_dir: Path) -> int:
-    """Import and invoke ``pipeline.cli.main`` (patchable for tests)."""
-    del embed_dir  # reserved for future script_dir override hooks
+    """Import and invoke ``pipeline.cli.main`` (patchable for tests).
+
+    ``embed_dir`` is used only to name the missing package in the failure message (and is
+    reserved for future script-dir override hooks).
+    """
     try:
         from pipeline.cli import main as pipeline_main
     except ImportError as exc:
