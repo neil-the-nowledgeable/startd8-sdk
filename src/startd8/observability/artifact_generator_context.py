@@ -295,9 +295,23 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
             skipped_non_service += 1
             continue
 
-        transport = hint.get("transport")
-        if not transport:
-            logger.warning("Service %s has no transport field; skipping", svc_id)
+        transport = hint.get("transport") or ""
+        # FR-12b/CR-3 (#226): declared workload kind(s), producer-supplied. Accept a
+        # scalar string or a list; normalize to a de-duped, order-preserving list.
+        _raw_kind = hint.get("kind")
+        if isinstance(_raw_kind, str):
+            kinds = [_raw_kind] if _raw_kind.strip() else []
+        elif isinstance(_raw_kind, list):
+            kinds = [str(k).strip() for k in _raw_kind if str(k).strip()]
+        else:
+            kinds = []
+        kinds = list(dict.fromkeys(kinds))  # de-dupe, keep order
+        # FR-14 (#226): relax the transport-required drop. A non-request workload
+        # (worker/cron/batch) legitimately has no listen transport; drop only when it
+        # ALSO declares no kind (nothing to determine ⇒ preserves pre-#226 behavior,
+        # keeping every existing http/grpc fixture byte-identical).
+        if not transport and not kinds:
+            logger.warning("Service %s has no transport and no kind; skipping", svc_id)
             continue
 
         metrics = hint.get("metrics", {})
@@ -328,6 +342,7 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
             ServiceHints(
                 service_id=svc_id,
                 transport=transport,
+                kinds=kinds,
                 language=hint.get("language"),
                 detected_databases=hint.get("detected_databases", []),
                 convention_metrics=convention_metrics,

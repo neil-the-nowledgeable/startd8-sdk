@@ -33,8 +33,15 @@ class ServiceHints:
     """Instrumentation hints for a single service."""
 
     service_id: str
-    transport: str  # "grpc" or "http"
+    # FR-14 (#226): optional — a service that declares a `kind` need not have a
+    # listen transport (workers/cron/batch don't). Absent transport + absent kinds
+    # is still skipped upstream (extract_service_hints).
+    transport: str = ""  # "grpc" | "http" | "" (non-request workload)
     language: Optional[str] = None
+    # FR-12b (#226): service workload kind(s), producer-supplied (CR-3). Modeled as
+    # one-or-more to support hybrid services (e.g. http_server + async_worker). Empty
+    # ⇒ determination falls back to transport (byte-identical to pre-#226).
+    kinds: List[str] = field(default_factory=list)
     detected_databases: List[str] = field(default_factory=list)
     convention_metrics: List[ConventionMetric] = field(default_factory=list)
     # Domain-specific metrics declared in the manifest (Closure 1 / Gap 1).
