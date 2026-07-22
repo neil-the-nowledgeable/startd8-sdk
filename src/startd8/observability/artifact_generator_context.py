@@ -229,6 +229,21 @@ def _is_non_service_entry(
     project_name = project_id.split("/")[0] if "/" in str(project_id) else ""
     if project_name and svc_id == project_name:
         return True
+    # Project *umbrella stem* (issue #241): a composite project_id like
+    # "mastodon-status-fanout" has an umbrella stem "mastodon" — the workspace/repo
+    # ROOT the producer sometimes emits as an instrumentation hint (structurally
+    # identical to a real service: same transport + metrics), which then gets a full,
+    # wrong (HTTP-shaped) artifact set. Filter an entry equal to that stem. Guarded to
+    # *composite* project_ids so a single-word project name that legitimately IS a
+    # service (e.g. "checkout") is never dropped. NOTE (producer bug, filed upstream):
+    # an arbitrary workspace basename that does NOT stem-match the project_id (e.g. a
+    # typo'd "mastadon") is structurally indistinguishable from a real service and
+    # cannot be caught here — the admitted-service log makes it visible instead.
+    proj = str(project_id).split("/")[0]
+    if "-" in proj:
+        stem = proj.split("-")[0]
+        if stem and svc_id.lower() == stem.lower():
+            return True
 
     # Known non-service directory names — check both exact match and as
     # path segments so compound IDs like "online-boutique/protos" are caught.
@@ -353,10 +368,15 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
             )
         )
 
+    # Visibility (issue #241): enumerate the admitted service_ids so a phantom entry
+    # the structural filter cannot catch (a producer-emitted workspace/project entry
+    # indistinguishable from a real service) is at least visible in the run log, rather
+    # than silently receiving a full artifact set.
     logger.info(
-        "Extracted hints for %d services (%d skipped)",
+        "Extracted hints for %d services (%d skipped): %s",
         len(services),
         len(raw_hints) - len(services),
+        ", ".join(s.service_id for s in services) or "(none)",
     )
     return services
 
