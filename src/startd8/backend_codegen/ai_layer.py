@@ -312,6 +312,24 @@ def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
                 raise ValueError(f"ai_passes.yaml: pass #{i} `output_fk` must be a mapping field->entity")
             output_fk = [(str(k), str(v)) for k, v in ofk.items()]
         guards = _parse_guards(entry.get("guards"), i)           # FR-B2/B3 (default-on)
+        # A PLAIN text-mode pass (no scope, no input_entities read-mode, no active
+        # source_binding) renders via `_render_pass_text`, which persists a SINGLE
+        # output entity (`output_entities[0]`). Without this guard a second/third
+        # output entity is silently DROPPED at generation — flag it instead, and
+        # point at read-mode for a genuine multi-entity pass. (The source_binding and
+        # scope modes already enforce this above.)
+        _active_binding = binding is not None and str(binding).strip().lower() != "none"
+        _is_plain_text_mode = (
+            scope is None and not entry.get("input_entities") and not _active_binding
+        )
+        if _is_plain_text_mode and len(tuple(entry["output_entities"])) != 1:
+            raise ValueError(
+                f"ai_passes.yaml: pass #{i} text-mode pass persists exactly one output "
+                f"entity from free text, but declares "
+                f"{list(entry['output_entities'])!r}. Split it into one pass per output "
+                f"entity (or add `input_entities` to make it a read-mode pass, which "
+                f"supports multiple)."
+            )
         passes.append(
             AiPass(
                 name=str(entry["name"]),

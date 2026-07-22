@@ -81,6 +81,36 @@ def test_parse_rejects_duplicate_names():
         parse_ai_passes(dup)
 
 
+def test_plain_text_mode_multi_output_is_flagged_not_silently_dropped():
+    # A plain text-mode pass (no input_entities / scope / source_binding) renders via
+    # _render_pass_text, which persists only output_entities[0]. A second output entity
+    # was silently DROPPED at generation; it must now raise a clear named error.
+    multi = (
+        "passes:\n"
+        "  - name: extract_both\n"
+        "    output_entities: [Capability, Outcome]\n"
+        "    route_path: /extract-both\n"
+        "    prompt: p\n"
+    )
+    with pytest.raises(ValueError, match=r"extract_both.*one output entity|one output entity"):
+        parse_ai_passes(multi)
+
+
+def test_read_mode_still_allows_multiple_output_entities():
+    # Byte-parity anchor: a READ-mode pass (has input_entities) legitimately writes
+    # multiple entities (the strtd8 multi-value Writes shape) — must NOT be rejected.
+    read_multi = (
+        "passes:\n"
+        "  - name: suggest\n"
+        "    input_entities: [ProofPoint]\n"
+        "    output_entities: [Capability, Outcome]\n"
+        "    route_path: /suggest\n"
+        "    prompt: p\n"
+    )
+    passes = parse_ai_passes(read_multi)
+    assert passes[0].output_entities == ("Capability", "Outcome")
+
+
 def test_human_inputs_parse():
     hi = parse_human_inputs(HUMAN)
     assert ("Metric", "value") in hi.human_only_fields
