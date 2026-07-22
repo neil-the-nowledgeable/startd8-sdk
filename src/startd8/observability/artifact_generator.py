@@ -27,7 +27,7 @@ from .artifact_generator_models import *  # noqa: F401,F403
 
 # Target Metric Binding (REQ_TARGET_METRIC_BINDING Step 3): resolve one
 # MetricDescriptor per service and thread it into the descriptor-aware generators.
-from .metric_descriptor import MetricDescriptor, resolve_descriptor
+from .metric_descriptor import MetricDescriptor, resolve_descriptor, resolve_sli_kinds
 
 # Context + generator clusters extracted to sibling modules (Tier-2 step 2);
 # re-exported so the orchestrator and external consumers keep their import paths.
@@ -85,6 +85,7 @@ from .artifact_generator_generators import (  # noqa: F401
     generate_runbook,
     generate_service_monitor,
     generate_slo_definitions,
+    generate_functional_slos,
 )
 
 try:
@@ -526,6 +527,10 @@ def generate_observability_artifacts(
         for service in services
     }
 
+    # FR-9 coverage accumulators (#226): the two gap classes + what actually emitted.
+    _fr_empty: List[str] = []
+    _fr_unfulfilled: List[Dict[str, Any]] = []
+    _fr_emitted: List[str] = []
     for service in services:
         descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
@@ -535,6 +540,28 @@ def generate_observability_artifacts(
                     descriptor,
                 )
             )
+        # FR-5: functional-requirement SLOs for declared non-triplet signal_kinds.
+        func_slo = generate_functional_slos(service, business, descriptor)
+        if func_slo.status == "generated":
+            report.artifacts.append(func_slo)
+        _q = func_slo.quality or {}
+        _fr_emitted.extend(_q.get("emitted_fr_ids", []))
+        _fr_unfulfilled.extend(_q.get("unfulfilled", []))
+        # FR-9: a service that resolves to ∅ SLI kinds (non-request, nothing declared)
+        # is observed by nothing — surface it rather than silently emitting nothing.
+        _svc_signals = [
+            f.signal_kind
+            for f in (business.functional_requirements or [])
+            if f.service in (None, "", service.service_id)
+        ]
+        if not resolve_sli_kinds(service.kinds, _svc_signals, service.transport):
+            _fr_empty.append(service.service_id)
+
+    report.fr_coverage = {
+        "empty_services": _fr_empty,
+        "unfulfilled": _fr_unfulfilled,
+        "emitted": _fr_emitted,
+    }
 
     report.services_processed = len(services)
     report.services_skipped = len(
@@ -1170,6 +1197,11 @@ def _write_index(
             len(a.quality.get("repairs_applied", [])) for a in scored
         )
         index["quality_summary"] = quality_summary
+
+    # FR-9 (#226): surface FR/SLI-kind coverage in the manifest, but only when there
+    # is something to report — a run with no functional[] stays byte-identical.
+    if any(report.fr_coverage.get(k) for k in ("empty_services", "unfulfilled", "emitted")):
+        index["fr_coverage"] = report.fr_coverage
 
     dest = output_dir / "observability-manifest.yaml"
     dest.parent.mkdir(parents=True, exist_ok=True)

@@ -973,6 +973,126 @@ def _ensure_red_coverage(
             pass
 
 
+#: Per-signal_kind SLO template for the NON-request kinds (#226 FR-5). Each maps a
+#: declared functional[] signal_kind to (convention metric, shape, unit). The series
+#: are convention-sourced (FR-6a) — OTel messaging-family / a named exporter
+#: convention — bound to the service via the descriptor's identity selector; the FR's
+#: `target` is the threshold. `custom` lets an FR carry its own PromQL in `target`.
+#: Kinds absent here (or an FR with no `target`) are *unfulfilled* → FR-9, never faked.
+_FUNCTIONAL_SLI_TEMPLATES = {
+    "queue_depth": ("messaging_client_queued_messages", "gauge_max", "short"),
+    "lag": ("messaging_client_consumer_lag_messages", "gauge_max", "short"),
+    "retry_rate": ("messaging_client_retries_total", "rate", "short"),
+    "saturation": ("resource_utilization_ratio", "gauge_max", "percentunit"),
+    "freshness": ("job_last_success_timestamp_seconds", "age", "s"),
+    "run_success": ("job_runs_total", "ratio", "ratio"),
+}
+#: signal_kinds already covered by the convention triplet.
+_TRIPLET_SIGNAL_KINDS = frozenset({"availability", "latency", "throughput"})
+
+
+def _functional_sli_query(shape: str, metric: str, selector: str) -> str:
+    """PromQL for a functional SLI by its shape (#226 FR-5), bound to *selector*."""
+    if shape == "gauge_max":
+        return f"max({metric}{selector})"
+    if shape == "rate":
+        return f"sum(rate({metric}{selector}[5m]))"
+    if shape == "age":
+        return f"time() - max({metric}{selector})"
+    if shape == "ratio":
+        return f"sum(rate({metric}{selector}[$__rate_interval]))"
+    return f"{metric}{selector}"
+
+
+def generate_functional_slos(
+    service: ServiceHints,
+    business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
+) -> ArtifactResult:
+    """Emit an SLO per declared functional[] FR whose signal_kind is a NON-request
+    kind (#226 FR-5) — queue_depth/retry_rate/freshness/run_success/lag/saturation.
+
+    Convention-sourced series (FR-6a) bound to the service; the FR's ``target`` is the
+    threshold (or, for ``custom``, its own PromQL). FRs scoped to another service, or
+    whose signal_kind is in the convention triplet, are skipped. FRs the emitter cannot
+    ground (unknown signal_kind, or missing target) are recorded ``unfulfilled`` in
+    ``quality`` for FR-9 — never emitted as a fabricated artifact. No functional[] ⇒
+    ``skipped`` (byte-identical to pre-#226; this generator adds nothing).
+    """
+    descriptor = _descriptor_for(service, descriptor)
+    selector = descriptor.selector(service.service_id)
+    frs = [
+        f
+        for f in (business.functional_requirements or [])
+        if f.service in (None, "", service.service_id)
+        and f.signal_kind not in _TRIPLET_SIGNAL_KINDS
+    ]
+    if not frs:
+        return ArtifactResult(
+            artifact_type="slo_definition", service_id=service.service_id,
+            output_path="", status="skipped",
+        )
+
+    documents: List[str] = []
+    emitted_fr_ids: List[str] = []
+    unfulfilled: List[Dict[str, str]] = []
+    for fr in frs:
+        kind = fr.signal_kind
+        if kind == "custom" and fr.target:
+            query = fr.target
+        elif kind in _FUNCTIONAL_SLI_TEMPLATES and fr.target:
+            metric, shape, _unit = _FUNCTIONAL_SLI_TEMPLATES[kind]
+            query = _functional_sli_query(shape, metric, selector)
+        else:
+            unfulfilled.append(
+                {"id": fr.id, "signal_kind": kind, "reason": "no groundable series/target"}
+            )
+            continue
+
+        slo = {
+            "apiVersion": "openslo/v1",
+            "kind": "SLO",
+            "metadata": {
+                "name": f"{service.service_id}-{kind}-{fr.id}".lower().replace("_", "-"),
+                "labels": {
+                    "service": service.service_id,
+                    "signal_kind": kind,
+                    "source_fr": fr.id,  # FR-8: traceability to the originating FR
+                    "generated_by": "startd8",
+                },
+            },
+            "spec": {
+                "description": fr.description or f"{kind} SLO for {service.service_id} ({fr.id})",
+                "target": fr.target,
+                "timeWindow": {"duration": business.slo_window, "isRolling": True},
+                "indicator": {
+                    "metadata": {"name": f"{service.service_id}-{kind}-sli"},
+                    "spec": {
+                        "thresholdMetric": {
+                            "metricSource": {"type": "prometheus", "spec": {"query": query}},
+                        },
+                    },
+                },
+                "alerting": {
+                    "name": f"{service.service_id}-{kind}-alert",
+                    "labels": {"severity": _severity_for(business, [])},
+                },
+            },
+        }
+        documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+        emitted_fr_ids.append(fr.id)
+
+    header = f"# Functional-requirement SLOs for {service.service_id} (#226 FR-5)\n"
+    return ArtifactResult(
+        artifact_type="slo_definition",
+        service_id=service.service_id,
+        output_path=f"slos/{service.service_id}-functional-slo.yaml",
+        status="generated" if documents else "skipped",
+        content=(header + "\n---\n".join(documents)) if documents else "",
+        quality={"emitted_fr_ids": emitted_fr_ids, "unfulfilled": unfulfilled},
+    )
+
+
 def generate_slo_definitions(
     service: ServiceHints,
     business: BusinessContext,
