@@ -1,8 +1,14 @@
 # AI-Agent / LLM-Integration `signal_kind` Family for the Observability Generator — Requirements
 
-**Version:** 0.1 (draft — reflective-requirements loop; series live-grounded, values deferred)
+**Version:** 0.2 (core mechanism implemented — FR-1/FR-1a/FR-2a shipped)
 **Date:** 2026-07-22
-**Status:** Draft — ready for CRP
+**Status:** Core SHIPPED (PR #270). **FR-1** (3 AI signal_kinds in `_FUNCTIONAL_SLI_TEMPLATES`),
+**FR-1a** (`quantile` shape), and **FR-2a** (project-scoped aggregate selector, never `{service=…}`)
+are implemented + tested; the generated queries match the §6 live-verified PromQL. **Deferred per
+their own gates:** FR-2 (auto-bind cat-5 route-states without a declared FR — OQ-2), FR-3 (threshold
+VALUES — OQ-1, don't invent), `llm_error_rate` (OQ-4). FR-4/FR-5 hold automatically via the existing
+functional-SLO path. Project-wide (`service`-less) AI FRs still emit per-service (OQ-2 dedup deferred);
+anchor an AI FR to a service meanwhile.
 **Extends:** the #226 "de-overfit" family (`docs/design/observability-requirement-shaped/REQUIREMENTS.md`),
 which made the observability generator **requirement-shaped** (per-`signal_kind` templates) and added
 service **KINDS** (`metric_descriptor.py`).

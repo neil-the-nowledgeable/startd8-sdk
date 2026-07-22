@@ -25,6 +25,52 @@ def _worker(signal_kinds_targets):
     return ServiceHints(service_id="mailer", transport="", kinds=["async_worker"])
 
 
+class TestAiAgentSignalKinds:
+    """docs/design/ai-agent-observability FR-1/FR-1a/FR-2a: the SDK emits SLOs for its own
+    hosted-LLM telemetry (cost/tokens/context) — grounded, live series; values deferred (OQ-1).
+    Distinct from #231 GPU ml_inference (§5)."""
+
+    def _svc(self):
+        # an 'agent' service anchoring the project-scoped AI FRs (per-service dedup = OQ-2).
+        return ServiceHints(service_id="agent", transport="", kinds=["async_worker"])
+
+    def _emit(self, signal_kind, target):
+        business = BusinessContext(
+            criticality="high",
+            functional_requirements=[
+                FunctionalRequirement(id="FR-AI", signal_kind=signal_kind, target=target,
+                                      service="agent"),
+            ],
+        )
+        return generate_functional_slos(self._svc(), business)
+
+    def test_llm_cost_per_request_emits_histogram_quantile(self):
+        r = self._emit("llm_cost_per_request", "0.05")
+        assert r.status == "generated"
+        assert "histogram_quantile(0.99, sum by (le) (rate(startd8_cost_per_request_USD_bucket[5m])))" in r.content
+        assert "target: '0.05'" in r.content or 'target: "0.05"' in r.content or "target: 0.05" in r.content
+
+    def test_token_throughput_emits_rate(self):
+        r = self._emit("token_throughput", "500")
+        assert "sum(rate(startd8_cost_output_tokens_total[5m]))" in r.content
+
+    def test_context_saturation_emits_gauge_max(self):
+        r = self._emit("context_saturation", "0.8")
+        assert "max(startd8_context_usage_ratio)" in r.content
+
+    def test_ai_slis_are_project_scoped_never_service_selector(self):
+        # FR-2a: AI series are model/project-labeled — a {service=...} selector would match
+        # nothing. The query must be aggregate (matches the live-verified §6 PromQL).
+        for kind, tgt in [("llm_cost_per_request", "0.05"), ("token_throughput", "500"),
+                          ("context_saturation", "0.8")]:
+            r = self._emit(kind, tgt)
+            assert "service=" not in r.content and "service_name=" not in r.content
+
+    def test_ai_rows_are_inert_without_a_declared_ai_fr(self):
+        # FR-0 byte-parity: a worker with no AI FR emits nothing AI-shaped (skipped).
+        assert generate_functional_slos(self._svc(), BusinessContext()).status == "skipped"
+
+
 class TestGroundedWorkerSeries:
     """Grounded worker-series fix (evidence: live OTel-demo Kafka-consumer fleet, 2026-07-22).
     A `lag` FR must bind to a series that REALLY exists, and prefer what the service declares."""
