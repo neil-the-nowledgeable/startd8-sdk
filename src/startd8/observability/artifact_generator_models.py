@@ -189,6 +189,11 @@ class GenerationReport:
     # Each row: {name, category, route_state, status, classification_source, [owner]}.
     # The authoritative emit-vs-cede provenance surface, NOT inferred from category.
     route_states: List[Dict[str, Any]] = field(default_factory=list)
+    # #226 FR-9: FR + SLI-kind coverage — distinguishes two gap classes so the pilot's
+    # "6 of 7 FRs → nothing" is visible, not masked. Keys: `empty_services` (resolved=∅,
+    # no kind/transport), `unfulfilled` (declared signal_kind, ungroundable ⇒ produced=0),
+    # `emitted` (FR ids that produced an artifact). Empty when no functional[] (pre-#226).
+    fr_coverage: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
