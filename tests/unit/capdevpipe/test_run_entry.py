@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,47 @@ from startd8.capdevpipe_runner import (
     run_embedded_pipeline,
 )
 from startd8.exceptions import ValidationError
+
+# A real (minimal) pipeline.config so config-free hydration can import canonical
+# ``load_pipeline_env`` from a tmp embed in isolation (AQ-1). Faithful to cap-dev-pipe's parser.
+_MINIMAL_PIPELINE_CONFIG = """\
+from pathlib import Path
+
+
+def load_pipeline_env(script_dir):
+    env_file = Path(script_dir) / "pipeline.env"
+    result = {}
+    if not env_file.is_file():
+        return result
+    for line in env_file.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip().strip("\\r")
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, _, value = line.partition("=")
+            result[key.strip()] = value.strip().strip('"').strip("'")
+    return result
+"""
+
+
+def _write_pipeline_pkg(embed: Path) -> None:
+    """Write a minimal importable ``pipeline`` package (with config.load_pipeline_env)."""
+    pkg = embed / "pipeline"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "config.py").write_text(_MINIMAL_PIPELINE_CONFIG, encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pipeline_imports():
+    """AQ-1: config-free hydration imports ``pipeline.config`` from the (tmp) embed. Drop any
+    ``pipeline*`` modules imported during the test so a stale tmpdir path can't leak into later
+    tests. Modules cached *before* the test are preserved."""
+    before = set(sys.modules)
+    yield
+    for name in set(sys.modules) - before:
+        if name == "pipeline" or name.startswith("pipeline."):
+            del sys.modules[name]
 
 
 class TestResolveEmbedDir:
@@ -162,11 +204,16 @@ class TestRunEmbeddedPipeline:
         project = tmp_path / "project"
         project.mkdir()
         embed = project / ".cap-dev-pipe"
-        (embed / "pipeline").mkdir(parents=True)
+        _write_pipeline_pkg(embed)  # real pipeline.config for AQ-1 hydration
         # Orchestrator-style embed: pipeline.env but no pipeline.yaml.
         (embed / "pipeline.env").write_text(
             'PROJECT_NAME="demo"\nPROJECT_ROOT="/work/demo"\n', encoding="utf-8"
         )
+        # A single language profile so the config-free run auto-selects it (QW-2 requires one).
+        prof = embed / "python"
+        prof.mkdir()
+        (prof / "python-plan.md").write_text("# plan\n", encoding="utf-8")
+        (prof / "python-requirements.md").write_text("# reqs\n", encoding="utf-8")
         return project, embed
 
     def test_config_free_run_hydrates_project_from_pipeline_env(
@@ -221,6 +268,43 @@ class TestRunEmbeddedPipeline:
             cwd=project, extra_argv=["--project-root", "/explicit/root"]
         )
         assert "PROJECT_ROOT" not in os.environ
+
+    def test_config_free_announces_mode_and_profile(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        # QW-1: a bare config-free run tells the user what it's doing (to stderr).
+        project, _ = self._make_configless_embed(tmp_path)
+        clean = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("PROJECT_NAME", "PROJECT_ROOT")
+        }
+        monkeypatch.setattr(os, "environ", clean)
+        monkeypatch.setattr(
+            "startd8.capdevpipe_runner._invoke_pipeline_main",
+            lambda argv, *, embed_dir: 0,
+        )
+        run_embedded_pipeline(cwd=project, extra_argv=["--dry-run"])
+        err = capsys.readouterr().err
+        assert "config-free run" in err
+        assert "auto-selected profile 'python'" in err
+
+    def test_config_free_no_profile_raises_actionably(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # QW-2: no profile to auto-select + no --plan → clear, actionable error (not an opaque
+        # downstream "plan required").
+        project = tmp_path / "p"
+        project.mkdir()
+        embed = project / ".cap-dev-pipe"
+        _write_pipeline_pkg(embed)
+        (embed / "pipeline.env").write_text('PROJECT_NAME="demo"\n', encoding="utf-8")
+        monkeypatch.setattr(
+            "startd8.capdevpipe_runner._invoke_pipeline_main",
+            lambda argv, *, embed_dir: 0,
+        )
+        with pytest.raises(ValidationError, match="no language profile"):
+            run_embedded_pipeline(cwd=project, extra_argv=[])
 
 
 class TestDiscoverProfileDocs:

@@ -79,9 +79,15 @@ first (canonical `pipeline verify` may already do this — delegate rather than 
 <details>
 <summary>Backlog appendix (draw from over later increments)</summary>
 
+> **Delivered (chore/capdevpipe-run-quickwins):** AQ-1, QW-1, QW-2, LH-1 are all done — see the
+> ✅ markers below. Finding #1 (zero-flag run) shipped in #221; finding #2 (profile-aware verify)
+> in #222. AQ-1's actual size was S (not XS): canonical `load_pipeline_env` needs a real importable
+> `pipeline` package, so the config-free tests gained real package scaffolding + a `sys.modules`
+> isolation fixture — a grounding correction to the original estimate.
+
 ### 🏗️ Architectural quick wins
 
-- **AQ-1 — Use canonical `load_pipeline_env` instead of the hand-rolled parser *(XS/S)*.** The #220
+- ✅ **AQ-1 — Use canonical `load_pipeline_env` instead of the hand-rolled parser *(XS/S → S)*.** The #220
   fix added `_hydrate_env_from_pipeline_env` (`capdevpipe_runner.py`), which re-implements
   `KEY=value` parsing that already exists canonically as `pipeline.config.load_pipeline_env(script_dir)`
   (`~/Documents/dev/cap-dev-pipe/pipeline/config.py:207`) — importable once `ensure_pipeline_import`
@@ -93,18 +99,18 @@ first (canonical `pipeline verify` may already do this — delegate rather than 
 
 ### ⚡ Quick wins
 
-- **QW-1 — Announce the run mode *(XS)*.** On the config-free path, emit one info line —
+- ✅ **QW-1 — Announce the run mode *(XS)*.** On the config-free path, emit one info line —
   `running config-free (no pipeline.yaml); profile=<lang>` — so the user understands *why* they
   didn't need `--config` and which inputs were selected. Closes a comprehension gap the #220 fix
-  opened (the run now silently behaves differently depending on whether `pipeline.yaml` exists).
-- **QW-2 — Point the config-free error at the fix, not just the symptom *(XS)*.** If discovery
+  opened. *(Delivered as two stderr lines via `_announce`.)*
+- ✅ **QW-2 — Point the config-free error at the fix, not just the symptom *(XS)*.** If discovery
   (finding #1) finds no profile *and* the caller passed no `--plan`, the pipeline's downstream
   "`--project`/plan required" error is opaque. Pre-empt it with a message naming the embed's
   expected `<lang>/<lang>-plan.md` convention and the `capdevpipe install --profile` that creates it.
 
 ### 🌱 Low-hanging fruit
 
-- **LH-1 — `capdevpipe run --dry-run` is already reachable — document it *(XS)*.** Passthrough argv
+- ✅ **LH-1 — `capdevpipe run --dry-run` is already reachable — document it *(XS)*.** Passthrough argv
   carries `--dry-run` through to the pipeline (validated in the #220 smoke test: it prints the full
   stage plan, exit 0). It's a strong "what will this do?" affordance that no help text mentions. Add
   it to the `run` command help / a docs example. Pure surfacing.

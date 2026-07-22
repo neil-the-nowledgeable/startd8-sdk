@@ -177,6 +177,33 @@ def _set_run_env_default(key: str, value: str, extras: Sequence[str]) -> None:
     os.environ.setdefault(key, value)
 
 
+def _announce(message: str) -> None:
+    """Emit one concise user-facing status line to stderr (QW-1).
+
+    stderr (not stdout) so it never interleaves with the embedded pipeline's own stage output.
+    """
+    print(f"[capdevpipe] {message}", file=sys.stderr)
+
+
+def _load_pipeline_env(embed_dir: Path) -> dict[str, str]:
+    """Read ``<embed>/pipeline.env`` via canonical ``pipeline.config.load_pipeline_env`` (AQ-1).
+
+    Single-sources the ``pipeline.env`` format on the embedded pipeline rather than re-parsing
+    it here — the canonical loader also handles a UTF-8 BOM and CRLF line endings. Relies on
+    :func:`ensure_pipeline_import` having placed the embed on ``sys.path`` (always true on the
+    ``run`` path). Degrades to ``{}`` if the embed has no importable ``pipeline`` package or the
+    file is unreadable — the caller then falls back to its remaining env defaults.
+    """
+    try:
+        from pipeline.config import load_pipeline_env
+    except ImportError:  # pragma: no cover - embed lacks an importable pipeline package
+        return {}
+    try:
+        return load_pipeline_env(embed_dir)
+    except OSError:  # pragma: no cover - unreadable env degrades to pipeline defaults
+        return {}
+
+
 def _hydrate_env_from_pipeline_env(embed_dir: Path, extras: Sequence[str]) -> None:
     """Export managed keys from ``<embed>/pipeline.env`` for a config-free run (issue #220).
 
@@ -185,27 +212,14 @@ def _hydrate_env_from_pipeline_env(embed_dir: Path, extras: Sequence[str]) -> No
     checkout, so the embed's ``pipeline.env`` is never loaded and ``--project`` would be
     unset. The embedded pipeline honors these process-env keys, so hydrating them here makes a
     bare ``capdevpipe run`` work on an orchestrator install whose profile ships no
-    ``pipeline.yaml``. Parsing mirrors cap-dev-pipe's ``load_pipeline_env``: plain
-    ``KEY=value`` (optionally quoted), ``#`` comments and blank lines skipped, no shell
-    sourcing.
+    ``pipeline.yaml``. Parsing is delegated to canonical ``load_pipeline_env`` (AQ-1); only the
+    flag-guarded export of the four managed keys is applied here.
     """
-    env_path = embed_dir / "pipeline.env"
-    if not env_path.is_file():
-        return
-    try:
-        text = env_path.read_text(encoding="utf-8")
-    except OSError:  # pragma: no cover - unreadable env degrades to pipeline defaults
-        return
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        if key not in MANAGED_ENV_KEYS:
-            continue
-        value = value.strip().strip('"').strip("'")
-        _set_run_env_default(key, value, extras)
+    env = _load_pipeline_env(embed_dir)
+    for key in MANAGED_ENV_KEYS:
+        value = env.get(key, "")
+        if value:
+            _set_run_env_default(key, value, extras)
 
 
 def discover_profile_docs(embed_dir: Path) -> list[tuple[str, Path, Path]]:
@@ -253,7 +267,14 @@ def _autofill_profile_docs(embed_dir: Path, extras: list[str]) -> list[str]:
         return extras
     discovered = discover_profile_docs(embed_dir)
     if not discovered:
-        return extras
+        # QW-2: with no profile to auto-select and no --plan, the pipeline would fail with an
+        # opaque "plan required" deep in the run. Pre-empt it with the actionable fix.
+        raise ValidationError(
+            f"Config-free run under {embed_dir} found no language profile to auto-select, and "
+            "no --plan was given. Install one with `startd8 capdevpipe install --profile "
+            "<lang>:<plan>:<reqs>` (which creates <lang>/<lang>-plan.md + <lang>-requirements.md), "
+            "or pass --plan/--requirements explicitly."
+        )
     if len(discovered) > 1:
         langs = ", ".join(lang for lang, _, _ in discovered)
         raise ValidationError(
@@ -268,6 +289,7 @@ def _autofill_profile_docs(embed_dir: Path, extras: list[str]) -> list[str]:
         plan,
         extra={"pipeline_name": "capdevpipe_run"},
     )
+    _announce(f"auto-selected profile {lang!r} (from {embed_dir / lang})")
     return ["--plan", str(plan), "--requirements", str(reqs), *extras]
 
 
@@ -290,6 +312,7 @@ def run_embedded_pipeline(
 
     os.environ.setdefault("PROCESS_HOME", str(embed))
     if config_free:
+        _announce("config-free run (no pipeline.yaml)")
         # Load project identity from pipeline.env so a symlink embed (whose pipeline.env the
         # config-free pipeline never reads) still resolves --project/--project-root.
         _hydrate_env_from_pipeline_env(embed, extras)
