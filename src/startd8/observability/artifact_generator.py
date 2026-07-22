@@ -519,6 +519,7 @@ def generate_observability_artifacts(
     descriptors: Dict[str, MetricDescriptor] = {
         service.service_id: resolve_descriptor(
             profile=service.metric_profile or None,
+            kinds=service.kinds,  # #226 FR-6: kind wins over transport
             transport=service.transport,
             overrides=service.descriptor_overrides,
         )
