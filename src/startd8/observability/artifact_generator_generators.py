@@ -18,7 +18,7 @@ import yaml  # noqa: F401
 
 from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
 from .artifact_generator_models import *  # noqa: F401,F403
-from .metric_descriptor import MetricDescriptor, profile_for_transport
+from .metric_descriptor import MetricDescriptor, profile_for_kinds, profile_for_transport
 from .spec import Receiver
 
 try:
@@ -214,7 +214,9 @@ def _descriptor_for(
     """
     if descriptor is not None:
         return descriptor
-    return profile_for_transport(service.transport)
+    # #226 FR-6: honor a declared workload kind in the standalone path too (kind wins
+    # over transport). Empty kinds ⇒ transport default (byte-identical to pre-#226).
+    return profile_for_kinds(service.kinds, service.transport)
 
 
 def _derivation_comment(derivations: List[DerivationTrace]) -> str:
