@@ -205,8 +205,10 @@ def main() -> int:
     print(f"Services skipped:   {report.services_skipped}")
     print(f"Artifacts: {generated} generated, {skipped} skipped, {errored} errors")
 
-    # Quality summary (REQ-KZ-OBS-730c)
-    scored = [a for a in report.artifacts if a.quality]
+    # Quality summary (REQ-KZ-OBS-730c). Gate on the `score` key, not truthiness:
+    # functional-SLO artifacts carry a scoreless coverage dict (#226 FR-5 / #254), which
+    # would otherwise KeyError on a.quality["score"] below once functional SLOs emit.
+    scored = [a for a in report.artifacts if a.quality and "score" in a.quality]
     if scored:
         scores_by_type: dict = {}
         for a in scored:
@@ -223,6 +225,14 @@ def main() -> int:
         total_repairs = sum(len(a.quality.get("repairs_applied", [])) for a in scored)
         print(f"    composite: {composite:.0%}")
         print(f"    issues: {total_issues}, repairs applied: {total_repairs}")
+
+    # P2 (#226 FR-9): surface the coverage GAPS the manifest records, so a human running
+    # the pipe sees them here instead of grepping observability-manifest.yaml.
+    gap_lines = format_coverage_gaps(getattr(report, "fr_coverage", None))
+    if gap_lines:
+        print()
+        for _line in gap_lines:
+            print(_line)
 
     # Write kaizen-metrics.json observability section (REQ-KZ-OBS-500)
     if not args.dry_run and scored:
@@ -319,6 +329,46 @@ def _apply_coverage_gate(args, output: Path) -> bool:
         for failure in result.failures:
             print(f"  - {failure}")
     return not result.passed
+
+
+def format_coverage_gaps(fr_coverage: dict) -> list:
+    """P2 (#226 FR-9 / #230-233): render the manifest's coverage GAPS as human lines.
+
+    Mirrors the portal Coverage Gaps panel (P1c): ungrounded-kind services (∅-folded +
+    a kind-specific next step from ``suggested_signals``), plain observed-by-nothing
+    services, and unfulfilled FRs. Returns ``[]`` when there are no gaps, so a fully
+    covered project prints nothing (byte-identical to before this surface existed).
+    """
+    cov = fr_coverage or {}
+    ungrounded = cov.get("ungrounded_kinds") or []
+    empty = cov.get("empty_services") or []
+    unfulfilled = cov.get("unfulfilled") or []
+    if not (ungrounded or empty or unfulfilled):
+        return []
+
+    lines = [
+        f"  Coverage gaps ({len(empty)} observed-by-nothing, "
+        f"{len(ungrounded)} ungrounded-kind, {len(unfulfilled)} unfulfilled):"
+    ]
+    ungrounded_svcs = {u.get("service") for u in ungrounded}
+    for u in ungrounded:
+        sig = "/".join(u.get("suggested_signals") or []) or "run_success/freshness"
+        also = " (observed by nothing)" if u.get("observed_by_nothing") else ""
+        lines.append(
+            f"    - {u.get('service')}: ungrounded kind '{u.get('kind')}'{also} "
+            f"-> declare a {sig} FR + target"
+        )
+    for svc in empty:
+        if svc in ungrounded_svcs:  # already told as the ungrounded story (LH-1) — no dupe
+            continue
+        lines.append(
+            f"    - {svc}: observed by nothing -> declare an FR, or add a request transport"
+        )
+    for uf in unfulfilled:
+        lines.append(
+            f"    - FR {uf.get('id', '?')}: declared '{uf.get('signal_kind', '?')}', metric absent"
+        )
+    return lines
 
 
 def _write_quality_to_kaizen_metrics(

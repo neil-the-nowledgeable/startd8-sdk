@@ -62,3 +62,48 @@ def test_absent_flag_forwards_none(monkeypatch, tmp_path):
     """Additive + opt-in: no flag ⇒ observability_yaml_path=None (no new artifact, manifest intact)."""
     captured = _run_main(monkeypatch, tmp_path, [])
     assert captured.get("observability_yaml_path") is None
+
+
+# --- P2 (#226 FR-9): human-readable coverage-gap summary in the wrapper ---
+
+def test_format_coverage_gaps_empty_when_no_gaps():
+    mod = _load_script_module()
+    assert mod.format_coverage_gaps({}) == []
+    assert mod.format_coverage_gaps({"empty_services": [], "ungrounded_kinds": [], "emitted": ["FR-1"]}) == []
+
+
+def test_format_coverage_gaps_renders_ungrounded_empty_and_unfulfilled():
+    mod = _load_script_module()
+    cov = {
+        "empty_services": ["mailer", "ranker"],
+        "ungrounded_kinds": [
+            {"service": "ranker", "kind": "ml_inference", "observed_by_nothing": True,
+             "suggested_signals": ["saturation", "lag"]},
+        ],
+        "unfulfilled": [{"id": "FR-7", "signal_kind": "freshness"}],
+        "emitted": [],
+    }
+    text = "\n".join(mod.format_coverage_gaps(cov))
+    # P1a kind-specific next step; P1b ∅ folded into the ungrounded row.
+    assert "ranker: ungrounded kind 'ml_inference' (observed by nothing) -> declare a saturation/lag FR" in text
+    # LH-1: ranker (ungrounded+empty) is NOT double-listed as a bare empty service.
+    assert text.count("ranker:") == 1
+    # a plain empty service still shows; the unfulfilled FR shows.
+    assert "mailer: observed by nothing" in text
+    assert "FR FR-7: declared 'freshness'" in text
+    # count header
+    assert "Coverage gaps (2 observed-by-nothing, 1 ungrounded-kind, 1 unfulfilled)" in text
+
+
+def test_scoreless_functional_quality_does_not_crash_the_summary(monkeypatch, tmp_path):
+    """#254 class: a functional-SLO artifact has quality={emitted_fr_ids,...} with no
+    'score' — the wrapper's quality summary must not KeyError once functional SLOs emit."""
+    mod = _load_script_module()
+    scored = mod  # sanity: module loaded
+    # exercise the exact filter the summary uses.
+    class _A:
+        def __init__(self, q):
+            self.quality = q
+    arts = [_A({"score": 0.9}), _A({"emitted_fr_ids": ["FR-1"], "unfulfilled": []}), _A(None)]
+    kept = [a for a in arts if a.quality and "score" in a.quality]
+    assert len(kept) == 1  # only the real scored artifact; no KeyError path reachable

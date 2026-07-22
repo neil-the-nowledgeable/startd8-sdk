@@ -61,7 +61,7 @@ the surface is good on day one instead of showing a hint you immediately re-poli
 | ✅ **P1a** | QW-2 per-kind signal hint | S | author — sharper, actionable guidance | none | **Delivered (PR #263)** |
 | ✅ **P1b** | LH-1 `empty_services ⊇ ungrounded` cross-ref | S | author — one story, not two gaps | none | **Delivered (PR #263)** |
 | ✅ **P1c** | QW-1 portal coverage-gap panel | S | human/author — invisible → visible in Grafana | *displays* P1a/P1b output | **Delivered (PR #263)** |
-| **P2 (re-targeted)** | QW-3 coverage line in the **SDK wrapper** `scripts/generate_observability_artifacts.py` | S | machine/human running the pipe | **spike done** — see verdict below; re-targeted from cross-repo to the SDK wrapper | ready to build (in-repo, S) |
+| ✅ **P2 (re-targeted)** | QW-3 coverage line in the **SDK wrapper** `scripts/generate_observability_artifacts.py` | S | machine/human running the pipe | spike re-targeted cross-repo → SDK wrapper | **Delivered (PR #265)** — + fixed a #254-class KeyError found in the same file |
 | ✅ **P3** | AQW-1 kind-vocab drift guard | S | dev — prevents a silent future regression | independent | **Delivered (PR #263)** |
 | **P4** | EC-1 OQ-5 grounding pilot | L | **highest ultimate** — closes #230/#231/#233 | **gated** on a real worker/batch/ML fleet + grounded values | a scheduled milestone, not a backlog quick-win |
 
