@@ -194,6 +194,16 @@ _KIND_DEFAULTS = {
     "stream": "messaging-semconv",
 }
 
+#: Recognized non-request workload kinds whose grounded metric series + threshold
+#: magnitudes are deliberately deferred (OQ-5) — we KNOW them but will not invent a
+#: profile for them (#230/#231/#233). Distinguishing "recognized-but-ungrounded" from
+#: "unknown kind" lets the generator (a) SUPPRESS the incidental transport-derived RED
+#: triple — so an `ml_inference` service that exposes an http health port does NOT get
+#: a silent 500ms HTTP-latency SLO that passes review (#231's silent danger) — and
+#: (b) emit an explicit coverage-gap entry instead of fabricating. Grounding a kind
+#: later = move it into `_KIND_DEFAULTS`/`_KIND_SLI_DEFAULTS` and drop it from here.
+UNGROUNDED_KINDS = frozenset({"batch", "cron", "ml_inference"})
+
 #: The three RED SLI kinds a request-server (or a job worker, on its messaging series)
 #: is observed by absent any declaration (#226 FR-12). Its home is here beside the kind
 #: tables so the determination model has a single source of truth.
@@ -226,10 +236,20 @@ def resolve_sli_kinds(
     nothing"). Byte-parity: a plain http/grpc service with no kind/FRs ⇒ the RED
     triple, identical to pre-#226.
     """
+    kinds = list(kinds or ())
     resolved: set[str] = set(signal_kinds or ())          # declared FR signals (additive)
-    for kind in kinds or ():
+    for kind in kinds:
         resolved |= set(_KIND_SLI_DEFAULTS.get(kind, ()))  # kind-implied RED base
-    if (transport or "").lower() in _TRANSPORT_DEFAULTS:
+    # #231: a service DECLARED as a recognized-but-ungrounded workload (batch/cron/
+    # ml_inference) whose transport is incidental (no request kind also declared) must
+    # NOT inherit the transport RED triple — that is the silent 500ms-HTTP-latency SLO
+    # that lets an ML service pass review. Suppress the transport base for it; it still
+    # gets exactly what it DECLARES via functional[] signal_kinds (additive, above).
+    incidental_transport = (
+        any(k in UNGROUNDED_KINDS for k in kinds)
+        and not any(k in REQUEST_KINDS for k in kinds)
+    )
+    if (transport or "").lower() in _TRANSPORT_DEFAULTS and not incidental_transport:
         resolved |= _REQUEST_SLI_KINDS                     # request-transport RED base
     return frozenset(resolved)
 

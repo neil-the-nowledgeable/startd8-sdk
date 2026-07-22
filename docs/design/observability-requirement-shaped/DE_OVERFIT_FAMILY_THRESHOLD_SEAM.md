@@ -102,3 +102,25 @@ manifest → importance → flat tiers in `_resolve_threshold` apply unchanged.
 For the newly-emitted inputs: read `signal_kind` snake_case from `functional[]`, read `kind` from
 `instrumentation_hints[svc]`, and treat `unknown` as "withhold HTTP SLOs" rather than a synonym for
 `http_server`.
+
+## Grounding-free slice landed (2026-07-22, #230/#231/#233)
+
+Ahead of the grounded pilot that will fill FR-7 per-`signal_kind` *values*, a values-free slice
+addresses the *silent/wrong-artifact* core of #230/#231/#233 without inventing any threshold or
+series (the fabrication those issues condemn):
+
+- **`UNGROUNDED_KINDS = {batch, cron, ml_inference}`** (`metric_descriptor.py`) — a registry that
+  distinguishes *recognized-but-ungrounded* from *unknown*. Grounding a kind later = move it into
+  `_KIND_DEFAULTS`/`_KIND_SLI_DEFAULTS` and drop it here.
+- **Incidental-transport suppression** (`resolve_sli_kinds`) — a service declared as an ungrounded
+  workload kind, with no request kind also declared, no longer inherits the transport RED triple.
+  This kills **#231's silent danger**: an `ml_inference` service exposing an http health port stops
+  receiving a 500ms HTTP-latency SLO that passes review. It still gets exactly what its `functional[]`
+  FRs declare (additive). **Byte-parity (FR-11) is preserved for every non-ungrounded service.**
+- **`fr_coverage.ungrounded_kinds`** — an explicit coverage-gap class naming each such service, its
+  kind, and the actionable next step (declare `run_success/freshness/saturation/lag` FRs, or await a
+  grounded profile). Surfaced in `observability-manifest.yaml` alongside the FR-9 classes.
+
+Still deferred to the pilot (unchanged): the per-`signal_kind` threshold *values* and any grounded
+`batch`/`cron`/`ml_inference` metric *series* (FR-7 / OQ-5). This slice makes the deferral **visible
+and safe**, it does not close it.

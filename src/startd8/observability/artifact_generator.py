@@ -27,7 +27,12 @@ from .artifact_generator_models import *  # noqa: F401,F403
 
 # Target Metric Binding (REQ_TARGET_METRIC_BINDING Step 3): resolve one
 # MetricDescriptor per service and thread it into the descriptor-aware generators.
-from .metric_descriptor import MetricDescriptor, resolve_descriptor, resolve_sli_kinds
+from .metric_descriptor import (
+    UNGROUNDED_KINDS,
+    MetricDescriptor,
+    resolve_descriptor,
+    resolve_sli_kinds,
+)
 
 # Context + generator clusters extracted to sibling modules (Tier-2 step 2);
 # re-exported so the orchestrator and external consumers keep their import paths.
@@ -531,6 +536,10 @@ def generate_observability_artifacts(
     _fr_empty: List[str] = []
     _fr_unfulfilled: List[Dict[str, Any]] = []
     _fr_emitted: List[str] = []
+    # #230/#231/#233: services declared as a recognized-but-ungrounded workload kind.
+    # Surfaced explicitly (not fabricated for) so the author sees the deferral and knows
+    # the actionable next step, rather than the service silently getting HTTP artifacts.
+    _ungrounded: List[Dict[str, str]] = []
     for service in services:
         descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
@@ -556,11 +565,25 @@ def generate_observability_artifacts(
         ]
         if not resolve_sli_kinds(service.kinds, _svc_signals, service.transport):
             _fr_empty.append(service.service_id)
+        # #230/#231/#233: recognized-but-ungrounded kind — name it and the way forward.
+        for _k in service.kinds:
+            if _k in UNGROUNDED_KINDS:
+                _ungrounded.append({
+                    "service": service.service_id,
+                    "kind": _k,
+                    "reason": (
+                        f"kind {_k!r} is recognized but has no grounded metric profile yet "
+                        f"(OQ-5); its default SLIs are deferred rather than invented. Declare "
+                        f"functional[] FRs with a signal_kind (run_success/freshness/saturation/"
+                        f"lag) + target to emit SLOs, or await a grounded profile."
+                    ),
+                })
 
     report.fr_coverage = {
         "empty_services": _fr_empty,
         "unfulfilled": _fr_unfulfilled,
         "emitted": _fr_emitted,
+        "ungrounded_kinds": _ungrounded,
     }
 
     report.services_processed = len(services)
@@ -1207,7 +1230,7 @@ def _write_index(
 
     # FR-9 (#226): surface FR/SLI-kind coverage in the manifest, but only when there
     # is something to report — a run with no functional[] stays byte-identical.
-    if any(report.fr_coverage.get(k) for k in ("empty_services", "unfulfilled", "emitted")):
+    if any(report.fr_coverage.get(k) for k in ("empty_services", "unfulfilled", "emitted", "ungrounded_kinds")):
         index["fr_coverage"] = report.fr_coverage
 
     dest = output_dir / "observability-manifest.yaml"

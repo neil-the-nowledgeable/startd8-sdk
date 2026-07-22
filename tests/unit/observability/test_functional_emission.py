@@ -18,6 +18,7 @@ from startd8.observability.artifact_generator import (
     generate_functional_slos,
     generate_observability_artifacts,
 )
+from startd8.observability.metric_descriptor import resolve_sli_kinds
 
 
 def _worker(signal_kinds_targets):
@@ -148,3 +149,33 @@ class TestFr9Coverage:
         index = yaml.safe_load((out / "observability-manifest.yaml").read_text())
         func_slo = [a for a in index["artifacts"] if "functional-slo" in a.get("path", "")]
         assert func_slo and all("quality_score" not in a for a in func_slo)
+
+
+class TestUngroundedKindCoverage:
+    """#230/#231/#233 grounding-free slice: a recognized-but-ungrounded workload kind
+    (batch/cron/ml_inference) is surfaced explicitly in fr_coverage — named, with the
+    actionable next step — rather than silently receiving HTTP artifacts or nothing."""
+
+    def test_ml_inference_service_is_flagged_ungrounded_not_fabricated(self, tmp_path):
+        meta = tmp_path / "onboarding-metadata.json"
+        meta.write_text(json.dumps({
+            "project_id": "p",
+            "instrumentation_hints": {
+                "ranker": {
+                    "service_id": "ranker",
+                    "kind": "ml_inference",
+                    "transport": "http",  # incidental serve port — must NOT yield HTTP SLOs
+                    "metrics": {"convention_based": [
+                        {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}
+                    ]},
+                },
+            },
+        }))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta, output_dir=tmp_path / "out", dry_run=True,
+        )
+        ung = report.fr_coverage["ungrounded_kinds"]
+        assert any(u["service"] == "ranker" and u["kind"] == "ml_inference" for u in ung)
+        assert any("run_success/freshness" in u["reason"] for u in ung)
+        # #231: the incidental http transport must not have produced a latency SLO.
+        assert "latency" not in resolve_sli_kinds(["ml_inference"], [], "http")
