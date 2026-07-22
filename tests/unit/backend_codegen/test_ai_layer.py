@@ -171,6 +171,26 @@ def test_service_and_server_imports():
     assert "APIRouter" not in server                        # FR-MA-4: no routes of its own
 
 
+def test_ai_service_emits_startd8_cost_metrics():
+    # Wiring fix: a deployed app's LLM usage must be QUERYABLE (startd8.cost.*), not only
+    # AiCall DB rows. The emit must be present, guarded, and independent of DB logging.
+    svc = _files()["app/ai/service.py"]
+    assert "from startd8.costs.otel_metrics import CostMetrics" in svc   # reuse the SDK emitter
+    assert "_COST_METRICS" in svc and "_COST_METRICS.record(" in svc     # actually emits
+    assert "total_cost=" in svc and "output_tokens=" in svc             # the SLI-shaped fields
+    # Guarded: absent OTel/startd8.costs ⇒ _COST_METRICS = None, no-op (app boots identically).
+    assert "_COST_METRICS = None" in svc
+    assert "if _COST_METRICS is not None:" in svc
+
+
+def test_ai_service_cost_emit_survives_compile(tmp_path):
+    # The generated cost-emit code must be valid Python (the wiring can't break the app).
+    svc = _files()["app/ai/service.py"]
+    p = tmp_path / "service.py"
+    p.write_text(svc, encoding="utf-8")
+    py_compile.compile(str(p), doraise=True)
+
+
 def test_pass_harness_imports_no_wrong_root():
     pass_mod = _files()["app/ai/extract_metrics.py"]
     assert "from app.ai.service import call_ai_service" in pass_mod
