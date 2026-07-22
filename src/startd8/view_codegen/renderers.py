@@ -154,7 +154,9 @@ def _render_workspace(v: ViewSpec) -> str:
     if p is None:
         raise ValueError(
             f"workspace {v.module!r}: requires a polymorphic relation "
-            f"(of/type_field/id_field/type_map); root {v.root!r} has none"
+            f"(of/type_field/id_field/type_map); root {v.root!r} has none. "
+            f"For a plain 'everything about one {v.root}' view over declared relations, "
+            f"use kind 'detail-compose' instead (#77)."
         )
     entities = sorted({v.root, p.of} | {ent for _, ent in p.type_map})
     imports = ", ".join(entities)

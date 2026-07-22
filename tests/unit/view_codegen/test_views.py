@@ -293,6 +293,9 @@ def test_h3_non_polymorphic_workspace_raises_named_valueerror_not_assertionerror
     assert ws.polymorphic is None
     with pytest.raises(ValueError, match=r"workspace 'member_workspace': requires a polymorphic"):
         _render_workspace(ws)
+    # #77 DX: the error must redirect the author to the generic archetype.
+    with pytest.raises(ValueError, match=r"detail-compose"):
+        _render_workspace(ws)
 
 
 def test_model_scope_route_derivation_and_override():

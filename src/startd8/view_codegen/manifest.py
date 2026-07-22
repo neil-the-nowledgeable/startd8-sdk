@@ -10,6 +10,12 @@ v1 archetypes: ``dashboard`` (aggregates + signal), ``board`` (group-by an order
 panels + conditional panels) and ``export-package`` (root + relations -> lossless package + named MD
 layout) are the fast-follow (VIEW_GENERATOR_REQUIREMENTS.md).
 
+Note (#77): ``workspace`` is the **polymorphic** single-record archetype (it resolves a polymorphic
+relation and flags gaps) — it is *not* the generic "everything about one record" view. For a plain
+non-polymorphic root, use ``detail-compose`` (root + its declared relations). Authoring a
+``workspace`` over a non-polymorphic root fails loud with a named error that redirects to
+``detail-compose``.
+
 ``board`` has two variants (FR-EB). The static-``order`` form groups root rows by a scalar
 ``group_by`` in a baked ``order: [...]`` allow-list (compile-time columns, e.g. a status enum). The
 **entity-backed** form (selected only when ``columns_from`` is present) groups by a related entity's
