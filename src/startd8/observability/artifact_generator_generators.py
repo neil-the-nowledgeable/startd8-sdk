@@ -44,6 +44,29 @@ _DEFAULT_THRESHOLDS = {
 }
 
 
+def _select_importance_default(business: "BusinessContext", field_name: str) -> Optional[str]:
+    """Importance-scaled default for ``field_name`` (FR-2), or ``None`` to fall through.
+
+    The VALUES come from a config file (``config/importance_thresholds.yaml``), loaded + manifest-
+    overridden by ``obs_config.load_importance_thresholds`` and carried on
+    ``business.importance_thresholds`` (nested ``<criticality>.<deployment_mode|default>.<field>``).
+    When the context did not load it (e.g. a directly-constructed ``BusinessContext``), the config-
+    file base is loaded here — nothing is hardcoded in this module. ``deployment_mode`` is read
+    ``None``-safely so this works before Increment 2 adds the field. Returns ``None`` when the
+    criticality/mode/field is not in the table (e.g. ``throughput``), so the caller falls back to the
+    flat ``_DEFAULT_THRESHOLDS``.
+    """
+    table = business.importance_thresholds
+    if table is None:
+        from .obs_config import load_importance_thresholds
+
+        table = load_importance_thresholds(None)
+    crit_row = table.get(business.criticality) or {}
+    mode_key = getattr(business, "deployment_mode", None) or "default"
+    cell = crit_row.get(mode_key) or crit_row.get("default") or {}
+    return cell.get(field_name)
+
+
 _INSTRUMENT_TO_PANEL: Dict[str, str] = {
     "histogram": "histogram",
     "counter": "timeseries",
@@ -108,9 +131,11 @@ def _resolve_threshold(
     business: BusinessContext,
     derivations: List[DerivationTrace],
 ) -> Tuple[Optional[str], str]:
-    """Resolve a threshold value with three-tier fallback.
+    """Resolve a threshold value with fallback tiers.
 
-    Returns (value, tier) where tier is 'manifest' or 'default'.
+    Returns (value, tier) where tier is 'manifest', 'default:importance', or 'default'.
+    Authored (manifest) values always win; when none is authored, an importance-scaled default
+    (FR-2, keyed on criticality[/deployment_mode]) is preferred over the flat default.
     """
     biz_value = getattr(business, field_name, None)
     if biz_value is not None:
@@ -123,6 +148,21 @@ def _resolve_threshold(
             )
         )
         return biz_value, "manifest"
+
+    # Importance-scaled default (FR-2/FR-3): derived, never authored — emitted under a distinct
+    # `default:importance` tier so it is not laundered into `tier="manifest"` (NR-4).
+    importance = _select_importance_default(business, field_name)
+    if importance is not None:
+        mode = getattr(business, "deployment_mode", None) or "-"
+        derivations.append(
+            DerivationTrace(
+                field=field_name,
+                source="_IMPORTANCE_THRESHOLDS",
+                transformation=f"{mode} + {business.criticality} → {field_name} {importance}",
+                tier="default:importance",
+            )
+        )
+        return importance, "default:importance"
 
     default = (business.default_thresholds or _DEFAULT_THRESHOLDS).get(field_name)
     if default is not None:

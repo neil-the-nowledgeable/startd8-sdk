@@ -300,8 +300,11 @@ class TestGenerateAlertRules:
     def test_uses_defaults_when_no_slo(self, grpc_service, business_defaults):
         result = generate_alert_rules(grpc_service, business_defaults)
         assert result.status == "generated"
-        # Should use default thresholds
-        assert any(d.tier == "default" for d in result.derivations)
+        # Should use a (non-authored) default tier. As of importance-scaled thresholds
+        # (design: importance-scaled-slo), an unauthored threshold resolves via the
+        # importance table — `default:importance` — falling back to flat `default`; either
+        # is a valid "used defaults, not manifest" outcome.
+        assert any(d.tier in ("default", "default:importance") for d in result.derivations)
 
     def test_derivation_traces(self, grpc_service, business):
         result = generate_alert_rules(grpc_service, business)
@@ -1741,3 +1744,106 @@ class TestDeterministicGeneratedAt:
     def test_unset_env_uses_wall_clock_shape(self, monkeypatch):
         monkeypatch.delenv(self._ENV, raising=False)
         assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", _utc_now_iso())
+
+
+class TestImportanceScaledThresholds:
+    """Increment 1 — criticality-scaled SLO default thresholds.
+
+    Design: docs/design/importance-scaled-slo/ (FR-2/2a/2b/3, NR-1/NR-4, FR-9).
+    """
+
+    from startd8.observability.artifact_generator_generators import (
+        _DEFAULT_THRESHOLDS,
+        _resolve_threshold,
+    )
+
+    _ORDER = ["low", "medium", "high", "critical"]  # ascending importance
+
+    @staticmethod
+    def _biz(criticality, **kw):
+        return BusinessContext(criticality=criticality, project_id="t", **kw)
+
+    def _resolve(self, criticality, field):
+        derivs = []
+        value, tier = TestImportanceScaledThresholds._resolve_threshold(
+            field, self._biz(criticality), derivs
+        )
+        return value, tier, derivs
+
+    def test_high_is_tighter_than_flat(self):
+        # FR-2: higher criticality ⇒ tighter than the flat default.
+        av, tier, _ = self._resolve("high", "availability")
+        lt, _, _ = self._resolve("high", "latency_p99")
+        assert tier == "default:importance"
+        assert _parse_availability_to_fraction(av) > _parse_availability_to_fraction(
+            self._DEFAULT_THRESHOLDS["availability"]
+        )
+        assert _parse_duration_to_seconds(lt) < _parse_duration_to_seconds(
+            self._DEFAULT_THRESHOLDS["latency_p99"]
+        )
+
+    def test_medium_value_unchanged(self):
+        # Acceptance: medium-criticality value equals the flat default (value, not tier).
+        av, _, _ = self._resolve("medium", "availability")
+        lt, _, _ = self._resolve("medium", "latency_p99")
+        assert av == self._DEFAULT_THRESHOLDS["availability"]
+        assert lt == self._DEFAULT_THRESHOLDS["latency_p99"]
+
+    def test_authored_threshold_wins(self):
+        # NR-1: an authored manifest value always wins and stays tier=manifest.
+        derivs = []
+        value, tier = TestImportanceScaledThresholds._resolve_threshold(
+            "availability", self._biz("high", availability="99.99"), derivs
+        )
+        assert (value, tier) == ("99.99", "manifest")
+
+    def test_throughput_never_scales(self):
+        # FR-2b: throughput stays flat for every criticality unless authored.
+        for crit in self._ORDER:
+            th, tier, _ = self._resolve(crit, "throughput")
+            assert th == self._DEFAULT_THRESHOLDS["throughput"]
+            assert tier == "default"  # flat fallback, not default:importance
+
+    def test_table_is_monotonic(self):
+        # FR-2a: raising criticality never loosens a field (values sourced from the config file).
+        from startd8.observability.obs_config import load_importance_thresholds
+
+        table = load_importance_thresholds(None)
+        avails = [
+            _parse_availability_to_fraction(table[c]["default"]["availability"]) for c in self._ORDER
+        ]
+        lats = [
+            _parse_duration_to_seconds(table[c]["default"]["latency_p99"]) for c in self._ORDER
+        ]
+        assert avails == sorted(avails), "availability must be non-decreasing with importance"
+        assert lats == sorted(lats, reverse=True), "latency must be non-increasing with importance"
+
+    def test_values_come_from_config_not_code(self):
+        # FR-7: the values live in the config file, and a manifest override wins per cell.
+        from startd8.observability.obs_config import load_importance_thresholds
+
+        base = load_importance_thresholds(None)
+        assert base["high"]["default"]["availability"] == "99.5"  # from config/importance_thresholds.yaml
+        overridden = load_importance_thresholds(
+            {"spec": {"observability": {"importanceThresholds": {"high": {"default": {"availability": "99.7"}}}}}}
+        )
+        assert overridden["high"]["default"]["availability"] == "99.7"
+        assert overridden["high"]["default"]["latency_p99"] == "400ms"  # untouched cell preserved
+
+    def test_derived_value_never_labeled_manifest(self):
+        # NR-4: an unauthored, importance-derived value must not carry tier=manifest.
+        _, tier, derivs = self._resolve("critical", "availability")
+        assert tier == "default:importance"
+        assert all(d.tier != "manifest" for d in derivs)
+
+    def test_provenance_transformation_is_parseable(self):
+        # FR-3: canonical grammar "{mode|-} + {crit} → {field} {value}".
+        _, _, derivs = self._resolve("high", "availability")
+        trace = next(d for d in derivs if d.tier == "default:importance")
+        assert re.match(
+            r"^(-|installed|deployed) \+ \w+ → \w+ \S+$", trace.transformation
+        ), trace.transformation
+
+    def test_deterministic(self):
+        # FR-9: identical inputs ⇒ identical value + tier.
+        assert self._resolve("high", "availability")[:2] == self._resolve("high", "availability")[:2]
