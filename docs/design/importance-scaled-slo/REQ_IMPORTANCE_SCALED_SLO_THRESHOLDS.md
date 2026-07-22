@@ -1,6 +1,6 @@
 # Importance-Scaled SLO Thresholds — Requirements
 
-**Version:** 0.4 (Post CRP Round 1 — 7 F-suggestions accepted, OQ-B/OQ-C resolved)
+**Version:** 0.5 (Post-pilot — added FR-10 non-fabrication requirement; see ContextCore ADR-004)
 **Date:** 2026-07-22
 **Status:** Ready for CRP review
 **Owner:** StartD8 SDK / observability (artifact_generator) + ContextCore (manifest, init-from-plan)
@@ -91,9 +91,15 @@ a flat innate table (`99% / 500ms / 100rps`) regardless of how important the ser
 
 The canonical observability generator resolves SLO thresholds in three effective tiers —
 **explicit** (env) > **manifest** (`spec.requirements.*`) > **default**. When the manifest omits a
-threshold (the common case for pipeline-derived manifests), the `default` tier returns a **flat**
-value from `_DEFAULT_THRESHOLDS` (`availability 99`, `latency_p99 500ms`, `throughput 100rps`) — the
-**same numbers for a single-user local tool and a shared multi-tenant production service.**
+threshold, the `default` tier returns a **flat** value from `_DEFAULT_THRESHOLDS` (`availability 99`,
+`latency_p99 500ms`, `throughput 100rps`) — the **same numbers for a single-user local tool and a
+shared multi-tenant production service.**
+
+> **Pilot-corrected premise (v0.5):** the original assumption that pipeline manifests *omit*
+> undefined thresholds was **wrong**. The ContextCore pipeline *fabricated* flat values with a
+> `contextcore-pipeline-innate` marker, which resolved at `tier="manifest"` and **masked** the
+> default tier entirely — so importance scaling never fired. Making it fire required a ContextCore
+> change (FR-10 / ADR-004): stop fabricating, leave undefined thresholds absent.
 
 Meanwhile the system already holds two importance signals it does not use for SLO tightness:
 1. **`criticality`** — derived by init-from-plan (0.82) and already used for alert *severity*.
@@ -177,6 +183,20 @@ declared/inferred) — with honest provenance, and without ever overriding autho
   table is a pure lookup; no timestamps/ordering/nondeterminism introduced (guards the pilot's
   headline determinism claim).
 
+- **FR-10 — The pipeline MUST NOT fabricate flat SLO placeholder values (ContextCore side).**
+  This design assumed manifests *omit* undefined thresholds so FR-2 fires. The Mastodon pilot re-run
+  revealed the opposite: the ContextCore pipeline *fabricated* flat values
+  (`spec.requirements.availability: "99.9"`, …) with a block-level
+  `source: contextcore-pipeline-innate` marker, which the generator resolved at `tier="manifest"` —
+  **masking** the importance-scaled default entirely. Therefore undefined SLO requirements MUST be
+  left **absent**; **field presence is the authored/derived signal** (the `source` marker is stale —
+  never updated on derivation — and lossy — block-level for four fields — so it is NOT a reliable
+  signal and is retired). Absent fields flow to FR-2's importance-scaled default; `errorBudget` is
+  derived from `availability`; `throughput` defaults flat. **Authoritative decision + full rationale:
+  ContextCore [ADR-004 — No fabricated SLO placeholders](../../../../ContextCore/docs/adr/004-no-fabricated-slo-placeholders.md)**
+  (`contextcore/docs/adr/004-no-fabricated-slo-placeholders.md`). *This requirement is implemented in
+  ContextCore, not startd8; it is recorded here because it is load-bearing for FR-2 to take effect.*
+
 ---
 
 ## 3. Non-Requirements
@@ -209,6 +229,13 @@ declared/inferred) — with honest provenance, and without ever overriding autho
   stays unset (recorded). Conservative, because guessing `deployed` fabricates a tighter budget.
 
 ---
+
+*v0.5 — Post-pilot reflective update. The pilot re-run falsified the "manifests omit thresholds"
+premise (they fabricated them), so importance scaling was masked. Added **FR-10** (pipeline must not
+fabricate flat SLO placeholders) + corrected the Problem Statement. FR-10 is implemented and owned by
+ContextCore **[ADR-004](../../../../ContextCore/docs/adr/004-no-fabricated-slo-placeholders.md)** —
+cited here (single-source), not duplicated. Verified end-to-end: pilot `high → 99.5/400ms`
+`[default:importance]` (was `99.9/500ms [manifest]`). 10 FRs.*
 
 *v0.4 — Post CRP Round 1: all 7 requirements-side (F) suggestions accepted and merged (FR-1
 unknown-value handling, FR-2a monotonicity, FR-2b/OQ-B throughput-flat, FR-3 provenance grammar,

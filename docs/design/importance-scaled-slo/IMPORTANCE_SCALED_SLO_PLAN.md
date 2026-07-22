@@ -74,7 +74,9 @@ SLOs than `installed + high`; a plan mentioning "multi-tenant production service
 ## Traceability
 
 FR-1→2.1/2.2 · FR-2→1.1/1.2/2.6 · FR-3→1.3 · FR-4→2.3/2.2 · FR-5→2.4 · FR-6→2.5 · FR-7→1.4 ·
-FR-8→(Increment split) · FR-9→1.5 guard. Every FR has a step; every step traces to an FR.
+FR-8→(Increment split) · FR-9→1.5 guard · **FR-10→ContextCore ADR-004 (no startd8 step — it is the
+load-bearing ContextCore precondition that makes FR-2 fire; see ContextCore PR #25)**. Every FR has a
+step (or a cross-repo owner); every step traces to an FR.
 
 ---
 
