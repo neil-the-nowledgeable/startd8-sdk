@@ -1,6 +1,6 @@
 # Requirement-Shaped, Service-Kind-Aware Observability Generation — Requirements
 
-**Version:** 0.3.1 (Post design-principle hardening — ready for CRP)
+**Version:** 0.4 (Post de-overfit generalization research — ready for CRP)
 **Date:** 2026-07-22
 **Status:** Ready for review
 **Issue:** #226
@@ -52,6 +52,36 @@
 - **[Context-Correctness-by-Construction]** — required context must be declared+validated+degradable, never a silent `None` → **FR-11**: every new field (`kind`, `functional[]`) is optional and its absence yields *byte-identical* pre-#226 output (the NR-4 guarantee, made constructive and test-gated by FR-0).
 - **[Hitsuzen]** — derive the determinable deterministically → kind fallback (`transport→kind`) and `signal_kind→metric series` mapping are deterministic table lookups, not LLM calls.
 
+### 0.3 De-Overfit Generalization (v0.4)
+
+> After v0.3.1, two research agents audited the generator for assumptions **overfit to
+> HTTP request-serving microservices / the Online Boutique demo** (the first use case).
+> The finding reframes #226: v0.3.1 patched *one* off-template case (async workers); the
+> real defect is that the **core RED triplet is emitted unconditionally**, i.e. the
+> determination model itself assumes every service is a request-server. This pass
+> upgrades the spec from "add async_worker" to a general **contract-first determination**
+> rule. (The reflective-loop caution: generalize the rule, don't accrete `batch_worker`,
+> `cron_worker`, … as siblings.)
+
+**The overfit, in one line:** convention answers *"what does a request-server emit"*; it must **not** be used to answer *"is this a request-server, and if not, what is it"* — yet today's unconditional triplet + `_ensure_red_coverage` synthesis (`artifact_generator_generators.py:795`) does exactly that.
+
+**What the audit found (representative; full catalog in the research report):**
+
+| Decision point | file:line | Overfit class | Breaks for |
+|----------------|-----------|---------------|------------|
+| `_GENERATORS` triplet emitted unconditionally | `artifact_generator.py:509` | request-serving-only | cron/batch (no availability%/p99), workers |
+| `_ensure_red_coverage` **synthesizes** rate/error/availability panels for every service | `artifact_generator_generators.py:795` | request-serving-only (ROOT) | worker/batch/stream/cron get fabricated "Request Rate" panels |
+| Duration-histogram gate (`type==histogram and "duration" in name`) is the *only* SLI path | `generators.py:218/934` | request-serving-only | any service whose primary SLI is a counter/gauge/age ⇒ **zero** alerts/SLOs (the pilot's 6-of-7) |
+| `_DEFAULT_THRESHOLDS` = availability 99 / latency 500ms / throughput 100rps | `generators.py:40` | request-serving-only | worker/batch/cron (category-error units) |
+| `_PROFILES` = only http/grpc/span-metrics | `metric_descriptor.py:127` | request-serving-only | no queue-depth/last-success/lag surface |
+| Transport is a **required** field; no-transport services dropped | `artifact_generator_context.py:298` | request-serving-only | workers/cron/batch have no listen transport ⇒ never generated |
+
+**The general principle (now FR-12):** artifacts are derived from a **resolved SLI-kind set** per service — declared (`kind` + `functional[].signal_kind`) with **convention as fallback only within the request-serving family**. Every alert/SLO/panel is a per-SLI-kind template row. The codebase already has this pattern in miniature: `_EXTENDED_PER_SERVICE_GENERATORS` is contract-driven (emitted iff declared, `artifact_generator.py:200/556`). This pass **promotes that pattern to govern the core triplet** and **deletes** the unconditional RED synthesis (FR-13). A plain request-server with no declaration resolves to `{latency, availability, throughput}` ⇒ **byte-identical** to today (FR-0/FR-11 preserved).
+
+**Precedent in-repo:** `stakeholder_panel/facilitation.py:1156` already fixed this exact anti-pattern ("the old fixed Online-Boutique class silently mis-forecast every non-OB project" → now derived from the project's objective). Same inversion, different subsystem.
+
+**Cross-generator scope (honest bound):** the smell is concentrated in `observability/`. The app-skeleton generators (`backend_/frontend_/scaffold_codegen`, `presentation_polish`) are well-hardened (contract-derived, graceful fallbacks). The one sibling instance is **#77** (`view_codegen` `workspace` archetype overfit to the *polymorphic* shape) — same root pattern, tracked separately (its crash is already fixed on main; the non-polymorphic renderer is the open half).
+
 ---
 
 ## 1. Problem Statement
@@ -70,22 +100,26 @@ The observability artifact generator derives a **generic per-service HTTP templa
 
 - **CR-1 — Manifest carries functional requirements.** `.contextcore.yaml` `spec.requirements.functional[]`, each: `id`, `description`, `signal_kind` (enum owned by §3/FR-5), optional `target`/threshold, optional `service` binding.
 - **CR-2 — Manifest carries traceability.** `spec.requirements.traceability[]` mapping FR id → service(s); SHOULD be populated by forwarding `ingestion-traceability.json` `requirement_mappings[]` (Mottainai).
-- **CR-3 — Onboarding metadata carries service kind.** `instrumentation_hints[svc].kind ∈ {http_server, grpc_server, async_worker, unknown}`, producer-supplied (inferred where possible, e.g. queue/worker library detection, the same mechanism that supplies `detected_databases`).
+- **CR-3 — Onboarding metadata carries service kind.** `instrumentation_hints[svc].kind ∈ {http_server, grpc_server, async_worker, batch, cron, stream, ml_inference, unknown}` *(generalized v0.4)*, producer-supplied (inferred where possible: queue/worker-library import ⇒ worker/stream; **no listen port ⇒ worker/cron/batch** — the same detection mechanism that supplies `detected_databases`). The producer SHOULD also relax the transport-required drop so a service that declares a `kind` is not excluded for lacking a listen transport (`artifact_generator_context.py:298`).
 
 ## 3. Requirements (SDK — this repo)
 
 ### Back-compat gate
 - **FR-0 — Golden regression test first.** Before any generator change, add a full-YAML golden/snapshot test for a representative `http_server` service (alert + SLO + dashboard_spec) under `tests/unit/observability/`. Every later FR runs against it. (None exists today.)
 
+### Determination model (the general rule — the core of v0.4)
+- **FR-12 — Contract-first, SLI-kind determination.** Each service SHALL resolve to a **set of SLI kinds** it is observed by, via one deterministic resolver `resolve_sli_kinds(kind, functional[], transport)`: the union of declared `functional[].signal_kind` and `kind`-implied defaults, falling back to `{latency, availability, throughput}` **only when nothing is declared AND the transport is request-serving**. Empty-and-non-request ⇒ `∅` + a visible coverage gap (FR-9), **never** a silent HTTP triplet. Every alert/SLO/dashboard-panel is derived **per SLI kind** from a per-kind template row. Convention answers "what does a request-server emit"; it does not answer "is this a request-server."
+- **FR-13 — Delete unconditional RED synthesis.** `_ensure_red_coverage` (`artifact_generator_generators.py:795`) SHALL become `_ensure_signal_coverage(panels, sli_kinds, …)` — it backfills only the panels the resolved SLI-kind set implies, and is a **no-op** when the set implies none. The always-on request-rate/availability synthesis is **removed**, not merely skipped for one kind. This is the single load-bearing deletion; it is the root cause of the wrong output for *every* non-request class, not just workers.
+
 ### Consume + derive
 - **FR-4 — Partial-forward, don't re-author.** Consume forwarded FR ids + traceability (CR-2). Only the genuinely-absent `signal_kind`/`target`/`service` are authored/declared; the ids, feature/task mappings, and source references come from `ingestion-traceability.json` unchanged.
-- **FR-5 — Consume functional requirements → derive signal-kind SLO/alert kinds.** Read `spec.requirements.functional[]`; for each FR, derive artifacts keyed on `signal_kind`. **Normative `signal_kind` enum (owned here):** `availability`, `latency`, `queue_depth`, `retry_rate`, `freshness`, `throughput`, `custom`. At minimum `queue_depth`, `retry_rate`, `freshness` gain derivation paths beyond today's availability+latency. Additive by default (OQ-6).
-- **FR-6 — Kind-aware derivation via profile extension.** Add an `async_worker` `MetricDescriptor` profile (`metric_descriptor.py:_PROFILES`) with worker series (queue-latency/job-duration/retry-failure), and a `kind→profile` default map beside `_TRANSPORT_DEFAULTS`; thread `kind` into `resolve_descriptor` so kind wins over transport when present. Make **`_ensure_red_coverage` kind-aware** so it does not synthesize HTTP RED for a worker. No worker shall receive an `http_server_duration` SLO.
-- **FR-7 — Per-kind default thresholds.** Make `default_thresholds` / `_DEFAULT_THRESHOLDS` **kind-keyed** (a worker's defaults are queue/retry-oriented, not `latency_p99="500ms"`); select the kind's block in `_resolve_threshold`.
+- **FR-5 — Signal-kind is the primary derivation axis.** The core triplet's emission is itself `signal_kind`-gated (FR-12), not unconditional. Read `spec.requirements.functional[]`; derive artifacts per `signal_kind`. **Normative `signal_kind` enum (owned here):** `availability`, `latency`, `throughput`, `queue_depth`, `retry_rate`, `freshness`, `run_success`, `saturation`, `lag`, `custom`. At minimum the non-request kinds (`queue_depth`, `retry_rate`, `freshness`, `run_success`, `lag`, `saturation`) gain derivation paths beyond today's availability+latency. Additive by default (OQ-6); a kind MAY suppress a default SLI (workers suppress latency).
+- **FR-6 — Kind→profile table (general, not one row).** Extend `MetricDescriptor._PROFILES` with a **table** of workload profiles — ship `http_server`, `grpc_server`, `async_worker`, **`batch`, `cron`, `stream`** (+ their SLI series/selectors) — plus one `kind→profile` map beside `_TRANSPORT_DEFAULTS`; thread `kind` into `resolve_descriptor` so kind wins over transport. `profile_for_transport`'s HTTP fallback survives **for the request-serving family only**. The requirement is the *table + resolution tier*; each row is ~4 additive lines. No service shall receive an SLI on series it does not emit (e.g. a worker on `http_server_duration`).
+- **FR-7 — Per-SLI-kind default thresholds.** Make `_DEFAULT_THRESHOLDS` a **per-`signal_kind`** table (not just per-service-kind), selected in `_resolve_threshold` — so a `freshness` FR on *any* service gets a freshness default, decoupled from the service's kind. `business.default_thresholds` override plumbing already exists.
 
 ### Traceability + visibility
 - **FR-8 — Stamp originating FR id on outputs.** Each FR-derived SLO/alert records its source FR id via a `DerivationTrace` (or a `source_fr` field on `ArtifactResult`), surfaced in `observability-manifest.yaml`.
-- **FR-9 — FR coverage report.** The generation report SHALL list which FRs produced artifacts and which produced **none** (the pilot's exact gap), mirroring `_record_unimplemented_artifact_types`. Makes "6 of 7 missing" visible without a manual grep.
+- **FR-9 — FR + SLI-kind coverage report.** The generation report SHALL list which FRs/`signal_kind`s produced artifacts and which produced **none**, **and** which services resolved to `∅` (the non-request-server-got-nothing symptom), mirroring `_record_unimplemented_artifact_types`. Makes both "6 of 7 FRs missing" and "this ML/stream/cron service got nothing" visible without a manual grep — the gap surfaces in the report instead of being masked by fabricated RED panels.
 
 ### Invariants + docs
 - **FR-11 — Absent-input parity (constructive).** With no `functional[]` and no `kind`, output is **byte-identical** to pre-#226 for every service (gated by FR-0). New fields are optional; absence degrades to today's convention path.
@@ -97,7 +131,7 @@ The observability artifact generator derives a **generic per-service HTTP templa
 
 - **NR-1 — No target-project code introspection.** Derive from declared FRs + convention metrics only (the prior doc's rejection stands).
 - **NR-2 — No new telemetry runtime.** Changes *what artifacts are derived*, not how the target app is instrumented.
-- **NR-3 — No exhaustive kind taxonomy.** Ship http_server/grpc_server/async_worker/unknown; defer batch/cron/stream.
+- **NR-3 — Ship the general kind→profile table; defer per-kind authoring guidance, not the mechanism.** *(Revised v0.4 — the prior "defer batch/cron/stream" was itself the overfit.)* Ship the `http_server`/`grpc_server`/`async_worker`/`batch`/`cron`/`stream`/`unknown` rows now (each is cheap + additive). What is deferred is polished per-kind *authoring guidance / runbook prose*, not the determination mechanism. Truly exotic archetypes (ml_inference specifics like GPU saturation series) may land as later rows without spec change.
 - **NR-4 — No breaking change to today's HTTP output** (now the constructive FR-11 + FR-0 gate).
 - **NR-5 — SDK does not write upstream schemas.** CR-1..CR-3 land in the producer; the SDK only consumes (Genchi Genbutsu boundary).
 
@@ -121,4 +155,5 @@ All symbols this spec names were grep-verified PRESENT:
 
 ---
 
-*v0.3.1 — Post design-principle hardening. 8 planning corrections; 3 FRs reclassified cross-repo (CR-1..3); FR-6/7 collapsed to profile extension; FR-0 (golden gate) and FR-11 (constructive parity) added; 5 OQs resolved. Applied lessons: phantom-requirement-pruning, phantom-reference-audit, extend-vs-build-separate, vocabulary-single-source. Applied principles: Mottainai, Genchi Genbutsu, Accidental-Complexity, Context-Correctness-by-Construction, Hitsuzen. Ready for CRP.*
+*v0.4 — Post de-overfit generalization research (§0.3). Reframed from "add async_worker" to a general contract-first SLI-kind determination model: added FR-12 (SLI-kind determination), FR-13 (delete unconditional RED synthesis); generalized FR-5 (signal_kind primary axis), FR-6 (kind→profile table, not one row), FR-7 (per-signal_kind thresholds), FR-9 (∅-service coverage), NR-3 (ship the table), CR-3 (7-kind enum + no-listen-port inference). Sibling instance #77 (view_codegen) noted; smell bound to observability/. Precedent: stakeholder_panel already fixed this inversion. Ready for CRP.*
+*v0.3.1 — Post design-principle hardening. 8 planning corrections; 3 FRs reclassified cross-repo (CR-1..3); FR-6/7 collapsed to profile extension; FR-0 (golden gate) and FR-11 (constructive parity) added; 5 OQs resolved. Applied lessons: phantom-requirement-pruning, phantom-reference-audit, extend-vs-build-separate, vocabulary-single-source. Applied principles: Mottainai, Genchi Genbutsu, Accidental-Complexity, Context-Correctness-by-Construction, Hitsuzen.*

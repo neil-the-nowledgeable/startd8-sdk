@@ -1,13 +1,17 @@
 # Implementation Plan — Requirement-Shaped, Service-Kind-Aware Observability (#226)
 
-**Version:** 1.0 (matches REQUIREMENTS v0.3.1)
+**Version:** 1.1 (matches REQUIREMENTS v0.4)
 **Date:** 2026-07-22
 **Companion:** `REQUIREMENTS.md`
 
-> Seam decision (from planning): **extend the existing `MetricDescriptor` profile
-> strategy**, do not build a parallel kind-dispatcher. The one legitimate `if kind`
-> branch is `_ensure_red_coverage` (RED is a server semantic). Everything else is a
-> table lookup (kind→profile, kind→thresholds, signal_kind→series).
+> Seam decision: **invert the core triplet from "always RED, patch exceptions" to
+> "derive per resolved SLI-kind set; RED is just the request-serving fallback."**
+> Promote the existing contract-driven `_EXTENDED_PER_SERVICE_GENERATORS` gate
+> (`artifact_generator.py:200/556`) to govern the triplet, and **delete** the
+> unconditional synthesis in `_ensure_red_coverage`. Everything else is a table
+> lookup (kind→profile, signal_kind→series, signal_kind→thresholds) — one general
+> rule, not per-kind `if` branches. The single justified branch is the SLI-kind
+> gate inside `_ensure_signal_coverage`.
 
 ---
 
@@ -23,14 +27,16 @@
 - CR-3: add `instrumentation_hints[svc].kind` to the Stage-4 EXPORT producer.
 - Deliverable back to SDK: updated sample fixtures (onboarding-metadata.json with `kind`; `.contextcore.yaml` with `functional[]`).
 
-## Phase 2 — SDK consumption + derivation — FR-4, FR-5, FR-6, FR-7
+## Phase 2 — SDK consumption + determination — FR-4, FR-5, FR-6, FR-7, FR-12, FR-13
 
 - **Models** (`artifact_generator_models.py`): add `kind: str = ""` to `ServiceHints`; add a `FunctionalRequirement` dataclass and `functional_requirements: List[FunctionalRequirement]` to `BusinessContext`.
 - **Context** (`artifact_generator_context.py`): read `hint.get("kind")` in `extract_service_hints` (~:327); read `requirements.get("functional")`/`traceability` in `load_business_context` (~:390). Absent ⇒ empty ⇒ today's path (FR-11).
-- **Descriptor** (`metric_descriptor.py`): add `async_worker` to `_PROFILES` (queue-latency histogram, job-duration bucket, retry/failure counter, job-failure `error_selector`); add `kind→profile` map beside `_TRANSPORT_DEFAULTS`; add a `kind` tier to `resolve_descriptor` (kind wins over transport). Wire `kind` at the resolution call site (`artifact_generator.py:519`).
-- **Thresholds** (`artifact_generator_generators.py`): make `_DEFAULT_THRESHOLDS` kind-keyed; select the kind block in `_resolve_threshold` (~:127).
-- **RED** (`artifact_generator_generators.py:795`): gate `_ensure_red_coverage` synthesis on kind (skip HTTP RED for `async_worker`). — the single justified `if kind` branch.
-- **FR-driven pass** (`artifact_generator_generators.py`): new derivation keyed on each FR's `signal_kind` (`queue_depth`/`retry_rate`/`freshness`), additive to the convention triplet.
+- **FR-12 — SLI-kind resolver.** Add `resolve_sli_kinds(kind, functional[], transport) → Set[SignalKind]`, computed once per service beside the descriptor (`artifact_generator.py:519`). Request-serving + no declaration ⇒ `{latency,availability,throughput}` (byte-identical today); non-request + no declaration ⇒ `∅`.
+- **FR-12 — gate the triplet.** Make each alert/SLO block emit iff its SLI kind ∈ the resolved set (mirrors the extended-generator gate at `:556`). The `latency`/`availability` template rows *are* today's code, extracted not rewritten.
+- **FR-6 — kind→profile table** (`metric_descriptor.py`): add `async_worker`, `batch`, `cron`, `stream` rows to `_PROFILES` (per-kind series/selectors) + a `kind→profile` map beside `_TRANSPORT_DEFAULTS` + a `kind` tier in `resolve_descriptor` (kind wins; HTTP fallback kept for the request family only).
+- **FR-7 — per-signal_kind thresholds** (`artifact_generator_generators.py:40`): `_DEFAULT_THRESHOLDS` keyed by `signal_kind`; selected in `_resolve_threshold` (~:127).
+- **FR-13 — delete unconditional RED** (`artifact_generator_generators.py:795`): rewrite `_ensure_red_coverage` → `_ensure_signal_coverage(panels, sli_kinds, …)`; backfill only what the set implies; no-op otherwise. Remove the always-on synthesis.
+- **FR-5 — signal-kind derivation rows**: `queue_depth`/`retry_rate`/`freshness`/`run_success`/`lag`/`saturation` templates, additive; a kind may suppress a default SLI (worker suppresses latency).
 
 ## Phase 3 — Traceability + coverage — FR-8, FR-9
 
