@@ -44,35 +44,27 @@ _DEFAULT_THRESHOLDS = {
 }
 
 
-# Importance-scaled SLO default thresholds (design: importance-scaled-slo, FR-2/FR-2a/FR-2b).
-# Keyed on ``(criticality, deployment_mode)``. Increment 1 populates the criticality-only rows
-# (``deployment_mode is None``); Increment 2 adds the ``deployed``/``installed`` exposure rows.
-# Only ``availability`` and ``latency_p99`` scale — ``throughput`` is a capacity fact and stays flat
-# (FR-2b): a field absent here falls through to ``_DEFAULT_THRESHOLDS``.
-# MONOTONIC (FR-2a): raising criticality never loosens a field (availability non-decreasing,
-# latency non-increasing). ``medium`` deliberately equals the flat default so medium-criticality
-# services are unchanged in value.
-_IMPORTANCE_THRESHOLDS: Dict[Tuple[str, Optional[str]], Dict[str, str]] = {
-    ("critical", None): {"availability": "99.9", "latency_p99": "300ms"},
-    ("high", None): {"availability": "99.5", "latency_p99": "400ms"},
-    ("medium", None): {"availability": "99", "latency_p99": "500ms"},
-    ("low", None): {"availability": "99", "latency_p99": "1s"},
-}
-
-
 def _select_importance_default(business: "BusinessContext", field_name: str) -> Optional[str]:
     """Importance-scaled default for ``field_name`` (FR-2), or ``None`` to fall through.
 
-    Keyed on ``(criticality, deployment_mode)``. ``deployment_mode`` is read ``None``-safely via
-    ``getattr`` so this works before Increment 2 adds the field. Returns ``None`` when the criticality
-    is unknown or the field does not participate in importance scaling (e.g. ``throughput``), so the
-    caller falls back to the flat ``_DEFAULT_THRESHOLDS``.
+    The VALUES come from a config file (``config/importance_thresholds.yaml``), loaded + manifest-
+    overridden by ``obs_config.load_importance_thresholds`` and carried on
+    ``business.importance_thresholds`` (nested ``<criticality>.<deployment_mode|default>.<field>``).
+    When the context did not load it (e.g. a directly-constructed ``BusinessContext``), the config-
+    file base is loaded here — nothing is hardcoded in this module. ``deployment_mode`` is read
+    ``None``-safely so this works before Increment 2 adds the field. Returns ``None`` when the
+    criticality/mode/field is not in the table (e.g. ``throughput``), so the caller falls back to the
+    flat ``_DEFAULT_THRESHOLDS``.
     """
-    key = (business.criticality, getattr(business, "deployment_mode", None))
-    row = _IMPORTANCE_THRESHOLDS.get(key)
-    if row is None:
-        return None
-    return row.get(field_name)
+    table = business.importance_thresholds
+    if table is None:
+        from .obs_config import load_importance_thresholds
+
+        table = load_importance_thresholds(None)
+    crit_row = table.get(business.criticality) or {}
+    mode_key = getattr(business, "deployment_mode", None) or "default"
+    cell = crit_row.get(mode_key) or crit_row.get("default") or {}
+    return cell.get(field_name)
 
 
 _INSTRUMENT_TO_PANEL: Dict[str, str] = {

@@ -18,14 +18,49 @@ Manifest overrides (all optional, under ``spec.observability``)::
 
 from __future__ import annotations
 
+import copy
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, Optional
+
+import yaml
 
 # Portal quality-gauge default (the only one not already a module dict elsewhere).
 _QUALITY_THRESHOLDS_DEFAULT: Dict[str, float] = {"warning": 0.6, "healthy": 0.8}
 
+# Importance-scaled SLO thresholds live in a config FILE (not hardcoded) — single source of truth
+# for the values (design: importance-scaled-slo, FR-7). Manifest may override any cell.
+_IMPORTANCE_THRESHOLDS_FILE = Path(__file__).resolve().parent / "config" / "importance_thresholds.yaml"
+
 
 def _obs(manifest: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return (manifest or {}).get("spec", {}).get("observability", {}) or {}
+
+
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge ``override`` onto a copy of ``base`` (override wins at the leaves)."""
+    out = copy.deepcopy(base)
+    for key, val in (override or {}).items():
+        if isinstance(val, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], val)
+        else:
+            out[key] = val
+    return out
+
+
+@lru_cache(maxsize=1)
+def _importance_base() -> Dict[str, Any]:
+    """Load + cache the base importance-threshold table from the config file (drop schema_version)."""
+    data = yaml.safe_load(_IMPORTANCE_THRESHOLDS_FILE.read_text(encoding="utf-8")) or {}
+    return {k: v for k, v in data.items() if k != "schema_version"}
+
+
+def load_importance_thresholds(manifest: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Importance-scaled SLO thresholds: config-file base, deep-merged with any manifest override
+    under ``spec.observability.importanceThresholds`` (FR-7). Nested
+    ``<criticality>.<deployment_mode|default>.{availability, latency_p99}``.
+    """
+    return _deep_merge(_importance_base(), _obs(manifest).get("importanceThresholds") or {})
 
 
 def load_severity_map(manifest: Optional[Dict[str, Any]]) -> Dict[str, str]:

@@ -1754,7 +1754,6 @@ class TestImportanceScaledThresholds:
 
     from startd8.observability.artifact_generator_generators import (
         _DEFAULT_THRESHOLDS,
-        _IMPORTANCE_THRESHOLDS,
         _resolve_threshold,
     )
 
@@ -1806,17 +1805,30 @@ class TestImportanceScaledThresholds:
             assert tier == "default"  # flat fallback, not default:importance
 
     def test_table_is_monotonic(self):
-        # FR-2a: raising criticality never loosens a field.
+        # FR-2a: raising criticality never loosens a field (values sourced from the config file).
+        from startd8.observability.obs_config import load_importance_thresholds
+
+        table = load_importance_thresholds(None)
         avails = [
-            _parse_availability_to_fraction(self._IMPORTANCE_THRESHOLDS[(c, None)]["availability"])
-            for c in self._ORDER
+            _parse_availability_to_fraction(table[c]["default"]["availability"]) for c in self._ORDER
         ]
         lats = [
-            _parse_duration_to_seconds(self._IMPORTANCE_THRESHOLDS[(c, None)]["latency_p99"])
-            for c in self._ORDER
+            _parse_duration_to_seconds(table[c]["default"]["latency_p99"]) for c in self._ORDER
         ]
         assert avails == sorted(avails), "availability must be non-decreasing with importance"
         assert lats == sorted(lats, reverse=True), "latency must be non-increasing with importance"
+
+    def test_values_come_from_config_not_code(self):
+        # FR-7: the values live in the config file, and a manifest override wins per cell.
+        from startd8.observability.obs_config import load_importance_thresholds
+
+        base = load_importance_thresholds(None)
+        assert base["high"]["default"]["availability"] == "99.5"  # from config/importance_thresholds.yaml
+        overridden = load_importance_thresholds(
+            {"spec": {"observability": {"importanceThresholds": {"high": {"default": {"availability": "99.7"}}}}}}
+        )
+        assert overridden["high"]["default"]["availability"] == "99.7"
+        assert overridden["high"]["default"]["latency_p99"] == "400ms"  # untouched cell preserved
 
     def test_derived_value_never_labeled_manifest(self):
         # NR-4: an unauthored, importance-derived value must not carry tier=manifest.

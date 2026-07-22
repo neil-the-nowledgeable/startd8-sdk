@@ -90,6 +90,10 @@ class BusinessContext:
     # defaults). Populated by load_business_context via obs_config; same precedence as personas.
     severity_map: Optional[Dict[str, str]] = None        # criticality → alert severity
     default_thresholds: Optional[Dict[str, str]] = None  # SLO default thresholds
+    # Importance-scaled SLO thresholds from the config file (+ manifest override). Nested
+    # <criticality>.<deployment_mode|default>.{availability, latency_p99}. None ⇒ resolver loads the
+    # config-file base itself (design: importance-scaled-slo, FR-7).
+    importance_thresholds: Optional[Dict[str, Any]] = None
     quality_thresholds: Optional[Dict[str, float]] = None  # portal quality-gauge bands
     # REQ_NOTIFICATION_POLICY FR-9: overridable Alertmanager route grouping. Keys:
     # group_by (list), group_wait (str), repeat_interval (str). None ⇒ built-in defaults.
