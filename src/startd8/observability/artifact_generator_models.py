@@ -83,6 +83,9 @@ class BusinessContext:
     """Business context extracted from .contextcore.yaml."""
 
     criticality: str = "medium"
+    # Deployment topology (importance-scaled-slo Increment 2): "installed" (local/single-user) ⇒
+    # extremely forgiving SLOs; "deployed"/None ⇒ the criticality scale. From spec.deployment.mode.
+    deployment_mode: Optional[str] = None
     availability: Optional[str] = None  # e.g. "99.9"
     latency_p99: Optional[str] = None  # e.g. "500ms"
     throughput: Optional[str] = None  # e.g. "100rps"

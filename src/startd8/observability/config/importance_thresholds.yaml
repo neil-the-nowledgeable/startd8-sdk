@@ -2,24 +2,35 @@
 # Design: docs/design/importance-scaled-slo/ (FR-7 single overridable table).
 #
 # Structure: <criticality>.<deployment_mode|default>.{availability, latency_p99}
-#   - `default` = no deployment-mode signal (Increment 1). Increment 2 adds `installed`/`deployed`
-#     sub-keys under each criticality (they fall back to `default` when absent).
+#   - `default` = no deployment-mode signal → the criticality scale (== `deployed`).
+#   - `deployed` = shared / multi-tenant / production → the criticality scale.
+#   - `installed` (Increment 2) = a tool a person runs on their own machine → EXTREMELY forgiving SLOs:
+#     a local single-user app does not owe production-grade availability/latency. Criticality still
+#     nudges within the forgiving band.
 #   - Only `availability` and `latency_p99` participate (FR-2b) — `throughput` is a capacity fact and
 #     is intentionally omitted here, so it falls through to the flat default.
-#   - MONOTONIC (FR-2a): raising criticality must never loosen a field (availability non-decreasing,
-#     latency non-increasing). `medium.default` deliberately equals the flat default (value unchanged).
+#   - MONOTONIC (FR-2a): raising criticality AND/OR moving installed→deployed must never loosen a
+#     field (availability non-decreasing, latency non-increasing).
 #
 # Override precedence: a project may override any cell in its ContextManifest under
-#   spec.observability.importanceThresholds: { high: { default: { availability: "99.7" } } }
+#   spec.observability.importanceThresholds: { high: { deployed: { availability: "99.7" } } }
 # which is deep-merged over these base values (obs_config.load_importance_thresholds).
 
 schema_version: 1
 
 critical:
-  default: { availability: "99.9", latency_p99: "300ms" }
+  default: &crit { availability: "99.9", latency_p99: "300ms" }
+  deployed: *crit
+  installed: { availability: "99", latency_p99: "1s" }
 high:
-  default: { availability: "99.5", latency_p99: "400ms" }
+  default: &high { availability: "99.5", latency_p99: "400ms" }
+  deployed: *high
+  installed: { availability: "97", latency_p99: "2s" }
 medium:
-  default: { availability: "99", latency_p99: "500ms" }
+  default: &medium { availability: "99", latency_p99: "500ms" }
+  deployed: *medium
+  installed: { availability: "95", latency_p99: "3s" }
 low:
-  default: { availability: "99", latency_p99: "1s" }
+  default: &low { availability: "99", latency_p99: "1s" }
+  deployed: *low
+  installed: { availability: "90", latency_p99: "5s" }
