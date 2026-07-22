@@ -504,6 +504,17 @@ from startd8.utils.agent_resolution import resolve_agent_spec
 from app.db import get_session  # noqa: F401 — the sync session contract (C-1)
 from app.tables import AiCall  # the SQLModel table (models.py only has AiCallSchema) — C-3
 
+# AI-agent observability: emit the SAME startd8.cost.* series the SDK does, so a DEPLOYED
+# app's LLM usage is QUERYABLE (cost/tokens per model), not only recorded as AiCall DB rows.
+# Fully guarded: absent OTel / startd8.costs, or with no OTel MeterProvider configured, this
+# is a no-op — the app boots and runs byte-for-byte identically. Never blocks a pass.
+try:
+    from types import SimpleNamespace as _CostPoint
+    from startd8.costs.otel_metrics import CostMetrics as _CostMetrics
+    _COST_METRICS = _CostMetrics()
+except Exception:  # pragma: no cover — best-effort telemetry; never block boot
+    _COST_METRICS = None
+
 logger = logging.getLogger(__name__)
 
 # Per-provider tool-use ceiling (C-2). 8192 stays under anthropic's >10-min streaming guard.
@@ -578,6 +589,21 @@ def _log_ai_call(session: Session, pass_name: str, raw: Any, agent_spec: str = "
         _in = getattr(usage, "input", None)
         _out = getattr(usage, "output", None)
         _cost = getattr(usage, "cost_estimate", None) if usage else None
+        # Emit startd8.cost.* (AI-agent observability) — independent best-effort block so a
+        # metric failure never breaks DB logging, and vice versa. model/provider from the
+        # provider:model agent_spec; no-op unless the app configured an OTel MeterProvider.
+        if _COST_METRICS is not None:
+            try:
+                _prov, _, _model = (agent_spec or "").partition(":")
+                _COST_METRICS.record(_CostPoint(
+                    model=_model or agent_spec or "unknown",
+                    provider=_prov or "unknown",
+                    input_tokens=int(_in or 0),
+                    output_tokens=int(_out or 0),
+                    total_cost=float(_cost or 0.0),
+                ))
+            except Exception:
+                pass
         candidates = {
             "purpose": pass_name,
             "pass_name": pass_name,
