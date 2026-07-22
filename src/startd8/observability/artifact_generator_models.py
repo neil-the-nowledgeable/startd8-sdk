@@ -62,6 +62,23 @@ class ServiceHints:
 
 
 @dataclass
+class FunctionalRequirement:
+    """A per-FR observability intent forwarded from the plan (#226 FR-4/FR-5, CR-1).
+
+    ``signal_kind`` is the normative enum owned by the #226 requirements doc
+    (availability|latency|throughput|queue_depth|retry_rate|freshness|run_success|
+    saturation|lag|custom). ``target`` is an optional threshold; ``service`` optionally
+    binds the FR to one service. Absent ``functional[]`` ⇒ empty list ⇒ pre-#226 path.
+    """
+
+    id: str = ""
+    signal_kind: str = ""
+    description: str = ""
+    target: Optional[str] = None
+    service: Optional[str] = None
+
+
+@dataclass
 class BusinessContext:
     """Business context extracted from .contextcore.yaml."""
 
@@ -105,6 +122,9 @@ class BusinessContext:
     # REQ_NOTIFICATION_POLICY FR-9: overridable Alertmanager route grouping. Keys:
     # group_by (list), group_wait (str), repeat_interval (str). None ⇒ built-in defaults.
     notification_grouping: Optional[Dict[str, Any]] = None
+    # #226 FR-4/FR-5: per-FR observability intents forwarded from the plan
+    # (spec.requirements.functional[]). Empty until CR-1 ships upstream ⇒ pre-#226 path.
+    functional_requirements: List["FunctionalRequirement"] = field(default_factory=list)
 
     def routing_channels(self) -> List[str]:
         """Channel identifiers for alert routing, with the Phase-0 fallback chain:

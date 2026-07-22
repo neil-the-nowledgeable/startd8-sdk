@@ -407,6 +407,21 @@ def load_business_context(
     ctx.throughput = requirements.get("throughput")
     ctx.error_budget = requirements.get("errorBudget")
 
+    # #226 FR-4/FR-5: per-FR observability intents (spec.requirements.functional[]).
+    # Forwarded from the plan (CR-1); absent ⇒ empty ⇒ pre-#226 path. Parsed leniently
+    # (dicts only; unknown keys ignored) so a newer manifest can't crash an older gen.
+    for fr in requirements.get("functional") or []:
+        if isinstance(fr, dict):
+            ctx.functional_requirements.append(
+                FunctionalRequirement(
+                    id=str(fr.get("id", "")),
+                    signal_kind=str(fr.get("signal_kind", "")),
+                    description=str(fr.get("description", "")),
+                    target=fr.get("target"),
+                    service=fr.get("service"),
+                )
+            )
+
     # SLO window from strategy objectives if available
     strategy = manifest.get("strategy", {})
     for obj in strategy.get("objectives", []):
