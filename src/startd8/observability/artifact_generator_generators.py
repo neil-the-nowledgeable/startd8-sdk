@@ -44,6 +44,37 @@ _DEFAULT_THRESHOLDS = {
 }
 
 
+# Importance-scaled SLO default thresholds (design: importance-scaled-slo, FR-2/FR-2a/FR-2b).
+# Keyed on ``(criticality, deployment_mode)``. Increment 1 populates the criticality-only rows
+# (``deployment_mode is None``); Increment 2 adds the ``deployed``/``installed`` exposure rows.
+# Only ``availability`` and ``latency_p99`` scale — ``throughput`` is a capacity fact and stays flat
+# (FR-2b): a field absent here falls through to ``_DEFAULT_THRESHOLDS``.
+# MONOTONIC (FR-2a): raising criticality never loosens a field (availability non-decreasing,
+# latency non-increasing). ``medium`` deliberately equals the flat default so medium-criticality
+# services are unchanged in value.
+_IMPORTANCE_THRESHOLDS: Dict[Tuple[str, Optional[str]], Dict[str, str]] = {
+    ("critical", None): {"availability": "99.9", "latency_p99": "300ms"},
+    ("high", None): {"availability": "99.5", "latency_p99": "400ms"},
+    ("medium", None): {"availability": "99", "latency_p99": "500ms"},
+    ("low", None): {"availability": "99", "latency_p99": "1s"},
+}
+
+
+def _select_importance_default(business: "BusinessContext", field_name: str) -> Optional[str]:
+    """Importance-scaled default for ``field_name`` (FR-2), or ``None`` to fall through.
+
+    Keyed on ``(criticality, deployment_mode)``. ``deployment_mode`` is read ``None``-safely via
+    ``getattr`` so this works before Increment 2 adds the field. Returns ``None`` when the criticality
+    is unknown or the field does not participate in importance scaling (e.g. ``throughput``), so the
+    caller falls back to the flat ``_DEFAULT_THRESHOLDS``.
+    """
+    key = (business.criticality, getattr(business, "deployment_mode", None))
+    row = _IMPORTANCE_THRESHOLDS.get(key)
+    if row is None:
+        return None
+    return row.get(field_name)
+
+
 _INSTRUMENT_TO_PANEL: Dict[str, str] = {
     "histogram": "histogram",
     "counter": "timeseries",
@@ -108,9 +139,11 @@ def _resolve_threshold(
     business: BusinessContext,
     derivations: List[DerivationTrace],
 ) -> Tuple[Optional[str], str]:
-    """Resolve a threshold value with three-tier fallback.
+    """Resolve a threshold value with fallback tiers.
 
-    Returns (value, tier) where tier is 'manifest' or 'default'.
+    Returns (value, tier) where tier is 'manifest', 'default:importance', or 'default'.
+    Authored (manifest) values always win; when none is authored, an importance-scaled default
+    (FR-2, keyed on criticality[/deployment_mode]) is preferred over the flat default.
     """
     biz_value = getattr(business, field_name, None)
     if biz_value is not None:
@@ -123,6 +156,21 @@ def _resolve_threshold(
             )
         )
         return biz_value, "manifest"
+
+    # Importance-scaled default (FR-2/FR-3): derived, never authored — emitted under a distinct
+    # `default:importance` tier so it is not laundered into `tier="manifest"` (NR-4).
+    importance = _select_importance_default(business, field_name)
+    if importance is not None:
+        mode = getattr(business, "deployment_mode", None) or "-"
+        derivations.append(
+            DerivationTrace(
+                field=field_name,
+                source="_IMPORTANCE_THRESHOLDS",
+                transformation=f"{mode} + {business.criticality} → {field_name} {importance}",
+                tier="default:importance",
+            )
+        )
+        return importance, "default:importance"
 
     default = (business.default_thresholds or _DEFAULT_THRESHOLDS).get(field_name)
     if default is not None:
