@@ -149,6 +149,22 @@ _PROFILES: Dict[str, MetricDescriptor] = {
         latency_bucket_metric="duration_milliseconds_bucket",
         latency_unit="ms",
     ),
+    # Non-request workload profile (#226 FR-6/FR-6a). Bound to the OTel **messaging
+    # semantic convention** (`messaging.process.*`) — the grounded convention for
+    # queue/worker/stream job processing (OQ-5 established workers may emit NO native
+    # metrics, so the series are convention-declared, not subject-sniffed). Maps a
+    # worker's real SLIs onto the RED axes: job-processing duration → latency, its
+    # histogram `_count` → throughput, `error.type` presence → failures. A worker
+    # thus gets job-shaped SLOs (job p99 / job rate / job success), never
+    # `http_server_duration`.
+    "messaging-semconv": MetricDescriptor(
+        profile="messaging-semconv",
+        service_label_key="service",
+        error_selector='error_type!=""',
+        throughput_metric="messaging_process_duration_count",
+        latency_bucket_metric="messaging_process_duration_bucket",
+        latency_unit="s",
+    ),
 }
 
 #: Profiles that model the OTel SDK semantic-convention surface (FR-5a).
@@ -162,6 +178,83 @@ _TRANSPORT_DEFAULTS = {
     "grpc-web": "semconv-grpc",
     "http": "semconv-http",
 }
+
+#: Service kinds that ARE request-servers — their descriptor comes from transport,
+#: not a workload profile (#226 FR-6). Kept explicit so `profile_for_kinds` can tell
+#: "this kind means use the transport default" from "no mapping".
+REQUEST_KINDS = frozenset({"http_server", "grpc_server"})
+
+#: Non-request workload kind → convention profile (#226 FR-6). The requirement is
+#: this TABLE; adding a row (batch/cron with their own grounded series) is additive.
+#: `stream`/`async_worker` share the messaging-semconv surface (queue/consumer job
+#: processing). batch/cron are intentionally absent until their series are grounded
+#: (OQ-5) rather than invented — they fall back to the transport default meanwhile.
+_KIND_DEFAULTS = {
+    "async_worker": "messaging-semconv",
+    "stream": "messaging-semconv",
+}
+
+#: The three RED SLI kinds a request-server (or a job worker, on its messaging series)
+#: is observed by absent any declaration (#226 FR-12). Its home is here beside the kind
+#: tables so the determination model has a single source of truth.
+_REQUEST_SLI_KINDS = frozenset({"latency", "availability", "throughput"})
+
+#: Kind → the SLI-kind set it implies absent per-FR declaration (#226 FR-12). Request
+#: kinds and job workers/streams resolve to the RED triple (a worker's RED rides its
+#: messaging descriptor, so "throughput"=job rate, "availability"=job success). cron/
+#: batch (freshness/run_success shapes) are intentionally deferred with their FR-6
+#: profiles — an unmapped kind contributes no implied set (falls to the transport tier).
+_KIND_SLI_DEFAULTS = {
+    "http_server": _REQUEST_SLI_KINDS,
+    "grpc_server": _REQUEST_SLI_KINDS,
+    "async_worker": _REQUEST_SLI_KINDS,
+    "stream": _REQUEST_SLI_KINDS,
+}
+
+
+def resolve_sli_kinds(
+    kinds: Optional[Iterable[str]] = None,
+    signal_kinds: Optional[Iterable[str]] = None,
+    transport: str = "",
+) -> "frozenset[str]":
+    """The set of SLI kinds a service is observed by (#226 FR-12) — the determination
+    core. The RED base applies when the service is **request-serving** (a request
+    transport, or a request/worker ``kind``); declared per-FR ``signal_kinds`` (from
+    ``functional[]``) are **additive** on top (OQ-6). A non-request service (no
+    request transport, no mapped kind) gets only what it declares — ``frozenset()``
+    when it declares nothing (the ∅ that FR-9 reports and FR-13 treats as "synthesize
+    nothing"). Byte-parity: a plain http/grpc service with no kind/FRs ⇒ the RED
+    triple, identical to pre-#226.
+    """
+    resolved: set[str] = set(signal_kinds or ())          # declared FR signals (additive)
+    for kind in kinds or ():
+        resolved |= set(_KIND_SLI_DEFAULTS.get(kind, ()))  # kind-implied RED base
+    if (transport or "").lower() in _TRANSPORT_DEFAULTS:
+        resolved |= _REQUEST_SLI_KINDS                     # request-transport RED base
+    return frozenset(resolved)
+
+
+def profile_for_kinds(kinds: Iterable[str], transport: str) -> MetricDescriptor:
+    """Descriptor for a service by its workload kind(s), kind winning over transport
+    (#226 FR-6). Empty kinds ⇒ the transport default (byte-identical to pre-#226).
+
+    Resolution: the first kind with a non-request workload mapping wins. If no kind
+    maps to a workload profile — including hybrids that also serve requests
+    (``http_server`` + ``async_worker``) — fall back to the transport default (the
+    request surface); a hybrid's worker SLIs are added by the FR-5 signal_kind
+    derivation, not the single request-shaped descriptor.
+    """
+    kinds = list(kinds or ())
+    # A hybrid that also serves requests keeps the request surface as its primary
+    # descriptor (so its http/grpc RED triplet is intact); its worker SLIs are added
+    # by the FR-5 signal_kind derivation, not this single-shape descriptor.
+    if any(k in REQUEST_KINDS for k in kinds):
+        return profile_for_transport(transport)
+    for kind in kinds:
+        mapped = _KIND_DEFAULTS.get(kind)
+        if mapped:
+            return _PROFILES[mapped]
+    return profile_for_transport(transport)
 
 
 def available_profiles() -> Tuple[str, ...]:
@@ -238,6 +331,7 @@ _OVERRIDABLE_AXES = frozenset(
 def resolve_descriptor(
     *,
     profile: Optional[str] = None,
+    kinds: Optional[Iterable[str]] = None,
     transport: str = "http",
     overrides: Optional[Dict[str, Any]] = None,
 ) -> MetricDescriptor:
@@ -257,6 +351,9 @@ def resolve_descriptor(
     an older generator); **unknown override keys** are ignored with a warning.
     ``profile_for`` stays strict for authoring-time validation.
     """
+    # Precedence (#226 FR-6): an explicit resolved `profile` (manifest/ContextCore)
+    # still wins; else a declared workload `kind` wins over transport; else the
+    # transport default. Empty kinds ⇒ transport default (byte-identical to pre-#226).
     if profile:
         try:
             base = profile_for(profile)
@@ -266,6 +363,8 @@ def resolve_descriptor(
                 "falling back to semconv-%s", profile, transport,
             )
             base = profile_for_transport(transport)
+    elif kinds:
+        base = profile_for_kinds(kinds, transport)
     else:
         base = profile_for_transport(transport)
 

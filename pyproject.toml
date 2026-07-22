@@ -213,6 +213,7 @@ startd8 = [
     "concierge_templates/*.md",
     "concierge_templates/inputs/*.yaml",
     "requirements_panel/templates/*.yaml",
+    "observability/config/*.yaml",
 ]
 
 

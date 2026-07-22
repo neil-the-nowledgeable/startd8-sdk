@@ -33,8 +33,15 @@ class ServiceHints:
     """Instrumentation hints for a single service."""
 
     service_id: str
-    transport: str  # "grpc" or "http"
+    # FR-14 (#226): optional — a service that declares a `kind` need not have a
+    # listen transport (workers/cron/batch don't). Absent transport + absent kinds
+    # is still skipped upstream (extract_service_hints).
+    transport: str = ""  # "grpc" | "http" | "" (non-request workload)
     language: Optional[str] = None
+    # FR-12b (#226): service workload kind(s), producer-supplied (CR-3). Modeled as
+    # one-or-more to support hybrid services (e.g. http_server + async_worker). Empty
+    # ⇒ determination falls back to transport (byte-identical to pre-#226).
+    kinds: List[str] = field(default_factory=list)
     detected_databases: List[str] = field(default_factory=list)
     convention_metrics: List[ConventionMetric] = field(default_factory=list)
     # Domain-specific metrics declared in the manifest (Closure 1 / Gap 1).
@@ -52,6 +59,23 @@ class ServiceHints:
     # (prometheus|loki|tempo). {} => fall back to today's name-based binding (FR-7).
     # Consumed by the dashboard renderer to emit `datasource: {type, uid}`.
     datasource_uids: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class FunctionalRequirement:
+    """A per-FR observability intent forwarded from the plan (#226 FR-4/FR-5, CR-1).
+
+    ``signal_kind`` is the normative enum owned by the #226 requirements doc
+    (availability|latency|throughput|queue_depth|retry_rate|freshness|run_success|
+    saturation|lag|custom). ``target`` is an optional threshold; ``service`` optionally
+    binds the FR to one service. Absent ``functional[]`` ⇒ empty list ⇒ pre-#226 path.
+    """
+
+    id: str = ""
+    signal_kind: str = ""
+    description: str = ""
+    target: Optional[str] = None
+    service: Optional[str] = None
 
 
 @dataclass
@@ -90,10 +114,17 @@ class BusinessContext:
     # defaults). Populated by load_business_context via obs_config; same precedence as personas.
     severity_map: Optional[Dict[str, str]] = None        # criticality → alert severity
     default_thresholds: Optional[Dict[str, str]] = None  # SLO default thresholds
+    # Importance-scaled SLO thresholds from the config file (+ manifest override). Nested
+    # <criticality>.<deployment_mode|default>.{availability, latency_p99}. None ⇒ resolver loads the
+    # config-file base itself (design: importance-scaled-slo, FR-7).
+    importance_thresholds: Optional[Dict[str, Any]] = None
     quality_thresholds: Optional[Dict[str, float]] = None  # portal quality-gauge bands
     # REQ_NOTIFICATION_POLICY FR-9: overridable Alertmanager route grouping. Keys:
     # group_by (list), group_wait (str), repeat_interval (str). None ⇒ built-in defaults.
     notification_grouping: Optional[Dict[str, Any]] = None
+    # #226 FR-4/FR-5: per-FR observability intents forwarded from the plan
+    # (spec.requirements.functional[]). Empty until CR-1 ships upstream ⇒ pre-#226 path.
+    functional_requirements: List["FunctionalRequirement"] = field(default_factory=list)
 
     def routing_channels(self) -> List[str]:
         """Channel identifiers for alert routing, with the Phase-0 fallback chain:
@@ -158,6 +189,11 @@ class GenerationReport:
     # Each row: {name, category, route_state, status, classification_source, [owner]}.
     # The authoritative emit-vs-cede provenance surface, NOT inferred from category.
     route_states: List[Dict[str, Any]] = field(default_factory=list)
+    # #226 FR-9: FR + SLI-kind coverage — distinguishes two gap classes so the pilot's
+    # "6 of 7 FRs → nothing" is visible, not masked. Keys: `empty_services` (resolved=∅,
+    # no kind/transport), `unfulfilled` (declared signal_kind, ungroundable ⇒ produced=0),
+    # `emitted` (FR ids that produced an artifact). Empty when no functional[] (pre-#226).
+    fr_coverage: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

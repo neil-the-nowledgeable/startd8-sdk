@@ -18,7 +18,12 @@ import yaml  # noqa: F401
 
 from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
 from .artifact_generator_models import *  # noqa: F401,F403
-from .metric_descriptor import MetricDescriptor, profile_for_transport
+from .metric_descriptor import (
+    MetricDescriptor,
+    profile_for_kinds,
+    profile_for_transport,
+    resolve_sli_kinds,
+)
 from .spec import Receiver
 
 try:
@@ -42,6 +47,29 @@ _DEFAULT_THRESHOLDS = {
     "latency_p99": "500ms",
     "throughput": "100rps",
 }
+
+
+def _select_importance_default(business: "BusinessContext", field_name: str) -> Optional[str]:
+    """Importance-scaled default for ``field_name`` (FR-2), or ``None`` to fall through.
+
+    The VALUES come from a config file (``config/importance_thresholds.yaml``), loaded + manifest-
+    overridden by ``obs_config.load_importance_thresholds`` and carried on
+    ``business.importance_thresholds`` (nested ``<criticality>.<deployment_mode|default>.<field>``).
+    When the context did not load it (e.g. a directly-constructed ``BusinessContext``), the config-
+    file base is loaded here — nothing is hardcoded in this module. ``deployment_mode`` is read
+    ``None``-safely so this works before Increment 2 adds the field. Returns ``None`` when the
+    criticality/mode/field is not in the table (e.g. ``throughput``), so the caller falls back to the
+    flat ``_DEFAULT_THRESHOLDS``.
+    """
+    table = business.importance_thresholds
+    if table is None:
+        from .obs_config import load_importance_thresholds
+
+        table = load_importance_thresholds(None)
+    crit_row = table.get(business.criticality) or {}
+    mode_key = getattr(business, "deployment_mode", None) or "default"
+    cell = crit_row.get(mode_key) or crit_row.get("default") or {}
+    return cell.get(field_name)
 
 
 _INSTRUMENT_TO_PANEL: Dict[str, str] = {
@@ -108,9 +136,11 @@ def _resolve_threshold(
     business: BusinessContext,
     derivations: List[DerivationTrace],
 ) -> Tuple[Optional[str], str]:
-    """Resolve a threshold value with three-tier fallback.
+    """Resolve a threshold value with fallback tiers.
 
-    Returns (value, tier) where tier is 'manifest' or 'default'.
+    Returns (value, tier) where tier is 'manifest', 'default:importance', or 'default'.
+    Authored (manifest) values always win; when none is authored, an importance-scaled default
+    (FR-2, keyed on criticality[/deployment_mode]) is preferred over the flat default.
     """
     biz_value = getattr(business, field_name, None)
     if biz_value is not None:
@@ -123,6 +153,21 @@ def _resolve_threshold(
             )
         )
         return biz_value, "manifest"
+
+    # Importance-scaled default (FR-2/FR-3): derived, never authored — emitted under a distinct
+    # `default:importance` tier so it is not laundered into `tier="manifest"` (NR-4).
+    importance = _select_importance_default(business, field_name)
+    if importance is not None:
+        mode = getattr(business, "deployment_mode", None) or "-"
+        derivations.append(
+            DerivationTrace(
+                field=field_name,
+                source="_IMPORTANCE_THRESHOLDS",
+                transformation=f"{mode} + {business.criticality} → {field_name} {importance}",
+                tier="default:importance",
+            )
+        )
+        return importance, "default:importance"
 
     default = (business.default_thresholds or _DEFAULT_THRESHOLDS).get(field_name)
     if default is not None:
@@ -174,7 +219,22 @@ def _descriptor_for(
     """
     if descriptor is not None:
         return descriptor
-    return profile_for_transport(service.transport)
+    # #226 FR-6: honor a declared workload kind in the standalone path too (kind wins
+    # over transport). Empty kinds ⇒ transport default (byte-identical to pre-#226).
+    return profile_for_kinds(service.kinds, service.transport)
+
+
+def _service_sli_kinds(service: ServiceHints, business: BusinessContext) -> "frozenset[str]":
+    """The resolved SLI-kind set for a service (#226 FR-12), the single source used by
+    the FR-12a triplet gate and the FR-13 signal-coverage gate. Unions the service's
+    declared functional[] signal_kinds with its kind/transport-implied defaults."""
+    frs = getattr(business, "functional_requirements", None) or ()
+    signals = [
+        getattr(f, "signal_kind", "")
+        for f in frs
+        if getattr(f, "service", None) in (None, "", service.service_id)
+    ]
+    return resolve_sli_kinds(service.kinds, signals, service.transport)
 
 
 def _derivation_comment(derivations: List[DerivationTrace]) -> str:
@@ -213,9 +273,19 @@ def generate_alert_rules(
     latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
     avail_raw, _ = _resolve_threshold("availability", business, derivations)
 
+    # FR-12a: the SLI-kind gate is ANDed with the per-metric gate below (never
+    # replaces it) — a block emits iff its SLI kind ∈ the resolved set AND its source
+    # metric is present. A request service resolves to the RED triple ⇒ byte-identical.
+    sli_kinds = _service_sli_kinds(service, business)
+
     for metric in service.convention_metrics:
         # Duration/histogram metrics → latency alert
-        if metric.type == "histogram" and "duration" in metric.name and latency_raw:
+        if (
+            metric.type == "histogram"
+            and "duration" in metric.name
+            and latency_raw
+            and "latency" in sli_kinds  # FR-12a
+        ):
             # FR-4a: emit the threshold in the descriptor's native unit
             # (500ms → 0.5 for seconds descriptors, 500 for millisecond ones).
             threshold = descriptor.scale_threshold_seconds(
@@ -252,6 +322,7 @@ def generate_alert_rules(
             metric.type == "histogram"
             and "duration" in metric.name
             and avail_raw
+            and "availability" in sli_kinds  # FR-12a
             and not any(r.get("alert", "").endswith("ErrorRateHigh") for r in rules)
         ):
             avail_frac = _parse_availability_to_fraction(avail_raw)
@@ -288,6 +359,7 @@ def generate_alert_rules(
             metric.type == "histogram"
             and "duration" in metric.name
             and avail_raw
+            and "availability" in sli_kinds  # FR-12a
             and not any(r.get("alert", "").endswith("AvailabilityLow") for r in rules)
         ):
             avail_frac = _parse_availability_to_fraction(avail_raw)
@@ -799,15 +871,22 @@ def _ensure_red_coverage(
     derivations: List[DerivationTrace],
     descriptor: Optional[MetricDescriptor] = None,
 ) -> None:
-    """Synthesize missing Rate and Error panels for RED coverage (REQ-KZ-OBS-200a).
+    """Backfill the panels the resolved SLI-kind set implies (#226 FR-13).
 
-    Inspects existing panels to determine which RED signals are present,
-    then adds synthetic panels for any that are missing. Metric names, the
-    service-identity selector, and the error selector are sourced from the
-    resolved :class:`MetricDescriptor` (FR-4); ``descriptor=None`` falls back to
-    the transport default for byte-identical back-compat.
+    Formerly ``_ensure_red_coverage``: it unconditionally synthesized Rate/Error/
+    Availability panels for *every* service, assuming every service is a request
+    server. It is now **gated on the resolved SLI-kind set** (FR-12): Request-Rate
+    iff ``throughput`` ∈ set, Error-Rate + the Availability(1h) gauge (FR-13a — an
+    availability-kind artifact, not RED-completion) iff ``availability`` ∈ set. A
+    service whose set implies neither is a **no-op** (the deletion of the
+    unconditional path). Metric names/selectors come from the resolved
+    :class:`MetricDescriptor` (FR-4); ``descriptor=None`` ⇒ transport/kind default.
+    Byte-parity: a request service resolves to the RED triple ⇒ identical output.
     """
     descriptor = _descriptor_for(service, descriptor)
+    # FR-12: what SLI kinds is this service actually observed by? (Shared resolver —
+    # same set the FR-12a alert/SLO gate uses.)
+    sli_kinds = _service_sli_kinds(service, business)
     # Shared RED detection — single source of truth with the validator
     try:
         from startd8.validators.observability_artifact_checks import (
@@ -823,6 +902,13 @@ def _ensure_red_coverage(
 
     if has_rate and has_error:
         return  # Already have full RED coverage
+    # FR-13: the load-bearing deletion of the unconditional path. Nothing to
+    # synthesize when the resolved set implies neither throughput nor availability
+    # (e.g. a cron observed only by freshness/run_success) — no fabricated panels.
+    want_rate = "throughput" in sli_kinds
+    want_error = "availability" in sli_kinds
+    if not want_rate and not want_error:
+        return
 
     # Descriptor-sourced throughput metric + selectors (FR-4). For the semconv
     # default this is rpc_server_duration_count / http_server_duration_count with
@@ -842,7 +928,7 @@ def _ensure_red_coverage(
         f'{total_selector}[$__rate_interval]))'
     )
 
-    if not has_rate:
+    if not has_rate and want_rate:
         panels.append({
             "type": "timeseries",
             "title": "Request Rate",
@@ -851,7 +937,7 @@ def _ensure_red_coverage(
             "group": "Throughput",
         })
 
-    if not has_error:
+    if not has_error and want_error:
         error_panel: Dict[str, Any] = {
             "type": "timeseries",
             "title": "Error Rate",
@@ -872,8 +958,10 @@ def _ensure_red_coverage(
                 pass
         panels.append(error_panel)
 
-    # Availability gauge — shows current availability vs SLO target
-    if business.availability:
+    # Availability gauge (FR-13a) — an availability-kind artifact, gated on
+    # `availability` ∈ the resolved set (it fires on business.availability alone,
+    # independent of has_rate/has_error, so it needs its own gate).
+    if business.availability and want_error:
         try:
             avail_target = round(float(business.availability) / 100.0, 6)
             # [1h] window is intentionally kept (context-specific, not a
@@ -905,6 +993,126 @@ def _ensure_red_coverage(
             pass
 
 
+#: Per-signal_kind SLO template for the NON-request kinds (#226 FR-5). Each maps a
+#: declared functional[] signal_kind to (convention metric, shape, unit). The series
+#: are convention-sourced (FR-6a) — OTel messaging-family / a named exporter
+#: convention — bound to the service via the descriptor's identity selector; the FR's
+#: `target` is the threshold. `custom` lets an FR carry its own PromQL in `target`.
+#: Kinds absent here (or an FR with no `target`) are *unfulfilled* → FR-9, never faked.
+_FUNCTIONAL_SLI_TEMPLATES = {
+    "queue_depth": ("messaging_client_queued_messages", "gauge_max", "short"),
+    "lag": ("messaging_client_consumer_lag_messages", "gauge_max", "short"),
+    "retry_rate": ("messaging_client_retries_total", "rate", "short"),
+    "saturation": ("resource_utilization_ratio", "gauge_max", "percentunit"),
+    "freshness": ("job_last_success_timestamp_seconds", "age", "s"),
+    "run_success": ("job_runs_total", "ratio", "ratio"),
+}
+#: signal_kinds already covered by the convention triplet.
+_TRIPLET_SIGNAL_KINDS = frozenset({"availability", "latency", "throughput"})
+
+
+def _functional_sli_query(shape: str, metric: str, selector: str) -> str:
+    """PromQL for a functional SLI by its shape (#226 FR-5), bound to *selector*."""
+    if shape == "gauge_max":
+        return f"max({metric}{selector})"
+    if shape == "rate":
+        return f"sum(rate({metric}{selector}[5m]))"
+    if shape == "age":
+        return f"time() - max({metric}{selector})"
+    if shape == "ratio":
+        return f"sum(rate({metric}{selector}[$__rate_interval]))"
+    return f"{metric}{selector}"
+
+
+def generate_functional_slos(
+    service: ServiceHints,
+    business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
+) -> ArtifactResult:
+    """Emit an SLO per declared functional[] FR whose signal_kind is a NON-request
+    kind (#226 FR-5) — queue_depth/retry_rate/freshness/run_success/lag/saturation.
+
+    Convention-sourced series (FR-6a) bound to the service; the FR's ``target`` is the
+    threshold (or, for ``custom``, its own PromQL). FRs scoped to another service, or
+    whose signal_kind is in the convention triplet, are skipped. FRs the emitter cannot
+    ground (unknown signal_kind, or missing target) are recorded ``unfulfilled`` in
+    ``quality`` for FR-9 — never emitted as a fabricated artifact. No functional[] ⇒
+    ``skipped`` (byte-identical to pre-#226; this generator adds nothing).
+    """
+    descriptor = _descriptor_for(service, descriptor)
+    selector = descriptor.selector(service.service_id)
+    frs = [
+        f
+        for f in (business.functional_requirements or [])
+        if f.service in (None, "", service.service_id)
+        and f.signal_kind not in _TRIPLET_SIGNAL_KINDS
+    ]
+    if not frs:
+        return ArtifactResult(
+            artifact_type="slo_definition", service_id=service.service_id,
+            output_path="", status="skipped",
+        )
+
+    documents: List[str] = []
+    emitted_fr_ids: List[str] = []
+    unfulfilled: List[Dict[str, str]] = []
+    for fr in frs:
+        kind = fr.signal_kind
+        if kind == "custom" and fr.target:
+            query = fr.target
+        elif kind in _FUNCTIONAL_SLI_TEMPLATES and fr.target:
+            metric, shape, _unit = _FUNCTIONAL_SLI_TEMPLATES[kind]
+            query = _functional_sli_query(shape, metric, selector)
+        else:
+            unfulfilled.append(
+                {"id": fr.id, "signal_kind": kind, "reason": "no groundable series/target"}
+            )
+            continue
+
+        slo = {
+            "apiVersion": "openslo/v1",
+            "kind": "SLO",
+            "metadata": {
+                "name": f"{service.service_id}-{kind}-{fr.id}".lower().replace("_", "-"),
+                "labels": {
+                    "service": service.service_id,
+                    "signal_kind": kind,
+                    "source_fr": fr.id,  # FR-8: traceability to the originating FR
+                    "generated_by": "startd8",
+                },
+            },
+            "spec": {
+                "description": fr.description or f"{kind} SLO for {service.service_id} ({fr.id})",
+                "target": fr.target,
+                "timeWindow": {"duration": business.slo_window, "isRolling": True},
+                "indicator": {
+                    "metadata": {"name": f"{service.service_id}-{kind}-sli"},
+                    "spec": {
+                        "thresholdMetric": {
+                            "metricSource": {"type": "prometheus", "spec": {"query": query}},
+                        },
+                    },
+                },
+                "alerting": {
+                    "name": f"{service.service_id}-{kind}-alert",
+                    "labels": {"severity": _severity_for(business, [])},
+                },
+            },
+        }
+        documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+        emitted_fr_ids.append(fr.id)
+
+    header = f"# Functional-requirement SLOs for {service.service_id} (#226 FR-5)\n"
+    return ArtifactResult(
+        artifact_type="slo_definition",
+        service_id=service.service_id,
+        output_path=f"slos/{service.service_id}-functional-slo.yaml",
+        status="generated" if documents else "skipped",
+        content=(header + "\n---\n".join(documents)) if documents else "",
+        quality={"emitted_fr_ids": emitted_fr_ids, "unfulfilled": unfulfilled},
+    )
+
+
 def generate_slo_definitions(
     service: ServiceHints,
     business: BusinessContext,
@@ -924,6 +1132,7 @@ def generate_slo_definitions(
     descriptor = _descriptor_for(service, descriptor)
     total_selector = descriptor.selector(service.service_id)
     error_selector = descriptor.selector(service.service_id, error=True)
+    sli_kinds = _service_sli_kinds(service, business)  # FR-12a gate (ANDed below)
     derivations: List[DerivationTrace] = []
     documents: List[str] = []
 
@@ -968,7 +1177,7 @@ def generate_slo_definitions(
     )
 
     # Availability SLO
-    if counter_metric and avail_raw:
+    if counter_metric and avail_raw and "availability" in sli_kinds:  # FR-12a
         # Throughput counter from the descriptor (FR-4). When the counter was
         # derived from a duration histogram, the semconv default resolves to
         # ``*_duration_count`` — the same name the prior _prom_name+_count path
@@ -1041,7 +1250,7 @@ def generate_slo_definitions(
         )
 
     # Latency SLO
-    if histogram_metric and latency_raw:
+    if histogram_metric and latency_raw and "latency" in sli_kinds:  # FR-12a
         # Latency histogram bucket base from the descriptor (FR-4). Byte-identical
         # to _prom_name(histogram_metric.name) for the semconv default.
         latency_bucket_base = descriptor.latency_bucket_metric

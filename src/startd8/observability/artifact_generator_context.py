@@ -295,9 +295,23 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
             skipped_non_service += 1
             continue
 
-        transport = hint.get("transport")
-        if not transport:
-            logger.warning("Service %s has no transport field; skipping", svc_id)
+        transport = hint.get("transport") or ""
+        # FR-12b/CR-3 (#226): declared workload kind(s), producer-supplied. Accept a
+        # scalar string or a list; normalize to a de-duped, order-preserving list.
+        _raw_kind = hint.get("kind")
+        if isinstance(_raw_kind, str):
+            kinds = [_raw_kind] if _raw_kind.strip() else []
+        elif isinstance(_raw_kind, list):
+            kinds = [str(k).strip() for k in _raw_kind if str(k).strip()]
+        else:
+            kinds = []
+        kinds = list(dict.fromkeys(kinds))  # de-dupe, keep order
+        # FR-14 (#226): relax the transport-required drop. A non-request workload
+        # (worker/cron/batch) legitimately has no listen transport; drop only when it
+        # ALSO declares no kind (nothing to determine ⇒ preserves pre-#226 behavior,
+        # keeping every existing http/grpc fixture byte-identical).
+        if not transport and not kinds:
+            logger.warning("Service %s has no transport and no kind; skipping", svc_id)
             continue
 
         metrics = hint.get("metrics", {})
@@ -328,6 +342,7 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
             ServiceHints(
                 service_id=svc_id,
                 transport=transport,
+                kinds=kinds,
                 language=hint.get("language"),
                 detected_databases=hint.get("detected_databases", []),
                 convention_metrics=convention_metrics,
@@ -392,6 +407,21 @@ def load_business_context(
     ctx.throughput = requirements.get("throughput")
     ctx.error_budget = requirements.get("errorBudget")
 
+    # #226 FR-4/FR-5: per-FR observability intents (spec.requirements.functional[]).
+    # Forwarded from the plan (CR-1); absent ⇒ empty ⇒ pre-#226 path. Parsed leniently
+    # (dicts only; unknown keys ignored) so a newer manifest can't crash an older gen.
+    for fr in requirements.get("functional") or []:
+        if isinstance(fr, dict):
+            ctx.functional_requirements.append(
+                FunctionalRequirement(
+                    id=str(fr.get("id", "")),
+                    signal_kind=str(fr.get("signal_kind", "")),
+                    description=str(fr.get("description", "")),
+                    target=fr.get("target"),
+                    service=fr.get("service"),
+                )
+            )
+
     # SLO window from strategy objectives if available
     strategy = manifest.get("strategy", {})
     for obj in strategy.get("objectives", []):
@@ -407,10 +437,16 @@ def load_business_context(
         logger.info("No latencyP99 in manifest; will use default (500ms)")
 
     # Resolve the declarative policy maps (manifest spec.observability over hardcoded defaults).
-    from .obs_config import load_default_thresholds, load_quality_thresholds, load_severity_map
+    from .obs_config import (
+        load_default_thresholds,
+        load_importance_thresholds,
+        load_quality_thresholds,
+        load_severity_map,
+    )
 
     ctx.severity_map = load_severity_map(manifest)
     ctx.default_thresholds = load_default_thresholds(manifest)
+    ctx.importance_thresholds = load_importance_thresholds(manifest)
     ctx.quality_thresholds = load_quality_thresholds(manifest)
 
     return ctx
