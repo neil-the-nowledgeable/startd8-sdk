@@ -112,3 +112,39 @@ class TestFr9Coverage:
         cov = report.fr_coverage
         assert "FR-006" in cov["emitted"]
         assert any(u["id"] == "FR-007" for u in cov["unfulfilled"])
+
+    def test_emitting_fr_does_not_crash_index_write(self, tmp_path):
+        # Regression (#254): a functional[] FR with a target actually EMITS an
+        # SLO, whose quality dict lacks `score`. The non-dry-run index/quality
+        # writers must not KeyError on that scoreless quality dict.
+        meta = tmp_path / "onboarding-metadata.json"
+        meta.write_text(json.dumps({
+            "project_id": "p",
+            "instrumentation_hints": {
+                "mailer": {
+                    "service_id": "mailer",
+                    "kind": "async_worker",
+                    "metrics": {"convention_based": [
+                        {"name": "messaging.process.duration", "type": "histogram", "source": "otel_semconv:messaging"}
+                    ]},
+                },
+            },
+        }))
+        manifest = tmp_path / ".contextcore.yaml"
+        manifest.write_text(
+            "spec:\n"
+            "  business: {criticality: high}\n"
+            "  requirements:\n"
+            "    functional:\n"
+            "      - {id: FR-006, signal_kind: queue_depth, target: '1000'}\n"
+        )
+        out = tmp_path / "out"
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta, output_dir=out,
+            manifest_path=manifest, dry_run=False,  # exercises _write_index + _write_quality_report
+        )
+        assert "FR-006" in report.fr_coverage["emitted"]
+        # Index was written; the functional-SLO artifact appears without a quality_score key.
+        index = yaml.safe_load((out / "observability-manifest.yaml").read_text())
+        func_slo = [a for a in index["artifacts"] if "functional-slo" in a.get("path", "")]
+        assert func_slo and all("quality_score" not in a for a in func_slo)
