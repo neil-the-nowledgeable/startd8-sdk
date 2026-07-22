@@ -49,6 +49,35 @@ inside the OQ-5 grounding gate. → so an author of a `cron` gets "declare a **f
 
 ---
 
+## Prioritization (all findings, ranked)
+
+The ordering *is* the recommendation. Two rules drive it: **wire cheap latent value before building
+new** (Mottainai — the S items ship value now; the L flagship is fleet-gated), and **refine the
+record before surfacing it** (do the data-shape fixes QW-2/LH-1 *before* the portal panel QW-1, so
+the surface is good on day one instead of showing a hint you immediately re-polish).
+
+| Rank | Finding | Effort | Value / audience | Gating / dependency | Do when |
+|------|---------|--------|------------------|---------------------|---------|
+| **P1a** | QW-2 per-kind signal hint | S | author — sharper, actionable guidance | none | **first** — refines the coverage record |
+| **P1b** | LH-1 `empty_services ⊇ ungrounded` cross-ref | S | author — one story, not two gaps | none | with P1a (same file/loop) |
+| **P1c** | QW-1 portal coverage-gap panel | S | human/author — invisible → visible in Grafana | *displays* P1a/P1b output | after P1a/P1b |
+| **P2** | QW-3 cap-dev-pipe / ContextCore coverage line | S–M | machine / cross-repo ripple | **hypothesis** — confirm the consumer reads `fr_coverage` first | fast-follow, after a short cross-repo spike |
+| **P3** | AQW-1 kind-vocab drift guard | S | dev — prevents a silent future regression | independent | opportunistic — any time the file is touched; hand deeper single-sourcing to `/complexity-distiller` |
+| **P4** | EC-1 OQ-5 grounding pilot | L | **highest ultimate** — closes #230/#231/#233 | **gated** on a real worker/batch/ML fleet + grounded values | a scheduled milestone, not a backlog quick-win |
+
+**Why this order, not "highest value first":** EC-1 has the biggest payoff (it closes three issues)
+but it is **blocked** — it needs a real fleet and grounded threshold values that don't exist yet, so
+it can't lead. The **P1 bundle** (three S items, no deps) is the leverage available *today*: it makes
+the slice we just shipped actually legible to an author, and it makes EC-1's eventual output legible
+too. P2 rests on an unverified cross-repo assumption — **spike the confirmation before building it**,
+or it risks being effort spent on a surface no consumer reads. P3 is cheap insurance with no urgency.
+
+**Suggested first increment:** P1a → P1b → P1c as one PR (all touch `artifact_generator.py` +
+`metric_descriptor.py` + `portal_spec_builder.py`; ~S total), landing "worker/batch/cron/ML coverage
+gaps are visible and per-kind-actionable" end-to-end.
+
+---
+
 ## Grounding note (belief → actual — where going-and-seeing changed the answer)
 
 | Belief going in | Actual (grounded) | Effect |
