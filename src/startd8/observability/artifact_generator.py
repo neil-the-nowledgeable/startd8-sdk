@@ -1169,7 +1169,13 @@ def _write_index(
                 **({"route_state": a.route_state} if a.route_state else {}),
                 **({"skip_reason": a.skip_reason} if a.skip_reason else {}),
                 **({"owner": a.owner} if a.owner else {}),
-                **({"quality_score": a.quality["score"]} if a.quality else {}),
+                # #226 FR-5: functional-SLO artifacts carry a non-score quality
+                # dict (emitted_fr_ids/unfulfilled), so gate on the key, not truthiness.
+                **(
+                    {"quality_score": a.quality["score"]}
+                    if a.quality and "score" in a.quality
+                    else {}
+                ),
             }
             for a in report.artifacts
         ],
@@ -1178,8 +1184,9 @@ def _write_index(
         "derivation_rules": list(seen_rules.values()),
     }
 
-    # Quality summary (REQ-KZ-OBS-730)
-    scored = [a for a in report.artifacts if a.quality]
+    # Quality summary (REQ-KZ-OBS-730). Only artifacts with an actual `score`
+    # count — functional-SLO artifacts carry a scoreless coverage dict (#226 FR-5).
+    scored = [a for a in report.artifacts if a.quality and "score" in a.quality]
     if scored:
         by_type: Dict[str, List[float]] = {}
         for a in scored:
@@ -1236,7 +1243,13 @@ def _write_quality_report(
     except ImportError:  # pragma: no cover
         compute_metric_coverage = None  # type: ignore[assignment]
 
-    scored = [a for a in artifacts if a.quality and a.status == "generated"]
+    # A scoreless quality dict (functional-SLO coverage, #226 FR-5) is not a
+    # scored artifact — gate on the `score` key so it doesn't trip the subscripts below.
+    scored = [
+        a
+        for a in artifacts
+        if a.quality and "score" in a.quality and a.status == "generated"
+    ]
     if not scored:
         return
 
