@@ -287,3 +287,133 @@ class TestStandaloneHandler:
             },
         )
         assert CapDevPipeInstaller().execute(cfg).success
+
+
+# --------------------------------------------------------------------------- #
+# profile-aware verify (cap-dev-pipe issue #2)
+# --------------------------------------------------------------------------- #
+
+# A faithful stand-in for the reworked project wrapper: delegates to run.sh when it is
+# embedded (full profile) and otherwise self-serves --list-langs and delegates to
+# run-cap-delivery.sh (orchestrator profile). Mirrors project-cap-dlv-pipe.sh.template.
+_DUAL_PATH_WRAPPER = """#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -x "$SCRIPT_DIR/run.sh" ]]; then
+    exec "$SCRIPT_DIR/run.sh" "$@"
+fi
+if [[ ! -x "$SCRIPT_DIR/run-cap-delivery.sh" ]]; then
+    echo "ERROR: neither run.sh nor run-cap-delivery.sh embedded" >&2; exit 1
+fi
+if [[ " $* " == *" --list-langs "* ]]; then
+    echo "Available language profiles:"
+    echo ""
+    for d in "$SCRIPT_DIR"/*/; do
+        name="$(basename "$d")"
+        case "$name" in design|prompts|pipeline|__pycache__) continue ;; .*) continue ;; esac
+        ls "$d"/*plan*.md >/dev/null 2>&1 && echo "  $name/"
+    done
+    exit 0
+fi
+exec "$SCRIPT_DIR/run-cap-delivery.sh" "$@"
+"""
+
+# Minimal run.sh stand-in: lists local <lang>/ profile dirs for --list-langs (full path).
+_FAKE_RUN_SH = """#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ " $* " == *" --list-langs "* ]]; then
+    echo "Available language profiles:"
+    for d in "$SCRIPT_DIR"/*/; do
+        name="$(basename "$d")"
+        ls "$d"/*plan*.md >/dev/null 2>&1 && echo "  $name/"
+    done
+    exit 0
+fi
+exit 0
+"""
+
+
+def _mk_exec(path, text):
+    import stat as _stat
+
+    path.write_text(text, encoding="utf-8")
+    path.chmod(path.stat().st_mode | _stat.S_IEXEC | _stat.S_IXGRP | _stat.S_IXOTH)
+
+
+def _build_embed(target, *, profile, with_run_sh, with_wrapper=True, langs=("python",)):
+    """Construct a minimal embed tree + install manifest for verify() tests."""
+    import json
+
+    from startd8.capdevpipe_installer import (
+        MANIFEST_FILENAME,
+        InstallMethod,
+        Manifest,
+    )
+
+    embed = target / EMBED_DIR_NAME
+    (embed / "design").mkdir(parents=True)
+    (embed / "prompts").mkdir()
+    for lang in langs:
+        (embed / lang).mkdir()
+        (embed / lang / f"{lang}-plan.md").write_text("# plan\n", encoding="utf-8")
+        (embed / lang / f"{lang}-requirements.md").write_text("# reqs\n", encoding="utf-8")
+    _mk_exec(embed / "run-cap-delivery.sh", "#!/usr/bin/env bash\nexit 0\n")
+    if with_run_sh:
+        _mk_exec(embed / "run.sh", _FAKE_RUN_SH)
+    if with_wrapper:
+        _mk_exec(embed / "proj-cap-dlv-pipe.sh", _DUAL_PATH_WRAPPER)
+    managed = ["design", "prompts", "run-cap-delivery.sh", *langs]
+    if with_run_sh:
+        managed.append("run.sh")
+    manifest = Manifest(
+        method=InstallMethod.SYMLINK,
+        source_path=target,
+        profiles=list(langs),
+        embed_profile=profile,
+        managed_paths=managed,
+    )
+    (embed / MANIFEST_FILENAME).write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
+    return embed
+
+
+class TestVerifyProfileAware:
+    """verify() resolves its runner from the embed profile (issue #2)."""
+
+    def test_orchestrator_verifies_through_wrapper_without_run_sh(self, installer, target):
+        _build_embed(target, profile="orchestrator", with_run_sh=False)
+        vr = installer.verify(target)
+        assert vr.passed, vr.message
+        assert "python" in vr.listed_langs
+
+    def test_full_still_requires_run_sh(self, installer, target):
+        # A full install missing run.sh is a real breakage — must NOT be masked by the wrapper.
+        _build_embed(target, profile="full", with_run_sh=False)
+        vr = installer.verify(target)
+        assert not vr.passed
+        assert "run.sh not found" in vr.message
+
+    def test_full_verifies_through_run_sh_when_present(self, installer, target):
+        _build_embed(target, profile="full", with_run_sh=True)
+        vr = installer.verify(target)
+        assert vr.passed, vr.message
+        assert "python" in vr.listed_langs
+
+    def test_orchestrator_without_wrapper_fails_actionably(self, installer, target):
+        _build_embed(target, profile="orchestrator", with_run_sh=False, with_wrapper=False)
+        vr = installer.verify(target)
+        assert not vr.passed
+        assert "no verifiable runner" in vr.message
+
+    def test_orchestrator_reports_missing_expected_profile(self, installer, target):
+        embed = _build_embed(target, profile="orchestrator", with_run_sh=False)
+        import json
+
+        from startd8.capdevpipe_installer import MANIFEST_FILENAME
+
+        mpath = embed / MANIFEST_FILENAME
+        data = json.loads(mpath.read_text())
+        data["profiles"] = ["python", "rust"]  # rust not on disk
+        mpath.write_text(json.dumps(data))
+        vr = installer.verify(target)
+        assert not vr.passed
+        assert "rust" in vr.message

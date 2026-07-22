@@ -914,6 +914,17 @@ class CapDevPipeInstaller:
         """The project wrapper filename ``{name}-cap-dlv-pipe.sh`` (FR-8 / FR-14)."""
         return f"{name}-cap-dlv-pipe.sh"
 
+    @staticmethod
+    def _find_project_wrapper(embed: Path) -> Optional[Path]:
+        """The generated project wrapper ``<name>-cap-dlv-pipe.sh`` in *embed*, or ``None``.
+
+        Used by profile-aware ``verify`` (issue #2) to enumerate profiles through the wrapper
+        when ``run.sh`` is not embedded. The ``.template`` source (``*-cap-dlv-pipe.sh.template``)
+        does not match ``*-cap-dlv-pipe.sh`` and is correctly excluded.
+        """
+        matches = sorted(p for p in embed.glob("*-cap-dlv-pipe.sh") if p.is_file())
+        return matches[0] if matches else None
+
     # -- embedding (FR-5, FR-6) -------------------------------------------- #
 
     #: Canonical ``EmbedActionType`` value → SDK ``ActionType`` (FR-A7 delegation).
@@ -1293,11 +1304,17 @@ class CapDevPipeInstaller:
         return langs
 
     def verify(self, target: Path) -> VerifyResult:
-        """Verify the install by subprocess ``run.sh --list-langs`` (FR-11).
+        """Verify the install by subprocess ``<runner> --list-langs`` (FR-11).
+
+        The runner is profile-aware (cap-dev-pipe issue #2): the ``full`` embed profile ships
+        ``run.sh`` and verifies through it; profiles that legitimately exclude ``run.sh`` (e.g.
+        ``orchestrator``, which ships the export/ingestion path only) verify through the
+        generated project wrapper ``<name>-cap-dlv-pipe.sh`` instead — the wrapper self-serves
+        ``--list-langs`` and delegates to ``run-cap-delivery.sh``.
 
         Passes iff the subprocess exits 0, every created profile (per the manifest) appears
         in stdout, and the single-source property holds (local ``design/``+``prompts/`` and a
-        resolvable ``run.sh`` in the embedded dir). A zero-profile "skip" install is a valid
+        resolvable runner in the embedded dir). A zero-profile "skip" install is a valid
         pass (R2-F7). A dangling embedded ``run.sh`` symlink is reported as a re-point
         diagnostic rather than a raw resolution error (basic FR-17; full doctor in P2).
         """
@@ -1305,19 +1322,43 @@ class CapDevPipeInstaller:
         run_sh = embed / "run.sh"
         manifest = self.read_manifest(target)
         expected = manifest.profiles if manifest else []
-        single_source_ok = (
-            (embed / "design").is_dir()
-            and (embed / "prompts").is_dir()
-            and (run_sh.is_symlink() or run_sh.is_file())
-        )
-        if not (run_sh.is_symlink() or run_sh.is_file()):
+        profile = manifest.embed_profile if manifest else DEFAULT_EMBED_PROFILE
+        run_sh_present = run_sh.is_symlink() or run_sh.is_file()
+
+        # Resolve the runner used to enumerate profiles. Prefer run.sh whenever present so the
+        # ``full`` path (and its dangling-symlink diagnostic below) is unchanged; only fall
+        # back to the wrapper for a profile that legitimately omits run.sh.
+        if run_sh_present:
+            runner = run_sh
+        elif profile != "full":
+            wrapper = self._find_project_wrapper(embed)
+            if wrapper is None or not (embed / "run-cap-delivery.sh").exists():
+                return VerifyResult(
+                    passed=False,
+                    expected_langs=expected,
+                    single_source_ok=False,
+                    message=(
+                        f"Embed profile {profile!r} excludes run.sh, but no verifiable runner "
+                        f"was found in {embed} (need a generated <name>-cap-dlv-pipe.sh wrapper "
+                        f"and run-cap-delivery.sh). Run install or repair."
+                    ),
+                )
+            runner = wrapper
+        else:
             return VerifyResult(
                 passed=False,
                 expected_langs=expected,
                 single_source_ok=False,
                 message=f"Embedded run.sh not found at {run_sh}. Run install or repair.",
             )
-        if run_sh.is_symlink() and not run_sh.exists():
+
+        single_source_ok = (
+            (embed / "design").is_dir()
+            and (embed / "prompts").is_dir()
+            and (runner.is_symlink() or runner.is_file())
+        )
+        # The dangling-symlink diagnostic applies to the symlinked run.sh source script only.
+        if runner is run_sh and run_sh.is_symlink() and not run_sh.exists():
             missing = Path(os.readlink(run_sh))
             return VerifyResult(
                 passed=False,
@@ -1330,7 +1371,7 @@ class CapDevPipeInstaller:
                 ),
             )
         proc = self._run_subprocess(
-            [str(run_sh), "--list-langs"], cwd=embed, timeout=SUBPROCESS_TIMEOUT_VERIFY
+            [str(runner), "--list-langs"], cwd=embed, timeout=SUBPROCESS_TIMEOUT_VERIFY
         )
         listed = self._parse_listed_langs(proc.stdout)
         listed_set = set(listed)
@@ -1346,7 +1387,7 @@ class CapDevPipeInstaller:
             )
         else:
             message = (
-                "Single-source property failed: local design/prompts or run.sh missing."
+                "Single-source property failed: local design/prompts or runner missing."
             )
         return VerifyResult(
             passed=passed,
