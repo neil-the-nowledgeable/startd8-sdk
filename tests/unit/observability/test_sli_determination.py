@@ -46,6 +46,38 @@ class TestResolveSliKinds:
     def test_nothing_declared_is_empty(self):
         assert resolve_sli_kinds() == frozenset()
 
+    # --- #231 grounding-free slice: an ungrounded workload kind suppresses the
+    # incidental transport RED triple (the silent 500ms-HTTP-latency SLO). ---
+
+    def test_ml_inference_with_http_transport_suppresses_red(self):
+        # THE #231 SILENT DANGER: an ml_inference service that exposes an http
+        # health/serve port must NOT inherit the 500ms HTTP-latency RED triple.
+        # Its transport is incidental; it gets only what it declares.
+        assert resolve_sli_kinds(kinds=["ml_inference"], transport="http") == frozenset()
+
+    def test_batch_and_cron_with_transport_suppress_red(self):
+        assert resolve_sli_kinds(kinds=["batch"], transport="http") == frozenset()
+        assert resolve_sli_kinds(kinds=["cron"], transport="grpc") == frozenset()
+
+    def test_ungrounded_kind_still_gets_declared_signals(self):
+        # Suppression removes only the incidental transport base — declared
+        # functional[] signals still resolve (the actionable path forward).
+        assert resolve_sli_kinds(
+            kinds=["ml_inference"], signal_kinds=["saturation"], transport="http"
+        ) == frozenset({"saturation"})
+
+    def test_hybrid_request_kind_keeps_red_despite_ungrounded_kind(self):
+        # A service that ALSO explicitly declares http_server genuinely serves
+        # requests → the transport is NOT incidental → RED is preserved.
+        assert resolve_sli_kinds(
+            kinds=["ml_inference", "http_server"], transport="http"
+        ) == RED
+
+    def test_parity_unchanged_for_non_ungrounded_services(self):
+        # FR-11 anchor: the suppression is inert for every non-ungrounded service.
+        assert resolve_sli_kinds(transport="http") == RED
+        assert resolve_sli_kinds(kinds=["async_worker"], transport="http") == RED
+
 
 class TestFr13GatedSynthesis:
     def _panels(self, service, business):
