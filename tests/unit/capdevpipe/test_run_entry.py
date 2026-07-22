@@ -9,6 +9,7 @@ import pytest
 
 from startd8.capdevpipe_runner import (
     build_pipeline_run_argv,
+    discover_profile_docs,
     ensure_pipeline_import,
     resolve_embed_dir,
     resolve_run_config,
@@ -220,3 +221,98 @@ class TestRunEmbeddedPipeline:
             cwd=project, extra_argv=["--project-root", "/explicit/root"]
         )
         assert "PROJECT_ROOT" not in os.environ
+
+
+class TestDiscoverProfileDocs:
+    def _write_profile(self, embed: Path, lang: str) -> None:
+        d = embed / lang
+        d.mkdir(parents=True)
+        (d / f"{lang}-plan.md").write_text("# plan\n", encoding="utf-8")
+        (d / f"{lang}-requirements.md").write_text("# reqs\n", encoding="utf-8")
+
+    def test_finds_single_pair_ignores_non_profile_dirs(self, tmp_path: Path) -> None:
+        embed = tmp_path / ".cap-dev-pipe"
+        embed.mkdir()
+        self._write_profile(embed, "python")
+        # Embed subtrees that must NOT be mistaken for profiles.
+        (embed / "pipeline").mkdir()
+        (embed / "design").mkdir()
+        (embed / "pipeline.env").write_text("PROJECT_NAME=x\n", encoding="utf-8")
+
+        found = discover_profile_docs(embed)
+        assert [lang for lang, _, _ in found] == ["python"]
+        _, plan, reqs = found[0]
+        assert plan.name == "python-plan.md" and reqs.name == "python-requirements.md"
+
+    def test_partial_pair_does_not_qualify(self, tmp_path: Path) -> None:
+        embed = tmp_path / ".cap-dev-pipe"
+        embed.mkdir()
+        d = embed / "go"
+        d.mkdir()
+        (d / "go-plan.md").write_text("# plan\n", encoding="utf-8")  # no requirements
+        assert discover_profile_docs(embed) == []
+
+    def test_multiple_profiles_sorted(self, tmp_path: Path) -> None:
+        embed = tmp_path / ".cap-dev-pipe"
+        embed.mkdir()
+        self._write_profile(embed, "python")
+        self._write_profile(embed, "go")
+        assert [lang for lang, _, _ in discover_profile_docs(embed)] == ["go", "python"]
+
+
+class TestConfigFreeProfileAutofill:
+    def _make_embed(self, tmp_path: Path, langs: tuple[str, ...]):
+        project = tmp_path / "project"
+        project.mkdir()
+        embed = project / ".cap-dev-pipe"
+        (embed / "pipeline").mkdir(parents=True)
+        (embed / "pipeline.env").write_text('PROJECT_NAME="demo"\n', encoding="utf-8")
+        for lang in langs:
+            d = embed / lang
+            d.mkdir()
+            (d / f"{lang}-plan.md").write_text("# plan\n", encoding="utf-8")
+            (d / f"{lang}-requirements.md").write_text("# reqs\n", encoding="utf-8")
+        return project, embed
+
+    def _capture_argv(self, monkeypatch) -> dict:
+        captured: dict = {}
+
+        def fake_invoke(argv, *, embed_dir):
+            captured["argv"] = argv
+            return 0
+
+        monkeypatch.setattr(
+            "startd8.capdevpipe_runner._invoke_pipeline_main", fake_invoke
+        )
+        return captured
+
+    def test_zero_flag_run_autofills_the_single_profile(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        project, embed = self._make_embed(tmp_path, ("python",))
+        captured = self._capture_argv(monkeypatch)
+
+        rc = run_embedded_pipeline(cwd=project)  # no extra flags at all
+        assert rc == 0
+        argv = captured["argv"]
+        assert "--config" not in argv
+        assert "--plan" in argv
+        assert str((embed / "python" / "python-plan.md").resolve()) in argv
+        assert str((embed / "python" / "python-requirements.md").resolve()) in argv
+
+    def test_autofill_respects_explicit_plan(self, tmp_path: Path, monkeypatch) -> None:
+        project, embed = self._make_embed(tmp_path, ("python",))
+        captured = self._capture_argv(monkeypatch)
+
+        run_embedded_pipeline(cwd=project, extra_argv=["--plan", "custom/plan.md"])
+        argv = captured["argv"]
+        assert argv.count("--plan") == 1
+        assert "custom/plan.md" in argv
+        # Did not also inject the discovered python plan.
+        assert str((embed / "python" / "python-plan.md").resolve()) not in argv
+
+    def test_ambiguous_profiles_raise(self, tmp_path: Path, monkeypatch) -> None:
+        project, _ = self._make_embed(tmp_path, ("python", "go"))
+        self._capture_argv(monkeypatch)
+        with pytest.raises(ValidationError, match="Multiple language profiles"):
+            run_embedded_pipeline(cwd=project)

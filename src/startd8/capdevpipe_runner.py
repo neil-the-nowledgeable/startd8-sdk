@@ -14,6 +14,9 @@ from typing import Sequence
 
 from .capdevpipe_installer import EMBED_DIR_NAME, MANAGED_ENV_KEYS
 from .exceptions import ConfigurationError, ValidationError
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 _PIPELINE_RUN_FLAGS = frozenset(
     {
@@ -205,6 +208,69 @@ def _hydrate_env_from_pipeline_env(embed_dir: Path, extras: Sequence[str]) -> No
         _set_run_env_default(key, value, extras)
 
 
+def discover_profile_docs(embed_dir: Path) -> list[tuple[str, Path, Path]]:
+    """Find installed language-profile doc pairs under the embed dir.
+
+    The installer writes each profile as ``<embed>/<lang>/<lang>-plan.md`` +
+    ``<lang>-requirements.md`` (``CapDevPipeInstaller.create_profile``). A directory qualifies
+    only when *both* convention-named docs are present, which excludes the ``pipeline/`` /
+    ``design/`` / ``prompts/`` embed subtrees. Returns ``(lang, plan, requirements)`` triples
+    with the docs resolved to absolute paths (profile docs may be relative symlinks), sorted by
+    language for determinism.
+    """
+    found: list[tuple[str, Path, Path]] = []
+    if not embed_dir.is_dir():
+        return found
+    for child in sorted(embed_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        plan = child / f"{child.name}-plan.md"
+        reqs = child / f"{child.name}-requirements.md"
+        if plan.is_file() and reqs.is_file():
+            found.append((child.name, plan.resolve(), reqs.resolve()))
+    return found
+
+
+def _autofill_profile_docs(embed_dir: Path, extras: list[str]) -> list[str]:
+    """Inject ``--plan``/``--requirements`` from the sole installed profile (issue #220 → zero-flag).
+
+    The embedded pipeline auto-selects a lone profile, but only one declared in ``pipeline.yaml``
+    — a config-free orchestrator install has none, so that path is unreachable. The installer,
+    however, already wrote the profile's plan/requirements on disk; discover the single pair and
+    inject it so a bare ``capdevpipe run`` works without the caller re-typing embed-relative paths.
+
+    No-ops (returns *extras* unchanged) when the caller already selected inputs
+    (``--plan``/``--reuse-export``/``--profile``) or when no profile is installed — the latter
+    leaves the pipeline to report its own "plan required" error. Refuses to guess when more than
+    one profile is installed: raises with the candidate languages so the caller disambiguates via
+    ``--plan``/``--requirements``.
+    """
+    if (
+        _argv_has_flag(extras, "--plan")
+        or _argv_has_flag(extras, "--reuse-export")
+        or _argv_has_flag(extras, "--profile")
+    ):
+        return extras
+    discovered = discover_profile_docs(embed_dir)
+    if not discovered:
+        return extras
+    if len(discovered) > 1:
+        langs = ", ".join(lang for lang, _, _ in discovered)
+        raise ValidationError(
+            f"Multiple language profiles installed under {embed_dir} ({langs}); cannot "
+            "auto-select. Pass --plan/--requirements explicitly (or --profile <name> with a "
+            "pipeline.yaml) to choose one."
+        )
+    lang, plan, reqs = discovered[0]
+    logger.info(
+        "capdevpipe run: config-free, auto-selected profile %r (plan=%s)",
+        lang,
+        plan,
+        extra={"pipeline_name": "capdevpipe_run"},
+    )
+    return ["--plan", str(plan), "--requirements", str(reqs), *extras]
+
+
 def run_embedded_pipeline(
     *,
     cwd: Path | None = None,
@@ -227,6 +293,9 @@ def run_embedded_pipeline(
         # Load project identity from pipeline.env so a symlink embed (whose pipeline.env the
         # config-free pipeline never reads) still resolves --project/--project-root.
         _hydrate_env_from_pipeline_env(embed, extras)
+        # Bridge the installer's on-disk profile dir into the run the pipeline can't auto-select
+        # config-free (issue #220 → zero-flag run).
+        extras = _autofill_profile_docs(embed, extras)
     _set_run_env_default("PROJECT_ROOT", str(workdir), extras)
 
     argv = build_pipeline_run_argv(embed, extras, config_path=config_path)
