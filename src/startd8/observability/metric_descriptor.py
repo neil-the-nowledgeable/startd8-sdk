@@ -204,6 +204,43 @@ _KIND_DEFAULTS = {
 #: later = move it into `_KIND_DEFAULTS`/`_KIND_SLI_DEFAULTS` and drop it from here.
 UNGROUNDED_KINDS = frozenset({"batch", "cron", "ml_inference"})
 
+#: The signal_kind SHAPE that fits each ungrounded kind (#230/#231/#233) — the *which
+#: SLI applies* axis, NOT a threshold VALUE (magnitudes stay gated on OQ-5 grounding).
+#: Used only to make the coverage-gap hint kind-specific ("declare a freshness FR" for a
+#: cron) instead of a generic four-option menu. A kind absent here falls back to the full
+#: list via `suggested_signals_for`. cron/batch are run-window/exit shapes; ml_inference
+#: is a saturation/lag shape — each asserted by its issue (#233/#230/#231 respectively).
+_KIND_SUGGESTED_SIGNALS = {
+    "cron": ("freshness", "run_success"),
+    "batch": ("run_success", "freshness"),
+    "ml_inference": ("saturation", "lag"),
+}
+
+#: The generic fallback shape when a kind has no specific suggestion — every non-request
+#: signal_kind an author might ground a workload with.
+_GENERIC_SUGGESTED_SIGNALS = ("run_success", "freshness", "saturation", "lag")
+
+
+def suggested_signals_for(kind: str) -> "tuple[str, ...]":
+    """The signal_kind shape(s) that fit an ungrounded ``kind`` (#230/#231/#233).
+
+    Shape only — never a threshold value (those await OQ-5 grounding). Falls back to the
+    generic non-request set for an unrecognized/unmapped kind so the hint is never empty.
+    """
+    return _KIND_SUGGESTED_SIGNALS.get(kind, _GENERIC_SUGGESTED_SIGNALS)
+
+
+#: The canonical service-kind vocabulary CR-3 emits (mirrors ContextCore's
+#: ``contracts/types.py::ServiceKind``; keep in sync, do not extend unilaterally). The SDK
+#: partitions every non-``unknown`` kind into exactly one of REQUEST_KINDS / grounded
+#: (`_KIND_DEFAULTS`) / UNGROUNDED_KINDS; a drift test asserts that partition so a kind
+#: added upstream can't fall silently to the transport default. ``unknown`` is the
+#: producer's "no signal" sentinel and is intentionally handled by the fallback path.
+CANONICAL_SERVICE_KINDS = frozenset({
+    "http_server", "grpc_server", "async_worker", "stream",
+    "batch", "cron", "ml_inference", "unknown",
+})
+
 #: The three RED SLI kinds a request-server (or a job worker, on its messaging series)
 #: is observed by absent any declaration (#226 FR-12). Its home is here beside the kind
 #: tables so the determination model has a single source of truth.

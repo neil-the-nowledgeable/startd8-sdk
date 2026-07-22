@@ -116,6 +116,50 @@ def _check_seed_size_budget(
     return size_mb
 
 
+def _build_observability_contract(
+    observability_hints: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Build the REQ-OPI-600 ``observability_contract`` from per-service hints.
+
+    Projects the config ``observability_hints`` (produced by cap-dev-pipe's
+    resolve-provenance from instrumentation_hints + observability-manifest.yaml)
+    into the seed-level contract consumed by the contractor prompt builder
+    (REQ-OPI-300/601). Returns ``None`` when no hints are available so the caller
+    can omit the key entirely (REQ-OPI-602: absence = "no guidance", graceful).
+    """
+    if not observability_hints or not isinstance(observability_hints, dict):
+        return None
+
+    services: Dict[str, Any] = {}
+    for svc_id, hints in observability_hints.items():
+        if not isinstance(hints, dict):
+            continue
+        entry: Dict[str, Any] = {
+            "transport": hints.get("transport", ""),
+            "language": hints.get("language", ""),
+            "convention_metrics": hints.get("metrics", {}).get("convention_based", []),
+        }
+        _sdk = hints.get("sdk")
+        if _sdk:
+            entry["sdk_packages"] = _sdk
+        _at = hints.get("alert_thresholds")
+        if _at:
+            entry["alert_thresholds"] = _at
+        # OPI-600 shape uses a scalar slo_window; hints carry slo_targets.window.
+        _slo_window = (hints.get("slo_targets") or {}).get("window")
+        if _slo_window:
+            entry["slo_window"] = _slo_window
+        services[svc_id] = entry
+
+    if not services:
+        return None
+
+    return {
+        "services": services,
+        "source": "observability-manifest.yaml + instrumentation_hints",
+    }
+
+
 # ---------------------------------------------------------------------------
 # PhaseEmitter
 # ---------------------------------------------------------------------------
@@ -332,22 +376,43 @@ class PhaseEmitter:
         if _obs_lookup and tasks:
             _enriched = 0
             for task in tasks:
-                ctx = (task.get("config") or {}).get("context") or {}
-                # Infer service name from target files
-                _target_files = ctx.get("target_files") or task.get("target_files", [])
-                _svc_name = ""
-                for tf in _target_files:
-                    parts = Path(tf).parts
-                    for p in parts:
-                        _norm = p.lower().replace("-", "")
-                        if _norm in _obs_lookup:
-                            _svc_name = _norm
+                # Read-only view for inference; a fresh {} here must NOT be mutated
+                # (it would be discarded — the write-back bug). We materialize a
+                # writable context only once a service match is confirmed.
+                read_ctx = (task.get("config") or {}).get("context") or {}
+                # REQ-OPI-150: honor an already-set service_name, else infer from
+                # target files (normalized: lowercase, hyphens stripped — OPI-151).
+                _svc_name = str(read_ctx.get("service_name") or "").lower().replace("-", "")
+                if _svc_name not in _obs_lookup:
+                    _svc_name = ""
+                _target_files = read_ctx.get("target_files") or task.get("target_files", [])
+                if not _svc_name:
+                    for tf in _target_files:
+                        parts = Path(tf).parts
+                        for p in parts:
+                            _norm = p.lower().replace("-", "")
+                            if _norm in _obs_lookup:
+                                _svc_name = _norm
+                                break
+                        if _svc_name:
                             break
-                    if _svc_name:
-                        break
 
                 if _svc_name and _svc_name in _obs_lookup:
+                    # Materialize a writable config.context so enrichment persists
+                    # even for tasks that arrived without one (write-back fix).
+                    cfg_dict = task.get("config")
+                    if not isinstance(cfg_dict, dict):
+                        cfg_dict = {}
+                        task["config"] = cfg_dict
+                    ctx = cfg_dict.get("context")
+                    if not isinstance(ctx, dict):
+                        ctx = {}
+                        cfg_dict["context"] = ctx
+
                     hints = _obs_lookup[_svc_name]
+                    # REQ-OPI-150: persist the inferred service_name (standalone value:
+                    # security-contract matching, per-service cost attribution).
+                    ctx["service_name"] = _svc_name
                     ctx["convention_metrics"] = (
                         hints.get("metrics", {}).get("convention_based", [])
                     )
@@ -356,13 +421,27 @@ class PhaseEmitter:
                     _sdk = hints.get("sdk")
                     if _sdk:
                         ctx["sdk_packages"] = _sdk
+                    # REQ-OPI-200: alert thresholds + SLO targets (merged into hints
+                    # from observability-manifest.yaml derivation rules upstream).
+                    _at = hints.get("alert_thresholds")
+                    if _at:
+                        ctx["alert_thresholds"] = _at
+                    _slo = hints.get("slo_targets")
+                    if _slo:
+                        ctx["slo_targets"] = _slo
                     _enriched += 1
 
             if _enriched:
                 logger.info(
-                    "Enriched %d/%d tasks with observability context (convention_metrics, transport)",
+                    "Enriched %d/%d tasks with observability context "
+                    "(service_name, convention_metrics, transport, thresholds)",
                     _enriched, len(tasks),
                 )
+
+        # REQ-OPI-600: build the observability_contract for the seed (top-level key,
+        # consumed by the contractor prompt builder — OPI-300/601). Absent when no
+        # hints exist (OPI-602: absence = "no guidance", graceful).
+        _observability_contract = _build_observability_contract(cfg.observability_hints)
 
         # 10.6 Deterministic manifest emission (FR-WPI-1..4) — the SECOND projection of the
         # kickoff docs, beside the seed: extraction → <output_dir>/manifests/* + the
@@ -393,6 +472,7 @@ class PhaseEmitter:
                 review_output=review_output,
                 context_files=context_files,
                 security_contract=_security_contract,
+                observability_contract=_observability_contract,
             )
 
         # 13. Task tracking
@@ -1080,6 +1160,7 @@ class PhaseEmitter:
         review_output: Optional[Dict[str, Any]],
         context_files: Optional[List[str]],
         security_contract: Optional[Dict[str, Any]] = None,
+        observability_contract: Optional[Dict[str, Any]] = None,
     ) -> Path:
         """Emit context-seed.json for the given route.
 
@@ -1190,6 +1271,14 @@ class PhaseEmitter:
             "density_warnings": _density_warnings,
             "diagnostic_report_path": "plan-ingestion-diagnostic.json",
         }
+
+        # REQ-OPI-600: attach the observability contract as a top-level seed key
+        # (schema allows additionalProperties). Stamp it with the seed's own
+        # generated_at so the two timestamps agree. Omitted when no hints exist.
+        if observability_contract:
+            observability_contract = dict(observability_contract)
+            observability_contract["generated_at"] = seed_dict.get("generated_at")
+            seed_dict["observability_contract"] = observability_contract
 
         if not _validate_context_seed(seed_dict):
             seed_dict["_schema_valid"] = False

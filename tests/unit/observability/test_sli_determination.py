@@ -13,7 +13,23 @@ from startd8.observability.artifact_generator import (
     ServiceHints,
     generate_dashboard_spec,
 )
-from startd8.observability.metric_descriptor import resolve_sli_kinds
+from startd8.observability.metric_descriptor import (
+    resolve_sli_kinds,
+    suggested_signals_for,
+)
+
+
+class TestSuggestedSignals:
+    """P1a (#230/#231/#233): kind-specific signal SHAPE hint (never a threshold value)."""
+
+    def test_each_ungrounded_kind_has_its_own_shape(self):
+        assert suggested_signals_for("cron") == ("freshness", "run_success")
+        assert suggested_signals_for("batch") == ("run_success", "freshness")
+        assert suggested_signals_for("ml_inference") == ("saturation", "lag")
+
+    def test_unknown_kind_falls_back_to_the_generic_non_request_set(self):
+        got = suggested_signals_for("something_new")
+        assert set(got) == {"run_success", "freshness", "saturation", "lag"}
 
 RED = frozenset({"latency", "availability", "throughput"})
 

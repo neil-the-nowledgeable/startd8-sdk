@@ -32,6 +32,7 @@ from .metric_descriptor import (
     MetricDescriptor,
     resolve_descriptor,
     resolve_sli_kinds,
+    suggested_signals_for,
 )
 
 # Context + generator clusters extracted to sibling modules (Tier-2 step 2);
@@ -563,19 +564,31 @@ def generate_observability_artifacts(
             for f in (business.functional_requirements or [])
             if f.service in (None, "", service.service_id)
         ]
-        if not resolve_sli_kinds(service.kinds, _svc_signals, service.transport):
+        _observed_by_nothing = not resolve_sli_kinds(
+            service.kinds, _svc_signals, service.transport
+        )
+        if _observed_by_nothing:
             _fr_empty.append(service.service_id)
-        # #230/#231/#233: recognized-but-ungrounded kind — name it and the way forward.
+        # #230/#231/#233: recognized-but-ungrounded kind — name it, cross-reference the
+        # ∅ symptom (LH-1: one story, not two gaps), and give a KIND-SPECIFIC next step
+        # (P1a: cron→freshness, ml_inference→saturation/lag — shape, never a value).
         for _k in service.kinds:
             if _k in UNGROUNDED_KINDS:
+                _sugg = suggested_signals_for(_k)
                 _ungrounded.append({
                     "service": service.service_id,
                     "kind": _k,
+                    # LH-1: an ungrounded service with no declared FRs is ALSO in
+                    # empty_services; tag it so a reader sees the cause, not two gaps.
+                    "observed_by_nothing": _observed_by_nothing,
+                    # P1a: the kind-specific signal SHAPE (not a value) — structured so a
+                    # surface can render it terse without parsing the prose reason.
+                    "suggested_signals": list(_sugg),
                     "reason": (
                         f"kind {_k!r} is recognized but has no grounded metric profile yet "
                         f"(OQ-5); its default SLIs are deferred rather than invented. Declare "
-                        f"functional[] FRs with a signal_kind (run_success/freshness/saturation/"
-                        f"lag) + target to emit SLOs, or await a grounded profile."
+                        f"a functional[] FR with signal_kind {'/'.join(_sugg)} + target to "
+                        f"emit an SLO, or await a grounded profile."
                     ),
                 })
 
