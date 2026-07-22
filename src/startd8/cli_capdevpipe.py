@@ -54,6 +54,72 @@ def _capdevpipe_callback() -> None:
     """cap-dev-pipe embed + orchestration helpers."""
 
 
+def _health_check(target_root: Path, *, doctor: bool) -> None:
+    """Shared body for ``verify``/``doctor`` (FR-4/5/6): read-only, honest no-install render.
+
+    Both verbs surface the installer's existing profile-aware :meth:`verify`/:meth:`doctor`
+    health checks (previously reachable only via ``install --rerun-mode doctor``). Neither
+    writes anything. A target with no ``.cap-dev-pipe/`` reports "no install found" rather
+    than a confusing structural failure or a stack trace (FR-6).
+    """
+    from .capdevpipe_installer import CapDevPipeInstaller
+
+    installer = CapDevPipeInstaller()
+    target = target_root.expanduser()
+    verb = "doctor" if doctor else "verify"
+    try:
+        if not installer.detect_existing(target).exists:
+            console.print(
+                f"[yellow]no cap-dev-pipe install found under {target}[/yellow] — "
+                "run `startd8 capdevpipe install` first."
+            )
+            raise typer.Exit(_EXIT_ERROR)
+        vr = installer.doctor(target) if doctor else installer.verify(target)
+    except Startd8Error as exc:
+        console.print(f"[red]error[/red]: {exc}")
+        raise typer.Exit(_EXIT_ERROR) from exc
+
+    if vr.passed:
+        console.print(f"[green]✓ cap-dev-pipe {verb} passed[/green]: {vr.message}")
+        raise typer.Exit(_EXIT_OK)
+    console.print(f"[red]✗ cap-dev-pipe {verb} FAILED[/red]: {vr.message}")
+    if vr.dangling_source is not None:
+        console.print(f"[dim]dangling source: {vr.dangling_source}[/dim]")
+    raise typer.Exit(_EXIT_ERROR)
+
+
+@capdevpipe_app.command(
+    "verify",
+    help="Health-check an embedded install (read-only, profile-aware).",
+)
+def verify_command(
+    target_root: Path = typer.Option(
+        Path.cwd(),
+        "--target-root",
+        "-t",
+        help="Project root containing .cap-dev-pipe/ (default: current directory).",
+    ),
+) -> None:
+    """Profile-aware structural/behavioral health check of the embedded install."""
+    _health_check(target_root, doctor=False)
+
+
+@capdevpipe_app.command(
+    "doctor",
+    help="Diagnose an embedded install (read-only; detects a moved/dangling source).",
+)
+def doctor_command(
+    target_root: Path = typer.Option(
+        Path.cwd(),
+        "--target-root",
+        "-t",
+        help="Project root containing .cap-dev-pipe/ (default: current directory).",
+    ),
+) -> None:
+    """Like ``verify`` plus a dangling canonical-source (relocation) diagnostic."""
+    _health_check(target_root, doctor=True)
+
+
 @capdevpipe_app.command(
     "run",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -163,7 +229,9 @@ def install_command(
     try:
         install_method = InstallMethod(method)
     except ValueError as exc:
-        raise typer.BadParameter(f"--method must be 'symlink' or 'copy', got {method!r}") from exc
+        raise typer.BadParameter(
+            f"--method must be 'symlink' or 'copy', got {method!r}"
+        ) from exc
     mode: Optional[ReRunMode] = None
     if rerun_mode is not None:
         try:
@@ -220,9 +288,11 @@ def install_command(
             tail = (
                 "Rolled back cleanly."
                 if result.rolled_back
-                else "Left repairable — re-run with --rerun-mode repair."
-                if result.repairable
-                else ""
+                else (
+                    "Left repairable — re-run with --rerun-mode repair."
+                    if result.repairable
+                    else ""
+                )
             )
             console.print(f"[red]install failed[/red]: {result.error}\n{tail}")
             raise typer.Exit(_EXIT_ERROR)
@@ -250,9 +320,13 @@ def _preview_install(installer, cfg, *, mode, existing: bool) -> None:
         f"(target: {cfg.target_root}, method: {cfg.method.value}, profile: {cfg.embed_profile})"
     )
     if existing and mode is not None:
-        console.print(f"[dim]existing install detected; re-run mode: {mode.value}[/dim]")
+        console.print(
+            f"[dim]existing install detected; re-run mode: {mode.value}[/dim]"
+        )
         if mode is ReRunMode.DOCTOR:
-            console.print("  • doctor is read-only (health check only); nothing would change.")
+            console.print(
+                "  • doctor is read-only (health check only); nothing would change."
+            )
             return
         if mode is ReRunMode.UPGRADE:
             actions = installer.embed_symlink(cfg)
@@ -260,18 +334,24 @@ def _preview_install(installer, cfg, *, mode, existing: bool) -> None:
                 console.print(f"  • {action.describe()}")
             prunes = installer.orphan_symlink_candidates(cfg.target_root, cfg)
             if prunes:
-                console.print("[yellow]would PRUNE these orphan symlinks (not in the current "
-                              "inventory):[/yellow]")
+                console.print(
+                    "[yellow]would PRUNE these orphan symlinks (not in the current "
+                    "inventory):[/yellow]"
+                )
                 for p in prunes:
                     console.print(f"  • prune {p}")
             else:
                 console.print("[dim]no orphan symlinks would be pruned.[/dim]")
-            console.print(f"[dim]{len(actions)} action(s) + {len(prunes)} prune(s); "
-                          "nothing written.[/dim]")
+            console.print(
+                f"[dim]{len(actions)} action(s) + {len(prunes)} prune(s); "
+                "nothing written.[/dim]"
+            )
             return
         # reconfigure / repair / replace-pipeline.env: show the plan the mode converges toward.
-        console.print("[dim](preview shows the full target plan; this mode applies its "
-                      "relevant subset)[/dim]")
+        console.print(
+            "[dim](preview shows the full target plan; this mode applies its "
+            "relevant subset)[/dim]"
+        )
     actions = installer.plan_actions(cfg)
     for action in actions:
         console.print(f"  • {action.describe()}")

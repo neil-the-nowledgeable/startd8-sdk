@@ -262,9 +262,12 @@ class TestVerify:
         vr = installer.verify(target)
         assert vr.passed and vr.expected_langs == []
 
-    def test_missing_run_sh_fails(self, installer, target):
-        vr = installer.verify(target)  # nothing installed
-        assert not vr.passed and "run.sh" in vr.message
+    def test_nothing_installed_fails(self, installer, target):
+        # Nothing installed → no manifest → honest "cannot verify" (profile-aware; the message
+        # no longer names run.sh, which is only one profile's script — finding #2).
+        vr = installer.verify(target)
+        assert not vr.passed
+        assert "manifest" in vr.message.lower() or "install" in vr.message.lower()
 
     def test_dangling_source_reported(self, installer, cfg_factory, target):
         cfg = cfg_factory()

@@ -351,7 +351,9 @@ class Manifest:
             profiles=list(data.get("profiles", [])),
             state=ManifestState(data.get("state", ManifestState.COMPLETE.value)),
             manifest_version=int(
-                data.get("schema_version", data.get("manifest_version", MANIFEST_VERSION))
+                data.get(
+                    "schema_version", data.get("manifest_version", MANIFEST_VERSION)
+                )
             ),
             embed_profile=str(data.get("embed_profile", DEFAULT_EMBED_PROFILE)),
             managed_paths=list(data.get("managed_paths", [])),
@@ -844,7 +846,9 @@ class CapDevPipeInstaller:
         """
         try:
             inv = resolve_embed_inventory(source, profile)
-        except Exception as exc:  # noqa: BLE001 - manifest managed_paths are best-effort
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - manifest managed_paths are best-effort
             self.logger.warning("capdevpipe managed_paths resolution failed: %s", exc)
             return []
         names = [
@@ -913,17 +917,6 @@ class CapDevPipeInstaller:
     def wrapper_filename(name: str) -> str:
         """The project wrapper filename ``{name}-cap-dlv-pipe.sh`` (FR-8 / FR-14)."""
         return f"{name}-cap-dlv-pipe.sh"
-
-    @staticmethod
-    def _find_project_wrapper(embed: Path) -> Optional[Path]:
-        """The generated project wrapper ``<name>-cap-dlv-pipe.sh`` in *embed*, or ``None``.
-
-        Used by profile-aware ``verify`` (issue #2) to enumerate profiles through the wrapper
-        when ``run.sh`` is not embedded. The ``.template`` source (``*-cap-dlv-pipe.sh.template``)
-        does not match ``*-cap-dlv-pipe.sh`` and is correctly excluded.
-        """
-        matches = sorted(p for p in embed.glob("*-cap-dlv-pipe.sh") if p.is_file())
-        return matches[0] if matches else None
 
     # -- embedding (FR-5, FR-6) -------------------------------------------- #
 
@@ -1304,61 +1297,55 @@ class CapDevPipeInstaller:
         return langs
 
     def verify(self, target: Path) -> VerifyResult:
-        """Verify the install by subprocess ``<runner> --list-langs`` (FR-11).
+        """Verify an install, **profile-aware** (finding #2 / issue #220 follow-on).
 
-        The runner is profile-aware (cap-dev-pipe issue #2): the ``full`` embed profile ships
-        ``run.sh`` and verifies through it; profiles that legitimately exclude ``run.sh`` (e.g.
-        ``orchestrator``, which ships the export/ingestion path only) verify through the
-        generated project wrapper ``<name>-cap-dlv-pipe.sh`` instead — the wrapper self-serves
-        ``--list-langs`` and delegates to ``run-cap-delivery.sh``.
+        ``run.sh`` is a ``full``-profile-only script; the ``orchestrator``/``minimal`` profiles
+        legitimately ship none, so the check is split:
 
-        Passes iff the subprocess exits 0, every created profile (per the manifest) appears
-        in stdout, and the single-source property holds (local ``design/``+``prompts/`` and a
-        resolvable runner in the embedded dir). A zero-profile "skip" install is a valid
-        pass (R2-F7). A dangling embedded ``run.sh`` symlink is reported as a re-point
-        diagnostic rather than a raw resolution error (basic FR-17; full doctor in P2).
+        * a profile that ships ``run.sh`` (or has it on disk) is verified **behaviorally** —
+          ``run.sh --list-langs`` must exit 0 and list every recorded profile — unchanged from
+          the original, including the dangling-symlink re-point diagnostic;
+        * a profile that excludes ``run.sh`` is verified **structurally** against its manifest
+          (:meth:`_verify_structural`).
+
+        A zero-profile "skip" install is a valid pass (R2-F7).
         """
         embed = Path(target) / EMBED_DIR_NAME
         run_sh = embed / "run.sh"
         manifest = self.read_manifest(target)
-        expected = manifest.profiles if manifest else []
-        profile = manifest.embed_profile if manifest else DEFAULT_EMBED_PROFILE
+        expected = list(manifest.profiles) if manifest else []
+        managed = set(manifest.managed_paths) if manifest else set()
         run_sh_present = run_sh.is_symlink() or run_sh.is_file()
 
-        # Resolve the runner used to enumerate profiles. Prefer run.sh whenever present so the
-        # ``full`` path (and its dangling-symlink diagnostic below) is unchanged; only fall
-        # back to the wrapper for a profile that legitimately omits run.sh.
-        if run_sh_present:
-            runner = run_sh
-        elif profile != "full":
-            wrapper = self._find_project_wrapper(embed)
-            if wrapper is None or not (embed / "run-cap-delivery.sh").exists():
-                return VerifyResult(
-                    passed=False,
-                    expected_langs=expected,
-                    single_source_ok=False,
-                    message=(
-                        f"Embed profile {profile!r} excludes run.sh, but no verifiable runner "
-                        f"was found in {embed} (need a generated <name>-cap-dlv-pipe.sh wrapper "
-                        f"and run-cap-delivery.sh). Run install or repair."
-                    ),
-                )
-            runner = wrapper
-        else:
+        # run.sh is full-only. Verify behaviorally when the profile ships it (or it is on disk);
+        # otherwise the profile has no run.sh and is verified structurally against its manifest.
+        if "run.sh" in managed or run_sh_present:
+            return self._verify_via_run_sh(embed, run_sh, expected)
+        return self._verify_structural(embed, manifest, expected)
+
+    def _verify_via_run_sh(
+        self, embed: Path, run_sh: Path, expected: List[str]
+    ) -> VerifyResult:
+        """Behavioral verify for a profile that ships ``run.sh`` (``full``): ``run.sh --list-langs``.
+
+        Passes iff the subprocess exits 0, every recorded profile appears in stdout, and the
+        single-source property holds (local ``design/`` + ``prompts/`` — both managed by the
+        ``full`` profile — and a resolvable ``run.sh``). A dangling ``run.sh`` symlink is reported
+        as a re-point diagnostic rather than a raw resolution error.
+        """
+        single_source_ok = (
+            (embed / "design").is_dir()
+            and (embed / "prompts").is_dir()
+            and (run_sh.is_symlink() or run_sh.is_file())
+        )
+        if not (run_sh.is_symlink() or run_sh.is_file()):
             return VerifyResult(
                 passed=False,
                 expected_langs=expected,
                 single_source_ok=False,
                 message=f"Embedded run.sh not found at {run_sh}. Run install or repair.",
             )
-
-        single_source_ok = (
-            (embed / "design").is_dir()
-            and (embed / "prompts").is_dir()
-            and (runner.is_symlink() or runner.is_file())
-        )
-        # The dangling-symlink diagnostic applies to the symlinked run.sh source script only.
-        if runner is run_sh and run_sh.is_symlink() and not run_sh.exists():
+        if run_sh.is_symlink() and not run_sh.exists():
             missing = Path(os.readlink(run_sh))
             return VerifyResult(
                 passed=False,
@@ -1371,7 +1358,7 @@ class CapDevPipeInstaller:
                 ),
             )
         proc = self._run_subprocess(
-            [str(runner), "--list-langs"], cwd=embed, timeout=SUBPROCESS_TIMEOUT_VERIFY
+            [str(run_sh), "--list-langs"], cwd=embed, timeout=SUBPROCESS_TIMEOUT_VERIFY
         )
         listed = self._parse_listed_langs(proc.stdout)
         listed_set = set(listed)
@@ -1387,7 +1374,7 @@ class CapDevPipeInstaller:
             )
         else:
             message = (
-                "Single-source property failed: local design/prompts or runner missing."
+                "Single-source property failed: local design/prompts or run.sh missing."
             )
         return VerifyResult(
             passed=passed,
@@ -1396,6 +1383,64 @@ class CapDevPipeInstaller:
             single_source_ok=single_source_ok,
             exit_code=proc.returncode,
             stderr=proc.stderr,
+            message=message,
+        )
+
+    def _verify_structural(
+        self, embed: Path, manifest: Optional[Manifest], expected: List[str]
+    ) -> VerifyResult:
+        """Structural, profile-aware verify for a profile with no ``run.sh`` (orchestrator/minimal).
+
+        Mirrors canonical ``verify_embed`` (OQ-3) without a subprocess or a runtime dependency on
+        the source checkout: each declared ``managed_paths`` entry must be present on disk (a
+        symlink counts only when its target resolves), the single-source trees the profile
+        declares must exist (``design/`` always, ``prompts/`` **only when it is a managed path** —
+        a ``minimal`` install ships ``design/`` but no ``prompts/``, FR-2), and every recorded
+        profile dir must be on disk. A missing manifest degrades to an honest "cannot verify"
+        rather than assuming ``full`` (FR-3).
+        """
+        if manifest is None:
+            return VerifyResult(
+                passed=False,
+                expected_langs=[],
+                message=(
+                    f"No install manifest under {embed}; cannot verify the install. "
+                    "Run `startd8 capdevpipe install` or repair."
+                ),
+            )
+        managed = list(manifest.managed_paths)
+        profile = manifest.embed_profile
+        missing_managed = [p for p in managed if not (embed / p).exists()]
+        design_ok = (embed / "design").is_dir()
+        prompts_ok = ("prompts" not in managed) or (embed / "prompts").is_dir()
+        listed = [lang for lang in expected if (embed / lang).is_dir()]
+        missing_profiles = [lang for lang in expected if lang not in listed]
+        single_source_ok = design_ok and prompts_ok and not missing_managed
+        passed = single_source_ok and not missing_profiles
+        if passed:
+            message = (
+                f"Verified: profile {profile!r} — {len(managed)} managed path(s) present, "
+                f"{len(listed)} profile(s) on disk."
+            )
+        elif missing_managed:
+            message = (
+                f"Profile {profile!r} install incomplete — missing managed path(s): "
+                f"{', '.join(missing_managed)}. Run repair."
+            )
+        elif not (design_ok and prompts_ok):
+            message = (
+                "Single-source property failed: local design/ or prompts/ missing."
+            )
+        else:
+            message = (
+                f"Profiles missing on disk: {', '.join(missing_profiles)}. "
+                "Run install or repair."
+            )
+        return VerifyResult(
+            passed=passed,
+            listed_langs=listed,
+            expected_langs=list(expected),
+            single_source_ok=single_source_ok,
             message=message,
         )
 

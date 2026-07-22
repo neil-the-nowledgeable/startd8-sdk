@@ -10,7 +10,10 @@ import sys
 
 import pytest
 
-from startd8.capdevpipe_embed_manifest import DEFAULT_EMBED_PROFILE, resolve_embed_inventory
+from startd8.capdevpipe_embed_manifest import (
+    DEFAULT_EMBED_PROFILE,
+    resolve_embed_inventory,
+)
 from startd8.capdevpipe_installer import (
     EMBED_DIR_NAME,
     InstallMethod,
@@ -293,31 +296,6 @@ class TestStandaloneHandler:
 # profile-aware verify (cap-dev-pipe issue #2)
 # --------------------------------------------------------------------------- #
 
-# A faithful stand-in for the reworked project wrapper: delegates to run.sh when it is
-# embedded (full profile) and otherwise self-serves --list-langs and delegates to
-# run-cap-delivery.sh (orchestrator profile). Mirrors project-cap-dlv-pipe.sh.template.
-_DUAL_PATH_WRAPPER = """#!/usr/bin/env bash
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [[ -x "$SCRIPT_DIR/run.sh" ]]; then
-    exec "$SCRIPT_DIR/run.sh" "$@"
-fi
-if [[ ! -x "$SCRIPT_DIR/run-cap-delivery.sh" ]]; then
-    echo "ERROR: neither run.sh nor run-cap-delivery.sh embedded" >&2; exit 1
-fi
-if [[ " $* " == *" --list-langs "* ]]; then
-    echo "Available language profiles:"
-    echo ""
-    for d in "$SCRIPT_DIR"/*/; do
-        name="$(basename "$d")"
-        case "$name" in design|prompts|pipeline|__pycache__) continue ;; .*) continue ;; esac
-        ls "$d"/*plan*.md >/dev/null 2>&1 && echo "  $name/"
-    done
-    exit 0
-fi
-exec "$SCRIPT_DIR/run-cap-delivery.sh" "$@"
-"""
-
 # Minimal run.sh stand-in: lists local <lang>/ profile dirs for --list-langs (full path).
 _FAKE_RUN_SH = """#!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -340,7 +318,7 @@ def _mk_exec(path, text):
     path.chmod(path.stat().st_mode | _stat.S_IEXEC | _stat.S_IXGRP | _stat.S_IXOTH)
 
 
-def _build_embed(target, *, profile, with_run_sh, with_wrapper=True, langs=("python",)):
+def _build_embed(target, *, profile, with_run_sh, langs=("python",)):
     """Construct a minimal embed tree + install manifest for verify() tests."""
     import json
 
@@ -356,14 +334,17 @@ def _build_embed(target, *, profile, with_run_sh, with_wrapper=True, langs=("pyt
     for lang in langs:
         (embed / lang).mkdir()
         (embed / lang / f"{lang}-plan.md").write_text("# plan\n", encoding="utf-8")
-        (embed / lang / f"{lang}-requirements.md").write_text("# reqs\n", encoding="utf-8")
+        (embed / lang / f"{lang}-requirements.md").write_text(
+            "# reqs\n", encoding="utf-8"
+        )
     _mk_exec(embed / "run-cap-delivery.sh", "#!/usr/bin/env bash\nexit 0\n")
     if with_run_sh:
         _mk_exec(embed / "run.sh", _FAKE_RUN_SH)
-    if with_wrapper:
-        _mk_exec(embed / "proj-cap-dlv-pipe.sh", _DUAL_PATH_WRAPPER)
     managed = ["design", "prompts", "run-cap-delivery.sh", *langs]
-    if with_run_sh:
+    if profile == "full":
+        # The full profile DECLARES run.sh in its inventory regardless of whether the file is
+        # on disk — so a full install with a missing run.sh is a real breakage (behavioral
+        # path), not a valid run.sh-less profile. `with_run_sh` controls only the file.
         managed.append("run.sh")
     manifest = Manifest(
         method=InstallMethod.SYMLINK,
@@ -372,21 +353,41 @@ def _build_embed(target, *, profile, with_run_sh, with_wrapper=True, langs=("pyt
         embed_profile=profile,
         managed_paths=managed,
     )
-    (embed / MANIFEST_FILENAME).write_text(json.dumps(manifest.to_dict()), encoding="utf-8")
+    (embed / MANIFEST_FILENAME).write_text(
+        json.dumps(manifest.to_dict()), encoding="utf-8"
+    )
     return embed
 
 
-class TestVerifyProfileAware:
-    """verify() resolves its runner from the embed profile (issue #2)."""
+def _rewrite_manifest(embed, **changes):
+    """Mutate the embed's install-manifest.json in place (test helper)."""
+    import json
 
-    def test_orchestrator_verifies_through_wrapper_without_run_sh(self, installer, target):
+    from startd8.capdevpipe_installer import MANIFEST_FILENAME
+
+    mpath = embed / MANIFEST_FILENAME
+    data = json.loads(mpath.read_text())
+    data.update(changes)
+    mpath.write_text(json.dumps(data))
+    return mpath
+
+
+class TestVerifyProfileAware:
+    """verify() is profile-aware (finding #2): a profile with no run.sh verifies structurally.
+
+    OQ-3 resolved: the structural check mirrors canonical ``verify_embed`` (per-``managed_paths``,
+    subprocess-free) rather than shelling to a run.sh/wrapper — so it does not depend on the
+    (separately-broken) orchestrator wrapper (cap-dev-pipe#2) or the source checkout.
+    """
+
+    def test_orchestrator_verifies_structurally_without_run_sh(self, installer, target):
         _build_embed(target, profile="orchestrator", with_run_sh=False)
         vr = installer.verify(target)
         assert vr.passed, vr.message
         assert "python" in vr.listed_langs
 
     def test_full_still_requires_run_sh(self, installer, target):
-        # A full install missing run.sh is a real breakage — must NOT be masked by the wrapper.
+        # A full install missing run.sh is a real breakage — must NOT be masked.
         _build_embed(target, profile="full", with_run_sh=False)
         vr = installer.verify(target)
         assert not vr.passed
@@ -398,22 +399,50 @@ class TestVerifyProfileAware:
         assert vr.passed, vr.message
         assert "python" in vr.listed_langs
 
-    def test_orchestrator_without_wrapper_fails_actionably(self, installer, target):
-        _build_embed(target, profile="orchestrator", with_run_sh=False, with_wrapper=False)
+    def test_orchestrator_missing_managed_path_fails_actionably(
+        self, installer, target
+    ):
+        # FR-1: a declared managed path gone on disk fails, naming the path.
+        embed = _build_embed(target, profile="orchestrator", with_run_sh=False)
+        (embed / "run-cap-delivery.sh").unlink()
         vr = installer.verify(target)
         assert not vr.passed
-        assert "no verifiable runner" in vr.message
+        assert "run-cap-delivery.sh" in vr.message
+
+    def test_minimal_without_prompts_still_passes(self, installer, target):
+        # FR-2: the `minimal` profile ships design/ but NOT prompts/ — must not falsely fail.
+        import shutil
+
+        embed = _build_embed(target, profile="minimal", with_run_sh=False)
+        _rewrite_manifest(
+            embed,
+            embed_profile="minimal",
+            managed_paths=["design", "run-cap-delivery.sh", "python"],
+        )
+        shutil.rmtree(embed / "prompts")
+        vr = installer.verify(target)
+        assert vr.passed, vr.message
+
+    def test_manifest_absent_degrades_not_assumes_full(self, installer, target):
+        # FR-3: no manifest → honest "cannot verify", never a false run.sh requirement.
+        from startd8.capdevpipe_installer import MANIFEST_FILENAME
+
+        embed = _build_embed(target, profile="orchestrator", with_run_sh=False)
+        (embed / MANIFEST_FILENAME).unlink()
+        vr = installer.verify(target)
+        assert not vr.passed
+        assert "manifest" in vr.message.lower()
+        assert "run.sh not found" not in vr.message
 
     def test_orchestrator_reports_missing_expected_profile(self, installer, target):
         embed = _build_embed(target, profile="orchestrator", with_run_sh=False)
-        import json
-
-        from startd8.capdevpipe_installer import MANIFEST_FILENAME
-
-        mpath = embed / MANIFEST_FILENAME
-        data = json.loads(mpath.read_text())
-        data["profiles"] = ["python", "rust"]  # rust not on disk
-        mpath.write_text(json.dumps(data))
+        _rewrite_manifest(embed, profiles=["python", "rust"])  # rust not on disk
         vr = installer.verify(target)
         assert not vr.passed
         assert "rust" in vr.message
+
+    def test_doctor_orchestrator_passes(self, installer, target):
+        # doctor() falls through to the profile-aware verify() for a healthy orchestrator.
+        _build_embed(target, profile="orchestrator", with_run_sh=False)
+        vr = installer.doctor(target)
+        assert vr.passed, vr.message
