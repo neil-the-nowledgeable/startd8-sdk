@@ -123,7 +123,11 @@ def doctor_command(
 @capdevpipe_app.command(
     "run",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-    help="Run the embedded pipeline (`python3 -m pipeline run` equivalent without bash).",
+    help=(
+        "Run the embedded pipeline (`python3 -m pipeline run` equivalent without bash). "
+        "Unknown flags pass through to the pipeline — e.g. `--dry-run` previews the stage plan "
+        "without executing; `--plan`/`--requirements`/`--project` override auto-selection."
+    ),
 )
 def run_command(
     ctx: typer.Context,
@@ -138,7 +142,13 @@ def run_command(
         help="Path to pipeline.yaml (default: <embed-dir>/pipeline.yaml)",
     ),
 ) -> None:
-    """Delegate to the embedded Python orchestrator with passthrough pipeline flags."""
+    """Delegate to the embedded Python orchestrator with passthrough pipeline flags.
+
+    All flags after the known options pass through to ``pipeline run`` verbatim. Notably
+    ``--dry-run`` prints the full stage plan and exits 0 without running anything — the fastest
+    "what will this do?" check. On a config-free install (no ``pipeline.yaml``) the sole
+    installed language profile is auto-selected; pass ``--plan``/``--requirements`` to override.
+    """
     try:
         exit_code = run_embedded_pipeline(
             cwd=Path.cwd(),
