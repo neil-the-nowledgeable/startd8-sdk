@@ -70,6 +70,27 @@ The two efforts are the two halves of the same fix:
 Neither fix is complete without the other landing in the **same** cell of the **same** table. That is
 why this is a coordination note and not two independent tickets.
 
+## The ContextCore-side prerequisites are now IMPLEMENTED (CR-1/#28, CR-2/#29, CR-3/#30)
+
+The threshold seam above is where signal_kind *values* nest. But #226 is **inert until it can read its
+inputs** — the FRs, the FR→service map, and the service kind. Those three data-plumbing prerequisites
+(tracked as ContextCore #28/#29/#30) are now shipped on the ContextCore side, so the generator can pick
+the right profile and SLIs instead of falling back to the HTTP shape:
+
+| CR | ContextCore issue | What ContextCore now emits | SDK consumer |
+|----|-------------------|----------------------------|--------------|
+| **CR-1** | #28 | `spec.requirements.functional[]` — each FR carries a `signal_kind` (normative enum mirrored from the #226 spec) + optional `target`/`service`. Emitted **snake_case** (`signal_kind`) to match `load_business_context`. Defaults to `custom` so an authored FR is never dropped. | `artifact_generator_context.load_business_context` (already reads `requirements.functional[]`) |
+| **CR-2** | #29 | `spec.requirements.traceability[]` — **forwarded** from `ingestion-traceability.json`'s `requirement_mappings[]` (Mottainai; deterministic, sorted). Opportunistic `--ingestion-traceability` flag on `manifest export`; a clean no-op at Stage-4 (artifact produced later), so no cap-dev-pipe change is forced. | FR→artifact traceability (`source_fr`); audit/coverage |
+| **CR-3** | #30 | `instrumentation_hints[svc].kind` — inferred from imports (queue/worker libs → `async_worker`/`stream`), graph protocol (→ `http_server`/`grpc_server`), or explicit declaration; **`unknown` (never silently `http_server`)** when there's no signal. Same import-scan mechanism as `detected_databases`. | kind→profile table (`resolve_descriptor` kind tier; #238 admits transport-less kind-declaring services) |
+
+**Enums live in `contextcore/contracts/types.py`** (`SignalKind`, `ServiceKind`) with docstrings naming the #226 spec as the normative owner — cite, keep in sync, do not extend unilaterally.
+
+**What this unblocks for you:** CR-3 is the one that directly de-inerts the de-overfit family — a
+Mastodon Sidekiq worker now emits `kind: async_worker` instead of falling back to `semconv-http`, so
+#230/#231/#233's batch/cron/ML profile rows can finally be **validated end-to-end**. (Note the current
+kind→profile table maps `async_worker`/`stream`; `batch`/`cron`/`ml_inference` are still your remaining
+work — but they can now be exercised against real emitted `kind` values.)
+
 ## For the SDK team, concretely
 
 When you implement FR-6/FR-7 for #230/#231/#233, add the signal_kind `field_name`s under each
@@ -77,3 +98,7 @@ existing `<criticality>.<deployment_mode>` cell in `importance_thresholds.yaml` 
 extremely forgiving, matching the mode semantics #247 established), and seed a criticality-agnostic
 baseline for each in the flat `_DEFAULT_THRESHOLDS`. No new resolution code — the existing
 manifest → importance → flat tiers in `_resolve_threshold` apply unchanged.
+
+For the newly-emitted inputs: read `signal_kind` snake_case from `functional[]`, read `kind` from
+`instrumentation_hints[svc]`, and treat `unknown` as "withhold HTTP SLOs" rather than a synonym for
+`http_server`.
