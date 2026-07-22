@@ -1,6 +1,6 @@
 # Requirement-Shaped, Service-Kind-Aware Observability Generation — Requirements
 
-**Version:** 0.5 (Post CRP Round 1 — all 9 F-suggestions applied)
+**Version:** 0.6 (Post Phase-2a start — FR-14 shipped, FR-7 reconciled with #234; see §0.4)
 **Date:** 2026-07-22
 **Status:** Ready for implementation
 **Issue:** #226
@@ -82,6 +82,15 @@
 
 **Cross-generator scope (honest bound):** the smell is concentrated in `observability/`. The app-skeleton generators (`backend_/frontend_/scaffold_codegen`, `presentation_polish`) are well-hardened (contract-derived, graceful fallbacks). The one sibling instance is **#77** (`view_codegen` `workspace` archetype overfit to the *polymorphic* shape) — same root pattern, tracked separately (its crash is already fixed on main; the non-polymorphic renderer is the open half).
 
+### 0.4 Reconciliation with #234 — compose, don't duplicate (v0.6)
+
+> A concurrent effort, **PR #234 "importance-scaled SLO default thresholds"** (merged 2026-07-22), shipped its *own* "FR-7": a criticality-scaled threshold table (`config/importance_thresholds.yaml`, `obs_config.load_importance_thresholds`, `_select_importance_default`, resolved in `_resolve_threshold`). It reshapes the **same** `_resolve_threshold` table this doc's FR-7 targets. Discovered while implementing Phase 2a.
+
+- **They are complementary axes of one table, not rivals.** #234 owns the **criticality** axis (magnitude of availability/latency per critical/high/medium/low); #226 FR-7 owns the **signal_kind** axis (which SLI *dimensions* exist: adds queue_depth/retry_rate/freshness/…). Composed: a **criticality × signal_kind** table.
+- **The compose needs no new resolution code.** `_resolve_threshold` / `_select_importance_default` are **already generic over `field_name`**, so adding signal_kind cells to `importance_thresholds.yaml` + baselines to `_DEFAULT_THRESHOLDS` is sufficient — the manifest→importance→flat tier logic applies unchanged (extend-vs-build-separate; Accidental-Complexity anti-principle). FR-7 rewritten accordingly.
+- **Decision:** compose onto #234's table (user, 2026-07-22). Do **not** build a parallel signal_kind threshold mechanism.
+- **Byte-parity intact:** availability/latency for existing services keep resolving through #234's path exactly as today (the Phase-0 goldens already lock this — they were verified green against `main + #234`).
+
 ---
 
 ## 1. Problem Statement
@@ -132,7 +141,8 @@ The observability artifact generator derives a **generic per-service HTTP templa
 
   At minimum the non-request kinds (`queue_depth`, `retry_rate`, `freshness`, `run_success`, `lag`, `saturation`) gain derivation paths beyond today's availability+latency. Additive by default (OQ-6); a kind MAY suppress a default SLI (workers suppress latency). The `retry_rate`/`run_success` and `lag`/`freshness` distinctions are load-bearing: they select *different* template rows and *different* threshold units (FR-7), so authoring them interchangeably is a category error.
 - **FR-6 — Kind→profile table (general, not one row).** Extend `MetricDescriptor._PROFILES` with a **table** of workload profiles — ship `http_server`, `grpc_server`, `async_worker`, **`batch`, `cron`, `stream`** (+ their SLI series/selectors) — plus one `kind→profile` map beside `_TRANSPORT_DEFAULTS`; thread `kind` into `resolve_descriptor` so kind wins over transport. `profile_for_transport`'s HTTP fallback survives **for the request-serving family only**. The requirement is the *table + resolution tier*; each row is ~4 additive lines. No service shall receive an SLI on series it does not emit (e.g. a worker on `http_server_duration`).
-- **FR-7 — Per-SLI-kind default thresholds.** Make `_DEFAULT_THRESHOLDS` a **per-`signal_kind`** table (not just per-service-kind), selected in `_resolve_threshold` — so a `freshness` FR on *any* service gets a freshness default, decoupled from the service's kind. `business.default_thresholds` override plumbing already exists.
+- **FR-7 — Per-SLI-kind default thresholds, *composed onto the #234 importance table* (revised — see §0.4).** A `freshness`/`queue_depth`/… FR on *any* service gets a signal-kind-appropriate default, decoupled from the service's kind. **Composition, not a new mechanism:** PR #234 (merged 2026-07-22) shipped `config/importance_thresholds.yaml` + `_select_importance_default` + `load_importance_thresholds`, a `<criticality>.<mode>.<field>` table resolved in `_resolve_threshold` (`artifact_generator_generators.py:129`). That resolver is **already generic over `field_name`**, so FR-7 is delivered by: (i) adding the non-request `signal_kind` cells (`queue_depth`/`retry_rate`/`freshness`/`run_success`/`lag`/`saturation`) into the **same** `importance_thresholds.yaml` under each criticality (→ a **criticality × signal_kind** table), and (ii) seeding a criticality-agnostic baseline for each in the flat `_DEFAULT_THRESHOLDS`. **No new resolution code** — the existing manifest→importance→flat tiers apply unchanged (extend-vs-build-separate; Accidental-Complexity). `business.default_thresholds` override plumbing already exists.
+  - **FR-7 grounding gate (OQ-5).** The threshold *values* and the derivation that *reads* them (FR-5/FR-6) are gated on OQ-5 (real worker/batch/stream series + realistic thresholds). Ship the table *shape* now; fill values from a grounded pilot, not by invention.
 
 ### Traceability + visibility
 - **FR-8 — Stamp originating FR id on outputs.** Each FR-derived SLO/alert records its source FR id via a `DerivationTrace` (or a `source_fr` field on `ArtifactResult`), surfaced in `observability-manifest.yaml`.
@@ -173,6 +183,7 @@ All symbols this spec names were grep-verified PRESENT:
 
 ---
 
+*v0.6 — Phase 2a started. FR-14 (relax transport-drop, add ServiceHints.kinds) SHIPPED (PR #238, merged). §0.4 records the reconciliation with concurrent PR #234 (importance-scaled thresholds): FR-7 recomposed to extend #234's criticality table with a signal_kind axis — no new resolution code (the resolver is already field_name-generic). FR-6/FR-5/FR-7 values gated on OQ-5 grounding.*
 *v0.5 — Post CRP Round 1 (claude-opus-4-8). All 9 F-suggestions ACCEPTED + applied (dispositions in Appendix A): FR-12a (AND-composition byte-parity rule), FR-12b (hybrid multi-kind union), FR-12c + FR-14 (relax the SDK transport-drop — the ∅-path was dead code), FR-13a (Availability-gauge carve-out), FR-13b (reuse presence detectors verbatim), FR-5 enum glosses (retry_rate vs run_success, lag vs freshness orthogonality), FR-9 two gap classes (∅ vs unfulfilled — the pilot's real symptom), FR-0 fixture matrix. Two load-bearing claims (transport hard-drop, availability-gauge independence) byte-verified against source before applying.*
 *v0.4 — Post de-overfit generalization research (§0.3). Reframed from "add async_worker" to a general contract-first SLI-kind determination model: added FR-12 (SLI-kind determination), FR-13 (delete unconditional RED synthesis); generalized FR-5 (signal_kind primary axis), FR-6 (kind→profile table, not one row), FR-7 (per-signal_kind thresholds), FR-9 (∅-service coverage), NR-3 (ship the table), CR-3 (7-kind enum + no-listen-port inference). Sibling instance #77 (view_codegen) noted; smell bound to observability/. Precedent: stakeholder_panel already fixed this inversion. Ready for CRP.*
 *v0.3.1 — Post design-principle hardening. 8 planning corrections; 3 FRs reclassified cross-repo (CR-1..3); FR-6/7 collapsed to profile extension; FR-0 (golden gate) and FR-11 (constructive parity) added; 5 OQs resolved. Applied lessons: phantom-requirement-pruning, phantom-reference-audit, extend-vs-build-separate, vocabulary-single-source. Applied principles: Mottainai, Genchi Genbutsu, Accidental-Complexity, Context-Correctness-by-Construction, Hitsuzen.*
