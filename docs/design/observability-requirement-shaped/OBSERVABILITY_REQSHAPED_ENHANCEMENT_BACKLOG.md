@@ -61,10 +61,31 @@ the surface is good on day one instead of showing a hint you immediately re-poli
 | ✅ **P1a** | QW-2 per-kind signal hint | S | author — sharper, actionable guidance | none | **Delivered (PR #263)** |
 | ✅ **P1b** | LH-1 `empty_services ⊇ ungrounded` cross-ref | S | author — one story, not two gaps | none | **Delivered (PR #263)** |
 | ✅ **P1c** | QW-1 portal coverage-gap panel | S | human/author — invisible → visible in Grafana | *displays* P1a/P1b output | **Delivered (PR #263)** |
-| **P2** | QW-3 cap-dev-pipe / ContextCore coverage line | S–M | machine / cross-repo ripple | **hypothesis** — confirm the consumer reads `fr_coverage` first | fast-follow, after a short cross-repo spike |
+| **P2 (re-targeted)** | QW-3 coverage line in the **SDK wrapper** `scripts/generate_observability_artifacts.py` | S | machine/human running the pipe | **spike done** — see verdict below; re-targeted from cross-repo to the SDK wrapper | ready to build (in-repo, S) |
 | ✅ **P3** | AQW-1 kind-vocab drift guard | S | dev — prevents a silent future regression | independent | **Delivered (PR #263)** |
 | **P4** | EC-1 OQ-5 grounding pilot | L | **highest ultimate** — closes #230/#231/#233 | **gated** on a real worker/batch/ML fleet + grounded values | a scheduled milestone, not a backlog quick-win |
 
+> **P2 spike verdict (2026-07-22 — grounded in cap-dev-pipe + ContextCore):** P2 is **real work, not
+> a no-op — but re-targeted.** Three consumers checked:
+> - **cap-dev-pipe** (`resolve-provenance.py:206`) already `yaml.safe_load`s the manifest but reads
+>   **only** `derivation_rules` (thresholds/SLO targets → plan-ingestion); `fr_coverage` sits in the
+>   parsed dict, ignored. A consumer *exists* but its job is threading thresholds, not human reporting.
+> - **ContextCore** — the observability orchestration stage that would consume `GenerationReport`
+>   (`CC_MVP_ORCHESTRATION_REQUIREMENTS.md` FR-4/FR-8 completeness ledger) is **a requirement, not
+>   code**: no `pipeline/stages/`, no `.py` touches the generator. So there is **no ContextCore
+>   consumer today**; `fr_coverage` is the natural fold-in for its ledger *when that stage is built*
+>   (blocked on it, nothing to do now).
+> - **SDK wrapper** `scripts/generate_observability_artifacts.py` — the actual human-facing entry the
+>   pipeline invokes. It prints a `[coverage gate]` line, but that's *metric-binding* coverage
+>   (FR-2/FR-10), **not** `fr_coverage`. It already parses the manifest (`idx`, `:303`), so the gap
+>   block is one `.get()` away.
+>
+> **Conclusion:** the highest-leverage P2 is an **in-repo S** — print a coverage-gap summary in the SDK
+> wrapper after generation (read `report.fr_coverage` / the `idx` it already loads). The original
+> cross-repo framing was mis-targeted: cap-dev-pipe's role is thresholds not reporting, and
+> ContextCore's consumer isn't built. cap-dev-pipe/ContextCore surfacing become *optional follow-ups*
+> gated on their own needs.
+>
 > **Delivered increment (PR #263):** P1a+P1b+P1c+P3. `fr_coverage.ungrounded_kinds[]` now carries
 > `suggested_signals` (kind-specific shape) + `observed_by_nothing` (∅ cross-reference); a self-gating
 > **Coverage Gaps** portal panel surfaces all three gap classes for operator/engineer personas; and a
