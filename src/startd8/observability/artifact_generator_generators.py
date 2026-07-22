@@ -994,21 +994,51 @@ def _ensure_red_coverage(
 
 
 #: Per-signal_kind SLO template for the NON-request kinds (#226 FR-5). Each maps a
-#: declared functional[] signal_kind to (convention metric, shape, unit). The series
-#: are convention-sourced (FR-6a) — OTel messaging-family / a named exporter
-#: convention — bound to the service via the descriptor's identity selector; the FR's
-#: `target` is the threshold. `custom` lets an FR carry its own PromQL in `target`.
-#: Kinds absent here (or an FR with no `target`) are *unfulfilled* → FR-9, never faked.
+#: declared functional[] signal_kind to (**candidate series** (preference-ordered), shape,
+#: unit). The series is bound to the service by ``_select_functional_metric``: the candidate
+#: the service actually DECLARES wins (FR-6a — *source* the series, don't assume a single
+#: name); else the first candidate. Candidates cover only the conventions we have EVIDENCE
+#: for. The ``lag`` Kafka-JMX series were verified present in a live OTel-demo Kafka-consumer
+#: fleet (2026-07-22, ``frauddetectionservice``), where every ``messaging_client_*`` /
+#: ``resource_utilization_ratio`` / ``job_*`` name we assumed returned **zero** — so the
+#: evidenced series lead and the (unverified) semconv-draft name is retained only as a
+#: trailing candidate. Other kinds keep their single (still-unverified) convention until a
+#: fleet grounds them (OQ-5). The FR's ``target`` is the threshold; ``custom`` carries its
+#: own PromQL. Kinds absent here (or an FR with no ``target``) are *unfulfilled* → FR-9.
 _FUNCTIONAL_SLI_TEMPLATES = {
-    "queue_depth": ("messaging_client_queued_messages", "gauge_max", "short"),
-    "lag": ("messaging_client_consumer_lag_messages", "gauge_max", "short"),
-    "retry_rate": ("messaging_client_retries_total", "rate", "short"),
-    "saturation": ("resource_utilization_ratio", "gauge_max", "percentunit"),
-    "freshness": ("job_last_success_timestamp_seconds", "age", "s"),
-    "run_success": ("job_runs_total", "ratio", "ratio"),
+    "queue_depth": (("messaging_client_queued_messages",), "gauge_max", "short"),
+    "lag": (
+        # Kafka JMX (verified real, 2026-07-22 OTel-demo) → semconv-draft (unverified).
+        ("kafka_consumer_records_lag_max", "kafka_consumer_records_lag",
+         "messaging_client_consumer_lag_messages"),
+        "gauge_max", "short",
+    ),
+    "retry_rate": (("messaging_client_retries_total",), "rate", "short"),
+    "saturation": (("resource_utilization_ratio",), "gauge_max", "percentunit"),
+    "freshness": (("job_last_success_timestamp_seconds",), "age", "s"),
+    "run_success": (("job_runs_total",), "ratio", "ratio"),
 }
 #: signal_kinds already covered by the convention triplet.
 _TRIPLET_SIGNAL_KINDS = frozenset({"availability", "latency", "throughput"})
+
+
+def _select_functional_metric(candidates: Tuple[str, ...], service: ServiceHints) -> str:
+    """Bind a functional SLI to the series the SERVICE actually emits (FR-6a): the first
+    candidate present in its declared/convention metrics wins; else the primary candidate.
+
+    A worker often reports **no** native metrics in onboarding (OQ-5), so the fallback to
+    ``candidates[0]`` is the common path — which is why the primary must be the series with
+    real evidence of existing, not an aspirational one. Names compare dot/underscore-
+    insensitively (OTel dotted ``kafka.consumer.records.lag.max`` vs PromQL underscored).
+    """
+    emitted = {
+        m.name.replace(".", "_")
+        for m in (list(service.convention_metrics or []) + list(service.declared_metrics or []))
+    }
+    for cand in candidates:
+        if cand.replace(".", "_") in emitted:
+            return cand
+    return candidates[0]
 
 
 def _functional_sli_query(shape: str, metric: str, selector: str) -> str:
@@ -1061,7 +1091,8 @@ def generate_functional_slos(
         if kind == "custom" and fr.target:
             query = fr.target
         elif kind in _FUNCTIONAL_SLI_TEMPLATES and fr.target:
-            metric, shape, _unit = _FUNCTIONAL_SLI_TEMPLATES[kind]
+            candidates, shape, _unit = _FUNCTIONAL_SLI_TEMPLATES[kind]
+            metric = _select_functional_metric(candidates, service)
             query = _functional_sli_query(shape, metric, selector)
         else:
             unfulfilled.append(
