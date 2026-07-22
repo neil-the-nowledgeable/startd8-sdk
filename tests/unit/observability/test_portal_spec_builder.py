@@ -639,6 +639,22 @@ class TestQualitySection:
         gauge = next(p for p in spec["panels"] if p["title"] == "Artifact Quality")
         assert gauge["group"] == "Quality"
 
+    def test_scoreless_functional_slo_does_not_break_quality_panels(
+        self, business, services, report_with_quality, metadata
+    ):
+        # Regression (#254): a functional-SLO artifact carries a scoreless quality
+        # dict ({emitted_fr_ids, unfulfilled}). It must not KeyError in
+        # _build_quality_panels nor pollute the score averages.
+        func_slo = ArtifactResult(
+            "slo_definition", "checkoutservice",
+            "slos/checkoutservice-functional-slo.yaml", "generated",
+        )
+        func_slo.quality = {"emitted_fr_ids": ["FR-006"], "unfulfilled": []}
+        report_with_quality.artifacts.append(func_slo)
+        spec = build_portal_spec(business, services, report_with_quality, metadata)
+        gauge = next(p for p in spec["panels"] if p["title"] == "Artifact Quality")
+        assert gauge["type"] == "gauge"
+
     def test_quality_included_for_manager(self, business, services, report_with_quality, metadata):
         spec = build_portal_spec(business, services, report_with_quality, metadata, persona="manager")
         titles = [p["title"] for p in spec["panels"]]

@@ -428,8 +428,11 @@ def _build_quality_panels(
     ``business.quality_thresholds`` (declarative) overrides the gauge bands; defaults to 0.6/0.8.
     """
     _qt = (getattr(business, "quality_thresholds", None) or {"warning": 0.6, "healthy": 0.8})
-    # Try quality from report artifacts first
-    scored = [a for a in report.artifacts if a.quality]
+    # Try quality from report artifacts first. Only artifacts with an actual
+    # `score` count — functional-SLO artifacts carry a scoreless coverage dict
+    # ({emitted_fr_ids, unfulfilled}, #226 FR-5), which would otherwise KeyError
+    # on the a.quality["score"] subscripts below (#254).
+    scored = [a for a in report.artifacts if a.quality and "score" in a.quality]
     if not scored:
         return [_text_panel(
             "Quality Metrics",
