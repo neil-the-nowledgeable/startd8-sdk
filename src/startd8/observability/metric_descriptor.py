@@ -194,6 +194,45 @@ _KIND_DEFAULTS = {
     "stream": "messaging-semconv",
 }
 
+#: The three RED SLI kinds a request-server (or a job worker, on its messaging series)
+#: is observed by absent any declaration (#226 FR-12). Its home is here beside the kind
+#: tables so the determination model has a single source of truth.
+_REQUEST_SLI_KINDS = frozenset({"latency", "availability", "throughput"})
+
+#: Kind → the SLI-kind set it implies absent per-FR declaration (#226 FR-12). Request
+#: kinds and job workers/streams resolve to the RED triple (a worker's RED rides its
+#: messaging descriptor, so "throughput"=job rate, "availability"=job success). cron/
+#: batch (freshness/run_success shapes) are intentionally deferred with their FR-6
+#: profiles — an unmapped kind contributes no implied set (falls to the transport tier).
+_KIND_SLI_DEFAULTS = {
+    "http_server": _REQUEST_SLI_KINDS,
+    "grpc_server": _REQUEST_SLI_KINDS,
+    "async_worker": _REQUEST_SLI_KINDS,
+    "stream": _REQUEST_SLI_KINDS,
+}
+
+
+def resolve_sli_kinds(
+    kinds: Optional[Iterable[str]] = None,
+    signal_kinds: Optional[Iterable[str]] = None,
+    transport: str = "",
+) -> "frozenset[str]":
+    """The set of SLI kinds a service is observed by (#226 FR-12) — the determination
+    core. The RED base applies when the service is **request-serving** (a request
+    transport, or a request/worker ``kind``); declared per-FR ``signal_kinds`` (from
+    ``functional[]``) are **additive** on top (OQ-6). A non-request service (no
+    request transport, no mapped kind) gets only what it declares — ``frozenset()``
+    when it declares nothing (the ∅ that FR-9 reports and FR-13 treats as "synthesize
+    nothing"). Byte-parity: a plain http/grpc service with no kind/FRs ⇒ the RED
+    triple, identical to pre-#226.
+    """
+    resolved: set[str] = set(signal_kinds or ())          # declared FR signals (additive)
+    for kind in kinds or ():
+        resolved |= set(_KIND_SLI_DEFAULTS.get(kind, ()))  # kind-implied RED base
+    if (transport or "").lower() in _TRANSPORT_DEFAULTS:
+        resolved |= _REQUEST_SLI_KINDS                     # request-transport RED base
+    return frozenset(resolved)
+
 
 def profile_for_kinds(kinds: Iterable[str], transport: str) -> MetricDescriptor:
     """Descriptor for a service by its workload kind(s), kind winning over transport

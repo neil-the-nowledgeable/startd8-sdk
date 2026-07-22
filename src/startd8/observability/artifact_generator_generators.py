@@ -18,7 +18,12 @@ import yaml  # noqa: F401
 
 from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
 from .artifact_generator_models import *  # noqa: F401,F403
-from .metric_descriptor import MetricDescriptor, profile_for_kinds, profile_for_transport
+from .metric_descriptor import (
+    MetricDescriptor,
+    profile_for_kinds,
+    profile_for_transport,
+    resolve_sli_kinds,
+)
 from .spec import Receiver
 
 try:
@@ -841,15 +846,27 @@ def _ensure_red_coverage(
     derivations: List[DerivationTrace],
     descriptor: Optional[MetricDescriptor] = None,
 ) -> None:
-    """Synthesize missing Rate and Error panels for RED coverage (REQ-KZ-OBS-200a).
+    """Backfill the panels the resolved SLI-kind set implies (#226 FR-13).
 
-    Inspects existing panels to determine which RED signals are present,
-    then adds synthetic panels for any that are missing. Metric names, the
-    service-identity selector, and the error selector are sourced from the
-    resolved :class:`MetricDescriptor` (FR-4); ``descriptor=None`` falls back to
-    the transport default for byte-identical back-compat.
+    Formerly ``_ensure_red_coverage``: it unconditionally synthesized Rate/Error/
+    Availability panels for *every* service, assuming every service is a request
+    server. It is now **gated on the resolved SLI-kind set** (FR-12): Request-Rate
+    iff ``throughput`` ∈ set, Error-Rate + the Availability(1h) gauge (FR-13a — an
+    availability-kind artifact, not RED-completion) iff ``availability`` ∈ set. A
+    service whose set implies neither is a **no-op** (the deletion of the
+    unconditional path). Metric names/selectors come from the resolved
+    :class:`MetricDescriptor` (FR-4); ``descriptor=None`` ⇒ transport/kind default.
+    Byte-parity: a request service resolves to the RED triple ⇒ identical output.
     """
     descriptor = _descriptor_for(service, descriptor)
+    # FR-12: what SLI kinds is this service actually observed by? Declared per-FR
+    # signal_kinds (functional[], empty until CR-1 ships) ∪ kind-implied ∪ transport.
+    _fr = getattr(business, "functional_requirements", None) or ()
+    sli_kinds = resolve_sli_kinds(
+        service.kinds,
+        [getattr(f, "signal_kind", "") for f in _fr],
+        service.transport,
+    )
     # Shared RED detection — single source of truth with the validator
     try:
         from startd8.validators.observability_artifact_checks import (
@@ -865,6 +882,13 @@ def _ensure_red_coverage(
 
     if has_rate and has_error:
         return  # Already have full RED coverage
+    # FR-13: the load-bearing deletion of the unconditional path. Nothing to
+    # synthesize when the resolved set implies neither throughput nor availability
+    # (e.g. a cron observed only by freshness/run_success) — no fabricated panels.
+    want_rate = "throughput" in sli_kinds
+    want_error = "availability" in sli_kinds
+    if not want_rate and not want_error:
+        return
 
     # Descriptor-sourced throughput metric + selectors (FR-4). For the semconv
     # default this is rpc_server_duration_count / http_server_duration_count with
@@ -884,7 +908,7 @@ def _ensure_red_coverage(
         f'{total_selector}[$__rate_interval]))'
     )
 
-    if not has_rate:
+    if not has_rate and want_rate:
         panels.append({
             "type": "timeseries",
             "title": "Request Rate",
@@ -893,7 +917,7 @@ def _ensure_red_coverage(
             "group": "Throughput",
         })
 
-    if not has_error:
+    if not has_error and want_error:
         error_panel: Dict[str, Any] = {
             "type": "timeseries",
             "title": "Error Rate",
@@ -914,8 +938,10 @@ def _ensure_red_coverage(
                 pass
         panels.append(error_panel)
 
-    # Availability gauge — shows current availability vs SLO target
-    if business.availability:
+    # Availability gauge (FR-13a) — an availability-kind artifact, gated on
+    # `availability` ∈ the resolved set (it fires on business.availability alone,
+    # independent of has_rate/has_error, so it needs its own gate).
+    if business.availability and want_error:
         try:
             avail_target = round(float(business.availability) / 100.0, 6)
             # [1h] window is intentionally kept (context-specific, not a
