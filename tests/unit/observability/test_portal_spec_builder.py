@@ -827,3 +827,45 @@ class TestPortalValidation:
         }
         result = validate_portal(json.dumps(dashboard))
         assert any(i.check == "OBP-104-6" for i in result.issues)
+
+
+class TestCoverageGapPanels:
+    """QW-1 (#226 FR-9 / #230-233): surface fr_coverage gaps in the portal, self-gating."""
+
+    def _report_with_gaps(self):
+        r = GenerationReport(project_id="p", generated_at="t", artifacts=[], services_processed=1)
+        r.fr_coverage = {
+            "empty_services": ["mailer", "ranker"],
+            "ungrounded_kinds": [
+                {"service": "ranker", "kind": "ml_inference", "observed_by_nothing": True,
+                 "suggested_signals": ["saturation", "lag"], "reason": "..."},
+            ],
+            "unfulfilled": [{"id": "FR-7", "signal_kind": "freshness"}],
+            "emitted": [],
+        }
+        return r
+
+    def test_panel_absent_when_no_coverage_gaps(self, business, services, report, metadata):
+        # report fixture carries no fr_coverage → byte-identical to pre-panel behavior.
+        spec = build_portal_spec(business, services, report, metadata, persona="operator")
+        assert not any(p["title"] == "Coverage Gaps" for p in spec["panels"])
+
+    def test_panel_present_and_actionable_when_gaps_exist(self, business, services, metadata):
+        spec = build_portal_spec(business, services, self._report_with_gaps(), metadata, persona="operator")
+        panel = next((p for p in spec["panels"] if p["title"] == "Coverage Gaps"), None)
+        assert panel is not None
+        content = panel["options"]["content"]
+        # P1a: kind-specific next step; P1b: the ∅ symptom folded into the ungrounded row.
+        assert "ranker" in content and "saturation/lag" in content
+        assert "observed by nothing" in content
+        # LH-1: ranker (ungrounded + empty) is NOT double-listed as a bare empty service.
+        assert content.count("`ranker`") == 1
+        # a plain empty service (mailer, not ungrounded) still shows.
+        assert "mailer" in content
+        # unfulfilled FR surfaces too.
+        assert "FR-7" in content
+
+    def test_panel_gated_out_for_executive_persona(self, business, services, metadata):
+        # 'services' section is operator/engineer only — executive never sees the gap panel.
+        spec = build_portal_spec(business, services, self._report_with_gaps(), metadata, persona="executive")
+        assert not any(p["title"] == "Coverage Gaps" for p in spec["panels"])

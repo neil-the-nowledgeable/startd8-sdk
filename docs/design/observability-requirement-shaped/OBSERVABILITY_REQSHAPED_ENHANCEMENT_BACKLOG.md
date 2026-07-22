@@ -58,12 +58,18 @@ the surface is good on day one instead of showing a hint you immediately re-poli
 
 | Rank | Finding | Effort | Value / audience | Gating / dependency | Do when |
 |------|---------|--------|------------------|---------------------|---------|
-| **P1a** | QW-2 per-kind signal hint | S | author — sharper, actionable guidance | none | **first** — refines the coverage record |
-| **P1b** | LH-1 `empty_services ⊇ ungrounded` cross-ref | S | author — one story, not two gaps | none | with P1a (same file/loop) |
-| **P1c** | QW-1 portal coverage-gap panel | S | human/author — invisible → visible in Grafana | *displays* P1a/P1b output | after P1a/P1b |
+| ✅ **P1a** | QW-2 per-kind signal hint | S | author — sharper, actionable guidance | none | **Delivered (PR #263)** |
+| ✅ **P1b** | LH-1 `empty_services ⊇ ungrounded` cross-ref | S | author — one story, not two gaps | none | **Delivered (PR #263)** |
+| ✅ **P1c** | QW-1 portal coverage-gap panel | S | human/author — invisible → visible in Grafana | *displays* P1a/P1b output | **Delivered (PR #263)** |
 | **P2** | QW-3 cap-dev-pipe / ContextCore coverage line | S–M | machine / cross-repo ripple | **hypothesis** — confirm the consumer reads `fr_coverage` first | fast-follow, after a short cross-repo spike |
-| **P3** | AQW-1 kind-vocab drift guard | S | dev — prevents a silent future regression | independent | opportunistic — any time the file is touched; hand deeper single-sourcing to `/complexity-distiller` |
+| ✅ **P3** | AQW-1 kind-vocab drift guard | S | dev — prevents a silent future regression | independent | **Delivered (PR #263)** |
 | **P4** | EC-1 OQ-5 grounding pilot | L | **highest ultimate** — closes #230/#231/#233 | **gated** on a real worker/batch/ML fleet + grounded values | a scheduled milestone, not a backlog quick-win |
+
+> **Delivered increment (PR #263):** P1a+P1b+P1c+P3. `fr_coverage.ungrounded_kinds[]` now carries
+> `suggested_signals` (kind-specific shape) + `observed_by_nothing` (∅ cross-reference); a self-gating
+> **Coverage Gaps** portal panel surfaces all three gap classes for operator/engineer personas; and a
+> drift test asserts the SDK's kind sets partition `CANONICAL_SERVICE_KINDS`. Remaining: **P2** (needs
+> the cross-repo consumer spike) and **P4** (the grounding pilot).
 
 **Why this order, not "highest value first":** EC-1 has the biggest payoff (it closes three issues)
 but it is **blocked** — it needs a real fleet and grounded threshold values that don't exist yet, so

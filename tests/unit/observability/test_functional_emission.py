@@ -175,7 +175,14 @@ class TestUngroundedKindCoverage:
             onboarding_metadata_path=meta, output_dir=tmp_path / "out", dry_run=True,
         )
         ung = report.fr_coverage["ungrounded_kinds"]
-        assert any(u["service"] == "ranker" and u["kind"] == "ml_inference" for u in ung)
-        assert any("run_success/freshness" in u["reason"] for u in ung)
+        entry = next(u for u in ung if u["service"] == "ranker")
+        assert entry["kind"] == "ml_inference"
+        # P1a: the hint is KIND-SPECIFIC (saturation/lag for ml_inference), not generic.
+        assert entry["suggested_signals"] == ["saturation", "lag"]
+        assert "saturation/lag" in entry["reason"]
+        assert "run_success/freshness/saturation/lag" not in entry["reason"]  # not the generic menu
+        # P1b: an ungrounded service with no FRs is ALSO observed by nothing — cross-referenced.
+        assert entry["observed_by_nothing"] is True
+        assert "ranker" in report.fr_coverage["empty_services"]
         # #231: the incidental http transport must not have produced a latency SLO.
         assert "latency" not in resolve_sli_kinds(["ml_inference"], [], "http")

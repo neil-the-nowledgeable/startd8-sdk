@@ -111,6 +111,9 @@ def build_portal_spec(
 
     if "services" in sections:
         panels.extend(_build_service_inventory_panels(services, report))
+        # QW-1: coverage gaps right after the inventory — "here are your services, and the
+        # ones observability couldn't fully cover." Self-gating: no gaps ⇒ no panel.
+        panels.extend(_build_coverage_gap_panels(report))
 
     if "objectives" in sections:
         panels.extend(_build_objectives_panels(metadata))
@@ -336,6 +339,49 @@ def _build_objectives_panels(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         rows.append(f"| {desc} | `{metric}` | {target} | {unit} |")
 
     return [_text_panel("Project Objectives", "\n".join([header, sep] + rows), "Objectives")]
+
+
+def _build_coverage_gap_panels(report: Any) -> List[Dict[str, Any]]:
+    """QW-1 / #226 FR-9 (+#230/#231/#233): surface the coverage GAPS a human would
+    otherwise have to grep out of ``observability-manifest.yaml`` — services observed by
+    nothing, recognized-but-ungrounded workload kinds (with a kind-specific next step),
+    and FRs whose metric is absent. Returns ``[]`` when there are no gaps, so a fully
+    covered project renders byte-identically to before this panel existed.
+    """
+    cov = getattr(report, "fr_coverage", None) or {}
+    ungrounded = cov.get("ungrounded_kinds") or []
+    empty = cov.get("empty_services") or []
+    unfulfilled = cov.get("unfulfilled") or []
+    if not (ungrounded or empty or unfulfilled):
+        return []
+
+    header = "| Service / FR | Gap | Next step |"
+    sep = "|--------------|-----|-----------|"
+    rows: List[str] = []
+    ungrounded_svcs = {u.get("service") for u in ungrounded}
+
+    for u in ungrounded:
+        # LH-1: fold the ∅ symptom into the ungrounded (cause) row — one story, not two.
+        gap = f"ungrounded kind `{u.get('kind')}`"
+        if u.get("observed_by_nothing"):
+            gap += " · observed by nothing"
+        sugg = "/".join(u.get("suggested_signals") or []) or "run_success/freshness"
+        rows.append(f"| `{u.get('service')}` | {gap} | declare a `{sugg}` FR + target |")
+
+    for svc in empty:
+        if svc in ungrounded_svcs:
+            continue  # already told as the ungrounded story (LH-1) — don't double-list
+        rows.append(
+            f"| `{svc}` | observed by nothing | declare a functional[] FR, "
+            "or add a request transport |"
+        )
+
+    for uf in unfulfilled:
+        fid = uf.get("id", "?")
+        sk = uf.get("signal_kind", "?")
+        rows.append(f"| FR `{fid}` | declared `{sk}`, metric absent | emit/label the series |")
+
+    return [_text_panel("Coverage Gaps", "\n".join([header, sep] + rows), "Coverage")]
 
 
 def _build_alert_inventory_panels(report: Any) -> List[Dict[str, Any]]:
