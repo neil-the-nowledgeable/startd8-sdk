@@ -3,6 +3,8 @@
 **Companion to:** [`REQ_IMPORTANCE_SCALED_SLO_THRESHOLDS.md`](./REQ_IMPORTANCE_SCALED_SLO_THRESHOLDS.md) (v0.3.1)
 **Date:** 2026-07-22
 
+**✅ STATUS (v0.6): Increment 1 & 2 SHIPPED** — Increment 1 startd8 PR #234 (merged) + ContextCore PR #27; Increment 2 startd8 PR #247 + ContextCore PR #27. See the requirements doc footer.
+
 This plan was written *before* the requirements were finalized and fed the §0 Planning Insights.
 It is organized by the two increments in FR-8 so Increment 1 ships value alone.
 
@@ -74,7 +76,9 @@ SLOs than `installed + high`; a plan mentioning "multi-tenant production service
 ## Traceability
 
 FR-1→2.1/2.2 · FR-2→1.1/1.2/2.6 · FR-3→1.3 · FR-4→2.3/2.2 · FR-5→2.4 · FR-6→2.5 · FR-7→1.4 ·
-FR-8→(Increment split) · FR-9→1.5 guard. Every FR has a step; every step traces to an FR.
+FR-8→(Increment split) · FR-9→1.5 guard · **FR-10→ContextCore ADR-004 (no startd8 step — it is the
+load-bearing ContextCore precondition that makes FR-2 fire; see ContextCore PR #25)**. Every FR has a
+step (or a cross-repo owner); every step traces to an FR.
 
 ---
 
