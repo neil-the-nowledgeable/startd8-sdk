@@ -709,6 +709,7 @@ class PrimeContractorWorkflow:
         # (and other consumers) are safe in standalone runs that never call
         # load_seed_context(), which overrides these when a seed is present.
         self._security_contract: dict[str, Any] | None = None          # REQ-ICD-106
+        self._observability_contract: dict[str, Any] | None = None     # REQ-OPI-300 (#268 R2)
         self._instrumentation_contract: dict[str, Any] | None = None
         self._guidance_context: dict[str, Any] | None = None
         self._expected_output_contracts: dict[str, Any] | None = None
@@ -1775,6 +1776,17 @@ class PrimeContractorWorkflow:
             logger.info(
                 "Security contract loaded from seed: %d database(s)",
                 len(_sc.get("databases", {})),
+            )
+
+        # REQ-OPI-300/601 (issue #268 R2): Observability contract — per-service convention
+        # metrics / transport / sdk_packages consumed by the spec/draft prompt builder.
+        self._observability_contract: dict[str, Any] | None = None
+        _oc = seed_data.get("observability_contract")
+        if _oc and isinstance(_oc, dict):
+            self._observability_contract = _oc
+            logger.info(
+                "Observability contract loaded from seed: %d service(s)",
+                len(_oc.get("services", {})),
             )
 
         # REQ-TCW-250: Instrumentation contract from onboarding
@@ -4424,6 +4436,12 @@ class PrimeContractorWorkflow:
         # REQ-ICD-106: Security contract
         if self._security_contract and "security_contract" not in gen_context:
             gen_context["security_contract"] = self._security_contract
+
+        # REQ-OPI-300/601 (#268 R2): Observability contract → the spec/draft prompt builder
+        # derives the per-service instrumentation guidance from it (keyed by service_name,
+        # already threaded above). Absent ⇒ no injection (OPI-302, operates as today).
+        if self._observability_contract and "observability_contract" not in gen_context:
+            gen_context["observability_contract"] = self._observability_contract
 
         # REQ-TCW-250: Instrumentation contract
         if self._instrumentation_contract and "instrumentation_contract" not in gen_context:
