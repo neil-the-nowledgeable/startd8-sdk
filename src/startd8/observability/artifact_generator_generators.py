@@ -224,6 +224,19 @@ def _descriptor_for(
     return profile_for_kinds(service.kinds, service.transport)
 
 
+def _service_sli_kinds(service: ServiceHints, business: BusinessContext) -> "frozenset[str]":
+    """The resolved SLI-kind set for a service (#226 FR-12), the single source used by
+    the FR-12a triplet gate and the FR-13 signal-coverage gate. Unions the service's
+    declared functional[] signal_kinds with its kind/transport-implied defaults."""
+    frs = getattr(business, "functional_requirements", None) or ()
+    signals = [
+        getattr(f, "signal_kind", "")
+        for f in frs
+        if getattr(f, "service", None) in (None, "", service.service_id)
+    ]
+    return resolve_sli_kinds(service.kinds, signals, service.transport)
+
+
 def _derivation_comment(derivations: List[DerivationTrace]) -> str:
     """Build a YAML comment block documenting derivation traces."""
     lines = ["# Derivation:"]
@@ -260,9 +273,19 @@ def generate_alert_rules(
     latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
     avail_raw, _ = _resolve_threshold("availability", business, derivations)
 
+    # FR-12a: the SLI-kind gate is ANDed with the per-metric gate below (never
+    # replaces it) — a block emits iff its SLI kind ∈ the resolved set AND its source
+    # metric is present. A request service resolves to the RED triple ⇒ byte-identical.
+    sli_kinds = _service_sli_kinds(service, business)
+
     for metric in service.convention_metrics:
         # Duration/histogram metrics → latency alert
-        if metric.type == "histogram" and "duration" in metric.name and latency_raw:
+        if (
+            metric.type == "histogram"
+            and "duration" in metric.name
+            and latency_raw
+            and "latency" in sli_kinds  # FR-12a
+        ):
             # FR-4a: emit the threshold in the descriptor's native unit
             # (500ms → 0.5 for seconds descriptors, 500 for millisecond ones).
             threshold = descriptor.scale_threshold_seconds(
@@ -299,6 +322,7 @@ def generate_alert_rules(
             metric.type == "histogram"
             and "duration" in metric.name
             and avail_raw
+            and "availability" in sli_kinds  # FR-12a
             and not any(r.get("alert", "").endswith("ErrorRateHigh") for r in rules)
         ):
             avail_frac = _parse_availability_to_fraction(avail_raw)
@@ -335,6 +359,7 @@ def generate_alert_rules(
             metric.type == "histogram"
             and "duration" in metric.name
             and avail_raw
+            and "availability" in sli_kinds  # FR-12a
             and not any(r.get("alert", "").endswith("AvailabilityLow") for r in rules)
         ):
             avail_frac = _parse_availability_to_fraction(avail_raw)
@@ -859,14 +884,9 @@ def _ensure_red_coverage(
     Byte-parity: a request service resolves to the RED triple ⇒ identical output.
     """
     descriptor = _descriptor_for(service, descriptor)
-    # FR-12: what SLI kinds is this service actually observed by? Declared per-FR
-    # signal_kinds (functional[], empty until CR-1 ships) ∪ kind-implied ∪ transport.
-    _fr = getattr(business, "functional_requirements", None) or ()
-    sli_kinds = resolve_sli_kinds(
-        service.kinds,
-        [getattr(f, "signal_kind", "") for f in _fr],
-        service.transport,
-    )
+    # FR-12: what SLI kinds is this service actually observed by? (Shared resolver —
+    # same set the FR-12a alert/SLO gate uses.)
+    sli_kinds = _service_sli_kinds(service, business)
     # Shared RED detection — single source of truth with the validator
     try:
         from startd8.validators.observability_artifact_checks import (
@@ -1112,6 +1132,7 @@ def generate_slo_definitions(
     descriptor = _descriptor_for(service, descriptor)
     total_selector = descriptor.selector(service.service_id)
     error_selector = descriptor.selector(service.service_id, error=True)
+    sli_kinds = _service_sli_kinds(service, business)  # FR-12a gate (ANDed below)
     derivations: List[DerivationTrace] = []
     documents: List[str] = []
 
@@ -1156,7 +1177,7 @@ def generate_slo_definitions(
     )
 
     # Availability SLO
-    if counter_metric and avail_raw:
+    if counter_metric and avail_raw and "availability" in sli_kinds:  # FR-12a
         # Throughput counter from the descriptor (FR-4). When the counter was
         # derived from a duration histogram, the semconv default resolves to
         # ``*_duration_count`` — the same name the prior _prom_name+_count path
@@ -1229,7 +1250,7 @@ def generate_slo_definitions(
         )
 
     # Latency SLO
-    if histogram_metric and latency_raw:
+    if histogram_metric and latency_raw and "latency" in sli_kinds:  # FR-12a
         # Latency histogram bucket base from the descriptor (FR-4). Byte-identical
         # to _prom_name(histogram_metric.name) for the semconv default.
         latency_bucket_base = descriptor.latency_bucket_metric
