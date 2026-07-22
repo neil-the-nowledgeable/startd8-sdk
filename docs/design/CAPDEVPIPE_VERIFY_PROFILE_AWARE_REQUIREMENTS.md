@@ -1,7 +1,28 @@
 # Requirements — Profile-aware `verify`/`doctor` + expose them as `capdevpipe` verbs
 
-Status: draft (v0.1) · Seeds: enhancement-backlog finding #2 (`CAPDEVPIPE_RUN_ENHANCEMENT_BACKLOG.md`)
+Status: **IMPLEMENTED (v0.2)** · Seeds: enhancement-backlog finding #2 (`CAPDEVPIPE_RUN_ENHANCEMENT_BACKLOG.md`)
 · Relates: issue #220 (config-free run), companion `cap-dev-pipe#2` (orchestrator wrapper)
+
+## Implementation status
+
+All FRs implemented on `fix/capdevpipe-verify-profile-aware` (173 capdevpipe tests green):
+- **FR-1** — `verify()` splits into `_verify_via_run_sh` (behavioral, `full`) and
+  `_verify_structural` (non-`full`); dispatch keys on `"run.sh" in managed_paths or run.sh on disk`.
+- **FR-2** — structural check requires `prompts/` **only when it is a managed path** (`minimal` passes).
+- **FR-3** — missing manifest degrades to an honest "cannot verify", never assumes `full`.
+- **FR-4/5/6** — `startd8 capdevpipe verify` / `doctor` commands added (read-only; honest no-install render).
+- **doctor()** — inherits the profile-aware `verify()` (fall-through); covered by a test.
+
+**OQ-3 RESOLVED (the load-bearing decision).** Canonical `verify_embed`
+(`cap-dev-pipe/pipeline/embed_manifest.py:623`) **does** implement a profile-aware, subprocess-free,
+per-`managed_paths` structural check — confirming that model is correct. We **did not delegate** to
+it, because delegation would add a runtime dependency on the source checkout being present for a
+**read-only** health verb (canonical `verify_embed` re-runs `resolve_install_plan` from
+`source_path`), and the SDK already persists `managed_paths` for exactly this self-contained check.
+So `_verify_structural` **mirrors** canonical's structure over the persisted `managed_paths` instead
+of importing it — same guarantees, no source-presence dependency, and **no dependency on the
+separately-broken orchestrator wrapper (cap-dev-pipe#2)** that the earlier WIP approach carried.
+The WIP's wrapper-`--list-langs` subprocess direction was dropped as a result.
 
 ## Why this needs requirements (the mis-size that grounding caught)
 

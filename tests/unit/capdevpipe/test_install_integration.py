@@ -10,7 +10,10 @@ import sys
 
 import pytest
 
-from startd8.capdevpipe_embed_manifest import DEFAULT_EMBED_PROFILE, resolve_embed_inventory
+from startd8.capdevpipe_embed_manifest import (
+    DEFAULT_EMBED_PROFILE,
+    resolve_embed_inventory,
+)
 from startd8.capdevpipe_installer import (
     EMBED_DIR_NAME,
     InstallMethod,
@@ -287,3 +290,159 @@ class TestStandaloneHandler:
             },
         )
         assert CapDevPipeInstaller().execute(cfg).success
+
+
+# --------------------------------------------------------------------------- #
+# profile-aware verify (cap-dev-pipe issue #2)
+# --------------------------------------------------------------------------- #
+
+# Minimal run.sh stand-in: lists local <lang>/ profile dirs for --list-langs (full path).
+_FAKE_RUN_SH = """#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ " $* " == *" --list-langs "* ]]; then
+    echo "Available language profiles:"
+    for d in "$SCRIPT_DIR"/*/; do
+        name="$(basename "$d")"
+        ls "$d"/*plan*.md >/dev/null 2>&1 && echo "  $name/"
+    done
+    exit 0
+fi
+exit 0
+"""
+
+
+def _mk_exec(path, text):
+    import stat as _stat
+
+    path.write_text(text, encoding="utf-8")
+    path.chmod(path.stat().st_mode | _stat.S_IEXEC | _stat.S_IXGRP | _stat.S_IXOTH)
+
+
+def _build_embed(target, *, profile, with_run_sh, langs=("python",)):
+    """Construct a minimal embed tree + install manifest for verify() tests."""
+    import json
+
+    from startd8.capdevpipe_installer import (
+        MANIFEST_FILENAME,
+        InstallMethod,
+        Manifest,
+    )
+
+    embed = target / EMBED_DIR_NAME
+    (embed / "design").mkdir(parents=True)
+    (embed / "prompts").mkdir()
+    for lang in langs:
+        (embed / lang).mkdir()
+        (embed / lang / f"{lang}-plan.md").write_text("# plan\n", encoding="utf-8")
+        (embed / lang / f"{lang}-requirements.md").write_text(
+            "# reqs\n", encoding="utf-8"
+        )
+    _mk_exec(embed / "run-cap-delivery.sh", "#!/usr/bin/env bash\nexit 0\n")
+    if with_run_sh:
+        _mk_exec(embed / "run.sh", _FAKE_RUN_SH)
+    managed = ["design", "prompts", "run-cap-delivery.sh", *langs]
+    if profile == "full":
+        # The full profile DECLARES run.sh in its inventory regardless of whether the file is
+        # on disk — so a full install with a missing run.sh is a real breakage (behavioral
+        # path), not a valid run.sh-less profile. `with_run_sh` controls only the file.
+        managed.append("run.sh")
+    manifest = Manifest(
+        method=InstallMethod.SYMLINK,
+        source_path=target,
+        profiles=list(langs),
+        embed_profile=profile,
+        managed_paths=managed,
+    )
+    (embed / MANIFEST_FILENAME).write_text(
+        json.dumps(manifest.to_dict()), encoding="utf-8"
+    )
+    return embed
+
+
+def _rewrite_manifest(embed, **changes):
+    """Mutate the embed's install-manifest.json in place (test helper)."""
+    import json
+
+    from startd8.capdevpipe_installer import MANIFEST_FILENAME
+
+    mpath = embed / MANIFEST_FILENAME
+    data = json.loads(mpath.read_text())
+    data.update(changes)
+    mpath.write_text(json.dumps(data))
+    return mpath
+
+
+class TestVerifyProfileAware:
+    """verify() is profile-aware (finding #2): a profile with no run.sh verifies structurally.
+
+    OQ-3 resolved: the structural check mirrors canonical ``verify_embed`` (per-``managed_paths``,
+    subprocess-free) rather than shelling to a run.sh/wrapper — so it does not depend on the
+    (separately-broken) orchestrator wrapper (cap-dev-pipe#2) or the source checkout.
+    """
+
+    def test_orchestrator_verifies_structurally_without_run_sh(self, installer, target):
+        _build_embed(target, profile="orchestrator", with_run_sh=False)
+        vr = installer.verify(target)
+        assert vr.passed, vr.message
+        assert "python" in vr.listed_langs
+
+    def test_full_still_requires_run_sh(self, installer, target):
+        # A full install missing run.sh is a real breakage — must NOT be masked.
+        _build_embed(target, profile="full", with_run_sh=False)
+        vr = installer.verify(target)
+        assert not vr.passed
+        assert "run.sh not found" in vr.message
+
+    def test_full_verifies_through_run_sh_when_present(self, installer, target):
+        _build_embed(target, profile="full", with_run_sh=True)
+        vr = installer.verify(target)
+        assert vr.passed, vr.message
+        assert "python" in vr.listed_langs
+
+    def test_orchestrator_missing_managed_path_fails_actionably(
+        self, installer, target
+    ):
+        # FR-1: a declared managed path gone on disk fails, naming the path.
+        embed = _build_embed(target, profile="orchestrator", with_run_sh=False)
+        (embed / "run-cap-delivery.sh").unlink()
+        vr = installer.verify(target)
+        assert not vr.passed
+        assert "run-cap-delivery.sh" in vr.message
+
+    def test_minimal_without_prompts_still_passes(self, installer, target):
+        # FR-2: the `minimal` profile ships design/ but NOT prompts/ — must not falsely fail.
+        import shutil
+
+        embed = _build_embed(target, profile="minimal", with_run_sh=False)
+        _rewrite_manifest(
+            embed,
+            embed_profile="minimal",
+            managed_paths=["design", "run-cap-delivery.sh", "python"],
+        )
+        shutil.rmtree(embed / "prompts")
+        vr = installer.verify(target)
+        assert vr.passed, vr.message
+
+    def test_manifest_absent_degrades_not_assumes_full(self, installer, target):
+        # FR-3: no manifest → honest "cannot verify", never a false run.sh requirement.
+        from startd8.capdevpipe_installer import MANIFEST_FILENAME
+
+        embed = _build_embed(target, profile="orchestrator", with_run_sh=False)
+        (embed / MANIFEST_FILENAME).unlink()
+        vr = installer.verify(target)
+        assert not vr.passed
+        assert "manifest" in vr.message.lower()
+        assert "run.sh not found" not in vr.message
+
+    def test_orchestrator_reports_missing_expected_profile(self, installer, target):
+        embed = _build_embed(target, profile="orchestrator", with_run_sh=False)
+        _rewrite_manifest(embed, profiles=["python", "rust"])  # rust not on disk
+        vr = installer.verify(target)
+        assert not vr.passed
+        assert "rust" in vr.message
+
+    def test_doctor_orchestrator_passes(self, installer, target):
+        # doctor() falls through to the profile-aware verify() for a healthy orchestrator.
+        _build_embed(target, profile="orchestrator", with_run_sh=False)
+        vr = installer.doctor(target)
+        assert vr.passed, vr.message

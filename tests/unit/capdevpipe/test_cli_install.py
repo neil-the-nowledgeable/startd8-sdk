@@ -18,18 +18,24 @@ pytestmark = pytest.mark.unit
 runner = CliRunner()
 
 _ENV = [
-    "--set-env", "CONTEXTCORE_ROOT=/home/u/ContextCore",
-    "--set-env", "SDK_ROOT=/home/u/startd8-sdk",
-    "--set-env", "PROJECT_ROOT=/home/u/proj",
-    "--set-env", "PROJECT_NAME=proj",
+    "--set-env",
+    "CONTEXTCORE_ROOT=/home/u/ContextCore",
+    "--set-env",
+    "SDK_ROOT=/home/u/startd8-sdk",
+    "--set-env",
+    "PROJECT_ROOT=/home/u/proj",
+    "--set-env",
+    "PROJECT_NAME=proj",
 ]
 
 
 def _install_args(source, target, *extra):
     return [
         "install",
-        "--source-path", str(source),
-        "--target-root", str(target),
+        "--source-path",
+        str(source),
+        "--target-root",
+        str(target),
         *_ENV,
         *extra,
     ]
@@ -37,7 +43,9 @@ def _install_args(source, target, *extra):
 
 class TestDryRun:
     def test_dry_run_writes_nothing(self, full_source, target):
-        result = runner.invoke(capdevpipe_app, _install_args(full_source, target, "--dry-run"))
+        result = runner.invoke(
+            capdevpipe_app, _install_args(full_source, target, "--dry-run")
+        )
         assert result.exit_code == 0, result.output
         # Nothing was written — no embed dir.
         assert not (target / EMBED_DIR_NAME).exists()
@@ -59,7 +67,9 @@ class TestDryRun:
             },
         )
         planned = installer.plan_actions(cfg)
-        result = runner.invoke(capdevpipe_app, _install_args(full_source, target, "--dry-run"))
+        result = runner.invoke(
+            capdevpipe_app, _install_args(full_source, target, "--dry-run")
+        )
         assert result.exit_code == 0, result.output
         # The preview reports exactly the number of actions execute would apply.
         assert f"{len(planned)} action(s) planned" in result.output
@@ -86,7 +96,9 @@ class TestRealInstall:
 
 class TestOptionValidation:
     def test_bad_method_rejected(self, full_source, target):
-        result = runner.invoke(capdevpipe_app, _install_args(full_source, target, "--method", "bogus"))
+        result = runner.invoke(
+            capdevpipe_app, _install_args(full_source, target, "--method", "bogus")
+        )
         assert result.exit_code != 0
         assert "method" in result.output.lower()
 
@@ -100,8 +112,15 @@ class TestOptionValidation:
     def test_malformed_set_env_rejected(self, full_source, target):
         result = runner.invoke(
             capdevpipe_app,
-            ["install", "--source-path", str(full_source), "--target-root", str(target),
-             "--set-env", "NOEQUALS"],
+            [
+                "install",
+                "--source-path",
+                str(full_source),
+                "--target-root",
+                str(target),
+                "--set-env",
+                "NOEQUALS",
+            ],
         )
         assert result.exit_code != 0
 
@@ -110,12 +129,16 @@ class TestDryRunSafety:
     def test_dry_run_with_rerun_mode_does_not_mutate(self, full_source, target):
         """--dry-run must never mutate, even on an existing install with a re-run mode."""
         # First do a real install so the embed exists.
-        assert runner.invoke(capdevpipe_app, _install_args(full_source, target)).exit_code == 0
+        assert (
+            runner.invoke(capdevpipe_app, _install_args(full_source, target)).exit_code
+            == 0
+        )
         embed = target / EMBED_DIR_NAME
         before = {p.name: (p.is_symlink(), p.stat().st_mtime) for p in embed.iterdir()}
 
         result = runner.invoke(
-            capdevpipe_app, _install_args(full_source, target, "--rerun-mode", "upgrade", "--dry-run")
+            capdevpipe_app,
+            _install_args(full_source, target, "--rerun-mode", "upgrade", "--dry-run"),
         )
         assert result.exit_code == 0, result.output
         after = {p.name: (p.is_symlink(), p.stat().st_mtime) for p in embed.iterdir()}
@@ -156,3 +179,32 @@ class TestParsers:
     def test_parse_profiles_rejects_empty_lang(self):
         with pytest.raises(Exception):
             _parse_profiles([":PLAN.md"])
+
+
+class TestVerifyDoctorCommands:
+    """`startd8 capdevpipe verify` / `doctor` (FR-4/5/6) — the exposed health-check verbs."""
+
+    def test_verify_no_install_reports_actionably(self, target):
+        # FR-6: no .cap-dev-pipe/ under the target → honest message, non-zero exit, no trace.
+        result = runner.invoke(capdevpipe_app, ["verify", "--target-root", str(target)])
+        assert result.exit_code == 1, result.output
+        assert "no cap-dev-pipe install found" in result.output
+
+    def test_verify_passes_after_full_install(self, full_source, target):
+        install = runner.invoke(capdevpipe_app, _install_args(full_source, target))
+        assert install.exit_code == 0, install.output
+        result = runner.invoke(capdevpipe_app, ["verify", "--target-root", str(target)])
+        assert result.exit_code == 0, result.output
+        assert "verify passed" in result.output
+
+    def test_doctor_passes_after_full_install(self, full_source, target):
+        install = runner.invoke(capdevpipe_app, _install_args(full_source, target))
+        assert install.exit_code == 0, install.output
+        result = runner.invoke(capdevpipe_app, ["doctor", "--target-root", str(target)])
+        assert result.exit_code == 0, result.output
+        assert "doctor passed" in result.output
+
+    def test_doctor_no_install_reports_actionably(self, target):
+        result = runner.invoke(capdevpipe_app, ["doctor", "--target-root", str(target)])
+        assert result.exit_code == 1, result.output
+        assert "no cap-dev-pipe install found" in result.output
