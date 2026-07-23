@@ -254,6 +254,11 @@ def _service_sli_kinds(service: ServiceHints, business: BusinessContext) -> "fro
     # are kept. Absent surface ⇒ unknown ⇒ RED stays (the #277 advisory flags the risk instead).
     if getattr(service, "metrics_surface", "") in NON_EMITTING_CONVENTION_SURFACES:
         resolved = resolved - _TRIPLET_SIGNAL_KINDS
+    # #286: a RED kind bound to a declared-emitted REAL series is emitted by
+    # generate_declared_base_slos against that series → drop the CONVENTION RED for that kind here
+    # so we never ALSO ship a (possibly-dead) convention SLI (precedence: declared > convention).
+    # Absent declared series ⇒ no-op (byte-identical to pre-#286).
+    resolved = resolved - _declared_covered_kinds(service)
     return resolved
 
 
@@ -1083,6 +1088,113 @@ def _select_functional_metric(candidates: Tuple[str, ...], service: ServiceHints
         if cand.replace(".", "_") in emitted:
             return cand
     return candidates[0]
+
+
+# #286 / REQ-CCL-107: the base RED kinds a declared-emitted series can bind, mapped to the
+# _functional_sli_query shape. availability is intentionally absent — a correct availability RATIO
+# needs an error-selector (good/total) the declared-series contract doesn't yet carry, so it is
+# recorded as deferred (a v2 once REQ-CCL-107 grows an error-label). latency = p99 on the histogram
+# `_bucket`; throughput = request rate. The threshold field each SLO's target resolves from.
+_DECLARED_SLI_SHAPE: Dict[str, Tuple[str, str]] = {
+    "latency": ("quantile", "latency_p99"),
+    "throughput": ("rate", "throughput"),
+}
+
+
+def _declared_series_selector(labels: Dict[str, str]) -> str:
+    """A PromQL label selector from the series' declared labels ({} ⇒ no selector). Sorted for
+    deterministic output. The labels are author-declared ground truth (job_name/queue_name/…),
+    NOT necessarily service.name — so this binds where the real series actually lives."""
+    if not labels:
+        return ""
+    return "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}"
+
+
+def _declared_covered_kinds(service: ServiceHints) -> "frozenset[str]":
+    """The base RED kinds a service's declared-emitted series can bind in v1 (latency/throughput).
+    Drives BOTH the precedence-suppression of the convention RED in ``_service_sli_kinds`` and the
+    emission in ``generate_declared_base_slos``. Empty ⇒ no declared binding (byte-identical)."""
+    covered: set = set()
+    for s in getattr(service, "declared_emitted_series", None) or ():
+        covered |= {k for k in s.covers if k in _DECLARED_SLI_SHAPE}
+    return frozenset(covered)
+
+
+def generate_declared_base_slos(
+    service: ServiceHints,
+    business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
+) -> ArtifactResult:
+    """Emit a base RED SLO bound to an author-declared REAL emitted series (#286 / REQ-CCL-107 Part B).
+
+    Precedence **declared > suppress > convention**: when the author declares a real series that
+    ``covers`` a base RED kind, bind the SLI to ``<series>{<declared labels>}`` — instead of the
+    #274 suppression or a convention metric the subject may not emit. v1 binds **latency** (p99 on
+    the histogram ``_bucket``) and **throughput** (request rate); ``availability`` is recorded as
+    *deferred* (needs an error-selector the contract doesn't yet carry). No declared series ⇒
+    ``skipped`` (byte-identical to pre-#286). The convention RED for a bound kind is suppressed in
+    ``_service_sli_kinds`` so this never double-emits."""
+    series = getattr(service, "declared_emitted_series", None) or ()
+    documents: List[str] = []
+    bound: List[Dict[str, str]] = []
+    deferred: List[Dict[str, str]] = []
+    severity = _severity_for(business, [])
+    for s in series:
+        selector = _declared_series_selector(s.labels)
+        for kind in s.covers:
+            shape_field = _DECLARED_SLI_SHAPE.get(kind)
+            if shape_field is None:
+                # covered by the author but not a v1-bindable shape (e.g. availability) — honest defer.
+                deferred.append({"service": service.service_id, "kind": kind, "series": s.name})
+                continue
+            shape, threshold_field = shape_field
+            query = _functional_sli_query(shape, s.name, selector)
+            target, _tier = _resolve_threshold(threshold_field, business, [])
+            slo = {
+                "apiVersion": "openslo/v1",
+                "kind": "SLO",
+                "metadata": {
+                    "name": f"{service.service_id}-{kind}-declared".lower().replace("_", "-"),
+                    "labels": {
+                        "service": service.service_id,
+                        "signal_kind": kind,
+                        "bound_series": s.name,  # traceability to the real declared series
+                        "generated_by": "startd8",
+                    },
+                },
+                "spec": {
+                    "description": (
+                        f"{kind} SLO for {service.service_id} bound to the declared emitted series "
+                        f"{s.name!r} (#286)"
+                    ),
+                    "target": target,
+                    "timeWindow": {"duration": business.slo_window, "isRolling": True},
+                    "indicator": {
+                        "metadata": {"name": f"{service.service_id}-{kind}-declared-sli"},
+                        "spec": {
+                            "thresholdMetric": {
+                                "metricSource": {"type": "prometheus", "spec": {"query": query}},
+                            },
+                        },
+                    },
+                    "alerting": {
+                        "name": f"{service.service_id}-{kind}-declared-alert",
+                        "labels": {"severity": severity},
+                    },
+                },
+            }
+            documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+            bound.append({"service": service.service_id, "kind": kind, "series": s.name})
+
+    header = f"# Declared-emitted-series base SLOs for {service.service_id} (#286)\n"
+    return ArtifactResult(
+        artifact_type="slo_definition",
+        service_id=service.service_id,
+        output_path=f"slos/{service.service_id}-declared-base-slo.yaml",
+        status="generated" if documents else "skipped",
+        content=(header + "\n---\n".join(documents)) if documents else "",
+        quality={"bound_declared_series": bound, "deferred_declared_kinds": deferred},
+    )
 
 
 def _functional_sli_query(shape: str, metric: str, selector: str) -> str:
