@@ -655,6 +655,35 @@ class TestDeclaredEmittedSeriesPromQLDefects:
                    and d["series"] == "sidekiq_queue_size"
                    for d in report.fr_coverage["deferred_declared_kinds"])
 
+    def test_defect_d_saturation_gap_is_actionable(self, tmp_path):
+        # D (deeper): the gap must be ACTIONABLE — a recognized functional kind carries a reason_code
+        # + a remedy (declare a functional[] FR), distinct from an availability-needs-error-selector
+        # deferral. A gap you can't act on is barely better than vanishing.
+        series = [{"name": "sidekiq_queue_size", "type": "gauge",
+                   "labels": {"queue_name": "default"}, "covers": ["saturation"]}]
+        d = next(x for x in self._run(tmp_path, series).fr_coverage["deferred_declared_kinds"]
+                 if x["kind"] == "saturation")
+        assert d["reason_code"] == "functional_kind_not_base_red"
+        assert "functional[] FR" in d["reason"] and "saturation" in d["reason"]
+
+    def test_defect_d_availability_deferral_has_distinct_reason_code(self, tmp_path):
+        # the two deferral causes must be distinguishable, not lumped under one availability-flavored label.
+        series = [{"name": "http_requests_total", "type": "counter",
+                   "labels": {"status": "200"}, "covers": ["availability"]}]  # no error_selector
+        d = next(x for x in self._run(tmp_path, series).fr_coverage["deferred_declared_kinds"]
+                 if x["kind"] == "availability")
+        assert d["reason_code"] == "availability_needs_error_selector"
+        assert "error_selector" in d["reason"]
+
+    def test_defect_d_unknown_kind_is_distinguished_from_functional(self, tmp_path):
+        # a genuinely bogus covers value grounds nothing — a different reason_code than a real
+        # functional kind (which has a remedy). Preserved by the parse layer (#300) so it surfaces.
+        series = [{"name": "some_series", "type": "gauge",
+                   "labels": {"q": "1"}, "covers": ["banana"]}]
+        d = next(x for x in self._run(tmp_path, series).fr_coverage["deferred_declared_kinds"]
+                 if x["kind"] == "banana")
+        assert d["reason_code"] == "unknown_kind"
+
 
 class TestServiceMonitorScrapeSurfaceGate:
     """#285: a ServiceMonitor is a Prometheus /metrics scrape config; suppress it for a service whose

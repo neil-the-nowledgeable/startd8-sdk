@@ -1238,7 +1238,15 @@ def generate_declared_base_slos(
                 # #286 v2: a good/total ratio needs the error subset; without an error_selector a
                 # correct availability ratio can't be built → honest defer (not a fabricated SLI).
                 if not s.error_selector:
-                    deferred.append({"service": svc, "kind": kind, "series": s.name})
+                    deferred.append({
+                        "service": svc, "kind": kind, "series": s.name,
+                        "reason_code": "availability_needs_error_selector",
+                        "reason": (
+                            f"availability covered by {s.name!r} but no error_selector — a correct "
+                            f"good/total ratio can't be built without the error subset. Declare an "
+                            f"error_selector (e.g. status=~\"5..\") on the series to bind it (#286 v2)."
+                        ),
+                    })
                     continue
                 target, _tier = _resolve_threshold("availability", business, [])
                 err_sel = _declared_error_selector(s.labels, s.error_selector)
@@ -1273,7 +1281,27 @@ def generate_declared_base_slos(
 
             shape_field = _resolve_declared_shape(kind, s.type)
             if shape_field is None:
-                deferred.append({"service": svc, "kind": kind, "series": s.name})
+                # #300 defect D: a declared kind the base-RED binder can't bind (e.g. saturation) must
+                # surface as an ACTIONABLE gap, not vanish. Distinguish a recognized functional kind
+                # (bindable via a functional[] FR — the remedy) from an unknown one (grounds nothing).
+                if kind in _FUNCTIONAL_SLI_TEMPLATES:
+                    reason_code = "functional_kind_not_base_red"
+                    reason = (
+                        f"{kind!r} is a functional signal kind, not a base RED kind — the declared-"
+                        f"series binder binds only latency/throughput/availability. Declare a "
+                        f"functional[] FR with signal_kind={kind!r} + target to emit an SLO "
+                        f"(the declared {s.type or 'series'} {s.name!r} can ground it)."
+                    )
+                else:
+                    reason_code = "unknown_kind"
+                    reason = (
+                        f"{kind!r} is not a base RED kind and has no known functional profile; "
+                        f"{s.name!r} grounds no SLI (check the declared covers value)."
+                    )
+                deferred.append({
+                    "service": svc, "kind": kind, "series": s.name,
+                    "reason_code": reason_code, "reason": reason,
+                })
                 continue
             shape, threshold_field = shape_field
             query = _functional_sli_query(shape, s.name, selector)
