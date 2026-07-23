@@ -18,9 +18,12 @@
 # tail) is a separate initiative; the rotted files are catalogued in tests/ci_known_failing.txt
 # as the widen-backlog. Widen the `Run tests` path below as that backlog is cleared.
 #
-# The one deselect: test_dashboard_renderer_v2's live-Grafana round-trip is skip-guarded
-# (skips in CI without GRAFANA_API_TOKEN) but fails locally against a Grafana lacking the
-# dashboard.grafana.app/v2 API — deselected for deterministic runs everywhere.
+# Three deselects (env-dependent tests that hard-fail instead of skipping when their toolchain/
+# service is absent — as it is on a clean CI runner):
+#   * test_dashboard_renderer_v2's live-Grafana round-trip — needs GRAFANA_API_TOKEN + a v2-API Grafana.
+#   * test_datasource_uid_binding's 2 render tests — need startd8-mixin/vendor (populated by `jb install`,
+#     a gitignored jsonnet-bundler dir absent in CI). Green locally only because the primary worktree
+#     has vendor; a fresh checkout fails them. (Better long-term: give these a skip-when-vendor-absent guard.)
 # ---------------------------------------------------------------------------
 name: Tests
 
@@ -55,8 +58,14 @@ jobs:
 
     - name: Run tests (stable observability core)
       run: |
+        # Deselects (env-dependent tests, no skip guard) — see header:
+        #  * live-Grafana round-trip (needs GRAFANA_API_TOKEN + a v2-API Grafana)
+        #  * 2 datasource-UID render tests (need startd8-mixin/vendor from `jb install` — a jsonnet
+        #    toolchain absent in this CI; they hard-fail without it instead of skipping).
         pytest tests/unit/observability \
           --deselect tests/unit/observability/test_dashboard_renderer_v2.py::test_live_round_trip_preserves_timeseries_query \
+          --deselect tests/unit/observability/test_datasource_uid_binding.py::test_render_binds_real_uid \
+          --deselect tests/unit/observability/test_datasource_uid_binding.py::test_render_default_uses_datasource_variable \
           --cov=startd8 --cov-report=xml
 
     - name: Upload coverage to Codecov
