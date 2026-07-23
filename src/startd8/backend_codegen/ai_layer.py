@@ -42,6 +42,40 @@ _EDGE_PY = {"String": "str", "Int": "int", "BigInt": "int", "Float": "float", "B
 # with "SQLite DateTime type only accepts Python datetime and date objects".
 _PROVENANCE_OMIT = {"source", "confirmed", "ownerId", "createdAt", "updatedAt"}
 
+# #260: the historical hardcoded server-managed set, in its original order/quoting so the DEFAULT
+# convention stays byte-identical. `_server_managed_set_literal` bakes this + any user-RENAMED
+# server-timestamp field names into the generated `_summary`/`_persist` helpers.
+_SERVER_MANAGED_BASE = ("id", "ownerId", "source", "confirmed", "createdAt", "updatedAt")
+_SERVER_MANAGED_PLACEHOLDER = "__STARTD8_SERVER_MANAGED__"
+
+
+def _is_server_timestamp(f: Any) -> bool:
+    """A Prisma server-managed timestamp, detected by ATTRIBUTE not name (#260): a user-renamed
+    ``modifiedAt @updatedAt`` (or ``@default(now())``/``@default(dbgenerated(...))``) is
+    server-managed exactly like the convention ``updatedAt``, and must be dropped by its ACTUAL
+    name — a hardcoded ``{"createdAt","updatedAt"}`` misses it and leaks it into the AI surface."""
+    return any(a == "@updatedAt" for a in f.attributes) or any(
+        a.startswith("@default(now(") or a.startswith("@default(dbgenerated(")
+        for a in f.attributes
+    )
+
+
+def _server_managed_set_literal(schema: Any) -> str:
+    """A Python set literal of the server-managed column names to bake into the generated helpers.
+
+    The historical `_SERVER_MANAGED_BASE` first (same order + double-quotes ⇒ byte-identical for a
+    conventionally-named schema), then any EXTRA names the schema declares server-managed by
+    attribute (a renamed ``@updatedAt``/``@default(now())`` timestamp or a renamed ``@id``). #260.
+    """
+    base = list(_SERVER_MANAGED_BASE)
+    extra: set[str] = set()
+    for m in schema.models.values():
+        for f in m.fields:
+            if (f.is_id or _is_server_timestamp(f)) and f.name not in base:
+                extra.add(f.name)
+    names = base + sorted(extra)
+    return "{" + ", ".join(f'"{n}"' for n in names) + "}"
+
 # AI artifact kinds (registered into drift._AI_KINDS). Per-pass modules share the `ai-pass` kind
 # and carry the pass name in the `startd8-entity` header slot for re-render dispatch. The two
 # `ai-tests-*` kinds are the rung-4 semantic tests over the AI layer (FR-6/NFR-2 + provenance gate).
@@ -650,6 +684,7 @@ def render_edge_schemas(schema_text, manifest_text, human_text, source_file="pri
             if (
                 f.is_id
                 or f.name in _PROVENANCE_OMIT
+                or _is_server_timestamp(f)  # #260: a RENAMED @updatedAt/@default(now()) is server-managed
                 or (ent, f.name) in human.human_only_fields
             ):
                 continue  # drop PKs, provenance, and human-authored fields (FR-6: no Metric.value)
@@ -684,7 +719,7 @@ def render_edge_schemas(schema_text, manifest_text, human_text, source_file="pri
 # Shared owned helpers emitted into every harness (plain strings — literal braces, no f-escaping).
 _SUMMARY_HELPER = '''def _summary(obj: Any) -> dict[str, Any]:
     """A row's content columns (drop ids/provenance/timestamps) for the prompt context."""
-    skip = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    skip = __STARTD8_SERVER_MANAGED__
     cols = obj.__table__.columns.keys()
     return {c: getattr(obj, c) for c in cols if c not in skip and getattr(obj, c) is not None}
 '''
@@ -695,7 +730,7 @@ _PERSIST_HELPER = '''def _persist(session: Session, model: Any, edge_obj: Any) -
     # Server-managed columns are never AI-authored: the harness sets source/confirmed and the table
     # defaults supply id/ownerId/timestamps. Dropping them here keeps str timestamps out of datetime
     # columns even if an edge schema ever carries them (belt-and-suspenders to _PROVENANCE_OMIT).
-    _server_managed = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    _server_managed = __STARTD8_SERVER_MANAGED__
     fields = {k: v for k, v in data.items() if hasattr(model, k) and k not in _server_managed}
     name = fields.get("name")
     if name and hasattr(model, "name"):
@@ -729,7 +764,7 @@ _PERSIST_DEDUP_HELPER = '''def _persist(session: Session, model: Any, edge_obj: 
     # Server-managed columns are never AI-authored: the harness sets source/confirmed and the table
     # defaults supply id/ownerId/timestamps. Dropping them here keeps str timestamps out of datetime
     # columns even if an edge schema ever carries them (belt-and-suspenders to _PROVENANCE_OMIT).
-    _server_managed = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    _server_managed = __STARTD8_SERVER_MANAGED__
     fields = {k: v for k, v in data.items() if hasattr(model, k) and k not in _server_managed}
     key = fields.get(_DEDUP_FIELD)
     if key is not None and hasattr(model, _DEDUP_FIELD):
@@ -770,14 +805,19 @@ def render_ai_pass(
         "# startd8-artifact: ai-pass",
         f"# startd8-artifact: ai-pass\n# startd8-entity: {ps.name}",
     )
+    schema = parse_prisma_schema(schema_text)
     if ps.is_scoped:  # FR-SRP: per-row relational pass (join resolution + real-FK child)
-        body = _render_pass_scoped(ps, parse_prisma_schema(schema_text),
+        body = _render_pass_scoped(ps, schema,
                                    effective_source_binding(schema_text, ps, parse_human_inputs(human_text)))
     elif ps.input_entities:
         body = _render_pass_read(ps)
     else:  # SPIKE (FR-IMP-4): bind is DERIVED from schema+human_inputs (or explicit override)
         binding = effective_source_binding(schema_text, ps, parse_human_inputs(human_text))
         body = _render_pass_text(ps, binding)
+    # #260: bake the SCHEMA-DERIVED server-managed set into the emitted _summary/_persist helpers
+    # (byte-identical for a conventionally-named schema; adds any renamed @updatedAt/@default(now())
+    # timestamp so it can't leak into the AI edit surface).
+    body = body.replace(_SERVER_MANAGED_PLACEHOLDER, _server_managed_set_literal(schema))
     return header + "\n\n" + body
 
 
@@ -787,7 +827,7 @@ def render_ai_pass(
 _PERSIST_SOURCE_HELPER = '''def _persist_source(session: Session, model: Any, edge_obj: Any, source_id: str) -> int:
     """Persist one edge object, stamped with source_id on the provenance field (source=ai). 0/1."""
     data = edge_obj.model_dump(exclude_none=True)
-    _server_managed = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    _server_managed = __STARTD8_SERVER_MANAGED__
     fields = {k: v for k, v in data.items() if hasattr(model, k) and k not in _server_managed}
     row = model(**fields)
     if hasattr(row, "source"):
@@ -960,7 +1000,7 @@ _PERSIST_SCOPED_HELPER = '''def _persist_scoped(session: Session, model: Any, ed
     """Persist one edge object as a CHILD: AI edge fields + source=ai/confirmed=false + the loose
     provenance (prov_field=source_id) + real FK(s) from the resolved join (fk_values). 0/1."""
     data = edge_obj.model_dump(exclude_none=True)
-    _server_managed = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    _server_managed = __STARTD8_SERVER_MANAGED__
     fields = {k: v for k, v in data.items() if hasattr(model, k) and k not in _server_managed}
     row = model(**fields)
     if hasattr(row, "source"):

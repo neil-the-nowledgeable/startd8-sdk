@@ -191,6 +191,40 @@ def test_ai_service_cost_emit_survives_compile(tmp_path):
     py_compile.compile(str(p), doraise=True)
 
 
+_RENAMED_TS_SCHEMA = SCHEMA.replace(
+    "updatedAt DateTime @updatedAt", "modifiedAt DateTime @updatedAt"
+).replace(
+    "createdAt DateTime @default(now())", "insertedAt DateTime @default(now())"
+)
+
+
+class TestServerManagedFieldsSchemaDerived:
+    """#260: server-managed fields are dropped by SCHEMA ATTRIBUTE, not a hardcoded name list —
+    a user-renamed @updatedAt / @default(now()) timestamp must not leak into the AI surface."""
+
+    def _files_renamed(self):
+        return dict(render_ai_layer(_RENAMED_TS_SCHEMA, MANIFEST, HUMAN))
+
+    def test_renamed_timestamp_not_in_ai_edit_write_surface(self):
+        # the edge (tool-input) schema is the write-gate — a renamed timestamp must NOT appear.
+        edge = self._files_renamed()["app/ai/edge_schemas.py"]
+        assert "modifiedAt" not in edge   # @updatedAt, renamed
+        assert "insertedAt" not in edge   # @default(now()), renamed
+        # a real content field is still writable.
+        assert "unit" in edge
+
+    def test_generated_helpers_bake_the_renamed_names(self):
+        pass_mod = self._files_renamed()["app/ai/extract_metrics.py"]
+        # the _summary/_persist skip set carries the ACTUAL renamed names, not just the convention.
+        assert '"modifiedAt"' in pass_mod and '"insertedAt"' in pass_mod
+        assert "__STARTD8_SERVER_MANAGED__" not in pass_mod  # placeholder fully substituted
+
+    def test_default_convention_is_byte_identical(self):
+        # a conventionally-named schema bakes the exact historical literal (no drift).
+        pass_mod = _files()["app/ai/extract_metrics.py"]
+        assert '{"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}' in pass_mod
+
+
 def test_pass_harness_imports_no_wrong_root():
     pass_mod = _files()["app/ai/extract_metrics.py"]
     assert "from app.ai.service import call_ai_service" in pass_mod

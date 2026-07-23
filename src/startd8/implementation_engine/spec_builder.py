@@ -733,70 +733,90 @@ def _build_security_guidance_section(context: Dict[str, Any]) -> str:
     return ""
 
 
-def _build_observability_guidance_section(context: Dict[str, Any]) -> str:
-    """REQ-OPI-300: instrumentation guidance from the observability contract (issue #268 R2).
-
-    When the task's service carries convention metrics, tell the LLM the EXACT OTel metric
-    names + instrument types to emit, the SDK packages to import (so imports are correct, not
-    generic), and the transport (so it picks the right interceptor). Absent metrics ⇒ ``""``
-    (REQ-OPI-302 — no injection, contractor operates exactly as today). Reads the per-task
-    ``convention_metrics`` (OPI-200) when present, else derives from the seed
-    ``observability_contract`` (OPI-601) via the task's ``service_name``.
-    """
+def _resolve_observability_fields(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve the observability guidance fields for a task: the per-task ``convention_metrics``
+    (OPI-200) when present, else the seed ``observability_contract`` entry keyed by the task's
+    ``service_name`` (OPI-601). Returns ``{}`` when there is nothing to emit (REQ-OPI-302)."""
     metrics = context.get("convention_metrics")
     transport = context.get("transport", "") or ""
-    language = context.get("language", "") or ""
     sdk_packages = context.get("sdk_packages")
     alert_thresholds = context.get("alert_thresholds")
 
     if not metrics:  # fall back to the seed contract, keyed by the task's service (OPI-601)
-        contract = context.get("observability_contract") or {}
-        services = contract.get("services") or {}
+        services = (context.get("observability_contract") or {}).get("services") or {}
         _sn = str(context.get("service_name") or "").lower().replace("-", "")
-        svc = None
-        for k, v in services.items():
-            if isinstance(v, dict) and k.lower().replace("-", "") == _sn:
-                svc = v
-                break
+        svc = next(
+            (v for k, v in services.items()
+             if isinstance(v, dict) and k.lower().replace("-", "") == _sn),
+            None,
+        )
         if isinstance(svc, dict):
             metrics = svc.get("convention_metrics")
             transport = transport or svc.get("transport", "")
-            language = language or svc.get("language", "")
             sdk_packages = sdk_packages or svc.get("sdk_packages")
             alert_thresholds = alert_thresholds or svc.get("alert_thresholds")
 
     if not metrics or not isinstance(metrics, list):
-        return ""  # REQ-OPI-302
+        return {}
+    return {
+        "metrics": metrics, "transport": transport,
+        "sdk_packages": sdk_packages, "alert_thresholds": alert_thresholds,
+    }
 
-    lines = [
+
+def build_observability_guidance_sections(context: Dict[str, Any]) -> tuple[str, str]:
+    """REQ-OPI-300 **V2** split (issue #268 backlog QW-1): return ``(p1_compact, p2_detail)``.
+
+    ``p1`` = the metric names + instrument types + SDK packages + transport — the load-bearing,
+    anti-wrong-import content, injected at budget priority **P1 (never trimmed)** so it survives
+    pressure. ``p2`` = alert thresholds / SLO targets — injected at **P2 (trimmable)**. Both are
+    ``""`` when the task has no convention metrics (REQ-OPI-302: operate exactly as today).
+    """
+    f = _resolve_observability_fields(context)
+    if not f:
+        return "", ""
+
+    p1 = [
         "## Observability Contract (REQ-OPI-300)",
         "",
         "This service has a defined instrumentation contract. Emit these OTel metrics with "
         "the EXACT names and instrument types below — not generic or invented ones:",
     ]
-    for m in metrics:
+    for m in f["metrics"]:
         if not isinstance(m, dict):
             continue
-        name = m.get("name", "?")
-        itype = m.get("type") or m.get("instrument") or "metric"
-        line = f"- `{name}` — {itype}"
+        line = f"- `{m.get('name', '?')}` — {m.get('type') or m.get('instrument') or 'metric'}"
         if m.get("source"):
             line += f" (convention: {m['source']})"
-        lines.append(line)
-    if transport:
-        lines.append(
-            f"- Transport is **{transport}** — use its idiomatic OTel instrumentation "
-            f"(the correct interceptor/middleware for {transport}), not a generic one."
+        p1.append(line)
+    if f["transport"]:
+        p1.append(
+            f"- Transport is **{f['transport']}** — use its idiomatic OTel instrumentation "
+            f"(the correct interceptor/middleware for {f['transport']}), not a generic one."
         )
-    if sdk_packages:
+    if f["sdk_packages"]:
         pkgs = (
-            ", ".join(str(p) for p in sdk_packages)
-            if isinstance(sdk_packages, list) else str(sdk_packages)
+            ", ".join(str(p) for p in f["sdk_packages"])
+            if isinstance(f["sdk_packages"], list) else str(f["sdk_packages"])
         )
-        lines.append(f"- Import instrumentation from: {pkgs} (use these exact packages).")
-    if alert_thresholds:
-        lines.append(f"- Alert thresholds to honor: {alert_thresholds}")
-    return "\n".join(lines) + "\n"
+        p1.append(f"- Import instrumentation from: {pkgs} (use these exact packages).")
+
+    p2 = ""
+    if f["alert_thresholds"]:
+        p2 = (
+            "## Observability Thresholds (REQ-OPI-300)\n\n"
+            f"- Alert thresholds to honor: {f['alert_thresholds']}\n"
+        )
+    return "\n".join(p1) + "\n", p2
+
+
+def _build_observability_guidance_section(context: Dict[str, Any]) -> str:
+    """Back-compat single-string view (P1 + P2 joined) — the V1 shape. New callers should use
+    ``build_observability_guidance_sections`` for the P1/P2 budget split."""
+    p1, p2 = build_observability_guidance_sections(context)
+    if not p1:
+        return ""
+    return p1 + (("\n" + p2) if p2 else "")
 
 
 def _build_anti_pattern_section(context: Dict[str, Any], task_description: str) -> str:
@@ -1491,12 +1511,14 @@ def build_spec_prompt(
     if corpus_authorities_section:
         prioritized.append((2, "corpus_authorities", corpus_authorities_section))
 
-    # P2: Observability instrumentation contract (REQ-OPI-300/301, issue #268 R2) — exact
-    # metric names + instrument types + SDK packages + transport, so the generated service
-    # emits the contract's telemetry with correct imports/interceptors, not generic ones.
-    observability_section = _build_observability_guidance_section(context)
-    if observability_section:
-        prioritized.append((2, "observability_guidance", observability_section))
+    # Observability instrumentation contract (REQ-OPI-300/301, V2 split #268 backlog QW-1):
+    # metric names + SDK packages + transport at P1 (never trimmed — the anti-wrong-import
+    # content); alert thresholds at P2 (trimmable). Absent metrics ⇒ neither (OPI-302).
+    obs_p1, obs_p2 = build_observability_guidance_sections(context)
+    if obs_p1:
+        prioritized.append((1, "observability_contract", obs_p1))
+    if obs_p2:
+        prioritized.append((2, "observability_thresholds", obs_p2))
 
     # P2: Within-run quality findings from accumulator (REQ-RFL-250)
     run_hints = context.pop("run_quality_hints", None)
