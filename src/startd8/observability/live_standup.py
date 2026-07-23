@@ -52,6 +52,7 @@ PROMETHEUS_IMAGE = "prom/prometheus:v2.53.0"
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 ScrapeReadyCheck = Callable[..., bool]
+SeriesCountCheck = Callable[..., Optional[float]]
 
 
 def render_prometheus_yml(
@@ -124,25 +125,73 @@ def _run(runner: Runner, argv: List[str], *, timeout: float = 60.0) -> "subproce
     return runner(argv, capture_output=True, text=True, check=False, timeout=timeout)
 
 
+def _parse_duration_seconds(value: str, *, default: float = 5.0) -> float:
+    """Parse a Prometheus-style duration (``5s`` / ``500ms`` / ``2m``) to seconds."""
+    s = str(value).strip()
+    try:
+        if s.endswith("ms"):
+            return float(s[:-2]) / 1000.0
+        if s.endswith("s"):
+            return float(s[:-1])
+        if s.endswith("m"):
+            return float(s[:-1]) * 60.0
+        return float(s)
+    except (TypeError, ValueError):
+        return default
+
+
+def job_series_count(
+    prometheus_url: str, job: str, *, auth: Optional[Auth] = None
+) -> Optional[float]:
+    """Number of distinct series Prometheus currently holds for ``job`` (``count({job=…})``).
+
+    Watching this settle is how the warm-up gate distinguishes "the metric surface has
+    finished registering" from "one scrape landed but lazy SLI series are still appearing."
+    """
+    return prometheus_query.instant_query_value(
+        prometheus_url, f'count({{job="{job}"}})', auth=auth
+    )
+
+
 def _await_scrape(
     prometheus_url: str,
     job: str,
     timeout: float,
     *,
     auth: Optional[Auth] = None,
-    interval: float = 1.0,
+    scrape_interval_s: float = 5.0,
+    poll_interval: Optional[float] = None,
     ready_fn: ScrapeReadyCheck = prometheus_query.scrape_ready,
+    count_fn: Optional[SeriesCountCheck] = None,
+    require_stable: bool = True,
 ) -> bool:
-    """Poll until Prometheus reports ≥1 scraped sample for ``job`` or ``timeout``.
+    """Poll until the subject is **warm**, or ``timeout`` elapses.
 
-    Errors (Prometheus not up yet) are swallowed so the poll keeps trying rather
-    than treating a transient as a definitive not-ready.
+    Warm = samples have landed (``ready_fn``) **and** the job's series-set size is
+    ``>0`` and **unchanged across two consecutive scrapes** (``count_fn``). Gating on
+    the first landed sample alone releases before lazily-registered SLI series appear
+    (lazy histograms, first-request counters), so replay reads those series as absent
+    and the derived SLI surfaces a false ``fail`` — the exact false-negative Tier B
+    exists to prevent (R1-F1/F2).
+
+    The poll cadence is ``>=`` the scrape interval so each stability comparison spans a
+    *fresh* scrape: an unchanged count read twice within a single scrape interval would
+    be a false "settled" (nothing re-scraped). Errors (backend not up yet) are swallowed
+    so the poll keeps trying.
     """
+    count_fn = count_fn or job_series_count
+    interval = poll_interval if poll_interval is not None else max(1.0, scrape_interval_s)
     deadline = time.monotonic() + timeout
+    prev: Optional[float] = None
     while time.monotonic() < deadline:
         try:
             if ready_fn(prometheus_url, job, auth=auth):
-                return True
+                if not require_stable:
+                    return True
+                count = count_fn(prometheus_url, job, auth=auth)
+                if count is not None and count > 0 and prev is not None and count == prev:
+                    return True  # two consecutive scrapes agree on the series set → warm
+                prev = count
         except Exception:  # noqa: BLE001 — backend not ready yet; keep polling
             pass
         time.sleep(interval)
@@ -173,6 +222,8 @@ def stand_up_subject_and_prometheus(
     auth: Optional[Auth] = None,
     runner: Runner = subprocess.run,
     scrape_ready_check: ScrapeReadyCheck = prometheus_query.scrape_ready,
+    series_count_check: Optional[SeriesCountCheck] = None,
+    poll_interval: Optional[float] = None,
     docker_available_fn: Callable[[], bool] = None,  # type: ignore[assignment]
 ) -> StandupHandle:
     """Bring up ``subject_image`` + Prometheus; return a handle once a scrape lands.
@@ -254,15 +305,19 @@ def stand_up_subject_and_prometheus(
         return handle
     handle.prometheus_url = f"http://127.0.0.1:{port}"
 
-    # 6) the load-bearing scrape-ready gate.
+    # 6) the load-bearing warm-up gate: samples landed AND the series set has settled
+    #    across two consecutive scrapes (R1-F1/F2 — avoids releasing before lazy SLI
+    #    series register, which would surface a false `fail`).
     handle.scrape_ready = _await_scrape(
         handle.prometheus_url, job_name, scrape_timeout,
-        auth=auth, ready_fn=scrape_ready_check,
+        auth=auth, ready_fn=scrape_ready_check, count_fn=series_count_check,
+        scrape_interval_s=_parse_duration_seconds(scrape_interval),
+        poll_interval=poll_interval,
     )
     if not handle.scrape_ready:
         handle.reason = (
-            f"no scrape landed within {scrape_timeout:.0f}s "
-            f"(subject may not expose {metrics_path} on :{subject_port})"
+            f"subject did not warm up within {scrape_timeout:.0f}s "
+            f"(no sustained scrape of {metrics_path} on :{subject_port})"
         )
     return handle
 
@@ -294,6 +349,7 @@ __all__ = [
     "PROMETHEUS_IMAGE",
     "StandupHandle",
     "render_prometheus_yml",
+    "job_series_count",
     "stand_up_subject_and_prometheus",
     "tear_down",
 ]
