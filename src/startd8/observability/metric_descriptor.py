@@ -204,6 +204,15 @@ _KIND_DEFAULTS = {
 #: later = move it into `_KIND_DEFAULTS`/`_KIND_SLI_DEFAULTS` and drop it from here.
 UNGROUNDED_KINDS = frozenset({"batch", "cron", "ml_inference"})
 
+#: metrics_surface values (REQ-CCL-106) that do NOT emit the OTel-convention meter metric the base
+#: RED SLIs query. Only ``otel_sdk_meter`` emits it; ``traces_only``/``none`` configure no meter, and
+#: ``prometheus_exporter``/``node_metrics`` emit DIFFERENT names. #274: on any of these the base RED
+#: SLI is dead, so the generator suppresses it + records the declared-but-absent gap. An empty
+#: surface is UNKNOWN (don't suppress — the #277 advisory flags the risk instead).
+NON_EMITTING_CONVENTION_SURFACES = frozenset(
+    {"traces_only", "none", "prometheus_exporter", "node_metrics"}
+)
+
 #: The signal_kind SHAPE that fits each ungrounded kind (#230/#231/#233) — the *which
 #: SLI applies* axis, NOT a threshold VALUE (magnitudes stay gated on OQ-5 grounding).
 #: Used only to make the coverage-gap hint kind-specific ("declare a freshness FR" for a

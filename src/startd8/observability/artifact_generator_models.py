@@ -42,6 +42,12 @@ class ServiceHints:
     # convention metrics but NO manifest_declared, this is the traces-only RISK profile —
     # the base SLIs rest on an unverified convention metric. Advisory only (see fr_coverage).
     has_traces: bool = False
+    # #274 / REQ-CCL-106: the subject's DECLARED metrics emission surface, when ContextCore
+    # captured an explicit self-declaration — `otel_sdk_meter | traces_only | prometheus_exporter
+    # | node_metrics | none`. Empty ⇒ unknown (SDK falls back to the #277 advisory, never a
+    # fabricated gap). Anything but `otel_sdk_meter` means the OTel-convention meter metric the
+    # base RED SLIs query is NOT emitted → suppress those SLIs + record the declared-but-absent gap.
+    metrics_surface: str = ""
     # FR-14 (#226): optional — a service that declares a `kind` need not have a
     # listen transport (workers/cron/batch don't). Absent transport + absent kinds
     # is still skipped upstream (extract_service_hints).

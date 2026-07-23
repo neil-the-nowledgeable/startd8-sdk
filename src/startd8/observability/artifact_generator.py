@@ -28,6 +28,7 @@ from .artifact_generator_models import *  # noqa: F401,F403
 # Target Metric Binding (REQ_TARGET_METRIC_BINDING Step 3): resolve one
 # MetricDescriptor per service and thread it into the descriptor-aware generators.
 from .metric_descriptor import (
+    NON_EMITTING_CONVENTION_SURFACES,
     UNGROUNDED_KINDS,
     MetricDescriptor,
     resolve_descriptor,
@@ -542,10 +543,13 @@ def generate_observability_artifacts(
     # the actionable next step, rather than the service silently getting HTTP artifacts.
     _ungrounded: List[Dict[str, str]] = []
     # #274 (ADR-003): base RED SLIs rest on convention metrics NOT verified as emitted —
-    # an advisory, not a gate. The SDK can't distinguish traces-only from emitting with the
-    # current onboarding signals (convention_based is aspirational semconv, not emission-
-    # verified); this surfaces the RISK honestly without removing the SLIs.
+    # an advisory, not a gate. Fires ONLY when the emission surface is UNKNOWN (metrics_surface
+    # absent); when it's declared (REQ-CCL-106), the strict path below handles it.
     _unverified_base: List[Dict[str, Any]] = []
+    # #274 / REQ-CCL-106: the STRICT fix — base RED SLIs SUPPRESSED because the declared
+    # metrics_surface doesn't emit the convention meter metric (traces-only/none/…). The upstream
+    # signal is present, so this is a real gap (no dead SLI shipped), not just an advisory.
+    _suppressed_base: List[Dict[str, Any]] = []
     for service in services:
         descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
@@ -596,27 +600,41 @@ def generate_observability_artifacts(
                         f"emit an SLO, or await a grounded profile."
                     ),
                 })
-        # #274 (ADR-003): trace-instrumented service whose base RED SLIs rest ENTIRELY on
-        # convention_based metrics with NO manifest_declared backing — the traces-only RISK
-        # profile (e.g. Mastodon). Advisory only: the SLIs still emit (byte-identical), but
-        # the reader is told they're unverified. The strict "emit no dead SLI" fix needs an
-        # upstream emission-surface signal the current onboarding doesn't carry (see #274).
+        # #274 / REQ-CCL-106 — the two-tier ADR-003 handling, keyed on the emission-surface signal:
         _red = {"availability", "latency", "throughput"}
-        if (
-            service.has_traces
+        _ms = getattr(service, "metrics_surface", "")
+        _red_before = _red & resolve_sli_kinds(service.kinds, _svc_signals, service.transport)
+        if _ms in NON_EMITTING_CONVENTION_SURFACES and _red_before:
+            # STRICT: the surface is DECLARED non-emitting → the base RED SLIs were suppressed
+            # (dropped from _service_sli_kinds) so no dead SLI ships. Record the real gap.
+            _suppressed_base.append({
+                "service": service.service_id,
+                "metrics_surface": _ms,
+                "suppressed_sli_kinds": sorted(_red_before),
+                "reason": (
+                    f"base RED SLIs suppressed — metrics_surface={_ms!r} does not emit the OTel-"
+                    f"convention meter metric they query (REQ-CCL-106 / #274). Declare the emitted "
+                    f"series (manifest_declared) or a functional[] FR with a real target to get SLIs."
+                ),
+            })
+        elif (
+            # ADVISORY (graceful fallback, #277): the surface is UNKNOWN (not declared) but this is
+            # the traces-only RISK profile — flag it, don't suppress (would false-gap a real HTTP svc).
+            not _ms
+            and service.has_traces
             and service.convention_metrics
             and not service.declared_metrics
-            and _red & resolve_sli_kinds(service.kinds, _svc_signals, service.transport)
+            and _red_before
         ):
             _unverified_base.append({
                 "service": service.service_id,
                 "convention_metrics": [m.name for m in service.convention_metrics],
                 "reason": (
                     "base RED SLIs use convention metrics derived from the service kind, NOT "
-                    "verified as emitted (trace-instrumented, no manifest_declared). If the "
-                    "subject is traces-only or exposes a different metric surface, the SLI "
-                    "won't evaluate — configure the meter, or declare the emitted metric "
-                    "(manifest_declared). Advisory (ADR-003 / #274)."
+                    "verified as emitted (trace-instrumented, no manifest_declared, no declared "
+                    "metrics_surface). If the subject is traces-only or a different metric surface, "
+                    "the SLI won't evaluate — declare `Metrics surface:` in the plan (REQ-CCL-106) "
+                    "for the strict fix, or declare the emitted metric. Advisory (ADR-003 / #274)."
                 ),
             })
 
@@ -625,7 +643,8 @@ def generate_observability_artifacts(
         "unfulfilled": _fr_unfulfilled,
         "emitted": _fr_emitted,
         "ungrounded_kinds": _ungrounded,
-        "unverified_base_metrics": _unverified_base,  # #274 advisory
+        "unverified_base_metrics": _unverified_base,      # #274 advisory (surface unknown)
+        "suppressed_base_metrics": _suppressed_base,      # #274 strict (surface declared non-emitting)
     }
 
     report.services_processed = len(services)
@@ -1272,7 +1291,7 @@ def _write_index(
 
     # FR-9 (#226): surface FR/SLI-kind coverage in the manifest, but only when there
     # is something to report — a run with no functional[] stays byte-identical.
-    if any(report.fr_coverage.get(k) for k in ("empty_services", "unfulfilled", "emitted", "ungrounded_kinds", "unverified_base_metrics")):
+    if any(report.fr_coverage.get(k) for k in ("empty_services", "unfulfilled", "emitted", "ungrounded_kinds", "unverified_base_metrics", "suppressed_base_metrics")):
         index["fr_coverage"] = report.fr_coverage
 
     dest = output_dir / "observability-manifest.yaml"

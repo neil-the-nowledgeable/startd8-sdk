@@ -20,6 +20,7 @@ import yaml  # noqa: F401
 from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
 from .artifact_generator_models import *  # noqa: F401,F403
 from .metric_descriptor import (
+    NON_EMITTING_CONVENTION_SURFACES,
     MetricDescriptor,
     profile_for_kinds,
     profile_for_transport,
@@ -246,7 +247,14 @@ def _service_sli_kinds(service: ServiceHints, business: BusinessContext) -> "fro
         for f in frs
         if getattr(f, "service", None) in (None, "", service.service_id)
     ]
-    return resolve_sli_kinds(service.kinds, signals, service.transport)
+    resolved = resolve_sli_kinds(service.kinds, signals, service.transport)
+    # #274 / REQ-CCL-106: a DECLARED non-emitting metrics_surface means the OTel-convention meter
+    # metric the base RED triple queries is not emitted → drop the RED triple so no dead
+    # availability/latency/throughput SLI is shipped. Declared functional signals (non-triplet)
+    # are kept. Absent surface ⇒ unknown ⇒ RED stays (the #277 advisory flags the risk instead).
+    if getattr(service, "metrics_surface", "") in NON_EMITTING_CONVENTION_SURFACES:
+        resolved = resolved - _TRIPLET_SIGNAL_KINDS
+    return resolved
 
 
 def _derivation_comment(derivations: List[DerivationTrace]) -> str:
