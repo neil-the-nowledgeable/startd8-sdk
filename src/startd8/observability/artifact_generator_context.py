@@ -360,6 +360,8 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 service_name=str(hint.get("service_name") or ""),
                 # #274: trace-instrumented? (used only for the unverified-base-metrics advisory)
                 has_traces=bool(hint.get("traces")),
+                # #274 / REQ-CCL-106: the declared metrics emission surface (explicit-only upstream).
+                metrics_surface=str(hint.get("metrics_surface") or ""),
                 transport=transport,
                 kinds=kinds,
                 language=hint.get("language"),

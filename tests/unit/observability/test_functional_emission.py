@@ -344,3 +344,70 @@ class TestUnverifiedBaseMetricsAdvisory:
             onboarding_metadata_path=meta, output_dir=tmp_path / "out", dry_run=True,
         )
         assert not report.fr_coverage["unverified_base_metrics"]
+
+
+class TestMetricsSurfaceStrictSuppression:
+    """#274 / REQ-CCL-106: a DECLARED non-emitting metrics_surface suppresses the dead base RED
+    SLIs (strict fix) and records the gap; an UNKNOWN surface falls back to the #277 advisory."""
+
+    def _meta(self, tmp_path, surface, with_fr=False):
+        hint = {
+            "service_id": "web", "kind": "http_server", "transport": "http",
+            "traces": {"required": [{"span_name": "GET /"}]},
+            "metrics": {"convention_based": [
+                {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]},
+        }
+        if surface:
+            hint["metrics_surface"] = surface
+        doc = {"project_id": "p", "instrumentation_hints": {"web": hint}}
+        if with_fr:
+            doc["spec"] = {"requirements": {"functional": [
+                {"id": "FR-1", "signal_kind": "queue_depth", "target": "1000", "service": "web"}]}}
+        m = tmp_path / "onboarding-metadata.json"
+        m.write_text(json.dumps(doc))
+        return m
+
+    def _run(self, tmp_path, surface, with_fr=False):
+        kw = {}
+        if with_fr:  # FRs come from the manifest, not the onboarding metadata
+            man = tmp_path / ".contextcore.yaml"
+            man.write_text(
+                "spec:\n  business: {criticality: high}\n  requirements:\n    functional:\n"
+                "      - {id: FR-1, signal_kind: queue_depth, target: '1000', service: web}\n"
+            )
+            kw["manifest_path"] = man
+        return generate_observability_artifacts(
+            onboarding_metadata_path=self._meta(tmp_path, surface, with_fr=False),
+            output_dir=tmp_path / "out", dry_run=False, **kw,
+        )
+
+    def test_traces_only_suppresses_the_base_red_slis(self, tmp_path):
+        report = self._run(tmp_path, "traces_only")
+        cov = report.fr_coverage
+        # strict gap recorded; advisory NOT fired (superseded by the signal).
+        assert any(u["service"] == "web" and u["metrics_surface"] == "traces_only"
+                   for u in cov["suppressed_base_metrics"])
+        assert not cov["unverified_base_metrics"]
+        # no dead availability/latency SLO shipped.
+        slo = [a for a in report.artifacts if a.artifact_type == "slo_definition"
+               and a.service_id == "web" and a.status == "generated"
+               and "functional" not in a.output_path]
+        joined = " ".join(a.content for a in slo)
+        assert "http_server_duration" not in joined
+
+    def test_otel_sdk_meter_still_emits_red(self, tmp_path):
+        # the surface that DOES emit the convention metric → unchanged behavior.
+        report = self._run(tmp_path, "otel_sdk_meter")
+        assert not report.fr_coverage["suppressed_base_metrics"]
+        assert any("http_server_duration" in a.content for a in report.artifacts
+                   if a.artifact_type == "slo_definition" and a.status == "generated")
+
+    def test_absent_surface_falls_back_to_advisory(self, tmp_path):
+        report = self._run(tmp_path, "")
+        assert not report.fr_coverage["suppressed_base_metrics"]
+        assert any(u["service"] == "web" for u in report.fr_coverage["unverified_base_metrics"])
+
+    def test_declared_functional_fr_still_emits_under_traces_only(self, tmp_path):
+        # suppression drops only the RED triple; a declared queue_depth FR still emits its SLO.
+        report = self._run(tmp_path, "traces_only", with_fr=True)
+        assert "FR-1" in report.fr_coverage["emitted"]
