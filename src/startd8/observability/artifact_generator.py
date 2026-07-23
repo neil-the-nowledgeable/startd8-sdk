@@ -94,6 +94,7 @@ from .artifact_generator_generators import (  # noqa: F401
     generate_service_monitor,
     generate_slo_definitions,
     generate_functional_slos,
+    generate_declared_base_slos,
 )
 
 try:
@@ -551,6 +552,10 @@ def generate_observability_artifacts(
     # metrics_surface doesn't emit the convention meter metric (traces-only/none/…). The upstream
     # signal is present, so this is a real gap (no dead SLI shipped), not just an advisory.
     _suppressed_base: List[Dict[str, Any]] = []
+    # #286 / REQ-CCL-107: base RED SLIs bound to an author-declared REAL emitted series (positive —
+    # a grounded binding, not a gap) + kinds covered but not v1-bindable (availability → deferred).
+    _bound_declared: List[Dict[str, Any]] = []
+    _deferred_declared: List[Dict[str, Any]] = []
     for service in services:
         descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
@@ -567,6 +572,14 @@ def generate_observability_artifacts(
         _q = func_slo.quality or {}
         _fr_emitted.extend(_q.get("emitted_fr_ids", []))
         _fr_unfulfilled.extend(_q.get("unfulfilled", []))
+        # #286: base RED SLIs bound to declared-emitted series (precedence declared > suppress >
+        # convention; the convention RED for a bound kind is dropped in _service_sli_kinds).
+        decl_slo = generate_declared_base_slos(service, business, descriptor)
+        if decl_slo.status == "generated":
+            report.artifacts.append(decl_slo)
+        _dq = decl_slo.quality or {}
+        _bound_declared.extend(_dq.get("bound_declared_series", []))
+        _deferred_declared.extend(_dq.get("deferred_declared_kinds", []))
         # FR-9: a service that resolves to ∅ SLI kinds (non-request, nothing declared)
         # is observed by nothing — surface it rather than silently emitting nothing.
         _svc_signals = [
@@ -646,6 +659,8 @@ def generate_observability_artifacts(
         "ungrounded_kinds": _ungrounded,
         "unverified_base_metrics": _unverified_base,      # #274 advisory (surface unknown)
         "suppressed_base_metrics": _suppressed_base,      # #274 strict (surface declared non-emitting)
+        "bound_declared_series": _bound_declared,         # #286 positive (base SLI bound to a real series)
+        "deferred_declared_kinds": _deferred_declared,    # #286 covered-but-not-v1-bindable (availability)
     }
 
     report.services_processed = len(services)

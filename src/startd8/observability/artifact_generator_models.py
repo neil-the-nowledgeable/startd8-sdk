@@ -29,6 +29,28 @@ class ConventionMetric:
 
 
 @dataclass
+class DeclaredEmittedSeries:
+    """An author-declared REAL emitted Prometheus series a base RED SLI can bind to
+    (#286 / REQ-CCL-107 Part B).
+
+    Carried on ``instrumentation_hints[svc].metrics.declared_emitted_series``. Distinct from
+    ``ConventionMetric`` (which has no labels and no RED-kind mapping): this says "series *name*,
+    selected by *labels*, grounds these base RED *kinds*" — so the SDK can bind the base SLI to a
+    real series (e.g. ``sidekiq_job_duration_seconds{job_name=...}``) instead of the #274
+    suppress-or-fabricate. Explicit-only (never inferred): absence ⇒ the SDK keeps #274 suppression.
+    """
+
+    name: str  # the REAL emitted series name, e.g. "http_request_duration_seconds"
+    type: str = ""  # "histogram" | "counter" | "gauge"
+    #: the selector labels the series actually carries ({job_name}, {queue_name}, {type,method,status})
+    #: — NOT necessarily service.name. Rendered verbatim into the PromQL selector.
+    labels: Dict[str, str] = field(default_factory=dict)
+    #: which base RED kinds this series can ground; subset of {availability, latency, throughput}.
+    covers: List[str] = field(default_factory=list)
+    enabling_flag: str = ""  # advisory only: the deploy flag that turns the series on. Not load-bearing.
+
+
+@dataclass
 class ServiceHints:
     """Instrumentation hints for a single service."""
 
@@ -63,6 +85,9 @@ class ServiceHints:
     # Distinct from convention_metrics: these describe what *this* service does
     # (e.g. token burn, cost, truncations) rather than generic OTel HTTP semconv.
     declared_metrics: List[ConventionMetric] = field(default_factory=list)
+    # #286 / REQ-CCL-107: author-declared REAL emitted series the base RED SLIs can bind to
+    # (name + labels + which RED kinds they ground). Explicit-only; absent ⇒ keep #274 suppression.
+    declared_emitted_series: List[DeclaredEmittedSeries] = field(default_factory=list)
     # Target metric binding (REQ_TARGET_METRIC_BINDING FR-2/FR-3/FR-6): the
     # effective convention profile ContextCore resolved for this service, plus
     # any per-axis descriptor overrides. "" / {} => fall back to the transport

@@ -286,6 +286,42 @@ def _parse_metric_set(raw: Any) -> List[ConventionMetric]:
     ]
 
 
+_RED_KINDS = frozenset({"availability", "latency", "throughput"})
+
+
+def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
+    """Parse ``metrics.declared_emitted_series`` (#286 / REQ-CCL-107) into models.
+
+    Entries without a ``name`` are dropped; ``labels`` non-dict ⇒ ``{}``; ``covers`` is filtered to
+    the RED kinds (a bogus kind can't ground a base SLI). Non-list input ⇒ empty (explicit-only:
+    absence keeps the #274 suppression, never a false binding). All values stringified defensively.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: List[DeclaredEmittedSeries] = []
+    for s in raw:
+        if not isinstance(s, dict) or not s.get("name"):
+            continue
+        labels = s.get("labels")
+        labels = (
+            {str(k): str(v) for k, v in labels.items()} if isinstance(labels, dict) else {}
+        )
+        covers = s.get("covers")
+        covers = (
+            [str(k) for k in covers if str(k) in _RED_KINDS] if isinstance(covers, list) else []
+        )
+        out.append(
+            DeclaredEmittedSeries(
+                name=str(s["name"]),
+                type=str(s.get("type", "")),
+                labels=labels,
+                covers=covers,
+                enabling_flag=str(s.get("enabling_flag", "")),
+            )
+        )
+    return out
+
+
 def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
     """Extract per-service instrumentation hints from onboarding metadata.
 
@@ -334,6 +370,8 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
         # Closure 1 / Gap 1: also consume manifest_declared domain metrics so
         # artifacts describe what *this* service does, not just generic HTTP.
         declared_metrics = _parse_metric_set(metrics.get("manifest_declared", []))
+        # #286 / REQ-CCL-107: author-declared REAL emitted series the base RED SLIs can bind to.
+        declared_series = _parse_declared_series(metrics.get("declared_emitted_series", []))
 
         # Target metric binding (FR-2/FR-3/FR-6): the effective convention
         # profile + per-axis overrides ContextCore resolved for this service.
@@ -368,6 +406,7 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 detected_databases=hint.get("detected_databases", []),
                 convention_metrics=convention_metrics,
                 declared_metrics=declared_metrics,
+                declared_emitted_series=declared_series,
                 metric_profile=metric_profile,
                 descriptor_overrides=descriptor_overrides,
                 datasource_uids=datasource_uids,

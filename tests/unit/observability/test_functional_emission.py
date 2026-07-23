@@ -417,6 +417,90 @@ class TestMetricsSurfaceStrictSuppression:
         assert "FR-1" in report.fr_coverage["emitted"]
 
 
+class TestDeclaredEmittedSeriesBinding:
+    """#286 / REQ-CCL-107 Part B: an author-declared REAL emitted series binds the base RED SLI to a
+    real metric (precedence declared > suppress > convention) instead of the #274 suppress-or-
+    fabricate. v1 binds latency (p99 on _bucket) + throughput (rate); availability is deferred."""
+
+    def _meta(self, tmp_path, *, surface="prometheus_exporter", series=None):
+        hint = {
+            "service_id": "web", "kind": "http_server", "transport": "http",
+            "traces": {"required": [{"span_name": "GET /"}]},
+            "metrics": {"convention_based": [
+                {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]},
+        }
+        if surface:
+            hint["metrics_surface"] = surface
+        if series is not None:
+            hint["metrics"]["declared_emitted_series"] = series
+        doc = {"project_id": "p", "instrumentation_hints": {"web": hint}}
+        m = tmp_path / "onboarding-metadata.json"
+        m.write_text(json.dumps(doc))
+        return m
+
+    def _run(self, tmp_path, **kw):
+        return generate_observability_artifacts(
+            onboarding_metadata_path=self._meta(tmp_path, **kw),
+            output_dir=tmp_path / "out", dry_run=False,
+        )
+
+    _LATENCY_SERIES = [{
+        "name": "http_request_duration_seconds", "type": "histogram",
+        "labels": {"method": "POST"}, "covers": ["latency"],
+        "enabling_flag": "MASTODON_PROMETHEUS_EXPORTER_WEB_DETAILED_METRICS",
+    }]
+
+    def _declared_slo(self, report):
+        return [a for a in report.artifacts if a.artifact_type == "slo_definition"
+                and "declared-base" in a.output_path and a.status == "generated"]
+
+    def test_declared_latency_binds_the_real_series(self, tmp_path):
+        report = self._run(tmp_path, series=self._LATENCY_SERIES)
+        slo = self._declared_slo(report)
+        assert len(slo) == 1
+        content = slo[0].content
+        # bound to the REAL series + its declared labels — NOT the convention http_server_duration.
+        assert "http_request_duration_seconds_bucket" in content
+        assert 'method="POST"' in content
+        assert "http_server_duration" not in content
+        # recorded as a positive binding in fr_coverage.
+        assert any(b["service"] == "web" and b["kind"] == "latency"
+                   and b["series"] == "http_request_duration_seconds"
+                   for b in report.fr_coverage["bound_declared_series"])
+
+    def test_convention_red_suppressed_when_bound(self, tmp_path):
+        # precedence declared > convention: the convention latency SLI is NOT also emitted.
+        report = self._run(tmp_path, series=self._LATENCY_SERIES)
+        base = [a for a in report.artifacts if a.artifact_type == "slo_definition"
+                and "declared-base" not in a.output_path and "functional" not in a.output_path
+                and a.service_id == "web" and a.status == "generated"]
+        assert all("http_server_duration_bucket" not in a.content for a in base)
+
+    def test_absent_declared_series_is_byte_identical_suppression(self, tmp_path):
+        # no declared series → no declared SLO, no bound records (pre-#286 behavior).
+        report = self._run(tmp_path, surface="traces_only", series=None)
+        assert self._declared_slo(report) == []
+        assert report.fr_coverage["bound_declared_series"] == []
+
+    def test_availability_only_is_deferred_not_bound(self, tmp_path):
+        # a series covering only availability is recorded deferred (needs an error-selector), not bound.
+        series = [{"name": "http_requests_total", "type": "counter",
+                   "labels": {"status": "200"}, "covers": ["availability"]}]
+        report = self._run(tmp_path, series=series)
+        assert self._declared_slo(report) == []                       # nothing v1-bindable
+        assert report.fr_coverage["bound_declared_series"] == []
+        assert any(d["kind"] == "availability" and d["service"] == "web"
+                   for d in report.fr_coverage["deferred_declared_kinds"])
+
+    def test_throughput_binds_a_rate_query(self, tmp_path):
+        series = [{"name": "http_requests_total", "type": "counter",
+                   "labels": {"job": "web"}, "covers": ["throughput"]}]
+        report = self._run(tmp_path, series=series)
+        slo = self._declared_slo(report)
+        assert len(slo) == 1
+        assert "sum(rate(http_requests_total{job=\"web\"}[5m]))" in slo[0].content
+
+
 class TestServiceMonitorScrapeSurfaceGate:
     """#285: a ServiceMonitor is a Prometheus /metrics scrape config; suppress it for a service whose
     declared metrics_surface serves NO scrape endpoint (traces_only/none), else it ships a dead
