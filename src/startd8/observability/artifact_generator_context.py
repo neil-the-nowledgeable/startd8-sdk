@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple  # noqa: F401
 import yaml  # noqa: F401
 
 from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
+from .metric_descriptor import BASE_RED_KINDS
 from .artifact_generator_models import *  # noqa: F401,F403
 
 try:
@@ -286,7 +287,9 @@ def _parse_metric_set(raw: Any) -> List[ConventionMetric]:
     ]
 
 
-_RED_KINDS = frozenset({"availability", "latency", "throughput"})
+# Single-sourced (metric_descriptor) — the valid `covers` values for a declared series ARE the base
+# RED triplet; keep them one object so this filter can't drift from the suppression gate.
+_RED_KINDS = BASE_RED_KINDS
 
 
 def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:

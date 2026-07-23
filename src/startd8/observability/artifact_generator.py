@@ -28,6 +28,7 @@ from .artifact_generator_models import *  # noqa: F401,F403
 # Target Metric Binding (REQ_TARGET_METRIC_BINDING Step 3): resolve one
 # MetricDescriptor per service and thread it into the descriptor-aware generators.
 from .metric_descriptor import (
+    BASE_RED_KINDS,
     NON_EMITTING_CONVENTION_SURFACES,
     NON_SCRAPEABLE_SURFACES,
     UNGROUNDED_KINDS,
@@ -614,10 +615,11 @@ def generate_observability_artifacts(
                         f"emit an SLO, or await a grounded profile."
                     ),
                 })
-        # #274 / REQ-CCL-106 — the two-tier ADR-003 handling, keyed on the emission-surface signal:
-        _red = {"availability", "latency", "throughput"}
+        # #274 / REQ-CCL-106 — the two-tier ADR-003 handling, keyed on the emission-surface signal.
+        # BASE_RED_KINDS is single-sourced (metric_descriptor) so this gate can't drift from the
+        # declared-series covers-filter or the convention-triplet suppression.
         _ms = getattr(service, "metrics_surface", "")
-        _red_before = _red & resolve_sli_kinds(service.kinds, _svc_signals, service.transport)
+        _red_before = BASE_RED_KINDS & resolve_sli_kinds(service.kinds, _svc_signals, service.transport)
         if _ms in NON_EMITTING_CONVENTION_SURFACES and _red_before:
             # STRICT: the surface is DECLARED non-emitting → the base RED SLIs were suppressed
             # (dropped from _service_sli_kinds) so no dead SLI ships. Record the real gap.

@@ -20,6 +20,7 @@ import yaml  # noqa: F401
 from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
 from .artifact_generator_models import *  # noqa: F401,F403
 from .metric_descriptor import (
+    BASE_RED_KINDS,
     NON_EMITTING_CONVENTION_SURFACES,
     MetricDescriptor,
     profile_for_kinds,
@@ -1059,8 +1060,8 @@ _FUNCTIONAL_SLI_TEMPLATES = {
     "token_throughput": (("startd8_cost_output_tokens_total",), "rate", "short"),
     "context_saturation": (("startd8_context_usage_ratio",), "gauge_max", "percentunit"),
 }
-#: signal_kinds already covered by the convention triplet.
-_TRIPLET_SIGNAL_KINDS = frozenset({"availability", "latency", "throughput"})
+#: signal_kinds already covered by the convention triplet — single-sourced (metric_descriptor).
+_TRIPLET_SIGNAL_KINDS = BASE_RED_KINDS
 
 #: signal_kinds whose series are labeled model/provider/project (NOT the per-service
 #: identity) — the AI-agent family (FR-2a). Their SLO query must NOT carry a `{service=...}`
