@@ -6,6 +6,7 @@
 Extracted verbatim from ``artifact_generator.py`` (Tier-2 refactor, step 2).
 """
 
+import dataclasses
 import json  # noqa: F401
 import logging
 import os
@@ -218,10 +219,21 @@ def _descriptor_for(
     pre-Step-3 hardcoded behavior byte-for-byte.
     """
     if descriptor is not None:
-        return descriptor
-    # #226 FR-6: honor a declared workload kind in the standalone path too (kind wins
-    # over transport). Empty kinds ⇒ transport default (byte-identical to pre-#226).
-    return profile_for_kinds(service.kinds, service.transport)
+        d = descriptor
+    else:
+        # #226 FR-6: honor a declared workload kind in the standalone path too (kind wins
+        # over transport). Empty kinds ⇒ transport default (byte-identical to pre-#226).
+        d = profile_for_kinds(service.kinds, service.transport)
+    # #275: bind the SLI label VALUE to the subject's real OTel service.name (slash
+    # preserved) when onboarding carries it — else the selector `service="mastodonweb"`
+    # never matches `mastodon/web` telemetry. Absent/equal ⇒ the {service_id} default
+    # (byte-identical). Braces escaped so `.format(service_id=...)` treats it as a literal.
+    real = getattr(service, "service_name", "") or ""
+    if real and real != service.service_id:
+        d = dataclasses.replace(
+            d, service_label_value_tpl=real.replace("{", "{{").replace("}", "}}")
+        )
+    return d
 
 
 def _service_sli_kinds(service: ServiceHints, business: BusinessContext) -> "frozenset[str]":
