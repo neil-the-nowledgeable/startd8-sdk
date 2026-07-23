@@ -43,3 +43,21 @@ def test_classifying_sets_are_mutually_exclusive():
     assert not (REQUEST_KINDS & UNGROUNDED_KINDS)
     assert not (REQUEST_KINDS & frozenset(_KIND_DEFAULTS))
     assert not (UNGROUNDED_KINDS & frozenset(_KIND_DEFAULTS))
+
+
+def test_base_red_kinds_single_sourced_across_the_three_seams():
+    # The base RED triplet is referenced at three seams that MUST agree — the two-tier suppression
+    # gate, the declared-series covers-filter, and the convention-triplet skip/suppress. A local
+    # re-literal at any one silently re-opens the #274 dead-SLI class for a future 4th base kind.
+    # This guard fails loudly if any seam stops pointing at the single source.
+    from startd8.observability.metric_descriptor import BASE_RED_KINDS
+    from startd8.observability.artifact_generator_context import _RED_KINDS
+    from startd8.observability.artifact_generator_generators import _TRIPLET_SIGNAL_KINDS
+
+    assert BASE_RED_KINDS == frozenset({"availability", "latency", "throughput"})
+    # `is` (not just ==) so a copied literal that happens to be equal today still fails.
+    assert _RED_KINDS is BASE_RED_KINDS
+    assert _TRIPLET_SIGNAL_KINDS is BASE_RED_KINDS
+    # the two-tier gate in artifact_generator.py consumes BASE_RED_KINDS directly (no local literal).
+    import startd8.observability.artifact_generator as ag
+    assert ag.BASE_RED_KINDS is BASE_RED_KINDS

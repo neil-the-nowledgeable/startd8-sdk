@@ -204,6 +204,14 @@ _KIND_DEFAULTS = {
 #: later = move it into `_KIND_DEFAULTS`/`_KIND_SLI_DEFAULTS` and drop it from here.
 UNGROUNDED_KINDS = frozenset({"batch", "cron", "ml_inference"})
 
+#: The base RED triplet the OTel convention covers — the SINGLE source for "which signal_kinds are
+#: the convention base SLIs" (#226). Imported by every seam that must agree on it so they can't drift:
+#: the two-tier suppression gate (``artifact_generator._red``), the declared-series ``covers`` filter
+#: (``artifact_generator_context._RED_KINDS``), and the convention-triplet skip/suppress in the
+#: generators (``_TRIPLET_SIGNAL_KINDS``). Evolving the base set (e.g. grounding a 4th base kind)
+#: is now ONE edit here — miss-one-copy silently re-opened the #274 dead-SLI class before this.
+BASE_RED_KINDS = frozenset({"availability", "latency", "throughput"})
+
 #: metrics_surface values (REQ-CCL-106) that do NOT emit the OTel-convention meter metric the base
 #: RED SLIs query. Only ``otel_sdk_meter`` emits it; ``traces_only``/``none`` configure no meter, and
 #: ``prometheus_exporter``/``node_metrics`` emit DIFFERENT names. #274: on any of these the base RED
