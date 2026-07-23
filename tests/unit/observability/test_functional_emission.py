@@ -294,3 +294,53 @@ class TestServiceNameLabelValue:
         d = _descriptor_for(svc, None)
         assert 'service_name="checkoutservice"' in d.selector("checkoutservice") \
             or 'service="checkoutservice"' in d.selector("checkoutservice")
+
+
+class TestUnverifiedBaseMetricsAdvisory:
+    """#274 (ADR-003): a trace-instrumented service whose base RED SLIs rest on convention
+    metrics with NO manifest_declared backing is the traces-only RISK profile — flagged as an
+    ADVISORY (SLIs still emit; not a false-gap), because the SDK can't verify emission."""
+
+    def test_traces_only_risk_profile_is_flagged(self, tmp_path):
+        meta = tmp_path / "onboarding-metadata.json"
+        meta.write_text(json.dumps({
+            "project_id": "p",
+            "instrumentation_hints": {
+                "web": {
+                    "service_id": "web", "kind": "http_server", "transport": "http",
+                    "traces": {"required": [{"span_name": "GET /"}]},   # trace-instrumented
+                    "metrics": {
+                        "convention_based": [{"name": "http.server.duration", "type": "histogram",
+                                              "source": "otel_semconv:http"}],
+                        "manifest_declared": [],                          # NOTHING emission-verified
+                    },
+                },
+            },
+        }))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta, output_dir=tmp_path / "out", dry_run=True,
+        )
+        adv = report.fr_coverage["unverified_base_metrics"]
+        assert any(u["service"] == "web" for u in adv)
+        assert any("verified as emitted" in u["reason"] for u in adv)
+
+    def test_declared_metrics_backing_suppresses_the_advisory(self, tmp_path):
+        # a service that DECLARES its emitted metrics is not flagged (emission-verified).
+        meta = tmp_path / "onboarding-metadata.json"
+        meta.write_text(json.dumps({
+            "project_id": "p",
+            "instrumentation_hints": {
+                "web": {
+                    "service_id": "web", "kind": "http_server", "transport": "http",
+                    "traces": {"required": []},
+                    "metrics": {
+                        "convention_based": [{"name": "http.server.duration", "type": "histogram", "source": "s"}],
+                        "manifest_declared": [{"name": "http.server.duration", "type": "histogram", "source": "s"}],
+                    },
+                },
+            },
+        }))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta, output_dir=tmp_path / "out", dry_run=True,
+        )
+        assert not report.fr_coverage["unverified_base_metrics"]

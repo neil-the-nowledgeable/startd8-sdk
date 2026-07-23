@@ -358,6 +358,8 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 service_id=svc_id,
                 # #275: the real OTel service.name (slash preserved) for the SLI label value.
                 service_name=str(hint.get("service_name") or ""),
+                # #274: trace-instrumented? (used only for the unverified-base-metrics advisory)
+                has_traces=bool(hint.get("traces")),
                 transport=transport,
                 kinds=kinds,
                 language=hint.get("language"),
