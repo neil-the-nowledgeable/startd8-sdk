@@ -284,3 +284,65 @@ def test_render_live_report_shows_status_and_dead_slis():
     assert "FAIL" in out
     assert "Tier B" in out and "Tier A" in out
     assert "dead (fail) 1" in out
+
+
+# ── FR-8a: the CLI surfaces the new-vs-baseline regression set (not just the exit code) ──
+
+def _cli_report():
+    # a FAIL live report with two dead SLIs on distinct services
+    return compare_live.build_live_comparison(
+        _comparison(), _fidelity("fail", [_v("fail", service="web"), _v("fail", service="cart")]), {})
+
+
+def _invoke_compare_live(monkeypatch, tmp_path, *extra):
+    from typer.testing import CliRunner
+    from startd8.observability import compare_live as cl
+    from startd8.observability.cli import observability_app
+
+    monkeypatch.setattr(cl, "run_live_comparison", lambda **kw: _cli_report())
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text('{"accepted_fail_ids": []}')  # empty ⇒ every fail is NEW
+    return CliRunner().invoke(
+        observability_app,
+        ["compare-live", "-m", str(manifest), "--subject-image", "x:1",
+         "--baseline", str(baseline), *extra],
+    )
+
+
+def test_cli_surfaces_new_fails_human(monkeypatch, tmp_path):
+    res = _invoke_compare_live(monkeypatch, tmp_path)
+    assert res.exit_code == 2
+    assert "2 NEW dead SLI(s) vs baseline" in res.output
+    assert "web/latency" in res.output and "cart/latency" in res.output
+
+
+def test_cli_new_fails_in_json(monkeypatch, tmp_path):
+    res = _invoke_compare_live(monkeypatch, tmp_path, "--json")
+    assert res.exit_code == 2
+    payload = json.loads(res.output)
+    assert len(payload["new_fail_verdicts"]) == 2
+    # --json carries the machine field but not the human "NEW dead SLI(s)" block
+    assert "NEW dead SLI(s) vs baseline" not in res.output
+
+
+def test_cli_clean_gate_no_new_block(monkeypatch, tmp_path):
+    # baseline that already accepts both fails ⇒ 0 new ⇒ exit 0, no NEW block
+    from typer.testing import CliRunner
+    from startd8.observability import compare_live as cl
+    from startd8.observability.cli import observability_app
+
+    report = _cli_report()
+    monkeypatch.setattr(cl, "run_live_comparison", lambda **kw: report)
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    baseline = tmp_path / "baseline.json"
+    ids = [compare_live.verdict_id(v) for v in report.fail_verdicts]
+    baseline.write_text(json.dumps({"accepted_fail_ids": ids}))
+    res = CliRunner().invoke(
+        observability_app,
+        ["compare-live", "-m", str(manifest), "--subject-image", "x:1", "--baseline", str(baseline)],
+    )
+    assert res.exit_code == 0
+    assert "NEW dead SLI(s)" not in res.output
