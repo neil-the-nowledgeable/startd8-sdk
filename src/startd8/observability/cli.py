@@ -404,3 +404,113 @@ def compare_cmd(
     typer.echo(json.dumps(report.to_dict(), indent=2) if as_json else render_report(report))
     if strict and report.total_gaps:
         raise typer.Exit(code=2)
+
+
+@observability_app.command("compare-live")
+def compare_live_cmd(
+    manifest: Path = typer.Option(
+        ..., "--manifest", "-m",
+        help="A generated observability-manifest.yaml (its fr_coverage block = Tier A).",
+    ),
+    artifacts_dir: Path = typer.Option(
+        None, "--artifacts-dir",
+        help="Generated observability output dir (the PromQL replayed for Tier B).",
+    ),
+    onboarding_metadata: Path = typer.Option(
+        None, "--onboarding-metadata",
+        help="ContextCore onboarding-metadata.json (reconstructs expected metric identity).",
+    ),
+    subject_image: str = typer.Option(
+        None, "--subject-image",
+        help="Single subject image to stand up + scrape (v1). Omit when using --prometheus.",
+    ),
+    subject_port: int = typer.Option(8080, "--subject-port", help="Subject /metrics port."),
+    metrics_path: str = typer.Option(
+        "/metrics", "--metrics-path",
+        help="Subject metrics path (e.g. /actuator/prometheus for Spring subjects)."),
+    prometheus: str = typer.Option(
+        None, "--prometheus",
+        help="Replay against an EXISTING backend instead of standing a subject up "
+             "(the multi-container / Mastodon path).",
+    ),
+    min_coverage: float = typer.Option(1.0, "--min-coverage", help="Fidelity threshold."),
+    allow_prod: bool = typer.Option(
+        False, "--allow-prod",
+        help="Permit a non-loopback --prometheus backend (FR-8c). No-op on the "
+             "--subject-image standup path (Prometheus is always loopback there)."),
+    keep_up: bool = typer.Option(
+        False, "--keep-up", help="Skip teardown (debug); prints the docker rm commands."),
+    strict_tier_a: bool = typer.Option(
+        False, "--strict-tier-a", help="Let Tier-A static gaps contribute a fail (default advisory)."),
+    baseline: Path = typer.Option(
+        None, "--baseline", help="Accepted-fail baseline JSON; exit 2 only on a NEW fail (CI gate)."),
+    write_baseline: bool = typer.Option(
+        False, "--write-baseline",
+        help="Write current fail identities to --baseline (explicit re-baseline; never automatic)."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the merged report as JSON."),
+) -> None:
+    """Tier-B live derived-vs-emitted comparison — merges live fidelity with Tier-A gaps.
+
+    Stands up ``--subject-image`` + Prometheus (or replays against ``--prometheus``), waits for a
+    real scrape, replays the derived PromQL, and reports per-SLI which bind vs which are dead. A dead
+    (``fail``) SLI is the #274/#275 bug class. With ``--baseline`` this is a CI gate: exit 2 on a NEW
+    fail, 0 if clean/baselined, 3 if the live replay was inconclusive (standup/scrape failed).
+
+    See docs/design/observability-compare/REQUIREMENTS.md.
+    """
+    from .compare_live import (
+        EXIT_UNKNOWN,
+        ci_gate,
+        load_baseline,
+        render_baseline,
+        render_live_report,
+        run_live_comparison,
+    )
+
+    auth = Auth.from_env()
+    report = run_live_comparison(
+        manifest=manifest,
+        artifacts_dir=artifacts_dir,
+        onboarding_metadata=onboarding_metadata,
+        subject_image=subject_image,
+        subject_port=subject_port,
+        metrics_path=metrics_path,
+        prometheus=prometheus,
+        min_coverage=min_coverage,
+        allow_prod=allow_prod,
+        keep_up=keep_up,
+        strict_tier_a=strict_tier_a,
+        auth=auth,
+    )
+
+    payload = json.dumps(report.to_dict(), indent=2) if as_json else render_live_report(report)
+    typer.echo(redact(payload, auth.redactions()))
+
+    if keep_up and report.standup.get("subject_container"):
+        typer.echo("# --keep-up: tear down with:  " + (
+            f"docker rm -f {report.standup['subject_container']} "
+            f"{report.standup['prometheus_container']}; "
+            f"docker network rm {report.standup['network']}"))
+
+    if write_baseline:
+        if not baseline:
+            raise typer.BadParameter("--write-baseline requires --baseline <path>")
+        # NR-4 guard: a baseline may only be authored from a CONFIRMED-LIVE run. On an
+        # ``unknown`` report (standup/scrape failed) ``fail_verdicts`` is empty, so writing
+        # would silently zero the accepted set and self-heal the gate on the next run.
+        if report.status == "unknown":
+            typer.echo(
+                f"# refusing --write-baseline: report is UNKNOWN ({report.reason}); "
+                "would erase the baseline. Existing baseline left untouched.")
+            raise typer.Exit(code=EXIT_UNKNOWN)
+        Path(baseline).write_text(
+            json.dumps(render_baseline(report, subject=subject_image or prometheus or ""), indent=2),
+            encoding="utf-8",
+        )
+        typer.echo(f"# wrote baseline ({len(report.fail_verdicts)} accepted fails) -> {baseline}")
+        raise typer.Exit(code=0)  # authoring is not a gate — never red-X the baseline commit
+
+    if baseline is not None:
+        code, _new = ci_gate(report, load_baseline(baseline))
+        raise typer.Exit(code=code)
+    raise typer.Exit(code=report.exit_code())
