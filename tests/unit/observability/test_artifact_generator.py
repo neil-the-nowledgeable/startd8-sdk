@@ -1575,6 +1575,25 @@ class TestDeliveryFieldConsumption:
         content = generate_runbook(grpc_service, biz).content
         assert "team **platform**" in content and "ops@acme.io" in content
 
+    def test_runbook_log_query_uses_real_service_name(self):
+        # #278 sibling: the operator copy-paste log query must use the real service.name (like the
+        # loki-rule alert / metric SLIs), not the sanitized service_id — else it matches nothing.
+        from startd8.observability.artifact_generator import ServiceHints
+        svc = ServiceHints(service_id="mastodonweb", service_name="mastodon/web",
+                           transport="http", convention_metrics=[])
+        content = generate_runbook(svc, BusinessContext()).content
+        assert '{service="mastodon/web"} |= "error"' in content
+        assert 'service="mastodonweb"} |= "error"' not in content
+
+    def test_runbook_log_query_agrees_with_loki_rule(self):
+        # the drift-proof property: runbook hint and loki-rule alert select the SAME stream.
+        from startd8.observability.artifact_generator import ServiceHints, generate_loki_rule
+        svc = ServiceHints(service_id="mastodonweb", service_name="mastodon/web",
+                           transport="http", convention_metrics=[])
+        biz = BusinessContext()
+        assert 'service="mastodon/web"' in generate_runbook(svc, biz).content
+        assert 'service="mastodon/web"' in generate_loki_rule(svc, biz).content
+
     def test_dashboard_datasource_env_override(self, grpc_service, monkeypatch):
         monkeypatch.setenv("OBS_PROM_DATASOURCE", "mimir-prod")
         doc = yaml.safe_load(

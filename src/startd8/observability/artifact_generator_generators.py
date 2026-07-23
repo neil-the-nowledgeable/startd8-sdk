@@ -1886,6 +1886,24 @@ def generate_notification_policy(
     )
 
 
+def _log_selector(
+    service: ServiceHints, target: Optional[Dict[str, Any]]
+) -> Tuple[str, str, str]:
+    """The LogQL stream-selector VALUE + its ``(source, tier)`` for a service's logs (#278).
+
+    Precedence: the real OTel ``service.name`` (matches real log streams + the metric SLIs, #275)
+    when declared > an explicit ``spec.targets[].name`` > the sanitized ``service_id``. Shared by the
+    loki-rule alert (`generate_loki_rule`) AND the runbook's operator log-query hint
+    (`generate_runbook`) so the two never drift — a paged operator's manual query matches the same
+    streams the alert fired on."""
+    real = getattr(service, "service_name", "") or ""
+    if real and real != service.service_id:
+        return real, "instrumentation_hints[svc].service_name", "manifest"
+    if target and target.get("name"):
+        return str(target["name"]), "manifest.spec.targets[].name", "manifest"
+    return service.service_id, "service_id", "default"
+
+
 def generate_loki_rule(
     service: ServiceHints,
     business: BusinessContext,
@@ -1906,17 +1924,8 @@ def generate_loki_rule(
     # #278: bind the LogQL stream selector to the real OTel service.name (slash preserved) when
     # onboarding declares it (REQ-CCL-105) — mirroring the #275 metric-SLI fix — so a log-based alert
     # matches the SAME telemetry the metric SLIs do, instead of falling through to the sanitized
-    # service_id. Precedence: real service.name > an explicit spec.targets[].name > service_id.
-    real = getattr(service, "service_name", "") or ""
-    if real and real != service.service_id:
-        selector_name = real
-        _sel_source, _sel_tier = "instrumentation_hints[svc].service_name", "manifest"
-    elif target and target.get("name"):
-        selector_name = str(target["name"])
-        _sel_source, _sel_tier = "manifest.spec.targets[].name", "manifest"
-    else:
-        selector_name = service.service_id
-        _sel_source, _sel_tier = "service_id", "default"
+    # service_id. The shared `_log_selector` keeps this in lockstep with the runbook's log-query hint.
+    selector_name, _sel_source, _sel_tier = _log_selector(service, target)
     derivations.append(DerivationTrace(
         field="loki.selector", source=_sel_source,
         transformation=f'{stream_key}="{selector_name}"', tier=_sel_tier,
@@ -1969,6 +1978,9 @@ def generate_runbook(
     severity = _severity_for(business, derivations)
     avail = business.availability or "—"
     latency = business.latency_p99 or "—"
+    # #278: the operator's copy-paste log query must select the SAME stream the loki-rule alert
+    # fires on — the real service.name, not the sanitized service_id (shared with generate_loki_rule).
+    log_selector, _, _ = _log_selector(service, _target_for(service.service_id, business.targets))
     lines = [
         f"# Runbook: {service.service_id}",
         "",
@@ -2000,7 +2012,7 @@ def generate_runbook(
         "1. Open the dashboard above; check the RED panels (rate, errors, duration).",
         "2. Correlate with recent deploys and the error-rate panel.",
         "3. Check logs for error spikes "
-        f"(`{{service=\"{service.service_id}\"}} |= \"error\"`).",
+        f"(`{{service=\"{log_selector}\"}} |= \"error\"`).",
         "",
         "## Escalation",
         "",
