@@ -287,17 +287,22 @@ def _parse_metric_set(raw: Any) -> List[ConventionMetric]:
     ]
 
 
-# Single-sourced (metric_descriptor) — the valid `covers` values for a declared series ARE the base
-# RED triplet; keep them one object so this filter can't drift from the suppression gate.
+# Single-sourced (metric_descriptor) — the base RED triplet a declared series can BIND a base SLI to.
+# NB: this no longer filters `covers` at parse time (#300 defect D) — the binder is the single
+# bind-vs-defer authority. Kept for reference by readers reasoning about which kinds actually bind.
 _RED_KINDS = BASE_RED_KINDS
 
 
 def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
     """Parse ``metrics.declared_emitted_series`` (#286 / REQ-CCL-107) into models.
 
-    Entries without a ``name`` are dropped; ``labels`` non-dict ⇒ ``{}``; ``covers`` is filtered to
-    the RED kinds (a bogus kind can't ground a base SLI). Non-list input ⇒ empty (explicit-only:
-    absence keeps the #274 suppression, never a false binding). All values stringified defensively.
+    Entries without a ``name`` are dropped; ``labels`` non-dict ⇒ ``{}``. ``covers`` is preserved
+    verbatim (stringified) — NOT filtered to the RED kinds (#300 defect D): a declared-but-
+    unbindable kind (e.g. ``saturation``) must reach the binder so it surfaces as a
+    ``deferred_declared_kinds`` gap instead of vanishing at parse time. The binder only ever BINDS the
+    RED kinds + availability; every other declared kind defers (a gap, not a false binding), and the
+    suppression gate re-filters (``_declared_covered_kinds``) so nothing drifts. Non-list input ⇒
+    empty (explicit-only: absence keeps the #274 suppression). All values stringified defensively.
     """
     if not isinstance(raw, list):
         return []
@@ -310,9 +315,7 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
             {str(k): str(v) for k, v in labels.items()} if isinstance(labels, dict) else {}
         )
         covers = s.get("covers")
-        covers = (
-            [str(k) for k in covers if str(k) in _RED_KINDS] if isinstance(covers, list) else []
-        )
+        covers = [str(k) for k in covers] if isinstance(covers, list) else []
         out.append(
             DeclaredEmittedSeries(
                 name=str(s["name"]),
