@@ -255,3 +255,62 @@ returns `bound_no_data`). Higher effort (needs a live subject) but the engine is
 | `enabling_flag` is probably surfaced somewhere (SLO/runbook) | `git grep` across `src/`+`tests/`: only parse + model + an unasserting test fixture — **zero consumers** | Promoted to the flagship Top finding (built-but-unwired latent value path) |
 | The RED triple is single-sourced (it's a well-factored module) | Restated literally in 3 modules | Became the one 🏗️ drift-seam item |
 | `compare` already makes the binding fully legible | It shows *which* kinds bound, but not the **flag** an operator must enable for the series to emit | Finding #1's fix routes through `compare` + the SLO description |
+
+---
+
+# Increment: service.name yokoten + post-#286 sweep — enhancement backlog
+
+**Scope:** a value/reach sweep of the observability generator after today's ServiceMonitor gate
+(#287), declared-emitted-series binding (#289/#291/#292), enabling_flag surfacing (#294), and the
+LogQL service.name fix (#295 / #278). **Register:** implementer. **Date:** 2026-07-23.
+
+> **Prior increment's finding 1 is DELIVERED.** `enabling_flag` (parsed-but-unwired) now reaches
+> the SLO description + `bound_declared_series` + `compare` — **PR #294**. Drop it from the to-do.
+
+## Top findings (do first)
+
+### 1. 🔴 DEFECT — the runbook's log-query hint uses the sanitized `service_id`, not the real `service.name` (last #278 sibling) — **XS/S**
+`generate_runbook` emits an operator copy-paste query
+`Check logs for error spikes (\`{service="{service.service_id}"} |= "error"\`)`
+(`artifact_generator_generators.py:2002-2003`) — the **sanitized** id (`mastodonweb`). But #295
+just bound the **loki-rule** alert selector to the real `service.name` (`mastodon/web`), and the
+metric SLIs (#275) too. So during an incident the operator pages on an alert firing over
+`{service="mastodon/web"}`, opens the runbook, pastes `{service="mastodonweb"}` — and **gets
+nothing**. The runbook is *generated* (wired), but emits a selector inconsistent with every other
+artifact for the same service. Verification gate cleared: `generate_runbook` consults `service_name`
+**nowhere** (confirmed by grep across the function); no test covers the line (a fix backfills one,
+breaks none). Fix mirrors #295 exactly: `service.service_name or service.service_id` for that one
+hint. → so an **on-call operator** can paste the runbook's log query and actually see the logs the
+alert fired on, instead of an empty result mid-incident.
+
+**Closure-Ledger row:**
+| Item | Now | Gate to next | Effort | Value |
+|---|---|---|---|---|
+| runbook log-query selector | **L2** (generated, but emits a non-matching selector — "done" in the count, broken in use) | use `service.service_name` when present (+ a regression test asserting `mastodon/web`) | XS/S | on-call query matches real streams; runbook consistent with the #295 alert |
+
+### 2. 🏗️ Drift seam — the base RED triple `{availability, latency, throughput}` is restated literally 4× across 3 modules — **S**
+`artifact_generator.py:618` (`_red`), `artifact_generator_context.py:289` (`_RED_KINDS`),
+`artifact_generator_generators.py:1063` (`_TRIPLET_SIGNAL_KINDS`) + a 2nd literal in the same file.
+Adding/renaming a base kind (the L-effort "move a kind out of the registry" step this family
+already anticipates) silently misses whichever copy the author forgets. Single-source one
+`BASE_RED_KINDS` frozenset imported by all three. **Cite `/complexity-distiller` S6 (scattered-
+constant / drift-seam) for any deeper constant-hygiene sweep** — this is the one architectural item.
+(Carried from the prior increment, still unbuilt.)
+
+## Grounding note (belief → actual — where going-and-seeing changed the answer)
+
+| Belief going in | Actual (grounded) | Effect |
+|---|---|---|
+| The notification route matcher probably diverges from the alert's `service` label (a #278 sibling) | **Both use `service_id`** (alert label `:330`, matcher `:1817`) — internally consistent, routing works | **Avoided a false P0.** Not a defect — dropped it |
+| The dashboard panels might filter on the sanitized id | `generate_dashboard_spec` uses `descriptor.selector(service_id)` → the #275 `service.name` override applies | Clean — no finding |
+| The service.name fix was fully spread by #275+#295 | One hand-built markdown surface (the runbook hint) never goes through the descriptor | Became Top finding 1 |
+
+## Honest gaps (product decisions surfaced while grounding — not bugs)
+
+- **The alert's `service` label being the sanitized id is fine** — it's the alert's own identity
+  namespace (routing + display), consistent with the matcher, and distinct from the PromQL *selector*
+  value. Don't "fix" it to `service.name`; that would desync it from the route matcher and break
+  routing. (The runbook query is different: it's a raw LogQL selector the operator runs, so it must
+  match real streams.)
+- **Availability declared-series binding remains deferred pending `error_selector`** — gated on
+  contextcore#43 (REQ-CCL-108), already filed; the SDK consumer is built. Not a gap to close here.
