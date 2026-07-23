@@ -97,11 +97,20 @@ def test_classic_renderer_untouched():
 
 
 def _grafana_reachable() -> bool:
-    if not os.environ.get("GRAFANA_API_TOKEN"):
+    """True only when a live Grafana that actually SERVES the dashboard.grafana.app/v2 API is
+    reachable + authenticated. Probing /api/health is insufficient — every Grafana answers it, but
+    this test needs the v2 dashboards API, which older Grafana (e.g. 10.x) returns 404 for. Probe the
+    v2 base with auth and require a 2xx; a 404 (v2 absent) or 401/403 (auth won't work) ⇒ skip."""
+    tok = os.environ.get("GRAFANA_API_TOKEN")
+    if not tok:
         return False
     try:
-        with urllib.request.urlopen("http://localhost:3000/api/health", timeout=3) as r:
-            return r.status == 200
+        req = urllib.request.Request(
+            "http://localhost:3000/apis/dashboard.grafana.app/v2/namespaces/default/dashboards",
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return 200 <= r.status < 300
     except Exception:
         return False
 

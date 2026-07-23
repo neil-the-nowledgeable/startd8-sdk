@@ -14,6 +14,7 @@ import json
 import os
 import tempfile
 
+import pytest
 import yaml
 
 from startd8.observability.artifact_generator_context import extract_service_hints
@@ -108,7 +109,14 @@ def _render_panel_datasources(spec_yaml: str):
         result = DashboardCreatorWorkflow().run(
             {"spec": spec, "output_dir": d, "enforce_uid": False}
         )
-        assert result.success, getattr(result, "error", None)
+        if not result.success:
+            err = str(getattr(result, "error", "") or "")
+            # Skip (not fail) when the jsonnet mixin toolchain is absent — startd8-mixin/vendor
+            # is gitignored + produced by `jb install`, so a fresh checkout / CI runner lacks it.
+            # Any OTHER render failure still asserts (a real regression must not be masked).
+            if "vendor" in err or "jb install" in err or "jsonnet" in err.lower():
+                pytest.skip(f"needs startd8-mixin/vendor (jb install): {err}")
+            assert result.success, err
         for f in os.listdir(d):
             if f.endswith(".json"):
                 j = json.loads(open(os.path.join(d, f)).read())
