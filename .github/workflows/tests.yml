@@ -1,20 +1,20 @@
 # ---------------------------------------------------------------------------
-# DISABLED — do not rename to tests.yml until the blockers below are cleared.
+# ENABLED 2026-07-23 — scoped to `tests/unit` (a green baseline; ~18.5k tests
+# collect cleanly, verified locally before enabling). Re-activated after being
+# silently disabled in 983bf53a (2026-02-23, a byte-identical rename bundled into
+# an unrelated feature commit) and diagnosed in 664fd35d.
 #
-# Why disabled: `pytest tests/` fails at *collection* on 11 pre-existing modules
-# (import errors, not test failures), so a full-suite run is red before it starts:
+# SCOPE — intentionally `tests/unit` only. A full `pytest tests/` is red at
+# *collection* on 11 pre-existing modules (import errors, not test failures);
+# widen the path below as each is fixed:
 #   - tests/contract_validation/*.py (7) import the external `contextcore` package
-#     (`contextcore.contracts`, `contextcore.generators`), which is NOT a startd8
-#     dependency. They need contextcore installed, or a skip-when-absent guard.
+#     (`contextcore.contracts`, `contextcore.generators`), NOT a startd8 dependency.
+#     Fix: install contextcore in CI, or add a skip-when-absent guard.
 #   - tests/test_workflow_catalog.py, tests/test_skill_aware_workflow.py,
-#     tests/test_artifact_generators.py, tests/test_tui_agents.py reference a
+#     tests/test_artifact_generators.py, tests/test_tui_agents.py (4) reference a
 #     removed/renamed API (WORKFLOW_CATALOG / WorkflowDescriptor predate the current
-#     WorkflowRegistry; SkillAwareWorkflow is no longer re-exported from the package).
-#     They need updating to the current API.
-#
-# The rest of the suite is healthy: `pytest tests/unit` collects cleanly (~18k tests).
-# This workflow is scoped to tests/unit so that enabling it (rename to tests.yml)
-# yields a green baseline; widen the path as the 11 modules above are fixed.
+#     WorkflowRegistry; SkillAwareWorkflow is no longer re-exported). Fix: update to
+#     the current API.
 # ---------------------------------------------------------------------------
 name: Tests
 
