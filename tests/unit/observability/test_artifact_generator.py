@@ -1551,6 +1551,25 @@ class TestDeliveryFieldConsumption:
         content = generate_loki_rule(grpc_service, biz).content
         assert 'service="checkout-svc"' in content
 
+    def test_loki_selector_uses_real_service_name(self):
+        # #278: the LogQL selector must use the real OTel service.name (slash preserved), like the
+        # metric SLI (#275) — not the sanitized service_id — so log alerts match real log streams.
+        from startd8.observability.artifact_generator import ServiceHints
+        svc = ServiceHints(service_id="mastodonweb", service_name="mastodon/web",
+                           transport="http", convention_metrics=[])
+        content = generate_loki_rule(svc, BusinessContext()).content
+        assert 'service="mastodon/web"' in content
+        assert 'service="mastodonweb"' not in content
+
+    def test_loki_selector_service_name_wins_over_target_name(self):
+        # real service.name correlates log + metric alerts, so it takes precedence over targets[].name.
+        from startd8.observability.artifact_generator import ServiceHints
+        svc = ServiceHints(service_id="mastodonweb", service_name="mastodon/web",
+                           transport="http", convention_metrics=[])
+        biz = BusinessContext(targets=[{"name": "mastodonweb", "namespace": "social"}])
+        content = generate_loki_rule(svc, biz).content
+        assert 'service="mastodon/web"' in content
+
     def test_runbook_escalation_from_owners(self, grpc_service):
         biz = BusinessContext(owners=[{"team": "platform", "email": "ops@acme.io"}])
         content = generate_runbook(grpc_service, biz).content

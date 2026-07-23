@@ -1903,12 +1903,24 @@ def generate_loki_rule(
     derivations: List[DerivationTrace] = []
     severity = _severity_for(business, derivations)
     target = _target_for(service.service_id, business.targets)
-    selector_name = str(target["name"]) if target and target.get("name") else service.service_id
-    if target and target.get("name"):
-        derivations.append(DerivationTrace(
-            field="loki.selector", source="manifest.spec.targets[].name",
-            transformation=f'{stream_key}="{selector_name}"', tier="manifest",
-        ))
+    # #278: bind the LogQL stream selector to the real OTel service.name (slash preserved) when
+    # onboarding declares it (REQ-CCL-105) — mirroring the #275 metric-SLI fix — so a log-based alert
+    # matches the SAME telemetry the metric SLIs do, instead of falling through to the sanitized
+    # service_id. Precedence: real service.name > an explicit spec.targets[].name > service_id.
+    real = getattr(service, "service_name", "") or ""
+    if real and real != service.service_id:
+        selector_name = real
+        _sel_source, _sel_tier = "instrumentation_hints[svc].service_name", "manifest"
+    elif target and target.get("name"):
+        selector_name = str(target["name"])
+        _sel_source, _sel_tier = "manifest.spec.targets[].name", "manifest"
+    else:
+        selector_name = service.service_id
+        _sel_source, _sel_tier = "service_id", "default"
+    derivations.append(DerivationTrace(
+        field="loki.selector", source=_sel_source,
+        transformation=f'{stream_key}="{selector_name}"', tier=_sel_tier,
+    ))
     expr = (
         f'sum(rate({{{stream_key}="{selector_name}"}} |= "error" [5m])) > 0'
     )
