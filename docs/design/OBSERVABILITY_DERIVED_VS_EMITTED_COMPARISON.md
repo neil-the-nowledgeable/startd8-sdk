@@ -102,9 +102,10 @@ signal, working end-to-end.
 
 A thin, subject-agnostic runner + a first-class verb:
 
-1. **`startd8 observability compare`** — wrap Tier A (read `fr_coverage` from a generated manifest)
-   into a one-shot "here's where the derived artifacts can't be grounded" report. **$0, offline, tiny**
-   — pure re-exposure of data already in the manifest. Highest value-per-effort.
+1. **`startd8 observability compare`** — ✅ **BUILT (PR #282).** Reads `fr_coverage` from a generated
+   manifest and renders a one-shot "here's where the derived artifacts can't be grounded" report
+   (`observability/compare.py`). `--json` for machines, `--strict` exits 2 on divergence (CI gate).
+   $0, offline. Verified end-to-end on a generated traces-only manifest (surfaces the #274 suppression).
 2. **Live runner** — `fleet.compose`/`boot_and_probe` stand up the subject + a Prometheus scraping its
    `/metrics`, wait for a scrape, then invoke `validate-promql` and merge its Tier-B verdicts with the
    Tier-A gaps into one report. Heavier (needs the subject running), but the engine is done.

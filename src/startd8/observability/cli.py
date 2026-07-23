@@ -374,3 +374,33 @@ def scorecard_cmd(
         typer.echo(f"scorecard written to {output} (status={data.get('status')})")
     else:
         typer.echo(md)
+
+
+@observability_app.command("compare")
+def compare_cmd(
+    manifest: Path = typer.Option(
+        ..., "--manifest", "-m",
+        help="A generated observability-manifest.yaml (its fr_coverage block is read).",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the report as JSON."),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help="Exit 2 when any divergence class is non-empty (for a CI gate).",
+    ),
+) -> None:
+    """Tier-A derived-vs-declared observability comparison — $0, offline.
+
+    Reports where the generated artifacts can't be grounded against the subject's declared
+    instrumentation surface (the manifest's ``fr_coverage``: suppressed / unverified base SLIs,
+    unfulfilled FRs, ungrounded kinds, empty services). The live twin — replay the queries
+    against real telemetry — is ``startd8 observability validate-promql``.
+
+    Exit: 0 (advisory) · 2 (``--strict`` and divergence present).
+    See docs/design/OBSERVABILITY_DERIVED_VS_EMITTED_COMPARISON.md.
+    """
+    from .compare import build_comparison_report, read_fr_coverage, render_report
+
+    report = build_comparison_report(read_fr_coverage(manifest))
+    typer.echo(json.dumps(report.to_dict(), indent=2) if as_json else render_report(report))
+    if strict and report.total_gaps:
+        raise typer.Exit(code=2)
