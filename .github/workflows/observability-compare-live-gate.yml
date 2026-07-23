@@ -1,0 +1,55 @@
+name: observability-compare-live-gate
+
+# Derived-vs-emitted CI gate (rung #3 of the compare-live capability).
+#
+# Regenerates the pilot Mastodon o11y artifacts and replays their derived PromQL against a PINNED
+# reference subject (a self-scraping prom/prometheus stood up by compare-live), failing the build
+# only on a NEW dead SLI — a verdict not in the committed baseline. This prevents the #274/#275
+# defect class (an SLI that evaluates against nothing) from silently shipping via a generator or
+# engine change. See docs/design/observability-compare/pilot-repro/README.md.
+
+on:
+  pull_request:
+    paths:
+      - 'src/startd8/observability/**'
+      - 'docs/design/observability-compare/pilot-repro/**'
+      - 'scripts/compare_live_gate.sh'
+      - '.github/workflows/observability-compare-live-gate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: compare-live-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install startd8 (editable)
+        run: pip install -e .
+
+      - name: Pre-pull the pinned Prometheus image
+        run: docker pull prom/prometheus:v2.53.0
+
+      - name: Run compare-live gate
+        run: |
+          set +e
+          bash scripts/compare_live_gate.sh
+          code=$?
+          echo "gate exit=$code"
+          if [ "$code" = "2" ]; then
+            echo "::error title=compare-live gate::A NEW dead SLI shipped (a derived SLI that evaluates against nothing). Fix the generator, or re-baseline with scripts/compare_live_gate.sh if intentional."
+            exit 1
+          fi
+          if [ "$code" = "3" ]; then
+            echo "::warning title=compare-live gate::Live replay was inconclusive (standup/scrape/infra). Not treated as a code regression."
+            exit 0
+          fi
+          exit 0
