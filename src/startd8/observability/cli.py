@@ -483,8 +483,30 @@ def compare_live_cmd(
         auth=auth,
     )
 
-    payload = json.dumps(report.to_dict(), indent=2) if as_json else render_live_report(report)
+    # FR-8a: when gating (--baseline, not authoring), compute the new-vs-baseline regression set up
+    # front so it reaches the operator in BOTH the --json payload and the human output — not just the
+    # exit code. `ci_gate` returns (exit_code, new_fail_verdicts); it is already computed either way.
+    gate = ci_gate(report, load_baseline(baseline)) if (baseline is not None and not write_baseline) else None
+
+    if as_json:
+        doc = report.to_dict()
+        if gate is not None:
+            doc["new_fail_verdicts"] = gate[1]  # FR-8a: what regressed vs baseline
+        payload = json.dumps(doc, indent=2)
+    else:
+        payload = render_live_report(report)
     typer.echo(redact(payload, auth.redactions()))
+
+    # FR-8a: on a gate FAIL, name WHICH SLIs are new vs baseline — the regression this change
+    # introduced — the discriminating signal a red gate exists to give (not just "something is dead").
+    if gate is not None and gate[1] and not as_json:
+        lines = [f"# {len(gate[1])} NEW dead SLI(s) vs baseline (introduced by this change):"]
+        lines += [
+            f"#   ✗ {v.get('service', '?')}/{v.get('signal', '?')} — "
+            f"{' '.join(str(v.get('expr', '')).split())}"
+            for v in gate[1]
+        ]
+        typer.echo(redact("\n".join(lines), auth.redactions()))
 
     if keep_up and report.standup.get("subject_container"):
         typer.echo("# --keep-up: tear down with:  " + (
@@ -510,7 +532,6 @@ def compare_live_cmd(
         typer.echo(f"# wrote baseline ({len(report.fail_verdicts)} accepted fails) -> {baseline}")
         raise typer.Exit(code=0)  # authoring is not a gate — never red-X the baseline commit
 
-    if baseline is not None:
-        code, _new = ci_gate(report, load_baseline(baseline))
-        raise typer.Exit(code=code)
+    if gate is not None:
+        raise typer.Exit(code=gate[0])
     raise typer.Exit(code=report.exit_code())

@@ -19,7 +19,7 @@ Code: `src/startd8/observability/{compare,compare_live,live_standup,prometheus_q
 
 ## Top findings (do these first)
 
-**1. [Built-but-unwired] The CI gate computes *which* SLIs regressed, then throws it away.**
+**1. [Built-but-unwired] The CI gate computes *which* SLIs regressed, then throws it away.** — ✅ **DELIVERED 2026-07-23** (FR-8a): the CLI now prints a `NEW dead SLI(s) vs baseline` block naming each regression, and `--json` carries `new_fail_verdicts`; proven on real telemetry (named the 1 dropped-baseline SLI, exit 2). +3 CLI tests.
 `ci_gate()` returns `(exit_code, new_fails)` — the new-vs-baseline regression list
 (`compare_live.py:ci_gate`, `new_fail_verdicts`). But the CLI drops it:
 `cli.py:514` → `code, _new = ci_gate(report, load_baseline(baseline))` then `raise typer.Exit(code)`.
@@ -50,7 +50,7 @@ already exists).
 <summary><b>Backlog appendix</b> — bucketed, ranked (draw from over later increments)</summary>
 
 ## ⚡ Quick wins
-- **QW-1 — surface `_new` on a gate failure** — *(= Top finding 1)* `cli.py:514`. **XS–S.**
+- **QW-1 — surface `_new` on a gate failure** — *(= Top finding 1)* ✅ **DELIVERED** (FR-8a).
 - **QW-2 — "…N more" on truncated dead-SLI list** — *(= Top finding 3)* `compare_live.py:316`. **XS.**
 - **QW-3 — link `HOWTO_COMPARE_LIVE.md` from `--help`** — the portable how-to (shipped in #301) is
   not referenced in `cli.py` (`grep HOWTO_COMPARE_LIVE cli.py` → none), so a user in `--help` can't
