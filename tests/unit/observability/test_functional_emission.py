@@ -468,6 +468,22 @@ class TestDeclaredEmittedSeriesBinding:
                    and b["series"] == "http_request_duration_seconds"
                    for b in report.fr_coverage["bound_declared_series"])
 
+    def test_enabling_flag_is_surfaced_in_slo_and_bound_record(self, tmp_path):
+        # backlog finding 1: an opt-in series' enabling_flag must reach the SLO description AND the
+        # bound record (was parsed-and-dropped) — so an operator knows the SLO is dead until the flag.
+        report = self._run(tmp_path, series=self._LATENCY_SERIES)
+        slo = self._declared_slo(report)
+        assert "Requires the MASTODON_PROMETHEUS_EXPORTER_WEB_DETAILED_METRICS flag" in slo[0].content
+        assert any(b.get("enabling_flag") == "MASTODON_PROMETHEUS_EXPORTER_WEB_DETAILED_METRICS"
+                   for b in report.fr_coverage["bound_declared_series"])
+
+    def test_no_flag_note_when_series_has_no_enabling_flag(self, tmp_path):
+        series = [{"name": "http_requests_total", "type": "counter",
+                   "labels": {"job": "web"}, "covers": ["throughput"]}]  # no enabling_flag
+        report = self._run(tmp_path, series=series)
+        assert "Requires the" not in self._declared_slo(report)[0].content
+        assert all(not b.get("enabling_flag") for b in report.fr_coverage["bound_declared_series"])
+
     def test_convention_red_suppressed_when_bound(self, tmp_path):
         # precedence declared > convention: the convention latency SLI is NOT also emitted.
         report = self._run(tmp_path, series=self._LATENCY_SERIES)

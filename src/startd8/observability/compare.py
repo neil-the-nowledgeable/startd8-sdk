@@ -80,7 +80,11 @@ def _entry_line(entry: Any) -> str:
         who = entry.get("service") or entry.get("id") or "?"
         # #286: declared bound/deferred entries carry kind + series instead of a reason.
         if entry.get("series") and entry.get("kind"):
-            return f"    - {who}: {entry['kind']} → {entry['series']}"
+            # backlog finding 1: surface the enabling flag so a reader knows the bound series is
+            # opt-in (dead until the flag is set) — not silently parsed-and-dropped.
+            flag = entry.get("enabling_flag")
+            suffix = f"  (requires {flag})" if flag else ""
+            return f"    - {who}: {entry['kind']} → {entry['series']}{suffix}"
         reason = " ".join(str(entry.get("reason", "")).split())
         return f"    - {who}: {reason}" if reason else f"    - {who}"
     return f"    - {entry}"
