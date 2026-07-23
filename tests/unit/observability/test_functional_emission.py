@@ -500,6 +500,24 @@ class TestDeclaredEmittedSeriesBinding:
         assert len(slo) == 1
         assert "sum(rate(http_requests_total{job=\"web\"}[5m]))" in slo[0].content
 
+    def test_two_series_same_kind_get_unique_names(self, tmp_path):
+        # #286 code-review fix: two declared series covering the SAME kind must not collide on
+        # `{svc}-{kind}-declared` — the series slug disambiguates SLO/SLI/alert names.
+        import re as _re
+        series = [
+            {"name": "http_request_duration_seconds", "type": "histogram",
+             "labels": {"q": "1"}, "covers": ["latency"]},
+            {"name": "http_request_queue_duration_seconds", "type": "histogram",
+             "labels": {"q": "2"}, "covers": ["latency"]},
+        ]
+        report = self._run(tmp_path, series=series)
+        slo = self._declared_slo(report)
+        assert len(slo) == 1
+        names = _re.findall(r"name: (\S+)", slo[0].content)
+        assert len(names) == len(set(names)), f"colliding names: {names}"
+        assert any("queue-duration" in n for n in names)  # both series distinctly represented
+        assert len(report.fr_coverage["bound_declared_series"]) == 2
+
     def test_availability_with_error_selector_binds_a_ratio(self, tmp_path):
         # #286 v2: availability + an error_selector → a good/total ratioMetric on the real series.
         series = [{"name": "http_requests_total", "type": "counter", "labels": {"job": "web"},
