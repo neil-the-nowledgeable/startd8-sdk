@@ -124,6 +124,43 @@ def instant_query_count(
     return len(result)
 
 
+def scrape_ready(
+    base: str,
+    job: str,
+    *,
+    auth: Optional[Auth] = None,
+    timeout: int = REQUEST_TIMEOUT,
+) -> bool:
+    """True once Prometheus has landed ≥1 sample for ``job`` in its TSDB.
+
+    The load-bearing readiness signal for the Tier-B live comparison
+    (``compare_live``): replaying generated PromQL *before* the first scrape
+    completes would return empty for every query — a false all-``fail`` report
+    indistinguishable from a genuinely dead SLI. We gate on
+    ``sum(scrape_samples_scraped{job="<job>"})`` rather than ``up`` because
+    ``up==1`` only means the target *responded*; a positive sample count
+    guarantees series actually exist and are queryable. Any backend/parse error
+    propagates so the poller keeps waiting rather than treating a transient as
+    ready.
+    """
+    promql = f'sum(scrape_samples_scraped{{job="{job}"}})'
+    q = urllib.parse.quote(promql, safe="")
+    data = _get_json(
+        f"{base.rstrip('/')}/api/v1/query?query={q}", auth=auth, timeout=timeout
+    )
+    result = data.get("data", {}).get("result") or []
+    for series in result:
+        value = series.get("value") or []
+        # instant-vector value is ``[<ts>, "<number>"]``; ready iff strictly > 0.
+        if len(value) == 2:
+            try:
+                if float(value[1]) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
+
+
 def list_metric_names(
     base: str,
     *,
@@ -165,6 +202,7 @@ def label_values(
 __all__ = [
     "Auth",
     "instant_query_count",
+    "scrape_ready",
     "list_metric_names",
     "label_values",
     "REQUEST_TIMEOUT",
