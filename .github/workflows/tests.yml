@@ -36,6 +36,7 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -66,7 +67,7 @@ jobs:
           --deselect tests/unit/observability/test_dashboard_renderer_v2.py::test_live_round_trip_preserves_timeseries_query \
           --deselect tests/unit/observability/test_datasource_uid_binding.py::test_render_binds_real_uid \
           --deselect tests/unit/observability/test_datasource_uid_binding.py::test_render_default_uses_datasource_variable \
-          --cov=startd8 --cov-report=xml
+          --cov=startd8.observability --cov-report=xml
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
