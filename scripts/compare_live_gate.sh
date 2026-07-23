@@ -43,6 +43,17 @@ from startd8.observability.artifact_generator import generate_observability_arti
 generate_observability_artifacts(Path(sys.argv[1]), Path(sys.argv[2]))
 PY
 
+# Regression floor: the baseline-diff only catches NEW dead SLIs — it is blind to a generator
+# regression that DROPS the fixture's SLIs entirely (zero fails ⇒ zero new fails ⇒ a false PASS).
+# The pilot's metrics-emitting service (mastodonstreaming) must always yield >= EXPECT_MIN_SLOS SLO
+# files; fewer means the generator stopped emitting known SLIs — a regression the diff can't see.
+n_slos=$(find "$WORK/observability/slos" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+if [[ "${n_slos:-0}" -lt "${EXPECT_MIN_SLOS:-1}" ]]; then
+  echo "GATE: FAIL — fixture generated ${n_slos:-0} SLO file(s) (< ${EXPECT_MIN_SLOS:-1}); the generator" \
+       "dropped known SLIs (a regression the baseline-diff alone cannot detect)."
+  exit 2
+fi
+
 CMD=(
   "$PY" -m startd8.cli observability compare-live
   -m "$WORK/observability/observability-manifest.yaml"

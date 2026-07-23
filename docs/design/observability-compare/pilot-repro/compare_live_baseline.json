@@ -1,7 +1,7 @@
 {
   "header": {
     "subject": "http://localhost:9090",
-    "note": "",
+    "note": "Accepted dead SLIs for the pilot Mastodon fixture replayed against a non-Mastodon backend (mastodonstreaming SLIs query the http_server_duration convention; backends here emit span-metrics-connector — the #274 class). Identities are backend-independent. Re-author with: WRITE_BASELINE=1 scripts/compare_live_gate.sh",
     "accepted_fail_count": 11
   },
   "accepted_fail_ids": [
