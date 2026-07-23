@@ -1,10 +1,11 @@
 {
   "header": {
-    "subject": "http://localhost:9090",
-    "note": "Accepted dead SLIs for the pilot Mastodon fixture replayed against a non-Mastodon backend (mastodonstreaming SLIs query the http_server_duration convention; backends here emit span-metrics-connector — the #274 class). Identities are backend-independent. Re-author with: WRITE_BASELINE=1 scripts/compare_live_gate.sh",
-    "accepted_fail_count": 11
+    "subject": "prom/prometheus:v2.53.0",
+    "note": "",
+    "accepted_fail_count": 15
   },
   "accepted_fail_ids": [
+    "mastodonsidekiq-declared-base|latency|slos/mastodonsidekiq-declared-base-slo.yaml|max(sidekiq_queue_latency{queue_name=\"default\"})",
     "mastodonstreaming|availability|alerts/mastodonstreaming-alerts.yaml|( 1 - rate(http_server_duration_count{service=\"mastodon/streaming\",status=~\"5..\"}[5m]) / rate(http_server_duration_count{service=\"mastodon/streaming\"}[5m]) ) < 0.99",
     "mastodonstreaming|availability|slos/mastodonstreaming-slo.yaml|rate(http_server_duration_count{service=\"mastodon/streaming\",status=~\"5..\"}[5m])",
     "mastodonstreaming|availability|slos/mastodonstreaming-slo.yaml|rate(http_server_duration_count{service=\"mastodon/streaming\"}[5m])",
@@ -15,6 +16,9 @@
     "mastodonstreaming|latency|dashboards/mastodonstreaming-dashboard-spec.yaml|histogram_quantile(0.95, rate(http_server_duration_bucket{service=\"mastodon/streaming\"}[$__rate_interval]))",
     "mastodonstreaming|latency|dashboards/mastodonstreaming-dashboard-spec.yaml|histogram_quantile(0.99, rate(http_server_duration_bucket{service=\"mastodon/streaming\"}[$__rate_interval]))",
     "mastodonstreaming|latency|slos/mastodonstreaming-slo.yaml|histogram_quantile(0.99, rate(http_server_duration_bucket{service=\"mastodon/streaming\"}[5m]))",
-    "mastodonstreaming|throughput|dashboards/mastodonstreaming-dashboard-spec.yaml|sum(rate(http_server_duration_count{service=\"mastodon/streaming\"}[$__rate_interval]))"
+    "mastodonstreaming|throughput|dashboards/mastodonstreaming-dashboard-spec.yaml|sum(rate(http_server_duration_count{service=\"mastodon/streaming\"}[$__rate_interval]))",
+    "mastodonweb-declared-base|availability|slos/mastodonweb-declared-base-slo.yaml|rate(http_requests_total[5m])",
+    "mastodonweb-declared-base|availability|slos/mastodonweb-declared-base-slo.yaml|rate(http_requests_total{status=~\"5..\"}[5m])",
+    "mastodonweb-declared-base|latency|slos/mastodonweb-declared-base-slo.yaml|histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))"
   ]
 }

@@ -13,7 +13,19 @@
       "transport": "http",
       "traces": true,
       "metrics_surface": "traces_only",
-      "metrics": {"convention_based": [{"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]}
+      "metrics": {
+        "convention_based": [{"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}],
+        "_declared_note": "Mastodon's Ruby prometheus_exporter emits these opt-in DETAILED series (#293/#300), separate from the traces-only OTel path. Empty-valued labels (method/status) are DIMENSIONS, not pins (#300 defect A). Exercises: A (empty-label selector), B (availability error_selector must not duplicate the status matcher).",
+        "declared_emitted_series": [
+          {"name": "http_request_duration_seconds", "type": "histogram",
+           "labels": {"method": "", "status": ""}, "covers": ["latency"],
+           "enabling_flag": "MASTODON_PROMETHEUS_EXPORTER_WEB_DETAILED_METRICS"},
+          {"name": "http_requests_total", "type": "counter",
+           "labels": {"method": "", "status": ""}, "covers": ["availability"],
+           "error_selector": "status=~\"5..\"",
+           "enabling_flag": "MASTODON_PROMETHEUS_EXPORTER_WEB_DETAILED_METRICS"}
+        ]
+      }
     },
     "mastodonsidekiq": {
       "service_id": "mastodonsidekiq",
@@ -21,7 +33,16 @@
       "transport": "http",
       "traces": true,
       "metrics_surface": "traces_only",
-      "metrics": {"convention_based": [{"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]}
+      "metrics": {
+        "convention_based": [{"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}],
+        "_declared_note": "Sidekiq's queue GAUGES (#300 defects C/D). sidekiq_queue_latency is a gauge covering latency — must bind as a gauge, NOT a histogram _bucket (C). sidekiq_queue_size covers saturation — not a base-RED kind, so it must surface as a deferred_declared_kinds gap, not vanish (D).",
+        "declared_emitted_series": [
+          {"name": "sidekiq_queue_latency", "type": "gauge",
+           "labels": {"queue_name": "default"}, "covers": ["latency"]},
+          {"name": "sidekiq_queue_size", "type": "gauge",
+           "labels": {"queue_name": "default"}, "covers": ["saturation"]}
+        ]
+      }
     },
     "mastodonstreaming": {
       "service_id": "mastodonstreaming",

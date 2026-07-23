@@ -1101,20 +1101,66 @@ _DECLARED_SLI_SHAPE: Dict[str, Tuple[str, str]] = {
 }
 
 
+def _resolve_declared_shape(
+    kind: str, series_type: str
+) -> "Optional[Tuple[str, str]]":
+    """Resolve the (PromQL shape, threshold field) for a declared series covering *kind*, honoring
+    the series' declared ``type`` (#300 defect C).
+
+    The kind's default shape assumes a metric family — ``latency`` ⇒ ``quantile`` (histogram_quantile
+    over the ``_bucket`` series), ``throughput`` ⇒ ``rate`` (counter). A series declared as a
+    ``gauge`` has neither a ``_bucket`` nor a counter to ``rate()`` — so the default shape queries a
+    series that doesn't exist and the SLI returns nothing. The DECLARED type wins over the kind's
+    template: a gauge binds as ``gauge_max`` (the current value), whatever kind it covers, keeping the
+    threshold field so the target still resolves. Unknown kind ⇒ ``None`` (deferred by the caller)."""
+    base = _DECLARED_SLI_SHAPE.get(kind)
+    if base is None:
+        return None
+    _shape, threshold_field = base
+    if series_type == "gauge":
+        return ("gauge_max", threshold_field)
+    return base
+
+
+#: A PromQL matcher key at the head of a fragment — ``status`` in ``status=~"5.."`` (any of
+#: ``= != =~ !~``). Used to drop a base label that the error_selector already constrains, so the
+#: availability good-subset never carries two matchers for the same key (#300 defect B).
+_MATCHER_KEY_RE = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=~|!~|!=|=)")
+
+
+def _equality_matchers(labels: Dict[str, str]) -> List[str]:
+    """The ``key="value"`` equality matchers for a series' declared labels, **excluding empty-valued
+    labels** (#300 defect A). An author writes ``labels: {method: "", status: ""}`` to declare the
+    series is *dimensioned* by method/status — NOT to pin them to the empty string. Rendering
+    ``{method="",status=""}`` is a correctness bug: ``method=""`` matches only series where the label
+    is absent, excluding every real labelled series. An empty value ⇒ aggregate over that dimension
+    (omit it from the selector); only labels with a concrete value become equality matchers. Sorted
+    for deterministic output."""
+    return [f'{k}="{v}"' for k, v in sorted(labels.items()) if v != ""]
+
+
 def _declared_series_selector(labels: Dict[str, str]) -> str:
-    """A PromQL label selector from the series' declared labels ({} ⇒ no selector). Sorted for
-    deterministic output. The labels are author-declared ground truth (job_name/queue_name/…),
-    NOT necessarily service.name — so this binds where the real series actually lives."""
-    if not labels:
-        return ""
-    return "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}"
+    """A PromQL label selector from the series' declared labels ({} ⇒ no selector). The labels are
+    author-declared ground truth (job_name/queue_name/…), NOT necessarily service.name — so this
+    binds where the real series actually lives. Empty-valued labels are aggregation dimensions, not
+    matchers, and are omitted (#300 defect A)."""
+    matchers = _equality_matchers(labels)
+    return "{" + ",".join(matchers) + "}" if matchers else ""
 
 
 def _declared_error_selector(labels: Dict[str, str], error_selector: str) -> str:
     """#286 v2: merge the series' base labels with its ERROR matcher fragment into one selector,
     for the availability ratio's error subset — e.g. labels ``{method="POST"}`` + ``status=~"5.."``
-    ⇒ ``{method="POST",status=~"5.."}``. No labels ⇒ ``{status=~"5.."}``."""
-    parts = [f'{k}="{v}"' for k, v in sorted(labels.items())]
+    ⇒ ``{method="POST",status=~"5.."}``. No labels ⇒ ``{status=~"5.."}``.
+
+    Empty-valued labels are dropped (#300 defect A), and any base label whose key the
+    ``error_selector`` already constrains is dropped too, so the good-subset never carries two
+    matchers for one key (#300 defect B — e.g. ``{status=""}`` + ``status=~"5.."`` yielded the
+    PromQL-rejected ``{status="",status=~"5.."}``)."""
+    err_keys = set(_MATCHER_KEY_RE.findall(error_selector)) if error_selector else set()
+    parts = [
+        f'{k}="{v}"' for k, v in sorted(labels.items()) if v != "" and k not in err_keys
+    ]
     if error_selector:
         parts.append(error_selector)
     return "{" + ",".join(parts) + "}" if parts else ""
@@ -1192,7 +1238,15 @@ def generate_declared_base_slos(
                 # #286 v2: a good/total ratio needs the error subset; without an error_selector a
                 # correct availability ratio can't be built → honest defer (not a fabricated SLI).
                 if not s.error_selector:
-                    deferred.append({"service": svc, "kind": kind, "series": s.name})
+                    deferred.append({
+                        "service": svc, "kind": kind, "series": s.name,
+                        "reason_code": "availability_needs_error_selector",
+                        "reason": (
+                            f"availability covered by {s.name!r} but no error_selector — a correct "
+                            f"good/total ratio can't be built without the error subset. Declare an "
+                            f"error_selector (e.g. status=~\"5..\") on the series to bind it (#286 v2)."
+                        ),
+                    })
                     continue
                 target, _tier = _resolve_threshold("availability", business, [])
                 err_sel = _declared_error_selector(s.labels, s.error_selector)
@@ -1225,9 +1279,29 @@ def generate_declared_base_slos(
                 bound.append({"service": svc, "kind": kind, "series": s.name, "enabling_flag": flag})
                 continue
 
-            shape_field = _DECLARED_SLI_SHAPE.get(kind)
+            shape_field = _resolve_declared_shape(kind, s.type)
             if shape_field is None:
-                deferred.append({"service": svc, "kind": kind, "series": s.name})
+                # #300 defect D: a declared kind the base-RED binder can't bind (e.g. saturation) must
+                # surface as an ACTIONABLE gap, not vanish. Distinguish a recognized functional kind
+                # (bindable via a functional[] FR — the remedy) from an unknown one (grounds nothing).
+                if kind in _FUNCTIONAL_SLI_TEMPLATES:
+                    reason_code = "functional_kind_not_base_red"
+                    reason = (
+                        f"{kind!r} is a functional signal kind, not a base RED kind — the declared-"
+                        f"series binder binds only latency/throughput/availability. Declare a "
+                        f"functional[] FR with signal_kind={kind!r} + target to emit an SLO "
+                        f"(the declared {s.type or 'series'} {s.name!r} can ground it)."
+                    )
+                else:
+                    reason_code = "unknown_kind"
+                    reason = (
+                        f"{kind!r} is not a base RED kind and has no known functional profile; "
+                        f"{s.name!r} grounds no SLI (check the declared covers value)."
+                    )
+                deferred.append({
+                    "service": svc, "kind": kind, "series": s.name,
+                    "reason_code": reason_code, "reason": reason,
+                })
                 continue
             shape, threshold_field = shape_field
             query = _functional_sli_query(shape, s.name, selector)

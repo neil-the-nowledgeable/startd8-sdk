@@ -12,6 +12,9 @@ derived-vs-emitted comparison capability). See the parent proposal
   `metrics_surface` is non-emitting (`traces_only`) and records the gap.
 - **#275 — wrong service label.** The SLI selector used the sanitized id `mastodonweb`; the real OTel
   `service.name` is `mastodon/web` (slash preserved). The generator now uses the real `service.name`.
+- **#300 — four PromQL defects in the #286 declared-emitted-series binder.** Found running this same
+  pilot against the real prometheus_exporter surface. The fixture now declares the opt-in Mastodon
+  series so the gate exercises each fixed path (see the table below).
 
 ## The fixture
 
@@ -25,9 +28,23 @@ It carries the pilot's structural traps:
 | `mastodonweb`, `mastodonsidekiq` | `traces_only` | Base RED SLIs **suppressed** (#274). |
 | `mastodonstreaming` | `otel_sdk_meter` | Emits the convention metric → SLIs **survive**, carrying the real `service="mastodon/streaming"` selector (#275), and **replay live** in Tier B. |
 
+The `mastodonweb` and `mastodonsidekiq` blocks also carry `declared_emitted_series` — the opt-in
+Mastodon `prometheus_exporter` DETAILED series (#293/#300), each `covers`-mapped to a base kind. These
+drive the **#286 declared-series binder** and pin the four **#300** PromQL fixes into the gate:
+
+| Declared series (service) | type · covers | #300 defect it guards |
+|---|---|---|
+| `http_request_duration_seconds` (web) | histogram · latency, `labels:{method:"",status:""}` | **A** — empty-value labels are dimensions, not `{method="",status=""}` matchers |
+| `http_requests_total` (web) | counter · availability, `error_selector: status=~"5.."` | **B** — the error subset must carry ONE `status` matcher, not `{status="",status=~"5.."}` |
+| `sidekiq_queue_latency` (sidekiq) | **gauge** · latency | **C** — a gauge binds `max(...)`, NOT `histogram_quantile(...\_bucket)` |
+| `sidekiq_queue_size` (sidekiq) | gauge · **saturation** | **D** — an unbindable kind surfaces as a `deferred_declared_kinds` gap, not vanishing |
+
 `compare_live_baseline.json` — the committed set of accepted (known) `fail` verdict identities for the
 CI gate. Each identity is `(service | signal | dir-qualified-source | normalized-expr)` — backend-
 independent, so it is stable whether replayed against the demo Prometheus or the CI reference subject.
+The declared-series SLIs (`mastodon{web,sidekiq}-declared-base/…`) are baselined `fail` too: they are
+now **well-formed** PromQL (the #300 fix), but the pinned `prom/prometheus` subject doesn't emit
+Mastodon's series, so they correctly report `no matching series` rather than a malformed query.
 
 ## Reproduce it locally
 

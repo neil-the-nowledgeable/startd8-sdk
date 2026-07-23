@@ -23,7 +23,7 @@ _GAP_CLASSES: Tuple[Tuple[str, str], ...] = (
     ("suppressed_base_metrics", "SUPPRESSED base SLIs — declared non-emitting metrics_surface (#274)"),
     ("suppressed_scrape_configs", "SUPPRESSED ServiceMonitors — surface serves no /metrics scrape (#285)"),
     ("unverified_base_metrics", "UNVERIFIED base SLIs — emission surface unknown, advisory (#277)"),
-    ("deferred_declared_kinds", "DEFERRED declared kinds — covered but not yet bindable, e.g. availability without an error-selector (#286)"),
+    ("deferred_declared_kinds", "DEFERRED declared kinds — covered but not base-bindable; see each entry's `reason` (availability without an error-selector, or a functional kind like saturation) (#286/#300)"),
     ("unfulfilled", "UNFULFILLED FRs — declared signal_kind, no emitting series"),
     ("ungrounded_kinds", "UNGROUNDED kinds — batch/cron/ml_inference, values pending grounding"),
     ("empty_services", "EMPTY services — observed by nothing"),

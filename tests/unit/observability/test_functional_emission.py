@@ -552,6 +552,139 @@ class TestDeclaredEmittedSeriesBinding:
         assert all(d["kind"] != "availability" for d in report.fr_coverage["deferred_declared_kinds"])
 
 
+class TestDeclaredEmittedSeriesPromQLDefects:
+    """#300: four PromQL correctness defects in the #286 declared-emitted-series binder, found
+    running the ContextCore-on-Mastodon (RepoProbe) pilot as an adversarial subject."""
+
+    def _meta(self, tmp_path, series):
+        hint = {
+            "service_id": "web", "kind": "http_server", "transport": "http",
+            "traces": {"required": [{"span_name": "GET /"}]},
+            "metrics": {
+                "convention_based": [
+                    {"name": "http.server.duration", "type": "histogram",
+                     "source": "otel_semconv:http"}],
+                "declared_emitted_series": series,
+            },
+            "metrics_surface": "prometheus_exporter",
+        }
+        doc = {"project_id": "p", "instrumentation_hints": {"web": hint}}
+        m = tmp_path / "onboarding-metadata.json"
+        m.write_text(json.dumps(doc))
+        return m
+
+    def _run(self, tmp_path, series):
+        return generate_observability_artifacts(
+            onboarding_metadata_path=self._meta(tmp_path, series),
+            output_dir=tmp_path / "out", dry_run=False,
+        )
+
+    def _declared_slo(self, report):
+        return [a for a in report.artifacts if a.artifact_type == "slo_definition"
+                and "declared-base" in a.output_path and a.status == "generated"]
+
+    def test_defect_a_empty_valued_labels_are_not_equality_matchers(self, tmp_path):
+        # Defect A: `labels: {method: "", status: ""}` declares dimensions, NOT a pin to "". Rendering
+        # {method="",status=""} matches only series where the label is ABSENT — excluding the real
+        # labelled series. Empty-valued labels must be omitted from the selector.
+        series = [{"name": "http_request_duration_seconds", "type": "histogram",
+                   "labels": {"method": "", "status": ""}, "covers": ["latency"]}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert 'method=""' not in content
+        assert 'status=""' not in content
+        # the empty labels drop out entirely → a bare _bucket selector, valid PromQL.
+        assert "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))" in content
+
+    def test_defect_a_keeps_concrete_valued_labels(self, tmp_path):
+        # a label WITH a value is still a real equality matcher; only empty ones drop.
+        series = [{"name": "http_request_duration_seconds", "type": "histogram",
+                   "labels": {"method": "", "job": "web"}, "covers": ["latency"]}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert 'job="web"' in content
+        assert 'method=""' not in content
+
+    def test_defect_b_no_duplicate_status_matcher_on_availability_error_query(self, tmp_path):
+        # Defect B: an empty `status=""` base label + an `error_selector` on `status` yielded the
+        # PromQL-rejected `{status="",status=~"5.."}`. The good-subset must carry ONE status matcher.
+        series = [{"name": "http_requests_total", "type": "counter",
+                   "labels": {"method": "", "status": ""}, "covers": ["availability"],
+                   "error_selector": 'status=~"5.."'}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert 'status="",status=~"5.."' not in content
+        assert 'status="200",status=~"5.."' not in content
+        # good subset is a single, valid status matcher; total has no empty selector.
+        assert 'rate(http_requests_total{status=~"5.."}[5m])' in content
+        assert "rate(http_requests_total[5m])" in content
+
+    def test_defect_b_concrete_label_key_colliding_with_error_selector_is_dropped(self, tmp_path):
+        # even a NON-empty base label whose key the error_selector re-constrains must not double up.
+        series = [{"name": "http_requests_total", "type": "counter",
+                   "labels": {"status": "200", "job": "web"}, "covers": ["availability"],
+                   "error_selector": 'status=~"5.."'}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert 'status="200",status=~"5.."' not in content
+        # job (unrelated key) is retained alongside the error matcher.
+        assert 'rate(http_requests_total{job="web",status=~"5.."}[5m])' in content
+
+    def test_defect_c_gauge_covering_latency_binds_as_gauge_not_histogram(self, tmp_path):
+        # Defect C: a gauge has no `_bucket` series — a `covers: latency` template must NOT override
+        # the declared gauge type into a histogram_quantile query that returns nothing.
+        series = [{"name": "sidekiq_queue_latency", "type": "gauge",
+                   "labels": {"queue_name": "default"}, "covers": ["latency"]}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert "_bucket" not in content
+        assert "histogram_quantile" not in content
+        assert 'max(sidekiq_queue_latency{queue_name="default"})' in content
+
+    def test_defect_c_histogram_latency_still_binds_as_quantile(self, tmp_path):
+        # regression guard: a declared histogram is unaffected — still p99 over _bucket.
+        series = [{"name": "http_request_duration_seconds", "type": "histogram",
+                   "labels": {"job": "web"}, "covers": ["latency"]}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert "http_request_duration_seconds_bucket" in content
+        assert "histogram_quantile" in content
+
+    def test_defect_d_saturation_surfaces_as_a_gap_not_vanish(self, tmp_path):
+        # Defect D: a declared series covering `saturation` (not base-bindable) was stripped at parse
+        # time and vanished everywhere. It must reach the deferred_declared_kinds gap channel.
+        series = [{"name": "sidekiq_queue_size", "type": "gauge",
+                   "labels": {"queue_name": "default"}, "covers": ["saturation"]}]
+        report = self._run(tmp_path, series)
+        assert self._declared_slo(report) == []  # correctly not bound as a base SLO
+        assert any(d["kind"] == "saturation" and d["service"] == "web"
+                   and d["series"] == "sidekiq_queue_size"
+                   for d in report.fr_coverage["deferred_declared_kinds"])
+
+    def test_defect_d_saturation_gap_is_actionable(self, tmp_path):
+        # D (deeper): the gap must be ACTIONABLE — a recognized functional kind carries a reason_code
+        # + a remedy (declare a functional[] FR), distinct from an availability-needs-error-selector
+        # deferral. A gap you can't act on is barely better than vanishing.
+        series = [{"name": "sidekiq_queue_size", "type": "gauge",
+                   "labels": {"queue_name": "default"}, "covers": ["saturation"]}]
+        d = next(x for x in self._run(tmp_path, series).fr_coverage["deferred_declared_kinds"]
+                 if x["kind"] == "saturation")
+        assert d["reason_code"] == "functional_kind_not_base_red"
+        assert "functional[] FR" in d["reason"] and "saturation" in d["reason"]
+
+    def test_defect_d_availability_deferral_has_distinct_reason_code(self, tmp_path):
+        # the two deferral causes must be distinguishable, not lumped under one availability-flavored label.
+        series = [{"name": "http_requests_total", "type": "counter",
+                   "labels": {"status": "200"}, "covers": ["availability"]}]  # no error_selector
+        d = next(x for x in self._run(tmp_path, series).fr_coverage["deferred_declared_kinds"]
+                 if x["kind"] == "availability")
+        assert d["reason_code"] == "availability_needs_error_selector"
+        assert "error_selector" in d["reason"]
+
+    def test_defect_d_unknown_kind_is_distinguished_from_functional(self, tmp_path):
+        # a genuinely bogus covers value grounds nothing — a different reason_code than a real
+        # functional kind (which has a remedy). Preserved by the parse layer (#300) so it surfaces.
+        series = [{"name": "some_series", "type": "gauge",
+                   "labels": {"q": "1"}, "covers": ["banana"]}]
+        d = next(x for x in self._run(tmp_path, series).fr_coverage["deferred_declared_kinds"]
+                 if x["kind"] == "banana")
+        assert d["reason_code"] == "unknown_kind"
+
+
 class TestServiceMonitorScrapeSurfaceGate:
     """#285: a ServiceMonitor is a Prometheus /metrics scrape config; suppress it for a service whose
     declared metrics_surface serves NO scrape endpoint (traces_only/none), else it ships a dead
