@@ -1125,6 +1125,13 @@ def _declared_series_binds_availability(s: "DeclaredEmittedSeries") -> bool:
     return "availability" in s.covers and bool(s.error_selector)
 
 
+def _series_slug(name: str) -> str:
+    """A name-safe token from a series name, so two declared series covering the SAME kind get
+    UNIQUE SLO/SLI/alert names instead of colliding on ``{svc}-{kind}-declared`` (#286). e.g.
+    ``http_request_duration_seconds`` → ``http-request-duration-seconds``."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "series"
+
+
 def _declared_covered_kinds(service: ServiceHints) -> "frozenset[str]":
     """The base RED kinds a service's declared-emitted series can bind: latency/throughput (always),
     plus availability when a series carries an error_selector (#286 v2). Drives BOTH the precedence-
@@ -1159,9 +1166,11 @@ def generate_declared_base_slos(
     deferred: List[Dict[str, str]] = []
     severity = _severity_for(business, [])
 
-    def _meta(kind: str, series_name: str) -> Dict[str, Any]:
+    def _meta(kind: str, series_name: str, slug: str) -> Dict[str, Any]:
+        # #286: the series slug disambiguates two series covering the same kind (else the
+        # SLO name collides on `{svc}-{kind}-declared` and an OpenSLO apply drops one).
         return {
-            "name": f"{svc}-{kind}-declared".lower().replace("_", "-"),
+            "name": f"{svc}-{kind}-{slug}-declared".lower().replace("_", "-"),
             "labels": {
                 "service": svc, "signal_kind": kind,
                 "bound_series": series_name,  # traceability to the real declared series
@@ -1171,6 +1180,7 @@ def generate_declared_base_slos(
 
     for s in series:
         selector = _declared_series_selector(s.labels)
+        slug = _series_slug(s.name)
         for kind in s.covers:
             if kind == "availability":
                 # #286 v2: a good/total ratio needs the error subset; without an error_selector a
@@ -1182,7 +1192,7 @@ def generate_declared_base_slos(
                 err_sel = _declared_error_selector(s.labels, s.error_selector)
                 slo = {
                     "apiVersion": "openslo/v1", "kind": "SLO",
-                    "metadata": _meta(kind, s.name),
+                    "metadata": _meta(kind, s.name, slug),
                     "spec": {
                         "description": (
                             f"availability SLO for {svc} bound to the declared emitted series "
@@ -1191,7 +1201,7 @@ def generate_declared_base_slos(
                         "target": target,
                         "timeWindow": {"duration": business.slo_window, "isRolling": True},
                         "budgetPolicy": "occurrences",
-                        "indicator": {"metadata": {"name": f"{svc}-availability-declared-sli"}, "spec": {
+                        "indicator": {"metadata": {"name": f"{svc}-availability-{slug}-declared-sli"}, "spec": {
                             "ratioMetric": {
                                 "counter": {"metricSource": {"type": "prometheus", "spec": {
                                     "query": f"rate({s.name}{selector}[5m])"}}},
@@ -1200,7 +1210,7 @@ def generate_declared_base_slos(
                             },
                         }},
                         "alerting": {
-                            "name": f"{svc}-availability-declared-alert",
+                            "name": f"{svc}-availability-{slug}-declared-alert",
                             "labels": {"severity": severity},
                         },
                     },
@@ -1219,7 +1229,7 @@ def generate_declared_base_slos(
             slo = {
                 "apiVersion": "openslo/v1",
                 "kind": "SLO",
-                "metadata": _meta(kind, s.name),
+                "metadata": _meta(kind, s.name, slug),
                 "spec": {
                     "description": (
                         f"{kind} SLO for {svc} bound to the declared emitted series "
@@ -1228,7 +1238,7 @@ def generate_declared_base_slos(
                     "target": target,
                     "timeWindow": {"duration": business.slo_window, "isRolling": True},
                     "indicator": {
-                        "metadata": {"name": f"{svc}-{kind}-declared-sli"},
+                        "metadata": {"name": f"{svc}-{kind}-{slug}-declared-sli"},
                         "spec": {
                             "thresholdMetric": {
                                 "metricSource": {"type": "prometheus", "spec": {"query": query}},
@@ -1236,7 +1246,7 @@ def generate_declared_base_slos(
                         },
                     },
                     "alerting": {
-                        "name": f"{svc}-{kind}-declared-alert",
+                        "name": f"{svc}-{kind}-{slug}-declared-alert",
                         "labels": {"severity": severity},
                     },
                 },
