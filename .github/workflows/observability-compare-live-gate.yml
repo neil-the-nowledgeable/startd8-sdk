@@ -1,0 +1,70 @@
+name: observability-compare-live-gate
+
+# Derived-vs-emitted CI gate (rung #3 of the compare-live capability).
+#
+# Regenerates the pilot Mastodon o11y artifacts and replays their derived PromQL against a PINNED
+# reference subject (a self-scraping prom/prometheus stood up by compare-live), failing the build
+# only on a NEW dead SLI — a verdict not in the committed baseline. This prevents the #274/#275
+# defect class (an SLI that evaluates against nothing) from silently shipping via a generator or
+# engine change. See docs/design/observability-compare/pilot-repro/README.md.
+#
+# Relationship to observability-fidelity.yml (they are complementary, NOT duplicates):
+#   * observability-fidelity.yml — a REUSABLE (workflow_call/dispatch) COVERAGE gate wrapping
+#     `validate-promql`; a caller supplies its own artifacts_dir + Prometheus and gates on a
+#     coverage floor. No auto-trigger, no baseline, no subject stand-up.
+#   * this workflow — a SELF-CONTAINED, auto-triggered PR REGRESSION gate wrapping `compare-live`
+#     (Tier-A merge + baseline-diff); it regenerates a committed fixture, stands up its own pinned
+#     subject, and fails only on a NEW dead SLI vs the committed baseline.
+
+on:
+  pull_request:
+    paths:
+      - 'src/startd8/observability/**'
+      - 'docs/design/observability-compare/pilot-repro/**'
+      - 'scripts/compare_live_gate.sh'
+      - '.github/workflows/observability-compare-live-gate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: compare-live-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install startd8 (editable)
+        run: pip install -e .
+
+      - name: Pre-pull the pinned Prometheus image
+        run: docker pull prom/prometheus:v2.53.0
+
+      - name: Run compare-live gate
+        run: |
+          set +e
+          bash scripts/compare_live_gate.sh
+          code=$?
+          echo "gate exit=$code"
+          case "$code" in
+            0)
+              echo "compare-live gate: no new dead SLI."
+              exit 0 ;;
+            2)
+              echo "::error title=compare-live gate::A NEW dead SLI shipped (a derived SLI that evaluates against nothing). Fix the generator, or re-baseline with scripts/compare_live_gate.sh if intentional."
+              exit 1 ;;
+            3)
+              echo "::warning title=compare-live gate::Live replay was inconclusive (standup/scrape/infra). Not treated as a code regression."
+              exit 0 ;;
+            *)
+              # A crash / unexpected code must NOT be mistaken for a clean pass.
+              echo "::error title=compare-live gate::Gate exited unexpectedly ($code) — treating as failure."
+              exit 1 ;;
+          esac

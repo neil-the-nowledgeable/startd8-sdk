@@ -1,0 +1,20 @@
+{
+  "header": {
+    "subject": "http://localhost:9090",
+    "note": "Accepted dead SLIs for the pilot Mastodon fixture replayed against a non-Mastodon backend (mastodonstreaming SLIs query the http_server_duration convention; backends here emit span-metrics-connector — the #274 class). Identities are backend-independent. Re-author with: WRITE_BASELINE=1 scripts/compare_live_gate.sh",
+    "accepted_fail_count": 11
+  },
+  "accepted_fail_ids": [
+    "mastodonstreaming|availability|alerts/mastodonstreaming-alerts.yaml|( 1 - rate(http_server_duration_count{service=\"mastodon/streaming\",status=~\"5..\"}[5m]) / rate(http_server_duration_count{service=\"mastodon/streaming\"}[5m]) ) < 0.99",
+    "mastodonstreaming|availability|slos/mastodonstreaming-slo.yaml|rate(http_server_duration_count{service=\"mastodon/streaming\",status=~\"5..\"}[5m])",
+    "mastodonstreaming|availability|slos/mastodonstreaming-slo.yaml|rate(http_server_duration_count{service=\"mastodon/streaming\"}[5m])",
+    "mastodonstreaming|error|alerts/mastodonstreaming-alerts.yaml|( rate(http_server_duration_count{service=\"mastodon/streaming\",status=~\"5..\"}[5m]) / rate(http_server_duration_count{service=\"mastodon/streaming\"}[5m]) ) > 0.01",
+    "mastodonstreaming|error|dashboards/mastodonstreaming-dashboard-spec.yaml|sum(rate(http_server_duration_count{service=\"mastodon/streaming\",status=~\"5..\"}[$__rate_interval])) / sum(rate(http_server_duration_count{service=\"mastodon/streaming\"}[$__rate_interval]))",
+    "mastodonstreaming|latency|alerts/mastodonstreaming-alerts.yaml|histogram_quantile(0.99, rate(http_server_duration_bucket{service=\"mastodon/streaming\"}[5m]) ) > 0.5",
+    "mastodonstreaming|latency|dashboards/mastodonstreaming-dashboard-spec.yaml|histogram_quantile(0.5, rate(http_server_duration_bucket{service=\"mastodon/streaming\"}[$__rate_interval]))",
+    "mastodonstreaming|latency|dashboards/mastodonstreaming-dashboard-spec.yaml|histogram_quantile(0.95, rate(http_server_duration_bucket{service=\"mastodon/streaming\"}[$__rate_interval]))",
+    "mastodonstreaming|latency|dashboards/mastodonstreaming-dashboard-spec.yaml|histogram_quantile(0.99, rate(http_server_duration_bucket{service=\"mastodon/streaming\"}[$__rate_interval]))",
+    "mastodonstreaming|latency|slos/mastodonstreaming-slo.yaml|histogram_quantile(0.99, rate(http_server_duration_bucket{service=\"mastodon/streaming\"}[5m]))",
+    "mastodonstreaming|throughput|dashboards/mastodonstreaming-dashboard-spec.yaml|sum(rate(http_server_duration_count{service=\"mastodon/streaming\"}[$__rate_interval]))"
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "project_id": "mastodon-status-fanout",
+  "_note": "Reconstructed Mastodon pilot input (the original run-008 artifacts were never persisted; the SDK's mastodon o11y tests use inline synthetic _meta). Faithful to the pilot structure: the phantom 'mastodon' umbrella stem (#241, filtered), two traces-only services (#274 base-SLI suppression), and one metrics-emitting service whose SLI carries the real OTel service.name with a slash (#275). Consumed by generate_observability_artifacts(); replayed by 'startd8 observability compare-live'.",
+  "instrumentation_hints": {
+    "mastodon": {
+      "service_id": "mastodon",
+      "transport": "http",
+      "metrics": {"convention_based": [{"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]}
+    },
+    "mastodonweb": {
+      "service_id": "mastodonweb",
+      "service_name": "mastodon/web",
+      "transport": "http",
+      "traces": true,
+      "metrics_surface": "traces_only",
+      "metrics": {"convention_based": [{"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]}
+    },
+    "mastodonsidekiq": {
+      "service_id": "mastodonsidekiq",
+      "service_name": "mastodon/sidekiq",
+      "transport": "http",
+      "traces": true,
+      "metrics_surface": "traces_only",
+      "metrics": {"convention_based": [{"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]}
+    },
+    "mastodonstreaming": {
+      "service_id": "mastodonstreaming",
+      "service_name": "mastodon/streaming",
+      "transport": "http",
+      "traces": true,
+      "metrics_surface": "otel_sdk_meter",
+      "metrics": {"convention_based": [{"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]}
+    }
+  }
+}
