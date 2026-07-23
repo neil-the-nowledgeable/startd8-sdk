@@ -190,3 +190,68 @@ gaps are visible and per-kind-actionable" end-to-end.
 - **`signal_kind` enum orthogonality is an open design question, not a task** — crp-focus-R1.md:20
   flags "is `retry_rate` a special case of `run_success`? is `lag` vs `freshness` real?" Left as a
   spec question for the grounding pilot (EC-1) to settle with evidence, not to guess now.
+
+---
+
+# Increment: declared-emitted-series binding (#286 / REQ-CCL-107) — enhancement backlog
+
+**Scope:** the just-shipped value-recovery increment after #274's traces-only suppression —
+`DeclaredEmittedSeries` + `_parse_declared_series` + `generate_declared_base_slos` (latency/
+throughput + availability-v2) + `fr_coverage.{bound_declared_series,deferred_declared_kinds}` +
+`observability compare` surfacing (PRs #289/#291/#292). Consumes ContextCore's REQ-CCL-107
+(contextcore#42), validated end-to-end 2026-07-23. **Register:** implementer. **Date:** 2026-07-23.
+
+## Top findings (do first)
+
+### 1. `enabling_flag` is parsed but **never surfaced** — a bound SLO can be silently dead-until-flagged — **S** (flagship)
+`DeclaredEmittedSeries.enabling_flag` (the deploy flag that turns the series on, e.g.
+`MASTODON_PROMETHEUS_EXPORTER_WEB_DETAILED_METRICS`) is **captured for exactly this purpose and then
+evaporates**. Verification gate cleared: `git grep enabling_flag` across all `src/` + `tests/`
+returns **only** the parse (`artifact_generator_context.py:320`), the model field
+(`artifact_generator_models.py:54`), and one test *fixture* that sets but never asserts it
+(`test_functional_emission.py:450`) — **zero consumers**. It reaches no SLO, no `fr_coverage`, no
+`compare`, no runbook. The consequence is concrete: Mastodon's DETAILED metrics are **opt-in / OFF by
+default**, so the SDK binds a latency SLO to `http_request_duration_seconds` — a series that emits
+**nothing** until the flag is set — and *nothing in the output tells the operator to set it*. This is
+a latent value path (advisory-by-design, so not a P0 break), but its value is currently **zero**
+because it's unwired. **Cheap fix:** thread `enabling_flag` into (a) the declared SLO's `description`
+("requires `<flag>` enabled"), (b) a `bound_declared_series[].enabling_flag` field, and (c) the
+`compare` bound line → so an **operator** knows the bound SLI is dead until they enable the flag,
+without reading the plan. The field is already parsed + on the model — this is pure wiring.
+
+### 2. The base RED triple `{availability, latency, throughput}` is restated literally 3× — drift seam — **S** (the one 🏗️ item)
+The triple is a literal in three places: `artifact_generator.py:618` (`_red`),
+`artifact_generator_context.py:289` (`_RED_KINDS`), `artifact_generator_generators.py:1063`
+(`_TRIPLET_SIGNAL_KINDS`). Adding or renaming a base kind (the L-effort "move a kind out of the
+registry" step this family already anticipates) silently misses whichever copy the author forgets.
+Single-source it (one `BASE_RED_KINDS` frozenset imported by all three). Cheap now, compounding
+later. **Cite `/complexity-distiller` S6 (scattered-constant / drift-seam) for any deeper sweep** —
+this is the one architectural item; the rest of the module's constant-hygiene is a distiller hand-off.
+
+### 3. Wire `bound_declared_series` into Tier-B `validate-promql` — from "bound" (static) to "bound + evaluates" (live) — **M**
+`fr_coverage.bound_declared_series` proves an SLI is *shaped* against a real series; it does **not**
+prove the series *evaluates*. The Tier-B engine already exists (`validate-promql` / `bind_and_verify`).
+Feeding the bound SLIs through it (replay `<series>{<labels>}` against a live Prometheus) closes the
+loop the compare doc promises — and would have caught finding #1 empirically (a flag-gated series
+returns `bound_no_data`). Higher effort (needs a live subject) but the engine is done; this is glue.
+
+## Honest gaps (product decisions surfaced while grounding — not bugs)
+
+- **Availability defers without an `error_selector` — by design.** A correct good/total ratio is
+  impossible without the error subset; the SDK records `deferred_declared_kinds` and never fabricates
+  a ratio. Live availability binding is gated on **contextcore#43** (REQ-CCL-108), already filed. Not
+  a bug — don't "complete" it by guessing an error selector.
+- **Declared `target` carries the raw threshold string (`'500ms'`/`'100rps'`), not an objective
+  fraction.** Intentional consistency with the sibling `generate_functional_slos` this generator
+  mirrors (declined in the #292 code review). A broader OpenSLO-target-semantics cleanup is a
+  separate, module-wide item — not specific to #286.
+- **Part B is dormant-but-safe until upstream declares series.** Explicit-only + degrade-to-suppress
+  is the design; absence is never read as a binding signal. Correct, not a gap.
+
+## Grounding note (belief → actual — where going-and-seeing changed the answer)
+
+| Belief going in | Actual (grounded) | Effect on the backlog |
+|---|---|---|
+| `enabling_flag` is probably surfaced somewhere (SLO/runbook) | `git grep` across `src/`+`tests/`: only parse + model + an unasserting test fixture — **zero consumers** | Promoted to the flagship Top finding (built-but-unwired latent value path) |
+| The RED triple is single-sourced (it's a well-factored module) | Restated literally in 3 modules | Became the one 🏗️ drift-seam item |
+| `compare` already makes the binding fully legible | It shows *which* kinds bound, but not the **flag** an operator must enable for the series to emit | Finding #1's fix routes through `compare` + the SLO description |
