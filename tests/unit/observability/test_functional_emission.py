@@ -273,3 +273,24 @@ class TestUngroundedKindCoverage:
         assert "ranker" in report.fr_coverage["empty_services"]
         # #231: the incidental http transport must not have produced a latency SLO.
         assert "latency" not in resolve_sli_kinds(["ml_inference"], [], "http")
+
+
+class TestServiceNameLabelValue:
+    """#275: the SLI label VALUE must be the real OTel service.name (slash preserved), not the
+    sanitized graph id — else the selector never matches real telemetry."""
+
+    def test_real_service_name_is_the_selector_value(self):
+        from startd8.observability.artifact_generator_generators import _descriptor_for
+        svc = ServiceHints(service_id="mastodonweb", service_name="mastodon/web", transport="http",
+                           kinds=["http_server"])
+        d = _descriptor_for(svc, None)
+        assert d.selector("mastodonweb") .startswith('{service="mastodon/web"') \
+            or 'service="mastodon/web"' in d.selector("mastodonweb")
+        assert "mastodonweb" not in d.selector("mastodonweb")  # the sanitized id is gone
+
+    def test_absent_service_name_is_byte_identical(self):
+        from startd8.observability.artifact_generator_generators import _descriptor_for
+        svc = ServiceHints(service_id="checkoutservice", transport="grpc", kinds=["grpc_server"])
+        d = _descriptor_for(svc, None)
+        assert 'service_name="checkoutservice"' in d.selector("checkoutservice") \
+            or 'service="checkoutservice"' in d.selector("checkoutservice")

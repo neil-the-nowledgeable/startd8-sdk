@@ -33,6 +33,11 @@ class ServiceHints:
     """Instrumentation hints for a single service."""
 
     service_id: str
+    # #275: the subject's real OTel `service.name` (slash preserved, e.g. "mastodon/web"),
+    # carried on instrumentation_hints[svc].service_name (contextcore#39/#40). Distinct from
+    # the sanitized graph `service_id` ("mastodonweb"). Used as the SLI label VALUE so the
+    # selector matches real telemetry; absent ⇒ fall back to service_id (byte-identical).
+    service_name: str = ""
     # FR-14 (#226): optional — a service that declares a `kind` need not have a
     # listen transport (workers/cron/batch don't). Absent transport + absent kinds
     # is still skipped upstream (extract_service_hints).
