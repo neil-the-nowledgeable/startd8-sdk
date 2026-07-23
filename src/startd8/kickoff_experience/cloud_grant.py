@@ -37,6 +37,51 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 
+# Observability manifest descriptors — consumed by ``observability/collector.py`` (this module is
+# registered in its ``_INSTRUMENTED_MODULES``) so the descriptor↔emission **bijection** holds
+# (REQ-OBS-SHARED-002): every counter created in :class:`GrantMetrics` has a matching descriptor here
+# and vice versa. Zero runtime cost. These are the FR-E4 cloud-grant lifecycle counters.
+_METER_NAME = "startd8.cloud_grant"
+_OTEL_DESCRIPTORS = {
+    "category": "business_observability",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "startd8.cloud_grant.issued",
+            "instrument": "counter",
+            "unit": "",
+            "description": "Cloud grants issued",
+            "meter": _METER_NAME,
+            "labels": [],
+        },
+        {
+            "name": "startd8.cloud_grant.consumed",
+            "instrument": "counter",
+            "unit": "",
+            "description": "Cloud grant uses consumed (session creation)",
+            "meter": _METER_NAME,
+            "labels": [],
+        },
+        {
+            "name": "startd8.cloud_grant.denied",
+            "instrument": "counter",
+            "unit": "",
+            "description": "Cloud grant write attempts denied, by reason",
+            "meter": _METER_NAME,
+            "labels": ["reason"],
+        },
+        {
+            "name": "startd8.cloud_grant.revoked",
+            "instrument": "counter",
+            "unit": "",
+            "description": "Cloud grants revoked",
+            "meter": _METER_NAME,
+            "labels": [],
+        },
+    ],
+}
+
+
 # --------------------------------------------------------------------------- scope + record
 
 

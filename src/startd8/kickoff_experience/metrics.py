@@ -35,6 +35,82 @@ logger = get_logger(__name__)
 
 _METER_NAME = "startd8.kickoff"
 
+# Observability manifest descriptors — consumed by ``observability/collector.py`` (this module is
+# registered in its ``_INSTRUMENTED_MODULES``) so the descriptor↔emission **bijection** holds
+# (REQ-OBS-SHARED-002): every instrument created in ``_gauges()`` has a matching descriptor here and
+# vice versa. Zero runtime cost. Kickoff progress signals are user-facing readiness/cost gauges plus
+# the cumulative facilitation-spend counter.
+_OTEL_DESCRIPTORS = {
+    "category": "business_observability",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "kickoff.readiness.percent",
+            "instrument": "gauge",
+            "unit": "",
+            "description": "Kickoff field readiness (ok fraction) as a percent",
+            "meter": _METER_NAME,
+            "labels": ["project"],
+        },
+        {
+            "name": "kickoff.session.cost_usd",
+            "instrument": "gauge",
+            "unit": "",
+            "description": "Latest kickoff session cost (USD)",
+            "meter": _METER_NAME,
+            "labels": ["project"],
+        },
+        {
+            "name": "kickoff.proposals.pending",
+            "instrument": "gauge",
+            "unit": "",
+            "description": "Pending kickoff proposals awaiting confirmation",
+            "meter": _METER_NAME,
+            "labels": ["project"],
+        },
+        {
+            "name": "kickoff.fields.blocked",
+            "instrument": "gauge",
+            "unit": "",
+            "description": "Blocked kickoff fields",
+            "meter": _METER_NAME,
+            "labels": ["project"],
+        },
+        {
+            "name": "kickoff.facilitation.cost_usd",
+            "instrument": "gauge",
+            "unit": "",
+            "description": "Latest facilitation cost (USD), labelled by posture + tier",
+            "meter": _METER_NAME,
+            "labels": ["project", "posture", "tier"],
+        },
+        {
+            "name": "kickoff.facilitation.cost_usd_total",
+            "instrument": "counter",
+            "unit": "",
+            "description": "Cumulative facilitation spend (USD), labelled by posture + tier",
+            "meter": _METER_NAME,
+            "labels": ["project", "posture", "tier"],
+        },
+        {
+            "name": "kickoff.activation.open",
+            "instrument": "gauge",
+            "unit": "",
+            "description": "Open activation conditions (firing 'alerts') from the oracle",
+            "meter": _METER_NAME,
+            "labels": ["project"],
+        },
+        {
+            "name": "kickoff.activation.severity",
+            "instrument": "gauge",
+            "unit": "",
+            "description": "Overall activation severity (0=ok, 1=attention, 2=blocked)",
+            "meter": _METER_NAME,
+            "labels": ["project"],
+        },
+    ],
+}
+
 # Lazy, process-wide instrument cache. `_tried` guards a single configure+create attempt so a missing
 # collector doesn't re-probe on every emit.
 _state: Dict[str, Any] = {"gauges": None, "tried": False}

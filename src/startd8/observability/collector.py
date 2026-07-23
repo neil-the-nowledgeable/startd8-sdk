@@ -43,6 +43,10 @@ _INSTRUMENTED_MODULES = [
     ("startd8.utils.artifact_inventory", "src/startd8/utils/artifact_inventory.py"),
     ("startd8.frontend_codegen.telemetry", "src/startd8/frontend_codegen/telemetry.py"),
     ("startd8.presentation_polish.telemetry", "src/startd8/presentation_polish/telemetry.py"),
+    # Kickoff experience live emitters — previously-undeclared shipped metrics (parity gap):
+    # the kickoff progress gauges + facilitation-spend counter, and the cloud-grant lifecycle counters.
+    ("startd8.kickoff_experience.metrics", "src/startd8/kickoff_experience/metrics.py"),
+    ("startd8.kickoff_experience.cloud_grant", "src/startd8/kickoff_experience/cloud_grant.py"),
 ]
 
 # Event type → instrument-group mapping (derived from EventType enum grouping).
