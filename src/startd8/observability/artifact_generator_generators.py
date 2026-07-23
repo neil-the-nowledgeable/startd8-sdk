@@ -22,7 +22,9 @@ from .artifact_generator_models import *  # noqa: F401,F403
 from .metric_descriptor import (
     BASE_RED_KINDS,
     NON_EMITTING_CONVENTION_SURFACES,
+    SPAN_METRICS_TEMPO_PROFILE,
     MetricDescriptor,
+    profile_for,
     profile_for_kinds,
     profile_for_transport,
     resolve_sli_kinds,
@@ -1212,6 +1214,9 @@ def generate_declared_base_slos(
     bound: List[Dict[str, str]] = []
     deferred: List[Dict[str, str]] = []
     severity = _severity_for(business, [])
+    # #307 §2.0: span > declared-series precedence. A kind a declared span signal owns is bound by
+    # the span lane; this base lane skips it (recorded) so a kind covered by BOTH emits exactly once.
+    span_owned = _declared_span_covered_kinds(service)
 
     def _meta(kind: str, series_name: str, slug: str) -> Dict[str, Any]:
         # #286: the series slug disambiguates two series covering the same kind (else the
@@ -1234,6 +1239,16 @@ def generate_declared_base_slos(
         flag = s.enabling_flag
         flag_note = f" Requires the {flag} flag enabled for the series to emit." if flag else ""
         for kind in s.covers:
+            if kind in span_owned:
+                # §2.0: the span lane owns this kind — record the skip, don't double-emit.
+                deferred.append({
+                    "service": svc, "kind": kind, "series": s.name,
+                    "reason_code": "superseded_by_span_binding",
+                    "reason": (f"{kind!r} for {svc} is bound by a declared span signal (span-metrics, "
+                               f"#307), which takes precedence over the declared Prometheus series "
+                               f"{s.name!r}; this base binding is skipped."),
+                })
+                continue
             if kind == "availability":
                 # #286 v2: a good/total ratio needs the error subset; without an error_selector a
                 # correct availability ratio can't be built → honest defer (not a fabricated SLI).
@@ -1509,6 +1524,176 @@ def generate_declared_functional_slos(
         artifact_type="slo_definition",
         service_id=service.service_id,
         output_path=f"slos/{service.service_id}-declared-functional-slo.yaml",
+        status="generated" if documents else "skipped",
+        content=(header + "\n---\n".join(documents)) if documents else "",
+        quality=quality,
+    )
+
+
+# --- #307: declared span-metrics SLI binding ------------------------------------
+
+def _span_descriptor(service: ServiceHints) -> MetricDescriptor:
+    """The span-metrics descriptor for a service (#307 FR-3): the fixed Tempo profile, NOT the
+    service's base-RED ``descriptors[svc]``, with the real ``service.name`` (#275) bound as the label
+    value (same replace pattern as ``_descriptor_for``)."""
+    d = profile_for(SPAN_METRICS_TEMPO_PROFILE)
+    real = getattr(service, "service_name", "") or ""
+    if real and real != service.service_id:
+        d = dataclasses.replace(
+            d, service_label_value_tpl=real.replace("{", "{{").replace("}", "}}")
+        )
+    return d
+
+
+def _span_selector(descriptor: MetricDescriptor, service_id: str, signal: "DeclaredSpanSignal",
+                   *, error: bool = False) -> str:
+    """The PromQL selector for a declared span signal: identity + descriptor extra_selectors
+    (server-kind filter) + ``span_name`` + the signal's non-empty attributes (#300-A discipline),
+    plus the error matcher when *error* (signal's ``error_selector`` overrides the descriptor's)."""
+    parts = [descriptor.service_matcher(service_id), *descriptor.extra_selectors,
+             f'span_name="{signal.name}"']
+    parts += [f'{k}="{v}"' for k, v in sorted(signal.attributes.items()) if v != ""]
+    if error:
+        err = signal.error_selector or descriptor.error_selector
+        if err:
+            parts.append(err)
+    return "{" + ",".join(parts) + "}"
+
+
+def _declared_span_covered_kinds(service: ServiceHints) -> "frozenset[str]":
+    """The base RED kinds a service's declared SPAN signals bind (#307). The single de-dup authority
+    (§2.0): the base #286 and functional #300 declared binders consult this to SKIP a kind the span
+    lane owns — span > declared-series precedence — so a kind covered by BOTH lanes emits ONCE."""
+    covered: set = set()
+    for s in getattr(service, "declared_span_signals", None) or ():
+        covered |= {k for k in s.covers if k in BASE_RED_KINDS}
+    return frozenset(covered)
+
+
+def generate_declared_span_slos(
+    service: ServiceHints,
+    business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
+) -> ArtifactResult:
+    """Emit a base RED SLO bound to an author-declared SPAN via span-metrics (#307 / option-b1 Part B).
+
+    The trace-surface sibling of ``generate_declared_base_slos``: for each declared span signal and each
+    base RED kind it covers, bind an SLI to ``traces_spanmetrics_*{service_name="<real>",
+    span_name="<declared>"}`` (FR-4) — carrying the real ``service.name`` (#275), on the fixed Tempo
+    descriptor (FR-3), latency threshold scaled to the descriptor unit (FR-5). Precedence span >
+    declared-series > convention (§2.0). v1 = per-span RED only; a span covering a functional kind is
+    deferred (out of v1 scope). No declared span signals ⇒ ``skipped``, no key (byte-identical, FR-8)."""
+    signals = getattr(service, "declared_span_signals", None) or ()
+    svc = service.service_id
+    d = _span_descriptor(service)
+    documents: List[str] = []
+    bound: List[Dict[str, Any]] = []
+    deferred: List[Dict[str, Any]] = []
+    severity = _severity_for(business, [])
+
+    latency_raw, _ = _resolve_threshold("latency_p99", business, [])
+    avail_target, _ = _resolve_threshold("availability", business, [])
+    tput_target, _ = _resolve_threshold("throughput", business, [])
+
+    def _meta(kind: str, slug: str, query: str) -> Dict[str, Any]:
+        return {
+            "name": f"{svc}-{kind}-{slug}-declared-span".lower().replace("_", "-"),
+            "labels": {"service": svc, "signal_kind": kind, "bound_span": slug,
+                       "generated_by": "startd8"},
+        }
+
+    for sig in signals:
+        slug = _series_slug(sig.name)
+        flag = sig.enabling_flag
+        flag_note = f" Requires the {flag} span-metrics connector/flag enabled." if flag else ""
+        sel = _span_selector(d, svc, sig)
+        for kind in sig.covers:
+            if kind not in BASE_RED_KINDS:
+                deferred.append({
+                    "service": svc, "kind": kind, "series": sig.name,
+                    "reason_code": "span_non_red_deferred_v1",
+                    "reason": (f"span {sig.name!r} covers {kind!r} — v1 binds per-span RED only "
+                               f"(latency/throughput/availability); functional-over-span is deferred."),
+                })
+                continue
+
+            if kind == "latency":
+                threshold = d.scale_threshold_seconds(_parse_duration_to_seconds(latency_raw)) \
+                    if latency_raw else None
+                query = (f"histogram_quantile({d.quantile}, sum by (le) "
+                         f"(rate({d.latency_bucket_metric}{sel}[{d.rate_window}])))")
+                target: Any = threshold
+            elif kind == "throughput":
+                query = f"sum(rate({d.throughput_metric}{sel}[{d.rate_window}]))"
+                target = tput_target
+            else:  # availability — good/total error-ratio (#286 v2 orientation, FR-4)
+                err = sig.error_selector or d.error_selector
+                if not err:
+                    deferred.append({
+                        "service": svc, "kind": kind, "series": sig.name,
+                        "reason_code": "availability_needs_error_selector",
+                        "reason": (f"availability for span {sig.name!r} needs an error dimension; "
+                                   f"neither the signal nor the descriptor declares one."),
+                    })
+                    continue
+                err_sel = _span_selector(d, svc, sig, error=True)
+                query = None  # ratioMetric below
+                target = avail_target
+                slo = {
+                    "apiVersion": "openslo/v1", "kind": "SLO",
+                    "metadata": _meta(kind, slug, ""),
+                    "spec": {
+                        "description": (f"availability SLO for {svc} bound to span-metrics of span "
+                                        f"{sig.name!r} (good/total ratio, #307).{flag_note}"),
+                        "target": target,
+                        "timeWindow": {"duration": business.slo_window, "isRolling": True},
+                        "budgetPolicy": "occurrences",
+                        "indicator": {"metadata": {"name": f"{svc}-availability-{slug}-declared-span-sli"},
+                                      "spec": {"ratioMetric": {
+                            "counter": {"metricSource": {"type": "prometheus", "spec": {
+                                "query": f"rate({d.throughput_metric}{sel}[{d.rate_window}])"}}},
+                            "good": {"metricSource": {"type": "prometheus", "spec": {
+                                "query": f"rate({d.throughput_metric}{err_sel}[{d.rate_window}])"}}},
+                        }}},
+                        "alerting": {"name": f"{svc}-availability-{slug}-declared-span-alert",
+                                     "labels": {"severity": severity}},
+                    },
+                }
+                documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+                bound.append({"service": svc, "kind": kind, "series": sig.name,
+                              "query": f"rate({d.throughput_metric}{sel}[{d.rate_window}])",
+                              "enabling_flag": flag})
+                continue
+
+            slo = {
+                "apiVersion": "openslo/v1", "kind": "SLO",
+                "metadata": _meta(kind, slug, query),
+                "spec": {
+                    "description": (f"{kind} SLO for {svc} bound to span-metrics of span "
+                                    f"{sig.name!r} (#307).{flag_note}"),
+                    "target": target,
+                    "timeWindow": {"duration": business.slo_window, "isRolling": True},
+                    "indicator": {"metadata": {"name": f"{svc}-{kind}-{slug}-declared-span-sli"},
+                                  "spec": {"thresholdMetric": {"metricSource": {
+                                      "type": "prometheus", "spec": {"query": query}}}}},
+                    "alerting": {"name": f"{svc}-{kind}-{slug}-declared-span-alert",
+                                 "labels": {"severity": severity}},
+                },
+            }
+            documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+            bound.append({"service": svc, "kind": kind, "series": sig.name,
+                          "query": query, "enabling_flag": flag})
+
+    quality: Dict[str, Any] = {}
+    if bound:
+        quality["bound_declared_span"] = bound
+    if deferred:
+        quality["deferred_declared_kinds"] = deferred
+    header = f"# Declared-span-metrics SLOs for {service.service_id} (#307)\n"
+    return ArtifactResult(
+        artifact_type="slo_definition",
+        service_id=service.service_id,
+        output_path=f"slos/{service.service_id}-declared-span-slo.yaml",
         status="generated" if documents else "skipped",
         content=(header + "\n---\n".join(documents)) if documents else "",
         quality=quality,

@@ -149,6 +149,19 @@ _PROFILES: Dict[str, MetricDescriptor] = {
         latency_bucket_metric="duration_milliseconds_bucket",
         latency_unit="ms",
     ),
+    # #307: Grafana Tempo metrics-generator span-metrics (distinct names/unit from the OTel
+    # Collector `spanmetrics` connector above). The surface #307 binds declared span signals to;
+    # `service_name` carries the real OTel service.name (#275), unit is SECONDS, and a server-kind
+    # filter avoids double-counting client spans (metric_descriptor axis-1 warning).
+    "tempo-spanmetrics": MetricDescriptor(
+        profile="tempo-spanmetrics",
+        service_label_key="service_name",
+        error_selector='status_code="STATUS_CODE_ERROR"',
+        throughput_metric="traces_spanmetrics_calls_total",
+        latency_bucket_metric="traces_spanmetrics_latency_seconds_bucket",
+        latency_unit="s",
+        extra_selectors=('span_kind="SPAN_KIND_SERVER"',),
+    ),
     # Non-request workload profile (#226 FR-6/FR-6a). Bound to the OTel **messaging
     # semantic convention** (`messaging.process.*`) — the grounded convention for
     # queue/worker/stream job processing (OQ-5 established workers may emit NO native
@@ -218,8 +231,12 @@ BASE_RED_KINDS = frozenset({"availability", "latency", "throughput"})
 #: SLI is dead, so the generator suppresses it + records the declared-but-absent gap. An empty
 #: surface is UNKNOWN (don't suppress — the #277 advisory flags the risk instead).
 NON_EMITTING_CONVENTION_SURFACES = frozenset(
-    {"traces_only", "none", "prometheus_exporter", "node_metrics"}
+    {"traces_only", "none", "prometheus_exporter", "node_metrics", "spanmetrics"}
 )
+
+#: #307: the profile a declared span-metrics surface binds to (Grafana Tempo metrics-generator).
+#: The span binder resolves THIS descriptor, not the service's base-RED `descriptors[svc]`.
+SPAN_METRICS_TEMPO_PROFILE = "tempo-spanmetrics"
 
 #: metrics_surface values (REQ-CCL-106) that expose NO Prometheus ``/metrics`` scrape endpoint at all,
 #: so a ServiceMonitor (a ``/metrics`` scrape config) targeting them is DEAD. Distinct from
@@ -228,7 +245,7 @@ NON_EMITTING_CONVENTION_SURFACES = frozenset(
 #: so they keep their ServiceMonitor. Only ``traces_only`` (traces, no meter/endpoint) and ``none``
 #: serve nothing to scrape. #285: suppress the ServiceMonitor for these + record the gap. Conservative:
 #: ``otel_sdk_meter`` is unchanged (deployments may expose a Prometheus exporter alongside OTLP push).
-NON_SCRAPEABLE_SURFACES = frozenset({"traces_only", "none"})
+NON_SCRAPEABLE_SURFACES = frozenset({"traces_only", "none", "spanmetrics"})
 
 #: The signal_kind SHAPE that fits each ungrounded kind (#230/#231/#233) — the *which
 #: SLI applies* axis, NOT a threshold VALUE (magnitudes stay gated on OQ-5 grounding).

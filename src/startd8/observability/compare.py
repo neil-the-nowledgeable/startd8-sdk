@@ -43,6 +43,9 @@ class ComparisonReport:
     #: #300 D2 (FR-10): FUNCTIONAL SLIs bound to a declared series (saturation/queue_depth/…). Kept
     #: distinct from `bound` (base RED); a generator-only key would be invisible to this report/dashboards.
     bound_functional: List[Any] = field(default_factory=list)
+    #: #307: per-span RED SLIs bound to a declared span via span-metrics (real service.name). A third
+    #: positive-binding lane — also dead unless consumed here (mirrors the FR-10 lesson).
+    bound_span: List[Any] = field(default_factory=list)
 
     @property
     def total_gaps(self) -> int:
@@ -56,6 +59,8 @@ class ComparisonReport:
             "bound_count": len(self.bound),
             "bound_declared_functional": self.bound_functional,
             "bound_functional_count": len(self.bound_functional),
+            "bound_declared_span": self.bound_span,
+            "bound_span_count": len(self.bound_span),
             "gaps": self.gaps,
             "gap_classes": list(self.gaps.keys()),
             "total_gaps": self.total_gaps,
@@ -74,13 +79,16 @@ def build_comparison_report(fr_coverage: Dict[str, Any]) -> ComparisonReport:
     bound = list(fr_coverage.get("bound_declared_series") or [])
     # #300 D2 (FR-10): read the functional-binding key, else it is dead (invisible to report/dashboards).
     bound_functional = list(fr_coverage.get("bound_declared_functional") or [])
+    # #307: same for the span-binding key.
+    bound_span = list(fr_coverage.get("bound_declared_span") or [])
     gaps: Dict[str, List[Any]] = {}
     for key, _label in _GAP_CLASSES:
         entries = fr_coverage.get(key) or []
         if entries:
             gaps[key] = list(entries)
     return ComparisonReport(
-        emitted=emitted, gaps=gaps, bound=bound, bound_functional=bound_functional
+        emitted=emitted, gaps=gaps, bound=bound, bound_functional=bound_functional,
+        bound_span=bound_span,
     )
 
 
@@ -119,6 +127,11 @@ def render_report(report: ComparisonReport) -> str:
     if report.bound_functional:
         lines += ["", f"Bound functional SLIs on declared series (#300 D2): {len(report.bound_functional)}"]
         lines += [_entry_line(b) for b in report.bound_functional]
+
+    # #307: per-span RED SLIs bound via span-metrics (real service.name), also positive.
+    if report.bound_span:
+        lines += ["", f"Bound span-metrics SLIs on declared spans (#307): {len(report.bound_span)}"]
+        lines += [_entry_line(b) for b in report.bound_span]
 
     if not report.gaps:
         lines += ["", "No divergence: every derived SLI is grounded in the declared surface. ✓", ""]

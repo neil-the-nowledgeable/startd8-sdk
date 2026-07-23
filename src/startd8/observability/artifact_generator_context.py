@@ -334,6 +334,36 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
     return out
 
 
+def _parse_declared_span_signals(raw: Any) -> List["DeclaredSpanSignal"]:
+    """Parse ``metrics.declared_span_signals`` (#307 / REQ-CCL-109) into models — the span analogue of
+    ``_parse_declared_series``. Entries without a ``name`` are dropped; ``attributes`` non-dict ⇒ ``{}``;
+    ``covers`` preserved verbatim (the binder decides — no producer-side subsetting, #300-D lesson);
+    ``target`` absent ⇒ ``None`` (byte-identity). Non-list ⇒ empty (explicit-only)."""
+    if not isinstance(raw, list):
+        return []
+    out: List[DeclaredSpanSignal] = []
+    for s in raw:
+        if not isinstance(s, dict) or not s.get("name"):
+            continue
+        attrs = s.get("attributes")
+        attrs = {str(k): str(v) for k, v in attrs.items()} if isinstance(attrs, dict) else {}
+        covers = s.get("covers")
+        covers = [str(k) for k in covers] if isinstance(covers, list) else []
+        raw_target = s.get("target")
+        target = str(raw_target) if raw_target is not None else None
+        out.append(
+            DeclaredSpanSignal(
+                name=str(s["name"]),
+                attributes=attrs,
+                covers=covers,
+                error_selector=str(s.get("error_selector", "")),
+                target=target,
+                enabling_flag=str(s.get("enabling_flag", "")),
+            )
+        )
+    return out
+
+
 def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
     """Extract per-service instrumentation hints from onboarding metadata.
 
@@ -384,6 +414,8 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
         declared_metrics = _parse_metric_set(metrics.get("manifest_declared", []))
         # #286 / REQ-CCL-107: author-declared REAL emitted series the base RED SLIs can bind to.
         declared_series = _parse_declared_series(metrics.get("declared_emitted_series", []))
+        # #307 / REQ-CCL-109: author-declared span signals for span-metrics RED binding.
+        declared_span_signals = _parse_declared_span_signals(metrics.get("declared_span_signals", []))
 
         # Target metric binding (FR-2/FR-3/FR-6): the effective convention
         # profile + per-axis overrides ContextCore resolved for this service.
@@ -419,6 +451,7 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 convention_metrics=convention_metrics,
                 declared_metrics=declared_metrics,
                 declared_emitted_series=declared_series,
+                declared_span_signals=declared_span_signals,
                 metric_profile=metric_profile,
                 descriptor_overrides=descriptor_overrides,
                 datasource_uids=datasource_uids,

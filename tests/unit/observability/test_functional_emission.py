@@ -14,9 +14,11 @@ from startd8.observability.artifact_generator import (
     BusinessContext,
     ConventionMetric,
     DeclaredEmittedSeries,
+    DeclaredSpanSignal,
     FunctionalRequirement,
     ServiceHints,
     generate_declared_functional_slos,
+    generate_declared_span_slos,
     generate_functional_slos,
     generate_observability_artifacts,
 )
@@ -799,6 +801,109 @@ class TestDeclaredFunctionalSLIBinding:
         text = _compare.render_report(report)
         assert "Bound functional SLIs on declared series" in text
         assert "max(qd)" in text and "threshold-deferred" in text  # query not dropped at render
+
+
+class TestDeclaredSpanSignalBinding:
+    """#307 — a declared span signal binds per-span RED SLIs to span-metrics
+    (traces_spanmetrics_*{service_name, span_name}) with the real service.name (#275).
+    Spec: docs/design/observability-compare/SPANMETRICS_SLI_BINDING_REQUIREMENTS.md v0.4."""
+
+    def _svc(self, signals, service_name="mastodon/sidekiq"):
+        return ServiceHints(service_id="sidekiq", service_name=service_name, transport="http",
+                            kinds=["http_server"], declared_span_signals=signals)
+
+    def _run(self, signals, business=None, **kw):
+        return generate_declared_span_slos(self._svc(signals, **kw), business or BusinessContext())
+
+    def test_fr4_latency_binds_span_metrics_with_real_service_name(self):
+        s = DeclaredSpanSignal(name="FeedInsertWorker", covers=["latency"])
+        r = self._run([s])
+        assert r.status == "generated"
+        c = r.content
+        # real service.name (#275) + span_name + server-kind filter (FR-3) + Tempo series (FR-3).
+        assert 'traces_spanmetrics_latency_seconds_bucket{service_name="mastodon/sidekiq"' in c
+        assert 'span_name="FeedInsertWorker"' in c
+        assert 'span_kind="SPAN_KIND_SERVER"' in c
+        assert "histogram_quantile" in c
+        b = r.quality["bound_declared_span"][0]
+        assert b["kind"] == "latency" and b["series"] == "FeedInsertWorker"
+
+    def test_fr5_latency_target_scaled_to_seconds(self):
+        # FR-5/R1-F2: the Tempo profile is unit=s, so a 500ms default renders target 0.5, NOT 500.
+        s = DeclaredSpanSignal(name="FeedInsertWorker", covers=["latency"])
+        c = self._run([s]).content
+        assert "target: 0.5" in c
+        assert "target: 500" not in c
+
+    def test_fr4_throughput_binds_calls_total(self):
+        s = DeclaredSpanSignal(name="FeedInsertWorker", covers=["throughput"])
+        c = self._run([s]).content
+        assert 'sum(rate(traces_spanmetrics_calls_total{service_name="mastodon/sidekiq"' in c
+
+    def test_fr4_availability_uses_descriptor_error_dimension(self):
+        # availability binds using the Tempo descriptor's status_code error selector (no signal one).
+        s = DeclaredSpanSignal(name="FeedInsertWorker", covers=["availability"])
+        c = self._run([s]).content
+        assert "ratioMetric" in c
+        assert 'status_code="STATUS_CODE_ERROR"' in c
+
+    def test_fr4_attributes_render_only_when_non_empty(self):
+        s = DeclaredSpanSignal(name="FeedInsertWorker", attributes={"queue": "default", "x": ""},
+                               covers=["latency"])
+        c = self._run([s]).content
+        assert 'queue="default"' in c
+        assert 'x=""' not in c
+
+    def test_v1_span_covering_functional_kind_is_deferred(self):
+        s = DeclaredSpanSignal(name="FeedInsertWorker", covers=["saturation"])
+        r = self._run([s])
+        assert r.status == "skipped"
+        d = r.quality["deferred_declared_kinds"][0]
+        assert d["reason_code"] == "span_non_red_deferred_v1"
+
+    def test_fr8_absent_span_signals_is_skipped_no_key(self):
+        r = self._run([])
+        assert r.status == "skipped"
+        assert "bound_declared_span" not in r.quality
+        assert "deferred_declared_kinds" not in r.quality
+
+    def test_precedence_span_supersedes_declared_series_end_to_end(self, tmp_path):
+        # §2.0 / R1-F4: a service declaring BOTH a Prometheus series and a span signal covering latency
+        # binds the SPAN once; the base declared-series binding is skipped + recorded.
+        hint = {
+            "service_id": "web", "service_name": "mastodon/web", "kind": "http_server",
+            "transport": "http", "traces": True, "metrics_surface": "spanmetrics",
+            "metrics": {
+                "convention_based": [{"name": "http.server.duration", "type": "histogram",
+                                      "source": "otel_semconv:http"}],
+                "declared_emitted_series": [{"name": "http_request_duration_seconds",
+                                             "type": "histogram", "labels": {"job": "web"},
+                                             "covers": ["latency"]}],
+                "declared_span_signals": [{"name": "FeedInsertWorker", "covers": ["latency"]}],
+            },
+        }
+        m = tmp_path / "onboarding-metadata.json"
+        m.write_text(json.dumps({"project_id": "p", "instrumentation_hints": {"web": hint}}))
+        report = generate_observability_artifacts(onboarding_metadata_path=m,
+                                                  output_dir=tmp_path / "out", dry_run=False)
+        # span latency bound; declared-series latency superseded (recorded), not double-emitted.
+        assert any(b["kind"] == "latency" and b["series"] == "FeedInsertWorker"
+                   for b in report.fr_coverage["bound_declared_span"])
+        assert report.fr_coverage["bound_declared_series"] == []
+        assert any(d.get("reason_code") == "superseded_by_span_binding"
+                   for d in report.fr_coverage["deferred_declared_kinds"])
+        # FR-1: spanmetrics is non-scrapeable → no ServiceMonitor for this service.
+        assert not [a for a in report.artifacts if a.artifact_type == "service_monitor"
+                    and a.service_id == "web" and a.status == "generated"]
+
+    def test_fr7_compare_surfaces_bound_span(self):
+        fr_cov = {"bound_declared_span": [{"service": "sidekiq", "kind": "latency",
+                                           "series": "FeedInsertWorker", "query": "histogram_quantile(...)"}]}
+        report = _compare.build_comparison_report(fr_cov)
+        assert report.to_dict()["bound_span_count"] == 1
+        text = _compare.render_report(report)
+        assert "Bound span-metrics SLIs on declared spans" in text
+        assert "latency → FeedInsertWorker" in text
 
 
 class TestServiceMonitorScrapeSurfaceGate:
