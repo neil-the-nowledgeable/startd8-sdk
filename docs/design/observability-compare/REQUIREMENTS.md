@@ -63,13 +63,13 @@ label) bug class. A CI gate on *new* `fail`s prevents the regression from ever s
 
 - **FR-1 Single-image standup.** Given `--subject-image` (+ `--subject-port`, default 8080), stand up the subject and `prom/prometheus` on a shared per-run bridge; Prometheus scrapes `subject:<port><metrics-path>` by Docker service-DNS.
 - **FR-2 Generated scrape config.** `render_prometheus_yml(*, job_name, target_host, target_port, metrics_path="/metrics", scrape_interval="5s") -> str` — pure, unit-testable.
-- **FR-3 Scrape-ready gate (load-bearing).** Poll `sum(scrape_samples_scraped{job=…})>0` via new `prometheus_query.scrape_ready`, with timeout. Timeout → Tier B `unknown` (never `fail`); Tier A gaps still reported.
+- **FR-3 Scrape-ready gate (load-bearing).** Poll `sum(scrape_samples_scraped{job=…})>0` via new `prometheus_query.scrape_ready`, with timeout. Timeout → Tier B `unknown` (never `fail`); Tier A gaps still reported. **Known limitation (v1, R1-F1/F2):** the gate is job-level, not per-SLI-series — a subject whose SLI series register only after warm-up (lazy histograms, first-request counters) can pass the gate while a specific SLI still reads empty, surfacing as `fail`. v1 accepts this; the fix (two-consecutive-scrape + per-series warmth so a not-yet-warm series is `unknown`, not `fail`) is a deferred follow-up.
 - **FR-4 Replay via the built engine.** Call `run_validation(...)` against the stood-up URL; consume its `FidelityReport` unchanged. `validate_promql.py` is **not modified** (NR-3).
 - **FR-5 Existing-backend path.** `--prometheus <url>` skips standup (the Mastodon/multi-container path). Honors the `--allow-prod` loopback guardrail already in `run_validation`.
 - **FR-6 Merge.** `build_live_comparison(comparison, fidelity, standup_status) -> LiveComparisonReport` — pure merge containing Tier A's `ComparisonReport.to_dict()` + Tier B's `FidelityReport.to_dict()`. Rollup severity `unknown > fail > pass`; Tier B authoritative; Tier A advisory unless `--strict-tier-a`.
 - **FR-7 CLI.** New `startd8 observability compare-live` verb. Flags: `--manifest/-m`, `--subject-image`, `--subject-port`, `--onboarding-metadata`, `--artifacts-dir`, `--prometheus`, `--allow-prod`, `--keep-up`, `--json`, `--strict-tier-a`, `--baseline`, `--write-baseline`. Exit = `report.exit_code()`. Output redacted via `redact`.
 - **FR-8 CI gate.** Verdict identity = `(service, signal, source_file-basename, normalized-expr)` (NOT `live_result_count`). `ci_gate(report, baseline)` → exit **2** on any *new* `fail`, **0** if all fails baselined, **3** if `unknown`. Baseline = committed JSON with a provenance header (image digest, date). `--write-baseline` is explicit-operator-only (NR-4).
-- **FR-9 Teardown & safety.** `finally` `tear_down(handle)` removes both containers + network + temp yml, best-effort/never-raises, on every path. Per-run `startd8-cmp-<8hex>` names. `--keep-up` prints the exact `docker rm -f` commands.
+- **FR-9 Teardown & safety.** `finally` `tear_down(handle)` removes both containers + network + temp yml, best-effort/never-raises, on every path. Per-run `startd8-cmp-<8hex>` names. `--keep-up` prints the exact `docker rm -f` commands. **Operator recovery (R1-F6):** the `startd8-cmp-` prefix is a stable contract — after a SIGKILL/OOM where `finally` never ran, `docker rm -f $(docker ps -aq --filter name=startd8-cmp)` + `docker network rm $(docker network ls -q --filter name=startd8-cmp)` sweeps every orphan.
 - **FR-10 Injectable seams.** `standup_fn`, `teardown_fn`, `validate_fn`, `read_fr_coverage_fn`, `scrape_ready_check`, `runner` all injectable — merge/gate/argv logic fully unit-tested with **zero docker** (mirrors `bind_and_verify`).
 
 ## 3. Non-Requirements
@@ -89,3 +89,80 @@ label) bug class. A CI gate on *new* `fail`s prevents the regression from ever s
 ---
 
 *v0.3.1 — post-planning + lessons + design-principle hardening. 4 assumptions corrected, 5 OQs resolved. Ready to implement.*
+
+*v0.4 — post CRP Round R1 (16 suggestions). Applied 8 (incl. 4 real code bugs: verdict_id cross-dir collision, write-baseline-on-unknown self-heal, write-baseline exit code, missing `--metrics-path`); deferred 4 with rationale (warm-up gate, per-series warmth, digest pin). Dispositions in Appendix A/B.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| R1-F8 / R1-S2 | `verdict_id` cross-dir basename collision | CRP R1 | Fixed: `_source_key` uses the dir-qualified last-two path components, not bare basename. Tests `test_verdict_id_distinguishes_same_basename_different_dirs`, `test_ci_gate_new_fail_in_second_dir_not_masked_by_baseline`. | 2026-07-22 |
+| R1-F4 / R1-S3 | `--write-baseline` on `unknown` silently zeroes baseline (NR-4 self-heal) | CRP R1 | Fixed: CLI refuses `--write-baseline` when `report.status == "unknown"`, exits 3, leaves baseline untouched. | 2026-07-22 |
+| R1-F5 | `--write-baseline` run inherits `report.exit_code()` → red-X's the baseline commit | CRP R1 | Fixed: authoring exits 0 (not a gate). | 2026-07-22 |
+| R1-F3 / R1-S5 | `--metrics-path` not exposed though renderer supports it | CRP R1 | Fixed: added `--metrics-path` flag, threaded through `run_live_comparison` → `stand_up_subject_and_prometheus`. | 2026-07-22 |
+| R1-F7 | Freeze `--json` merged-report schema as a versioned contract | CRP R1 | Fixed: `LiveComparisonReport.REPORT_VERSION=1`, emitted as `report_version`. Test `test_report_carries_a_versioned_schema`. | 2026-07-22 |
+| R1-S1 | Tier-A gap count must be surfaced on an overall Tier-B `pass` | CRP R1 | Made load-bearing: `_rollup_reason` includes the advisory gap count on pass. Test `test_pass_with_advisory_gaps_surfaces_gap_count`. | 2026-07-22 |
+| R1-S6 | Leak check must assert network + tempfile gone, not only containers | CRP R1 | Fixed: integration test asserts `_network_gone` + `prometheus_yml_path` unlinked. | 2026-07-22 |
+| R1-S8 | `--allow-prod` is inert on the standup path (comprehension risk) | CRP R1 | Fixed (doc): flag help states it is a no-op on `--subject-image` (Prometheus always loopback). | 2026-07-22 |
+
+### Appendix B: Rejected / Deferred Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Disposition & Rationale | Date |
+|----|------------|--------|-------------------------|------|
+| R1-F1 / R1-S4 | Gate on **two consecutive** scrapes (warm-up race) | CRP R1 | **Deferred** — the single `scrape_samples_scraped>0` gate is adequate for v1; a 2-scrape gate still would not guarantee the *specific SLI series* exist (job-level, not series-level), so it does not fully close the race. Recorded as a known-limitation caveat on FR-3; a real fix (per-series warmth) pairs with F2 in a follow-up. | 2026-07-22 |
+| R1-F2 | A `fail` must require a **confirmed-live** subject (per-series), else `unknown` | CRP R1 | **Deferred** — requires per-SLI-series warmth detection (significant scope); v1 accepts that a not-yet-warm subject may surface `fail`. Caveat added to FR-3. Revisit with F1. | 2026-07-22 |
+| R1-F6 | SIGKILL/OOM orphan-recovery contract (naming prefix as a stable sweep contract) | CRP R1 | **Partially accepted** — the network/tempfile leak assertions (S6) applied; the `startd8-cmp-<hex>` naming is documented in FR-9 as a stable operator-recovery prefix (`docker … --filter name=startd8-cmp`). | 2026-07-22 |
+| R1-S7 | Pin `prom/prometheus@sha256:…` instead of a floating tag | CRP R1 | **Decision (not now)** — v1 keeps the `:v2.53.0` tag; pinning an unverifiable digest offline is itself risky. Digest-pin + pre-pull is the documented pre-1.0 hardening step (module docstring + FR-9/R3). Not re-propose without an airgapped-CI trigger. | 2026-07-22 |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-07-23 03:20:00 UTC
+- **Scope**: Requirements review grounded against the SHIPPED implementation (`live_standup.py`, `compare_live.py`, `prometheus_query.scrape_ready`, `cli.py compare-live`). Weighted per CRP_FOCUS: scrape-ready gate semantics, merge rollup, CI-gate identity stability, teardown/leak safety, localhost/allow-prod guardrail. No prior rounds — this is R1.
+
+##### Focus-file asks (addressed first, per prompt template; orchestrator triages later)
+
+**Ask 1 — Scrape-ready gate signal (`scrape_samples_scraped>0` vs `up==1` vs both).**
+- **Summary answer:** partial — `scrape_samples_scraped>0` is the correct *primary* signal, but the gate is under-specified for the warm-up race the focus names.
+- **Rationale:** `prometheus_query.scrape_ready` (shipped) gates on `sum(scrape_samples_scraped{job=…})>0`, correctly stronger than `up==1` (which only proves the target responded). But FR-3 does not require that the *specific replayed SLI series* exist — a subject can expose `/metrics` with a positive sample count while the SLI-relevant series appear only after warm-up, so the gate passes and Tier B still reads a false `fail`.
+- **Assumptions / conditions:** subjects whose SLI metrics are lazily registered (first request, first GC, first histogram observation) exist among target subjects.
+- **Suggested improvements:** see R1-F1 (warm-up second-scrape requirement) and R1-F2 (distinguish "no series at all" from "series absent" in the timeout→unknown mapping).
+
+**Ask 2 — timeout→`unknown` (never `fail`) load-bearing correctness.**
+- **Summary answer:** yes, correct and load-bearing — but the *inverse* leak (a subject that scrapes but whose SLIs are all genuinely dead) is indistinguishable from warm-up under the current single-gate spec.
+- **Rationale:** §0 row 4 and FR-3 correctly map timeout→`unknown`. The shipped `build_live_comparison` returns `unknown` when `fidelity is None`. The gap is upstream: FR-3 gives no minimum-sample or two-consecutive-scrape criterion, so "one scrape landed" is treated as "fully warm."
+- **Assumptions / conditions:** none.
+- **Suggested improvements:** R1-F1.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Validation | high | FR-3: require the scrape-ready gate to observe **two consecutive scrapes** (or `scrape_samples_scraped>0` sustained across ≥2 poll intervals), not a single landed sample, before declaring ready. State the warm-up caveat explicitly as an acceptance criterion. | Focus Ask 1: a subject can expose `/metrics` with a positive sample count while the specific SLI series register only after warm-up (lazy histograms, first-request counters). A single-scrape gate passes, replay runs, and reads a false `fail` — the exact false-negative Tier B exists to prevent. | FR-3 (§2) | Unit: inject a `scrape_ready_check` returning True on first call but with SLI series still empty; assert the gate does not release until the second confirmation. |
+| R1-F2 | Data | medium | FR-8/FR-6: define what a `fail` verdict means when the subject scraped successfully but a series is absent vs. when the whole TSDB is thin. Add an acceptance criterion that a `fail` requires a **confirmed-live subject** (scrape_ready true) — otherwise it must be `unknown`, not `fail`. | The spec asserts timeout→`unknown` but does not close the symmetric case: partial warm-up (scrape_ready true, but the SLI's series never appeared) currently yields `fail`, conflating "generator emitted wrong metric" (#274) with "subject not warm." Ground truth: `build_live_comparison` only branches on `fidelity is None`, never on per-verdict warmth. | FR-3 / FR-6 (§2) | Manual: stand up a subject with a lazily-registered SLI; assert the SLI reports `bound_no_data`/`unknown`, not `fail`, before it is exercised. |
+| R1-F3 | Interfaces | medium | FR-7: add `--metrics-path` and `--scrape-interval` flags to the verb, or state explicitly that `/metrics` and `5s` are fixed for v1. `render_prometheus_yml` already parameterizes both, but the CLI hard-codes them (`cli.py` exposes neither). | FR-7's flag list omits `--metrics-path`; many subjects expose `/actuator/prometheus`, `/-/metrics`, etc. The shipped `render_prometheus_yml(metrics_path=…)` supports it but the operator cannot reach it, so any non-`/metrics` subject silently produces an all-`fail`/`unknown` report with no operator recourse. | FR-7 flag list (§2) | Verify `compare-live --metrics-path /actuator/prometheus` threads through to the generated `prometheus.yml` job. |
+| R1-F4 | Security | high | FR-8/NR-4: require that `--write-baseline` refuse (error, non-zero) when `report.status != "pass"`-with-fails is `unknown`, i.e. never persist a baseline derived from a run where standup/scrape failed. State: a baseline may only be written from a **confirmed-live** report. | NR-4 says the gate must never self-heal, but the shipped `render_baseline` reads `report.fail_verdicts`, which is **empty on an `unknown` report** (standup failed). `--write-baseline` on a failed standup silently writes `accepted_fail_ids: []` — erasing a real baseline and defeating the gate on the next run. | FR-8 (§2), NR-4 (§3) | Unit: call the baseline writer with an `unknown` report; assert it raises / refuses rather than emitting an empty `accepted_fail_ids`. |
+| R1-F5 | Ops | medium | FR-8: specify the **exit code of a `--write-baseline` run**. State it should exit 0 (baseline authoring is not a gate). Currently the CLI runs `report.exit_code()` after writing, so re-baselining a subject that has fails exits 2. | The shipped `cli.py` guards `ci_gate` behind `not write_baseline` (good) but then falls through to `raise typer.Exit(report.exit_code())` — so an operator re-baselining a known-failing subject gets a non-zero exit, which in CI is indistinguishable from a gate failure and will red-X the very commit that records the accepted baseline. | FR-8 (§2) | Verify `compare-live --write-baseline --baseline X` on a subject with dead SLIs exits 0. |
+| R1-F6 | Risks | medium | FR-9: add an acceptance criterion that the **temp `prometheus.yml` is removed even when standup returns before `prometheus_yml_path` is set**, and that orphan `startd8-cmp-*` resources from a killed process (no `finally` reached, e.g. SIGKILL) are documented as operator-recoverable via a single `docker … --filter name=startd8-cmp` sweep. | FR-9 covers the `finally` path but not the SIGKILL/OOM path where Python never runs teardown. The per-run `startd8-cmp-<hex>` naming (shipped) makes a bulk sweep possible, but the spec never promises the naming prefix is a **stable, greppable contract** an operator can rely on for recovery. | FR-9 (§2) | Manual: `kill -9` a mid-flight run; verify `docker ps -a --filter name=startd8-cmp` + `docker network ls --filter name=startd8-cmp` surface every leaked resource for a one-command cleanup. |
+| R1-F7 | Interfaces | low | FR-6: name and freeze the merged-report JSON schema (the keys `status/reason/total_gaps/fail_verdicts/tier_a/tier_b/standup`) as a versioned contract, since `--json` output is the machine surface CI parses. | `LiveComparisonReport.to_dict()` is the CI-consumed contract but FR-6/FR-7 describe it only prosaically. A downstream CI job keying on `fail_verdicts[].service` will break silently if the shape drifts. Ground: no schema/version field on the emitted dict. | FR-6 / FR-7 (§2) | Add a schema-snapshot test over `to_dict()` keys; bump a `report_version` on change. |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F8 | Data | medium | FR-8: specify collision behavior for `verdict_id` when two distinct SLIs share `(service, signal, basename)` but differ only in expr, AND when the same SLI moves between two source dirs with the same basename. Require the identity to include a **relative path fragment or a content hash**, not bare `os.path.basename`. | Focus Ask (CI-gate identity): the shipped `verdict_id` uses `os.path.basename(source_file)`, so `alerts/foo.yaml` and `dashboards/foo.yaml` collide; a genuinely-new dead SLI in the second file can normalize onto a baselined id and slip the gate (exit 0 when it should be 2). | FR-8 identity tuple (§2) | Unit: two verdicts with identical basename from different dirs; assert distinct `verdict_id`; assert a new fail in the second is NOT masked by the first's baseline entry. |
+

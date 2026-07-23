@@ -20,7 +20,6 @@ See ``docs/design/observability-compare/REQUIREMENTS.md``.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -49,8 +48,13 @@ class LiveComparisonReport:
     total_gaps: int = 0  # convenience rollup from tier_a
     fail_verdicts: List[Dict[str, Any]] = field(default_factory=list)  # tier_b fails (the CI signal)
 
+    #: Bumped when the emitted ``to_dict()`` shape changes — the ``--json`` output
+    #: is the machine surface CI parses, so the key set is a versioned contract (R1-F7).
+    REPORT_VERSION = 1
+
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "report_version": self.REPORT_VERSION,
             "status": self.status,
             "reason": self.reason,
             "total_gaps": self.total_gaps,
@@ -134,6 +138,7 @@ def run_live_comparison(
     artifacts_dir: Optional[Path] = None,
     subject_image: Optional[str] = None,
     subject_port: int = 8080,
+    metrics_path: str = "/metrics",
     prometheus: Optional[str] = None,
     min_coverage: float = 1.0,
     allow_prod: bool = False,
@@ -192,6 +197,7 @@ def run_live_comparison(
         handle = _standup(
             subject_image=subject_image,
             subject_port=subject_port,
+            metrics_path=metrics_path,
             job_name=job_name,
             scrape_ready_check=live_standup.prometheus_query.scrape_ready,
             auth=auth,
@@ -216,16 +222,30 @@ def run_live_comparison(
 # ────────────────────────────── CI gate (FR-8) ─────────────────────────────
 
 
+def _source_key(source_file: str) -> str:
+    """Directory-qualified source key (last two path components).
+
+    NOT bare ``basename``: ``alerts/foo.yaml`` and ``dashboards/foo.yaml`` share a
+    basename, so a bare-basename identity would let a genuinely-new dead SLI in one
+    file normalize onto a baselined id from the other and slip the gate (R1-F8/S2).
+    Keeping ``<parent>/<name>`` disambiguates the two artifact kinds while staying
+    stable across an absolute-vs-relative path prefix.
+    """
+    parts = Path(str(source_file)).parts
+    return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else "")
+
+
 def verdict_id(v: Dict[str, Any]) -> str:
     """Stable identity of one verdict for baseline diffing.
 
-    ``(service, signal, source_file basename, normalized expr)`` — deliberately
+    ``(service, signal, dir-qualified source key, normalized expr)`` — deliberately
     NOT ``live_result_count`` (environment-noisy). The whitespace-normalized expr
-    keeps the id stable across formatting churn.
+    keeps the id stable across formatting churn; the dir-qualified source key keeps
+    same-basename files in different artifact dirs distinct (R1-F8/S2).
     """
     service = str(v.get("service", ""))
     signal = str(v.get("signal", ""))
-    src = os.path.basename(str(v.get("source_file", "")))
+    src = _source_key(str(v.get("source_file", "")))
     expr = " ".join(str(v.get("expr", "")).split())
     return f"{service}|{signal}|{src}|{expr}"
 

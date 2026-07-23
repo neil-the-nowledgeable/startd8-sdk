@@ -37,6 +37,12 @@ def _container_gone(name: str) -> bool:
     return not (r.stdout or "").strip()
 
 
+def _network_gone(name: str) -> bool:
+    r = subprocess.run(["docker", "network", "ls", "-q", "-f", f"name={name}"],
+                       capture_output=True, text=True, check=False)
+    return not (r.stdout or "").strip()
+
+
 def test_real_standup_scrape_lands_and_teardown_is_clean():
     handle = None
     try:
@@ -52,6 +58,8 @@ def test_real_standup_scrape_lands_and_teardown_is_clean():
         if handle is not None:
             live_standup.tear_down(handle)
 
-    # both containers and the network are gone
+    # both containers, the network, AND the temp config are gone (R1-S6)
     assert _container_gone(handle.subject_container)
     assert _container_gone(handle.prometheus_container)
+    assert _network_gone(handle.network)
+    assert handle.prometheus_yml_path is not None and not handle.prometheus_yml_path.exists()

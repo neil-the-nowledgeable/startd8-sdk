@@ -190,7 +190,27 @@ def test_verdict_id_stable_across_whitespace_and_path():
         {"service": "web", "signal": "lat", "source_file": "slos/web.yaml", "expr": "sum( x )"})
     b = compare_live.verdict_id(
         {"service": "web", "signal": "lat", "source_file": "/abs/slos/web.yaml", "expr": "sum(  x  )"})
-    assert a == b  # basename + normalized expr
+    assert a == b  # dir-qualified key (slos/web.yaml) + normalized expr
+
+
+def test_verdict_id_distinguishes_same_basename_different_dirs():
+    # R1-F8/S2: a bare basename would collide alerts/foo.yaml with dashboards/foo.yaml,
+    # letting a genuinely-new dead SLI slip a baseline built from the other file.
+    alert = compare_live.verdict_id(
+        {"service": "web", "signal": "lat", "source_file": "alerts/foo.yaml", "expr": "x"})
+    dash = compare_live.verdict_id(
+        {"service": "web", "signal": "lat", "source_file": "dashboards/foo.yaml", "expr": "x"})
+    assert alert != dash
+
+
+def test_ci_gate_new_fail_in_second_dir_not_masked_by_baseline():
+    fail = _v("fail", source_file="dashboards/foo.yaml")
+    r = compare_live.build_live_comparison(_comparison(), _fidelity("fail", [fail]), {})
+    # baseline only accepts the SAME-basename fail from the OTHER dir
+    baseline = {compare_live.verdict_id(
+        {"service": "web", "signal": "latency", "source_file": "alerts/foo.yaml", "expr": "histogram(x)"})}
+    code, new = compare_live.ci_gate(r, baseline=baseline)
+    assert code == 2 and len(new) == 1  # not masked
 
 
 def test_ci_gate_new_fail_exits_2():
@@ -240,6 +260,22 @@ def test_load_baseline_absent_is_empty(tmp_path):
 
 
 # ── renderer ────────────────────────────────────────────────────────────────
+
+def test_report_carries_a_versioned_schema():
+    # R1-F7: --json is the CI-consumed contract; the key set is versioned.
+    r = compare_live.build_live_comparison(_comparison(), _fidelity("pass", [_v("pass")]), {})
+    d = r.to_dict()
+    assert d["report_version"] == compare_live.LiveComparisonReport.REPORT_VERSION
+    assert set(["status", "reason", "total_gaps", "fail_verdicts", "tier_a", "tier_b", "standup"]) <= set(d)
+
+
+def test_pass_with_advisory_gaps_surfaces_gap_count():
+    # R1-S1: a Tier-B pass must not silently bury a large Tier-A gap set.
+    gaps = {"empty_services": ["a", "b", "c"], "unfulfilled": [{"id": "FR-9"}]}
+    r = compare_live.build_live_comparison(_comparison(gaps), _fidelity("pass", [_v("pass")]), {})
+    assert r.status == "pass"
+    assert "4 advisory static gap" in r.reason  # count is load-bearing in the reason
+
 
 def test_render_live_report_shows_status_and_dead_slis():
     r = compare_live.build_live_comparison(
