@@ -68,8 +68,11 @@ Declared profile: **<test|internal|standard|high-traffic>**
 ▷ One `###` block per kind of record. The type/verb vocabularies below are a non-normative
 ▷ snapshot of KICKOFF_AUTHORING_CONTRACT.md §2.1 (the contract owns them). Plain types only:
 ▷ text, long text, number, decimal, money (whole cents — exact sums), date, date+time, yes/no,
-▷ choice of: a|b|c — ONE field per row (a slash-row like `promptTokens / responseTokens` is
-▷ flagged, never split-parsed). Relationship verbs only: has one, has many, belongs to,
+▷ choice of: a\|b\|c — inside the field TABLE, escape every enum pipe as `\|` (an unescaped `|`
+▷ collides with the table column separator and silently truncates the enum to its first value;
+▷ `kickoff check` now flags a single-value `choice of:` as an advisory). ONE field per row (a
+▷ slash-row like `promptTokens / responseTokens` is flagged, never split-parsed). Relationship
+▷ verbs only: has one, has many, belongs to,
 ▷ references (a loose id — no FK, e.g. a polymorphic link), links X to Y / links to many. Mark
 ▷ human-only fields with ONLY HUMANS ENTER THIS; set a default with `default: <value>` in the
 ▷ Notes cell. Don't list bookkeeping fields (ids, timestamps, ownership) — every record gets
