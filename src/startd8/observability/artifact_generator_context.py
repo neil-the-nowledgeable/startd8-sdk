@@ -316,6 +316,10 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
         )
         covers = s.get("covers")
         covers = [str(k) for k in covers] if isinstance(covers, list) else []
+        # #300 D2 (FR-9): an ABSENT target must read as None (not str("")→"") so it is indistinguishable
+        # from a pre-feature series and byte-identity holds. Only stringify when a value was declared.
+        raw_target = s.get("target")
+        target = str(raw_target) if raw_target is not None else None
         out.append(
             DeclaredEmittedSeries(
                 name=str(s["name"]),
@@ -324,6 +328,7 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
                 covers=covers,
                 error_selector=str(s.get("error_selector", "")),
                 enabling_flag=str(s.get("enabling_flag", "")),
+                target=target,
             )
         )
     return out

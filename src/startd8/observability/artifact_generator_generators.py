@@ -1281,27 +1281,9 @@ def generate_declared_base_slos(
 
             shape_field = _resolve_declared_shape(kind, s.type)
             if shape_field is None:
-                # #300 defect D: a declared kind the base-RED binder can't bind (e.g. saturation) must
-                # surface as an ACTIONABLE gap, not vanish. Distinguish a recognized functional kind
-                # (bindable via a functional[] FR — the remedy) from an unknown one (grounds nothing).
-                if kind in _FUNCTIONAL_SLI_TEMPLATES:
-                    reason_code = "functional_kind_not_base_red"
-                    reason = (
-                        f"{kind!r} is a functional signal kind, not a base RED kind — the declared-"
-                        f"series binder binds only latency/throughput/availability. Declare a "
-                        f"functional[] FR with signal_kind={kind!r} + target to emit an SLO "
-                        f"(the declared {s.type or 'series'} {s.name!r} can ground it)."
-                    )
-                else:
-                    reason_code = "unknown_kind"
-                    reason = (
-                        f"{kind!r} is not a base RED kind and has no known functional profile; "
-                        f"{s.name!r} grounds no SLI (check the declared covers value)."
-                    )
-                deferred.append({
-                    "service": svc, "kind": kind, "series": s.name,
-                    "reason_code": reason_code, "reason": reason,
-                })
+                # #300 D2: a non-base-RED kind is now owned by generate_declared_functional_slos
+                # (bind/threshold-defer/type-mismatch/precedence-skip). The base-RED binder skips it —
+                # it neither binds nor defers here, so there is exactly one owner and no double record.
                 continue
             shape, threshold_field = shape_field
             query = _functional_sli_query(shape, s.name, selector)
@@ -1342,6 +1324,194 @@ def generate_declared_base_slos(
         status="generated" if documents else "skipped",
         content=(header + "\n---\n".join(documents)) if documents else "",
         quality={"bound_declared_series": bound, "deferred_declared_kinds": deferred},
+    )
+
+
+#: #300 D2 (FR-5): the metric family each functional SLI shape requires. A declared series can only
+#: bind a functional kind when its declared ``type`` matches — a gauge for gauge_max/age, a counter for
+#: rate/ratio (reuses the #300-C "declared type wins over the template" insight). ``quantile`` needs a
+#: histogram but no in-scope (non-project-scoped) functional kind uses it (NR-4) — reserved/forward-compat.
+_SHAPE_REQUIRED_TYPE: Dict[str, str] = {
+    "gauge_max": "gauge",
+    "age": "gauge",
+    "rate": "counter",
+    "ratio": "counter",
+    "quantile": "histogram",
+}
+
+
+def _is_declared_functional_kind(kind: str) -> bool:
+    """A kind a declared series may bind as a FUNCTIONAL SLI (#300 D2/FR-1): a recognized functional
+    template kind that is neither base RED (owned by the base binder) nor project-scoped (NR-4 — the
+    AI-agent kinds are model/project-labeled, not per-service declared series)."""
+    return (
+        kind in _FUNCTIONAL_SLI_TEMPLATES
+        and kind not in BASE_RED_KINDS
+        and kind not in _PROJECT_SCOPED_SIGNAL_KINDS
+    )
+
+
+def _functional_fr_covers(business: BusinessContext, service_id: str, kind: str) -> Optional[str]:
+    """#300 D2 (FR-7): the id of a functional[] FR that already covers ``(service, kind)`` — reusing
+    ``generate_functional_slos``'s own service predicate so a GLOBAL (``service=None``) FR also
+    suppresses the declared binding. ``None`` ⇒ no FR owns this kind (the declared binding is free to
+    emit)."""
+    for f in (business.functional_requirements or []):
+        if f.signal_kind == kind and f.service in (None, "", service_id):
+            return f.id
+    return None
+
+
+def generate_declared_functional_slos(
+    service: ServiceHints,
+    business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
+) -> ArtifactResult:
+    """Emit a FUNCTIONAL SLO bound to an author-declared REAL emitted series (#300 D2 / defect-D uplift).
+
+    The complement of ``generate_declared_base_slos``: where that binds the base RED kinds, this binds a
+    declared series that ``covers`` a recognized **functional** kind (saturation/queue_depth/lag/…) — the
+    series already grounds the query, so deferring it (pre-D2) left value on the floor. Per ``(series,
+    covered-kind)`` (FR-1), gated by declared-type↔shape compatibility (FR-5), suppressed when a
+    functional[] FR already owns the kind (FR-7). The **query is always determinable** and is bound via
+    ``_functional_sli_query`` (FR-2); the **target comes only from the author** (``series.target``, FR-3)
+    — with a target the SLO is graded and emitted; without one the SLI is *threshold-deferred* (no SLO on
+    disk — a null-target OpenSLO doc is malformed) and travels in ``deferred_declared_kinds`` carrying its
+    grounded query (FR-4/OQ-5). The SDK never synthesizes a functional target (NR-1). No functional-
+    covering declared series ⇒ ``skipped`` and no ``bound_declared_functional`` key (byte-identical, FR-9)."""
+    series = getattr(service, "declared_emitted_series", None) or ()
+    svc = service.service_id
+    documents: List[str] = []
+    bound: List[Dict[str, Any]] = []
+    deferred: List[Dict[str, Any]] = []
+    severity = _severity_for(business, [])
+
+    for s in series:
+        selector = _declared_series_selector(s.labels)
+        slug = _series_slug(s.name)
+        flag = s.enabling_flag
+        flag_note = f" Requires the {flag} flag enabled for the series to emit." if flag else ""
+        for kind in s.covers:
+            # Base RED (incl. availability) is the base binder's; project-scoped AI-agent kinds are NR-4.
+            if kind in BASE_RED_KINDS:
+                continue
+            if kind in _PROJECT_SCOPED_SIGNAL_KINDS:
+                deferred.append({
+                    "service": svc, "kind": kind, "series": s.name,
+                    "reason_code": "functional_kind_project_scoped",
+                    "reason": (
+                        f"{kind!r} is a project/model-scoped AI-agent kind, not a per-service declared "
+                        f"series (NR-4); it is not bound from {s.name!r}."
+                    ),
+                })
+                continue
+            if not _is_declared_functional_kind(kind):
+                deferred.append({
+                    "service": svc, "kind": kind, "series": s.name,
+                    "reason_code": "unknown_kind",
+                    "reason": (
+                        f"{kind!r} is not a base RED kind and has no known functional profile; "
+                        f"{s.name!r} grounds no SLI (check the declared covers value)."
+                    ),
+                })
+                continue
+
+            # FR-7: a functional[] FR covering the same (service, kind) wins — skip, recorded.
+            winning_fr = _functional_fr_covers(business, svc, kind)
+            if winning_fr is not None:
+                deferred.append({
+                    "service": svc, "kind": kind, "series": s.name,
+                    "reason_code": "functional_fr_precedence_skip", "winning_fr": winning_fr,
+                    "reason": (
+                        f"{kind!r} for {svc} is already covered by functional[] FR {winning_fr!r}; "
+                        f"the declared-series binding is skipped to avoid a double SLO (FR precedence)."
+                    ),
+                })
+                continue
+
+            _candidates, shape, _unit = _FUNCTIONAL_SLI_TEMPLATES[kind]
+            required_type = _SHAPE_REQUIRED_TYPE.get(shape)
+            # FR-5: the declared type must match the kind's shape family (a counter can't gauge_max).
+            if s.type != required_type:
+                deferred.append({
+                    "service": svc, "kind": kind, "series": s.name,
+                    "reason_code": "functional_type_shape_mismatch",
+                    "reason": (
+                        f"{kind!r} uses the {shape!r} shape which needs a {required_type!r} series, but "
+                        f"{s.name!r} is declared type {s.type or 'unspecified'!r}; not bound."
+                    ),
+                })
+                continue
+
+            # FR-2: the grounded query is always determinable from the declared series + its selector.
+            query = _functional_sli_query(shape, s.name, selector)
+
+            # FR-3/FR-4: target from the author, else threshold-deferred (query travels in the gap).
+            if s.target is None:
+                deferred.append({
+                    "service": svc, "kind": kind, "series": s.name, "query": query,
+                    "threshold_deferred": True,
+                    "reason_code": "functional_bound_threshold_deferred",
+                    "reason": (
+                        f"{kind!r} SLI for {svc} is grounded on {s.name!r} but has no target — set "
+                        f"`target` on the declared series to emit a graded SLO (NR-1: no default "
+                        f"threshold is invented)."
+                    ),
+                })
+                continue
+
+            name = f"{svc}-{kind}-{slug}-declared-functional".lower().replace("_", "-")
+            slo = {
+                "apiVersion": "openslo/v1",
+                "kind": "SLO",
+                "metadata": {
+                    "name": name,
+                    "labels": {
+                        "service": svc, "signal_kind": kind,
+                        "bound_series": s.name, "generated_by": "startd8",
+                    },
+                },
+                "spec": {
+                    "description": (
+                        f"{kind} SLO for {svc} bound to the declared emitted series "
+                        f"{s.name!r} (#300 D2).{flag_note}"
+                    ),
+                    "target": s.target,
+                    "timeWindow": {"duration": business.slo_window, "isRolling": True},
+                    "indicator": {
+                        "metadata": {"name": f"{svc}-{kind}-{slug}-declared-functional-sli"},
+                        "spec": {
+                            "thresholdMetric": {
+                                "metricSource": {"type": "prometheus", "spec": {"query": query}},
+                            },
+                        },
+                    },
+                    "alerting": {
+                        "name": f"{svc}-{kind}-{slug}-declared-functional-alert",
+                        "labels": {"severity": severity},
+                    },
+                },
+            }
+            documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+            bound.append({
+                "service": svc, "kind": kind, "series": s.name,
+                "query": query, "threshold": "authored", "enabling_flag": flag,
+            })
+
+    # FR-9: no bound quality key when nothing bound (absent, not empty-list — an empty list is a diff).
+    quality: Dict[str, Any] = {}
+    if bound:
+        quality["bound_declared_functional"] = bound
+    if deferred:
+        quality["deferred_declared_kinds"] = deferred
+    header = f"# Declared-emitted-series FUNCTIONAL SLOs for {service.service_id} (#300 D2)\n"
+    return ArtifactResult(
+        artifact_type="slo_definition",
+        service_id=service.service_id,
+        output_path=f"slos/{service.service_id}-declared-functional-slo.yaml",
+        status="generated" if documents else "skipped",
+        content=(header + "\n---\n".join(documents)) if documents else "",
+        quality=quality,
     )
 
 

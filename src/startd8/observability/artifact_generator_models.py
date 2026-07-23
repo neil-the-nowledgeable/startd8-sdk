@@ -52,6 +52,11 @@ class DeclaredEmittedSeries:
     #: correct ratio can't be built without it); latency/throughput never need it.
     error_selector: str = ""
     enabling_flag: str = ""  # advisory only: the deploy flag that turns the series on. Not load-bearing.
+    #: #300 D2 (FR-3): optional author-supplied SLO objective for a FUNCTIONAL kind this series covers
+    #: (saturation/queue_depth/lag/…). A raw PromQL/objective string, mirroring
+    #: ``FunctionalRequirement.target`` — NOT a float. Absent (``None``) ⇒ the functional SLI binds its
+    #: query but is *threshold-deferred* (no SLO written); the SDK never synthesizes a target (NR-1).
+    target: Optional[str] = None
 
 
 @dataclass

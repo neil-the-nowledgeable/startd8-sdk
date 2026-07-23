@@ -96,6 +96,7 @@ from .artifact_generator_generators import (  # noqa: F401
     generate_slo_definitions,
     generate_functional_slos,
     generate_declared_base_slos,
+    generate_declared_functional_slos,
 )
 
 try:
@@ -557,6 +558,9 @@ def generate_observability_artifacts(
     # a grounded binding, not a gap) + kinds covered but not v1-bindable (availability → deferred).
     _bound_declared: List[Dict[str, Any]] = []
     _deferred_declared: List[Dict[str, Any]] = []
+    # #300 D2: functional SLOs bound to a declared series (saturation/queue_depth/…) — a positive
+    # grounding on a real series, the complement of _bound_declared (which is base RED only).
+    _bound_declared_functional: List[Dict[str, Any]] = []
     for service in services:
         descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
@@ -581,6 +585,14 @@ def generate_observability_artifacts(
         _dq = decl_slo.quality or {}
         _bound_declared.extend(_dq.get("bound_declared_series", []))
         _deferred_declared.extend(_dq.get("deferred_declared_kinds", []))
+        # #300 D2: declared-series FUNCTIONAL SLOs (saturation/queue_depth/…) — a separate lane/doc
+        # (FR-6); threshold-deferred/type-mismatch/precedence-skip candidates feed the same gap channel.
+        declf_slo = generate_declared_functional_slos(service, business, descriptor)
+        if declf_slo.status == "generated":
+            report.artifacts.append(declf_slo)
+        _dfq = declf_slo.quality or {}
+        _bound_declared_functional.extend(_dfq.get("bound_declared_functional", []))
+        _deferred_declared.extend(_dfq.get("deferred_declared_kinds", []))
         # FR-9: a service that resolves to ∅ SLI kinds (non-request, nothing declared)
         # is observed by nothing — surface it rather than silently emitting nothing.
         _svc_signals = [
@@ -664,6 +676,10 @@ def generate_observability_artifacts(
         "bound_declared_series": _bound_declared,         # #286 positive (base SLI bound to a real series)
         "deferred_declared_kinds": _deferred_declared,    # #286 covered-but-not-v1-bindable (availability)
     }
+    # #300 D2 (FR-9): only surface the functional-binding key when something bound — an empty list would
+    # be a new manifest byte vs pre-feature goldens. Absent ⇒ byte-identical.
+    if _bound_declared_functional:
+        report.fr_coverage["bound_declared_functional"] = _bound_declared_functional
 
     report.services_processed = len(services)
     report.services_skipped = len(

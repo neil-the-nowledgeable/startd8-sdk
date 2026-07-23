@@ -1,8 +1,9 @@
 # Declared-Series Functional SLI Binding — Requirements
 
-**Version:** 0.4 (post CRP Round 1 — 10 suggestions + adversarial, all applied; ready to implement)
+**Version:** 0.4 (post CRP Round 1 — 10 suggestions + adversarial, all applied)
 **Date:** 2026-07-23
-**Status:** Draft — spec only, no code
+**Status:** IMPLEMENTED (2026-07-23) — all 11 FRs landed; `generate_declared_functional_slos` +
+`compare.py` consumer contract + 8 tests. Pilot verified (threshold-deferred), gate PASS.
 **Owner:** observability artifact generator (`src/startd8/observability/`)
 **Branch:** `fix/issue-300-declared-series-promql`
 **Refs:** #300 (defect D), #286 (declared-emitted-series binder), #226 (functional SLOs)

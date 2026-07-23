@@ -37,7 +37,7 @@ drive the **#286 declared-series binder** and pin the four **#300** PromQL fixes
 | `http_request_duration_seconds` (web) | histogram · latency, `labels:{method:"",status:""}` | **A** — empty-value labels are dimensions, not `{method="",status=""}` matchers |
 | `http_requests_total` (web) | counter · availability, `error_selector: status=~"5.."` | **B** — the error subset must carry ONE `status` matcher, not `{status="",status=~"5.."}` |
 | `sidekiq_queue_latency` (sidekiq) | **gauge** · latency | **C** — a gauge binds `max(...)`, NOT `histogram_quantile(...\_bucket)` |
-| `sidekiq_queue_size` (sidekiq) | gauge · **saturation** | **D** — an unbindable kind surfaces as a `deferred_declared_kinds` gap, not vanishing |
+| `sidekiq_queue_size` (sidekiq) | gauge · **saturation** | **D / D2** — a functional kind: its grounded query `max(sidekiq_queue_size{queue_name="default"})` binds and travels in the `deferred_declared_kinds` gap as **threshold-deferred** (no `target` declared → no SLO on disk, NR-1). Declaring a `target` on the series would emit a graded `{svc}-declared-functional-slo.yaml`. |
 
 `compare_live_baseline.json` — the committed set of accepted (known) `fail` verdict identities for the
 CI gate. Each identity is `(service | signal | dir-qualified-source | normalized-expr)` — backend-

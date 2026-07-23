@@ -197,3 +197,6 @@ docs/design/otel-demo-corpus/startup-capture.json
 /step2_config.json
 /step2_retry_config.json
 /code-manifest-arc-review-config.json
+
+# local CRP prompt artifacts (regenerable, bulky)
+docs/design/observability-compare/CRP_PROMPT_*.md
