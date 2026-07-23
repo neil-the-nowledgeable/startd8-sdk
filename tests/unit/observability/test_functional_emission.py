@@ -394,6 +394,10 @@ class TestMetricsSurfaceStrictSuppression:
                and "functional" not in a.output_path]
         joined = " ".join(a.content for a in slo)
         assert "http_server_duration" not in joined
+        # #274 dashboard gate: no dead convention-metric panel in the dashboard spec either.
+        dash = [a for a in report.artifacts if a.artifact_type == "dashboard_spec"
+                and a.service_id == "web" and a.status == "generated"]
+        assert all("http_server_duration" not in a.content for a in dash)
 
     def test_otel_sdk_meter_still_emits_red(self, tmp_path):
         # the surface that DOES emit the convention metric → unchanged behavior.

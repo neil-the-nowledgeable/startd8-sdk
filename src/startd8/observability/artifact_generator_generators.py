@@ -509,7 +509,15 @@ def generate_dashboard_spec(
     if latency_base.endswith("_bucket"):
         latency_base = latency_base[: -len("_bucket")]
 
-    for metric in service.convention_metrics:
+    # #274: on a declared non-emitting metrics_surface (traces_only/…), the convention metrics
+    # are aspirational (not emitted) → skip their dashboard panels so no dead meter panel renders,
+    # matching the SLO/alert suppression. `_ensure_red_coverage` below is likewise sli_kinds-gated,
+    # so a traces-only dashboard carries no dead RED panel. Absent surface ⇒ unchanged.
+    _panel_metrics = (
+        [] if service.metrics_surface in NON_EMITTING_CONVENTION_SURFACES
+        else service.convention_metrics
+    )
+    for metric in _panel_metrics:
         prom = _prom_name(metric.name)
         is_latency = metric.type == "histogram" and "duration" in metric.name
         metric_base = latency_base if is_latency else prom
