@@ -541,6 +541,11 @@ def generate_observability_artifacts(
     # Surfaced explicitly (not fabricated for) so the author sees the deferral and knows
     # the actionable next step, rather than the service silently getting HTTP artifacts.
     _ungrounded: List[Dict[str, str]] = []
+    # #274 (ADR-003): base RED SLIs rest on convention metrics NOT verified as emitted —
+    # an advisory, not a gate. The SDK can't distinguish traces-only from emitting with the
+    # current onboarding signals (convention_based is aspirational semconv, not emission-
+    # verified); this surfaces the RISK honestly without removing the SLIs.
+    _unverified_base: List[Dict[str, Any]] = []
     for service in services:
         descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
@@ -591,12 +596,36 @@ def generate_observability_artifacts(
                         f"emit an SLO, or await a grounded profile."
                     ),
                 })
+        # #274 (ADR-003): trace-instrumented service whose base RED SLIs rest ENTIRELY on
+        # convention_based metrics with NO manifest_declared backing — the traces-only RISK
+        # profile (e.g. Mastodon). Advisory only: the SLIs still emit (byte-identical), but
+        # the reader is told they're unverified. The strict "emit no dead SLI" fix needs an
+        # upstream emission-surface signal the current onboarding doesn't carry (see #274).
+        _red = {"availability", "latency", "throughput"}
+        if (
+            service.has_traces
+            and service.convention_metrics
+            and not service.declared_metrics
+            and _red & resolve_sli_kinds(service.kinds, _svc_signals, service.transport)
+        ):
+            _unverified_base.append({
+                "service": service.service_id,
+                "convention_metrics": [m.name for m in service.convention_metrics],
+                "reason": (
+                    "base RED SLIs use convention metrics derived from the service kind, NOT "
+                    "verified as emitted (trace-instrumented, no manifest_declared). If the "
+                    "subject is traces-only or exposes a different metric surface, the SLI "
+                    "won't evaluate — configure the meter, or declare the emitted metric "
+                    "(manifest_declared). Advisory (ADR-003 / #274)."
+                ),
+            })
 
     report.fr_coverage = {
         "empty_services": _fr_empty,
         "unfulfilled": _fr_unfulfilled,
         "emitted": _fr_emitted,
         "ungrounded_kinds": _ungrounded,
+        "unverified_base_metrics": _unverified_base,  # #274 advisory
     }
 
     report.services_processed = len(services)
@@ -1243,7 +1272,7 @@ def _write_index(
 
     # FR-9 (#226): surface FR/SLI-kind coverage in the manifest, but only when there
     # is something to report — a run with no functional[] stays byte-identical.
-    if any(report.fr_coverage.get(k) for k in ("empty_services", "unfulfilled", "emitted", "ungrounded_kinds")):
+    if any(report.fr_coverage.get(k) for k in ("empty_services", "unfulfilled", "emitted", "ungrounded_kinds", "unverified_base_metrics")):
         index["fr_coverage"] = report.fr_coverage
 
     dest = output_dir / "observability-manifest.yaml"

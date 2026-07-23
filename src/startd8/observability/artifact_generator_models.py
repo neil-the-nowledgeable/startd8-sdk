@@ -38,6 +38,10 @@ class ServiceHints:
     # the sanitized graph `service_id` ("mastodonweb"). Used as the SLI label VALUE so the
     # selector matches real telemetry; absent ⇒ fall back to service_id (byte-identical).
     service_name: str = ""
+    # #274 (ADR-003): the subject carries trace instrumentation (a `traces` block). With
+    # convention metrics but NO manifest_declared, this is the traces-only RISK profile —
+    # the base SLIs rest on an unverified convention metric. Advisory only (see fr_coverage).
+    has_traces: bool = False
     # FR-14 (#226): optional — a service that declares a `kind` need not have a
     # listen transport (workers/cron/batch don't). Absent transport + absent kinds
     # is still skipped upstream (extract_service_hints).
