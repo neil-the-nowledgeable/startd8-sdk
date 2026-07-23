@@ -64,6 +64,8 @@ def test_standup_builds_networked_argv_and_gates_on_scrape():
         run_id="abc123",
         runner=runner,
         scrape_ready_check=lambda url, job, auth=None: True,
+        series_count_check=lambda url, job, auth=None: 12.0,  # stable series set → warm
+        poll_interval=0.0,
         docker_available_fn=lambda: True,
     )
 
@@ -89,12 +91,13 @@ def test_standup_builds_networked_argv_and_gates_on_scrape():
 def test_standup_scrape_timeout_is_not_a_fail():
     runner = FakeRunner()
     handle = live_standup.stand_up_subject_and_prometheus(
-        subject_image="s:1", run_id="t1", runner=runner,
+        subject_image="s:1", run_id="t1", scrape_timeout=0.05, runner=runner,
         scrape_ready_check=lambda url, job, auth=None: False,  # never ready
+        poll_interval=0.0,
         docker_available_fn=lambda: True,
     )
     assert handle.scrape_ready is False
-    assert "no scrape landed" in handle.reason
+    assert "did not warm up" in handle.reason
     # still resolved a URL and both containers exist → teardown has names
     assert handle.subject_container and handle.prometheus_container
 
@@ -118,19 +121,50 @@ def test_standup_network_create_failure_returns_handle_with_reason():
     assert "network create failed" in handle.reason
 
 
-def test_await_scrape_returns_true_once_ready():
-    calls = {"n": 0}
+def test_await_scrape_returns_true_when_ready_and_series_stable():
+    # ready always, series count stable → two consecutive equal counts → warm.
+    assert live_standup._await_scrape(
+        "http://x", "j", timeout=5.0, poll_interval=0.0,
+        ready_fn=lambda u, j, auth=None: True,
+        count_fn=lambda u, j, auth=None: 7.0,
+    )
 
-    def ready(url, job, auth=None):
-        calls["n"] += 1
-        return calls["n"] >= 2
 
-    assert live_standup._await_scrape("http://x", "j", timeout=5.0, interval=0.0, ready_fn=ready)
+def test_await_scrape_waits_for_series_to_settle():
+    # R1-F1/F2: ready immediately, but the series set is still GROWING (lazy
+    # registration). The gate must not release until two consecutive scrapes agree.
+    counts = iter([3.0, 5.0, 7.0, 7.0, 7.0])
+    seen = []
+
+    def count_fn(u, j, auth=None):
+        c = next(counts)
+        seen.append(c)
+        return c
+
+    assert live_standup._await_scrape(
+        "http://x", "j", timeout=5.0, poll_interval=0.0,
+        ready_fn=lambda u, j, auth=None: True, count_fn=count_fn,
+    )
+    # released only after the first repeated value (7,7), not on the growing prefix
+    assert seen[:4] == [3.0, 5.0, 7.0, 7.0]
+
+
+def test_await_scrape_ready_but_series_never_stable_times_out():
+    counts = iter(range(1, 10_000))  # monotonically changing → never settles
+
+    def count_fn(u, j, auth=None):
+        return float(next(counts))
+
+    assert not live_standup._await_scrape(
+        "http://x", "j", timeout=0.05, poll_interval=0.0,
+        ready_fn=lambda u, j, auth=None: True, count_fn=count_fn,
+    )
 
 
 def test_await_scrape_times_out_when_never_ready():
     assert not live_standup._await_scrape(
-        "http://x", "j", timeout=0.05, interval=0.01, ready_fn=lambda u, j, auth=None: False,
+        "http://x", "j", timeout=0.05, poll_interval=0.0,
+        ready_fn=lambda u, j, auth=None: False,
     )
 
 
@@ -140,7 +174,21 @@ def test_await_scrape_swallows_backend_errors_and_keeps_polling():
 
     # must not propagate — returns False on timeout
     assert not live_standup._await_scrape(
-        "http://x", "j", timeout=0.05, interval=0.01, ready_fn=raising)
+        "http://x", "j", timeout=0.05, poll_interval=0.0, ready_fn=raising)
+
+
+def test_await_scrape_require_stable_false_releases_on_first_ready():
+    assert live_standup._await_scrape(
+        "http://x", "j", timeout=5.0, poll_interval=0.0, require_stable=False,
+        ready_fn=lambda u, j, auth=None: True,
+    )
+
+
+def test_parse_duration_seconds():
+    assert live_standup._parse_duration_seconds("5s") == 5.0
+    assert live_standup._parse_duration_seconds("500ms") == 0.5
+    assert live_standup._parse_duration_seconds("2m") == 120.0
+    assert live_standup._parse_duration_seconds("garbage") == 5.0  # default
 
 
 def test_parse_published_port():

@@ -124,6 +124,34 @@ def instant_query_count(
     return len(result)
 
 
+def instant_query_value(
+    base: str,
+    promql: str,
+    *,
+    auth: Optional[Auth] = None,
+    timeout: int = REQUEST_TIMEOUT,
+) -> Optional[float]:
+    """The first scalar sample value of an instant ``/api/v1/query`` (``None`` if empty).
+
+    Distinct from :func:`instant_query_count` (which returns how many series matched):
+    this returns the *value*, e.g. the scalar result of ``count({job="x"})`` used by the
+    warm-up gate to watch the job's series-set size settle.
+    """
+    q = urllib.parse.quote(promql, safe="")
+    data = _get_json(
+        f"{base.rstrip('/')}/api/v1/query?query={q}", auth=auth, timeout=timeout
+    )
+    result = data.get("data", {}).get("result") or []
+    for series in result:
+        value = series.get("value") or []
+        if len(value) == 2:
+            try:
+                return float(value[1])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def scrape_ready(
     base: str,
     job: str,
@@ -202,6 +230,7 @@ def label_values(
 __all__ = [
     "Auth",
     "instant_query_count",
+    "instant_query_value",
     "scrape_ready",
     "list_metric_names",
     "label_values",

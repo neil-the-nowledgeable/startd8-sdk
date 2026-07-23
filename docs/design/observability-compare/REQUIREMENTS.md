@@ -63,7 +63,7 @@ label) bug class. A CI gate on *new* `fail`s prevents the regression from ever s
 
 - **FR-1 Single-image standup.** Given `--subject-image` (+ `--subject-port`, default 8080), stand up the subject and `prom/prometheus` on a shared per-run bridge; Prometheus scrapes `subject:<port><metrics-path>` by Docker service-DNS.
 - **FR-2 Generated scrape config.** `render_prometheus_yml(*, job_name, target_host, target_port, metrics_path="/metrics", scrape_interval="5s") -> str` — pure, unit-testable.
-- **FR-3 Scrape-ready gate (load-bearing).** Poll `sum(scrape_samples_scraped{job=…})>0` via new `prometheus_query.scrape_ready`, with timeout. Timeout → Tier B `unknown` (never `fail`); Tier A gaps still reported. **Known limitation (v1, R1-F1/F2):** the gate is job-level, not per-SLI-series — a subject whose SLI series register only after warm-up (lazy histograms, first-request counters) can pass the gate while a specific SLI still reads empty, surfacing as `fail`. v1 accepts this; the fix (two-consecutive-scrape + per-series warmth so a not-yet-warm series is `unknown`, not `fail`) is a deferred follow-up.
+- **FR-3 Warm-up gate (load-bearing).** Two-phase: (1) samples have landed (`sum(scrape_samples_scraped{job=…})>0` via `prometheus_query.scrape_ready`), **and** (2) the job's series set has **settled** — `count({job=…})>0` and unchanged across two consecutive scrapes (`job_series_count`). The poll cadence is `>=` the scrape interval so each stability comparison spans a fresh scrape. This closes the warm-up race (R1-F1/F2): gating on the first landed sample alone would release before lazily-registered SLI series (lazy histograms, first-request counters) appear, surfacing a false `fail`. Timeout → Tier B `unknown` (never `fail`); Tier A gaps still reported.
 - **FR-4 Replay via the built engine.** Call `run_validation(...)` against the stood-up URL; consume its `FidelityReport` unchanged. `validate_promql.py` is **not modified** (NR-3).
 - **FR-5 Existing-backend path.** `--prometheus <url>` skips standup (the Mastodon/multi-container path). Honors the `--allow-prod` loopback guardrail already in `run_validation`.
 - **FR-6 Merge.** `build_live_comparison(comparison, fidelity, standup_status) -> LiveComparisonReport` — pure merge containing Tier A's `ComparisonReport.to_dict()` + Tier B's `FidelityReport.to_dict()`. Rollup severity `unknown > fail > pass`; Tier B authoritative; Tier A advisory unless `--strict-tier-a`.
@@ -91,6 +91,8 @@ label) bug class. A CI gate on *new* `fail`s prevents the regression from ever s
 *v0.3.1 — post-planning + lessons + design-principle hardening. 4 assumptions corrected, 5 OQs resolved. Ready to implement.*
 
 *v0.4 — post CRP Round R1 (16 suggestions). Applied 8 (incl. 4 real code bugs: verdict_id cross-dir collision, write-baseline-on-unknown self-heal, write-baseline exit code, missing `--metrics-path`); deferred 4 with rationale (warm-up gate, per-series warmth, digest pin). Dispositions in Appendix A/B.*
+
+*v0.4.1 — closed the deferred warm-up gate (R1-F1/F2): FR-3 is now a two-phase settle gate (samples landed + series-set stable across two consecutive scrapes). Digest-pin (R1-S7) remains the only open deferral.*
 
 ---
 
@@ -123,8 +125,8 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Disposition & Rationale | Date |
 |----|------------|--------|-------------------------|------|
-| R1-F1 / R1-S4 | Gate on **two consecutive** scrapes (warm-up race) | CRP R1 | **Deferred** — the single `scrape_samples_scraped>0` gate is adequate for v1; a 2-scrape gate still would not guarantee the *specific SLI series* exist (job-level, not series-level), so it does not fully close the race. Recorded as a known-limitation caveat on FR-3; a real fix (per-series warmth) pairs with F2 in a follow-up. | 2026-07-22 |
-| R1-F2 | A `fail` must require a **confirmed-live** subject (per-series), else `unknown` | CRP R1 | **Deferred** — requires per-SLI-series warmth detection (significant scope); v1 accepts that a not-yet-warm subject may surface `fail`. Caveat added to FR-3. Revisit with F1. | 2026-07-22 |
+| R1-F1 / R1-S4 | Gate on **two consecutive** scrapes (warm-up race) | CRP R1 | **Applied 2026-07-23** — `_await_scrape` now requires two consecutive scrapes agreeing on the job's series count (`job_series_count` = `count({job=…})`), polled `>=` the scrape interval so each comparison spans a fresh scrape. Tests `test_await_scrape_waits_for_series_to_settle`, `test_await_scrape_ready_but_series_never_stable_times_out`. | 2026-07-23 |
+| R1-F2 | A `fail` must require a **confirmed-live** subject (per-series), else `unknown` | CRP R1 | **Applied 2026-07-23 (via F1)** — the settle gate uses the job's *series-set size stabilizing* as the warm proxy: it will not release while lazy SLI series are still registering, so a not-yet-warm subject stays `unknown` (gate un-passed) rather than replaying into a false `fail`. Full per-metric warmth remains a `validate_promql`-level concern (NR-3, not modified here). | 2026-07-23 |
 | R1-F6 | SIGKILL/OOM orphan-recovery contract (naming prefix as a stable sweep contract) | CRP R1 | **Partially accepted** — the network/tempfile leak assertions (S6) applied; the `startd8-cmp-<hex>` naming is documented in FR-9 as a stable operator-recovery prefix (`docker … --filter name=startd8-cmp`). | 2026-07-22 |
 | R1-S7 | Pin `prom/prometheus@sha256:…` instead of a floating tag | CRP R1 | **Decision (not now)** — v1 keeps the `:v2.53.0` tag; pinning an unverifiable digest offline is itself risky. Digest-pin + pre-pull is the documented pre-1.0 hardening step (module docstring + FR-9/R3). Not re-propose without an airgapped-CI trigger. | 2026-07-22 |
 
