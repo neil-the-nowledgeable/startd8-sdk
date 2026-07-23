@@ -13,11 +13,14 @@ import yaml
 from startd8.observability.artifact_generator import (
     BusinessContext,
     ConventionMetric,
+    DeclaredEmittedSeries,
     FunctionalRequirement,
     ServiceHints,
+    generate_declared_functional_slos,
     generate_functional_slos,
     generate_observability_artifacts,
 )
+from startd8.observability import compare as _compare
 from startd8.observability.metric_descriptor import resolve_sli_kinds
 
 
@@ -656,15 +659,17 @@ class TestDeclaredEmittedSeriesPromQLDefects:
                    for d in report.fr_coverage["deferred_declared_kinds"])
 
     def test_defect_d_saturation_gap_is_actionable(self, tmp_path):
-        # D (deeper): the gap must be ACTIONABLE — a recognized functional kind carries a reason_code
-        # + a remedy (declare a functional[] FR), distinct from an availability-needs-error-selector
-        # deferral. A gap you can't act on is barely better than vanishing.
+        # D (deeper, post-D2): a recognized functional kind with NO target is threshold-deferred and
+        # carries its GROUNDED query — the SLI is real, only its objective is missing (actionable: set
+        # `target`). Distinct from an availability-needs-error-selector deferral.
         series = [{"name": "sidekiq_queue_size", "type": "gauge",
                    "labels": {"queue_name": "default"}, "covers": ["saturation"]}]
         d = next(x for x in self._run(tmp_path, series).fr_coverage["deferred_declared_kinds"]
                  if x["kind"] == "saturation")
-        assert d["reason_code"] == "functional_kind_not_base_red"
-        assert "functional[] FR" in d["reason"] and "saturation" in d["reason"]
+        assert d["reason_code"] == "functional_bound_threshold_deferred"
+        assert d["threshold_deferred"] is True
+        assert d["query"] == 'max(sidekiq_queue_size{queue_name="default"})'
+        assert "target" in d["reason"]
 
     def test_defect_d_availability_deferral_has_distinct_reason_code(self, tmp_path):
         # the two deferral causes must be distinguishable, not lumped under one availability-flavored label.
@@ -683,6 +688,105 @@ class TestDeclaredEmittedSeriesPromQLDefects:
         d = next(x for x in self._run(tmp_path, series).fr_coverage["deferred_declared_kinds"]
                  if x["kind"] == "banana")
         assert d["reason_code"] == "unknown_kind"
+
+
+class TestDeclaredFunctionalSLIBinding:
+    """#300 D2 — a declared_emitted_series covering a recognized FUNCTIONAL kind binds a real
+    functional SLO (query always determinable; target author-supplied else threshold-deferred).
+    Spec: docs/design/observability-compare/DECLARED_FUNCTIONAL_SLI_REQUIREMENTS.md v0.4."""
+
+    def _svc(self, series):
+        return ServiceHints(service_id="worker", transport="", kinds=["async_worker"],
+                            declared_emitted_series=series)
+
+    def _run(self, series, business=None):
+        return generate_declared_functional_slos(self._svc(series), business or BusinessContext())
+
+    def test_fr2_fr3_fr8_authored_target_binds_a_graded_slo(self, tmp_path):
+        s = DeclaredEmittedSeries(name="sidekiq_queue_size", type="gauge",
+                                  labels={"queue_name": "default"}, covers=["saturation"],
+                                  target="0.8")
+        r = self._run([s])
+        assert r.status == "generated"
+        assert 'max(sidekiq_queue_size{queue_name="default"})' in r.content
+        assert "target: '0.8'" in r.content or "target: 0.8" in r.content
+        b = r.quality["bound_declared_functional"]
+        assert b == [{"service": "worker", "kind": "saturation", "series": "sidekiq_queue_size",
+                      "query": 'max(sidekiq_queue_size{queue_name="default"})',
+                      "threshold": "authored", "enabling_flag": ""}]
+        assert "deferred_declared_kinds" not in r.quality
+
+    def test_fr4_no_target_is_threshold_deferred_no_slo_on_disk(self):
+        s = DeclaredEmittedSeries(name="sidekiq_queue_size", type="gauge",
+                                  labels={"queue_name": "default"}, covers=["saturation"])  # no target
+        r = self._run([s])
+        assert r.status == "skipped" and r.content == ""      # FR-4: no SLO YAML written
+        assert "bound_declared_functional" not in r.quality
+        d = r.quality["deferred_declared_kinds"][0]
+        assert d["reason_code"] == "functional_bound_threshold_deferred"
+        assert d["threshold_deferred"] is True
+        assert d["query"] == 'max(sidekiq_queue_size{queue_name="default"})'  # query must not be lost
+
+    def test_fr5_type_shape_mismatch_defers(self):
+        # saturation → gauge_max needs a gauge; a counter must NOT bind.
+        s = DeclaredEmittedSeries(name="sidekiq_queue_size", type="counter",
+                                  labels={"queue_name": "default"}, covers=["saturation"], target="0.8")
+        d = self._run([s]).quality["deferred_declared_kinds"][0]
+        assert d["reason_code"] == "functional_type_shape_mismatch"
+        assert "gauge" in d["reason"] and "counter" in d["reason"]
+
+    def test_fr7_functional_fr_precedence_skips_declared_binding(self):
+        s = DeclaredEmittedSeries(name="sidekiq_queue_size", type="gauge",
+                                  labels={"q": "1"}, covers=["saturation"], target="0.8")
+        biz = BusinessContext(functional_requirements=[
+            FunctionalRequirement(id="FR-SAT", signal_kind="saturation", target="0.9", service="worker")])
+        r = self._run([s], biz)
+        assert r.status == "skipped"                          # FR wins → no declared SLO
+        d = r.quality["deferred_declared_kinds"][0]
+        assert d["reason_code"] == "functional_fr_precedence_skip"
+        assert d["winning_fr"] == "FR-SAT"
+
+    def test_fr7_global_service_none_fr_also_suppresses(self):
+        # a global FR (service=None) covering the kind must also win (the R1-F7 fix).
+        s = DeclaredEmittedSeries(name="sidekiq_queue_size", type="gauge",
+                                  labels={"q": "1"}, covers=["saturation"], target="0.8")
+        biz = BusinessContext(functional_requirements=[
+            FunctionalRequirement(id="FR-GLOBAL", signal_kind="saturation", target="0.9", service=None)])
+        d = self._run([s], biz).quality["deferred_declared_kinds"][0]
+        assert d["reason_code"] == "functional_fr_precedence_skip" and d["winning_fr"] == "FR-GLOBAL"
+
+    def test_fr1_multi_kind_covers_binds_each_separately(self):
+        # covers: [saturation, queue_depth] (both gauge_max) → two independent candidates.
+        s = DeclaredEmittedSeries(name="worker_gauge", type="gauge", labels={"q": "1"},
+                                  covers=["saturation", "queue_depth"], target="10")
+        b = self._run([s]).quality["bound_declared_functional"]
+        assert {e["kind"] for e in b} == {"saturation", "queue_depth"}
+
+    def test_fr9_no_functional_series_is_skipped_no_key(self):
+        # only base-RED coverage → this generator emits nothing and no bound key.
+        s = DeclaredEmittedSeries(name="http_x", type="histogram", labels={}, covers=["latency"])
+        r = self._run([s])
+        assert r.status == "skipped"
+        assert "bound_declared_functional" not in r.quality
+        assert "deferred_declared_kinds" not in r.quality  # RED is the base binder's, not deferred here
+
+    def test_fr10_compare_reads_bound_functional_and_deferred_query(self):
+        # FR-10: the compare.py consumer must surface the new key AND the threshold-deferred query.
+        fr_cov = {
+            "bound_declared_functional": [
+                {"service": "worker", "kind": "saturation", "series": "q_size",
+                 "query": "max(q_size)", "threshold": "authored"}],
+            "deferred_declared_kinds": [
+                {"service": "w2", "kind": "queue_depth", "series": "qd",
+                 "query": "max(qd)", "threshold_deferred": True,
+                 "reason_code": "functional_bound_threshold_deferred"}],
+        }
+        report = _compare.build_comparison_report(fr_cov)
+        assert len(report.bound_functional) == 1
+        assert report.to_dict()["bound_functional_count"] == 1
+        text = _compare.render_report(report)
+        assert "Bound functional SLIs on declared series" in text
+        assert "max(qd)" in text and "threshold-deferred" in text  # query not dropped at render
 
 
 class TestServiceMonitorScrapeSurfaceGate:

@@ -40,6 +40,9 @@ class ComparisonReport:
     #: #286: base SLIs BOUND to an author-declared real emitted series — a positive grounding
     #: (the derived SLI targets a real series, not a convention metric the subject may not emit).
     bound: List[Any] = field(default_factory=list)
+    #: #300 D2 (FR-10): FUNCTIONAL SLIs bound to a declared series (saturation/queue_depth/…). Kept
+    #: distinct from `bound` (base RED); a generator-only key would be invisible to this report/dashboards.
+    bound_functional: List[Any] = field(default_factory=list)
 
     @property
     def total_gaps(self) -> int:
@@ -51,6 +54,8 @@ class ComparisonReport:
             "emitted_count": len(self.emitted),
             "bound_declared_series": self.bound,
             "bound_count": len(self.bound),
+            "bound_declared_functional": self.bound_functional,
+            "bound_functional_count": len(self.bound_functional),
             "gaps": self.gaps,
             "gap_classes": list(self.gaps.keys()),
             "total_gaps": self.total_gaps,
@@ -67,12 +72,16 @@ def read_fr_coverage(manifest_path: Path) -> Dict[str, Any]:
 def build_comparison_report(fr_coverage: Dict[str, Any]) -> ComparisonReport:
     emitted = list(fr_coverage.get("emitted") or [])
     bound = list(fr_coverage.get("bound_declared_series") or [])
+    # #300 D2 (FR-10): read the functional-binding key, else it is dead (invisible to report/dashboards).
+    bound_functional = list(fr_coverage.get("bound_declared_functional") or [])
     gaps: Dict[str, List[Any]] = {}
     for key, _label in _GAP_CLASSES:
         entries = fr_coverage.get(key) or []
         if entries:
             gaps[key] = list(entries)
-    return ComparisonReport(emitted=emitted, gaps=gaps, bound=bound)
+    return ComparisonReport(
+        emitted=emitted, gaps=gaps, bound=bound, bound_functional=bound_functional
+    )
 
 
 def _entry_line(entry: Any) -> str:
@@ -84,6 +93,11 @@ def _entry_line(entry: Any) -> str:
             # opt-in (dead until the flag is set) — not silently parsed-and-dropped.
             flag = entry.get("enabling_flag")
             suffix = f"  (requires {flag})" if flag else ""
+            # #300 D2 (FR-10): a threshold-deferred functional binding carries a GROUNDED query that
+            # must reach the reader — the SLI is real, only its target is missing. Surface it so the
+            # value FR-4 protects is not dropped at render.
+            if entry.get("threshold_deferred") and entry.get("query"):
+                suffix += f"  [threshold-deferred; query: {entry['query']}]"
             return f"    - {who}: {entry['kind']} → {entry['series']}{suffix}"
         reason = " ".join(str(entry.get("reason", "")).split())
         return f"    - {who}: {reason}" if reason else f"    - {who}"
@@ -100,6 +114,11 @@ def render_report(report: ComparisonReport) -> str:
     if report.bound:
         lines += ["", f"Bound to declared emitted series (#286): {len(report.bound)}"]
         lines += [_entry_line(b) for b in report.bound]
+
+    # #300 D2: functional SLIs bound to a declared series (saturation/queue_depth/…), also positive.
+    if report.bound_functional:
+        lines += ["", f"Bound functional SLIs on declared series (#300 D2): {len(report.bound_functional)}"]
+        lines += [_entry_line(b) for b in report.bound_functional]
 
     if not report.gaps:
         lines += ["", "No divergence: every derived SLI is grounded in the declared surface. ✓", ""]
