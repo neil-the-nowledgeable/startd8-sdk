@@ -213,6 +213,15 @@ NON_EMITTING_CONVENTION_SURFACES = frozenset(
     {"traces_only", "none", "prometheus_exporter", "node_metrics"}
 )
 
+#: metrics_surface values (REQ-CCL-106) that expose NO Prometheus ``/metrics`` scrape endpoint at all,
+#: so a ServiceMonitor (a ``/metrics`` scrape config) targeting them is DEAD. Distinct from
+#: ``NON_EMITTING_CONVENTION_SURFACES`` (which is about convention metric *names*):
+#: ``prometheus_exporter``/``node_metrics`` DON'T emit the convention names but DO serve ``/metrics``,
+#: so they keep their ServiceMonitor. Only ``traces_only`` (traces, no meter/endpoint) and ``none``
+#: serve nothing to scrape. #285: suppress the ServiceMonitor for these + record the gap. Conservative:
+#: ``otel_sdk_meter`` is unchanged (deployments may expose a Prometheus exporter alongside OTLP push).
+NON_SCRAPEABLE_SURFACES = frozenset({"traces_only", "none"})
+
 #: The signal_kind SHAPE that fits each ungrounded kind (#230/#231/#233) — the *which
 #: SLI applies* axis, NOT a threshold VALUE (magnitudes stay gated on OQ-5 grounding).
 #: Used only to make the coverage-gap hint kind-specific ("declare a freshness FR" for a

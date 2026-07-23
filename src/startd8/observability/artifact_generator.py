@@ -29,6 +29,7 @@ from .artifact_generator_models import *  # noqa: F401,F403
 # MetricDescriptor per service and thread it into the descriptor-aware generators.
 from .metric_descriptor import (
     NON_EMITTING_CONVENTION_SURFACES,
+    NON_SCRAPEABLE_SURFACES,
     UNGROUNDED_KINDS,
     MetricDescriptor,
     resolve_descriptor,
@@ -666,16 +667,37 @@ def generate_observability_artifacts(
     # Closure 3B: native extended generators, produced only for declared types that
     # this SDK actually owns (ceded types are recorded as owned_elsewhere skips below).
     declared = set(report.declared_artifact_types)
+    # #285: a ServiceMonitor is a Prometheus /metrics scrape config; suppress it for a service
+    # whose declared metrics_surface serves NO scrape endpoint (traces_only/none) — else it ships a
+    # dead scrape target (the ADR-003 FP-3 the Mastodon pilot found). Mirrors the base-RED gate above.
+    _suppressed_scrape: List[Dict[str, Any]] = []
     for atype, (gen_fn, output_prefix) in _EXTENDED_PER_SERVICE_GENERATORS.items():
         if atype not in declared or atype in owned_elsewhere:
             continue
         for service in services:
+            if atype == "service_monitor" and getattr(
+                service, "metrics_surface", ""
+            ) in NON_SCRAPEABLE_SURFACES:
+                _suppressed_scrape.append({
+                    "service": service.service_id,
+                    "metrics_surface": service.metrics_surface,
+                    "reason": (
+                        f"ServiceMonitor suppressed — metrics_surface="
+                        f"{service.metrics_surface!r} exposes no Prometheus /metrics scrape "
+                        f"endpoint, so the scrape config would target nothing (#285 / ADR-003). "
+                        f"Declare a scrapeable surface (prometheus_exporter/node_metrics) to emit one."
+                    ),
+                })
+                continue
             report.artifacts.append(
                 _generate_one(
                     gen_fn, service, business, atype, output_prefix,
                     descriptors[service.service_id],
                 )
             )
+    # #285: fold the scrape-config suppressions into fr_coverage (assembled above), same shape as
+    # suppressed_base_metrics — an honest gap, so `observability compare` can surface it.
+    report.fr_coverage["suppressed_scrape_configs"] = _suppressed_scrape
 
     # Closure 3A / Gap 2 + REQ-OAT-052: record declared-but-unproduced types as
     # explicit skips carrying skip_reason (owned_elsewhere | unimplemented) + owner,

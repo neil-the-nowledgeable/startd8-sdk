@@ -21,6 +21,7 @@ import yaml
 #: (``artifact_generator.py``) populates these; this module only presents them.
 _GAP_CLASSES: Tuple[Tuple[str, str], ...] = (
     ("suppressed_base_metrics", "SUPPRESSED base SLIs — declared non-emitting metrics_surface (#274)"),
+    ("suppressed_scrape_configs", "SUPPRESSED ServiceMonitors — surface serves no /metrics scrape (#285)"),
     ("unverified_base_metrics", "UNVERIFIED base SLIs — emission surface unknown, advisory (#277)"),
     ("unfulfilled", "UNFULFILLED FRs — declared signal_kind, no emitting series"),
     ("ungrounded_kinds", "UNGROUNDED kinds — batch/cron/ml_inference, values pending grounding"),
