@@ -1,8 +1,10 @@
 # Span-Metrics SLI Binding (declared trace surface → bind SLIs with `service.name`) — Requirements
 
-**Version:** 0.4 (post CRP Round 1 — 10 suggestions + adversarial, all applied; ready to implement)
+**Version:** 0.4 (post CRP Round 1 — 10 suggestions + adversarial, all applied)
 **Date:** 2026-07-23
-**Status:** Draft — spec only, no code
+**Status:** IMPLEMENTED (2026-07-23) — `generate_declared_span_slos` + `tempo-spanmetrics` profile +
+`DeclaredSpanSignal` + compare.py consumer + §2.0 span>series precedence + 10 tests. FR-6's
+`fr_coverage`-gate fix (R1-F7) landed separately as **#310** (drift-proof `any(values())`); v1 = per-span RED.
 **Owner:** observability artifact generator (`src/startd8/observability/`)
 **GitHub:** startd8-sdk **#307** (Part B) · pairs with ContextCore **#58** / REQ-CCL-109 (Part A, the carry)
 **Refs:** #286/#300 (declared-emitted-series binding — the Prometheus-surface sibling), #275/#276 (real

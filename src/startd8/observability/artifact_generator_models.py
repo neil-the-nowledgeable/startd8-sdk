@@ -60,6 +60,30 @@ class DeclaredEmittedSeries:
 
 
 @dataclass
+class DeclaredSpanSignal:
+    """An author-declared span (name) whose span-metrics RED an SLI can bind to (#307 / option-b1).
+
+    The trace-surface analogue of :class:`DeclaredEmittedSeries`: instead of a Prometheus series
+    selected by labels, it names a **span** (e.g. ``FeedInsertWorker``) whose span-metrics connector /
+    Tempo metrics-generator RED series (``traces_spanmetrics_*{service_name, span_name}``) an SLI binds
+    to — carrying the real ``service.name`` (#275). Carried on
+    ``instrumentation_hints[svc].metrics.declared_span_signals`` (ContextCore REQ-CCL-109). Explicit-only
+    (never inferred): absence ⇒ no span binding (byte-identical)."""
+
+    name: str  # the declared span name, e.g. "FeedInsertWorker" (bound as span_name="...")
+    #: extra span attributes ANDed into the selector (rendered only when non-empty, #300-A discipline).
+    attributes: Dict[str, str] = field(default_factory=dict)
+    #: which base RED kinds this span grounds (subset of {availability, latency, throughput}); v1 = RED.
+    covers: List[str] = field(default_factory=list)
+    #: the error matcher fragment for the availability good/total ratio; empty ⇒ use the descriptor's
+    #: (Tempo ``status_code="STATUS_CODE_ERROR"``), and if neither, availability stays deferred.
+    error_selector: str = ""
+    #: forward-compat (functional-over-span, out of v1 scope): author SLO objective, else deferred.
+    target: Optional[str] = None
+    enabling_flag: str = ""  # advisory only: the flag/connector that turns the span-metrics on.
+
+
+@dataclass
 class ServiceHints:
     """Instrumentation hints for a single service."""
 
@@ -97,6 +121,9 @@ class ServiceHints:
     # #286 / REQ-CCL-107: author-declared REAL emitted series the base RED SLIs can bind to
     # (name + labels + which RED kinds they ground). Explicit-only; absent ⇒ keep #274 suppression.
     declared_emitted_series: List[DeclaredEmittedSeries] = field(default_factory=list)
+    # #307 / REQ-CCL-109: author-declared SPAN signals whose span-metrics RED an SLI can bind to
+    # (span_name + covers). The trace-surface analogue of declared_emitted_series; explicit-only.
+    declared_span_signals: List[DeclaredSpanSignal] = field(default_factory=list)
     # Target metric binding (REQ_TARGET_METRIC_BINDING FR-2/FR-3/FR-6): the
     # effective convention profile ContextCore resolved for this service, plus
     # any per-axis descriptor overrides. "" / {} => fall back to the transport
