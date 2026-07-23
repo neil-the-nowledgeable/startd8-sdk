@@ -1090,11 +1090,10 @@ def _select_functional_metric(candidates: Tuple[str, ...], service: ServiceHints
     return candidates[0]
 
 
-# #286 / REQ-CCL-107: the base RED kinds a declared-emitted series can bind, mapped to the
-# _functional_sli_query shape. availability is intentionally absent — a correct availability RATIO
-# needs an error-selector (good/total) the declared-series contract doesn't yet carry, so it is
-# recorded as deferred (a v2 once REQ-CCL-107 grows an error-label). latency = p99 on the histogram
-# `_bucket`; throughput = request rate. The threshold field each SLO's target resolves from.
+# #286 / REQ-CCL-107: the threshold-shaped base RED kinds a declared-emitted series binds, mapped to
+# the _functional_sli_query shape + the threshold field the SLO target resolves from. latency = p99
+# on the histogram `_bucket`; throughput = request rate. availability is NOT here — it is a good/total
+# RATIO (not a threshold shape), handled separately and only when the series carries an error_selector.
 _DECLARED_SLI_SHAPE: Dict[str, Tuple[str, str]] = {
     "latency": ("quantile", "latency_p99"),
     "throughput": ("rate", "throughput"),
@@ -1110,13 +1109,32 @@ def _declared_series_selector(labels: Dict[str, str]) -> str:
     return "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}"
 
 
+def _declared_error_selector(labels: Dict[str, str], error_selector: str) -> str:
+    """#286 v2: merge the series' base labels with its ERROR matcher fragment into one selector,
+    for the availability ratio's error subset — e.g. labels ``{method="POST"}`` + ``status=~"5.."``
+    ⇒ ``{method="POST",status=~"5.."}``. No labels ⇒ ``{status=~"5.."}``."""
+    parts = [f'{k}="{v}"' for k, v in sorted(labels.items())]
+    if error_selector:
+        parts.append(error_selector)
+    return "{" + ",".join(parts) + "}" if parts else ""
+
+
+def _declared_series_binds_availability(s: "DeclaredEmittedSeries") -> bool:
+    """A series binds availability only when it both ``covers`` it AND carries an error_selector
+    (a correct good/total ratio is impossible without the error subset)."""
+    return "availability" in s.covers and bool(s.error_selector)
+
+
 def _declared_covered_kinds(service: ServiceHints) -> "frozenset[str]":
-    """The base RED kinds a service's declared-emitted series can bind in v1 (latency/throughput).
-    Drives BOTH the precedence-suppression of the convention RED in ``_service_sli_kinds`` and the
-    emission in ``generate_declared_base_slos``. Empty ⇒ no declared binding (byte-identical)."""
+    """The base RED kinds a service's declared-emitted series can bind: latency/throughput (always),
+    plus availability when a series carries an error_selector (#286 v2). Drives BOTH the precedence-
+    suppression of the convention RED in ``_service_sli_kinds`` and emission in
+    ``generate_declared_base_slos``. Empty ⇒ no declared binding (byte-identical)."""
     covered: set = set()
     for s in getattr(service, "declared_emitted_series", None) or ():
         covered |= {k for k in s.covers if k in _DECLARED_SLI_SHAPE}
+        if _declared_series_binds_availability(s):
+            covered.add("availability")
     return frozenset(covered)
 
 
@@ -1129,23 +1147,71 @@ def generate_declared_base_slos(
 
     Precedence **declared > suppress > convention**: when the author declares a real series that
     ``covers`` a base RED kind, bind the SLI to ``<series>{<declared labels>}`` — instead of the
-    #274 suppression or a convention metric the subject may not emit. v1 binds **latency** (p99 on
-    the histogram ``_bucket``) and **throughput** (request rate); ``availability`` is recorded as
-    *deferred* (needs an error-selector the contract doesn't yet carry). No declared series ⇒
-    ``skipped`` (byte-identical to pre-#286). The convention RED for a bound kind is suppressed in
-    ``_service_sli_kinds`` so this never double-emits."""
+    #274 suppression or a convention metric the subject may not emit. Binds **latency** (p99 on the
+    histogram ``_bucket``) and **throughput** (request rate); **availability** binds as a good/total
+    ratio when the series carries an ``error_selector`` (#286 v2), else it is recorded *deferred*. No
+    declared series ⇒ ``skipped`` (byte-identical to pre-#286). The convention RED for a bound kind is
+    suppressed in ``_service_sli_kinds`` so this never double-emits."""
     series = getattr(service, "declared_emitted_series", None) or ()
+    svc = service.service_id
     documents: List[str] = []
     bound: List[Dict[str, str]] = []
     deferred: List[Dict[str, str]] = []
     severity = _severity_for(business, [])
+
+    def _meta(kind: str, series_name: str) -> Dict[str, Any]:
+        return {
+            "name": f"{svc}-{kind}-declared".lower().replace("_", "-"),
+            "labels": {
+                "service": svc, "signal_kind": kind,
+                "bound_series": series_name,  # traceability to the real declared series
+                "generated_by": "startd8",
+            },
+        }
+
     for s in series:
         selector = _declared_series_selector(s.labels)
         for kind in s.covers:
+            if kind == "availability":
+                # #286 v2: a good/total ratio needs the error subset; without an error_selector a
+                # correct availability ratio can't be built → honest defer (not a fabricated SLI).
+                if not s.error_selector:
+                    deferred.append({"service": svc, "kind": kind, "series": s.name})
+                    continue
+                target, _tier = _resolve_threshold("availability", business, [])
+                err_sel = _declared_error_selector(s.labels, s.error_selector)
+                slo = {
+                    "apiVersion": "openslo/v1", "kind": "SLO",
+                    "metadata": _meta(kind, s.name),
+                    "spec": {
+                        "description": (
+                            f"availability SLO for {svc} bound to the declared emitted series "
+                            f"{s.name!r} (good/total ratio, #286)"
+                        ),
+                        "target": target,
+                        "timeWindow": {"duration": business.slo_window, "isRolling": True},
+                        "budgetPolicy": "occurrences",
+                        "indicator": {"metadata": {"name": f"{svc}-availability-declared-sli"}, "spec": {
+                            "ratioMetric": {
+                                "counter": {"metricSource": {"type": "prometheus", "spec": {
+                                    "query": f"rate({s.name}{selector}[5m])"}}},
+                                "good": {"metricSource": {"type": "prometheus", "spec": {
+                                    "query": f"rate({s.name}{err_sel}[5m])"}}},
+                            },
+                        }},
+                        "alerting": {
+                            "name": f"{svc}-availability-declared-alert",
+                            "labels": {"severity": severity},
+                        },
+                    },
+                }
+                documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+                bound.append({"service": svc, "kind": kind, "series": s.name})
+                continue
+
             shape_field = _DECLARED_SLI_SHAPE.get(kind)
             if shape_field is None:
-                # covered by the author but not a v1-bindable shape (e.g. availability) — honest defer.
-                deferred.append({"service": service.service_id, "kind": kind, "series": s.name})
+                deferred.append({"service": svc, "kind": kind, "series": s.name})
                 continue
             shape, threshold_field = shape_field
             query = _functional_sli_query(shape, s.name, selector)
@@ -1153,24 +1219,16 @@ def generate_declared_base_slos(
             slo = {
                 "apiVersion": "openslo/v1",
                 "kind": "SLO",
-                "metadata": {
-                    "name": f"{service.service_id}-{kind}-declared".lower().replace("_", "-"),
-                    "labels": {
-                        "service": service.service_id,
-                        "signal_kind": kind,
-                        "bound_series": s.name,  # traceability to the real declared series
-                        "generated_by": "startd8",
-                    },
-                },
+                "metadata": _meta(kind, s.name),
                 "spec": {
                     "description": (
-                        f"{kind} SLO for {service.service_id} bound to the declared emitted series "
+                        f"{kind} SLO for {svc} bound to the declared emitted series "
                         f"{s.name!r} (#286)"
                     ),
                     "target": target,
                     "timeWindow": {"duration": business.slo_window, "isRolling": True},
                     "indicator": {
-                        "metadata": {"name": f"{service.service_id}-{kind}-declared-sli"},
+                        "metadata": {"name": f"{svc}-{kind}-declared-sli"},
                         "spec": {
                             "thresholdMetric": {
                                 "metricSource": {"type": "prometheus", "spec": {"query": query}},
@@ -1178,13 +1236,13 @@ def generate_declared_base_slos(
                         },
                     },
                     "alerting": {
-                        "name": f"{service.service_id}-{kind}-declared-alert",
+                        "name": f"{svc}-{kind}-declared-alert",
                         "labels": {"severity": severity},
                     },
                 },
             }
             documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
-            bound.append({"service": service.service_id, "kind": kind, "series": s.name})
+            bound.append({"service": svc, "kind": kind, "series": s.name})
 
     header = f"# Declared-emitted-series base SLOs for {service.service_id} (#286)\n"
     return ArtifactResult(

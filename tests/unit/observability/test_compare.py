@@ -32,6 +32,33 @@ def test_divergence_classes_reported_with_counts_and_reasons():
     assert "validate-promql" in text  # points at Tier B
 
 
+def test_bound_declared_series_shown_as_positive():
+    # #286: a base SLI bound to a real declared series is grounding (positive), not a gap.
+    r = build_comparison_report({
+        "emitted": [],
+        "bound_declared_series": [
+            {"service": "web", "kind": "latency", "series": "http_request_duration_seconds"}],
+    })
+    assert r.total_gaps == 0 and len(r.bound) == 1
+    text = render_report(r)
+    assert "Bound to declared emitted series" in text
+    assert "web: latency → http_request_duration_seconds" in text
+    assert r.to_dict()["bound_count"] == 1
+
+
+def test_deferred_declared_kinds_reported_as_a_gap_class():
+    # #286: a covered-but-not-yet-bindable kind (availability w/o error-selector) is a gap.
+    r = build_comparison_report({
+        "emitted": [],
+        "deferred_declared_kinds": [
+            {"service": "web", "kind": "availability", "series": "http_requests_total"}],
+    })
+    assert "deferred_declared_kinds" in r.gaps
+    text = render_report(r)
+    assert "DEFERRED declared kinds" in text
+    assert "web: availability → http_requests_total" in text
+
+
 def test_read_fr_coverage_from_a_manifest(tmp_path):
     m = tmp_path / "observability-manifest.yaml"
     m.write_text(yaml.safe_dump({"fr_coverage": {"emitted": ["FR-1"], "empty_services": ["x"]}}))

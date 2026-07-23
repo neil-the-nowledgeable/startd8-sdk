@@ -500,6 +500,23 @@ class TestDeclaredEmittedSeriesBinding:
         assert len(slo) == 1
         assert "sum(rate(http_requests_total{job=\"web\"}[5m]))" in slo[0].content
 
+    def test_availability_with_error_selector_binds_a_ratio(self, tmp_path):
+        # #286 v2: availability + an error_selector → a good/total ratioMetric on the real series.
+        series = [{"name": "http_requests_total", "type": "counter", "labels": {"job": "web"},
+                   "covers": ["availability"], "error_selector": 'status=~"5.."'}]
+        report = self._run(tmp_path, series=series)
+        slo = self._declared_slo(report)
+        assert len(slo) == 1
+        content = slo[0].content
+        assert "ratioMetric" in content
+        # total = the base selector; good = base labels + the error subset.
+        assert 'rate(http_requests_total{job="web"}[5m])' in content
+        assert 'rate(http_requests_total{job="web",status=~"5.."}[5m])' in content
+        assert any(b["kind"] == "availability" and b["series"] == "http_requests_total"
+                   for b in report.fr_coverage["bound_declared_series"])
+        # not double-recorded as deferred.
+        assert all(d["kind"] != "availability" for d in report.fr_coverage["deferred_declared_kinds"])
+
 
 class TestServiceMonitorScrapeSurfaceGate:
     """#285: a ServiceMonitor is a Prometheus /metrics scrape config; suppress it for a service whose
