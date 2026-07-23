@@ -46,6 +46,18 @@ def test_bound_declared_series_shown_as_positive():
     assert r.to_dict()["bound_count"] == 1
 
 
+def test_bound_line_surfaces_the_enabling_flag():
+    # backlog finding 1: an opt-in series' enabling_flag appears on the compare bound line.
+    r = build_comparison_report({
+        "emitted": [],
+        "bound_declared_series": [
+            {"service": "web", "kind": "latency", "series": "http_request_duration_seconds",
+             "enabling_flag": "MASTODON_DETAILED"}],
+    })
+    text = render_report(r)
+    assert "latency → http_request_duration_seconds  (requires MASTODON_DETAILED)" in text
+
+
 def test_deferred_declared_kinds_reported_as_a_gap_class():
     # #286: a covered-but-not-yet-bindable kind (availability w/o error-selector) is a gap.
     r = build_comparison_report({

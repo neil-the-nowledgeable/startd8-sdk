@@ -1181,6 +1181,11 @@ def generate_declared_base_slos(
     for s in series:
         selector = _declared_series_selector(s.labels)
         slug = _series_slug(s.name)
+        # #286 backlog finding 1: the series may be OPT-IN (e.g. Mastodon DETAILED metrics, off by
+        # default) — surface the enabling flag so an operator knows the bound SLO is dead until it's
+        # set, instead of the flag being silently parsed-and-dropped. Advisory (not load-bearing).
+        flag = s.enabling_flag
+        flag_note = f" Requires the {flag} flag enabled for the series to emit." if flag else ""
         for kind in s.covers:
             if kind == "availability":
                 # #286 v2: a good/total ratio needs the error subset; without an error_selector a
@@ -1196,7 +1201,7 @@ def generate_declared_base_slos(
                     "spec": {
                         "description": (
                             f"availability SLO for {svc} bound to the declared emitted series "
-                            f"{s.name!r} (good/total ratio, #286)"
+                            f"{s.name!r} (good/total ratio, #286).{flag_note}"
                         ),
                         "target": target,
                         "timeWindow": {"duration": business.slo_window, "isRolling": True},
@@ -1216,7 +1221,7 @@ def generate_declared_base_slos(
                     },
                 }
                 documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
-                bound.append({"service": svc, "kind": kind, "series": s.name})
+                bound.append({"service": svc, "kind": kind, "series": s.name, "enabling_flag": flag})
                 continue
 
             shape_field = _DECLARED_SLI_SHAPE.get(kind)
@@ -1233,7 +1238,7 @@ def generate_declared_base_slos(
                 "spec": {
                     "description": (
                         f"{kind} SLO for {svc} bound to the declared emitted series "
-                        f"{s.name!r} (#286)"
+                        f"{s.name!r} (#286).{flag_note}"
                     ),
                     "target": target,
                     "timeWindow": {"duration": business.slo_window, "isRolling": True},
@@ -1252,7 +1257,7 @@ def generate_declared_base_slos(
                 },
             }
             documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
-            bound.append({"service": svc, "kind": kind, "series": s.name})
+            bound.append({"service": svc, "kind": kind, "series": s.name, "enabling_flag": flag})
 
     header = f"# Declared-emitted-series base SLOs for {service.service_id} (#286)\n"
     return ArtifactResult(
