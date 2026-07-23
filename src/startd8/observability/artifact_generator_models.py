@@ -47,6 +47,10 @@ class DeclaredEmittedSeries:
     labels: Dict[str, str] = field(default_factory=dict)
     #: which base RED kinds this series can ground; subset of {availability, latency, throughput}.
     covers: List[str] = field(default_factory=list)
+    #: #286 v2: the PromQL matcher fragment selecting the ERROR subset (e.g. ``status=~"5.."``),
+    #: needed to build the availability good/total ratio. Empty ⇒ availability stays *deferred* (a
+    #: correct ratio can't be built without it); latency/throughput never need it.
+    error_selector: str = ""
     enabling_flag: str = ""  # advisory only: the deploy flag that turns the series on. Not load-bearing.
 
 

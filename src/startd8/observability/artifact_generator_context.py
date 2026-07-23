@@ -316,6 +316,7 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
                 type=str(s.get("type", "")),
                 labels=labels,
                 covers=covers,
+                error_selector=str(s.get("error_selector", "")),
                 enabling_flag=str(s.get("enabling_flag", "")),
             )
         )
