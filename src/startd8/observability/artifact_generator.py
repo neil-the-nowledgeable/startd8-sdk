@@ -1346,7 +1346,14 @@ def _write_index(
 
     # FR-9 (#226): surface FR/SLI-kind coverage in the manifest, but only when there
     # is something to report — a run with no functional[] stays byte-identical.
-    if any(report.fr_coverage.get(k) for k in ("empty_services", "unfulfilled", "emitted", "ungrounded_kinds", "unverified_base_metrics", "suppressed_base_metrics")):
+    # NB: gate on ANY non-empty value, NOT a hardcoded key subset. The prior fixed list
+    # ({empty_services, unfulfilled, emitted, ungrounded_kinds, unverified_base_metrics,
+    # suppressed_base_metrics}) drifted from the dict and omitted the #286/#300 positive-
+    # binding keys (bound_declared_series/-functional, deferred_declared_kinds) — so a run
+    # whose ONLY coverage signal was a declared binding (no suppression) silently dropped
+    # fr_coverage from the manifest and `observability compare` read {}. Values-based gating
+    # can't drift as new keys are added.
+    if any(report.fr_coverage.values()):
         index["fr_coverage"] = report.fr_coverage
 
     dest = output_dir / "observability-manifest.yaml"

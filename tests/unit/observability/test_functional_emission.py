@@ -501,6 +501,18 @@ class TestDeclaredEmittedSeriesBinding:
         assert self._declared_slo(report) == []
         assert report.fr_coverage["bound_declared_series"] == []
 
+    def test_fr_coverage_survives_a_pure_binding_run(self, tmp_path):
+        # Regression (CRP #307 R1-F7): a run whose ONLY coverage signal is a bound declared series
+        # (an emitting surface → NO suppression fires) must still WRITE fr_coverage to the manifest.
+        # The emission gate keyed on a fixed subset that omitted the bound_declared_* keys, so this
+        # class of run silently dropped fr_coverage and `observability compare` read {}.
+        report = self._run(tmp_path, surface="otel_sdk_meter", series=self._LATENCY_SERIES)
+        assert report.fr_coverage["bound_declared_series"]          # the only non-empty class
+        assert not report.fr_coverage["suppressed_base_metrics"]    # no suppression fired
+        manifest = (tmp_path / "out" / "observability-manifest.yaml").read_text()
+        assert "fr_coverage:" in manifest
+        assert "bound_declared_series" in manifest
+
     def test_availability_only_is_deferred_not_bound(self, tmp_path):
         # a series covering only availability is recorded deferred (needs an error-selector), not bound.
         series = [{"name": "http_requests_total", "type": "counter",
