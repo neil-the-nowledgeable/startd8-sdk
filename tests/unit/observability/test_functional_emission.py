@@ -415,3 +415,57 @@ class TestMetricsSurfaceStrictSuppression:
         # suppression drops only the RED triple; a declared queue_depth FR still emits its SLO.
         report = self._run(tmp_path, "traces_only", with_fr=True)
         assert "FR-1" in report.fr_coverage["emitted"]
+
+
+class TestServiceMonitorScrapeSurfaceGate:
+    """#285: a ServiceMonitor is a Prometheus /metrics scrape config; suppress it for a service whose
+    declared metrics_surface serves NO scrape endpoint (traces_only/none), else it ships a dead
+    scrape target (the ADR-003 FP-3 the Mastodon pilot found). Mirrors #274's base-RED gate."""
+
+    def _run(self, tmp_path, surface):
+        hint = {
+            "service_id": "web", "kind": "http_server", "transport": "http",
+            "traces": {"required": [{"span_name": "GET /"}]},
+            "metrics": {"convention_based": [
+                {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]},
+        }
+        if surface:
+            hint["metrics_surface"] = surface
+        doc = {
+            "project_id": "p",
+            "instrumentation_hints": {"web": hint},
+            # service_monitor only emits when DECLARED (Closure 3A) — declare it so the gate is exercised.
+            "artifact_types": ["service_monitor"],
+        }
+        m = tmp_path / "onboarding-metadata.json"
+        m.write_text(json.dumps(doc))
+        return generate_observability_artifacts(
+            onboarding_metadata_path=m, output_dir=tmp_path / "out", dry_run=False,
+        )
+
+    def _monitors(self, report):
+        return [a for a in report.artifacts if a.artifact_type == "service_monitor"
+                and a.service_id == "web" and a.status == "generated"]
+
+    def test_traces_only_suppresses_the_service_monitor(self, tmp_path):
+        report = self._run(tmp_path, "traces_only")
+        assert self._monitors(report) == []          # no dead scrape config shipped
+        assert any(u["service"] == "web" and u["metrics_surface"] == "traces_only"
+                   for u in report.fr_coverage["suppressed_scrape_configs"])
+
+    def test_none_surface_suppresses_the_service_monitor(self, tmp_path):
+        report = self._run(tmp_path, "none")
+        assert self._monitors(report) == []
+        assert any(u["service"] == "web" for u in report.fr_coverage["suppressed_scrape_configs"])
+
+    def test_prometheus_exporter_keeps_the_service_monitor(self, tmp_path):
+        # a scrapeable surface (serves /metrics, different names) still gets its ServiceMonitor.
+        report = self._run(tmp_path, "prometheus_exporter")
+        assert len(self._monitors(report)) == 1
+        assert not report.fr_coverage["suppressed_scrape_configs"]
+
+    def test_absent_surface_keeps_the_service_monitor(self, tmp_path):
+        # unknown surface must NOT be gated (would false-suppress a real scrapeable service).
+        report = self._run(tmp_path, "")
+        assert len(self._monitors(report)) == 1
+        assert not report.fr_coverage["suppressed_scrape_configs"]
