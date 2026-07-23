@@ -1,0 +1,51 @@
+# CI widen-backlog — what blocks expanding the Tests workflow beyond the observability core.
+#
+# The Tests workflow (.github/workflows/tests.yml) currently runs ONLY tests/unit/observability
+# (verified green + stable + fast). To widen coverage, the two problems below must be cleared;
+# this file is the catalogue, not an input the workflow reads.
+#
+# ── Problem 1: ROT (deterministic) — 28 files, 85 failures, tests behind evolved APIs ──
+# Characterized 2026-07-23 (spot-checked, not assumed):
+#   - Stale API (real code moved on): test_source_reconciler.py — 20 tests call `SourceReconciler()`
+#     but __init__ now requires `project_root` (largest single cluster). Likely one fix per cluster.
+#   - Environmental: test_gemini_agent.py / test_gemini_safety_filter.py (optional google-genai),
+#     test_benchmark_* (docker/seeds) — should be skip-guarded, not "fixed".
+# Fix a file → run it green in isolation → it can join CI scope.
+#
+tests/unit/contractors/test_contract_threading.py
+tests/unit/contractors/test_prime_walkthrough_mode.py
+tests/unit/frontend_codegen/test_convention_detection.py
+tests/unit/scripts/test_kaizen_instrumentation_metrics.py
+tests/unit/semantic_compliance/test_orchestrator_e2e.py
+tests/unit/test_artisan_config.py
+tests/unit/test_benchmark_behavioral.py
+tests/unit/test_benchmark_k2_leverage.py
+tests/unit/test_benchmark_provision.py
+tests/unit/test_code_manifest.py
+tests/unit/test_connection_pool.py
+tests/unit/test_escalation_conflation.py
+tests/unit/test_forward_manifest.py
+tests/unit/test_gemini_agent.py
+tests/unit/test_gemini_safety_filter.py
+tests/unit/test_import_resolution.py
+tests/unit/test_ob_benchmark_seeds.py
+tests/unit/test_observability_manifest.py
+tests/unit/test_plan_ingestion_golden.py
+tests/unit/test_plan_ingestion_workflow.py
+tests/unit/test_primary_contractor_workflow.py
+tests/unit/test_prime_task_enrichment.py
+tests/unit/test_ratelimit.py
+tests/unit/test_security_contract_wiring.py
+tests/unit/test_source_reconciler.py
+tests/unit/test_stakeholder_run.py
+tests/unit/test_timeout_config.py
+tests/unit/vipp/test_apply.py
+#
+# ── Problem 2: FLAKY TAIL (nondeterministic) — the harder one ──
+# A full tests/unit run fails 1–3 DIFFERENT tests each time, all of which PASS in isolation:
+# timing/perf assertions (e.g. test_manifest_cache::test_real_project_under_10s), e2e/CLI
+# subprocess tests (test_cli_compare_models_e2e, concierge derive CLI), and cross-module state
+# pollution (test_ratelimit, test_run_ob_benchmark_cli). pytest-xdist --dist loadscope did NOT
+# make it green (perf tests flake worse under parallel CPU load). Widening past the deterministic
+# rot will need a flaky-test strategy (pytest-rerunfailures retries, and/or quarantining the
+# timing/e2e tests behind a marker), not just fixing the 28 files above.
