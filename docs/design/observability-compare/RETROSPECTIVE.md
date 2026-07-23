@@ -22,8 +22,9 @@ the **standard the arc proved**: how to build, verify, and gate a *fidelity/regr
 | The baseline-diff CI gate guards regressions | It is **blind to *dropped* SLIs** (0 fails ⇒ 0 new fails ⇒ false PASS), and the workflow **silently-greened on a crash** (`exit 1` fell through to pass) — both found by `/code-review` | A diff/allowlist gate needs a **presence floor** + a **fail-closed** exit mapping. |
 | `$?` after the CLI reports the CLI's exit | `... | head` made `$?` report *head* — a `FAIL` (exit 2) read as `0` | Never read `$?` through a pipe; capture without the pipe (or `PIPESTATUS`). |
 | The red parity test was ours/unrelated-and-open | Fixed by a **concurrent session** — `add509af` #284 (declare kickoff+grant metrics) | Re-check `origin/main` before acting on a "known-broken" test; the tree moves under you. |
+| I was adding *the* observability CI gate | An **`observability-fidelity.yml`** workflow already existed (reusable `validate-promql` coverage gate); I'd added a parallel one without checking — violating this doc's own **Rule 1** while writing it | Rule 1 is load-bearing precisely because it is easy to skip: grep `.github/workflows/` before adding CI. Kept both (genuinely complementary) but **differentiated** them in-header + README. |
 
-Eight surprises → the loop worked (Phase-3 heuristic: zero surprises means you read the docs, not the code).
+Nine surprises → the loop worked (Phase-3 heuristic: zero surprises means you read the docs, not the code). The last one is the sharpest: I tripped Rule 1 *while authoring it* — evidence the rule earns its place.
 
 ---
 

@@ -52,6 +52,13 @@ Prometheus (docker), replays, and diffs against `compare_live_baseline.json`:
 - **exit 2** — a **new** dead SLI shipped (a generator/engine regression). ❌ fails the build.
 - **exit 3** — live replay inconclusive (standup/scrape/infra). ⚠️ warns, does not block.
 
+## Related CI
+
+`.github/workflows/observability-fidelity.yml` is a **complementary, not duplicate** gate: a *reusable*
+(`workflow_call`/`dispatch`) **coverage** gate wrapping `validate-promql`, where a caller supplies its own
+artifacts + Prometheus. This workflow is the *self-contained, auto-triggered* **regression** gate wrapping
+`compare-live` (Tier-A merge + baseline-diff over a committed fixture + a stood-up pinned subject).
+
 ## Re-baselining (explicit operator action — the gate never self-heals)
 
 When a new dead SLI is *intentional* (e.g. a deliberate new SLI awaiting instrumentation), re-author

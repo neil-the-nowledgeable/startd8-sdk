@@ -7,6 +7,14 @@ name: observability-compare-live-gate
 # only on a NEW dead SLI — a verdict not in the committed baseline. This prevents the #274/#275
 # defect class (an SLI that evaluates against nothing) from silently shipping via a generator or
 # engine change. See docs/design/observability-compare/pilot-repro/README.md.
+#
+# Relationship to observability-fidelity.yml (they are complementary, NOT duplicates):
+#   * observability-fidelity.yml — a REUSABLE (workflow_call/dispatch) COVERAGE gate wrapping
+#     `validate-promql`; a caller supplies its own artifacts_dir + Prometheus and gates on a
+#     coverage floor. No auto-trigger, no baseline, no subject stand-up.
+#   * this workflow — a SELF-CONTAINED, auto-triggered PR REGRESSION gate wrapping `compare-live`
+#     (Tier-A merge + baseline-diff); it regenerates a committed fixture, stands up its own pinned
+#     subject, and fails only on a NEW dead SLI vs the committed baseline.
 
 on:
   pull_request:
