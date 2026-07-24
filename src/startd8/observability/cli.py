@@ -18,6 +18,7 @@ are redacted from all output.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -500,6 +501,11 @@ def compare_live_cmd(
         False, "--apply-profile-fix",
         help="Write the diagnosed metricsProfile fix into --manifest (explicit; regenerate after).",
     ),
+    emit_metrics: bool = typer.Option(
+        False, "--emit-metrics",
+        help="Emit the gate verdict as OTel metrics (needs OTEL_EXPORTER_OTLP_ENDPOINT) so "
+             "fidelity is trendable in Grafana.",
+    ),
 ) -> None:
     """Tier-B live derived-vs-emitted comparison — merges live fidelity with Tier-A gaps.
 
@@ -565,6 +571,31 @@ def compare_live_cmd(
             for v in gate[1]
         ]
         typer.echo(redact("\n".join(lines), auth.redactions()))
+
+    if emit_metrics:
+        # FR-11: record the gate verdict to OTel so fidelity is trendable in Grafana. Opt-in +
+        # no-op safe: bootstrap an exporter from OTEL_EXPORTER_OTLP_ENDPOINT (configure_otel
+        # registers an atexit force-flush so this short-lived CLI actually exports).
+        from .compare_live_metrics import record_gate_metrics, subject_label
+
+        endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+        if endpoint:
+            try:
+                from ..otel import OTelConfig, configure_otel
+
+                configure_otel(OTelConfig(otlp_endpoint=endpoint))
+            except Exception:  # noqa: BLE001 — never let telemetry setup fail the gate
+                pass
+        subj = subject_label(subject_image, prometheus)
+        n_new = len(gate[1]) if gate is not None else 0
+        if record_gate_metrics(report, n_new, subj):
+            typer.echo(
+                f"# emitted compare-live gate metrics (subject={subj}, meter startd8.observability.compare_live)"
+            )
+        else:
+            typer.echo(
+                "# --emit-metrics: OTel unavailable or no OTEL_EXPORTER_OTLP_ENDPOINT — nothing emitted."
+            )
 
     if keep_up and report.standup.get("subject_container"):
         typer.echo(

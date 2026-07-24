@@ -79,6 +79,12 @@ label) bug class. A CI gate on *new* `fail`s prevents the regression from ever s
   *Acceptance:* on a run with a suggested profile, `--apply-profile-fix` sets `spec.observability.metricsProfile` in the manifest + prints a "regenerate to take effect" confirmation; on a run with none, it writes nothing and says so.
 - **FR-9 Teardown & safety.** `finally` `tear_down(handle)` removes both containers + network + temp yml, best-effort/never-raises, on every path. Per-run `startd8-cmp-<8hex>` names. `--keep-up` prints the exact `docker rm -f` commands. **Operator recovery (R1-F6):** the `startd8-cmp-` prefix is a stable contract — after a SIGKILL/OOM where `finally` never ran, `docker rm -f $(docker ps -aq --filter name=startd8-cmp)` + `docker network rm $(docker network ls -q --filter name=startd8-cmp)` sweeps every orphan.
 - **FR-10 Injectable seams.** `standup_fn`, `teardown_fn`, `validate_fn`, `read_fr_coverage_fn`, `scrape_ready_check`, `runner` all injectable — merge/gate/argv logic fully unit-tested with **zero docker** (mirrors `bind_and_verify`).
+- **FR-11 Emit the gate result as OTel metrics (OP-1).** `compare-live --emit-metrics` records the run's verdict to OpenTelemetry so o11y *fidelity itself* is trendable in Grafana (not just a per-run exit code). Under the meter `startd8.observability.compare_live`:
+  - `gate_runs` (counter) +1 per run, attributes `{status, subject}` — run counts by pass/fail/unknown.
+  - `dead_sli_count` / `new_fail_count` / `binding_coverage` (histograms) — the report's dead-SLI total, the new-vs-baseline regressions (0 when no `--baseline`), and Tier-B binding coverage, attribute `{subject}`.
+  - `subject` = `--subject-image` or the `--prometheus` **hostname** (never the full URL — FR-7 redaction).
+  - **Opt-in + no-op safe:** only when `--emit-metrics` is passed; it bootstraps a MeterProvider from `OTEL_EXPORTER_OTLP_ENDPOINT` (reusing `otel.configure_otel`, whose atexit force-flush exports before the short-lived CLI exits) and prints a one-line note when OTel is unavailable / no endpoint — never fails the gate. Recording mirrors `costs/otel_metrics.py` (lazy meter, guarded).
+  *Acceptance:* with an in-memory reader, a `--emit-metrics` run records `gate_runs` with the run's `status` and the three histograms; without OTel/endpoint it emits nothing and the gate is unaffected.
 
 ## 3. Non-Requirements
 - **NR-1** Multi-container subject standup (Mastodon PG+Redis+Sidekiq) — deferred; reach via `--prometheus <existing>`.
@@ -105,6 +111,8 @@ label) bug class. A CI gate on *new* `fail`s prevents the regression from ever s
 *v0.4.2 — added FR-8a (surface the new-vs-baseline regression set on a gate FAIL): the ENHANCEMENT_BACKLOG lead finding — `ci_gate` already computes `new_fails` but the CLI discarded it, so a red gate never said *which* SLIs regressed.*
 
 *v0.4.3 — added FR-8b (`--apply-profile-fix`): apply the diagnosed `metricsProfile` to the manifest via the existing `bind_and_verify.write_project_profile` — closing the diagnose→fix half. Explicit-only, no-op when no single profile fixes it, warns comments aren't preserved, requires regenerate.*
+
+*v0.4.4 — added FR-11 (`--emit-metrics`, backlog OP-1): emit the gate verdict as OTel metrics (`startd8.observability.compare_live`: gate_runs/dead_sli_count/new_fail_count/binding_coverage) so fidelity is trendable in Grafana. Opt-in, no-op-safe, mirrors `costs/otel_metrics.py`.*
 
 ---
 

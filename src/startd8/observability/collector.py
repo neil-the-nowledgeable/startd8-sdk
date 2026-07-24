@@ -41,6 +41,8 @@ _INSTRUMENTED_MODULES = [
     ("startd8.security_prime.otel", "src/startd8/security_prime/otel.py"),
     ("startd8.sapper.report", "src/startd8/sapper/report.py"),  # declares sapper.findings.count
     ("startd8.utils.artifact_inventory", "src/startd8/utils/artifact_inventory.py"),
+    # FR-11: compare-live gate metrics (gate_runs + dead_sli/new_fail/binding_coverage histograms)
+    ("startd8.observability.compare_live_metrics", "src/startd8/observability/compare_live_metrics.py"),
     ("startd8.frontend_codegen.telemetry", "src/startd8/frontend_codegen/telemetry.py"),
     ("startd8.presentation_polish.telemetry", "src/startd8/presentation_polish/telemetry.py"),
     # Kickoff experience live emitters — previously-undeclared shipped metrics (parity gap):
