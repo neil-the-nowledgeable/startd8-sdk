@@ -78,3 +78,62 @@ Ground: this standard is exactly the v0.3.1 §0 table — each clause earned by 
   maps, grouping-insensitive) is the reusable piece — apply it to the next cutover rather than a diff.
 - Feeds the forward loop: the extracted standard is now an input to the next `/reflective-requirements`
   that consumes a ContextCore→SDK handoff (the FR-7 spanmetrics-dimension follow-up will).
+
+---
+
+# Retrospective — the follow-ups batch (QW-2/QW-3/EC-1/EC-2, PR #324)
+
+**Pilot:** the four enhancement-backlog items, commits on `feat/collector-enrichment-followups`.
+**Question:** what reusable standard did EC-1 prove for **adding a per-instance override to a shared
+generator**?
+
+## Phase 2 — the actuals
+
+- The diff threaded an optional `service` into `_severity_for` and 9 per-service call sites; the runbook
+  gained a per-service owner branch; the generator gained a spanmetrics-dimension fragment + `fr_coverage`.
+- **The observed result:** the full observability suite stayed **732 passed** — byte-identical — with **no
+  feature flag**. The grep `grep -rl '"business"' tests/…/instrumentation_hints` returned only my *own*
+  collector_enrichment tests: no alert/SLO/runbook fixture carries per-service business.
+
+## Phase 3 — reversed discovery table (belief → actual)
+
+| The spec (NR-1) believed | The actuals revealed | Standard extracted |
+|---|---|---|
+| EC-1 "must be additive/**flag-guarded** — rewiring risks byte-output regressions." | **No flag needed.** The new field's **empty-default** (`criticality=""`, `owner=None`) + the consumer's fallback-to-project **is** the guard: empty ⇒ project value ⇒ identical bytes. | When an added per-instance override defaults to empty AND the consumer falls back to the prior value, existing output is byte-identical *for free* — a flag is accidental complexity. |
+| The risk is "rewiring." | The risk is only real **if an existing fixture populates the new field.** It doesn't (grep-verified). | The load-bearing safety step is the **grep proving no existing input carries the new field**, not a flag. |
+
+## Phase 4 — the extracted standard
+
+> **Standard: the empty-default is the guard, not a flag.**
+> To add a per-instance override to a shared generator without regressing existing output:
+> 1. Give the new field an **empty/absent default** (`""` / `None`).
+> 2. Have the consumer **prefer the per-instance value only when truthy, else fall back** to the
+>    existing (project/global) value — and keep the *fallback path's* derivation/trace **byte-identical**
+>    to before (e.g. `_severity_for`'s project-path `source` string is unchanged).
+> 3. **Grep the fixtures/inputs to prove none populate the new field.** This is the actual safety proof;
+>    the full suite is the confirmation.
+> 4. Only reach for a feature flag when an existing input *does* carry the field and the new behavior
+>    would change shipped output — i.e. when steps 1–3 can't hold. Absent that, a flag is a mechanism
+>    guarding a regression a structural invariant already prevents.
+
+Ground: `_severity_for` (`artifact_generator_generators.py:193`) + the 9 threaded call sites; the
+byte-identical 732-fixture result; the fixture grep.
+
+## Phase 5 — lesson + principle
+
+- **Lesson (SDK):** *"empty-default is the byte-identity guard, not a flag"* — with the grep-the-fixtures
+  proof step. → auto-memory + Lessons Learned.
+- **Accidental-Complexity anti-principle** (reaffirmed): the spec's instinct to add a *flag* was a
+  mechanism to guard a regression a **structural invariant** (empty-default → fallback → identical)
+  already prevents. Prefer the invariant; delete the mechanism.
+- **SOTTO**: byte-identical-when-absent, achieved by empty-gating rather than a flag — the same shape as
+  the generator's presence-gate.
+
+## Phase 6 — Yokoten
+
+- The same "empty-default is the guard" move applies to the *other* dormant FR-1b consumers and to any
+  future per-service override of a shared generator (thresholds, datasource UIDs, dashboard placement).
+  When the next one lands, skip the flag; grep the fixtures instead.
+- Feeds the forward loop: this standard is now an input to the next `/reflective-requirements` that
+  proposes a per-instance override — it should default to "empty-default guard, verify by grep" and only
+  escalate to a flag if a fixture already carries the field.
