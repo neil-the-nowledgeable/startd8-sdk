@@ -1,6 +1,6 @@
 # compare-live — Next Steps
 
-**Updated:** 2026-07-24 · **Status:** v1 shipped; expanded subject coverage **spec CRP-triaged (v0.4) — ready to build, no open decisions**
+**Updated:** 2026-07-24 · **Status:** v1 shipped; **Inc-1 multi-container standup shipped**; next = FR-8 warm-up traffic → Inc-2 span-metrics
 
 A roadmap/orientation for the `compare-live` effort — where it stands and the sequenced build. Points to
 the authoritative specs rather than restating them. **The design gate is cleared** (CRP R1 triaged, OQ-B
@@ -16,8 +16,9 @@ resolved); the next move is implementation.
 | **Single-image standup** (boot 1 subject + Prometheus, warm-up-gate on scrape) | **shipped v1** | `REQUIREMENTS.md`, `live_standup.py` |
 | **CLI** `startd8 observability {compare, compare-live, contrast}` | **shipped** | `cli.py:398/433/306` |
 | **Gate metrics/histograms** | **shipped** (concurrent) | `compare_live_metrics.py` |
-| **Expanded subject coverage** — Inc-1 multi-container, Inc-2 span-metrics | **spec v0.4 — CRP R1 triaged, ready to build** | `SUBJECT_COVERAGE_REQUIREMENTS.md` |
-| **Traffic driver for Inc-2** (FR-8) | **speced + reuse-mapped** (zero new engine) | `TRAFFIC_DRIVER_REUSE_MAP.md` |
+| **Inc-1 — multi-container standup** (`--subject-compose`, lean topology → two-network compose → warm-up gate → N-container teardown) | **shipped** — `live_compose.py`, wired into `run_live_comparison` + CLI | `live_compose.py`, `compare_live.py:262`, `cli.py` |
+| **Expanded subject coverage** — Inc-2 span-metrics | **spec v0.4 — CRP R1 triaged, ready to build** | `SUBJECT_COVERAGE_REQUIREMENTS.md` |
+| **Traffic driver for Inc-2** (FR-8) | **speced + reuse-mapped** (zero new engine) — next up | `TRAFFIC_DRIVER_REUSE_MAP.md` |
 
 ## Design gate — CLEARED (CRP R1 triaged 2026-07-24)
 
@@ -41,11 +42,15 @@ cross-model coverage of the OQ-B call, but R1's findings were grounded correctio
 
 Each increment reuses the shipped Tier-B replay unchanged; the work is standup topology.
 
-1. **Inc-1 — multi-container standup** (**M-L**). **Build `observability/live_compose.py`** (OQ-B: reuse
-   `compose.py` patterns, don't import `benchmark_matrix`) + the topology input parser (`--subject-compose`,
-   lean YAML, single-scrape-target boundary + schema per FR-1) → compose (`internal:true` fleet + `edge`,
-   service-DNS, Prometheus-as-ingress-on-both-nets) → boot in dep order → `_await_scrape` gate →
-   N-container best-effort `tear_down` (FR-7 contract).
+1. **Inc-1 — multi-container standup** (**M-L**). ✅ **SHIPPED.** `observability/live_compose.py` (new leaner
+   compose builder — reuses `compose.py`'s net/DNS/ingress/dep-env *patterns*, does **not** import
+   `benchmark_matrix`) + the topology input parser (`--subject-compose`, lean YAML, single-scrape-target
+   boundary + FR-1 schema, fail-loud `TopologyError`) → two-network compose (`internal:true` fleet + `edge`,
+   service-DNS, Prometheus-as-ingress-on-both-nets) → `docker compose up -d` in dep order → the **reused**
+   `_await_scrape` gate → N-container best-effort `tear_down_compose` (FR-7: project name = sole ownership
+   key, leaked-count not raise). Wired as Tier-B Path 2 in `run_live_comparison` (precedence: `--prometheus`
+   > `--subject-compose` > `--subject-image`). Zero-docker unit tests: `test_live_compose.py` (23) +
+   compose-orchestration cases in `test_compare_live.py`.
 2. **FR-8 — warm-up traffic** (**S**, build alongside Inc-1). Drive bounded traffic before the readiness
    gate so lazily-registered RED series (and Inc-2 span-metrics) materialize. **Reuse an existing driver**
    by subject shape — `run_smoke` (generic OpenAPI) / `run_journey_http` (OB HTTP) / `run_journey` (OB
@@ -84,7 +89,7 @@ hardest part (traffic).
   keep diffs logic-only, verify `gh pr view … mergeable` before merging.
 
 ## Pointers
-- Authoritative spec: **`SUBJECT_COVERAGE_REQUIREMENTS.md`** (v0.3.2). Parent: `REQUIREMENTS.md` (shipped v1).
+- Authoritative spec: **`SUBJECT_COVERAGE_REQUIREMENTS.md`** (v0.4). Parent: `REQUIREMENTS.md` (shipped v1).
 - Traffic reuse: **`TRAFFIC_DRIVER_REUSE_MAP.md`** + `~/Documents/tools/load-generators/README.md`.
 - SLI surfaces already speced/shipped in this dir: `DECLARED_FUNCTIONAL_SLI_*`, `SPANMETRICS_SLI_BINDING_*`,
   `SYNTHETIC_PROBE_P0/P1P3_*`.

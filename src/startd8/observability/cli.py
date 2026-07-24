@@ -456,6 +456,13 @@ def compare_live_cmd(
     subject_port: int = typer.Option(
         8080, "--subject-port", help="Subject /metrics port."
     ),
+    subject_compose: Path = typer.Option(
+        None,
+        "--subject-compose",
+        help="Lean multi-container subject-topology YAML to stand up (Inc-1). "
+        "Boots an N-container fleet + Prometheus; scrapes one metrics_service. "
+        "Mutually exclusive with --subject-image / --prometheus.",
+    ),
     metrics_path: str = typer.Option(
         "/metrics",
         "--metrics-path",
@@ -532,6 +539,7 @@ def compare_live_cmd(
         onboarding_metadata=onboarding_metadata,
         subject_image=subject_image,
         subject_port=subject_port,
+        subject_compose=subject_compose,
         metrics_path=metrics_path,
         prometheus=prometheus,
         min_coverage=min_coverage,
@@ -606,6 +614,8 @@ def compare_live_cmd(
                 f"docker network rm {report.standup['network']}"
             )
         )
+    elif keep_up and report.standup.get("teardown_hint"):
+        typer.echo("# --keep-up: tear down with:  " + report.standup["teardown_hint"])
 
     if apply_profile_fix:
         # FR-8b: apply the diagnosed one-line fix to the manifest — an EXPLICIT authoring action

@@ -183,6 +183,116 @@ def test_run_no_subject_and_no_prometheus_is_unknown(tmp_path):
     assert r.status == "unknown"
 
 
+# ── run_live_comparison — Inc-1 multi-container (--subject-compose) ──────────
+
+_COMPOSE_TOPO = (
+    "containers:\n"
+    "  - {name: web, image: myapp:latest, port: 3000, deps: [db]}\n"
+    "  - {name: db,  image: postgres:16,  port: 5432}\n"
+    "metrics_service: web\n"
+    "metrics_port: 3000\n"
+)
+
+
+def _compose_handle(**kw):
+    from startd8.observability.live_compose import ComposeStandupHandle
+
+    base = dict(
+        prometheus_url="http://127.0.0.1:9", job_name="subject",
+        project_name="startd8-cmp-x", metrics_service="web", scrape_ready=True,
+    )
+    base.update(kw)
+    return ComposeStandupHandle(**base)
+
+
+def test_run_compose_path_replays_and_tears_down(tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    topo = tmp_path / "topo.yaml"
+    topo.write_text(_COMPOSE_TOPO)
+    seen, torn = {}, {"n": 0}
+
+    def fake_compose_standup(**kw):
+        seen["topology"] = kw["topology"]
+        return _compose_handle()
+
+    def fake_validate(**kw):
+        seen["prometheus_url"] = kw["prometheus_url"]
+        return _fidelity("pass", [_v("pass")])
+
+    def fake_standup(**kw):  # single-image path must NOT run
+        raise AssertionError("subject_image standup should be skipped on the compose path")
+
+    r = compare_live.run_live_comparison(
+        manifest=manifest, subject_compose=topo,
+        compose_standup_fn=fake_compose_standup,
+        compose_teardown_fn=lambda h: torn.__setitem__("n", torn["n"] + 1),
+        standup_fn=fake_standup, validate_fn=fake_validate,
+        read_fr_coverage_fn=lambda p: {},
+    )
+    assert r.status == "pass"
+    assert seen["prometheus_url"] == "http://127.0.0.1:9"
+    assert seen["topology"].metrics_service == "web"
+    assert torn["n"] == 1  # compose teardown fired
+    assert r.standup["mode"] == "compose"
+
+
+def test_run_compose_scrape_fail_is_unknown_and_tears_down(tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    topo = tmp_path / "topo.yaml"
+    topo.write_text(_COMPOSE_TOPO)
+    torn = {"n": 0}
+
+    def fake_compose_standup(**kw):
+        return _compose_handle(scrape_ready=False, reason="did not warm up")
+
+    r = compare_live.run_live_comparison(
+        manifest=manifest, subject_compose=topo,
+        compose_standup_fn=fake_compose_standup,
+        compose_teardown_fn=lambda h: torn.__setitem__("n", torn["n"] + 1),
+        validate_fn=lambda **kw: (_ for _ in ()).throw(AssertionError("must not replay")),
+        read_fr_coverage_fn=lambda p: {},
+    )
+    assert r.status == "unknown"
+    assert torn["n"] == 1
+
+
+def test_run_compose_malformed_topology_is_unknown_no_standup(tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    topo = tmp_path / "bad.yaml"
+    topo.write_text("containers: []\nmetrics_service: a\nmetrics_port: 1\n")
+
+    def fake_compose_standup(**kw):  # must NOT be reached — fail before standup
+        raise AssertionError("standup must not run on a malformed topology")
+
+    r = compare_live.run_live_comparison(
+        manifest=manifest, subject_compose=topo,
+        compose_standup_fn=fake_compose_standup,
+        read_fr_coverage_fn=lambda p: {},
+    )
+    assert r.status == "unknown"
+    assert "invalid --subject-compose topology" in r.standup["reason"]
+
+
+def test_run_compose_keep_up_skips_teardown(tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    topo = tmp_path / "topo.yaml"
+    topo.write_text(_COMPOSE_TOPO)
+    torn = {"n": 0}
+
+    compare_live.run_live_comparison(
+        manifest=manifest, subject_compose=topo, keep_up=True,
+        compose_standup_fn=lambda **kw: _compose_handle(),
+        compose_teardown_fn=lambda h: torn.__setitem__("n", torn["n"] + 1),
+        validate_fn=lambda **kw: _fidelity("pass", [_v("pass")]),
+        read_fr_coverage_fn=lambda p: {},
+    )
+    assert torn["n"] == 0  # --keep-up left it running
+
+
 # ── CI gate (FR-8) ──────────────────────────────────────────────────────────
 
 def test_verdict_id_stable_across_whitespace_and_path():
