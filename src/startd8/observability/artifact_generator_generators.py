@@ -1757,10 +1757,12 @@ def generate_declared_probe_slos(
         query = _functional_sli_query(shape, metric, selector)
         rec.update({
             "query": query, "published_metric": metric, "metric_kind": probe.metric_kind,
-            "reason_code": "probe_pending_no_runner",
-            "reason": (f"freshness SLI for {svc} is derived from declared probe {probe.name!r} but its "
-                       f"metric {metric!r} is published only once the probe RUNNER runs (P1/P2); the SLO "
-                       f"is recorded pending a runner — a positive finding, not a dead SLI."),
+            # #308 P1 (FR-P1-4): a runner spec is emitted for every bindable probe → the lifecycle advances
+            # probe_pending_no_runner (P0-only) → probe_runner_emitted (P1) → probe_bound (P2 promotion).
+            "reason_code": "probe_runner_emitted",
+            "reason": (f"freshness SLI for {svc} is derived from declared probe {probe.name!r}; a runner "
+                       f"spec is emitted (probe-specs/) but its metric {metric!r} is published only once "
+                       f"the runner RUNS (P2) — recorded pending a run, a positive finding, not a dead SLI."),
         })
         # FR-4: target from the author, else threshold-deferred (#300 D2 discipline). Either way: recorded.
         if probe.target is not None:
@@ -1770,7 +1772,7 @@ def generate_declared_probe_slos(
         pending.append(rec)
 
     quality: Dict[str, Any] = {"pending_probes": pending} if pending else {}
-    # FR-2: P0 writes NO file — always skipped; the SLO shape lives in pending_probes.
+    # FR-2: P0/P1 write NO SLO file — always skipped; the SLO shape lives in pending_probes.
     return ArtifactResult(
         artifact_type="slo_definition",
         service_id=service.service_id,
@@ -1778,6 +1780,62 @@ def generate_declared_probe_slos(
         status="skipped",
         content="",
         quality=quality,
+    )
+
+
+#: #308 P1: a secret/env reference inside an opaque probe field, e.g. ${SECRET:MASTO_TOKEN} or ${ENV:URL}.
+_PROBE_SECRET_REF_RE = re.compile(r"\$\{([A-Za-z0-9_:.-]+)\}")
+
+
+def generate_declared_probe_specs(
+    service: ServiceHints,
+    business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
+) -> ArtifactResult:
+    """Emit the runnable probe-spec artifact for a service's declared probes (#308 P1 / FR-P1-1..2).
+
+    A non-PromQL artifact (``probe-specs/{svc}-probe-specs.yaml``, excluded from PromQL replay by FR-P1-3):
+    a declarative runner recipe an operator/runner executes — the SDK emits, never runs (NR-1). Credentials
+    ride as ``${SECRET:...}``/``${ENV:...}`` references, never inlined (FR-P1-2); a spec that is incomplete
+    (missing action/poll/assert) is emitted **structurally non-runnable** (``runnable: false``) so a runner
+    cannot silently run a partial spec and publish a spurious metric (NR-6). No probes ⇒ ``skipped``, no
+    file (byte-identical)."""
+    probes = getattr(service, "declared_probes", None) or ()
+    svc = service.service_id
+    specs: List[Dict[str, Any]] = []
+    for probe in probes:
+        required = sorted({m for f in (probe.action, probe.poll, probe.assert_, probe.measure)
+                           for m in _PROBE_SECRET_REF_RE.findall(f)})
+        # FR-P1-2/NR-6: an executed runner must be structurally non-runnable when incomplete.
+        runnable = bool(probe.action and probe.poll and probe.assert_)
+        spec: Dict[str, Any] = {
+            "name": probe.name,
+            "signal_kind": probe.signal_kind,
+            "published_metric": _probe_metric_name(probe),
+            "metric_kind": probe.metric_kind,
+            "runnable": runnable,
+            "runner": {
+                "action": probe.action, "poll": probe.poll, "assert": probe.assert_,
+                "measure": probe.measure, "interval": probe.interval, "timeout": probe.timeout,
+            },
+        }
+        if required:
+            spec["required_secrets"] = required
+        if not runnable:
+            spec["unresolved"] = "# UNRESOLVED REQUIRED PARAM: action/poll/assert must all be set to run"
+        specs.append(spec)
+
+    if not specs:
+        return ArtifactResult(artifact_type="probe_spec", service_id=svc, output_path="",
+                              status="skipped")
+    doc = {"apiVersion": "startd8/v1", "kind": "ProbeSpecSet", "service": svc, "probes": specs}
+    header = f"# Synthetic-probe runner specs for {svc} (#308 P1) — emitted, not run\n"
+    return ArtifactResult(
+        artifact_type="probe_spec",
+        service_id=svc,
+        output_path=f"probe-specs/{svc}-probe-specs.yaml",
+        status="generated",
+        content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
     )
 
 

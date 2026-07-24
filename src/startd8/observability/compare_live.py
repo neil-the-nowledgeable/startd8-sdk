@@ -32,8 +32,57 @@ from .validate_promql import FidelityReport, run_validation
 # Reuse the engine's exit-code + verdict taxonomy — single-source (do not restate).
 EXIT_PASS, EXIT_FAIL, EXIT_UNKNOWN = 0, 2, 3
 #: rollup severity: higher wins. unknown (couldn't observe) > fail (dead SLI) > pass.
-_SEVERITY = {"pass": 0, "fail": 1, "unknown": 2}
-_STATUS_BY_SEVERITY = {v: k for k, v in _SEVERITY.items()}
+#: #308 P2 (FR-P2-1/F3): `pending_probe` is severity 0 EXPLICITLY (a declared invariant, not a
+#: `.get(default=0)` accident) — a probe metric expected-absent until its runner runs is NEVER a fail.
+_SEVERITY = {"pass": 0, "pending_probe": 0, "fail": 1, "unknown": 2}
+_STATUS_BY_SEVERITY = {0: "pass", 1: "fail", 2: "unknown"}
+
+
+def pending_probe_verdicts(fr_coverage: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """#308 P2 (FR-P2-1): SYNTHESIZE a `pending_probe` verdict per `pending_probes` fr_coverage entry.
+
+    P0/P1 write no SLO YAML, so `extract_exprs` yields no verdict for the probe metric — compare-live
+    synthesizes one here, identified by the entry's recorded ``published_metric`` (a fr_coverage JOIN, NOT
+    a ``probe_`` name-prefix heuristic — ``published_metric`` is author-overridable). These verdicts are
+    ``pending_probe`` (severity 0) and MUST NOT be fed to ``compute_coverage`` (they are excluded from the
+    binding-coverage denominator, like ``excluded``), so a pending probe can never drop coverage below the
+    floor and trip ``EXIT_FAIL``. They are also not ``"fail"``, so they never enter the CI ``fail_verdicts``
+    / baseline-diff set."""
+    out: List[Dict[str, Any]] = []
+    for e in (fr_coverage.get("pending_probes") or []):
+        if not isinstance(e, dict) or not e.get("query"):
+            continue  # unsupported metric_kind/signal_kind entries carry no query → nothing to bind
+        out.append({
+            "verdict": "pending_probe",
+            "expr": e["query"],
+            "metric": e.get("published_metric", ""),
+            "service": e.get("service", ""),
+            "probe": e.get("name", ""),
+            "detail": "expected-absent until the probe runner runs (#308 P2)",
+        })
+    return out
+
+
+def promote_probe_slo(entry: Dict[str, Any], slo_window: str = "30d") -> Dict[str, Any]:
+    """#308 P2 (FR-P2-2): build a real OpenSLO doc from a live-confirmed `pending_probes` entry — using the
+    ALREADY-RECORDED ``query``/``target`` (Mottainai: no re-derivation; the promoted PromQL == the P0
+    string, so ``validate_promql`` self-heals off it). Caller gates promotion on live confirmation +
+    ≥2 warm-up scrapes (NR-5); this is the pure builder."""
+    svc, name = entry.get("service", "svc"), entry.get("name", "probe")
+    slug = f"{svc}-{name}".lower().replace("_", "-")
+    spec: Dict[str, Any] = {
+        "description": f"freshness SLO for {svc} promoted from confirmed probe {name!r} (#308 P2).",
+        "timeWindow": {"duration": slo_window, "isRolling": True},
+        "indicator": {"metadata": {"name": f"{slug}-probe-sli"},
+                      "spec": {"thresholdMetric": {"metricSource": {
+                          "type": "prometheus", "spec": {"query": entry["query"]}}}}},
+    }
+    if entry.get("target") is not None:
+        spec["target"] = entry["target"]
+    return {"apiVersion": "openslo/v1", "kind": "SLO",
+            "metadata": {"name": f"{slug}-probe", "labels": {"service": svc, "signal_kind": "freshness",
+                                                             "generated_by": "startd8"}},
+            "spec": spec}
 
 
 @dataclass
