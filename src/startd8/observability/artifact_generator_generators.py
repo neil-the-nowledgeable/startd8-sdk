@@ -1893,9 +1893,22 @@ def generate_functional_slos(
     unfulfilled: List[Dict[str, str]] = []
     for fr in frs:
         kind = fr.signal_kind
+        # #229 FR-4/FR-6: the objective + its provenance tier. Author `fr.target` wins (NR-3, read
+        # explicitly first — `_resolve_threshold`'s own author-tier reads getattr(business, kind) which is
+        # always None for a signal_kind, so it can't honor the FR). Absent an author target, a GROUNDED
+        # per-signal_kind config default may resolve (saturation only today); else the FR is unfulfilled.
+        target: Optional[str] = fr.target
+        tier = "manifest"
         if kind == "custom" and fr.target:
             query = fr.target
-        elif kind in _FUNCTIONAL_SLI_TEMPLATES and fr.target:
+        elif kind in _FUNCTIONAL_SLI_TEMPLATES:
+            if target is None:
+                target, tier = _resolve_threshold(kind, business, [])  # #229: grounded default or (None, …)
+            if target is None:
+                unfulfilled.append(
+                    {"id": fr.id, "signal_kind": kind, "reason": "no groundable series/target"}
+                )
+                continue
             candidates, shape, _unit = _FUNCTIONAL_SLI_TEMPLATES[kind]
             metric = _select_functional_metric(candidates, service)
             # FR-2a: AI-agent series are model/project-labeled, not per-service — a
@@ -1908,21 +1921,26 @@ def generate_functional_slos(
             )
             continue
 
+        _labels = {
+            "service": service.service_id,
+            "signal_kind": kind,
+            "source_fr": fr.id,  # FR-8: traceability to the originating FR
+            "generated_by": "startd8",
+        }
+        # #229 FR-6: on-disk provenance — mark a grounded-derived default so a consumer can tell it from
+        # an author target. Authored path stays byte-identical (tier="manifest" ⇒ no label added).
+        if tier == "default:importance":
+            _labels["threshold_tier"] = tier
         slo = {
             "apiVersion": "openslo/v1",
             "kind": "SLO",
             "metadata": {
                 "name": f"{service.service_id}-{kind}-{fr.id}".lower().replace("_", "-"),
-                "labels": {
-                    "service": service.service_id,
-                    "signal_kind": kind,
-                    "source_fr": fr.id,  # FR-8: traceability to the originating FR
-                    "generated_by": "startd8",
-                },
+                "labels": _labels,
             },
             "spec": {
                 "description": fr.description or f"{kind} SLO for {service.service_id} ({fr.id})",
-                "target": fr.target,
+                "target": target,
                 "timeWindow": {"duration": business.slo_window, "isRolling": True},
                 "indicator": {
                     "metadata": {"name": f"{service.service_id}-{kind}-sli"},
