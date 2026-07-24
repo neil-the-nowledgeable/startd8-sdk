@@ -121,6 +121,31 @@ def test_standup_network_create_failure_returns_handle_with_reason():
     assert "network create failed" in handle.reason
 
 
+def test_standup_never_raises_after_containers_up_so_caller_can_tear_down():
+    # Teardown-reachability (the caller's `finally` is gated on `handle is not None`): a
+    # subprocess TIMEOUT after `docker run` must not propagate, else the network + containers
+    # leak. The standup catches it and returns the handle with the names to sweep.
+    class RaisingAfterRun:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, argv, **kwargs):
+            self.calls.append(argv)
+            sub = argv[1] if len(argv) > 1 else ""
+            if sub == "port":  # times out AFTER network + both containers exist
+                raise subprocess.TimeoutExpired(cmd=argv, timeout=60.0)
+            return subprocess.CompletedProcess(argv, 0, "deadbeef\n", "")
+
+    handle = live_standup.stand_up_subject_and_prometheus(
+        subject_image="s:1", run_id="raise1", runner=RaisingAfterRun(),
+        docker_available_fn=lambda: True,
+    )
+    assert handle.scrape_ready is False
+    assert "standup error" in handle.reason
+    # the caller's finally has the names to remove — no leak.
+    assert handle.network and handle.subject_container and handle.prometheus_container
+
+
 def test_await_scrape_returns_true_when_ready_and_series_stable():
     # ready always, series count stable → two consecutive equal counts → warm.
     assert live_standup._await_scrape(

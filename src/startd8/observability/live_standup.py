@@ -252,74 +252,84 @@ def stand_up_subject_and_prometheus(
         handle.reason = "docker CLI not available on PATH"
         return handle
 
-    # 1) per-run bridge network (service-DNS reachable, no egress-deny needed).
-    r = _run(runner, ["docker", "network", "create", network])
-    if r.returncode != 0:
-        handle.reason = f"docker network create failed: {(r.stderr or r.stdout or '').strip()[:200]}"
-        return handle
+    # Everything below can create a network/containers. A raise here (a `_run` subprocess
+    # TIMEOUT → TimeoutExpired) must NOT propagate: the caller reaches `tear_down` only via
+    # `if handle is not None` in its `finally`, so an exception that escaped before the handle
+    # is returned would leak the network + containers. Catch-all → record the reason and return
+    # the handle so teardown is always REACHABLE (the caller-graph half of "teardown on every path").
+    try:
+        # 1) per-run bridge network (service-DNS reachable, no egress-deny needed).
+        r = _run(runner, ["docker", "network", "create", network])
+        if r.returncode != 0:
+            handle.reason = f"docker network create failed: {(r.stderr or r.stdout or '').strip()[:200]}"
+            return handle
 
-    # 2) scrape config → temp file bind-mounted into Prometheus.
-    yml = render_prometheus_yml(
-        job_name=job_name,
-        target_host=subject_container,  # R4: DNS name == subject --name
-        target_port=subject_port,
-        metrics_path=metrics_path,
-        scrape_interval=scrape_interval,
-    )
-    tmp = tempfile.NamedTemporaryFile("w", suffix="-prometheus.yml", delete=False, encoding="utf-8")
-    tmp.write(yml)
-    tmp.close()
-    handle.prometheus_yml_path = Path(tmp.name)
-
-    # 3) subject — we own the argv so it joins the shared network (OQ-1).
-    subject_cmd = [
-        "docker", "run", "-d", "--network", network,
-        "--name", subject_container, subject_image,
-    ]
-    handle.run_cmds.append(subject_cmd)
-    r = _run(runner, subject_cmd)
-    if r.returncode != 0:
-        handle.reason = f"subject boot failed: {(r.stderr or r.stdout or '').strip()[:200]}"
-        return handle
-    handle.subject_ready = True  # container started; the scrape gate is the real readiness
-
-    # 4) Prometheus, publishing 9090 on loopback (keeps the prod-replay guardrail happy).
-    prom_cmd = [
-        "docker", "run", "-d", "--network", network,
-        "--name", prometheus_container,
-        "-p", "127.0.0.1:0:9090",
-        "-v", f"{handle.prometheus_yml_path}:/etc/prometheus/prometheus.yml:ro",
-        PROMETHEUS_IMAGE,
-    ]
-    handle.run_cmds.append(prom_cmd)
-    r = _run(runner, prom_cmd)
-    if r.returncode != 0:
-        handle.reason = f"prometheus boot failed: {(r.stderr or r.stdout or '').strip()[:200]}"
-        return handle
-
-    # 5) read back the published loopback port.
-    r = _run(runner, ["docker", "port", prometheus_container, "9090"])
-    port = _parse_published_port(r.stdout) if r.returncode == 0 else None
-    if not port:
-        handle.reason = "could not resolve the published Prometheus port"
-        return handle
-    handle.prometheus_url = f"http://127.0.0.1:{port}"
-
-    # 6) the load-bearing warm-up gate: samples landed AND the series set has settled
-    #    across two consecutive scrapes (R1-F1/F2 — avoids releasing before lazy SLI
-    #    series register, which would surface a false `fail`).
-    handle.scrape_ready = _await_scrape(
-        handle.prometheus_url, job_name, scrape_timeout,
-        auth=auth, ready_fn=scrape_ready_check, count_fn=series_count_check,
-        scrape_interval_s=_parse_duration_seconds(scrape_interval),
-        poll_interval=poll_interval,
-    )
-    if not handle.scrape_ready:
-        handle.reason = (
-            f"subject did not warm up within {scrape_timeout:.0f}s "
-            f"(no sustained scrape of {metrics_path} on :{subject_port})"
+        # 2) scrape config → temp file bind-mounted into Prometheus.
+        yml = render_prometheus_yml(
+            job_name=job_name,
+            target_host=subject_container,  # R4: DNS name == subject --name
+            target_port=subject_port,
+            metrics_path=metrics_path,
+            scrape_interval=scrape_interval,
         )
-    return handle
+        tmp = tempfile.NamedTemporaryFile("w", suffix="-prometheus.yml", delete=False, encoding="utf-8")
+        tmp.write(yml)
+        tmp.close()
+        handle.prometheus_yml_path = Path(tmp.name)
+
+        # 3) subject — we own the argv so it joins the shared network (OQ-1).
+        subject_cmd = [
+            "docker", "run", "-d", "--network", network,
+            "--name", subject_container, subject_image,
+        ]
+        handle.run_cmds.append(subject_cmd)
+        r = _run(runner, subject_cmd)
+        if r.returncode != 0:
+            handle.reason = f"subject boot failed: {(r.stderr or r.stdout or '').strip()[:200]}"
+            return handle
+        handle.subject_ready = True  # container started; the scrape gate is the real readiness
+
+        # 4) Prometheus, publishing 9090 on loopback (keeps the prod-replay guardrail happy).
+        prom_cmd = [
+            "docker", "run", "-d", "--network", network,
+            "--name", prometheus_container,
+            "-p", "127.0.0.1:0:9090",
+            "-v", f"{handle.prometheus_yml_path}:/etc/prometheus/prometheus.yml:ro",
+            PROMETHEUS_IMAGE,
+        ]
+        handle.run_cmds.append(prom_cmd)
+        r = _run(runner, prom_cmd)
+        if r.returncode != 0:
+            handle.reason = f"prometheus boot failed: {(r.stderr or r.stdout or '').strip()[:200]}"
+            return handle
+
+        # 5) read back the published loopback port.
+        r = _run(runner, ["docker", "port", prometheus_container, "9090"])
+        port = _parse_published_port(r.stdout) if r.returncode == 0 else None
+        if not port:
+            handle.reason = "could not resolve the published Prometheus port"
+            return handle
+        handle.prometheus_url = f"http://127.0.0.1:{port}"
+
+        # 6) the load-bearing warm-up gate: samples landed AND the series set has settled
+        #    across two consecutive scrapes (R1-F1/F2 — avoids releasing before lazy SLI
+        #    series register, which would surface a false `fail`).
+        handle.scrape_ready = _await_scrape(
+            handle.prometheus_url, job_name, scrape_timeout,
+            auth=auth, ready_fn=scrape_ready_check, count_fn=series_count_check,
+            scrape_interval_s=_parse_duration_seconds(scrape_interval),
+            poll_interval=poll_interval,
+        )
+        if not handle.scrape_ready:
+            handle.reason = (
+                f"subject did not warm up within {scrape_timeout:.0f}s "
+                f"(no sustained scrape of {metrics_path} on :{subject_port})"
+            )
+        return handle
+    except Exception as e:  # noqa: BLE001 — never leak; teardown owns cleanup (caller finally)
+        handle.scrape_ready = False
+        handle.reason = f"standup error (resources left for teardown): {type(e).__name__}: {e}"
+        return handle
 
 
 def tear_down(handle: StandupHandle, *, runner: Runner = subprocess.run) -> None:
@@ -327,7 +337,9 @@ def tear_down(handle: StandupHandle, *, runner: Runner = subprocess.run) -> None
 
     Never raises: each step is independent so one failure does not leak the rest.
     Runs on every path (pass/fail/scrape-timeout/exception) via the caller's
-    ``finally`` (FR-9).
+    ``finally`` — which is only REACHABLE because :func:`stand_up_subject_and_prometheus`
+    never propagates once resources exist (it catches and returns the handle); a raise
+    that escaped standup would leave the caller's ``handle`` ``None`` and skip this (FR-9).
     """
     for name in (handle.subject_container, handle.prometheus_container):
         if name:
