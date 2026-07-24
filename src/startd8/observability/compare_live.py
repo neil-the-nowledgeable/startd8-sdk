@@ -106,10 +106,14 @@ class LiveComparisonReport:
     tier_b: Optional[Dict[str, Any]] = None  # FidelityReport.to_dict(), None if standup/scrape failed
     total_gaps: int = 0  # convenience rollup from tier_a
     fail_verdicts: List[Dict[str, Any]] = field(default_factory=list)  # tier_b fails (the CI signal)
+    #: #308 P2 (EC-1): synthesized `pending_probe` verdicts merged into Tier-B — a positive finding
+    #: (a freshness SLI awaiting its runner), NOT a fail and NOT in the coverage denominator.
+    pending_verdicts: List[Dict[str, Any]] = field(default_factory=list)
 
     #: Bumped when the emitted ``to_dict()`` shape changes — the ``--json`` output
     #: is the machine surface CI parses, so the key set is a versioned contract (R1-F7).
-    REPORT_VERSION = 1
+    #: v2 (#308 EC-1): added ``pending_verdicts``.
+    REPORT_VERSION = 2
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -118,6 +122,7 @@ class LiveComparisonReport:
             "reason": self.reason,
             "total_gaps": self.total_gaps,
             "fail_verdicts": self.fail_verdicts,
+            "pending_verdicts": self.pending_verdicts,
             "tier_a": self.tier_a,
             "tier_b": self.tier_b,
             "standup": self.standup,
@@ -145,6 +150,10 @@ def build_live_comparison(
     """
     tier_a = comparison.to_dict()
     total_gaps = comparison.total_gaps
+    # #308 P2 (EC-1): synthesize the pending_probe verdicts from the Tier-A pending list (already in
+    # hand). They are positive-but-pending — NOT fails and NOT in the coverage denominator (they're
+    # merged AFTER fidelity computed its counts, so binding_coverage is untouched).
+    pending = pending_probe_verdicts({"pending_probes": comparison.pending})
 
     if fidelity is None:
         return LiveComparisonReport(
@@ -154,10 +163,15 @@ def build_live_comparison(
             standup=standup_status,
             tier_b=None,
             total_gaps=total_gaps,
+            pending_verdicts=pending,
         )
 
     tier_b = fidelity.to_dict()
     fail_verdicts = [v for v in tier_b.get("verdicts", []) if v.get("verdict") == "fail"]
+    # Merge the pending verdicts into the Tier-B verdict list so `--json` carries the complete
+    # roll-up. They are `pending_probe` (severity 0), so they never enter `fail_verdicts` above.
+    if pending:
+        tier_b["verdicts"] = list(tier_b.get("verdicts", [])) + pending
 
     tier_a_status = "fail" if (strict_tier_a and total_gaps > 0) else "pass"
     severity = max(_SEVERITY.get(tier_a_status, 0), _SEVERITY.get(fidelity.status, 0))
@@ -172,6 +186,7 @@ def build_live_comparison(
         tier_b=tier_b,
         total_gaps=total_gaps,
         fail_verdicts=fail_verdicts,
+        pending_verdicts=pending,
     )
 
 
@@ -377,6 +392,14 @@ def render_live_report(report: LiveComparisonReport) -> str:
                          f"{v.get('remediation') or v.get('expected_metric') or 'no matching series'}")
         if tb.get("suggested_metrics_profile"):
             lines.append(f"  one-line fix: metricsProfile = {tb['suggested_metrics_profile']}")
+        lines.append("")
+    # #308 P2 (EC-1): pending probes — a positive-but-pending finding (a freshness SLI awaiting its
+    # runner), shown distinctly from dead SLIs and independent of standup (they are Tier-A-derived).
+    if report.pending_verdicts:
+        lines += [f"Pending probes — freshness SLIs awaiting a runner (#308): {len(report.pending_verdicts)}"]
+        for v in report.pending_verdicts[:20]:
+            lines.append(f"    ⧗ {v.get('service','?')}/{v.get('probe','?')}: "
+                         f"pending runner — expects {v.get('metric','?')}")
         lines.append("")
     # Tier A (static, advisory)
     lines += [f"Tier A (static divergence): {report.total_gaps} gap(s) across "

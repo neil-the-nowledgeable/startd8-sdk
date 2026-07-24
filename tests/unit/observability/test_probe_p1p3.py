@@ -10,7 +10,8 @@ from startd8.observability.artifact_generator import (
     BusinessContext, DeclaredProbe, ServiceHints, generate_declared_probe_specs,
 )
 from startd8.observability import compare_live as _cl
-from startd8.observability.validate_promql import _EXCLUDED_ARTIFACT_DIRS
+from startd8.observability.compare import build_comparison_report
+from startd8.observability.validate_promql import FidelityReport, _EXCLUDED_ARTIFACT_DIRS
 from startd8.observability.probe_trace import SpanLite, SpanLink, compute_fanout_freshness
 
 
@@ -98,6 +99,40 @@ class TestP2Verdict:
         with pytest.raises(ValueError, match="no grounded query"):
             _cl.promote_probe_slo({"service": "web", "name": "x",
                                    "reason_code": "probe_unsupported_metric_kind"})
+
+    # --- EC-1: the pending_probe verdict is now WIRED into build_live_comparison ---
+
+    def _fidelity(self):
+        return FidelityReport(status="pass", queries_replayed=1, reason="", coverage=1.0,
+                              min_coverage=1.0)
+
+    def _live_report(self, fidelity):
+        fc = {"pending_probes": [{"service": "web", "name": "fanout", "published_metric": "m",
+                                  "query": "max(m)", "reason_code": "probe_runner_emitted"}]}
+        comparison = build_comparison_report(fc)
+        return _cl.build_live_comparison(comparison, fidelity, {"skipped": True})
+
+    def test_ec1_pending_verdict_merged_into_tier_b_not_fail(self):
+        # EC-1 (built-but-unwired fix): a live run's Tier-B verdict list now carries the pending probe,
+        # it is NOT a fail, and it does not flip status to fail.
+        rep = self._live_report(self._fidelity())
+        assert len(rep.pending_verdicts) == 1 and rep.pending_verdicts[0]["verdict"] == "pending_probe"
+        assert any(v.get("verdict") == "pending_probe" for v in rep.tier_b["verdicts"])
+        assert rep.fail_verdicts == []
+        assert rep.status != "fail"
+        # versioned JSON contract bumped + carries the new key.
+        d = rep.to_dict()
+        assert d["report_version"] == 2 and len(d["pending_verdicts"]) == 1
+
+    def test_ec1_pending_rendered_distinctly_from_dead(self):
+        text = _cl.render_live_report(self._live_report(self._fidelity()))
+        assert "Pending probes — freshness SLIs awaiting a runner" in text
+        assert "web/fanout: pending runner" in text
+
+    def test_ec1_pending_carried_even_when_standup_failed(self):
+        # fidelity None (standup/scrape failed) → unknown, but the Tier-A-derived pending still surfaces.
+        rep = self._live_report(None)
+        assert rep.status == "unknown" and len(rep.pending_verdicts) == 1
 
 
 # --- P3: link-aware pure delta core (validation trace-gated / external) ---
