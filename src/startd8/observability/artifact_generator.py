@@ -87,6 +87,7 @@ from .artifact_generator_generators import (  # noqa: F401
     _resolve_threshold,
     _severity_for,
     generate_alert_rules,
+    generate_business_criticality_dashboard,
     generate_capability_index,
     generate_collector_enrichment,
     generate_dashboard_spec,
@@ -829,6 +830,16 @@ def generate_observability_artifacts(
     # so coverage reporting is honest, not silently partial.
     _record_unimplemented_artifact_types(report, owned_elsewhere)
 
+    # Value round-2 #1: the project-level business-criticality dashboard CONSUMES the
+    # collector_enrichment span-metrics dimension. Generated HERE (before the Grafana-JSON render)
+    # so it renders like every other dashboard_spec; presence-gated on criticality (self-skips
+    # otherwise). Its sibling — the enrichment processor itself — is generated further below.
+    _bcd = _repair_and_validate(
+        generate_business_criticality_dashboard(services, business, report), business
+    )
+    if _bcd.status != "skipped":
+        report.artifacts.append(_bcd)
+
     # Gap 4 / Closure 4A: render dashboard specs to deployable Grafana JSON at the
     # contracted grafana/dashboards/{service}-dashboard.json path. Runs in dry_run
     # too (side-effect-free; renders via a temp dir) so drift detection stays
@@ -887,6 +898,16 @@ def generate_observability_artifacts(
                 _cec.get("statements", 0),
                 _cec.get("criticality_dimension", False),
             )
+            # Value round-2 #2: name the services still missing business context, so the operator
+            # can complete their manifest instead of discovering the gap during an incident.
+            _missing = _cec.get("services_missing") or []
+            if _missing:
+                logger.warning(
+                    "collector_enrichment: %d service(s) have NO business context (add "
+                    "criticality/owner in the manifest): %s",
+                    len(_missing),
+                    ", ".join(_missing),
+                )
     except Exception:
         logger.exception("collector_enrichment generation failed")
 
