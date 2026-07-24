@@ -874,6 +874,29 @@ class BaseAgent(ABC):
                 )
 
                 if strict and pre_flight_estimate.suggested_action == "reject":
+                    # Emit the preflight-reject telemetry the enum + collector already declare (and the
+                    # capability manifests already claim). Sibling truncation events fire from
+                    # truncation_detection.py; this reject peer was authored but never wired — a dormant
+                    # value path caught by the survivorship audit. Defensive local import + swallow so
+                    # telemetry can never break the reject path.
+                    try:
+                        from ..events.types import Event, EventType, EventPriority
+                        from ..events.bus import EventBus
+                        EventBus.emit(Event(
+                            type=EventType.TRUNCATION_PREFLIGHT_REJECT,
+                            source="AgentPreFlight",
+                            data={
+                                "agent_name": self.name,
+                                "model": self.model,
+                                "estimated_lines": pre_flight_estimate.estimated_lines,
+                                "safe_line_limit": safe_line_limit,
+                                "suggested_action": pre_flight_estimate.suggested_action,
+                                "reasoning": pre_flight_estimate.reasoning,
+                            },
+                            priority=EventPriority.HIGH,
+                        ))
+                    except Exception:
+                        logger.debug("Failed to emit TRUNCATION_PREFLIGHT_REJECT", exc_info=True)
                     raise ValueError(
                         f"Pre-flight check rejected task: {pre_flight_estimate.reasoning}"
                     )
