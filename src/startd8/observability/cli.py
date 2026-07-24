@@ -463,6 +463,20 @@ def compare_live_cmd(
         "Boots an N-container fleet + Prometheus; scrapes one metrics_service. "
         "Mutually exclusive with --subject-image / --prometheus.",
     ),
+    warm_up: str = typer.Option(
+        None,
+        "--warm-up",
+        help="Drive bounded warm-up traffic at the subject ingress before the gate "
+        "(FR-8; --subject-compose only). One of: smoke (generic OpenAPI), ob-http, "
+        "ob-grpc. Needed for span-metrics / lazily-registered RED series.",
+    ),
+    warm_up_metric: str = typer.Option(
+        None,
+        "--warm-up-metric",
+        help="Histogram _count metric the warm-up gate requires non-zero samples for "
+        "(e.g. traces_spanmetrics_calls_total). With --warm-up; converges only when "
+        "sum(increase(<metric>[1m]))>0 AND the driver reached terminal success.",
+    ),
     metrics_path: str = typer.Option(
         "/metrics",
         "--metrics-path",
@@ -540,6 +554,8 @@ def compare_live_cmd(
         subject_image=subject_image,
         subject_port=subject_port,
         subject_compose=subject_compose,
+        warm_up=warm_up,
+        warm_up_metric=warm_up_metric,
         metrics_path=metrics_path,
         prometheus=prometheus,
         min_coverage=min_coverage,

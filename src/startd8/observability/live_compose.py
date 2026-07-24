@@ -47,7 +47,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
-from . import prometheus_query
+from . import prometheus_query, warmup_traffic
 from .live_standup import (
     PROMETHEUS_IMAGE,
     Runner,
@@ -220,6 +220,7 @@ def generate_live_compose_dict(
     host_port: int = 0,
     prometheus_image: str = PROMETHEUS_IMAGE,
     prometheus_yml_name: str = "prometheus.yml",
+    publish_ingress: Optional[tuple[str, int]] = None,
 ) -> Dict[str, Any]:
     """Build the docker-compose mapping for ``topology`` + a Prometheus ingress.
 
@@ -228,12 +229,22 @@ def generate_live_compose_dict(
     (service-DNS + egress-deny); Prometheus joins **both** ``fleet`` (to scrape the
     subject by DNS) and ``edge`` (to publish on a loopback host port). ``host_port``
     ``0`` publishes on an ephemeral loopback port resolved after boot.
+
+    ``publish_ingress=(service, port)`` ALSO exposes that subject service on ``edge``
+    + a loopback host port (the FR-8 warm-up ingress) so a host-side traffic driver
+    can drive it. The rest of the fleet stays internal/egress-denied.
     """
+    ingress_service = publish_ingress[0] if publish_ingress else None
+    ingress_port = publish_ingress[1] if publish_ingress else None
+
     services: Dict[str, Any] = {}
     for c in _topo_order(topology.containers):
         block: Dict[str, Any] = {"image": c.image, "networks": [FLEET_NETWORK]}
         if c.deps:
             block["depends_on"] = list(c.deps)
+        if c.name == ingress_service:
+            block["networks"] = [FLEET_NETWORK, EDGE_NETWORK]
+            block["ports"] = [f"127.0.0.1:0:{ingress_port}"]
         services[c.name] = block
 
     services[PROMETHEUS_SERVICE] = {
@@ -274,6 +285,8 @@ class ComposeStandupHandle:
     scrape_ready: bool = False
     reason: str = ""
     leaked: int = 0
+    ingress_url: str = ""  # FR-8: the host-published subject ingress a driver drove
+    warmup: Optional[dict] = None  # FR-8: WarmupOutcome.to_dict() when warm-up ran
     run_cmds: List[List[str]] = field(default_factory=list)
 
     def teardown_hint(self) -> str:
@@ -293,6 +306,8 @@ class ComposeStandupHandle:
             "scrape_ready": self.scrape_ready,
             "reason": self.reason,
             "leaked": self.leaked,
+            "ingress_url": self.ingress_url,
+            "warmup": self.warmup,
             "teardown_hint": self.teardown_hint(),
         }
 
@@ -324,13 +339,22 @@ def stand_up_compose_subject(
     up_timeout: float = 300.0,
     run_id: Optional[str] = None,
     auth: Optional[Auth] = None,
+    warmup: Optional["warmup_traffic.WarmupSpec"] = None,
+    warmup_count_metric: Optional[str] = None,
     runner: Runner = subprocess.run,
     scrape_ready_check: ScrapeReadyCheck = prometheus_query.scrape_ready,
     series_count_check: Optional[SeriesCountCheck] = None,
     poll_interval: Optional[float] = None,
     docker_available_fn: Callable[[], bool] = None,  # type: ignore[assignment]
+    warmup_fn: Optional[Callable[..., "warmup_traffic.WarmupOutcome"]] = None,
 ) -> ComposeStandupHandle:
     """Bring up ``topology`` + Prometheus via compose; return a handle once a scrape lands.
+
+    ``warmup`` (FR-8): when set, the ``metrics_service`` is also host-published as an
+    ingress and a bounded traffic loop drives it before the readiness gate so
+    lazily-registered / span-metric series materialize. The gate then requires the
+    driver's terminal success AND (when ``warmup_count_metric`` is given) non-zero
+    samples for that metric — else the run is ``unknown`` naming the driver.
 
     The caller is responsible for :func:`tear_down_compose` in a ``finally`` block.
     """
@@ -363,7 +387,15 @@ def stand_up_compose_subject(
         scrape_interval=scrape_interval,
     )
     (workdir / "prometheus.yml").write_text(yml, encoding="utf-8")
-    compose = generate_live_compose_dict(topology, host_port=0)
+
+    # FR-8: a host-drivable warm-up also publishes the metrics_service as an ingress
+    # so a host-side traffic driver can reach it. ob-grpc needs an in-fleet driver
+    # (grpc ports stay internal) — defer it rather than publish a port no driver uses.
+    publish_ingress = None
+    warmup_host_drivable = bool(warmup) and warmup.shape in warmup_traffic.HOST_DRIVABLE_SHAPES
+    if warmup_host_drivable:
+        publish_ingress = (topology.metrics_service, topology.metrics_port)
+    compose = generate_live_compose_dict(topology, host_port=0, publish_ingress=publish_ingress)
     compose_path = workdir / "docker-compose.yml"
     compose_path.write_text(yaml.safe_dump(compose, sort_keys=False), encoding="utf-8")
     handle.compose_path = compose_path
@@ -385,9 +417,30 @@ def stand_up_compose_subject(
         return handle
     handle.prometheus_url = f"http://127.0.0.1:{port}"
 
-    # 4) the reused load-bearing warm-up gate (FR-3/FR-6): samples landed AND the
+    # 4) FR-8 warm-up traffic (Inc-2 enabler): drive bounded traffic at the subject's
+    #    ingress BEFORE the readiness gate so lazily-registered / span-metric series
+    #    materialize. A non-host-drivable shape (ob-grpc) is fail-loud unknown.
+    if warmup and not warmup_host_drivable:
+        handle.reason = (
+            f"warm-up shape {warmup.shape!r} is not host-drivable in v1 "
+            f"(needs an in-fleet driver); supported: {list(warmup_traffic.HOST_DRIVABLE_SHAPES)}"
+        )
+        return handle
+    if warmup_host_drivable:
+        r = _compose(runner, workdir, project, "port", topology.metrics_service,
+                     str(topology.metrics_port), timeout=30.0)
+        iport = _parse_published_port(r.stdout) if r.returncode == 0 else None
+        if not iport:
+            handle.reason = "could not resolve the published subject-ingress port for warm-up"
+            return handle
+        handle.ingress_url = f"http://127.0.0.1:{iport}"
+        _drive = warmup_fn or warmup_traffic.drive_warmup
+        outcome = _drive(warmup, ingress_url=handle.ingress_url)
+        handle.warmup = outcome.to_dict()
+
+    # 5) the reused load-bearing scrape gate (FR-3/FR-6): samples landed AND the
     #    series set settled across two consecutive scrapes.
-    handle.scrape_ready = _await_scrape(
+    scrape_ok = _await_scrape(
         handle.prometheus_url,
         job_name,
         scrape_timeout,
@@ -397,12 +450,34 @@ def stand_up_compose_subject(
         scrape_interval_s=_parse_duration_seconds(scrape_interval),
         poll_interval=poll_interval,
     )
-    if not handle.scrape_ready:
+    if not scrape_ok:
         handle.reason = (
             f"subject did not warm up within {scrape_timeout:.0f}s "
             f"(no sustained scrape of {topology.metrics_path} on "
             f"{topology.metrics_service}:{topology.metrics_port})"
         )
+        return handle
+
+    # 6) FR-8 convergence: with warm-up, additionally require driver terminal success
+    #    AND non-zero samples for the count metric (never series-count alone).
+    if warmup_host_drivable:
+        outcome = warmup_traffic.WarmupOutcome(
+            driver=handle.warmup["driver"],
+            exercised=handle.warmup["exercised"],
+            terminal_success=handle.warmup["terminal_success"],
+            iterations=handle.warmup["iterations"],
+            reason=handle.warmup["reason"],
+        )
+        ready, why = warmup_traffic.evaluate_warmup(
+            outcome, prometheus_url=handle.prometheus_url,
+            count_metric=warmup_count_metric, auth=auth,
+        )
+        handle.scrape_ready = ready
+        if not ready:
+            handle.reason = why
+        return handle
+
+    handle.scrape_ready = True
     return handle
 
 
