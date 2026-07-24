@@ -16,21 +16,27 @@
 #   spec.observability.importanceThresholds: { high: { deployed: { availability: "99.7" } } }
 # which is deep-merged over these base values (obs_config.load_importance_thresholds).
 
+# #229 / #226 FR-7 — the per-signal_kind axis. `saturation` (percentunit, a gauge_max CEILING) is the ONE
+# grounded cell: 80% is the SRE-canonical saturation alert; it is *non-increasing* (tighter) as criticality
+# rises and installed→deployed (opposite direction to availability, a floor). All OTHER functional kinds
+# (freshness/queue_depth/lag/retry_rate/run_success) are GROUNDING-PENDING and deliberately OMITTED —
+# their magnitudes are app-specific (need a live pilot), and run_success's SLI is a bare rate not a ratio.
+# An omitted key → `_select_importance_default` returns None → the binder defers (never a fabricated value).
 schema_version: 1
 
 critical:
-  default: &crit { availability: "99.9", latency_p99: "300ms" }
+  default: &crit { availability: "99.9", latency_p99: "300ms", saturation: "0.75" }
   deployed: *crit
-  installed: { availability: "99", latency_p99: "1s" }
+  installed: { availability: "99", latency_p99: "1s", saturation: "0.85" }
 high:
-  default: &high { availability: "99.5", latency_p99: "400ms" }
+  default: &high { availability: "99.5", latency_p99: "400ms", saturation: "0.80" }
   deployed: *high
-  installed: { availability: "97", latency_p99: "2s" }
+  installed: { availability: "97", latency_p99: "2s", saturation: "0.90" }
 medium:
-  default: &medium { availability: "99", latency_p99: "500ms" }
+  default: &medium { availability: "99", latency_p99: "500ms", saturation: "0.85" }
   deployed: *medium
-  installed: { availability: "95", latency_p99: "3s" }
+  installed: { availability: "95", latency_p99: "3s", saturation: "0.92" }
 low:
-  default: &low { availability: "99", latency_p99: "1s" }
+  default: &low { availability: "99", latency_p99: "1s", saturation: "0.90" }
   deployed: *low
-  installed: { availability: "90", latency_p99: "5s" }
+  installed: { availability: "90", latency_p99: "5s", saturation: "0.95" }
