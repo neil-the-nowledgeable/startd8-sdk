@@ -480,3 +480,221 @@ class TestParityCLI:
             ["enrichment-parity", "-g", str(tmp_path / "nope.yaml"), "-r", str(gen)],
         )
         assert res.exit_code == 2
+
+
+# ============================ EC-1: per-service severity + owner ============================
+
+
+class TestEC1PerServiceSeverity:
+    def test_service_criticality_wins_over_project(self):
+        from startd8.observability.artifact_generator_generators import _severity_for
+
+        derivs = []
+        sev = _severity_for(
+            BusinessContext(criticality="low"),
+            derivs,
+            ServiceHints(service_id="s", service_name="s", criticality="critical"),
+        )
+        assert sev == "critical"  # per-service, not project "low"→info
+        assert "instrumentation_hints[s].business.criticality" in derivs[0].source
+
+    def test_absent_service_criticality_falls_back_to_project(self):
+        from startd8.observability.artifact_generator_generators import _severity_for
+
+        derivs = []
+        sev = _severity_for(
+            BusinessContext(criticality="low"),
+            derivs,
+            ServiceHints(
+                service_id="s", service_name="s"
+            ),  # no per-service criticality
+        )
+        assert sev == "info"
+        # trace kept byte-identical to pre-EC-1 on the project path
+        assert derivs[0].source == "manifest.spec.business.criticality"
+
+    def test_no_service_arg_falls_back(self):
+        from startd8.observability.artifact_generator_generators import _severity_for
+
+        sev = _severity_for(BusinessContext(criticality="high"), [])
+        assert sev == "critical"
+
+    def test_alert_rule_uses_per_service_severity(self):
+        from startd8.observability.artifact_generator_generators import (
+            generate_alert_rules,
+        )
+        from startd8.observability.artifact_generator_models import ConventionMetric
+
+        metrics = [
+            ConventionMetric("http.server.duration", "histogram", "otel_semconv:http")
+        ]
+        svc = ServiceHints(
+            service_id="cart",
+            service_name="cart",
+            transport="http",
+            criticality="critical",
+            convention_metrics=metrics,
+        )
+        out = generate_alert_rules(svc, BusinessContext(criticality="low")).content
+        assert "severity: critical" in out  # per-service critical, not project low→info
+        # control: same service without per-service criticality → project low→info
+        svc_plain = ServiceHints(
+            service_id="cart",
+            service_name="cart",
+            transport="http",
+            convention_metrics=metrics,
+        )
+        out_plain = generate_alert_rules(
+            svc_plain, BusinessContext(criticality="low")
+        ).content
+        assert "severity: info" in out_plain and "severity: critical" not in out_plain
+
+    def test_runbook_uses_per_service_owner(self):
+        from startd8.observability.artifact_generator_generators import generate_runbook
+
+        svc = ServiceHints(
+            service_id="cart",
+            service_name="cart",
+            transport="grpc",
+            owner="commerce-team",
+        )
+        out = generate_runbook(svc, BusinessContext()).content
+        assert "- Owner: commerce-team" in out
+
+
+# ============================ EC-2: spanmetrics dimension + QW-3 coverage ============================
+
+
+class TestEC2DimensionAndCoverage:
+    def test_criticality_emits_spanmetrics_dimension(self):
+        r = generate_collector_enrichment(
+            [ServiceHints(service_id="a", service_name="a", criticality="critical")],
+            BusinessContext(),
+            _report(),
+        )
+        doc = yaml.safe_load(r.content)
+        assert doc["connectors"]["spanmetrics"]["dimensions"] == [
+            {"name": "business.criticality"}
+        ]
+
+    def test_owner_only_emits_no_dimension(self):
+        # owner alone must NOT become a metric dimension (unbounded cardinality).
+        r = generate_collector_enrichment(
+            [ServiceHints(service_id="a", service_name="a", owner="team-x")],
+            BusinessContext(),
+            _report(),
+        )
+        doc = yaml.safe_load(r.content)
+        assert "connectors" not in doc
+
+    def test_dimension_does_not_break_parity(self):
+        # the added connectors block must not affect the processors-only semantic parity gate
+        r = generate_collector_enrichment(
+            _boutique_services(), BusinessContext(project_id="ob"), _report()
+        )
+        assert check_collector_enrichment_parity(
+            r.content, _FIXTURE.read_text()
+        ).matches
+
+    def test_fr_coverage_populated(self):
+        rep = _report()
+        generate_collector_enrichment(
+            [
+                ServiceHints(
+                    service_id="a", service_name="a", criticality="high", owner="t"
+                )
+            ],
+            BusinessContext(),
+            rep,
+        )
+        cov = rep.fr_coverage["collector_enrichment"]
+        assert cov["statements"] == 2
+        assert cov["services_enriched"] == 1
+        assert cov["criticality_dimension"] is True
+        assert cov["provenance"].startswith("sha256:")
+
+
+# ============================ QW-4/QW-5: append-safety + drift derivation ============================
+
+
+class TestQW4AppendComment:
+    def test_connectors_block_marked_append_only(self):
+        r = generate_collector_enrichment(
+            [ServiceHints(service_id="a", service_name="a", criticality="critical")],
+            BusinessContext(),
+            _report(),
+        )
+        # inline marker sits on the line directly above the connectors block (not just the header)
+        assert "(see DEPLOYING.md).\nconnectors:\n" in r.content
+        assert yaml.safe_load(r.content) is not None  # still valid YAML (it's a YAML comment)
+
+    def test_no_append_comment_when_no_dimension(self):
+        # owner-only ⇒ no connectors block ⇒ no append comment
+        r = generate_collector_enrichment(
+            [ServiceHints(service_id="a", service_name="a", owner="team")],
+            BusinessContext(),
+            _report(),
+        )
+        assert "# APPEND" not in r.content
+
+
+class TestQW5DriftDerivation:
+    def _deriv(self, crit):
+        r = generate_collector_enrichment(
+            [ServiceHints(service_id="cart", service_name="cart", criticality=crit)],
+            BusinessContext(),
+            _report(),
+        )
+        return r.derivations
+
+    def test_emits_one_stable_keyed_provenance_derivation(self):
+        [d] = self._deriv("critical")
+        assert d.field == "collector_enrichment.business"
+        assert d.source == "instrumentation_hints[*].business"
+        assert d.transformation.startswith("sha256:")
+
+    def test_key_stable_but_hash_changes_on_business_change(self):
+        [a] = self._deriv("critical")
+        [b] = self._deriv("high")
+        assert (a.field, a.source) == (b.field, b.source)  # stable key
+        assert a.transformation != b.transformation  # hash tracks the change
+
+    def test_check_drift_flags_a_business_change(self):
+        # exercise the real check_drift derivation-rule path end-to-end
+        import json
+
+        from startd8.observability.artifact_generator import (
+            check_drift,
+            generate_observability_artifacts,
+        )
+
+        def _meta(crit):
+            return {
+                "instrumentation_hints": {
+                    "cart": {
+                        "transport": "grpc",
+                        "service_name": "cart",
+                        "business": {"criticality": crit},
+                    }
+                },
+                "declared_artifact_types": [],
+            }
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            mp = td / "onboarding.json"
+            out = td / "out"
+            # run 1: criticality=critical, write the index
+            mp.write_text(json.dumps(_meta("critical")))
+            generate_observability_artifacts(
+                onboarding_metadata_path=mp, output_dir=out, dry_run=False
+            )
+            assert (out / "observability-manifest.yaml").exists()
+            # unchanged manifest ⇒ no drift
+            assert check_drift(mp, out) == 0
+            # run 2: criticality flips ⇒ drift MUST be detected (was silently missed pre-QW-5)
+            mp.write_text(json.dumps(_meta("high")))
+            assert check_drift(mp, out) == 1

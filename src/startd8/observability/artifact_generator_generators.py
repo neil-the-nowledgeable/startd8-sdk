@@ -190,14 +190,29 @@ def _resolve_threshold(
     return None, "none"
 
 
-def _severity_for(business: BusinessContext, derivations: List[DerivationTrace]) -> str:
-    """Derive alert severity from criticality."""
-    severity = (business.severity_map or _CRITICALITY_TO_SEVERITY).get(business.criticality, "warning")
+def _severity_for(
+    business: BusinessContext,
+    derivations: List[DerivationTrace],
+    service: Optional["ServiceHints"] = None,
+) -> str:
+    """Derive alert severity from criticality (EC-1: per-service when available).
+
+    Prefers ``service.criticality`` (the ContextCore-forwarded per-service business context,
+    FR-1b) over the project-level ``business.criticality`` when present. Absent per-service
+    criticality ⇒ the project value ⇒ byte-identical to the pre-EC-1 output (the derivation trace
+    is kept identical on the project path so no existing artifact changes)."""
+    per_service = bool(service is not None and getattr(service, "criticality", ""))
+    criticality = service.criticality if per_service else business.criticality
+    severity = (business.severity_map or _CRITICALITY_TO_SEVERITY).get(criticality, "warning")
     derivations.append(
         DerivationTrace(
             field="alert_severity",
-            source="manifest.spec.business.criticality",
-            transformation=f"{business.criticality} → {severity}",
+            source=(
+                f"instrumentation_hints[{service.service_id}].business.criticality"
+                if per_service
+                else "manifest.spec.business.criticality"
+            ),
+            transformation=f"{criticality} → {severity}",
             tier="manifest",
         )
     )
@@ -289,7 +304,7 @@ def generate_alert_rules(
     """
     descriptor = _descriptor_for(service, descriptor)
     derivations: List[DerivationTrace] = []
-    severity = _severity_for(business, derivations)
+    severity = _severity_for(business, derivations, service)
     rules: List[Dict[str, Any]] = []
 
     # Descriptor-sourced metric shapes (FR-4): names, selectors, unit.
@@ -1214,7 +1229,7 @@ def generate_declared_base_slos(
     documents: List[str] = []
     bound: List[Dict[str, str]] = []
     deferred: List[Dict[str, str]] = []
-    severity = _severity_for(business, [])
+    severity = _severity_for(business, [], service)
     # #307 §2.0: span > declared-series precedence. A kind a declared span signal owns is bound by
     # the span lane; this base lane skips it (recorded) so a kind covered by BOTH emits exactly once.
     span_owned = _declared_span_covered_kinds(service)
@@ -1400,7 +1415,7 @@ def generate_declared_functional_slos(
     documents: List[str] = []
     bound: List[Dict[str, Any]] = []
     deferred: List[Dict[str, Any]] = []
-    severity = _severity_for(business, [])
+    severity = _severity_for(business, [], service)
 
     for s in series:
         selector = _declared_series_selector(s.labels)
@@ -1590,7 +1605,7 @@ def generate_declared_span_slos(
     documents: List[str] = []
     bound: List[Dict[str, Any]] = []
     deferred: List[Dict[str, Any]] = []
-    severity = _severity_for(business, [])
+    severity = _severity_for(business, [], service)
 
     latency_raw, _ = _resolve_threshold("latency_p99", business, [])
     avail_target, _ = _resolve_threshold("availability", business, [])
@@ -1953,7 +1968,7 @@ def generate_functional_slos(
                 },
                 "alerting": {
                     "name": f"{service.service_id}-{kind}-alert",
-                    "labels": {"severity": _severity_for(business, [])},
+                    "labels": {"severity": _severity_for(business, [], service)},
                 },
             },
         }
@@ -2022,7 +2037,7 @@ def generate_slo_definitions(
 
     avail_raw, _ = _resolve_threshold("availability", business, derivations)
     latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
-    severity = _severity_for(business, derivations)
+    severity = _severity_for(business, derivations, service)
 
     window = business.slo_window
     derivations.append(
@@ -2348,7 +2363,7 @@ def generate_notification_policy(
     descriptor = _descriptor_for(service, descriptor)
     label_key = descriptor.service_label_key
     derivations: List[DerivationTrace] = []
-    severity = _severity_for(business, derivations)
+    severity = _severity_for(business, derivations, service)
 
     by_name = {r.name: r for r in business.receivers}
     channels = business.routing_channels()
@@ -2507,7 +2522,7 @@ def generate_loki_rule(
     descriptor = _descriptor_for(service, descriptor)
     stream_key = descriptor.logql_stream_key()
     derivations: List[DerivationTrace] = []
-    severity = _severity_for(business, derivations)
+    severity = _severity_for(business, derivations, service)
     target = _target_for(service.service_id, business.targets)
     # #278: bind the LogQL stream selector to the real OTel service.name (slash preserved) when
     # onboarding declares it (REQ-CCL-105) — mirroring the #275 metric-SLI fix — so a log-based alert
@@ -2563,7 +2578,7 @@ def generate_runbook(
 ) -> ArtifactResult:
     """Generate an incident runbook (markdown) for a service."""
     derivations: List[DerivationTrace] = []
-    severity = _severity_for(business, derivations)
+    severity = _severity_for(business, derivations, service)
     avail = business.availability or "—"
     latency = business.latency_p99 or "—"
     # #278: the operator's copy-paste log query must select the SAME stream the loki-rule alert
@@ -2624,6 +2639,15 @@ def generate_runbook(
         derivations.append(DerivationTrace(
             field="escalation.contacts", source="manifest.metadata.owners",
             transformation=f"{len(owner_lines)} owner(s)", tier="manifest",
+        ))
+    elif getattr(service, "owner", None):
+        # EC-1: per-service owner (ContextCore-forwarded hint["business"].owner, FR-1b) wins over the
+        # project scalar when present. Absent ⇒ the project owner ⇒ byte-identical to pre-EC-1.
+        owner_lines = [f"- Owner: {service.owner}"]
+        derivations.append(DerivationTrace(
+            field="escalation.owner",
+            source=f"instrumentation_hints[{service.service_id}].business.owner",
+            transformation="per-service owner", tier="manifest",
         ))
     elif business.owner:
         owner_lines = [f"- Owner: {business.owner}"]
@@ -2832,12 +2856,28 @@ def generate_collector_enrichment(
         }
     }
 
+    # EC-2 (FR-7): promote criticality to a span-metrics dimension so the enrichment is queryable
+    # as a label on `calls_total{business_criticality=...}`, not just present on spans. ONLY
+    # criticality (bounded to the 4-value enum) — owner is deliberately NOT a dimension (unbounded
+    # cardinality would explode the metric series; it stays a span attribute for trace-level RCA).
+    # Matches the demo (otelcol-config-extras.yml). Emitted as a partial `connectors:` fragment the
+    # operator merges into their existing spanmetrics connector (appends dimensions).
+    has_criticality = any(attr == "criticality" for _sel, attr, _val in rows)
+    if has_criticality:
+        doc["connectors"] = {
+            "spanmetrics": {"dimensions": [{"name": "business.criticality"}]}
+        }
+
     provenance = _business_provenance(rows)
+    services_enriched = len({sel for sel, _attr, _val in rows})
     header = (
         "# GENERATED — do not edit; regenerate via `startd8 observability` "
         "(REQ_COLLECTOR_ENRICHMENT).\n"
         "# Single source: manifest spec.business + spec.targets[].criticality/owner, forwarded as\n"
         "# instrumentation_hints[svc].business. This replaces the hand-maintained transform/business mirror.\n"
+        "# Merge into your collector config: add transform/business to the traces pipeline processors,\n"
+        "# and append the spanmetrics `dimensions` to your existing spanmetrics connector. See\n"
+        "# docs/design/collector-enrichment/DEPLOYING.md.\n"
         f"# provenance: sha256:{provenance}\n\n"
     )
     body = yaml.dump(
@@ -2847,10 +2887,45 @@ def generate_collector_enrichment(
         allow_unicode=True,
         width=1_000_000,  # never fold the long OTTL statements onto multiple lines
     )
+    # QW-4: the emitted `connectors:` block is a PARTIAL fragment, not a full connector — copying it
+    # wholesale would replace (not extend) the operator's real spanmetrics connector, losing its
+    # histogram/namespace/flush config. Mark it append-only inline so a scroll-to-the-YAML operator
+    # can't miss the header note.
+    if has_criticality:
+        body = body.replace(
+            "\nconnectors:\n",
+            "\n# APPEND these dimensions to your EXISTING spanmetrics connector — do NOT replace it "
+            "(see DEPLOYING.md).\nconnectors:\n",
+            1,
+        )
+
+    # QW-3 / OB-1: surface provenance + counts in the run report so drift/regen tooling and the
+    # coverage report can read them without parsing the artifact YAML. fr_coverage is a guaranteed
+    # dict field on GenerationReport, written directly here as the other generators do.
+    report.fr_coverage["collector_enrichment"] = {
+        "provenance": f"sha256:{provenance}",
+        "statements": len(rows),
+        "services_enriched": services_enriched,
+        "criticality_dimension": has_criticality,
+    }
+
+    # QW-5: emit ONE stable-keyed derivation carrying the provenance hash. check_drift compares
+    # derivation rules by (field, source) → transformation, but NOT artifact content — so without
+    # this a business-context change (e.g. a service's criticality flip) leaves the same artifact
+    # key with no derivation and is reported as "No drift". The stable (field, source) + changing
+    # transformation (the hash) makes check_drift flag a business-context change. (Deferred FR-10b.)
     return ArtifactResult(
         artifact_type="collector_enrichment",
         service_id=project_id,
         output_path=_COLLECTOR_ENRICHMENT_PATH,
         status="generated",
         content=header + body,
+        derivations=[
+            DerivationTrace(
+                field="collector_enrichment.business",
+                source="instrumentation_hints[*].business",
+                transformation=f"sha256:{provenance}",
+                tier="manifest",
+            )
+        ],
     )

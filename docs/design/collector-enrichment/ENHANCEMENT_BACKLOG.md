@@ -1,57 +1,57 @@
 # collector_enrichment — Enhancement Backlog
 
-**Date:** 2026-07-24
-**Scope:** the just-shipped `collector_enrichment` (FR-1b + FR-2–11, PR #321, `5896a15e`).
-**Method:** grounded against the merged code; leads with what to do first, buckets below the fold.
+**Last refreshed:** 2026-07-24 (fresh pass after #321–#324).
+**Method:** grounded against current code on `feat/collector-enrichment-followups`; leads with the
+2–3 findings that matter, appendix below the fold.
 
-> **Grounding note (belief → actual corrections).** Three first-guesses changed on contact with code:
-> (1) I assumed the parity gate had *some* operator surface — it has **none** (tests only). (2) I
-> assumed "mergeable file" (from the reqs) was a real registry capability — `ArtifactTypeSpec` has
-> **no `mergeable` field** (`artifact_generator_models.py`); the file is emitted standalone, so the
-> last-mile merge is genuinely unaddressed. (3) I assumed acceptance #5 (spans carry the attrs in the
-> backend) had a proof — it doesn't, **but** the harness to prove it (`runtime_fidelity.py`) already
-> exists. All three became findings.
+## Delivered log
+
+| Ref | Shipped |
+|---|---|
+| #321 | Generator (FR-1b + FR-2–11): `ServiceHints.{criticality,owner}`, presence-gated OTTL `transform/business`, escaping, determinism, fail-fast validation, semantic parity gate |
+| #322 | `startd8 observability enrichment-parity` CLI (QW-1) + this backlog |
+| #323 | Live proof: `collector_config()` enrichment seam + `find_collector_binary`-gated integration test (LH-1/EC-2 harness half) |
+| #324 | `DEPLOYING.md` (QW-2), `fr_coverage` counts (QW-3/OB-1), per-service alert severity + runbook owner (EC-1), generator emits spanmetrics dimension (EC-2) |
 
 ---
 
 ## Top findings (do these first)
 
-**1. ⚡ Expose the parity gate as a CLI — the cutover-safety mechanism is unreachable without Python.**
-`check_collector_enrichment_parity` / `extract_enrichment_map` (`collector_enrichment_parity.py`) are
-called **only from `test_collector_enrichment.py`** — confirmed: `grep -rn check_collector_enrichment_parity src/` returns nothing outside the module's own def. Yet the *entire point* of FR-10a/11 is a
-one-shot check an **operator** runs against their real collector config before deleting the hand-written
-`transform/business` block. The `observability` Typer group already hosts sibling verbs (`compare`,
-`compare-live`, `contrast`, `scorecard` — `observability/cli.py:379-410`), so this is a ~40-line
-subcommand riding an established pattern. → so an **operator can prove generated ≡ deployed and retire
-the mirror safely** without hand-writing a Python harness. **Effort: S.**
+**1. 🌱 A business-context change is invisible to `check_drift` — one derivation closes it. ✅ DONE.**
+`Confirmed:` `generate_collector_enrichment` emits **zero** `DerivationTrace`s (grep of the function =
+0), and `check_drift` (`artifact_generator.py:1633-1664`) detects drift by artifact **keys**
+(`(type, service_id)`, add/remove) + **derivation rules** (`field,source → transformation`). It does
+**not** hash artifact content. So when a service's business context changes — e.g. `cartservice`
+criticality `critical→high` — the artifact key is unchanged, no derivation exists to compare, and
+`check_drift` prints **"No drift detected"** even though the committed enrichment file is now stale. The
+fix rides existing plumbing: emit **one** `DerivationTrace(field="collector_enrichment.business",
+source="instrumentation_hints[*].business", transformation="sha256:<provenance>")` — the provenance hash
+is already computed (`_business_provenance`), and `check_drift`'s derivation-rule comparison (`:1660`)
+then flags a business-context change **for free**. → so an operator's `--check`/CI gate **catches a stale
+committed enrichment** instead of silently passing. This is the deferred FR-10b drift detection, now
+reachable for near-nothing. **XS/S.**
 
-**2. 🌱 Close acceptance #5 with the otelcol harness that already exists — via the spanmetrics *dimension*.**
-Acceptance #5 ("after operator wiring, spans carry `business.criticality`/`owner` in the backend") has
-**no live proof**. `runtime_fidelity.py:177` already owns an `otelcol-contrib` subprocess on loopback with
-injectable launcher/scrape (built for the spanmetrics spike). **Grounding correction:** it is a *metrics*
-harness, not a trace harness — `collector_config()` (`:41`) wires `otlp → spanmetrics → prometheus` with
-**no trace exporter**, so the *literal* "inspect the span" check isn't possible here. The harness-shaped
-proof instead **promotes `business.criticality` to a spanmetrics `dimensions:` entry** (exactly what the
-real demo does, `otelcol-config-extras.yml:69-72`) so the enriched attribute surfaces as
-`calls_total{business_criticality="critical"}` in the `/metrics` the harness already scrapes and parses
-(`parse_prometheus_text`/`check_descriptor_binding`). This **merges LH-1 with EC-2/FR-7** — one build proves
-the path end-to-end *and* delivers the queryable dimension. Gated on `find_collector_binary()` (`:168`) →
-skips where `otelcol-contrib` is absent (it is, locally), runs in CI. → so the team gets **executable proof
-enrichment reaches a queryable backend label**, not just well-formed YAML. **Effort: M.**
+**2. ⚡ The emitted `connectors:` block is a replace-footgun — mark it append-only inline. ✅ DONE.**
+`Confirmed:` the generated file ends with a bare `connectors:\n  spanmetrics:\n    dimensions:` block
+(verified by rendering it). It *looks* like a complete, copyable spanmetrics connector — but an operator
+who copies that `connectors:` section **replaces** their real spanmetrics connector, losing
+`histogram`/`namespace`/`metrics_flush_interval` and breaking span-metrics. The append instruction lives
+in the header comment 8 lines above and is easy to miss when scrolling to the YAML. Add a one-line
+inline comment directly above the block: `# APPEND these dimensions to your EXISTING spanmetrics
+connector — do not replace it (see DEPLOYING.md).` → so an operator **can't silently break their metrics
+pipeline** by copy-pasting the wrong block. High blast radius, fresh code, trivial fix. **XS.**
 
-**3. ⚡ Document (or emit) the last-mile merge — the standalone block has no path into a real config.**
-The generator writes a bare `processors: {transform/business: …}` file (`_COLLECTOR_ENRICHMENT_PATH`,
-`artifact_generator_generators.py:2723`). An operator must still hand-merge it into their collector
-config's `processors:` **and** add `transform/business` to a `traces` pipeline — nothing emits or
-documents that step (and `ArtifactTypeSpec` has no `mergeable` machinery to do it automatically). A short
-`README`/header snippet showing the two-line wiring is the cheap fix; a `--merge-into <config.yaml>` helper
-is the fuller one. → so an operator **knows how to actually deploy the artifact** instead of guessing.
-**Effort: S (doc) / M (merge helper).**
+**3. 🌱 `fr_coverage["collector_enrichment"]` is written but no surface reads it.**
+`Confirmed:` `compare.py` has **0** references to `collector_enrichment` (it reads only its `_GAP_CLASSES`
+divergence keys), and nothing else consumes the block — so OB-1's "make the $0 pass legible" goal is only
+half-met: the counts (`statements`, `services_enriched`) sit in the manifest, unread. Surface them in the
+run's console summary / index roll-up ("collector_enrichment: 13 services enriched, 26 statements, 1
+dimension"). → so a human **sees the pass did something** without opening the manifest YAML. **S.**
 
-*(No built-but-unwired **defect** to report: the generator is wired into `generate_observability_artifacts`
-and stamped/written; the parity gate shipping as a function+test is exactly what FR-10a/11 specified — its
-missing CLI is a latent **capability**, not a broken path. Verified by tracing both ends of the generator
-wire and running the 28-test suite green on merged main.)*
+*(No built-but-unwired **defect**: the generator is wired into `generate_observability_artifacts`, written
+on non-dry-run, and stamped; the parity CLI and live seam are wired. Finding #1 is a drift-coverage **gap**,
+not a broken path — verified by tracing both ends of the `check_drift` comparison and confirming the
+generator's zero-derivation output.)*
 
 ---
 
@@ -59,59 +59,44 @@ wire and running the 28-test suite green on merged main.)*
 <summary><b>Backlog appendix</b> (supporting; draw from over later increments)</summary>
 
 ### ⚡ Quick wins
-- **QW-1 — parity CLI subcommand** — ✅ **DELIVERED** (`startd8 observability enrichment-parity -g <generated> -r <deployed> [--json]`; exit 0=parity/1=mismatch/2=unreadable; `cli.py`). Top finding #1. **S.**
-- **QW-2 — last-mile merge doc/snippet** — Top finding #3, doc flavor. **S.**
-- **QW-3 — surface provenance in the run report** — the sha256 is written to the file header
-  (`_business_provenance`, `:2835/2841`) but not into `report.fr_coverage` or the run index, so a consumer
-  must open the YAML to see it. Add one `fr_coverage["collector_enrichment_provenance"]` line → drift/regen
-  tooling can read it without parsing the artifact. **XS.**
+- **QW-4 — inline append-only comment on the `connectors:` block** — ✅ **DELIVERED** (inline `# APPEND …` above the block). Top finding #2. **XS.**
+- **QW-5 — provenance derivation for drift** — ✅ **DELIVERED** (one stable-keyed `DerivationTrace` carrying the provenance; `check_drift` now flags a business-context change, end-to-end tested). Top finding #1. **XS/S.**
 
 ### 🌱 Low-hanging fruit
-- **LH-1 — live acceptance-#5 proof (merged with EC-2)** — 🔨 **IN PROGRESS** (this branch). Top finding #2:
-  a `collector_config()` seam that injects `transform/business` + a `business.criticality` spanmetrics
-  dimension, and a `find_collector_binary()`-gated integration test asserting the labeled `calls_total`.
-  Reuses `extract_enrichment_map` to feed the real generator output through the harness. **M.**
-- **LH-2 — emit an `error`-status artifact into coverage honestly** — the generator already returns
-  `status="error"` with `error_message` on validation failure (`:2726-2734`), and the wiring appends it
-  (`artifact_generator.py`, `!= "skipped"`). Confirm it surfaces in the quality/coverage report rather
-  than being silently dropped — one assertion + a report line closes the loop. **XS/S.**
+- **LH-2 — surface the coverage counts** — Top finding #3 (run summary / index line). **S.**
+- **LH-3 — score the artifact like its siblings.** `Confirmed:` `_repair_and_validate`
+  (`artifact_generator.py:260-282`) scores `dashboard_spec`/`alert_rule`/`slo_definition` but has **no**
+  `collector_enrichment` branch, so it ships with no `quality` dict and is absent from the run's quality
+  report. A thin validator (reuse the fail-fast `validate_collector_enrichment` as the check set → a 0/1
+  score) makes it consistent. Low marginal value (internal validate already guarantees correctness). **S.**
 
 ### 🏗️ Architectural quick win (≤1)
-- **AQ-1 — extract the semantic-parity pattern on 2nd use (not now).** `extract_enrichment_map` +
-  map-diff is the reusable "parse two collector configs → compare resolved meaning, grouping-insensitive"
-  shape the RETROSPECTIVE flagged for Yokoten. The spanmetrics generator (#307) is the sibling; when a
-  *second* `transform/*` cutover needs parity, lift a shared `collector_config_semantic_diff`. Until then,
-  duplication-of-one is correct — **do not pre-abstract.** **M, deferred.**
+- **AQ-1 — extract the semantic-parity pattern on 2nd use (still deferred).** `extract_enrichment_map` +
+  map-diff is the reusable "parse two collector configs → compare resolved meaning" shape. No 2nd
+  `transform/*` consumer exists yet → duplication-of-one is correct; **do not pre-abstract.** **M, deferred.**
 
-### 🚀 Enhanced capabilities (higher effort; each justified by existing plumbing)
-- **EC-1 — per-service alert severity + runbook escalation (NR-1 seed).** `ServiceHints.{criticality,owner}`
-  are now populated per-service but read *only* by `generate_collector_enrichment`; `_severity_for` and the
-  runbook escalation block still read project-level `business.criticality/owner`. The data now exists to make
-  severity per-service. Must be additive/flag-guarded — rewiring risks byte-output regressions on existing
-  fixtures (why it was NR-1). **M.**
-- **EC-2 — FR-7: `business.criticality` as a spanmetrics dimension (NR-3 seed).** `calls_total{business_criticality=…}` makes the enrichment queryable in Prometheus, not just present on spans. The *harness* half
-  ships with LH-1 (the `collector_config()` dimension seam). The remaining half — the **generator** emitting
-  the spanmetrics dimension config alongside `transform/business` — stays a follow-up. **M/L.**
-- **EC-3 — FR-10b: post-cutover drift detection (NR-6 seed).** The provenance sha256 is *already computed*
-  (`_business_provenance`) — the missing half is reading it back and re-hashing the deployed config to alert
-  on drift after the hand-written block is removed. Reuses the parity parser from QW-1. **M.**
-
-### 🔭 Operational / observability
-- **OB-1 — count emitted enrichment statements in `fr_coverage`.** One integer (`statements`, `services_enriched`) in the run report makes the paid-nothing $0 pass *legible* — "12 services enriched, 24 statements"
-  — and gives drift tooling a cheap signal. **XS.**
+### 🚀 Enhanced capabilities
+- **EC-3 — `enrichment-parity` against a LIVE collector.** Today the CLI diffs two files. A `--live-config
+  <url>` that pulls a running collector's effective config (zpages/config endpoint) would let an operator
+  verify the *deployed* processor, not just a file. Justified by the parity parser already being
+  transport-agnostic (it takes YAML text). **M.**
+- **EC-4 — single-source the dimension name.** The spanmetrics dimension is the hardcoded literal
+  `business.criticality` in **two** places now (generator connectors block + `runtime_fidelity` seam
+  default). If a 3rd business attr ever becomes a dimension, that's a 2-site edit. Single-source it when
+  the 2nd dimension appears (not before). **S, deferred.**
 
 </details>
 
 ---
 
-## Honest gaps (product decisions surfaced while grounding — not bugs)
+## Honest gaps (decisions surfaced while grounding — not bugs)
 
-- **Per-service consumption is deliberately deferred (NR-1).** Existing alert/slo/runbook generators keep
-  reading project-level criticality *by design* — to preserve byte-identical output on shipped fixtures.
-  EC-1 is the opt-in path; confirm that's the intended shape before wiring it.
-- **`business.context_version` OTTL statement intentionally omitted (NR-4).** Provenance lives in the header
-  comment so the emitted statement set stays equal to the reference and semantic parity is clean. Decision,
-  not omission.
-- **Two `ServiceHints` resolving to the same `service.name` silently merge** (non-conflicting attrs) or
-  fail-fast (conflicting values). `service.name` is unique in practice; documented as a considered-and-
-  declined item in the PR #321 code-review. Revisit only if a real duplicate-name topology appears.
+- **The provenance hash is only *partially* redundant with `check_drift`.** I first assumed it was fully
+  redundant (deterministic file → content-hash ≡ business-hash). Grounding corrected this: `check_drift`
+  is **key + derivation** based, not content-based, so it misses content changes entirely — which is
+  exactly why Top finding #1 is real, not redundant.
+- **`owner` is deliberately not a spanmetrics dimension** (unbounded cardinality). Stays a span attribute
+  for trace-level RCA. Confirm that's the intended shape before anyone "adds owner to the dashboard."
+- **Runbook owner precedence: structured `business.owners` before per-service `service.owner`** — a
+  product decision (structured escalation contacts are the actionable "who to page"); per-service owner is
+  a fallback enrichment. Revisit only if per-service ownership should override project escalation.
