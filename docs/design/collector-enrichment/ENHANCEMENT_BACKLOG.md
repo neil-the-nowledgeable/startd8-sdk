@@ -25,14 +25,19 @@ one-shot check an **operator** runs against their real collector config before d
 subcommand riding an established pattern. → so an **operator can prove generated ≡ deployed and retire
 the mirror safely** without hand-writing a Python harness. **Effort: S.**
 
-**2. 🌱 Close acceptance #5 with the otelcol harness that already exists.**
+**2. 🌱 Close acceptance #5 with the otelcol harness that already exists — via the spanmetrics *dimension*.**
 Acceptance #5 ("after operator wiring, spans carry `business.criticality`/`owner` in the backend") has
-**no live proof** — no test boots a collector with the emitted processor. But `runtime_fidelity.py:178`
-already owns an `otelcol-contrib` subprocess on loopback (built for the spanmetrics spike, with
-`collector_config()` at `:41`). Feeding the emitted `otelcol-business-enrichment.yaml` into that harness
-and asserting an emitted span carries `business.criticality` closes the one acceptance criterion the unit
-suite structurally cannot. → so the team gets **end-to-end proof the enrichment actually stamps spans**,
-not just that the YAML is well-formed. **Effort: M.**
+**no live proof**. `runtime_fidelity.py:177` already owns an `otelcol-contrib` subprocess on loopback with
+injectable launcher/scrape (built for the spanmetrics spike). **Grounding correction:** it is a *metrics*
+harness, not a trace harness — `collector_config()` (`:41`) wires `otlp → spanmetrics → prometheus` with
+**no trace exporter**, so the *literal* "inspect the span" check isn't possible here. The harness-shaped
+proof instead **promotes `business.criticality` to a spanmetrics `dimensions:` entry** (exactly what the
+real demo does, `otelcol-config-extras.yml:69-72`) so the enriched attribute surfaces as
+`calls_total{business_criticality="critical"}` in the `/metrics` the harness already scrapes and parses
+(`parse_prometheus_text`/`check_descriptor_binding`). This **merges LH-1 with EC-2/FR-7** — one build proves
+the path end-to-end *and* delivers the queryable dimension. Gated on `find_collector_binary()` (`:168`) →
+skips where `otelcol-contrib` is absent (it is, locally), runs in CI. → so the team gets **executable proof
+enrichment reaches a queryable backend label**, not just well-formed YAML. **Effort: M.**
 
 **3. ⚡ Document (or emit) the last-mile merge — the standalone block has no path into a real config.**
 The generator writes a bare `processors: {transform/business: …}` file (`_COLLECTOR_ENRICHMENT_PATH`,
@@ -62,7 +67,10 @@ wire and running the 28-test suite green on merged main.)*
   tooling can read it without parsing the artifact. **XS.**
 
 ### 🌱 Low-hanging fruit
-- **LH-1 — live acceptance-#5 proof** — Top finding #2, via `runtime_fidelity.py`. **M.**
+- **LH-1 — live acceptance-#5 proof (merged with EC-2)** — 🔨 **IN PROGRESS** (this branch). Top finding #2:
+  a `collector_config()` seam that injects `transform/business` + a `business.criticality` spanmetrics
+  dimension, and a `find_collector_binary()`-gated integration test asserting the labeled `calls_total`.
+  Reuses `extract_enrichment_map` to feed the real generator output through the harness. **M.**
 - **LH-2 — emit an `error`-status artifact into coverage honestly** — the generator already returns
   `status="error"` with `error_message` on validation failure (`:2726-2734`), and the wiring appends it
   (`artifact_generator.py`, `!= "skipped"`). Confirm it surfaces in the quality/coverage report rather
@@ -81,9 +89,9 @@ wire and running the 28-test suite green on merged main.)*
   runbook escalation block still read project-level `business.criticality/owner`. The data now exists to make
   severity per-service. Must be additive/flag-guarded — rewiring risks byte-output regressions on existing
   fixtures (why it was NR-1). **M.**
-- **EC-2 — FR-7: `business.criticality` as a spanmetrics dimension (NR-3 seed).** `calls_total{business_criticality=…}` makes the enrichment queryable in Prometheus, not just present on spans. The spanmetrics
-  connector already lives in `runtime_fidelity.collector_config()`; adding a dimension is a localized change
-  there + an emitter tweak. **M/L.**
+- **EC-2 — FR-7: `business.criticality` as a spanmetrics dimension (NR-3 seed).** `calls_total{business_criticality=…}` makes the enrichment queryable in Prometheus, not just present on spans. The *harness* half
+  ships with LH-1 (the `collector_config()` dimension seam). The remaining half — the **generator** emitting
+  the spanmetrics dimension config alongside `transform/business` — stays a follow-up. **M/L.**
 - **EC-3 — FR-10b: post-cutover drift detection (NR-6 seed).** The provenance sha256 is *already computed*
   (`_business_provenance`) — the missing half is reading it back and re-hashing the deployed config to alert
   on drift after the hand-written block is removed. Reuses the parity parser from QW-1. **M.**

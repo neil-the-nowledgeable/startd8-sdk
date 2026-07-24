@@ -34,11 +34,81 @@ class CollectorUnavailable(Exception):
 
 # ─────────────────────────── collector config ──────────────────────────────
 
+
 #: The span-metrics collector config validated by the spike. The 4 load-bearing knobs
 #: (`namespace: ""`, no explicit span.kind dimension, `resource_to_telemetry_conversion`,
 #: `telemetry.metrics.level: none`) are what make `calls_total{service_name,status_code}`
 #: appear unprefixed — the exact `span-metrics-connector` descriptor surface. Ship verbatim.
-def collector_config(otlp_endpoint: str = "127.0.0.1:4317", prom_endpoint: str = "127.0.0.1:8889") -> str:
+def _ottl_literal(s: str) -> str:
+    """Go-style double-quoted OTTL literal body (backslash first, then quote).
+
+    Local copy of the emitter's ``_ottl_str`` so ``runtime_fidelity`` stays importable without a
+    dependency on ``artifact_generator_generators`` (which star-imports the artifact models).
+    """
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _business_enrichment_processor(enrichment: Dict[str, Dict[str, str]]) -> str:
+    """Render a ``processors:`` block with a ``transform/business`` processor from a resolved
+    ``{service.name: {attr: value}}`` map — the same OTTL shape the artifact generator emits, so the
+    live harness proves the *real* enrichment path (feed it ``extract_enrichment_map(<generated>)``).
+
+    One statement per present ``(service, attr)``, sorted deterministically (criticality before
+    owner, then service). Indented to sit under the collector-config top level."""
+    rank = {"criticality": 0, "owner": 1}
+    rows = sorted(
+        (
+            (svc, attr, val)
+            for svc, attrs in enrichment.items()
+            for attr, val in attrs.items()
+        ),
+        key=lambda r: (rank.get(r[1], 99), r[0]),
+    )
+    stmts = "".join(
+        f'          - set(attributes["business.{attr}"], "{_ottl_literal(val)}") '
+        f'where resource.attributes["service.name"] == "{_ottl_literal(svc)}"\n'
+        for svc, attr, val in rows
+    )
+    return (
+        "processors:\n"
+        "  transform/business:\n"
+        "    error_mode: ignore\n"
+        "    trace_statements:\n"
+        "      - context: span\n"
+        "        statements:\n" + stmts
+    )
+
+
+def collector_config(
+    otlp_endpoint: str = "127.0.0.1:4317",
+    prom_endpoint: str = "127.0.0.1:8889",
+    *,
+    business_enrichment: Optional[Dict[str, Dict[str, str]]] = None,
+    enrichment_dimensions: Optional[List[str]] = None,
+) -> str:
+    """Collector config for the span-metrics loopback harness.
+
+    Default (both keyword args ``None``) is **byte-identical** to the original span-metrics config.
+    When ``business_enrichment`` (a ``{service.name: {criticality?, owner?}}`` map) is given, a
+    ``transform/business`` processor is injected into the traces pipeline so spans are enriched before
+    the spanmetrics connector reads them; when ``enrichment_dimensions`` is given (e.g.
+    ``["business.criticality"]``), those attributes are promoted to span-metrics dimensions so they
+    surface as labels on ``calls_total`` in the scraped ``/metrics`` — the executable proof of the
+    enrichment path (REQ_COLLECTOR_ENRICHMENT acceptance #5 + FR-7).
+    """
+    # spanmetrics dimensions block (child of the connector; empty ⇒ default output unchanged).
+    dims_block = ""
+    if enrichment_dimensions:
+        dims_lines = "".join(f"      - name: {d}\n" for d in enrichment_dimensions)
+        dims_block = "    dimensions:\n" + dims_lines
+
+    # transform/business processor block + its wiring into the traces pipeline (empty ⇒ unchanged).
+    processors_block = ""
+    traces_processors_line = ""
+    if business_enrichment:
+        processors_block = _business_enrichment_processor(business_enrichment) + "\n"
+        traces_processors_line = "      processors: [transform/business]\n"
+
     return f"""receivers:
   otlp:
     protocols:
@@ -51,14 +121,14 @@ connectors:
       explicit:
         buckets: [2ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s]
     metrics_flush_interval: 1s
-exporters:
+{dims_block}exporters:
   prometheus:
     endpoint: {prom_endpoint}
     resource_to_telemetry_conversion:
       enabled: true
     enable_open_metrics: false
     add_metric_suffixes: true
-service:
+{processors_block}service:
   telemetry:
     metrics:
       level: none
@@ -67,7 +137,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [spanmetrics]
+{traces_processors_line}      exporters: [spanmetrics]
     metrics:
       receivers: [spanmetrics]
       exporters: [prometheus]
@@ -76,7 +146,9 @@ service:
 
 # ───────────────────────────── /metrics parser ─────────────────────────────
 
-_LINE = re.compile(r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(\{(?P<labels>[^}]*)\})?\s+(?P<val>.+)$")
+_LINE = re.compile(
+    r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(\{(?P<labels>[^}]*)\})?\s+(?P<val>.+)$"
+)
 _LBL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 
 
@@ -105,10 +177,17 @@ class RuntimeBinding:
     reason: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"outcome": self.outcome, "coverage": self.coverage, "axes": self.axes, "reason": self.reason}
+        return {
+            "outcome": self.outcome,
+            "coverage": self.coverage,
+            "axes": self.axes,
+            "reason": self.reason,
+        }
 
 
-def check_descriptor_binding(parsed: Dict[str, List[Dict[str, str]]], descriptor, service_id: str) -> RuntimeBinding:
+def check_descriptor_binding(
+    parsed: Dict[str, List[Dict[str, str]]], descriptor, service_id: str
+) -> RuntimeBinding:
     """Presence-check the descriptor's RED axes against a parsed `/metrics` (FR-4).
 
     Four axes: throughput metric name, latency-bucket name, the service-identity **label**
@@ -122,11 +201,17 @@ def check_descriptor_binding(parsed: Dict[str, List[Dict[str, str]]], descriptor
     axes["throughput_metric"] = tp in parsed
     axes["latency_bucket"] = descriptor.latency_bucket_metric in parsed
     value = descriptor.service_label_value_tpl.format(service_id=service_id)
-    axes["service_identity"] = any(s.get(descriptor.service_label_key) == value for s in tp_series)
-    err_key = (descriptor.error_selector or "").split("=", 1)[0].split("=~", 1)[0].strip()
+    axes["service_identity"] = any(
+        s.get(descriptor.service_label_key) == value for s in tp_series
+    )
+    err_key = (
+        (descriptor.error_selector or "").split("=", 1)[0].split("=~", 1)[0].strip()
+    )
     axes["error_selector"] = bool(err_key) and any(err_key in s for s in tp_series)
     bound = sum(1 for v in axes.values() if v)
-    return RuntimeBinding(outcome="bound", coverage=round(bound / len(axes), 4), axes=axes)
+    return RuntimeBinding(
+        outcome="bound", coverage=round(bound / len(axes), 4), axes=axes
+    )
 
 
 # ─────────────────────── instrumentation resolution (FR-2) ──────────────────
@@ -138,7 +223,9 @@ class InstrumentationSpec:
     env: Dict[str, str]
 
 
-def resolve_instrumentation(language: str, *, otlp_endpoint: str, service_id: str) -> Optional[InstrumentationSpec]:
+def resolve_instrumentation(
+    language: str, *, otlp_endpoint: str, service_id: str
+) -> Optional[InstrumentationSpec]:
     """The launch-time auto-instrument wrapper for *language*, or None if unsupported.
 
     Harness-injected (a deployment property, not model skill — NR-3). Python-first
@@ -157,7 +244,11 @@ def resolve_instrumentation(language: str, *, otlp_endpoint: str, service_id: st
         return InstrumentationSpec(["opentelemetry-instrument"], base)
     if lang in ("node", "nodejs"):
         return InstrumentationSpec(
-            [], {**base, "NODE_OPTIONS": "--require @opentelemetry/auto-instrumentations-node/register"}
+            [],
+            {
+                **base,
+                "NODE_OPTIONS": "--require @opentelemetry/auto-instrumentations-node/register",
+            },
         )
     return None
 
@@ -171,6 +262,7 @@ def find_collector_binary(explicit: Optional[str] = None) -> Optional[str]:
         if cand and Path(cand).is_file():
             return cand
     from shutil import which
+
     return which("otelcol-contrib")
 
 
@@ -193,11 +285,15 @@ class SpanMetricsCollector:
         launcher: Optional[Callable[..., Any]] = None,
         scrape_fn: Optional[Callable[[str], Optional[str]]] = None,
         ready_timeout_s: float = 5.0,
+        config: Optional[str] = None,
     ) -> None:
         self.collector_bin = collector_bin
         self.workdir = Path(workdir)
         self.otlp_endpoint = otlp_endpoint
         self.prom_endpoint = prom_endpoint
+        # Caller-provided collector config (e.g. a business-enrichment variant). None ⇒ the default
+        # span-metrics config. Lets a test boot an enriched pipeline without a second launcher.
+        self._config = config
         self._metrics_url = f"http://{prom_endpoint}/metrics"
         self._launcher = launcher or self._default_launcher
         self._scrape = scrape_fn or self._default_scrape
@@ -209,7 +305,10 @@ class SpanMetricsCollector:
         import subprocess
 
         return subprocess.Popen(
-            argv, cwd=str(cwd), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            argv,
+            cwd=str(cwd),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
 
@@ -224,20 +323,28 @@ class SpanMetricsCollector:
 
     def __enter__(self) -> "SpanMetricsCollector":
         cfg_path = self.workdir / "otelcol-spanmetrics.yaml"
-        cfg_path.write_text(collector_config(self.otlp_endpoint, self.prom_endpoint))
-        self._proc = self._launcher([self.collector_bin, "--config", str(cfg_path)], self.workdir)
+        cfg_path.write_text(
+            self._config or collector_config(self.otlp_endpoint, self.prom_endpoint)
+        )
+        self._proc = self._launcher(
+            [self.collector_bin, "--config", str(cfg_path)], self.workdir
+        )
         deadline = time.monotonic() + self._ready_timeout_s
         while time.monotonic() < deadline:
             if self._scrape(self._metrics_url) is not None:
                 return self
             time.sleep(0.05)
         self._teardown()
-        raise CollectorUnavailable(f"collector /metrics not ready within {self._ready_timeout_s}s")
+        raise CollectorUnavailable(
+            f"collector /metrics not ready within {self._ready_timeout_s}s"
+        )
 
     def scrape(self) -> Optional[str]:
         return self._scrape(self._metrics_url)
 
-    def poll_binding(self, descriptor, service_id: str, *, settle_s: float = 8.0, cap_s: float = 15.0) -> RuntimeBinding:
+    def poll_binding(
+        self, descriptor, service_id: str, *, settle_s: float = 8.0, cap_s: float = 15.0
+    ) -> RuntimeBinding:
         """Poll until the throughput series is present AND non-zero (FR-8), then bind-check.
 
         A present-but-zero throughput (the counter delta hasn't accumulated on the first scrape)
@@ -252,10 +359,15 @@ class SpanMetricsCollector:
             # the one that passed the gate), and it halves the HTTP load.
             text = self.scrape() or ""
             if _has_nonzero_throughput(text, tp):
-                return check_descriptor_binding(parse_prometheus_text(text), descriptor, service_id)
+                return check_descriptor_binding(
+                    parse_prometheus_text(text), descriptor, service_id
+                )
             time.sleep(0.2)
-        return RuntimeBinding(outcome="no_telemetry", coverage=None,
-                              reason=f"no non-zero {tp!r} within {cap_s}s (service emitted no usable telemetry)")
+        return RuntimeBinding(
+            outcome="no_telemetry",
+            coverage=None,
+            reason=f"no non-zero {tp!r} within {cap_s}s (service emitted no usable telemetry)",
+        )
 
     def _teardown(self) -> None:
         proc = self._proc
@@ -297,23 +409,38 @@ def probe_service_runtime_observability(
     (uninstrumented) and the runtime term is ``degraded`` (never a fail, never model-blamed
     — FR-7). Returns ``(service_result, runtime_observability_dict)``.
     """
-    def _degraded(reason: str) -> Dict[str, Any]:
-        return {"outcome": "degraded", "coverage": None, "profile": getattr(descriptor, "profile", ""),
-                "reason": reason}
 
-    spec = resolve_instrumentation(language, otlp_endpoint="127.0.0.1:4317", service_id=service_id)
+    def _degraded(reason: str) -> Dict[str, Any]:
+        return {
+            "outcome": "degraded",
+            "coverage": None,
+            "profile": getattr(descriptor, "profile", ""),
+            "reason": reason,
+        }
+
+    spec = resolve_instrumentation(
+        language, otlp_endpoint="127.0.0.1:4317", service_id=service_id
+    )
     binloc = find_collector_binary(collector_bin)
     if spec is None:
-        return run_service(argv, extra_env), _degraded(f"language {language!r} not auto-instrumentable")
+        return run_service(argv, extra_env), _degraded(
+            f"language {language!r} not auto-instrumentable"
+        )
     if binloc is None:
-        return run_service(argv, extra_env), _degraded("otelcol-contrib binary not found")
+        return run_service(argv, extra_env), _degraded(
+            "otelcol-contrib binary not found"
+        )
 
     argv2 = [*spec.argv_prefix, *argv]
     env2 = {**extra_env, **spec.env}
     try:
-        with SpanMetricsCollector(binloc, Path(workdir), launcher=launcher, scrape_fn=scrape_fn) as c:
+        with SpanMetricsCollector(
+            binloc, Path(workdir), launcher=launcher, scrape_fn=scrape_fn
+        ) as c:
             sr = run_service(argv2, env2)
-            binding = c.poll_binding(descriptor, service_id, settle_s=settle_s, cap_s=cap_s)
+            binding = c.poll_binding(
+                descriptor, service_id, settle_s=settle_s, cap_s=cap_s
+            )
         out = binding.to_dict()
         out["profile"] = getattr(descriptor, "profile", "")
         return sr, out
