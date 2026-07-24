@@ -1,0 +1,26 @@
+# NON-NORMATIVE SNAPSHOT — verbatim copy of the hand-written transform/business block from the
+# InsightFinder / Online-Boutique demo:
+#   ~/Documents/Jobs/.../Insight-Finder/demo/collector/otelcol-config-extras.yml (lines 29-48)
+# Used ONLY as the cutover parity target (REQ_COLLECTOR_ENRICHMENT FR-10a/11). The generator emits
+# one statement PER SERVICE; this reference GROUPS services by shared value — hence parity is
+# SEMANTIC (service→{attr:value} maps compared), not byte-for-byte. Do not treat as normative.
+processors:
+  # A1 — business-context enrichment. service.name → criticality + owner (BPI personas).
+  transform/business:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          # criticality tiers
+          - set(attributes["business.criticality"], "critical") where resource.attributes["service.name"] == "frontend" or resource.attributes["service.name"] == "checkoutservice" or resource.attributes["service.name"] == "cartservice" or resource.attributes["service.name"] == "paymentservice"
+          - set(attributes["business.criticality"], "high") where resource.attributes["service.name"] == "productcatalogservice" or resource.attributes["service.name"] == "currencyservice" or resource.attributes["service.name"] == "shippingservice" or resource.attributes["service.name"] == "quoteservice" or resource.attributes["service.name"] == "accountingservice"
+          - set(attributes["business.criticality"], "medium") where resource.attributes["service.name"] == "emailservice" or resource.attributes["service.name"] == "recommendationservice" or resource.attributes["service.name"] == "adservice" or resource.attributes["service.name"] == "frauddetectionservice"
+          # owners (BPI astronomer personas)
+          - set(attributes["business.owner"], "Nicolaus Copernicus") where resource.attributes["service.name"] == "checkoutservice" or resource.attributes["service.name"] == "cartservice"
+          - set(attributes["business.owner"], "Annie Jump Cannon") where resource.attributes["service.name"] == "frontend"
+          - set(attributes["business.owner"], "Edmond Halley") where resource.attributes["service.name"] == "paymentservice" or resource.attributes["service.name"] == "currencyservice"
+          - set(attributes["business.owner"], "Charles Messier") where resource.attributes["service.name"] == "productcatalogservice" or resource.attributes["service.name"] == "adservice"
+          - set(attributes["business.owner"], "Henrietta Leavitt") where resource.attributes["service.name"] == "recommendationservice"
+          - set(attributes["business.owner"], "Maria Mitchell") where resource.attributes["service.name"] == "shippingservice" or resource.attributes["service.name"] == "emailservice" or resource.attributes["service.name"] == "quoteservice"
+          - set(attributes["business.owner"], "Urbain Le Verrier") where resource.attributes["service.name"] == "accountingservice"
+          - set(attributes["business.owner"], "Johannes Kepler") where resource.attributes["service.name"] == "frauddetectionservice"

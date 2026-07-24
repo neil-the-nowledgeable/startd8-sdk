@@ -7,6 +7,7 @@ Extracted verbatim from ``artifact_generator.py`` (Tier-2 refactor, step 2).
 """
 
 import dataclasses
+import hashlib
 import json  # noqa: F401
 import logging
 import os
@@ -2636,4 +2637,144 @@ def generate_capability_index(
         output_path="capability-index.yaml",
         status="generated",
         content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
+    )
+
+
+# --- collector_enrichment (REQ_COLLECTOR_ENRICHMENT FR-3/4/5/6) -------------------------------
+
+# Attribute emission rank — criticality statements before owner statements (FR-5 determinism).
+_BUSINESS_ATTR_RANK = {"criticality": 0, "owner": 1}
+_COLLECTOR_ENRICHMENT_PATH = "collector-enrichment/otelcol-business-enrichment.yaml"
+
+
+def _ottl_str(s: str) -> str:
+    """Escape a string for a Go-style double-quoted OTTL literal body (FR-6).
+
+    OTTL string literals use Go escaping — backslash first (so we don't double-escape the
+    escapes we add), then double-quote. Greenfield config → injection risk, so applied to
+    EVERY emitted literal: both the selector service.name and the attribute value.
+    """
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _business_provenance(rows: List[Tuple[str, str, str]]) -> str:
+    """Canonical sha256 over the sorted (service, attr, value) business subtree (FR-4).
+
+    Computed on RAW values (pre-OTTL-escape) so the hash tracks the source data, not the
+    rendering. Deterministic across runs and input order (rows are pre-sorted by the caller)."""
+    canon = json.dumps(rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def _collector_enrichment_rows(
+    services: List[ServiceHints],
+) -> Tuple[List[Tuple[str, str, str]], Set[str]]:
+    """Resolve per-service business context into sorted (service_name, attr, value) rows.
+
+    Selector value is the real OTel service.name (REQ-CCL-105), falling back to service_id when
+    absent. Only present attrs contribute a row (partial business context is valid). Returns the
+    sorted rows plus the set of service.names that carried ANY business context (for FR-8)."""
+    rows: List[Tuple[str, str, str]] = []
+    business_services: Set[str] = set()
+    for svc in services:
+        sel = (getattr(svc, "service_name", "") or "").strip() or svc.service_id
+        crit = (getattr(svc, "criticality", "") or "").strip()
+        owner = (getattr(svc, "owner", None) or None)
+        if crit or owner:
+            business_services.add(sel)
+        if crit:
+            rows.append((sel, "criticality", crit))
+        if owner:
+            rows.append((sel, "owner", str(owner).strip()))
+    rows.sort(key=lambda r: (_BUSINESS_ATTR_RANK.get(r[1], 99), r[0]))
+    return rows, business_services
+
+
+def generate_collector_enrichment(
+    services: List[ServiceHints],
+    business: BusinessContext,
+    report: GenerationReport,
+) -> ArtifactResult:
+    """Emit the OTel Collector ``transform/business`` processor from per-service business context.
+
+    REQ_COLLECTOR_ENRICHMENT FR-3/4/5/6/8. One statement per present ``(service, attr)``; the
+    single source is ``instrumentation_hints[svc].business`` (FR-1b, already producer-resolved).
+
+    Presence-gated (SOTTO): if no service carries business context the artifact is ``skipped`` with
+    empty content — no file, byte-identical to a pre-feature run. Fail-fast (FR-8): a validation
+    error degrades to ``status="error"`` with an empty body, never a half-written config.
+    """
+    project_id = business.project_id or report.project_id or "project"
+    rows, business_services = _collector_enrichment_rows(services)
+
+    # Presence gate (FR-3 / accept 3a): nothing to enrich ⇒ no artifact.
+    if not rows:
+        return ArtifactResult(
+            artifact_type="collector_enrichment",
+            service_id=project_id,
+            output_path=_COLLECTOR_ENRICHMENT_PATH,
+            status="skipped",
+            content="",
+            skip_reason="no business context on any service",
+        )
+
+    # Fail-fast validation on the built model, BEFORE serialization (FR-8).
+    try:
+        from .collector_enrichment_validation import (
+            CollectorEnrichmentError,
+            validate_collector_enrichment,
+        )
+
+        validate_collector_enrichment(rows, business_services)
+    except CollectorEnrichmentError as exc:
+        return ArtifactResult(
+            artifact_type="collector_enrichment",
+            service_id=project_id,
+            output_path=_COLLECTOR_ENRICHMENT_PATH,
+            status="error",
+            content="",
+            error_message=str(exc),
+        )
+
+    # Render OTTL statements. Two escaping layers: _ottl_str for the OTTL literal (so the collector's
+    # OTTL parser sees valid string literals), then yaml.dump for the YAML literal (so the collector's
+    # YAML parser returns the exact statement — safe for owner values containing ': ', '#', quotes).
+    statements = [
+        f'set(attributes["business.{attr}"], "{_ottl_str(val)}") '
+        f'where resource.attributes["service.name"] == "{_ottl_str(sel)}"'
+        for sel, attr, val in rows
+    ]
+
+    doc: Dict[str, Any] = {
+        "processors": {
+            "transform/business": {
+                "error_mode": "ignore",
+                "trace_statements": [
+                    {"context": "span", "statements": statements},
+                ],
+            }
+        }
+    }
+
+    provenance = _business_provenance(rows)
+    header = (
+        "# GENERATED — do not edit; regenerate via `startd8 observability` "
+        "(REQ_COLLECTOR_ENRICHMENT).\n"
+        "# Single source: manifest spec.business + spec.targets[].criticality/owner, forwarded as\n"
+        "# instrumentation_hints[svc].business. This replaces the hand-maintained transform/business mirror.\n"
+        f"# provenance: sha256:{provenance}\n\n"
+    )
+    body = yaml.dump(
+        doc,
+        default_flow_style=False,
+        sort_keys=False,
+        allow_unicode=True,
+        width=1_000_000,  # never fold the long OTTL statements onto multiple lines
+    )
+    return ArtifactResult(
+        artifact_type="collector_enrichment",
+        service_id=project_id,
+        output_path=_COLLECTOR_ENRICHMENT_PATH,
+        status="generated",
+        content=header + body,
     )
