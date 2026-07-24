@@ -276,6 +276,45 @@ def test_run_compose_malformed_topology_is_unknown_no_standup(tmp_path):
     assert "invalid --subject-compose topology" in r.standup["reason"]
 
 
+def test_run_compose_warm_up_passthrough(tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    topo = tmp_path / "topo.yaml"
+    topo.write_text(_COMPOSE_TOPO)
+    seen = {}
+
+    def fake_compose_standup(**kw):
+        seen["warmup"] = kw.get("warmup")
+        seen["warmup_count_metric"] = kw.get("warmup_count_metric")
+        return _compose_handle()
+
+    compare_live.run_live_comparison(
+        manifest=manifest, subject_compose=topo,
+        warm_up="smoke", warm_up_metric="traces_spanmetrics_calls_total",
+        compose_standup_fn=fake_compose_standup,
+        compose_teardown_fn=lambda h: None,
+        validate_fn=lambda **kw: _fidelity("pass", [_v("pass")]),
+        read_fr_coverage_fn=lambda p: {},
+    )
+    assert seen["warmup"].shape == "smoke"
+    assert seen["warmup_count_metric"] == "traces_spanmetrics_calls_total"
+
+
+def test_run_compose_invalid_warm_up_shape_is_unknown_no_standup(tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    topo = tmp_path / "topo.yaml"
+    topo.write_text(_COMPOSE_TOPO)
+
+    r = compare_live.run_live_comparison(
+        manifest=manifest, subject_compose=topo, warm_up="bogus",
+        compose_standup_fn=lambda **kw: (_ for _ in ()).throw(AssertionError("no standup on bad shape")),
+        read_fr_coverage_fn=lambda p: {},
+    )
+    assert r.status == "unknown"
+    assert "unknown --warm-up shape" in r.standup["reason"]
+
+
 def test_run_compose_keep_up_skips_teardown(tmp_path):
     manifest = tmp_path / "m.yaml"
     manifest.write_text("fr_coverage: {}\n")

@@ -213,6 +213,8 @@ def run_live_comparison(
     subject_image: Optional[str] = None,
     subject_port: int = 8080,
     subject_compose: Optional[Path] = None,
+    warm_up: Optional[str] = None,
+    warm_up_metric: Optional[str] = None,
     metrics_path: str = "/metrics",
     prometheus: Optional[str] = None,
     min_coverage: float = 1.0,
@@ -276,12 +278,25 @@ def run_live_comparison(
                 {"mode": "compose", "reason": f"invalid --subject-compose topology: {e}"},
                 strict_tier_a=strict_tier_a,
             )
+        warmup_spec = None
+        if warm_up:
+            if warm_up not in live_compose.warmup_traffic.VALID_SHAPES:
+                return build_live_comparison(
+                    comparison, None,
+                    {"mode": "compose", "reason": f"unknown --warm-up shape {warm_up!r} "
+                     f"(valid: {list(live_compose.warmup_traffic.VALID_SHAPES)})"},
+                    strict_tier_a=strict_tier_a,
+                )
+            warmup_spec = live_compose.warmup_traffic.WarmupSpec(shape=warm_up)
+
         c_handle: Optional[live_compose.ComposeStandupHandle] = None
         try:
             c_handle = _compose_standup(
                 topology=topology,
                 job_name=job_name,
                 auth=auth,
+                warmup=warmup_spec,
+                warmup_count_metric=warm_up_metric,
                 scrape_ready_check=live_standup.prometheus_query.scrape_ready,
             )
             if not c_handle.scrape_ready:

@@ -273,3 +273,84 @@ def test_teardown_hint_is_a_compose_down():
     assert "docker compose -p startd8-cmp-h1 down -v --remove-orphans" in hint
     assert handle.to_dict()["teardown_hint"] == hint
     assert handle.to_dict()["mode"] == "compose"
+
+
+# ── FR-8: warm-up traffic wired into the compose standup ────────────────────
+
+def test_compose_dict_publishes_ingress_when_requested():
+    topo = live_compose.parse_subject_topology(_MINIMAL)
+    compose = live_compose.generate_live_compose_dict(topo, publish_ingress=("web", 3000))
+    web = compose["services"]["web"]
+    assert web["networks"] == [live_compose.FLEET_NETWORK, live_compose.EDGE_NETWORK]
+    assert web["ports"] == ["127.0.0.1:0:3000"]
+    # non-ingress subject containers stay internal-only.
+    assert compose["services"]["db"]["networks"] == [live_compose.FLEET_NETWORK]
+
+
+def test_standup_warmup_drives_ingress_and_gates_on_terminal_success():
+    from startd8.observability import warmup_traffic
+
+    topo = live_compose.parse_subject_topology(_MINIMAL)
+    runner = FakeRunner()  # port subcommand returns 127.0.0.1:49153 for both prom + ingress
+    seen = {}
+
+    def fake_warmup(spec, *, ingress_url=None, addr_map=None):
+        seen["ingress_url"] = ingress_url
+        seen["shape"] = spec.shape
+        return warmup_traffic.WarmupOutcome(
+            driver=spec.shape, exercised=True, terminal_success=True, iterations=1
+        )
+
+    handle = live_compose.stand_up_compose_subject(
+        topology=topo,
+        run_id="w1",
+        warmup=warmup_traffic.WarmupSpec(shape="smoke"),
+        warmup_count_metric=None,  # driver-only gate (sample check unit-tested separately)
+        runner=runner,
+        scrape_ready_check=lambda url, job, auth=None: True,
+        series_count_check=lambda url, job, auth=None: 5.0,
+        poll_interval=0.0,
+        docker_available_fn=lambda: True,
+        warmup_fn=fake_warmup,
+    )
+    assert handle.scrape_ready is True
+    assert seen["ingress_url"] == "http://127.0.0.1:49153"
+    assert handle.warmup["terminal_success"] is True
+    # the compose published the metrics_service as an ingress.
+    compose_yaml = (handle.workdir / "docker-compose.yml").read_text()
+    assert "127.0.0.1:0:3000" in compose_yaml
+
+
+def test_standup_warmup_driver_cannot_exercise_is_unknown():
+    from startd8.observability import warmup_traffic
+
+    topo = live_compose.parse_subject_topology(_MINIMAL)
+    handle = live_compose.stand_up_compose_subject(
+        topology=topo, run_id="w2",
+        warmup=warmup_traffic.WarmupSpec(shape="smoke"),
+        runner=FakeRunner(),
+        scrape_ready_check=lambda url, job, auth=None: True,
+        series_count_check=lambda url, job, auth=None: 5.0,
+        poll_interval=0.0,
+        docker_available_fn=lambda: True,
+        warmup_fn=lambda spec, **kw: warmup_traffic.WarmupOutcome(
+            driver="smoke", exercised=False, reason="driver 'smoke' could not exercise the subject"
+        ),
+    )
+    assert handle.scrape_ready is False
+    assert "could not exercise" in handle.reason
+
+
+def test_standup_ob_grpc_warmup_is_deferred_unknown():
+    from startd8.observability import warmup_traffic
+
+    topo = live_compose.parse_subject_topology(_MINIMAL)
+    handle = live_compose.stand_up_compose_subject(
+        topology=topo, run_id="w3",
+        warmup=warmup_traffic.WarmupSpec(shape="ob-grpc"),
+        runner=FakeRunner(),
+        docker_available_fn=lambda: True,
+        warmup_fn=lambda spec, **kw: (_ for _ in ()).throw(AssertionError("grpc must not drive host-side")),
+    )
+    assert handle.scrape_ready is False
+    assert "not host-drivable" in handle.reason
