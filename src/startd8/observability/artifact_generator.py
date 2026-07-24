@@ -88,6 +88,7 @@ from .artifact_generator_generators import (  # noqa: F401
     _severity_for,
     generate_alert_rules,
     generate_capability_index,
+    generate_collector_enrichment,
     generate_dashboard_spec,
     generate_loki_rule,
     generate_notification_policy,
@@ -798,6 +799,18 @@ def generate_observability_artifacts(
         # Both additive/opt-in; the renderers are taxonomy-free (the _stamp_taxonomy pass stamps them).
         report.artifacts.append(render_domain_alert_rules(_spec, project_id=_pid))
         report.artifacts.append(render_domain_dashboard(_spec, project_id=_pid))
+
+    # collector_enrichment (REQ_COLLECTOR_ENRICHMENT FR-3): the OTTL transform/business processor,
+    # sourced from per-service hint["business"] (FR-1b). PRESENCE-gated (not declaration-gated): the
+    # generator self-skips when no service carries business context, so a manifest without business
+    # context is byte-identical to a pre-feature run (SOTTO). Runs before capability_index so the
+    # inventory can include it.
+    try:
+        _ce = generate_collector_enrichment(services, business, report)
+        if _ce.status != "skipped":
+            report.artifacts.append(_ce)
+    except Exception:
+        logger.exception("collector_enrichment generation failed")
 
     # Closure 3B: project-level capability index runs last so its inventory
     # reflects every artifact produced this run (triplet + extended + dashboard

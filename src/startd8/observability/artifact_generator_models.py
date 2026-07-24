@@ -168,6 +168,14 @@ class ServiceHints:
     # (prometheus|loki|tempo). {} => fall back to today's name-based binding (FR-7).
     # Consumed by the dashboard renderer to emit `datasource: {type, uid}`.
     datasource_uids: Dict[str, str] = field(default_factory=dict)
+    # collector_enrichment FR-1b (REQ_COLLECTOR_ENRICHMENT): per-service business context,
+    # ALREADY resolved (per-target over project, field-by-field) by the ContextCore producer and
+    # forwarded on instrumentation_hints[svc].business = {criticality?, owner?}. Consumed only by
+    # generate_collector_enrichment to source the OTTL transform/business processor. Absent ⇒
+    # ""/None ⇒ the service contributes no enrichment statement (byte-identical to pre-feature).
+    # No SDK-side project fallback (the producer already applied it — NR-2).
+    criticality: str = ""
+    owner: Optional[str] = None
 
 
 @dataclass

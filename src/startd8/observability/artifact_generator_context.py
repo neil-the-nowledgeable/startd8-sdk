@@ -42,6 +42,10 @@ _ARTIFACT_TYPE_REGISTRY: Dict[str, ArtifactTypeSpec] = {
         ArtifactTypeSpec("runbook", "runbook", Category.SERVICE.value, Orientation.HUMAN.value, True, 70),
         # Project-level artifacts (consumers — emitted after per-service rows).
         ArtifactTypeSpec("capability_index", "capability_index", Category.PROJECT.value, Orientation.HUMAN.value, False, 80),
+        # collector_enrichment (REQ_COLLECTOR_ENRICHMENT FR-2): the OTTL transform/business processor.
+        # PROJECT/SYSTEM (a machine-consumed collector config). requires_declaration=False — gating is
+        # PRESENCE-based (emitted iff ≥1 service carries business context), not declaration-based.
+        ArtifactTypeSpec("collector_enrichment", "collector_enrichment", Category.PROJECT.value, Orientation.SYSTEM.value, False, 85),
         ArtifactTypeSpec("onboarding_portal", "portal", Category.PROJECT.value, Orientation.HUMAN.value, True, 90),
     ]
 }
@@ -468,6 +472,13 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
             str(k): str(v) for k, v in datasource_uids.items() if isinstance(v, str) and v.strip()
         }
 
+        # collector_enrichment FR-1b: per-service business context, forwarded under
+        # hint["business"] = {criticality?, owner?} (already resolved target-over-project by
+        # the ContextCore producer). Absent/malformed ⇒ ""/None ⇒ no enrichment statement.
+        _biz = hint.get("business")
+        if not isinstance(_biz, dict):
+            _biz = {}
+
         services.append(
             ServiceHints(
                 service_id=svc_id,
@@ -489,6 +500,9 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 metric_profile=metric_profile,
                 descriptor_overrides=descriptor_overrides,
                 datasource_uids=datasource_uids,
+                # collector_enrichment FR-1b — raw, producer-resolved per-service business.
+                criticality=str(_biz.get("criticality") or ""),
+                owner=(_biz.get("owner") or None),
             )
         )
 
