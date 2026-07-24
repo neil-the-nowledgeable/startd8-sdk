@@ -67,7 +67,17 @@ def promote_probe_slo(entry: Dict[str, Any], slo_window: str = "30d") -> Dict[st
     """#308 P2 (FR-P2-2): build a real OpenSLO doc from a live-confirmed `pending_probes` entry — using the
     ALREADY-RECORDED ``query``/``target`` (Mottainai: no re-derivation; the promoted PromQL == the P0
     string, so ``validate_promql`` self-heals off it). Caller gates promotion on live confirmation +
-    ≥2 warm-up scrapes (NR-5); this is the pure builder."""
+    ≥2 warm-up scrapes (NR-5); this is the pure builder.
+
+    Raises ``ValueError`` if *entry* carries no ``query`` — a query-less pending record (an unsupported
+    metric_kind/signal_kind, which ``pending_probe_verdicts`` also filters out) is not promotable; fail
+    loudly rather than emit a malformed SLO with a missing indicator query."""
+    query = entry.get("query")
+    if not query:
+        raise ValueError(
+            f"cannot promote probe {entry.get('name')!r} for {entry.get('service')!r}: the "
+            f"pending_probes entry has no grounded query (unbindable metric_kind/signal_kind)"
+        )
     svc, name = entry.get("service", "svc"), entry.get("name", "probe")
     slug = f"{svc}-{name}".lower().replace("_", "-")
     spec: Dict[str, Any] = {
@@ -75,7 +85,7 @@ def promote_probe_slo(entry: Dict[str, Any], slo_window: str = "30d") -> Dict[st
         "timeWindow": {"duration": slo_window, "isRolling": True},
         "indicator": {"metadata": {"name": f"{slug}-probe-sli"},
                       "spec": {"thresholdMetric": {"metricSource": {
-                          "type": "prometheus", "spec": {"query": entry["query"]}}}}},
+                          "type": "prometheus", "spec": {"query": query}}}}},
     }
     if entry.get("target") is not None:
         spec["target"] = entry["target"]
