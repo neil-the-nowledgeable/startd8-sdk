@@ -92,6 +92,13 @@ class TestP2Verdict:
         assert slo["spec"]["target"] == "5"
         assert slo["metadata"]["name"] == "web-fanout-probe"
 
+    def test_fr_p2_2_promotion_of_queryless_entry_raises(self):
+        # code-review M1: a query-less pending entry (unbindable kind) must fail loudly, not KeyError.
+        import pytest
+        with pytest.raises(ValueError, match="no grounded query"):
+            _cl.promote_probe_slo({"service": "web", "name": "x",
+                                   "reason_code": "probe_unsupported_metric_kind"})
+
 
 # --- P3: link-aware pure delta core (validation trace-gated / external) ---
 
