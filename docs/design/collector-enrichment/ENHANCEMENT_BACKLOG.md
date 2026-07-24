@@ -99,3 +99,33 @@ generator's zero-derivation output.)*
 - **Runbook owner precedence: structured `business.owners` before per-service `service.owner`** — a
   product decision (structured escalation contacts are the actionable "who to page"); per-service owner is
   a fallback enrichment. Revisit only if per-service ownership should override project escalation.
+
+---
+
+## End-user-value pass (2026-07-24, round 2)
+
+> A value/ease-of-use lens after the plumbing was complete. Grounding corrected two going-in
+> assumptions: EC-2 only did the *emit* half (the dimension had **no generated consumer**), and
+> per-service `owner` does **not** drive alert routing (`notification_policy` is project-level only).
+
+- **RV-1 — business-criticality dashboard (consume the dimension).** ✅ **DELIVERED**.
+  `generate_business_criticality_dashboard` emits a project-level `dashboard_spec` with "request rate"
+  + "error ratio" panels grouped `by (business_criticality)` (grounded error selector
+  `status_code="STATUS_CODE_ERROR"`, `metric_descriptor.py:147`). Presence-gated on criticality; scored
+  like siblings; renders to `grafana/dashboards/business-criticality-dashboard.json`. Closes EC-2's loop
+  — an operator sees business impact ranked out of the box instead of hand-writing the PromQL. **M.**
+- **RV-2 — business-context completeness feedback.** ✅ **DELIVERED**. The generator computes
+  `services_missing` (all services − enriched) into `fr_coverage` + the index summary, and the wiring
+  logs a `WARNING` naming the un-tagged services — so an operator completes their manifest instead of
+  discovering the gap during an incident. Surfaced only on partial-adoption (≥1 tagged), never on a
+  fully-off project. **S.**
+- **RV-3 — `owner` → alert routing (enhanced capability, NOT built).** `service.owner` rides on
+  `ServiceHints` but `generate_notification_policy` routes only by project-level `routing_channels()`.
+  Auto-routing a service's alert to its owning team needs a new `owner → channel` map (manifest config).
+  Genuine value (right team paged), bigger lift. **M/L, deferred** (needs new config).
+
+### Round-2 appendix
+- **Owner soft-rule warning** — `collector_enrichment_validation.py` has no email check; a `warning` when
+  an owner looks like a personal email would enforce the R2-F1 soft rule SDK-side. Low value. **XS.**
+- **`enrichment-parity` in the generated CI section** — surface the parity command in a CI checklist so
+  operators know to run it before cutover. **XS.**

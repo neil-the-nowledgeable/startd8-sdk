@@ -888,3 +888,153 @@ class TestLH2Legibility:
         )
         index = _yaml.safe_load((out / "observability-manifest.yaml").read_text())
         assert "collector_enrichment" not in index["summary"]
+
+
+# ============================ Round-2 #2: completeness (services_missing) ============================
+
+
+class TestCompletenessGap:
+    def test_missing_services_surfaced(self):
+        services = [
+            ServiceHints(service_id="a", service_name="a", criticality="critical"),
+            ServiceHints(service_id="b", service_name="b"),  # no business context
+            ServiceHints(service_id="c", service_name="c", owner="team"),
+        ]
+        rep = _report()
+        generate_collector_enrichment(services, BusinessContext(), rep)
+        cov = rep.fr_coverage["collector_enrichment"]
+        assert cov["services_missing"] == ["b"]
+        assert cov["services_enriched"] == 2
+
+    def test_no_missing_when_all_tagged(self):
+        services = [
+            ServiceHints(service_id="a", service_name="a", criticality="high"),
+            ServiceHints(service_id="b", service_name="b", criticality="low"),
+        ]
+        rep = _report()
+        generate_collector_enrichment(services, BusinessContext(), rep)
+        assert rep.fr_coverage["collector_enrichment"]["services_missing"] == []
+
+    def test_missing_in_index_summary(self, tmp_path):
+        import json
+
+        import yaml as _yaml
+
+        from startd8.observability.artifact_generator import (
+            generate_observability_artifacts,
+        )
+
+        meta = {
+            "instrumentation_hints": {
+                "cart": {
+                    "transport": "grpc",
+                    "service_name": "cart",
+                    "business": {"criticality": "critical"},
+                },
+                "adsvc": {"transport": "grpc", "service_name": "adsvc"},
+            },
+            "declared_artifact_types": [],
+        }
+        mp = tmp_path / "onboarding.json"
+        out = tmp_path / "out"
+        mp.write_text(json.dumps(meta))
+        generate_observability_artifacts(
+            onboarding_metadata_path=mp, output_dir=out, dry_run=False
+        )
+        idx = _yaml.safe_load((out / "observability-manifest.yaml").read_text())
+        assert idx["summary"]["collector_enrichment"]["services_missing"] == ["adsvc"]
+
+
+# ============================ Round-2 #1: business-criticality dashboard ============================
+
+
+class TestBusinessCriticalityDashboard:
+    def test_generated_when_criticality_present(self):
+        from startd8.observability.artifact_generator_generators import (
+            generate_business_criticality_dashboard,
+        )
+
+        r = generate_business_criticality_dashboard(
+            [ServiceHints(service_id="a", service_name="a", criticality="critical")],
+            BusinessContext(),
+            _report(),
+        )
+        assert r.status == "generated"
+        assert r.artifact_type == "dashboard_spec"
+        doc = yaml.safe_load(r.content)
+        assert doc["uid"] == "obs-business-criticality"
+        exprs = " ".join(p["expr"] for p in doc["panels"])
+        assert "by (business_criticality)" in exprs
+        assert 'status_code="STATUS_CODE_ERROR"' in exprs  # grounded error selector
+
+    def test_skipped_without_criticality(self):
+        from startd8.observability.artifact_generator_generators import (
+            generate_business_criticality_dashboard,
+        )
+
+        r = generate_business_criticality_dashboard(
+            [
+                ServiceHints(service_id="a", service_name="a", owner="team")
+            ],  # owner only, no criticality
+            BusinessContext(),
+            _report(),
+        )
+        assert r.status == "skipped"
+
+    def test_end_to_end_emits_and_renders(self, tmp_path):
+        import json
+
+        from startd8.observability.artifact_generator import (
+            generate_observability_artifacts,
+        )
+
+        meta = {
+            "instrumentation_hints": {
+                "cart": {
+                    "transport": "grpc",
+                    "service_name": "cart",
+                    "business": {"criticality": "critical"},
+                },
+            },
+            "declared_artifact_types": [],
+        }
+        mp = tmp_path / "onboarding.json"
+        out = tmp_path / "out"
+        mp.write_text(json.dumps(meta))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=mp, output_dir=out, dry_run=False
+        )
+        specs = [
+            a
+            for a in report.artifacts
+            if a.output_path.endswith("business-criticality-dashboard-spec.yaml")
+        ]
+        assert len(specs) == 1 and specs[0].quality is not None  # scored like siblings
+        # rendered to deployable Grafana JSON
+        assert (
+            out / "grafana" / "dashboards" / "business-criticality-dashboard.json"
+        ).exists()
+
+    def test_absent_when_no_business_context(self, tmp_path):
+        import json
+
+        from startd8.observability.artifact_generator import (
+            generate_observability_artifacts,
+        )
+
+        meta = {
+            "instrumentation_hints": {
+                "cart": {"transport": "grpc", "service_name": "cart"}
+            },
+            "declared_artifact_types": [],
+        }
+        mp = tmp_path / "onboarding.json"
+        mp.write_text(json.dumps(meta))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=mp, output_dir=tmp_path / "out", dry_run=True
+        )
+        assert not [
+            a
+            for a in report.artifacts
+            if a.output_path.endswith("business-criticality-dashboard-spec.yaml")
+        ]
