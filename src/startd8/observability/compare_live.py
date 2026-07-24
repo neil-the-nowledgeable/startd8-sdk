@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from . import live_standup
+from . import live_compose, live_standup
 from .compare import ComparisonReport, build_comparison_report, read_fr_coverage
 from .prometheus_query import Auth
 from .validate_promql import FidelityReport, run_validation
@@ -212,6 +212,7 @@ def run_live_comparison(
     artifacts_dir: Optional[Path] = None,
     subject_image: Optional[str] = None,
     subject_port: int = 8080,
+    subject_compose: Optional[Path] = None,
     metrics_path: str = "/metrics",
     prometheus: Optional[str] = None,
     min_coverage: float = 1.0,
@@ -223,21 +224,27 @@ def run_live_comparison(
     # injectable seams (FR-10) — mirror bind_and_verify / run_validation.
     standup_fn: Optional[Callable[..., live_standup.StandupHandle]] = None,
     teardown_fn: Optional[Callable[..., None]] = None,
+    compose_standup_fn: Optional[Callable[..., live_compose.ComposeStandupHandle]] = None,
+    compose_teardown_fn: Optional[Callable[..., None]] = None,
     validate_fn: Optional[Callable[..., FidelityReport]] = None,
     read_fr_coverage_fn: Optional[Callable[[Path], Dict[str, Any]]] = None,
 ) -> LiveComparisonReport:
     """Orchestrate: Tier A (static) + Tier B (live) → one merged report.
 
-    Two Tier-B backends:
+    Three Tier-B backends (precedence: prometheus > subject_compose > subject_image):
     * ``prometheus=<url>`` — replay against an already-running backend (skip
-      standup). This is the multi-container / Mastodon path (NR-1) and is $0-docker.
-    * ``subject_image=<image>`` — stand up the subject + Prometheus, wait for a
+      standup). This is the Mastodon path and is $0-docker.
+    * ``subject_compose=<file>`` — stand up a **multi-container** subject topology
+      (Inc-1, ``live_compose``) + Prometheus, wait for a scrape, then replay.
+    * ``subject_image=<image>`` — stand up a single subject + Prometheus, wait for a
       scrape, then replay. Teardown always runs in ``finally`` unless ``--keep-up``.
     """
     _read = read_fr_coverage_fn or read_fr_coverage
     _validate = validate_fn or run_validation
     _standup = standup_fn or live_standup.stand_up_subject_and_prometheus
     _teardown = teardown_fn or live_standup.tear_down
+    _compose_standup = compose_standup_fn or live_compose.stand_up_compose_subject
+    _compose_teardown = compose_teardown_fn or live_compose.tear_down_compose
     auth = auth if auth is not None else Auth.from_env()
 
     comparison = build_comparison_report(_read(manifest))
@@ -258,7 +265,42 @@ def run_live_comparison(
             strict_tier_a=strict_tier_a,
         )
 
-    # ── Path 2: stand up subject + Prometheus ──────────────────────────────
+    # ── Path 2: stand up a multi-container subject topology (Inc-1) ─────────
+    if subject_compose:
+        try:
+            topology = live_compose.parse_subject_topology(Path(subject_compose).read_text(encoding="utf-8"))
+        except live_compose.TopologyError as e:
+            # Fail-loud (FR-5): a malformed topology is `unknown`, never a partial standup.
+            return build_live_comparison(
+                comparison, None,
+                {"mode": "compose", "reason": f"invalid --subject-compose topology: {e}"},
+                strict_tier_a=strict_tier_a,
+            )
+        c_handle: Optional[live_compose.ComposeStandupHandle] = None
+        try:
+            c_handle = _compose_standup(
+                topology=topology,
+                job_name=job_name,
+                auth=auth,
+                scrape_ready_check=live_standup.prometheus_query.scrape_ready,
+            )
+            if not c_handle.scrape_ready:
+                return build_live_comparison(comparison, None, c_handle.to_dict(), strict_tier_a=strict_tier_a)
+
+            fidelity = _validate(
+                artifacts_dir=artifacts_dir,
+                onboarding_metadata=onboarding_metadata,
+                prometheus_url=c_handle.prometheus_url,
+                min_coverage=min_coverage,
+                allow_prod=allow_prod,
+                auth=auth,
+            )
+            return build_live_comparison(comparison, fidelity, c_handle.to_dict(), strict_tier_a=strict_tier_a)
+        finally:
+            if c_handle is not None and not keep_up:
+                _compose_teardown(c_handle)
+
+    # ── Path 3: stand up a single subject image + Prometheus ───────────────
     if not subject_image:
         return build_live_comparison(
             comparison, None,
