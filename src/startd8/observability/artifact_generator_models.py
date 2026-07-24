@@ -84,6 +84,36 @@ class DeclaredSpanSignal:
 
 
 @dataclass
+class DeclaredProbe:
+    """An author-declared SYNTHETIC PROBE for a signal the subject emits no metric for (#308 P0 / option-b2).
+
+    Grounds a *derive-value* SLI — e.g. Mastodon fan-out freshness (create-status → feed-visible latency),
+    which is cross-trace (``propagation_style: :link``) so neither a scrape (#286) nor a span-metrics
+    connector (#307) can produce it. The author declares the probe SHAPE (do X, poll until Y, measure the
+    delta); the threshold stays inferred. **P0 is static/$0**: it records the derived SLO in
+    ``pending_probes`` (no SLO YAML on disk — a query on the not-yet-published metric would be replayed as a
+    dead SLI); the runner + live binding are P1/P2. ``action``/``poll``/``assert_`` are carried opaque (P0
+    never executes them). Carried on ``instrumentation_hints[svc].metrics.declared_probes``."""
+
+    name: str  # probe id, e.g. "fanout_freshness" (drives the default metric probe_<name>_seconds)
+    action: str = ""     # opaque: the request that triggers the behaviour (P1 runs it), e.g. POST /statuses
+    poll: str = ""       # opaque: what to poll until the assertion holds, e.g. GET /timelines/home
+    assert_: str = ""    # opaque: the assertion that ends the measurement (id visible)
+    measure: str = ""    # opaque: what delta is measured, e.g. t(visible) - t(created)
+    interval: str = "60s"
+    timeout: str = "30s"
+    #: v1 = "freshness" only; any other kind defers (no query shape defined for a synthetic availability yet).
+    signal_kind: str = "freshness"
+    #: the metric the runner (P1) will publish + the SLI (P0) queries — single-sourced. Empty ⇒ default
+    #: ``probe_<name>_seconds``. For a histogram probe the runner publishes ``<published_metric>_bucket``.
+    published_metric: str = ""
+    #: closed enum ``gauge|histogram`` — the query shape; any other value defers (never a fabricated query).
+    metric_kind: str = "gauge"
+    #: author SLO objective; absent ⇒ threshold-deferred (the SDK never infers a freshness threshold, NR-1).
+    target: Optional[str] = None
+
+
+@dataclass
 class ServiceHints:
     """Instrumentation hints for a single service."""
 
@@ -124,6 +154,9 @@ class ServiceHints:
     # #307 / REQ-CCL-109: author-declared SPAN signals whose span-metrics RED an SLI can bind to
     # (span_name + covers). The trace-surface analogue of declared_emitted_series; explicit-only.
     declared_span_signals: List[DeclaredSpanSignal] = field(default_factory=list)
+    # #308 P0: author-declared synthetic probes for a signal the subject emits no metric for
+    # (fan-out freshness). Recorded as pending_probes (P0 is static/$0); explicit-only.
+    declared_probes: List[DeclaredProbe] = field(default_factory=list)
     # Target metric binding (REQ_TARGET_METRIC_BINDING FR-2/FR-3/FR-6): the
     # effective convention profile ContextCore resolved for this service, plus
     # any per-axis descriptor overrides. "" / {} => fall back to the transport

@@ -14,10 +14,12 @@ from startd8.observability.artifact_generator import (
     BusinessContext,
     ConventionMetric,
     DeclaredEmittedSeries,
+    DeclaredProbe,
     DeclaredSpanSignal,
     FunctionalRequirement,
     ServiceHints,
     generate_declared_functional_slos,
+    generate_declared_probe_slos,
     generate_declared_span_slos,
     generate_functional_slos,
     generate_observability_artifacts,
@@ -904,6 +906,84 @@ class TestDeclaredSpanSignalBinding:
         text = _compare.render_report(report)
         assert "Bound span-metrics SLIs on declared spans" in text
         assert "latency → FeedInsertWorker" in text
+
+
+class TestDeclaredProbeP0:
+    """#308 P0 — a declared synthetic probe records a freshness SLI PENDING a runner (static, $0);
+    NO slos/ file is written. Spec: SYNTHETIC_PROBE_P0_REQUIREMENTS.md v0.4."""
+
+    def _svc(self, probes):
+        return ServiceHints(service_id="web", service_name="mastodon/web", transport="http",
+                            kinds=["http_server"], declared_probes=probes)
+
+    def _run(self, probes):
+        return generate_declared_probe_slos(self._svc(probes), BusinessContext())
+
+    def test_fr2_writes_no_slo_file_records_pending(self):
+        # R1-F1: P0 emits NO SLO YAML (would be a dead-SLI leak); the SLO lives in pending_probes.
+        r = self._run([DeclaredProbe(name="fanout_freshness")])
+        assert r.status == "skipped" and r.content == "" and r.output_path == ""
+        p = r.quality["pending_probes"][0]
+        assert p["reason_code"] == "probe_pending_no_runner"
+        assert p["threshold_deferred"] is True  # no target
+
+    def test_fr3_gauge_query_is_service_scoped_default_metric(self):
+        p = self._run([DeclaredProbe(name="fanout_freshness")]).quality["pending_probes"][0]
+        assert p["query"] == 'max(probe_fanout_freshness_seconds{service="web"})'
+        assert p["published_metric"] == "probe_fanout_freshness_seconds"
+
+    def test_fr3_histogram_query_appends_bucket(self):
+        # R1-F4: histogram → quantile shape appends _bucket (P1 runner must publish the _bucket family).
+        p = self._run([DeclaredProbe(name="fanout", metric_kind="histogram",
+                                     published_metric="probe_fanout_seconds")]).quality["pending_probes"][0]
+        assert "probe_fanout_seconds_bucket" in p["query"] and "histogram_quantile" in p["query"]
+
+    def test_fr4_authored_target_recorded_not_deferred(self):
+        p = self._run([DeclaredProbe(name="fanout_freshness", target="5")]).quality["pending_probes"][0]
+        assert p["target"] == "5"
+        assert "threshold_deferred" not in p
+
+    def test_fr5_unsupported_metric_kind_defers_no_query(self):
+        p = self._run([DeclaredProbe(name="x", metric_kind="counter")]).quality["pending_probes"][0]
+        assert p["reason_code"] == "probe_unsupported_metric_kind"
+        assert "query" not in p
+
+    def test_fr1_non_freshness_signal_kind_defers(self):
+        p = self._run([DeclaredProbe(name="x", signal_kind="availability")]).quality["pending_probes"][0]
+        assert p["reason_code"] == "probe_unsupported_signal_kind"
+        assert "query" not in p
+
+    def test_fr6_no_probes_is_skipped_no_key(self):
+        r = self._run([])
+        assert r.status == "skipped" and r.quality == {}
+
+    def test_fr7_end_to_end_static_positive_finding(self, tmp_path):
+        # FR-7: a declared probe with no runner → a pending_probes entry + a "Pending probes" render
+        # section + NO slos/ probe file, all $0. And it does NOT count as a divergence/gap.
+        hint = {"service_id": "web", "service_name": "mastodon/web", "kind": "http_server",
+                "transport": "http", "traces": True, "metrics_surface": "traces_only",
+                "metrics": {"convention_based": [{"name": "http.server.duration", "type": "histogram",
+                                                  "source": "otel_semconv:http"}],
+                            "declared_probes": [{"name": "fanout_freshness",
+                                                 "action": "POST /api/v1/statuses",
+                                                 "poll": "GET /api/v1/timelines/home",
+                                                 "assert": "status id present"}]}}
+        m = tmp_path / "onboarding-metadata.json"
+        m.write_text(json.dumps({"project_id": "p", "instrumentation_hints": {"web": hint}}))
+        report = generate_observability_artifacts(onboarding_metadata_path=m,
+                                                  output_dir=tmp_path / "out", dry_run=False)
+        pend = report.fr_coverage["pending_probes"]
+        assert any(e["name"] == "fanout_freshness" and e["query"] for e in pend)
+        # no probe SLO file on disk (R1-F1)
+        assert not list((tmp_path / "out" / "slos").glob("*probe*")) if (tmp_path / "out" / "slos").exists() else True
+        # compare surfaces it as its own positive section, NOT a gap.
+        crep = _compare.build_comparison_report(report.fr_coverage)
+        assert crep.to_dict()["pending_count"] >= 1
+        text = _compare.render_report(crep)
+        assert "Pending probes" in text
+        di = text.find("Divergence")
+        pi = text.find("Pending probes")
+        assert pi != -1 and (di == -1 or pi < di)  # pending shown before/outside Divergence
 
 
 class TestServiceMonitorScrapeSurfaceGate:

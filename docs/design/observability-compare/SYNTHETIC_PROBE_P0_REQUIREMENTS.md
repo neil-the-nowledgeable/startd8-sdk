@@ -1,8 +1,10 @@
 # Synthetic-Probe SLI — P0 (declaration + static freshness SLO, $0) — Requirements
 
-**Version:** 0.4 (post CRP Round 1 — 10 suggestions + adversarial, all applied; ready to implement)
+**Version:** 0.4 (post CRP Round 1 — 10 suggestions + adversarial, all applied)
 **Date:** 2026-07-23
-**Status:** Draft — spec only, no code
+**Status:** IMPLEMENTED (2026-07-23) — `DeclaredProbe` + parse + `generate_declared_probe_slos` (writes NO
+slos/ file; records `pending_probes`) + `compare.py` pending section + 8 tests. v1 = freshness/gauge|histogram.
+P1–P3 (runner spec, live binding, link-aware) remain in the design doc.
 **Owner:** observability artifact generator (`src/startd8/observability/`)
 **GitHub:** startd8-sdk **#308** (option-b2), **Phase P0** only · ContextCore probe-carry to follow
 **Refs:** design doc `SYNTHETIC_PROBE_SLI_DESIGN.md` (the P0–P3 frame), #300 D2 (threshold-deferral —
