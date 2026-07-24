@@ -130,14 +130,14 @@ already exists).
 ## Top findings (do these first)
 
 **1. [Built-but-unwired] The P2 `pending_probe` verdict is synthesized by a tested function that nothing
-calls.** `pending_probe_verdicts()` (`compare_live.py`) and `promote_probe_slo()` have **zero callers** in
-`src/`/`scripts/` (confirmed by grep, both ends). `build_live_comparison` — which **already receives
-`comparison.pending`** — never merges the synthesized verdicts into `tier_b`, so a `compare-live` run's
-Tier-B verdict list never shows pending probes (they appear only in Tier-A). The plumbing is *in hand*:
-wire `pending_probe_verdicts(comparison.pending-or-fr_coverage)` into `build_live_comparison` and append to
-`tier_b["verdicts"]` (excluded from `fail_verdicts`/coverage, as FR-P2-1 specifies) → so a live report's
-verdict roll-up is complete and an operator sees *"N freshness SLIs pending a runner"* next to the real
-verdicts. **Effort: XS–S.** *(Not "broken" — pending probes already show in Tier-A; this completes the
+calls.** — ✅ **DELIVERED 2026-07-23** (EC-1): `build_live_comparison` now synthesizes the pending verdicts
+from `comparison.pending` and merges them into `tier_b["verdicts"]` + a new `pending_verdicts` field
+(`--json` `report_version` bumped 1→2); `render_live_report` shows a distinct "Pending probes" block. They
+are `pending_probe` (severity 0) — never in `fail_verdicts`/coverage, so they can't flip the gate. +4 tests.
+`promote_probe_slo()` remains uncalled by design — its surface is the P2-live `--promote-probes` flag (EC-3).
+Original finding: `pending_probe_verdicts()` had **zero callers**; `build_live_comparison` — which already
+received `comparison.pending` — never merged them, so a `compare-live` run's Tier-B list never showed pending
+probes (they appeared only in Tier-A). *(Not "broken" — Tier-A already showed them; this completed the
 Tier-B surface the P2 function was built for.)*
 
 **2. [Enhanced capability] `--promote-probes` — the promotion builder exists; the CLI surface that fires it
@@ -152,8 +152,8 @@ confirmed metric, writes the promoted SLO. **Effort: M** (part of it is external
 <details><summary>Bucketed backlog (draw from over later increments)</summary>
 
 ### ⚡ Quick wins
-- **EC-1 — Wire `pending_probe_verdicts` into `build_live_comparison`** (Top finding 1). `comparison.pending`
-  is already the input; append to `tier_b["verdicts"]`, add a count to `_rollup_reason`. **XS–S.**
+- **EC-1 — Wire `pending_probe_verdicts` into `build_live_comparison`** — ✅ **DELIVERED** (Top finding 1);
+  merged into `tier_b["verdicts"]` + `pending_verdicts` field + a distinct render block. **XS–S.**
 - **EC-2 — A "Pending probes" count in the live rollup reason.** `_rollup_reason` (`compare_live.py`) names
   dead SLIs but not pending probes; add *"· M pending probe(s)"* so a green run still advertises the
   derive-value finding. **XS.**
@@ -193,4 +193,4 @@ confirmed metric, writes the promoted SLO. **Effort: M** (part of it is external
 
 | Item | Now | Gate to next | Value if closed |
 |------|-----|--------------|-----------------|
-| P2 `pending_probe` verdict wiring | **L2** (built + unit-tested; **zero callers** — orphaned pure fn) | L3 = `build_live_comparison` calls `pending_probe_verdicts` and merges into `tier_b["verdicts"]`, excluded from `fail_verdicts`/coverage; +1 integration test asserting a pending entry appears in a live report's Tier-B | a `compare-live` run's verdict roll-up is complete — pending probes surface as Tier-B verdicts, not only in Tier-A |
+| P2 `pending_probe` verdict wiring | **L3 ✅ DELIVERED** (EC-1, 2026-07-23) — wired into `build_live_comparison`, merged into `tier_b["verdicts"]` + `pending_verdicts` field, rendered distinctly; +4 tests | L4/L5 = live-proven on a real run once a probe runner exists (P2-live, external) | done: a `compare-live` run's Tier-B roll-up is complete — pending probes surface as Tier-B verdicts, not only in Tier-A |
