@@ -75,10 +75,10 @@ generator's zero-derivation output.)*
   `transform/*` consumer exists yet → duplication-of-one is correct; **do not pre-abstract.** **M, deferred.**
 
 ### 🚀 Enhanced capabilities
-- **EC-3 — `enrichment-parity` against a LIVE collector.** Today the CLI diffs two files. A `--live-config
-  <url>` that pulls a running collector's effective config (zpages/config endpoint) would let an operator
-  verify the *deployed* processor, not just a file. Justified by the parity parser already being
-  transport-agnostic (it takes YAML text). **M.**
+- **EC-3 — `enrichment-parity` against a LIVE/deployed collector.** ✅ **DELIVERED** as `--reference-cmd`
+  (not `--live-config` — grounding: stock otelcol-contrib exposes no config-over-HTTP endpoint, but the
+  deployed config IS fetchable from a ConfigMap/host file). The command's stdout is the reference; mutually
+  exclusive with `--reference`; non-zero/timeout ⇒ exit 2. Rode the already transport-agnostic parser. **S–M.**
 - **EC-4 — single-source the dimension name.** The spanmetrics dimension is the hardcoded literal
   `business.criticality` in **two** places now (generator connectors block + `runtime_fidelity` seam
   default). If a 3rd business attr ever becomes a dimension, that's a 2-site edit. Single-source it when
