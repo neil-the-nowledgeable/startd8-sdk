@@ -25,6 +25,7 @@ class MockAgent(BaseAgent):
         timeout_config: Optional["TimeoutConfig"] = None,
         retry_config: Optional["RetryConfig"] = None,
         system_prompt: Optional[str] = None,
+        error: "Optional[BaseException | type[BaseException]]" = None,
         **kwargs,
     ):
         """
@@ -36,18 +37,32 @@ class MockAgent(BaseAgent):
             timeout_config: Optional timeout configuration (stored for inspection)
             retry_config: Optional retry configuration (stored for inspection)
             system_prompt: Optional system prompt (stored for inspection/testing)
+            error: Optional error-injection. When set, every generation call
+                (``agenerate`` / ``agenerate_tools`` / ``agenerate_tools_stream``) raises it,
+                so tests can exercise real failure paths. Accepts an exception instance
+                (raised as-is) or an exception class (instantiated). Default ``None`` =
+                no error, behavior unchanged.
             **kwargs: Additional keyword arguments (ignored)
         """
         super().__init__(name, model)
         self.timeout_config = timeout_config
         self.retry_config = retry_config
         self.system_prompt = system_prompt
+        self.error = error
         # FR-0a: a queue of scripted AgenticTurns the tool-use loop consumes one-per-call.
         # Pass `tool_turns=[...]` to drive a multi-turn loop deterministically in tests.
         self._scripted_tool_turns: list = list(kwargs.get("tool_turns") or [])
         self.tool_calls_received: list = []  # records messages passed to each agenerate_tools call
         # FR-S0a: when True, supports_streaming() reports True and agenerate_tools_stream is used.
         self.streaming: bool = bool(kwargs.get("streaming", False))
+
+    def _maybe_raise(self) -> None:
+        """Injected-error support. If constructed with ``error=``, raise it on every generation call so
+        tests can exercise real failure paths (an exception instance is raised as-is; an exception class
+        is instantiated). A no-op when ``error is None`` — so default MockAgent behavior is unchanged."""
+        if self.error is None:
+            return
+        raise self.error if isinstance(self.error, BaseException) else self.error()
 
     async def agenerate(
         self,
@@ -64,6 +79,7 @@ class MockAgent(BaseAgent):
             max_tokens: Optional per-call max_tokens override (accepted for
                 API compatibility; does not affect mock output).
         """
+        self._maybe_raise()  # error-injection (constructor error=)
         # Resolve system prompt: call-level overrides instance-level
         effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
         # Store for test inspection
@@ -130,6 +146,7 @@ class MockAgent(BaseAgent):
         Pops the next pre-loaded :class:`AgenticTurn` from ``tool_turns`` (set at construction). When
         the queue is exhausted, returns a terminal final-text turn with no tool calls.
         """
+        self._maybe_raise()  # error-injection (constructor error=)
         await asyncio.sleep(0)  # keep the coroutine genuinely async without test latency
         self.tool_calls_received.append(self._normalize_messages(messages))
         return self._next_scripted_turn()
@@ -147,6 +164,7 @@ class MockAgent(BaseAgent):
         would return — so one script drives both the streaming and non-streaming paths."""
         from ..models import TextDelta, TurnComplete
 
+        self._maybe_raise()  # error-injection (constructor error=)
         await asyncio.sleep(0)
         self.tool_calls_received.append(self._normalize_messages(messages))
         turn = self._next_scripted_turn()
