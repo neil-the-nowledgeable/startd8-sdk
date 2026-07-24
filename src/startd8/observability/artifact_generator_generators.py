@@ -2889,16 +2889,14 @@ def generate_collector_enrichment(
     )
 
     # QW-3 / OB-1: surface provenance + counts in the run report so drift/regen tooling and the
-    # coverage report can read them without parsing the artifact YAML.
-    try:
-        report.fr_coverage["collector_enrichment"] = {
-            "provenance": f"sha256:{provenance}",
-            "statements": len(rows),
-            "services_enriched": services_enriched,
-            "criticality_dimension": has_criticality,
-        }
-    except Exception:  # pragma: no cover - report shape is defensive only
-        pass
+    # coverage report can read them without parsing the artifact YAML. fr_coverage is a guaranteed
+    # dict field on GenerationReport, written directly here as the other generators do.
+    report.fr_coverage["collector_enrichment"] = {
+        "provenance": f"sha256:{provenance}",
+        "statements": len(rows),
+        "services_enriched": services_enriched,
+        "criticality_dimension": has_criticality,
+    }
 
     return ArtifactResult(
         artifact_type="collector_enrichment",
