@@ -8,9 +8,12 @@ and the provider falls through to the LLM (resolves OQ-2 invalidation).
 
 Layout: ``.startd8/corpus-content/<safe_term_id>/<source_checksum>``
 
-This module is PURE/ADDITIVE — nothing here is invoked by any live workflow. The live
-postmortem write-wiring is deferred to plan increment I3 (flag-gated). v1 populate is used
-by the validator / bootstrap / tests only.
+Wiring (I3, flag-gated / default-off): the **write** path is live — ``prime_postmortem.py``
+calls ``populate_from_run`` (I3a, 2026-06-03); the **read** path is live —
+``prime_contractor.py`` instantiates this store for the Phase-0.7 corpus shortcut (I3b). Both
+are default-off; ``populate`` is otherwise exercised by the validator / bootstrap / tests.
+(Corrected 2026-07-24 — the prior "nothing here is invoked by any live workflow" docstring had
+drifted stale ~6 weeks behind the I3a/I3b wiring; SURVIVORSHIP-AUDIT / dev-os CL-20.)
 """
 from __future__ import annotations
 
