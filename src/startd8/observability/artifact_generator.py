@@ -98,6 +98,7 @@ from .artifact_generator_generators import (  # noqa: F401
     generate_declared_base_slos,
     generate_declared_functional_slos,
     generate_declared_span_slos,
+    generate_declared_probe_slos,
 )
 
 try:
@@ -564,6 +565,8 @@ def generate_observability_artifacts(
     _bound_declared_functional: List[Dict[str, Any]] = []
     # #307: per-span RED SLOs bound to declared span signals via span-metrics (real service.name, #275).
     _bound_declared_span: List[Dict[str, Any]] = []
+    # #308 P0: synthetic-probe freshness SLIs recorded pending a runner (a positive finding, not a gap).
+    _pending_probes: List[Dict[str, Any]] = []
     for service in services:
         descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
@@ -603,6 +606,10 @@ def generate_observability_artifacts(
         _dsq = decls_slo.quality or {}
         _bound_declared_span.extend(_dsq.get("bound_declared_span", []))
         _deferred_declared.extend(_dsq.get("deferred_declared_kinds", []))
+        # #308 P0: synthetic-probe freshness SLIs — recorded pending a runner (writes NO slos/ file).
+        probe_slo = generate_declared_probe_slos(service, business, descriptor)
+        _ppq = probe_slo.quality or {}
+        _pending_probes.extend(_ppq.get("pending_probes", []))
         # FR-9: a service that resolves to ∅ SLI kinds (non-request, nothing declared)
         # is observed by nothing — surface it rather than silently emitting nothing.
         _svc_signals = [
@@ -693,6 +700,9 @@ def generate_observability_artifacts(
     # #307 (FR-8): same byte-identity discipline for the span-binding key.
     if _bound_declared_span:
         report.fr_coverage["bound_declared_span"] = _bound_declared_span
+    # #308 P0 (FR-6): pending synthetic-probe SLIs — surfaced only when present (byte-identity: absent, not []).
+    if _pending_probes:
+        report.fr_coverage["pending_probes"] = _pending_probes
 
     report.services_processed = len(services)
     report.services_skipped = len(

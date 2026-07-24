@@ -1700,6 +1700,87 @@ def generate_declared_span_slos(
     )
 
 
+# --- #308 P0: synthetic-probe freshness SLI (static, $0 — recorded, never written to slos/) ---
+
+#: #308 P0 (FR-1): the closed metric_kind → query-shape map. gauge → max(); histogram → p99 (the
+#: `quantile` shape appends `_bucket`, so a histogram probe's runner must publish `<metric>_bucket`).
+_PROBE_METRIC_KIND_SHAPE: Dict[str, str] = {"gauge": "gauge_max", "histogram": "quantile"}
+
+
+def _probe_metric_name(probe: "DeclaredProbe") -> str:
+    """The single-sourced published-metric name (FR-3): the declared `published_metric`, else the default
+    `probe_<name>_seconds` (metric-safe)."""
+    if probe.published_metric:
+        return probe.published_metric
+    safe = re.sub(r"[^a-z0-9]+", "_", probe.name.lower()).strip("_") or "probe"
+    return f"probe_{safe}_seconds"
+
+
+def generate_declared_probe_slos(
+    service: ServiceHints,
+    business: BusinessContext,
+    descriptor: Optional[MetricDescriptor] = None,
+) -> ArtifactResult:
+    """Record a synthetic-probe freshness SLI for a signal the subject emits no metric for (#308 P0).
+
+    **Writes NO SLO YAML** (FR-2, R1-F1): the published metric does not exist until a runner runs the probe
+    (P1/P2), so a query on it would be replayed by the file-based `validate_promql` as a #274 dead SLI. The
+    derived SLO (query + optional target) is instead recorded in ``pending_probes`` — a POSITIVE finding
+    ("a freshness SLO the subject has no metric for, pending a probe runner"), NOT a gap. Static/$0: the
+    ``action``/``poll``/``assert`` are never executed. ``metric_kind`` is a closed ``gauge|histogram`` enum
+    and ``signal_kind`` is ``freshness``-only in v1; anything else is recorded with an ``unsupported``
+    reason_code and no query (never a fabricated SLI). No declared probes ⇒ ``skipped``, no key (byte-
+    identical, FR-6)."""
+    probes = getattr(service, "declared_probes", None) or ()
+    svc = service.service_id
+    pending: List[Dict[str, Any]] = []
+    selector = f'{{service="{svc}"}}'  # service-scoped so two services' same-named probes don't collide
+
+    for probe in probes:
+        rec: Dict[str, Any] = {"service": svc, "name": probe.name,
+                               "signal_kind": probe.signal_kind}
+        if probe.signal_kind != "freshness":
+            rec["reason_code"] = "probe_unsupported_signal_kind"
+            rec["reason"] = (f"probe {probe.name!r} signal_kind={probe.signal_kind!r} — v1 supports only "
+                             f"'freshness'; no query shape is defined, so it is recorded but not bound.")
+            pending.append(rec)
+            continue
+        shape = _PROBE_METRIC_KIND_SHAPE.get(probe.metric_kind)
+        if shape is None:
+            rec["reason_code"] = "probe_unsupported_metric_kind"
+            rec["reason"] = (f"probe {probe.name!r} metric_kind={probe.metric_kind!r} — must be "
+                             f"'gauge' or 'histogram'; recorded but not bound (no fabricated query).")
+            pending.append(rec)
+            continue
+
+        metric = _probe_metric_name(probe)
+        query = _functional_sli_query(shape, metric, selector)
+        rec.update({
+            "query": query, "published_metric": metric, "metric_kind": probe.metric_kind,
+            "reason_code": "probe_pending_no_runner",
+            "reason": (f"freshness SLI for {svc} is derived from declared probe {probe.name!r} but its "
+                       f"metric {metric!r} is published only once the probe RUNNER runs (P1/P2); the SLO "
+                       f"is recorded pending a runner — a positive finding, not a dead SLI."),
+        })
+        # FR-4: target from the author, else threshold-deferred (#300 D2 discipline). Either way: recorded.
+        if probe.target is not None:
+            rec["target"] = probe.target
+        else:
+            rec["threshold_deferred"] = True
+        pending.append(rec)
+
+    quality: Dict[str, Any] = {"pending_probes": pending} if pending else {}
+    # FR-2: P0 writes NO file — always skipped; the SLO shape lives in pending_probes.
+    return ArtifactResult(
+        artifact_type="slo_definition",
+        service_id=service.service_id,
+        output_path="",
+        status="skipped",
+        content="",
+        quality=quality,
+    )
+
+
 def _functional_sli_query(shape: str, metric: str, selector: str) -> str:
     """PromQL for a functional SLI by its shape (#226 FR-5), bound to *selector*."""
     if shape == "gauge_max":

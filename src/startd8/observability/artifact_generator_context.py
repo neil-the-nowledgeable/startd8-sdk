@@ -364,6 +364,37 @@ def _parse_declared_span_signals(raw: Any) -> List["DeclaredSpanSignal"]:
     return out
 
 
+def _parse_declared_probes(raw: Any) -> List["DeclaredProbe"]:
+    """Parse ``metrics.declared_probes`` (#308 P0) into models. Entries without a ``name`` are dropped;
+    ``action``/``poll``/``assert``/``measure`` carried verbatim (opaque; P0 never executes them);
+    ``target`` absent ⇒ ``None`` (byte-identity). Non-list ⇒ empty (explicit-only). NB the JSON key is
+    ``assert`` (a Python keyword) → the model field ``assert_``."""
+    if not isinstance(raw, list):
+        return []
+    out: List[DeclaredProbe] = []
+    for p in raw:
+        if not isinstance(p, dict) or not p.get("name"):
+            continue
+        raw_target = p.get("target")
+        target = str(raw_target) if raw_target is not None else None
+        out.append(
+            DeclaredProbe(
+                name=str(p["name"]),
+                action=str(p.get("action", "")),
+                poll=str(p.get("poll", "")),
+                assert_=str(p.get("assert", p.get("assert_", ""))),
+                measure=str(p.get("measure", "")),
+                interval=str(p.get("interval", "60s")),
+                timeout=str(p.get("timeout", "30s")),
+                signal_kind=str(p.get("signal_kind", "freshness")),
+                published_metric=str(p.get("published_metric", "")),
+                metric_kind=str(p.get("metric_kind", "gauge")),
+                target=target,
+            )
+        )
+    return out
+
+
 def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
     """Extract per-service instrumentation hints from onboarding metadata.
 
@@ -416,6 +447,8 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
         declared_series = _parse_declared_series(metrics.get("declared_emitted_series", []))
         # #307 / REQ-CCL-109: author-declared span signals for span-metrics RED binding.
         declared_span_signals = _parse_declared_span_signals(metrics.get("declared_span_signals", []))
+        # #308 P0: author-declared synthetic probes (fan-out freshness) — recorded as pending_probes.
+        declared_probes = _parse_declared_probes(metrics.get("declared_probes", []))
 
         # Target metric binding (FR-2/FR-3/FR-6): the effective convention
         # profile + per-axis overrides ContextCore resolved for this service.
@@ -452,6 +485,7 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 declared_metrics=declared_metrics,
                 declared_emitted_series=declared_series,
                 declared_span_signals=declared_span_signals,
+                declared_probes=declared_probes,
                 metric_profile=metric_profile,
                 descriptor_overrides=descriptor_overrides,
                 datasource_uids=datasource_uids,

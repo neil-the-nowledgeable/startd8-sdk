@@ -46,6 +46,9 @@ class ComparisonReport:
     #: #307: per-span RED SLIs bound to a declared span via span-metrics (real service.name). A third
     #: positive-binding lane — also dead unless consumed here (mirrors the FR-10 lesson).
     bound_span: List[Any] = field(default_factory=list)
+    #: #308 P0: synthetic-probe freshness SLIs recorded PENDING a runner — a positive finding (a derived
+    #: SLO the subject has no metric for), NOT a divergence. Does not count toward `total_gaps`.
+    pending: List[Any] = field(default_factory=list)
 
     @property
     def total_gaps(self) -> int:
@@ -61,6 +64,8 @@ class ComparisonReport:
             "bound_functional_count": len(self.bound_functional),
             "bound_declared_span": self.bound_span,
             "bound_span_count": len(self.bound_span),
+            "pending_probes": self.pending,
+            "pending_count": len(self.pending),
             "gaps": self.gaps,
             "gap_classes": list(self.gaps.keys()),
             "total_gaps": self.total_gaps,
@@ -81,6 +86,8 @@ def build_comparison_report(fr_coverage: Dict[str, Any]) -> ComparisonReport:
     bound_functional = list(fr_coverage.get("bound_declared_functional") or [])
     # #307: same for the span-binding key.
     bound_span = list(fr_coverage.get("bound_declared_span") or [])
+    # #308 P0: pending synthetic-probe SLIs — a positive-but-pending finding (not a gap, not in _GAP_CLASSES).
+    pending = list(fr_coverage.get("pending_probes") or [])
     gaps: Dict[str, List[Any]] = {}
     for key, _label in _GAP_CLASSES:
         entries = fr_coverage.get(key) or []
@@ -88,7 +95,7 @@ def build_comparison_report(fr_coverage: Dict[str, Any]) -> ComparisonReport:
             gaps[key] = list(entries)
     return ComparisonReport(
         emitted=emitted, gaps=gaps, bound=bound, bound_functional=bound_functional,
-        bound_span=bound_span,
+        bound_span=bound_span, pending=pending,
     )
 
 
@@ -132,6 +139,19 @@ def render_report(report: ComparisonReport) -> str:
     if report.bound_span:
         lines += ["", f"Bound span-metrics SLIs on declared spans (#307): {len(report.bound_span)}"]
         lines += [_entry_line(b) for b in report.bound_span]
+
+    # #308 P0: synthetic-probe SLIs recorded PENDING a runner — a positive finding (a derived SLO the
+    # subject has no metric for), shown with the bound sections, NOT under "Divergence" (R1-F10).
+    if report.pending:
+        lines += ["", f"Pending probes — freshness SLIs awaiting a probe runner (#308 P0): {len(report.pending)}"]
+        for p in report.pending:
+            if isinstance(p, dict):
+                who = p.get("service", "?")
+                q = p.get("query") or f"(unbindable: {p.get('reason_code', '?')})"
+                td = "  [threshold-deferred]" if p.get("threshold_deferred") else ""
+                lines.append(f"    - {who}: {p.get('name', '?')} ({p.get('signal_kind', '?')}) → {q}{td}")
+            else:
+                lines.append(f"    - {p}")
 
     if not report.gaps:
         lines += ["", "No divergence: every derived SLI is grounded in the declared surface. ✓", ""]
