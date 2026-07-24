@@ -31,7 +31,9 @@ class CollectorEnrichmentError(ValueError):
     and surfaced as ArtifactResult(status="error"); never produces partial output."""
 
 
-def validate_collector_enrichment(rows: Iterable[Row], business_services: Set[str]) -> None:
+def validate_collector_enrichment(
+    rows: Iterable[Row], business_services: Set[str]
+) -> None:
     """Validate the resolved statement rows. Raise ``CollectorEnrichmentError`` on any violation.
 
     Args:
@@ -70,4 +72,6 @@ def validate_collector_enrichment(rows: Iterable[Row], business_services: Set[st
     pairs: List[Tuple[str, str]] = [(sel, attr) for sel, attr, _val in rows]
     if len(pairs) != len(set(pairs)):
         dupes = sorted({p for p in pairs if pairs.count(p) > 1})
-        raise CollectorEnrichmentError(f"duplicate (service, attr) statement(s): {dupes}")
+        raise CollectorEnrichmentError(
+            f"duplicate (service, attr) statement(s): {dupes}"
+        )

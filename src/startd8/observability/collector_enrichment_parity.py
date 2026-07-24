@@ -87,7 +87,9 @@ def extract_enrichment_map(cfg_yaml: str) -> Dict[str, Dict[str, str]]:
     return out
 
 
-def check_collector_enrichment_parity(generated_yaml: str, reference_yaml: str) -> ParityResult:
+def check_collector_enrichment_parity(
+    generated_yaml: str, reference_yaml: str
+) -> ParityResult:
     """Compare the generated processor against the hand-written reference — semantically (FR-10a/11)."""
     gen = extract_enrichment_map(generated_yaml)
     ref = extract_enrichment_map(reference_yaml)
