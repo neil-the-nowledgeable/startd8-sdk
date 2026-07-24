@@ -1,8 +1,8 @@
 # compare-live — Expanded Subject Coverage (multi-container + span-metrics standup)
 
-**Version:** 0.3.2 (post-review — adds FR-8 warm-up traffic; FR-6/OQ-B flagged for CRP)
+**Version:** 0.4 (CRP R1 triaged — OQ-B resolved, all 9 suggestions applied)
 **Date:** 2026-07-24
-**Status:** Draft — ready for CRP (one open decision: OQ-B, see §0.3)
+**Status:** Draft — ready to build (no open decisions; see Appendix A for R1 dispositions)
 **Parent:** `REQUIREMENTS.md` (shipped v1, single-image standup) — this specs the deferred **NR-1**
 (multi-container) and **NR-2** (span-metrics) as the next increments. **Backlog:** EC-2 / EC-3.
 
@@ -45,15 +45,19 @@ Applied the SDK lessons:
 - **[High] Inc-2 would degrade to always-`unknown` — no traffic driver.** Grounded: `stand_up_subject_and_prometheus` (`live_standup.py:229-278`) boots + scrapes but drives **no** requests, and span-metrics
   emit nothing until the subject is exercised. **Resolved by FR-8** (warm-up traffic reusing an existing
   driver — `run_smoke`/`run_journey_http`/`run_journey`; no new engine).
-- **[Medium — OPEN for CRP] FR-6 vs OQ-B contradiction.** FR-6 states topology = "generalized
-  `generate_compose_dict`," but OQ-B leaves the approach open and *leans the other way* (a new leaner
-  `observability/live_compose.py` reusing only the net/DNS/ingress patterns). The coupling is real —
-  `generate_compose_dict` validates `ingress` against the **global OB `_SERVICES` registry**
-  (`compose.py:94` → `services.py:88`), which an arbitrary compare-live subject fails. **CRP must decide
-  OQ-B and align FR-6.** Recommendation: the new-leaner-module path (avoid coupling compare-live to
-  `benchmark_matrix`; generalizing in place would fork the registry validation).
-- **[Low] Multi-container × span-metrics composition underspecified** (FR-1 topology + FR-4 preset
-  interaction); Prometheus-is-the-ingress joins **two** networks (fleet + edge) — state it explicitly.
+- **[Medium — RESOLVED by CRP R1] FR-6 vs OQ-B contradiction → new-leaner-module.** OQ-B is decided:
+  build a new `observability/live_compose.py` that **reuses `compose.py`'s net/DNS/ingress/dep-env
+  patterns without importing `benchmark_matrix`'s OB registry**; FR-6 reworded to match (R1-F2). CRP R1
+  corrected the coupling inventory (R1-F1): `generate_compose_dict` couples to the global `_SERVICES`
+  registry at **three** sites, not two — ingress validation (`compose.py:94`), **the dep-edge fan-out
+  `get_service(dep_name)` (`compose.py:57`)**, and topo-order — while the image coupling is **already
+  soft** (`compose.py:42` prefers `spec.image`; `r3` namespace is only the `image is None` fallback). The
+  dep fan-out is the coupling that actually breaks an arbitrary subject, which is what justifies the
+  new-module lean.
+- **[Low — RESOLVED] Multi-container × span-metrics + networking.** FR-1 now states the **single
+  scrape-target** v1 boundary (R1-F6); FR-2 now frames the `internal:true` fleet + `edge` topology as
+  **new code adapted from `compose.py`**, not a reuse of the plain-bridge standup (R1-F4), with
+  Prometheus-ingress joining both networks stated explicitly.
 
 ---
 
@@ -79,10 +83,30 @@ validation. The Tier-B replay engine (`run_validation`) is reused unchanged.
 - **FR-1 Subject topology input.** `compare-live` accepts a **lean subject-topology** description (v1):
   an ordered list of containers `{name, image, port, deps?}`, plus which service Prometheus scrapes
   (`metrics_service` + `metrics_port` + `metrics_path`). Passed via a `--subject-compose <file.yaml>`
-  (repeatable-free, one file). Single-image (`--subject-image`) remains the trivial 1-container case.
-- **FR-2 Compose standup.** Build a compose from the topology (reusing `compose.py` topology mechanics —
-  internal fleet net + service-DNS + dep-edge env) plus a **Prometheus** service that scrapes
-  `metrics_service:metrics_port<metrics_path>`, published on a host port (the `ingress` mechanism).
+  (non-repeatable, single file). Single-image (`--subject-image`) remains the trivial 1-container case.
+  **Single scrape target (v1 boundary, R1-F6):** exactly **one** `metrics_service` is scraped — the
+  shipped `render_prometheus_yml` (`live_standup.py:58`) emits a **single** Prometheus job. Per-service
+  scraping of N services is **out of scope for v1** (would require generalizing the renderer to N jobs);
+  a topology may still *contain* N containers, but only one exposes the metrics compare-live replays.
+  **Schema (R1-F9):** required `name, image, port, metrics_service, metrics_port, metrics_path`; optional
+  `deps: [name]`. A malformed/incomplete topology ⇒ `unknown` (fail-loud, per FR-5), never a partial
+  standup. Minimal example:
+  ```yaml
+  containers:
+    - {name: web, image: myapp:latest, port: 3000, deps: [db]}
+    - {name: db,  image: postgres:16,  port: 5432}
+  metrics_service: web
+  metrics_port: 3000
+  metrics_path: /metrics
+  ```
+- **FR-2 Compose standup.** Build a compose from the topology plus a **Prometheus** service that scrapes
+  `metrics_service:metrics_port<metrics_path>`, published on a host port (the `ingress` pattern).
+  **This is NEW networking, adapted from `compose.py`'s pattern — not a reuse of the shipped standup
+  (R1-F4):** the current single-image standup uses a **plain bridge** `docker network create`
+  (`live_standup.py:258`) with **no** `internal: true` fleet / `edge` split. FR-2 introduces the
+  two-network topology (`internal: true` `fleet` for intra-net service-DNS + egress-deny, `edge` bridge
+  for the host-published Prometheus-ingress, which therefore **joins both networks**). Estimate
+  effort/teardown from `compose.py`'s pattern, not from the plain-bridge standup.
 - **FR-3 Readiness + warm-up.** Boot in dependency order; gate on the **existing** two-phase warm-up
   (`_await_scrape`: samples landed + series settled) against the stood-up Prometheus. Timeout →
   `unknown`. No new gate logic.
@@ -97,11 +121,16 @@ validation. The Tier-B replay engine (`run_validation`) is reused unchanged.
 
 ### Cross-cutting
 - **FR-6 Reuse, don't rebuild.** Tier-B replay = `run_validation` unchanged; span-metrics config =
-  `runtime_fidelity.collector_config`; topology = generalized `generate_compose_dict`. New code is the
-  standup glue + the topology input parser, not a new engine.
+  `runtime_fidelity.collector_config`; topology = **a new `observability/live_compose.py` that reuses the
+  `compose.py` net/DNS/ingress/dep-env *patterns* without importing `benchmark_matrix`'s OB registry**
+  (OQ-B resolved — R1-F2/F1). New code is the leaner compose builder + the topology input parser + the
+  standup glue, not a new engine and not a fork of `benchmark_matrix`.
 - **FR-7 Teardown & safety.** Extend the existing best-effort `tear_down` to remove **all** compose
   containers + networks + temp files, on every path (the shipped `finally` + `startd8-cmp-<hex>`
-  contract, generalized to N containers).
+  contract, generalized to N containers). **N-container contract (R1-F7):** teardown is **best-effort
+  per-container** — one container's removal failure must **not** abort removal of the rest, the network,
+  or temp files; the `startd8-cmp-<hex>` prefix is the **sole ownership key** for the sweep; the run
+  reports a leaked-resource count rather than raising.
 - **FR-8 Warm-up traffic (the Inc-2 enabler).** Span-metrics (and lazily-registered RED series) emit
   **no series until the subject handles a request** — so the standup, which today only boots + scrapes
   (`live_standup.py:229-278`), must **drive bounded traffic at the subject's ingress before the readiness
@@ -112,11 +141,22 @@ validation. The Tier-B replay engine (`run_validation`) is reused unchanged.
   - OB-shaped HTTP → **`run_journey_http(httpx.Client)`** (`benchmark_matrix/fleet/frontend_gate.py:49`);
   - OB-shaped gRPC → **`run_journey(addr_map)`** (`benchmark_matrix/fleet/adapter_b.py:227`).
 
-  Loop the chosen driver until the span-metric series **settle** (reuse the existing two-phase `_await_scrape`
-  gate on series-count stability) or **timeout → `unknown`** (fail-loud, per FR-5). **Realistic-load upgrade
-  (optional):** a locust loadgenerator **as a sidecar in the FR-2 compose** (`FRONTEND_ADDR=<ingress>`),
-  lifted from `online-boutique-*/loadgenerator` — it rides the multi-container mechanism already built,
-  adding no standup code. Full grounding + options: **`TRAFFIC_DRIVER_REUSE_MAP.md`** (this dir) and the
+  **Convergence signal (R1-F3 — do NOT gate on series-count alone).** `_await_scrape`/`job_series_count`
+  key on series *presence/count settling*; span-metric histograms register `_bucket`/`_count`/`_sum`
+  series on the first scrape with **zero observations** until traffic lands, so series-count can "settle"
+  at a stable-but-empty state and gate green with no data — re-introducing the false-ready path FR-8
+  exists to kill. Release the gate only when **both** hold: (a) the histogram `_count` series exist **and**
+  `sum(increase(<span_metric>_count[<window>])) > 0` (non-zero samples), **and** (b) the driver reached a
+  **terminal success** — `JourneyOutcome.completed` / `run_smoke` status `passed` (R1-F8) — not merely
+  "some series appeared" (a loop that only ever succeeds at `GET /` yields non-zero series while the
+  checkout SLI stays empty). Else **timeout → `unknown`** (fail-loud, per FR-5).
+  **Driver-can't-exercise → fail-loud (R1-F5).** A driver that produces **no successful request** — e.g.
+  `run_smoke` returns `status="skipped"` (no `/openapi.json` / no CRUD resource; it never raises), or the
+  OB journey scores all-fail on a non-OB subject — must resolve the run to **`unknown` naming the driver**,
+  never a silent proceed-to-gate (which is indistinguishable from "subject emits no traces").
+  **Realistic-load upgrade (optional):** a locust loadgenerator **as a sidecar in the FR-2 compose**
+  (`FRONTEND_ADDR=<ingress>`), lifted from `online-boutique-*/loadgenerator` — it rides the multi-container
+  mechanism already built, adding no standup code. Full grounding + options: **`TRAFFIC_DRIVER_REUSE_MAP.md`** (this dir) and the
   cross-project catalog `~/Documents/tools/load-generators/README.md`.
 
 ## 3. Non-Requirements
@@ -130,10 +170,12 @@ validation. The Tier-B replay engine (`run_validation`) is reused unchanged.
 - **OQ-A** Topology input format: a bespoke lean YAML (FR-1) vs a **subset** of docker-compose syntax
   (`services: {image, ports, depends_on}`) so operators reuse familiar shape without full-compose
   complexity. Lean-YAML for v1; revisit.
-- **OQ-B** Generalize `generate_compose_dict` in place (validate ingress against the passed fleet;
-  per-service stock `image`) vs a new leaner `observability/live_compose.py` that reuses only the
-  network/DNS/ingress *patterns*. Planning leans **new leaner module** to avoid coupling compare-live to
-  `benchmark_matrix`.
+- **OQ-B — RESOLVED (CRP R1): new leaner `observability/live_compose.py`.** Reuses `compose.py`'s
+  net/DNS/ingress/dep-env *patterns* without importing `benchmark_matrix`'s OB registry. Rationale
+  (R1-F1): `generate_compose_dict` couples to the global `_SERVICES` registry at **three** sites —
+  ingress validation (`compose.py:94`), the **dep-edge fan-out `get_service(dep_name)` (`:57`)**, and
+  topo-order — so generalizing in place would fork `benchmark_matrix`'s hot path; the image coupling
+  (`:42`) is already soft and not a factor. FR-6 reworded to match (R1-F2).
 - **OQ-C** Effort: Inc-1 ≈ **M-L** (topology parser + compose gen + N-container standup/teardown); Inc-2
   ≈ **M** on top (a preset + the collector container). Not the "L from scratch" the backlog implied.
 
@@ -146,9 +188,15 @@ validation. The Tier-B replay engine (`run_validation`) is reused unchanged.
 | `get_service` (global-registry coupling), `topo_order` | `benchmark_matrix/fleet/services.py` | ✓ |
 | `collector_config`, `:8889` prom exporter | `observability/runtime_fidelity.py` | ✓ |
 | FR-8 drivers: `run_smoke` `deploy_harness/smoke.py:70` · `run_journey_http` `fleet/frontend_gate.py:49` · `run_journey` `fleet/adapter_b.py:227` | startd8-sdk | ✓ |
+| `get_service(dep_name)` dep-edge fan-out (3rd registry coupling, R1-F1) | `benchmark_matrix/fleet/compose.py:57` | ✓ |
+| `observability/live_compose.py` (OQ-B target — new leaner compose builder) | startd8-sdk | ⛔ to be created |
 
 ---
 
+*v0.4 — CRP R1 triaged. OQ-B resolved (new `live_compose.py`); all 9 R1 suggestions applied (FR-1 single-
+scrape boundary + schema; FR-2 new-networking provenance; FR-6 reworded; FR-7 N-container teardown
+contract; FR-8 non-zero-sample + terminal-success convergence + driver-can't-exercise fail-loud). No open
+decisions. Dispositions in Appendix A.*
 *v0.3.2 — post-review. Added FR-8 (warm-up traffic, reuses existing drivers — resolves the [High]
 always-`unknown` gap); flagged the FR-6/OQ-B contradiction for CRP (§0.3). Reuse grounding in
 `TRAFFIC_DRIVER_REUSE_MAP.md`.*
@@ -172,7 +220,15 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F1 | Correct OQ-B coupling inventory: 3 registry sites (add dep fan-out `compose.py:57`); image coupling already soft | R1 | **Applied** → §0.3 + §4 OQ-B rewritten with the 3-site inventory; Reference-Audit row added for `compose.py:57`. Justifies the new-module lean. | 2026-07-24 |
+| R1-F2 | Reword FR-6 to defer to OQ-B (new-module pattern reuse), not "generalized `generate_compose_dict`" | R1 | **Applied** → FR-6 reworded to "new `observability/live_compose.py` reusing `compose.py` patterns without importing `benchmark_matrix`." Resolves the contradiction. | 2026-07-24 |
+| R1-F3 | FR-8 needs a non-zero-sample convergence signal, not series-count settling alone | R1 | **Applied** → FR-8 gate now requires `sum(increase(<hist>_count[…]))>0` **and** driver terminal success before release. | 2026-07-24 |
+| R1-F4 | State FR-2's `internal:true` fleet+edge is NEW (shipped standup = plain bridge `live_standup.py:258`), not reuse | R1 | **Applied** → FR-2 reworded as "new networking adapted from `compose.py`'s pattern"; Prometheus-on-two-nets stated. | 2026-07-24 |
+| R1-F5 | FR-8: driver that produces no successful request ⇒ `unknown` naming the driver (fail-loud), never silent proceed | R1 | **Applied** → FR-8 adds the driver-can't-exercise fail-loud branch (`run_smoke` skip / OB-journey all-fail). | 2026-07-24 |
+| R1-F6 | FR-1/FR-2: state single-scrape-target v1 boundary (`render_prometheus_yml` single-job `live_standup.py:58`) | R1 | **Applied** → FR-1 states the single `metrics_service` scrape boundary; N-job scraping is out of scope for v1. | 2026-07-24 |
+| R1-F7 | FR-7 N-container teardown contract: best-effort per-container, prefix is sole ownership key, report leaks | R1 | **Applied** → FR-7 adds the best-effort-per-container + `startd8-cmp-<hex>`-ownership + leaked-count contract. | 2026-07-24 |
+| R1-F8 (adversarial) | FR-8 warm-up must assert driver **terminal success** (`completed`/`passed`), not just "some series appeared" | R1 | **Applied** → folded into FR-8's convergence signal (clause (b)); closes the partial-warm-up hole R1-F3 alone left. | 2026-07-24 |
+| R1-F9 | FR-1 needs a formal schema + example + malformed⇒`unknown` validation surface | R1 | **Applied** → FR-1 adds required/optional fields, a minimal YAML example, and the fail-loud malformed-topology rule. | 2026-07-24 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
