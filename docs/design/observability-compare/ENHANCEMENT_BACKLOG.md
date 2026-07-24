@@ -86,10 +86,11 @@ already exists).
   defect — the tag works today.)*
 
 ## 🔭 Operational / observability (make the gate legible)
-- **OP-1 — emit the compare-live verdict as OTel metrics** — the SDK already has an OTel stack
-  (`costs/otel_metrics`, `observability/`); emitting `compare_live.dead_sli_count{subject}` +
-  `gate.result` would let a Grafana panel trend "derived-vs-emitted fidelity over time" instead of
-  reading exit codes. **S–M.** *(Cheapest way to prove the gate's ongoing value.)*
+- **OP-1 — emit the compare-live verdict as OTel metrics** — ✅ **DELIVERED 2026-07-24** (FR-11):
+  `compare-live --emit-metrics` records `gate_runs{status,subject}` + `dead_sli_count` /
+  `new_fail_count` / `binding_coverage` histograms under meter `startd8.observability.compare_live`
+  (mirrors `costs/otel_metrics.py`; opt-in, no-op-safe, hostname-only `subject`). Grafana can now
+  trend derived-vs-emitted fidelity over time. Proven via in-memory reader (4 tests) + the real CLI.
 - **OP-2 — upload the merged report as a CI artifact** — `observability-compare-live-gate.yml` runs the
   gate but keeps no record; an `actions/upload-artifact` of the `--json` report (mirrors
   `observability-fidelity.yml`'s `fidelity-report` upload) gives post-hoc diagnosis on a red gate. **S.**
