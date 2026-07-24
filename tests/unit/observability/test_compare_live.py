@@ -300,6 +300,44 @@ def test_run_compose_warm_up_passthrough(tmp_path):
     assert seen["warmup_count_metric"] == "traces_spanmetrics_calls_total"
 
 
+def test_run_compose_span_metrics_mode_passthrough(tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    topo = tmp_path / "topo.yaml"
+    topo.write_text(_COMPOSE_TOPO)
+    seen = {}
+
+    def fake_compose_standup(**kw):
+        seen["span_metrics"] = kw.get("span_metrics")
+        return _compose_handle()
+
+    compare_live.run_live_comparison(
+        manifest=manifest, subject_compose=topo,
+        metrics_mode="span-metrics", warm_up="ob-http",
+        warm_up_metric="traces_spanmetrics_calls_total",
+        compose_standup_fn=fake_compose_standup,
+        compose_teardown_fn=lambda h: None,
+        validate_fn=lambda **kw: _fidelity("pass", [_v("pass")]),
+        read_fr_coverage_fn=lambda p: {},
+    )
+    assert seen["span_metrics"] is True
+
+
+def test_run_compose_invalid_metrics_mode_is_unknown_no_standup(tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("fr_coverage: {}\n")
+    topo = tmp_path / "topo.yaml"
+    topo.write_text(_COMPOSE_TOPO)
+
+    r = compare_live.run_live_comparison(
+        manifest=manifest, subject_compose=topo, metrics_mode="bogus",
+        compose_standup_fn=lambda **kw: (_ for _ in ()).throw(AssertionError("no standup on bad mode")),
+        read_fr_coverage_fn=lambda p: {},
+    )
+    assert r.status == "unknown"
+    assert "unknown --subject-metrics-mode" in r.standup["reason"]
+
+
 def test_run_compose_invalid_warm_up_shape_is_unknown_no_standup(tmp_path):
     manifest = tmp_path / "m.yaml"
     manifest.write_text("fr_coverage: {}\n")

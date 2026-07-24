@@ -1,10 +1,11 @@
 # compare-live — Next Steps
 
-**Updated:** 2026-07-24 · **Status:** v1 shipped; **Inc-1 multi-container standup + FR-8 warm-up traffic shipped**; next = Inc-2 span-metrics preset (now unblocked)
+**Updated:** 2026-07-24 · **Status:** ✅ **expanded-subject-coverage roadmap COMPLETE** — v1 + Inc-1 (multi-container) + FR-8 (warm-up traffic) + Inc-2 (span-metrics preset) all shipped. Remaining items are the explicit deferrals (NR-A..D).
 
 A roadmap/orientation for the `compare-live` effort — where it stands and the sequenced build. Points to
-the authoritative specs rather than restating them. **The design gate is cleared** (CRP R1 triaged, OQ-B
-resolved); the next move is implementation.
+the authoritative specs rather than restating them. **All three build-sequence increments (Inc-1, FR-8,
+Inc-2) are now shipped**; what remains are the explicit non-goals (NR-A..D) — real-compose ingestion, k8s
+standup, cross-service scoring — each an ADR-gated future increment, not a loose end.
 
 ---
 
@@ -19,6 +20,7 @@ resolved); the next move is implementation.
 | **Inc-1 — multi-container standup** (`--subject-compose`, lean topology → two-network compose → warm-up gate → N-container teardown) | **shipped** — `live_compose.py`, wired into `run_live_comparison` + CLI | `live_compose.py`, `compare_live.py:262`, `cli.py` |
 | **Expanded subject coverage** — Inc-2 span-metrics | **spec v0.4 — CRP R1 triaged, ready to build** | `SUBJECT_COVERAGE_REQUIREMENTS.md` |
 | **FR-8 — warm-up traffic** (`--warm-up {smoke,ob-http,ob-grpc}`, bounded driver loop, two-part convergence) | **shipped** — `warmup_traffic.py`, wired into `live_compose` standup + CLI | `warmup_traffic.py`, `live_compose.py`, `TRAFFIC_DRIVER_REUSE_MAP.md` |
+| **Inc-2 — span-metrics preset** (`--subject-metrics-mode span-metrics`: subject→collector-contrib→Prometheus scrapes `collector:8889`) | **shipped** — `SpanMetricsWiring` + `stand_up_compose_subject(span_metrics=…)`, reuses `runtime_fidelity.collector_config` + FR-8 warm-up | `live_compose.py`, `cli.py` |
 
 ## Design gate — CLEARED (CRP R1 triaged 2026-07-24)
 
@@ -59,14 +61,16 @@ Each increment reuses the shipped Tier-B replay unchanged; the work is standup t
    Wired into `stand_up_compose_subject` (`--warm-up` publishes the `metrics_service` as a host ingress; HTTP
    shapes drive host-side, `ob-grpc` deferred to an in-fleet driver) + `--warm-up`/`--warm-up-metric` CLI.
    Zero-network unit tests: `test_warmup_traffic.py` + standup-warm-up cases in `test_live_compose.py`.
-3. **Inc-2 — span-metrics preset** (**M** on top of Inc-1, **now unblocked by FR-8**).
-   `--subject-metrics-mode span-metrics`: a 3-node preset (subject with
-   `OTEL_EXPORTER_OTLP_ENDPOINT=collector:4317` → `otel/opentelemetry-collector-contrib` running the reused
-   `collector_config` text → Prometheus scrapes `collector:8889`). Reuses the shipped FR-8 warm-up with a
-   span-metric `--warm-up-metric` (e.g. `traces_spanmetrics_calls_total`). Fail-loud (FR-5).
+3. **Inc-2 — span-metrics preset** (**M** on top of Inc-1). ✅ **SHIPPED.**
+   `--subject-metrics-mode span-metrics`: the 3-node preset (subject with
+   `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317` → `otel/opentelemetry-collector-contrib` running the
+   reused `runtime_fidelity.collector_config` text → Prometheus scrapes `collector:8889`, not the subject).
+   `SpanMetricsWiring` + `stand_up_compose_subject(span_metrics=True, otlp_app=…)`; the collector config is
+   written with `0.0.0.0` endpoints so peers reach it. Pairs with the shipped FR-8 warm-up + a span-metric
+   `--warm-up-metric` (e.g. `traces_spanmetrics_calls_total`); no traffic ⇒ `unknown`, fail-loud (FR-5).
 
-**Effort:** M-L + S + M — *not* the "2×L from scratch" the backlog implied; the reuse map + FR-8 de-risk the
-hardest part (traffic).
+**Effort (actual):** M-L + S + M, all shipped — *not* the "2×L from scratch" the backlog implied; the reuse
+map + FR-8 de-risked the hardest part (traffic), and Inc-2 was a thin preset over Inc-1's mechanism.
 
 ## Open decisions / risks
 - **OQ-A** — topology input format: bespoke lean YAML vs a docker-compose subset. **Lean-YAML for v1**

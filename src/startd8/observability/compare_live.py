@@ -215,6 +215,7 @@ def run_live_comparison(
     subject_compose: Optional[Path] = None,
     warm_up: Optional[str] = None,
     warm_up_metric: Optional[str] = None,
+    metrics_mode: str = "direct",
     metrics_path: str = "/metrics",
     prometheus: Optional[str] = None,
     min_coverage: float = 1.0,
@@ -289,6 +290,14 @@ def run_live_comparison(
                 )
             warmup_spec = live_compose.warmup_traffic.WarmupSpec(shape=warm_up)
 
+        if metrics_mode not in ("direct", "span-metrics"):
+            return build_live_comparison(
+                comparison, None,
+                {"mode": "compose", "reason": f"unknown --subject-metrics-mode {metrics_mode!r} "
+                 "(valid: direct, span-metrics)"},
+                strict_tier_a=strict_tier_a,
+            )
+
         c_handle: Optional[live_compose.ComposeStandupHandle] = None
         try:
             c_handle = _compose_standup(
@@ -297,6 +306,7 @@ def run_live_comparison(
                 auth=auth,
                 warmup=warmup_spec,
                 warmup_count_metric=warm_up_metric,
+                span_metrics=(metrics_mode == "span-metrics"),
                 scrape_ready_check=live_standup.prometheus_query.scrape_ready,
             )
             if not c_handle.scrape_ready:

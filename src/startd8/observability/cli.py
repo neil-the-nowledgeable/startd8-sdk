@@ -477,6 +477,15 @@ def compare_live_cmd(
         "(e.g. traces_spanmetrics_calls_total). With --warm-up; converges only when "
         "sum(increase(<metric>[1m]))>0 AND the driver reached terminal success.",
     ),
+    metrics_mode: str = typer.Option(
+        "direct",
+        "--subject-metrics-mode",
+        help="How the subject's metrics reach Prometheus (--subject-compose only). "
+        "'direct' (default): scrape the subject's own /metrics. 'span-metrics' (Inc-2): "
+        "front the subject with an otel-collector-contrib (subject emits OTLP → "
+        "collector:4317 → Prometheus scrapes collector:8889). Pair with --warm-up + "
+        "--warm-up-metric, else it degrades to unknown (no traffic ⇒ no span-metrics).",
+    ),
     metrics_path: str = typer.Option(
         "/metrics",
         "--metrics-path",
@@ -556,6 +565,7 @@ def compare_live_cmd(
         subject_compose=subject_compose,
         warm_up=warm_up,
         warm_up_metric=warm_up_metric,
+        metrics_mode=metrics_mode,
         metrics_path=metrics_path,
         prometheus=prometheus,
         min_coverage=min_coverage,

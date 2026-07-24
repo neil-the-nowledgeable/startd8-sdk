@@ -354,3 +354,108 @@ def test_standup_ob_grpc_warmup_is_deferred_unknown():
     )
     assert handle.scrape_ready is False
     assert "not host-drivable" in handle.reason
+
+
+# ── Inc-2: span-metrics preset (collector-fronted) ──────────────────────────
+
+_APP_TOPO = (
+    "containers:\n"
+    "  - {name: app, image: myapp:latest, port: 8080}\n"
+    "metrics_service: app\n"
+    "metrics_port: 8080\n"
+)
+
+
+def test_parse_rejects_collector_reserved_name():
+    with pytest.raises(live_compose.TopologyError) as e:
+        live_compose.parse_subject_topology(
+            "containers:\n  - {name: collector, image: i, port: 1}\n"
+            "metrics_service: collector\nmetrics_port: 1"
+        )
+    assert "reserved" in str(e.value)
+
+
+def test_span_metrics_compose_adds_collector_and_repoints_prometheus():
+    topo = live_compose.parse_subject_topology(_APP_TOPO)
+    wiring = live_compose.SpanMetricsWiring(otlp_app="app")
+    compose = live_compose.generate_live_compose_dict(topo, span_metrics=wiring)
+
+    # collector container present, mounts the config at the contrib default path.
+    coll = compose["services"][live_compose.COLLECTOR_SERVICE]
+    assert coll["image"] == live_compose.COLLECTOR_IMAGE
+    assert any(live_compose.COLLECTOR_CONFIG_MOUNT in v for v in coll["volumes"])
+
+    # the app emits OTLP to the collector and starts after it.
+    app = compose["services"]["app"]
+    assert app["environment"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://collector:4317"
+    assert app["environment"]["OTEL_TRACES_EXPORTER"] == "otlp"
+    assert "collector" in app["depends_on"]
+
+    # Prometheus scrapes the COLLECTOR, not the subject.
+    assert compose["services"][live_compose.PROMETHEUS_SERVICE]["depends_on"] == [
+        live_compose.COLLECTOR_SERVICE
+    ]
+
+
+def test_standup_span_metrics_scrapes_collector_and_writes_config():
+    topo = live_compose.parse_subject_topology(_APP_TOPO)
+    runner = FakeRunner()
+    handle = live_compose.stand_up_compose_subject(
+        topology=topo, run_id="sm1", span_metrics=True,
+        runner=runner,
+        scrape_ready_check=lambda url, job, auth=None: True,
+        series_count_check=lambda url, job, auth=None: 3.0,
+        poll_interval=0.0,
+        docker_available_fn=lambda: True,
+    )
+    assert handle.scrape_ready is True
+    assert handle.metrics_service == live_compose.COLLECTOR_SERVICE
+    assert live_compose.COLLECTOR_SERVICE in handle.container_names
+
+    # prometheus.yml targets the collector:8889, and the collector config was written.
+    prom_yml = (handle.workdir / "prometheus.yml").read_text()
+    assert "targets: ['collector:8889']" in prom_yml
+    otelcol = (handle.workdir / "otelcol.yaml").read_text()
+    assert "spanmetrics" in otelcol
+    assert "0.0.0.0:4317" in otelcol and "0.0.0.0:8889" in otelcol
+
+
+def test_standup_span_metrics_with_warmup_drives_app_serving_port():
+    from startd8.observability import warmup_traffic
+
+    topo = live_compose.parse_subject_topology(_APP_TOPO)
+    seen = {}
+
+    def fake_warmup(spec, *, ingress_url=None, addr_map=None):
+        seen["ingress_url"] = ingress_url
+        return warmup_traffic.WarmupOutcome(
+            driver=spec.shape, exercised=True, terminal_success=True, iterations=1
+        )
+
+    # count_metric=None → driver-only gate (the non-zero-sample metric gate is unit-tested
+    # directly in test_warmup_traffic against an injected query_fn).
+    handle = live_compose.stand_up_compose_subject(
+        topology=topo, run_id="sm2", span_metrics=True,
+        warmup=warmup_traffic.WarmupSpec(shape="ob-http"),
+        warmup_count_metric=None,
+        runner=FakeRunner(),
+        scrape_ready_check=lambda url, job, auth=None: True,
+        series_count_check=lambda url, job, auth=None: 4.0,
+        poll_interval=0.0,
+        docker_available_fn=lambda: True,
+        warmup_fn=fake_warmup,
+    )
+    # ob-http drove the app's own serving port (published as ingress), not /metrics.
+    assert seen["ingress_url"] == "http://127.0.0.1:49153"
+    assert handle.warmup["terminal_success"] is True
+    assert handle.scrape_ready is True
+
+
+def test_standup_span_metrics_unknown_otlp_app_is_fail_loud():
+    topo = live_compose.parse_subject_topology(_APP_TOPO)
+    handle = live_compose.stand_up_compose_subject(
+        topology=topo, run_id="sm3", span_metrics=True, otlp_app="ghost",
+        runner=FakeRunner(), docker_available_fn=lambda: True,
+    )
+    assert handle.scrape_ready is False
+    assert "not a container" in handle.reason
