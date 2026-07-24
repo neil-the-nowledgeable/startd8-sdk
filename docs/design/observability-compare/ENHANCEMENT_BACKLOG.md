@@ -107,3 +107,90 @@ already exists).
   `tests/ci_known_failing.txt` — not part of this capability.
 
 </details>
+
+---
+
+# Addendum — Synthetic-Probe & declared-lane capabilities (#307 / #308)
+
+**Date:** 2026-07-23 · **Scope:** the declared-lane binders shipped after the original backlog —
+`#307` span-metrics binding, `#308` synthetic-probe P0 + P1–P3. Code:
+`src/startd8/observability/{artifact_generator_generators,compare,compare_live,validate_promql,probe_trace}.py`.
+
+**Grounding note (belief → actual):**
+- *Believed* pending probes might be **invisible** in a live run (a broken end-to-end path) → *actual:*
+  they **are** surfaced in Tier-A — `ComparisonReport.pending` (`compare.py:98`) flows into the live
+  report via `comparison.to_dict()` (`compare_live.py:build_live_comparison` → `tier_a`). That
+  **downgraded** the lead finding from "broken" to "the Tier-B *verdict* roll-up is incomplete" — the
+  function is orphaned, not the feature.
+- *Believed* the R1-F2 "exit-2 leak" the CRP guarded was live in the pipeline → *actual:* `compute_coverage`
+  reads only `extract_exprs` verdicts (`validate_promql.py:981`), and P0/P1 write **no** probe SLO file, so
+  a pending probe was never in that denominator to begin with — the guard is correct but its risk is latent
+  until P2 promotion writes a real SLO. A **decision boundary**, not a bug.
+
+## Top findings (do these first)
+
+**1. [Built-but-unwired] The P2 `pending_probe` verdict is synthesized by a tested function that nothing
+calls.** `pending_probe_verdicts()` (`compare_live.py`) and `promote_probe_slo()` have **zero callers** in
+`src/`/`scripts/` (confirmed by grep, both ends). `build_live_comparison` — which **already receives
+`comparison.pending`** — never merges the synthesized verdicts into `tier_b`, so a `compare-live` run's
+Tier-B verdict list never shows pending probes (they appear only in Tier-A). The plumbing is *in hand*:
+wire `pending_probe_verdicts(comparison.pending-or-fr_coverage)` into `build_live_comparison` and append to
+`tier_b["verdicts"]` (excluded from `fail_verdicts`/coverage, as FR-P2-1 specifies) → so a live report's
+verdict roll-up is complete and an operator sees *"N freshness SLIs pending a runner"* next to the real
+verdicts. **Effort: XS–S.** *(Not "broken" — pending probes already show in Tier-A; this completes the
+Tier-B surface the P2 function was built for.)*
+
+**2. [Enhanced capability] `--promote-probes` — the promotion builder exists; the CLI surface that fires it
+doesn't.** `promote_probe_slo()` (`compare_live.py`) builds the `slos/` SLO from a live-confirmed pending
+entry (single-sourced off the recorded query), but no `--promote-probes` flag on `compare-live` calls it,
+and the ≥2-scrape warm-up gate (NR-5) isn't wired. This is the P2-live surface: wire a flag that, on a
+confirmed metric, writes the promoted SLO. **Effort: M** (part of it is external — needs a live subject to
+*confirm* — but the flag + warm-up gate + write are unit-testable). *(OQ-2.)*
+
+## Backlog appendix
+
+<details><summary>Bucketed backlog (draw from over later increments)</summary>
+
+### ⚡ Quick wins
+- **EC-1 — Wire `pending_probe_verdicts` into `build_live_comparison`** (Top finding 1). `comparison.pending`
+  is already the input; append to `tier_b["verdicts"]`, add a count to `_rollup_reason`. **XS–S.**
+- **EC-2 — A "Pending probes" count in the live rollup reason.** `_rollup_reason` (`compare_live.py`) names
+  dead SLIs but not pending probes; add *"· M pending probe(s)"* so a green run still advertises the
+  derive-value finding. **XS.**
+
+### 🚀 Enhanced capabilities
+- **EC-3 — `--promote-probes` flag + warm-up gate** (Top finding 2). Builder is done; wire the CLI surface.
+  **M.** *(OQ-2; part external.)*
+- **EC-4 — P3 Tempo trace-file adapter.** `compute_fanout_freshness` (`probe_trace.py`) is a tested pure
+  core with **zero callers**; nothing maps real trace JSON → `SpanLite`. Add a `trace_file` adapter (OQ-3
+  leans "consume an exported trace file, no live Tempo dep") → link-aware freshness becomes runnable on a
+  real export. **M/L.** *(External validation still needs traces with the `:link` edge.)*
+- **EC-5 — A concrete runner reference recipe.** P1 emits the `probe-spec.yaml` but OQ-1 deferred the *one*
+  concrete runner (a portable Python/HTTP loop) that executes it. Shipping a reference runner turns the spec
+  from a description into a thing an operator can actually run. **M.** *(OQ-1.)*
+
+### 🏗️ Architectural quick win (one item — hand off deeper cleanup)
+- **EC-6 — Unify the four positive-finding lanes.** `ComparisonReport` now carries
+  `bound`/`bound_functional`/`bound_span`/`pending` — four field+build+render+`to_dict` repetitions
+  (`compare.py:42-67`), each added by a separate lane (#286/#300/#307/#308). The #300-D2 CRP (R1-F8) and the
+  Capability-Delivery-Loop §3 explicitly deferred unification "until the 5th lane." There are now **four** —
+  the threshold is met. This is a **`/complexity-distiller` smell (duplicated shape / shotgun-surgery seam)**;
+  hand the deeper extraction there. One backlog item, cited, not built here. **S–M.**
+
+### Honest gaps (decisions, not bugs)
+- **P2-live and P3-validation are external BY DESIGN** — the spec's §4a Definition-of-Done marks them
+  unit-vs-external; the pure functions (verdict synth, promotion builder, delta core) are the unit-tier
+  deliverable and are done + tested. Their *callers* (live run, `--promote-probes`, Tempo adapter) are the
+  external/P2-live/P3 work above — not a defect that the functions "don't run" today.
+- **`declared_probes` / `declared_span_signals` arrive only if the onboarding metadata carries them.**
+  `_parse_declared_probes` parses the field when present, but the **ContextCore #58 / REQ-CCL-109 carry**
+  (cross-repo) is what makes a real onboarding surface emit it. Until then these lanes fire only on a
+  hand-authored fixture — a known cross-repo dependency, not a gap in this repo.
+
+</details>
+
+## Closure-Ledger row (verified defect)
+
+| Item | Now | Gate to next | Value if closed |
+|------|-----|--------------|-----------------|
+| P2 `pending_probe` verdict wiring | **L2** (built + unit-tested; **zero callers** — orphaned pure fn) | L3 = `build_live_comparison` calls `pending_probe_verdicts` and merges into `tier_b["verdicts"]`, excluded from `fail_verdicts`/coverage; +1 integration test asserting a pending entry appears in a live report's Tier-B | a `compare-live` run's verdict roll-up is complete — pending probes surface as Tier-B verdicts, not only in Tier-A |
