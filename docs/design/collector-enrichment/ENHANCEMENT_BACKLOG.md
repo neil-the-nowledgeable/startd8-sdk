@@ -60,11 +60,10 @@ wire and running the 28-test suite green on merged main.)*
 
 ### ⚡ Quick wins
 - **QW-1 — parity CLI subcommand** — ✅ **DELIVERED** (`startd8 observability enrichment-parity -g <generated> -r <deployed> [--json]`; exit 0=parity/1=mismatch/2=unreadable; `cli.py`). Top finding #1. **S.**
-- **QW-2 — last-mile merge doc/snippet** — Top finding #3, doc flavor. **S.**
-- **QW-3 — surface provenance in the run report** — the sha256 is written to the file header
-  (`_business_provenance`, `:2835/2841`) but not into `report.fr_coverage` or the run index, so a consumer
-  must open the YAML to see it. Add one `fr_coverage["collector_enrichment_provenance"]` line → drift/regen
-  tooling can read it without parsing the artifact. **XS.**
+- **QW-2 — last-mile merge doc/snippet** — ✅ **DELIVERED** (`DEPLOYING.md`: 3-step merge + parity-gate + cardinality notes; generator header points to it). Top finding #3. **S.**
+- **QW-3 / OB-1 — surface provenance + counts in the run report** — ✅ **DELIVERED**. The generator now
+  writes `report.fr_coverage["collector_enrichment"] = {provenance, statements, services_enriched,
+  criticality_dimension}` → drift/regen tooling + the coverage report read them without parsing the YAML. **XS.**
 
 ### 🌱 Low-hanging fruit
 - **LH-1 — live acceptance-#5 proof (merged with EC-2)** — 🔨 **IN PROGRESS** (this branch). Top finding #2:
@@ -84,21 +83,22 @@ wire and running the 28-test suite green on merged main.)*
   duplication-of-one is correct — **do not pre-abstract.** **M, deferred.**
 
 ### 🚀 Enhanced capabilities (higher effort; each justified by existing plumbing)
-- **EC-1 — per-service alert severity + runbook escalation (NR-1 seed).** `ServiceHints.{criticality,owner}`
-  are now populated per-service but read *only* by `generate_collector_enrichment`; `_severity_for` and the
-  runbook escalation block still read project-level `business.criticality/owner`. The data now exists to make
-  severity per-service. Must be additive/flag-guarded — rewiring risks byte-output regressions on existing
-  fixtures (why it was NR-1). **M.**
-- **EC-2 — FR-7: `business.criticality` as a spanmetrics dimension (NR-3 seed).** `calls_total{business_criticality=…}` makes the enrichment queryable in Prometheus, not just present on spans. The *harness* half
-  ships with LH-1 (the `collector_config()` dimension seam). The remaining half — the **generator** emitting
-  the spanmetrics dimension config alongside `transform/business` — stays a follow-up. **M/L.**
+- **EC-1 — per-service alert severity + runbook escalation (NR-1 seed).** ✅ **DELIVERED**. `_severity_for`
+  gains an optional `service` and prefers `service.criticality`; threaded into every per-service generator
+  (alerts/SLOs/monitor/notification/runbook). Runbook prefers `service.owner`. **No flag needed** — empty
+  per-service value ⇒ project fallback ⇒ byte-identical (732 existing fixtures unchanged; the empty-default
+  IS the guard). **M.**
+- **EC-2 — FR-7: `business.criticality` as a spanmetrics dimension (NR-3 seed).** ✅ **DELIVERED**. Both
+  halves now ship: the harness seam (#323) and the **generator** now emits a `connectors.spanmetrics.dimensions:
+  [business.criticality]` fragment alongside `transform/business` (criticality only — owner stays a span
+  attribute; unbounded cardinality would explode series). Parity gate unaffected (reads processors only). **M/L.**
 - **EC-3 — FR-10b: post-cutover drift detection (NR-6 seed).** The provenance sha256 is *already computed*
   (`_business_provenance`) — the missing half is reading it back and re-hashing the deployed config to alert
   on drift after the hand-written block is removed. Reuses the parity parser from QW-1. **M.**
 
 ### 🔭 Operational / observability
-- **OB-1 — count emitted enrichment statements in `fr_coverage`.** One integer (`statements`, `services_enriched`) in the run report makes the paid-nothing $0 pass *legible* — "12 services enriched, 24 statements"
-  — and gives drift tooling a cheap signal. **XS.**
+- **OB-1 — count emitted enrichment statements in `fr_coverage`.** ✅ **DELIVERED** with QW-3 (`statements` +
+  `services_enriched` in the run report). **XS.**
 
 </details>
 
