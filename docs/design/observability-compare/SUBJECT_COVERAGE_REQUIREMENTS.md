@@ -1,8 +1,8 @@
 # compare-live — Expanded Subject Coverage (multi-container + span-metrics standup)
 
-**Version:** 0.3.1 (post-planning + lessons + design-principle hardening)
+**Version:** 0.3.2 (post-review — adds FR-8 warm-up traffic; FR-6/OQ-B flagged for CRP)
 **Date:** 2026-07-24
-**Status:** Draft — ready for CRP
+**Status:** Draft — ready for CRP (one open decision: OQ-B, see §0.3)
 **Parent:** `REQUIREMENTS.md` (shipped v1, single-image standup) — this specs the deferred **NR-1**
 (multi-container) and **NR-2** (span-metrics) as the next increments. **Backlog:** EC-2 / EC-3.
 
@@ -37,6 +37,23 @@ Applied the SDK lessons:
 - **Accidental-Complexity anti-principle** — span-metrics is a *preset* of the multi-container mechanism, not a parallel code path; one standup engine, parameterized (FR-4). Resisted a second standup module.
 - **Genchi Genbutsu** — the spec binds to the real interfaces (`generate_compose_dict` signature, the `:8889` exposition endpoint), correcting the backlog's "swap the backend" / "relax egress" proxies.
 - **Context-Correctness-by-Construction** — a subject that can't be described / a container that never becomes ready → `unknown` (fail-loud), never a false `pass` (FR-5), mirroring the shipped scrape-gate.
+
+### 0.3 Review Response (2026-07-24)
+
+> A code-review of v0.3.1 + a 4-scope reuse hunt (`TRAFFIC_DRIVER_REUSE_MAP.md`) surfaced:
+
+- **[High] Inc-2 would degrade to always-`unknown` — no traffic driver.** Grounded: `stand_up_subject_and_prometheus` (`live_standup.py:229-278`) boots + scrapes but drives **no** requests, and span-metrics
+  emit nothing until the subject is exercised. **Resolved by FR-8** (warm-up traffic reusing an existing
+  driver — `run_smoke`/`run_journey_http`/`run_journey`; no new engine).
+- **[Medium — OPEN for CRP] FR-6 vs OQ-B contradiction.** FR-6 states topology = "generalized
+  `generate_compose_dict`," but OQ-B leaves the approach open and *leans the other way* (a new leaner
+  `observability/live_compose.py` reusing only the net/DNS/ingress patterns). The coupling is real —
+  `generate_compose_dict` validates `ingress` against the **global OB `_SERVICES` registry**
+  (`compose.py:94` → `services.py:88`), which an arbitrary compare-live subject fails. **CRP must decide
+  OQ-B and align FR-6.** Recommendation: the new-leaner-module path (avoid coupling compare-live to
+  `benchmark_matrix`; generalizing in place would fork the registry validation).
+- **[Low] Multi-container × span-metrics composition underspecified** (FR-1 topology + FR-4 preset
+  interaction); Prometheus-is-the-ingress joins **two** networks (fleet + edge) — state it explicitly.
 
 ---
 
@@ -85,6 +102,22 @@ validation. The Tier-B replay engine (`run_validation`) is reused unchanged.
 - **FR-7 Teardown & safety.** Extend the existing best-effort `tear_down` to remove **all** compose
   containers + networks + temp files, on every path (the shipped `finally` + `startd8-cmp-<hex>`
   contract, generalized to N containers).
+- **FR-8 Warm-up traffic (the Inc-2 enabler).** Span-metrics (and lazily-registered RED series) emit
+  **no series until the subject handles a request** — so the standup, which today only boots + scrapes
+  (`live_standup.py:229-278`), must **drive bounded traffic at the subject's ingress before the readiness
+  gate**, else Inc-2 degrades to always-`unknown`. **v1 adds no engine — it reuses an existing SDK
+  driver, selected by subject shape:**
+  - arbitrary OpenAPI app → **`run_smoke(base_url)`** (`deploy_harness/smoke.py:70`) — schema-discovered
+    CRUD round-trip;
+  - OB-shaped HTTP → **`run_journey_http(httpx.Client)`** (`benchmark_matrix/fleet/frontend_gate.py:49`);
+  - OB-shaped gRPC → **`run_journey(addr_map)`** (`benchmark_matrix/fleet/adapter_b.py:227`).
+
+  Loop the chosen driver until the span-metric series **settle** (reuse the existing two-phase `_await_scrape`
+  gate on series-count stability) or **timeout → `unknown`** (fail-loud, per FR-5). **Realistic-load upgrade
+  (optional):** a locust loadgenerator **as a sidecar in the FR-2 compose** (`FRONTEND_ADDR=<ingress>`),
+  lifted from `online-boutique-*/loadgenerator` — it rides the multi-container mechanism already built,
+  adding no standup code. Full grounding + options: **`TRAFFIC_DRIVER_REUSE_MAP.md`** (this dir) and the
+  cross-project catalog `~/Documents/tools/load-generators/README.md`.
 
 ## 3. Non-Requirements
 - **NR-A** Consuming the app's real `docker-compose.yml` verbatim (volumes/healthchecks/build) — a lean
@@ -112,7 +145,11 @@ validation. The Tier-B replay engine (`run_validation`) is reused unchanged.
 | `generate_compose_dict(fleet, *, ingress, host_port)`, `ServiceSpec` | `benchmark_matrix/fleet/compose.py` / `services.py` | ✓ |
 | `get_service` (global-registry coupling), `topo_order` | `benchmark_matrix/fleet/services.py` | ✓ |
 | `collector_config`, `:8889` prom exporter | `observability/runtime_fidelity.py` | ✓ |
+| FR-8 drivers: `run_smoke` `deploy_harness/smoke.py:70` · `run_journey_http` `fleet/frontend_gate.py:49` · `run_journey` `fleet/adapter_b.py:227` | startd8-sdk | ✓ |
 
 ---
 
-*v0.3.1 — post-planning + hardening. Reframed 5 assumptions (backend-swap→topology; two-items→one-doc-two-increments; egress-non-issue; compose-reusable-but-coupled; lean-input-not-real-compose). Effort re-estimated M-L+M, not 2×L. Ready for CRP.*
+*v0.3.2 — post-review. Added FR-8 (warm-up traffic, reuses existing drivers — resolves the [High]
+always-`unknown` gap); flagged the FR-6/OQ-B contradiction for CRP (§0.3). Reuse grounding in
+`TRAFFIC_DRIVER_REUSE_MAP.md`.*
+*v0.3.1 — post-planning + hardening. Reframed 5 assumptions (backend-swap→topology; two-items→one-doc-two-increments; egress-non-issue; compose-reusable-but-coupled; lean-input-not-real-compose). Effort re-estimated M-L+M, not 2×L.*
