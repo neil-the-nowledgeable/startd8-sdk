@@ -346,3 +346,59 @@ def test_cli_clean_gate_no_new_block(monkeypatch, tmp_path):
     )
     assert res.exit_code == 0
     assert "NEW dead SLI(s)" not in res.output
+
+
+# ── FR-8b: --apply-profile-fix writes the diagnosed metricsProfile into the manifest ──
+
+def _report_with_profile(profile, status="fail"):
+    fid = FidelityReport(
+        status=status, reason="x", queries_replayed=1, coverage=0.0, min_coverage=1.0,
+        binding_coverage=0.0, verdicts=[_v("fail")], suggested_metrics_profile=profile,
+    )
+    return compare_live.build_live_comparison(_comparison(), fid, {})
+
+
+def _invoke_apply(monkeypatch, manifest, report, *extra):
+    from typer.testing import CliRunner
+    from startd8.observability import compare_live as cl
+    from startd8.observability.cli import observability_app
+    monkeypatch.setattr(cl, "run_live_comparison", lambda **kw: report)
+    return CliRunner().invoke(
+        observability_app,
+        ["compare-live", "-m", str(manifest), "--subject-image", "x:1", "--apply-profile-fix", *extra],
+    )
+
+
+def test_cli_apply_profile_fix_writes_manifest(monkeypatch, tmp_path):
+    import yaml as _yaml
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("spec:\n  observability: {}\n")
+    res = _invoke_apply(monkeypatch, manifest, _report_with_profile("span-metrics-connector"))
+    assert res.exit_code == 0
+    assert "applied spec.observability.metricsProfile = span-metrics-connector" in res.output
+    assert "comments are NOT preserved" in res.output  # honest lossiness warning
+    got = _yaml.safe_load(manifest.read_text())
+    assert got["spec"]["observability"]["metricsProfile"] == "span-metrics-connector"
+
+
+def test_cli_apply_profile_fix_noop_when_no_profile(monkeypatch, tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("spec: {}\n")
+    before = manifest.read_text()
+    res = _invoke_apply(monkeypatch, manifest, _report_with_profile("", status="fail"))
+    assert "no single metricsProfile" in res.output
+    assert manifest.read_text() == before          # untouched
+    assert res.exit_code == 2                        # report.exit_code() for a fail stands
+
+
+def test_cli_apply_profile_fix_conflicts_with_write_baseline(monkeypatch, tmp_path):
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("spec: {}\n")
+    baseline = tmp_path / "b.json"
+    baseline.write_text('{"accepted_fail_ids": []}')
+    res = _invoke_apply(monkeypatch, manifest, _report_with_profile("p"),
+                        "--write-baseline", "--baseline", str(baseline))
+    assert res.exit_code == 2                         # BadParameter (typer usage error)
+    assert manifest.read_text() == "spec: {}\n"       # conflict blocked BOTH writes
+    # the message is present but Rich word-wraps it in a box; check whitespace-normalized
+    assert "separate authoring" in " ".join(res.output.replace("│", " ").split())

@@ -30,7 +30,7 @@ signal — "these 2 are NEW" — is built and dropped. **Wire `_new` into the ou
 something is dead*. **Effort: XS–S.** *(This is the gate's whole reason to exist; surfacing it is the
 highest value-per-line in the capability.)*
 
-**2. [Latent capability] The one-line fix is computed and printed, but never applied.**
+**2. [Latent capability] The one-line fix is computed and printed, but never applied.** — ✅ **DELIVERED 2026-07-24** (FR-8b): `compare-live --apply-profile-fix` writes `spec.observability.metricsProfile` into the manifest via the existing `bind_and_verify.write_project_profile` (so it was S, not M); explicit-only, no-ops when no single profile fixes it, warns comments aren't preserved, tells you to regenerate. Proven on the demo Prometheus (wrote `span-metrics-connector`). +3 CLI tests.
 `compare_live.py:319-320` renders `one-line fix: metricsProfile = <profile>` (from
 `validate_promql`'s `suggested_metrics_profile`). There is **no `--apply`/`--fix`** anywhere
 (`grep` in `compare_live.py`/`cli.py` finds only the print + the source at `cli.py:205`). The fix is
@@ -69,7 +69,7 @@ already exists).
   absent; the CI deselects were removed. *(Kept here as the Delivered log.)*
 
 ## 🚀 Enhanced capabilities
-- **EC-1 — `--apply-profile-fix`** — *(= Top finding 2)* `compare_live.py:319`. **M.**
+- **EC-1 — `--apply-profile-fix`** — *(= Top finding 2)* ✅ **DELIVERED** (FR-8b; was S not M — reused `bind_and_verify.write_project_profile`).
 - **EC-2 — multi-container subject standup (NR-1)** — `live_standup` stands up ONE `subject_image`;
   heavy subjects (Mastodon = PG+Redis+Sidekiq) are reachable only via `--prometheus <existing>`. A
   compose-based multi-service standup would let the gate stand up real apps. The fleet's

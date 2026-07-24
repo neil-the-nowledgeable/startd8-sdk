@@ -496,6 +496,10 @@ def compare_live_cmd(
     as_json: bool = typer.Option(
         False, "--json", help="Emit the merged report as JSON."
     ),
+    apply_profile_fix: bool = typer.Option(
+        False, "--apply-profile-fix",
+        help="Write the diagnosed metricsProfile fix into --manifest (explicit; regenerate after).",
+    ),
 ) -> None:
     """Tier-B live derived-vs-emitted comparison — merges live fidelity with Tier-A gaps.
 
@@ -571,6 +575,31 @@ def compare_live_cmd(
                 f"docker network rm {report.standup['network']}"
             )
         )
+
+    if apply_profile_fix:
+        # FR-8b: apply the diagnosed one-line fix to the manifest — an EXPLICIT authoring action
+        # (like --write-baseline), reusing the existing manifest-writer. It is the manifest half,
+        # not a full fix: the operator must regenerate for the derived SLIs to change.
+        if write_baseline:
+            raise typer.BadParameter(
+                "--apply-profile-fix and --write-baseline are separate authoring actions — run one at a time"
+            )
+        from .bind_and_verify import write_project_profile
+
+        profile = (report.tier_b or {}).get("suggested_metrics_profile") or ""
+        if not profile:
+            typer.echo(
+                "# no single metricsProfile fixes this run (none suggested — the fix may be a "
+                "per-axis override); manifest left untouched. See the report detail."
+            )
+            raise typer.Exit(code=report.exit_code())
+        write_project_profile(manifest, manifest, profile)
+        typer.echo(f"# applied spec.observability.metricsProfile = {profile} -> {manifest}")
+        typer.echo(
+            "# NOTE: plain-YAML round-trip — comments are NOT preserved. Regenerate "
+            "(startd8 generate observability / backend) for the derived SLIs to take effect."
+        )
+        raise typer.Exit(code=0)  # authoring is not a gate
 
     if write_baseline:
         if not baseline:
