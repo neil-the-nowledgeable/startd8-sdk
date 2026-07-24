@@ -68,6 +68,19 @@ EDGE_NETWORK = "edge"
 #: container may not take it (validated on parse) so ``compose port`` is unambiguous.
 PROMETHEUS_SERVICE = "prometheus"
 
+#: Inc-2 span-metrics preset (FR-4): an OTel-collector-contrib container fronts the
+#: subject — the subject emits OTLP to ``collector:4317``, the collector runs the
+#: reused ``runtime_fidelity.collector_config`` spanmetrics pipeline and exposes the
+#: derived RED series on ``collector:8889``, which Prometheus scrapes (not the subject).
+COLLECTOR_SERVICE = "collector"
+COLLECTOR_IMAGE = "otel/opentelemetry-collector-contrib:0.109.0"
+COLLECTOR_OTLP_PORT = 4317
+COLLECTOR_PROM_PORT = 8889
+#: The contrib image's default config path (``--config`` defaults to this).
+COLLECTOR_CONFIG_MOUNT = "/etc/otelcol-contrib/config.yaml"
+#: Names a subject container may not take (validated on parse).
+RESERVED_SERVICE_NAMES = (PROMETHEUS_SERVICE, COLLECTOR_SERVICE)
+
 
 class TopologyError(ValueError):
     """A malformed / incomplete subject topology (FR-1 schema violation).
@@ -151,7 +164,10 @@ def parse_subject_topology(data: Any) -> SubjectTopology:
         image = rc.get("image")
         _require(isinstance(name, str) and name.strip() != "", f"containers[{i}].name is required")
         _require(isinstance(image, str) and image.strip() != "", f"container {name!r}: image is required")
-        _require(name != PROMETHEUS_SERVICE, f"container name {name!r} is reserved (Prometheus service)")
+        _require(
+            name not in RESERVED_SERVICE_NAMES,
+            f"container name {name!r} is reserved (compose infrastructure: {list(RESERVED_SERVICE_NAMES)})",
+        )
         _require(name not in seen, f"duplicate container name {name!r}")
         seen.add(name)
         port = _as_int(rc.get("port"), f"container {name!r}: port")
@@ -214,6 +230,21 @@ def _topo_order(containers: tuple[Container, ...]) -> tuple[Container, ...]:
     return tuple(ordered)
 
 
+@dataclass(frozen=True)
+class SpanMetricsWiring:
+    """Inc-2 (FR-4): the collector container + which app emits OTLP to it.
+
+    ``otlp_app`` is the subject container pointed at the collector via
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` and depended-on by Prometheus's scrape target
+    (the collector, not the subject). ``config_name`` is the collector config file
+    written into the compose workdir and bind-mounted at ``COLLECTOR_CONFIG_MOUNT``.
+    """
+
+    otlp_app: str
+    collector_image: str = COLLECTOR_IMAGE
+    config_name: str = "otelcol.yaml"
+
+
 def generate_live_compose_dict(
     topology: SubjectTopology,
     *,
@@ -221,6 +252,7 @@ def generate_live_compose_dict(
     prometheus_image: str = PROMETHEUS_IMAGE,
     prometheus_yml_name: str = "prometheus.yml",
     publish_ingress: Optional[tuple[str, int]] = None,
+    span_metrics: Optional[SpanMetricsWiring] = None,
 ) -> Dict[str, Any]:
     """Build the docker-compose mapping for ``topology`` + a Prometheus ingress.
 
@@ -233,24 +265,47 @@ def generate_live_compose_dict(
     ``publish_ingress=(service, port)`` ALSO exposes that subject service on ``edge``
     + a loopback host port (the FR-8 warm-up ingress) so a host-side traffic driver
     can drive it. The rest of the fleet stays internal/egress-denied.
+
+    ``span_metrics`` (Inc-2/FR-4) adds an OTel-collector container: the ``otlp_app``
+    is pointed at ``collector:4317`` (OTLP), the collector runs the reused spanmetrics
+    config and exposes ``collector:8889``, and Prometheus scrapes the **collector**
+    rather than the subject (the subject exposes no ``/metrics``).
     """
     ingress_service = publish_ingress[0] if publish_ingress else None
     ingress_port = publish_ingress[1] if publish_ingress else None
+    scrape_target = COLLECTOR_SERVICE if span_metrics else topology.metrics_service
 
     services: Dict[str, Any] = {}
     for c in _topo_order(topology.containers):
         block: Dict[str, Any] = {"image": c.image, "networks": [FLEET_NETWORK]}
         if c.deps:
             block["depends_on"] = list(c.deps)
+        if span_metrics and c.name == span_metrics.otlp_app:
+            # emit OTLP to the collector; start after it (mirrors resolve_instrumentation env).
+            block["environment"] = {
+                "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://{COLLECTOR_SERVICE}:{COLLECTOR_OTLP_PORT}",
+                "OTEL_TRACES_EXPORTER": "otlp",
+                "OTEL_METRICS_EXPORTER": "none",
+                "OTEL_LOGS_EXPORTER": "none",
+                "OTEL_SERVICE_NAME": c.name,
+            }
+            block["depends_on"] = sorted(set(list(c.deps) + [COLLECTOR_SERVICE]))
         if c.name == ingress_service:
             block["networks"] = [FLEET_NETWORK, EDGE_NETWORK]
             block["ports"] = [f"127.0.0.1:0:{ingress_port}"]
         services[c.name] = block
 
+    if span_metrics:
+        services[COLLECTOR_SERVICE] = {
+            "image": span_metrics.collector_image,
+            "networks": [FLEET_NETWORK],
+            "volumes": [f"./{span_metrics.config_name}:{COLLECTOR_CONFIG_MOUNT}:ro"],
+        }
+
     services[PROMETHEUS_SERVICE] = {
         "image": prometheus_image,
         "networks": [FLEET_NETWORK, EDGE_NETWORK],
-        "depends_on": [topology.metrics_service],
+        "depends_on": [scrape_target],
         "ports": [f"127.0.0.1:{host_port}:9090"],
         "volumes": [f"./{prometheus_yml_name}:/etc/prometheus/prometheus.yml:ro"],
     }
@@ -341,6 +396,9 @@ def stand_up_compose_subject(
     auth: Optional[Auth] = None,
     warmup: Optional["warmup_traffic.WarmupSpec"] = None,
     warmup_count_metric: Optional[str] = None,
+    span_metrics: bool = False,
+    collector_image: str = COLLECTOR_IMAGE,
+    otlp_app: Optional[str] = None,
     runner: Runner = subprocess.run,
     scrape_ready_check: ScrapeReadyCheck = prometheus_query.scrape_ready,
     series_count_check: Optional[SeriesCountCheck] = None,
@@ -350,22 +408,51 @@ def stand_up_compose_subject(
 ) -> ComposeStandupHandle:
     """Bring up ``topology`` + Prometheus via compose; return a handle once a scrape lands.
 
-    ``warmup`` (FR-8): when set, the ``metrics_service`` is also host-published as an
-    ingress and a bounded traffic loop drives it before the readiness gate so
-    lazily-registered / span-metric series materialize. The gate then requires the
-    driver's terminal success AND (when ``warmup_count_metric`` is given) non-zero
-    samples for that metric — else the run is ``unknown`` naming the driver.
+    ``warmup`` (FR-8): when set, the subject ingress is host-published and a bounded
+    traffic loop drives it before the readiness gate so lazily-registered / span-metric
+    series materialize. The gate then requires the driver's terminal success AND (when
+    ``warmup_count_metric`` is given) non-zero samples for that metric — else ``unknown``.
+
+    ``span_metrics`` (Inc-2/FR-4): front the subject with an OTel-collector container —
+    the ``otlp_app`` (default ``metrics_service``) emits OTLP to ``collector:4317``, the
+    collector runs the reused spanmetrics config and Prometheus scrapes ``collector:8889``.
+    Without a warm-up this path can only ever degrade to ``unknown`` (no traffic ⇒ no
+    span-metrics — FR-5), so pair it with ``warmup`` + a span-metric ``warmup_count_metric``.
 
     The caller is responsible for :func:`tear_down_compose` in a ``finally`` block.
     """
     rid = run_id or uuid.uuid4().hex[:8]
     project = f"startd8-cmp-{rid}"  # the sole ownership key for teardown (FR-7)
+
+    # Inc-2: in span-metrics mode Prometheus scrapes the COLLECTOR, and the warm-up
+    # ingress is the app's own serving port (the subject exposes no /metrics).
+    otlp_app = (otlp_app or topology.metrics_service) if span_metrics else None
+    if span_metrics:
+        app_container = next((c for c in topology.containers if c.name == otlp_app), None)
+        if app_container is None:
+            return ComposeStandupHandle(
+                prometheus_url="", job_name=job_name, project_name=project,
+                metrics_service=COLLECTOR_SERVICE,
+                reason=f"otlp_app {otlp_app!r} is not a container in the topology",
+            )
+        scrape_host, scrape_port, scrape_path = COLLECTOR_SERVICE, COLLECTOR_PROM_PORT, "/metrics"
+        ingress_service, ingress_port = otlp_app, app_container.port
+    else:
+        scrape_host, scrape_port, scrape_path = (
+            topology.metrics_service, topology.metrics_port, topology.metrics_path,
+        )
+        ingress_service, ingress_port = topology.metrics_service, topology.metrics_port
+
     handle = ComposeStandupHandle(
         prometheus_url="",
         job_name=job_name,
         project_name=project,
-        metrics_service=topology.metrics_service,
-        container_names=[c.name for c in topology.containers] + [PROMETHEUS_SERVICE],
+        metrics_service=scrape_host,
+        container_names=(
+            [c.name for c in topology.containers]
+            + ([COLLECTOR_SERVICE] if span_metrics else [])
+            + [PROMETHEUS_SERVICE]
+        ),
     )
 
     # Degrade-honest: no docker CLI → fail-loud handle, never a false green.
@@ -381,21 +468,34 @@ def stand_up_compose_subject(
     handle.workdir = workdir
     yml = render_prometheus_yml(
         job_name=job_name,
-        target_host=topology.metrics_service,  # compose service-DNS name
-        target_port=topology.metrics_port,
-        metrics_path=topology.metrics_path,
+        target_host=scrape_host,  # compose service-DNS name (collector in span-metrics mode)
+        target_port=scrape_port,
+        metrics_path=scrape_path,
         scrape_interval=scrape_interval,
     )
     (workdir / "prometheus.yml").write_text(yml, encoding="utf-8")
 
-    # FR-8: a host-drivable warm-up also publishes the metrics_service as an ingress
-    # so a host-side traffic driver can reach it. ob-grpc needs an in-fleet driver
-    # (grpc ports stay internal) — defer it rather than publish a port no driver uses.
+    # Inc-2: write the reused spanmetrics collector config (0.0.0.0 so peers can reach it).
+    sm_wiring = None
+    if span_metrics:
+        from .runtime_fidelity import collector_config
+
+        cfg = collector_config(
+            f"0.0.0.0:{COLLECTOR_OTLP_PORT}", f"0.0.0.0:{COLLECTOR_PROM_PORT}"
+        )
+        (workdir / "otelcol.yaml").write_text(cfg, encoding="utf-8")
+        sm_wiring = SpanMetricsWiring(otlp_app=otlp_app, collector_image=collector_image)
+
+    # FR-8: a host-drivable warm-up also publishes the subject ingress so a host-side
+    # traffic driver can reach it. ob-grpc needs an in-fleet driver (grpc ports stay
+    # internal) — defer it rather than publish a port no driver uses.
     publish_ingress = None
     warmup_host_drivable = bool(warmup) and warmup.shape in warmup_traffic.HOST_DRIVABLE_SHAPES
     if warmup_host_drivable:
-        publish_ingress = (topology.metrics_service, topology.metrics_port)
-    compose = generate_live_compose_dict(topology, host_port=0, publish_ingress=publish_ingress)
+        publish_ingress = (ingress_service, ingress_port)
+    compose = generate_live_compose_dict(
+        topology, host_port=0, publish_ingress=publish_ingress, span_metrics=sm_wiring
+    )
     compose_path = workdir / "docker-compose.yml"
     compose_path.write_text(yaml.safe_dump(compose, sort_keys=False), encoding="utf-8")
     handle.compose_path = compose_path
@@ -427,8 +527,8 @@ def stand_up_compose_subject(
         )
         return handle
     if warmup_host_drivable:
-        r = _compose(runner, workdir, project, "port", topology.metrics_service,
-                     str(topology.metrics_port), timeout=30.0)
+        r = _compose(runner, workdir, project, "port", ingress_service,
+                     str(ingress_port), timeout=30.0)
         iport = _parse_published_port(r.stdout) if r.returncode == 0 else None
         if not iport:
             handle.reason = "could not resolve the published subject-ingress port for warm-up"
@@ -521,9 +621,12 @@ __all__ = [
     "FLEET_NETWORK",
     "EDGE_NETWORK",
     "PROMETHEUS_SERVICE",
+    "COLLECTOR_SERVICE",
+    "COLLECTOR_IMAGE",
     "TopologyError",
     "Container",
     "SubjectTopology",
+    "SpanMetricsWiring",
     "ComposeStandupHandle",
     "parse_subject_topology",
     "generate_live_compose_dict",
