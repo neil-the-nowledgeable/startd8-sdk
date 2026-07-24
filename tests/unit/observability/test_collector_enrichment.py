@@ -428,3 +428,55 @@ class TestWiring:
         assert not [
             a for a in report.artifacts if a.artifact_type == "collector_enrichment"
         ]
+
+
+# ============================ enrichment-parity CLI (QW-1) ============================
+
+
+class TestParityCLI:
+    """`startd8 observability enrichment-parity` — exposes the parity gate for operators."""
+
+    def _write_generated(self, tmp_path):
+        r = generate_collector_enrichment(
+            _boutique_services(), BusinessContext(project_id="ob"), _report()
+        )
+        p = tmp_path / "gen.yaml"
+        p.write_text(r.content)
+        return p
+
+    def test_match_exits_zero(self, tmp_path):
+        from typer.testing import CliRunner
+        from startd8.observability.cli import observability_app
+
+        gen = self._write_generated(tmp_path)
+        res = CliRunner().invoke(
+            observability_app,
+            ["enrichment-parity", "-g", str(gen), "-r", str(_FIXTURE)],
+        )
+        assert res.exit_code == 0
+        assert "PARITY OK" in res.stdout
+
+    def test_mismatch_exits_one(self, tmp_path):
+        from typer.testing import CliRunner
+        from startd8.observability.cli import observability_app
+
+        gen = self._write_generated(tmp_path)
+        bad = tmp_path / "bad.yaml"
+        bad.write_text(gen.read_text().replace('"critical"', '"low"'))
+        res = CliRunner().invoke(
+            observability_app,
+            ["enrichment-parity", "-g", str(gen), "-r", str(bad), "--json"],
+        )
+        assert res.exit_code == 1
+        assert '"matches": false' in res.stdout
+
+    def test_missing_file_exits_two(self, tmp_path):
+        from typer.testing import CliRunner
+        from startd8.observability.cli import observability_app
+
+        gen = self._write_generated(tmp_path)
+        res = CliRunner().invoke(
+            observability_app,
+            ["enrichment-parity", "-g", str(tmp_path / "nope.yaml"), "-r", str(gen)],
+        )
+        assert res.exit_code == 2
