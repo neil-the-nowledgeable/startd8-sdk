@@ -2887,6 +2887,17 @@ def generate_collector_enrichment(
         allow_unicode=True,
         width=1_000_000,  # never fold the long OTTL statements onto multiple lines
     )
+    # QW-4: the emitted `connectors:` block is a PARTIAL fragment, not a full connector — copying it
+    # wholesale would replace (not extend) the operator's real spanmetrics connector, losing its
+    # histogram/namespace/flush config. Mark it append-only inline so a scroll-to-the-YAML operator
+    # can't miss the header note.
+    if has_criticality:
+        body = body.replace(
+            "\nconnectors:\n",
+            "\n# APPEND these dimensions to your EXISTING spanmetrics connector — do NOT replace it "
+            "(see DEPLOYING.md).\nconnectors:\n",
+            1,
+        )
 
     # QW-3 / OB-1: surface provenance + counts in the run report so drift/regen tooling and the
     # coverage report can read them without parsing the artifact YAML. fr_coverage is a guaranteed
@@ -2898,10 +2909,23 @@ def generate_collector_enrichment(
         "criticality_dimension": has_criticality,
     }
 
+    # QW-5: emit ONE stable-keyed derivation carrying the provenance hash. check_drift compares
+    # derivation rules by (field, source) → transformation, but NOT artifact content — so without
+    # this a business-context change (e.g. a service's criticality flip) leaves the same artifact
+    # key with no derivation and is reported as "No drift". The stable (field, source) + changing
+    # transformation (the hash) makes check_drift flag a business-context change. (Deferred FR-10b.)
     return ArtifactResult(
         artifact_type="collector_enrichment",
         service_id=project_id,
         output_path=_COLLECTOR_ENRICHMENT_PATH,
         status="generated",
         content=header + body,
+        derivations=[
+            DerivationTrace(
+                field="collector_enrichment.business",
+                source="instrumentation_hints[*].business",
+                transformation=f"sha256:{provenance}",
+                tier="manifest",
+            )
+        ],
     )

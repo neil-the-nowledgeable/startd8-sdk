@@ -612,3 +612,89 @@ class TestEC2DimensionAndCoverage:
         assert cov["services_enriched"] == 1
         assert cov["criticality_dimension"] is True
         assert cov["provenance"].startswith("sha256:")
+
+
+# ============================ QW-4/QW-5: append-safety + drift derivation ============================
+
+
+class TestQW4AppendComment:
+    def test_connectors_block_marked_append_only(self):
+        r = generate_collector_enrichment(
+            [ServiceHints(service_id="a", service_name="a", criticality="critical")],
+            BusinessContext(),
+            _report(),
+        )
+        # inline marker sits on the line directly above the connectors block (not just the header)
+        assert "(see DEPLOYING.md).\nconnectors:\n" in r.content
+        assert yaml.safe_load(r.content) is not None  # still valid YAML (it's a YAML comment)
+
+    def test_no_append_comment_when_no_dimension(self):
+        # owner-only ⇒ no connectors block ⇒ no append comment
+        r = generate_collector_enrichment(
+            [ServiceHints(service_id="a", service_name="a", owner="team")],
+            BusinessContext(),
+            _report(),
+        )
+        assert "# APPEND" not in r.content
+
+
+class TestQW5DriftDerivation:
+    def _deriv(self, crit):
+        r = generate_collector_enrichment(
+            [ServiceHints(service_id="cart", service_name="cart", criticality=crit)],
+            BusinessContext(),
+            _report(),
+        )
+        return r.derivations
+
+    def test_emits_one_stable_keyed_provenance_derivation(self):
+        [d] = self._deriv("critical")
+        assert d.field == "collector_enrichment.business"
+        assert d.source == "instrumentation_hints[*].business"
+        assert d.transformation.startswith("sha256:")
+
+    def test_key_stable_but_hash_changes_on_business_change(self):
+        [a] = self._deriv("critical")
+        [b] = self._deriv("high")
+        assert (a.field, a.source) == (b.field, b.source)  # stable key
+        assert a.transformation != b.transformation  # hash tracks the change
+
+    def test_check_drift_flags_a_business_change(self):
+        # exercise the real check_drift derivation-rule path end-to-end
+        import json
+
+        from startd8.observability.artifact_generator import (
+            check_drift,
+            generate_observability_artifacts,
+        )
+
+        def _meta(crit):
+            return {
+                "instrumentation_hints": {
+                    "cart": {
+                        "transport": "grpc",
+                        "service_name": "cart",
+                        "business": {"criticality": crit},
+                    }
+                },
+                "declared_artifact_types": [],
+            }
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            mp = td / "onboarding.json"
+            out = td / "out"
+            # run 1: criticality=critical, write the index
+            mp.write_text(json.dumps(_meta("critical")))
+            generate_observability_artifacts(
+                onboarding_metadata_path=mp, output_dir=out, dry_run=False
+            )
+            assert (out / "observability-manifest.yaml").exists()
+            # unchanged manifest ⇒ no drift
+            assert check_drift(mp, out) == 0
+            # run 2: criticality flips ⇒ drift MUST be detected (was silently missed pre-QW-5)
+            mp.write_text(json.dumps(_meta("high")))
+            assert check_drift(mp, out) == 1

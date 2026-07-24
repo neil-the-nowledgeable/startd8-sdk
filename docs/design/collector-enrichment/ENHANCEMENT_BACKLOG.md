@@ -17,7 +17,7 @@
 
 ## Top findings (do these first)
 
-**1. 🌱 A business-context change is invisible to `check_drift` — one derivation closes it.**
+**1. 🌱 A business-context change is invisible to `check_drift` — one derivation closes it. ✅ DONE.**
 `Confirmed:` `generate_collector_enrichment` emits **zero** `DerivationTrace`s (grep of the function =
 0), and `check_drift` (`artifact_generator.py:1633-1664`) detects drift by artifact **keys**
 (`(type, service_id)`, add/remove) + **derivation rules** (`field,source → transformation`). It does
@@ -31,7 +31,7 @@ then flags a business-context change **for free**. → so an operator's `--check
 committed enrichment** instead of silently passing. This is the deferred FR-10b drift detection, now
 reachable for near-nothing. **XS/S.**
 
-**2. ⚡ The emitted `connectors:` block is a replace-footgun — mark it append-only inline.**
+**2. ⚡ The emitted `connectors:` block is a replace-footgun — mark it append-only inline. ✅ DONE.**
 `Confirmed:` the generated file ends with a bare `connectors:\n  spanmetrics:\n    dimensions:` block
 (verified by rendering it). It *looks* like a complete, copyable spanmetrics connector — but an operator
 who copies that `connectors:` section **replaces** their real spanmetrics connector, losing
@@ -59,8 +59,8 @@ generator's zero-derivation output.)*
 <summary><b>Backlog appendix</b> (supporting; draw from over later increments)</summary>
 
 ### ⚡ Quick wins
-- **QW-4 — inline append-only comment on the `connectors:` block** — Top finding #2. **XS.**
-- **QW-5 — provenance derivation for drift** — Top finding #1 (emit one `DerivationTrace`). **XS/S.**
+- **QW-4 — inline append-only comment on the `connectors:` block** — ✅ **DELIVERED** (inline `# APPEND …` above the block). Top finding #2. **XS.**
+- **QW-5 — provenance derivation for drift** — ✅ **DELIVERED** (one stable-keyed `DerivationTrace` carrying the provenance; `check_drift` now flags a business-context change, end-to-end tested). Top finding #1. **XS/S.**
 
 ### 🌱 Low-hanging fruit
 - **LH-2 — surface the coverage counts** — Top finding #3 (run summary / index line). **S.**
