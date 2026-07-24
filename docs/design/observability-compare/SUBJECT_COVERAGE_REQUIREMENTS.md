@@ -153,3 +153,82 @@ validation. The Tier-B replay engine (`run_validation`) is reused unchanged.
 always-`unknown` gap); flagged the FR-6/OQ-B contradiction for CRP (§0.3). Reuse grounding in
 `TRAFFIC_DRIVER_REUSE_MAP.md`.*
 *v0.3.1 — post-planning + hardening. Reframed 5 assumptions (backend-swap→topology; two-items→one-doc-two-increments; egress-non-issue; compose-reusable-but-coupled; lean-input-not-real-compose). Effort re-estimated M-L+M, not 2×L.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-07-24
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-07-24 18:40:00 UTC
+- **Scope**: Requirements-quality review (unambiguity / completeness / testability / traceability), grounded in `compose.py`, `services.py`, `live_standup.py`, and the FR-8 driver signatures. Focus-file asks 1–4 answered first.
+
+##### Focus-file asks (answered before standard suggestions)
+
+**Ask 1 — OQ-B: generalize `generate_compose_dict` in place vs new `observability/live_compose.py`.**
+- **Summary answer:** New leaner module — but the coupling is *deeper* than the doc states, which strengthens the case.
+- **Rationale:** The doc names two OB couplings (ingress validation `compose.py:94→services.py:88`; `image_namespace="r3"`). Grounding surfaced a **third, more pervasive** one the doc misses: `_service_block` (`compose.py:57`) resolves **every** dependency edge through the global registry — `dep = get_service(dep_name)` — to derive `{addr_env}: {peer}:{dial_port}`. An arbitrary compare-live subject whose deps aren't in `_SERVICES` `KeyError`s on *dep fan-out*, not just ingress. Conversely the image coupling is *already soft*: `_service_block:42` uses `spec.image` when set and only falls back to the `r3` namespace when `image is None`, so a per-service stock image needs no change. Net: generalizing-in-place must fork **two** `get_service` call-sites (ingress + dep fan-out) plus thread `addr_env`/`dial_port` off the passed fleet — that is a behavior fork of `benchmark_matrix`'s hot path, risking Round-3 regressions. A new module reusing only the net/DNS/ingress *patterns* isolates that risk.
+- **Assumptions / conditions:** The new module must still carry the §0 faithfulness traps generically (dep-edge env injection, listen≠dial remap) — i.e. it reuses the *mechanism* (`_service_block`'s env/network logic) but sources dep addresses from the passed topology, not `_BY_NAME`.
+- **Suggested improvements:** See R1-F1 (correct the OQ-B coupling inventory) and R1-F2 (align FR-6).
+
+**Ask 2 — FR-6 vs OQ-B contradiction.**
+- **Summary answer:** Yes, real contradiction; FR-6 must be reworded to state the *pattern-reuse* outcome, not "generalized `generate_compose_dict`."
+- **Rationale:** FR-6 (`§2 Cross-cutting`) asserts "topology = generalized `generate_compose_dict`" as settled, but OQ-B (`§4`) and §0.3 both lean new-module. A reader implementing FR-6 verbatim would generalize in place, contradicting the recommendation. See R1-F2.
+
+**Ask 3 — FR-8 soundness (host-side loop vs in-compose locust; span-metrics convergence signal).**
+- **Summary answer:** Host-side loop for v1 is correct; but the convergence signal is under-specified — `_await_scrape`/`job_series_count` count *series presence*, which is the wrong settle signal for histograms.
+- **Rationale:** FR-8 says "re-gate on the two-phase `_await_scrape` (series-count stability)." Grounding (`live_standup.py:143 job_series_count`, `:156 _await_scrape`) confirms the gate keys on **series count settling**. For span-metrics the risk is that the histogram *series* (`_bucket`/`_count`/`_sum`) register on first scrape while their **counts are still 0** until traffic lands — so series-count can "settle" at a stable-but-empty state and gate green with no data, re-introducing the always-`unknown`/false-ready failure FR-8 exists to kill. See R1-F3 (require a non-zero-sample convergence signal, e.g. `sum(increase(<hist>_count[…]))>0`).
+- **Assumptions / conditions:** none.
+- **Suggested improvements:** R1-F3; and R1-F5 on `run_smoke`'s skip-return semantics as a warm-up input.
+
+**Ask 4 — Multi-container × span-metrics composition; Prometheus-two-networks clarity.**
+- **Summary answer:** Under-defined in two concrete ways beyond the doc's own [Low] note.
+- **Rationale:** (a) The *current* single-image standup uses a **plain bridge** `docker network create` (`live_standup.py:258`), NOT the `internal:true` fleet + `edge` split FR-2 introduces — so FR-2 is a *new* network topology for compare-live, not a reuse of the shipped standup's networking; the doc frames it as reuse. (b) `render_prometheus_yml` (`live_standup.py:58`) emits a **single scrape job** (one `target_host:target_port`); FR-4 (scrape `collector:8889`) fits, but any FR-1 subject where the ingress service ≠ the metrics service, or where >1 service must be scraped, needs multi-job Prometheus config that does not exist yet. See R1-F4 and R1-F6.
+- **Suggested improvements:** R1-F4, R1-F6.
+
+##### Numbered suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Architecture | high | Correct the OQ-B / §0.3 coupling inventory: `generate_compose_dict` couples to the global registry at **three** sites, not two — add the dep-edge fan-out `get_service(dep_name)` at `compose.py:57` (every `depends_on` peer is resolved via `_BY_NAME` to build `{addr_env}: peer:dial_port`). Also note the image coupling is *already soft* (`compose.py:42` prefers `spec.image`; the `r3` namespace is only the `image is None` fallback), so it is NOT a blocker. | The doc's stated couplings (ingress validation + image_namespace) understate the in-place-generalization cost and overstate the image issue; the dep fan-out is the coupling that actually breaks an arbitrary subject and forks `benchmark_matrix`'s hot path. Getting the inventory right is what justifies OQ-B's new-module lean. | §0.3 (FR-6/OQ-B bullet) and §4 OQ-B | Grep-verify `get_service(` occurrences in `compose.py` return exactly two call-sites (`:94` ingress, `:57` dep); confirm `_service_block` image branch at `:42`. |
+| R1-F2 | Interfaces | high | Reword FR-6's third clause from "topology = generalized `generate_compose_dict`" to the OQ-B-resolved outcome, e.g. "topology = a new `observability/live_compose.py` that **reuses the `compose.py` net/DNS/ingress/dep-env patterns** without importing `benchmark_matrix`'s OB registry." Make FR-6 defer to OQ-B rather than pre-deciding it. | FR-6 currently states as a *requirement* the exact approach OQ-B/§0.3 leans *against* — an implementer following FR-6 verbatim contradicts the recommendation. A requirement must not assert an open decision as settled. | §2 Cross-cutting, FR-6 (verbatim: "topology = generalized `generate_compose_dict`") | Post-CRP, verify FR-6 wording and OQ-B resolution agree (no reviewer can read them as contradictory). |
+| R1-F3 | Validation | high | FR-8 must specify a **non-zero-sample** span-metric convergence signal, not just `_await_scrape` series-count stability. State the gate as: histogram `_count` series exist **AND** `sum(increase(<span_metric>_count[<window>])) > 0` before releasing; series-count-only stability may settle at a registered-but-empty state and gate green with no data. | `_await_scrape`/`job_series_count` (`live_standup.py:143,156`) key on series *presence/count settling*; span-metric histograms can register series on first scrape with zero observations until traffic lands — re-introducing the false-ready path FR-8 exists to eliminate (see §0.3 [High]). | §2 FR-8, after "reuse the existing two-phase `_await_scrape` gate on series-count stability" | Stand up a span-metrics subject, drive zero traffic, assert the gate does NOT release (stays until timeout→`unknown`); drive traffic, assert release only after `_count` increase is observed. |
+| R1-F4 | Ops | medium | State explicitly that FR-2 introduces a **new** two-network topology (`internal:true` `fleet` + `edge` bridge) that the *current* single-image standup does not use (it uses a plain `docker network create` bridge, `live_standup.py:258`). Frame FR-2 networking as **new code adapted from `compose.py`'s pattern**, not reuse of the shipped standup. | The doc's [Low] note says "Prometheus joins two networks — state it explicitly," but the deeper gap is that the shipped standup has no fleet/edge concept at all; readers estimating effort/teardown from the existing standup will under-scope. Accurate provenance prevents a false "just reuse live_standup" read. | §0.3 [Low] bullet and §1/FR-2 | Confirm `live_standup.py` uses a single plain bridge (grep `network create`); confirm no `internal:true`/`edge` today. |
+| R1-F5 | Risks | medium | FR-8 should define behavior when the selected driver **cannot exercise** the subject: `run_smoke` returns a `SmokeOutcome(status="skipped", …)` (no OpenAPI / no CRUD resource / body-synth-fail) and **never raises**; the OB journey drivers can score all-fail on a non-OB subject. Specify that a driver that produces **no successful request** ⇒ warm-up fails ⇒ `unknown` (fail-loud), never a silent proceed-to-gate. | Without this, a mis-matched driver (generic `run_smoke` against an app with no `/openapi.json`) silently drives zero real traffic, span-metrics never materialize, and the run degrades to `unknown` with no distinguishable cause from "subject emits no traces." Making the skip an explicit fail-loud branch preserves diagnosability. | §2 FR-8, driver-selection list | Point `run_smoke` at a subject with no `/openapi.json`; assert warm-up reports a `skipped`/`unknown` reason naming the driver, not a false-ready. |
+| R1-F6 | Interfaces | medium | FR-1/FR-2 must state whether Prometheus scrapes **one** service (`metrics_service`) or potentially several, and reconcile with `render_prometheus_yml` being **single-job today** (`live_standup.py:58`). If v1 is single-scrape-target, say so as an explicit boundary; if multi-service metrics are in scope, FR-2 must call out generalizing `render_prometheus_yml` to N scrape jobs. | FR-1 introduces `metrics_service`/`metrics_port`/`metrics_path` (singular), implying one scrape target, but a "multi-container app" reader may expect per-service scraping. The single-job renderer is a concrete constraint that should be surfaced as either a boundary or a required change. | §2 FR-1 (metrics_service fields) and FR-2 | Confirm `render_prometheus_yml` emits exactly one `job_name`/target; assert FR text names the single-target boundary or the N-job change. |
+| R1-F7 | Validation | low | FR-3/FR-7 reuse `_await_scrape` and `tear_down`, but neither states the **N-container** teardown ordering/failure contract: FR-7 says "generalized to N containers" — specify that teardown is **best-effort per-container** (one container's removal failure must not abort the rest) and that the `startd8-cmp-<hex>` prefix is the sole ownership key for the sweep. | "Generalized to N containers" is directionally clear but not testable as written; a partial-teardown that aborts on the first error would leak containers/networks across runs. The shipped single-image `tear_down` is best-effort (`live_standup.py:325`); the N-container contract should say so. | §2 FR-7 | Simulate one container removal failing; assert remaining containers + the network + temp files are still removed and the run reports leaked-resource count. |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F8 | Risks | medium | Adversarial to my own Ask-3/R1-F3: even a non-zero `_count` signal can gate green on **partial** warm-up (only the browse step's spans materialized, checkout never ran). Add that FR-8's warm-up must assert the driver reached a **terminal success** (e.g. `JourneyOutcome.completed` / `run_smoke` status `passed`), not merely "some series appeared," before the gate is trusted. | A bounded loop that only ever succeeds at `GET /` produces non-zero span-metrics yet leaves the checkout SLI's series empty — the PromQL replay then validates a subset and may false-`pass`/`unknown` inconsistently. Tying warm-up release to driver terminal success closes the partial-coverage hole R1-F3 alone leaves open. | §2 FR-8 (convergence criteria) | Force checkout to fail; assert warm-up does not report ready (driver `completed=False`), run resolves `unknown`, not a partial green. |
+| R1-F9 | Data | low | FR-1's `--subject-compose <file.yaml>` lean schema is described in prose (`{name, image, port, deps?}` + `metrics_service`/`metrics_port`/`metrics_path`) but has no formal schema or example. Add a minimal YAML example and state required-vs-optional fields + the validation error surface (malformed topology ⇒ `unknown`, never a partial standup), consistent with FR-5 fail-loud. | An implementer/QA cannot write a conformance test against prose; a worked example + field table makes FR-1 testable and prevents divergent parsers. Cross-refs OQ-A (lean-YAML vs compose-subset) — pin the v1 shape concretely. | §2 FR-1 | Provide the example as a golden fixture; assert the parser round-trips it and rejects a missing-`metrics_service` file with an `unknown`-class error. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with): none — Appendix C had no prior rounds at R1.
+
