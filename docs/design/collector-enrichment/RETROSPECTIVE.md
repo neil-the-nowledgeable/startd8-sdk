@@ -137,3 +137,64 @@ byte-identical 732-fixture result; the fixture grep.
 - Feeds the forward loop: this standard is now an input to the next `/reflective-requirements` that
   proposes a per-instance override — it should default to "empty-default guard, verify by grep" and only
   escalate to a flag if a fixture already carries the field.
+
+---
+
+# Retrospective — the enhancement-backlog-driven arc (#322–326)
+
+**Pilot:** five PRs driven by `/enhancement-backlog` (parity CLI → live proof → follow-ups → drift/append
+→ legibility/scoring → `--reference-cmd`), over the collector_enrichment subsystem.
+**Question:** how should an enhancement backlog be *consumed*? What did the arc prove about the backlog
+itself as an input?
+
+## Phase 2 — the actuals
+
+The backlog is *supposed* to be grounded (its own discipline: `Confirmed:` vs `Hypothesis:`). Yet at
+**build** time, grounding the enabling claim against the real code — and the real external system —
+corrected the backlog's framing on three of the items actually built.
+
+## Phase 3 — reversed discovery table (backlog said → actuals revealed)
+
+| The backlog said | Grounding at build time revealed | So the standard is… |
+|---|---|---|
+| QW-3 provenance is likely **redundant** with existing drift detection | `check_drift` (`artifact_generator.py:1633-1664`) is **key + derivation** based, **not** content-based → provenance is *not* redundant; a business change was silently undetected (→ QW-5, a real fix) | re-ground the "redundant with X" dismissal against X's actual code — a dismissal is a hypothesis too |
+| EC-3 = `--live-config <url>` pulling a running collector's effective config | stock `otelcol-contrib` exposes **no** config-over-HTTP endpoint (zPages ≠ raw config) → built `--reference-cmd` instead | ground the **external data source**, not just the internal enabling claim |
+| the parity gate is the deliverable (function + test) | correct — but reachable **only from tests**; the operator surface was missing (→ QW-1 CLI) | "shipped as speced" can still be unreachable; check the *surface*, not just the function |
+
+The load-bearing surprise is the middle row. The backlog grounded the half it could see — its **own
+repo** ("the parity parser is transport-agnostic", true) — and *guessed* the half it couldn't — the
+**third-party** surface ("otelcol exposes config over HTTP", false). The internal "already exists" was
+right while the external "and you can fetch X from Y" was wrong.
+
+## Phase 4 — the extracted standard
+
+> **Standard: an enhancement-backlog item is a hypothesis; re-ground it at build time — the internal
+> enabling claim AND the external data source.**
+> A backlog is authored against a snapshot and grounded against the code it can see. Before building an
+> item:
+> 1. **Re-verify the internal enabling claim** — the code moves; the `file:line` the item cites may have
+>    changed. Confirm the plumbing still exists and does what the item assumes.
+> 2. **Ground the external data source separately** — if the item depends on a third-party surface (an
+>    endpoint, a binary flag, a config API), verify *that* exists. The internal claim can be true while the
+>    external assumption is false (EC-3: transport-agnostic parser ✓, otelcol config endpoint ✗).
+> 3. **Treat "redundant with X" / "already covered" as a hypothesis too** — open X's code before dismissing
+>    (QW-3→QW-5: the "redundant" provenance was the fix).
+> 4. Expect ~1-in-3 built items to need a framing correction. That is the grounding working, not the
+>    backlog failing.
+
+## Phase 5 — lesson + principle
+
+- **Lesson:** *"an enhancement-backlog item is a belief; re-ground both its internal claim and its external
+  data source at build time"* — the third member of the belief-artifact triad with
+  [[feedback_cross_repo_handoff_grounding]] (handoffs) and the requirements spec (reflective-requirements).
+  → auto-memory.
+- **Genchi Genbutsu, extended:** the principle already says "bind to the real artifact." The arc sharpens
+  it — *which* real artifact: for a backlog item, that's **two** artifacts (your code + the third-party
+  system it touches), and the backlog only grounded the first.
+
+## Phase 6 — Yokoten
+
+- Every future `/enhancement-backlog` consumption: before building an item, re-run its `Confirmed:` claim
+  and, if it names an external surface, verify that surface exists — don't inherit the backlog's grounding.
+- The belief-artifact triad (handoff · spec · backlog) now has one rule: **the map is not the territory,
+  in both directions, at every stage — re-ground at the moment of building, not just at authoring.**
