@@ -62,11 +62,23 @@ After a collector reload, spans carry `business.criticality` / `business.owner`,
 Before deleting any hand-written `transform/business` block, confirm the generated one is equivalent:
 
 ```bash
+# against a config FILE
 startd8 observability enrichment-parity \
   --generated collector-enrichment/otelcol-business-enrichment.yaml \
   --reference path/to/your/hand-written-collector-config.yaml
-# exit 0 = parity (safe to retire the mirror) · 1 = mismatch · 2 = unreadable input
+
+# ...or against the LIVE deployed config, pulled by any command (--reference-cmd):
+startd8 observability enrichment-parity \
+  --generated collector-enrichment/otelcol-business-enrichment.yaml \
+  --reference-cmd "kubectl get configmap otel-collector -o jsonpath='{.data.config\.yaml}'"
+# exit 0 = parity (safe to retire the mirror) · 1 = mismatch · 2 = unreadable/erroring input
 ```
+
+`--reference-cmd` runs a shell command and compares against its stdout — use it to verify the config
+that is **actually deployed** (a k8s ConfigMap, a host file, etc.), not just a file in your repo. It is
+mutually exclusive with `--reference`; a non-zero exit or a 60s timeout yields exit code 2 (never a
+false pass). The command runs with your shell/credentials — it's your command, same trust model as a
+shell alias.
 
 Parity is **semantic**, not byte-for-byte: a one-statement-per-service generated block matches a
 value-grouped hand-written block (`… == "a" or … == "b"`) as long as the resolved

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import typer
 
@@ -611,12 +612,19 @@ def enrichment_parity_cmd(
         help="Generated collector-enrichment YAML "
         "(collector-enrichment/otelcol-business-enrichment.yaml from the artifact run).",
     ),
-    reference: Path = typer.Option(
-        ...,
+    reference: Optional[Path] = typer.Option(
+        None,
         "--reference",
         "-r",
-        help="The deployed / hand-written collector config to compare against "
-        "(the transform/business block being retired).",
+        help="The deployed / hand-written collector config FILE to compare against.",
+    ),
+    reference_cmd: Optional[str] = typer.Option(
+        None,
+        "--reference-cmd",
+        help="Shell command whose stdout is the reference collector config — pull the LIVE deployed "
+        "config from wherever it lives, e.g. "
+        "\"kubectl get configmap otel-collector -o jsonpath='{.data.config\\.yaml}'\". "
+        "Mutually exclusive with --reference.",
     ),
     as_json: bool = typer.Option(
         False, "--json", help="Emit the ParityResult as JSON instead of a text summary."
@@ -624,18 +632,47 @@ def enrichment_parity_cmd(
 ) -> None:
     """Semantic parity gate for the collector_enrichment cutover (REQ_COLLECTOR_ENRICHMENT FR-10a/11).
 
-    Compares the generated ``transform/business`` processor against the hand-written one on the
-    resolved ``{service.name: {criticality?, owner?}}`` map — order- and grouping-insensitive, so a
-    one-statement-per-service generator matches a value-grouped hand-written block. Run this before
-    deleting the mirror. Exit 0 = parity (safe to cut over), 1 = mismatch, 2 = unreadable input.
+    Compares the generated ``transform/business`` processor against the deployed one on the resolved
+    ``{service.name: {criticality?, owner?}}`` map — order- and grouping-insensitive, so a
+    one-statement-per-service generator matches a value-grouped hand-written block. The reference is a
+    FILE (``--reference``) or the stdout of a command that fetches the LIVE deployed config
+    (``--reference-cmd``, e.g. a ``kubectl get configmap``). Run before deleting the mirror.
+    Exit 0 = parity (safe to cut over), 1 = mismatch, 2 = unreadable/erroring input.
     """
+    import subprocess
+
     from .collector_enrichment_parity import check_collector_enrichment_parity
+
+    if (reference is None) == (reference_cmd is None):
+        typer.echo(
+            "error: provide exactly one of --reference <file> or --reference-cmd <shell>",
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
     try:
         gen_yaml = Path(generated).read_text()
-        ref_yaml = Path(reference).read_text()
+        if reference_cmd is not None:
+            # The operator's own command, on their own machine (same trust model as a shell alias) —
+            # run it and use stdout as the reference. Non-zero exit / timeout ⇒ code 2, never a false pass.
+            proc = subprocess.run(
+                reference_cmd, shell=True, capture_output=True, text=True, timeout=60
+            )
+            if proc.returncode != 0:
+                typer.echo(
+                    f"error: --reference-cmd exited {proc.returncode}: "
+                    f"{(proc.stderr or '').strip()[:500]}",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
+            ref_yaml = proc.stdout
+        else:
+            ref_yaml = Path(reference).read_text()
     except OSError as exc:
         typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+    except subprocess.TimeoutExpired:
+        typer.echo("error: --reference-cmd timed out after 60s", err=True)
         raise typer.Exit(code=2)
 
     result = check_collector_enrichment_parity(gen_yaml, ref_yaml)

@@ -481,6 +481,62 @@ class TestParityCLI:
         )
         assert res.exit_code == 2
 
+    # EC-3: --reference-cmd (pull the live/deployed config from a command's stdout)
+    def test_reference_cmd_match_exits_zero(self, tmp_path):
+        from typer.testing import CliRunner
+        from startd8.observability.cli import observability_app
+
+        gen = self._write_generated(tmp_path)
+        res = CliRunner().invoke(
+            observability_app,
+            ["enrichment-parity", "-g", str(gen), "--reference-cmd", f"cat {_FIXTURE}"],
+        )
+        assert res.exit_code == 0
+        assert "PARITY OK" in res.stdout
+
+    def test_reference_cmd_nonzero_exits_two(self, tmp_path):
+        from typer.testing import CliRunner
+        from startd8.observability.cli import observability_app
+
+        gen = self._write_generated(tmp_path)
+        res = CliRunner().invoke(
+            observability_app,
+            ["enrichment-parity", "-g", str(gen), "--reference-cmd", "exit 7"],
+        )
+        assert res.exit_code == 2
+        assert "exited 7" in (res.stdout + (res.stderr or ""))
+
+    def test_both_reference_sources_exits_two(self, tmp_path):
+        from typer.testing import CliRunner
+        from startd8.observability.cli import observability_app
+
+        gen = self._write_generated(tmp_path)
+        res = CliRunner().invoke(
+            observability_app,
+            [
+                "enrichment-parity",
+                "-g",
+                str(gen),
+                "-r",
+                str(_FIXTURE),
+                "--reference-cmd",
+                f"cat {_FIXTURE}",
+            ],
+        )
+        assert res.exit_code == 2
+        assert "exactly one" in (res.stdout + (res.stderr or ""))
+
+    def test_no_reference_source_exits_two(self, tmp_path):
+        from typer.testing import CliRunner
+        from startd8.observability.cli import observability_app
+
+        gen = self._write_generated(tmp_path)
+        res = CliRunner().invoke(
+            observability_app, ["enrichment-parity", "-g", str(gen)]
+        )
+        assert res.exit_code == 2
+        assert "exactly one" in (res.stdout + (res.stderr or ""))
+
 
 # ============================ EC-1: per-service severity + owner ============================
 
