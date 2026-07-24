@@ -2,7 +2,7 @@
 
 **Version:** 0.4 (post CRP Round 1 — 8 suggestions + adversarial, all applied; ready to implement)
 **Date:** 2026-07-23
-**Status:** Draft — spec only, no code
+**Status:** IMPLEMENTED (unit tier, 2026-07-23) — P1 runner-spec + exclusion + reason_code state machine; P2 `pending_probe` verdict synthesis + severity-0 + promotion builder; P3 pure `SpanLite` delta core. 14 tests. **P2-live + P3-validation are EXTERNAL (a live Mastodon/Tempo subject), NOT done here.**
 **Owner:** observability artifact generator (`src/startd8/observability/`)
 **GitHub:** startd8-sdk **#308**, Phases **P1/P2/P3** (P0 shipped, PR #312)
 **Refs:** `SYNTHETIC_PROBE_SLI_DESIGN.md` (the P0–P3 frame), `SYNTHETIC_PROBE_P0_REQUIREMENTS.md` (v0.4,

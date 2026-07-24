@@ -276,6 +276,7 @@ _EXCLUDED_ARTIFACT_DIRS: Dict[str, str] = {
     "loki-rules": "loki_rule",               # LogQL, not PromQL
     "notifications": "notification_policy",  # Alertmanager routing, not a query
     "runbooks": "runbook",                   # prose, not a query
+    "probe-specs": "probe_spec",             # #308 P1: synthetic-probe runner recipe, not PromQL
 }
 
 
@@ -553,7 +554,7 @@ class ExprVerdict:
     expr: str
     source_file: str
     live_result_count: int
-    verdict: str  # "pass" | "fail" | "bound_no_data" | "error" | "excluded"
+    verdict: str  # "pass" | "fail" | "bound_no_data" | "error" | "excluded" | "pending_probe" (#308 P2)
     mismatched_axes: List[str] = field(default_factory=list)
     expected_metric: str = ""
     remediation: str = ""

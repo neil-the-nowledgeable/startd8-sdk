@@ -99,6 +99,7 @@ from .artifact_generator_generators import (  # noqa: F401
     generate_declared_functional_slos,
     generate_declared_span_slos,
     generate_declared_probe_slos,
+    generate_declared_probe_specs,
 )
 
 try:
@@ -610,6 +611,10 @@ def generate_observability_artifacts(
         probe_slo = generate_declared_probe_slos(service, business, descriptor)
         _ppq = probe_slo.quality or {}
         _pending_probes.extend(_ppq.get("pending_probes", []))
+        # #308 P1: the runnable probe-spec artifact (probe-specs/, excluded from PromQL replay).
+        probe_spec = generate_declared_probe_specs(service, business, descriptor)
+        if probe_spec.status == "generated":
+            report.artifacts.append(probe_spec)
         # FR-9: a service that resolves to ∅ SLI kinds (non-request, nothing declared)
         # is observed by nothing — surface it rather than silently emitting nothing.
         _svc_signals = [

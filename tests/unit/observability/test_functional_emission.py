@@ -920,11 +920,12 @@ class TestDeclaredProbeP0:
         return generate_declared_probe_slos(self._svc(probes), BusinessContext())
 
     def test_fr2_writes_no_slo_file_records_pending(self):
-        # R1-F1: P0 emits NO SLO YAML (would be a dead-SLI leak); the SLO lives in pending_probes.
+        # R1-F1: the probe lane emits NO SLO YAML (dead-SLI leak); the SLO lives in pending_probes.
+        # Post-P1 the reason_code advances to probe_runner_emitted (a runner spec now exists).
         r = self._run([DeclaredProbe(name="fanout_freshness")])
         assert r.status == "skipped" and r.content == "" and r.output_path == ""
         p = r.quality["pending_probes"][0]
-        assert p["reason_code"] == "probe_pending_no_runner"
+        assert p["reason_code"] == "probe_runner_emitted"
         assert p["threshold_deferred"] is True  # no target
 
     def test_fr3_gauge_query_is_service_scoped_default_metric(self):
