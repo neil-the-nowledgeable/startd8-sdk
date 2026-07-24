@@ -111,8 +111,10 @@ def validate_promql(
         prometheus_url=prometheus,
         min_coverage=min_coverage,
         bind_window=bind_window,
-        exclude_kinds={k.strip() for k in exclude_kinds.split(",") if k.strip()} or None,
-        exclude_services={s.strip() for s in exclude_services.split(",") if s.strip()} or None,
+        exclude_kinds={k.strip() for k in exclude_kinds.split(",") if k.strip()}
+        or None,
+        exclude_services={s.strip() for s in exclude_services.split(",") if s.strip()}
+        or None,
         allow_prod=allow_prod,
         dry_run=dry_run,
         auth=auth,
@@ -290,7 +292,9 @@ def bind_and_verify_cmd(
     payload = redact(json.dumps(result.to_dict(), indent=2), auth.redactions())
     if report is not None:
         Path(report).write_text(payload + "\n")
-        typer.echo(f"bind-and-verify report written to {report} (status={result.status})")
+        typer.echo(
+            f"bind-and-verify report written to {report} (status={result.status})"
+        )
     else:
         typer.echo(payload)
 
@@ -300,26 +304,35 @@ def bind_and_verify_cmd(
 @observability_app.command("contrast")
 def contrast_cmd(
     manifest: Path = typer.Option(
-        ..., "--manifest", "-m",
+        ...,
+        "--manifest",
+        "-m",
         help="ContextCore manifest — generated ungoverned (bindings stripped) and governed.",
     ),
     output: Path = typer.Option(
-        ..., "--output", "-o",
+        ...,
+        "--output",
+        "-o",
         help="Output dir (holds ungoverned/ + governed/ + before-after-contrast.md).",
     ),
     prometheus: str = typer.Option(
-        "http://localhost:9090", "--prometheus",
+        "http://localhost:9090",
+        "--prometheus",
         help="Prometheus base URL both variants are replayed against.",
     ),
     min_coverage: float = typer.Option(
-        0.9, "--min-coverage",
+        0.9,
+        "--min-coverage",
         help="binding_coverage floor for each variant's gate status.",
     ),
     allow_prod: bool = typer.Option(
-        False, "--allow-prod", help="Opt in to a non-demo/non-localhost backend.",
+        False,
+        "--allow-prod",
+        help="Opt in to a non-demo/non-localhost backend.",
     ),
     export_cmd: str = typer.Option(
-        "contextcore manifest export --no-strict-quality", "--export-cmd",
+        "contextcore manifest export --no-strict-quality",
+        "--export-cmd",
         help="Command that runs ContextCore export (override if not on PATH).",
     ),
 ) -> None:
@@ -354,11 +367,15 @@ def contrast_cmd(
 @observability_app.command("scorecard")
 def scorecard_cmd(
     report: Path = typer.Option(
-        ..., "--report", "-r",
+        ...,
+        "--report",
+        "-r",
         help="fidelity-report.json (from `validate-promql --report`) to render.",
     ),
     output: Path = typer.Option(
-        None, "--output", "-o",
+        None,
+        "--output",
+        "-o",
         help="Write the markdown scorecard here (default: stdout).",
     ),
 ) -> None:
@@ -379,12 +396,15 @@ def scorecard_cmd(
 @observability_app.command("compare")
 def compare_cmd(
     manifest: Path = typer.Option(
-        ..., "--manifest", "-m",
+        ...,
+        "--manifest",
+        "-m",
         help="A generated observability-manifest.yaml (its fr_coverage block is read).",
     ),
     as_json: bool = typer.Option(False, "--json", help="Emit the report as JSON."),
     strict: bool = typer.Option(
-        False, "--strict",
+        False,
+        "--strict",
         help="Exit 2 when any divergence class is non-empty (for a CI gate).",
     ),
 ) -> None:
@@ -401,7 +421,9 @@ def compare_cmd(
     from .compare import build_comparison_report, read_fr_coverage, render_report
 
     report = build_comparison_report(read_fr_coverage(manifest))
-    typer.echo(json.dumps(report.to_dict(), indent=2) if as_json else render_report(report))
+    typer.echo(
+        json.dumps(report.to_dict(), indent=2) if as_json else render_report(report)
+    )
     if strict and report.total_gaps:
         raise typer.Exit(code=2)
 
@@ -409,45 +431,70 @@ def compare_cmd(
 @observability_app.command("compare-live")
 def compare_live_cmd(
     manifest: Path = typer.Option(
-        ..., "--manifest", "-m",
+        ...,
+        "--manifest",
+        "-m",
         help="A generated observability-manifest.yaml (its fr_coverage block = Tier A).",
     ),
     artifacts_dir: Path = typer.Option(
-        None, "--artifacts-dir",
+        None,
+        "--artifacts-dir",
         help="Generated observability output dir (the PromQL replayed for Tier B).",
     ),
     onboarding_metadata: Path = typer.Option(
-        None, "--onboarding-metadata",
+        None,
+        "--onboarding-metadata",
         help="ContextCore onboarding-metadata.json (reconstructs expected metric identity).",
     ),
     subject_image: str = typer.Option(
-        None, "--subject-image",
+        None,
+        "--subject-image",
         help="Single subject image to stand up + scrape (v1). Omit when using --prometheus.",
     ),
-    subject_port: int = typer.Option(8080, "--subject-port", help="Subject /metrics port."),
-    metrics_path: str = typer.Option(
-        "/metrics", "--metrics-path",
-        help="Subject metrics path (e.g. /actuator/prometheus for Spring subjects)."),
-    prometheus: str = typer.Option(
-        None, "--prometheus",
-        help="Replay against an EXISTING backend instead of standing a subject up "
-             "(the multi-container / Mastodon path).",
+    subject_port: int = typer.Option(
+        8080, "--subject-port", help="Subject /metrics port."
     ),
-    min_coverage: float = typer.Option(1.0, "--min-coverage", help="Fidelity threshold."),
+    metrics_path: str = typer.Option(
+        "/metrics",
+        "--metrics-path",
+        help="Subject metrics path (e.g. /actuator/prometheus for Spring subjects).",
+    ),
+    prometheus: str = typer.Option(
+        None,
+        "--prometheus",
+        help="Replay against an EXISTING backend instead of standing a subject up "
+        "(the multi-container / Mastodon path).",
+    ),
+    min_coverage: float = typer.Option(
+        1.0, "--min-coverage", help="Fidelity threshold."
+    ),
     allow_prod: bool = typer.Option(
-        False, "--allow-prod",
+        False,
+        "--allow-prod",
         help="Permit a non-loopback --prometheus backend (FR-8c). No-op on the "
-             "--subject-image standup path (Prometheus is always loopback there)."),
+        "--subject-image standup path (Prometheus is always loopback there).",
+    ),
     keep_up: bool = typer.Option(
-        False, "--keep-up", help="Skip teardown (debug); prints the docker rm commands."),
+        False, "--keep-up", help="Skip teardown (debug); prints the docker rm commands."
+    ),
     strict_tier_a: bool = typer.Option(
-        False, "--strict-tier-a", help="Let Tier-A static gaps contribute a fail (default advisory)."),
+        False,
+        "--strict-tier-a",
+        help="Let Tier-A static gaps contribute a fail (default advisory).",
+    ),
     baseline: Path = typer.Option(
-        None, "--baseline", help="Accepted-fail baseline JSON; exit 2 only on a NEW fail (CI gate)."),
+        None,
+        "--baseline",
+        help="Accepted-fail baseline JSON; exit 2 only on a NEW fail (CI gate).",
+    ),
     write_baseline: bool = typer.Option(
-        False, "--write-baseline",
-        help="Write current fail identities to --baseline (explicit re-baseline; never automatic)."),
-    as_json: bool = typer.Option(False, "--json", help="Emit the merged report as JSON."),
+        False,
+        "--write-baseline",
+        help="Write current fail identities to --baseline (explicit re-baseline; never automatic).",
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the merged report as JSON."
+    ),
 ) -> None:
     """Tier-B live derived-vs-emitted comparison — merges live fidelity with Tier-A gaps.
 
@@ -486,7 +533,11 @@ def compare_live_cmd(
     # FR-8a: when gating (--baseline, not authoring), compute the new-vs-baseline regression set up
     # front so it reaches the operator in BOTH the --json payload and the human output — not just the
     # exit code. `ci_gate` returns (exit_code, new_fail_verdicts); it is already computed either way.
-    gate = ci_gate(report, load_baseline(baseline)) if (baseline is not None and not write_baseline) else None
+    gate = (
+        ci_gate(report, load_baseline(baseline))
+        if (baseline is not None and not write_baseline)
+        else None
+    )
 
     if as_json:
         doc = report.to_dict()
@@ -500,7 +551,9 @@ def compare_live_cmd(
     # FR-8a: on a gate FAIL, name WHICH SLIs are new vs baseline — the regression this change
     # introduced — the discriminating signal a red gate exists to give (not just "something is dead").
     if gate is not None and gate[1] and not as_json:
-        lines = [f"# {len(gate[1])} NEW dead SLI(s) vs baseline (introduced by this change):"]
+        lines = [
+            f"# {len(gate[1])} NEW dead SLI(s) vs baseline (introduced by this change):"
+        ]
         lines += [
             f"#   ✗ {v.get('service', '?')}/{v.get('signal', '?')} — "
             f"{' '.join(str(v.get('expr', '')).split())}"
@@ -509,10 +562,14 @@ def compare_live_cmd(
         typer.echo(redact("\n".join(lines), auth.redactions()))
 
     if keep_up and report.standup.get("subject_container"):
-        typer.echo("# --keep-up: tear down with:  " + (
-            f"docker rm -f {report.standup['subject_container']} "
-            f"{report.standup['prometheus_container']}; "
-            f"docker network rm {report.standup['network']}"))
+        typer.echo(
+            "# --keep-up: tear down with:  "
+            + (
+                f"docker rm -f {report.standup['subject_container']} "
+                f"{report.standup['prometheus_container']}; "
+                f"docker network rm {report.standup['network']}"
+            )
+        )
 
     if write_baseline:
         if not baseline:
@@ -523,15 +580,80 @@ def compare_live_cmd(
         if report.status == "unknown":
             typer.echo(
                 f"# refusing --write-baseline: report is UNKNOWN ({report.reason}); "
-                "would erase the baseline. Existing baseline left untouched.")
+                "would erase the baseline. Existing baseline left untouched."
+            )
             raise typer.Exit(code=EXIT_UNKNOWN)
         Path(baseline).write_text(
-            json.dumps(render_baseline(report, subject=subject_image or prometheus or ""), indent=2),
+            json.dumps(
+                render_baseline(report, subject=subject_image or prometheus or ""),
+                indent=2,
+            ),
             encoding="utf-8",
         )
-        typer.echo(f"# wrote baseline ({len(report.fail_verdicts)} accepted fails) -> {baseline}")
-        raise typer.Exit(code=0)  # authoring is not a gate — never red-X the baseline commit
+        typer.echo(
+            f"# wrote baseline ({len(report.fail_verdicts)} accepted fails) -> {baseline}"
+        )
+        raise typer.Exit(
+            code=0
+        )  # authoring is not a gate — never red-X the baseline commit
 
     if gate is not None:
         raise typer.Exit(code=gate[0])
     raise typer.Exit(code=report.exit_code())
+
+
+@observability_app.command("enrichment-parity")
+def enrichment_parity_cmd(
+    generated: Path = typer.Option(
+        ...,
+        "--generated",
+        "-g",
+        help="Generated collector-enrichment YAML "
+        "(collector-enrichment/otelcol-business-enrichment.yaml from the artifact run).",
+    ),
+    reference: Path = typer.Option(
+        ...,
+        "--reference",
+        "-r",
+        help="The deployed / hand-written collector config to compare against "
+        "(the transform/business block being retired).",
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the ParityResult as JSON instead of a text summary."
+    ),
+) -> None:
+    """Semantic parity gate for the collector_enrichment cutover (REQ_COLLECTOR_ENRICHMENT FR-10a/11).
+
+    Compares the generated ``transform/business`` processor against the hand-written one on the
+    resolved ``{service.name: {criticality?, owner?}}`` map — order- and grouping-insensitive, so a
+    one-statement-per-service generator matches a value-grouped hand-written block. Run this before
+    deleting the mirror. Exit 0 = parity (safe to cut over), 1 = mismatch, 2 = unreadable input.
+    """
+    from .collector_enrichment_parity import check_collector_enrichment_parity
+
+    try:
+        gen_yaml = Path(generated).read_text()
+        ref_yaml = Path(reference).read_text()
+    except OSError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+
+    result = check_collector_enrichment_parity(gen_yaml, ref_yaml)
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "matches": result.matches,
+                    "only_in_generated": result.only_in_generated,
+                    "only_in_reference": result.only_in_reference,
+                    "value_mismatch": result.value_mismatch,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    else:
+        typer.echo(result.summary())
+
+    raise typer.Exit(code=0 if result.matches else 1)

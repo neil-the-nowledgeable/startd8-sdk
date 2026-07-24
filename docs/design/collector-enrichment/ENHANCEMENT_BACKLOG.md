@@ -54,8 +54,7 @@ wire and running the 28-test suite green on merged main.)*
 <summary><b>Backlog appendix</b> (supporting; draw from over later increments)</summary>
 
 ### ⚡ Quick wins
-- **QW-1 — parity CLI subcommand** — Top finding #1. `observability/cli.py` pattern + the built parity
-  module. **S.**
+- **QW-1 — parity CLI subcommand** — ✅ **DELIVERED** (`startd8 observability enrichment-parity -g <generated> -r <deployed> [--json]`; exit 0=parity/1=mismatch/2=unreadable; `cli.py`). Top finding #1. **S.**
 - **QW-2 — last-mile merge doc/snippet** — Top finding #3, doc flavor. **S.**
 - **QW-3 — surface provenance in the run report** — the sha256 is written to the file header
   (`_business_provenance`, `:2835/2841`) but not into `report.fr_coverage` or the run index, so a consumer
