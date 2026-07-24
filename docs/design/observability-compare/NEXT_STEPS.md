@@ -1,9 +1,10 @@
 # compare-live — Next Steps
 
-**Updated:** 2026-07-24 · **Status:** v1 shipped; expanded subject coverage speced (ready for CRP, one open decision)
+**Updated:** 2026-07-24 · **Status:** v1 shipped; expanded subject coverage **spec CRP-triaged (v0.4) — ready to build, no open decisions**
 
-A roadmap/orientation for the `compare-live` effort — where it stands, the one gate to clear next, and
-the sequenced build. Points to the authoritative specs rather than restating them.
+A roadmap/orientation for the `compare-live` effort — where it stands and the sequenced build. Points to
+the authoritative specs rather than restating them. **The design gate is cleared** (CRP R1 triaged, OQ-B
+resolved); the next move is implementation.
 
 ---
 
@@ -15,36 +16,42 @@ the sequenced build. Points to the authoritative specs rather than restating the
 | **Single-image standup** (boot 1 subject + Prometheus, warm-up-gate on scrape) | **shipped v1** | `REQUIREMENTS.md`, `live_standup.py` |
 | **CLI** `startd8 observability {compare, compare-live, contrast}` | **shipped** | `cli.py:398/433/306` |
 | **Gate metrics/histograms** | **shipped** (concurrent) | `compare_live_metrics.py` |
-| **Expanded subject coverage** — Inc-1 multi-container, Inc-2 span-metrics | **speced v0.3.2, ready for CRP** | `SUBJECT_COVERAGE_REQUIREMENTS.md` |
+| **Expanded subject coverage** — Inc-1 multi-container, Inc-2 span-metrics | **spec v0.4 — CRP R1 triaged, ready to build** | `SUBJECT_COVERAGE_REQUIREMENTS.md` |
 | **Traffic driver for Inc-2** (FR-8) | **speced + reuse-mapped** (zero new engine) | `TRAFFIC_DRIVER_REUSE_MAP.md` |
 
-## The one gate before building: CRP on SUBJECT_COVERAGE
+## Design gate — CLEARED (CRP R1 triaged 2026-07-24)
 
-`SUBJECT_COVERAGE_REQUIREMENTS.md` v0.3.2 is CRP-ready **but carries one open decision that must be
-resolved first (§0.3):**
+`SUBJECT_COVERAGE_REQUIREMENTS.md` is **v0.4 — ready to build, no open decisions**. CRP R1 (Appendix C) was
+triaged, all 9 suggestions applied (Appendix A). Key resolutions:
 
-- **OQ-B / FR-6 contradiction — DECIDE THIS.** FR-6 says "reuse the generalized `generate_compose_dict`,"
-  but OQ-B leans toward a **new leaner `observability/live_compose.py`** that reuses only the
-  net/DNS/ingress patterns. The coupling is real: `generate_compose_dict` (`benchmark_matrix/fleet/compose.py:79`) validates `ingress` against the **global OB `_SERVICES` registry** (`:94` → `services.py:88`),
-  which an arbitrary compare-live subject fails. **Recommendation: the new-leaner-module path** — don't
-  couple compare-live to `benchmark_matrix`; generalizing in place would fork the registry validation.
-- Also for CRP: multi-container × span-metrics composition (FR-1 topology + FR-4 preset interaction) and
-  the Prometheus-is-ingress-on-two-networks detail (both flagged §0.3 Low).
+- **OQ-B RESOLVED → build a new `observability/live_compose.py`** that reuses `compose.py`'s
+  net/DNS/ingress/dep-env *patterns* **without** importing `benchmark_matrix`'s OB registry. (CRP corrected
+  the coupling: **3** registry sites, not 2 — the dep-edge fan-out `get_service(dep_name)` at
+  `compose.py:57` is the one that actually breaks an arbitrary subject.)
+- **FR-8 convergence hardened** — gate on `sum(increase(<hist>_count[…]))>0` **AND** driver terminal
+  success (not series-count settling, which greens on registered-but-empty histograms); driver-can't-
+  exercise ⇒ `unknown` naming the driver.
+- **FR-1** single-scrape-target v1 boundary + schema/example; **FR-2** framed as new networking (not reuse
+  of the plain-bridge standup); **FR-7** N-container best-effort teardown contract.
 
-**Action:** run `/new-cnvrg-rvw-prmpt` on `SUBJECT_COVERAGE_REQUIREMENTS.md` (+ this dir's `CRP_FOCUS.md`),
-resolve OQ-B, align FR-6, then unblock the build.
+**No further review needed to start.** (An optional second-model CRP R2 on v0.4 is available for
+cross-model coverage of the OQ-B call, but R1's findings were grounded corrections and the spec is solid.)
 
-## Build sequence (post-CRP)
+## Build sequence
 
 Each increment reuses the shipped Tier-B replay unchanged; the work is standup topology.
 
-1. **Inc-1 — multi-container standup** (**M-L**). Topology input parser (`--subject-compose`, lean YAML) →
-   compose (fleet net + service-DNS + Prometheus-as-ingress) → boot in dep order → reuse `_await_scrape`
-   gate → generalized `tear_down`. Landing point for OQ-B (build the leaner `live_compose` here).
+1. **Inc-1 — multi-container standup** (**M-L**). **Build `observability/live_compose.py`** (OQ-B: reuse
+   `compose.py` patterns, don't import `benchmark_matrix`) + the topology input parser (`--subject-compose`,
+   lean YAML, single-scrape-target boundary + schema per FR-1) → compose (`internal:true` fleet + `edge`,
+   service-DNS, Prometheus-as-ingress-on-both-nets) → boot in dep order → `_await_scrape` gate →
+   N-container best-effort `tear_down` (FR-7 contract).
 2. **FR-8 — warm-up traffic** (**S**, build alongside Inc-1). Drive bounded traffic before the readiness
    gate so lazily-registered RED series (and Inc-2 span-metrics) materialize. **Reuse an existing driver**
    by subject shape — `run_smoke` (generic OpenAPI) / `run_journey_http` (OB HTTP) / `run_journey` (OB
-   gRPC). No new engine. Full options: `TRAFFIC_DRIVER_REUSE_MAP.md` + `~/Documents/tools/load-generators/`.
+   gRPC). Gate on **non-zero samples AND driver terminal success** (not series-count settling — FR-8/R1-F3/F8);
+   driver-can't-exercise ⇒ `unknown` naming the driver. Options: `TRAFFIC_DRIVER_REUSE_MAP.md` +
+   `~/Documents/tools/load-generators/`.
 3. **Inc-2 — span-metrics preset** (**M** on top of Inc-1). `--subject-metrics-mode span-metrics`: a 3-node
    preset (subject → `otel/opentelemetry-collector-contrib` running the reused `collector_config` text →
    Prometheus scrapes `collector:8889`). **Depends on FR-8** — without traffic it degrades to always-`unknown`.
@@ -53,11 +60,12 @@ Each increment reuses the shipped Tier-B replay unchanged; the work is standup t
 **Effort:** M-L + S + M — *not* the "2×L from scratch" the backlog implied; the reuse map + FR-8 de-risk the
 hardest part (traffic).
 
-## Open decisions / risks (carry into CRP)
-- **OQ-B** (above) — the load-bearing architecture call.
-- **OQ-A** — topology input format: bespoke lean YAML vs a docker-compose subset. Lean-YAML for v1.
+## Open decisions / risks
+- **OQ-A** — topology input format: bespoke lean YAML vs a docker-compose subset. **Lean-YAML for v1**
+  (FR-1 pins a concrete schema); revisit if operators want compose-subset familiarity.
 - **FR-8 shape** — host-side driver loop (v1, zero new deps) vs an in-compose locust sidecar (realistic
-  load, rides the Inc-1 compose). Recommend host-side loop for v1, sidecar as the upgrade.
+  load, rides the Inc-1 compose). **Recommend host-side loop for v1**, sidecar as the upgrade.
+- *(OQ-B resolved by CRP R1 — new `live_compose.py`; see the design-gate section.)*
 
 ## Deferred (explicit non-goals for now)
 - **NR-A / Inc-3** — consuming a real `docker-compose.yml` verbatim (volumes/healthchecks/build).
