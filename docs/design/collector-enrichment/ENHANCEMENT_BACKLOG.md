@@ -63,12 +63,11 @@ generator's zero-derivation output.)*
 - **QW-5 — provenance derivation for drift** — ✅ **DELIVERED** (one stable-keyed `DerivationTrace` carrying the provenance; `check_drift` now flags a business-context change, end-to-end tested). Top finding #1. **XS/S.**
 
 ### 🌱 Low-hanging fruit
-- **LH-2 — surface the coverage counts** — Top finding #3 (run summary / index line). **S.**
-- **LH-3 — score the artifact like its siblings.** `Confirmed:` `_repair_and_validate`
-  (`artifact_generator.py:260-282`) scores `dashboard_spec`/`alert_rule`/`slo_definition` but has **no**
-  `collector_enrichment` branch, so it ships with no `quality` dict and is absent from the run's quality
-  report. A thin validator (reuse the fail-fast `validate_collector_enrichment` as the check set → a 0/1
-  score) makes it consistent. Low marginal value (internal validate already guarantees correctness). **S.**
+- **LH-2 — surface the coverage counts** — ✅ **DELIVERED** (logger.info at generation + `summary.collector_enrichment` in the index manifest). **S.**
+- **LH-3 — score the artifact like its siblings.** ✅ **DELIVERED**. `validate_collector_enrichment_artifact`
+  (CE-100a/100b/101/102/103 checklist, reuses `extract_enrichment_map` + the enum) + a `collector_enrichment`
+  branch in `_repair_and_validate`; the artifact is routed through it in the wiring, so it now carries a
+  `quality` dict in the run report. **S.**
 
 ### 🏗️ Architectural quick win (≤1)
 - **AQ-1 — extract the semantic-parity pattern on 2nd use (still deferred).** `extract_enrichment_map` +
