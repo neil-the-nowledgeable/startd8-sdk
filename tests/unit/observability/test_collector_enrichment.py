@@ -626,7 +626,9 @@ class TestQW4AppendComment:
         )
         # inline marker sits on the line directly above the connectors block (not just the header)
         assert "(see DEPLOYING.md).\nconnectors:\n" in r.content
-        assert yaml.safe_load(r.content) is not None  # still valid YAML (it's a YAML comment)
+        assert (
+            yaml.safe_load(r.content) is not None
+        )  # still valid YAML (it's a YAML comment)
 
     def test_no_append_comment_when_no_dimension(self):
         # owner-only ⇒ no connectors block ⇒ no append comment
@@ -698,3 +700,135 @@ class TestQW5DriftDerivation:
             # run 2: criticality flips ⇒ drift MUST be detected (was silently missed pre-QW-5)
             mp.write_text(json.dumps(_meta("high")))
             assert check_drift(mp, out) == 1
+
+
+# ============================ LH-3: artifact scored like siblings ============================
+
+
+class TestLH3Scoring:
+    def test_valid_artifact_scores_full(self):
+        from startd8.validators.observability_artifact_checks import (
+            validate_collector_enrichment_artifact,
+        )
+
+        r = generate_collector_enrichment(
+            [
+                ServiceHints(
+                    service_id="a", service_name="a", criticality="critical", owner="t"
+                )
+            ],
+            BusinessContext(),
+            _report(),
+        )
+        vr = validate_collector_enrichment_artifact(r.content, r.output_path)
+        assert vr.score == 1.0
+        assert vr.statement_count == 2
+        assert vr.issues == []
+
+    def test_out_of_enum_criticality_flagged(self):
+        from startd8.validators.observability_artifact_checks import (
+            validate_collector_enrichment_artifact,
+        )
+
+        content = (
+            "processors:\n  transform/business:\n    error_mode: ignore\n"
+            "    trace_statements:\n    - context: span\n      statements:\n"
+            '      - set(attributes["business.criticality"], "bogus") where '
+            'resource.attributes["service.name"] == "a"\n'
+        )
+        vr = validate_collector_enrichment_artifact(content, "x")
+        assert vr.score < 1.0
+        assert any(i.check == "CE-102" for i in vr.issues)
+
+    def test_scored_in_run_quality(self, tmp_path):
+        import json
+
+        from startd8.observability.artifact_generator import (
+            generate_observability_artifacts,
+        )
+
+        meta = {
+            "instrumentation_hints": {
+                "cart": {
+                    "transport": "grpc",
+                    "service_name": "cart",
+                    "business": {"criticality": "critical"},
+                },
+            },
+            "declared_artifact_types": [],
+        }
+        mp = tmp_path / "onboarding.json"
+        mp.write_text(json.dumps(meta))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=mp, output_dir=tmp_path / "out", dry_run=True
+        )
+        [ce] = [
+            a for a in report.artifacts if a.artifact_type == "collector_enrichment"
+        ]
+        assert ce.quality is not None
+        assert ce.quality["score"] == 1.0
+
+
+# ============================ LH-2: counts surfaced in the index summary ============================
+
+
+class TestLH2Legibility:
+    def test_counts_in_index_summary(self, tmp_path):
+        import json
+
+        import yaml as _yaml
+
+        from startd8.observability.artifact_generator import (
+            generate_observability_artifacts,
+        )
+
+        meta = {
+            "instrumentation_hints": {
+                "cart": {
+                    "transport": "grpc",
+                    "service_name": "cart",
+                    "business": {"criticality": "critical", "owner": "commerce"},
+                },
+                "email": {
+                    "transport": "http",
+                    "service_name": "email",
+                    "business": {"criticality": "medium"},
+                },
+            },
+            "declared_artifact_types": [],
+        }
+        mp = tmp_path / "onboarding.json"
+        out = tmp_path / "out"
+        mp.write_text(json.dumps(meta))
+        generate_observability_artifacts(
+            onboarding_metadata_path=mp, output_dir=out, dry_run=False
+        )
+        index = _yaml.safe_load((out / "observability-manifest.yaml").read_text())
+        ce = index["summary"]["collector_enrichment"]
+        assert ce["services_enriched"] == 2
+        assert ce["statements"] == 3  # cart: crit+owner, email: crit
+        assert ce["criticality_dimension"] is True
+
+    def test_no_summary_key_when_no_business(self, tmp_path):
+        import json
+
+        import yaml as _yaml
+
+        from startd8.observability.artifact_generator import (
+            generate_observability_artifacts,
+        )
+
+        meta = {
+            "instrumentation_hints": {
+                "cart": {"transport": "grpc", "service_name": "cart"}
+            },
+            "declared_artifact_types": [],
+        }
+        mp = tmp_path / "onboarding.json"
+        out = tmp_path / "out"
+        mp.write_text(json.dumps(meta))
+        generate_observability_artifacts(
+            onboarding_metadata_path=mp, output_dir=out, dry_run=False
+        )
+        index = _yaml.safe_load((out / "observability-manifest.yaml").read_text())
+        assert "collector_enrichment" not in index["summary"]

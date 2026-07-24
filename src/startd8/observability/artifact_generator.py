@@ -126,16 +126,18 @@ except ImportError:
 # Grafana JSON (Gap 4); slo_definition ← slo output; the remaining five are
 # native extended generators (Closure 3B), produced when declared. Any declared
 # type NOT in this set is still recorded as an honest, explicit skip (Gap 2).
-_IMPLEMENTED_ARTIFACT_TYPES = frozenset({
-    "dashboard",
-    "prometheus_rule",
-    "slo_definition",
-    "service_monitor",
-    "notification_policy",
-    "loki_rule",
-    "runbook",
-    "capability_index",
-})
+_IMPLEMENTED_ARTIFACT_TYPES = frozenset(
+    {
+        "dashboard",
+        "prometheus_rule",
+        "slo_definition",
+        "service_monitor",
+        "notification_policy",
+        "loki_rule",
+        "runbook",
+        "capability_index",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +161,9 @@ _IMPLEMENTED_ARTIFACT_TYPES = frozenset({
 # The triplet is produced UNCONDITIONALLY (no declaration / cede gate). Marking one
 # of these owned_elsewhere is contradictory — production wins (see
 # _record_unimplemented_artifact_types), so coverage never excludes a produced type.
-_ALWAYS_PRODUCED_DECLARED_TYPES = frozenset({"prometheus_rule", "dashboard", "slo_definition"})
+_ALWAYS_PRODUCED_DECLARED_TYPES = frozenset(
+    {"prometheus_rule", "dashboard", "slo_definition"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +248,7 @@ def _repair_and_validate(
             validate_dashboard,
             validate_alerts,
             validate_slo,
+            validate_collector_enrichment_artifact,
         )
     except ImportError:
         return result  # validators not available — degrade gracefully
@@ -259,42 +264,63 @@ def _repair_and_validate(
 
     if result.artifact_type == "dashboard_spec":
         vr = validate_dashboard(
-            result.content, result.output_path, autofix=True,
-            service_id=result.service_id, transport=transport,
+            result.content,
+            result.output_path,
+            autofix=True,
+            service_id=result.service_id,
+            transport=transport,
         )
         # If gridPos was injected, update content with repaired YAML
         if vr.repairs_applied:
             try:
                 repaired = yaml.safe_load(result.content)
-                from startd8.validators.observability_artifact_checks import repair_gridpos
+                from startd8.validators.observability_artifact_checks import (
+                    repair_gridpos,
+                )
+
                 repaired, _ = repair_gridpos(repaired)
-                result.content = yaml.dump(repaired, default_flow_style=False, sort_keys=False)
+                result.content = yaml.dump(
+                    repaired, default_flow_style=False, sort_keys=False
+                )
             except Exception:
                 pass
 
     elif result.artifact_type == "alert_rule":
         vr = validate_alerts(
-            result.content, result.output_path,
+            result.content,
+            result.output_path,
             manifest_availability=avail,
-            service_id=result.service_id, transport=transport,
+            service_id=result.service_id,
+            transport=transport,
         )
 
     elif result.artifact_type == "slo_definition":
         vr = validate_slo(
-            result.content, result.output_path,
+            result.content,
+            result.output_path,
             manifest_availability=avail,
             autofix=True,
-            service_id=result.service_id, transport=transport,
+            service_id=result.service_id,
+            transport=transport,
         )
         # If SLO target was repaired, update content
         if vr.repairs_applied:
             try:
-                from startd8.validators.observability_artifact_checks import repair_slo_target
+                from startd8.validators.observability_artifact_checks import (
+                    repair_slo_target,
+                )
+
                 repaired = yaml.safe_load(result.content)
                 repaired, _ = repair_slo_target(repaired, avail)
-                result.content = yaml.dump(repaired, default_flow_style=False, sort_keys=False)
+                result.content = yaml.dump(
+                    repaired, default_flow_style=False, sort_keys=False
+                )
             except Exception:
                 pass
+
+    elif result.artifact_type == "collector_enrichment":
+        # LH-3: score the enrichment artifact like its siblings (structural content re-check).
+        vr = validate_collector_enrichment_artifact(result.content, result.output_path)
 
     if vr is not None:
         result.quality = {
@@ -314,8 +340,10 @@ def _repair_and_validate(
             )
             logger.info(
                 "Artifact quality: %s %s score=%.0f%% issues=[%s]",
-                result.artifact_type, result.service_id,
-                vr.score * 100, issue_summary,
+                result.artifact_type,
+                result.service_id,
+                vr.score * 100,
+                issue_summary,
             )
 
     return result
@@ -327,13 +355,15 @@ def _repair_and_validate(
 # (`service` vs `service_name` for span-metrics), so it must read
 # `descriptor.service_label_key` rather than hardcoding `service`. The remaining
 # per-service generators (service_monitor, runbook) stay (service, business).
-_DESCRIPTOR_AWARE_GENERATORS = frozenset({
-    generate_alert_rules,
-    generate_slo_definitions,
-    generate_dashboard_spec,
-    generate_loki_rule,
-    generate_notification_policy,
-})
+_DESCRIPTOR_AWARE_GENERATORS = frozenset(
+    {
+        generate_alert_rules,
+        generate_slo_definitions,
+        generate_dashboard_spec,
+        generate_loki_rule,
+        generate_notification_policy,
+    }
+)
 
 
 def _generate_one(
@@ -361,14 +391,18 @@ def _generate_one(
         result = _repair_and_validate(result, business, transport=service.transport)
         return _stamp_taxonomy(result)
     except Exception:
-        logger.exception("%s generation failed for %s", artifact_type, service.service_id)
-        return _stamp_taxonomy(ArtifactResult(
-            artifact_type=artifact_type,
-            service_id=service.service_id,
-            output_path=f"{output_prefix}/{service.service_id}-{output_prefix}.yaml",
-            status="error",
-            error_message="Generation raised exception",
-        ))
+        logger.exception(
+            "%s generation failed for %s", artifact_type, service.service_id
+        )
+        return _stamp_taxonomy(
+            ArtifactResult(
+                artifact_type=artifact_type,
+                service_id=service.service_id,
+                output_path=f"{output_prefix}/{service.service_id}-{output_prefix}.yaml",
+                status="error",
+                error_message="Generation raised exception",
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +438,11 @@ def _generate_portal_artifact(
 
     try:
         spec_dict = build_portal_spec(
-            business, services, report, metadata, persona=persona,
+            business,
+            services,
+            report,
+            metadata,
+            persona=persona,
         )
     except Exception:
         logger.exception("Portal spec build failed for %s", project_id)
@@ -451,7 +489,11 @@ def _generate_portal_artifact(
                 content=content,
             )
         else:
-            error_msg = result.output.get("error", "Unknown workflow error") if isinstance(result.output, dict) else str(result.output)
+            error_msg = (
+                result.output.get("error", "Unknown workflow error")
+                if isinstance(result.output, dict)
+                else str(result.output)
+            )
             logger.error("Portal workflow failed: %s", error_msg)
             return ArtifactResult(
                 artifact_type="portal",
@@ -508,7 +550,11 @@ def generate_observability_artifacts(
     _obs_spec = None
     if observability_yaml_path is not None and Path(observability_yaml_path).exists():
         from .spec import from_observability_yaml
-        _obs = yaml.safe_load(Path(observability_yaml_path).read_text(encoding="utf-8")) or {}
+
+        _obs = (
+            yaml.safe_load(Path(observability_yaml_path).read_text(encoding="utf-8"))
+            or {}
+        )
         _obs_spec = from_observability_yaml(_obs)
         business.receivers = list(_obs_spec.receivers)
 
@@ -574,7 +620,11 @@ def generate_observability_artifacts(
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
             report.artifacts.append(
                 _generate_one(
-                    gen_fn, service, business, artifact_type, output_prefix,
+                    gen_fn,
+                    service,
+                    business,
+                    artifact_type,
+                    output_prefix,
                     descriptor,
                 )
             )
@@ -634,40 +684,46 @@ def generate_observability_artifacts(
         for _k in service.kinds:
             if _k in UNGROUNDED_KINDS:
                 _sugg = suggested_signals_for(_k)
-                _ungrounded.append({
-                    "service": service.service_id,
-                    "kind": _k,
-                    # LH-1: an ungrounded service with no declared FRs is ALSO in
-                    # empty_services; tag it so a reader sees the cause, not two gaps.
-                    "observed_by_nothing": _observed_by_nothing,
-                    # P1a: the kind-specific signal SHAPE (not a value) — structured so a
-                    # surface can render it terse without parsing the prose reason.
-                    "suggested_signals": list(_sugg),
-                    "reason": (
-                        f"kind {_k!r} is recognized but has no grounded metric profile yet "
-                        f"(OQ-5); its default SLIs are deferred rather than invented. Declare "
-                        f"a functional[] FR with signal_kind {'/'.join(_sugg)} + target to "
-                        f"emit an SLO, or await a grounded profile."
-                    ),
-                })
+                _ungrounded.append(
+                    {
+                        "service": service.service_id,
+                        "kind": _k,
+                        # LH-1: an ungrounded service with no declared FRs is ALSO in
+                        # empty_services; tag it so a reader sees the cause, not two gaps.
+                        "observed_by_nothing": _observed_by_nothing,
+                        # P1a: the kind-specific signal SHAPE (not a value) — structured so a
+                        # surface can render it terse without parsing the prose reason.
+                        "suggested_signals": list(_sugg),
+                        "reason": (
+                            f"kind {_k!r} is recognized but has no grounded metric profile yet "
+                            f"(OQ-5); its default SLIs are deferred rather than invented. Declare "
+                            f"a functional[] FR with signal_kind {'/'.join(_sugg)} + target to "
+                            f"emit an SLO, or await a grounded profile."
+                        ),
+                    }
+                )
         # #274 / REQ-CCL-106 — the two-tier ADR-003 handling, keyed on the emission-surface signal.
         # BASE_RED_KINDS is single-sourced (metric_descriptor) so this gate can't drift from the
         # declared-series covers-filter or the convention-triplet suppression.
         _ms = getattr(service, "metrics_surface", "")
-        _red_before = BASE_RED_KINDS & resolve_sli_kinds(service.kinds, _svc_signals, service.transport)
+        _red_before = BASE_RED_KINDS & resolve_sli_kinds(
+            service.kinds, _svc_signals, service.transport
+        )
         if _ms in NON_EMITTING_CONVENTION_SURFACES and _red_before:
             # STRICT: the surface is DECLARED non-emitting → the base RED SLIs were suppressed
             # (dropped from _service_sli_kinds) so no dead SLI ships. Record the real gap.
-            _suppressed_base.append({
-                "service": service.service_id,
-                "metrics_surface": _ms,
-                "suppressed_sli_kinds": sorted(_red_before),
-                "reason": (
-                    f"base RED SLIs suppressed — metrics_surface={_ms!r} does not emit the OTel-"
-                    f"convention meter metric they query (REQ-CCL-106 / #274). Declare the emitted "
-                    f"series (manifest_declared) or a functional[] FR with a real target to get SLIs."
-                ),
-            })
+            _suppressed_base.append(
+                {
+                    "service": service.service_id,
+                    "metrics_surface": _ms,
+                    "suppressed_sli_kinds": sorted(_red_before),
+                    "reason": (
+                        f"base RED SLIs suppressed — metrics_surface={_ms!r} does not emit the OTel-"
+                        f"convention meter metric they query (REQ-CCL-106 / #274). Declare the emitted "
+                        f"series (manifest_declared) or a functional[] FR with a real target to get SLIs."
+                    ),
+                }
+            )
         elif (
             # ADVISORY (graceful fallback, #277): the surface is UNKNOWN (not declared) but this is
             # the traces-only RISK profile — flag it, don't suppress (would false-gap a real HTTP svc).
@@ -677,27 +733,29 @@ def generate_observability_artifacts(
             and not service.declared_metrics
             and _red_before
         ):
-            _unverified_base.append({
-                "service": service.service_id,
-                "convention_metrics": [m.name for m in service.convention_metrics],
-                "reason": (
-                    "base RED SLIs use convention metrics derived from the service kind, NOT "
-                    "verified as emitted (trace-instrumented, no manifest_declared, no declared "
-                    "metrics_surface). If the subject is traces-only or a different metric surface, "
-                    "the SLI won't evaluate — declare `Metrics surface:` in the plan (REQ-CCL-106) "
-                    "for the strict fix, or declare the emitted metric. Advisory (ADR-003 / #274)."
-                ),
-            })
+            _unverified_base.append(
+                {
+                    "service": service.service_id,
+                    "convention_metrics": [m.name for m in service.convention_metrics],
+                    "reason": (
+                        "base RED SLIs use convention metrics derived from the service kind, NOT "
+                        "verified as emitted (trace-instrumented, no manifest_declared, no declared "
+                        "metrics_surface). If the subject is traces-only or a different metric surface, "
+                        "the SLI won't evaluate — declare `Metrics surface:` in the plan (REQ-CCL-106) "
+                        "for the strict fix, or declare the emitted metric. Advisory (ADR-003 / #274)."
+                    ),
+                }
+            )
 
     report.fr_coverage = {
         "empty_services": _fr_empty,
         "unfulfilled": _fr_unfulfilled,
         "emitted": _fr_emitted,
         "ungrounded_kinds": _ungrounded,
-        "unverified_base_metrics": _unverified_base,      # #274 advisory (surface unknown)
-        "suppressed_base_metrics": _suppressed_base,      # #274 strict (surface declared non-emitting)
-        "bound_declared_series": _bound_declared,         # #286 positive (base SLI bound to a real series)
-        "deferred_declared_kinds": _deferred_declared,    # #286 covered-but-not-v1-bindable (availability)
+        "unverified_base_metrics": _unverified_base,  # #274 advisory (surface unknown)
+        "suppressed_base_metrics": _suppressed_base,  # #274 strict (surface declared non-emitting)
+        "bound_declared_series": _bound_declared,  # #286 positive (base SLI bound to a real series)
+        "deferred_declared_kinds": _deferred_declared,  # #286 covered-but-not-v1-bindable (availability)
     }
     # #300 D2 (FR-9): only surface the functional-binding key when something bound — an empty list would
     # be a new manifest byte vs pre-feature goldens. Absent ⇒ byte-identical.
@@ -711,9 +769,7 @@ def generate_observability_artifacts(
         report.fr_coverage["pending_probes"] = _pending_probes
 
     report.services_processed = len(services)
-    report.services_skipped = len(
-        [s for s in services if not s.convention_metrics]
-    )
+    report.services_skipped = len([s for s in services if not s.convention_metrics])
 
     report.declared_artifact_types = _declared_artifact_types(metadata)
 
@@ -737,23 +793,30 @@ def generate_observability_artifacts(
         if atype not in declared or atype in owned_elsewhere:
             continue
         for service in services:
-            if atype == "service_monitor" and getattr(
-                service, "metrics_surface", ""
-            ) in NON_SCRAPEABLE_SURFACES:
-                _suppressed_scrape.append({
-                    "service": service.service_id,
-                    "metrics_surface": service.metrics_surface,
-                    "reason": (
-                        f"ServiceMonitor suppressed — metrics_surface="
-                        f"{service.metrics_surface!r} exposes no Prometheus /metrics scrape "
-                        f"endpoint, so the scrape config would target nothing (#285 / ADR-003). "
-                        f"Declare a scrapeable surface (prometheus_exporter/node_metrics) to emit one."
-                    ),
-                })
+            if (
+                atype == "service_monitor"
+                and getattr(service, "metrics_surface", "") in NON_SCRAPEABLE_SURFACES
+            ):
+                _suppressed_scrape.append(
+                    {
+                        "service": service.service_id,
+                        "metrics_surface": service.metrics_surface,
+                        "reason": (
+                            f"ServiceMonitor suppressed — metrics_surface="
+                            f"{service.metrics_surface!r} exposes no Prometheus /metrics scrape "
+                            f"endpoint, so the scrape config would target nothing (#285 / ADR-003). "
+                            f"Declare a scrapeable surface (prometheus_exporter/node_metrics) to emit one."
+                        ),
+                    }
+                )
                 continue
             report.artifacts.append(
                 _generate_one(
-                    gen_fn, service, business, atype, output_prefix,
+                    gen_fn,
+                    service,
+                    business,
+                    atype,
+                    output_prefix,
                     descriptors[service.service_id],
                 )
             )
@@ -778,7 +841,11 @@ def generate_observability_artifacts(
     # Portal generation — after per-service artifacts (REQ-OBP-103a)
     if portal:
         portal_result = _generate_portal_artifact(
-            business, services, report, metadata, output_dir,
+            business,
+            services,
+            report,
+            metadata,
+            output_dir,
             persona=portal_persona,
             provision_url=portal_provision_url,
             dry_run=dry_run,
@@ -793,6 +860,7 @@ def generate_observability_artifacts(
     if _obs_spec is not None:
         from .alert_renderer import render_domain_alert_rules
         from .dashboard_renderer import render_domain_dashboard
+
         _spec = _obs_spec  # parsed once above (single from_observability_yaml call)
         _pid = business.project_id or "domain"
         # E1: the SAME observability.yaml drives both — domain alert rules AND a domain dashboard.
@@ -808,7 +876,17 @@ def generate_observability_artifacts(
     try:
         _ce = generate_collector_enrichment(services, business, report)
         if _ce.status != "skipped":
+            # LH-3: score it like the triplet (attaches a quality dict via the CE-1xx checks).
+            _ce = _repair_and_validate(_ce, business)
             report.artifacts.append(_ce)
+            # LH-2: make the $0 pass legible — surface the counts (already in fr_coverage) on the console.
+            _cec = report.fr_coverage.get("collector_enrichment") or {}
+            logger.info(
+                "collector_enrichment: %d services enriched, %d statements, criticality_dimension=%s",
+                _cec.get("services_enriched", 0),
+                _cec.get("statements", 0),
+                _cec.get("criticality_dimension", False),
+            )
     except Exception:
         logger.exception("collector_enrichment generation failed")
 
@@ -903,8 +981,7 @@ def _coverage_by_category(counted: Set[str]) -> Dict[str, float]:
         cat = spec.category if spec else "uncategorized"
         by_cat.setdefault(cat, []).append(atype in _IMPLEMENTED_ARTIFACT_TYPES)
     return {
-        cat: round(sum(flags) / len(flags), 4)
-        for cat, flags in sorted(by_cat.items())
+        cat: round(sum(flags) / len(flags), 4) for cat, flags in sorted(by_cat.items())
     }
 
 
@@ -979,7 +1056,9 @@ def _produced_service_targets(report: GenerationReport) -> Tuple[Set[str], Set[s
 
 
 def _bridge_human_actionable(
-    result: ArtifactResult, dash_services: Set[str], run_services: Set[str],
+    result: ArtifactResult,
+    dash_services: Set[str],
+    run_services: Set[str],
 ) -> bool:
     """REQ-OAT-061 human (actionability) half of a bridge artifact.
 
@@ -998,7 +1077,9 @@ def _bridge_human_actionable(
     rules = [r for r in _iter_rule_dicts(result.content) if "alert" in r]
     if not rules:
         return False
-    handoff_exists = result.service_id in dash_services or result.service_id in run_services
+    handoff_exists = (
+        result.service_id in dash_services or result.service_id in run_services
+    )
     for r in rules:
         labels = r.get("labels", {}) or {}
         ann = r.get("annotations", {}) or {}
@@ -1101,36 +1182,45 @@ def _record_unimplemented_artifact_types(
             # coverage denominator (which derives `owned` from these skip records).
             logger.warning(
                 "artifact_type %r marked owned_elsewhere but is always produced by the "
-                "triplet generator; ignoring the cede (counted as produced)", atype,
+                "triplet generator; ignoring the cede (counted as produced)",
+                atype,
             )
             ceded = False
         if ceded:
             owner = owned_elsewhere[atype]
-            report.artifacts.append(_stamp_taxonomy(ArtifactResult(
-                artifact_type=atype,
-                service_id=project_id,
-                output_path=f"(owned by {owner}: {atype})",
-                status="skipped",
-                error_message=f"declared but owned by {owner}; produced elsewhere",
-                skip_reason="owned_elsewhere",
-                owner=owner,
-                route_state=RouteState.CONTEXTCORE_OWNED.value,
-            )))
+            report.artifacts.append(
+                _stamp_taxonomy(
+                    ArtifactResult(
+                        artifact_type=atype,
+                        service_id=project_id,
+                        output_path=f"(owned by {owner}: {atype})",
+                        status="skipped",
+                        error_message=f"declared but owned by {owner}; produced elsewhere",
+                        skip_reason="owned_elsewhere",
+                        owner=owner,
+                        route_state=RouteState.CONTEXTCORE_OWNED.value,
+                    )
+                )
+            )
             continue
         if atype in _IMPLEMENTED_ARTIFACT_TYPES:
             continue
-        report.artifacts.append(_stamp_taxonomy(ArtifactResult(
-            artifact_type=atype,
-            service_id=project_id,
-            output_path=f"(not generated: {atype})",
-            status="skipped",
-            error_message=(
-                "declared in onboarding artifact_types but not implemented "
-                "by the observability triplet generator"
-            ),
-            skip_reason="unimplemented",
-            route_state=RouteState.DECLARED_UNIMPLEMENTED.value,
-        )))
+        report.artifacts.append(
+            _stamp_taxonomy(
+                ArtifactResult(
+                    artifact_type=atype,
+                    service_id=project_id,
+                    output_path=f"(not generated: {atype})",
+                    status="skipped",
+                    error_message=(
+                        "declared in onboarding artifact_types but not implemented "
+                        "by the observability triplet generator"
+                    ),
+                    skip_reason="unimplemented",
+                    route_state=RouteState.DECLARED_UNIMPLEMENTED.value,
+                )
+            )
+        )
 
 
 def _log_provision_outcome(result: Any, service_id: str) -> None:
@@ -1220,9 +1310,13 @@ def _convert_dashboards_to_grafana_json(
                         if provision_url:
                             _log_provision_outcome(result, service_id)
                     else:
-                        error_message = "workflow reported success but no JSON file found"
+                        error_message = (
+                            "workflow reported success but no JSON file found"
+                        )
                 else:
-                    error_message = getattr(result, "error", None) or "conversion failed"
+                    error_message = (
+                        getattr(result, "error", None) or "conversion failed"
+                    )
         except Exception as exc:  # toolchain missing, compile error, etc.
             logger.exception("Grafana JSON conversion failed for %s", service_id)
             error_message = f"conversion raised: {exc}"
@@ -1289,13 +1383,22 @@ def _write_index(
         "artifacts_skipped": skipped,
         "artifacts_errored": errored,
     }
+    # LH-2: roll the collector_enrichment counts into the index summary so the manifest is
+    # self-describing (services enriched / statements / dimension) without opening the artifact.
+    _ce_cov = report.fr_coverage.get("collector_enrichment")
+    if _ce_cov:
+        summary["collector_enrichment"] = _ce_cov
 
     # REQ-OAT-052: honest, route-aware artifact-type coverage. Types ceded to
     # another component (skip_reason=owned_elsewhere) are EXCLUDED from the declared
     # denominator so a correct cede does not read as a false <1.0 FAIL (R4-F2).
     if report.declared_artifact_types:
         declared = set(report.declared_artifact_types)
-        owned = {a.artifact_type for a in report.artifacts if a.skip_reason == "owned_elsewhere"}
+        owned = {
+            a.artifact_type
+            for a in report.artifacts
+            if a.skip_reason == "owned_elsewhere"
+        }
         counted = declared - owned  # the REQ-OAT-052 denominator
         implemented = counted & _IMPLEMENTED_ARTIFACT_TYPES
         unimplemented = sorted(counted - _IMPLEMENTED_ARTIFACT_TYPES)
@@ -1323,7 +1426,8 @@ def _write_index(
         # surface the count so the "awaiting a cat-4/5 home" gap is visible, not
         # silently mixed into service observability.
         summary["metrics_awaiting_category_home"] = sum(
-            1 for r in report.route_states
+            1
+            for r in report.route_states
             if r.get("category") in (Category.PROJECT.value, Category.AI_AGENT.value)
         )
 
@@ -1375,7 +1479,9 @@ def _write_index(
         for atype, scores in by_type.items():
             quality_summary[f"avg_{atype}_score"] = round(sum(scores) / len(scores), 4)
         all_scores = [a.quality["score"] for a in scored]
-        quality_summary["avg_composite_score"] = round(sum(all_scores) / len(all_scores), 4)
+        quality_summary["avg_composite_score"] = round(
+            sum(all_scores) / len(all_scores), 4
+        )
         quality_summary["artifacts_scored"] = len(scored)
         quality_summary["total_issues"] = sum(
             len(a.quality.get("issues", [])) for a in scored
@@ -1509,9 +1615,7 @@ def _write_quality_report(
 
         # Fold the available orientation coverages at equal weights (REQ-OAT-051).
         _covs = [c for c in (cov_human, cov_system, cov_bridge) if c is not None]
-        coverage_for_blend: Optional[float] = (
-            sum(_covs) / len(_covs) if _covs else None
-        )
+        coverage_for_blend: Optional[float] = sum(_covs) / len(_covs) if _covs else None
 
         if coverage_for_blend is None:
             composite = structural
@@ -1681,7 +1785,9 @@ def _append_to_provenance(
 ) -> None:
     """Best-effort append observability artifacts to run-provenance.json."""
     if not provenance_path.exists():
-        logger.info("No run-provenance.json at %s; skipping provenance append", provenance_path)
+        logger.info(
+            "No run-provenance.json at %s; skipping provenance append", provenance_path
+        )
         return
 
     try:
@@ -1703,4 +1809,6 @@ def _append_to_provenance(
             json.dump(provenance, f, indent=2)
         logger.info("Appended observability entry to %s", provenance_path)
     except (OSError, json.JSONDecodeError):
-        logger.warning("Failed to append to provenance at %s", provenance_path, exc_info=True)
+        logger.warning(
+            "Failed to append to provenance at %s", provenance_path, exc_info=True
+        )

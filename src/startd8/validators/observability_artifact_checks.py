@@ -59,8 +59,8 @@ __all__ = [
 class ObservabilityIssue:
     """A single issue found during observability artifact validation."""
 
-    check: str       # e.g. "OBS-100d"
-    severity: str    # "error", "warning", "info"
+    check: str  # e.g. "OBS-100d"
+    severity: str  # "error", "warning", "info"
     message: str
 
 
@@ -185,7 +185,8 @@ def repair_slo_target(
         spec["target"] = manifest_availability
         logger.info(
             "repair_slo_target: %s → %s (from manifest)",
-            old, manifest_availability,
+            old,
+            manifest_availability,
         )
         return slo, [f"slo_target_{old}_to_{manifest_availability}"]
 
@@ -194,6 +195,7 @@ def repair_slo_target(
 
 def _repair_bucket_suffix(expr: str) -> str:
     """Append _bucket to histogram_quantile metric references if missing."""
+
     def _fix(m: re.Match) -> str:
         metric = m.group(1)
         if not metric.endswith("_bucket"):
@@ -201,7 +203,7 @@ def _repair_bucket_suffix(expr: str) -> str:
         return m.group(0)
 
     return re.sub(
-        r'histogram_quantile\([^,]+,\s*(?:rate|increase)\((\w+)\{',
+        r"histogram_quantile\([^,]+,\s*(?:rate|increase)\((\w+)\{",
         _fix,
         expr,
     )
@@ -228,10 +230,14 @@ def validate_dashboard(
     try:
         data = yaml.safe_load(content)
     except yaml.YAMLError as exc:
-        result.issues.append(ObservabilityIssue("OBS-100a", "error", f"YAML parse error: {exc}"))
+        result.issues.append(
+            ObservabilityIssue("OBS-100a", "error", f"YAML parse error: {exc}")
+        )
         return result
     if not isinstance(data, dict):
-        result.issues.append(ObservabilityIssue("OBS-100a", "error", "YAML content is not a mapping"))
+        result.issues.append(
+            ObservabilityIssue("OBS-100a", "error", "YAML content is not a mapping")
+        )
         return result
     result.yaml_valid = True
     result.checks_passed += 1
@@ -245,11 +251,15 @@ def validate_dashboard(
     result.panel_count = len(panels)
     n = len(panels)
 
-    result.check("OBS-100b", "error", bool(data.get("title")), "Dashboard missing 'title'")
+    result.check(
+        "OBS-100b", "error", bool(data.get("title")), "Dashboard missing 'title'"
+    )
 
     uid = data.get("uid", "")
     result.check(
-        "OBS-100c", "error", bool(uid) and uid.startswith("obs-"),
+        "OBS-100c",
+        "error",
+        bool(uid) and uid.startswith("obs-"),
         f"uid '{uid}' doesn't match obs-{{service}} pattern",
     )
 
@@ -259,27 +269,43 @@ def validate_dashboard(
     # total but raise no issue (empty message = the prior `elif panels:` state).
     panels_with_expr = sum(1 for p in panels if _panel_has_expr(p))
     result.check(
-        "OBS-100e", "error", bool(panels) and panels_with_expr == n,
+        "OBS-100e",
+        "error",
+        bool(panels) and panels_with_expr == n,
         f"{n - panels_with_expr}/{n} panels missing PromQL expr" if panels else "",
     )
     panels_with_type = sum(1 for p in panels if p.get("type"))
     result.check(
-        "OBS-100f", "warning", bool(panels) and panels_with_type == n,
-        f"{n - panels_with_type}/{n} panels missing visualization type" if panels else "",
+        "OBS-100f",
+        "warning",
+        bool(panels) and panels_with_type == n,
+        (
+            f"{n - panels_with_type}/{n} panels missing visualization type"
+            if panels
+            else ""
+        ),
     )
     panels_with_unit = sum(1 for p in panels if p.get("unit"))
     result.check(
-        "OBS-100g", "warning", bool(panels) and panels_with_unit == n,
+        "OBS-100g",
+        "warning",
+        bool(panels) and panels_with_unit == n,
         f"{n - panels_with_unit}/{n} panels missing unit" if panels else "",
     )
     panels_with_grid = sum(1 for p in panels if p.get("gridPos"))
     result.check(
-        "OBS-100h", "warning", bool(panels) and panels_with_grid == n,
+        "OBS-100h",
+        "warning",
+        bool(panels) and panels_with_grid == n,
         "Panels missing gridPos" if panels else "",
     )
 
-    result.check("OBS-100i", "warning", bool(data.get("datasources")), "No datasources declared")
-    result.check("OBS-100j", "info", bool(data.get("variables")), "No variables declared")
+    result.check(
+        "OBS-100i", "warning", bool(data.get("datasources")), "No datasources declared"
+    )
+    result.check(
+        "OBS-100j", "info", bool(data.get("variables")), "No variables declared"
+    )
 
     # OBS-200a (OBS-710c): RED coverage
     red = _compute_red_coverage(panels)
@@ -292,7 +318,9 @@ def validate_dashboard(
     if not has_duration_panel(panels):
         missing.append("Duration")
     result.check(
-        "OBS-200a", "warning", red >= 2.0 / 3.0,
+        "OBS-200a",
+        "warning",
+        red >= 2.0 / 3.0,
         f"RED coverage {red:.0%} — missing: {', '.join(missing)}",
     )
 
@@ -325,10 +353,14 @@ def validate_alerts(
     try:
         data = yaml.safe_load(content)
     except yaml.YAMLError as exc:
-        result.issues.append(ObservabilityIssue("OBS-101a", "error", f"YAML parse error: {exc}"))
+        result.issues.append(
+            ObservabilityIssue("OBS-101a", "error", f"YAML parse error: {exc}")
+        )
         return result
     if not isinstance(data, dict):
-        result.issues.append(ObservabilityIssue("OBS-101a", "error", "YAML content is not a mapping"))
+        result.issues.append(
+            ObservabilityIssue("OBS-101a", "error", "YAML content is not a mapping")
+        )
         return result
     result.yaml_valid = True
     result.checks_passed += 1
@@ -345,23 +377,41 @@ def validate_alerts(
     for rule in rules:
         name = rule.get("alert", "")
         result.check(
-            "OBS-101c", "error", bool(name) and name[0].isupper(),
+            "OBS-101c",
+            "error",
+            bool(name) and name[0].isupper(),
             f"Rule missing or invalid alert name: '{name}'",
         )
-        result.check("OBS-101d", "error", bool(rule.get("expr")), f"Rule '{name}' missing expr")
-        result.check("OBS-101e", "warning", bool(rule.get("for")), f"Rule '{name}' missing 'for' duration")
+        result.check(
+            "OBS-101d", "error", bool(rule.get("expr")), f"Rule '{name}' missing expr"
+        )
+        result.check(
+            "OBS-101e",
+            "warning",
+            bool(rule.get("for")),
+            f"Rule '{name}' missing 'for' duration",
+        )
 
         labels = rule.get("labels", {})
         severity = labels.get("severity", "")
         result.check(
-            "OBS-101f", "error", severity in ("critical", "warning", "info"),
+            "OBS-101f",
+            "error",
+            severity in ("critical", "warning", "info"),
             f"Rule '{name}' missing/invalid severity label: '{severity}'",
         )
-        result.check("OBS-101g", "warning", bool(labels.get("service")), f"Rule '{name}' missing service label")
+        result.check(
+            "OBS-101g",
+            "warning",
+            bool(labels.get("service")),
+            f"Rule '{name}' missing service label",
+        )
 
         annotations = rule.get("annotations", {})
         result.check(
-            "OBS-101h", "warning", bool(annotations.get("summary")),
+            "OBS-101h",
+            "warning",
+            bool(annotations.get("summary")),
             f"Rule '{name}' missing summary annotation",
         )
 
@@ -369,7 +419,9 @@ def validate_alerts(
     expected = 3 if manifest_availability is not None else 1
     result.rule_coverage = min(len(rules), expected) / expected if expected else 1.0
     result.check(
-        "OBS-710d", "warning", result.rule_coverage >= 1.0,
+        "OBS-710d",
+        "warning",
+        result.rule_coverage >= 1.0,
         f"Alert coverage: {len(rules)}/{expected} expected rules (rule_coverage={result.rule_coverage:.2f})",
     )
 
@@ -414,7 +466,8 @@ def validate_slo(
         for doc in slo_docs:
             doc_yaml = yaml.dump(doc, default_flow_style=False, sort_keys=False)
             sub = validate_slo(
-                doc_yaml, file_path,
+                doc_yaml,
+                file_path,
                 manifest_availability=manifest_availability,
                 autofix=autofix,
                 service_id=service_id,
@@ -438,10 +491,14 @@ def validate_slo(
     try:
         data = yaml.safe_load(content)
     except yaml.YAMLError as exc:
-        result.issues.append(ObservabilityIssue("OBS-102a", "error", f"YAML parse error: {exc}"))
+        result.issues.append(
+            ObservabilityIssue("OBS-102a", "error", f"YAML parse error: {exc}")
+        )
         return result
     if not isinstance(data, dict):
-        result.issues.append(ObservabilityIssue("OBS-102a", "error", "YAML content is not a mapping"))
+        result.issues.append(
+            ObservabilityIssue("OBS-102a", "error", "YAML content is not a mapping")
+        )
         return result
     result.yaml_valid = True
     result.checks_passed += 1
@@ -455,11 +512,15 @@ def validate_slo(
     metadata = data.get("metadata", {})
 
     result.check(
-        "OBS-102b", "error", data.get("apiVersion") == "openslo/v1",
+        "OBS-102b",
+        "error",
+        data.get("apiVersion") == "openslo/v1",
         f"apiVersion: '{data.get('apiVersion')}' (expected 'openslo/v1')",
     )
     result.check(
-        "OBS-102c", "error", data.get("kind") == "SLO",
+        "OBS-102c",
+        "error",
+        data.get("kind") == "SLO",
         f"kind: '{data.get('kind')}' (expected 'SLO')",
     )
 
@@ -469,20 +530,32 @@ def validate_slo(
         result.target_value = float(target)
     result.check("OBS-102d", "error", target is not None, "Missing spec.target")
 
-    result.check("OBS-102e", "error", bool(spec.get("timeWindow")), "Missing spec.timeWindow")
+    result.check(
+        "OBS-102e", "error", bool(spec.get("timeWindow")), "Missing spec.timeWindow"
+    )
 
     indicator = spec.get("indicator", {})
     ind_spec = indicator.get("spec", {}) if isinstance(indicator, dict) else {}
     result.check(
-        "OBS-102f", "error",
+        "OBS-102f",
+        "error",
         bool(ind_spec.get("thresholdMetric") or ind_spec.get("ratioMetric")),
         "Missing spec.indicator with threshold/ratio metric",
     )
 
-    result.check("OBS-102g", "warning", bool(metadata.get("name")), "Missing metadata.name")
+    result.check(
+        "OBS-102g", "warning", bool(metadata.get("name")), "Missing metadata.name"
+    )
     labels = metadata.get("labels", {})
-    result.check("OBS-102h", "warning", bool(labels.get("service")), "Missing metadata.labels.service")
-    result.check("OBS-102i", "info", bool(spec.get("alerting")), "Missing spec.alerting section")
+    result.check(
+        "OBS-102h",
+        "warning",
+        bool(labels.get("service")),
+        "Missing metadata.labels.service",
+    )
+    result.check(
+        "OBS-102i", "info", bool(spec.get("alerting")), "Missing spec.alerting section"
+    )
 
     # OBS-202a (OBS-710a): target matches manifest — three-way (match / no-manifest / no-target)
     if manifest_availability is not None and result.target_value is not None:
@@ -490,7 +563,9 @@ def validate_slo(
         if matches:
             result.target_matches_manifest = True
         result.check(
-            "OBS-202a", "error", matches,
+            "OBS-202a",
+            "error",
+            matches,
             f"SLO target {result.target_value} doesn't match manifest availability {manifest_availability}",
         )
     elif manifest_availability is None:
@@ -544,7 +619,9 @@ def compute_service_composite(
     structural = (dashboard_score * 0.35) + (alert_score * 0.35) + (slo_score * 0.30)
     if metric_coverage is None:
         return structural
-    return round(structural * _STRUCTURAL_WEIGHT + metric_coverage * _COVERAGE_WEIGHT, 6)
+    return round(
+        structural * _STRUCTURAL_WEIGHT + metric_coverage * _COVERAGE_WEIGHT, 6
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -949,7 +1026,9 @@ def validate_cross_artifact_consistency(
 def _extract_metric_names(expr: str) -> List[str]:
     """Extract Prometheus metric names from a PromQL expression."""
     # Match metric_name{...} or metric_name[...] or bare metric_name in functions
-    return re.findall(r'([a-z_][a-z0-9_]*(?:_bucket|_total|_count|_sum)?)\s*[{\[\(]', expr)
+    return re.findall(
+        r"([a-z_][a-z0-9_]*(?:_bucket|_total|_count|_sum)?)\s*[{\[\(]", expr
+    )
 
 
 def _safe_yaml_load(content: Optional[str]) -> Optional[Dict]:
@@ -968,8 +1047,8 @@ def _safe_yaml_load(content: Optional[str]) -> Optional[Dict]:
 # ---------------------------------------------------------------------------
 
 # OTel dot-notation → Prometheus underscore mapping
-_PROM_NAME_RE = re.compile(r'^[a-z][a-z0-9_]*$')
-_DOT_METRIC_RE = re.compile(r'[a-z]+\.[a-z]+\.[a-z]')
+_PROM_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_DOT_METRIC_RE = re.compile(r"[a-z]+\.[a-z]+\.[a-z]")
 
 # Transport → expected metric prefix
 _TRANSPORT_METRIC_PREFIX: Dict[str, str] = {
@@ -1006,39 +1085,49 @@ def validate_metric_names(
         for metric in metrics:
             # OBS-203a: Prometheus naming convention
             if _DOT_METRIC_RE.search(metric):
-                issues.append(ObservabilityIssue(
-                    "OBS-203a", "warning",
-                    f"Metric '{metric}' uses dot notation; "
-                    f"Prometheus convention requires underscores "
-                    f"(e.g., '{metric.replace('.', '_')}')",
-                ))
+                issues.append(
+                    ObservabilityIssue(
+                        "OBS-203a",
+                        "warning",
+                        f"Metric '{metric}' uses dot notation; "
+                        f"Prometheus convention requires underscores "
+                        f"(e.g., '{metric.replace('.', '_')}')",
+                    )
+                )
 
             # OBS-203b: Transport-metric alignment
             if transport:
                 expected_prefix = _TRANSPORT_METRIC_PREFIX.get(transport)
                 if expected_prefix:
                     # Only check server-side metrics (skip generic ones like 'rate', 'sum')
-                    if ("server" in metric or "client" in metric) and \
-                            not metric.startswith(expected_prefix):
-                        issues.append(ObservabilityIssue(
-                            "OBS-203b", "error",
-                            f"Service '{service_id}' uses {transport} but "
-                            f"metric '{metric}' doesn't match expected prefix "
-                            f"'{expected_prefix}*'",
-                        ))
+                    if (
+                        "server" in metric or "client" in metric
+                    ) and not metric.startswith(expected_prefix):
+                        issues.append(
+                            ObservabilityIssue(
+                                "OBS-203b",
+                                "error",
+                                f"Service '{service_id}' uses {transport} but "
+                                f"metric '{metric}' doesn't match expected prefix "
+                                f"'{expected_prefix}*'",
+                            )
+                        )
 
         # OBS-203c: _bucket suffix in histogram_quantile()
         hq_matches = re.findall(
-            r'histogram_quantile\([^,]+,\s*(?:rate|increase)\((\w+)\{',
+            r"histogram_quantile\([^,]+,\s*(?:rate|increase)\((\w+)\{",
             expr,
         )
         for metric in hq_matches:
             if not metric.endswith("_bucket"):
-                issues.append(ObservabilityIssue(
-                    "OBS-203c", "warning",
-                    f"histogram_quantile() references '{metric}' "
-                    f"without _bucket suffix (should be '{metric}_bucket')",
-                ))
+                issues.append(
+                    ObservabilityIssue(
+                        "OBS-203c",
+                        "warning",
+                        f"histogram_quantile() references '{metric}' "
+                        f"without _bucket suffix (should be '{metric}_bucket')",
+                    )
+                )
 
     return issues
 
@@ -1094,13 +1183,19 @@ def validate_derivation_completeness(
                 if "severity:" in content:
                     consumed = True
                     # Check value: "high → critical" means severity should be "critical"
-                    expected_sev = rule_value.split("→")[-1].strip() if "→" in rule_value else rule_value
+                    expected_sev = (
+                        rule_value.split("→")[-1].strip()
+                        if "→" in rule_value
+                        else rule_value
+                    )
                     if f"severity: {expected_sev}" not in content:
                         # Check YAML-parsed value
                         data = _safe_yaml_load(content)
                         if data:
                             for g in data.get("groups", [{}]):
-                                for r in (g.get("rules", []) if isinstance(g, dict) else []):
+                                for r in (
+                                    g.get("rules", []) if isinstance(g, dict) else []
+                                ):
                                     actual = r.get("labels", {}).get("severity", "")
                                     if actual and actual != expected_sev:
                                         incorrect.append(
@@ -1176,8 +1271,13 @@ def has_error_panel(panels: List[Dict[str, Any]]) -> bool:
     """Check for an error rate panel (E in RED)."""
     for expr in get_all_panel_exprs(panels):
         e = expr.lower()
-        if ("error" in e or "status_code" in e or "status_code!=" in e
-                or 'status_code!="ok"' in e or "status!=" in e):
+        if (
+            "error" in e
+            or "status_code" in e
+            or "status_code!=" in e
+            or 'status_code!="ok"' in e
+            or "status!=" in e
+        ):
             return True
     return False
 
@@ -1253,9 +1353,13 @@ def validate_portal(
         result.json_valid = True
         result.checks_passed += 1
     except (ValueError, TypeError):
-        result.issues.append(ObservabilityIssue(
-            "OBP-104-1", "error", "Portal content is not valid JSON",
-        ))
+        result.issues.append(
+            ObservabilityIssue(
+                "OBP-104-1",
+                "error",
+                "Portal content is not valid JSON",
+            )
+        )
         return result
 
     panels = dashboard.get("panels", [])
@@ -1268,9 +1372,13 @@ def validate_portal(
     if text_panels:
         result.checks_passed += 1
     else:
-        result.issues.append(ObservabilityIssue(
-            "OBP-104-2", "error", "Portal has no text panels",
-        ))
+        result.issues.append(
+            ObservabilityIssue(
+                "OBP-104-2",
+                "error",
+                "Portal has no text panels",
+            )
+        )
 
     # OBP-104-3: Has "Project Overview" panel
     result.checks_total += 1
@@ -1279,24 +1387,30 @@ def validate_portal(
         result.has_overview = True
         result.checks_passed += 1
     else:
-        result.issues.append(ObservabilityIssue(
-            "OBP-104-3", "warning", "Portal missing 'Project Overview' panel",
-        ))
+        result.issues.append(
+            ObservabilityIssue(
+                "OBP-104-3",
+                "warning",
+                "Portal missing 'Project Overview' panel",
+            )
+        )
 
     # OBP-104-4: Has service-related panel
     result.checks_total += 1
     has_services = any(
-        "service" in t.lower() or "inventory" in t.lower()
-        for t in panel_titles
+        "service" in t.lower() or "inventory" in t.lower() for t in panel_titles
     )
     if has_services:
         result.has_service_inventory = True
         result.checks_passed += 1
     else:
-        result.issues.append(ObservabilityIssue(
-            "OBP-104-4", "warning",
-            "Portal missing service inventory panel",
-        ))
+        result.issues.append(
+            ObservabilityIssue(
+                "OBP-104-4",
+                "warning",
+                "Portal missing service inventory panel",
+            )
+        )
 
     # OBP-104-5: Service count match (when expected count provided)
     if expected_service_count is not None:
@@ -1308,20 +1422,26 @@ def validate_portal(
                 content_text = p.get("options", {}).get("content", "")
                 # Count data rows (lines starting with |, excluding header/separator)
                 data_rows = [
-                    line for line in content_text.split("\n")
-                    if line.startswith("|") and not line.startswith("|-")
-                    and "Service" not in line.split("|")[1] if "|" in line
+                    line
+                    for line in content_text.split("\n")
+                    if line.startswith("|")
+                    and not line.startswith("|-")
+                    and "Service" not in line.split("|")[1]
+                    if "|" in line
                 ]
                 # Subtract header row
                 row_count = max(0, len(data_rows) - 1)
                 if row_count == expected_service_count:
                     result.checks_passed += 1
                 else:
-                    result.issues.append(ObservabilityIssue(
-                        "OBP-104-5", "warning",
-                        f"Service count mismatch: expected {expected_service_count}, "
-                        f"found {row_count} rows in inventory",
-                    ))
+                    result.issues.append(
+                        ObservabilityIssue(
+                            "OBP-104-5",
+                            "warning",
+                            f"Service count mismatch: expected {expected_service_count}, "
+                            f"found {row_count} rows in inventory",
+                        )
+                    )
                 break
         else:
             # No service inventory panel found — already flagged in OBP-104-4
@@ -1333,9 +1453,103 @@ def validate_portal(
     if "portal" in title.lower():
         result.checks_passed += 1
     else:
-        result.issues.append(ObservabilityIssue(
-            "OBP-104-6", "info",
-            f"Dashboard title '{title}' does not contain 'Portal'",
-        ))
+        result.issues.append(
+            ObservabilityIssue(
+                "OBP-104-6",
+                "info",
+                f"Dashboard title '{title}' does not contain 'Portal'",
+            )
+        )
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# collector_enrichment (REQ_COLLECTOR_ENRICHMENT LH-3) — score the artifact like
+# its dashboard/alert/slo siblings so it appears in the run's quality report. The
+# generator's own validate_collector_enrichment is fail-FAST on the in-memory model;
+# this re-checks the emitted YAML content (structural, non-raising) for the score.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CollectorEnrichmentValidationResult(_ChecklistResult):
+    file_path: str
+    yaml_valid: bool = False
+    statement_count: int = 0
+    checks_passed: int = 0
+    checks_total: int = 0
+    issues: List[ObservabilityIssue] = field(default_factory=list)
+    repairs_applied: List[str] = field(default_factory=list)
+
+
+def validate_collector_enrichment_artifact(
+    content: str, file_path: str = ""
+) -> CollectorEnrichmentValidationResult:
+    """Structural score for a generated collector_enrichment artifact (CE-1xx checks).
+
+    Non-raising (unlike the generator's fail-fast validator): a corrupt on-disk artifact
+    scores <1.0 with issues rather than aborting the run's scoring pass."""
+    from startd8.observability.collector_enrichment_parity import extract_enrichment_map
+    from startd8.observability.collector_enrichment_validation import CRITICALITY_VALUES
+
+    result = CollectorEnrichmentValidationResult(file_path=file_path)
+
+    # CE-100a: YAML parseable (fatal — early return)
+    result.checks_total += 1
+    try:
+        data = yaml.safe_load(content) or {}
+    except yaml.YAMLError as exc:
+        result.issues.append(
+            ObservabilityIssue("CE-100a", "error", f"YAML parse error: {exc}")
+        )
+        return result
+    result.checks_passed += 1
+    result.yaml_valid = True
+
+    proc = (
+        ((data.get("processors") or {}).get("transform/business") or {})
+        if isinstance(data, dict)
+        else {}
+    )
+    # CE-100b: transform/business processor shape (error_mode + span-context statements)
+    result.check(
+        "CE-100b",
+        "error",
+        bool(proc)
+        and proc.get("error_mode") == "ignore"
+        and (proc.get("trace_statements") or [{}])[0].get("context") == "span",
+        "missing/malformed transform/business processor" if not proc else "",
+    )
+
+    emap = extract_enrichment_map(content)
+    result.statement_count = sum(len(attrs) for attrs in emap.values())
+    # CE-101: at least one enrichment statement
+    result.check(
+        "CE-101", "error", result.statement_count > 0, "no enrichment statements"
+    )
+    # CE-102: every criticality value is in the closed enum
+    bad_crit = sorted(
+        {
+            v
+            for attrs in emap.values()
+            for k, v in attrs.items()
+            if k == "criticality" and v not in CRITICALITY_VALUES
+        }
+    )
+    result.check(
+        "CE-102",
+        "error",
+        not bad_crit,
+        f"criticality out of enum: {bad_crit}" if bad_crit else "",
+    )
+    # CE-103: no empty service.name selector
+    empty_sel = "" in emap
+    result.check(
+        "CE-103",
+        "error",
+        not empty_sel,
+        "empty service.name selector" if empty_sel else "",
+    )
 
     return result
