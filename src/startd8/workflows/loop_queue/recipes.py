@@ -94,3 +94,22 @@ register_recipe(
         steps=("run workflow",),
     )
 )
+
+register_recipe(
+    LoopRecipe(
+        loop_id="reflective-requirements",
+        description=(
+            "Agent-surface reflective-requirements loop (OQ-6): draft "
+            "requirements + plan, reflect planning insights back into the "
+            "reqs, then stop. Follow-on CRP is a separate queued job "
+            "(typically depends_on this job_id)."
+        ),
+        executors=(LoopExecutor.AGENT_SURFACE.value,),
+        inputs=(
+            "ReflectiveRequirementsRequest (scope, requirements_path, "
+            "plan_path, optional agent_template_path)"
+        ),
+        completion="requirements + plan written; drain-result ok",
+        steps=("render instruction bundle", "agent writes docs", "confirm"),
+    )
+)

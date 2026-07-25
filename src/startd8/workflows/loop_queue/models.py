@@ -70,6 +70,13 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_utc(iso: str) -> datetime:
+    value = datetime.fromisoformat(iso)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def looks_like_agent_bundle(text: str) -> bool:
     """True when *text* carries agent-surface bundle / mustache markers.
 
@@ -143,6 +150,32 @@ class CrpReviewRequest(BaseModel):
         ).hexdigest()
 
 
+class ReflectiveRequirementsRequest(BaseModel):
+    """Agent-surface reflective-requirements intent (OQ-6 settled: first-class recipe).
+
+    Paths are write targets (may be created on drain). Parent directories must
+    exist at enqueue. Unknown keys fail closed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str
+    requirements_path: str
+    plan_path: str
+    agent_template_path: Optional[str] = None
+    surface_conformance: Optional[Dict[str, Any]] = None
+
+    @property
+    def source_paths(self) -> List[Path]:
+        return [Path(self.requirements_path), Path(self.plan_path)]
+
+    def content_hash(self) -> str:
+        payload = self.model_dump(mode="json")
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+
 class RoundRecord(BaseModel):
     """One completed review round recorded on the job (FR-8d)."""
 
@@ -178,6 +211,8 @@ class WorkflowLoopJob(BaseModel):
     rounds: List[RoundRecord] = Field(default_factory=list)
     #: Durable artifact pointers (rendered bundle, hand-off path, ...).
     artifacts: Dict[str, str] = Field(default_factory=dict)
+    #: OQ-5: UTC ISO expiry while ``status=processing``; cleared on leave.
+    lease_expires_at: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -211,15 +246,35 @@ class WorkflowLoopJob(BaseModel):
                 f"invalid CrpReviewRequest for job {self.job_id!r}: {e}"
             ) from e
 
+    def reflective_request(self) -> ReflectiveRequirementsRequest:
+        """Parse ``config`` as reflective-requirements intent (OQ-6)."""
+        if self.loop_id != "reflective-requirements":
+            raise LoopQueueValidationError(
+                f"job {self.job_id!r} has loop_id={self.loop_id!r}, "
+                "not 'reflective-requirements'"
+            )
+        try:
+            return ReflectiveRequirementsRequest.model_validate(self.config)
+        except Exception as e:
+            raise LoopQueueValidationError(
+                f"invalid ReflectiveRequirementsRequest for job {self.job_id!r}: {e}"
+            ) from e
+
     def rounds_completed(self) -> int:
         return len(self.rounds)
 
     def touch(self) -> None:
         self.updated_at = _utc_now_iso()
 
+    def lease_expired(self, *, now: Optional[datetime] = None) -> bool:
+        if not self.lease_expires_at:
+            return False
+        current = now or datetime.now(timezone.utc)
+        return _parse_utc(self.lease_expires_at) <= current
+
 
 class LoopQueueConfig(BaseModel):
-    """WLQ configuration (FR-2; OQ-7 lean: dedicated folder)."""
+    """WLQ configuration (FR-2; OQ-7 settled: dedicated folder)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -228,6 +283,9 @@ class LoopQueueConfig(BaseModel):
     #: Default agent-surface CRP bundle renderer script (FR-20.2). ``None``
     #: falls back to $STARTD8_CRP_RENDERER, then the cap-dev-pipe location.
     renderer_script: Optional[Path] = None
+    #: OQ-5 settled: abandoned ``processing`` jobs reclaim to ``pending`` after
+    #: this many seconds. ``0`` disables automatic reclaim (explicit requeue only).
+    lease_ttl_seconds: int = Field(default=3600, ge=0)
 
 
 class DrainHandoff(BaseModel):
@@ -252,6 +310,8 @@ class DrainHandoff(BaseModel):
     )
     status_writeback_path: str
     budget_warning: Optional[str] = None
+    #: OQ-11: optional human markdown card path alongside the JSON hand-off.
+    markdown_card_path: Optional[str] = None
 
 
 class DrainResult(BaseModel):

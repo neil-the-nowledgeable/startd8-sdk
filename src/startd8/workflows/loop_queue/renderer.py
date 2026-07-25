@@ -33,6 +33,7 @@ from .models import (
     CrpReviewRequest,
     LoopQueueBlockedError,
     LoopQueueValidationError,
+    ReflectiveRequirementsRequest,
 )
 
 logger = get_logger(__name__)
@@ -43,6 +44,33 @@ DEFAULT_RENDERER_SCRIPT = Path(
 
 _SLOT_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 _SINGLE_BRACE_FIELD_RE = re.compile(r"(?<!\{)\{[a-zA-Z_][a-zA-Z0-9_]*\}(?!\})")
+
+DEFAULT_REFLECTIVE_TEMPLATE = """# Reflective Requirements — {{scope}}
+
+You are draining a Workflow Loop Queue `reflective-requirements` job.
+Follow the **reflective-requirements** skill process (draft requirements →
+plan → reflect planning insights → update requirements + plan). Do **not**
+start CRP review or implementation in this drain.
+
+## Write targets (absolute)
+
+| Artifact | Path |
+|----------|------|
+| Requirements | `{{requirements_path}}` |
+| Plan | `{{plan_path}}` |
+
+Create or update both markdown files. Prefer the project's existing
+requirements/plan shape when present.
+
+## Done when
+
+1. Both paths exist as non-empty `.md` files.
+2. You write `drain-result.json` at the path from the Drain Hand-off with
+   `ok: true`, `paths_written` exactly matching those two paths, and
+   `round_number: 1`.
+3. Chat/UI reply is a short confirmation only (paths + that reflective loop
+   finished). Do not paste the full documents into chat.
+"""
 
 
 def resolve_renderer_script(configured: Optional[Path] = None) -> Path:
@@ -205,3 +233,45 @@ def render_bundle(
     bundle_path.write_text(memory + generated, encoding="utf-8")
     logger.info("Rendered WLQ bundle via %s: %s", script.name, bundle_path)
     return bundle_path
+
+
+def render_reflective_bundle(
+    request: ReflectiveRequirementsRequest,
+    artifact_dir: Path,
+) -> Path:
+    """Render the agent-surface reflective-requirements instruction bundle."""
+    artifact_dir = Path(artifact_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    template_bytes: Optional[bytes] = None
+    template_label = Path("<default-reflective-template>")
+    if request.agent_template_path:
+        template_path = Path(request.agent_template_path)
+        if not template_path.is_file():
+            raise LoopQueueBlockedError(
+                f"agent_template_path vanished: {template_path}"
+            )
+        template_bytes = template_path.read_bytes()
+        template_label = template_path
+        template_text = template_bytes.decode("utf-8")
+    else:
+        template_text = DEFAULT_REFLECTIVE_TEMPLATE
+        template_bytes = template_text.encode("utf-8")
+
+    key = hashlib.sha256(
+        request.content_hash().encode("ascii") + b":" + template_bytes
+    ).hexdigest()[:12]
+    bundle_path = artifact_dir / f"bundle-reflective-{key}.md"
+    if bundle_path.is_file():
+        logger.info("Reusing cached reflective bundle %s", bundle_path)
+        return bundle_path
+
+    slots = {
+        "scope": request.scope,
+        "requirements_path": str(Path(request.requirements_path).resolve()),
+        "plan_path": str(Path(request.plan_path).resolve()),
+        "source_paths": "\n".join(str(p.resolve()) for p in request.source_paths),
+    }
+    rendered = _render_slot_template(template_text, slots, template_label)
+    bundle_path.write_text(rendered, encoding="utf-8")
+    logger.info("Rendered reflective bundle: %s", bundle_path)
+    return bundle_path.resolve()

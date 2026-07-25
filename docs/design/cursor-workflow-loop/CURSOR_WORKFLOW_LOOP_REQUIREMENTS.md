@@ -136,7 +136,7 @@ The SDK already has:
 
 - **FR-2 — Reuse JobQueue operational patterns, not JobFile semantics.** Watch folder, status sidecar, archive-on-complete, priority ordering, and sequential drain (`max_concurrent_jobs` default 1) SHOULD match `JobQueue` UX (`startd8 queue status|run|watch`). Implementation MUST NOT overload `JobFile.prompt` for workflow configs. *Acceptance:* a prompt job and a workflow-loop job can coexist in the same watch tree or sibling trees without cross-interpretation.
 
-- **FR-3 — Durable status across sessions / surfaces.** Status transitions `pending → processing → awaiting_triage | completed | failed | cancelled | blocked` persist on disk. A new agent session (any conforming surface) can `status` / `run-next` without prior conversation memory. Kill-mid-job lease/heartbeat is **Increment 3 / OQ-5** — until then, abandoned `processing` is recoverable via explicit `requeue` / `cancel` (v1 interim). **[R1-F3]** *Acceptance:* after a completed review round, status is `awaiting_triage` (if triage deferred) or advances per FR-12/13; lease TTL not required for Inc 1 ship.
+- **FR-3 — Durable status across sessions / surfaces.** Status transitions `pending → processing → awaiting_triage | completed | failed | cancelled | blocked` persist on disk. A new agent session (any conforming surface) can `status` / `run-next` without prior conversation memory. Abandoned `processing` jobs reclaim to `pending` after `lease_ttl_seconds` (default 3600; `0` disables) on `status` / `run-next`; explicit `requeue` / `cancel` remain. **[R1-F3]** *Acceptance:* after a completed review round, status is `awaiting_triage` (if triage deferred) or advances per FR-12/13; expired lease → reclaimable `pending`.
 
 - **FR-4 — Vendor-neutral enqueue / drain CLI + reference Cursor skill.** WLQ ships CLI ops: `enqueue`, `status`, `run-next` / `drain`, `cancel`, `list-loops`, `list-surfaces`, and for CRP: `triage` / `render`. These are the **canonical ops** every vendor surface must map to (FR-21). v1 also ships a **Cursor reference skill** that invokes those ops. Drain for `executor=agent-surface`: ensure a **rendered review-template bundle** exists (FR-8 / FR-20), hand the surface a **Drain Hand-off** (FR-21) pointing at the absolute bundle path; surface’s agent executes Write/Edit; write confirmation + suggestion counts back to job status. Drain for `executor=sdk-workflow`: `WorkflowRegistry.run_workflow` / `startd8 workflow run`. *Acceptance:* Cursor happy path documented; a fixture “mock surface” that only implements VASI hand-off ops can drain without Cursor-specific code.
 
@@ -193,7 +193,7 @@ The SDK already has:
 
 - **FR-15 — Generic one-shot workflow jobs.** Any registered workflow MAY be enqueued as `loop_id=one-shot` (or omit loop and set `workflow_id` only) with `executor=sdk-workflow`. v1 implementation priority after CRP: review-adjacent family (`critical-review`, `design-polish`, `doc-enhancement`, `plain-language`, `policy-analysis`). *Acceptance:* enqueue+run `plain-language` with a fixture config succeeds under mock agents where the workflow allows.
 
-- **FR-16 — Dependency DAG (light).** `depends_on: [job_id, …]` blocks drain until dependencies are `completed`. Cycles fail at enqueue. *Acceptance:* CRP job B depending on reflective-reqs job A does not start until A completes. (Reflective-requirements may remain an agent-surface skill, not an SDK workflow — OQ-6.)
+- **FR-16 — Dependency DAG (light).** `depends_on: [job_id, …]` blocks drain until dependencies are `completed`. Cycles fail at enqueue. *Acceptance:* CRP job B depending on `loop_id=reflective-requirements` job A does not start until A completes.
 
 - **FR-17 — Observability.** Emit OTel spans or structured logs for enqueue, drain start/end, `executor`, `surface_id`, workflow_id/loop_id, cost (when sdk-workflow), status transition. Reuse `get_logger` / existing workflow span patterns. *Acceptance:* a drain produces a span/log line searchable by `job_id` and `surface_id`.
 
@@ -217,15 +217,17 @@ The SDK already has:
 
 ---
 
-## 4. Open Questions
+## 4. Open Questions — Resolved
 
-- **OQ-5.** Lease/heartbeat for abandoned `processing` jobs — auto-fail after TTL vs require explicit `requeue`? *(v1 interim: explicit `requeue`/`cancel` only — see FR-3.)*
-- **OQ-6.** Should reflective-requirements become a first-class `loop_id=reflective-requirements` recipe (`agent-surface` only), or stay an external skill that merely enqueues a follow-on CRP job?
-- **OQ-7.** Same watch folder as prompt jobs vs dedicated `.startd8/workflow-loop-queue/` — UX unity vs isolation?
-- **OQ-8.** For agent-surface CRP, is the reviewing agent always the *current* chat agent, or should the surface spawn a distinct subagent / Task tool run (blind review) by default? *(May differ per vendor — VASI should allow either.)*
-- **OQ-9.** MCP `execute_workflow` as an enqueue/drain backend in Increment 2 — gate on `user-startd8` MCP reliability, or always shell out to CLI?
-- **OQ-10.** Should optional `agent_template_path` project overrides live in-repo (versioned) or under `.startd8/` (local-only)? Default lean: in-repo under `docs/design/**/templates/` or `.startd8/review-templates/`.
-- **OQ-11.** Should Drain Hand-off be JSON-only, or also a short human markdown “run this” card for chat-paste vendors?
+| ID | Decision | Rationale / code |
+|----|----------|------------------|
+| **OQ-5** | **Lease TTL with reclaim.** Default `LoopQueueConfig.lease_ttl_seconds=3600`. Expired `processing` jobs auto-reclaim to `pending` on `status` / `run-next` (Mottainai). `0` disables; explicit `requeue`/`cancel` remain. | Abandoned drains must not wedge the queue forever. |
+| **OQ-6** | **First-class `loop_id=reflective-requirements`** (`agent-surface` only). Follow-on CRP is a separate job (often `depends_on`). | Capability-Delivery Loop needs an executable first bookend, not only a skill outside the queue. |
+| **OQ-7** | **Dedicated** `.startd8/workflow-loop-queue/` (not shared with prompt JobQueue). | Isolation avoids cross-interpretation with `*_startd8_job.json`. |
+| **OQ-8** | **Default = current chat agent.** Surfaces MAY spawn a blind subagent/Task; VASI allows either. Cursor reference skill uses the current agent. | Lowest friction for v1; vendors can harden. |
+| **OQ-9** | **CLI is canonical.** Vendors shell out to `startd8 wloop *`. MCP wrappers are optional later, not required for correctness. | Offline-friendly; avoids flaky MCP as a hard dependency. |
+| **OQ-10** | Prefer **in-repo** templates under `docs/design/**/templates/`; local-only under `.startd8/review-templates/` also allowed. | Versioned templates travel with the project. |
+| **OQ-11** | **JSON + markdown card.** `drain-handoff.json` remains normative; `drain-handoff.md` is always written (`markdown_card_path` on the hand-off). | Chat-paste vendors need a short human card; machines keep JSON. |
 
 ---
 
@@ -259,7 +261,7 @@ The SDK already has:
 | **1** | Agent-surface review-template (FR-20) + Cursor reference skill + mock-surface contract test + triage | First multi-vendor-capable CRP loop (Cursor ships) |
 | **1.1** | CRP `sdk-workflow` executor (FR-9) | Headless / CI CRP via same queue |
 | **2** | Generic one-shot workflows (FR-15) + deps (FR-16) + optional MCP | Catalog leverage |
-| **3** | Budgets/OTel + lease policy (OQ-5) + optional reflective-reqs recipe (OQ-6) | Production hardening |
+| **3** | Budgets/OTel + lease TTL + first-class `reflective-requirements` recipe | Production hardening |
 
 ---
 

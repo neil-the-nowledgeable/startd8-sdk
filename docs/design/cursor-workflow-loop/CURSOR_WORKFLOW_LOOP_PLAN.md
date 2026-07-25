@@ -97,7 +97,7 @@ cannot be reused as `architectural-review-log.review_template` (`str.format` /
 | 3a | OTel spans / structured logs | FR-17 |
 | 3b | Budget wiring for sdk-workflow | FR-18 |
 | 3c | Experimental API export + docs | FR-19 |
-| 3d | Resolve OQ-5 (lease TTL) and OQ-6 (reflective-reqs recipe) | OQs |
+| 3d | Resolve OQ-5…OQ-11 (lease TTL, reflective-reqs recipe, folder, agent model, CLI-canonical, template location, markdown card) | OQs — **done** |
 
 ---
 
@@ -193,7 +193,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | ---- | ---- | ---- | ---- |
 | FR-1 Workflow-loop job envelope | §2 0a, 0e | Partial | Models + round-trip; typed CRP request fields not yet a plan step (see R1-S1) |
 | FR-2 JobQueue patterns, not JobFile | §1 Approach; §2 0b; OQ-7 lean path | Covered | Sibling tree default stated |
-| FR-3 Durable status / lease | §2 0a–0b; §6 3d | Partial | Persistence covered; lease/heartbeat deferred (R1-S4) |
+| FR-3 Durable status / lease | §2 0a–0b; §6 3d | Covered | Lease TTL reclaim (default 3600s); explicit requeue/cancel remain |
 | FR-4 Cursor skill + CLI | §2 0d; §3 1e | Partial | Skill planned; CLI incomplete vs cancel/drain/list-loops (R1-S2) |
 | FR-5 Catalog-validated workflow jobs | §2 0c, 0e | Covered | discover + fail-closed tests |
 | FR-6 Fail-closed missing artifacts | §2 0c, 0e | Covered | enqueue + unit tests; drain re-check implied via FR-6 map |
@@ -211,8 +211,10 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | FR-18 Budget fail-closed | §6 3b | Covered | Budget wiring for sdk-workflow |
 | FR-19 Experimental API | §6 3c; §1 code home | Covered | Export + docs |
 | NR-1…NR-7 | §8 Settled | Covered | Do-not-relitigate aligns |
-| OQ-5 Lease TTL | §6 3d | Partial | Deferred; conflicts with FR-3 early acceptance (R1-S4) |
-| OQ-6 Reflective-reqs recipe | §6 3d | Partial | Deferred resolve only |
-| OQ-7 Watch folder | §2 Default path | Covered (plan) / Conflict | Plan leans dedicated folder; requirements still list OQ-7 open |
-| OQ-8 Current vs subagent | (none) | Gap | Affects FR-4 drain semantics; no plan lean |
-| OQ-9 MCP backend | §5 2d | Partial | Optional Inc2 only |
+| OQ-5 Lease TTL | §6 3d | Covered | Default 3600s reclaim; `0` disables |
+| OQ-6 Reflective-reqs recipe | §6 3d | Covered | First-class `loop_id=reflective-requirements` |
+| OQ-7 Watch folder | §2 Default path | Covered | Dedicated `.startd8/workflow-loop-queue/` |
+| OQ-8 Current vs subagent | VASI + skill | Covered | Default current chat; blind optional |
+| OQ-9 MCP backend | §5 2d | Covered | CLI canonical; MCP optional |
+| OQ-10 Template location | Requirements §4 | Covered | Prefer in-repo `docs/design/**/templates/` |
+| OQ-11 Markdown hand-off | VASI + handoff.py | Covered | `drain-handoff.md` + `markdown_card_path` |

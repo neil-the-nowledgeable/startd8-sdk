@@ -75,6 +75,7 @@ When `run-next` selects an `executor=agent-surface` job, WLQ writes a hand-off
 sidecar (and MAY print the same JSON to stdout):
 
 **Path:** `<queue_root>/<job_id>/drain-handoff.json`
+**Markdown card (OQ-11):** `<queue_root>/<job_id>/drain-handoff.md` — also exposed as `markdown_card_path` on the JSON hand-off
 **JSON Schema:** [`schemas/drain-handoff.schema.json`](schemas/drain-handoff.schema.json)
 
 ```json
@@ -96,18 +97,24 @@ sidecar (and MAY print the same JSON to stdout):
     "dual_doc_coverage_matrix": true
   },
   "status_writeback_path": "/abs/path/to/<job_id>/drain-result.json",
-  "budget_warning": null
+  "budget_warning": null,
+  "markdown_card_path": "/abs/path/to/<job_id>/drain-handoff.md"
 }
 ```
 
 ### Agent execution contract (all surfaces)
 
-1. Open `bundle_path` (agent with filesystem read).
-2. Follow the bundle: append `#### Review Round R{n}` under Appendix C on each
+**Default reviewer (OQ-8):** the current chat/session agent. Surfaces MAY
+instead spawn a blind subagent / Task tool; that choice is vendor UX.
+
+1. Open `bundle_path` (agent with filesystem read), or paste the markdown card.
+2. For `loop_id=crp`: append `#### Review Round R{n}` under Appendix C on each
    in-scope source path; initialize A/B/C scaffold if absent.
-3. Dual-doc: also append Requirements Coverage Matrix to the plan.
-4. Do **not** modify populated Appendix A/B; do **not** self-triage.
-5. Write `drain-result.json` (below); chat/UI reply is a short confirmation only.
+3. Dual-doc CRP: also append Requirements Coverage Matrix to the plan.
+4. For `loop_id=reflective-requirements`: write/update the requirements + plan
+   paths named in the hand-off (no CRP, no implementation).
+5. Do **not** modify populated Appendix A/B on CRP drains; do **not** self-triage.
+6. Write `drain-result.json` (below); chat/UI reply is a short confirmation only.
 
 ### Status write-back
 

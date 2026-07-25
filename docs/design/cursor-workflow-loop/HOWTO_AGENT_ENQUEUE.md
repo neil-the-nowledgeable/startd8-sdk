@@ -89,7 +89,7 @@ You should see `status: pending`. Stop here unless the user asked you to drain.
 |-------|----------|-------------|
 | `schema_version` | yes | `"0.1.0"` until WLQ bumps it |
 | `job_id` | yes | Stable unique id (`crp-<slug>`, uuid ok) |
-| `loop_id` | yes | `"crp"` for Convergent Review; `"one-shot"` for a catalog workflow |
+| `loop_id` | yes | `"crp"` · `"reflective-requirements"` · `"one-shot"` |
 | `executor` | yes | `"agent-surface"` (IDE agent) or `"sdk-workflow"` (API keys / headless) |
 | `surface_id` | if agent-surface | `"cursor"` \| `"codex"` \| `"antigravity"` \| custom |
 | `workflow_id` | if sdk-workflow / one-shot | e.g. `"plain-language"`, `"architectural-review-log"` |
@@ -143,6 +143,26 @@ Dual-doc CRP needs **both** paths. Single-doc: set only the one you are reviewin
 
 Do **not** put a Cursor/CRP prompt bundle into any `review_template` field.
 
+### Reflective-requirements (agent-surface)
+
+Parent directories must exist; the requirements/plan files may be created on drain.
+
+```json
+{
+  "schema_version": "0.1.0",
+  "job_id": "refl-feature-x",
+  "loop_id": "reflective-requirements",
+  "executor": "agent-surface",
+  "surface_id": "cursor",
+  "status": "pending",
+  "config": {
+    "scope": "Feature X — requirements + plan bookend",
+    "requirements_path": "/ABS/PATH/REQUIREMENTS.md",
+    "plan_path": "/ABS/PATH/PLAN.md"
+  }
+}
+```
+
 ### One-shot catalog workflow
 
 ```json
@@ -161,13 +181,13 @@ Do **not** put a Cursor/CRP prompt bundle into any `review_template` field.
 
 Validate `config` keys against `startd8 workflow describe <workflow_id>` (when available).
 
-### Chained jobs
+### Chained jobs (reflective → CRP)
 
 ```json
-"depends_on": ["reflective-reqs-1"]
+"depends_on": ["refl-feature-x"]
 ```
 
-Enqueue the dependency first. Drain will skip this job until the dependency is `completed`.
+Enqueue the reflective job first, then the CRP job with that `depends_on`. Drain skips the CRP until the dependency is `completed`.
 
 ---
 
@@ -207,7 +227,7 @@ When the user asks to **run** the job:
 startd8 wloop run-next --job-id crp-cwlq-r1
 ```
 
-For `agent-surface`, read the Drain Hand-off JSON and execute the rendered bundle (see VASI §5). Then write `drain-result.json`.
+For `agent-surface`, read the Drain Hand-off JSON (and optional `markdown_card_path`) and execute the rendered bundle in the **current** chat by default (see VASI §5). Then write `drain-result.json`.
 
 ---
 

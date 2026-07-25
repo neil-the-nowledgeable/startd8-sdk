@@ -50,18 +50,9 @@
     },
     "success_criteria": {
       "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "append_review_round",
-        "init_appendix_if_missing",
-        "no_triage",
-        "dual_doc_coverage_matrix"
-      ],
-      "properties": {
-        "append_review_round": {"type": "boolean"},
-        "init_appendix_if_missing": {"type": "boolean"},
-        "no_triage": {"type": "boolean"},
-        "dual_doc_coverage_matrix": {"type": "boolean"}
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "boolean"
       }
     },
     "status_writeback_path": {
@@ -70,6 +61,10 @@
     },
     "budget_warning": {
       "type": ["string", "null"]
+    },
+    "markdown_card_path": {
+      "type": ["string", "null"],
+      "description": "OQ-11: optional human markdown card alongside the JSON hand-off"
     }
   }
 }

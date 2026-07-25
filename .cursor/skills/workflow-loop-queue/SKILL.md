@@ -1,6 +1,6 @@
 ---
 name: workflow-loop-queue
-description: Enqueues, drains, checks, cancels, and triages startd8 Workflow Loop Queue jobs through the VASI contract. Use when the user asks to run a queued CRP review, enqueue a workflow loop, inspect wloop status, or process a drain hand-off in Cursor.
+description: Enqueues, drains, checks, cancels, and triages startd8 Workflow Loop Queue jobs through the VASI contract. Use when the user asks to run a queued CRP review, enqueue a workflow loop, reflective-requirements via wloop, inspect wloop status, or process a drain hand-off in Cursor.
 ---
 
 # Workflow Loop Queue
@@ -8,6 +8,10 @@ description: Enqueues, drains, checks, cancels, and triages startd8 Workflow Loo
 Use the SDK-owned `startd8 wloop` commands. Do not reimplement queue state.
 The VASI contract is
 `docs/design/cursor-workflow-loop/VENDOR_AGENT_SURFACE_INTERFACE.md`.
+
+**Defaults (settled OQs):** current chat agent executes drains (not a blind
+subagent unless the user asks); CLI is canonical (do not require MCP); queue
+root is `.startd8/workflow-loop-queue/`.
 
 ## Enqueue CRP
 
@@ -28,55 +32,49 @@ startd8 wloop status --job-id <job-id>
 
 Stop after status unless the user also requested drain.
 
-## Drain a CRP round
+## Enqueue reflective-requirements
 
-1. Run `startd8 wloop run-next --job-id <job-id>`.
-2. Parse the returned Drain Hand-off JSON. Do not invent a round number or
-   source path.
-3. Read the entire file at `bundle_path`.
-4. Follow that bundle using filesystem read/write tools:
-   - append exactly the requested `#### Review Round R<n>` under Appendix C;
-   - initialize the A/B/C scaffold only when absent;
-   - in dual-doc mode, write S-prefix suggestions to the plan, F-prefix
-     suggestions to requirements, and append the coverage matrix to the plan;
-   - never modify populated Appendix A/B and never self-triage;
-   - preserve every prior Appendix C round.
-5. Verify every source path contains the hand-off round and count S/F
-   suggestions.
-6. Write JSON to the exact `status_writeback_path`:
+When the user wants the reflective-requirements loop queued (not only the
+skill ad hoc):
 
 ```json
 {
-  "vasi_version": "0.1.0",
-  "job_id": "<from hand-off>",
+  "job_id": "refl-feature-x",
+  "loop_id": "reflective-requirements",
+  "executor": "agent-surface",
   "surface_id": "cursor",
-  "ok": true,
-  "round_number": 1,
-  "suggestion_counts": {"S": 0, "F": 0},
-  "paths_written": ["<all absolute source_paths, exactly>"],
-  "error": null
+  "status": "pending",
+  "config": {
+    "scope": "Feature X",
+    "requirements_path": "/ABS/PATH/REQUIREMENTS.md",
+    "plan_path": "/ABS/PATH/PLAN.md"
+  }
 }
 ```
 
-7. Run `startd8 wloop run-next --job-id <job-id>` again. Success means status
-   becomes `awaiting_triage`. If verification failed, write `ok: false` with
-   `error` and do not claim success.
-8. Reply with only the job id, round, paths written, counts, and resulting
-   status. Do not repeat suggestion content in chat.
+Parent directories must exist. Follow-on CRP should be a separate job with
+`depends_on: ["refl-feature-x"]`.
 
-## Triage
+## Drain (CRP or reflective-requirements)
 
-Only triage when explicitly requested. Prepare a JSON list of decisions with
-`id`, `decision` (`ACCEPT` or `REJECT`), `summary`, `rationale`, and optional
-`source`, then run:
+1. Run `startd8 wloop run-next --job-id <job-id>`.
+2. Read the Drain Hand-off JSON (and optionally `markdown_card_path`).
+3. Open `bundle_path` and follow it with filesystem write tools in **this**
+   chat (default). Only spawn a blind subagent if the user explicitly wants
+   isolation.
+4. CRP: append Appendix C only; no A/B triage. Reflective: write the named
+   requirements + plan files; no CRP/implementation.
+5. Write `drain-result.json` to `status_writeback_path`.
+6. Run `startd8 wloop run-next --job-id <job-id>` again to verify.
+7. Reply with job id, paths, counts/status only.
+
+## Triage (CRP)
+
+Only when explicitly requested:
 
 ```bash
 startd8 wloop triage --job-id <job-id> --decisions <decisions.json>
 ```
-
-Triage records ACCEPT in Appendix A and REJECT in Appendix B. It must never
-delete or rewrite Appendix C. The queue returns `pending` when another round
-remains, otherwise `completed`.
 
 ## Other operations
 
@@ -89,6 +87,5 @@ startd8 wloop list-loops
 startd8 wloop list-surfaces
 ```
 
-Exit `2` means validation failed. Exit `3` means retryable `blocked`; restore
-the named artifact, then use `requeue`. Do not pass an agent bundle to the SDK
-`review_template` field.
+Stuck `processing` jobs reclaim automatically after the lease TTL (default 1h),
+or use `requeue`. Exit `2` = validation; exit `3` = blocked.

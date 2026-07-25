@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Union
 
@@ -26,6 +27,7 @@ from ..builtin.architectural_review_log_helpers import (
     _max_review_round,
 )
 from ..registry import WorkflowRegistry
+from .handoff import persist_drain_handoff
 from .models import (
     CrpReviewRequest,
     DrainHandoff,
@@ -36,6 +38,7 @@ from .models import (
     LoopQueueConfig,
     LoopQueueError,
     LoopQueueValidationError,
+    ReflectiveRequirementsRequest,
     RoundRecord,
     TriageDecision,
     WorkflowLoopJob,
@@ -43,7 +46,7 @@ from .models import (
 )
 from .observability import set_span_status, wlq_span
 from .recipes import get_recipe
-from .renderer import render_bundle
+from .renderer import render_bundle, render_reflective_bundle
 from .sdk_executor import map_crp_request_to_workflow_config, run_sdk_crp
 from .storage import LoopQueueStorage
 from .surfaces import is_known_surface
@@ -99,6 +102,9 @@ class WorkflowLoopQueue:
             if job.executor is LoopExecutor.SDK_WORKFLOW and job.workflow_id:
                 # Fail closed on FR-9 mapping before the job is durable.
                 map_crp_request_to_workflow_config(request, job.workflow_id)
+        elif job.loop_id == "reflective-requirements":
+            reflective = job.reflective_request()
+            self._validate_reflective_request(job, reflective, enqueue=True)
 
         if job.workflow_id:
             self._validate_workflow(job)
@@ -141,6 +147,7 @@ class WorkflowLoopQueue:
         return self.storage.list_jobs()
 
     def status_summary(self) -> Dict[str, object]:
+        reclaimed = self.reclaim_expired_leases()
         jobs = self.list_jobs()
         counts = {status.value: 0 for status in LoopJobStatus}
         for job in jobs:
@@ -149,6 +156,8 @@ class WorkflowLoopQueue:
             "queue_root": str(self.storage.queue_root),
             "total_jobs": len(jobs),
             "status_counts": counts,
+            "reclaimed_leases": reclaimed,
+            "lease_ttl_seconds": self.config.lease_ttl_seconds,
             "jobs": [j.model_dump(mode="json") for j in jobs],
         }
 
@@ -171,7 +180,8 @@ class WorkflowLoopQueue:
             raise LoopQueueValidationError(
                 f"cannot requeue job {job_id!r} in status={job.status.value}"
             )
-        return self._transition(job, LoopJobStatus.PENDING, None)
+        job.lease_expires_at = None
+        return self._transition(job, LoopJobStatus.PENDING, "requeued explicitly")
 
     # -- render / drain ----------------------------------------------------
 
@@ -214,6 +224,7 @@ class WorkflowLoopQueue:
         :class:`CrpReviewRequest` → catalog workflow and runs it in-process
         (Increment 1.1 / FR-9).
         """
+        self.reclaim_expired_leases()
         job = self._select_job(job_id)
         if job.status is LoopJobStatus.PROCESSING:
             if job.executor is LoopExecutor.SDK_WORKFLOW:
@@ -272,6 +283,8 @@ class WorkflowLoopQueue:
             raise LoopQueueValidationError(
                 f"job {job.job_id!r} blocked by unfinished depends_on: {unmet}"
             )
+        if job.loop_id == "reflective-requirements":
+            return self._drain_reflective_agent_surface(job)
         self._require_agent_crp(job)
 
         request = job.crp_request()
@@ -313,12 +326,12 @@ class WorkflowLoopQueue:
                     ),
                     budget_warning=self._budget_warning(job, request),
                 )
-                handoff_path = self.storage.write_json_artifact(
-                    job.job_id,
-                    "drain-handoff.json",
-                    handoff.model_dump(mode="json"),
+                handoff = persist_drain_handoff(self.storage, job.job_id, handoff)
+                job.artifacts["drain_handoff_path"] = str(
+                    self.storage.handoff_path(job.job_id).resolve()
                 )
-                job.artifacts["drain_handoff_path"] = str(handoff_path.resolve())
+                if handoff.markdown_card_path:
+                    job.artifacts["markdown_card_path"] = handoff.markdown_card_path
                 job.artifacts["status_writeback_path"] = handoff.status_writeback_path
                 self._transition(job, LoopJobStatus.PROCESSING, None)
                 logger.info(
@@ -328,6 +341,67 @@ class WorkflowLoopQueue:
                     round_number,
                     bundle,
                 )
+                set_span_status(span, ok=True)
+                return handoff
+            except LoopQueueBlockedError as e:
+                self._transition(job, LoopJobStatus.BLOCKED, str(e))
+                set_span_status(span, ok=False, description=str(e))
+                raise
+            except LoopQueueValidationError as e:
+                self._transition(job, LoopJobStatus.FAILED, str(e))
+                set_span_status(span, ok=False, description=str(e))
+                raise
+
+    def _drain_reflective_agent_surface(
+        self, job: WorkflowLoopJob
+    ) -> DrainHandoff:
+        """Emit VASI hand-off for reflective-requirements (OQ-6)."""
+        if job.executor is not LoopExecutor.AGENT_SURFACE:
+            raise LoopQueueValidationError(
+                "reflective-requirements requires executor=agent-surface"
+            )
+        request = job.reflective_request()
+        with wlq_span(
+            "wlq.drain",
+            {
+                "wlq.job_id": job.job_id,
+                "wlq.loop_id": job.loop_id,
+                "wlq.executor": job.executor.value,
+                "wlq.surface_id": job.surface_id,
+            },
+        ) as span:
+            try:
+                self._validate_reflective_request(job, request, enqueue=False)
+                bundle = render_reflective_bundle(
+                    request, self.storage.artifact_dir(job.job_id)
+                )
+                artifact_dir = self.storage.artifact_dir(job.job_id).resolve()
+                handoff = DrainHandoff(
+                    job_id=job.job_id,
+                    surface_id=job.surface_id or "",
+                    loop_id=job.loop_id,
+                    round_number=1,
+                    bundle_path=str(bundle),
+                    source_paths=[str(p.resolve()) for p in request.source_paths],
+                    success_criteria={
+                        "write_requirements": True,
+                        "write_plan": True,
+                        "no_crp": True,
+                        "no_implementation": True,
+                    },
+                    status_writeback_path=str(
+                        (artifact_dir / "drain-result.json").resolve()
+                    ),
+                )
+                handoff = persist_drain_handoff(self.storage, job.job_id, handoff)
+                job.artifacts["drain_handoff_path"] = str(
+                    self.storage.handoff_path(job.job_id).resolve()
+                )
+                if handoff.markdown_card_path:
+                    job.artifacts["markdown_card_path"] = handoff.markdown_card_path
+                job.artifacts["status_writeback_path"] = handoff.status_writeback_path
+                job.artifacts["bundle_path"] = str(bundle)
+                self._transition(job, LoopJobStatus.PROCESSING, None)
                 set_span_status(span, ok=True)
                 return handoff
             except LoopQueueBlockedError as e:
@@ -534,7 +608,7 @@ class WorkflowLoopQueue:
             raise LoopQueueError(f"one-shot drain failed: {e}") from e
 
     def complete_drain(self, job_id: str) -> WorkflowLoopJob:
-        """Validate a VASI write-back and detect the claimed Appendix C append."""
+        """Validate a VASI write-back after an agent-surface drain."""
         job = self.get(job_id)
         if job.status is not LoopJobStatus.PROCESSING:
             raise LoopQueueValidationError(
@@ -565,6 +639,40 @@ class WorkflowLoopQueue:
             )
         if not result.ok:
             errors.append(result.error or "surface reported ok=false")
+
+        if job.loop_id == "reflective-requirements":
+            request_r = job.reflective_request()
+            expected_paths = {str(p.resolve()) for p in request_r.source_paths}
+            written_paths = {str(Path(p).resolve()) for p in result.paths_written}
+            if written_paths != expected_paths:
+                errors.append(
+                    f"paths_written must exactly match source_paths: "
+                    f"expected {sorted(expected_paths)}, got {sorted(written_paths)}"
+                )
+            for path in request_r.source_paths:
+                if not path.is_file():
+                    errors.append(f"expected written file missing: {path}")
+                elif path.stat().st_size == 0:
+                    errors.append(f"expected written file is empty: {path}")
+                elif path.suffix.lower() != ".md":
+                    errors.append(f"expected markdown file: {path}")
+            if errors:
+                reason = "; ".join(errors)
+                self._transition(job, LoopJobStatus.FAILED, reason)
+                raise LoopQueueValidationError(reason)
+            job.rounds.append(
+                RoundRecord(
+                    round_number=result.round_number,
+                    suggestion_counts=result.suggestion_counts,
+                    paths_written=sorted(written_paths),
+                )
+            )
+            self.storage.consume_drain_result(job_id, result.round_number)
+            return self._transition(
+                job,
+                LoopJobStatus.COMPLETED,
+                "reflective-requirements docs written",
+            )
 
         request = job.crp_request()
         expected_paths = {str(p.resolve()) for p in request.source_paths}
@@ -712,6 +820,75 @@ class WorkflowLoopQueue:
                 )
             if not os.access(path, os.R_OK):
                 raise LoopQueueValidationError(f"required path is unreadable: {path}")
+
+    def _validate_reflective_request(
+        self,
+        job: WorkflowLoopJob,
+        request: ReflectiveRequirementsRequest,
+        *,
+        enqueue: bool,
+    ) -> None:
+        if job.executor is not LoopExecutor.AGENT_SURFACE:
+            raise LoopQueueValidationError(
+                "reflective-requirements requires executor=agent-surface"
+            )
+        if not is_known_surface(job.surface_id or ""):
+            conformance = request.surface_conformance or {}
+            capabilities = set(conformance.get("capabilities", []))
+            if not conformance.get("vasi_version") or not {
+                "status",
+                "drain",
+            }.issubset(capabilities):
+                raise LoopQueueValidationError(
+                    f"unknown surface_id {job.surface_id!r} must declare "
+                    "surface_conformance with vasi_version and capabilities "
+                    "including status + drain"
+                )
+        for path in request.source_paths:
+            parent = path.expanduser().resolve().parent
+            if not parent.is_dir():
+                message = (
+                    f"parent directory for write target "
+                    f"{'does not exist' if enqueue else 'vanished'}: {parent}"
+                )
+                if enqueue:
+                    raise LoopQueueValidationError(message)
+                raise LoopQueueBlockedError(message)
+            if path.suffix.lower() != ".md":
+                raise LoopQueueValidationError(
+                    f"reflective-requirements paths must be markdown (.md): {path}"
+                )
+        if request.agent_template_path:
+            template = Path(request.agent_template_path)
+            if not template.is_file():
+                message = (
+                    f"agent_template_path "
+                    f"{'does not exist' if enqueue else 'vanished'}: {template}"
+                )
+                if enqueue:
+                    raise LoopQueueValidationError(message)
+                raise LoopQueueBlockedError(message)
+
+    def reclaim_expired_leases(self) -> List[str]:
+        """OQ-5: reclaim abandoned ``processing`` jobs whose lease expired."""
+        if self.config.lease_ttl_seconds <= 0:
+            return []
+        reclaimed: List[str] = []
+        now = datetime.now(timezone.utc)
+        for job in self.list_jobs():
+            if job.status is not LoopJobStatus.PROCESSING:
+                continue
+            if not job.lease_expired(now=now):
+                continue
+            job.lease_expires_at = None
+            self._transition(
+                job,
+                LoopJobStatus.PENDING,
+                "lease expired; reclaimed for drain (OQ-5)",
+            )
+            reclaimed.append(job.job_id)
+            logger.info("WLQ reclaimed expired lease job_id=%s", job.job_id)
+        return reclaimed
 
     @staticmethod
     def _check_sdk_budget(job: WorkflowLoopJob, *, at: str) -> None:
@@ -866,8 +1043,7 @@ class WorkflowLoopQueue:
     def _require_agent_crp(job: WorkflowLoopJob) -> None:
         if not (job.loop_id == "crp" and job.executor is LoopExecutor.AGENT_SURFACE):
             raise LoopQueueValidationError(
-                "Increment 1 drain supports loop_id=crp + "
-                "executor=agent-surface only"
+                "this drain path requires loop_id=crp + executor=agent-surface"
             )
 
     def _handoff_round(self, job: WorkflowLoopJob) -> int:
@@ -914,6 +1090,13 @@ class WorkflowLoopQueue:
         previous = job.status
         job.status = status
         job.status_reason = reason
+        if status is LoopJobStatus.PROCESSING and self.config.lease_ttl_seconds > 0:
+            job.lease_expires_at = (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=self.config.lease_ttl_seconds)
+            ).isoformat()
+        elif status is not LoopJobStatus.PROCESSING:
+            job.lease_expires_at = None
         self.storage.save_job(job)
         logger.info(
             "WLQ status job_id=%s %s->%s reason=%s",
