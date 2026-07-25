@@ -219,4 +219,24 @@ Keep it short, for example:
 
 ---
 
+## Experimental Python API (FR-19)
+
+```python
+from startd8.workflows.loop_queue import (
+    LoopQueueConfig,
+    WorkflowLoopJob,
+    WorkflowLoopQueue,
+)
+
+queue = WorkflowLoopQueue(
+    LoopQueueConfig(queue_root=".startd8/workflow-loop-queue")
+)
+queue.enqueue(WorkflowLoopJob.model_validate({...}))  # same envelope as CLI
+queue.run_next(job_id="crp-cwlq-r1")
+```
+
+Pre-1.0: import path and envelope fields may change in MINOR versions.
+
+---
+
 *How-to for agents · WLQ enqueue · pairs with VASI `enqueue` capability.*

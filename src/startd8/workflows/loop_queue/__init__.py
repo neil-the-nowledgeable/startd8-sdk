@@ -5,6 +5,24 @@
 
 WLQ is a durable, vendor-neutral queue for workflow/loop jobs. It is a sibling
 of the prompt ``JobQueue`` and is not the agentic tool-use loop.
+
+**Experimental pre-1.0.** Import from this package; CLI ops live under
+``startd8 wloop``. VASI contract:
+``docs/design/cursor-workflow-loop/VENDOR_AGENT_SURFACE_INTERFACE.md``.
+
+Quick start::
+
+    from startd8.workflows.loop_queue import (
+        LoopQueueConfig,
+        WorkflowLoopJob,
+        WorkflowLoopQueue,
+    )
+
+    queue = WorkflowLoopQueue(
+        LoopQueueConfig(queue_root=".startd8/workflow-loop-queue")
+    )
+    queue.enqueue(WorkflowLoopJob.model_validate({...}))
+    handoff_or_job = queue.run_next()
 """
 
 from .models import (

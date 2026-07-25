@@ -41,6 +41,7 @@ from .models import (
     WorkflowLoopJob,
     looks_like_agent_bundle,
 )
+from .observability import set_span_status, wlq_span
 from .recipes import get_recipe
 from .renderer import render_bundle
 from .sdk_executor import map_crp_request_to_workflow_config, run_sdk_crp
@@ -103,8 +104,20 @@ class WorkflowLoopQueue:
             self._validate_workflow(job)
 
         self._validate_dependencies(job)
+        self._check_sdk_budget(job, at="enqueue")
 
-        self.storage.save_job(job)
+        with wlq_span(
+            "wlq.enqueue",
+            {
+                "wlq.job_id": job.job_id,
+                "wlq.loop_id": job.loop_id,
+                "wlq.executor": job.executor.value,
+                "wlq.surface_id": job.surface_id,
+                "wlq.workflow_id": job.workflow_id,
+            },
+        ) as span:
+            self.storage.save_job(job)
+            set_span_status(span, ok=True)
         logger.info(
             "WLQ enqueue job_id=%s loop_id=%s executor=%s surface_id=%s",
             job.job_id,
@@ -219,23 +232,41 @@ class WorkflowLoopQueue:
                 raise LoopQueueValidationError(
                     f"job {job.job_id!r} blocked by unfinished depends_on: {unmet}"
                 )
-            if job.loop_id == "crp":
-                return self.drain_sdk_workflow(
-                    job.job_id,
-                    agents=agents,
-                    on_progress=on_progress,
-                    dry_run=dry_run,
-                )
-            if job.loop_id == "one-shot":
-                return self.drain_one_shot(
-                    job.job_id,
-                    agents=agents,
-                    on_progress=on_progress,
-                    dry_run=dry_run,
-                )
-            raise LoopQueueValidationError(
-                f"no sdk-workflow drain for loop_id={job.loop_id!r}"
-            )
+            self._check_sdk_budget(job, at="drain")
+            with wlq_span(
+                "wlq.drain",
+                {
+                    "wlq.job_id": job.job_id,
+                    "wlq.loop_id": job.loop_id,
+                    "wlq.executor": job.executor.value,
+                    "wlq.workflow_id": job.workflow_id,
+                    "wlq.dry_run": dry_run,
+                },
+            ) as span:
+                try:
+                    if job.loop_id == "crp":
+                        result = self.drain_sdk_workflow(
+                            job.job_id,
+                            agents=agents,
+                            on_progress=on_progress,
+                            dry_run=dry_run,
+                        )
+                    elif job.loop_id == "one-shot":
+                        result = self.drain_one_shot(
+                            job.job_id,
+                            agents=agents,
+                            on_progress=on_progress,
+                            dry_run=dry_run,
+                        )
+                    else:
+                        raise LoopQueueValidationError(
+                            f"no sdk-workflow drain for loop_id={job.loop_id!r}"
+                        )
+                    set_span_status(span, ok=result.status is not LoopJobStatus.FAILED)
+                    return result
+                except Exception as e:
+                    set_span_status(span, ok=False, description=str(e))
+                    raise
         unmet = self._unmet_dependencies(job)
         if unmet:
             raise LoopQueueValidationError(
@@ -244,55 +275,69 @@ class WorkflowLoopQueue:
         self._require_agent_crp(job)
 
         request = job.crp_request()
-        try:
-            self._validate_crp_request(job, request, enqueue=False)
-            if job.rounds_completed() >= request.max_rounds:
-                return self._transition(
-                    job, LoopJobStatus.COMPLETED, "max_rounds exhausted"
+        with wlq_span(
+            "wlq.drain",
+            {
+                "wlq.job_id": job.job_id,
+                "wlq.loop_id": job.loop_id,
+                "wlq.executor": job.executor.value,
+                "wlq.surface_id": job.surface_id,
+            },
+        ) as span:
+            try:
+                self._validate_crp_request(job, request, enqueue=False)
+                if job.rounds_completed() >= request.max_rounds:
+                    completed = self._transition(
+                        job, LoopJobStatus.COMPLETED, "max_rounds exhausted"
+                    )
+                    set_span_status(span, ok=True)
+                    return completed
+                bundle = self.render(job.job_id)
+                round_number = self._derive_next_round(request)
+                artifact_dir = self.storage.artifact_dir(job.job_id).resolve()
+                handoff = DrainHandoff(
+                    job_id=job.job_id,
+                    surface_id=job.surface_id or "",
+                    loop_id=job.loop_id,
+                    round_number=round_number,
+                    bundle_path=str(bundle),
+                    source_paths=[str(p.resolve()) for p in request.source_paths],
+                    success_criteria={
+                        "append_review_round": True,
+                        "init_appendix_if_missing": True,
+                        "no_triage": True,
+                        "dual_doc_coverage_matrix": request.dual_doc,
+                    },
+                    status_writeback_path=str(
+                        (artifact_dir / "drain-result.json").resolve()
+                    ),
+                    budget_warning=self._budget_warning(job, request),
                 )
-            bundle = self.render(job.job_id)
-            round_number = self._derive_next_round(request)
-            artifact_dir = self.storage.artifact_dir(job.job_id).resolve()
-            handoff = DrainHandoff(
-                job_id=job.job_id,
-                surface_id=job.surface_id or "",
-                loop_id=job.loop_id,
-                round_number=round_number,
-                bundle_path=str(bundle),
-                source_paths=[str(p.resolve()) for p in request.source_paths],
-                success_criteria={
-                    "append_review_round": True,
-                    "init_appendix_if_missing": True,
-                    "no_triage": True,
-                    "dual_doc_coverage_matrix": request.dual_doc,
-                },
-                status_writeback_path=str(
-                    (artifact_dir / "drain-result.json").resolve()
-                ),
-                budget_warning=self._budget_warning(job, request),
-            )
-            handoff_path = self.storage.write_json_artifact(
-                job.job_id,
-                "drain-handoff.json",
-                handoff.model_dump(mode="json"),
-            )
-            job.artifacts["drain_handoff_path"] = str(handoff_path.resolve())
-            job.artifacts["status_writeback_path"] = handoff.status_writeback_path
-            self._transition(job, LoopJobStatus.PROCESSING, None)
-            logger.info(
-                "WLQ drain handoff job_id=%s surface_id=%s round=%s bundle=%s",
-                job.job_id,
-                job.surface_id,
-                round_number,
-                bundle,
-            )
-            return handoff
-        except LoopQueueBlockedError as e:
-            self._transition(job, LoopJobStatus.BLOCKED, str(e))
-            raise
-        except LoopQueueValidationError as e:
-            self._transition(job, LoopJobStatus.FAILED, str(e))
-            raise
+                handoff_path = self.storage.write_json_artifact(
+                    job.job_id,
+                    "drain-handoff.json",
+                    handoff.model_dump(mode="json"),
+                )
+                job.artifacts["drain_handoff_path"] = str(handoff_path.resolve())
+                job.artifacts["status_writeback_path"] = handoff.status_writeback_path
+                self._transition(job, LoopJobStatus.PROCESSING, None)
+                logger.info(
+                    "WLQ drain handoff job_id=%s surface_id=%s round=%s bundle=%s",
+                    job.job_id,
+                    job.surface_id,
+                    round_number,
+                    bundle,
+                )
+                set_span_status(span, ok=True)
+                return handoff
+            except LoopQueueBlockedError as e:
+                self._transition(job, LoopJobStatus.BLOCKED, str(e))
+                set_span_status(span, ok=False, description=str(e))
+                raise
+            except LoopQueueValidationError as e:
+                self._transition(job, LoopJobStatus.FAILED, str(e))
+                set_span_status(span, ok=False, description=str(e))
+                raise
 
     def drain_sdk_workflow(
         self,
@@ -667,6 +712,25 @@ class WorkflowLoopQueue:
                 )
             if not os.access(path, os.R_OK):
                 raise LoopQueueValidationError(f"required path is unreadable: {path}")
+
+    @staticmethod
+    def _check_sdk_budget(job: WorkflowLoopJob, *, at: str) -> None:
+        """Fail closed on zero/negative $ budgets for spending executors (FR-18)."""
+        if job.executor is not LoopExecutor.SDK_WORKFLOW:
+            return
+        if "max_cost_usd" not in job.budget:
+            return
+        try:
+            cap = float(job.budget["max_cost_usd"])
+        except (TypeError, ValueError) as e:
+            raise LoopQueueValidationError(
+                f"budget.max_cost_usd must be a number ({at}): {e}"
+            ) from e
+        if cap <= 0:
+            raise LoopQueueValidationError(
+                f"sdk-workflow refuses to {at} with max_cost_usd={cap} "
+                "(FR-18 zero-dollar budget fail-closed)"
+            )
 
     def _validate_workflow(self, job: WorkflowLoopJob) -> None:
         WorkflowRegistry.discover()
