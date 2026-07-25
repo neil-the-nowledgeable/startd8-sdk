@@ -30,23 +30,23 @@ _PERSONA_SECTIONS: Dict[str, set] = {
     # Platform Engineer: "Infrastructure That Understands Business Value"
     # Cares about: alert precision, SLO accuracy, context completeness
     "operator": {
-        "overview", "services", "objectives", "alerts", "dashboards",
+        "overview", "coverage", "services", "objectives", "alerts", "dashboards",
         "communication", "security", "quality", "provenance",
     },
     # AI Developer / Engineer: "Agents That Remember"
     # Cares about: service topology, dashboards for debugging, provenance
     "engineer": {
-        "overview", "services", "communication", "dashboards", "provenance",
+        "overview", "coverage", "services", "communication", "dashboards", "provenance",
     },
     # Team Lead / Manager: "Status Updates That Write Themselves"
     # Cares about: project health, objectives, quality trends, time recovery
     "manager": {
-        "overview", "objectives", "quality", "health", "provenance",
+        "overview", "coverage", "objectives", "quality", "health", "provenance",
     },
     # Executive: Business impact summaries only
     # Cares about: project criticality, objectives, quality score
     "executive": {
-        "overview", "objectives", "quality",
+        "overview", "coverage", "objectives", "quality",
     },
 }
 
@@ -64,6 +64,7 @@ def build_portal_spec(
     *,
     persona: str = "operator",
     profile: Any = None,
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a DashboardSpec dict for the onboarding portal.
 
@@ -94,6 +95,13 @@ def build_portal_spec(
     if "overview" in sections:
         panels.extend(_build_project_overview_panels(business, report))
         panels.extend(_build_persona_value_panel(persona, profile.value if profile is not None else None))
+
+    # Telemetry Coverage Portal, side 2 (ContextCore REQ-TCP-120..124): persona-scoped
+    # expected-vs-actual coverage from a compare-live reconciliation. Self-gating: no
+    # coverage payload ⇒ no panel (existing callers unaffected); payload-but-empty ⇒ a
+    # data-readiness note (REQ-TCP-142, never a silent blank).
+    if "coverage" in sections:
+        panels.extend(_build_coverage_section(coverage, persona))
 
     # --- Benchmark Analyst analytical sections (A3); static markdown tables from metadata["aggregate"] ---
     if "scoring-methodology" in sections:
@@ -175,13 +183,22 @@ def build_all_portal_specs(
     services: List[Any],
     report: Any,
     metadata: Dict[str, Any],
+    *,
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Build portal specs for all resolved personas (hardcoded defaults + manifest ``personas[]``, A1)."""
+    """Build portal specs for all resolved personas (hardcoded defaults + manifest ``personas[]``, A1).
+
+    ``coverage`` (optional ``{"records": [...], "summary": {...}}`` from
+    ``coverage_reconcile``) is threaded into every persona's coverage section (REQ-TCP-141).
+    """
     from .persona_config import load_personas
 
     profiles = load_personas(metadata.get("personas"))
     return [
-        build_portal_spec(business, services, report, metadata, persona=pid, profile=prof)
+        build_portal_spec(
+            business, services, report, metadata,
+            persona=pid, profile=prof, coverage=coverage,
+        )
         for pid, prof in profiles.items()
     ]
 
@@ -382,6 +399,127 @@ def _build_coverage_gap_panels(report: Any) -> List[Dict[str, Any]]:
         rows.append(f"| FR `{fid}` | declared `{sk}`, metric absent | emit/label the series |")
 
     return [_text_panel("Coverage Gaps", "\n".join([header, sep] + rows), "Coverage")]
+
+
+# ---------------------------------------------------------------------------
+# Telemetry Coverage section (ContextCore REQ-TCP-120..124) — persona-scoped
+# rendering of a compare-live reconciliation ({"records": [...], "summary": {...}}
+# from startd8.observability.coverage_reconcile). Pure markdown; self-gating.
+# ---------------------------------------------------------------------------
+
+_COV_STATUS_LABEL = {
+    "bound": "✅ bound",
+    "partial": "🟡 partial",
+    "no_telemetry": "🔴 no telemetry",
+    "declared_absent": "⬛ declared-absent",
+    "pending_probe": "⏳ pending probe",
+    "degraded": "⚠️ degraded",
+}
+_COV_CRIT_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
+_COV_NOT_OBSERVABLE = {"no_telemetry", "declared_absent", "partial", "degraded"}
+
+
+def _cov_pct(v: Any) -> str:
+    return "—" if v is None else f"{round(float(v) * 100)}%"
+
+
+def _cov_status(status: str) -> str:
+    return _COV_STATUS_LABEL.get(status, status)
+
+
+def _cov_sort_key(rec: Dict[str, Any]):
+    return (_COV_CRIT_RANK.get(rec.get("criticality"), 9), rec.get("service", ""))
+
+
+def _build_coverage_section(coverage: Optional[Dict[str, Any]], persona: str) -> List[Dict[str, Any]]:
+    """Persona-scoped telemetry-coverage panels. ``coverage`` is
+    ``{"records": [CoverageRecord.to_dict()...], "summary": summarize(...)}`` or ``None``.
+    """
+    if not coverage:
+        return []  # caller didn't wire coverage → section absent (backward compatible)
+    records = coverage.get("records") or []
+    summary = coverage.get("summary") or {}
+    if not records:
+        # REQ-TCP-142: payload present but empty ⇒ explicit data-readiness note, never a blank.
+        return [_text_panel(
+            "Telemetry Coverage",
+            "_No coverage data yet — run `compare-live` to populate. "
+            "This is a data-readiness state, not a failure (REQ-TCP-142)._",
+            "Coverage",
+        )]
+    if persona == "executive":
+        return _coverage_executive(summary)
+    if persona == "manager":
+        return _coverage_manager(records)
+    if persona == "engineer":
+        return _coverage_engineer(records)
+    return _coverage_operator(records, summary)  # operator = default
+
+
+def _coverage_executive(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """REQ-TCP-122: coverage % by business criticality tier + 'are critical services observable'."""
+    by_tier = summary.get("by_criticality") or {}
+    crit = by_tier.get("critical") or {}
+    not_bound = summary.get("critical_not_bound") or []
+    head = (
+        f"**Overall observable coverage:** {_cov_pct(summary.get('overall_coverage'))}  ·  "
+        f"**Critical-tier coverage:** {_cov_pct(crit.get('coverage'))}\n\n"
+    )
+    if not_bound:
+        head += f"> ⚠️ **{len(not_bound)} critical service(s) NOT observable:** `{'`, `'.join(not_bound)}`\n\n"
+    else:
+        head += "> ✅ **Every critical-tier service is observable.**\n\n"
+    rows = ["| Criticality | Services | Observable coverage |", "|-------------|----------|---------------------|"]
+    for tier in sorted(by_tier, key=lambda t: _COV_CRIT_RANK.get(t, 9)):
+        d = by_tier[tier]
+        rows.append(f"| {tier} | {d.get('total', 0)} | {_cov_pct(d.get('coverage'))} |")
+    return [_text_panel("Business Observability — Coverage by Criticality", head + "\n".join(rows), "Coverage")]
+
+
+def _coverage_manager(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """REQ-TCP-123: portfolio-health — every service with tier, coverage, owner, status."""
+    rows = ["| Service | Criticality | Coverage | Owner | Status |", "|---------|-------------|----------|-------|--------|"]
+    for r in sorted(records, key=_cov_sort_key):
+        rows.append(
+            f"| `{r.get('service')}` | {r.get('criticality')} | {_cov_pct(r.get('binding_coverage'))} "
+            f"| {r.get('owner') or '—'} | {_cov_status(r.get('presence_status'))} |"
+        )
+    return [_text_panel("Portfolio Health — Telemetry Coverage", "\n".join(rows), "Coverage")]
+
+
+def _coverage_operator(records: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """REQ-TCP-121: incident-readiness — services NOT observable, worst criticality first, + next step."""
+    gaps = [r for r in records if r.get("presence_status") in _COV_NOT_OBSERVABLE]
+    not_bound = summary.get("critical_not_bound") or []
+    if not gaps:
+        return [_text_panel(
+            "Incident Readiness — Telemetry Coverage",
+            "✅ **Every service is observable.** No silent services.",
+            "Coverage",
+        )]
+    head = ""
+    if not_bound:
+        head = f"> 🔴 **Critical services with no telemetry:** `{'`, `'.join(not_bound)}` — fix before you need them at 2am.\n\n"
+    rows = ["| Service | Criticality | Status | Next step |", "|---------|-------------|--------|-----------|"]
+    for r in sorted(gaps, key=_cov_sort_key):
+        rows.append(
+            f"| `{r.get('service')}` | {r.get('criticality')} | {_cov_status(r.get('presence_status'))} "
+            f"| {r.get('next_step') or '—'} |"
+        )
+    return [_text_panel("Incident Readiness — Telemetry Coverage", head + "\n".join(rows), "Coverage")]
+
+
+def _coverage_engineer(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """REQ-TCP-124: per-service expected-vs-actual RED axes + the specific missing signal + next step."""
+    rows = ["| Service | Expected axes | Bound | Missing | Next step |", "|---------|---------------|-------|---------|-----------|"]
+    for r in sorted(records, key=_cov_sort_key):
+        exp = ", ".join(r.get("expected_axes") or []) or "—"
+        act = ", ".join(r.get("actual_axes") or []) or "—"
+        miss = ", ".join(r.get("missing_signals") or []) or "—"
+        rows.append(
+            f"| `{r.get('service')}` | {exp} | {act} | {miss} | {r.get('next_step') or '—'} |"
+        )
+    return [_text_panel("Per-Service Coverage — Expected vs Actual", "\n".join(rows), "Coverage")]
 
 
 def _build_alert_inventory_panels(report: Any) -> List[Dict[str, Any]]:
