@@ -183,5 +183,5 @@ def test_unknown_workflow_fails_closed(tmp_path: Path):
         config={"plan_path": str(source), "scope": "Review"},
     )
     queue = WorkflowLoopQueue(LoopQueueConfig(queue_root=tmp_path / "queue"))
-    with pytest.raises(LoopQueueValidationError, match="unknown workflow_id"):
+    with pytest.raises(LoopQueueValidationError, match="CRP sdk-workflow supports"):
         queue.enqueue(job)

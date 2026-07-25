@@ -26,6 +26,11 @@ from .models import (
 )
 from .queue import WorkflowLoopQueue
 from .recipes import LoopRecipe, get_recipe, list_recipes
+from .sdk_executor import (
+    map_crp_request_to_workflow_config,
+    resolve_crp_workflow_id,
+    run_sdk_crp,
+)
 from .surfaces import KnownSurface, list_surfaces
 
 __all__ = [
@@ -50,4 +55,7 @@ __all__ = [
     "get_recipe",
     "list_recipes",
     "list_surfaces",
+    "map_crp_request_to_workflow_config",
+    "resolve_crp_workflow_id",
+    "run_sdk_crp",
 ]

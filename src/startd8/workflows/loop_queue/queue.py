@@ -16,7 +16,9 @@ from typing import Dict, Iterable, List, Optional, Union
 
 from pydantic import ValidationError
 
+from ...agents import BaseAgent
 from ...logging_config import get_logger
+from ..base import ProgressCallback
 from ..builtin.architectural_review_log_constants import _ensure_appendix_exists
 from ..builtin.architectural_review_log_helpers import (
     _apply_triage_decisions,
@@ -41,6 +43,7 @@ from .models import (
 )
 from .recipes import get_recipe
 from .renderer import render_bundle
+from .sdk_executor import map_crp_request_to_workflow_config, run_sdk_crp
 from .storage import LoopQueueStorage
 from .surfaces import is_known_surface
 
@@ -92,6 +95,9 @@ class WorkflowLoopQueue:
         if job.loop_id == "crp":
             request = job.crp_request()
             self._validate_crp_request(job, request, enqueue=True)
+            if job.executor is LoopExecutor.SDK_WORKFLOW and job.workflow_id:
+                # Fail closed on FR-9 mapping before the job is durable.
+                map_crp_request_to_workflow_config(request, job.workflow_id)
 
         if job.workflow_id:
             self._validate_workflow(job)
@@ -175,7 +181,12 @@ class WorkflowLoopQueue:
         return bundle.resolve()
 
     def run_next(
-        self, job_id: Optional[str] = None
+        self,
+        job_id: Optional[str] = None,
+        *,
+        agents: Optional[List[BaseAgent]] = None,
+        on_progress: Optional[ProgressCallback] = None,
+        dry_run: bool = False,
     ) -> Union[DrainHandoff, WorkflowLoopJob]:
         """Advance one queue step.
 
@@ -183,17 +194,29 @@ class WorkflowLoopQueue:
         Drain Hand-off and leaves the job ``processing``. A subsequent call
         after the surface writes ``drain-result.json`` consumes that write-back
         and moves the job to ``awaiting_triage``.
+
+        For ``executor=sdk-workflow`` CRP jobs this maps
+        :class:`CrpReviewRequest` → catalog workflow and runs it in-process
+        (Increment 1.1 / FR-9).
         """
         job = self._select_job(job_id)
         if job.status is LoopJobStatus.PROCESSING:
+            if job.executor is LoopExecutor.SDK_WORKFLOW:
+                raise LoopQueueValidationError(
+                    f"sdk-workflow job {job.job_id!r} is stuck processing; "
+                    "use requeue/cancel (no VASI write-back path)"
+                )
             return self.complete_drain(job.job_id)
         if job.status is not LoopJobStatus.PENDING:
             raise LoopQueueValidationError(
                 f"job {job.job_id!r} is not drainable: status={job.status.value}"
             )
         if job.executor is LoopExecutor.SDK_WORKFLOW:
-            raise LoopQueueValidationError(
-                "sdk-workflow drain is Increment 1.1; enqueue validation is available"
+            return self.drain_sdk_workflow(
+                job.job_id,
+                agents=agents,
+                on_progress=on_progress,
+                dry_run=dry_run,
             )
         self._require_agent_crp(job)
 
@@ -247,6 +270,130 @@ class WorkflowLoopQueue:
         except LoopQueueValidationError as e:
             self._transition(job, LoopJobStatus.FAILED, str(e))
             raise
+
+    def drain_sdk_workflow(
+        self,
+        job_id: str,
+        *,
+        agents: Optional[List[BaseAgent]] = None,
+        on_progress: Optional[ProgressCallback] = None,
+        dry_run: bool = False,
+    ) -> WorkflowLoopJob:
+        """Run CRP via ``WorkflowRegistry.run_workflow`` (FR-9)."""
+        job = self.get(job_id)
+        if job.loop_id != "crp" or job.executor is not LoopExecutor.SDK_WORKFLOW:
+            raise LoopQueueValidationError(
+                "drain_sdk_workflow requires loop_id=crp + executor=sdk-workflow"
+            )
+        if job.status is not LoopJobStatus.PENDING:
+            raise LoopQueueValidationError(
+                f"job {job_id!r} is not pending (status={job.status.value})"
+            )
+        if not job.workflow_id:
+            raise LoopQueueValidationError("workflow_id is required for sdk-workflow")
+
+        request = job.crp_request()
+        try:
+            self._validate_crp_request(job, request, enqueue=False)
+            # Fail-closed mapping before spend (also rejects agent bundles).
+            map_crp_request_to_workflow_config(request, job.workflow_id)
+            if job.rounds_completed() >= request.max_rounds:
+                return self._transition(
+                    job, LoopJobStatus.COMPLETED, "max_rounds exhausted"
+                )
+
+            self._transition(job, LoopJobStatus.PROCESSING, None)
+            wid, config, result = run_sdk_crp(
+                request,
+                job.workflow_id,
+                agents=agents,
+                on_progress=on_progress,
+                dry_run=dry_run,
+            )
+            job.artifacts["sdk_workflow_id"] = wid
+            self.storage.write_json_artifact(
+                job.job_id,
+                "sdk-run-config.json",
+                config,
+            )
+            self.storage.write_json_artifact(
+                job.job_id,
+                "sdk-run-result.json",
+                {
+                    "success": result.success,
+                    "error": result.error,
+                    "output": result.output if isinstance(result.output, dict) else {},
+                    "dry_run": dry_run,
+                },
+            )
+
+            if dry_run:
+                return self._transition(
+                    job, LoopJobStatus.PENDING, "sdk-workflow dry-run complete"
+                )
+            if not result.success:
+                return self._transition(
+                    job,
+                    LoopJobStatus.FAILED,
+                    result.error or "sdk-workflow drain failed",
+                )
+
+            round_numbers = []
+            output = result.output if isinstance(result.output, dict) else {}
+            if "round_numbers" in output:
+                round_numbers = list(output.get("round_numbers") or [])
+            elif "plan_review" in output or "requirements_review" in output:
+                for key in ("requirements_review", "plan_review"):
+                    nested = output.get(key) or {}
+                    if isinstance(nested, dict):
+                        round_numbers.extend(nested.get("round_numbers") or [])
+            if not round_numbers:
+                observed = 0
+                for path in request.source_paths:
+                    if path.is_file():
+                        observed = max(
+                            observed,
+                            _max_crp_round(path.read_text(encoding="utf-8")),
+                        )
+                round_numbers = [observed or 1]
+
+            job.rounds.append(
+                RoundRecord(
+                    round_number=max(int(n) for n in round_numbers),
+                    suggestion_counts={},
+                    paths_written=[str(p.resolve()) for p in request.source_paths],
+                )
+            )
+            if not request.enable_triage:
+                return self._transition(
+                    job,
+                    LoopJobStatus.AWAITING_TRIAGE,
+                    f"sdk-workflow {wid} succeeded; triage deferred",
+                )
+            if job.rounds_completed() >= request.max_rounds:
+                return self._transition(
+                    job,
+                    LoopJobStatus.COMPLETED,
+                    f"sdk-workflow {wid} succeeded; rounds complete",
+                )
+            return self._transition(
+                job,
+                LoopJobStatus.PENDING,
+                f"sdk-workflow {wid} succeeded; next round pending",
+            )
+        except LoopQueueBlockedError as e:
+            self._transition(job, LoopJobStatus.BLOCKED, str(e))
+            raise
+        except LoopQueueValidationError as e:
+            # Prefer FAILED once drain has begun.
+            current = self.get(job_id)
+            if current.status is LoopJobStatus.PROCESSING:
+                self._transition(current, LoopJobStatus.FAILED, str(e))
+            raise
+        except Exception as e:
+            current = self.get(job_id)
+            self._transition(current, LoopJobStatus.FAILED, f"sdk-workflow error: {e}")
+            raise LoopQueueError(f"sdk-workflow drain failed: {e}") from e
 
     def complete_drain(self, job_id: str) -> WorkflowLoopJob:
         """Validate a VASI write-back and detect the claimed Appendix C append."""
