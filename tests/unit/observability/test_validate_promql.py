@@ -121,6 +121,27 @@ def test_all_pass_exit_zero_coverage_one(tmp_path, monkeypatch):
     assert all(v.verdict == "pass" for v in report.verdicts)
 
 
+def test_onboarding_metadata_optional_does_not_crash(tmp_path, monkeypatch):
+    # EC-14: --onboarding-metadata is optional; omitting it must NOT crash on Path(None)
+    # (was: TypeError at reconstruct_descriptors(Path(onboarding_metadata))). Runs without
+    # descriptor enrichment (binding falls back to service_id).
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "checkoutservice",
+                  {"checkoutserviceLatencyP99High": "histogram_quantile(0.99, rate(x[5m])) > 0.5"})
+    monkeypatch.setattr(prometheus_query, "instant_query_count", lambda *a, **k: 3)
+    monkeypatch.setattr(prometheus_query, "list_metric_names", lambda *a, **k: ["x"])
+    monkeypatch.setattr(prometheus_query, "label_values", lambda *a, **k: ["checkoutservice"])
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=None,   # the EC-14 case
+        prometheus_url="http://localhost:9090",
+        min_coverage=1.0,
+        auth=Auth(),
+    )
+    assert report.status == "pass"   # no crash; replay still works
+
+
 # ─────────────── span-metrics-vs-semconv 4-axis mismatch (FR-9) ─────────────
 
 

@@ -772,7 +772,9 @@ def run_validation(
             min_coverage=min_coverage,
         )
 
-    descriptors = reconstruct_descriptors(Path(onboarding_metadata))
+    # EC-14: --onboarding-metadata is optional; without it, run without descriptor enrichment
+    # (per-service binding falls back to service_id) rather than crashing on Path(None).
+    descriptors = reconstruct_descriptors(Path(onboarding_metadata)) if onboarding_metadata else {}
 
     # Target drift: which declared services are ABSENT from the backend entirely — a
     # whole-service gap (every query fails on the same axis), distinct from a per-query
