@@ -11,9 +11,17 @@ from startd8.observability.backends import (
     AgentAdapter,
     OperatorAdapter,
     RenderBackend,
+    RuleIntent,
     ScrapeIntent,
     get_adapter,
 )
+
+
+_RULES = [
+    RuleIntent(record="node_cpu_saturation", expr="1 - avg by (node) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))",
+               labels={"level": "node", "unit": "ratio"}),
+    RuleIntent(record="pod_ready", expr='kube_pod_status_ready{condition="true"}', labels={"level": "pod"}),
+]
 
 
 def _intent():
@@ -41,6 +49,34 @@ def test_agent_adapter_emits_alloy_prometheus_scrape():
     assert "forward_to" in r.content
     # Alloy uses // comments, never # (would be a syntax error)
     assert "\n#" not in r.content and not r.content.startswith("#")
+
+
+def test_agent_render_rules_emits_bare_mimir_ruler_group():
+    r = AgentAdapter().render_rules("infra-sli", _RULES)
+    assert r.output_path == "ruler/infra-sli.yaml"
+    doc = yaml.safe_load(r.content)
+    # bare {groups:[...]}, NO PrometheusRule CRD wrapper (no operator on an LGTM stack)
+    assert "kind" not in doc and "apiVersion" not in doc
+    grp = doc["groups"][0]
+    assert grp["name"] == "infra-sli"
+    assert grp["rules"][0]["record"] == "node_cpu_saturation"
+    assert grp["rules"][0]["labels"] == {"level": "node", "unit": "ratio"}
+
+
+def test_operator_render_rules_wraps_in_prometheusrule_crd():
+    r = OperatorAdapter().render_rules("infra-sli", _RULES)
+    assert r.output_path == "prometheus-rules/infra-sli.yaml"
+    doc = yaml.safe_load(r.content)
+    assert doc["apiVersion"] == "monitoring.coreos.com/v1"
+    assert doc["kind"] == "PrometheusRule"
+    assert doc["spec"]["groups"][0]["name"] == "infra-sli"
+    assert doc["spec"]["groups"][0]["rules"][0]["record"] == "node_cpu_saturation"
+
+
+def test_rule_bodies_are_identical_across_backends():
+    agent = yaml.safe_load(AgentAdapter().render_rules("g", _RULES).content)["groups"][0]["rules"]
+    operator = yaml.safe_load(OperatorAdapter().render_rules("g", _RULES).content)["spec"]["groups"][0]["rules"]
+    assert agent == operator  # only the wrapper differs, never the rule content
 
 
 def test_get_adapter_dispatch_defaults_to_operator():

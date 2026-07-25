@@ -48,6 +48,19 @@ class ScrapeIntent:
 
 
 @dataclass(frozen=True)
+class RuleIntent:
+    """A backend-neutral recording rule: a named series derived from a PromQL expression.
+
+    Infra SLIs become RuleIntents (record = the SLI's series name, expr = its PromQL, labels =
+    level/unit/framing) that the ruler evaluates so dashboards/alerts read a stable series.
+    """
+
+    record: str
+    expr: str
+    labels: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class RenderedArtifact:
     """A rendered artifact: where it goes and its complete serialized content."""
 
@@ -63,6 +76,21 @@ class BackendAdapter(abc.ABC):
     @abc.abstractmethod
     def render_scrape(self, intent: ScrapeIntent, derivation_comment: str) -> RenderedArtifact:
         """Render a scrape target for ``intent``."""
+
+    @abc.abstractmethod
+    def render_rules(self, group: str, rules: list["RuleIntent"]) -> RenderedArtifact:
+        """Render a recording-rule group named ``group``."""
+
+    @staticmethod
+    def _rule_dicts(rules: list["RuleIntent"]) -> list:
+        """Shared: RuleIntent → the plain {record, expr[, labels]} dict both backends nest."""
+        out = []
+        for r in rules:
+            d = {"record": r.record, "expr": r.expr}
+            if r.labels:
+                d["labels"] = dict(r.labels)
+            out.append(d)
+        return out
 
 
 class OperatorAdapter(BackendAdapter):
@@ -105,6 +133,18 @@ class OperatorAdapter(BackendAdapter):
             content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
         )
 
+    def render_rules(self, group: str, rules: list[RuleIntent]) -> RenderedArtifact:
+        doc = {
+            "apiVersion": "monitoring.coreos.com/v1",
+            "kind": "PrometheusRule",
+            "metadata": {"name": group},
+            "spec": {"groups": [{"name": group, "rules": self._rule_dicts(rules)}]},
+        }
+        return RenderedArtifact(
+            output_path=f"prometheus-rules/{group}.yaml",
+            content=yaml.dump(doc, default_flow_style=False, sort_keys=False),
+        )
+
 
 class AgentAdapter(BackendAdapter):
     """Grafana Alloy backend — emits a ``prometheus.scrape`` River block (no operator needed)."""
@@ -132,6 +172,15 @@ class AgentAdapter(BackendAdapter):
         return RenderedArtifact(
             output_path=f"alloy/{intent.name}-scrape.alloy",
             content=block,
+        )
+
+    def render_rules(self, group: str, rules: list[RuleIntent]) -> RenderedArtifact:
+        # Mimir ruler rule-group file (loaded into a tenant namespace via the ruler API) — a bare
+        # {groups: [...]} with no PrometheusRule CRD wrapper (no operator on an Alloy/LGTM stack).
+        doc = {"groups": [{"name": group, "rules": self._rule_dicts(rules)}]}
+        return RenderedArtifact(
+            output_path=f"ruler/{group}.yaml",
+            content=yaml.dump(doc, default_flow_style=False, sort_keys=False),
         )
 
 
