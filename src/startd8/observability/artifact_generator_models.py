@@ -295,6 +295,55 @@ class ArtifactResult:
 
 
 @dataclass
+class CoverageReport:
+    """FR-9 coverage/gap accumulator — one typed home for what were previously 11
+    parallel local lists (``_fr_empty``/``_ungrounded``/``_suppressed_base``/…) that
+    ``generate_observability_artifacts`` assembled by hand into ``report.fr_coverage``.
+
+    Distillation (complexity-distiller D1, S2+S10): the accumulation is the same, but
+    the fields are typed and the serialization contract lives in one place next to the
+    data instead of being a stringly-typed dict literal built inline in the hot loop.
+
+    ``to_fr_coverage()`` preserves **golden byte-identity**: the first eight keys are
+    ALWAYS emitted, in this order; the last three are emitted ONLY when non-empty (an
+    empty list would be a new manifest byte versus pre-feature goldens — #300/#307/#308).
+    """
+
+    empty_services: List[str] = field(default_factory=list)
+    unfulfilled: List[Dict[str, Any]] = field(default_factory=list)
+    emitted: List[str] = field(default_factory=list)
+    ungrounded_kinds: List[Dict[str, Any]] = field(default_factory=list)
+    unverified_base_metrics: List[Dict[str, Any]] = field(default_factory=list)  # #274 advisory (surface unknown)
+    suppressed_base_metrics: List[Dict[str, Any]] = field(default_factory=list)  # #274 strict (surface declared non-emitting)
+    bound_declared_series: List[Dict[str, Any]] = field(default_factory=list)  # #286 positive (base SLI bound to a real series)
+    deferred_declared_kinds: List[Dict[str, Any]] = field(default_factory=list)  # #286 covered-but-not-v1-bindable
+    # byte-identity-conditional keys — surfaced only when present (absent, not []):
+    bound_declared_functional: List[Dict[str, Any]] = field(default_factory=list)  # #300 D2
+    bound_declared_span: List[Dict[str, Any]] = field(default_factory=list)  # #307
+    pending_probes: List[Dict[str, Any]] = field(default_factory=list)  # #308 P0
+
+    def to_fr_coverage(self) -> Dict[str, Any]:
+        """Serialize to the ``report.fr_coverage`` dict, byte-identical to the prior inline build."""
+        fr: Dict[str, Any] = {
+            "empty_services": self.empty_services,
+            "unfulfilled": self.unfulfilled,
+            "emitted": self.emitted,
+            "ungrounded_kinds": self.ungrounded_kinds,
+            "unverified_base_metrics": self.unverified_base_metrics,
+            "suppressed_base_metrics": self.suppressed_base_metrics,
+            "bound_declared_series": self.bound_declared_series,
+            "deferred_declared_kinds": self.deferred_declared_kinds,
+        }
+        if self.bound_declared_functional:
+            fr["bound_declared_functional"] = self.bound_declared_functional
+        if self.bound_declared_span:
+            fr["bound_declared_span"] = self.bound_declared_span
+        if self.pending_probes:
+            fr["pending_probes"] = self.pending_probes
+        return fr
+
+
+@dataclass
 class GenerationReport:
     """Summary of all generated artifacts (REQ-UOM-004)."""
 

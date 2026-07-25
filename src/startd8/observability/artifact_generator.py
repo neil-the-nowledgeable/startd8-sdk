@@ -592,33 +592,10 @@ def generate_observability_artifacts(
         for service in services
     }
 
-    # FR-9 coverage accumulators (#226): the two gap classes + what actually emitted.
-    _fr_empty: List[str] = []
-    _fr_unfulfilled: List[Dict[str, Any]] = []
-    _fr_emitted: List[str] = []
-    # #230/#231/#233: services declared as a recognized-but-ungrounded workload kind.
-    # Surfaced explicitly (not fabricated for) so the author sees the deferral and knows
-    # the actionable next step, rather than the service silently getting HTTP artifacts.
-    _ungrounded: List[Dict[str, str]] = []
-    # #274 (ADR-003): base RED SLIs rest on convention metrics NOT verified as emitted —
-    # an advisory, not a gate. Fires ONLY when the emission surface is UNKNOWN (metrics_surface
-    # absent); when it's declared (REQ-CCL-106), the strict path below handles it.
-    _unverified_base: List[Dict[str, Any]] = []
-    # #274 / REQ-CCL-106: the STRICT fix — base RED SLIs SUPPRESSED because the declared
-    # metrics_surface doesn't emit the convention meter metric (traces-only/none/…). The upstream
-    # signal is present, so this is a real gap (no dead SLI shipped), not just an advisory.
-    _suppressed_base: List[Dict[str, Any]] = []
-    # #286 / REQ-CCL-107: base RED SLIs bound to an author-declared REAL emitted series (positive —
-    # a grounded binding, not a gap) + kinds covered but not v1-bindable (availability → deferred).
-    _bound_declared: List[Dict[str, Any]] = []
-    _deferred_declared: List[Dict[str, Any]] = []
-    # #300 D2: functional SLOs bound to a declared series (saturation/queue_depth/…) — a positive
-    # grounding on a real series, the complement of _bound_declared (which is base RED only).
-    _bound_declared_functional: List[Dict[str, Any]] = []
-    # #307: per-span RED SLOs bound to declared span signals via span-metrics (real service.name, #275).
-    _bound_declared_span: List[Dict[str, Any]] = []
-    # #308 P0: synthetic-probe freshness SLIs recorded pending a runner (a positive finding, not a gap).
-    _pending_probes: List[Dict[str, Any]] = []
+    # FR-9 coverage/gap accumulation — one typed home (complexity-distiller D1). Each field
+    # carries the same lineage the 11 inline lists did (#226/#230/#274/#286/#300/#307/#308);
+    # see CoverageReport for the per-field notes and the byte-identity serialization contract.
+    coverage = CoverageReport()
     for service in services:
         descriptor = descriptors[service.service_id]
         for gen_fn, artifact_type, output_prefix in _GENERATORS:
@@ -637,35 +614,35 @@ def generate_observability_artifacts(
         if func_slo.status == "generated":
             report.artifacts.append(func_slo)
         _q = func_slo.quality or {}
-        _fr_emitted.extend(_q.get("emitted_fr_ids", []))
-        _fr_unfulfilled.extend(_q.get("unfulfilled", []))
+        coverage.emitted.extend(_q.get("emitted_fr_ids", []))
+        coverage.unfulfilled.extend(_q.get("unfulfilled", []))
         # #286: base RED SLIs bound to declared-emitted series (precedence declared > suppress >
         # convention; the convention RED for a bound kind is dropped in _service_sli_kinds).
         decl_slo = generate_declared_base_slos(service, business, descriptor)
         if decl_slo.status == "generated":
             report.artifacts.append(decl_slo)
         _dq = decl_slo.quality or {}
-        _bound_declared.extend(_dq.get("bound_declared_series", []))
-        _deferred_declared.extend(_dq.get("deferred_declared_kinds", []))
+        coverage.bound_declared_series.extend(_dq.get("bound_declared_series", []))
+        coverage.deferred_declared_kinds.extend(_dq.get("deferred_declared_kinds", []))
         # #300 D2: declared-series FUNCTIONAL SLOs (saturation/queue_depth/…) — a separate lane/doc
         # (FR-6); threshold-deferred/type-mismatch/precedence-skip candidates feed the same gap channel.
         declf_slo = generate_declared_functional_slos(service, business, descriptor)
         if declf_slo.status == "generated":
             report.artifacts.append(declf_slo)
         _dfq = declf_slo.quality or {}
-        _bound_declared_functional.extend(_dfq.get("bound_declared_functional", []))
-        _deferred_declared.extend(_dfq.get("deferred_declared_kinds", []))
+        coverage.bound_declared_functional.extend(_dfq.get("bound_declared_functional", []))
+        coverage.deferred_declared_kinds.extend(_dfq.get("deferred_declared_kinds", []))
         # #307: per-span RED SLOs bound to declared span signals via span-metrics (a third declared lane).
         decls_slo = generate_declared_span_slos(service, business, descriptor)
         if decls_slo.status == "generated":
             report.artifacts.append(decls_slo)
         _dsq = decls_slo.quality or {}
-        _bound_declared_span.extend(_dsq.get("bound_declared_span", []))
-        _deferred_declared.extend(_dsq.get("deferred_declared_kinds", []))
+        coverage.bound_declared_span.extend(_dsq.get("bound_declared_span", []))
+        coverage.deferred_declared_kinds.extend(_dsq.get("deferred_declared_kinds", []))
         # #308 P0: synthetic-probe freshness SLIs — recorded pending a runner (writes NO slos/ file).
         probe_slo = generate_declared_probe_slos(service, business, descriptor)
         _ppq = probe_slo.quality or {}
-        _pending_probes.extend(_ppq.get("pending_probes", []))
+        coverage.pending_probes.extend(_ppq.get("pending_probes", []))
         # #308 P1: the runnable probe-spec artifact (probe-specs/, excluded from PromQL replay).
         probe_spec = generate_declared_probe_specs(service, business, descriptor)
         if probe_spec.status == "generated":
@@ -677,18 +654,19 @@ def generate_observability_artifacts(
             for f in (business.functional_requirements or [])
             if f.service in (None, "", service.service_id)
         ]
-        _observed_by_nothing = not resolve_sli_kinds(
-            service.kinds, _svc_signals, service.transport
-        )
+        # Resolve the SLI kinds once (pure fn) — reused by the ∅-coverage check here and the
+        # base-RED gate below (was re-derived at both sites: complexity-distiller S8).
+        _sli_kinds = resolve_sli_kinds(service.kinds, _svc_signals, service.transport)
+        _observed_by_nothing = not _sli_kinds
         if _observed_by_nothing:
-            _fr_empty.append(service.service_id)
+            coverage.empty_services.append(service.service_id)
         # #230/#231/#233: recognized-but-ungrounded kind — name it, cross-reference the
         # ∅ symptom (LH-1: one story, not two gaps), and give a KIND-SPECIFIC next step
         # (P1a: cron→freshness, ml_inference→saturation/lag — shape, never a value).
         for _k in service.kinds:
             if _k in UNGROUNDED_KINDS:
                 _sugg = suggested_signals_for(_k)
-                _ungrounded.append(
+                coverage.ungrounded_kinds.append(
                     {
                         "service": service.service_id,
                         "kind": _k,
@@ -710,13 +688,11 @@ def generate_observability_artifacts(
         # BASE_RED_KINDS is single-sourced (metric_descriptor) so this gate can't drift from the
         # declared-series covers-filter or the convention-triplet suppression.
         _ms = getattr(service, "metrics_surface", "")
-        _red_before = BASE_RED_KINDS & resolve_sli_kinds(
-            service.kinds, _svc_signals, service.transport
-        )
+        _red_before = BASE_RED_KINDS & _sli_kinds
         if _ms in NON_EMITTING_CONVENTION_SURFACES and _red_before:
             # STRICT: the surface is DECLARED non-emitting → the base RED SLIs were suppressed
             # (dropped from _service_sli_kinds) so no dead SLI ships. Record the real gap.
-            _suppressed_base.append(
+            coverage.suppressed_base_metrics.append(
                 {
                     "service": service.service_id,
                     "metrics_surface": _ms,
@@ -737,7 +713,7 @@ def generate_observability_artifacts(
             and not service.declared_metrics
             and _red_before
         ):
-            _unverified_base.append(
+            coverage.unverified_base_metrics.append(
                 {
                     "service": service.service_id,
                     "convention_metrics": [m.name for m in service.convention_metrics],
@@ -751,26 +727,10 @@ def generate_observability_artifacts(
                 }
             )
 
-    report.fr_coverage = {
-        "empty_services": _fr_empty,
-        "unfulfilled": _fr_unfulfilled,
-        "emitted": _fr_emitted,
-        "ungrounded_kinds": _ungrounded,
-        "unverified_base_metrics": _unverified_base,  # #274 advisory (surface unknown)
-        "suppressed_base_metrics": _suppressed_base,  # #274 strict (surface declared non-emitting)
-        "bound_declared_series": _bound_declared,  # #286 positive (base SLI bound to a real series)
-        "deferred_declared_kinds": _deferred_declared,  # #286 covered-but-not-v1-bindable (availability)
-    }
-    # #300 D2 (FR-9): only surface the functional-binding key when something bound — an empty list would
-    # be a new manifest byte vs pre-feature goldens. Absent ⇒ byte-identical.
-    if _bound_declared_functional:
-        report.fr_coverage["bound_declared_functional"] = _bound_declared_functional
-    # #307 (FR-8): same byte-identity discipline for the span-binding key.
-    if _bound_declared_span:
-        report.fr_coverage["bound_declared_span"] = _bound_declared_span
-    # #308 P0 (FR-6): pending synthetic-probe SLIs — surfaced only when present (byte-identity: absent, not []).
-    if _pending_probes:
-        report.fr_coverage["pending_probes"] = _pending_probes
+    # Serialize the typed accumulator to report.fr_coverage. to_fr_coverage() preserves the exact
+    # prior contract: 8 keys always, {bound_declared_functional, bound_declared_span, pending_probes}
+    # present only when non-empty (byte-identity vs pre-#300/#307/#308 goldens).
+    report.fr_coverage = coverage.to_fr_coverage()
 
     report.services_processed = len(services)
     report.services_skipped = len([s for s in services if not s.convention_metrics])
