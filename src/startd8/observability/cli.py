@@ -610,7 +610,11 @@ def compare_live_cmd(
         # FR-11: record the gate verdict to OTel so fidelity is trendable in Grafana. Opt-in +
         # no-op safe: bootstrap an exporter from OTEL_EXPORTER_OTLP_ENDPOINT (configure_otel
         # registers an atexit force-flush so this short-lived CLI actually exports).
-        from .compare_live_metrics import record_gate_metrics, subject_label
+        from .compare_live_metrics import (
+            record_gate_metrics,
+            record_service_coverage,
+            subject_label,
+        )
 
         endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
         if endpoint:
@@ -623,6 +627,15 @@ def compare_live_cmd(
         subj = subject_label(subject_image, prometheus)
         n_new = len(gate[1]) if gate is not None else 0
         if record_gate_metrics(report, n_new, subj):
+            # REQ-TCP-112: also emit the per-service coverage dimension. Reconcile the report
+            # (criticality falls back to "unknown" here; the ContextCore emit path supplies
+            # manifest-resolved criticality). Best-effort — never fail the gate on telemetry.
+            try:
+                from .coverage_reconcile import reconcile
+                recs = [r.to_dict() for r in reconcile(report.to_dict())]
+                record_service_coverage(recs, subj)
+            except Exception:  # noqa: BLE001
+                pass
             typer.echo(
                 f"# emitted compare-live gate metrics (subject={subj}, meter startd8.observability.compare_live)"
             )

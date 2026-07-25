@@ -25,6 +25,10 @@ except ImportError:
 # Personas aligned with ContextCore personalization.py AudienceType +
 # harbor tour profiles (team-lead, platform-engineer, ai-developer).
 # See docs/design/onboarding-portal/ONBOARDING_PORTAL_GRAFANA_PLAN.md §4a.
+#
+# These four are the CANONICAL portal personas. The product-persona -> portal-persona
+# mapping (ContextCore's six user.yaml personas onto these four) is owned by ONE doc —
+# cite it, don't restate it: ContextCore REQ_TELEMETRY_COVERAGE_PORTAL.md (REQ-TCP-130).
 
 _PERSONA_SECTIONS: Dict[str, set] = {
     # Platform Engineer: "Infrastructure That Understands Business Value"

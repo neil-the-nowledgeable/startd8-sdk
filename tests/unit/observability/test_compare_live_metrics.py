@@ -63,6 +63,55 @@ def test_records_gate_runs_and_histograms(in_memory_metrics):
     assert cov.sum == pytest.approx(0.25)
 
 
+# ─────────────────────── per-service coverage (REQ-TCP-112) ─────────────────
+
+from startd8.observability import coverage_reconcile as cr  # noqa: E402
+
+
+def _service_records():
+    live = {
+        "report_version": 2, "status": "fail", "reason": "x",
+        "tier_a": {"gaps": {}},
+        "tier_b": {
+            "per_service": {
+                "web": {"total": 1, "passed": 1, "coverage": 1.0, "signals": {}},
+                "cart": {"total": 1, "passed": 0, "coverage": 0.0, "signals": {}},
+            },
+            "target_drift": {"declared_absent": ["pay"], "checked": True},
+            "verdicts": [],
+        },
+        "pending_verdicts": [],
+    }
+    recs = cr.reconcile(live, criticality_map={"web": "critical", "cart": "critical", "pay": "high"})
+    return [r.to_dict() for r in recs]
+
+
+def test_service_coverage_emits_per_service_histogram_and_presence(in_memory_metrics):
+    n = clm.record_service_coverage(_service_records(), subject="boutique:1")
+    assert n == 3
+    metrics = _collect(in_memory_metrics)
+
+    # histogram only for numeric-coverage services (web=1.0, cart=0.0), NOT declared-absent pay
+    cov = metrics["startd8.observability.compare_live.service_binding_coverage"]
+    by_service = {p.attributes["service"]: p for p in cov}
+    assert set(by_service) == {"web", "cart"}
+    assert by_service["web"].sum == pytest.approx(1.0)
+    assert by_service["web"].attributes["criticality"] == "critical"
+    assert by_service["web"].attributes["subject"] == "boutique:1"
+
+    # presence counter carries EVERY service incl. declared_absent, with its status
+    pres = metrics["startd8.observability.compare_live.service_presence"]
+    status_by_service = {p.attributes["service"]: p.attributes["presence_status"] for p in pres}
+    assert status_by_service == {"web": "bound", "cart": "no_telemetry", "pay": "declared_absent"}
+
+
+def test_service_coverage_is_noop_when_meter_unavailable(monkeypatch):
+    monkeypatch.setattr(clm, "_GATE_METRICS", clm._GateMetrics())
+    monkeypatch.setattr(clm._otel_metrics, "get_meter",
+                        lambda name: (_ for _ in ()).throw(RuntimeError("no provider")))
+    assert clm.record_service_coverage(_service_records(), subject="s") == 0
+
+
 def test_subject_label_prefers_image_then_hostname_never_full_url():
     assert clm.subject_label("img:1", None) == "img:1"
     # a URL with credentials/params → only the hostname is used (FR-7 redaction)
