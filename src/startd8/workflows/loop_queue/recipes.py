@@ -1,0 +1,83 @@
+# Copyright 2026 Force Multiplier Labs
+# SPDX-License-Identifier: LicenseRef-FSL-1.1-ALv2
+
+"""Loop recipe registry (FR-7) — thin, not a second WorkflowRegistry (NR-7)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
+
+from .models import LoopExecutor
+
+
+@dataclass(frozen=True)
+class LoopRecipe:
+    """Declares what a loop needs and which executors can drain it (FR-7)."""
+
+    loop_id: str
+    description: str
+    executors: Tuple[str, ...]
+    #: Which catalog workflow_ids the sdk-workflow executor maps to (cite only).
+    workflow_ids: Tuple[str, ...] = ()
+    inputs: str = ""
+    completion: str = ""
+    steps: Tuple[str, ...] = ()
+
+
+_RECIPES: Dict[str, LoopRecipe] = {}
+
+
+def register_recipe(recipe: LoopRecipe) -> None:
+    _RECIPES[recipe.loop_id] = recipe
+
+
+def get_recipe(loop_id: str) -> LoopRecipe:
+    if loop_id not in _RECIPES:
+        raise KeyError(f"unknown loop_id: {loop_id!r}; known: {sorted(_RECIPES)}")
+    return _RECIPES[loop_id]
+
+
+def list_recipes() -> List[LoopRecipe]:
+    return sorted(_RECIPES.values(), key=lambda r: r.loop_id)
+
+
+def known_loop_ids() -> List[str]:
+    return sorted(_RECIPES)
+
+
+# -- built-in recipes ---------------------------------------------------------
+
+register_recipe(
+    LoopRecipe(
+        loop_id="crp",
+        description=(
+            "Convergent Review Protocol: multi-round review of a plan and/or "
+            "requirements doc; suggestions append to Appendix C, triage records "
+            "dispositions in Appendix A/B (schema owned by "
+            "docs/design/arc-review/ARCHITECTURAL_REVIEW_REQUIREMENTS.md)."
+        ),
+        executors=(
+            LoopExecutor.AGENT_SURFACE.value,
+            LoopExecutor.SDK_WORKFLOW.value,
+        ),
+        workflow_ids=("convergent-review", "architectural-review-log"),
+        inputs="CrpReviewRequest (plan_path/requirements_path, scope, max_rounds, ...)",
+        completion="max_rounds exhausted and final round triaged",
+        steps=("render bundle", "review round (Appendix C)", "triage (A/B)"),
+    )
+)
+
+register_recipe(
+    LoopRecipe(
+        loop_id="one-shot",
+        description=(
+            "Single run of any catalog workflow via executor=sdk-workflow "
+            "(FR-15; drain lands in Increment 2)."
+        ),
+        executors=(LoopExecutor.SDK_WORKFLOW.value,),
+        inputs="config matching the workflow's declared WorkflowInputs",
+        completion="workflow run succeeded",
+        steps=("run workflow",),
+    )
+)
