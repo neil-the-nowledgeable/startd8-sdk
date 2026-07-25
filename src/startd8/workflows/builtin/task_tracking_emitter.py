@@ -431,3 +431,51 @@ def emit_task_tracking_artifacts(
         result["installed_to"] = installed_path
 
     return result
+
+
+# ─────────────────── Cross-repo canonical fixture (ContextCore carry) ───────────────────
+#
+# The single stable entry point ContextCore's work-item parity job imports so its FR-13
+# golden fixture is generated from the *real* emitter shape rather than a hand-authored
+# stand-in that silently drifts (WORKITEM_TASK_CARRY_HANDOFF.md T3, option (a)).
+#
+# It MUST be deterministic (fixed ids/timestamps) so the checked-in golden fixture is
+# byte-stable across runs, and it MUST route through `_build_state_file` (never a parallel
+# hand-authored dict) so any future emitter shape change is reflected here by construction.
+
+#: Frozen inputs for the canonical span. Changing these is a deliberate contract change that
+#: ContextCore's parity job will see on the next regeneration — keep them stable.
+_CANONICAL_FIXTURE_INPUTS: Dict[str, Any] = {
+    "task_id": "wit-canary-001",
+    "title": "Canonical SDK task span (ContextCore work-item carry fixture)",
+    "task_type": "task",
+    "status": "in_progress",
+    "priority": "high",
+    "story_points": 3,
+    "prompt": "Canonical fixture task for cross-repo SpanState v2 parity.",
+    "depends_on": ["wit-canary-000"],
+    "labels": ["fixture", "carry"],
+    "feature_id": "wit-carry",
+    "target_files": ["src/example.py"],
+    "estimated_loc": 42,
+    "project_id": "contextcore-carry",
+    "sprint_id": "sprint-1",
+    "trace_id": "0af7651916cd43dd8448eb211c80319c",
+    "span_id": "b7ad6b7169203331",
+    "parent_span_id": None,
+    "timestamp": "2026-07-25T00:00:00+00:00",
+    "creation_timestamp": "2026-07-25T00:00:00+00:00",
+}
+
+
+def emit_canonical_fixture() -> Dict[str, Any]:
+    """Return one canonical SDK-emitted task-span state dict (SpanState v2).
+
+    The stable, importable source of truth for ContextCore's work-item ``task.*`` carry
+    parity fixture (``scripts/generate_workitem_sdk_fixture.py``). Deterministic and
+    routed through :func:`_build_state_file`, so it is exactly what the emitter produces —
+    no hand-authored shape to drift. ContextCore overlays its work-item state under
+    ``attributes["contextcore.workitem"]`` on top of this; the additive overlay must leave
+    every key here intact (``schema_version`` stays ``2``).
+    """
+    return _build_state_file(**_CANONICAL_FIXTURE_INPUTS)
