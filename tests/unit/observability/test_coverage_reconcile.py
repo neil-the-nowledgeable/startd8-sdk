@@ -35,6 +35,32 @@ def _by_service(records):
     return {r.service: r for r in records}
 
 
+# ─────────────────────────── liveness / stale (EC-13) ──────────────────────
+
+
+def test_liveness_downgrades_bound_to_stale():
+    tb = {"per_service": {"web": _ps(1.0), "cart": _ps(1.0)}}
+    recs = _by_service(cr.reconcile(_report(tier_b=tb), liveness={"web": True, "cart": False}))
+    assert recs["web"].presence_status == cr.BOUND     # live → bound
+    assert recs["cart"].presence_status == cr.STALE    # no recent traffic → stale
+    assert "went dark" in recs["cart"].next_step
+
+
+def test_liveness_absent_is_backward_compatible():
+    tb = {"per_service": {"web": _ps(1.0)}}
+    r = cr.reconcile(_report(tier_b=tb))  # no liveness arg
+    assert r[0].presence_status == cr.BOUND
+
+
+def test_summarize_counts_stale_as_not_observable():
+    tb = {"per_service": {"web": _ps(1.0), "cart": _ps(1.0)}}
+    recs = cr.reconcile(_report(tier_b=tb), criticality_map={"web": "critical", "cart": "critical"},
+                        liveness={"web": True, "cart": False})
+    s = cr.summarize(recs)
+    assert s["by_criticality"]["critical"]["coverage"] == 0.5   # stale drags the tier down
+    assert "cart" in s["by_criticality"]["critical"]["not_bound"]
+
+
 # ─────────────────────────── presence taxonomy ─────────────────────────────
 
 

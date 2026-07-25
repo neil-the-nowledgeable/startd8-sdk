@@ -37,9 +37,12 @@ NO_TELEMETRY = "no_telemetry"      # coverage <= 0 — queries ran, nothing boun
 DECLARED_ABSENT = "declared_absent"  # tier_b.target_drift.declared_absent — never emitted
 PENDING_PROBE = "pending_probe"    # pending_verdicts only — positive, NOT a gap (#308)
 DEGRADED = "degraded"              # tier_b is None / not observed — fail-loud unknown (NR-3)
+STALE = "stale"                    # EC-13: series PRESENT (binds) but no recent traffic — a
+                                   # frozen span-metric of a service that went dark. Presence != liveness.
 
 #: Statuses that count as "observable" for a coverage rollup. ``pending_probe`` is positive-
 #: but-pending and is EXCLUDED from both numerator and denominator (mirrors #308 in compare-live).
+#: ``stale`` is NOT observable — the series binds but the service isn't actually live.
 _OBSERVABLE = {BOUND}
 _ROLLUP_DENOMINATOR_EXCLUDES = {PENDING_PROBE}
 
@@ -111,6 +114,8 @@ def _next_step(status: str, missing: List[str], remediation: str) -> str:
         return f"bind missing signal(s): {', '.join(missing)}" if missing else "close remaining axis gaps"
     if status == PENDING_PROBE:
         return "awaiting the probe runner (freshness SLI) — positive, not a gap"
+    if status == STALE:
+        return "series present but NO recent traffic — the service likely went dark (check it's up)"
     if status == DEGRADED:
         return "live standup/scrape unavailable — re-run compare-live to measure this service"
     return ""
@@ -136,6 +141,7 @@ def reconcile(
     *,
     criticality_map: Optional[Dict[str, str]] = None,
     service_hints: Optional[Dict[str, Any]] = None,
+    liveness: Optional[Dict[str, bool]] = None,
 ) -> List[CoverageRecord]:
     """Reconcile a ``LiveComparisonReport.to_dict()`` into per-service coverage records.
 
@@ -225,6 +231,12 @@ def reconcile(
         else:
             # Declared (has a hint / gap) but not observed and not in drift → not measured.
             status = DEGRADED
+
+        # EC-13: presence != liveness. A fully-bound service with NO recent traffic is STALE
+        # (its span-metric series is present — so it binds — but frozen at its last value; the
+        # service went dark). ``liveness`` is a caller-supplied rate>0 probe; absent → unchanged.
+        if status == BOUND and liveness is not None and liveness.get(svc) is False:
+            status = STALE
 
         records.append(
             CoverageRecord(
