@@ -45,6 +45,15 @@ _OTEL_DESCRIPTORS = {
         {"name": "startd8.observability.compare_live.binding_coverage", "instrument": "histogram",
          "unit": "1", "meter": _METER_NAME, "labels": ["subject"],
          "description": "Tier-B binding coverage of the derived SLIs (0..1)"},
+        # Per-service coverage (ContextCore REQ-TCP-112) — the `subject`-only metrics above are
+        # run-level; these add the `service`/`criticality` dimension the Telemetry Coverage Portal
+        # needs for per-service and per-tier trends. Fed from a coverage_reconcile record set.
+        {"name": "startd8.observability.compare_live.service_binding_coverage", "instrument": "histogram",
+         "unit": "1", "meter": _METER_NAME, "labels": ["service", "criticality", "subject"],
+         "description": "per-service Tier-B binding coverage (0..1)"},
+        {"name": "startd8.observability.compare_live.service_presence", "instrument": "counter",
+         "unit": "1", "meter": _METER_NAME, "labels": ["service", "criticality", "presence_status", "subject"],
+         "description": "per-service telemetry presence status occurrences (bound/no_telemetry/declared_absent/...)"},
     ],
 }
 
@@ -70,6 +79,8 @@ class _GateMetrics:
         self._dead = None
         self._new = None
         self._coverage = None
+        self._svc_cov = None
+        self._svc_presence = None
 
     def _ensure(self) -> bool:
         if self._initialized:
@@ -93,6 +104,12 @@ class _GateMetrics:
         self._coverage = self._meter.create_histogram(
             "startd8.observability.compare_live.binding_coverage", unit="1",
             description="Tier-B binding coverage of the derived SLIs (0..1)")
+        self._svc_cov = self._meter.create_histogram(
+            "startd8.observability.compare_live.service_binding_coverage", unit="1",
+            description="per-service Tier-B binding coverage (0..1)")
+        self._svc_presence = self._meter.create_counter(
+            "startd8.observability.compare_live.service_presence", unit="1",
+            description="per-service telemetry presence status occurrences")
         return True
 
     def record(self, report: Any, new_fail_count: int, subject: str) -> bool:
@@ -108,6 +125,35 @@ class _GateMetrics:
         self._coverage.record(float(tier_b.get("binding_coverage", 0.0) or 0.0), subj)
         return True
 
+    def record_service_coverage(self, records: Any, subject: str) -> int:
+        """Emit per-service coverage (REQ-TCP-112) from coverage_reconcile record dicts.
+
+        For each record: a ``service_presence`` count (always, carrying the status — so
+        ``no_telemetry``/``declared_absent``/``degraded`` services are visible, not just the
+        covered ones), and a ``service_binding_coverage`` sample when a numeric coverage exists.
+        Returns the number of records emitted (0 when the meter is a no-op).
+        """
+        if not self._ensure():
+            return 0
+        n = 0
+        for r in records or []:
+            svc = r.get("service")
+            if not svc:
+                continue
+            attrs = {
+                "service": str(svc),
+                "criticality": str(r.get("criticality", "unknown")),
+                "subject": subject,
+            }
+            self._svc_presence.add(
+                1, {**attrs, "presence_status": str(r.get("presence_status", "unknown"))}
+            )
+            cov = r.get("binding_coverage")
+            if cov is not None:
+                self._svc_cov.record(float(cov), attrs)
+            n += 1
+        return n
+
 
 _GATE_METRICS = _GateMetrics()
 
@@ -117,4 +163,9 @@ def record_gate_metrics(report: Any, new_fail_count: int, subject: str) -> bool:
     return _GATE_METRICS.record(report, new_fail_count, subject)
 
 
-__all__ = ["record_gate_metrics", "subject_label", "_OTEL_DESCRIPTORS"]
+def record_service_coverage(records: Any, subject: str) -> int:
+    """Module-level entry point for per-service coverage emission (REQ-TCP-112). No-op safe."""
+    return _GATE_METRICS.record_service_coverage(records, subject)
+
+
+__all__ = ["record_gate_metrics", "record_service_coverage", "subject_label", "_OTEL_DESCRIPTORS"]
