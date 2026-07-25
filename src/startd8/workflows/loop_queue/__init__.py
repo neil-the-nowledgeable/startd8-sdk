@@ -25,7 +25,12 @@ from .models import (
     WorkflowLoopJob,
 )
 from .queue import WorkflowLoopQueue
-from .recipes import LoopRecipe, get_recipe, list_recipes
+from .recipes import (
+    ONE_SHOT_PRIORITY_WORKFLOWS,
+    LoopRecipe,
+    get_recipe,
+    list_recipes,
+)
 from .sdk_executor import (
     map_crp_request_to_workflow_config,
     resolve_crp_workflow_id,
@@ -48,6 +53,7 @@ __all__ = [
     "LoopQueueError",
     "LoopQueueValidationError",
     "LoopRecipe",
+    "ONE_SHOT_PRIORITY_WORKFLOWS",
     "RoundRecord",
     "TriageDecision",
     "WorkflowLoopJob",

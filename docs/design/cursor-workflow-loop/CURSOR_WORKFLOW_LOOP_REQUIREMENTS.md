@@ -2,7 +2,7 @@
 
 **Version:** 0.5 (Multi-vendor agent surfaces — Cursor reference + Codex / Antigravity interface)
 **Date:** 2026-07-24
-**Status:** Increments 0, 0.5, and 1 implemented; Cursor is v1 reference surface
+**Status:** Increments 0–2 implemented; Cursor is v1 reference surface; Inc 3 harden remaining
 **Author:** Neil Yashinsky (drafted with agent assist)
 **Companion plan:** `CURSOR_WORKFLOW_LOOP_PLAN.md`
 **Doc folder note:** Path `docs/design/cursor-workflow-loop/` is historical (Cursor-first spike). Product name is **Workflow Loop Queue (WLQ)**; “CWLQ” means the Cursor reference surface only.

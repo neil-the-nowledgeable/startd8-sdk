@@ -102,6 +102,8 @@ class WorkflowLoopQueue:
         if job.workflow_id:
             self._validate_workflow(job)
 
+        self._validate_dependencies(job)
+
         self.storage.save_job(job)
         logger.info(
             "WLQ enqueue job_id=%s loop_id=%s executor=%s surface_id=%s",
@@ -212,11 +214,32 @@ class WorkflowLoopQueue:
                 f"job {job.job_id!r} is not drainable: status={job.status.value}"
             )
         if job.executor is LoopExecutor.SDK_WORKFLOW:
-            return self.drain_sdk_workflow(
-                job.job_id,
-                agents=agents,
-                on_progress=on_progress,
-                dry_run=dry_run,
+            unmet = self._unmet_dependencies(job)
+            if unmet:
+                raise LoopQueueValidationError(
+                    f"job {job.job_id!r} blocked by unfinished depends_on: {unmet}"
+                )
+            if job.loop_id == "crp":
+                return self.drain_sdk_workflow(
+                    job.job_id,
+                    agents=agents,
+                    on_progress=on_progress,
+                    dry_run=dry_run,
+                )
+            if job.loop_id == "one-shot":
+                return self.drain_one_shot(
+                    job.job_id,
+                    agents=agents,
+                    on_progress=on_progress,
+                    dry_run=dry_run,
+                )
+            raise LoopQueueValidationError(
+                f"no sdk-workflow drain for loop_id={job.loop_id!r}"
+            )
+        unmet = self._unmet_dependencies(job)
+        if unmet:
+            raise LoopQueueValidationError(
+                f"job {job.job_id!r} blocked by unfinished depends_on: {unmet}"
             )
         self._require_agent_crp(job)
 
@@ -394,6 +417,76 @@ class WorkflowLoopQueue:
             current = self.get(job_id)
             self._transition(current, LoopJobStatus.FAILED, f"sdk-workflow error: {e}")
             raise LoopQueueError(f"sdk-workflow drain failed: {e}") from e
+
+    def drain_one_shot(
+        self,
+        job_id: str,
+        *,
+        agents: Optional[List[BaseAgent]] = None,
+        on_progress: Optional[ProgressCallback] = None,
+        dry_run: bool = False,
+    ) -> WorkflowLoopJob:
+        """Run a catalog workflow once via the registry (FR-15)."""
+        job = self.get(job_id)
+        if job.loop_id != "one-shot" or job.executor is not LoopExecutor.SDK_WORKFLOW:
+            raise LoopQueueValidationError(
+                "drain_one_shot requires loop_id=one-shot + executor=sdk-workflow"
+            )
+        if job.status is not LoopJobStatus.PENDING:
+            raise LoopQueueValidationError(
+                f"job {job_id!r} is not pending (status={job.status.value})"
+            )
+        if not job.workflow_id:
+            raise LoopQueueValidationError("workflow_id is required for one-shot")
+
+        self._validate_workflow(job)
+        self._transition(job, LoopJobStatus.PROCESSING, None)
+        try:
+            WorkflowRegistry.discover()
+            result = WorkflowRegistry.run_workflow(
+                job.workflow_id,
+                config=dict(job.config),
+                agents=agents,
+                on_progress=on_progress,
+                dry_run=dry_run,
+            )
+            self.storage.write_json_artifact(
+                job.job_id,
+                "sdk-run-result.json",
+                {
+                    "success": result.success,
+                    "error": result.error,
+                    "output": result.output if isinstance(result.output, dict) else {},
+                    "dry_run": dry_run,
+                    "workflow_id": job.workflow_id,
+                },
+            )
+            if dry_run:
+                return self._transition(
+                    job, LoopJobStatus.PENDING, "one-shot dry-run complete"
+                )
+            if not result.success:
+                return self._transition(
+                    job,
+                    LoopJobStatus.FAILED,
+                    result.error or f"one-shot {job.workflow_id} failed",
+                )
+            return self._transition(
+                job,
+                LoopJobStatus.COMPLETED,
+                f"one-shot {job.workflow_id} succeeded",
+            )
+        except LoopQueueValidationError:
+            current = self.get(job_id)
+            if current.status is LoopJobStatus.PROCESSING:
+                self._transition(
+                    current, LoopJobStatus.FAILED, "one-shot validation failed"
+                )
+            raise
+        except Exception as e:
+            current = self.get(job_id)
+            self._transition(current, LoopJobStatus.FAILED, f"one-shot error: {e}")
+            raise LoopQueueError(f"one-shot drain failed: {e}") from e
 
     def complete_drain(self, job_id: str) -> WorkflowLoopJob:
         """Validate a VASI write-back and detect the claimed Appendix C append."""
@@ -610,17 +703,100 @@ class WorkflowLoopQueue:
             rejected.extend(_extract_table_ids(doc, _APPENDIX_B))
         return sorted(set(applied)), sorted(set(rejected))
 
+    def _validate_dependencies(self, job: WorkflowLoopJob) -> None:
+        """Fail closed on missing deps and cycles (FR-16)."""
+        if not job.depends_on:
+            return
+        if job.job_id in job.depends_on:
+            raise LoopQueueValidationError(
+                f"job {job.job_id!r} cannot depend on itself"
+            )
+        for dep in job.depends_on:
+            if not self.storage.job_exists(dep):
+                raise LoopQueueValidationError(
+                    f"depends_on unknown job_id: {dep!r} "
+                    "(enqueue the dependency first)"
+                )
+        # Graph of all known jobs plus the candidate.
+        adj: Dict[str, List[str]] = {}
+        for existing in self.list_jobs():
+            adj[existing.job_id] = list(existing.depends_on)
+        adj[job.job_id] = list(job.depends_on)
+        cycle = self._find_dependency_cycle(adj)
+        if cycle:
+            raise LoopQueueValidationError(
+                "depends_on cycle detected: " + " → ".join(cycle)
+            )
+
+    @staticmethod
+    def _find_dependency_cycle(adj: Dict[str, List[str]]) -> Optional[List[str]]:
+        """Return one cycle path (first == last) or None."""
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color = {node: WHITE for node in adj}
+        parent: Dict[str, Optional[str]] = {node: None for node in adj}
+
+        def dfs(node: str) -> Optional[List[str]]:
+            color[node] = GRAY
+            for neighbor in adj.get(node, []):
+                if neighbor not in color:
+                    continue  # unknown edge ignored; enqueue validates existence
+                if color[neighbor] is GRAY:
+                    path = [neighbor, node]
+                    cursor: Optional[str] = node
+                    while cursor is not None and cursor != neighbor:
+                        cursor = parent[cursor]
+                        if cursor is not None:
+                            path.append(cursor)
+                    path.append(neighbor)
+                    path.reverse()
+                    return path
+                if color[neighbor] is WHITE:
+                    parent[neighbor] = node
+                    found = dfs(neighbor)
+                    if found:
+                        return found
+            color[node] = BLACK
+            return None
+
+        for node in adj:
+            if color[node] is WHITE:
+                found = dfs(node)
+                if found:
+                    return found
+        return None
+
+    def _unmet_dependencies(self, job: WorkflowLoopJob) -> List[str]:
+        unmet: List[str] = []
+        for dep in job.depends_on:
+            try:
+                dep_job = self.get(dep)
+            except LoopQueueError:
+                unmet.append(dep)
+                continue
+            if dep_job.status is not LoopJobStatus.COMPLETED:
+                unmet.append(dep)
+        return unmet
+
     def _select_job(self, job_id: Optional[str]) -> WorkflowLoopJob:
         if job_id:
             return self.get(job_id)
-        jobs = [
+        candidates = [
             j
             for j in self.list_jobs()
             if j.status in (LoopJobStatus.PENDING, LoopJobStatus.PROCESSING)
+            and not self._unmet_dependencies(j)
         ]
-        if not jobs:
+        if not candidates:
+            pending = [
+                j.job_id for j in self.list_jobs() if j.status is LoopJobStatus.PENDING
+            ]
+            if pending:
+                raise LoopQueueError(
+                    "no drainable WLQ jobs; pending jobs are waiting on depends_on: "
+                    + ", ".join(pending)
+                )
             raise LoopQueueError("no pending or processing WLQ jobs")
-        return jobs[0]
+        return candidates[0]
 
     @staticmethod
     def _require_agent_crp(job: WorkflowLoopJob) -> None:

@@ -2,7 +2,7 @@
 
 **Version:** 0.5 (Aligned with Requirements v0.5 — multi-vendor VASI)
 **Date:** 2026-07-24
-**Status:** Increments 0, 0.5, 1, and 1.1 implemented on `feat/wloq-inc0-inc1`
+**Status:** Increments 0–2 implemented on `feat/wloq-inc0-inc1` (Inc 3 harden remaining)
 **Requirements:** `CURSOR_WORKFLOW_LOOP_REQUIREMENTS.md`
 
 ---

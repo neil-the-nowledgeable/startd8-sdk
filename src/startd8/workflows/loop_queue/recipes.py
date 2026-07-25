@@ -68,14 +68,27 @@ register_recipe(
     )
 )
 
+#: FR-15 v1 priority family — any registered workflow may be enqueued; these
+#: are the first-class review-adjacent targets called out in the plan.
+ONE_SHOT_PRIORITY_WORKFLOWS: Tuple[str, ...] = (
+    "critical-review",
+    "design-polish",
+    "doc-enhancement",
+    "plain-language",
+    "policy-analysis",
+)
+
 register_recipe(
     LoopRecipe(
         loop_id="one-shot",
         description=(
             "Single run of any catalog workflow via executor=sdk-workflow "
-            "(FR-15; drain lands in Increment 2)."
+            "(FR-15). Priority review-adjacent family: "
+            + ", ".join(ONE_SHOT_PRIORITY_WORKFLOWS)
+            + "."
         ),
         executors=(LoopExecutor.SDK_WORKFLOW.value,),
+        workflow_ids=ONE_SHOT_PRIORITY_WORKFLOWS,
         inputs="config matching the workflow's declared WorkflowInputs",
         completion="workflow run succeeded",
         steps=("run workflow",),
