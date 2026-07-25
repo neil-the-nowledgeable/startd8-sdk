@@ -421,6 +421,7 @@ def _generate_portal_artifact(
     persona: str = "operator",
     provision_url: Optional[str] = None,
     dry_run: bool = False,
+    coverage: Optional[Dict[str, Any]] = None,
 ) -> Optional[ArtifactResult]:
     """Generate an onboarding portal via DashboardCreatorWorkflow.
 
@@ -444,6 +445,7 @@ def _generate_portal_artifact(
             report,
             metadata,
             persona=persona,
+            coverage=coverage,
         )
     except Exception:
         logger.exception("Portal spec build failed for %s", project_id)
@@ -529,6 +531,7 @@ def generate_observability_artifacts(
     portal_provision_url: Optional[str] = None,
     dashboard_provision_url: Optional[str] = None,
     observability_yaml_path: Optional[Path] = None,
+    portal_coverage: Optional[Dict[str, Any]] = None,
 ) -> GenerationReport:
     """Top-level orchestrator.
 
@@ -860,6 +863,7 @@ def generate_observability_artifacts(
             persona=portal_persona,
             provision_url=portal_provision_url,
             dry_run=dry_run,
+            coverage=portal_coverage,
         )
         if portal_result is not None:
             report.artifacts.append(portal_result)
