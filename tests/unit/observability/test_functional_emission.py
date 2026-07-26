@@ -663,6 +663,29 @@ class TestDeclaredEmittedSeriesPromQLDefects:
         assert "http_request_duration_seconds_bucket" in content
         assert "histogram_quantile" in content
 
+    def test_summary_latency_binds_the_raw_quantile_series_not_a_bucket(self, tmp_path):
+        # EC-SUMMARY-TYPE: Harbor emits its request-duration metric as a Prometheus SummaryVec —
+        # NO `_bucket`; p99 is the raw `{quantile="0.99"}` series. A `covers: latency` summary must
+        # bind that raw quantile series, NOT a histogram_quantile over a nonexistent `_bucket`.
+        series = [{"name": "harbor_core_http_request_duration_seconds", "type": "summary",
+                   "labels": {"method": "GET"}, "covers": ["latency"]}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert "_bucket" not in content
+        assert "histogram_quantile" not in content
+        assert 'quantile="0.99"' in content
+        assert 'method="GET"' in content
+        # the exact grounded expression: the pre-computed p99 quantile series, no rate/aggregation.
+        assert ('harbor_core_http_request_duration_seconds{quantile="0.99",method="GET"}'
+                in content)
+
+    def test_summary_latency_without_labels_still_binds_quantile(self, tmp_path):
+        # no declared labels ⇒ a bare `{quantile="0.99"}` selector (valid PromQL), still no `_bucket`.
+        series = [{"name": "harbor_core_http_request_duration_seconds", "type": "summary",
+                   "labels": {}, "covers": ["latency"]}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert "_bucket" not in content
+        assert 'harbor_core_http_request_duration_seconds{quantile="0.99"}' in content
+
     def test_defect_d_saturation_surfaces_as_a_gap_not_vanish(self, tmp_path):
         # Defect D: a declared series covering `saturation` (not base-bindable) was stripped at parse
         # time and vanished everywhere. It must reach the deferred_declared_kinds gap channel.

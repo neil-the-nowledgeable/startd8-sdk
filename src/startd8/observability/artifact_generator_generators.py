@@ -1130,13 +1130,24 @@ def _resolve_declared_shape(
     ``gauge`` has neither a ``_bucket`` nor a counter to ``rate()`` — so the default shape queries a
     series that doesn't exist and the SLI returns nothing. The DECLARED type wins over the kind's
     template: a gauge binds as ``gauge_max`` (the current value), whatever kind it covers, keeping the
-    threshold field so the target still resolves. Unknown kind ⇒ ``None`` (deferred by the caller)."""
+    threshold field so the target still resolves. Unknown kind ⇒ ``None`` (deferred by the caller).
+
+    #300 defect C (EC-SUMMARY-TYPE): a ``summary`` (Prometheus SummaryVec) has NO ``_bucket`` — it
+    exposes its pre-computed quantiles as ``{quantile="0.99"}`` series on the base name directly, plus
+    ``_sum``/``_count``. So a summary latency series must NOT render ``histogram_quantile`` over a
+    nonexistent ``_bucket``; it binds as ``summary_quantile`` (the raw p99 quantile series). Harbor's
+    ``harbor_core_http_request_duration_seconds`` is exactly this case."""
     base = _DECLARED_SLI_SHAPE.get(kind)
     if base is None:
         return None
     _shape, threshold_field = base
     if series_type == "gauge":
         return ("gauge_max", threshold_field)
+    if series_type == "summary" and kind == "latency":
+        # A summary's p99 is a raw series (`NAME{quantile="0.99"}`), not a histogram bucket. Other
+        # kinds a summary covers (availability/throughput via `_count`, a counter) keep their default
+        # rate() shape below — only latency needs the summary-specific quantile series.
+        return ("summary_quantile", threshold_field)
     return base
 
 
@@ -1872,6 +1883,14 @@ def _functional_sli_query(shape: str, metric: str, selector: str) -> str:
             f"histogram_quantile(0.99, sum by (le) "
             f"(rate({metric}_bucket{selector}[5m])))"
         )
+    if shape == "summary_quantile":
+        # EC-SUMMARY-TYPE: a Prometheus SummaryVec exposes p99 as a RAW series
+        # `NAME{quantile="0.99", <labels>}` — no `_bucket`, no `histogram_quantile`, no `rate()`.
+        # Merge the `quantile="0.99"` matcher into the declared-labels selector (which arrives as
+        # `{method="POST"}` or empty) so the SLI reads the pre-computed quantile directly.
+        inner = selector[1:-1] if selector.startswith("{") and selector.endswith("}") else ""
+        matchers = 'quantile="0.99"' + (f",{inner}" if inner else "")
+        return f'{metric}{{{matchers}}}'
     return f"{metric}{selector}"
 
 
