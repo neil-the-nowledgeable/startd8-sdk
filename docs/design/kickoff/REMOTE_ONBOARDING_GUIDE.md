@@ -22,6 +22,12 @@ The stakeholder never gets the API key, never touches the CLI, and **cannot writ
 the agentic loop only *recommends*; the operator confirms every write (the same human gate as a local
 session).
 
+> **The magic link is chat-write only.** It opens the human chat door and nothing else. Grants for other
+> capabilities (`capture`, `instantiate`) are for the **programmatic** consumer — issue them without a
+> link and share the consumer api-key (`cloud-grant issue --capability capture …`). `invite` and `issue
+> --with-link` **refuse** a non-`chat-write` capability (fail-closed), so you can't accidentally hand a
+> stakeholder a link that would only ever show "invalid".
+
 ---
 
 ## The one-command invite

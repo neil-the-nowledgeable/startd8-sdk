@@ -57,6 +57,17 @@ capture` → send link → human captures) **doesn't work end-to-end**; only `ch
 — **S** (the engine exists; the fix is threading the grant's own capability into the redeem target, or
 constraining `invite --capability` to `chat-write` for the human-door path). See CL row below.
 
+> **✅ RESOLVED 2026-07-25 — guard the footgun (S).** Decision (honest-gap #1): the human door is
+> **deliberately chat-only** — the onboarding model is "stakeholder proposes via chat; operator applies"
+> (`REMOTE_ONBOARDING_GUIDE.md:22`). So the fix was never "build a human capture door"; it was that the
+> CLI *permitted creating a dead link*. Fixed by a **fail-closed guard** at both mint points —
+> `issue --with-link` and `invite` now refuse a non-`chat-write` `--capability` before writing any grant
+> (`cli_cloud_grant.py::_guard_link_capability`), pointing operators to the programmatic `issue
+> --capability` path. Tests +3 (reject-issue, reject-invite, allow-chat-write) → `test_cli_cloud_grant.py`
+> 14/14 green. *Framing correction:* v0.2's FR-E18 note itself points to the programmatic `issue
+> --capability` path — it did **not** claim human-link capture works; the gap was purely the unguarded CLI
+> combo, now closed.
+
 ### 2. 🌱 Latent capability — surface "what was captured" in the JSON oracle (the three surfaces have drifted)
 
 `Confirmed:` FR-E14 added the **"What was captured"** section (the actual field *values*, the
@@ -150,4 +161,6 @@ Value audience: **user** (end-user/operator) · **dev** (maintainer). Status: `b
 
 *This pass (2026-07-20): building the Top findings. Strike items to ✅ in place as each lands.*
 
-- *(none yet — R2 opened 2026-07-20)*
+- **Top-#1 (dead invite link)** — ✅ SHIPPED 2026-07-25 — fail-closed `_guard_link_capability` on
+  `issue --with-link` + `invite` (`cli_cloud_grant.py`); +3 tests, `test_cli_cloud_grant.py` 14/14 green.
+  Resolved as "deliberately chat-only door → guard the footgun" (S), not a human-capture-door build.

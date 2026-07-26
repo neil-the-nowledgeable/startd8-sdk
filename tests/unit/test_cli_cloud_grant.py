@@ -63,6 +63,45 @@ def test_issue_is_fail_closed_when_store_is_unwritable(tmp_path):
     assert r.exit_code == 1 and "fail-closed" in r.output
 
 
+def test_issue_with_link_rejects_non_chat_write_capability(tmp_path):
+    # A magic link opens the chat-write-only human door; a link for capture/instantiate would be a
+    # dead link (redeem TARGET_MISMATCH). Guard is fail-closed: exit 2, no grant on disk.
+    store, audit = _paths(tmp_path)
+    r = runner.invoke(cloud_grant_app, ["issue", "--deployment", "d", "--project", "p",
+                                        "--issued-by", "op", "--capability", "capture",
+                                        "--with-link", "--serve-url", "https://app.example",
+                                        "--store", store, "--audit", audit])
+    assert r.exit_code == 2 and "fail-closed" in r.output and "chat-write only" in r.output
+    assert not Path(store).exists()   # refused BEFORE minting — nothing written
+
+
+def test_issue_with_link_allows_chat_write(tmp_path):
+    # The default capability + a link is the supported human-door path — still works.
+    store, audit = _paths(tmp_path)
+    r = runner.invoke(cloud_grant_app, ["issue", "--deployment", "d", "--project", "p",
+                                        "--issued-by", "op", "--with-link",
+                                        "--serve-url", "https://app.example",
+                                        "--store", store, "--audit", audit])
+    assert r.exit_code == 0 and "/kickoff/enter?t=" in r.output
+    g = next(iter(json.loads(Path(store).read_text()).values()))
+    assert g["capability"] == "chat-write"
+
+
+def test_invite_rejects_non_chat_write_capability(tmp_path):
+    # invite ALWAYS mints a human link, so a non-chat-write capability is always a dead link.
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    store, audit = _paths(tmp_path)
+    r = runner.invoke(cloud_grant_app, ["invite", "--for-serve", str(proj),
+                                        "--serve-url", "https://app.example",
+                                        "--cloud-origin", "https://app.example",
+                                        "--issued-by", "op", "--deployment", "d",
+                                        "--capability", "instantiate",
+                                        "--store", store, "--audit", audit])
+    assert r.exit_code == 2 and "fail-closed" in r.output and "chat-write only" in r.output
+    assert not Path(store).exists()   # no grant, no link minted
+
+
 def test_list_empty_and_populated(tmp_path):
     store, _ = _paths(tmp_path)
     empty = runner.invoke(cloud_grant_app, ["list", "--store", store])
