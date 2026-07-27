@@ -1059,3 +1059,53 @@ class TestServiceMonitorScrapeSurfaceGate:
         report = self._run(tmp_path, "")
         assert len(self._monitors(report)) == 1
         assert not report.fr_coverage["suppressed_scrape_configs"]
+
+
+class TestServiceMonitorRuntimeGate:
+    """ADR-003 FP-3: a ServiceMonitor is a Prometheus-Operator (k8s) CRD. On a NON-k8s target
+    (docker-compose, systemd, …) it selects a resource that does not exist — a dead k8s artifact.
+    Suppress it for a KNOWN non-k8s target kind; empty/unknown/k8s kinds keep emitting (conservative)."""
+
+    def _run(self, tmp_path, target_kind):
+        # A scrapeable service (prometheus_exporter) so the #285 surface gate does NOT fire — this
+        # isolates the RUNTIME gate.
+        hint = {
+            "service_id": "web", "kind": "http_server", "transport": "http",
+            "metrics_surface": "prometheus_exporter",
+            "metrics": {"convention_based": [
+                {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"}]},
+        }
+        doc = {"project_id": "p", "instrumentation_hints": {"web": hint},
+               "artifact_types": ["service_monitor"]}
+        m = tmp_path / "onboarding-metadata.json"
+        m.write_text(json.dumps(doc))
+        manifest = tmp_path / "manifest.json"
+        target = {"name": "web"}
+        if target_kind is not None:
+            target["kind"] = target_kind
+        manifest.write_text(json.dumps({"spec": {"targets": [target]}}))
+        return generate_observability_artifacts(
+            onboarding_metadata_path=m, output_dir=tmp_path / "out",
+            manifest_path=manifest, dry_run=False,
+        )
+
+    def _monitors(self, report):
+        return [a for a in report.artifacts if a.artifact_type == "service_monitor"
+                and a.service_id == "web" and a.status == "generated"]
+
+    def test_compose_service_target_suppresses_the_service_monitor(self, tmp_path):
+        report = self._run(tmp_path, "compose_service")
+        assert self._monitors(report) == []  # no dead k8s CRD on a compose runtime
+        assert any(u["service"] == "web" and u.get("target_kind") == "compose_service"
+                   for u in report.fr_coverage["suppressed_scrape_configs"])
+
+    def test_k8s_deployment_target_keeps_the_service_monitor(self, tmp_path):
+        report = self._run(tmp_path, "Deployment")
+        assert len(self._monitors(report)) == 1
+        assert not report.fr_coverage["suppressed_scrape_configs"]
+
+    def test_absent_target_kind_keeps_the_service_monitor(self, tmp_path):
+        # empty/unknown kind must NOT be gated (preserves today's k8s default — no regression).
+        report = self._run(tmp_path, None)
+        assert len(self._monitors(report)) == 1
+        assert not report.fr_coverage["suppressed_scrape_configs"]
