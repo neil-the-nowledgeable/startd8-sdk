@@ -28,12 +28,22 @@ from startd8.observability.metric_descriptor import (  # noqa: E402
 from startd8.observability.artifact_generator_generators import (  # noqa: E402
     _TRIPLET_SIGNAL_KINDS,
 )
+from startd8.observability.artifact_generator import (  # noqa: E402
+    _NON_K8S_TARGET_KINDS,
+)
 
 SERVICE_KINDS = set(ctypes.SERVICE_KIND_VALUES)
 SIGNAL_KINDS = set(ctypes.SIGNAL_KIND_VALUES)
 # Ordering-safe against an older installed ContextCore that predates MetricsSurface: fall back to None
 # and skip the metrics_surface guards rather than erroring if the owner symbol isn't present yet.
 METRICS_SURFACES = getattr(ctypes, "METRICS_SURFACE_VALUES", None)
+# DeploymentRuntime lives in contextcore.contracts.types; TargetKind / NON_K8S_TARGET_KINDS live in
+# contextcore.models.core. Both may be absent on an older installed ContextCore → skip, don't error.
+DEPLOYMENT_RUNTIMES = getattr(ctypes, "DEPLOYMENT_RUNTIME_VALUES", None)
+try:  # optional-dependency boundary — models is a heavier import than contracts.types
+    from contextcore.models.core import NON_K8S_TARGET_KINDS as CC_NON_K8S_TARGET_KINDS  # noqa: E402
+except Exception:  # pragma: no cover - only when ContextCore predates the partition
+    CC_NON_K8S_TARGET_KINDS = None
 
 # Every service kind startd8 partitions (server / defaulted / ungrounded).
 STARTD8_SERVICE_KINDS = set(REQUEST_KINDS) | set(_KIND_DEFAULTS) | set(UNGROUNDED_KINDS)
@@ -92,4 +102,40 @@ def test_non_scrapeable_surfaces_are_known_to_contextcore():
     assert not unknown, (
         f"startd8 NON_SCRAPEABLE_SURFACES {sorted(unknown)} not in ContextCore's MetricsSurface "
         f"({sorted(METRICS_SURFACES)}). Reconcile metric_descriptor with contextcore.contracts.types."
+    )
+
+
+@pytest.mark.skipif(DEPLOYMENT_RUNTIMES is None, reason="installed ContextCore predates DeploymentRuntime")
+def test_deployment_runtime_gate_token_is_known_to_contextcore():
+    """startd8 fails ServiceMonitor closed on `deployment_runtime == "unknown"` (artifact_generator).
+
+    That bare string is a cross-repo contract with ContextCore's DeploymentRuntime vocabulary. If
+    ContextCore renamed the `unknown` runtime, the fail-closed gate would silently stop firing (the FP-3
+    dead-k8s artifact returns). Guard the token here.
+    """
+    assert "unknown" in set(DEPLOYMENT_RUNTIMES), (
+        f"startd8 gates ServiceMonitor on deployment_runtime=='unknown', absent from ContextCore's "
+        f"DeploymentRuntime ({sorted(DEPLOYMENT_RUNTIMES)}). Reconcile artifact_generator with "
+        f"contextcore.contracts.types.DeploymentRuntime."
+    )
+
+
+@pytest.mark.skipif(CC_NON_K8S_TARGET_KINDS is None, reason="installed ContextCore predates NON_K8S_TARGET_KINDS")
+def test_non_k8s_target_kinds_are_known_to_contextcore():
+    """startd8's `_NON_K8S_TARGET_KINDS` (ServiceMonitor-suppression set) must be a subset of
+    ContextCore's `NON_K8S_TARGET_KINDS` partition.
+
+    Guards the load-bearing cross-repo contract: the target kind ContextCore emits for a compose runtime
+    (`compose_service`) must be one startd8 recognizes as non-k8s, and startd8 must not special-case a
+    kind ContextCore's `TargetKind` schema would reject (a manifest could never carry it). Both were bare
+    coincidentally-equal string sets before this guard.
+    """
+    unknown = set(_NON_K8S_TARGET_KINDS) - set(CC_NON_K8S_TARGET_KINDS)
+    assert not unknown, (
+        f"startd8 _NON_K8S_TARGET_KINDS {sorted(unknown)} not in ContextCore's NON_K8S_TARGET_KINDS "
+        f"({sorted(CC_NON_K8S_TARGET_KINDS)}). Add the kind(s) to contextcore.models.core.TargetKind."
+    )
+    assert "compose_service" in set(CC_NON_K8S_TARGET_KINDS) & set(_NON_K8S_TARGET_KINDS), (
+        "compose_service (the kind init-from-plan emits for a compose runtime) must be non-k8s in BOTH "
+        "repos, else the [118] ServiceMonitor FP-3 returns."
     )
