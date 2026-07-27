@@ -1066,7 +1066,7 @@ class TestServiceMonitorRuntimeGate:
     (docker-compose, systemd, …) it selects a resource that does not exist — a dead k8s artifact.
     Suppress it for a KNOWN non-k8s target kind; empty/unknown/k8s kinds keep emitting (conservative)."""
 
-    def _run(self, tmp_path, target_kind):
+    def _run(self, tmp_path, target_kind, runtime=None):
         # A scrapeable service (prometheus_exporter) so the #285 surface gate does NOT fire — this
         # isolates the RUNTIME gate.
         hint = {
@@ -1083,11 +1083,29 @@ class TestServiceMonitorRuntimeGate:
         target = {"name": "web"}
         if target_kind is not None:
             target["kind"] = target_kind
-        manifest.write_text(json.dumps({"spec": {"targets": [target]}}))
+        spec = {"targets": [target]}
+        if runtime is not None:
+            spec["deployment"] = {"runtime": runtime}
+        manifest.write_text(json.dumps({"spec": spec}))
         return generate_observability_artifacts(
             onboarding_metadata_path=m, output_dir=tmp_path / "out",
             manifest_path=manifest, dry_run=False,
         )
+
+    def test_unknown_runtime_suppresses_the_service_monitor(self, tmp_path):
+        # Thanos FP-3: a k8s `Deployment` target (which normally emits) but an EXPLICIT
+        # deployment.runtime='unknown' (probe couldn't confirm k8s) — fail-closed, suppress the CRD.
+        report = self._run(tmp_path, "Deployment", runtime="unknown")
+        assert self._monitors(report) == []
+        assert any(u["service"] == "web" and u.get("deployment_runtime") == "unknown"
+                   for u in report.fr_coverage["suppressed_scrape_configs"])
+
+    def test_absent_runtime_with_deployment_target_still_emits(self, tmp_path):
+        # No runtime declared + a Deployment target ⇒ today's k8s default, ServiceMonitor emitted
+        # (back-compat: only an EXPLICIT 'unknown' fails closed).
+        report = self._run(tmp_path, "Deployment", runtime=None)
+        assert len(self._monitors(report)) == 1
+        assert not report.fr_coverage["suppressed_scrape_configs"]
 
     def _monitors(self, report):
         return [a for a in report.artifacts if a.artifact_type == "service_monitor"

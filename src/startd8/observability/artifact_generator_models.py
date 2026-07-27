@@ -203,6 +203,10 @@ class BusinessContext:
     # Deployment topology (importance-scaled-slo Increment 2): "installed" (local/single-user) ⇒
     # extremely forgiving SLOs; "deployed"/None ⇒ the criticality scale. From spec.deployment.mode.
     deployment_mode: Optional[str] = None
+    # From spec.deployment.runtime (compose | kubernetes | unknown | None). Drives the runtime-correct
+    # artifact set — notably: an explicit 'unknown' fails the ServiceMonitor gate closed (k8s CRD needs
+    # POSITIVE k8s evidence; a defaulted Deployment target on an unknown runtime is a dead-k8s FP-3).
+    deployment_runtime: Optional[str] = None
     availability: Optional[str] = None  # e.g. "99.9"
     latency_p99: Optional[str] = None  # e.g. "500ms"
     throughput: Optional[str] = None  # e.g. "100rps"
