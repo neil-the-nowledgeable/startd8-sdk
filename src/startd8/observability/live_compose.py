@@ -463,122 +463,132 @@ def stand_up_compose_subject(
         handle.reason = "docker CLI not available on PATH"
         return handle
 
-    # 1) render the compose + a single-job prometheus.yml into a temp project dir.
-    workdir = Path(tempfile.mkdtemp(prefix="startd8-cmp-"))
-    handle.workdir = workdir
-    yml = render_prometheus_yml(
-        job_name=job_name,
-        target_host=scrape_host,  # compose service-DNS name (collector in span-metrics mode)
-        target_port=scrape_port,
-        metrics_path=scrape_path,
-        scrape_interval=scrape_interval,
-    )
-    (workdir / "prometheus.yml").write_text(yml, encoding="utf-8")
-
-    # Inc-2: write the reused spanmetrics collector config (0.0.0.0 so peers can reach it).
-    sm_wiring = None
-    if span_metrics:
-        from .runtime_fidelity import collector_config
-
-        cfg = collector_config(
-            f"0.0.0.0:{COLLECTOR_OTLP_PORT}", f"0.0.0.0:{COLLECTOR_PROM_PORT}"
+    # Everything below can create containers. A raise here (a `_compose` subprocess
+    # TIMEOUT → TimeoutExpired, an unreachable-Prometheus URLError from the warm-up
+    # sample query, an injected driver fault) must NOT propagate: the caller reaches
+    # `tear_down_compose` only via `if handle is not None` in its `finally`, so an
+    # exception that escaped before the handle is returned would leak the whole fleet.
+    # Catch-all → record the reason and return the handle so teardown always runs (FR-7).
+    try:
+        # 1) render the compose + a single-job prometheus.yml into a temp project dir.
+        workdir = Path(tempfile.mkdtemp(prefix="startd8-cmp-"))
+        handle.workdir = workdir
+        yml = render_prometheus_yml(
+            job_name=job_name,
+            target_host=scrape_host,  # compose service-DNS name (collector in span-metrics mode)
+            target_port=scrape_port,
+            metrics_path=scrape_path,
+            scrape_interval=scrape_interval,
         )
-        (workdir / "otelcol.yaml").write_text(cfg, encoding="utf-8")
-        sm_wiring = SpanMetricsWiring(otlp_app=otlp_app, collector_image=collector_image)
+        (workdir / "prometheus.yml").write_text(yml, encoding="utf-8")
 
-    # FR-8: a host-drivable warm-up also publishes the subject ingress so a host-side
-    # traffic driver can reach it. ob-grpc needs an in-fleet driver (grpc ports stay
-    # internal) — defer it rather than publish a port no driver uses.
-    publish_ingress = None
-    warmup_host_drivable = bool(warmup) and warmup.shape in warmup_traffic.HOST_DRIVABLE_SHAPES
-    if warmup_host_drivable:
-        publish_ingress = (ingress_service, ingress_port)
-    compose = generate_live_compose_dict(
-        topology, host_port=0, publish_ingress=publish_ingress, span_metrics=sm_wiring
-    )
-    compose_path = workdir / "docker-compose.yml"
-    compose_path.write_text(yaml.safe_dump(compose, sort_keys=False), encoding="utf-8")
-    handle.compose_path = compose_path
+        # Inc-2: write the reused spanmetrics collector config (0.0.0.0 so peers can reach it).
+        sm_wiring = None
+        if span_metrics:
+            from .runtime_fidelity import collector_config
 
-    # 2) compose up -d (compose resolves depends_on ordering itself).
-    up_cmd = ["docker", "compose", "-p", project, "up", "-d"]
-    handle.run_cmds.append(up_cmd)
-    r = _compose(runner, workdir, project, "up", "-d", timeout=up_timeout)
-    if r.returncode != 0:
-        handle.reason = f"compose up failed: {(r.stderr or r.stdout or '').strip()[:200]}"
-        return handle
-    handle.subject_ready = True  # containers started; the scrape gate is the real readiness
+            cfg = collector_config(
+                f"0.0.0.0:{COLLECTOR_OTLP_PORT}", f"0.0.0.0:{COLLECTOR_PROM_PORT}"
+            )
+            (workdir / "otelcol.yaml").write_text(cfg, encoding="utf-8")
+            sm_wiring = SpanMetricsWiring(otlp_app=otlp_app, collector_image=collector_image)
 
-    # 3) resolve the published loopback Prometheus port.
-    r = _compose(runner, workdir, project, "port", PROMETHEUS_SERVICE, "9090", timeout=30.0)
-    port = _parse_published_port(r.stdout) if r.returncode == 0 else None
-    if not port:
-        handle.reason = "could not resolve the published Prometheus port"
-        return handle
-    handle.prometheus_url = f"http://127.0.0.1:{port}"
-
-    # 4) FR-8 warm-up traffic (Inc-2 enabler): drive bounded traffic at the subject's
-    #    ingress BEFORE the readiness gate so lazily-registered / span-metric series
-    #    materialize. A non-host-drivable shape (ob-grpc) is fail-loud unknown.
-    if warmup and not warmup_host_drivable:
-        handle.reason = (
-            f"warm-up shape {warmup.shape!r} is not host-drivable in v1 "
-            f"(needs an in-fleet driver); supported: {list(warmup_traffic.HOST_DRIVABLE_SHAPES)}"
+        # FR-8: a host-drivable warm-up also publishes the subject ingress so a host-side
+        # traffic driver can reach it. ob-grpc needs an in-fleet driver (grpc ports stay
+        # internal) — defer it rather than publish a port no driver uses.
+        publish_ingress = None
+        warmup_host_drivable = bool(warmup) and warmup.shape in warmup_traffic.HOST_DRIVABLE_SHAPES
+        if warmup_host_drivable:
+            publish_ingress = (ingress_service, ingress_port)
+        compose = generate_live_compose_dict(
+            topology, host_port=0, publish_ingress=publish_ingress, span_metrics=sm_wiring
         )
-        return handle
-    if warmup_host_drivable:
-        r = _compose(runner, workdir, project, "port", ingress_service,
-                     str(ingress_port), timeout=30.0)
-        iport = _parse_published_port(r.stdout) if r.returncode == 0 else None
-        if not iport:
-            handle.reason = "could not resolve the published subject-ingress port for warm-up"
+        compose_path = workdir / "docker-compose.yml"
+        compose_path.write_text(yaml.safe_dump(compose, sort_keys=False), encoding="utf-8")
+        handle.compose_path = compose_path
+
+        # 2) compose up -d (compose resolves depends_on ordering itself).
+        up_cmd = ["docker", "compose", "-p", project, "up", "-d"]
+        handle.run_cmds.append(up_cmd)
+        r = _compose(runner, workdir, project, "up", "-d", timeout=up_timeout)
+        if r.returncode != 0:
+            handle.reason = f"compose up failed: {(r.stderr or r.stdout or '').strip()[:200]}"
             return handle
-        handle.ingress_url = f"http://127.0.0.1:{iport}"
-        _drive = warmup_fn or warmup_traffic.drive_warmup
-        outcome = _drive(warmup, ingress_url=handle.ingress_url)
-        handle.warmup = outcome.to_dict()
+        handle.subject_ready = True  # containers started; the scrape gate is the real readiness
 
-    # 5) the reused load-bearing scrape gate (FR-3/FR-6): samples landed AND the
-    #    series set settled across two consecutive scrapes.
-    scrape_ok = _await_scrape(
-        handle.prometheus_url,
-        job_name,
-        scrape_timeout,
-        auth=auth,
-        ready_fn=scrape_ready_check,
-        count_fn=series_count_check,
-        scrape_interval_s=_parse_duration_seconds(scrape_interval),
-        poll_interval=poll_interval,
-    )
-    if not scrape_ok:
-        handle.reason = (
-            f"subject did not warm up within {scrape_timeout:.0f}s "
-            f"(no sustained scrape of {topology.metrics_path} on "
-            f"{topology.metrics_service}:{topology.metrics_port})"
+        # 3) resolve the published loopback Prometheus port.
+        r = _compose(runner, workdir, project, "port", PROMETHEUS_SERVICE, "9090", timeout=30.0)
+        port = _parse_published_port(r.stdout) if r.returncode == 0 else None
+        if not port:
+            handle.reason = "could not resolve the published Prometheus port"
+            return handle
+        handle.prometheus_url = f"http://127.0.0.1:{port}"
+
+        # 4) FR-8 warm-up traffic (Inc-2 enabler): drive bounded traffic at the subject's
+        #    ingress BEFORE the readiness gate so lazily-registered / span-metric series
+        #    materialize. A non-host-drivable shape (ob-grpc) is fail-loud unknown.
+        if warmup and not warmup_host_drivable:
+            handle.reason = (
+                f"warm-up shape {warmup.shape!r} is not host-drivable in v1 "
+                f"(needs an in-fleet driver); supported: {list(warmup_traffic.HOST_DRIVABLE_SHAPES)}"
+            )
+            return handle
+        if warmup_host_drivable:
+            r = _compose(runner, workdir, project, "port", ingress_service,
+                         str(ingress_port), timeout=30.0)
+            iport = _parse_published_port(r.stdout) if r.returncode == 0 else None
+            if not iport:
+                handle.reason = "could not resolve the published subject-ingress port for warm-up"
+                return handle
+            handle.ingress_url = f"http://127.0.0.1:{iport}"
+            _drive = warmup_fn or warmup_traffic.drive_warmup
+            outcome = _drive(warmup, ingress_url=handle.ingress_url)
+            handle.warmup = outcome.to_dict()
+
+        # 5) the reused load-bearing scrape gate (FR-3/FR-6): samples landed AND the
+        #    series set settled across two consecutive scrapes.
+        scrape_ok = _await_scrape(
+            handle.prometheus_url,
+            job_name,
+            scrape_timeout,
+            auth=auth,
+            ready_fn=scrape_ready_check,
+            count_fn=series_count_check,
+            scrape_interval_s=_parse_duration_seconds(scrape_interval),
+            poll_interval=poll_interval,
         )
+        if not scrape_ok:
+            handle.reason = (
+                f"subject did not warm up within {scrape_timeout:.0f}s "
+                f"(no sustained scrape of {scrape_path} on {scrape_host}:{scrape_port})"
+            )
+            return handle
+
+        # 6) FR-8 convergence: with warm-up, additionally require driver terminal success
+        #    AND non-zero samples for the count metric (never series-count alone).
+        if warmup_host_drivable:
+            outcome = warmup_traffic.WarmupOutcome(
+                driver=handle.warmup["driver"],
+                exercised=handle.warmup["exercised"],
+                terminal_success=handle.warmup["terminal_success"],
+                iterations=handle.warmup["iterations"],
+                reason=handle.warmup["reason"],
+            )
+            ready, why = warmup_traffic.evaluate_warmup(
+                outcome, prometheus_url=handle.prometheus_url,
+                count_metric=warmup_count_metric, auth=auth,
+            )
+            handle.scrape_ready = ready
+            if not ready:
+                handle.reason = why
+            return handle
+
+        handle.scrape_ready = True
         return handle
-
-    # 6) FR-8 convergence: with warm-up, additionally require driver terminal success
-    #    AND non-zero samples for the count metric (never series-count alone).
-    if warmup_host_drivable:
-        outcome = warmup_traffic.WarmupOutcome(
-            driver=handle.warmup["driver"],
-            exercised=handle.warmup["exercised"],
-            terminal_success=handle.warmup["terminal_success"],
-            iterations=handle.warmup["iterations"],
-            reason=handle.warmup["reason"],
-        )
-        ready, why = warmup_traffic.evaluate_warmup(
-            outcome, prometheus_url=handle.prometheus_url,
-            count_metric=warmup_count_metric, auth=auth,
-        )
-        handle.scrape_ready = ready
-        if not ready:
-            handle.reason = why
+    except Exception as e:  # noqa: BLE001 — never leak a stood-up fleet; teardown owns cleanup (FR-7)
+        handle.scrape_ready = False
+        handle.reason = f"standup error (fleet left for teardown): {type(e).__name__}: {e}"
         return handle
-
-    handle.scrape_ready = True
-    return handle
 
 
 def _count_leaked(runner: Runner, project: str) -> int:

@@ -253,6 +253,38 @@ def test_teardown_removes_project_and_workdir(tmp_path):
     assert not workdir.exists()  # temp dir swept
 
 
+def test_standup_never_raises_after_up_so_caller_can_tear_down():
+    # FR-7 safety: a subprocess TIMEOUT (or any raise) AFTER `compose up` must not
+    # propagate — else the caller's `finally: if handle is not None` never runs and the
+    # whole fleet leaks. The standup must catch it and return the handle (with workdir +
+    # project set) so teardown owns cleanup.
+    class RaisingAfterUp:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, argv, **kwargs):
+            self.calls.append(argv)
+            sub = argv[4] if argv[:2] == ["docker", "compose"] and len(argv) > 4 else ""
+            if sub == "up":
+                return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+            if sub == "port":  # times out AFTER containers are up
+                raise subprocess.TimeoutExpired(cmd=argv, timeout=30.0)
+            return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+
+    topo = live_compose.parse_subject_topology(_MINIMAL)
+    runner = RaisingAfterUp()
+    handle = live_compose.stand_up_compose_subject(
+        topology=topo, run_id="raise1", runner=runner, docker_available_fn=lambda: True,
+    )
+    # did NOT propagate; returned a fail-loud handle the caller's finally can tear down.
+    assert handle.scrape_ready is False
+    assert "standup error" in handle.reason
+    assert handle.project_name == "startd8-cmp-raise1"
+    assert handle.workdir is not None  # teardown has the project dir to sweep
+    # clean up the temp dir the test created.
+    live_compose.tear_down_compose(handle, runner=lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+
+
 def test_teardown_reports_leaked_count_without_raising():
     handle = live_compose.ComposeStandupHandle(
         prometheus_url="", job_name="subject", project_name="startd8-cmp-lk",
