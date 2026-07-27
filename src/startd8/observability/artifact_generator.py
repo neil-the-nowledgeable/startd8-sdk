@@ -86,6 +86,7 @@ from .artifact_generator_generators import (  # noqa: F401
     _prom_name,
     _resolve_threshold,
     _severity_for,
+    _target_for,
     generate_alert_rules,
     generate_business_criticality_dashboard,
     generate_capability_index,
@@ -224,6 +225,14 @@ _EXTENDED_PER_SERVICE_GENERATORS = {
     "loki_rule": (generate_loki_rule, "loki-rules"),
     "runbook": (generate_runbook, "runbooks"),
 }
+
+#: spec.targets[].kind values that are NOT Kubernetes workloads — a Prometheus-Operator ServiceMonitor
+#: CRD is meaningless for these (no k8s API / operator to reconcile it). Used to suppress a dead k8s
+#: ServiceMonitor on a non-k8s runtime (ADR-003 FP-3). An empty/unknown/k8s kind is NOT listed, so it
+#: keeps emitting (conservative — today's k8s default is preserved).
+_NON_K8S_TARGET_KINDS = frozenset(
+    {"compose_service", "docker_service", "docker_container", "systemd", "process", "binary", "host"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +783,28 @@ def generate_observability_artifacts(
                     }
                 )
                 continue
+            # Runtime-correct artifact set: a ServiceMonitor is a Prometheus-Operator (k8s) CRD. On a
+            # NON-k8s target (docker-compose, systemd, bare process) it targets a resource that does not
+            # exist — a dead k8s artifact (ADR-003 FP-3, the Harbor pilot). Suppress + record when the
+            # service's target kind is KNOWN non-k8s; empty/unknown/k8s kinds keep emitting (conservative,
+            # no regression to today's k8s default). The scrapeable surface is still real — a compose
+            # subject wants a static prometheus scrape_config, not a ServiceMonitor (follow-up).
+            if atype == "service_monitor":
+                _tk = str((_target_for(service.service_id, business.targets) or {}).get("kind", "")).strip().lower()
+                if _tk in _NON_K8S_TARGET_KINDS:
+                    _suppressed_scrape.append(
+                        {
+                            "service": service.service_id,
+                            "target_kind": _tk,
+                            "reason": (
+                                f"ServiceMonitor suppressed — target kind {_tk!r} is not a Kubernetes "
+                                f"workload, so a Prometheus-Operator ServiceMonitor CRD has nothing to "
+                                f"select (a dead k8s artifact on a non-k8s runtime). A static prometheus "
+                                f"scrape_config is the runtime-correct scrape for this target."
+                            ),
+                        }
+                    )
+                    continue
             report.artifacts.append(
                 _generate_one(
                     gen_fn,
