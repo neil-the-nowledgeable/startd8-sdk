@@ -1109,3 +1109,40 @@ class TestServiceMonitorRuntimeGate:
         report = self._run(tmp_path, None)
         assert len(self._monitors(report)) == 1
         assert not report.fr_coverage["suppressed_scrape_configs"]
+
+
+class TestDeclaredGaugeObservePanel:
+    """A declared inventory GAUGE (no SLO threshold) must reach a dashboard PANEL on its REAL series
+    name — the honest artifact for an observe-only signal, and what lets coverage credit the FR that
+    names it (Harbor FR-6: harbor_statistics_* storage/project/repo totals). NOT a fabricated saturation SLO."""
+
+    def _spec(self, tmp_path, series):
+        hint = {
+            "service_id": "harbor-exporter", "kind": "http_server", "transport": "http",
+            "metrics_surface": "prometheus_exporter",
+            "metrics": {"convention_based": [], "declared_emitted_series": series},
+        }
+        doc = {"project_id": "harbor", "instrumentation_hints": {"harbor-exporter": hint},
+               "artifact_types": ["dashboard_spec"]}
+        m = tmp_path / "onboarding-metadata.json"
+        m.write_text(json.dumps(doc))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=m, output_dir=tmp_path / "out", dry_run=False,
+        )
+        return "".join(a.content for a in report.artifacts if a.artifact_type == "dashboard_spec")
+
+    def test_declared_gauge_gets_observe_panel_on_real_name(self, tmp_path):
+        content = self._spec(tmp_path, [
+            {"name": "harbor_statistics_total_storage_consumption", "type": "gauge", "labels": []},
+        ])
+        assert "harbor_statistics_total_storage_consumption" in content
+        assert "max(harbor_statistics_total_storage_consumption" in content
+
+    def test_declared_histogram_is_not_re_panelled_as_gauge(self, tmp_path):
+        # a histogram/summary declared series is bound as an SLO elsewhere; the observe-gauge panel
+        # path must NOT emit a max() panel for it.
+        content = self._spec(tmp_path, [
+            {"name": "harbor_core_http_request_duration_seconds", "type": "summary",
+             "labels": [], "covers": ["latency"]},
+        ])
+        assert "max(harbor_core_http_request_duration_seconds" not in content
