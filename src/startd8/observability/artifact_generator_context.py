@@ -550,6 +550,9 @@ def load_business_context(
     # Deployment mode (Increment 2): drives importance-scaled defaults toward extreme forgiveness for
     # locally-installed apps. From spec.deployment.mode; absent ⇒ None ⇒ criticality-only.
     ctx.deployment_mode = (spec.get("deployment") or {}).get("mode")
+    # spec.deployment.runtime (compose|kubernetes|unknown) — gates the runtime-correct artifact set
+    # (an explicit 'unknown' suppresses the k8s ServiceMonitor; FP-3 fail-closed).
+    ctx.deployment_runtime = (spec.get("deployment") or {}).get("runtime")
     ctx.owner = business.get("owner")
     ctx.dashboard_placement = observability.get("dashboardPlacement", "standard")
 

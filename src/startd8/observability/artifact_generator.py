@@ -791,16 +791,29 @@ def generate_observability_artifacts(
             # subject wants a static prometheus scrape_config, not a ServiceMonitor (follow-up).
             if atype == "service_monitor":
                 _tk = str((_target_for(service.service_id, business.targets) or {}).get("kind", "")).strip().lower()
-                if _tk in _NON_K8S_TARGET_KINDS:
+                # Fail-closed on an EXPLICIT unknown runtime: a ServiceMonitor is a k8s-operator CRD, so
+                # it needs POSITIVE evidence of k8s. When the probe authored spec.deployment.runtime as
+                # 'unknown' (it could not confirm the deployment shape — e.g. Thanos, deployed many ways),
+                # a defaulted `Deployment` target is NOT that evidence → suppress (else the dead-k8s FP-3).
+                # An absent runtime stays today's k8s default (back-compat); a KNOWN non-k8s target kind is
+                # still suppressed by the kind check below.
+                _rt = str(getattr(business, "deployment_runtime", "") or "").strip().lower()
+                if _rt == "unknown" or _tk in _NON_K8S_TARGET_KINDS:
                     _suppressed_scrape.append(
                         {
                             "service": service.service_id,
                             "target_kind": _tk,
+                            "deployment_runtime": _rt or None,
                             "reason": (
-                                f"ServiceMonitor suppressed — target kind {_tk!r} is not a Kubernetes "
-                                f"workload, so a Prometheus-Operator ServiceMonitor CRD has nothing to "
-                                f"select (a dead k8s artifact on a non-k8s runtime). A static prometheus "
-                                f"scrape_config is the runtime-correct scrape for this target."
+                                f"ServiceMonitor suppressed — "
+                                + (
+                                    f"deployment runtime is {_rt!r} (k8s not confirmed), so a "
+                                    if _rt == "unknown"
+                                    else f"target kind {_tk!r} is not a Kubernetes workload, so a "
+                                )
+                                + "Prometheus-Operator ServiceMonitor CRD has nothing to select (a dead "
+                                "k8s artifact). A static prometheus scrape_config is the runtime-correct "
+                                "scrape for this target."
                             ),
                         }
                     )
