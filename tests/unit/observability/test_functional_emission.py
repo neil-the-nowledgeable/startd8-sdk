@@ -663,6 +663,26 @@ class TestDeclaredEmittedSeriesPromQLDefects:
         assert "http_request_duration_seconds_bucket" in content
         assert "histogram_quantile" in content
 
+    def test_summary_latency_binds_native_quantile_not_dead_bucket(self, tmp_path):
+        # A Prometheus Summary has no `_bucket` — a `covers: latency` template must NOT emit a
+        # histogram_quantile(_bucket) query that returns nothing (false coverage). It binds the
+        # Summary's native client-computed p99 child series `{quantile="0.99"}` instead, merged into
+        # the existing selector (one brace group).
+        series = [{"name": "harbor_core_http_request_duration_seconds", "type": "summary",
+                   "labels": {"job": "core"}, "covers": ["latency"]}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert "_bucket" not in content
+        assert "histogram_quantile" not in content
+        assert 'harbor_core_http_request_duration_seconds{quantile="0.99",job="core"}' in content
+
+    def test_summary_latency_native_quantile_with_no_labels(self, tmp_path):
+        # empty labels → a bare `{quantile="0.99"}` selector, still valid PromQL (no double braces).
+        series = [{"name": "harbor_core_http_request_duration_seconds", "type": "summary",
+                   "labels": {}, "covers": ["latency"]}]
+        content = self._declared_slo(self._run(tmp_path, series))[0].content
+        assert 'harbor_core_http_request_duration_seconds{quantile="0.99"}' in content
+        assert "{quantile=\"0.99\"}{" not in content  # never two adjacent brace groups
+
     def test_defect_d_saturation_surfaces_as_a_gap_not_vanish(self, tmp_path):
         # Defect D: a declared series covering `saturation` (not base-bindable) was stripped at parse
         # time and vanished everywhere. It must reach the deferred_declared_kinds gap channel.

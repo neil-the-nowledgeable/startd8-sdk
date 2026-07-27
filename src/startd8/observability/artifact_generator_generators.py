@@ -1131,13 +1131,23 @@ def _resolve_declared_shape(
     ``gauge`` has neither a ``_bucket`` nor a counter to ``rate()`` — so the default shape queries a
     series that doesn't exist and the SLI returns nothing. The DECLARED type wins over the kind's
     template: a gauge binds as ``gauge_max`` (the current value), whatever kind it covers, keeping the
-    threshold field so the target still resolves. Unknown kind ⇒ ``None`` (deferred by the caller)."""
+    threshold field so the target still resolves.
+
+    A ``summary`` covering ``latency`` has the same failure mode as a gauge under the default quantile
+    shape — a Prometheus Summary has NO ``_bucket``, so ``histogram_quantile(rate(_bucket))`` queries a
+    non-existent series and the SLI is dead (yet counts as bound). A Summary instead publishes its p99
+    as a native client-computed child series ``{quantile="0.99"}``, so it binds as ``summary_quantile``.
+    (If the Summary is configured with no objectives that child series is absent — a subject-config data
+    gap, not a wrong shape; ``rate(_sum)/rate(_count)`` avg is the documented always-valid fallback once
+    GroundTruth carries objectives.) Unknown kind ⇒ ``None`` (deferred by the caller)."""
     base = _DECLARED_SLI_SHAPE.get(kind)
     if base is None:
         return None
     _shape, threshold_field = base
     if series_type == "gauge":
         return ("gauge_max", threshold_field)
+    if series_type == "summary" and _shape == "quantile":
+        return ("summary_quantile", threshold_field)
     return base
 
 
@@ -1873,6 +1883,15 @@ def _functional_sli_query(shape: str, metric: str, selector: str) -> str:
             f"histogram_quantile(0.99, sum by (le) "
             f"(rate({metric}_bucket{selector}[5m])))"
         )
+    if shape == "summary_quantile":
+        # A Prometheus Summary publishes p99 as its native client-computed child series
+        # `{quantile="0.99"}` — NOT a `_bucket` (which a Summary lacks). Merge the quantile matcher
+        # INTO the existing selector braces so we never emit two adjacent brace groups.
+        if selector.startswith("{") and selector.endswith("}") and len(selector) > 2:
+            merged = '{quantile="0.99",' + selector[1:]
+        else:
+            merged = '{quantile="0.99"}'
+        return f"{metric}{merged}"
     return f"{metric}{selector}"
 
 
