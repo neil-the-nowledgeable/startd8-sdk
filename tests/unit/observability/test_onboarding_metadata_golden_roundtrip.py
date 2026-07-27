@@ -148,6 +148,10 @@ class TestOnboardingMetadataGoldenRoundTrip:
         web = drifted["instrumentation_hints"]["web"]
         web["declared_emitted_series"] = web["metrics"].pop("declared_emitted_series")  # wrong nesting
         report = _run_golden(tmp_path, doc=drifted)
+        # Guard-the-guard: prove the service is still PROCESSED (not silently dropped), so "nothing
+        # bound" below reflects the loader ignoring the mis-nested path — not a vacuous pass because
+        # `web` vanished from extraction (which a future extract_service_hints change could cause).
+        assert report.services_processed == 2
         contents = _generated_slo_contents(report)
         assert not [c for c in contents if "ratioMetric" in c and "http_requests_total" in c], (
             "mis-nested declared_emitted_series still bound — the loader is not reading the documented "
@@ -162,6 +166,10 @@ class TestOnboardingMetadataGoldenRoundTrip:
         sk = drifted["instrumentation_hints"]["sidekiq"]
         sk["declared_span_signals"] = sk["metrics"].pop("declared_span_signals")  # wrong nesting
         report = _run_golden(tmp_path, doc=drifted)
+        # Guard-the-guard (see sibling): sidekiq's metrics is now {} after the pop, so absence of a
+        # span SLO would be trivially true if it were dropped — assert it's still processed so the
+        # result provably reflects the loader ignoring the mis-nested `declared_span_signals` path.
+        assert report.services_processed == 2
         contents = _generated_slo_contents(report)
         assert not [c for c in contents if "traces_spanmetrics_latency_seconds_bucket" in c], (
             "mis-nested declared_span_signals still bound — loader not reading `metrics.declared_span_signals`"
