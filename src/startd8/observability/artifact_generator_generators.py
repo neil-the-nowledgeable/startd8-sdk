@@ -607,6 +607,12 @@ def generate_dashboard_spec(
     # additive — the convention-based RED panels above remain the baseline.
     _add_domain_panels(panels, service, derivations, descriptor)
 
+    # A declared GAUGE is an observe signal (an inventory / current-value reading — e.g. a metrics
+    # exporter's storage/project/repo totals) with no pass/fail threshold → it binds no SLO. Its
+    # correct artifact is a dashboard panel on the REAL emitted series (not a fabricated saturation
+    # SLO). Emits the observe panel that also lets coverage credit the FR naming the gauge (Harbor FR-6).
+    _add_declared_gauge_observe_panels(panels, service, derivations)
+
     # REQ-OAG-107: DB latency panels when databases were detected.
     _add_database_panels(panels, service, derivations, descriptor)
 
@@ -852,6 +858,52 @@ def _add_domain_panels(
                 field="domain_panels",
                 source=f"instrumentation_hints.{service.service_id}.metrics.manifest_declared",
                 transformation=f"{added} declared metrics → panels",
+                tier="manifest",
+            )
+        )
+
+
+def _add_declared_gauge_observe_panels(
+    panels: List[Dict[str, Any]],
+    service: ServiceHints,
+    derivations: List[DerivationTrace],
+) -> None:
+    """Append an OBSERVE panel per declared_emitted_series GAUGE, bound to the REAL series name.
+
+    A declared gauge (a metrics exporter's inventory/current-value reading — storage bytes, project
+    /repo counts, in-flight requests) has no meaningful SLO threshold, so the declared SLO binders
+    correctly emit nothing for it. Its honest artifact is a dashboard panel — ``max(<name>{sel})`` —
+    which visualises the real value AND lets coverage credit the FR that names the gauge (Harbor
+    FR-6). NOT a fabricated ``saturation`` SLO. Additive; dedup by expr; histogram/summary/counter
+    declared series are bound as SLOs elsewhere and are not re-panelled here."""
+    series = getattr(service, "declared_emitted_series", None) or ()
+    gauges = [s for s in series if getattr(s, "type", "") == "gauge" and getattr(s, "name", "")]
+    if not gauges:
+        return
+    existing = {str(p.get("expr", "")) for p in panels}
+    added = 0
+    for s in gauges:
+        selector = _declared_series_selector(getattr(s, "labels", {}) or {})
+        query = f"max({s.name}{selector})"
+        if query in existing:
+            continue
+        panels.append(
+            {
+                "type": "timeseries",
+                "title": _panel_title(s.name),
+                "expr": query,
+                "unit": "short",
+                "group": "Inventory",
+            }
+        )
+        existing.add(query)
+        added += 1
+    if added:
+        derivations.append(
+            DerivationTrace(
+                field="declared_gauge_observe_panels",
+                source=f"instrumentation_hints.{service.service_id}.metrics.declared_emitted_series",
+                transformation=f"{added} declared gauge(s) → observe panel(s)",
                 tier="manifest",
             )
         )
