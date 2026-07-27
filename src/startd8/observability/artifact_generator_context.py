@@ -191,7 +191,15 @@ def load_onboarding_metadata(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Onboarding metadata not found: {path}")
     with open(path, "r") as f:
-        data = json.load(f)
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as e:
+            # Name the file + position; a bare JSONDecodeError doesn't carry the path, so a
+            # malformed producer artifact otherwise fails with no clue which file (CEP R2).
+            raise ValueError(
+                f"Onboarding metadata at {path} is not valid JSON "
+                f"(line {e.lineno}, column {e.colno}): {e.msg}"
+            ) from e
     logger.info("Loaded onboarding metadata from %s (%d top-level keys)", path, len(data))
     return data
 
@@ -417,6 +425,15 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
     services: List[ServiceHints] = []
     skipped_non_service = 0
     for svc_id, hint in raw_hints.items():
+        # A malformed producer may emit a non-object hint value (a string/list/null); the
+        # extraction below assumes a dict (`hint.get(...)`), so guard it into a legible skip
+        # instead of an opaque AttributeError deep in the loop (CEP contract-robustness R6).
+        if not isinstance(hint, dict):
+            logger.warning(
+                "Skipping instrumentation_hints[%r]: expected a JSON object, got %s",
+                svc_id, type(hint).__name__,
+            )
+            continue
         # REQ-KZ-OBS-103: Filter non-service entries
         if _is_non_service_entry(svc_id, hint, metadata):
             logger.info("Skipping non-service entry: %s", svc_id)
