@@ -122,6 +122,40 @@ class TestExecute:
 
     @patch(_GEN_PATH)
     @patch(_PCW_PATH)
+    def test_cross_file_gate_fail_blocks_success(self, MockPCW, MockGen, adapter, seed_file):
+        # REQ-CKG-240 / CL-32: a cross-file gate FAIL is build-breaking even when
+        # per-feature status is clean (failed==0). The adapter must NOT report success
+        # — parity with scripts/run_prime_workflow.py:988's exit-code path.
+        mock_wf = _make_mock_wf(run_return={
+            "processed": 1, "succeeded": 1, "failed": 0,
+            "total_cost_usd": 0.01, "total_input_tokens": 100, "total_output_tokens": 50,
+            "cross_file_gate": {"passed": False, "verdict": "FAIL:cross_file",
+                                "cross_file_failures": [{"feature_id": "f1"}]},
+        })
+        MockPCW.return_value = mock_wf
+
+        result = adapter._execute({"seed_path": str(seed_file)}, None, None)
+
+        assert result.success is False
+
+    @patch(_GEN_PATH)
+    @patch(_PCW_PATH)
+    def test_cross_file_gate_pass_or_absent_keeps_success(self, MockPCW, MockGen, adapter, seed_file):
+        # Degrade-safe: a passing gate OR a missing/unavailable gate key must not block
+        # success (mirrors gate.get("passed", True) on the script path).
+        mock_wf = _make_mock_wf(run_return={
+            "processed": 1, "succeeded": 1, "failed": 0,
+            "total_cost_usd": 0.01, "total_input_tokens": 100, "total_output_tokens": 50,
+            "cross_file_gate": {"passed": True, "verdict": "PASS"},
+        })
+        MockPCW.return_value = mock_wf
+
+        result = adapter._execute({"seed_path": str(seed_file)}, None, None)
+
+        assert result.success is True
+
+    @patch(_GEN_PATH)
+    @patch(_PCW_PATH)
     def test_micro_prime_enabled(self, MockPCW, MockGen, adapter, seed_file):
         mock_wf = _make_mock_wf()
         MockPCW.return_value = mock_wf

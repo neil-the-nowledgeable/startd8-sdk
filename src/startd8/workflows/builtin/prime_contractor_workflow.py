@@ -265,7 +265,13 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
 
             # Convert to WorkflowResult — failed==0 is success (even if queue was empty)
             failed = result_dict.get("failed", 0)
-            success = failed == 0
+            # REQ-CKG-240 / CL-32: an error-severity cross-file finding is build-breaking,
+            # so it must fail the run even when per-feature status is clean. Mirror the
+            # scripts/run_prime_workflow.py exit-code path so the two run surfaces agree
+            # (the adapter previously ignored the gate — a CL-21 last-mile propagation gap).
+            # Degrade-safe: a missing/unavailable gate defaults to passed.
+            gate = result_dict.get("cross_file_gate") or {}
+            success = failed == 0 and gate.get("passed", True)
 
             metrics = WorkflowMetrics(
                 total_time_ms=int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000),
