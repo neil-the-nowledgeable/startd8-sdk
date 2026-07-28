@@ -209,6 +209,7 @@ startd8 = [
     "evaluation/corpus/*.yaml",
     "contractors/artisan_phases/prompts/*.yaml",
     "workflows/builtin/prompts/*.yaml",
+    "workflows/loop_queue/prompts/*.md",
     "implementation_engine/prompts/*.yaml",
     "concierge_templates/*.md",
     "concierge_templates/inputs/*.yaml",

@@ -29,6 +29,7 @@ from ..builtin.architectural_review_log_helpers import (
 )
 from ..registry import WorkflowRegistry
 from .handoff import persist_drain_handoff
+from .reflective_hardening import reflective_hardening_gaps
 from .models import (
     AssignedReviewer,
     CrpReviewRequest,
@@ -157,8 +158,8 @@ class WorkflowLoopQueue:
     def list_jobs(self) -> List[WorkflowLoopJob]:
         return self.storage.list_jobs()
 
-    def status_summary(self) -> Dict[str, object]:
-        reclaimed = self.reclaim_expired_leases()
+    def status_summary(self, *, reclaim_leases: bool = True) -> Dict[str, object]:
+        reclaimed = self.reclaim_expired_leases() if reclaim_leases else 0
         jobs = self.list_jobs()
         counts = {status.value: 0 for status in LoopJobStatus}
         for job in jobs:
@@ -171,6 +172,60 @@ class WorkflowLoopQueue:
             "lease_ttl_seconds": self.config.lease_ttl_seconds,
             "jobs": [j.model_dump(mode="json") for j in jobs],
         }
+
+    def pilot_projection(
+        self,
+        pilot_id: str,
+        *,
+        history_limit: int = 50,
+        reclaim_leases: bool = False,
+        include_full_jobs: bool = False,
+    ) -> Dict[str, object]:
+        """Pilot-filtered status + contents + history (REQ_PILOT_QUEUE_OBSERVABILITY).
+
+        Read-mostly: lease reclaim is off by default (FR-12).
+        """
+        from .pilot_affiliation import (
+            compact_job_row,
+            count_by_status,
+            partition_pilot_jobs,
+        )
+
+        reclaimed = self.reclaim_expired_leases() if reclaim_leases else 0
+        all_jobs = self.list_jobs()
+        in_flight, history = partition_pilot_jobs(all_jobs, pilot_id)
+        history_trimmed = history[: max(0, history_limit)]
+        root = str(self.storage.queue_root)
+
+        def rows(jobs: List[WorkflowLoopJob]) -> List[Dict[str, object]]:
+            out: List[Dict[str, object]] = []
+            for job in jobs:
+                dr = self.storage.result_path(job.job_id).exists()
+                out.append(
+                    compact_job_row(
+                        job, queue_root=root, drain_result_exists=dr
+                    )
+                )
+            return out
+
+        matched = in_flight + history
+        payload: Dict[str, object] = {
+            "schema_version": "1.0.0",
+            "pilot_id": (pilot_id or "").strip().lower(),
+            "queue_root": root,
+            "reclaimed_leases": reclaimed,
+            "lease_ttl_seconds": self.config.lease_ttl_seconds,
+            "total_jobs_in_root": len(all_jobs),
+            "matched_jobs": len(matched),
+            "status_counts": count_by_status(matched),
+            "in_flight": rows(in_flight),
+            "history": rows(history_trimmed),
+            "history_truncated": len(history) > len(history_trimmed),
+            "history_total": len(history),
+        }
+        if include_full_jobs:
+            payload["jobs"] = [j.model_dump(mode="json") for j in matched]
+        return payload
 
     def cancel(self, job_id: str) -> WorkflowLoopJob:
         job = self.get(job_id)
@@ -437,6 +492,8 @@ class WorkflowLoopQueue:
                     success_criteria={
                         "write_requirements": True,
                         "write_plan": True,
+                        "harden_lessons_v03": True,
+                        "harden_design_principles_v031": True,
                         "no_crp": True,
                         "no_implementation": True,
                     },
@@ -770,6 +827,13 @@ class WorkflowLoopQueue:
                     errors.append(f"expected written file is empty: {path}")
                 elif path.suffix.lower() != ".md":
                     errors.append(f"expected markdown file: {path}")
+            req_path = Path(request_r.requirements_path)
+            if req_path.is_file() and req_path.stat().st_size > 0:
+                errors.extend(
+                    reflective_hardening_gaps(
+                        req_path.read_text(encoding="utf-8")
+                    )
+                )
             if errors:
                 reason = "; ".join(errors)
                 self._transition(job, LoopJobStatus.FAILED, reason)
@@ -785,7 +849,7 @@ class WorkflowLoopQueue:
             return self._transition(
                 job,
                 LoopJobStatus.COMPLETED,
-                "reflective-requirements docs written",
+                "reflective-requirements docs hardened through v0.3.1",
             )
 
         if job.loop_id == "research":

@@ -140,8 +140,17 @@ def test_reflective_requirements_drain(tmp_path: Path):
     assert "Widget feature" in Path(handoff.bundle_path).read_text(encoding="utf-8")
     assert handoff.markdown_card_path
 
-    # Mock surface writes the two docs + result.
-    reqs.write_text("# Requirements\n\nFR-1.\n", encoding="utf-8")
+    # Mock surface writes the two docs + result (must clear harden gate).
+    reqs.write_text(
+        "# Requirements\n\n"
+        "**Version:** 0.3.1\n\n"
+        "### 0.1 Lessons-Learned Hardening (v0.3)\n\n"
+        "Checked lessons; none applicable.\n\n"
+        "### 0.2 Design-Principle Hardening (v0.3.1)\n\n"
+        "Checked design principles; none applicable.\n\n"
+        "FR-1.\n",
+        encoding="utf-8",
+    )
     plan.write_text("# Plan\n\nSteps.\n", encoding="utf-8")
     Path(handoff.status_writeback_path).write_text(
         json.dumps(

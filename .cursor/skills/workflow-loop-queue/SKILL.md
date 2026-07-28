@@ -13,6 +13,14 @@ The VASI contract is
 `.startd8/workflow-loop-queue/`. Reviewer default is the current chat agent
 unless the drain hand-off sets `assigned_reviewer.mode=blind_rotate`.
 
+**Unattended drains:** Cursor **Settings → Agents → Approvals & Execution**
+must be **Run Everything** (zero prompts) or **Auto-review** with project
+`.cursor/permissions.json` (`terminalAllowlist` / `mcpAllowlist` / `autoRun`)
+plus `.cursor/sandbox.json` `additionalReadwritePaths` for ContextCore docs.
+Do **not** set `"approvalMode": "unrestricted"` (unsupported; can break the
+Run Mode UI). Hooks that return `permission: "allow"` do **not** override Run
+Mode / External-File Protection — reload the window after changing config.
+
 ## Enqueue CRP
 
 1. Resolve the plan and/or requirements paths to absolute `.md` paths in the
@@ -79,14 +87,20 @@ Parent directories must exist. Follow-on CRP should be a separate job with
      `suggestion_counts`, `paths_written`, `reviewer_model` = exact assigned
      slug). Do **not** use `schema_version` — that field fails closed.
    - Current chat only orchestrates and runs the verify `run-next`.
-   - **Scope the reviewer tightly:** instruct it to read only the bundle, the
-     focus file, and the source docs — no repo-wide greps or exploration — and
-     state that persisting the Appendix C append is mandatory. Unscoped
-     reviewers have burned 90+ minutes writing nothing.
+   - **Scope the CRP reviewer:** primary inputs are the bundle, the focus file,
+     and the source docs. **Targeted reads of named existing code** the docs claim
+     to extend are encouraged (validate APIs / catch accidental complexity). Do
+     **not** do open-ended repo-wide exploration that delays the Appendix C
+     append — persisting the round is mandatory. Unscoped crawls have burned
+     90+ minutes writing nothing.
+   - **Do not** apply this CRP scope posture to reflective-requirements Tasks —
+     those must explore code to plan (full skill through Phase 4.6).
 4. **Else (`current`):** open `bundle_path` and follow it in this chat.
 5. CRP: append Appendix C only; no A/B triage. WLQ already ensured the A/B/C
    scaffold (like `new-cnvrg-rvw-prmpt`) — do **not** initialize it. Reflective:
-   write the named requirements + plan files; no CRP/implementation.
+   run the **full** `reflective-requirements` skill through Phase 4.6
+   (lessons + design-principle hardening → v0.3.1); write the named
+   requirements + plan files; no CRP/implementation.
 6. Write `drain-result.json` to `status_writeback_path`.
 7. Run `startd8 wloop run-next --job-id <job-id>` again to verify.
 8. If status is `pending`, more review rounds remain — repeat drain (do **not**

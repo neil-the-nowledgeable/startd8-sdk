@@ -134,7 +134,9 @@ the surface **must** spawn a blind Task with that slug (not the current chat).
    `appendix_scaffold_ensured=true`).
 3. Dual-doc CRP: also append Requirements Coverage Matrix to the plan.
 4. For `loop_id=reflective-requirements`: write/update the requirements + plan
-   paths named in the hand-off (no CRP, no implementation).
+   paths named in the hand-off through the full reflective skill (incl. lessons
+   + design-principle hardening to v0.3.1); do not stop after a bare draft/plan
+   pass; no CRP, no implementation.
 5. Do **not** modify populated Appendix A/B on CRP drains; do **not** self-triage.
 6. Write `drain-result.json` (below); for `blind_rotate` include
    `reviewer_model` equal to `assigned_reviewer.model` (fail-closed on mismatch).

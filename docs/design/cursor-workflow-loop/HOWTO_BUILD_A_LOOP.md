@@ -340,10 +340,15 @@ cause was clear.
 **Queue root ≠ document root.** Covered in §3.1 because it's the #1 error. Always set
 `$STARTD8_WLOOP_ROOT` or pass `--root`.
 
-**Keep reviewer subagent scope tight.** A `blind_rotate` reviewer given free rein to explore
-the target repo can burn 90+ minutes without writing anything. Tell it to read the bundle, the
-focus file, and the source docs — *and nothing else*. No repo-wide greps. Emphasize that
+**Keep CRP reviewer subagent scope purposeful (not docs-blind).** A `blind_rotate`
+reviewer given free rein to crawl the target repo can burn 90+ minutes without
+writing anything. Primary inputs: the bundle, the focus file, and the source docs.
+**Targeted reads of named files/APIs the docs claim to extend are encouraged** —
+otherwise non-greenfield reviews invent parallel machinery or miss reuse. Forbid
+open-ended exploration that delays the Appendix C append; emphasize that
 persisting the append is mandatory and that the round fails if nothing is written.
+Do **not** copy this CRP scope posture onto reflective-requirements drains (those
+must explore code to plan through Phase 4.6).
 
 **Never pass an agent bundle as a `review_template`.** SDK `review_template` goes through
 `str.format`, so a CRP bundle containing `R{n}` dies with `KeyError: 'n'`. WLQ detects bundle
@@ -375,15 +380,73 @@ by hand creates a job with no lease that never reclaims.
 ## 9. Cursor-specific setup
 
 A multi-round loop with subagents generates a lot of permission prompts, which stalls
-unattended drains. Two hooks in the loop-owning repo fix that — see `.cursor/hooks.json` plus
-`.cursor/hooks/` in startd8-sdk:
+unattended drains. **Hooks alone are not enough** — Cursor's Run Mode / External-File
+Protection can still prompt even when a hook returns `permission: "allow"`. For unattended
+WLQ, configure **all** of the layers below.
 
-- a `preToolUse` hook auto-allowing `Write`/`StrReplace`/`Delete`/`ApplyPatch` so reviewers can
-  append without interruption;
-- a `subagentStart` hook auto-allowing the Task spawns `blind_rotate` needs.
+### 9.1 Run Mode (required — this is what actually skips prompts)
 
-Both fail open for unmatched tools. Scope them to a repo where auto-allowing writes is
-acceptable.
+In Cursor desktop: **Settings → Agents → Approvals & Execution**.
+
+| Goal | Mode |
+|------|------|
+| **Zero prompts** (Thanos pilot / queue host) | **Run Everything** |
+| Fewer prompts with a classifier | **Auto-review** (+ `permissions.json` `autoRun` steering) |
+| Deterministic allowlist only | **Allowlist** |
+
+Do **not** put `"approvalMode": "unrestricted"` in `permissions.json` — that key is not in
+the public schema and has been observed to **break** the Run Mode UI. Do **not** leave the
+UI on an empty **Allowlist** (that is the old “Ask Every Time” equivalent).
+
+CRP / reflective drains write **outside** `startd8-sdk` (ContextCore design docs). Even with
+a generous allowlist, **External-File Protection** can still prompt. For unattended queues
+either use **Run Everything**, or disable External-File Protection for this host and add
+those paths in `.cursor/sandbox.json` (below).
+
+### 9.2 Project `permissions.json` (allowlists + Auto-review steering)
+
+In the **loop-owning** repo (`startd8-sdk`), ship `.cursor/permissions.json` using the
+[official schema](https://cursor.com/docs/reference/permissions.md):
+
+```json
+{
+  "terminalAllowlist": ["startd8", "python3", "timeout", "bash", "…"],
+  "mcpAllowlist": ["*:*"],
+  "autoRun": {
+    "allow_instructions": [
+      "Allow startd8 wloop + Task drains without asking."
+    ],
+    "block_instructions": [
+      "Block git push --force and credential exfiltration."
+    ]
+  }
+}
+```
+
+Notes:
+
+- Field name is **`autoRun`**, not `autoReview`.
+- `autoRun` only steers the classifier when Run Mode is **Auto-review**; it is ignored in
+  **Run Everything** / **Allowlist**.
+- `permissions.json` allowlists **replace** the in-app allowlist for that type when set.
+
+### 9.3 Project `sandbox.json` (ContextCore / remediation writes)
+
+Ship `.cursor/sandbox.json` with `additionalReadwritePaths` for consumer doc trees the
+queue must edit (ContextCore remediation design docs, `~/.contextcore/remediation`, etc.).
+See the [sandbox.json reference](https://cursor.com/docs/reference/sandbox.md).
+
+### 9.4 Hooks (defense in depth)
+
+See `.cursor/hooks.json` plus `.cursor/hooks/` in startd8-sdk:
+
+- `preToolUse` → auto-allow `Write`/`StrReplace`/`Delete`/`ApplyPatch` (Appendix C appends)
+- `preToolUse` → auto-allow `Shell` (orchestrator `wloop` / auto-consume)
+- `beforeShellExecution` → auto-allow terminal commands
+- `subagentStart` → auto-allow Task spawns for `blind_rotate`
+
+Hooks fail open for unmatched tools. Scope them to a repo where auto-allowing writes/shell
+is acceptable (the WLQ host). After changing hooks/permissions, **reload the Cursor window**.
 
 There's also a `workflow-loop-queue` skill in `.cursor/skills/` with the condensed enqueue and
 drain procedures — worth reading before driving a loop by hand.

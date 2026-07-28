@@ -5,64 +5,92 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import Dict
 
 from .models import DrainHandoff
+from .prompt_loader import load_prompt_text
 from .storage import LoopQueueStorage
+
+_SLOT_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
+
+
+def _fill(template: str, slots: Dict[str, str]) -> str:
+    """Substitute ``{{slot}}`` placeholders; unknown slots stay empty-string safe."""
+    unknown = sorted(
+        {name for name in _SLOT_RE.findall(template) if name not in slots}
+    )
+    if unknown:
+        raise ValueError(
+            f"handoff template uses unknown slots: {unknown}; "
+            f"available: {sorted(slots)}"
+        )
+    return _SLOT_RE.sub(lambda m: slots[m.group(1)], template)
 
 
 def render_handoff_markdown(handoff: DrainHandoff) -> str:
-    """Short human card for chat-paste vendors (OQ-11 settled: JSON + markdown)."""
+    """Short human card for chat-paste vendors (OQ-11 settled: JSON + markdown).
+
+    Templates live under ``loop_queue/prompts/drain-handoff*.md`` (override via
+    ``$STARTD8_WLQ_HANDOFF_*`` env vars — see ``prompt_loader.PROMPT_ENV``).
+    """
     sources = "\n".join(f"- `{p}`" for p in handoff.source_paths)
     criteria = "\n".join(
         f"- `{key}`: {value}" for key, value in sorted(handoff.success_criteria.items())
     )
-    warning = ""
+    budget_warning = ""
     if handoff.budget_warning:
-        warning = f"\n**Budget warning:** {handoff.budget_warning}\n"
+        budget_warning = f"\n**Budget warning:** {handoff.budget_warning}\n"
+
+    base_slots: Dict[str, str] = {
+        "job_id": handoff.job_id,
+        "surface_id": handoff.surface_id,
+        "loop_id": handoff.loop_id,
+        "round_number": str(handoff.round_number),
+        "bundle_path": handoff.bundle_path,
+        "status_writeback_path": handoff.status_writeback_path,
+        "source_paths": sources,
+        "success_criteria": criteria,
+        "budget_warning": budget_warning,
+    }
 
     reviewer = handoff.assigned_reviewer
     if reviewer and reviewer.mode == "blind_rotate" and reviewer.model:
-        do_this = (
-            f"## Do this\n\n"
-            f"**Blind rotate:** spawn a Task/subagent with model "
-            f"`{reviewer.model}` (roster index {reviewer.roster_index}). "
-            f"**Do not** run the CRP review in the current chat.\n\n"
-            f"1. Pass `{handoff.bundle_path}` to that Task; it follows the bundle "
-            f"with filesystem write tools.\n"
-            f"2. Task writes only the source paths listed below.\n"
-            f"3. Task writes confirmation JSON to `{handoff.status_writeback_path}` "
-            f"including `reviewer_model: \"{reviewer.model}\"`.\n"
-            f"4. Current chat runs `startd8 wloop run-next --job-id {handoff.job_id}` "
-            f"to verify.\n\n"
+        do_slots = {
+            **base_slots,
+            "reviewer_model": reviewer.model,
+            "roster_index": (
+                "" if reviewer.roster_index is None else str(reviewer.roster_index)
+            ),
+        }
+        do_this = _fill(
+            load_prompt_text("drain-handoff-do-this-blind-rotate.md"),
+            do_slots,
         )
-        reviewer_block = (
-            f"## Assigned reviewer\n\n"
-            f"- **mode:** `blind_rotate`\n"
-            f"- **model:** `{reviewer.model}`\n"
-            f"- **roster:** {', '.join(f'`{m}`' for m in reviewer.roster)}\n\n"
+        reviewer_block = _fill(
+            load_prompt_text("drain-handoff-reviewer-block.md"),
+            {
+                "reviewer_model": reviewer.model,
+                "reviewer_roster": ", ".join(f"`{m}`" for m in reviewer.roster),
+            },
         )
     else:
-        do_this = (
-            f"## Do this\n\n"
-            f"1. Open `{handoff.bundle_path}` and follow it with filesystem write tools.\n"
-            f"2. Write only the source paths listed below.\n"
-            f"3. Write confirmation JSON to `{handoff.status_writeback_path}`.\n"
-            f"4. Run `startd8 wloop run-next --job-id {handoff.job_id}`.\n\n"
+        do_this = _fill(
+            load_prompt_text("drain-handoff-do-this-current.md"),
+            base_slots,
         )
         reviewer_block = ""
 
-    return (
-        f"# WLQ Drain Hand-off — `{handoff.job_id}`\n\n"
-        f"**Surface:** `{handoff.surface_id}`  \n"
-        f"**Loop:** `{handoff.loop_id}`  \n"
-        f"**Round:** R{handoff.round_number}\n"
-        f"{warning}\n"
-        f"{do_this}"
-        f"{reviewer_block}"
-        f"## Source paths\n\n{sources}\n\n"
-        f"## Success criteria\n\n{criteria}\n\n"
-        f"Chat/UI reply should be a short confirmation only.\n"
+    return _fill(
+        load_prompt_text("drain-handoff.md"),
+        {
+            **base_slots,
+            "do_this": do_this.rstrip() + "\n",
+            "reviewer_block": (
+                reviewer_block.rstrip() + "\n" if reviewer_block else ""
+            ),
+        },
     )
 
 

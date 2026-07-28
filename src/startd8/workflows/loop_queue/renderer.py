@@ -15,6 +15,10 @@ any VASI surface's agent opens and follows. Two renderers:
    at render time; any placeholder left unsubstituted fails closed — the
    agent never sees a live slot.
 
+Default reflective / research bundles load from packaged config under
+``loop_queue/prompts/`` (override via ``$STARTD8_WLQ_REFLECTIVE_TEMPLATE`` /
+``$STARTD8_WLQ_RESEARCH_TEMPLATE``, or per-job ``agent_template_path``).
+
 Rendered bundles are cached in the job artifact dir keyed by a content hash of
 the ``CrpReviewRequest`` + round + template bytes (FR-14 / Mottainai).
 """
@@ -36,6 +40,7 @@ from .models import (
     ReflectiveRequirementsRequest,
     ResearchRequest,
 )
+from .prompt_loader import load_prompt_text, resolve_prompt_path
 
 logger = get_logger(__name__)
 
@@ -46,68 +51,32 @@ DEFAULT_RENDERER_SCRIPT = Path(
 _SLOT_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 _SINGLE_BRACE_FIELD_RE = re.compile(r"(?<!\{)\{[a-zA-Z_][a-zA-Z0-9_]*\}(?!\})")
 
-DEFAULT_REFLECTIVE_TEMPLATE = """# Reflective Requirements — {{scope}}
+# Packaged prompt filenames (see ``prompts/`` and ``prompt_loader.PROMPT_ENV``).
+REFLECTIVE_PROMPT_NAME = "reflective-requirements.md"
+RESEARCH_PROMPT_NAME = "research.md"
 
-You are draining a Workflow Loop Queue `reflective-requirements` job.
-Follow the **reflective-requirements** skill process (draft requirements →
-plan → reflect planning insights → update requirements + plan). Do **not**
-start CRP review or implementation in this drain.
 
-## Write targets (absolute)
+def default_reflective_template_text() -> str:
+    """Packaged (or env-overridden) reflective-requirements drain bundle."""
+    return load_prompt_text(REFLECTIVE_PROMPT_NAME)
 
-| Artifact | Path |
-|----------|------|
-| Requirements | `{{requirements_path}}` |
-| Plan | `{{plan_path}}` |
 
-Create or update both markdown files. Prefer the project's existing
-requirements/plan shape when present.
+def default_research_template_text() -> str:
+    """Packaged (or env-overridden) research drain bundle."""
+    return load_prompt_text(RESEARCH_PROMPT_NAME)
 
-## Done when
 
-1. Both paths exist as non-empty `.md` files.
-2. You write `drain-result.json` at the path from the Drain Hand-off with
-   `ok: true`, `paths_written` exactly matching those two paths, and
-   `round_number: 1`.
-3. Chat/UI reply is a short confirmation only (paths + that reflective loop
-   finished). Do not paste the full documents into chat.
-"""
+# Back-compat: ``from …renderer import DEFAULT_REFLECTIVE_TEMPLATE`` resolves
+# via ``__getattr__`` to the packaged prompt text.
 
-DEFAULT_RESEARCH_TEMPLATE = """# Research Job — {{scope}}
 
-You are draining a Workflow Loop Queue `research` job. Produce durable
-findings from the investigation brief. Do **not** start CRP review or
-implementation coding unless the brief's deliverables explicitly require a
-small spike (and then keep spikes behind flags / gallery toggles).
-
-## Inputs / outputs (absolute)
-
-| Artifact | Path | Role |
-|----------|------|------|
-| Brief (read; may update status pointer) | `{{brief_path}}` | Investigation brief — trust **code** over stale prose |
-| Findings (write) | `{{findings_path}}` | Ranked shortlist, open-question answers, API/spike notes |
-
-Optional focus: `{{focus_file}}`
-
-## Method
-
-1. Read the brief end-to-end; verify claims against the real codebase.
-2. Use a few parallel agents when the brief asks for multi-angle research
-   (code inventory, candidate scoring, perf, boundary).
-3. Write `{{findings_path}}` covering the brief's expected deliverables
-   (ranked shortlist, spikes/status, deferred list, open questions).
-4. Optionally update the brief's status line to point at the findings doc.
-5. Do not invent a new WLQ recipe from inside this drain.
-
-## Done when
-
-1. `{{findings_path}}` exists as a non-empty `.md` file.
-2. You write `drain-result.json` at the path from the Drain Hand-off with
-   `ok: true`, `paths_written` containing exactly that findings path, and
-   `round_number: 1`.
-3. Chat/UI reply is a short confirmation only (paths + that research
-   finished). Do not paste the full findings into chat.
-"""
+def __getattr__(name: str) -> str:
+    """Lazy load former module-level template constants from packaged prompts."""
+    if name == "DEFAULT_REFLECTIVE_TEMPLATE":
+        return default_reflective_template_text()
+    if name == "DEFAULT_RESEARCH_TEMPLATE":
+        return default_research_template_text()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def resolve_renderer_script(configured: Optional[Path] = None) -> Path:
@@ -280,7 +249,6 @@ def render_reflective_bundle(
     artifact_dir = Path(artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     template_bytes: Optional[bytes] = None
-    template_label = Path("<default-reflective-template>")
     if request.agent_template_path:
         template_path = Path(request.agent_template_path)
         if not template_path.is_file():
@@ -291,7 +259,8 @@ def render_reflective_bundle(
         template_label = template_path
         template_text = template_bytes.decode("utf-8")
     else:
-        template_text = DEFAULT_REFLECTIVE_TEMPLATE
+        template_label = resolve_prompt_path(REFLECTIVE_PROMPT_NAME)
+        template_text = template_label.read_text(encoding="utf-8")
         template_bytes = template_text.encode("utf-8")
 
     key = hashlib.sha256(
@@ -322,7 +291,6 @@ def render_research_bundle(
     artifact_dir = Path(artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     template_bytes: Optional[bytes] = None
-    template_label = Path("<default-research-template>")
     if request.agent_template_path:
         template_path = Path(request.agent_template_path)
         if not template_path.is_file():
@@ -333,7 +301,8 @@ def render_research_bundle(
         template_label = template_path
         template_text = template_bytes.decode("utf-8")
     else:
-        template_text = DEFAULT_RESEARCH_TEMPLATE
+        template_label = resolve_prompt_path(RESEARCH_PROMPT_NAME)
+        template_text = template_label.read_text(encoding="utf-8")
         template_bytes = template_text.encode("utf-8")
 
     key = hashlib.sha256(
