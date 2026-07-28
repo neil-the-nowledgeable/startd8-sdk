@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://startd8.dev/schemas/wlq/v0.1.0/drain-handoff.schema.json",
+  "title": "WLQ VASI Drain Hand-off",
+  "description": "Machine-readable hand-off emitted by startd8 wloop run-next for an agent-surface job.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "vasi_version",
+    "job_id",
+    "surface_id",
+    "loop_id",
+    "round_number",
+    "bundle_path",
+    "source_paths",
+    "success_criteria",
+    "status_writeback_path"
+  ],
+  "properties": {
+    "vasi_version": {
+      "const": "0.1.0"
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "surface_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "loop_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "round_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "bundle_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_paths": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "success_criteria": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    },
+    "status_writeback_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "budget_warning": {
+      "type": ["string", "null"]
+    },
+    "markdown_card_path": {
+      "type": ["string", "null"],
+      "description": "OQ-11: optional human markdown card alongside the JSON hand-off"
+    },
+    "assigned_reviewer": {
+      "type": ["object", "null"],
+      "description": "Per-drain reviewer assignment; blind_rotate requires Task spawn with model",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["current", "blind_rotate"]
+        },
+        "model": {
+          "type": ["string", "null"]
+        },
+        "roster_index": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "roster": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reviewer_tier": {
+          "type": ["string", "null"],
+          "enum": ["flagship", "mid_tier", null]
+        }
+      }
+    }
+  }
+}

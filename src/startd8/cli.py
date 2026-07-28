@@ -36,6 +36,7 @@ from .utils.agent_resolution import resolve_agent_spec as _resolve_agent_impl
 # Shared helpers + command groups extracted to sibling modules (Pass E).
 from .cli_shared import console, logger, get_framework, _resolve_agent
 from .cli_queue import queue_app
+from .cli_wloop import wloop_app
 from .cli_project import project_app
 from .cli_workflow import workflow_app
 from .cli_manifest import manifest_app
@@ -1245,6 +1246,7 @@ def benchmark_round3(
 # =============================================================================
 
 app.add_typer(queue_app, name="queue")
+app.add_typer(wloop_app, name="wloop")
 
 
 # =============================================================================

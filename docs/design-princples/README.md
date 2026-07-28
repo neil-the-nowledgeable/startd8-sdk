@@ -42,6 +42,7 @@ coherent stance: value already exists in the pipeline; the failure mode is losin
 | **[Keiyaku](./KEIYAKU_DESIGN_PRINCIPLE.md)** (契約) | Every agent-to-agent message is a **typed, validated contract** — not unstructured prose the receiver has to trust |
 | **[Anzen](./ANZEN_DESIGN_PRINCIPLE.md)** (安全) | **Security by construction** — the pipeline structurally cannot emit known vulnerability classes, the same way it can't emit a service without a dashboard |
 | **[Mieruka](./MIERUKA_DESIGN_PRINCIPLE.md)** (見える化) | Make **code structure observable** as first-class telemetry — no step should mutate code it cannot first query. The visibility substrate Kaizen depends on |
+| **[Makoto](./MAKOTO_DESIGN_PRINCIPLE.md)** (誠) | Every verdict (`PASS`/`deterministic`/`covered`) must be **read from the evidence it names** — absent evidence, emit `inconclusive`, never assert. Genchi Genbutsu compiled into the reporting code; a guard that stops a false verdict ≠ a fix that proves the true one |
 
 ---
 

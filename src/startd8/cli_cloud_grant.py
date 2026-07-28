@@ -71,6 +71,30 @@ def _parse_ttl(s: str) -> float:
     return total
 
 
+def _guard_link_capability(capability: str) -> None:
+    """Fail-closed: a one-time magic link opens the HUMAN door (`/kickoff/enter`), whose redeem
+    target is fixed to ``chat-write`` (web.py). A link minted for any other capability would always
+    deny on redemption (``TARGET_MISMATCH``) — a silent dead link. capture/instantiate grants are for
+    the PROGRAMMATIC consumer (the served app's ``--api-key``), so refuse to pair them with a link and
+    point the operator at the key-based path. Aborts before any grant is written."""
+    if capability == _DEFAULT_CAPABILITY:
+        return
+    console.print(
+        f"[red]refusing to mint a magic link for capability '{capability}' "
+        "(fail-closed — no grant written)[/red]"
+    )
+    console.print(
+        "[yellow]  Magic links open the HUMAN chat door, which is chat-write only; a "
+        f"'{capability}' grant redeemed via link always denies (TARGET_MISMATCH) — a dead link.[/yellow]"
+    )
+    console.print(
+        f"  '{capability}' is redeemed programmatically by the served app's consumer key. Issue it "
+        "WITHOUT a link and share the api-key instead:\n"
+        f"    [cyan]startd8 cloud-grant issue --capability {capability} --uses 1 --ttl 15m …[/cyan]"
+    )
+    raise typer.Exit(2)
+
+
 @cloud_grant_app.command("issue")
 def issue(
     deployment: str = typer.Option(
@@ -123,6 +147,7 @@ def issue(
     # don't leave an un-linkable grant on disk).
     link_base: Optional[str] = None
     if with_link:
+        _guard_link_capability(capability)       # a link is chat-write only (dead link otherwise)
         link_base = (serve_url or "").rstrip("/") or None
         if link_base is None:
             console.print(
@@ -211,6 +236,9 @@ def invite(
     if not deployment:
         console.print("[red]provide --deployment (or set STARTD8_DEPLOYMENT_ID)[/red]")
         raise typer.Exit(2)
+    # invite ALWAYS mints a human link, so a non-chat-write capability would be a dead link (FR-E15 ×
+    # FR-E18 don't compose through the human door). Fail closed before minting.
+    _guard_link_capability(capability)
     key = api_key or ("sk-kickoff-" + _secrets.token_urlsafe(24))
     link_token = _secrets.token_urlsafe(32)
     base = serve_url.rstrip("/")
