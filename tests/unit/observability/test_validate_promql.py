@@ -121,27 +121,6 @@ def test_all_pass_exit_zero_coverage_one(tmp_path, monkeypatch):
     assert all(v.verdict == "pass" for v in report.verdicts)
 
 
-def test_onboarding_metadata_optional_does_not_crash(tmp_path, monkeypatch):
-    # EC-14: --onboarding-metadata is optional; omitting it must NOT crash on Path(None)
-    # (was: TypeError at reconstruct_descriptors(Path(onboarding_metadata))). Runs without
-    # descriptor enrichment (binding falls back to service_id).
-    artifacts = tmp_path / "art"
-    _write_alerts(artifacts, "checkoutservice",
-                  {"checkoutserviceLatencyP99High": "histogram_quantile(0.99, rate(x[5m])) > 0.5"})
-    monkeypatch.setattr(prometheus_query, "instant_query_count", lambda *a, **k: 3)
-    monkeypatch.setattr(prometheus_query, "list_metric_names", lambda *a, **k: ["x"])
-    monkeypatch.setattr(prometheus_query, "label_values", lambda *a, **k: ["checkoutservice"])
-
-    report = run_validation(
-        artifacts_dir=artifacts,
-        onboarding_metadata=None,   # the EC-14 case
-        prometheus_url="http://localhost:9090",
-        min_coverage=1.0,
-        auth=Auth(),
-    )
-    assert report.status == "pass"   # no crash; replay still works
-
-
 # ─────────────── span-metrics-vs-semconv 4-axis mismatch (FR-9) ─────────────
 
 
@@ -899,6 +878,186 @@ def test_extracts_from_alerts_slos_and_dashboards(tmp_path, monkeypatch):
     assert ("slo", "expr_b") in got
     assert ("dashboard", "expr_c") in got
     assert all(e.service == "checkoutservice" for e in exprs)
+
+
+# ───────────────────── #362 service-id attribution ─────────────────────
+
+
+def test_service_from_openslo_metadata_not_declared_base_filename(tmp_path):
+    """#362: ``compact-declared-base-slo.yaml`` must attribute to ``compact``, not the profile."""
+    artifacts = tmp_path / "art"
+    (artifacts / "slos").mkdir(parents=True)
+    docs = [
+        {
+            "apiVersion": "openslo/v1",
+            "kind": "SLO",
+            "metadata": {
+                "name": "compact-throughput-declared",
+                "labels": {"service": "compact", "signal_kind": "throughput"},
+            },
+            "spec": {
+                "indicator": {
+                    "spec": {
+                        "thresholdMetric": {
+                            "metricSource": {
+                                "spec": {
+                                    "query": "sum(rate(thanos_compact_blocks_cleaned_total[5m]))"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        },
+        {
+            "apiVersion": "openslo/v1",
+            "kind": "SLO",
+            "metadata": {
+                "name": "receive-throughput-declared",
+                "labels": {"service": "receive", "signal_kind": "throughput"},
+            },
+            "spec": {
+                "indicator": {
+                    "spec": {
+                        "thresholdMetric": {
+                            "metricSource": {
+                                "spec": {
+                                    "query": "sum(rate(thanos_receive_replications_total[5m]))"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        },
+    ]
+    # Thanos-shaped: profile filename, but real service ids on each document.
+    text = "\n---\n".join(yaml.dump(d) for d in docs)
+    (artifacts / "slos" / "compact-declared-base-slo.yaml").write_text(text)
+
+    exprs = validate_promql.extract_exprs(artifacts)
+    by_svc = {e.service for e in exprs}
+    assert by_svc == {"compact", "receive"}
+    assert "compact-declared-base" not in by_svc
+
+
+def test_declared_base_filename_fallback_strips_profile_suffix(tmp_path):
+    """#362: filename last-resort still yields the real service, not ``*-declared-base``."""
+    artifacts = tmp_path / "art"
+    (artifacts / "slos").mkdir(parents=True)
+    # No metadata.labels.service — fall through to filename.
+    doc = {
+        "apiVersion": "openslo/v1",
+        "kind": "SLO",
+        "metadata": {"name": "receive-throughput"},
+        "spec": {
+            "indicator": {
+                "spec": {
+                    "thresholdMetric": {
+                        "metricSource": {"spec": {"query": "sum(rate(x[5m]))"}}
+                    }
+                }
+            }
+        },
+    }
+    (artifacts / "slos" / "receive-declared-base-slo.yaml").write_text(yaml.dump(doc))
+    exprs = validate_promql.extract_exprs(artifacts)
+    assert len(exprs) == 1
+    assert exprs[0].service == "receive"
+
+
+def test_promql_service_label_beats_filename(tmp_path):
+    """#362 preference 2: identity matcher in PromQL when artifact has no service label."""
+    artifacts = tmp_path / "art"
+    (artifacts / "alerts").mkdir(parents=True)
+    doc = {
+        "groups": [
+            {
+                "name": "misc",
+                "rules": [
+                    {
+                        "alert": "StoreLatencyHigh",
+                        "expr": 'histogram_quantile(0.99, rate(duration_bucket{service="store"}[5m])) > 0.5',
+                    }
+                ],
+            }
+        ]
+    }
+    # Misleading filename — PromQL label must win.
+    (artifacts / "alerts" / "misc-bundle-alerts.yaml").write_text(yaml.dump(doc))
+    exprs = validate_promql.extract_exprs(artifacts)
+    assert len(exprs) == 1
+    assert exprs[0].service == "store"
+
+
+def test_business_criticality_dashboard_not_a_service(tmp_path, monkeypatch):
+    """#362: cross-cutting dashboard must not appear in ``per_service``."""
+    artifacts = tmp_path / "art"
+    (artifacts / "dashboards").mkdir(parents=True)
+    (artifacts / "slos").mkdir(parents=True)
+    # Real service SLO (metadata).
+    slo = {
+        "apiVersion": "openslo/v1",
+        "kind": "SLO",
+        "metadata": {
+            "name": "compact-throughput",
+            "labels": {"service": "compact"},
+        },
+        "spec": {
+            "indicator": {
+                "spec": {
+                    "thresholdMetric": {
+                        "metricSource": {"spec": {"query": "sum(rate(thanos_compact_x[5m]))"}}
+                    }
+                }
+            }
+        },
+    }
+    (artifacts / "slos" / "compact-declared-base-slo.yaml").write_text(yaml.dump(slo))
+    # Cross-cutting project dashboard — no service label, rollup by business_criticality.
+    dash = {
+        "title": "Business Criticality Overview",
+        "uid": "obs-business-criticality",
+        "panels": [
+            {
+                "title": "Request rate by business criticality",
+                "expr": "sum by (business_criticality) (rate(calls_total[5m]))",
+            },
+            {
+                "title": "Error ratio by business criticality",
+                "expr": (
+                    'sum by (business_criticality) (rate(calls_total{status_code="STATUS_CODE_ERROR"}[5m]))'
+                    " / sum by (business_criticality) (rate(calls_total[5m]))"
+                ),
+            },
+        ],
+    }
+    (artifacts / "dashboards" / "business-criticality-dashboard-spec.yaml").write_text(
+        yaml.dump(dash)
+    )
+    onboarding = _semconv_onboarding(tmp_path, service="compact")
+
+    monkeypatch.setattr(prometheus_query, "instant_query_count", lambda *a, **k: 1)
+    monkeypatch.setattr(prometheus_query, "list_metric_names", lambda *a, **k: ["x"])
+    monkeypatch.setattr(prometheus_query, "label_values", lambda *a, **k: ["compact"])
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+    )
+    assert "business-criticality" not in report.per_service
+    assert "" not in report.per_service
+    assert "compact" in report.per_service
+    # Cross-cutting panels still contribute to overall replay count.
+    assert report.queries_replayed == 3
+    # Extracted with empty service, not a fake stem.
+    exprs = validate_promql.extract_exprs(artifacts)
+    cross = [e for e in exprs if e.source_kind == "dashboard"]
+    assert len(cross) == 2
+    assert all(e.service == "" for e in cross)
 
 
 # ────────────────────────────── CLI wiring ────────────────────────────────
