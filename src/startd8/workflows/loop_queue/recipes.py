@@ -115,7 +115,8 @@ register_recipe(
             "plan_path, optional agent_template_path)"
         ),
         completion=(
-            "requirements + plan hardened through v0.3.1; drain-result ok"
+            "requirements anti-skip hardened through v0.3.1 markers "
+            "(plan sync soft / not consume-checked); drain-result ok"
         ),
         steps=("render instruction bundle", "agent writes docs", "confirm"),
     )

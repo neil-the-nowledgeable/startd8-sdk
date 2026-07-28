@@ -32,8 +32,10 @@ requirements/plan shape when present.
 1. Both paths exist as non-empty `.md` files.
 2. Requirements reach **v0.3.1** (or equivalent): §0 Planning Insights,
    §0.1 Lessons-Learned Hardening, §0.2 Design-Principle Hardening present
-   (or documented no-op checks), and the plan matches the hardened reqs.
+   (or documented no-op checks). Plan should match the hardened reqs
+   (**soft** — not consume-checked; only requirements markers are gated).
 3. You write `drain-result.json` at the path from the Drain Hand-off with
+   `vasi_version: "0.1.0"`, `job_id` and `surface_id` matching the hand-off,
    `ok: true`, `paths_written` exactly matching those two paths, and
    `round_number: 1`.
 4. Chat/UI reply is a short confirmation only (paths + that reflective loop

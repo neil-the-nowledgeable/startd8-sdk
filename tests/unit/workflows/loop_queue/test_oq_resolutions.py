@@ -171,6 +171,52 @@ def test_reflective_requirements_drain(tmp_path: Path):
     assert done.status is LoopJobStatus.COMPLETED
 
 
+def test_reflective_harden_gate_fails_consume_without_markers(tmp_path: Path):
+    """FR-PC-3: consume must REJECT requirements that skip Phase 4.5/4.6 markers."""
+    from startd8.workflows.loop_queue.models import LoopQueueValidationError
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    reqs = docs / "REQ.md"
+    plan = docs / "PLAN.md"
+    queue = WorkflowLoopQueue(LoopQueueConfig(queue_root=tmp_path / "queue"))
+    queue.enqueue(
+        WorkflowLoopJob(
+            job_id="refl-fail",
+            loop_id="reflective-requirements",
+            executor="agent-surface",
+            surface_id="cursor",
+            config={
+                "scope": "Skip harden",
+                "requirements_path": str(reqs),
+                "plan_path": str(plan),
+            },
+        )
+    )
+    handoff = queue.run_next("refl-fail")
+    assert isinstance(handoff, DrainHandoff)
+    reqs.write_text("# Requirements\n\nFR-1.\n", encoding="utf-8")
+    plan.write_text("# Plan\n\nSteps.\n", encoding="utf-8")
+    Path(handoff.status_writeback_path).write_text(
+        json.dumps(
+            {
+                "vasi_version": "0.1.0",
+                "job_id": "refl-fail",
+                "surface_id": "cursor",
+                "ok": True,
+                "round_number": 1,
+                "suggestion_counts": {},
+                "paths_written": handoff.source_paths,
+                "error": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(LoopQueueValidationError, match="Phase 4"):
+        queue.run_next("refl-fail")
+    assert queue.get("refl-fail").status is LoopJobStatus.FAILED
+
+
 def test_reflective_enqueue_requires_parent_dir(tmp_path: Path):
     queue = WorkflowLoopQueue(LoopQueueConfig(queue_root=tmp_path / "queue"))
     with pytest.raises(Exception, match="parent directory"):
