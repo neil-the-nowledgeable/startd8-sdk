@@ -1,0 +1,45 @@
+{
+  "description": "FR-B6a join expectations (normalize_element_id + match ladder)",
+  "cases": [
+    {
+      "element_id": "PRODUCT_CATALOG",
+      "normalized": "productcatalogservice",
+      "hints": [
+        "productcatalogservice"
+      ],
+      "matched": "productcatalogservice"
+    },
+    {
+      "element_id": "PRODUCT_CATALOG_SERVICE",
+      "normalized": "productcatalogservice",
+      "hints": [
+        "productcatalogservice"
+      ],
+      "matched": "productcatalogservice"
+    },
+    {
+      "element_id": "PRODUCT_CATALOG",
+      "normalized": "productcatalogservice",
+      "hints": [
+        "productcatalog"
+      ],
+      "matched": "productcatalog"
+    },
+    {
+      "element_id": "store",
+      "normalized": "store",
+      "hints": [
+        "store"
+      ],
+      "matched": "store"
+    },
+    {
+      "element_id": "query-frontend",
+      "normalized": "query-frontend",
+      "hints": [
+        "query-frontend"
+      ],
+      "matched": "query-frontend"
+    }
+  ]
+}

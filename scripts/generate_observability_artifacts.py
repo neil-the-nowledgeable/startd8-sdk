@@ -42,11 +42,111 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from startd8.observability.affordance_map_consume import (
+    EXIT_ALL_SKIPPED,
+    EXIT_MALFORMED,
+    EXIT_OK,
+    apply_affordance_actions,
+    exit_code_for_apply,
+    exit_code_for_plan,
+    format_plan_for_dry_run,
+    load_affordance_map,
+    merge_and_write_reports,
+    plan_affordance_actions,
+    write_affordance_actions_report,
+    write_apply_actions_report,
+)
 from startd8.observability.artifact_generator import (
     check_drift,
+    extract_service_hints,
     generate_observability_artifacts,
+    load_business_context,
+    load_onboarding_metadata,
     _append_to_provenance,
 )
+from startd8.observability.metric_descriptor import resolve_descriptor
+
+
+def _run_affordance_map_mode(args, onboarding: Path, output: Path) -> int:
+    """AffordanceMap mode: plan (dry-run) or targeted apply + merge (WP-B1)."""
+    load = load_affordance_map(Path(args.affordance_map))
+    if load.error:
+        print(f"error: AffordanceMap {load.error}", file=sys.stderr)
+        return EXIT_MALFORMED
+
+    if load.source_truncated:
+        print(
+            "warning: AffordanceMap appears history-truncated "
+            "(source_truncated=true); repairs may be incomplete.",
+            file=sys.stderr,
+        )
+
+    metadata = load_onboarding_metadata(onboarding)
+    services = extract_service_hints(metadata)
+    known_ids = [s.service_id for s in services]
+    manifest = Path(args.manifest) if args.manifest else None
+    business = load_business_context(manifest, metadata)
+
+    service_filter = None
+    empty_intersection = False
+    if args.services:
+        service_filter = [s.strip() for s in args.services.split(",") if s.strip()]
+        if not set(service_filter) & set(known_ids):
+            empty_intersection = True
+
+    plan = plan_affordance_actions(
+        load.entries,
+        known_ids,
+        service_filter=service_filter,
+    )
+    if service_filter is not None and not plan.actions and not plan.skips:
+        empty_intersection = True
+
+    print(format_plan_for_dry_run(plan))
+    if load.source_truncated:
+        print("  note: source_truncated=true")
+
+    if args.dry_run:
+        print("\n[DRY RUN] AffordanceMap mode — no artifact files written.")
+        return exit_code_for_plan(
+            load, plan, empty_intersection=empty_intersection
+        )
+
+    if empty_intersection:
+        write_affordance_actions_report(
+            output, plan=plan, load=load, dry_run=False
+        )
+        return EXIT_OK
+
+    descriptors = {
+        s.service_id: resolve_descriptor(
+            profile=s.metric_profile or None,
+            kinds=s.kinds,
+            transport=s.transport,
+            overrides=s.descriptor_overrides,
+        )
+        for s in services
+    }
+    apply = apply_affordance_actions(
+        plan,
+        services=services,
+        business=business,
+        output_dir=output,
+        descriptors=descriptors,
+        contracts=metadata.get("expected_output_contracts") or {},
+    )
+    merge_and_write_reports(output, apply)
+    write_apply_actions_report(output, load=load, apply=apply)
+    print(
+        f"Applied: "
+        f"{sum(1 for e in apply.entries if e.outcome.value == 'applied')} "
+        f"changed, "
+        f"{sum(1 for e in apply.entries if e.outcome.value == 'applied_no_change')} "
+        f"no-change, "
+        f"{sum(1 for e in apply.entries if e.outcome.value == 'skipped')} skipped"
+    )
+    print(f"Wrote {output / 'affordance_actions.json'}")
+    return exit_code_for_apply(load, apply)
 
 
 def main() -> int:
@@ -139,12 +239,53 @@ def main() -> int:
             "produced / declared) is below this fraction. Opt-in; unset = no gate."
         ),
     )
+    parser.add_argument(
+        "--affordance-map",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Optional AffordanceMap JSON (slim array or scorecard-json with "
+            "affordance_map). Enables targeted gen.* repair mode (REQ Affordance-Map "
+            "Consume). Replaces full-tree generate when present."
+        ),
+    )
+    parser.add_argument(
+        "--services",
+        default=None,
+        metavar="LIST",
+        help=(
+            "Optional comma-separated service ids. When used with --affordance-map, "
+            "intersects the map (FR-B8)."
+        ),
+    )
     args = parser.parse_args()
 
     onboarding = Path(args.onboarding_metadata)
     output = Path(args.output_dir)
     manifest = Path(args.manifest) if args.manifest else None
     obs_yaml = Path(args.observability_yaml) if args.observability_yaml else None
+
+    if args.affordance_map and args.check:
+        print(
+            "error: --check cannot be combined with --affordance-map "
+            "(NR-G8); refuse.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.affordance_map and (
+        args.min_metric_coverage is not None
+        or args.min_artifact_type_coverage is not None
+    ):
+        print(
+            "error: --min-*-coverage cannot be combined with --affordance-map "
+            "(FR-B9); refuse.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.affordance_map:
+        return _run_affordance_map_mode(args, onboarding, output)
 
     if args.check:
         return check_drift(onboarding, output, manifest)

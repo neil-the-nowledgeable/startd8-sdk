@@ -1459,8 +1459,9 @@ class TestAllArtifactsScored:
         agg = q["aggregate"]
         # Finding 1 acceptance: every generated artifact is scored.
         assert agg["artifacts_scored"] == agg["artifacts_generated"]
-        # runbook is missing Risks/Procedures markers → composite must drop below 1.0.
-        assert agg["avg_composite_score"] < 1.0
+        # FR-B5: runbook now emits Overview/Risks/Procedures/Escalation markers —
+        # composite is no longer forced below 1.0 by EXT-100 heading gaps.
+        assert agg["avg_composite_score"] > 0.0
 
     def test_runbook_scored_against_its_markers(self, tmp_path):
         meta_path = tmp_path / "m.json"
@@ -1472,7 +1473,12 @@ class TestAllArtifactsScored:
         )
         runbook = next(a for a in report.artifacts if a.artifact_type == "runbook")
         assert runbook.quality is not None  # now scored (was unscored pre-Finding-1)
-        assert runbook.quality["score"] < 1.0  # missing Risks/Procedures sections
+        # FR-B5: contract markers present → EXT-100 clear → full marker score.
+        assert runbook.quality["score"] == 1.0
+        assert all(
+            m in (runbook.content or "")
+            for m in ("Overview", "Risks", "Procedures", "Escalation")
+        )
 
 
 # ---------------------------------------------------------------------------

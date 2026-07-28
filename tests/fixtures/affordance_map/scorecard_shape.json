@@ -1,0 +1,70 @@
+{
+  "affordance_map": [
+    {
+      "element_id": "store",
+      "gap_code": "red_missing",
+      "affordance_ids": [
+        "gen.emit_red_panels"
+      ],
+      "confidence": 1.0,
+      "provenance": "catalog.attach"
+    },
+    {
+      "element_id": "query-frontend",
+      "gap_code": "dashboard_oversize",
+      "affordance_ids": [
+        "gen.shrink_dashboard_lines"
+      ],
+      "confidence": 1.0,
+      "provenance": "catalog.attach"
+    },
+    {
+      "element_id": "store",
+      "gap_code": "metric_coverage_empty",
+      "affordance_ids": [
+        "gen.improve_metric_coverage"
+      ],
+      "confidence": 1.0,
+      "provenance": "catalog.attach"
+    },
+    {
+      "element_id": "store",
+      "gap_code": "runbook_skeletal",
+      "affordance_ids": [
+        "gen.enrich_runbook"
+      ],
+      "confidence": 1.0,
+      "provenance": "catalog.attach"
+    },
+    {
+      "element_id": "compact-declared-base",
+      "gap_code": "dead_sli_bucket",
+      "affordance_ids": [
+        "rex.ingest_dead_bucket"
+      ],
+      "confidence": 1.0,
+      "provenance": "catalog.attach"
+    }
+  ],
+  "gaps": [
+    {
+      "element_id": "store",
+      "gap_code": "red_missing",
+      "affordance_ids": [
+        "gen.emit_red_panels"
+      ]
+    },
+    {
+      "element_id": "extra-1",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "extra-2",
+      "gap_code": "red_missing"
+    }
+  ],
+  "history": {
+    "trimmed": false
+  },
+  "verdict": "GO"
+}

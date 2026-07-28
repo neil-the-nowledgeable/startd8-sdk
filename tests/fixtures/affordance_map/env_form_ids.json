@@ -1,0 +1,20 @@
+[
+  {
+    "element_id": "PRODUCT_CATALOG",
+    "gap_code": "red_missing",
+    "affordance_ids": [
+      "gen.emit_red_panels"
+    ],
+    "confidence": 1.0,
+    "provenance": "catalog.attach"
+  },
+  {
+    "element_id": "PRODUCT_CATALOG_SERVICE",
+    "gap_code": "triplet_incomplete",
+    "affordance_ids": [
+      "gen.complete_triplet"
+    ],
+    "confidence": 1.0,
+    "provenance": "catalog.attach"
+  }
+]

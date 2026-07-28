@@ -1,0 +1,107 @@
+{
+  "affordance_map": [
+    {
+      "element_id": "store",
+      "gap_code": "red_missing",
+      "affordance_ids": [
+        "gen.emit_red_panels"
+      ],
+      "confidence": 1.0,
+      "provenance": "catalog.attach"
+    },
+    {
+      "element_id": "query-frontend",
+      "gap_code": "dashboard_oversize",
+      "affordance_ids": [
+        "gen.shrink_dashboard_lines"
+      ],
+      "confidence": 1.0,
+      "provenance": "catalog.attach"
+    }
+  ],
+  "gaps": [
+    {
+      "element_id": "g0",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g1",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g2",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g3",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g4",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g5",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g6",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g7",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g8",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g9",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g10",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g11",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g12",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g13",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g14",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g15",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g16",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g17",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g18",
+      "gap_code": "red_missing"
+    },
+    {
+      "element_id": "g19",
+      "gap_code": "red_missing"
+    }
+  ],
+  "history": {
+    "trimmed": true
+  }
+}
