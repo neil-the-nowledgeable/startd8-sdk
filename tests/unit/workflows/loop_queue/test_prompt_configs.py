@@ -34,8 +34,16 @@ def test_packaged_prompts_exist():
         "drain-handoff-do-this-current.md",
         "drain-handoff-do-this-blind-rotate.md",
         "drain-handoff-reviewer-block.md",
+        "crp-memory-preamble.md",
     ):
         assert (root / name).is_file(), name
+
+
+def test_crp_memory_preamble_slots():
+    text = load_prompt_text("crp-memory-preamble.md")
+    assert "{{round_number}}" in text
+    assert "{{applied_ids}}" in text
+    assert "WLQ authoritative drain context" in text
 
 
 def test_reflective_default_mentions_phase_46():

@@ -226,17 +226,19 @@ def render_bundle(
             f"{proc.stderr.strip() or proc.stdout.strip()}"
         )
     generated = bundle_path.read_text(encoding="utf-8")
-    memory = (
-        "# WLQ authoritative drain context\n\n"
-        f"- **Round to append:** R{round_number}\n"
-        f"- **Applied IDs (do not re-propose):** "
-        f"{', '.join(applied_ids) or '(none)'}\n"
-        f"- **Rejected IDs (do not re-propose):** "
-        f"{', '.join(rejected_ids) or '(none)'}\n"
-        "- This round number is derived from the source documents. Do not "
-        "replace or increment it.\n\n---\n\n"
+    preamble = load_prompt_text("crp-memory-preamble.md")
+    memory = _render_slot_template(
+        preamble,
+        {
+            "round_number": str(round_number),
+            "applied_ids": ", ".join(applied_ids) or "(none)",
+            "rejected_ids": ", ".join(rejected_ids) or "(none)",
+        },
+        resolve_prompt_path("crp-memory-preamble.md"),
     )
-    bundle_path.write_text(memory + generated, encoding="utf-8")
+    if not memory.endswith("\n"):
+        memory += "\n"
+    bundle_path.write_text(memory + "\n" + generated, encoding="utf-8")
     logger.info("Rendered WLQ bundle via %s: %s", script.name, bundle_path)
     return bundle_path
 

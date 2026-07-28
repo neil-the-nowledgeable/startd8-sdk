@@ -29,6 +29,7 @@ PROMPT_ENV: Mapping[str, str] = {
         "STARTD8_WLQ_HANDOFF_DO_THIS_BLIND_ROTATE"
     ),
     "drain-handoff-reviewer-block.md": "STARTD8_WLQ_HANDOFF_REVIEWER_BLOCK",
+    "crp-memory-preamble.md": "STARTD8_WLQ_CRP_MEMORY_PREAMBLE",
 }
 
 _PACKAGE = "startd8.workflows.loop_queue"
