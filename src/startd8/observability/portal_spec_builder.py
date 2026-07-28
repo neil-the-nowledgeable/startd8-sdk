@@ -418,10 +418,13 @@ _COV_STATUS_LABEL = {
     "declared_absent": "⬛ declared-absent",
     "pending_probe": "⏳ pending probe",
     "degraded": "⚠️ degraded",
+    "suppressed": "🚫 suppressed (not generated)",
     "stale": "🟠 stale (went dark)",
 }
 _COV_CRIT_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
-_COV_NOT_OBSERVABLE = {"no_telemetry", "declared_absent", "partial", "degraded", "stale"}
+_COV_NOT_OBSERVABLE = {
+    "no_telemetry", "declared_absent", "partial", "degraded", "suppressed", "stale",
+}
 
 
 def _cov_pct(v: Any) -> str:
