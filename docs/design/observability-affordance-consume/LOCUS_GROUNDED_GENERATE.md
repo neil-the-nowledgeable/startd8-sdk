@@ -23,4 +23,6 @@ python3 scripts/generate_observability_artifacts.py \
   --dry-run
 ```
 
-Prefer X2-enriched `affordance-map-export.json` from Thanos `analysis/fde-latest/`.
+Prefer a **tick-stable freeze** (e.g. Thanos `analysis/fde-freeze-2026-07-28-locked-0.5648/`) for regression dogfood; `analysis/fde-latest/` rewrites every LOOP ON.
+
+Dogfood note (2026-07-28): copy-apply under `/tmp` — 11 locus binds applied; receive dashboards cite `thanos_*` (no `rpc_server`). macOS writers must not `Path.relative_to` an unresolved `/tmp` root (use planned relative paths).
