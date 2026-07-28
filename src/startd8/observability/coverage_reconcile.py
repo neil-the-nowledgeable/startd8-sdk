@@ -37,6 +37,7 @@ NO_TELEMETRY = "no_telemetry"      # coverage <= 0 — queries ran, nothing boun
 DECLARED_ABSENT = "declared_absent"  # tier_b.target_drift.declared_absent — never emitted
 PENDING_PROBE = "pending_probe"    # pending_verdicts only — positive, NOT a gap (#308)
 DEGRADED = "degraded"              # tier_b is None / not observed — fail-loud unknown (NR-3)
+SUPPRESSED = "suppressed"          # Tier-A suppressed_base_metrics — SLIs omitted at generation (#363)
 STALE = "stale"                    # EC-13: series PRESENT (binds) but no recent traffic — a
                                    # frozen span-metric of a service that went dark. Presence != liveness.
 
@@ -114,6 +115,12 @@ def _next_step(status: str, missing: List[str], remediation: str) -> str:
         return f"bind missing signal(s): {', '.join(missing)}" if missing else "close remaining axis gaps"
     if status == PENDING_PROBE:
         return "awaiting the probe runner (freshness SLI) — positive, not a gap"
+    if status == SUPPRESSED:
+        return (
+            "SLIs suppressed at generation (metrics_surface / profile) — "
+            "adjust the generation profile or declare emitted series; "
+            "re-running compare-live will not help"
+        )
     if status == STALE:
         return "series present but NO recent traffic — the service likely went dark (check it's up)"
     if status == DEGRADED:
@@ -160,6 +167,7 @@ def reconcile(
     declared_absent = set(target_drift.get("declared_absent") or [])
     verdicts: List[Dict[str, Any]] = (tier_b or {}).get("verdicts") or []
     pending_services = {v.get("service") for v in pending_verdicts if v.get("service")}
+    suppressed_by_svc = _suppressed_gap_by_service(tier_a)
 
     # Per-service remediation hint: first fail verdict's remediation (already authored upstream).
     remediation_by_svc: Dict[str, str] = {}
@@ -203,6 +211,7 @@ def reconcile(
         actual: List[str] = []
         missing: List[str] = []
         coverage: Optional[float] = None
+        gap = suppressed_by_svc.get(svc) or {}
 
         if tier_b_missing:
             status = DEGRADED
@@ -228,6 +237,12 @@ def reconcile(
                 status = PARTIAL
         elif svc in pending_services:
             status = PENDING_PROBE
+        elif svc in suppressed_by_svc:
+            # #363: generation omitted SLIs — distinct from "standup unavailable".
+            status = SUPPRESSED
+            kinds = gap.get("suppressed_sli_kinds") or []
+            if isinstance(kinds, list) and kinds:
+                expected = sorted({str(k) for k in kinds})
         else:
             # Declared (has a hint / gap) but not observed and not in drift → not measured.
             status = DEGRADED
@@ -237,6 +252,15 @@ def reconcile(
         # service went dark). ``liveness`` is a caller-supplied rate>0 probe; absent → unchanged.
         if status == BOUND and liveness is not None and liveness.get(svc) is False:
             status = STALE
+
+        # Prefer upstream fail remediation; for suppressed, surface the generation gap reason.
+        remediation = remediation_by_svc.get(svc, "") or (
+            str(gap.get("reason") or "") if status == SUPPRESSED else ""
+        )
+        provenance = dict(provenance_base)
+        if status == SUPPRESSED and gap.get("metrics_surface"):
+            provenance["metrics_surface"] = gap["metrics_surface"]
+            provenance["gap_class"] = "suppressed_base_metrics"
 
         records.append(
             CoverageRecord(
@@ -248,11 +272,22 @@ def reconcile(
                 expected_axes=expected,
                 actual_axes=actual,
                 missing_signals=missing,
-                next_step=_next_step(status, missing, remediation_by_svc.get(svc, "")),
-                provenance=dict(provenance_base),
+                next_step=_next_step(status, missing, remediation),
+                provenance=provenance,
             )
         )
     return records
+
+
+def _suppressed_gap_by_service(tier_a: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Map service id → Tier-A ``suppressed_base_metrics`` gap entry (#363)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for e in (tier_a.get("gaps") or {}).get("suppressed_base_metrics") or []:
+        if isinstance(e, dict) and e.get("service"):
+            out.setdefault(str(e["service"]), e)
+        elif isinstance(e, str) and e:
+            out.setdefault(e, {"service": e})
+    return out
 
 
 def _services_in_gaps(tier_a: Dict[str, Any]) -> set:

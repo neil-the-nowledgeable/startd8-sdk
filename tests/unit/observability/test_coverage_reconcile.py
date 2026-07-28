@@ -120,6 +120,49 @@ def test_tier_b_missing_is_degraded_not_fabricated():
     assert r.binding_coverage is None
 
 
+def test_suppressed_base_metrics_is_not_degraded():
+    """#363: generation-side omission ≠ standup unavailable."""
+    tier_a = {
+        "gaps": {
+            "suppressed_base_metrics": [
+                {
+                    "service": "receive",
+                    "metrics_surface": "prometheus_exporter",
+                    "suppressed_sli_kinds": ["availability", "latency", "throughput"],
+                    "reason": (
+                        "base RED SLIs suppressed — metrics_surface='prometheus_exporter' "
+                        "does not emit the OTel-convention meter"
+                    ),
+                }
+            ]
+        }
+    }
+    # tier_b present but empty for this service — the Thanos pilot shape.
+    r = _by_service(
+        cr.reconcile(_report(tier_b={"per_service": {}}, tier_a=tier_a))
+    )["receive"]
+    assert r.presence_status == cr.SUPPRESSED
+    assert r.binding_coverage is None
+    assert "re-run compare-live" not in r.next_step
+    assert "generation" in r.next_step.lower() or "suppressed" in r.next_step.lower()
+    assert r.provenance.get("metrics_surface") == "prometheus_exporter"
+    assert r.expected_axes == ["availability", "latency", "throughput"]
+
+
+def test_suppressed_does_not_override_per_service_binding():
+    """A service with Tier-B queries stays bound/partial even if also in suppressed gaps."""
+    tier_a = {
+        "gaps": {
+            "suppressed_base_metrics": [
+                {"service": "compact", "metrics_surface": "prometheus_exporter"}
+            ]
+        }
+    }
+    tb = {"per_service": {"compact": _ps(1.0, {"throughput": {"total": 1, "passed": 1}})}}
+    r = _by_service(cr.reconcile(_report(tier_b=tb, tier_a=tier_a)))["compact"]
+    assert r.presence_status == cr.BOUND
+
+
 def test_fail_verdict_remediation_and_mismatch_folded_in():
     tb = {
         "per_service": {"web": _ps(0.5, {"latency": {"total": 1, "passed": 1}})},
