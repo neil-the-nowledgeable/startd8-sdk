@@ -215,9 +215,10 @@ def reconcile(
 
         if tier_b_missing:
             status = DEGRADED
-        elif svc in declared_absent:
-            status = DECLARED_ABSENT
         elif svc in per_service:
+            # EC-RECONCILE-ABSENT-SHADOWS-LIVE: live per_service coverage beats target_drift.
+            # Identity-label absence can coexist with binding PromQL (Thanos scrape); do not
+            # force declared_absent when coverage > 0 or any signal passed.
             ps = per_service[svc] or {}
             coverage = float(ps.get("coverage", 0.0) or 0.0)
             signals = ps.get("signals") or {}
@@ -229,12 +230,19 @@ def reconcile(
             for ax in mismatched_by_svc.get(svc, []):
                 if ax not in missing:
                     missing.append(ax)
-            if coverage >= 1.0 and not missing:
-                status = BOUND
-            elif coverage <= 0.0:
-                status = NO_TELEMETRY
+            if coverage > 0 or actual:
+                if coverage >= 1.0 and not missing:
+                    status = BOUND
+                elif coverage <= 0.0:
+                    status = NO_TELEMETRY
+                else:
+                    status = PARTIAL
+            elif svc in declared_absent:
+                status = DECLARED_ABSENT
             else:
-                status = PARTIAL
+                status = NO_TELEMETRY
+        elif svc in declared_absent:
+            status = DECLARED_ABSENT
         elif svc in pending_services:
             status = PENDING_PROBE
         elif svc in suppressed_by_svc:
@@ -261,6 +269,12 @@ def reconcile(
         if status == SUPPRESSED and gap.get("metrics_surface"):
             provenance["metrics_surface"] = gap["metrics_surface"]
             provenance["gap_class"] = "suppressed_base_metrics"
+        if (
+            svc in declared_absent
+            and svc in per_service
+            and status not in (DECLARED_ABSENT, DEGRADED)
+        ):
+            provenance["identity_label_drift"] = True
 
         records.append(
             CoverageRecord(

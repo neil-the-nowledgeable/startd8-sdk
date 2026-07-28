@@ -104,6 +104,33 @@ def test_declared_absent_from_target_drift():
     assert "deploy" in r.next_step
 
 
+def test_live_coverage_beats_declared_absent():
+    """EC-RECONCILE-ABSENT-SHADOWS-LIVE: identity-label drift must not hide live binds."""
+    tb = {
+        "per_service": {
+            "receive": _ps(0.5, {"throughput": {"total": 2, "passed": 1}}),
+        },
+        "target_drift": {"declared_absent": ["receive"], "checked": True},
+    }
+    r = _by_service(cr.reconcile(_report(tier_b=tb)))["receive"]
+    assert r.presence_status == cr.PARTIAL
+    assert r.binding_coverage == 0.5
+    assert r.provenance.get("identity_label_drift") is True
+
+
+def test_declared_absent_when_per_service_coverage_zero():
+    """Zero live coverage + identity absent → keep deploy hint (declared_absent)."""
+    tb = {
+        "per_service": {
+            "payments": _ps(0.0, {"latency": {"total": 1, "passed": 0}}),
+        },
+        "target_drift": {"declared_absent": ["payments"], "checked": True},
+    }
+    r = _by_service(cr.reconcile(_report(tier_b=tb)))["payments"]
+    assert r.presence_status == cr.DECLARED_ABSENT
+    assert r.binding_coverage == 0.0
+
+
 def test_pending_probe_is_positive_not_a_gap():
     pending = [{"verdict": "pending_probe", "service": "feed", "probe": "fanout"}]
     r = _by_service(cr.reconcile(_report(tier_b={"per_service": {}}, pending=pending)))["feed"]
