@@ -12,7 +12,7 @@ markdown AST — so agents can use slightly varied headings.
 from __future__ import annotations
 
 import re
-from typing import List
+from typing import List, Pattern, Sequence
 
 _LESSONS_HEADING = re.compile(
     r"(?im)^\s{0,3}#{1,4}\s*0\.1\b.*lessons[- ]learned",
@@ -37,23 +37,25 @@ _VERSION_031 = re.compile(
 )
 
 
+def _matches_any(text: str, patterns: Sequence[Pattern[str]]) -> bool:
+    return any(p.search(text) for p in patterns)
+
+
 def reflective_hardening_gaps(requirements_text: str) -> List[str]:
     """Return human-readable gaps if requirements lack Phase 4.5 / 4.6 markers.
 
-    Empty list means the lightweight gate passes.
+    Empty list means the lightweight gate passes. This is an **anti-skip**
+    check (heading / phrase / explicit no-op), not proof that lessons or
+    principles were actually applied.
     """
     text = requirements_text or ""
     gaps: List[str] = []
 
-    has_lessons = bool(
-        _LESSONS_HEADING.search(text)
-        or _LESSONS_PHRASE.search(text)
-        or _LESSONS_NOOP.search(text)
+    has_lessons = _matches_any(
+        text, (_LESSONS_HEADING, _LESSONS_PHRASE, _LESSONS_NOOP)
     )
-    has_principles = bool(
-        _PRINCIPLES_HEADING.search(text)
-        or _PRINCIPLES_PHRASE.search(text)
-        or _PRINCIPLES_NOOP.search(text)
+    has_principles = _matches_any(
+        text, (_PRINCIPLES_HEADING, _PRINCIPLES_PHRASE, _PRINCIPLES_NOOP)
     )
     has_v031 = bool(_VERSION_031.search(text))
 

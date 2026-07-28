@@ -46,6 +46,18 @@ def test_crp_memory_preamble_slots():
     assert "WLQ authoritative drain context" in text
 
 
+def test_prompt_basename_rejects_traversal():
+    from startd8.workflows.loop_queue.prompt_loader import assert_prompt_basename
+
+    assert_prompt_basename("reflective-requirements.md")
+    with pytest.raises(ValueError, match="basename"):
+        assert_prompt_basename("../etc/passwd")
+    with pytest.raises(ValueError, match="basename"):
+        assert_prompt_basename("nested/foo.md")
+    with pytest.raises(ValueError, match="basename"):
+        load_prompt_text("../evil.md")
+
+
 def test_reflective_default_mentions_phase_46():
     text = default_reflective_template_text()
     assert "Phase 4.5" in text

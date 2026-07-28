@@ -93,7 +93,7 @@ def persist_drain_handoff(
     card_path = artifact_dir / "drain-handoff.md"
     try:
         card_path.write_text(render_handoff_markdown(handoff), encoding="utf-8")
-    except (ValueError, FileNotFoundError, OSError) as e:
+    except (ValueError, FileNotFoundError, OSError, UnicodeDecodeError) as e:
         raise RuntimeError(
             f"failed to render drain hand-off markdown for {job_id!r}: {e}"
         ) from e

@@ -223,6 +223,10 @@ def render_bundle(
         )
     generated = bundle_path.read_text(encoding="utf-8")
     preamble = load_prompt_text("crp-memory-preamble.md")
+    try:
+        preamble_label = resolve_prompt_path("crp-memory-preamble.md")
+    except FileNotFoundError:
+        preamble_label = Path("crp-memory-preamble.md")
     memory = _render_slot_template(
         preamble,
         {
@@ -230,7 +234,7 @@ def render_bundle(
             "applied_ids": ", ".join(applied_ids) or "(none)",
             "rejected_ids": ", ".join(rejected_ids) or "(none)",
         },
-        resolve_prompt_path("crp-memory-preamble.md"),
+        preamble_label,
     )
     if not memory.endswith("\n"):
         memory += "\n"
