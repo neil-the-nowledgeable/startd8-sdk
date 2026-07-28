@@ -90,6 +90,16 @@ class ActionOutcome(str, Enum):
     SKIPPED = "skipped"
 
 
+
+def signal_kind_for(family_or_signal: str) -> str:
+    """Classify locus signal (metric | transport | component)."""
+    s = family_or_signal or ""
+    if s.startswith("transport:"):
+        return "transport"
+    if s.startswith("component:"):
+        return "component"
+    return "metric"
+
 def _coerce_confidence(raw: Any) -> Optional[float]:
     """Soft-coerce map confidence; bad values → None (do not fail the whole load)."""
     if raw is None:
@@ -110,12 +120,24 @@ class AffordanceMapEntry:
     confidence: Optional[float] = None
     provenance: Optional[str] = None
     unmapped_reason: Optional[str] = None
+    locus_status: Optional[str] = None
+    source_loci: List[Dict[str, Any]] = field(default_factory=list)
+    locus_reason: Optional[str] = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> "AffordanceMapEntry":
         ids = raw.get("affordance_ids") or []
         if not isinstance(ids, list):
             ids = []
+        loci_raw = raw.get("source_loci") or []
+        loci: List[Dict[str, Any]] = []
+        if isinstance(loci_raw, list):
+            for loc in loci_raw:
+                if isinstance(loc, Mapping):
+                    row = dict(loc)
+                    fos = str(row.get("family_or_signal") or "")
+                    row["signal_kind"] = row.get("signal_kind") or signal_kind_for(fos)
+                    loci.append(row)
         return cls(
             element_id=str(raw.get("element_id") or ""),
             gap_code=str(raw.get("gap_code") or ""),
@@ -126,6 +148,13 @@ class AffordanceMapEntry:
                 str(raw["unmapped_reason"])
                 if raw.get("unmapped_reason") is not None
                 else None
+            ),
+            locus_status=(
+                str(raw["locus_status"]) if raw.get("locus_status") is not None else None
+            ),
+            source_loci=loci,
+            locus_reason=(
+                str(raw["locus_reason"]) if raw.get("locus_reason") is not None else None
             ),
         )
 
@@ -147,6 +176,9 @@ class ActionPlanEntry:
     content_hash_after: Optional[str] = None
     rendered_hash_before: Optional[str] = None
     rendered_hash_after: Optional[str] = None
+    loci_used: Optional[List[Dict[str, Any]]] = None
+    locus_skip_reason: Optional[str] = None
+    locus_status: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -251,6 +283,121 @@ def match_service_id(
     return None
 
 
+# ---- Locus helpers (REQ locus-grounded generate) -----------------------------
+
+_LOCUS_BLOCKING = frozenset(
+    {"no_source_locus", "unverifiable", "locus_unavailable"}
+)
+_ARTIFACT_SHAPE_GEN = frozenset({GEN_ENRICH_RUNBOOK, GEN_SHRINK})
+_RED_RATE_RE = re.compile(
+    r"(request|handled|started|received|http|grpc).*(total|count)|_(requests|ops|operations)_total$",
+    re.I,
+)
+_RED_ERR_RE = re.compile(r"error|fail|drop|reject|5xx|failed", re.I)
+_RED_DUR_RE = re.compile(r"duration|latency|delay|_seconds$|_bucket$", re.I)
+
+
+def metric_loci(entry: AffordanceMapEntry) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for loc in entry.source_loci or []:
+        fos = str(loc.get("family_or_signal") or "")
+        kind = str(loc.get("signal_kind") or signal_kind_for(fos))
+        if kind == "metric" and fos and not fos.startswith(("transport:", "component:")):
+            row = dict(loc)
+            row["signal_kind"] = "metric"
+            out.append(row)
+    return out
+
+
+def is_transport_or_component_only(entry: AffordanceMapEntry) -> bool:
+    """True when loci exist but none are metric families (FR-G2b)."""
+    if not entry.source_loci:
+        return False
+    return not metric_loci(entry)
+
+
+def merge_needed_where_into_entries(
+    entries: Sequence[AffordanceMapEntry],
+    needed_where: Union[Path, str, Mapping[str, Any]],
+) -> List[AffordanceMapEntry]:
+    """Transitional merge. AffordanceMap-native loci win on conflict (FR-G1)."""
+    if isinstance(needed_where, (str, Path)):
+        path = Path(needed_where)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("needed-where unreadable: %s", exc)
+            return list(entries)
+    else:
+        data = needed_where
+    if not isinstance(data, Mapping):
+        return list(entries)
+    rows = data.get("needed_where") or data.get("affordance_map") or []
+    idx: Dict[Tuple[str, str], Mapping[str, Any]] = {}
+    if isinstance(rows, list):
+        for r in rows:
+            if isinstance(r, Mapping):
+                idx[(str(r.get("element_id") or ""), str(r.get("gap_code") or ""))] = r
+    out: List[AffordanceMapEntry] = []
+    for e in entries:
+        if e.locus_status or e.source_loci:
+            out.append(e)
+            continue
+        nw = idx.get((e.element_id, e.gap_code))
+        if not nw:
+            out.append(e)
+            continue
+        loci: List[Dict[str, Any]] = []
+        for loc in nw.get("source_loci") or []:
+            if isinstance(loc, Mapping):
+                row = dict(loc)
+                fos = str(row.get("family_or_signal") or "")
+                row["signal_kind"] = row.get("signal_kind") or signal_kind_for(fos)
+                loci.append(row)
+        out.append(
+            AffordanceMapEntry(
+                element_id=e.element_id,
+                gap_code=e.gap_code,
+                affordance_ids=list(e.affordance_ids),
+                confidence=e.confidence,
+                provenance=e.provenance,
+                unmapped_reason=e.unmapped_reason,
+                locus_status=str(nw.get("status") or "") or None,
+                source_loci=loci,
+                locus_reason=str(nw["reason"]) if nw.get("reason") is not None else None,
+            )
+        )
+    return out
+
+
+def _pick_red_families(loci: Sequence[Mapping[str, Any]]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    rate = err = dur = None
+    for loc in loci:
+        n = str(loc.get("family_or_signal") or "")
+        if not n:
+            continue
+        if err is None and _RED_ERR_RE.search(n):
+            err = n
+        elif dur is None and _RED_DUR_RE.search(n):
+            dur = n
+        elif rate is None and _RED_RATE_RE.search(n):
+            rate = n
+    names = [str(l.get("family_or_signal")) for l in loci if l.get("family_or_signal")]
+    if rate is None and names:
+        rate = names[0]
+    if err is None:
+        for n in names:
+            if n != rate and _RED_ERR_RE.search(n):
+                err = n
+                break
+    if dur is None:
+        for n in names:
+            if n not in (rate, err) and _RED_DUR_RE.search(n):
+                dur = n
+                break
+    return rate, err, dur
+
+
 # ---- Load (FR-B1) ------------------------------------------------------------
 
 
@@ -353,7 +500,7 @@ def plan_affordance_actions(
     *,
     service_filter: Optional[Sequence[str]] = None,
 ) -> PlanResult:
-    """Build ordered action plan; unknown ids/services → skips (FR-B2, B6, B8)."""
+    """Build ordered action plan; unknown ids/services → skips (FR-B2, B6, B8 + locus)."""
     known = list(known_service_ids)
     filter_set: Optional[Set[str]] = set(service_filter) if service_filter else None
 
@@ -365,7 +512,22 @@ def plan_affordance_actions(
 
     planned: List[ActionPlanEntry] = []
     skips: List[ActionPlanEntry] = []
-    seen: Set[Tuple[str, str]] = set()
+    # key -> (locus_rank, entry) for preference: source_backed (0) over partial (1)
+    best: Dict[Tuple[str, str, str], Tuple[int, ActionPlanEntry]] = {}
+
+    def _locus_rank(status: Optional[str]) -> int:
+        if status == "source_backed":
+            return 0
+        if status == "partial":
+            return 1
+        return 2
+
+    def _remember(entry: ActionPlanEntry, locus_status: Optional[str]) -> None:
+        key = (entry.service_id, entry.gap_code, entry.affordance_id)
+        rank = _locus_rank(locus_status)
+        prev = best.get(key)
+        if prev is None or rank < prev[0]:
+            best[key] = (rank, entry)
 
     for entry in entries:
         matched = match_service_id(entry.element_id, known)
@@ -380,6 +542,8 @@ def plan_affordance_actions(
                     confidence=entry.confidence,
                     outcome=ActionOutcome.SKIPPED,
                     unmapped_reason=entry.unmapped_reason,
+                    locus_status=entry.locus_status,
+                    locus_skip_reason=entry.locus_reason,
                 )
             )
             continue
@@ -396,9 +560,16 @@ def plan_affordance_actions(
                     confidence=entry.confidence,
                     outcome=ActionOutcome.SKIPPED,
                     unmapped_reason=entry.unmapped_reason,
+                    locus_status=entry.locus_status,
+                    locus_skip_reason=entry.locus_reason,
+                    loci_used=list(entry.source_loci) if entry.source_loci else None,
                 )
             )
             continue
+
+        blocking = (entry.locus_status or "") in _LOCUS_BLOCKING
+        transport_only = is_transport_or_component_only(entry)
+        m_loci = metric_loci(entry)
 
         for aid in ids:
             if not aid.startswith("gen."):
@@ -412,6 +583,7 @@ def plan_affordance_actions(
                         confidence=entry.confidence,
                         outcome=ActionOutcome.SKIPPED,
                         unmapped_reason=entry.unmapped_reason,
+                        locus_status=entry.locus_status,
                     )
                 )
                 continue
@@ -426,28 +598,44 @@ def plan_affordance_actions(
                         confidence=entry.confidence,
                         outcome=ActionOutcome.SKIPPED,
                         unmapped_reason=entry.unmapped_reason,
+                        locus_status=entry.locus_status,
                     )
                 )
                 continue
 
-            key = (matched, aid)
-            if key in seen:
-                continue
-            seen.add(key)
-
-            if aid in ADVISORY_GEN:
+            if blocking and aid not in _ARTIFACT_SHAPE_GEN:
                 skips.append(
                     ActionPlanEntry(
                         service_id=matched,
                         affordance_id=aid,
                         artifact_types=list(_ARTIFACT_TYPES.get(aid, [])),
-                        reason="no_deterministic_lever",
+                        reason=f"locus_blocked:{entry.locus_status}",
                         gap_code=entry.gap_code,
                         confidence=entry.confidence,
                         outcome=ActionOutcome.SKIPPED,
+                        locus_status=entry.locus_status,
+                        locus_skip_reason=entry.locus_reason or entry.locus_status,
                     )
                 )
                 continue
+
+            if aid == GEN_EMIT_RED and transport_only:
+                skips.append(
+                    ActionPlanEntry(
+                        service_id=matched,
+                        affordance_id=aid,
+                        artifact_types=list(_ARTIFACT_TYPES.get(aid, [])),
+                        reason="transport_only_loci",
+                        gap_code=entry.gap_code,
+                        confidence=entry.confidence,
+                        outcome=ActionOutcome.SKIPPED,
+                        locus_status=entry.locus_status,
+                        locus_skip_reason="transport_only_loci",
+                        loci_used=list(entry.source_loci),
+                    )
+                )
+                continue
+
             if aid in UNREACHABLE_GEN:
                 skips.append(
                     ActionPlanEntry(
@@ -458,22 +646,56 @@ def plan_affordance_actions(
                         gap_code=entry.gap_code,
                         confidence=entry.confidence,
                         outcome=ActionOutcome.SKIPPED,
+                        locus_status=entry.locus_status,
                     )
                 )
                 continue
 
-            planned.append(
-                ActionPlanEntry(
-                    service_id=matched,
-                    affordance_id=aid,
-                    artifact_types=list(_ARTIFACT_TYPES.get(aid, [])),
-                    reason=f"gap:{entry.gap_code or 'unspecified'}",
-                    gap_code=entry.gap_code,
-                    confidence=entry.confidence,
-                    outcome=ActionOutcome.PLANNED,
+            # Coverage: live when source_backed metric loci exist; else advisory skip
+            if aid in ADVISORY_GEN:
+                if entry.locus_status == "source_backed" and m_loci:
+                    pe = ActionPlanEntry(
+                        service_id=matched,
+                        affordance_id=aid,
+                        artifact_types=list(_ARTIFACT_TYPES.get(aid, [])),
+                        reason=f"gap:{entry.gap_code or 'unspecified'}:locus_bind",
+                        gap_code=entry.gap_code,
+                        confidence=entry.confidence,
+                        outcome=ActionOutcome.PLANNED,
+                        locus_status=entry.locus_status,
+                        loci_used=list(m_loci),
+                    )
+                    _remember(pe, entry.locus_status)
+                    continue
+                skips.append(
+                    ActionPlanEntry(
+                        service_id=matched,
+                        affordance_id=aid,
+                        artifact_types=list(_ARTIFACT_TYPES.get(aid, [])),
+                        reason="no_deterministic_lever",
+                        gap_code=entry.gap_code,
+                        confidence=entry.confidence,
+                        outcome=ActionOutcome.SKIPPED,
+                        locus_status=entry.locus_status,
+                        locus_skip_reason=entry.locus_reason,
+                    )
                 )
-            )
+                continue
 
+            pe = ActionPlanEntry(
+                service_id=matched,
+                affordance_id=aid,
+                artifact_types=list(_ARTIFACT_TYPES.get(aid, [])),
+                reason=f"gap:{entry.gap_code or 'unspecified'}",
+                gap_code=entry.gap_code,
+                confidence=entry.confidence,
+                outcome=ActionOutcome.PLANNED,
+                locus_status=entry.locus_status,
+                loci_used=list(m_loci) if m_loci else (list(entry.source_loci) if entry.source_loci else None),
+            )
+            _remember(pe, entry.locus_status)
+
+    planned = [v[1] for v in best.values()]
     planned.sort(
         key=lambda e: (_PRIORITY_INDEX.get(e.affordance_id, 99), e.service_id)
     )
@@ -1144,6 +1366,64 @@ def _apply_shrink(
     result.entries.append(entry)
 
 
+def _locus_red_dashboard_yaml(
+    service_id: str,
+    loci: Sequence[Mapping[str, Any]],
+) -> str:
+    """Minimal dashboard_spec YAML using only cited metric families (FR-G2/G3)."""
+    rate, err, dur = _pick_red_families(loci)
+    panels: List[Dict[str, Any]] = []
+    used: List[str] = []
+    if rate:
+        panels.append(
+            {
+                "type": "timeseries",
+                "title": "Request Rate",
+                "expr": f"sum(rate({rate}[$__rate_interval]))",
+                "unit": "reqps",
+                "group": "Throughput",
+            }
+        )
+        used.append(rate)
+    if err:
+        panels.append(
+            {
+                "type": "timeseries",
+                "title": "Error Rate",
+                "expr": f"sum(rate({err}[$__rate_interval]))",
+                "unit": "reqps",
+                "group": "Errors",
+            }
+        )
+        used.append(err)
+    if dur:
+        panels.append(
+            {
+                "type": "timeseries",
+                "title": "Duration",
+                "expr": f"histogram_quantile(0.99, sum(rate({dur}[$__rate_interval])) by (le))"
+                if dur.endswith("_bucket")
+                else f"sum(rate({dur}[$__rate_interval]))",
+                "unit": "s",
+                "group": "Latency",
+            }
+        )
+        used.append(dur)
+    if not panels:
+        return ""
+    spec = {
+        "apiVersion": "grafana.observability/v1alpha1",
+        "kind": "DashboardSpec",
+        "metadata": {"name": f"{service_id}-locus-red"},
+        "spec": {
+            "title": f"{service_id} RED (locus-grounded)",
+            "panels": panels,
+            "locus_families": used,
+        },
+    }
+    return yaml.safe_dump(spec, sort_keys=False)
+
+
 def _apply_emit_red(
     entry: ActionPlanEntry,
     *,
@@ -1156,11 +1436,65 @@ def _apply_emit_red(
     repair_and_validate: Any,
     service_sli_kinds: Any,
 ) -> None:
-    """Apply ``gen.emit_red_panels`` for one service."""
+    """Apply ``gen.emit_red_panels`` for one service (locus-biased when loci present)."""
     sli = service_sli_kinds(service, business)
     dash_path = output_dir / f"dashboards/{service.service_id}-dashboard-spec.yaml"
     before = dash_path.read_text(encoding="utf-8") if dash_path.is_file() else ""
     entry.content_hash_before = content_hash(before) if before else None
+
+    loci = list(entry.loci_used or [])
+    metric_only = [
+        l
+        for l in loci
+        if str(l.get("signal_kind") or signal_kind_for(str(l.get("family_or_signal") or "")))
+        == "metric"
+    ]
+
+    if metric_only:
+        after = _locus_red_dashboard_yaml(service.service_id, metric_only)
+        if not after:
+            entry.outcome = ActionOutcome.SKIPPED
+            entry.reason = "locus_families_unusable"
+            entry.locus_skip_reason = "locus_families_unusable"
+            result.entries.append(entry)
+            return
+        entry.content_hash_after = content_hash(after)
+        if before and content_hash(before) == entry.content_hash_after:
+            entry.outcome = ActionOutcome.APPLIED_NO_CHANGE
+            entry.reason = "red_already_complete_locus"
+            result.entries.append(entry)
+            return
+        dash_rel = f"dashboards/{service.service_id}-dashboard-spec.yaml"
+        dest = _confined_dest(output_dir, dash_rel)
+        if dest is None:
+            entry.outcome = ActionOutcome.SKIPPED
+            entry.reason = "path_escape"
+            result.entries.append(entry)
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(after, encoding="utf-8")
+        # Use planned relative path — do not dest.relative_to(output_dir):
+        # macOS /tmp → /private/tmp breaks Path.relative_to on unresolved roots.
+        result.written_paths.append(dash_rel)
+        entry.outcome = ActionOutcome.APPLIED
+        entry.reason = "emit_red_panels_locus"
+        entry.loci_used = metric_only
+        result.touched_service_ids.append(service.service_id)
+        result.quality_touched.setdefault(service.service_id, {})["dashboard_spec"] = {
+            "score": 1.0,
+            "status": "generated",
+            "locus_grounded": True,
+        }
+        result.manifest_touched.append(
+            {
+                "type": "dashboard_spec",
+                "service": service.service_id,
+                "path": f"dashboards/{service.service_id}-dashboard-spec.yaml",
+                "status": "generated",
+            }
+        )
+        result.entries.append(entry)
+        return
 
     if "throughput" not in sli and "availability" not in sli:
         entry.outcome = ActionOutcome.APPLIED_NO_CHANGE
@@ -1214,6 +1548,105 @@ def _apply_emit_red(
             "path": art.output_path,
             "status": art.status,
             "quality_score": (art.quality or {}).get("score"),
+        }
+    )
+    result.entries.append(entry)
+
+
+def _apply_improve_coverage(
+    entry: ActionPlanEntry,
+    *,
+    service: Any,
+    output_dir: Path,
+    result: ApplyResult,
+) -> None:
+    """Bind ≥1 PromQL panel to a cited metric family (FR-G4) — no second scorer."""
+    loci = list(entry.loci_used or [])
+    metric_only = [
+        l
+        for l in loci
+        if str(l.get("signal_kind") or signal_kind_for(str(l.get("family_or_signal") or "")))
+        == "metric"
+    ]
+    if not metric_only:
+        entry.outcome = ActionOutcome.SKIPPED
+        entry.reason = "no_deterministic_lever"
+        entry.locus_skip_reason = "no_metric_loci"
+        result.entries.append(entry)
+        return
+
+    family = str(metric_only[0].get("family_or_signal") or "")
+    dash_rel = f"dashboards/{service.service_id}-dashboard-spec.yaml"
+    dash_path = output_dir / dash_rel
+    before = dash_path.read_text(encoding="utf-8") if dash_path.is_file() else ""
+    entry.content_hash_before = content_hash(before) if before else None
+
+    panel = {
+        "type": "timeseries",
+        "title": f"Coverage bind: {family}",
+        "expr": f"sum(rate({family}[$__rate_interval]))",
+        "unit": "ops",
+        "group": "Coverage",
+    }
+    if before:
+        try:
+            doc = yaml.safe_load(before) or {}
+        except Exception:  # noqa: BLE001
+            doc = {}
+    else:
+        doc = {
+            "apiVersion": "grafana.observability/v1alpha1",
+            "kind": "DashboardSpec",
+            "metadata": {"name": f"{service.service_id}-coverage"},
+            "spec": {"title": f"{service.service_id} coverage", "panels": []},
+        }
+    if not isinstance(doc, dict):
+        doc = {}
+    spec = doc.setdefault("spec", {})
+    if not isinstance(spec, dict):
+        spec = {}
+        doc["spec"] = spec
+    panels = spec.setdefault("panels", [])
+    if not isinstance(panels, list):
+        panels = []
+        spec["panels"] = panels
+    # Idempotent: skip if family already referenced
+    already = any(family in str(p.get("expr") or "") for p in panels if isinstance(p, dict))
+    if already:
+        entry.outcome = ActionOutcome.APPLIED_NO_CHANGE
+        entry.reason = "coverage_family_already_bound"
+        entry.content_hash_after = entry.content_hash_before
+        entry.loci_used = metric_only[:1]
+        result.entries.append(entry)
+        return
+    panels.append(panel)
+    after = yaml.safe_dump(doc, sort_keys=False)
+    entry.content_hash_after = content_hash(after)
+    dest = _confined_dest(output_dir, dash_rel)
+    if dest is None:
+        entry.outcome = ActionOutcome.SKIPPED
+        entry.reason = "path_escape"
+        result.entries.append(entry)
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(after, encoding="utf-8")
+    result.written_paths.append(dash_rel)
+    entry.outcome = ActionOutcome.APPLIED
+    entry.reason = "improve_metric_coverage_locus_bind"
+    entry.loci_used = metric_only[:1]
+    result.touched_service_ids.append(service.service_id)
+    result.quality_touched.setdefault(service.service_id, {})["dashboard_spec"] = {
+        "score": 1.0,
+        "status": "generated",
+        "locus_grounded": True,
+        "coverage_family": family,
+    }
+    result.manifest_touched.append(
+        {
+            "type": "dashboard_spec",
+            "service": service.service_id,
+            "path": dash_rel,
+            "status": "generated",
         }
     )
     result.entries.append(entry)
@@ -1340,6 +1773,9 @@ def apply_affordance_actions(
             confidence=action.confidence,
             legs=action.legs,
             outcome=ActionOutcome.PLANNED,
+            loci_used=list(action.loci_used) if action.loci_used else None,
+            locus_status=action.locus_status,
+            locus_skip_reason=action.locus_skip_reason,
         )
         service = by_id.get(action.service_id)
         if service is None:
@@ -1384,6 +1820,15 @@ def apply_affordance_actions(
                 generate_dashboard_spec=generate_dashboard_spec,
                 repair_and_validate=_repair_and_validate,
                 service_sli_kinds=_service_sli_kinds,
+            )
+            continue
+
+        if action.affordance_id == GEN_IMPROVE_COVERAGE:
+            _apply_improve_coverage(
+                entry,
+                service=service,
+                output_dir=output_dir,
+                result=result,
             )
             continue
 
@@ -1537,6 +1982,9 @@ __all__ = [
     "normalize_element_id",
     "match_service_id",
     "load_affordance_map",
+    "merge_needed_where_into_entries",
+    "signal_kind_for",
+    "metric_loci",
     "plan_affordance_actions",
     "exit_code_for_plan",
     "exit_code_for_apply",

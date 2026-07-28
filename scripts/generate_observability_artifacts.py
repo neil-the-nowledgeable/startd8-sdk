@@ -52,6 +52,7 @@ from startd8.observability.affordance_map_consume import (
     format_plan_for_dry_run,
     load_affordance_map,
     merge_and_write_reports,
+    merge_needed_where_into_entries,
     plan_affordance_actions,
     write_affordance_actions_report,
     write_apply_actions_report,
@@ -73,6 +74,11 @@ def _run_affordance_map_mode(args, onboarding: Path, output: Path) -> int:
     if load.error:
         print(f"error: AffordanceMap {load.error}", file=sys.stderr)
         return EXIT_MALFORMED
+
+    if getattr(args, "needed_where", None):
+        load.entries = merge_needed_where_into_entries(
+            load.entries, Path(args.needed_where)
+        )
 
     if load.source_truncated:
         print(
@@ -247,6 +253,15 @@ def main() -> int:
             "Optional AffordanceMap JSON (slim array or scorecard-json with "
             "affordance_map). Enables targeted gen.* repair mode (REQ Affordance-Map "
             "Consume). Replaces full-tree generate when present."
+        ),
+    )
+    parser.add_argument(
+        "--needed-where",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Optional needed-where.json to merge loci onto AffordanceMap rows "
+            "(transitional; AffordanceMap-native loci win on conflict)."
         ),
     )
     parser.add_argument(
