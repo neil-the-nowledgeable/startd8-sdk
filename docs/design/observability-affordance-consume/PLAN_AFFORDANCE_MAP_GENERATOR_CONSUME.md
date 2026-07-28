@@ -72,7 +72,7 @@ scorecard-json / affordance_map.json
 | B0.5 | **Merge-into-existing** helpers for manifest + quality (implement before WP-B1 writes) |
 | B0.6 | HOWTO join table + exit codes |
 
-**Exit:** dry-run plan stable; AC-G2/6–11 green.
+**Exit:** dry-run plan stable; AC-G2/6–11 green. ✅
 
 ### WP-B1 — Targeted apply + FR-B5 (FR-B3, B3a, B5, AC-G3/4/12)
 
@@ -85,7 +85,7 @@ scorecard-json / affordance_map.json
 | B1.5 | FR-B5: Overview/Risks/Procedures/Escalation; Risks body from coverage/criticality |
 | B1.6 | Tests: single-service RED + untouched quality/manifest byte-identical; freshness → applied_no_change |
 
-**Exit:** AC-G1, G3, G4, G12 green.
+**Exit:** AC-G1, G3, G4, G12 green. ✅
 
 ### WP-B2 — Shrink (FR-B4, AC-G5)
 
@@ -97,7 +97,7 @@ scorecard-json / affordance_map.json
 | B2.4 | Graph integrity (id uniqueness, targets, gridPos reflow) |
 | B2.5 | Sidecar content hashes (not `--check`) |
 
-**Exit:** AC-G5 green.
+**Exit:** AC-G5 green. ✅
 
 ### WP-B3 — Sidecar + operator glue (FR-B7)
 
@@ -107,7 +107,7 @@ scorecard-json / affordance_map.json
 | B3.2 | HOWTO end-to-end recipe |
 | B3.3 | Optional jq extract only |
 
-**Exit:** sidecar fields complete.
+**Exit:** sidecar fields complete. ✅
 
 ---
 

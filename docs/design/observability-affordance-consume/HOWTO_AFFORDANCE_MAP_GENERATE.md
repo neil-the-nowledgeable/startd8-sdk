@@ -1,6 +1,6 @@
 # HOWTO — Affordance-map biased generate
 
-> Operator recipe for REQ/PLAN v0.4 (WP-B3 complete).
+> Operator recipe for REQ/PLAN v0.4 — **shipped** on `main` @ `deaa7fbb` (2026-07-28).
 
 ## Goal
 
