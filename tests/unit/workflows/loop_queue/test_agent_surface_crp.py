@@ -133,71 +133,59 @@ def test_mock_surface_dual_doc_r1_r2_and_triage(tmp_path: Path):
 
     _mock_surface_drain(queue, handoff1)
     job = queue.run_next("mock-crp")
-    assert job.status is LoopJobStatus.AWAITING_TRIAGE
+    assert job.status is LoopJobStatus.PENDING
     assert job.rounds[0].suggestion_counts == {"S": 1, "F": 1}
     assert not queue.storage.result_path("mock-crp").exists()
-
-    job = queue.triage(
-        "mock-crp",
-        [
-            {
-                "id": "R1-S1",
-                "decision": "ACCEPT",
-                "summary": "Mock plan change",
-                "rationale": "Accepted for test",
-                "source": "mock",
-            },
-            {
-                "id": "R1-F1",
-                "decision": "REJECT",
-                "summary": "Mock requirements change",
-                "rationale": "Rejected for test",
-                "source": "mock",
-            },
-        ],
-    )
-    assert job.status is LoopJobStatus.PENDING
-    assert "R1-S1" in plan.read_text(encoding="utf-8")
-    assert "R1-F1" in requirements.read_text(encoding="utf-8")
     assert "#### Review Round R1" in plan.read_text(encoding="utf-8")
 
     handoff2 = queue.run_next("mock-crp")
     assert isinstance(handoff2, DrainHandoff)
     assert handoff2.round_number == 2
     _mock_surface_drain(queue, handoff2)
-    assert queue.run_next("mock-crp").status is LoopJobStatus.AWAITING_TRIAGE
-
-    final = queue.triage(
-        "mock-crp",
-        [
-            {
-                "id": "R2-S1",
-                "decision": "REJECT",
-                "summary": "Round 2 plan item",
-                "rationale": "No longer needed",
-            },
-            {
-                "id": "R2-F1",
-                "decision": "ACCEPT",
-                "summary": "Round 2 requirement",
-                "rationale": "Needed",
-            },
-        ],
-    )
+    final = queue.run_next("mock-crp")
     assert final.status is LoopJobStatus.COMPLETED
     assert len(final.rounds) == 2
+    assert "R1-S1" in plan.read_text(encoding="utf-8")
+    assert "R1-F1" in requirements.read_text(encoding="utf-8")
+    assert "R2-S1" in plan.read_text(encoding="utf-8")
+    assert "### Appendix A: Applied Suggestions" in plan.read_text(encoding="utf-8")
     assert plan.read_text(encoding="utf-8").count("#### Review Round R1") == 1
     assert plan.read_text(encoding="utf-8").count("#### Review Round R2") == 1
 
 
-def test_max_rounds_one_never_schedules_second_round(tmp_path: Path):
-    queue, _, _, _ = _make_queue_and_job(tmp_path, dual=False, max_rounds=1)
-    handoff = queue.run_next("mock-crp")
+def test_manual_triage_policy_waits_for_explicit_triage(tmp_path: Path):
+    plan = tmp_path / "PLAN.md"
+    plan.write_text("# Plan\n\nArchitecture text.\n", encoding="utf-8")
+    template = tmp_path / "agent-template.md"
+    template.write_text(_TEMPLATE, encoding="utf-8")
+    job = WorkflowLoopJob(
+        job_id="manual-crp",
+        loop_id="crp",
+        executor="agent-surface",
+        surface_id="mock-surface",
+        config={
+            "plan_path": str(plan),
+            "scope": "Manual triage",
+            "max_rounds": 1,
+            "substantially_addressed_threshold": 3,
+            "max_suggestions": 10,
+            "agent_template_path": str(template),
+            "triage_policy": "manual",
+            "surface_conformance": {
+                "vasi_version": "0.1.0",
+                "capabilities": ["status", "drain"],
+            },
+        },
+    )
+    queue = WorkflowLoopQueue(LoopQueueConfig(queue_root=tmp_path / "queue"))
+    queue.enqueue(job)
+    handoff = queue.run_next("manual-crp")
     assert isinstance(handoff, DrainHandoff)
     _mock_surface_drain(queue, handoff)
-    assert queue.run_next("mock-crp").status is LoopJobStatus.AWAITING_TRIAGE
+    waiting = queue.run_next("manual-crp")
+    assert waiting.status is LoopJobStatus.AWAITING_TRIAGE
     final = queue.triage(
-        "mock-crp",
+        "manual-crp",
         [
             {
                 "id": "R1-S1",
@@ -208,6 +196,17 @@ def test_max_rounds_one_never_schedules_second_round(tmp_path: Path):
         ],
     )
     assert final.status is LoopJobStatus.COMPLETED
+
+
+def test_max_rounds_one_never_schedules_second_round(tmp_path: Path):
+    queue, _, _, _ = _make_queue_and_job(tmp_path, dual=False, max_rounds=1)
+    handoff = queue.run_next("mock-crp")
+    assert isinstance(handoff, DrainHandoff)
+    _mock_surface_drain(queue, handoff)
+    final = queue.run_next("mock-crp")
+    assert final.status is LoopJobStatus.COMPLETED
+    assert len(final.rounds) == 1
+    assert "R1-S1" in (tmp_path / "PLAN.md").read_text(encoding="utf-8")
 
 
 def test_render_cache_reuses_same_bundle(tmp_path: Path):

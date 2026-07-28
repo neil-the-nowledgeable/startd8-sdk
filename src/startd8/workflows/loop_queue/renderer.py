@@ -34,6 +34,7 @@ from .models import (
     LoopQueueBlockedError,
     LoopQueueValidationError,
     ReflectiveRequirementsRequest,
+    ResearchRequest,
 )
 
 logger = get_logger(__name__)
@@ -70,6 +71,42 @@ requirements/plan shape when present.
    `round_number: 1`.
 3. Chat/UI reply is a short confirmation only (paths + that reflective loop
    finished). Do not paste the full documents into chat.
+"""
+
+DEFAULT_RESEARCH_TEMPLATE = """# Research Job — {{scope}}
+
+You are draining a Workflow Loop Queue `research` job. Produce durable
+findings from the investigation brief. Do **not** start CRP review or
+implementation coding unless the brief's deliverables explicitly require a
+small spike (and then keep spikes behind flags / gallery toggles).
+
+## Inputs / outputs (absolute)
+
+| Artifact | Path | Role |
+|----------|------|------|
+| Brief (read; may update status pointer) | `{{brief_path}}` | Investigation brief — trust **code** over stale prose |
+| Findings (write) | `{{findings_path}}` | Ranked shortlist, open-question answers, API/spike notes |
+
+Optional focus: `{{focus_file}}`
+
+## Method
+
+1. Read the brief end-to-end; verify claims against the real codebase.
+2. Use a few parallel agents when the brief asks for multi-angle research
+   (code inventory, candidate scoring, perf, boundary).
+3. Write `{{findings_path}}` covering the brief's expected deliverables
+   (ranked shortlist, spikes/status, deferred list, open questions).
+4. Optionally update the brief's status line to point at the findings doc.
+5. Do not invent a new WLQ recipe from inside this drain.
+
+## Done when
+
+1. `{{findings_path}}` exists as a non-empty `.md` file.
+2. You write `drain-result.json` at the path from the Drain Hand-off with
+   `ok: true`, `paths_written` containing exactly that findings path, and
+   `round_number: 1`.
+3. Chat/UI reply is a short confirmation only (paths + that research
+   finished). Do not paste the full findings into chat.
 """
 
 
@@ -274,4 +311,49 @@ def render_reflective_bundle(
     rendered = _render_slot_template(template_text, slots, template_label)
     bundle_path.write_text(rendered, encoding="utf-8")
     logger.info("Rendered reflective bundle: %s", bundle_path)
+    return bundle_path.resolve()
+
+
+def render_research_bundle(
+    request: ResearchRequest,
+    artifact_dir: Path,
+) -> Path:
+    """Render the agent-surface research instruction bundle."""
+    artifact_dir = Path(artifact_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    template_bytes: Optional[bytes] = None
+    template_label = Path("<default-research-template>")
+    if request.agent_template_path:
+        template_path = Path(request.agent_template_path)
+        if not template_path.is_file():
+            raise LoopQueueBlockedError(
+                f"agent_template_path vanished: {template_path}"
+            )
+        template_bytes = template_path.read_bytes()
+        template_label = template_path
+        template_text = template_bytes.decode("utf-8")
+    else:
+        template_text = DEFAULT_RESEARCH_TEMPLATE
+        template_bytes = template_text.encode("utf-8")
+
+    key = hashlib.sha256(
+        request.content_hash().encode("ascii") + b":" + template_bytes
+    ).hexdigest()[:12]
+    bundle_path = artifact_dir / f"bundle-research-{key}.md"
+    if bundle_path.is_file():
+        logger.info("Reusing cached research bundle %s", bundle_path)
+        return bundle_path
+
+    slots = {
+        "scope": request.scope,
+        "brief_path": str(Path(request.brief_path).resolve()),
+        "findings_path": str(Path(request.findings_path).resolve()),
+        "focus_file": (
+            str(Path(request.focus_file).resolve()) if request.focus_file else "(none)"
+        ),
+        "source_paths": "\n".join(str(p.resolve()) for p in request.source_paths),
+    }
+    rendered = _render_slot_template(template_text, slots, template_label)
+    bundle_path.write_text(rendered, encoding="utf-8")
+    logger.info("Rendered research bundle: %s", bundle_path)
     return bundle_path.resolve()

@@ -151,7 +151,7 @@ def test_sdk_workflow_drain_with_scripted_agent(tmp_path: Path):
     agent.generate.return_value = (_snippet(1), 500, tu)
 
     result_job = queue.run_next("sdk-crp-1", agents=[agent])
-    assert result_job.status is LoopJobStatus.AWAITING_TRIAGE
+    assert result_job.status is LoopJobStatus.COMPLETED
     assert result_job.rounds_completed() == 1
     assert "#### Review Round R1" in plan.read_text(encoding="utf-8")
     assert (queue.storage.artifact_dir("sdk-crp-1") / "sdk-run-result.json").is_file()

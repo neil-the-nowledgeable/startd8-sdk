@@ -85,6 +85,8 @@ self-contained prompt bundle; the SDK executor maps the same fields to
 | Drain contract | Surface points the agent at the absolute path of the rendered bundle + source doc paths; agent appends Appendix C; chat reply = write-confirmation only |
 | SDK `review_template` | Remains an **SDK-executor-only** customization seam. WLQ MUST fail closed if a job tries to pass an agent-surface bundle as `review_template` |
 | Shared seam | Typed `CrpReviewRequest` (FR-1a) feeds renderers; templates are not a second source of truth for paths/rounds |
+| Deferred batch triage | All `max_rounds` review drains run first (`pending` between rounds). Default `triage_policy=auto_accept` then ACCEPTS untriaged Appendix C ids into A and completes. `manual` leaves `awaiting_triage` for an explicit `triage` call (FR-12/13) |
+| Reviewer tiers | `reviewer_tier=flagship\|mid_tier` expands a 3-vendor Cursor Task roster (Anthropic→OpenAI→Google); explicit `reviewer_roster` overrides; pairs with `max_rounds` (FR-23) |
 
 ### 0.5 Multi-vendor agent surfaces (v0.5)
 
@@ -132,11 +134,11 @@ The SDK already has:
 
 - **FR-1 — Workflow-loop job envelope.** Define a versioned job schema (suggested filename pattern `*_startd8_wloop.json` or equivalent, distinct from `*_startd8_job.json`) with at least: `schema_version`, `job_id`, `loop_id` (recipe name, e.g. `crp`), `executor` (`agent-surface` \| `sdk-workflow`), `surface_id` (required when `executor=agent-surface`; recommended known values: `cursor`, `codex`, `antigravity`; open string for future vendors), `workflow_id` (optional when `agent-surface`; required when `sdk-workflow`), `config`, `priority`, `status` ∈ {`pending`, `processing`, `awaiting_triage`, `completed`, `failed`, `cancelled`, `blocked`}, `created_at`, `depends_on[]`, `budget`, `metadata`. Alias `executor=cursor-agent` MAY be accepted as deprecated synonym for `agent-surface` + `surface_id=cursor`. *Acceptance:* invalid schema fails at enqueue; valid jobs round-trip; unknown `surface_id` is allowed if VASI fields present (FR-21). **[R1-F1 / §0.5]**
 
-- **FR-1a — Canonical CRP review-intent (`CrpReviewRequest`).** When `loop_id=crp`, `config` MUST carry a typed object with at least: `plan_path` and/or `requirements_path` (dual-doc needs both), `scope`, `max_rounds`, `substantially_addressed_threshold`, `max_suggestions`, optional `focus_file`, optional `agents` / provider policy, `enable_triage` / `enable_apply` (sdk-workflow), optional `agent_template_path` (project override for agent-surface renderer; alias `cursor_template_path` accepted). Unknown required keys fail closed at enqueue. **[R1-F2 / §0.3–0.5]** *Acceptance:* unit test rejects CRP enqueue missing required intent keys; all executors/surfaces consume one request instance.
+- **FR-1a — Canonical CRP review-intent (`CrpReviewRequest`).** When `loop_id=crp`, `config` MUST carry a typed object with at least: `plan_path` and/or `requirements_path` (dual-doc needs both), `scope`, `max_rounds`, `substantially_addressed_threshold`, `max_suggestions`, optional `focus_file`, optional `agents` / provider policy, `enable_triage` / `enable_apply` (sdk-workflow), optional `agent_template_path` (project override for agent-surface renderer; alias `cursor_template_path` accepted), optional reviewer routing fields (FR-23), and `triage_policy` ∈ {`auto_accept` (default), `manual`}. Unknown required keys fail closed at enqueue. **[R1-F2 / §0.3–0.5]** *Acceptance:* unit test rejects CRP enqueue missing required intent keys; all executors/surfaces consume one request instance.
 
 - **FR-2 — Reuse JobQueue operational patterns, not JobFile semantics.** Watch folder, status sidecar, archive-on-complete, priority ordering, and sequential drain (`max_concurrent_jobs` default 1) SHOULD match `JobQueue` UX (`startd8 queue status|run|watch`). Implementation MUST NOT overload `JobFile.prompt` for workflow configs. *Acceptance:* a prompt job and a workflow-loop job can coexist in the same watch tree or sibling trees without cross-interpretation.
 
-- **FR-3 — Durable status across sessions / surfaces.** Status transitions `pending → processing → awaiting_triage | completed | failed | cancelled | blocked` persist on disk. A new agent session (any conforming surface) can `status` / `run-next` without prior conversation memory. Abandoned `processing` jobs reclaim to `pending` after `lease_ttl_seconds` (default 3600; `0` disables) on `status` / `run-next`; explicit `requeue` / `cancel` remain. **[R1-F3]** *Acceptance:* after a completed review round, status is `awaiting_triage` (if triage deferred) or advances per FR-12/13; expired lease → reclaimable `pending`.
+- **FR-3 — Durable status across sessions / surfaces.** Status transitions for CRP review drains: `pending → processing → pending` (more rounds remain) or `pending → processing → completed` when `triage_policy=auto_accept` after the final round (transient `awaiting_triage` during auto-triage is allowed); with `triage_policy=manual`, final round ends in `awaiting_triage` until an explicit `triage` → `completed`. Also `failed` / `cancelled` / `blocked` as applicable. A new agent session (any conforming surface) can `status` / `run-next` without prior conversation memory. Abandoned `processing` jobs reclaim to `pending` after `lease_ttl_seconds` (default 3600; `0` disables) on `status` / `run-next`; explicit `requeue` / `cancel` remain. **[R1-F3]** *Acceptance:* after a non-final review round, status is `pending`; after the final review round with default `auto_accept`, status is `completed` with Appendix A rows for untriaged ids; expired lease → reclaimable `pending`.
 
 - **FR-4 — Vendor-neutral enqueue / drain CLI + reference Cursor skill.** WLQ ships CLI ops: `enqueue`, `status`, `run-next` / `drain`, `cancel`, `list-loops`, `list-surfaces`, and for CRP: `triage` / `render`. These are the **canonical ops** every vendor surface must map to (FR-21). v1 also ships a **Cursor reference skill** that invokes those ops. Drain for `executor=agent-surface`: ensure a **rendered review-template bundle** exists (FR-8 / FR-20), hand the surface a **Drain Hand-off** (FR-21) pointing at the absolute bundle path; surface’s agent executes Write/Edit; write confirmation + suggestion counts back to job status. Drain for `executor=sdk-workflow`: `WorkflowRegistry.run_workflow` / `startd8 workflow run`. *Acceptance:* Cursor happy path documented; a fixture “mock surface” that only implements VASI hand-off ops can drain without Cursor-specific code.
 
@@ -166,17 +168,51 @@ The SDK already has:
 
 - **FR-7 — Loop recipe registry.** WLQ ships a small registry of **loop recipes** (not the full WorkflowRegistry). v1 recipe: `crp`. Each recipe declares: inputs, steps/phases, which executors it supports, completion predicate, and how it maps to zero-or-more `workflow_id`s when using `sdk-workflow`. *Acceptance:* `list-loops` shows `crp` with `agent-surface` and `sdk-workflow` documented.
 
-- **FR-8 — CRP agent-surface executor (v1 default) = review-template drain.** For `loop_id=crp` + `executor=agent-surface`, the drain path MUST: (a) derive next round number and prior A/B memory from the target doc(s); (b) **render or reuse** an agent-surface review-template bundle per FR-20 (default renderer: `new-cnvrg-rvw-prmpt` / guide); (c) emit a VASI Drain Hand-off (FR-21) so the named `surface_id`’s agent executes the bundle — append a `#### Review Round R{n}` block under Appendix C (initialize A/B/C scaffold if absent); (d) record write confirmation + suggestion counts on the job status; (e) leave **triage** as an explicit follow-up step — reviewer must not self-triage into A/B. The rendered bundle is never fed to SDK `review_template`. *Acceptance:* fixture → scaffold + R1; second `run-next` → R2; status records S/F counts; works with `surface_id=cursor` reference and a mock surface fixture.
+- **FR-8 — CRP agent-surface executor (v1 default) = review-template drain.** For `loop_id=crp` + `executor=agent-surface`, the drain path MUST: (a) derive next round number and prior A/B memory from the target doc(s); (b) **ensure** the Appendix A/B/C scaffold on each source doc (idempotent; same contract as `new-cnvrg-rvw-prmpt`) then **render or reuse** an agent-surface review-template bundle per FR-20; (c) emit a VASI Drain Hand-off (FR-21) so the named `surface_id`’s agent executes the bundle — append a `#### Review Round R{n}` block under Appendix C only (`init_appendix_if_missing=false`, `appendix_scaffold_ensured=true`); (d) record write confirmation + suggestion counts on the job status; (e) return the job to `pending` when more review rounds remain under `max_rounds`, or finish the review phase per FR-13 when all rounds are complete — reviewer must not self-triage into A/B during a review drain. The rendered bundle is never fed to SDK `review_template`. *Acceptance:* fixture → scaffold + R1 → `pending`; second `run-next` → R2 → `completed` under default `auto_accept` when `max_rounds=2`; status records S/F counts; works with `surface_id=cursor` reference and a mock surface fixture.
 
-- **FR-9 — CRP SDK-workflow executor.** For `loop_id=crp` + `executor=sdk-workflow`, drain MUST invoke `convergent-review` (dual-doc) or `architectural-review-log` (single-doc) via the registry with config mapped from `CrpReviewRequest` (FR-1a). It MUST NOT pass an agent-surface review-template bundle as `review_template`. Optional SDK-native `review_template` overrides remain allowed only under the SDK `str.format` contract. *Acceptance:* dry-run / scripted-agent path mutates the fixture like a direct `startd8 workflow run`; contract test: both executors accept one `CrpReviewRequest`; setting `review_template` to an agent-surface bundle fails closed.
+- **FR-9 — CRP SDK-workflow executor.** For `loop_id=crp` + `executor=sdk-workflow`, drain MUST invoke `convergent-review` (dual-doc) or `architectural-review-log` (single-doc) via the registry with config mapped from `CrpReviewRequest` (FR-1a). It MUST NOT pass an agent-surface review-template bundle as `review_template`. Optional SDK-native `review_template` overrides remain allowed only under the SDK `str.format` contract. When SDK triage/apply is not enabled in-workflow, the same review-phase + `triage_policy` finish rules as FR-13 apply. *Acceptance:* dry-run / scripted-agent path mutates the fixture like a direct `startd8 workflow run`; contract test: both executors accept one `CrpReviewRequest`; setting `review_template` to an agent-surface bundle fails closed.
 
 - **FR-10 — Cite, don’t fork, CRP protocol.** Suggestion schema, areas, severities, and Appendix A/B/C rules remain owned by `docs/design/arc-review/ARCHITECTURAL_REVIEW_REQUIREMENTS.md` and `CONVERGENT_REVIEW_AGENT_GUIDE.md`. WLQ requirements MUST NOT redefine the 7-column table. *Acceptance:* this doc links §-refs only; CRP Agent Guide is the reviewer contract.
 
 - **FR-11 — Derive round / coverage (Hitsuzen).** Next `R{n}`, applied/rejected ID lists, and priority-area steering MUST be derived from the on-disk document state and **injected into the rendered agent-surface bundle before drain**. Agents MUST NOT invent the round number. *Acceptance:* after manual R1 append, enqueue+drain uses R2.
 
-- **FR-12 — Multi-round + stop conditions.** A CRP job supports `max_rounds` (default aligned with skill defaults, e.g. 2), optional `substantially_addressed_threshold`, and optional `$` / turn budget. Completion when rounds exhausted **or** recipe-defined convergence signal (for sdk-workflow: workflow result success + configured rounds). *Acceptance:* `max_rounds=1` never schedules a second review step.
+- **FR-12 — Multi-round review phase (then stop).** A CRP job supports `max_rounds` (default aligned with skill defaults, e.g. 2), optional `substantially_addressed_threshold`, and optional `$` / turn budget. The **review phase** runs consecutive Appendix C rounds until `max_rounds` is reached (or a recipe-defined convergence signal ends review early for sdk-workflow). Triage is **not** interleaved between rounds (FR-13). *Acceptance:* `max_rounds=1` never schedules a second review step; `max_rounds=2` allows R1 then R2 without an intervening `triage` action.
 
-- **FR-13 — Triage handoff is a first-class step.** After each review round (or after N rounds), the job MAY enter `awaiting_triage`. A `triage` action (any VASI-capable surface or SDK CLI helper) records Accepted→Appendix A / Rejected→Appendix B per CRP rules. **Appendix C round history remains append-only**; triage updates A/B and job status, not deletion of C. v1 MAY allow human-in-the-loop triage outside the queue, but status MUST distinguish `awaiting_triage` from `completed`. *Acceptance:* status distinguishes `awaiting_triage` from `completed`; A/B gain disposition rows without erasing C.
+- **FR-13 — Batch triage after all review rounds (normative; auto by default).** CRP loop policy:
+  1. Run all configured review rounds first (`run-next` / drain until `rounds_completed == max_rounds`).
+  2. Between non-final rounds, job status MUST be `pending` — **not** `awaiting_triage`.
+  3. After the final review round, apply `triage_policy`:
+     - **`auto_accept` (default):** automatically ACCEPT every still-untriaged Appendix C suggestion id into Appendix A (rationale stamped as WLQ auto-triage), preserve Appendix C append-only, then mark the job `completed`. Must not require a separate human/CLI triage step to finish the loop.
+     - **`manual`:** enter `awaiting_triage`; an explicit `triage` action records ACCEPT→A / REJECT→B for any subset of ids, then `completed`.
+  4. Reviewer agents during review drains MUST NOT self-triage into A/B.
+  **Appendix C round history remains append-only.** *Acceptance:* mid-loop after R1 of `max_rounds=2` is `pending`; after final round with default policy, status is `completed` and A contains the R1+R2 ids; with `triage_policy=manual`, status is `awaiting_triage` until an explicit triage call.
+
+- **FR-23 — Cross-vendor reviewer tiers (flagship / mid-tier).** End users MUST be able to request multi-vendor CRP without listing raw model slugs, by declaring a **reviewer tier** on the job envelope alongside `max_rounds`:
+  1. **`reviewer_tier`:** `flagship` \| `mid_tier`.
+     - **`flagship`:** curated Cursor Task roster spanning Anthropic + OpenAI + Google **top** models (one slug per vendor, stable order: Anthropic → OpenAI → Google).
+     - **`mid_tier`:** curated Cursor Task roster spanning the same three vendors at **balanced / mid** capability (same vendor order).
+  2. Setting `reviewer_tier` MUST coerce `reviewer_mode=blind_rotate` (unless an explicit incompatible mode is set — fail closed) and expand `reviewer_roster` from the SDK-owned preset catalog when `reviewer_roster` is omitted.
+  3. An explicit non-empty `reviewer_roster` ALWAYS wins over the tier preset (power users / experiments); `reviewer_tier` MAY still be recorded for telemetry.
+  4. Round assignment remains `roster[(round_number - 1) % len(roster)]` (FR-8 / OQ-8). `max_rounds` is independent — e.g. `max_rounds=3` + `reviewer_tier=flagship` ⇒ one round per flagship vendor; `max_rounds=2` uses the first two roster entries then stops review.
+  5. Preset catalogs live in code (single source) and MUST be listable (e.g. docs + unit fixture); bumping a preset is an intentional SDK change, not a silent per-project default.
+  6. Initiation JSON example (normative shape):
+     ```json
+     {
+       "loop_id": "crp",
+       "executor": "agent-surface",
+       "surface_id": "cursor",
+       "config": {
+         "plan_path": "/ABS/PLAN.md",
+         "requirements_path": "/ABS/REQUIREMENTS.md",
+         "scope": "Cross-vendor flagship CRP",
+         "max_rounds": 3,
+         "reviewer_tier": "flagship",
+         "substantially_addressed_threshold": 3,
+         "max_suggestions": 10
+       }
+     }
+     ```
+  *Acceptance:* enqueue with `reviewer_tier=flagship` and no roster expands to 3 vendor slugs and blind_rotate; `mid_tier` expands to a distinct 3-vendor mid roster; explicit roster overrides tier expansion; R1/R2/R3 hand-offs assign Anthropic/OpenAI/Google flagship slugs in order; `list`-style unit test freezes the preset membership.
 
 - **FR-14 — Resume / Mottainai.** Re-draining a CRP job MUST NOT regenerate a completed round’s Appendix C block. Completed rounds are skipped; only pending work runs. Rendered agent-surface review-template bundles are cached under the job’s artifact dir and reused unless `CrpReviewRequest` inputs change (content hash). *Acceptance:* second drain after successful R1 is a no-op or advances only R2.
 
@@ -184,7 +220,7 @@ The SDK already has:
   1. **Output:** a self-contained markdown bundle on disk (absolute path recorded on the job + Drain Hand-off).
   2. **Renderer:** default = `new-cnvrg-rvw-prmpt` (or equivalent). Optional project override via `agent_template_path` — markdown with **safe `{{slot}}` placeholders only**. Substitution at render time; agent never sees unsubstituted required slots.
   3. **Forbidden:** Python `str.format` / single-brace `{name}` on agent-facing CRP text (spike `KeyError: 'n'`).
-  4. **Agent contract (all surfaces):** filesystem read/write to source docs; append Appendix C (+ dual-doc coverage matrix to plan); no A/B triage; short confirmation reply.
+  4. **Agent contract (all surfaces):** filesystem read/write to source docs; append Appendix C (+ dual-doc coverage matrix to plan); scaffold already ensured by WLQ (FR-8); no A/B triage; short confirmation reply.
   5. **Queue integration:** `run-next` for `agent-surface` emits VASI Drain Hand-off; success = append detected + status write-back.
   6. **Surface independence:** bundle format is identical for Cursor, Codex, Antigravity; only the surface’s UX for opening/running the bundle differs (vendor-owned).
   *Acceptance:* (a) default renderer produces a runnable bundle; (b) `{{slot}}` override fixture; (c) bundle rejected as SDK `review_template`; (d) Cursor reference e2e; (e) mock non-Cursor surface drains via hand-off alone.
@@ -195,11 +231,21 @@ The SDK already has:
 
 - **FR-16 — Dependency DAG (light).** `depends_on: [job_id, …]` blocks drain until dependencies are `completed`. Cycles fail at enqueue. *Acceptance:* CRP job B depending on `loop_id=reflective-requirements` job A does not start until A completes.
 
-- **FR-17 — Observability.** Emit OTel spans or structured logs for enqueue, drain start/end, `executor`, `surface_id`, workflow_id/loop_id, cost (when sdk-workflow), status transition. Reuse `get_logger` / existing workflow span patterns. *Acceptance:* a drain produces a span/log line searchable by `job_id` and `surface_id`.
+- **FR-17 — Observability.** Emit OTel spans or structured logs for enqueue, drain start/end, `executor`, `surface_id`, workflow_id/loop_id, cost (when sdk-workflow), status transition. Reuse `get_logger` / existing workflow span patterns. **CLI stdout contract:** `startd8 wloop *` success payloads that agents parse MUST be **JSON-only on stdout**. OTel / exporter / logging failures MUST NOT interleave with that JSON (route to stderr, or suppress exporter noise unless `--verbose` / debug logging). *Acceptance:* a drain produces a span/log line searchable by `job_id` and `surface_id`; with a dead collector, `wloop status` stdout is still valid JSON (`json.loads` of the full stdout succeeds).
 
 - **FR-18 — Budget fail-closed.** Optional per-job and per-queue `$` / round caps checked before sdk-workflow re-entry (wire to `costs/budget.py` when executor spends). Agent-surface executor: enforce `max_rounds` and surface a budget warning in the Drain Hand-off / skill banner (vendor UX may rephrase). *Acceptance:* zero-dollar budget with sdk-workflow refuses to start.
 
 - **FR-19 — Public experimental API.** Queue models + `enqueue`/`drain`/hand-off helpers are **experimental** pre-1.0; import path documented (suggested: `startd8.workflows.loop_queue`). VASI schema published alongside. *Acceptance:* smoke import + schema fixture test.
+
+- **FR-24 — Queue root ≠ document root (agent ergonomics).** `plan_path` / `requirements_path` (and reflective write targets) are the **documents under review** — absolute paths into whatever project owns those docs (often a consumer repo). The WLQ **queue root** is the **loop-owning** store (typically the SDK / tooling repo’s `.startd8/workflow-loop-queue/`), not “wherever the agent’s CWD is when reading the docs.” Requirements:
+  1. **Resolution order for `--root`:** explicit `--root` → `$STARTD8_WLOOP_ROOT` → default `.startd8/workflow-loop-queue` relative to CWD.
+  2. On `enqueue`, if the resolved root is **newly created** (no prior `jobs/` envelopes and no existing queue marker), CLI MUST emit a loud note to **stderr** naming the absolute path and asking whether this is the intended loop root (enqueue still succeeds — soft warn, not fail-closed).
+  3. Agent HOWTO / skill MUST state the split in Preconditions and use **consumer-shaped** absolute path examples (not WLQ’s own design docs as the default copy-paste target).
+  *Acceptance:* unit/CLI test that a fresh root prints the stderr note; HOWTO examples show e.g. a ContextCore (or other project) plan/reqs path with an explicit SDK `--root`.
+
+- **FR-25 — Storage layout: `jobs/` is canonical; do not verify via `pending/`.** CLI `enqueue` persists envelopes under `<queue_root>/jobs/<job_id>_startd8_wloop.json` with `status=pending`. Agents MUST confirm via `startd8 wloop status`, **not** by listing a `pending/` folder. A `pending/` directory MAY be used only as **optional human/agent staging** for draft envelopes before `--config`; it is not the post-enqueue store and v1 does not require a file-drop watcher. *Acceptance:* HOWTO documents CLI vs staging explicitly; enqueue never requires writing into `pending/`.
+
+- **FR-26 — HOWTO documents WLQ as a reusable substrate.** `HOWTO_AGENT_ENQUEUE.md` MUST include a short section on composing agent loops via WLQ (e.g. `reflective-requirements` → `crp` with `depends_on`), emphasizing shell-out to `startd8 wloop` so consumer projects keep a **zero-import** boundary with the SDK. *Acceptance:* section present; field checklist says confirm with `wloop status` not folder listing.
 
 ---
 
@@ -210,10 +256,11 @@ The SDK already has:
 - **NR-3 — Not a rewrite of CRP protocol.** No new suggestion schema, areas, or appendix semantics. Do not strip Appendix C round history on triage.
 - **NR-4 — Not Prime/Artisan/cap-dev-pipe orchestration in v1.** `prime-contractor`, `plan-ingestion` *may* be enqueued as one-shot later; WLQ does not replace `.cap-dev-pipe/` scripts.
 - **NR-5 — Not vendor Automations as a v1 hard dependency.** CLI + one reference Cursor skill are sufficient; Cursor Automations / Codex schedulers / Antigravity automations are optional Increment 2+ consumers of the same on-disk queue (vendor-owned).
-- **NR-6 — Not autonomous merge/push.** Queue does not commit, open PRs, or apply triage without an explicit triage action / human confirmation.
+- **NR-6 — Not autonomous merge/push.** Queue does not commit or open PRs. Default `triage_policy=auto_accept` DOES auto-disposition Appendix A after the review phase (FR-13); it does not merge code or open PRs. Use `triage_policy=manual` when ACCEPT/REJECT must stay human-gated.
 - **NR-7 — Not a second WorkflowRegistry.** Loop recipes are thin; catalog ownership stays with entry points in `pyproject.toml`.
 - **NR-8 — Not unifying agent-surface bundles with SDK `review_template`.** v1 does **not** migrate `architectural-review-log.review_template` off `str.format`. Agent-surface uses FR-20; SDK custom templates stay on the existing SDK contract.
 - **NR-9 — Not shipping Codex or Antigravity connectors in startd8-sdk.** Those vendors (or integrators) implement VASI downstream. SDK delivers the interface doc, schemas, CLI, reference Cursor adapter, and contract tests — not vendor plugins.
+- **NR-10 — Not auto-discovering the “right” consumer docs.** WLQ does not crawl sibling repos for plan/requirements; agents (or users) MUST supply absolute paths. FR-24 only clarifies queue-root vs doc-root.
 
 ---
 
@@ -224,7 +271,7 @@ The SDK already has:
 | **OQ-5** | **Lease TTL with reclaim.** Default `LoopQueueConfig.lease_ttl_seconds=3600`. Expired `processing` jobs auto-reclaim to `pending` on `status` / `run-next` (Mottainai). `0` disables; explicit `requeue`/`cancel` remain. | Abandoned drains must not wedge the queue forever. |
 | **OQ-6** | **First-class `loop_id=reflective-requirements`** (`agent-surface` only). Follow-on CRP is a separate job (often `depends_on`). | Capability-Delivery Loop needs an executable first bookend, not only a skill outside the queue. |
 | **OQ-7** | **Dedicated** `.startd8/workflow-loop-queue/` (not shared with prompt JobQueue). | Isolation avoids cross-interpretation with `*_startd8_job.json`. |
-| **OQ-8** | **Default = current chat agent.** Surfaces MAY spawn a blind subagent/Task; VASI allows either. Cursor reference skill uses the current agent. | Lowest friction for v1; vendors can harden. |
+| **OQ-8** | **Default = current chat agent.** Robustness path: `reviewer_mode=blind_rotate` + `reviewer_roster` **or** `reviewer_tier` (`flagship` \| `mid_tier` expands to Anthropic+OpenAI+Google Cursor Task slugs) → each drain assigns `roster[(round-1)%len]` and **must** spawn a blind Task; write-back `reviewer_model` fail-closed (FR-23). | Lowest friction default; cross-vendor when tier/roster set. |
 | **OQ-9** | **CLI is canonical.** Vendors shell out to `startd8 wloop *`. MCP wrappers are optional later, not required for correctness. | Offline-friendly; avoids flaky MCP as a hard dependency. |
 | **OQ-10** | Prefer **in-repo** templates under `docs/design/**/templates/`; local-only under `.startd8/review-templates/` also allowed. | Versioned templates travel with the project. |
 | **OQ-11** | **JSON + markdown card.** `drain-handoff.json` remains normative; `drain-handoff.md` is always written (`markdown_card_path` on the hand-off). | Chat-paste vendors need a short human card; machines keep JSON. |

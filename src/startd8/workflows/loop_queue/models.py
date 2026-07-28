@@ -86,6 +86,19 @@ def looks_like_agent_bundle(text: str) -> bool:
     return bool(_AGENT_BUNDLE_MARKERS.search(text))
 
 
+class AssignedReviewer(BaseModel):
+    """Per-drain reviewer assignment for agent-surface CRP (blind_rotate roster)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["current", "blind_rotate"]
+    model: Optional[str] = None
+    roster_index: Optional[int] = None
+    roster: List[str] = Field(default_factory=list)
+    #: FR-23 tier that expanded the roster, when applicable.
+    reviewer_tier: Optional[Literal["flagship", "mid_tier"]] = None
+
+
 class CrpReviewRequest(BaseModel):
     """Canonical typed CRP review intent (FR-1a).
 
@@ -115,6 +128,20 @@ class CrpReviewRequest(BaseModel):
     #: Optional project {{slot}} template override for the agent-surface
     #: renderer (FR-20.2). Alias ``cursor_template_path`` accepted (FR-1a).
     agent_template_path: Optional[str] = None
+    #: Agent-surface CRP: ``current`` (default chat) or ``blind_rotate`` (Task
+    #: subagent with ``reviewer_roster[(round-1) % len]``). Distinct from
+    #: ``agents`` (sdk-workflow provider specs).
+    reviewer_mode: Literal["current", "blind_rotate"] = "current"
+    #: Cursor Task model slugs for ``blind_rotate`` (e.g. claude-opus-…, gpt-…).
+    #: When omitted and ``reviewer_tier`` is set, expanded from FR-23 presets.
+    reviewer_roster: Optional[List[str]] = None
+    #: FR-23: ``flagship`` or ``mid_tier`` → cross-vendor Anthropic/OpenAI/Google
+    #: Cursor Task roster. Coerces ``blind_rotate``; explicit roster overrides.
+    reviewer_tier: Optional[Literal["flagship", "mid_tier"]] = None
+    #: After all ``max_rounds`` review drains: ``auto_accept`` ACCEPTs every
+    #: untriaged Appendix C id into A and completes the job; ``manual`` leaves
+    #: ``awaiting_triage`` for an explicit ``triage`` call.
+    triage_policy: Literal["auto_accept", "manual"] = "auto_accept"
 
     @model_validator(mode="before")
     @classmethod
@@ -125,12 +152,56 @@ class CrpReviewRequest(BaseModel):
             data.setdefault("agent_template_path", alias)
         return data
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_roster_or_tier_to_blind_rotate(cls, data: Any) -> Any:
+        """Non-empty roster or reviewer_tier with omitted mode → ``blind_rotate``."""
+        if isinstance(data, dict):
+            data = dict(data)
+            roster = data.get("reviewer_roster")
+            tier = data.get("reviewer_tier")
+            if (roster or tier) and "reviewer_mode" not in data:
+                data["reviewer_mode"] = "blind_rotate"
+        return data
+
     @model_validator(mode="after")
     def _require_at_least_one_source(self) -> "CrpReviewRequest":
         if not self.plan_path and not self.requirements_path:
             raise ValueError(
                 "CrpReviewRequest requires plan_path and/or requirements_path"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_reviewer_roster(self) -> "CrpReviewRequest":
+        from .reviewer_presets import resolve_reviewer_tier_roster
+
+        if self.reviewer_tier and self.reviewer_mode == "current":
+            raise ValueError(
+                "reviewer_tier requires reviewer_mode=blind_rotate "
+                "(omit reviewer_mode to coerce)"
+            )
+
+        roster = self.reviewer_roster
+        if self.reviewer_tier and not roster:
+            self.reviewer_roster = resolve_reviewer_tier_roster(self.reviewer_tier)
+            roster = self.reviewer_roster
+
+        if self.reviewer_mode == "blind_rotate":
+            if not roster:
+                raise ValueError(
+                    "reviewer_mode=blind_rotate requires a non-empty "
+                    "reviewer_roster or reviewer_tier=flagship|mid_tier"
+                )
+            cleaned = [entry.strip() for entry in roster if entry and str(entry).strip()]
+            if len(cleaned) != len(roster) or not cleaned:
+                raise ValueError(
+                    "reviewer_roster entries must be non-empty Cursor Task model slugs"
+                )
+            self.reviewer_roster = cleaned
+        elif roster is not None:
+            cleaned = [entry.strip() for entry in roster if entry and str(entry).strip()]
+            self.reviewer_roster = cleaned or None
         return self
 
     @property
@@ -141,6 +212,21 @@ class CrpReviewRequest(BaseModel):
     @property
     def dual_doc(self) -> bool:
         return bool(self.plan_path and self.requirements_path)
+
+    def assigned_reviewer_for_round(self, round_number: int) -> AssignedReviewer:
+        """Resolve the VASI assigned_reviewer for drain round ``round_number``."""
+        if round_number < 1:
+            raise ValueError(f"round_number must be >= 1, got {round_number}")
+        if self.reviewer_mode != "blind_rotate" or not self.reviewer_roster:
+            return AssignedReviewer(mode="current", model=None, roster_index=None, roster=[])
+        index = (round_number - 1) % len(self.reviewer_roster)
+        return AssignedReviewer(
+            mode="blind_rotate",
+            model=self.reviewer_roster[index],
+            roster_index=index,
+            roster=list(self.reviewer_roster),
+            reviewer_tier=self.reviewer_tier,
+        )
 
     def content_hash(self) -> str:
         """Stable hash of the intent — the FR-14 bundle-cache key component."""
@@ -168,6 +254,40 @@ class ReflectiveRequirementsRequest(BaseModel):
     @property
     def source_paths(self) -> List[Path]:
         return [Path(self.requirements_path), Path(self.plan_path)]
+
+    def content_hash(self) -> str:
+        payload = self.model_dump(mode="json")
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+
+class ResearchRequest(BaseModel):
+    """Agent-surface research-job intent (brief → findings).
+
+    ``brief_path`` must exist at enqueue (the investigation brief).
+    ``findings_path`` is the write target (may be created on drain); its parent
+    directory must exist. Unknown keys fail closed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str
+    brief_path: str
+    findings_path: str
+    agent_template_path: Optional[str] = None
+    surface_conformance: Optional[Dict[str, Any]] = None
+    #: Optional absolute path to a focus file the researcher should prioritize.
+    focus_file: Optional[str] = None
+
+    @property
+    def source_paths(self) -> List[Path]:
+        """Paths the drain must leave as non-empty markdown (findings only)."""
+        return [Path(self.findings_path)]
+
+    @property
+    def brief(self) -> Path:
+        return Path(self.brief_path)
 
     def content_hash(self) -> str:
         payload = self.model_dump(mode="json")
@@ -260,6 +380,19 @@ class WorkflowLoopJob(BaseModel):
                 f"invalid ReflectiveRequirementsRequest for job {self.job_id!r}: {e}"
             ) from e
 
+    def research_request(self) -> ResearchRequest:
+        """Parse ``config`` as research-job intent (brief → findings)."""
+        if self.loop_id != "research":
+            raise LoopQueueValidationError(
+                f"job {self.job_id!r} has loop_id={self.loop_id!r}, not 'research'"
+            )
+        try:
+            return ResearchRequest.model_validate(self.config)
+        except Exception as e:
+            raise LoopQueueValidationError(
+                f"invalid ResearchRequest for job {self.job_id!r}: {e}"
+            ) from e
+
     def rounds_completed(self) -> int:
         return len(self.rounds)
 
@@ -303,7 +436,9 @@ class DrainHandoff(BaseModel):
     success_criteria: Dict[str, bool] = Field(
         default_factory=lambda: {
             "append_review_round": True,
-            "init_appendix_if_missing": True,
+            # False: WLQ ensures the A/B/C scaffold (like new-cnvrg-rvw-prmpt).
+            "init_appendix_if_missing": False,
+            "appendix_scaffold_ensured": True,
             "no_triage": True,
             "dual_doc_coverage_matrix": True,
         }
@@ -312,6 +447,8 @@ class DrainHandoff(BaseModel):
     budget_warning: Optional[str] = None
     #: OQ-11: optional human markdown card path alongside the JSON hand-off.
     markdown_card_path: Optional[str] = None
+    #: Blind-rotate roster assignment for this drain (agent-surface CRP).
+    assigned_reviewer: Optional[AssignedReviewer] = None
 
 
 class DrainResult(BaseModel):
@@ -327,6 +464,8 @@ class DrainResult(BaseModel):
     suggestion_counts: Dict[str, int] = Field(default_factory=dict)
     paths_written: List[str] = Field(default_factory=list)
     error: Optional[str] = None
+    #: Required when hand-off ``assigned_reviewer.mode`` is ``blind_rotate``.
+    reviewer_model: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_counts(self) -> "DrainResult":

@@ -92,29 +92,53 @@ sidecar (and MAY print the same JSON to stdout):
   ],
   "success_criteria": {
     "append_review_round": true,
-    "init_appendix_if_missing": true,
+    "init_appendix_if_missing": false,
+    "appendix_scaffold_ensured": true,
     "no_triage": true,
     "dual_doc_coverage_matrix": true
   },
   "status_writeback_path": "/abs/path/to/<job_id>/drain-result.json",
   "budget_warning": null,
-  "markdown_card_path": "/abs/path/to/<job_id>/drain-handoff.md"
+  "markdown_card_path": "/abs/path/to/<job_id>/drain-handoff.md",
+  "assigned_reviewer": {
+    "mode": "blind_rotate",
+    "model": "gpt-5.6-luna-medium",
+    "roster_index": 1,
+    "roster": [
+      "claude-opus-5-thinking-high",
+      "gpt-5.6-luna-medium",
+      "gemini-3.1-pro"
+    ]
+  }
 }
 ```
 
+`assigned_reviewer` is always present for CRP drains. `mode=current` means the
+session agent reviews; `mode=blind_rotate` assigns `roster[(round-1) % len]`
+and **requires** a Task/subagent with that Cursor model slug.
+
 ### Agent execution contract (all surfaces)
 
-**Default reviewer (OQ-8):** the current chat/session agent. Surfaces MAY
-instead spawn a blind subagent / Task tool; that choice is vendor UX.
+**Default reviewer (OQ-8):** the current chat/session agent when
+`assigned_reviewer.mode=current`. Robustness path: job config sets
+`reviewer_mode=blind_rotate` + `reviewer_roster` → hand-off assigns a model and
+the surface **must** spawn a blind Task with that slug (not the current chat).
 
-1. Open `bundle_path` (agent with filesystem read), or paste the markdown card.
+1. If `blind_rotate`: spawn Task with `assigned_reviewer.model`; pass
+   `bundle_path` / write-back path. If `current`: open `bundle_path` (or paste
+   the markdown card) in this session.
 2. For `loop_id=crp`: append `#### Review Round R{n}` under Appendix C on each
-   in-scope source path; initialize A/B/C scaffold if absent.
+   in-scope source path. The A/B/C scaffold is **pre-initialized by WLQ** on
+   render/drain (same contract as `new-cnvrg-rvw-prmpt.sh`) — do **not** create
+   a second scaffold (`init_appendix_if_missing=false`,
+   `appendix_scaffold_ensured=true`).
 3. Dual-doc CRP: also append Requirements Coverage Matrix to the plan.
 4. For `loop_id=reflective-requirements`: write/update the requirements + plan
    paths named in the hand-off (no CRP, no implementation).
 5. Do **not** modify populated Appendix A/B on CRP drains; do **not** self-triage.
-6. Write `drain-result.json` (below); chat/UI reply is a short confirmation only.
+6. Write `drain-result.json` (below); for `blind_rotate` include
+   `reviewer_model` equal to `assigned_reviewer.model` (fail-closed on mismatch).
+7. Chat/UI reply is a short confirmation only.
 
 ### Status write-back
 
@@ -129,13 +153,19 @@ instead spawn a blind subagent / Task tool; that choice is vendor UX.
   "round_number": 1,
   "suggestion_counts": { "S": 6, "F": 4 },
   "paths_written": ["/abs/…/PLAN.md", "/abs/…/REQUIREMENTS.md"],
-  "error": null
+  "error": null,
+  "reviewer_model": "gpt-5.6-luna-medium"
 }
 ```
 
-WLQ marks the job `awaiting_triage` (or next-round `pending`) only after a valid
-write-back with `ok: true`. Missing/invalid write-back → `failed` or remain
-`processing` per FR-3 interim rules.
+WLQ after a valid write-back with `ok: true`:
+- **`pending`** when more CRP review rounds remain under `max_rounds`, or
+- **`completed`** when all rounds are done and `triage_policy=auto_accept`
+  (default — untriaged Appendix C ids are ACCEPT'd into A), or
+- **`awaiting_triage`** when all rounds are done and `triage_policy=manual`
+  (explicit `triage` step required).
+
+Missing/invalid write-back → `failed` or remain `processing` per FR-3 lease rules.
 
 ---
 

@@ -24,11 +24,13 @@ from ..builtin.architectural_review_log_constants import _ensure_appendix_exists
 from ..builtin.architectural_review_log_helpers import (
     _apply_triage_decisions,
     _extract_table_ids,
+    _extract_untriaged_suggestions,
     _max_review_round,
 )
 from ..registry import WorkflowRegistry
 from .handoff import persist_drain_handoff
 from .models import (
+    AssignedReviewer,
     CrpReviewRequest,
     DrainHandoff,
     DrainResult,
@@ -39,6 +41,7 @@ from .models import (
     LoopQueueError,
     LoopQueueValidationError,
     ReflectiveRequirementsRequest,
+    ResearchRequest,
     RoundRecord,
     TriageDecision,
     WorkflowLoopJob,
@@ -46,7 +49,8 @@ from .models import (
 )
 from .observability import set_span_status, wlq_span
 from .recipes import get_recipe
-from .renderer import render_bundle, render_reflective_bundle
+from .renderer import render_bundle, render_reflective_bundle, render_research_bundle
+from .scaffold import ensure_source_scaffolds
 from .sdk_executor import map_crp_request_to_workflow_config, run_sdk_crp
 from .storage import LoopQueueStorage
 from .surfaces import is_known_surface
@@ -55,7 +59,11 @@ logger = get_logger(__name__)
 
 _APPENDIX_A = "### Appendix A: Applied Suggestions"
 _APPENDIX_B = "### Appendix B: Rejected Suggestions (with Rationale)"
+_APPENDIX_C = "### Appendix C: Incoming Suggestions"
 _NORMATIVE_ROUND_RE = re.compile(r"^####\s+Review Round R(\d+)(?:\s|$)", re.MULTILINE)
+_SUGGESTION_ID_RE = re.compile(r"\b(R\d+-[SF]\d+)\b")
+_AUTO_TRIAGE_RATIONALE = "WLQ auto-triage after max_rounds (triage_policy=auto_accept)"
+_AUTO_TRIAGE_SOURCE = "wlq-auto"
 
 
 def _max_crp_round(doc: str) -> int:
@@ -105,6 +113,9 @@ class WorkflowLoopQueue:
         elif job.loop_id == "reflective-requirements":
             reflective = job.reflective_request()
             self._validate_reflective_request(job, reflective, enqueue=True)
+        elif job.loop_id == "research":
+            research = job.research_request()
+            self._validate_research_request(job, research, enqueue=True)
 
         if job.workflow_id:
             self._validate_workflow(job)
@@ -170,8 +181,21 @@ class WorkflowLoopQueue:
         return self._transition(job, LoopJobStatus.CANCELLED, "cancelled explicitly")
 
     def requeue(self, job_id: str) -> WorkflowLoopJob:
-        """Interim explicit recovery for abandoned processing/blocked jobs (FR-3)."""
+        """Interim explicit recovery for abandoned processing/blocked jobs (FR-3).
+
+        Also allows ``awaiting_triage → pending`` when CRP review rounds remain
+        (deferred-triage resume / policy migration).
+        """
         job = self.get(job_id)
+        if job.status is LoopJobStatus.AWAITING_TRIAGE and job.loop_id == "crp":
+            request = job.crp_request()
+            if job.rounds_completed() < request.max_rounds:
+                job.lease_expires_at = None
+                return self._transition(
+                    job,
+                    LoopJobStatus.PENDING,
+                    "requeued from awaiting_triage; continue remaining review rounds",
+                )
         if job.status not in (
             LoopJobStatus.PROCESSING,
             LoopJobStatus.BLOCKED,
@@ -186,11 +210,20 @@ class WorkflowLoopQueue:
     # -- render / drain ----------------------------------------------------
 
     def render(self, job_id: str) -> Path:
-        """Render/reuse the next CRP bundle without changing job status."""
+        """Render/reuse the next CRP bundle without changing job status.
+
+        Before rendering, ensures each source doc has the Appendix A/B/C
+        scaffold (same contract as ``new-cnvrg-rvw-prmpt.sh``), so reviewers
+        only append a Review Round under Appendix C.
+        """
         job = self.get(job_id)
         self._require_agent_crp(job)
         request = job.crp_request()
         self._validate_crp_request(job, request, enqueue=False)
+        initialized = ensure_source_scaffolds(request.source_paths)
+        if initialized:
+            job.artifacts["scaffold_initialized"] = ",".join(str(p) for p in initialized)
+            self.storage.save_job(job)
         round_number = self._derive_next_round(request)
         applied, rejected = self._derive_disposition_ids(request)
         bundle = render_bundle(
@@ -217,8 +250,10 @@ class WorkflowLoopQueue:
 
         For a pending agent-surface CRP job this emits and persists a VASI
         Drain Hand-off and leaves the job ``processing``. A subsequent call
-        after the surface writes ``drain-result.json`` consumes that write-back
-        and moves the job to ``awaiting_triage``.
+        after the surface writes ``drain-result.json`` consumes that write-back:
+        non-final rounds return to ``pending``; after ``max_rounds``,
+        ``triage_policy=auto_accept`` (default) batch-ACCEPTS untriaged
+        Appendix C items and completes; ``manual`` leaves ``awaiting_triage``.
 
         For ``executor=sdk-workflow`` CRP jobs this maps
         :class:`CrpReviewRequest` → catalog workflow and runs it in-process
@@ -233,6 +268,12 @@ class WorkflowLoopQueue:
                     "use requeue/cancel (no VASI write-back path)"
                 )
             return self.complete_drain(job.job_id)
+        if (
+            job.status is LoopJobStatus.AWAITING_TRIAGE
+            and job.loop_id == "crp"
+            and job.crp_request().triage_policy == "auto_accept"
+        ):
+            return self._auto_triage_accept_all(job)
         if job.status is not LoopJobStatus.PENDING:
             raise LoopQueueValidationError(
                 f"job {job.job_id!r} is not drainable: status={job.status.value}"
@@ -285,6 +326,8 @@ class WorkflowLoopQueue:
             )
         if job.loop_id == "reflective-requirements":
             return self._drain_reflective_agent_surface(job)
+        if job.loop_id == "research":
+            return self._drain_research_agent_surface(job)
         self._require_agent_crp(job)
 
         request = job.crp_request()
@@ -307,6 +350,7 @@ class WorkflowLoopQueue:
                     return completed
                 bundle = self.render(job.job_id)
                 round_number = self._derive_next_round(request)
+                assigned = request.assigned_reviewer_for_round(round_number)
                 artifact_dir = self.storage.artifact_dir(job.job_id).resolve()
                 handoff = DrainHandoff(
                     job_id=job.job_id,
@@ -317,7 +361,10 @@ class WorkflowLoopQueue:
                     source_paths=[str(p.resolve()) for p in request.source_paths],
                     success_criteria={
                         "append_review_round": True,
-                        "init_appendix_if_missing": True,
+                        # WLQ (and new-cnvrg-rvw-prmpt) pre-initialize A/B/C —
+                        # reviewers must append only; never create the scaffold.
+                        "init_appendix_if_missing": False,
+                        "appendix_scaffold_ensured": True,
                         "no_triage": True,
                         "dual_doc_coverage_matrix": request.dual_doc,
                     },
@@ -325,6 +372,7 @@ class WorkflowLoopQueue:
                         (artifact_dir / "drain-result.json").resolve()
                     ),
                     budget_warning=self._budget_warning(job, request),
+                    assigned_reviewer=assigned,
                 )
                 handoff = persist_drain_handoff(self.storage, job.job_id, handoff)
                 job.artifacts["drain_handoff_path"] = str(
@@ -333,6 +381,9 @@ class WorkflowLoopQueue:
                 if handoff.markdown_card_path:
                     job.artifacts["markdown_card_path"] = handoff.markdown_card_path
                 job.artifacts["status_writeback_path"] = handoff.status_writeback_path
+                if assigned.mode == "blind_rotate" and assigned.model:
+                    job.artifacts["assigned_reviewer_model"] = assigned.model
+                    job.artifacts["assigned_reviewer_mode"] = assigned.mode
                 self._transition(job, LoopJobStatus.PROCESSING, None)
                 logger.info(
                     "WLQ drain handoff job_id=%s surface_id=%s round=%s bundle=%s",
@@ -388,6 +439,65 @@ class WorkflowLoopQueue:
                         "write_plan": True,
                         "no_crp": True,
                         "no_implementation": True,
+                    },
+                    status_writeback_path=str(
+                        (artifact_dir / "drain-result.json").resolve()
+                    ),
+                )
+                handoff = persist_drain_handoff(self.storage, job.job_id, handoff)
+                job.artifacts["drain_handoff_path"] = str(
+                    self.storage.handoff_path(job.job_id).resolve()
+                )
+                if handoff.markdown_card_path:
+                    job.artifacts["markdown_card_path"] = handoff.markdown_card_path
+                job.artifacts["status_writeback_path"] = handoff.status_writeback_path
+                job.artifacts["bundle_path"] = str(bundle)
+                self._transition(job, LoopJobStatus.PROCESSING, None)
+                set_span_status(span, ok=True)
+                return handoff
+            except LoopQueueBlockedError as e:
+                self._transition(job, LoopJobStatus.BLOCKED, str(e))
+                set_span_status(span, ok=False, description=str(e))
+                raise
+            except LoopQueueValidationError as e:
+                self._transition(job, LoopJobStatus.FAILED, str(e))
+                set_span_status(span, ok=False, description=str(e))
+                raise
+
+    def _drain_research_agent_surface(self, job: WorkflowLoopJob) -> DrainHandoff:
+        """Emit VASI hand-off for research (brief → findings)."""
+        if job.executor is not LoopExecutor.AGENT_SURFACE:
+            raise LoopQueueValidationError(
+                "research requires executor=agent-surface"
+            )
+        request = job.research_request()
+        with wlq_span(
+            "wlq.drain",
+            {
+                "wlq.job_id": job.job_id,
+                "wlq.loop_id": job.loop_id,
+                "wlq.executor": job.executor.value,
+                "wlq.surface_id": job.surface_id,
+            },
+        ) as span:
+            try:
+                self._validate_research_request(job, request, enqueue=False)
+                bundle = render_research_bundle(
+                    request, self.storage.artifact_dir(job.job_id)
+                )
+                artifact_dir = self.storage.artifact_dir(job.job_id).resolve()
+                handoff = DrainHandoff(
+                    job_id=job.job_id,
+                    surface_id=job.surface_id or "",
+                    loop_id=job.loop_id,
+                    round_number=1,
+                    bundle_path=str(bundle),
+                    source_paths=[str(p.resolve()) for p in request.source_paths],
+                    success_criteria={
+                        "write_findings": True,
+                        "read_brief": True,
+                        "no_crp": True,
+                        "no_implementation_unless_brief_spike": True,
                     },
                     status_writeback_path=str(
                         (artifact_dir / "drain-result.json").resolve()
@@ -507,11 +617,15 @@ class WorkflowLoopQueue:
                 )
             )
             if not request.enable_triage:
-                return self._transition(
-                    job,
-                    LoopJobStatus.AWAITING_TRIAGE,
-                    f"sdk-workflow {wid} succeeded; triage deferred",
-                )
+                # Same deferred-triage policy as agent-surface: all rounds first.
+                if job.rounds_completed() < request.max_rounds:
+                    return self._transition(
+                        job,
+                        LoopJobStatus.PENDING,
+                        f"sdk-workflow {wid} succeeded; "
+                        f"next round pending ({job.rounds_completed()}/{request.max_rounds})",
+                    )
+                return self._finish_review_phase(job, request)
             if job.rounds_completed() >= request.max_rounds:
                 return self._transition(
                     job,
@@ -674,6 +788,42 @@ class WorkflowLoopQueue:
                 "reflective-requirements docs written",
             )
 
+        if job.loop_id == "research":
+            request_res = job.research_request()
+            expected_paths = {str(p.resolve()) for p in request_res.source_paths}
+            written_paths = {str(Path(p).resolve()) for p in result.paths_written}
+            if written_paths != expected_paths:
+                errors.append(
+                    f"paths_written must exactly match source_paths: "
+                    f"expected {sorted(expected_paths)}, got {sorted(written_paths)}"
+                )
+            for path in request_res.source_paths:
+                if not path.is_file():
+                    errors.append(f"expected written file missing: {path}")
+                elif path.stat().st_size == 0:
+                    errors.append(f"expected written file is empty: {path}")
+                elif path.suffix.lower() != ".md":
+                    errors.append(f"expected markdown file: {path}")
+            if not request_res.brief.is_file():
+                errors.append(f"research brief vanished: {request_res.brief}")
+            if errors:
+                reason = "; ".join(errors)
+                self._transition(job, LoopJobStatus.FAILED, reason)
+                raise LoopQueueValidationError(reason)
+            job.rounds.append(
+                RoundRecord(
+                    round_number=result.round_number,
+                    suggestion_counts=result.suggestion_counts,
+                    paths_written=sorted(written_paths),
+                )
+            )
+            self.storage.consume_drain_result(job_id, result.round_number)
+            return self._transition(
+                job,
+                LoopJobStatus.COMPLETED,
+                "research findings written",
+            )
+
         request = job.crp_request()
         expected_paths = {str(p.resolve()) for p in request.source_paths}
         written_paths = {str(Path(p).resolve()) for p in result.paths_written}
@@ -693,6 +843,24 @@ class WorkflowLoopQueue:
                     f"R{expected_round}, highest is R{observed}"
                 )
 
+        assigned = self._assigned_reviewer_from_handoff(job)
+        if assigned is None:
+            assigned = request.assigned_reviewer_for_round(expected_round)
+        if assigned.mode == "blind_rotate":
+            expected_model = assigned.model
+            if not expected_model:
+                errors.append("blind_rotate hand-off missing assigned model")
+            elif not result.reviewer_model:
+                errors.append(
+                    "blind_rotate requires drain-result.reviewer_model "
+                    f"(expected {expected_model!r})"
+                )
+            elif result.reviewer_model != expected_model:
+                errors.append(
+                    f"reviewer_model {result.reviewer_model!r} != assigned "
+                    f"{expected_model!r}"
+                )
+
         if errors:
             reason = "; ".join(errors)
             self._transition(job, LoopJobStatus.FAILED, reason)
@@ -706,11 +874,99 @@ class WorkflowLoopQueue:
             )
         )
         self.storage.consume_drain_result(job_id, result.round_number)
+        # FR-13: all review rounds first; then auto or manual batch triage.
+        if job.rounds_completed() < request.max_rounds:
+            return self._transition(
+                job,
+                LoopJobStatus.PENDING,
+                f"round R{result.round_number} complete; "
+                f"next round pending ({job.rounds_completed()}/{request.max_rounds})",
+            )
+        return self._finish_review_phase(job, request)
+
+    def _finish_review_phase(
+        self, job: WorkflowLoopJob, request: CrpReviewRequest
+    ) -> WorkflowLoopJob:
+        """After all review rounds: auto-accept triage or await manual triage."""
+        if request.triage_policy == "auto_accept":
+            self._transition(
+                job,
+                LoopJobStatus.AWAITING_TRIAGE,
+                f"all {request.max_rounds} review rounds complete; auto-triaging",
+            )
+            return self._auto_triage_accept_all(self.get(job.job_id))
         return self._transition(
             job,
             LoopJobStatus.AWAITING_TRIAGE,
-            f"round R{result.round_number} awaits explicit triage",
+            f"all {request.max_rounds} review rounds complete; await batch triage",
         )
+
+    def _collect_auto_triage_decisions(
+        self, request: CrpReviewRequest
+    ) -> List[TriageDecision]:
+        """Build ACCEPT decisions for every untriaged suggestion id across sources."""
+        by_id: Dict[str, TriageDecision] = {}
+        for path in request.source_paths:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            applied = _extract_table_ids(text, _APPENDIX_A)
+            rejected = _extract_table_ids(text, _APPENDIX_B)
+            triaged = set(applied) | set(rejected)
+            table_items, _ = _extract_untriaged_suggestions(text, applied, rejected)
+            for item in table_items:
+                sid = item["id"]
+                if sid in by_id:
+                    continue
+                summary = str(item.get("suggestion") or sid).strip()
+                if len(summary) > 160:
+                    summary = summary[:157] + "..."
+                by_id[sid] = TriageDecision(
+                    id=sid,
+                    decision="ACCEPT",
+                    summary=summary or sid,
+                    rationale=_AUTO_TRIAGE_RATIONALE,
+                    source=_AUTO_TRIAGE_SOURCE,
+                )
+            # Freeform Appendix C (numbered lists) — catch IDs tables miss.
+            c_idx = text.find(_APPENDIX_C)
+            appendix_c = text[c_idx:] if c_idx >= 0 else ""
+            for sid in _SUGGESTION_ID_RE.findall(appendix_c):
+                if sid in triaged or sid in by_id:
+                    continue
+                summary = sid
+                for line in appendix_c.splitlines():
+                    if sid in line and "#### Review Round" not in line:
+                        cleaned = line.strip().lstrip("1234567890.-) ").strip()
+                        cleaned = cleaned.replace(f"**{sid}**", "").strip(" —-")
+                        if cleaned:
+                            summary = cleaned[:160]
+                        break
+                by_id[sid] = TriageDecision(
+                    id=sid,
+                    decision="ACCEPT",
+                    summary=summary or sid,
+                    rationale=_AUTO_TRIAGE_RATIONALE,
+                    source=_AUTO_TRIAGE_SOURCE,
+                )
+        return list(by_id.values())
+
+    def _auto_triage_accept_all(self, job: WorkflowLoopJob) -> WorkflowLoopJob:
+        """ACCEPT all untriaged Appendix C ids, then complete (FR-13 auto_accept)."""
+        if job.status is not LoopJobStatus.AWAITING_TRIAGE:
+            raise LoopQueueValidationError(
+                f"job {job.job_id!r} is not awaiting triage "
+                f"(status={job.status.value})"
+            )
+        request = job.crp_request()
+        decisions = self._collect_auto_triage_decisions(request)
+        if not decisions:
+            return self._transition(
+                job,
+                LoopJobStatus.COMPLETED,
+                "all review rounds complete; auto-triage found nothing untriaged",
+            )
+        return self.triage(job.job_id, decisions)
 
     # -- CRP triage --------------------------------------------------------
 
@@ -759,9 +1015,13 @@ class WorkflowLoopQueue:
             path.write_text(updated, encoding="utf-8")
 
         if job.rounds_completed() >= request.max_rounds:
-            return self._transition(job, LoopJobStatus.COMPLETED, "final round triaged")
+            return self._transition(
+                job, LoopJobStatus.COMPLETED, "batch triage complete; all rounds done"
+            )
+        # Should not normally happen under deferred-triage (awaiting only after
+        # max_rounds), but keep a safe resume path if status was forced early.
         return self._transition(
-            job, LoopJobStatus.PENDING, "round triaged; next round pending"
+            job, LoopJobStatus.PENDING, "partial triage; next round pending"
         )
 
     # -- validation / derivation ------------------------------------------
@@ -858,6 +1118,80 @@ class WorkflowLoopQueue:
                 raise LoopQueueValidationError(
                     f"reflective-requirements paths must be markdown (.md): {path}"
                 )
+        if request.agent_template_path:
+            template = Path(request.agent_template_path)
+            if not template.is_file():
+                message = (
+                    f"agent_template_path "
+                    f"{'does not exist' if enqueue else 'vanished'}: {template}"
+                )
+                if enqueue:
+                    raise LoopQueueValidationError(message)
+                raise LoopQueueBlockedError(message)
+
+    def _validate_research_request(
+        self,
+        job: WorkflowLoopJob,
+        request: ResearchRequest,
+        *,
+        enqueue: bool,
+    ) -> None:
+        if job.executor is not LoopExecutor.AGENT_SURFACE:
+            raise LoopQueueValidationError(
+                "research requires executor=agent-surface"
+            )
+        if not is_known_surface(job.surface_id or ""):
+            conformance = request.surface_conformance or {}
+            capabilities = set(conformance.get("capabilities", []))
+            if not conformance.get("vasi_version") or not {
+                "status",
+                "drain",
+            }.issubset(capabilities):
+                raise LoopQueueValidationError(
+                    f"unknown surface_id {job.surface_id!r} must declare "
+                    "surface_conformance with vasi_version and capabilities "
+                    "including status + drain"
+                )
+        brief = request.brief.expanduser().resolve()
+        if not brief.is_file():
+            message = (
+                f"research brief_path "
+                f"{'does not exist' if enqueue else 'vanished'}: {brief}"
+            )
+            if enqueue:
+                raise LoopQueueValidationError(message)
+            raise LoopQueueBlockedError(message)
+        if brief.suffix.lower() != ".md":
+            raise LoopQueueValidationError(
+                f"research brief_path must be markdown (.md): {brief}"
+            )
+        if not os.access(brief, os.R_OK):
+            raise LoopQueueValidationError(f"research brief is unreadable: {brief}")
+
+        findings = Path(request.findings_path).expanduser().resolve()
+        parent = findings.parent
+        if not parent.is_dir():
+            message = (
+                f"parent directory for findings_path "
+                f"{'does not exist' if enqueue else 'vanished'}: {parent}"
+            )
+            if enqueue:
+                raise LoopQueueValidationError(message)
+            raise LoopQueueBlockedError(message)
+        if findings.suffix.lower() != ".md":
+            raise LoopQueueValidationError(
+                f"research findings_path must be markdown (.md): {findings}"
+            )
+        if request.focus_file:
+            focus = Path(request.focus_file).expanduser().resolve()
+            if not focus.is_file():
+                message = (
+                    f"focus_file "
+                    f"{'does not exist' if enqueue else 'vanished'}: {focus}"
+                )
+                if enqueue:
+                    raise LoopQueueValidationError(message)
+                raise LoopQueueBlockedError(message)
         if request.agent_template_path:
             template = Path(request.agent_template_path)
             if not template.is_file():
@@ -1056,6 +1390,20 @@ class WorkflowLoopQueue:
             ).round_number
         except Exception as e:
             raise LoopQueueValidationError(f"invalid drain hand-off {path}: {e}") from e
+
+    def _assigned_reviewer_from_handoff(
+        self, job: WorkflowLoopJob
+    ) -> Optional[AssignedReviewer]:
+        path = self.storage.handoff_path(job.job_id)
+        if not path.is_file():
+            return None
+        try:
+            handoff = DrainHandoff.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        except Exception:
+            return None
+        return handoff.assigned_reviewer
 
     @staticmethod
     def _decisions_for_path(

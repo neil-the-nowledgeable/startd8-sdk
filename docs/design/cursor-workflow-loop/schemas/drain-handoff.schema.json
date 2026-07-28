@@ -65,6 +65,36 @@
     "markdown_card_path": {
       "type": ["string", "null"],
       "description": "OQ-11: optional human markdown card alongside the JSON hand-off"
+    },
+    "assigned_reviewer": {
+      "type": ["object", "null"],
+      "description": "Per-drain reviewer assignment; blind_rotate requires Task spawn with model",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["current", "blind_rotate"]
+        },
+        "model": {
+          "type": ["string", "null"]
+        },
+        "roster_index": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "roster": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reviewer_tier": {
+          "type": ["string", "null"],
+          "enum": ["flagship", "mid_tier", null]
+        }
+      }
     }
   }
 }

@@ -63,8 +63,12 @@ register_recipe(
         ),
         workflow_ids=("convergent-review", "architectural-review-log"),
         inputs="CrpReviewRequest (plan_path/requirements_path, scope, max_rounds, ...)",
-        completion="max_rounds exhausted and final round triaged",
-        steps=("render bundle", "review round (Appendix C)", "triage (A/B)"),
+        completion="max_rounds review drains done, then auto_accept (or manual) triage",
+        steps=(
+            "render bundle",
+            "review rounds R1..Rmax (Appendix C; pending between rounds)",
+            "auto_accept triage into A (default) or manual triage",
+        ),
     )
 )
 
@@ -111,5 +115,27 @@ register_recipe(
         ),
         completion="requirements + plan written; drain-result ok",
         steps=("render instruction bundle", "agent writes docs", "confirm"),
+    )
+)
+
+register_recipe(
+    LoopRecipe(
+        loop_id="research",
+        description=(
+            "Agent-surface research loop: read a RESEARCH brief, investigate "
+            "(code + optional multi-agent), write FINDINGS. Follow-on CRP on "
+            "findings is a separate queued job (typically depends_on)."
+        ),
+        executors=(LoopExecutor.AGENT_SURFACE.value,),
+        inputs=(
+            "ResearchRequest (scope, brief_path, findings_path, optional "
+            "focus_file / agent_template_path)"
+        ),
+        completion="findings written; drain-result ok",
+        steps=(
+            "render instruction bundle",
+            "agent researches + writes findings",
+            "confirm",
+        ),
     )
 )

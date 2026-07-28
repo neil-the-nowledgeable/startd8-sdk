@@ -62,10 +62,10 @@ cannot be reused as `architectural-review-log.review_template` (`str.format` /
 | 1a | `LoopRecipe` protocol + `crp` recipe registration | FR-7 |
 | 1b | Derive next round / A/B ID lists — reuse helpers from `architectural_review_log_helpers.py` | FR-11, Mottainai |
 | 1c | **FR-20 renderer:** default shell/import `new-cnvrg-rvw-prmpt`; optional `agent_template_path` with `{{slot}}` only; cache rendered bundle under job artifact dir (content hash) | FR-8, FR-14, FR-20 |
-| 1d | Drain step machine: `pending → processing → awaiting_triage \| pending(next round) → completed`; emit VASI Drain Hand-off | FR-12, FR-13, FR-21 |
+| 1d | Drain step machine: `pending → processing → pending` (more rounds) or `awaiting_triage` (all `max_rounds` done); emit VASI Drain Hand-off; **no auto-triage** | FR-12, FR-13, FR-21 |
 | 1e | **Cursor reference skill:** `enqueue-crp`, `wloop-status`, `wloop-run-next` (consume hand-off + execute), `wloop-cancel` | FR-4, FR-8 |
 | 1f | Fixture: temp markdown → render → R1 append → R2; status write-confirmation + S/F counts; dual-doc prefix isolation; mock-surface drain | FR-8, FR-11, FR-14, FR-20, FR-21 |
-| 1g | First-class `triage` skill/CLI: Accepted→A / Rejected→B; keep C append-only; clear `awaiting_triage` | FR-13 |
+| 1g | First-class `triage` skill/CLI: batch ACCEPT→A / REJECT→B for all rounds after review phase; keep C append-only; `awaiting_triage → completed` | FR-13 |
 
 ---
 
@@ -202,19 +202,23 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | FR-9 CRP sdk-workflow executor | §4 1.1a–1.1c | Covered | Canonical request → workflow; no Cursor bundle as template |
 | FR-10 Cite, don’t fork CRP | §8 Settled | Covered | Cite-only; no schema fork |
 | FR-11 Derive round / coverage | §3 1b, 1f | Covered | Helper reuse + R1→R2 fixture |
-| FR-12 Multi-round + stop | §3 1d | Partial | Step machine present; max_rounds/budget knobs not named as tasks |
-| FR-13 Triage handoff | §3 1d | Gap | Status transition only; no triage action step (R1-S5) |
+| FR-12 Multi-round review | §3 1d | Covered | Review phase to max_rounds; no interleave triage |
+| FR-13 Batch triage | §3 1d, 1g | Covered | auto_accept default after all rounds; manual opt-out |
+| FR-23 Reviewer tiers | models + reviewer_presets | Covered | flagship/mid_tier 3-vendor Cursor Task presets |
+| FR-24 Queue root ≠ docs | HOWTO + cli_support + CLI | Covered | `--root` / `$STARTD8_WLOOP_ROOT` + fresh-root stderr warn |
+| FR-25 `jobs/` canonical | HOWTO + storage | Covered | confirm via `wloop status`, not `ls pending/` |
+| FR-26 Substrate HOWTO | HOWTO § substrate | Covered | reflective→CRP + zero-import shell-out |
 | FR-14 Resume / Mottainai | §3 1c, 1f | Covered | Content-hash cache + R2 fixture |
 | FR-15 One-shot workflow jobs | §5 2a–2b | Covered | Recipe + priority list |
 | FR-16 Dependency DAG | §5 2c | Covered | depends_on + cycle detection |
-| FR-17 Observability | §6 3a | Covered | OTel/logs in harden |
+| FR-17 Observability | §6 3a + CLI stdout | Covered | OTel/logs; wloop JSON-only stdout |
 | FR-18 Budget fail-closed | §6 3b | Covered | Budget wiring for sdk-workflow |
 | FR-19 Experimental API | §6 3c; §1 code home | Covered | Export + docs |
 | NR-1…NR-7 | §8 Settled | Covered | Do-not-relitigate aligns |
 | OQ-5 Lease TTL | §6 3d | Covered | Default 3600s reclaim; `0` disables |
 | OQ-6 Reflective-reqs recipe | §6 3d | Covered | First-class `loop_id=reflective-requirements` |
 | OQ-7 Watch folder | §2 Default path | Covered | Dedicated `.startd8/workflow-loop-queue/` |
-| OQ-8 Current vs subagent | VASI + skill | Covered | Default current chat; blind optional |
+| OQ-8 Current vs subagent | VASI + skill + roster | Covered | Default current; `blind_rotate` + roster for cross-vendor |
 | OQ-9 MCP backend | §5 2d | Covered | CLI canonical; MCP optional |
 | OQ-10 Template location | Requirements §4 | Covered | Prefer in-repo `docs/design/**/templates/` |
 | OQ-11 Markdown hand-off | VASI + handoff.py | Covered | `drain-handoff.md` + `markdown_card_path` |

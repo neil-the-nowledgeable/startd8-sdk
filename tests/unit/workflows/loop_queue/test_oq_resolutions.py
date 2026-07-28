@@ -186,3 +186,76 @@ def test_list_loops_includes_reflective():
     ids = {r.loop_id for r in list_recipes()}
     assert "reflective-requirements" in ids
     assert "crp" in ids
+    assert "research" in ids
+
+
+def test_research_drain(tmp_path: Path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    brief = docs / "RESEARCH-Widget.md"
+    findings = docs / "FINDINGS-Widget.md"
+    brief.write_text(
+        "# Research brief — Widget\n\n## Expected deliverables\n1. Ranked shortlist\n",
+        encoding="utf-8",
+    )
+    queue = WorkflowLoopQueue(LoopQueueConfig(queue_root=tmp_path / "queue"))
+    queue.enqueue(
+        WorkflowLoopJob(
+            job_id="research-widget-1",
+            loop_id="research",
+            executor="agent-surface",
+            surface_id="cursor",
+            config={
+                "scope": "Widget FX opportunity scan",
+                "brief_path": str(brief),
+                "findings_path": str(findings),
+            },
+        )
+    )
+    handoff = queue.run_next("research-widget-1")
+    assert isinstance(handoff, DrainHandoff)
+    assert handoff.loop_id == "research"
+    assert handoff.round_number == 1
+    bundle = Path(handoff.bundle_path).read_text(encoding="utf-8")
+    assert "Widget FX opportunity scan" in bundle
+    assert str(brief.resolve()) in bundle
+    assert str(findings.resolve()) in handoff.source_paths
+
+    findings.write_text("# Findings — Widget\n\nDo squash first.\n", encoding="utf-8")
+    Path(handoff.status_writeback_path).write_text(
+        json.dumps(
+            {
+                "vasi_version": "0.1.0",
+                "job_id": "research-widget-1",
+                "surface_id": "cursor",
+                "ok": True,
+                "round_number": 1,
+                "suggestion_counts": {},
+                "paths_written": handoff.source_paths,
+                "error": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    done = queue.run_next("research-widget-1")
+    assert done.status is LoopJobStatus.COMPLETED
+
+
+def test_research_enqueue_requires_brief(tmp_path: Path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    queue = WorkflowLoopQueue(LoopQueueConfig(queue_root=tmp_path / "queue"))
+    with pytest.raises(Exception, match="brief_path"):
+        queue.enqueue(
+            WorkflowLoopJob(
+                job_id="research-missing-brief",
+                loop_id="research",
+                executor="agent-surface",
+                surface_id="cursor",
+                config={
+                    "scope": "X",
+                    "brief_path": str(docs / "MISSING.md"),
+                    "findings_path": str(docs / "FINDINGS.md"),
+                },
+            )
+        )

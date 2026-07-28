@@ -20,17 +20,46 @@ def render_handoff_markdown(handoff: DrainHandoff) -> str:
     warning = ""
     if handoff.budget_warning:
         warning = f"\n**Budget warning:** {handoff.budget_warning}\n"
+
+    reviewer = handoff.assigned_reviewer
+    if reviewer and reviewer.mode == "blind_rotate" and reviewer.model:
+        do_this = (
+            f"## Do this\n\n"
+            f"**Blind rotate:** spawn a Task/subagent with model "
+            f"`{reviewer.model}` (roster index {reviewer.roster_index}). "
+            f"**Do not** run the CRP review in the current chat.\n\n"
+            f"1. Pass `{handoff.bundle_path}` to that Task; it follows the bundle "
+            f"with filesystem write tools.\n"
+            f"2. Task writes only the source paths listed below.\n"
+            f"3. Task writes confirmation JSON to `{handoff.status_writeback_path}` "
+            f"including `reviewer_model: \"{reviewer.model}\"`.\n"
+            f"4. Current chat runs `startd8 wloop run-next --job-id {handoff.job_id}` "
+            f"to verify.\n\n"
+        )
+        reviewer_block = (
+            f"## Assigned reviewer\n\n"
+            f"- **mode:** `blind_rotate`\n"
+            f"- **model:** `{reviewer.model}`\n"
+            f"- **roster:** {', '.join(f'`{m}`' for m in reviewer.roster)}\n\n"
+        )
+    else:
+        do_this = (
+            f"## Do this\n\n"
+            f"1. Open `{handoff.bundle_path}` and follow it with filesystem write tools.\n"
+            f"2. Write only the source paths listed below.\n"
+            f"3. Write confirmation JSON to `{handoff.status_writeback_path}`.\n"
+            f"4. Run `startd8 wloop run-next --job-id {handoff.job_id}`.\n\n"
+        )
+        reviewer_block = ""
+
     return (
         f"# WLQ Drain Hand-off — `{handoff.job_id}`\n\n"
         f"**Surface:** `{handoff.surface_id}`  \n"
         f"**Loop:** `{handoff.loop_id}`  \n"
         f"**Round:** R{handoff.round_number}\n"
         f"{warning}\n"
-        f"## Do this\n\n"
-        f"1. Open `{handoff.bundle_path}` and follow it with filesystem write tools.\n"
-        f"2. Write only the source paths listed below.\n"
-        f"3. Write confirmation JSON to `{handoff.status_writeback_path}`.\n"
-        f"4. Run `startd8 wloop run-next --job-id {handoff.job_id}`.\n\n"
+        f"{do_this}"
+        f"{reviewer_block}"
         f"## Source paths\n\n{sources}\n\n"
         f"## Success criteria\n\n{criteria}\n\n"
         f"Chat/UI reply should be a short confirmation only.\n"
