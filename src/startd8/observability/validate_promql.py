@@ -91,8 +91,32 @@ class ExtractedExpr:
     source_kind: str  # "alert" | "slo" | "dashboard"
 
 
+#: Empty service id for project-level / cross-cutting artifacts (#362). Still
+#: replayed for overall binding_coverage, but excluded from ``per_service`` and
+#: target-drift so a label-rollup dashboard never appears as a dark service.
+CROSS_CUTTING_SERVICE = ""
+
+#: Filename stems / markers that are never real service ids (issue #362).
+#: Matched as substrings of the artifact stem (e.g. ``business-criticality-dashboard-spec``).
+_CROSS_CUTTING_MARKERS: Tuple[str, ...] = ("business-criticality",)
+
+#: PromQL identity-label keys, highest priority first (#362 preference 2).
+_PROMQL_IDENTITY_KEYS: Tuple[str, ...] = ("service_name", "service", "job")
+
+#: Exact equality matcher: ``service="checkout"``, ``job='thanos-receive'``.
+#: Deliberately excludes ``=~`` (regex values are not service ids).
+_PROMQL_IDENTITY_LABEL_RE = re.compile(
+    r'\b(?P<key>service_name|service|job)\s*=\s*(?P<q>["\'])(?P<val>(?:(?!(?P=q)).)+)(?P=q)'
+)
+
+
 def _service_from_filename(path: Path) -> str:
-    """``checkoutservice-alerts.yaml`` → ``checkoutservice`` (FR-8 mapping)."""
+    """``checkoutservice-alerts.yaml`` → ``checkoutservice`` (FR-8 mapping).
+
+    Also strips generator profile suffixes such as ``-declared-base`` (#286 / #362)
+    so ``compact-declared-base-slo.yaml`` falls back to ``compact``, not the
+    profile name. Prefer :func:`resolve_service_id` — filename is last resort.
+    """
     stem = path.stem
     for suffix in (
         "-alerts",
@@ -101,10 +125,79 @@ def _service_from_filename(path: Path) -> str:
         "-dashboard-spec",
         "-dashboard",
         "-loki-rules",
+        "-notification-policy",
     ):
         if stem.endswith(suffix):
-            return stem[: -len(suffix)]
+            stem = stem[: -len(suffix)]
+            break
+    # Profile / binding-lane suffixes that ride after the real service id.
+    for profile_suffix in ("-declared-base", "-functional"):
+        if stem.endswith(profile_suffix):
+            stem = stem[: -len(profile_suffix)]
+            break
     return stem
+
+
+def _is_cross_cutting_stem(stem: str) -> bool:
+    """True when *stem* names a project-level rollup, not a service (#362)."""
+    lowered = (stem or "").lower()
+    return any(marker in lowered for marker in _CROSS_CUTTING_MARKERS)
+
+
+def _service_from_promql(expr: str) -> Optional[str]:
+    """Pull a service id from PromQL identity label matchers (#362 preference 2).
+
+    Prefers ``service_name`` > ``service`` > ``job``. First match per key wins;
+    regex matchers (``=~``) are ignored.
+    """
+    if not expr:
+        return None
+    best_key_rank: Optional[int] = None
+    best_val: Optional[str] = None
+    key_rank = {k: i for i, k in enumerate(_PROMQL_IDENTITY_KEYS)}
+    for m in _PROMQL_IDENTITY_LABEL_RE.finditer(expr):
+        key = m.group("key")
+        rank = key_rank.get(key)
+        if rank is None:
+            continue
+        if best_key_rank is None or rank < best_key_rank:
+            best_key_rank = rank
+            best_val = m.group("val")
+    return best_val
+
+
+def resolve_service_id(
+    *,
+    path: Path,
+    local_service: Optional[str],
+    expr: str,
+) -> str:
+    """Attribute one PromQL expr to a real service id (#362).
+
+    Preference order:
+      1. Explicit service id on the artifact (OpenSLO ``metadata.labels.service``,
+         alert ``labels.service``, top-level ``service``) — passed as *local_service*
+      2. Identity label matchers in the PromQL (``service`` / ``service_name`` / ``job``)
+      3. Filename stem (last resort), never for cross-cutting dashboards
+
+    Returns :data:`CROSS_CUTTING_SERVICE` (``""``) when the artifact is a
+    project-level rollup with no attributable service — callers must keep such
+    exprs out of ``per_service``.
+    """
+    if isinstance(local_service, str) and local_service.strip():
+        return local_service.strip()
+    from_promql = _service_from_promql(expr)
+    if from_promql:
+        return from_promql
+    # Cross-cutting check against the raw stem (before profile stripping) AND the
+    # stripped fallback, so ``business-criticality-dashboard-spec`` never becomes
+    # a fake service row.
+    if _is_cross_cutting_stem(path.stem):
+        return CROSS_CUTTING_SERVICE
+    fallback = _service_from_filename(path)
+    if not fallback or _is_cross_cutting_stem(fallback):
+        return CROSS_CUTTING_SERVICE
+    return fallback
 
 
 def _signal_for(name: str) -> str:
@@ -116,15 +209,41 @@ def _signal_for(name: str) -> str:
     return "other"
 
 
-def _iter_exprs_in_obj(obj: Any) -> List[Tuple[str, str]]:
-    """Recursively collect ``(name_hint, expr)`` pairs from a parsed YAML tree.
+def _service_from_node(d: Dict[str, Any]) -> Optional[str]:
+    """Explicit service id on a YAML node (OpenSLO metadata / alert labels / top-level)."""
+    meta = d.get("metadata")
+    if isinstance(meta, dict):
+        labels = meta.get("labels")
+        if isinstance(labels, dict):
+            for key in ("service", "service_id"):
+                v = labels.get(key)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+    labels = d.get("labels")
+    if isinstance(labels, dict):
+        for key in ("service", "service_id"):
+            v = labels.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    for key in ("service", "service_id"):
+        v = d.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+def _iter_exprs_in_obj(obj: Any) -> List[Tuple[str, str, Optional[str]]]:
+    """Recursively collect ``(name_hint, expr, local_service)`` from a parsed YAML tree.
 
     Handles all three artifact shapes generically rather than binding to one
     schema: alert-rule ``.expr`` (with sibling ``.alert``/``.record`` name),
     SLO ``metricSource.spec.query`` / ``.query`` (with nearest ``metadata.name``),
     and dashboard-panel ``.expr`` / ``targets[].expr`` (with sibling ``.title``).
+
+    *local_service* inherits down the tree from OpenSLO ``metadata.labels.service``
+    or alert ``labels.service`` so multi-doc SLO files attribute per document (#362).
     """
-    found: List[Tuple[str, str]] = []
+    found: List[Tuple[str, str, Optional[str]]] = []
 
     def _name_hint(d: Dict[str, Any]) -> str:
         for key in ("alert", "record", "title", "name"):
@@ -136,21 +255,22 @@ def _iter_exprs_in_obj(obj: Any) -> List[Tuple[str, str]]:
             return meta["name"]
         return ""
 
-    def _walk(node: Any, name_hint: str) -> None:
+    def _walk(node: Any, name_hint: str, inherited_service: Optional[str]) -> None:
         if isinstance(node, dict):
             local_hint = _name_hint(node) or name_hint
+            local_svc = _service_from_node(node) or inherited_service
             # alert / dashboard-panel expr, and SLO "query" fields
             for expr_key in ("expr", "query"):
                 v = node.get(expr_key)
                 if isinstance(v, str) and v.strip():
-                    found.append((local_hint, v.strip()))
+                    found.append((local_hint, v.strip(), local_svc))
             for value in node.values():
-                _walk(value, local_hint)
+                _walk(value, local_hint, local_svc)
         elif isinstance(node, list):
             for item in node:
-                _walk(item, name_hint)
+                _walk(item, name_hint, inherited_service)
 
-    _walk(obj, "")
+    _walk(obj, "", None)
     return found
 
 
@@ -228,10 +348,11 @@ def widen_rate_window(expr: str, window: str = "1h") -> str:
 def extract_exprs(artifacts_dir: Path) -> List[ExtractedExpr]:
     """Walk ``alerts/`` ``slos/`` ``dashboards/`` and pull every PromQL expr.
 
-    Maps each expr to ``(service, signal)`` via the per-service filename and the
-    nearest alert/rule/panel name (FR-8). Reads the *actual emitted* PromQL —
-    it does NOT re-derive metric identity from it (Mottainai; identity comes from
-    the descriptor).
+    Maps each expr to ``(service, signal)`` via :func:`resolve_service_id` (#362:
+    explicit artifact labels → PromQL identity matchers → filename last resort;
+    cross-cutting dashboards get ``""``) and the nearest alert/rule/panel name
+    (FR-8). Reads the *actual emitted* PromQL for replay only — metric *identity*
+    still comes from the descriptor (Mottainai).
     """
     exprs: List[ExtractedExpr] = []
     kinds = {
@@ -249,14 +370,17 @@ def extract_exprs(artifacts_dir: Path) -> List[ExtractedExpr]:
             except (yaml.YAMLError, OSError) as e:
                 logger.warning("skipping unparseable artifact %s: %s", path, e)
                 continue
-            service = _service_from_filename(path)
             for doc in docs:
                 if doc is None:
                     continue
-                for name_hint, expr in _iter_exprs_in_obj(doc):
+                for name_hint, expr, local_service in _iter_exprs_in_obj(doc):
                     exprs.append(
                         ExtractedExpr(
-                            service=service,
+                            service=resolve_service_id(
+                                path=path,
+                                local_service=local_service,
+                                expr=expr,
+                            ),
                             signal=_signal_for(name_hint),
                             expr=expr,
                             source_file=str(path),
@@ -772,16 +896,15 @@ def run_validation(
             min_coverage=min_coverage,
         )
 
-    # EC-14: --onboarding-metadata is optional; without it, run without descriptor enrichment
-    # (per-service binding falls back to service_id) rather than crashing on Path(None).
-    descriptors = reconstruct_descriptors(Path(onboarding_metadata)) if onboarding_metadata else {}
+    descriptors = reconstruct_descriptors(Path(onboarding_metadata))
 
     # Target drift: which declared services are ABSENT from the backend entirely — a
     # whole-service gap (every query fails on the same axis), distinct from a per-query
     # binding miss. Surfaced so the operator can deploy the service or exclude it, rather
     # than reading N scattered fails. Degrade-honest (unreachable ⇒ inconclusive).
     target_drift = detect_target_drift(
-        {e.service for e in exprs},
+        # #362: cross-cutting exprs carry "" — never treat as a declared service.
+        {e.service for e in exprs if e.service},
         descriptors,
         lambda key: label_vals(prometheus_url, key, auth=auth),
     )
@@ -994,16 +1117,19 @@ def run_validation(
     per_axis: Dict[str, int] = {}
     _bound_verdicts = {"pass", "bound_no_data"}
     for v in verdicts:
-        svc = per_service.setdefault(
-            v.service, {"total": 0, "passed": 0, "signals": {}}
-        )
-        svc["total"] += 1
-        if v.verdict in _bound_verdicts:
-            svc["passed"] += 1
-        sig = svc["signals"].setdefault(v.signal, {"total": 0, "passed": 0})
-        sig["total"] += 1
-        if v.verdict in _bound_verdicts:
-            sig["passed"] += 1
+        # #362: cross-cutting / unattributable exprs stay in overall coverage but
+        # must not invent a fake per_service row (e.g. business-criticality).
+        if v.service:
+            svc = per_service.setdefault(
+                v.service, {"total": 0, "passed": 0, "signals": {}}
+            )
+            svc["total"] += 1
+            if v.verdict in _bound_verdicts:
+                svc["passed"] += 1
+            sig = svc["signals"].setdefault(v.signal, {"total": 0, "passed": 0})
+            sig["total"] += 1
+            if v.verdict in _bound_verdicts:
+                sig["passed"] += 1
         for axis in v.mismatched_axes:
             per_axis[axis] = per_axis.get(axis, 0) + 1
     for svc in per_service.values():
