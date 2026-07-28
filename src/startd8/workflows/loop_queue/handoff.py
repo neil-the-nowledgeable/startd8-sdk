@@ -5,28 +5,11 @@
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from typing import Dict
 
 from .models import DrainHandoff
-from .prompt_loader import load_prompt_text
+from .prompt_loader import load_prompt_text, substitute_slots
 from .storage import LoopQueueStorage
-
-_SLOT_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
-
-
-def _fill(template: str, slots: Dict[str, str]) -> str:
-    """Substitute ``{{slot}}`` placeholders; unknown slots stay empty-string safe."""
-    unknown = sorted(
-        {name for name in _SLOT_RE.findall(template) if name not in slots}
-    )
-    if unknown:
-        raise ValueError(
-            f"handoff template uses unknown slots: {unknown}; "
-            f"available: {sorted(slots)}"
-        )
-    return _SLOT_RE.sub(lambda m: slots[m.group(1)], template)
 
 
 def render_handoff_markdown(handoff: DrainHandoff) -> str:
@@ -34,6 +17,7 @@ def render_handoff_markdown(handoff: DrainHandoff) -> str:
 
     Templates live under ``loop_queue/prompts/drain-handoff*.md`` (override via
     ``$STARTD8_WLQ_HANDOFF_*`` env vars — see ``prompt_loader.PROMPT_ENV``).
+    Unknown ``{{slot}}`` names fail closed (``ValueError``).
     """
     sources = "\n".join(f"- `{p}`" for p in handoff.source_paths)
     criteria = "\n".join(
@@ -64,25 +48,28 @@ def render_handoff_markdown(handoff: DrainHandoff) -> str:
                 "" if reviewer.roster_index is None else str(reviewer.roster_index)
             ),
         }
-        do_this = _fill(
+        do_this = substitute_slots(
             load_prompt_text("drain-handoff-do-this-blind-rotate.md"),
             do_slots,
+            label="drain-handoff-do-this-blind-rotate.md",
         )
-        reviewer_block = _fill(
+        reviewer_block = substitute_slots(
             load_prompt_text("drain-handoff-reviewer-block.md"),
             {
                 "reviewer_model": reviewer.model,
                 "reviewer_roster": ", ".join(f"`{m}`" for m in reviewer.roster),
             },
+            label="drain-handoff-reviewer-block.md",
         )
     else:
-        do_this = _fill(
+        do_this = substitute_slots(
             load_prompt_text("drain-handoff-do-this-current.md"),
             base_slots,
+            label="drain-handoff-do-this-current.md",
         )
         reviewer_block = ""
 
-    return _fill(
+    return substitute_slots(
         load_prompt_text("drain-handoff.md"),
         {
             **base_slots,
@@ -91,6 +78,7 @@ def render_handoff_markdown(handoff: DrainHandoff) -> str:
                 reviewer_block.rstrip() + "\n" if reviewer_block else ""
             ),
         },
+        label="drain-handoff.md",
     )
 
 
@@ -103,7 +91,12 @@ def persist_drain_handoff(
     artifact_dir = storage.artifact_dir(job_id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     card_path = artifact_dir / "drain-handoff.md"
-    card_path.write_text(render_handoff_markdown(handoff), encoding="utf-8")
+    try:
+        card_path.write_text(render_handoff_markdown(handoff), encoding="utf-8")
+    except (ValueError, FileNotFoundError, OSError) as e:
+        raise RuntimeError(
+            f"failed to render drain hand-off markdown for {job_id!r}: {e}"
+        ) from e
     updated = handoff.model_copy(
         update={"markdown_card_path": str(card_path.resolve())}
     )

@@ -16,9 +16,10 @@ bypasses these defaults entirely.
 from __future__ import annotations
 
 import os
+import re
 from importlib import resources
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Dict, Mapping, Optional
 
 PROMPT_ENV: Mapping[str, str] = {
     "reflective-requirements.md": "STARTD8_WLQ_REFLECTIVE_TEMPLATE",
@@ -34,6 +35,7 @@ PROMPT_ENV: Mapping[str, str] = {
 
 _PACKAGE = "startd8.workflows.loop_queue"
 _PROMPTS_REL = Path(__file__).resolve().parent / "prompts"
+_SLOT_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
 
 def packaged_prompts_dir() -> Path:
@@ -42,6 +44,18 @@ def packaged_prompts_dir() -> Path:
         return _PROMPTS_REL
     root = resources.files(_PACKAGE)
     return Path(str(root.joinpath("prompts")))
+
+
+def substitute_slots(template: str, slots: Dict[str, str], *, label: str) -> str:
+    """Substitute ``{{slot}}`` placeholders; fail closed on unknown slot names."""
+    unknown = sorted(
+        {name for name in _SLOT_RE.findall(template) if name not in slots}
+    )
+    if unknown:
+        raise ValueError(
+            f"{label} uses unknown slots: {unknown}; available: {sorted(slots)}"
+        )
+    return _SLOT_RE.sub(lambda m: slots[m.group(1)], template)
 
 
 def resolve_prompt_path(
@@ -79,7 +93,7 @@ def resolve_prompt_path(
             candidate = Path(str(traversable))
             if candidate.is_file():
                 return candidate.resolve()
-    except Exception:
+    except (OSError, TypeError, ValueError, AttributeError):
         pass
     raise FileNotFoundError(f"packaged WLQ prompt missing: {name}")
 
@@ -102,7 +116,7 @@ def load_prompt_text(
             .joinpath("prompts", name)
             .read_text(encoding="utf-8")
         )
-    except (FileNotFoundError, OSError, TypeError):
+    except (FileNotFoundError, OSError, TypeError, AttributeError):
         return resolve_prompt_path(name, configured=configured).read_text(
             encoding="utf-8"
         )

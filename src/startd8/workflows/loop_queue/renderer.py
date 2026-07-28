@@ -40,7 +40,7 @@ from .models import (
     ReflectiveRequirementsRequest,
     ResearchRequest,
 )
-from .prompt_loader import load_prompt_text, resolve_prompt_path
+from .prompt_loader import load_prompt_text, resolve_prompt_path, substitute_slots
 
 logger = get_logger(__name__)
 
@@ -48,7 +48,6 @@ DEFAULT_RENDERER_SCRIPT = Path(
     "~/Documents/dev/cap-dev-pipe/new-cnvrg-rvw-prmpt.sh"
 ).expanduser()
 
-_SLOT_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 _SINGLE_BRACE_FIELD_RE = re.compile(r"(?<!\{)\{[a-zA-Z_][a-zA-Z0-9_]*\}(?!\})")
 
 # Packaged prompt filenames (see ``prompts/`` and ``prompt_loader.PROMPT_ENV``).
@@ -139,15 +138,12 @@ def _render_slot_template(
             f"agent template {template_path} contains forbidden single-brace "
             f"fields {forbidden}; use safe {{{{slot}}}} placeholders"
         )
-    unknown = sorted(
-        {name for name in _SLOT_RE.findall(template_text) if name not in slots}
-    )
-    if unknown:
-        raise LoopQueueValidationError(
-            f"agent template {template_path} uses unknown slots: {unknown}; "
-            f"available: {sorted(slots)}"
+    try:
+        return substitute_slots(
+            template_text, slots, label=f"agent template {template_path}"
         )
-    return _SLOT_RE.sub(lambda m: slots[m.group(1)], template_text)
+    except ValueError as e:
+        raise LoopQueueValidationError(str(e)) from e
 
 
 def render_bundle(

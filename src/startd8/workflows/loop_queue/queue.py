@@ -829,11 +829,15 @@ class WorkflowLoopQueue:
                     errors.append(f"expected markdown file: {path}")
             req_path = Path(request_r.requirements_path)
             if req_path.is_file() and req_path.stat().st_size > 0:
-                errors.extend(
-                    reflective_hardening_gaps(
-                        req_path.read_text(encoding="utf-8")
+                try:
+                    req_text = req_path.read_text(encoding="utf-8")
+                except UnicodeDecodeError as e:
+                    errors.append(
+                        f"requirements not valid UTF-8 for harden gate: "
+                        f"{req_path}: {e}"
                     )
-                )
+                else:
+                    errors.extend(reflective_hardening_gaps(req_text))
             if errors:
                 reason = "; ".join(errors)
                 self._transition(job, LoopJobStatus.FAILED, reason)

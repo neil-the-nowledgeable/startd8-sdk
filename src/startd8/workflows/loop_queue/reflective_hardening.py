@@ -69,13 +69,11 @@ def reflective_hardening_gaps(requirements_text: str) -> List[str]:
             "(§0.2 Design-Principle Hardening, or an explicit "
             "'checked design principles; none applicable')"
         )
+    # Version string is optional when both harden sections are present.
     if not has_v031 and not (has_lessons and has_principles):
-        # If both sections exist, accept without a literal 0.3.1 string.
         gaps.append(
             "requirements missing v0.3.1 version marker "
             "(and incomplete §0.1/§0.2 harden sections)"
         )
-    elif not has_v031 and has_lessons and has_principles:
-        pass  # sections present — version string optional
 
     return gaps
