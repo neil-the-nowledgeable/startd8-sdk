@@ -69,7 +69,7 @@ Repo `startd8-sdk`, path `docs/design/cursor-workflow-loop/WLQ_CRP_DRAIN_ENHANCE
 *Grep (open):* `rg -n 'subprocess.run' renderer.py` → `:218` without timeout.  
 **Verify:** unit test mocks hang → `TimeoutExpired` → `LoopQueueBlockedError` with stderr snippet.  
 **Phase-4 eligible:** YES (mechanical).
-**Phase-4 status:** applied on `cep/wlq-drain-xs` (PR pending) — renderer timeout + unit test.
+**Phase-4 status:** applied on `cep/wlq-drain-xs` (→ [PR #368](https://github.com/neil-the-nowledgeable/startd8-sdk/pull/368)) — renderer timeout + unit test.
 
 ### EC-WLQ-02 — `finish-from-docs` CLI escape hatch
 **Type:** wire-existing · **Effort:** S · **Value:** HIGH (operator recovery after failed drain-result)  
@@ -85,7 +85,7 @@ Expose `startd8 wloop finish-from-docs --job-id …` that refuses unless `doc_hi
 *Grep (open):* no `flock` / `.pid` in template.  
 **Verify:** two overlapping `--once` invocations → second exits 1 with clear message; first still consumes.  
 **Phase-4 eligible:** flock half YES; pidfile optional same PR.
-**Phase-4 status:** applied in `dev-os` (`cursor-loops/templates/auto-consume.sh`) via portable `mkdir` lock + pidfile (macOS has no `flock`) — PR pending.
+**Phase-4 status:** applied in `dev-os` (`cursor-loops/templates/auto-consume.sh`) via portable `mkdir` lock + pidfile (macOS has no `flock`). **No PR:** `dev-os` has no git remote and `cursor-loops/templates/` is untracked — change is in the working tree only.
 
 ### EC-WLQ-04 — Handoff card emits copy-paste auto-consume arm line
 **Type:** wire-existing · **Effort:** S · **Value:** MED-HIGH  
@@ -101,7 +101,7 @@ Add a minimal JSON exemplar + “NOT blocking/major/minor/nit” to `.cursor/ski
 *Grep:* skill lists fields but no severity ban string.  
 **Verify:** `rg -n 'severity|blocking/major' SKILL.md` finds the ban.  
 **Phase-4 eligible:** YES (docs-only).
-**Phase-4 status:** applied on `cep/wlq-drain-xs` (PR pending) — S/F exemplar + severity ban in SKILL.md.
+**Phase-4 status:** applied on `cep/wlq-drain-xs` (→ [PR #368](https://github.com/neil-the-nowledgeable/startd8-sdk/pull/368)) — S/F exemplar + severity ban in SKILL.md.
 
 ### EC-WLQ-06 — `startd8 wloop watch` (status stream)
 **Type:** wire-existing · **Effort:** S · **Value:** MED  
