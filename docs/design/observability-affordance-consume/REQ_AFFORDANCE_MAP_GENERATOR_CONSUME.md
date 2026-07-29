@@ -176,7 +176,7 @@ When `--affordance-map` is present:
 | `gen.emit_red_panels` | Ensure `_ensure_red_coverage` for that service’s dashboard; regenerate dashboard only if needed. If kinds imply neither throughput nor availability, record **`applied_no_change`** (not `applied`). |
 | `gen.complete_triplet` | Authoritative leg signal = `{output_dir}/observability/observability-quality.json` → `services.{svc}.{artifact_type}.score` for `alert_rule` / `dashboard_spec` / `slo_definition` (absent key = missing; `0.0` = zero-score). Regenerate those legs only. If quality JSON absent/stale → regenerate **all three** with `reason="leg_signal_unavailable"`. Surface per-leg selection on `ActionPlanEntry`. Declared-lane SLOs regenerate with the SLO leg. |
 | `gen.improve_metric_coverage` | **Advisory.** At HEAD, dashboard regen is byte-identical for the human coverage lane. Record `skipped` with `reason="no_deterministic_lever"` (or `applied_no_change` if a no-op regen is attempted). Do **not** claim dashboard repair. Bridging via authored `observability.yaml` alerts is out of map-mode scope (project-scope; see FR-B3a). |
-| `gen.enrich_runbook` | **Schema fidelity.** After FR-B5, EXT-100 cannot emit `runbook_skeletal`; if the id appears, `skipped` with `reason="unreachable_after_fr_b5"`. No dedicated repair branch required. |
+| `gen.enrich_runbook` | **Live retrofit.** Pre-FR-B5 trees still emit `runbook_skeletal` (Service summary / First response). Map-mode renames/injects Overview·Risks·Procedures, fills hollow Risks, keeps Escalation. New emit remains FR-B5 always-on. |
 | `gen.shrink_dashboard_lines` | Apply FR-B4 shrink to that service’s **dashboard spec**, then re-render/re-measure Grafana JSON. |
 
 **FR-B5 — Runbook marker parity (always-on).**  

@@ -106,7 +106,7 @@ Match ladder: (1) exact → (2) normalized equals hint → (3) `(?:service)?$`-i
 | `gen.complete_triplet` | live |
 | `gen.shrink_dashboard_lines` | live (spec → re-render; refuse if no render / RED regress) |
 | `gen.improve_metric_coverage` | **advisory** → `skipped` / `no_deterministic_lever` |
-| `gen.enrich_runbook` | **unreachable** after FR-B5 headings → `skipped` |
+| `gen.enrich_runbook` | **live** — retrofit pre-FR-B5 runbooks (rename/inject Overview·Risks·Procedures; keep Escalation) |
 
 ## Notes
 

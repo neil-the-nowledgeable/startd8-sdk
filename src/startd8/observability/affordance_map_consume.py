@@ -1,8 +1,8 @@
 """AffordanceMap consume — load, plan, apply, merge, sidecar (REQ Affordance-Map Generator Consume).
 
 Shipped WP-B0–B3: deterministic planner, targeted live ``gen.*`` repairs (RED / triplet /
-shrink), FR-B5-aligned runbooks (elsewhere), FR-B7 ``affordance_actions.json`` sidecar.
-Does **not** import contextcore (NR-G1 / AC-G7).
+shrink / enrich_runbook retrofit), FR-B5-aligned runbooks (elsewhere), FR-B7
+``affordance_actions.json`` sidecar. Does **not** import contextcore (NR-G1 / AC-G7).
 """
 
 from __future__ import annotations
@@ -57,9 +57,11 @@ KNOWN_GEN_AFFORDANCES: frozenset = frozenset(
     }
 )
 
-# Live = real repair branch; advisory/unreachable skip honestly (R2-F1/F4).
+# Live = real repair branch; advisory skip honestly (R2-F1).
+# gen.enrich_runbook is LIVE: FR-B5 fixed *new* emit; map-mode retrofits
+# pre-FR-B5 trees (Service summary / First response → Overview / Procedures + Risks).
 ADVISORY_GEN: frozenset = frozenset({GEN_IMPROVE_COVERAGE})
-UNREACHABLE_GEN: frozenset = frozenset({GEN_ENRICH_RUNBOOK})
+UNREACHABLE_GEN: frozenset = frozenset()  # kept for API; empty after enrich LIVE
 LIVE_GEN: frozenset = frozenset(KNOWN_GEN_AFFORDANCES - ADVISORY_GEN - UNREACHABLE_GEN)
 
 AFFORDANCE_PRIORITY: Tuple[str, ...] = (
@@ -632,21 +634,6 @@ def plan_affordance_actions(
                         locus_status=entry.locus_status,
                         locus_skip_reason="transport_only_loci",
                         loci_used=list(entry.source_loci),
-                    )
-                )
-                continue
-
-            if aid in UNREACHABLE_GEN:
-                skips.append(
-                    ActionPlanEntry(
-                        service_id=matched,
-                        affordance_id=aid,
-                        artifact_types=list(_ARTIFACT_TYPES.get(aid, [])),
-                        reason="unreachable_after_fr_b5",
-                        gap_code=entry.gap_code,
-                        confidence=entry.confidence,
-                        outcome=ActionOutcome.SKIPPED,
-                        locus_status=entry.locus_status,
                     )
                 )
                 continue
@@ -1249,6 +1236,238 @@ def _write_one(output_dir: Path, artifact: Any) -> Optional[str]:
     return rel
 
 
+_HEADING_RENAMES: Tuple[Tuple[re.Pattern, str], ...] = (
+    (re.compile(r"^##\s+Service summary\s*$", re.MULTILINE), "## Overview"),
+    (re.compile(r"^##\s+First response\s*$", re.MULTILINE), "## Procedures"),
+)
+
+_DEFAULT_RUNBOOK_CONTRACT: Dict[str, Any] = {
+    "completeness_markers": ["Overview", "Risks", "Escalation", "Procedures"],
+    "max_lines": 300,
+}
+
+
+def _risks_section_body(service: Any, business: Any) -> str:
+    """Deterministic Risks bullets (same sources as FR-B5 ``generate_runbook``)."""
+    avail = getattr(business, "availability", None) or "—"
+    crit = getattr(business, "criticality", None) or "medium"
+    bits = [
+        f"- Criticality is **{crit}**; availability target **{avail}**.",
+    ]
+    kinds = list(getattr(service, "kinds", None) or [])
+    if kinds:
+        bits.append(
+            f"- Declared kinds ({', '.join(kinds)}) drive which RED/SLI panels apply — "
+            "missing throughput/availability kinds leave Rate/Error coverage incomplete."
+        )
+    else:
+        bits.append(
+            "- No service kinds declared — RED completeness depends on transport defaults; "
+            "verify OBS-200a after regenerate."
+        )
+    return "\n".join(bits)
+
+
+def _section_span(text: str, heading: str) -> Optional[Tuple[int, int]]:
+    """Return ``[start, end)`` of the body after ``heading`` until the next ``##``."""
+    m = re.search(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE)
+    if not m:
+        return None
+    start = m.end()
+    nxt = re.search(r"^##\s+", text[start:], re.MULTILINE)
+    end = start + nxt.start() if nxt else len(text)
+    return start, end
+
+
+def _insert_before_heading_or_append(text: str, heading: str, block: str) -> str:
+    m = re.search(rf"^{re.escape(heading)}\s*$", text, re.MULTILINE)
+    if m:
+        return text[: m.start()] + block + text[m.start() :]
+    return text.rstrip() + "\n\n" + block
+
+
+def _insert_after_section(text: str, heading: str, block: str) -> str:
+    span = _section_span(text, heading)
+    if span is None:
+        return text.rstrip() + "\n\n" + block
+    _, end = span
+    return text[:end] + block + text[end:]
+
+
+def _ensure_risks_nonempty(text: str, service: Any, business: Any) -> str:
+    span = _section_span(text, "## Risks")
+    if span is None:
+        return text
+    start, end = span
+    body = text[start:end]
+    has_content = any(
+        ln.strip() and not ln.strip().startswith("#") for ln in body.splitlines()
+    )
+    if has_content:
+        return text
+    fill = "\n\n" + _risks_section_body(service, business) + "\n\n"
+    return text[:start] + fill + text[end:]
+
+
+def enrich_runbook_markdown(
+    content: str,
+    *,
+    service: Any,
+    business: Any,
+) -> str:
+    """Idempotent retrofit: old FR-B5-pre headings → contract markers + Risks body.
+
+    Renames ``Service summary``→``Overview``, ``First response``→``Procedures``;
+    injects missing Overview/Risks/Procedures/Escalation; fills hollow Risks.
+    Keeps Escalation (and other sections) intact.
+    """
+    text = content or ""
+    for pat, repl in _HEADING_RENAMES:
+        text = pat.sub(repl, text)
+
+    sid = getattr(service, "service_id", None) or "service"
+    if "## Overview" not in text:
+        overview = (
+            f"## Overview\n\n"
+            f"- **Service:** {sid}\n"
+            f"- **Transport:** {getattr(service, 'transport', None) or 'unknown'}\n\n"
+        )
+        # After title / blockquote preamble when present
+        m = re.search(r"^#\s+.+$", text, re.MULTILINE)
+        if m:
+            rest = text[m.end() :]
+            # skip blank + optional blockquote lines
+            pos = 0
+            lines = rest.splitlines(keepends=True)
+            i = 0
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            while i < len(lines) and lines[i].lstrip().startswith(">"):
+                i += 1
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            pos = m.end() + sum(len(lines[j]) for j in range(i))
+            text = text[:pos] + overview + text[pos:]
+        else:
+            text = overview + text
+
+    if "## Risks" not in text:
+        risks = f"## Risks\n\n{_risks_section_body(service, business)}\n\n"
+        text = _insert_after_section(text, "## Overview", risks)
+
+    if "## Procedures" not in text:
+        procedures = (
+            "## Procedures\n\n"
+            "1. Open the service dashboard; check the RED panels (rate, errors, duration).\n"
+            "2. Correlate with recent deploys and the error-rate panel.\n"
+            "3. Check logs for error spikes.\n\n"
+        )
+        if "## Escalation" in text:
+            text = _insert_before_heading_or_append(text, "## Escalation", procedures)
+        else:
+            text = text.rstrip() + "\n\n" + procedures
+
+    if "## Escalation" not in text:
+        text = (
+            text.rstrip()
+            + "\n\n## Escalation\n\n- Notify the owning team.\n"
+        )
+
+    text = _ensure_risks_nonempty(text, service, business)
+    if not text.endswith("\n"):
+        text += "\n"
+    return text
+
+
+def _apply_enrich_runbook(
+    entry: ActionPlanEntry,
+    *,
+    service: Any,
+    business: Any,
+    output_dir: Path,
+    result: ApplyResult,
+    contracts: Optional[Mapping[str, Any]] = None,
+) -> None:
+    """Live apply for ``gen.enrich_runbook`` — retrofit on-disk runbook markdown."""
+    from startd8.validators.observability_artifact_checks import (
+        validate_extended_artifact,
+    )
+
+    rel = f"runbooks/{service.service_id}-runbook.md"
+    dest = _confined_dest(output_dir, rel)
+    if dest is None:
+        entry.outcome = ActionOutcome.SKIPPED
+        entry.reason = "path_escape"
+        result.entries.append(entry)
+        return
+
+    before = dest.read_text(encoding="utf-8") if dest.is_file() else ""
+    entry.content_hash_before = content_hash(before) if before else None
+
+    if not before.strip():
+        # No prior file — emit a fresh FR-B5 runbook rather than inventing from empty
+        from startd8.observability.artifact_generator_generators import generate_runbook
+
+        art = generate_runbook(service, business)
+        after = art.content or ""
+        entry.content_hash_after = content_hash(after) if after else None
+        path = _write_one(output_dir, art)
+        if not path:
+            entry.outcome = ActionOutcome.SKIPPED
+            entry.reason = "runbook_not_generated"
+            result.entries.append(entry)
+            return
+        result.written_paths.append(path)
+        entry.outcome = ActionOutcome.APPLIED
+        entry.reason = "enrich_runbook_fresh"
+        result.touched_service_ids.append(service.service_id)
+        q = validate_extended_artifact(
+            after,
+            (contracts or {}).get("runbook") or _DEFAULT_RUNBOOK_CONTRACT,
+        ).to_quality()
+        result.quality_touched.setdefault(service.service_id, {})["runbook"] = q
+        result.manifest_touched.append(
+            {
+                "type": "runbook",
+                "service": service.service_id,
+                "path": rel,
+                "status": "generated",
+            }
+        )
+        result.entries.append(entry)
+        return
+
+    after = enrich_runbook_markdown(before, service=service, business=business)
+    entry.content_hash_after = content_hash(after)
+    if after == before:
+        entry.outcome = ActionOutcome.APPLIED_NO_CHANGE
+        entry.reason = "runbook_markers_already_present"
+        entry.content_hash_after = entry.content_hash_before
+        result.entries.append(entry)
+        return
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(after, encoding="utf-8")
+    result.written_paths.append(rel)
+    entry.outcome = ActionOutcome.APPLIED
+    entry.reason = "enrich_runbook"
+    result.touched_service_ids.append(service.service_id)
+    q = validate_extended_artifact(
+        after,
+        (contracts or {}).get("runbook") or _DEFAULT_RUNBOOK_CONTRACT,
+    ).to_quality()
+    result.quality_touched.setdefault(service.service_id, {})["runbook"] = q
+    result.manifest_touched.append(
+        {
+            "type": "runbook",
+            "service": service.service_id,
+            "path": rel,
+            "status": "generated",
+        }
+    )
+    result.entries.append(entry)
+
+
 def _apply_shrink(
     entry: ActionPlanEntry,
     *,
@@ -1747,7 +1966,7 @@ def apply_affordance_actions(
     max_lines: Optional[int] = None,
     render_fn: Optional[RenderFn] = None,
 ) -> ApplyResult:
-    """Apply live plan actions; advisory/unreachable remain planner skips."""
+    """Apply live plan actions; advisory remain planner skips."""
     from startd8.observability.artifact_generator import _repair_and_validate
     from startd8.observability.artifact_generator_generators import (
         _service_sli_kinds,
@@ -1845,6 +2064,17 @@ def apply_affordance_actions(
                 generate_slo_definitions=generate_slo_definitions,
                 generate_declared_base_slos=generate_declared_base_slos,
                 repair_and_validate=_repair_and_validate,
+            )
+            continue
+
+        if action.affordance_id == GEN_ENRICH_RUNBOOK:
+            _apply_enrich_runbook(
+                entry,
+                service=service,
+                business=business,
+                output_dir=output_dir,
+                result=result,
+                contracts=contracts,
             )
             continue
 
@@ -1972,6 +2202,7 @@ __all__ = [
     "GEN_EMIT_RED",
     "GEN_COMPLETE_TRIPLET",
     "GEN_SHRINK",
+    "GEN_ENRICH_RUNBOOK",
     "ActionOutcome",
     "AffordanceMapEntry",
     "ActionPlanEntry",
@@ -1982,6 +2213,7 @@ __all__ = [
     "normalize_element_id",
     "match_service_id",
     "load_affordance_map",
+    "enrich_runbook_markdown",
     "merge_needed_where_into_entries",
     "signal_kind_for",
     "metric_loci",
