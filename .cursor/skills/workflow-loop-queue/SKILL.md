@@ -92,7 +92,7 @@ Parent directories must exist. Follow-on CRP should be a separate job with
 
      ```json
      {
-       "vasi_version": "1.0",
+       "vasi_version": "0.1.0",
        "job_id": "<job-id>",
        "surface_id": "cursor_task",
        "ok": true,
@@ -102,6 +102,9 @@ Parent directories must exist. Follow-on CRP should be a separate job with
        "reviewer_model": "<assigned_reviewer.model slug>"
      }
      ```
+
+     Fail-closed extras: do not add `loop_id`, `status`, `requirements_path`,
+     `plan_path`, or other non-VASI fields — they invalidate the drain.
    - Current chat only orchestrates and runs the verify `run-next`.
    - **Scope the CRP reviewer:** primary inputs are the bundle, the focus file,
      and the source docs. **Targeted reads of named existing code** the docs claim
