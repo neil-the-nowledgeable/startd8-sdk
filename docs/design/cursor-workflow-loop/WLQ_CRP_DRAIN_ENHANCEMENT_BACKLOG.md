@@ -155,3 +155,48 @@ Counters/histograms for drain/complete/fail durations. Useful once watch/runbook
 | EC-WLQ-03 | Auto-apply: `flock -n` (+ pidfile write) in auto-consume.sh |
 | EC-WLQ-05 | Auto-apply: SKILL.md exemplar + severity ban |
 | EC-WLQ-02,04,06,07,08 + wildcards | Left for human (judgment / larger) |
+
+---
+
+## Round 1.1 — Late Seeder A reconcile ([CEP seeder A fresh](b4a6b3c5-74b2-4a0e-a547-9d4bb742f9b1))
+
+Seeder A completed after Round-1 triage. Unique **open** items (CL-29 grepped) appended; duplicates of EC-WLQ-01 / OTel meters absorbed.
+
+### EC-WLQ-09 — Doc-saturation gate in `drain_sdk_workflow` ⭐
+**Type:** fix · **Effort:** S · **Value:** HIGH  
+**Lineage:** A2 (late)  
+Agent-surface `run_next` gates on `doc_highest`; `drain_sdk_workflow` still only uses `job.rounds_completed()`.  
+*Grep (open):* `_doc_highest_round` absent in `drain_sdk_workflow` body.  
+**Verify:** sdk-workflow job with Appendix C at Rmax but missing RoundRecords → finish, no phantom LLM round.
+
+### EC-WLQ-10 — Gate `wloop render` on max_rounds / doc_highest
+**Type:** fix · **Effort:** S · **Value:** HIGH  
+**Lineage:** A3 (late)  
+`render()` derives next round with no saturation check — external footgun door.  
+*Grep (open):* no `_doc_highest_round` / `max_rounds` in `render()`.  
+**Verify:** after Rmax in docs → `wloop render` exits blocked naming doc_highest.
+
+### EC-WLQ-11 — Expose dual-counter on `wloop status`
+**Type:** wire-existing · **Effort:** S · **Value:** MED-HIGH  
+**Lineage:** A4 (late)  
+Surface `recorded_rounds`, `doc_highest`, `max_rounds` in status / compact row (Hansei Genchi Genbutsu).  
+**Verify:** JSON status includes both counters after a skewed CRP job.
+
+### EC-WLQ-12 — Terminal `depends_on` (FAILED/CANCELLED) fail-loud
+**Type:** wire-existing · **Effort:** S · **Value:** MED  
+**Lineage:** A5 (late)  
+`_unmet_dependencies` treats any non-COMPLETED dep as "still pending" — permanent deps poll forever.  
+*Grep (open):* `if dep_job.status is not LoopJobStatus.COMPLETED` only.  
+**Verify:** downstream of FAILED dep → blocked/failed with reason naming terminal dep status.
+
+### EC-WLQ-13 — Round-gate diagnostics as OTel span attributes
+**Type:** wire-existing · **Effort:** S · **Value:** MED  
+**Lineage:** A6 (late); distinct from WC-WLQ-02 meters  
+`logger.info` already has counters; `set_attribute` never called in `loop_queue/`.  
+**Verify:** Tempo span on drain transition carries `wlq.recorded_rounds` / `wlq.doc_highest` / `wlq.max_rounds`.
+
+| Absorbed late-A | Fate |
+|-----------------|------|
+| A1 renderer timeout | Already EC-WLQ-01 → PR #368 |
+| A meters-only framing | Already WC-WLQ-02 |
+
