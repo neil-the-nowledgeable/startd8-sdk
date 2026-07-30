@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import statistics as _st
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html import escape as _esc
 from pathlib import Path
@@ -196,54 +197,49 @@ def _headline(agg: Optional[Dict], contam: Optional[dict]) -> str:
     return "no scores computed for this run."
 
 
-def _qtable(agg: Dict, models: List[str]) -> str:
-    """A quality-leaderboard markdown table for an ordered model subset (or a no-models marker)."""
+def _qtable(
+    agg: Dict,
+    models: List[str],
+    *,
+    classification: Optional[Dict[str, str]] = None,
+) -> str:
+    """A quality-leaderboard markdown table for an ordered model subset (or a no-models marker).
+
+    When ``classification`` is provided (FR-DT-18), a Lane column tags each model
+    ``team_lane`` | ``invite`` | ``both``.
+    """
     if not models:
         return "_(no models in this group for this run)_"
-    rows = [
-        "| Rank | Model | quality (median) | IQR | pass-rate | catastrophic | cost $ | model tok/s med |",
-        "|---:|---|---:|---:|---:|---:|---:|---:|",
-    ]
+    use_lane = bool(classification)
+    if use_lane:
+        rows = [
+            "| Rank | Model | lane | quality (median) | IQR | pass-rate | catastrophic | cost $ | model tok/s med |",
+            "|---:|---|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    else:
+        rows = [
+            "| Rank | Model | quality (median) | IQR | pass-rate | catastrophic | cost $ | model tok/s med |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|",
+        ]
     for i, model in enumerate(models, 1):
         s = agg["by_model"][model]
-        rows.append(
-            f"| {i} | `{model}` | {_f(s['quality_median'])} | {_f(s['quality_iqr'])} | "
-            f"{_f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {_f(s['cost_total_usd'], 4)} | "
-            f"{_f(s.get('model_tokens_per_sec_median'), 1)} |"  # FR-SPEED-2 headline
-        )
+        if use_lane:
+            lane = (classification or {}).get(model, "—")
+            rows.append(
+                f"| {i} | `{model}` | `{lane}` | {_f(s['quality_median'])} | {_f(s['quality_iqr'])} | "
+                f"{_f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {_f(s['cost_total_usd'], 4)} | "
+                f"{_f(s.get('model_tokens_per_sec_median'), 1)} |"
+            )
+        else:
+            rows.append(
+                f"| {i} | `{model}` | {_f(s['quality_median'])} | {_f(s['quality_iqr'])} | "
+                f"{_f(s['pass_rate'])} | {s['catastrophic_count']}/{s['n']} | {_f(s['cost_total_usd'], 4)} | "
+                f"{_f(s.get('model_tokens_per_sec_median'), 1)} |"
+            )
     return "\n".join(rows)
 
 
-def _speed_section(agg: Optional[Dict]) -> str:
-    """Section E (FR-SPEED-4): two time measures + harness overhead, ranked by pure-model throughput."""
-    head = "## Speed (generation time — reported, not scored)"
-    if not agg or not agg.get("by_model"):
-        return f"{head}\n\n" + _NOT_COMPUTED.format(why="no `cells.json` aggregate persisted")
-    rows = [
-        head, "",
-        "> `model` = pure model API time (Σ GenerateResult.time_ms); `pipeline wall` = whole subprocess; "
-        "`harness overhead` = (wall − model)/wall.", "",
-        "| Rank | Model | model time med (s) | model tok/s med | pipeline wall med (s) | "
-        "pipeline tok/s med | harness overhead |",
-        "|---:|---|---:|---:|---:|---:|---:|",
-    ]
-    ranked = sorted(agg["by_model"],
-                    key=lambda m: agg["by_model"][m].get("model_tokens_per_sec_median") or -1.0,
-                    reverse=True)
-    for i, model in enumerate(ranked, 1):
-        s = agg["by_model"][model]
-        mt, wall = s.get("model_time_median_s"), s.get("latency_median_s")
-        overhead = (f"{(wall - mt) / wall:.0%}"
-                    if isinstance(mt, (int, float)) and isinstance(wall, (int, float)) and wall > 0
-                    else "N/A")
-        rows.append(
-            f"| {i} | `{model}` | {_f(mt, 1)} | {_f(s.get('model_tokens_per_sec_median'), 1)} | "
-            f"{_f(wall, 1)} | {_f(s.get('tokens_per_sec_median'), 1)} | {overhead} |"
-        )
-    return "\n".join(rows)
-
-
-def _scoreboard_section(agg: Optional[Dict]) -> str:
+def _scoreboard_section(agg: Optional[Dict], *, run_dir: Optional[Path] = None) -> str:
     head = "## Scoreboard — composite quality (best → worst)"
     if not agg:
         return f"{head}\n\n" + _NOT_COMPUTED.format(
@@ -251,13 +247,152 @@ def _scoreboard_section(agg: Optional[Dict]) -> str:
         )
     cap = (
         "> Quality = median composite (structural × compile-gate × behavioral fold × defect penalty);\n"
-        "> catastrophic = $0/failed/timeout/integrity-fail (FR-17). Each table ranked best→worst."
+        "> catastrophic = $0/failed/timeout/integrity-fail (FR-17). Each table ranked best→worst.\n"
+        ">\n"
+        "> **Individual** tables below rank every enrolled model. **Provider** groups are presentation\n"
+        "> filters, not Team medals (lab identity comes from `entrant_roster.yaml`, not the\n"
+        "> `provider:` prefix — OpenRouter labs share one prefix).\n"
+        "> Lane tags (`team_lane` / `invite` / `both`) appear when RoundRoster or `tournament.json` "
+        "is present (FR-DT-18)."
     )
+    board = _team_board(agg, run_dir=run_dir)
+    classification = board.classification or None
     ordered = _ranked_models(agg)
     blocks = [head, cap]
     for key, title in _SCOREBOARD_GROUPS:
-        blocks.append(f"### {title}\n\n" + _qtable(agg, _group_models(ordered, key)))
+        label = title.replace("All models", "Individual (all entrants)")
+        cls = classification if key == "all" else None
+        blocks.append(
+            f"### {label}\n\n" + _qtable(agg, _group_models(ordered, key), classification=cls)
+        )
+    blocks.append(_team_section_from_board(board))
     return "\n\n".join(blocks)
+
+
+@dataclass
+class _TeamBoard:
+    """Shared Team computation result for markdown + HTML renderers."""
+
+    rows: Optional[List] = None
+    footnote: str = ""
+    degrade: Optional[str] = None
+    invite_only: List[str] = field(default_factory=list)
+    classification: Dict[str, str] = field(default_factory=dict)
+
+
+def _team_section(agg: Optional[Dict], *, run_dir: Optional[Path] = None) -> str:
+    """Team medals (eligible squads) — FR-DT-6/16/18; degrade-honest when roster absent."""
+    return _team_section_from_board(_team_board(agg, run_dir=run_dir))
+
+
+def _team_section_from_board(board: _TeamBoard) -> str:
+    head = "### Team (eligible squads)"
+    if board.degrade or not board.rows:
+        why = board.degrade or "no eligible squads for this run"
+        prefix = f"{head}\n\n{board.footnote}\n\n" if board.footnote else f"{head}\n\n"
+        return prefix + _NOT_COMPUTED.format(why=why)
+    table = [
+        "| Rank | Lab | team quality | team cost $ | flagship | mid | fast |",
+        "|---:|---|---:|---:|---|---|---|",
+    ]
+    for i, r in enumerate(board.rows, 1):
+        table.append(
+            f"| {i} | `{r.lab}` | {_f(r.quality)} | {_f(r.cost_usd, 4)} | "
+            f"`{r.members['flagship']}` | `{r.members['mid']}` | `{r.members['fast']}` |"
+        )
+    return f"{head}\n\n{board.footnote}\n\n" + "\n".join(table)
+
+
+def _team_board(agg: Optional[Dict], *, run_dir: Optional[Path] = None) -> _TeamBoard:
+    """Shared Team computation for markdown + HTML (single load path).
+
+    Enrollment context prefers ``round_roster.yaml``; falls back to ``tournament.json``
+    (EC-DT-8) when the YAML is absent but a real-run stamp exists.
+    """
+    from .entrant_roster import find_entrant_roster, load_entrant_roster, roster_hash
+    from .round_roster import find_round_roster, load_round_roster, resolve_enrollment, round_roster_hash
+    from .team_score import TEAM_METRIC_ID, team_rows
+
+    if not agg or not agg.get("by_model"):
+        return _TeamBoard(degrade="no `by_model` aggregate")
+    if run_dir is None:
+        return _TeamBoard(degrade="no run_dir (cannot load entrant_roster.yaml)")
+    roster_path = find_entrant_roster(run_dir)
+    if roster_path is None:
+        return _TeamBoard(degrade="no `entrant_roster.yaml` in run dir — Team track not computed")
+    try:
+        roster = load_entrant_roster(roster_path)
+    except (OSError, ValueError) as exc:
+        return _TeamBoard(degrade=f"entrant roster load failed: {exc}")
+
+    team_lane = None
+    invite_only: List[str] = []
+    classification: Dict[str, str] = {}
+    rr_hash = None
+    lane = None
+    provenance = None
+    rr_path = find_round_roster(run_dir)
+    if rr_path is not None:
+        try:
+            rr = load_round_roster(rr_path)
+            enr = resolve_enrollment(rr, roster)
+            team_lane = list(enr.team_lane_labs)
+            invite_only = list(enr.invite_models)
+            classification = dict(enr.classification)
+            rr_hash = round_roster_hash(rr)
+            lane = rr.lane
+            provenance = "round_roster"
+        except (OSError, ValueError) as exc:
+            return _TeamBoard(degrade=f"round_roster resolve failed: {exc}")
+    else:
+        tj = Path(run_dir) / "tournament.json"
+        if tj.is_file():
+            try:
+                data = json.loads(tj.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                return _TeamBoard(degrade=f"tournament.json load failed: {exc}")
+            if not isinstance(data, dict):
+                return _TeamBoard(degrade="tournament.json: expected a mapping")
+            raw_lane = data.get("team_lane_labs")
+            team_lane = list(raw_lane) if isinstance(raw_lane, list) else []
+            invite_only = list(data.get("individual_invite_only") or [])
+            classification = {
+                str(k): str(v) for k, v in (data.get("classification") or {}).items()
+            }
+            rr_hash = data.get("round_roster_hash")
+            lane = data.get("lane")
+            provenance = "tournament.json"
+
+    rows = team_rows(agg, roster, team_lane=team_lane)
+    er_hash = roster_hash(roster)
+    footnote = (
+        f"> Metric `{TEAM_METRIC_ID}` = unweighted mean of best-per-tier `quality_median`; "
+        f"cost = sum of those members' mean costs. Eligibility = flagship+mid+fast present"
+        + (" ∧ lab ∈ team-lane set" if team_lane is not None else "")
+        + f". Entrant roster `{er_hash}`"
+        + (f" · round roster `{rr_hash}` · lane `{lane}`" if rr_hash else "")
+        + (f" · enrollment from `{provenance}`" if provenance else "")
+        + "."
+    )
+    if invite_only:
+        footnote += (
+            "\n> Individual-invite only (not Team-eligible): "
+            + ", ".join(f"`{m}`" for m in invite_only)
+            + "."
+        )
+    if not rows:
+        return _TeamBoard(
+            footnote=footnote,
+            degrade="no eligible squads for this run",
+            invite_only=invite_only,
+            classification=classification,
+        )
+    return _TeamBoard(
+        rows=rows,
+        footnote=footnote,
+        invite_only=invite_only,
+        classification=classification,
+    )
 
 
 def _consistency_section(agg: Optional[Dict]) -> str:
@@ -775,7 +910,7 @@ def build_scorecard(run_dir, *, now: Optional[datetime] = None) -> str:
 
     sections = [
         _header(spec, cells, contam, now),
-        _scoreboard_section(agg),  # A — scores first (inverted pyramid)
+        _scoreboard_section(agg, run_dir=run_dir),  # A — scores first (inverted pyramid)
         _consistency_section(agg),
         _credibility_section(contam),
         _behavioral_section(cells),
@@ -931,14 +1066,37 @@ _QCOLS = [
     "Cost $",
 ]
 
+_QCOLS_LANE = [
+    "Rank",
+    "Model",
+    "Lane",
+    "Quality (median)",
+    "IQR",
+    "Pass-rate",
+    "Catastrophic",
+    "Cost $",
+]
 
-def _h_qrows(agg: Dict, models: List[str]) -> List[str]:
+
+def _h_qrows(
+    agg: Dict,
+    models: List[str],
+    *,
+    classification: Optional[Dict[str, str]] = None,
+) -> List[str]:
     rows = []
+    use_lane = bool(classification)
     for i, model in enumerate(models, 1):
         s = agg["by_model"][model]
         cls = ' class="top"' if i == 1 else ""
+        lane_cell = (
+            f"<td class=dimv>{_esc((classification or {}).get(model, '—'))}</td>"
+            if use_lane
+            else ""
+        )
         rows.append(
             f"<tr{cls}><td class=rank>{i}</td><td class=model>{_esc(model)}</td>"
+            f"{lane_cell}"
             f"<td class=big>{_hf(s['quality_median'])}</td><td class=dimv>{_hf(s['quality_iqr'])}</td>"
             f"<td>{_hf(s['pass_rate'])}</td><td class=dimv>{s['catastrophic_count']}/{s['n']}</td>"
             f"<td>{_hf(s['cost_total_usd'], 4)}</td></tr>"
@@ -946,21 +1104,56 @@ def _h_qrows(agg: Dict, models: List[str]) -> List[str]:
     return rows
 
 
-def _h_scoreboard(agg: Optional[Dict]) -> str:
+def _h_scoreboard(agg: Optional[Dict], *, run_dir: Optional[Path] = None) -> str:
     if not agg:
         return _empty(
             "no cells.json aggregate persisted (the whole Scoreboard degrades together)"
         )
+    board = _team_board(agg, run_dir=run_dir)
+    classification = board.classification or None
     ordered = _ranked_models(agg)
     parts = []
     for key, title in _SCOREBOARD_GROUPS:
         models = _group_models(ordered, key)
-        parts.append(f'<h3 class="grp">{_esc(title)}</h3>')
-        parts.append(
-            _h_table(_QCOLS, _h_qrows(agg, models))
-            if models
-            else '<div class="sb-empty">— no models in this group for this run —</div>'
+        label = title.replace("All models", "Individual (all entrants)")
+        parts.append(f'<h3 class="grp">{_esc(label)}</h3>')
+        if not models:
+            parts.append('<div class="sb-empty">— no models in this group for this run —</div>')
+            continue
+        cols = _QCOLS_LANE if (classification and key == "all") else _QCOLS
+        cls = classification if key == "all" else None
+        parts.append(_h_table(cols, _h_qrows(agg, models, classification=cls)))
+    parts.append(_h_team_section_from_board(board))
+    return "".join(parts)
+
+
+def _h_team_section(agg: Optional[Dict], *, run_dir: Optional[Path] = None) -> str:
+    """HTML twin of Team medals — real table, not escaped markdown."""
+    return _h_team_section_from_board(_team_board(agg, run_dir=run_dir))
+
+
+def _h_team_section_from_board(board: _TeamBoard) -> str:
+    parts = ['<h3 class="grp">Team (eligible squads)</h3>']
+    if board.footnote:
+        note = board.footnote.replace("> ", "").replace("`", "")
+        parts.append(f'<p class="note">{_esc(note)}</p>')
+    if board.degrade or not board.rows:
+        parts.append(_empty(board.degrade or "no eligible squads for this run"))
+        return "".join(parts)
+    rows = []
+    for i, r in enumerate(board.rows, 1):
+        cls = ' class="top"' if i == 1 else ""
+        rows.append(
+            f"<tr{cls}><td class=rank>{i}</td><td class=model>{_esc(r.lab)}</td>"
+            f"<td class=big>{_hf(r.quality)}</td><td>{_hf(r.cost_usd, 4)}</td>"
+            f"<td class=dimv>{_esc(r.members['flagship'])}</td>"
+            f"<td class=dimv>{_esc(r.members['mid'])}</td>"
+            f"<td class=dimv>{_esc(r.members['fast'])}</td></tr>"
         )
+    parts.append(_h_table(
+        ["Rank", "Lab", "Team quality", "Team cost $", "Flagship", "Mid", "Fast"],
+        rows,
+    ))
     return "".join(parts)
 
 
@@ -1316,7 +1509,7 @@ def build_scorecard_html(run_dir, *, now: Optional[datetime] = None) -> str:
     comparison = _load_json(run_dir / COMPARISON_FILE)
 
     scoreboard = _h_dim(
-        "A", "Scoreboard", _SB_CAP, _h_scoreboard(agg), 0.05
+        "A", "Scoreboard", _SB_CAP, _h_scoreboard(agg, run_dir=run_dir), 0.05
     )  # scores first
     bodies = [
         _h_consistency(agg),
