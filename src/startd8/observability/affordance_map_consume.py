@@ -765,9 +765,13 @@ def plan_affordance_actions(
                 )
                 continue
 
-            # Coverage: live when source_backed metric loci exist; else advisory skip
+            # Coverage: live when source_backed|partial metric loci exist
+            # (same honesty window as RED / gap #2 admit); else advisory skip
             if aid in ADVISORY_GEN:
-                if entry.locus_status == "source_backed" and m_loci:
+                if (
+                    (entry.locus_status or "") in ("source_backed", "partial")
+                    and m_loci
+                ):
                     pe = ActionPlanEntry(
                         service_id=matched,
                         affordance_id=aid,
@@ -2489,8 +2493,9 @@ def _apply_improve_coverage(
 ) -> None:
     """Locus-biased coverage bind: dashboard (human) + SLO (system) + alert (bridge).
 
-    SDK brief P0 / LOCUS_GROUNDED_GENERATE: live when ``source_backed`` + metric
-    loci (planner already plans this). Dashboard-only bind left system/bridge at 0.
+    SDK brief P0 / LOCUS_GROUNDED_GENERATE: live when ``source_backed``|``partial``
+    + metric loci (planner already plans this). Dashboard-only bind left
+    system/bridge at 0.
     """
     loci = list(entry.loci_used or [])
     metric_only = [
