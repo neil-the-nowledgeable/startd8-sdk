@@ -2578,3 +2578,12 @@ class TestDeploymentModeSLO:
         _, tier = TestDeploymentModeSLO._resolve_threshold("availability", b, derivs)
         assert tier == "default:importance"
         assert any("installed" in d.transformation for d in derivs)
+
+
+def test_coverage_bind_panel_expr_hist_duration_uses_bucket():
+    from startd8.observability.artifact_generator import _coverage_bind_panel_expr
+
+    expr = _coverage_bind_panel_expr("thanos_compact_garbage_collection_duration_seconds")
+    assert "histogram_quantile" in expr and "_bucket" in expr
+    assert "max(" not in expr
+    assert _coverage_bind_panel_expr("thanos_compact_halted") == "max(thanos_compact_halted{})"
