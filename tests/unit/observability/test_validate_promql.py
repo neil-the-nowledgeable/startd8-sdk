@@ -1152,3 +1152,228 @@ def test_detect_profile_unreachable_is_unknown(monkeypatch):
     result = _run_detect_profile(monkeypatch, RuntimeError("connection refused"))
     assert result.exit_code == 3, result.output
     assert json.loads(result.output)["status"] == "unknown"
+
+
+# ───── cross-cutting absent rollup exclusion (unknown-bucket Path Fix) ─────
+
+
+def _business_criticality_artifacts(tmp_path: Path) -> tuple:
+    """Cross-cutting dashboard (service=="") + one real service SLO for denominator."""
+    artifacts = tmp_path / "art"
+    (artifacts / "dashboards").mkdir(parents=True)
+    (artifacts / "slos").mkdir(parents=True)
+    slo = {
+        "apiVersion": "openslo/v1",
+        "kind": "SLO",
+        "metadata": {"name": "compact-throughput", "labels": {"service": "compact"}},
+        "spec": {
+            "indicator": {
+                "spec": {
+                    "thresholdMetric": {
+                        "metricSource": {
+                            "spec": {"query": "sum(rate(thanos_compact_group_compactions_total[5m]))"}
+                        }
+                    }
+                }
+            }
+        },
+    }
+    (artifacts / "slos" / "compact-declared-base-slo.yaml").write_text(yaml.dump(slo))
+    dash = {
+        "title": "Business Criticality Overview",
+        "uid": "obs-business-criticality",
+        "panels": [
+            {
+                "title": "Request rate by business criticality",
+                "expr": "sum by (business_criticality) (rate(calls_total[5m]))",
+            },
+            {
+                "title": "Error ratio by business criticality",
+                "expr": (
+                    'sum by (business_criticality) (rate(calls_total{status_code="STATUS_CODE_ERROR"}[5m]))'
+                    " / sum by (business_criticality) (rate(calls_total[5m]))"
+                ),
+            },
+        ],
+    }
+    (artifacts / "dashboards" / "business-criticality-dashboard-spec.yaml").write_text(
+        yaml.dump(dash)
+    )
+    onboarding = _semconv_onboarding(tmp_path, service="compact")
+    return artifacts, onboarding
+
+
+def test_metric_families_from_expr_guards():
+    from startd8.observability.validate_promql import metric_families_from_expr
+
+    assert metric_families_from_expr("sum by (x) (rate(calls_total[5m]))") == ["calls_total"]
+    assert metric_families_from_expr(
+        "sum by (business_criticality) (rate(calls_total[5m]))"
+    ) == ["calls_total"]
+    # Empty / no extractable metric → None (keep visible).
+    assert metric_families_from_expr("vector(1)") is None
+    # Single-char-only base refused.
+    assert metric_families_from_expr("rate(a[5m])") is None
+
+
+def test_cross_cutting_absent_families_excluded_from_denominator(tmp_path):
+    """All families window-absent → Verdict.EXCLUDED + counter; row stays in verdicts."""
+    artifacts, onboarding = _business_criticality_artifacts(tmp_path)
+
+    def _q(base, expr, **k):
+        # Compact SLO binds; cross-cutting panels empty at primary/wide.
+        if "thanos_compact" in expr:
+            return 1
+        return 0
+
+    def _val(base, expr, **k):
+        # Windowed family probe: calls_total absent.
+        if "calls_total" in expr and "count_over_time" in expr:
+            return 0.0
+        return None
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.5,
+        auth=Auth(),
+        query_fn=_q,
+        value_fn=_val,
+        list_names_fn=lambda *a, **k: ["thanos_compact_group_compactions_total"],
+        label_values_fn=lambda *a, **k: ["compact"],
+    )
+    excluded = [v for v in report.verdicts if v.verdict == "excluded"]
+    assert len(excluded) == 2
+    assert all(v.exclusion_reason == "cross_cutting_absent_rollup" for v in excluded)
+    assert all(v.service == "" for v in excluded)
+    assert report.excluded_by_reason.get("cross_cutting_absent_rollup") == 2
+    # Rows remain in verdicts (provenance); denominator drops the 2 excluded.
+    assert report.denominator == 1  # only compact SLO remains applicable
+    assert report.binding_coverage == 1.0
+    d = report.to_dict()
+    assert d["denominator"] == 1
+    assert d["excluded_by_reason"]["cross_cutting_absent_rollup"] == 2
+    # FR-9 residual names exprs + source + families.
+    residual = d["excluded_cross_cutting_rollups"]
+    assert len(residual) == 2
+    assert all("calls_total" in r["absent_families"] for r in residual)
+    assert all("business-criticality-dashboard-spec.yaml" in r["source_file"] for r in residual)
+
+
+def test_cross_cutting_present_family_not_excluded(tmp_path):
+    """Cross-cutting + present family (live-name hint) stays fail/bind — no over-exclusion."""
+    artifacts, onboarding = _business_criticality_artifacts(tmp_path)
+
+    def _q(base, expr, **k):
+        if "thanos_compact" in expr:
+            return 1
+        return 0
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=_q,
+        value_fn=lambda *a, **k: 99.0,  # would say present if probed
+        list_names_fn=lambda *a, **k: [
+            "thanos_compact_group_compactions_total",
+            "calls_total",  # present-name hint blocks exclusion
+        ],
+        label_values_fn=lambda *a, **k: ["compact"],
+    )
+    assert all(v.verdict != "excluded" for v in report.verdicts)
+    fails = [v for v in report.verdicts if v.verdict == "fail" and v.service == ""]
+    assert len(fails) == 2
+    assert "cross_cutting_absent_rollup" not in report.excluded_by_reason
+
+
+def test_cross_cutting_window_present_not_excluded(tmp_path):
+    """Live names empty for family, but windowed probe finds samples → keep visible."""
+    artifacts, onboarding = _business_criticality_artifacts(tmp_path)
+
+    def _q(base, expr, **k):
+        return 1 if "thanos_compact" in expr else 0
+
+    def _val(base, expr, **k):
+        if "count_over_time" in expr:
+            return 3.0  # samples in window
+        return None
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=_q,
+        value_fn=_val,
+        list_names_fn=lambda *a, **k: ["thanos_compact_group_compactions_total"],
+        label_values_fn=lambda *a, **k: ["compact"],
+    )
+    assert all(v.verdict != "excluded" for v in report.verdicts if v.service == "")
+
+
+def test_cross_cutting_budget_exhaustion_not_excluded(tmp_path):
+    """Auxiliary family probe needs budget; exhaustion ⇒ keep visible (fail-closed)."""
+    artifacts, onboarding = _business_criticality_artifacts(tmp_path)
+
+    def _q(base, expr, **k):
+        return 1 if "thanos_compact" in expr else 0
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=_q,
+        value_fn=lambda *a, **k: 0.0,
+        list_names_fn=lambda *a, **k: ["thanos_compact_group_compactions_total"],
+        label_values_fn=lambda *a, **k: ["compact"],
+        query_budget=2,  # compact + first empty panel; family probe blocked
+    )
+    # At least one cross-cutting panel must remain non-excluded.
+    cross = [v for v in report.verdicts if v.service == ""]
+    assert cross
+    assert any(v.verdict != "excluded" for v in cross)
+
+
+def test_cross_cutting_probe_http_error_not_excluded(tmp_path):
+    """Malformed family probe (HTTP 400) ⇒ keep visible."""
+    import urllib.error
+    from io import BytesIO
+
+    artifacts, onboarding = _business_criticality_artifacts(tmp_path)
+
+    def _q(base, expr, **k):
+        return 1 if "thanos_compact" in expr else 0
+
+    def _val(base, expr, **k):
+        raise urllib.error.HTTPError(base, 400, "bad", hdrs=None, fp=BytesIO())
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=_q,
+        value_fn=_val,
+        list_names_fn=lambda *a, **k: ["thanos_compact_group_compactions_total"],
+        label_values_fn=lambda *a, **k: ["compact"],
+    )
+    assert "cross_cutting_absent_rollup" not in report.excluded_by_reason
+    assert all(v.verdict != "excluded" for v in report.verdicts if v.service == "")
+
+
+def test_cross_cutting_exclusion_preserves_pseudo_service_extract(tmp_path):
+    """#362 / FR-10: exclusion must not invent a fake service id on extract."""
+    artifacts, onboarding = _business_criticality_artifacts(tmp_path)
+    exprs = validate_promql.extract_exprs(artifacts)
+    cross = [e for e in exprs if e.source_kind == "dashboard"]
+    assert len(cross) == 2
+    assert all(e.service == "" for e in cross)
+    assert not any(e.service == "business-criticality" for e in exprs)

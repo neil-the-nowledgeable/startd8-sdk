@@ -68,6 +68,10 @@ MAX_PROBES_PER_EXPR = 6
 #: Default per-run query budget (FR-8c). Bounds total live queries.
 DEFAULT_QUERY_BUDGET = 5000
 
+#: Typed exclusion reason for cross-cutting rollups whose metric family is
+#: absent over the covered ``bind_window`` (Thanos unknown-bucket Path Fix).
+EXCLUSION_CROSS_CUTTING_ABSENT_ROLLUP = "cross_cutting_absent_rollup"
+
 #: Signals we map alert/rule names onto (per-service, per-signal rollup, FR-10).
 _SIGNAL_PATTERNS: Tuple[Tuple[str, str], ...] = (
     ("latency", r"latency|duration|p99|p95|p50"),
@@ -142,6 +146,123 @@ def _is_cross_cutting_stem(stem: str) -> bool:
     """True when *stem* names a project-level rollup, not a service (#362)."""
     lowered = (stem or "").lower()
     return any(marker in lowered for marker in _CROSS_CUTTING_MARKERS)
+
+
+def metric_families_from_expr(expr: str) -> Optional[List[str]]:
+    """Extract metric-family bases from a PromQL expr for absence probing.
+
+    Reuses :func:`observability_fidelity_static.bare_metrics_from_expr` (Mottainai).
+    Returns ``None`` when extraction is empty, unsupported, or yields no usable
+    bases (every candidate ≤1 char) — callers MUST keep the verdict visible
+    (fail-closed). Histogram-derived suffixes (``_bucket`` / ``_count`` / ``_sum``)
+    collapse to the shared family base so ``calls_total_count`` and ``calls_total``
+    probe once.
+    """
+    from .observability_fidelity_static import bare_metrics_from_expr
+
+    # Aggregation grouping clauses name labels, not metrics — blank them so
+    # ``sum by (business_criticality) (rate(calls_total[5m]))`` yields calls_total only.
+    scrubbed = re.sub(r"\b(?:by|without)\s*\([^)]*\)", " ", expr or "")
+    raw = bare_metrics_from_expr(scrubbed)
+    if not raw:
+        return None
+    families: List[str] = []
+    seen: set = set()
+    for name in sorted(raw):
+        base = name
+        for suf in ("_bucket", "_count", "_sum"):
+            if base.endswith(suf) and len(base) > len(suf):
+                base = base[: -len(suf)]
+                break
+        if len(base) <= 1:
+            continue  # refuse short bases; do not scan whole TSDB
+        if base not in seen:
+            seen.add(base)
+            families.append(base)
+    return families or None
+
+
+def _family_present_in_live_names(family: str, live_names: Iterable[str]) -> bool:
+    """Cheap present-name hint: True if any live ``__name__`` is *family* or ``family_*``."""
+    for n in live_names:
+        if n == family or n.startswith(family + "_"):
+            return True
+    return False
+
+
+def _family_window_absent_query(family: str, bind_window: str) -> str:
+    """PromQL proving family absence over a covered window (not an instant snapshot)."""
+    safe = re.escape(family)
+    return f'count(count_over_time({{__name__=~"{safe}.*"}}[{bind_window}]))'
+
+
+_BIND_WINDOW_RE = re.compile(r"^\d+[smhdwy]$", re.IGNORECASE)
+
+
+def _try_exclude_cross_cutting_absent(
+    *,
+    expr: str,
+    source_file: str,
+    bind_window: str,
+    live_names: Optional[List[str]],
+    q_value: Callable[..., Optional[float]],
+    prometheus_url: str,
+    auth: Auth,
+    replayed: int,
+    query_budget: int,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]], List[Dict[str, Any]], int, bool]:
+    """Decide FR-3 cross-cutting absent-rollup exclusion (fail-closed).
+
+    Returns ``(exclusion_reason_or_None, residual_or_None, axis_detail,
+    new_replayed, backend_unreachable)``.
+    """
+    if live_names is None:
+        return None, None, [], replayed, False
+    if not _BIND_WINDOW_RE.match(bind_window or ""):
+        logger.warning("refusing cross-cutting exclusion: invalid bind_window %r", bind_window)
+        return None, None, [], replayed, False
+    families = metric_families_from_expr(expr)
+    if families is None:
+        return None, None, [], replayed, False
+    if any(_family_present_in_live_names(f, live_names) for f in families):
+        return None, None, [], replayed, False
+
+    spent = replayed
+    for fam in families:
+        if spent >= query_budget:
+            return None, None, [], spent, False
+        probe = _family_window_absent_query(fam, bind_window)
+        try:
+            val = q_value(prometheus_url, probe, auth=auth)
+            spent += 1
+        except urllib.error.HTTPError as exc:
+            if exc.code in (400, 422):
+                return None, None, [], spent, False
+            logger.warning("family absence probe failed (unreachable?): %s", exc)
+            return None, None, [], spent, True
+        except Exception as exc:
+            logger.warning("family absence probe failed (unreachable?): %s", exc)
+            return None, None, [], spent, True
+        if val is not None and float(val) > 0:
+            return None, None, [], spent, False
+
+    residual = {
+        "expr": expr,
+        "source_file": source_file,
+        "absent_families": list(families),
+        "bind_window": bind_window,
+        "exclusion_reason": EXCLUSION_CROSS_CUTTING_ABSENT_ROLLUP,
+    }
+    axis_detail = [
+        {
+            "axis": "cross_cutting_absent_rollup",
+            "expected": fam,
+            "mismatched": True,
+            "detail": f"windowed absence over {bind_window}",
+        }
+        for fam in families
+    ]
+    return EXCLUSION_CROSS_CUTTING_ABSENT_ROLLUP, residual, axis_detail, spent, False
 
 
 def _service_from_promql(expr: str) -> Optional[str]:
@@ -724,6 +845,11 @@ class FidelityReport:
     #: manifest declares but the backend has never emitted — a whole-service gap to deploy
     #: or --exclude-services, distinct from a per-query binding miss.
     target_drift: Dict[str, Any] = field(default_factory=dict)
+    #: Coverage denominator after EXCLUDED drop (R1-S6 / AC-2). 0 when unknown/empty run.
+    denominator: int = 0
+    #: FR-9 operator residual: excluded cross-cutting rollups still named (expr, source,
+    #: absent families) so exclusion never erases the human-visible gap.
+    excluded_cross_cutting_rollups: List[Dict[str, Any]] = field(default_factory=list)
     verdicts: List[ExprVerdict] = field(default_factory=list)
     per_service: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     per_axis: Dict[str, int] = field(default_factory=dict)
@@ -746,10 +872,12 @@ class FidelityReport:
             "queries_excluded": sum(self.excluded_by_reason.values()),
             "excluded_by_reason": self.excluded_by_reason,
             "excluded_artifacts": self.excluded_artifacts,
+            "excluded_cross_cutting_rollups": self.excluded_cross_cutting_rollups,
             "target_drift": self.target_drift,
             "coverage": round(self.coverage, 4),
             "binding_coverage": round(self.binding_coverage, 4),
             "data_coverage": round(self.data_coverage, 4),
+            "denominator": self.denominator,
             "bound_no_data": self.bound_no_data,
             "min_coverage": self.min_coverage,
             "static_gate_note": self.static_gate_note,
@@ -822,6 +950,7 @@ def run_validation(
     exclude_services: Optional[set] = None,
     auth: Optional[Auth] = None,
     query_fn: Optional[Callable[..., int]] = None,
+    value_fn: Optional[Callable[..., Optional[float]]] = None,
     list_names_fn: Optional[Callable[..., List[str]]] = None,
     label_values_fn: Optional[Callable[..., List[str]]] = None,
 ) -> FidelityReport:
@@ -832,6 +961,7 @@ def run_validation(
     """
     auth = auth if auth is not None else Auth.from_env()
     q_count = query_fn or prometheus_query.instant_query_count
+    q_value = value_fn or prometheus_query.instant_query_value
     list_names = list_names_fn or prometheus_query.list_metric_names
     label_vals = label_values_fn or prometheus_query.label_values
 
@@ -918,6 +1048,7 @@ def run_validation(
         return live_names_cache["names"]
 
     verdicts: List[ExprVerdict] = []
+    excluded_cross_cutting_rollups: List[Dict[str, Any]] = []
     replayed = 0
     skipped = 0
     backend_unreachable = False
@@ -976,6 +1107,7 @@ def run_validation(
         mismatched: List[str] = []
         remediation = ""
         suggested_profile = ""
+        exclusion_reason = ""
         axis_detail: List[Dict[str, Any]] = []
 
         if count > 0:
@@ -1003,6 +1135,47 @@ def run_validation(
                     logger.warning("query failed (backend unreachable?): %s", exc)
                     backend_unreachable = True
                     break
+
+            # Cross-cutting absent rollup (Path Fix): exclude from denominator when
+            # service=="" AND every referenced metric family is window-absent.
+            # Descriptor-free — runs before the descriptor diagnosis branch (R2-S1).
+            if verdict == "fail" and e.service == CROSS_CUTTING_SERVICE:
+                try:
+                    live_hint: Optional[List[str]] = _live_names()
+                except Exception as exc:
+                    logger.warning("list_metric_names failed (cross-cutting hint): %s", exc)
+                    live_hint = None  # fail-closed: no exclusion
+                excl_reason, residual, excl_axes, replayed, unreachable = (
+                    _try_exclude_cross_cutting_absent(
+                        expr=e.expr,
+                        source_file=e.source_file,
+                        bind_window=bind_window,
+                        live_names=live_hint,
+                        q_value=q_value,
+                        prometheus_url=prometheus_url,
+                        auth=auth,
+                        replayed=replayed,
+                        query_budget=query_budget,
+                    )
+                )
+                if unreachable:
+                    backend_unreachable = True
+                    break
+                if excl_reason:
+                    verdict = "excluded"
+                    exclusion_reason = excl_reason
+                    excluded_by_reason[excl_reason] = (
+                        excluded_by_reason.get(excl_reason, 0) + 1
+                    )
+                    if residual:
+                        excluded_cross_cutting_rollups.append(residual)
+                    families = (residual or {}).get("absent_families") or []
+                    remediation = (
+                        f"cross-cutting rollup excluded: metric family "
+                        f"{', '.join(families)} absent over {bind_window} "
+                        f"(generator still emits {e.source_file})"
+                    )
+                    axis_detail = excl_axes
 
             if verdict == "fail" and descriptor is not None:
                 expected_metric = descriptor.throughput_metric
@@ -1058,6 +1231,7 @@ def run_validation(
                 remediation=remediation,
                 suggested_profile=suggested_profile,
                 replayed_expr=replayed_note,
+                exclusion_reason=exclusion_reason,
                 axis_detail=axis_detail,
             )
         )
@@ -1110,6 +1284,7 @@ def run_validation(
     data_coverage = _cov.data_coverage
     binding_coverage = _cov.binding_coverage
     coverage = binding_coverage
+    denominator = _cov.denominator
 
     # Rollups (FR-10): per-service coverage (binding view — pass + bound_no_data) and
     # per-axis mismatch counts.
@@ -1173,6 +1348,8 @@ def run_validation(
         binding_coverage=binding_coverage,
         bound_no_data=bound_no_data,
         min_coverage=min_coverage,
+        denominator=denominator,
+        excluded_cross_cutting_rollups=excluded_cross_cutting_rollups,
         verdicts=verdicts,
         per_service=per_service,
         per_axis=per_axis,
