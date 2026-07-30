@@ -135,7 +135,10 @@ def _service_from_filename(path: Path) -> str:
             stem = stem[: -len(suffix)]
             break
     # Profile / binding-lane suffixes that ride after the real service id.
-    for profile_suffix in ("-declared-base", "-functional"):
+    # ``-coverage-bind``: AffordanceMap orientation/map-mode legs
+    # (PATHFIX_QF — without this, ``query-frontend-coverage-bind-slo.yaml``
+    # attributes to phantom service ``query-frontend-coverage-bind``).
+    for profile_suffix in ("-declared-base", "-functional", "-coverage-bind"):
         if stem.endswith(profile_suffix):
             stem = stem[: -len(profile_suffix)]
             break

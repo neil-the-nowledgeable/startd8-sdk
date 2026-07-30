@@ -117,6 +117,28 @@ class TestFr13GatedSynthesis:
         assert "Request Rate" in titles
         assert "Availability (1h)" in titles
 
+    def test_http_plus_thanos_declared_suppresses_convention_red(self):
+        """PATHFIX_QF: query-frontend-style — thanos_* declared ⇒ no http.server RED."""
+        from startd8.observability.artifact_generator_generators import _service_sli_kinds
+        from startd8.observability.artifact_generator_models import DeclaredEmittedSeries
+
+        svc = ServiceHints(
+            service_id="query-frontend",
+            transport="http",
+            convention_metrics=[
+                ConventionMetric("http.server.duration", "histogram", "otel_semconv:http")
+            ],
+            declared_emitted_series=[
+                DeclaredEmittedSeries(
+                    name="thanos_frontend_split_queries_total",
+                    type="counter",
+                    covers=["throughput"],
+                )
+            ],
+        )
+        kinds = _service_sli_kinds(svc, BusinessContext(criticality="high", availability="99.5"))
+        assert kinds == frozenset()
+
     def test_empty_set_service_gets_no_synthesized_red(self):
         # FR-13 deletion: a cron (unmapped kind, no transport ⇒ ∅) synthesizes no
         # Request Rate / Availability gauge — the fabricated-RED bug is gone.
