@@ -846,6 +846,24 @@ class TestMetricCoverageInQualityReport:
         assert svc["metric_coverage_alerted"] <= svc["metric_coverage_dashboarded"]
         assert "avg_metric_coverage_score" in quality["aggregate"]
         assert "avg_metric_coverage_alerted" in quality["aggregate"]
+        # OBS-200a tip honesty: emit-time sdk sha for tip_sha_match fail-closed.
+        assert "sdk_sha_source" in quality["aggregate"]
+        assert "provenance" in quality
+        assert quality["provenance"]["sdk_sha_source"] in ("git_rev_parse", "absent")
+        if quality["provenance"]["sdk_sha_source"] == "git_rev_parse":
+            assert len(quality["aggregate"]["sdk_sha"]) >= 7
+            assert quality["aggregate"]["sdk_sha"] == quality["provenance"]["sdk_sha"]
+
+
+class TestEmitTimeSdkSha:
+    def test_resolves_git_sha_from_checkout(self):
+        from startd8.observability.artifact_generator import _emit_time_sdk_sha
+
+        prov = _emit_time_sdk_sha()
+        assert prov["sdk_sha_source"] in ("git_rev_parse", "absent")
+        if prov["sdk_sha_source"] == "git_rev_parse":
+            assert len(prov["sdk_sha"]) >= 7
+            assert prov["sdk_module_path"].endswith("startd8/__init__.py") or "startd8" in prov["sdk_module_path"]
 
 
 class TestEvaluatorExpectedSetUnion:
