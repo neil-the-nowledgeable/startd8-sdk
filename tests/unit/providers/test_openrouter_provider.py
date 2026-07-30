@@ -29,6 +29,8 @@ ENROLLED = [
     "minimax/minimax-m3",
     "minimax/minimax-m2.7",
     "minimax/minimax-m2.5",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "mistralai/mistral-large-2512",
 ]
 
 

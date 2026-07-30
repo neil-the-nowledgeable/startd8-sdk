@@ -52,6 +52,9 @@ class OpenRouterProvider:
         "minimax/minimax-m3",                    # MiniMax M3 flagship
         "minimax/minimax-m2.7",                  # MiniMax M2.7 mid
         "minimax/minimax-m2.5",                  # MiniMax M2.5 fast
+        # Policy B Individual invites (not Team-lane)
+        "nvidia/nemotron-3-ultra-550b-a55b",     # NVIDIA Nemotron 3 Ultra
+        "mistralai/mistral-large-2512",          # Mistral Large
     ]
 
     @property

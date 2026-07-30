@@ -163,6 +163,8 @@ class Models:
     OPENROUTER_MINIMAX_M3 = "openrouter:minimax/minimax-m3"
     OPENROUTER_MINIMAX_M27 = "openrouter:minimax/minimax-m2.7"
     OPENROUTER_MINIMAX_M25 = "openrouter:minimax/minimax-m2.5"
+    OPENROUTER_NEMOTRON_ULTRA = "openrouter:nvidia/nemotron-3-ultra-550b-a55b"
+    OPENROUTER_MISTRAL_LARGE = "openrouter:mistralai/mistral-large-2512"
 
     # ==========================================================================
     # Jetson Edge Cluster (self-hosted; opt-in, LAN; see docs/design/jetson-cluster-benchmark/)
@@ -507,6 +509,18 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         provider="openrouter",
         model_id="minimax/minimax-m2.5",
         tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "nvidia/nemotron-3-ultra-550b-a55b": ModelInfo(
+        provider="openrouter",
+        model_id="nvidia/nemotron-3-ultra-550b-a55b",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "mistralai/mistral-large-2512": ModelInfo(
+        provider="openrouter",
+        model_id="mistralai/mistral-large-2512",
+        tier="flagship",
         capabilities={"text", "code"},
     ),
     # Jetson edge cluster (aliases; served on a self-hosted LAN endpoint)
