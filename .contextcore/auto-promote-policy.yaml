@@ -1,0 +1,34 @@
+# Remediation Auto-Promote policy — startd8-sdk (Thanos pilot Path Fix surface).
+# Human-attested. See ContextCore docs/design/requirements/REQ_REMEDIATION_AUTO_PROMOTE.md FR-5.
+#
+# Standing attestation substituting for per-unit `merge --i-have-reviewed` when FR-3 holds.
+# Remote push ACL / branch protection remains the real identity gate.
+
+schema_version: 1
+
+enabled: true
+
+canonical_branch: main
+
+push_mode: direct
+
+# Principal expected to be able to push `main` (documentation / digest only — not runtime-authenticated).
+pushing_identity: "neil-the-nowledgeable"
+
+attested_by: "neil-the-nowledgeable (session 2026-07-30 — wire auto-promote for startd8-sdk Thanos exec)"
+attested_at: "2026-07-30T05:24:49Z"
+
+expires_at: "2026-12-31T23:59:59Z"
+
+# Thanos Class-B / observability Path Fix surface in this repo.
+# Empty globs authorize nothing — keep this list intentional.
+allowed_path_globs:
+  - "src/startd8/observability/**"
+  - "src/startd8/verification/**"
+  - "tests/**"
+  - "docs/**"
+  - ".contextcore/**"
+
+max_files: 20
+# Align with ContextCore pilot raise (large test+docs evidence commits).
+max_loc: 1500
