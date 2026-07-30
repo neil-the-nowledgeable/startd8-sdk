@@ -315,6 +315,11 @@ _DECLARED_SERIES_UPSTREAM_RENAMES: Dict[str, Tuple[str, Dict[str, str]]] = {
         "thanos_compact_blocks_marked_total",
         {"marker": "deletion-mark.json"},
     ),
+    # query-frontend: Cortex mixin aliases absent live; Thanos twins present
+    # (QUERY_FRONTEND_RESIDUAL_BRIEF_2026-07-30 / score tier1_qf_cortex_thanos_alias).
+    # Do NOT invent twins — groundtruth has no thanos_frontend_query_range_duration_*.
+    "cortex_frontend_split_queries_total": ("thanos_frontend_split_queries_total", {}),
+    "cortex_query_frontend_queries_total": ("thanos_query_frontend_queries_total", {}),
 }
 
 

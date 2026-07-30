@@ -1886,3 +1886,52 @@ class TestExitCodesRefusal:
         entry.outcome = ActionOutcome.APPLIED
         apply = ApplyResult(entries=[entry])
         assert exit_code_for_apply(self._load(), apply) == EXIT_OK
+
+
+def test_duration_panel_expr_uses_bucket_for_histogram_basename():
+    from startd8.observability.affordance_map_consume import _duration_panel_expr
+
+    expr = _duration_panel_expr("thanos_compact_garbage_collection_duration_seconds")
+    assert "_bucket" in expr
+    assert "histogram_quantile" in expr
+    assert "sum(rate(thanos_compact_garbage_collection_duration_seconds[$__rate_interval]))" not in expr
+
+
+def test_locus_red_duration_panel_not_bare_rate():
+    from startd8.observability.affordance_map_consume import _locus_red_dashboard_yaml
+    import yaml
+
+    yaml_text = _locus_red_dashboard_yaml(
+        "compact",
+        [
+            {"family_or_signal": "thanos_compact_group_compaction_runs_started_total", "signal_kind": "metric"},
+            {"family_or_signal": "thanos_compact_garbage_collection_failures_total", "signal_kind": "metric"},
+            {"family_or_signal": "thanos_compact_garbage_collection_duration_seconds", "signal_kind": "metric"},
+        ],
+    )
+    doc = yaml.safe_load(yaml_text)
+    panels = (doc.get("spec") or {}).get("panels") or []
+    dur = next(p for p in panels if p.get("title") == "Duration")
+    assert "histogram_quantile" in dur["expr"]
+    assert "duration_seconds_bucket" in dur["expr"]
+
+
+def test_load_affordance_map_captures_score_improvement_blockers(tmp_path):
+    from startd8.observability.affordance_map_consume import load_affordance_map
+    import json
+
+    path = tmp_path / "export.json"
+    path.write_text(
+        json.dumps(
+            {
+                "affordance_map": [],
+                "score_improvement_blockers": [
+                    {"id": "tier1_class_b_mapfed_latency", "status": "open", "tier": 1}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_affordance_map(path)
+    assert loaded.ok
+    assert loaded.score_improvement_blockers[0]["id"] == "tier1_class_b_mapfed_latency"

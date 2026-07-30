@@ -40,6 +40,58 @@ def test_rename_helper_passthrough_unknown():
     assert labels == {"resolution": "5m"}
 
 
+def test_rename_cortex_frontend_split_queries_to_thanos_twin():
+    """tier1_qf_cortex_thanos_alias — Cortex alias absent; Thanos twin live."""
+    name, labels = _apply_declared_series_upstream_rename(
+        "cortex_frontend_split_queries_total", {}
+    )
+    assert name == "thanos_frontend_split_queries_total"
+    assert labels == {}
+
+
+def test_parse_rewrites_cortex_qf_aliases():
+    parsed = _parse_declared_series(
+        [
+            {
+                "name": "cortex_frontend_split_queries_total",
+                "type": "counter",
+                "covers": ["throughput"],
+            },
+            {
+                "name": "cortex_query_frontend_queries_total",
+                "type": "counter",
+                "covers": ["throughput"],
+            },
+        ]
+    )
+    names = {p.name for p in parsed}
+    assert names == {
+        "thanos_frontend_split_queries_total",
+        "thanos_query_frontend_queries_total",
+    }
+
+
+def test_declared_base_slo_emits_thanos_qf_twin_not_cortex():
+    service = ServiceHints(
+        service_id="query-frontend",
+        transport="http",
+        declared_emitted_series=_parse_declared_series(
+            [
+                {
+                    "name": "cortex_frontend_split_queries_total",
+                    "type": "counter",
+                    "covers": ["throughput"],
+                }
+            ]
+        ),
+    )
+    result = generate_declared_base_slos(service, BusinessContext())
+    assert result.status == "generated"
+    body = result.content or ""
+    assert "thanos_frontend_split_queries_total" in body
+    assert "cortex_frontend_split_queries_total" not in body
+
+
 def test_parse_rewrites_stale_compact_deletion_marker():
     parsed = _parse_declared_series(
         [

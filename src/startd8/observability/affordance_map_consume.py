@@ -222,6 +222,9 @@ class LoadResult:
     source_truncated: bool = False
     source_shape: str = "array"  # array | scorecard
     error: Optional[str] = None
+    #: Tier-1 score holdbacks stamped by Thanos enrich (peer prioritization).
+    #: Not gen.* actions — consume logs them; generator Path-Fix owns Class B / aliases.
+    score_improvement_blockers: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -453,6 +456,36 @@ def _pick_red_families(loci: Sequence[Mapping[str, Any]]) -> Tuple[Optional[str]
     return rate, err, dur
 
 
+def _duration_panel_expr(dur: str) -> str:
+    """PromQL for a Duration panel from an AffordanceMap duration family.
+
+    Locus families are usually histogram *basenames* (``…_duration_seconds``),
+    not ``_bucket`` series. ``sum(rate(basename))`` is empty for native
+    histograms and surfaces as Class B http.server axis noise in live bind.
+    Prefer ``histogram_quantile`` on ``{fam}_bucket`` (same shape as declared-
+    base latency SLOs). Already-``_bucket`` names and non-hist durations keep
+    a plain ``rate()``.
+    """
+    fam = (dur or "").strip()
+    if not fam:
+        return ""
+    n = fam.lower()
+    if fam.endswith("_bucket"):
+        bucket = fam
+    elif (
+        "_duration" in n
+        or "_latency" in n
+        or "_delay" in n
+        or (n.endswith("_seconds") and "timestamp" not in n)
+    ):
+        bucket = f"{fam}_bucket"
+    else:
+        return f"sum(rate({fam}[$__rate_interval]))"
+    return (
+        f"histogram_quantile(0.99, sum(rate({bucket}[$__rate_interval])) by (le))"
+    )
+
+
 # ---- Load (FR-B1) ------------------------------------------------------------
 
 
@@ -487,6 +520,7 @@ def load_affordance_map(
     truncated = False
     shape = "array"
     rows: List[Any]
+    blockers: List[Dict[str, Any]] = []
 
     if isinstance(data, list):
         rows = data
@@ -519,6 +553,9 @@ def load_affordance_map(
         ):
             # HISTORY_AFFORDANCE_CAP = 15 — silent trim looks like success.
             truncated = True
+        raw_blockers = data.get("score_improvement_blockers")
+        if isinstance(raw_blockers, list):
+            blockers = [b for b in raw_blockers if isinstance(b, dict)]
     else:
         return LoadResult(entries=[], error="root must be array or object")
 
@@ -538,11 +575,23 @@ def load_affordance_map(
             "AffordanceMap appears history-truncated (source_truncated=true)%s",
             f" path={path_hint}" if path_hint else "",
         )
+    if blockers:
+        open_ids = [
+            str(b.get("id") or "?")
+            for b in blockers
+            if str(b.get("status") or "open") == "open"
+        ]
+        logger.info(
+            "AffordanceMap score_improvement_blockers open=%s%s",
+            open_ids,
+            f" path={path_hint}" if path_hint else "",
+        )
 
     return LoadResult(
         entries=entries,
         source_truncated=truncated,
         source_shape=shape,
+        score_improvement_blockers=blockers,
     )
 
 
@@ -1985,9 +2034,7 @@ def _locus_red_dashboard_yaml(
             {
                 "type": "timeseries",
                 "title": "Duration",
-                "expr": f"histogram_quantile(0.99, sum(rate({dur}[$__rate_interval])) by (le))"
-                if dur.endswith("_bucket")
-                else f"sum(rate({dur}[$__rate_interval]))",
+                "expr": _duration_panel_expr(dur),
                 "unit": "s",
                 "group": "Latency",
             }
