@@ -232,6 +232,44 @@ class TestResolveDescriptor:
         assert d.latency_unit == "ms"           # known key applied
         assert not hasattr(d, "bogus_axis")     # unknown key ignored, no crash
 
+    def test_native_metric_override_stops_semconv_http_fallback(self):
+        """FR-2/FR-3 (derivation_0_compact_5_dead_slis_live_binding_0.6556).
+
+        Thanos ``compact`` emits native ``thanos_compact_*`` families and has no
+        built-in convention profile (``match_profiles(live)`` returns ``[]`` for
+        this backend). Without a declared identity, an unknown transport falls
+        back to ``semconv-http`` and the evaluator expects
+        ``http_server_duration_count`` — a phantom mismatch against a convention
+        the backend never used. The existing ``overrides`` escape hatch already
+        fixes this with no new machinery (NR-5): declaring the corrected,
+        upstream-renamed deletion-marker identity
+        (``thanos_compact_blocks_marked_total`` with a ``marker`` label,
+        replacing the stale ``thanos_compact_blocks_marked_for_deletion_total``
+        per thanos/CHANGELOG.md PR #3410) redirects ``throughput_metric`` away
+        from the HTTP default.
+        """
+        # No declared identity ⇒ silent fallback reproduces the phantom axis.
+        fallback = resolve_descriptor(profile=None, transport="unknown-native")
+        assert fallback.throughput_metric == "http_server_duration_count"
+
+        # Declared identity (the FR-2 corrected, human-owned metric name) ⇒ the
+        # effective descriptor carries the live successor family instead.
+        corrected = resolve_descriptor(
+            profile=None,
+            transport="unknown-native",
+            overrides={
+                "throughput_metric": "thanos_compact_blocks_marked_total",
+                "extra_selectors": ('marker="deletion-mark.json"',),
+            },
+        )
+        assert corrected.throughput_metric == "thanos_compact_blocks_marked_total"
+        assert corrected.throughput_metric != "http_server_duration_count"
+        assert corrected.extra_selectors == ('marker="deletion-mark.json"',)
+        # The stale, upstream-renamed name is never the effective identity.
+        assert "thanos_compact_blocks_marked_for_deletion_total" not in (
+            corrected.throughput_metric,
+        )
+
 
 # ── extract_service_hints reads the binding fields (FR-3 contract) ─────────
 class TestServiceHintsBinding:

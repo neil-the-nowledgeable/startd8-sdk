@@ -304,6 +304,32 @@ def _parse_metric_set(raw: Any) -> List[ConventionMetric]:
 # bind-vs-defer authority. Kept for reference by readers reasoning about which kinds actually bind.
 _RED_KINDS = BASE_RED_KINDS
 
+# Known upstream family renames banked when subject harvest lags Go (mixin drift).
+# Value: (live_family, required_equality_labels). Author-supplied labels win on key
+# collision. Mottainai: correct at the declared-series parse boundary so
+# ``generate_declared_base_slos`` emits the live PromQL without editing upstream
+# Thanos mixin (NR-3) or inventing a second binding path (NR-5).
+# derivation_0_compact_5_dead_slis_live_binding_0.6556 / thanos CHANGELOG PR #3410.
+_DECLARED_SERIES_UPSTREAM_RENAMES: Dict[str, Tuple[str, Dict[str, str]]] = {
+    "thanos_compact_blocks_marked_for_deletion_total": (
+        "thanos_compact_blocks_marked_total",
+        {"marker": "deletion-mark.json"},
+    ),
+}
+
+
+def _apply_declared_series_upstream_rename(
+    name: str, labels: Dict[str, str]
+) -> Tuple[str, Dict[str, str]]:
+    """Rewrite a harvested stale family to its live successor (+ required labels)."""
+    mapping = _DECLARED_SERIES_UPSTREAM_RENAMES.get(name)
+    if mapping is None:
+        return name, labels
+    live_name, required = mapping
+    merged = dict(required)
+    merged.update(labels)  # author labels win
+    return live_name, merged
+
 
 def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
     """Parse ``metrics.declared_emitted_series`` (#286 / REQ-CCL-107) into models.
@@ -315,6 +341,9 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
     RED kinds + availability; every other declared kind defers (a gap, not a false binding), and the
     suppression gate re-filters (``_declared_covered_kinds``) so nothing drifts. Non-list input ⇒
     empty (explicit-only: absence keeps the #274 suppression). All values stringified defensively.
+
+    Applies :data:`_DECLARED_SERIES_UPSTREAM_RENAMES` so a mixin-harvested stale
+    family name is rewritten to the live Go identity before binding.
     """
     if not isinstance(raw, list):
         return []
@@ -326,6 +355,7 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
         labels = (
             {str(k): str(v) for k, v in labels.items()} if isinstance(labels, dict) else {}
         )
+        name, labels = _apply_declared_series_upstream_rename(str(s["name"]), labels)
         covers = s.get("covers")
         covers = [str(k) for k in covers] if isinstance(covers, list) else []
         # #300 D2 (FR-9): an ABSENT target must read as None (not str("")→"") so it is indistinguishable
@@ -334,7 +364,7 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
         target = str(raw_target) if raw_target is not None else None
         out.append(
             DeclaredEmittedSeries(
-                name=str(s["name"]),
+                name=name,
                 type=str(s.get("type", "")),
                 labels=labels,
                 covers=covers,

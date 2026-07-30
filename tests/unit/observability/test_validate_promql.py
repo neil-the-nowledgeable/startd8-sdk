@@ -1377,3 +1377,95 @@ def test_cross_cutting_exclusion_preserves_pseudo_service_extract(tmp_path):
     assert len(cross) == 2
     assert all(e.service == "" for e in cross)
     assert not any(e.service == "business-criticality" for e in exprs)
+
+
+# ── FR-4 generalization (derivation_0_compact_5_dead_slis_live_binding_0.6556) ──
+#
+# The windowed-absence exclusion above was gated on ``e.service ==
+# CROSS_CUTTING_SERVICE`` (empty string), so a NAMED service whose declared
+# metrics are all window-absent fell through to the descriptor-axis diagnosis
+# branch and acquired phantom mismatches against a convention (e.g. HTTP RED)
+# it never used. These two fixtures are the plan's I-2b exit gate: (a) a named
+# service, all referenced families window-absent ⇒ honest ``excluded`` verdict
+# with zero ``mismatched_axes``; (b) a sibling with one family live ⇒ stays
+# ``fail`` and is NOT excluded. The exclusion helper itself
+# (``_try_exclude_cross_cutting_absent``) is unchanged — only the call-site
+# gate at the top of this block was generalized from ``service==""`` to "any
+# service" (NR-7: no fail-closed guard was relaxed to do it).
+
+
+def test_named_service_absent_family_excluded(tmp_path):
+    """FR-4 (a): a NAMED service, all referenced families window-absent ⇒ excluded."""
+    artifacts = tmp_path / "art"
+    _write_alerts(
+        artifacts,
+        "compact",
+        {"CompactDownsampleStalled": "rate(thanos_compact_downsample_total[5m]) == 0"},
+    )
+    onboarding = _semconv_onboarding(tmp_path, service="compact")
+
+    def _q(base, expr, **k):
+        return 0  # absent at both the primary and the wide (bound_no_data) probe
+
+    def _val(base, expr, **k):
+        if "count_over_time" in expr:
+            return 0.0  # windowed family-absence probe: zero series
+        return None
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=_q,
+        value_fn=_val,
+        # Nothing named thanos_compact_downsample* is live, but a SIBLING
+        # thanos_compact_* family is — proving the component is running
+        # (E6's discriminator), which is what makes the exclusion honest
+        # rather than a blanket "absent ⇒ excluded" for any named service.
+        list_names_fn=lambda *a, **k: ["thanos_compact_halted"],
+        label_values_fn=lambda *a, **k: [],
+    )
+    named = [v for v in report.verdicts if v.service == "compact"]
+    assert len(named) == 1
+    assert named[0].verdict == "excluded"
+    assert named[0].exclusion_reason == "cross_cutting_absent_rollup"
+    assert named[0].mismatched_axes == []  # R1-F5: rubric-visible field stays empty
+    # R3-S2: axis_detail keeps diagnostic mismatch flags; consumers must not
+    # treat axis_detail as the Class-A rubric field (that is mismatched_axes).
+    assert any(
+        d.get("mismatched") is True and d.get("axis") == "cross_cutting_absent_rollup"
+        for d in (named[0].axis_detail or [])
+    )
+
+
+def test_named_service_partial_live_stays_fail(tmp_path):
+    """FR-4 (b) sibling: one referenced family live ⇒ stays fail, not excluded.
+
+    Proves the pre-existing ``_family_present_in_live_names`` guard still
+    refuses the exclusion once it is reachable for a named service (NR-7).
+    """
+    artifacts = tmp_path / "art"
+    _write_alerts(
+        artifacts,
+        "compact",
+        {"CompactDownsampleStalled": "rate(thanos_compact_downsample_total[5m]) == 0"},
+    )
+    onboarding = _semconv_onboarding(tmp_path, service="compact")
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=lambda base, expr, **k: 0,
+        value_fn=lambda *a, **k: 99.0,  # would say present if the probe ever ran
+        list_names_fn=lambda *a, **k: ["thanos_compact_downsample_total"],  # present-name hint
+        label_values_fn=lambda *a, **k: ["compact"],
+    )
+    named = [v for v in report.verdicts if v.service == "compact"]
+    assert len(named) == 1
+    assert named[0].verdict == "fail"
+    assert named[0].exclusion_reason == ""

@@ -190,6 +190,41 @@ def _family_present_in_live_names(family: str, live_names: Iterable[str]) -> boo
     return False
 
 
+def _component_prefix(family: str) -> Optional[str]:
+    """First two ``_``-joined segments of *family* (e.g. ``thanos_compact_group_x``
+    → ``thanos_compact``) — the common Prometheus ``namespace_subsystem_name``
+    convention. ``None`` when the family has no separable subsystem segment
+    (fewer than 2 underscore-joined parts, e.g. a bare span-metrics name like
+    ``calls_total`` is itself only 2 segments and IS its own prefix; a 1-segment
+    name yields ``None``).
+    """
+    parts = (family or "").split("_")
+    if len(parts) < 2:
+        return None
+    return "_".join(parts[:2])
+
+
+def _component_has_other_live_metric(families: Iterable[str], live_names: Iterable[str]) -> bool:
+    """True when a live metric shares a component prefix with one of *families*.
+
+    FR-4 generalization guard (derivation_0_compact_5_dead_slis_live_binding_0.6556):
+    distinguishes "the declared metric is absent because this native-metric
+    component hasn't materialized it yet" (other same-component families ARE
+    live — e.g. Thanos ``compact`` emits 18 other ``thanos_compact_*`` series)
+    from "the declared identity is simply wrong for this backend" (nothing
+    resembling it is live — e.g. a semconv-declared service backed by a live
+    span-metrics backend). Only the former may take the windowed-absence
+    exclusion path for a *named* (non-cross-cutting) service; the latter must
+    still surface its genuine descriptor-axis mismatch.
+    """
+    live = list(live_names)
+    for fam in families:
+        prefix = _component_prefix(fam)
+        if prefix and _family_present_in_live_names(prefix, live):
+            return True
+    return False
+
+
 def _family_window_absent_query(family: str, bind_window: str) -> str:
     """PromQL proving family absence over a covered window (not an instant snapshot)."""
     safe = re.escape(family)
@@ -1136,15 +1171,38 @@ def run_validation(
                     backend_unreachable = True
                     break
 
-            # Cross-cutting absent rollup (Path Fix): exclude from denominator when
-            # service=="" AND every referenced metric family is window-absent.
-            # Descriptor-free — runs before the descriptor diagnosis branch (R2-S1).
-            if verdict == "fail" and e.service == CROSS_CUTTING_SERVICE:
+            # Windowed-absence exclusion (FR-4, derivation_0_compact_5_dead_slis_live_binding_0.6556):
+            # generalized from "only the cross-cutting (service=="") bucket" to
+            # "any service whose declared families are window-absent AND the
+            # owning component has other live metrics" (_component_has_other_
+            # live_metric) — the discriminator that lets a native-metric
+            # component (e.g. Thanos ``compact``, 18 other live
+            # ``thanos_compact_*`` families) get an honest exclusion instead of
+            # phantom descriptor-axis mismatches, while a component whose
+            # declared identity bears no resemblance to anything live (e.g. a
+            # semconv-declared service backed by a live span-metrics backend)
+            # still gets the genuine descriptor diagnosis below. A wholesale
+            # gate deletion (no liveness discriminator) would mask that second
+            # class of miss as an honest exclusion — exactly the risk NR-7
+            # guards against. The helper itself (``_try_exclude_cross_cutting_
+            # absent``) and all of its own fail-closed guards are unchanged;
+            # any referenced family present live, an unusable extraction, a
+            # malformed bind_window, or a probe error still refuse the
+            # exclusion. Descriptor-free — runs before the descriptor
+            # diagnosis branch (R2-S1).
+            exclusion_eligible = verdict == "fail" and e.service == CROSS_CUTTING_SERVICE
+            live_hint: Optional[List[str]] = None
+            if verdict == "fail":
                 try:
-                    live_hint: Optional[List[str]] = _live_names()
+                    live_hint = _live_names()
                 except Exception as exc:
                     logger.warning("list_metric_names failed (cross-cutting hint): %s", exc)
                     live_hint = None  # fail-closed: no exclusion
+                if not exclusion_eligible and live_hint is not None:
+                    exclusion_eligible = _component_has_other_live_metric(
+                        metric_families_from_expr(e.expr) or [], live_hint
+                    )
+            if exclusion_eligible:
                 excl_reason, residual, excl_axes, replayed, unreachable = (
                     _try_exclude_cross_cutting_absent(
                         expr=e.expr,
