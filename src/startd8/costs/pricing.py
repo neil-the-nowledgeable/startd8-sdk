@@ -506,6 +506,16 @@ class PricingService:
             input_cost_per_million=0.15, output_cost_per_million=0.90,
             estimated=True, notes="OpenRouter MiniMax M2.5; rates from /models 2026-07-30.",
         ),
+        "nvidia/nemotron-3-ultra-550b-a55b": ModelPricing(
+            model="nvidia/nemotron-3-ultra-550b-a55b", provider="openrouter",
+            input_cost_per_million=0.60, output_cost_per_million=3.60,
+            estimated=True, notes="OpenRouter Nemotron 3 Ultra; rates from /models 2026-07-30.",
+        ),
+        "mistralai/mistral-large-2512": ModelPricing(
+            model="mistralai/mistral-large-2512", provider="openrouter",
+            input_cost_per_million=0.50, output_cost_per_million=1.50,
+            estimated=True, notes="OpenRouter Mistral Large 2512; rates from /models 2026-07-30.",
+        ),
     }
 
     # Provider detection patterns
