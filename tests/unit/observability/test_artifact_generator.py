@@ -929,6 +929,44 @@ class TestEvaluatorExpectedSetUnion:
         assert built["diagnostics"]["orphan_element_ids"] == ["not-a-hint"]
         assert built["diagnostics"]["hint_only_services"] == ["compact"]
 
+    def test_build_admits_partial_affordance_loci_like_red(self):
+        """Tip a6968b9c: qf lost orientation when only partial RED/dead rows
+        carried metric loci and admit required source_backed. Partial must
+        widen expected + feed orientation (same honesty window as RED)."""
+        from startd8.observability.artifact_generator import build_service_metrics_expected
+        from startd8.observability.artifact_generator_models import ServiceHints
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        svc = ServiceHints(service_id="query-frontend", transport="http")
+        entry = AffordanceMapEntry(
+            element_id="query-frontend",
+            gap_code="red_missing",
+            affordance_ids=["gen.emit_red_panels"],
+            locus_status="partial",
+            source_loci=[
+                {
+                    "family_or_signal": "thanos_query_frontend_queries_total",
+                    "signal_kind": "metric",
+                },
+                {
+                    "family_or_signal": "cortex_query_frontend_retries",
+                    "signal_kind": "metric",
+                },
+            ],
+        )
+        blocked = AffordanceMapEntry(
+            element_id="query-frontend",
+            gap_code="metric_coverage_empty",
+            affordance_ids=["gen.improve_metric_coverage"],
+            locus_status="no_source_locus",
+            source_loci=[],
+        )
+        built = build_service_metrics_expected([svc], affordance_map=[entry, blocked])
+        assert built["expected_sources"]["query-frontend"]["affordance_loci"] == 2
+        assert "thanos_query_frontend_queries_total" in built["service_metrics"]["query-frontend"]
+        assert "cortex_query_frontend_retries" in built["service_metrics"]["query-frontend"]
+        assert built["export_disposition"] == "fresh_export"
+
     def test_build_malformed_export_fail_closed(self):
         from startd8.observability.artifact_generator import build_service_metrics_expected
         from startd8.observability.artifact_generator_models import ServiceHints
@@ -1333,6 +1371,68 @@ class TestOrientationBind:
         assert quality["aggregate"]["avg_metric_coverage_system"] == 1.0
         assert quality["aggregate"]["avg_metric_coverage_bridge"] == 1.0
 
+    def test_partial_locus_raises_system_and_bridge_for_qf(self, tmp_path, manifest_yaml):
+        """query-frontend tip regression: partial metric loci must still orient."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta = {
+            "project_id": "thanos-pilot",
+            "instrumentation_hints": {
+                "query-frontend": {
+                    "service_id": "query-frontend",
+                    "transport": "http",
+                    "language": "go",
+                    "metrics": {"convention_based": [], "manifest_declared": []},
+                },
+            },
+        }
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(meta))
+        entry = AffordanceMapEntry(
+            element_id="query-frontend",
+            gap_code="red_missing",
+            affordance_ids=["gen.emit_red_panels"],
+            locus_status="partial",
+            source_loci=[
+                {
+                    "family_or_signal": "thanos_query_frontend_queries_total",
+                    "signal_kind": "metric",
+                },
+                {
+                    "family_or_signal": "cortex_query_frontend_retries",
+                    "signal_kind": "metric",
+                },
+            ],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        assert report.orientation_bind["export_disposition"] == "fresh_export"
+        ev = report.orientation_bind["services"]["query-frontend"]
+        assert ev["families_admitted"] == 2
+        assert ev["system_added"] >= 1
+        assert ev["bridge_added"] >= 1
+        quality = json.loads(
+            (tmp_path / "observability" / "observability-quality.json").read_text()
+        )
+        svc = quality["services"]["query-frontend"]
+        assert svc["metric_coverage_system"] > 0
+        assert svc["metric_coverage_bridge"] > 0
+        # hist basename retries must use *_bucket (Class B Path-Fix #375)
+        slo = next(
+            a
+            for a in report.artifacts
+            if a.artifact_type == "slo_definition"
+            and a.service_id == "query-frontend"
+            and a.content
+            and "cortex_query_frontend_retries" in a.content
+        )
+        assert "cortex_query_frontend_retries_bucket" in slo.content
+        assert "max(cortex_query_frontend_retries{})" not in slo.content
+
     def test_no_export_adds_no_orientation_bind(self, tmp_path, manifest_yaml):
         meta_path = tmp_path / "onboarding-metadata.json"
         meta_path.write_text(json.dumps(self._meta_no_declared()))
@@ -1464,9 +1564,9 @@ class TestRedBindPanels:
         )
 
     def test_partial_locus_status_still_lands(self, tmp_path, manifest_yaml):
-        """FR-1: `partial` rows (e.g. query-frontend) MUST land too — unlike gap
-        #2's own source_backed-only matcher, this bind reuses `plan_affordance_actions`,
-        which admits source_backed AND partial (only excludes _LOCUS_BLOCKING)."""
+        """FR-1: `partial` rows (e.g. query-frontend) MUST land too — gap #2
+        admit now shares source_backed|partial; RED still uses
+        `plan_affordance_actions` for emit_red filter + audited skips."""
         from startd8.observability.affordance_map_consume import AffordanceMapEntry
 
         meta_path = tmp_path / "onboarding-metadata.json"

@@ -583,6 +583,14 @@ _EXPORT_MALFORMED = "malformed_export"
 _EXPORT_OK = "fresh_export"
 
 
+#: Coverage / expected-set admit statuses — same honesty window as RED bind
+#: (``plan_affordance_actions``): ``source_backed`` and ``partial``. Restricting
+#: to ``source_backed`` alone silently drops query-frontend when its
+#: ``metric_coverage_empty`` row is absent and only ``partial`` RED/dead rows
+#: carry metric loci (tip ``a6968b9c`` metric depth regression).
+_ADMIT_LOCUS_STATUSES = frozenset({"source_backed", "partial"})
+
+
 def _admit_affordance_metric_families(
     services: List[Any],
     affordance_map: Any,
@@ -590,8 +598,9 @@ def _admit_affordance_metric_families(
     """Admit AffordanceMap metric loci into per-service family sets (FR-2/FR-3).
 
     Exact ``element_id == service_id`` join only (no prefix/stack-default). Entry-level
-    ``locus_status == "source_backed"`` then ``metric_loci``; fail-closed on load error
-    or history truncation. Returns ``(per_service_families, disposition, diagnostics)``.
+    ``locus_status`` in ``source_backed``|``partial`` then ``metric_loci``; fail-closed
+    on load error or history truncation. Returns
+    ``(per_service_families, disposition, diagnostics)``.
     """
     empty: Dict[str, Set[str]] = {s.service_id: set() for s in services}
     diag: Dict[str, Any] = {
@@ -637,7 +646,7 @@ def _admit_affordance_metric_families(
             if eid:
                 orphans.append(eid)
             continue
-        if entry.locus_status != "source_backed":
+        if (entry.locus_status or "") not in _ADMIT_LOCUS_STATUSES:
             continue
         for row in metric_loci(entry):
             fam = str(row.get("family_or_signal") or "").strip()
@@ -1196,16 +1205,12 @@ def _apply_affordance_red_bind_panels(
     (FR-1, FR-1b) verbatim for family selection and panel-expr construction —
     no second RED-panel-shape implementation.
 
-    Does **not** reuse gap #2's ``_admit_affordance_metric_families`` (that
-    matcher admits only ``locus_status == "source_backed"`` rows, which would
-    silently drop ``query-frontend`` — a ``partial`` row FR-1 explicitly
-    targets). Instead reuses ``plan_affordance_actions`` directly: it already
-    applies the correct ``gen.emit_red_panels`` filter (source_backed AND
-    partial; excludes ``_LOCUS_BLOCKING`` + transport-only via
-    ``transport_only_loci``), so no second locus-admission layer is added
-    (Accidental-Complexity anti-principle) and every skip (FR-5, e.g.
-    ``business-criticality``'s ``no_source_locus``) is captured verbatim from
-    the planner's own skip reasons for audit (R3-F2).
+    Does **not** reuse gap #2's ``_admit_affordance_metric_families`` for RED
+    family pick (RED needs ``plan_affordance_actions``'s emit_red filter +
+    transport-only skip + audited ``_LOCUS_BLOCKING`` reasons). Gap #2 admit
+    now shares the same ``source_backed``|``partial`` honesty window for
+    coverage expected-set / orientation, but RED still goes through the
+    planner so skip reasons stay verbatim (R3-F2 / Accidental-Complexity).
 
     APPENDS the (at most 3) RED panels into the existing top-level ``panels``
     list rather than replacing the whole document, so this bind composes with

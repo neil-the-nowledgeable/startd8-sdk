@@ -176,6 +176,26 @@ def test_coverage_planned_when_source_backed_metric_loci():
     )
 
 
+def test_coverage_planned_when_partial_metric_loci():
+    """qf tip depth: partial RED/dead loci must plan improve_metric_coverage."""
+    e = AffordanceMapEntry.from_dict(
+        {
+            "element_id": "query-frontend",
+            "gap_code": "red_missing",
+            "affordance_ids": ["gen.improve_metric_coverage"],
+            "locus_status": "partial",
+            "source_loci": [
+                {
+                    "family_or_signal": "thanos_query_frontend_queries_total",
+                    "signal_kind": "metric",
+                }
+            ],
+        }
+    )
+    plan = plan_affordance_actions([e], ["query-frontend"])
+    assert any(a.affordance_id == GEN_IMPROVE_COVERAGE for a in plan.actions)
+
+
 def test_apply_locus_red_and_coverage(tmp_path):
     out = tmp_path / "out"
     (out / "dashboards").mkdir(parents=True)
