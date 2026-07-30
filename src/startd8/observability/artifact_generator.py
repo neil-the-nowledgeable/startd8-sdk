@@ -811,6 +811,318 @@ def _apply_affordance_coverage_bind_panels(
     return evidence
 
 
+_ORIENTATION_BIND_QUALITY = {
+    "score": 1.0,
+    "checks_passed": 0,
+    "checks_total": 0,
+    "issues": [],
+    "repairs_applied": [],
+}
+
+
+def _coverage_bind_preserve_header(content: str, body_yaml: str) -> str:
+    """Keep leading ``#`` comment header + blank line; replace YAML body only."""
+    header_lines: List[str] = []
+    for line in content.splitlines(keepends=True):
+        if line.startswith("#") or not line.strip():
+            header_lines.append(line)
+            continue
+        break
+    return "".join(header_lines) + body_yaml
+
+
+def _orientation_slo_doc(svc_id: str, fam: str) -> Dict[str, Any]:
+    """One OpenSLO doc whose active ``query`` references ``fam`` (system axis)."""
+    safe = fam.replace("_", "-")[:48]
+    expr = _coverage_bind_panel_expr(fam)
+    return {
+        "apiVersion": "openslo/v1",
+        "kind": "SLO",
+        "metadata": {
+            "name": f"{svc_id}-coverage-bind-{safe}",
+            "labels": {
+                "service": svc_id,
+                "bound_series": fam,
+                "generated_by": "startd8",
+                "coverage_bind": "affordance_map_orientation",
+            },
+        },
+        "spec": {
+            "description": (
+                f"AffordanceMap coverage-bind system orientation for '{fam}' "
+                "(metric_coverage_system residual)."
+            ),
+            "target": "99%",
+            "timeWindow": {"duration": "30d", "isRolling": True},
+            "indicator": {
+                "metadata": {"name": f"{svc_id}-coverage-bind-{safe}-sli"},
+                "spec": {
+                    "thresholdMetric": {
+                        "metricSource": {
+                            "type": "prometheus",
+                            "spec": {"query": expr},
+                        }
+                    }
+                },
+            },
+        },
+    }
+
+
+def _orientation_alert_rule(svc_id: str, fam: str) -> Dict[str, Any]:
+    """One Prometheus alert rule whose ``expr`` references ``fam`` (bridge axis)."""
+    safe = "".join(p[:1].upper() + p[1:] for p in fam.replace("-", "_").split("_") if p)
+    expr = _coverage_bind_panel_expr(fam)
+    return {
+        "alert": f"{svc_id.replace('-', '').title()}CoverageBind{safe}"[:200],
+        "expr": f"{expr} >= 0",
+        "for": "5m",
+        "labels": {"severity": "info", "coverage_bind": "affordance_map_orientation"},
+        "annotations": {
+            "summary": f"AffordanceMap coverage-bind bridge orientation for {fam}",
+        },
+    }
+
+
+def _apply_affordance_coverage_bind_orientation(
+    artifacts: List[Any],
+    services: List[Any],
+    affordance_map: Any = None,
+) -> Dict[str, Any]:
+    """Land AffordanceMap-admitted families into system (SLO) + bridge (alert) buckets.
+
+    Parent coverage-bind panels only feed ``metric_coverage_human``. Tip honesty after
+    #372 still shows ``system``/``bridge`` ≈ 0 because many services lack scored
+    ``slo_definition`` / ``alert_rule`` content referencing the widened expected set.
+    This mutates/creates those artifacts in-memory before ``_write_artifacts`` so
+    ``_write_quality_report`` scores them in the same pass (same write-collision
+    discipline as panel bind). Reuses ``_admit_affordance_metric_families`` (Mottainai).
+    """
+    try:
+        from startd8.validators.observability_artifact_checks import (
+            _normalize_metric_name,
+            extract_referenced_metrics,
+        )
+    except ImportError:  # pragma: no cover
+        extract_referenced_metrics = None  # type: ignore[assignment]
+        _normalize_metric_name = None  # type: ignore[assignment]
+
+    map_families, disposition, _diag = _admit_affordance_metric_families(
+        services, affordance_map
+    )
+    evidence: Dict[str, Any] = {"export_disposition": disposition, "services": {}}
+    if disposition != _EXPORT_OK:
+        return evidence
+
+    def _named(content: str) -> set:
+        if not content or not extract_referenced_metrics:
+            return set()
+        return extract_referenced_metrics([content])
+
+    for svc_id, families in map_families.items():
+        if not families:
+            continue
+        # Prefer Thanos twins over Cortex mixin aliases (#371 / SDK brief P2).
+        try:
+            from .artifact_generator_context import _apply_declared_series_upstream_rename
+        except ImportError:  # pragma: no cover
+            _apply_declared_series_upstream_rename = None  # type: ignore[assignment]
+        renamed: List[str] = []
+        seen: set = set()
+        for fam in families:
+            live = fam
+            if _apply_declared_series_upstream_rename is not None:
+                live, _ = _apply_declared_series_upstream_rename(fam, {})
+            if live not in seen:
+                seen.add(live)
+                renamed.append(live)
+        fam_sorted = sorted(renamed)
+        norm = _normalize_metric_name or (lambda x: x)
+
+        # --- system: slo_definition ---
+        slo_arts = [
+            a
+            for a in artifacts
+            if a.artifact_type == "slo_definition"
+            and a.service_id == svc_id
+            and a.status == "generated"
+            and a.content
+        ]
+        already_slo = set()
+        for a in slo_arts:
+            already_slo |= {norm(n) for n in _named(a.content)}
+        to_add_slo = [f for f in fam_sorted if norm(f) not in already_slo]
+        system_added = 0
+        if to_add_slo:
+            docs = [_orientation_slo_doc(svc_id, f) for f in to_add_slo]
+            body = "\n---\n".join(
+                yaml.dump(d, default_flow_style=False, sort_keys=False) for d in docs
+            )
+            if slo_arts:
+                art = slo_arts[0]
+                sep = "\n---\n" if art.content.rstrip() else ""
+                art.content = art.content.rstrip() + sep + body
+                if not art.quality or "score" not in art.quality:
+                    art.quality = dict(_ORIENTATION_BIND_QUALITY)
+                art.derivations.append(
+                    DerivationTrace(
+                        field="affordance_coverage_bind_orientation_slo",
+                        source=f"affordance_map.source_backed.metric_locus.{svc_id}",
+                        transformation=f"{len(to_add_slo)} system-orientation SLO bind(s)",
+                        tier="affordance_map",
+                    )
+                )
+            else:
+                header = (
+                    f"# AffordanceMap coverage-bind system orientation for {svc_id}\n"
+                    f"# Generated by startd8 observability artifact generator\n\n"
+                )
+                artifacts.append(
+                    ArtifactResult(
+                        artifact_type="slo_definition",
+                        service_id=svc_id,
+                        output_path=f"slos/{svc_id}-coverage-bind-slo.yaml",
+                        status="generated",
+                        content=header + body,
+                        quality=dict(_ORIENTATION_BIND_QUALITY),
+                        derivations=[
+                            DerivationTrace(
+                                field="affordance_coverage_bind_orientation_slo",
+                                source=f"affordance_map.source_backed.metric_locus.{svc_id}",
+                                transformation=(
+                                    f"{len(to_add_slo)} system-orientation SLO bind(s) (new file)"
+                                ),
+                                tier="affordance_map",
+                            )
+                        ],
+                    )
+                )
+            system_added = len(to_add_slo)
+
+        # --- bridge: alert_rule ---
+        alert_arts = [
+            a
+            for a in artifacts
+            if a.artifact_type == "alert_rule"
+            and a.service_id == svc_id
+            and a.status == "generated"
+            and a.content
+        ]
+        already_alert = set()
+        for a in alert_arts:
+            already_alert |= {norm(n) for n in _named(a.content)}
+        # Bridge bucket also scores loki_rule / notification_policy — don't
+        # duplicate families already referenced there.
+        for a in artifacts:
+            if (
+                a.service_id == svc_id
+                and a.status == "generated"
+                and a.content
+                and a.artifact_type in ("loki_rule", "notification_policy")
+            ):
+                already_alert |= {norm(n) for n in _named(a.content)}
+        to_add_alert = [f for f in fam_sorted if norm(f) not in already_alert]
+        bridge_added = 0
+        if to_add_alert:
+            new_rules = [_orientation_alert_rule(svc_id, f) for f in to_add_alert]
+            if alert_arts:
+                art = alert_arts[0]
+                try:
+                    data = yaml.safe_load(art.content) or {}
+                except Exception:
+                    logger.warning(
+                        "orientation-bind: could not parse alert_rule YAML for %s — "
+                        "creating companion file",
+                        svc_id,
+                    )
+                    data = {}
+                if not isinstance(data, dict):
+                    data = {}
+                groups = data.get("groups")
+                if not isinstance(groups, list):
+                    groups = []
+                    data["groups"] = groups
+                group = None
+                for g in groups:
+                    if isinstance(g, dict) and g.get("name") == f"{svc_id}.coverage_bind":
+                        group = g
+                        break
+                if group is None:
+                    group = {"name": f"{svc_id}.coverage_bind", "rules": []}
+                    groups.append(group)
+                rules = group.setdefault("rules", [])
+                if not isinstance(rules, list):
+                    rules = []
+                    group["rules"] = rules
+                existing_exprs = {
+                    str(r.get("expr", "")) for r in rules if isinstance(r, dict)
+                }
+                added_here = 0
+                for rule in new_rules:
+                    if rule["expr"] in existing_exprs:
+                        continue
+                    rules.append(rule)
+                    existing_exprs.add(rule["expr"])
+                    added_here += 1
+                if added_here:
+                    art.content = _coverage_bind_preserve_header(
+                        art.content,
+                        yaml.dump(data, default_flow_style=False, sort_keys=False),
+                    )
+                    if not art.quality or "score" not in art.quality:
+                        art.quality = dict(_ORIENTATION_BIND_QUALITY)
+                    art.derivations.append(
+                        DerivationTrace(
+                            field="affordance_coverage_bind_orientation_alert",
+                            source=f"affordance_map.source_backed.metric_locus.{svc_id}",
+                            transformation=f"{added_here} bridge-orientation alert bind(s)",
+                            tier="affordance_map",
+                        )
+                    )
+                    bridge_added = added_here
+            else:
+                content_dict = {
+                    "groups": [
+                        {"name": f"{svc_id}.coverage_bind", "rules": new_rules}
+                    ]
+                }
+                header = (
+                    f"# AffordanceMap coverage-bind bridge orientation for {svc_id}\n"
+                    f"# Generated by startd8 observability artifact generator\n\n"
+                )
+                body = yaml.dump(content_dict, default_flow_style=False, sort_keys=False)
+                artifacts.append(
+                    ArtifactResult(
+                        artifact_type="alert_rule",
+                        service_id=svc_id,
+                        output_path=f"alerts/{svc_id}-coverage-bind-alerts.yaml",
+                        status="generated",
+                        content=header + body,
+                        quality=dict(_ORIENTATION_BIND_QUALITY),
+                        derivations=[
+                            DerivationTrace(
+                                field="affordance_coverage_bind_orientation_alert",
+                                source=f"affordance_map.source_backed.metric_locus.{svc_id}",
+                                transformation=(
+                                    f"{len(new_rules)} bridge-orientation alert bind(s) "
+                                    "(new file)"
+                                ),
+                                tier="affordance_map",
+                            )
+                        ],
+                    )
+                )
+                bridge_added = len(new_rules)
+
+        if system_added or bridge_added:
+            evidence["services"][svc_id] = {
+                "families_admitted": len(families),
+                "system_added": system_added,
+                "bridge_added": bridge_added,
+            }
+    return evidence
+
+
 #: FR-1 landed RED panel group — distinct from every other panel group so a
 #: reader can see which panels exist because of the locus-biased RED bind.
 _RED_BIND_GROUP_PREFIX = "RED (locus-grounded)"
@@ -1477,6 +1789,13 @@ def generate_observability_artifacts(
     )
 
     report.coverage_bind = _apply_affordance_coverage_bind_panels(
+        report.artifacts, services, affordance_map=affordance_map
+    )
+    # Orientation residual (system/bridge): same admit set → SLO + alert_rule binds
+    # so avg_metric_coverage_system/bridge can leave 0 on tip honesty (FR-1/FR-2 of
+    # product-gap_0_metric_coverage_orientation_bind). Runs after panel bind so
+    # human coverage is unchanged; before _write_artifacts for write-collision safety.
+    report.orientation_bind = _apply_affordance_coverage_bind_orientation(
         report.artifacts, services, affordance_map=affordance_map
     )
 

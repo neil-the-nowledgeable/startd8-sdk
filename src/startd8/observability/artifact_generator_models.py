@@ -373,6 +373,10 @@ class GenerationReport:
     # product-gap metric-coverage coverage-bind (Step 2/2a, FR-2/FR-7): per-service
     # AffordanceMap-derived panel-bind evidence (families admitted, panels added).
     coverage_bind: Dict[str, Any] = field(default_factory=dict)
+    # product-gap metric-coverage orientation bind (system/bridge residual): AffordanceMap-
+    # admitted families into slo_definition (system) + alert_rule (bridge) so
+    # avg_metric_coverage_system/bridge move above 0 on the same expected set.
+    orientation_bind: Dict[str, Any] = field(default_factory=dict)
     # product-gap red-dashboards RED bind (pilot-gap_red_dashboards Step 2, FR-1/FR-3/
     # FR-7): per-service locus-biased RED (rate/error/duration) panel-bind evidence,
     # plus explicit skip reasons for no_source_locus / transport_only rows (FR-5).

@@ -1226,6 +1226,145 @@ class TestCoverageBindPanels:
         assert dry.coverage_bind == wet.coverage_bind
 
 
+class TestOrientationBind:
+    """product-gap_0_metric_coverage_orientation_bind — system/bridge residual.
+
+    Parent coverage-bind panels only move human; tip honesty after #372 still
+    shows system/bridge ≈ 0 when slo_definition/alert_rule are absent. This
+    bind creates/extends those artifacts from the same AffordanceMap admit set.
+    """
+
+    def _meta_no_declared(self):
+        return {
+            "project_id": "thanos-pilot",
+            "instrumentation_hints": {
+                "receive": {
+                    "service_id": "receive",
+                    "transport": "grpc",
+                    "language": "go",
+                    "metrics": {"convention_based": [], "manifest_declared": []},
+                },
+            },
+        }
+
+    def test_source_backed_locus_raises_system_and_bridge(
+        self, tmp_path, manifest_yaml
+    ):
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta_no_declared()))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            locus_status="source_backed",
+            source_loci=[
+                {
+                    "family_or_signal": "thanos_receive_write_timeseries",
+                    "signal_kind": "metric",
+                },
+                {"family_or_signal": "receive_transport_hops", "signal_kind": "transport"},
+            ],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+
+        assert report.orientation_bind["export_disposition"] == "fresh_export"
+        ev = report.orientation_bind["services"]["receive"]
+        assert ev["families_admitted"] == 1
+        assert ev["system_added"] == 1
+        assert ev["bridge_added"] == 1
+
+        slo = next(
+            a
+            for a in report.artifacts
+            if a.artifact_type == "slo_definition"
+            and a.service_id == "receive"
+            and a.status == "generated"
+            and a.content
+        )
+        alert = next(
+            a
+            for a in report.artifacts
+            if a.artifact_type == "alert_rule"
+            and a.service_id == "receive"
+            and a.status == "generated"
+            and a.content
+        )
+        assert "thanos_receive_write_timeseries" in slo.content
+        assert "receive_transport_hops" not in slo.content
+        assert "thanos_receive_write_timeseries" in alert.content
+
+        quality = json.loads(
+            (tmp_path / "observability" / "observability-quality.json").read_text()
+        )
+        svc = quality["services"]["receive"]
+        assert svc["metric_coverage_human"] == 1.0
+        assert svc["metric_coverage_system"] == 1.0
+        assert svc["metric_coverage_bridge"] == 1.0
+        assert svc["metric_coverage_alerted"] == 1.0
+        assert quality["aggregate"]["avg_metric_coverage_score"] == 1.0
+        assert quality["aggregate"]["avg_metric_coverage_system"] == 1.0
+        assert quality["aggregate"]["avg_metric_coverage_bridge"] == 1.0
+
+    def test_no_export_adds_no_orientation_bind(self, tmp_path, manifest_yaml):
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta_no_declared()))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+        )
+        assert report.orientation_bind["export_disposition"] == "no_export"
+        assert report.orientation_bind["services"] == {}
+
+    def test_orientation_bind_idempotent(self, tmp_path, manifest_yaml):
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta_no_declared()))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            locus_status="source_backed",
+            source_loci=[
+                {
+                    "family_or_signal": "thanos_receive_write_timeseries",
+                    "signal_kind": "metric",
+                }
+            ],
+        )
+        kwargs = dict(
+            onboarding_metadata_path=meta_path,
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        first = generate_observability_artifacts(
+            output_dir=tmp_path / "out1", **kwargs
+        )
+        # Second pass on already-written tree: regenerate from same map should
+        # still report admitted families but not duplicate when content already
+        # references them (fresh generate with same map → same shape).
+        second = generate_observability_artifacts(
+            output_dir=tmp_path / "out2", **kwargs
+        )
+        assert first.orientation_bind == second.orientation_bind
+        slo = next(
+            a
+            for a in second.artifacts
+            if a.artifact_type == "slo_definition"
+            and a.service_id == "receive"
+            and a.status == "generated"
+            and a.content
+        )
+        # Name appears in labels/description/query — assert a single OpenSLO doc, not
+        # a duplicated --- document for the same family.
+        assert slo.content.count("kind: SLO") == 1
+        assert "query:" in slo.content and "thanos_receive_write_timeseries" in slo.content
+
+
 class TestRedBindPanels:
     """pilot-gap_red_dashboards Step 2 — land the already-built locus-biased
     ``gen.emit_red_panels`` output as generator input (FR-1, FR-2, FR-3, FR-7),

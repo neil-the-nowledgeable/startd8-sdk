@@ -1935,3 +1935,61 @@ def test_load_affordance_map_captures_score_improvement_blockers(tmp_path):
     loaded = load_affordance_map(path)
     assert loaded.ok
     assert loaded.score_improvement_blockers[0]["id"] == "tier1_class_b_mapfed_latency"
+
+# ---- Sapper-lite advisory inject -------------------------------------------
+
+
+def test_load_sapper_lite_guidance_noop_without_env(monkeypatch):
+    from startd8.observability.affordance_map_consume import (
+        SAPPER_LITE_REPORT_ENV,
+        load_sapper_lite_guidance,
+    )
+
+    monkeypatch.delenv(SAPPER_LITE_REPORT_ENV, raising=False)
+    assert load_sapper_lite_guidance() is None
+
+
+def test_load_sapper_lite_guidance_from_sdk_inject_block(tmp_path, monkeypatch):
+    from startd8.observability.affordance_map_consume import (
+        SAPPER_LITE_REPORT_ENV,
+        load_sapper_lite_guidance,
+        plan_affordance_actions,
+        AffordanceMapEntry,
+        GEN_IMPROVE_COVERAGE,
+    )
+
+    report = {
+        "schema_version": "sapper-lite/1.1.0",
+        "sdk_inject_block": "## Sapper-lite SDK\n\n- keep hist Duration\n",
+        "ranked": [],
+    }
+    path = tmp_path / "sapper-lite-friction.json"
+    path.write_text(json.dumps(report))
+    monkeypatch.setenv(SAPPER_LITE_REPORT_ENV, str(path))
+    g = load_sapper_lite_guidance()
+    assert g and "hist Duration" in g
+
+    entries = [
+        AffordanceMapEntry(
+            element_id="query-frontend",
+            gap_code="metric_coverage_empty",
+            affordance_ids=[GEN_IMPROVE_COVERAGE],
+            confidence=1.0,
+            locus_status="source_backed",
+            source_loci=[{"signal_kind": "metric", "family_or_signal": "thanos_frontend_split_queries_total"}],
+        )
+    ]
+    plan = plan_affordance_actions(entries, ["query-frontend"])
+    assert plan.sapper_lite_guidance and "hist Duration" in plan.sapper_lite_guidance
+
+
+def test_load_sapper_lite_guidance_malformed_noop(tmp_path, monkeypatch):
+    from startd8.observability.affordance_map_consume import (
+        SAPPER_LITE_REPORT_ENV,
+        load_sapper_lite_guidance,
+    )
+
+    path = tmp_path / "bad.json"
+    path.write_text("{not-json")
+    monkeypatch.setenv(SAPPER_LITE_REPORT_ENV, str(path))
+    assert load_sapper_lite_guidance() is None

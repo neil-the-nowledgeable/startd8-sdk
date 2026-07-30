@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -85,7 +86,7 @@ _ENV_FORM = re.compile(r"^[A-Z][A-Z0-9_]*(?:_SERVICE)?$")
 _ARTIFACT_TYPES: Dict[str, List[str]] = {
     GEN_EMIT_RED: ["dashboard_spec", "dashboard"],
     GEN_COMPLETE_TRIPLET: ["alert_rule", "dashboard_spec", "slo_definition"],
-    GEN_IMPROVE_COVERAGE: ["dashboard_spec"],
+    GEN_IMPROVE_COVERAGE: ["dashboard_spec", "slo_definition", "alert_rule"],
     GEN_ENRICH_RUNBOOK: ["runbook"],
     GEN_SHRINK: ["dashboard_spec", "dashboard"],
 }
@@ -95,6 +96,9 @@ _ARTIFACT_TYPES: Dict[str, List[str]] = {
 # `triplet_gate.py`) resolves the leg set from this symbol rather than
 # re-declaring its own copy.
 TRIPLET_LEGS: Tuple[str, ...] = tuple(_ARTIFACT_TYPES[GEN_COMPLETE_TRIPLET])
+
+# Sapper-lite o11y friction (Thanos measure) — advisory inject before gen.* (mirror FR-SAP-12).
+SAPPER_LITE_REPORT_ENV = "STARTD8_SAPPER_LITE_REPORT"
 
 
 class ActionOutcome(str, Enum):
@@ -237,6 +241,8 @@ class PlanResult:
 
     actions: List[ActionPlanEntry]
     skips: List[ActionPlanEntry] = field(default_factory=list)
+    #: Advisory Sapper-lite guidance (STARTD8_SAPPER_LITE_REPORT); never blocks apply.
+    sapper_lite_guidance: Optional[str] = None
 
     @property
     def all_entries(self) -> List[ActionPlanEntry]:
@@ -788,7 +794,78 @@ def plan_affordance_actions(
     planned.sort(
         key=lambda e: (_PRIORITY_INDEX.get(e.affordance_id, 99), e.service_id)
     )
-    return PlanResult(actions=planned, skips=skips)
+    planned_aids = {e.affordance_id for e in planned}
+    guidance = load_sapper_lite_guidance(planned_affordance_ids=planned_aids)
+    if guidance:
+        logger.info("Sapper-lite guidance attached (%d chars)", len(guidance))
+    return PlanResult(actions=planned, skips=skips, sapper_lite_guidance=guidance)
+
+
+def load_sapper_lite_guidance(
+    *,
+    report_path: Optional[str] = None,
+    planned_affordance_ids: Optional[Set[str]] = None,
+) -> Optional[str]:
+    """Load advisory Sapper-lite text from ``STARTD8_SAPPER_LITE_REPORT`` (or path).
+
+    Guarded no-op: missing/malformed → None (never raises). Prefers ``sdk_inject_block``
+    when present; else filters ranked findings to ``owner=startd8`` or intersecting gen ids.
+    """
+    raw = (report_path or os.environ.get(SAPPER_LITE_REPORT_ENV, "") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_file():
+        logger.info("Sapper-lite report not found (%s); skipping inject", path)
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.info("Sapper-lite report unreadable (%s); skipping inject", exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    block = data.get("sdk_inject_block")
+    if isinstance(block, str) and block.strip():
+        return block.strip()
+
+    ranked = data.get("ranked")
+    if not isinstance(ranked, list):
+        return None
+    planned = set(planned_affordance_ids or ())
+    lines: List[str] = [
+        "## Sapper-lite SDK map-mode guidance (advisory)",
+        "",
+        "Do not hard-block apply. Prefer AffordanceMap metric loci; do not invent rpc.server.*",
+        "",
+    ]
+    n = 0
+    for f in ranked:
+        if not isinstance(f, dict):
+            continue
+        if f.get("verdict") == "validated":
+            continue
+        aids = [a for a in (f.get("affordance_ids") or []) if isinstance(a, str)]
+        owner = f.get("owner")
+        if owner != "startd8" and not (planned & set(aids)):
+            continue
+        if planned and aids and not (planned & set(aids)):
+            # Still allow startd8 owner general hints when no gen intersection
+            if owner != "startd8":
+                continue
+        hint = f.get("inject_hint") or f.get("claim")
+        if not hint:
+            continue
+        stage = f.get("avoidable_cost_stage") or "?"
+        sev = f.get("severity") or "?"
+        lines.append(f"- [{stage}/{sev}] {hint}")
+        n += 1
+        if n >= 20:
+            break
+    if n == 0:
+        return None
+    return "\n".join(lines)
 
 
 def exit_code_for_plan(
@@ -824,8 +901,13 @@ def format_plan_for_dry_run(plan: PlanResult) -> str:
         )
     for e in plan.skips:
         lines.append(
-            f"  ~ SKIP  {e.service_id}  {e.affordance_id}  reason={e.reason}"
+            f"  - SKIP {e.service_id}  {e.affordance_id}  reason={e.reason}"
         )
+    if plan.sapper_lite_guidance:
+        lines.append("")
+        lines.append("Sapper-lite guidance (advisory):")
+        for ln in plan.sapper_lite_guidance.splitlines()[:30]:
+            lines.append(f"  {ln}")
     return "\n".join(lines)
 
 
@@ -2184,6 +2266,200 @@ def _apply_emit_red(
     result.entries.append(entry)
 
 
+def _coverage_bind_expr(fam: str) -> str:
+    """PromQL shape for coverage binds — hist duration/delay uses ``*_bucket``."""
+    n = (fam or "").lower()
+    if (
+        "_duration" in n
+        or "_latency" in n
+        or "_delay" in n
+        or (n.endswith("_seconds") and "timestamp" not in n)
+    ):
+        return _duration_panel_expr(fam)
+    return f"max({fam}{{}})"
+
+
+def _prefer_thanos_twin_family(fam: str) -> str:
+    """Cortex mixin alias → Thanos twin when known (#371 / SDK brief P2)."""
+    try:
+        from .artifact_generator_context import _apply_declared_series_upstream_rename
+    except ImportError:  # pragma: no cover
+        return fam
+    live, _labels = _apply_declared_series_upstream_rename(fam, {})
+    return live or fam
+
+
+def _write_coverage_orientation_legs(
+    *,
+    service_id: str,
+    family: str,
+    output_dir: Path,
+    result: ApplyResult,
+) -> List[str]:
+    """Write active SLO + alert referencing ``family`` (system/bridge axes).
+
+    Active rules only — commented TODO stubs are stripped by
+    ``extract_referenced_metrics`` and do not move bridge (SDK brief / CRP R2-F1).
+    """
+    written: List[str] = []
+    expr = _coverage_bind_expr(family)
+    safe = family.replace("_", "-")[:48]
+
+    slo_rel = f"slos/{service_id}-coverage-bind-slo.yaml"
+    slo_path = _confined_dest(output_dir, slo_rel)
+    if slo_path is not None:
+        slo_doc = {
+            "apiVersion": "openslo/v1",
+            "kind": "SLO",
+            "metadata": {
+                "name": f"{service_id}-coverage-bind-{safe}",
+                "labels": {
+                    "service": service_id,
+                    "bound_series": family,
+                    "generated_by": "startd8",
+                    "coverage_bind": "improve_metric_coverage",
+                },
+            },
+            "spec": {
+                "description": (
+                    f"gen.improve_metric_coverage system orientation for '{family}'."
+                ),
+                "target": "99%",
+                "timeWindow": {"duration": "30d", "isRolling": True},
+                "indicator": {
+                    "metadata": {"name": f"{service_id}-coverage-bind-{safe}-sli"},
+                    "spec": {
+                        "thresholdMetric": {
+                            "metricSource": {
+                                "type": "prometheus",
+                                "spec": {"query": expr},
+                            }
+                        }
+                    },
+                },
+            },
+        }
+        header = (
+            f"# gen.improve_metric_coverage system orientation for {service_id}\n\n"
+        )
+        if slo_path.is_file():
+            prior = slo_path.read_text(encoding="utf-8")
+            if family in prior and "query:" in prior:
+                pass  # already bound
+            else:
+                sep = "\n---\n" if prior.rstrip() else ""
+                slo_path.write_text(
+                    prior.rstrip()
+                    + sep
+                    + yaml.safe_dump(slo_doc, sort_keys=False),
+                    encoding="utf-8",
+                )
+                written.append(slo_rel)
+        else:
+            slo_path.parent.mkdir(parents=True, exist_ok=True)
+            slo_path.write_text(
+                header + yaml.safe_dump(slo_doc, sort_keys=False), encoding="utf-8"
+            )
+            written.append(slo_rel)
+        if slo_rel in written or (slo_path.is_file() and family in slo_path.read_text(encoding="utf-8")):
+            result.quality_touched.setdefault(service_id, {})["slo_definition"] = {
+                "score": 1.0,
+                "status": "generated",
+                "locus_grounded": True,
+                "coverage_family": family,
+            }
+            result.manifest_touched.append(
+                {
+                    "type": "slo_definition",
+                    "service": service_id,
+                    "path": slo_rel,
+                    "status": "generated",
+                }
+            )
+
+    alert_rel = f"alerts/{service_id}-coverage-bind-alerts.yaml"
+    alert_path = _confined_dest(output_dir, alert_rel)
+    if alert_path is not None:
+        rule = {
+            "alert": f"{service_id.replace('-', '').title()}CoverageBind{safe}"[:200],
+            "expr": f"{expr} >= 0",
+            "for": "5m",
+            "labels": {"severity": "info", "coverage_bind": "improve_metric_coverage"},
+            "annotations": {
+                "summary": f"gen.improve_metric_coverage bridge orientation for {family}",
+            },
+        }
+        content_dict = {
+            "groups": [{"name": f"{service_id}.coverage_bind", "rules": [rule]}]
+        }
+        header = (
+            f"# gen.improve_metric_coverage bridge orientation for {service_id}\n\n"
+        )
+        if alert_path.is_file():
+            prior = alert_path.read_text(encoding="utf-8")
+            if family in prior and "expr:" in prior:
+                pass
+            else:
+                try:
+                    data = yaml.safe_load(prior) or {}
+                except Exception:  # noqa: BLE001
+                    data = {}
+                if not isinstance(data, dict):
+                    data = {}
+                groups = data.setdefault("groups", [])
+                if not isinstance(groups, list):
+                    groups = []
+                    data["groups"] = groups
+                group = None
+                for g in groups:
+                    if isinstance(g, dict) and g.get("name") == f"{service_id}.coverage_bind":
+                        group = g
+                        break
+                if group is None:
+                    group = {"name": f"{service_id}.coverage_bind", "rules": []}
+                    groups.append(group)
+                rules = group.setdefault("rules", [])
+                if not isinstance(rules, list):
+                    rules = []
+                    group["rules"] = rules
+                if not any(family in str(r.get("expr") or "") for r in rules if isinstance(r, dict)):
+                    rules.append(rule)
+                    # preserve comment header
+                    header_lines: List[str] = []
+                    for line in prior.splitlines(keepends=True):
+                        if line.startswith("#") or not line.strip():
+                            header_lines.append(line)
+                            continue
+                        break
+                    alert_path.write_text(
+                        "".join(header_lines)
+                        + yaml.safe_dump(data, sort_keys=False),
+                        encoding="utf-8",
+                    )
+                    written.append(alert_rel)
+        else:
+            alert_path.parent.mkdir(parents=True, exist_ok=True)
+            alert_path.write_text(
+                header + yaml.safe_dump(content_dict, sort_keys=False), encoding="utf-8"
+            )
+            written.append(alert_rel)
+        result.quality_touched.setdefault(service_id, {})["alert_rule"] = {
+            "score": 1.0,
+            "status": "generated",
+            "locus_grounded": True,
+            "coverage_family": family,
+        }
+        result.manifest_touched.append(
+            {
+                "type": "alert_rule",
+                "service": service_id,
+                "path": alert_rel,
+                "status": "generated",
+            }
+        )
+    return written
+
+
 def _apply_improve_coverage(
     entry: ActionPlanEntry,
     *,
@@ -2191,7 +2467,11 @@ def _apply_improve_coverage(
     output_dir: Path,
     result: ApplyResult,
 ) -> None:
-    """Bind ≥1 PromQL panel to a cited metric family (FR-G4) — no second scorer."""
+    """Locus-biased coverage bind: dashboard (human) + SLO (system) + alert (bridge).
+
+    SDK brief P0 / LOCUS_GROUNDED_GENERATE: live when ``source_backed`` + metric
+    loci (planner already plans this). Dashboard-only bind left system/bridge at 0.
+    """
     loci = list(entry.loci_used or [])
     metric_only = [
         l
@@ -2206,16 +2486,18 @@ def _apply_improve_coverage(
         result.entries.append(entry)
         return
 
-    family = str(metric_only[0].get("family_or_signal") or "")
+    raw_family = str(metric_only[0].get("family_or_signal") or "")
+    family = _prefer_thanos_twin_family(raw_family)
     dash_rel = f"dashboards/{service.service_id}-dashboard-spec.yaml"
     dash_path = output_dir / dash_rel
     before = dash_path.read_text(encoding="utf-8") if dash_path.is_file() else ""
     entry.content_hash_before = content_hash(before) if before else None
 
+    expr = _coverage_bind_expr(family)
     panel = {
         "type": "timeseries",
         "title": f"Coverage bind: {family}",
-        "expr": f"sum(rate({family}[$__rate_interval]))",
+        "expr": expr,
         "unit": "ops",
         "group": "Coverage",
     }
@@ -2233,53 +2515,74 @@ def _apply_improve_coverage(
         }
     if not isinstance(doc, dict):
         doc = {}
-    spec = doc.setdefault("spec", {})
-    if not isinstance(spec, dict):
-        spec = {}
-        doc["spec"] = spec
-    panels = spec.setdefault("panels", [])
+    # Support both DashboardSpec shapes (spec.panels and top-level panels).
+    panels_parent = doc
+    if isinstance(doc.get("spec"), dict) and "panels" in doc["spec"]:
+        panels_parent = doc["spec"]
+    elif "panels" not in doc:
+        spec = doc.setdefault("spec", {})
+        if not isinstance(spec, dict):
+            spec = {}
+            doc["spec"] = spec
+        panels_parent = spec
+    panels = panels_parent.setdefault("panels", [])
     if not isinstance(panels, list):
         panels = []
-        spec["panels"] = panels
-    # Idempotent: skip if family already referenced
+        panels_parent["panels"] = panels
+
+    dash_changed = False
     already = any(family in str(p.get("expr") or "") for p in panels if isinstance(p, dict))
-    if already:
+    if not already:
+        panels.append(panel)
+        after = yaml.safe_dump(doc, sort_keys=False)
+        dest = _confined_dest(output_dir, dash_rel)
+        if dest is None:
+            entry.outcome = ActionOutcome.SKIPPED
+            entry.reason = "path_escape"
+            result.entries.append(entry)
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(after, encoding="utf-8")
+        result.written_paths.append(dash_rel)
+        dash_changed = True
+        result.quality_touched.setdefault(service.service_id, {})["dashboard_spec"] = {
+            "score": 1.0,
+            "status": "generated",
+            "locus_grounded": True,
+            "coverage_family": family,
+        }
+        result.manifest_touched.append(
+            {
+                "type": "dashboard_spec",
+                "service": service.service_id,
+                "path": dash_rel,
+                "status": "generated",
+            }
+        )
+
+    orient_written = _write_coverage_orientation_legs(
+        service_id=service.service_id,
+        family=family,
+        output_dir=output_dir,
+        result=result,
+    )
+    result.written_paths.extend(orient_written)
+
+    entry.loci_used = metric_only[:1]
+    if family != raw_family:
+        entry.reason = f"improve_metric_coverage_locus_bind:twin:{raw_family}->{family}"
+    else:
+        entry.reason = "improve_metric_coverage_locus_bind"
+    if dash_changed or orient_written:
+        entry.outcome = ActionOutcome.APPLIED
+        entry.content_hash_after = content_hash(
+            dash_path.read_text(encoding="utf-8") if dash_path.is_file() else ""
+        )
+        result.touched_service_ids.append(service.service_id)
+    else:
         entry.outcome = ActionOutcome.APPLIED_NO_CHANGE
         entry.reason = "coverage_family_already_bound"
         entry.content_hash_after = entry.content_hash_before
-        entry.loci_used = metric_only[:1]
-        result.entries.append(entry)
-        return
-    panels.append(panel)
-    after = yaml.safe_dump(doc, sort_keys=False)
-    entry.content_hash_after = content_hash(after)
-    dest = _confined_dest(output_dir, dash_rel)
-    if dest is None:
-        entry.outcome = ActionOutcome.SKIPPED
-        entry.reason = "path_escape"
-        result.entries.append(entry)
-        return
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(after, encoding="utf-8")
-    result.written_paths.append(dash_rel)
-    entry.outcome = ActionOutcome.APPLIED
-    entry.reason = "improve_metric_coverage_locus_bind"
-    entry.loci_used = metric_only[:1]
-    result.touched_service_ids.append(service.service_id)
-    result.quality_touched.setdefault(service.service_id, {})["dashboard_spec"] = {
-        "score": 1.0,
-        "status": "generated",
-        "locus_grounded": True,
-        "coverage_family": family,
-    }
-    result.manifest_touched.append(
-        {
-            "type": "dashboard_spec",
-            "service": service.service_id,
-            "path": dash_rel,
-            "status": "generated",
-        }
-    )
     result.entries.append(entry)
 
 
@@ -2700,6 +3003,8 @@ __all__ = [
     "signal_kind_for",
     "metric_loci",
     "plan_affordance_actions",
+    "load_sapper_lite_guidance",
+    "SAPPER_LITE_REPORT_ENV",
     "exit_code_for_plan",
     "exit_code_for_apply",
     "format_plan_for_dry_run",
