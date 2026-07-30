@@ -608,7 +608,9 @@ def test_apply_red_touches_only_target_service(tmp_path):
 # ---- WP-B2: shrink (FR-B4 / AC-G5) ------------------------------------------
 
 from startd8.observability.affordance_map_consume import (
+    SelectorParseError,
     content_hash,
+    dashboard_metric_selectors,
     line_count,
     resolve_dashboard_max_lines,
     shrink_dashboard_lines,
@@ -659,21 +661,129 @@ def _fake_render(spec: dict) -> str:
     return "{\n" + "\n".join(f'  "line_{i}": {i},' for i in range(max(n * 25, 1))) + "\n}\n"
 
 
+def _fat_spec_safe(n_extra: int = 10) -> dict:
+    """RED trio + decorative extras that are safe to drop under FR-1.
+
+    Unlike ``_fat_spec``'s numbered "Body size" panels (each a *distinct*
+    metric selector via a differing label, so FR-1 must refuse to drop any
+    of them), these extras carry no ``expr``/``targets`` at all — dropping
+    one never shrinks the dashboard's selector set. Used wherever a test
+    wants a shrink that actually *succeeds* while remaining metric-preserving.
+    """
+    spec = _fat_spec(0)
+    panels = list(spec["panels"])
+    for i in range(n_extra):
+        panels.append(
+            {
+                "id": 10 + i,
+                "title": f"Info panel {i}",
+                "group": "Cost & Tokens",
+                "text": "docs",
+            }
+        )
+    spec["panels"] = panels
+    return spec
+
+
 def test_resolve_dashboard_max_lines():
     assert resolve_dashboard_max_lines(None) == 300
     assert resolve_dashboard_max_lines({"dashboard": {"max_lines": 120}}) == 120
     assert resolve_dashboard_max_lines({"dashboard": {}}) == 300
 
 
+# ---- Step 1: dashboard_metric_selectors (FR-1 input) ------------------------
+
+
+def test_dashboard_metric_selectors_basic_extraction():
+    spec = _fat_spec(0)  # Request Rate / Error Rate / Duration p99 (histogram)
+    selectors = dashboard_metric_selectors(spec)
+    names = {s.split("{")[0] for s in selectors}
+    assert "rpc_server_requests_total" in names
+    # The histogram_quantile(rate(rpc_server_duration_bucket[5m])) leg has no
+    # sibling _count/_sum in this fixture, so it is NOT merged into a family
+    # (R1-S5: a lone leg keeps its own name rather than being widened away).
+    assert "rpc_server_duration_bucket" in names
+
+
+def test_dashboard_metric_selectors_distinct_label_matchers_stay_distinct():
+    """R2-S2: same metric name, different label matcher => different selector."""
+    spec = {
+        "panels": [
+            {"title": "a", "expr": 'thanos_x{cluster="a"}'},
+            {"title": "b", "expr": 'thanos_x{cluster="b"}'},
+        ]
+    }
+    selectors = dashboard_metric_selectors(spec)
+    assert len(selectors) == 2
+
+
+def test_dashboard_metric_selectors_collapses_confirmed_histogram_family():
+    spec = {
+        "panels": [
+            {
+                "title": "p99",
+                "expr": 'histogram_quantile(0.99, rate(thanos_dur_bucket{job="x"}[5m]))',
+            },
+            {"title": "sum", "expr": 'rate(thanos_dur_sum{job="x"}[5m])'},
+            {"title": "count", "expr": 'rate(thanos_dur_count{job="x"}[5m])'},
+        ]
+    }
+    selectors = dashboard_metric_selectors(spec)
+    # All three legs of one confirmed histogram family collapse to one entry.
+    assert selectors == frozenset({'thanos_dur{job="x"}'})
+
+
+def test_dashboard_metric_selectors_does_not_merge_unconfirmed_suffix():
+    """A lone '_count' metric with no sibling '_bucket' is not a confirmed
+    histogram leg — must not be merged away, or two distinct series could
+    collapse into one and silently pass FR-1's subset check (R1-S5)."""
+    spec = {"panels": [{"title": "c", "expr": "my_custom_count"}]}
+    selectors = dashboard_metric_selectors(spec)
+    assert selectors == frozenset({"my_custom_count{}"})
+
+
+def test_dashboard_metric_selectors_recurses_nested_row_panels():
+    """R2-S1: Grafana row panels nest their children under panels[].panels."""
+    spec = {
+        "panels": [
+            {
+                "title": "Row",
+                "type": "row",
+                "panels": [{"title": "child", "expr": "thanos_nested_metric"}],
+            }
+        ]
+    }
+    selectors = dashboard_metric_selectors(spec)
+    assert any("thanos_nested_metric" in s for s in selectors)
+
+
+def test_dashboard_metric_selectors_reads_rendered_targets_shape():
+    rendered = {
+        "panels": [
+            {"title": "t", "targets": [{"expr": "thanos_rendered_only_metric"}]}
+        ]
+    }
+    selectors = dashboard_metric_selectors(rendered)
+    assert any("thanos_rendered_only_metric" in s for s in selectors)
+
+
+def test_dashboard_metric_selectors_fails_closed_on_unbalanced_brace():
+    """R1-F2: a parse failure must raise, never silently contribute ∅."""
+    spec = {"panels": [{"title": "bad", "expr": "thanos_broken{cluster=\"a\""}]}
+    with pytest.raises(SelectorParseError):
+        dashboard_metric_selectors(spec)
+
+
 def test_shrink_drops_non_red_to_budget():
-    spec = _fat_spec(10)
+    spec = _fat_spec_safe(10)
+    pre_selectors = dashboard_metric_selectors(spec)
     result = shrink_dashboard_lines(
-        spec, max_lines=100, preserve_red=True, render_fn=_fake_render
+        spec, max_lines=80, preserve_red=True, render_fn=_fake_render
     )
     assert result.ok
     assert result.panels_dropped > 0
-    assert result.lines_after <= 100
-    assert line_count(result.rendered_json) <= 100
+    assert result.lines_after <= 80
+    assert line_count(result.rendered_json) <= 80
     titles = {p["title"] for p in result.spec["panels"]}
     assert "Request Rate" in titles
     assert "Error Rate" in titles
@@ -682,6 +792,23 @@ def test_shrink_drops_non_red_to_budget():
     for p in result.spec["panels"]:
         assert "gridPos" in p
         assert "expr" in p
+    # FR-1: a *successful* shrink still preserves every metric selector.
+    assert dashboard_metric_selectors(result.spec) == pre_selectors
+
+
+def test_shrink_refuses_would_delete_metric_coverage():
+    """Each 'Body size' extra is a distinct selector (via a differing label)
+    — dropping any of them shrinks coverage, so FR-1 must refuse even though
+    a priority signal (the file-order tie-break among equal-scored extras)
+    otherwise exists."""
+    spec = _fat_spec(10)
+    result = shrink_dashboard_lines(
+        spec, max_lines=100, preserve_red=True, render_fn=_fake_render
+    )
+    assert not result.ok
+    assert result.reason == "would_delete_metric_coverage"
+    assert result.lost_selectors
+    assert all("body_size_bucket" in s for s in result.lost_selectors)
 
 
 def test_shrink_refuses_when_render_unavailable():
@@ -693,7 +820,9 @@ def test_shrink_refuses_when_render_unavailable():
 
 
 def test_shrink_refuses_when_only_red_remains():
-    # Tiny budget with only RED panels — cannot drop without regressing.
+    # Tiny budget, all-RED panels: every candidate scores the same
+    # (-1000, all RED-protected) — a global tie is "no signal", not a
+    # RED-specific gate (FR-2/FR-3: the had_red precondition was deleted).
     red_only = {
         "uid": "store-dash",
         "title": "store",
@@ -703,7 +832,7 @@ def test_shrink_refuses_when_only_red_remains():
         red_only, max_lines=5, preserve_red=True, render_fn=_fake_render
     )
     assert not result.ok
-    assert result.reason == "would_regress_red"
+    assert result.reason == "no_drop_signal"
 
 
 def test_apply_shrink_oversize_writes_and_hashes(tmp_path):
@@ -715,7 +844,7 @@ def test_apply_shrink_oversize_writes_and_hashes(tmp_path):
     biz = BusinessContext()
     dash_dir = tmp_path / "dashboards"
     dash_dir.mkdir()
-    before_text = yaml.safe_dump(_fat_spec(12), sort_keys=False)
+    before_text = yaml.safe_dump(_fat_spec_safe(12), sort_keys=False)
     dash_path = dash_dir / "store-dashboard-spec.yaml"
     dash_path.write_text(before_text, encoding="utf-8")
     before_hash = content_hash(before_text)
@@ -838,7 +967,7 @@ def test_shrink_already_under_budget_does_not_merge_wipe(tmp_path):
     assert len(after["artifacts"]) == 2
 
 
-def test_apply_shrink_refuses_red_regression(tmp_path):
+def test_apply_shrink_refuses_no_drop_signal(tmp_path):
     import yaml
 
     svc = _grpc_service("store")
@@ -868,8 +997,150 @@ def test_apply_shrink_refuses_red_regression(tmp_path):
     )
     shrink = [e for e in apply.entries if e.affordance_id == GEN_SHRINK][0]
     assert shrink.outcome == ActionOutcome.SKIPPED
-    assert shrink.reason == "would_regress_red"
+    assert shrink.reason == "no_drop_signal"
     assert shrink.content_hash_before == shrink.content_hash_after
+
+
+def test_apply_shrink_refuses_spec_render_drift(tmp_path):
+    """The on-disk rendered artifact carries selectors the spec does not
+    (or vice versa) — refuse before ever calling the shrinker (plan Step 3,
+    R3-S1 symmetric check)."""
+    import yaml
+
+    svc = _grpc_service("store")
+    biz = BusinessContext()
+    dash_dir = tmp_path / "dashboards"
+    dash_dir.mkdir()
+    spec = _fat_spec(0)
+    (dash_dir / "store-dashboard-spec.yaml").write_text(
+        yaml.safe_dump(spec, sort_keys=False), encoding="utf-8"
+    )
+    gj_dir = tmp_path / "grafana" / "dashboards"
+    gj_dir.mkdir(parents=True)
+    rendered = {
+        "panels": spec["panels"]
+        + [
+            {
+                "title": "Extra render-only metric",
+                "targets": [{"expr": 'thanos_receive_config_hash{cluster="a"}'}],
+            }
+        ]
+    }
+    (gj_dir / "store-dashboard.json").write_text(json.dumps(rendered), encoding="utf-8")
+    plan = plan_affordance_actions(
+        [
+            AffordanceMapEntry(
+                element_id="store",
+                gap_code="dashboard_oversize",
+                affordance_ids=[GEN_SHRINK],
+            )
+        ],
+        ["store"],
+    )
+    apply = apply_affordance_actions(
+        plan,
+        services=[svc],
+        business=biz,
+        output_dir=tmp_path,
+        max_lines=5,
+        render_fn=_fake_render,
+    )
+    shrink = [e for e in apply.entries if e.affordance_id == GEN_SHRINK][0]
+    assert shrink.outcome == ActionOutcome.SKIPPED
+    assert shrink.reason == "spec_render_drift"
+    assert shrink.render_available is True
+    assert any("thanos_receive_config_hash" in s for s in shrink.legs or [])
+    assert shrink.content_hash_before == shrink.content_hash_after
+
+
+def test_apply_shrink_refuses_scored_artifact_over_budget(tmp_path):
+    """Spec is already under budget, and its selectors match the on-disk
+    render exactly (no drift) — but the *scored* rendered artifact is still
+    over budget. APPLIED_NO_CHANGE would be a false green (plan Step 3)."""
+    import yaml
+
+    svc = _grpc_service("store")
+    biz = BusinessContext()
+    dash_dir = tmp_path / "dashboards"
+    dash_dir.mkdir()
+    spec = _fat_spec(0)  # 3 panels, well under any real budget
+    (dash_dir / "store-dashboard-spec.yaml").write_text(
+        yaml.safe_dump(spec, sort_keys=False), encoding="utf-8"
+    )
+    gj_dir = tmp_path / "grafana" / "dashboards"
+    gj_dir.mkdir(parents=True)
+    # Same selectors as the spec (no drift) but pretty-printed with non-metric
+    # padding so the scored line count exceeds max_lines.
+    (gj_dir / "store-dashboard.json").write_text(
+        json.dumps(
+            {"panels": spec["panels"], "padding": list(range(400))}, indent=2
+        ),
+        encoding="utf-8",
+    )
+    plan = plan_affordance_actions(
+        [
+            AffordanceMapEntry(
+                element_id="store",
+                gap_code="dashboard_oversize",
+                affordance_ids=[GEN_SHRINK],
+            )
+        ],
+        ["store"],
+    )
+    apply = apply_affordance_actions(
+        plan,
+        services=[svc],
+        business=biz,
+        output_dir=tmp_path,
+        max_lines=80,
+        render_fn=_fake_render,
+    )
+    shrink = [e for e in apply.entries if e.affordance_id == GEN_SHRINK][0]
+    assert shrink.outcome == ActionOutcome.SKIPPED
+    assert shrink.reason == "scored_artifact_over_budget"
+    assert shrink.content_hash_before == shrink.content_hash_after
+
+
+def test_apply_shrink_refusal_never_touches_quality_or_manifest(tmp_path):
+    """FR-6: every refusal path must leave merge_and_write_reports a no-op."""
+    import yaml
+
+    from startd8.observability.affordance_map_consume import merge_and_write_reports
+
+    svc = _grpc_service("store")
+    biz = BusinessContext()
+    dash_dir = tmp_path / "dashboards"
+    dash_dir.mkdir()
+    (dash_dir / "store-dashboard-spec.yaml").write_text(
+        yaml.safe_dump(_fat_spec(0), sort_keys=False), encoding="utf-8"
+    )
+    plan = plan_affordance_actions(
+        [
+            AffordanceMapEntry(
+                element_id="store",
+                gap_code="dashboard_oversize",
+                affordance_ids=[GEN_SHRINK],
+            )
+        ],
+        ["store"],
+    )
+    apply = apply_affordance_actions(
+        plan,
+        services=[svc],
+        business=biz,
+        output_dir=tmp_path,
+        max_lines=5,
+        render_fn=_fake_render,
+    )
+    shrink = [e for e in apply.entries if e.affordance_id == GEN_SHRINK][0]
+    assert shrink.outcome == ActionOutcome.SKIPPED
+    assert not apply.quality_touched
+    assert not apply.manifest_touched
+    assert not (tmp_path / "observability-quality.json").is_file()
+    assert not (tmp_path / "observability-manifest.yaml").is_file()
+    merge_and_write_reports(tmp_path, apply)  # must remain a no-op
+    assert not (tmp_path / "observability-quality.json").is_file()
+    assert not (tmp_path / "observability-manifest.yaml").is_file()
 
 
 # ---- WP-B3: sidecar completeness (FR-B7) ------------------------------------
@@ -908,7 +1179,7 @@ def test_apply_sidecar_echoes_unmapped_and_hashes(tmp_path):
     dash_dir = tmp_path / "dashboards"
     dash_dir.mkdir()
     (dash_dir / "store-dashboard-spec.yaml").write_text(
-        yaml.safe_dump(_fat_spec(10), sort_keys=False), encoding="utf-8"
+        yaml.safe_dump(_fat_spec_safe(10), sort_keys=False), encoding="utf-8"
     )
     load = load_affordance_map(
         [
@@ -1013,7 +1284,7 @@ def test_shrink_refuse_does_not_mutate_returned_spec():
         red_only, max_lines=5, preserve_red=True, render_fn=_fake_render
     )
     assert not result.ok
-    assert result.reason == "would_regress_red"
+    assert result.reason == "no_drop_signal"
     assert len(result.spec["panels"]) == len(original["panels"])
     assert {p["title"] for p in result.spec["panels"]} == {
         p["title"] for p in original["panels"]

@@ -181,6 +181,10 @@ class ActionPlanEntry:
     loci_used: Optional[List[Dict[str, Any]]] = None
     locus_skip_reason: Optional[str] = None
     locus_status: Optional[str] = None
+    # True/False once a shrink attempt has checked for an on-disk rendered
+    # artifact; None (default) means "not applicable" — distinguishes a
+    # substantive refusal from render_unavailable (plan Step 3).
+    render_available: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -924,6 +928,9 @@ class ShrinkResult:
     panels_dropped: int = 0
     lines_before: int = 0
     lines_after: int = 0
+    # Evidence carrier for a "would_delete_metric_coverage" refusal (R1-F3):
+    # the selector names that would have been lost by the refused drop.
+    lost_selectors: Optional[List[str]] = None
 
 
 def resolve_dashboard_max_lines(
@@ -946,6 +953,217 @@ def line_count(text: str) -> int:
     if not text:
         return 0
     return text.count("\n") + 1
+
+
+# ---- Metric selector identity (FR-1 input; plan Step 1 / R1-S5, R2-S1, R2-S2) -
+
+# PromQL keywords/operators that never name a metric.
+_PROMQL_KEYWORDS: frozenset = frozenset(
+    {
+        "by", "without", "on", "ignoring", "group_left", "group_right",
+        "offset", "bool", "and", "or", "unless", "atan2",
+    }
+)
+
+# PromQL functions — always followed by "(" and never a metric selector, even
+# though several (histogram_quantile, sum_over_time, label_replace, …) contain
+# underscores like real Thanos series names.
+_PROMQL_FUNCTIONS: frozenset = frozenset(
+    {
+        "rate", "irate", "increase", "delta", "idelta", "deriv", "predict_linear",
+        "sum", "avg", "min", "max", "count", "count_values", "stddev", "stdvar",
+        "topk", "bottomk", "quantile", "histogram_quantile", "abs", "ceil",
+        "floor", "round", "exp", "ln", "log2", "log10", "sqrt", "clamp",
+        "clamp_max", "clamp_min", "absent", "absent_over_time", "changes",
+        "resets", "sort", "sort_desc", "vector", "scalar", "time", "timestamp",
+        "label_replace", "label_join", "day_of_month", "day_of_week",
+        "days_in_month", "hour", "minute", "month", "year", "sum_over_time",
+        "avg_over_time", "min_over_time", "max_over_time", "count_over_time",
+        "quantile_over_time", "stddev_over_time", "stdvar_over_time",
+        "last_over_time", "present_over_time", "holt_winters",
+    }
+)
+
+_METRIC_TOKEN_RE = re.compile(r"[A-Za-z_:][A-Za-z0-9_:]*")
+_LABEL_MATCHER_RE = re.compile(
+    r'([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"'
+)
+# A genuine histogram always exposes these three legs under one base name.
+_HIST_SUFFIXES: Tuple[str, ...] = ("_bucket", "_count", "_sum")
+# PromQL duration-literal units (``5m``, ``1h30m``, ``30s``, …) — a bare unit
+# letter immediately after a digit is a duration suffix, never a metric name.
+_DURATION_UNITS: frozenset = frozenset({"ms", "s", "m", "h", "d", "w", "y"})
+
+
+class SelectorParseError(ValueError):
+    """A PromQL expression could not be parsed for selector identity.
+
+    Raised rather than swallowed (R1-F2): a parse failure must never look like
+    "this query touches zero metrics" to the FR-1 subset check, or a real
+    deletion could satisfy the invariant vacuously.
+    """
+
+
+def _normalize_label_matchers(
+    label_block: str, *, drop: frozenset = frozenset()
+) -> Tuple[Tuple[str, str, str], ...]:
+    """Sorted ``(name, op, value)`` triples — full matcher identity (R2-S2).
+
+    Distinct label matchers on the same metric name are distinct selectors;
+    only ``drop`` (used for the histogram ``le`` bucket label) is elided.
+    """
+    pairs = [
+        (k, op, v)
+        for k, op, v in _LABEL_MATCHER_RE.findall(label_block or "")
+        if k not in drop
+    ]
+    return tuple(sorted(pairs))
+
+
+def _extract_raw_selectors(expr: str) -> List[Tuple[str, str]]:
+    """Scan a PromQL expression for ``(metric_name, label_block)`` pairs.
+
+    Fail-closed on an unbalanced ``{`` — raises :class:`SelectorParseError`
+    instead of returning a partial/empty result for that expression.
+    """
+    out: List[Tuple[str, str]] = []
+    i, n = 0, len(expr)
+    while i < n:
+        c = expr[i]
+        if c == "[":
+            # Range-vector / subquery duration span, e.g. "[5m]" or "[1h:5m]"
+            # — never contains a metric selector, only durations.
+            depth, j = 0, i
+            while j < n:
+                if expr[j] == "[":
+                    depth += 1
+                elif expr[j] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+            i = j if j > i else i + 1
+            continue
+        m = _METRIC_TOKEN_RE.match(expr, i)
+        if not m:
+            i += 1
+            continue
+        tok = m.group(0)
+        start = m.start()
+        i = m.end()
+        low = tok.lower()
+        if low in _DURATION_UNITS and start > 0 and expr[start - 1].isdigit():
+            # "offset 5m" / "1h30m" outside a "[...]" span.
+            continue
+        if low in ("by", "without"):
+            # "sum by (le, job) (...)" / "... without (instance) (...)" — the
+            # parenthesized list is label names, never metric selectors.
+            k = i
+            while k < n and expr[k] in " \t":
+                k += 1
+            if k < n and expr[k] == "(":
+                depth, j = 0, k
+                while j < n:
+                    if expr[j] == "(":
+                        depth += 1
+                    elif expr[j] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            j += 1
+                            break
+                    j += 1
+                else:
+                    raise SelectorParseError(
+                        f"unbalanced by/without parens in expr: {expr!r}"
+                    )
+                i = j
+            continue
+        if low in _PROMQL_KEYWORDS or low in _PROMQL_FUNCTIONS:
+            continue
+        if i < n and expr[i] == "(" and "_" not in tok:
+            # Bare identifier(...) call with no metric-shaped name — treat as
+            # an unknown function rather than a selector.
+            continue
+        label_block = ""
+        if i < n and expr[i] == "{":
+            depth, j = 0, i
+            while j < n:
+                if expr[j] == "{":
+                    depth += 1
+                elif expr[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+            else:
+                raise SelectorParseError(
+                    f"unbalanced selector brace in expr: {expr!r}"
+                )
+            label_block = expr[i:j]
+            i = j
+        out.append((tok, label_block))
+    return out
+
+
+def dashboard_metric_selectors(spec_or_rendered: Mapping[str, Any]) -> frozenset:
+    """Selector-identity set for a dashboard spec or rendered Grafana JSON.
+
+    Reads ``panels[].expr`` (spec shape) and ``panels[].targets[].expr``
+    (rendered shape), recursing into Grafana row panels' nested ``panels[]``
+    (R2-S1). Histogram ``_bucket``/``_count``/``_sum`` legs of the *same*
+    base name + label set collapse to one selector **only when at least two
+    of the legs actually co-occur** — a lone ``..._count`` metric that merely
+    shares a suffix with no sibling ``_bucket`` is not merged into a family
+    it may not belong to (R1-S5: cardinality is the property FR-1 must not
+    let a normalizer quietly erase). Distinct label matchers on the same
+    metric name remain distinct selectors (R2-S2); only the bucket ``le``
+    label is elided when collapsing a confirmed histogram family.
+
+    Raises :class:`SelectorParseError` (fail-closed, R1-F2) rather than
+    silently contributing an empty selector set for an unparseable query.
+    """
+    families: Dict[Tuple[str, Tuple[Tuple[str, str, str], ...]], Set[str]] = {}
+
+    def visit(panel: Mapping[str, Any]) -> None:
+        exprs: List[str] = []
+        if panel.get("expr"):
+            exprs.append(str(panel["expr"]))
+        for t in panel.get("targets") or []:
+            if isinstance(t, Mapping) and t.get("expr"):
+                exprs.append(str(t["expr"]))
+        for expr in exprs:
+            for name, label_block in _extract_raw_selectors(expr):
+                base = name
+                is_hist_leg = False
+                for suf in _HIST_SUFFIXES:
+                    if name.endswith(suf):
+                        base = name[: -len(suf)]
+                        is_hist_leg = True
+                        break
+                drop = frozenset({"le"}) if is_hist_leg else frozenset()
+                labels = _normalize_label_matchers(label_block, drop=drop)
+                key = (base, labels) if is_hist_leg else (name, labels)
+                families.setdefault(key, set()).add(name)
+        for child in panel.get("panels") or []:
+            if isinstance(child, Mapping):
+                visit(child)
+
+    for p in spec_or_rendered.get("panels") or []:
+        if isinstance(p, Mapping):
+            visit(p)
+
+    selectors: Set[str] = set()
+    for (base_or_name, labels), names in families.items():
+        label_str = ",".join(f'{k}{op}"{v}"' for k, op, v in labels)
+        has_bucket = any(nm.endswith("_bucket") for nm in names)
+        if has_bucket and len(names) > 1:
+            selectors.add(f"{base_or_name}{{{label_str}}}")
+        else:
+            for nm in names:
+                selectors.add(f"{nm}{{{label_str}}}")
+    return frozenset(selectors)
 
 
 def try_render_grafana_json(spec_dict: Mapping[str, Any]) -> Optional[str]:
@@ -1048,14 +1266,35 @@ def shrink_dashboard_lines(
     spec_dict: Mapping[str, Any],
     *,
     max_lines: int,
-    preserve_red: bool = True,
+    preserve_red: bool = True,  # noqa: ARG001 — kept for call-site compat (FR-2)
     render_fn: Optional[RenderFn] = None,
 ) -> ShrinkResult:
-    """Shrink a dashboard **spec** until rendered JSON ≤ max_lines (FR-B4).
+    """Shrink a dashboard **spec** until rendered JSON <= max_lines, refusing
+    honestly rather than deleting Thanos metric coverage (FR-B4 / FR-1..FR-3).
 
-    Drops non-RED panels first, reflows gridPos, re-renders and re-measures.
-    Refuses when render is unavailable or RED would regress. On refuse, ``spec``
-    is left unchanged from the last successful drop (candidate drops are staged).
+    Refusal precedence ladder inside the drop loop (R1-S1), checked freshly
+    each iteration against the *current* top-priority candidate:
+
+      1. ``no_drop_signal`` — every remaining candidate has the same
+         ``_drop_priority`` score (no ordering signal at all; a stable sort
+         would delete-by-list-position, not by judgement). FR-3.
+      2. ``would_delete_metric_coverage`` — the top-priority candidate is the
+         only carrier of one or more metric selectors; dropping it would
+         shrink the dashboard's selector set below what it started with.
+         FR-1. This subsumes the old RED-regression gate: a RED panel that
+         is a real metric's only carrier is refused for the same reason a
+         non-RED one would be; a panel that is *not* uniquely load-bearing
+         (a duplicate view, a decorative/non-metric panel) may be dropped
+         even if it happens to look RED-shaped, because nothing is lost.
+
+    ``preserve_red``/``_red_coverage_ok`` are no longer an in-loop gate
+    (FR-2 — the gate was inert on every real subject dashboard: RED coverage
+    never reached 2/3 on any of them, so it could never fire) — RED-looking
+    panels still sort last via ``_drop_priority``'s -1000, which is now
+    ordering input only, not a second, redundant safety mechanism (PRE-6).
+
+    On refuse, ``spec`` is left unchanged from the last successful drop
+    (candidate drops are staged before being accepted).
     """
     render: RenderFn = render_fn or try_render_grafana_json
     spec: Dict[str, Any] = json.loads(json.dumps(spec_dict))  # deep copy via JSON
@@ -1063,7 +1302,12 @@ def shrink_dashboard_lines(
     _reflow_gridpos(panels)
     spec["panels"] = panels
 
-    had_red = _red_coverage_ok(panels) if preserve_red else False
+    try:
+        pre_selectors = dashboard_metric_selectors(spec)
+    except SelectorParseError:
+        return ShrinkResult(
+            ok=False, spec=spec, reason="selector_parse_failed", panels_dropped=0
+        )
 
     rendered = render(spec)
     if rendered is None:
@@ -1087,36 +1331,59 @@ def shrink_dashboard_lines(
 
     dropped = 0
     while line_count(rendered) > max_lines:
-        candidates = [
-            (i, p)
-            for i, p in enumerate(panels)
-            if not (preserve_red and _panel_is_red_protected(p))
-        ]
+        candidates = list(enumerate(panels))
         if not candidates:
             return ShrinkResult(
                 ok=False,
                 spec=spec,
                 rendered_json=rendered,
-                reason="would_regress_red",
+                reason="panel_graph_integrity",
+                panels_dropped=dropped,
+                lines_before=before_lines,
+                lines_after=line_count(rendered),
+            )
+        scores = [_drop_priority(p) for _, p in candidates]
+        if len(set(scores)) <= 1:
+            # Global tie: no candidate is distinguishable from any other, so
+            # any pick is "deleted by list position, not judgement" (FR-3).
+            return ShrinkResult(
+                ok=False,
+                spec=spec,
+                rendered_json=rendered,
+                reason="no_drop_signal",
                 panels_dropped=dropped,
                 lines_before=before_lines,
                 lines_after=line_count(rendered),
             )
         candidates.sort(key=lambda ip: _drop_priority(ip[1]), reverse=True)
-        drop_i = candidates[0][0]
-        # Stage the drop so a RED refuse does not mutate the returned spec.
+        drop_i, _victim = candidates[0]
         staged: List[Dict[str, Any]] = json.loads(json.dumps(panels))
         staged.pop(drop_i)
         _reflow_gridpos(staged)
-        if preserve_red and had_red and not _red_coverage_ok(staged):
+        staged_spec = dict(spec)
+        staged_spec["panels"] = staged
+        try:
+            post_selectors = dashboard_metric_selectors(staged_spec)
+        except SelectorParseError:
             return ShrinkResult(
                 ok=False,
                 spec=spec,
                 rendered_json=rendered,
-                reason="would_regress_red",
+                reason="selector_parse_failed",
                 panels_dropped=dropped,
                 lines_before=before_lines,
                 lines_after=line_count(rendered),
+            )
+        if not (pre_selectors <= post_selectors):
+            return ShrinkResult(
+                ok=False,
+                spec=spec,
+                rendered_json=rendered,
+                reason="would_delete_metric_coverage",
+                panels_dropped=dropped,
+                lines_before=before_lines,
+                lines_after=line_count(rendered),
+                lost_selectors=sorted(pre_selectors - post_selectors),
             )
         panels = staged
         spec["panels"] = panels
@@ -1493,7 +1760,12 @@ def _apply_shrink(
             entry.reason = "no_dashboard_spec"
             result.entries.append(entry)
             return
-        _write_one(output_dir, art)
+        written = _write_one(output_dir, art)
+        if written:
+            # R1-F5: this write happens before any FR-1/FR-3/FR-4 precondition
+            # can fire — a later refusal must not silently omit it from the
+            # sidecar's written_paths accounting.
+            result.written_paths.append(written)
     before = dash_path.read_text(encoding="utf-8")
     entry.content_hash_before = content_hash(before)
     gj_rel = f"grafana/dashboards/{service.service_id}-dashboard.json"
@@ -1523,6 +1795,45 @@ def _apply_shrink(
         return
 
     ml = max_lines if max_lines is not None else resolve_dashboard_max_lines(contracts)
+
+    # ---- Spec<->render coherence precondition (FR-4/FR-6, plan Step 3) ----
+    # A fresh re-render is always spec-derived and can never drift from the
+    # spec's own selectors; the drift this guards against is between the
+    # spec and whatever rendered artifact *already exists on disk* (e.g. an
+    # earlier, differently-templated generation). Checked symmetrically
+    # (R3-S1): either direction of divergence is a coherence failure.
+    try:
+        spec_selectors = dashboard_metric_selectors(spec_dict)
+    except SelectorParseError:
+        entry.outcome = ActionOutcome.SKIPPED
+        entry.reason = "selector_parse_failed"
+        entry.content_hash_after = entry.content_hash_before
+        entry.rendered_hash_after = entry.rendered_hash_before
+        result.entries.append(entry)
+        return
+
+    entry.render_available = gj_path.is_file()
+    scored_lines: Optional[int] = None
+    if entry.render_available:
+        rendered_text = gj_path.read_text(encoding="utf-8")
+        try:
+            rendered_dict = json.loads(rendered_text)
+            render_selectors = dashboard_metric_selectors(rendered_dict)
+        except (json.JSONDecodeError, SelectorParseError):
+            render_selectors = None
+        if render_selectors is not None:
+            spec_only = spec_selectors - render_selectors
+            render_only = render_selectors - spec_selectors
+            if spec_only or render_only:
+                entry.outcome = ActionOutcome.SKIPPED
+                entry.reason = "spec_render_drift"
+                entry.content_hash_after = entry.content_hash_before
+                entry.rendered_hash_after = entry.rendered_hash_before
+                entry.legs = sorted(spec_only) + [f"+{s}" for s in sorted(render_only)]
+                result.entries.append(entry)
+                return
+            scored_lines = line_count(rendered_text)
+
     shrink = shrink_dashboard_lines(
         spec_dict,
         max_lines=ml,
@@ -1534,10 +1845,23 @@ def _apply_shrink(
         entry.reason = shrink.reason
         entry.content_hash_after = entry.content_hash_before
         entry.rendered_hash_after = entry.rendered_hash_before
+        if shrink.lost_selectors:
+            entry.legs = shrink.lost_selectors
         result.entries.append(entry)
         return
 
     if shrink.panels_dropped == 0 and shrink.reason == "already_under_budget":
+        # FR-4/FR-6: the spec being under budget is not sufficient when the
+        # already-scored artifact on disk is still over — that would be a
+        # false APPLIED_NO_CHANGE (the row-level fix; the class-level
+        # exit_code_for_apply residual is out of scope, see R1-S3).
+        if scored_lines is not None and scored_lines > ml:
+            entry.outcome = ActionOutcome.SKIPPED
+            entry.reason = "scored_artifact_over_budget"
+            entry.content_hash_after = entry.content_hash_before
+            entry.rendered_hash_after = entry.rendered_hash_before
+            result.entries.append(entry)
+            return
         entry.outcome = ActionOutcome.APPLIED_NO_CHANGE
         entry.reason = "already_under_budget"
         entry.content_hash_after = entry.content_hash_before
