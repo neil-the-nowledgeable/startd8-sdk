@@ -1259,20 +1259,51 @@ def get_all_panel_exprs(panels: List[Dict[str, Any]]) -> List[str]:
     return exprs
 
 
+def _panel_title_lower(panel: Dict[str, Any]) -> str:
+    return str(panel.get("title") or "").strip().lower()
+
+
 def has_rate_panel(panels: List[Dict[str, Any]]) -> bool:
-    """Check for a request rate panel (R in RED)."""
+    """Check for a request rate panel (R in RED).
+
+    Accepts AffordanceMap / Thanos-shaped binds (titles ``Request Rate``;
+    ``rate(..._total)`` counters) in addition to HTTP-semconv ``rate(..._count)``.
+    Aligns with ``affordance_map_consume._panel_is_red_protected`` (which already
+    treated ``_total`` as Rate) so OBS-200a does not disagree with shrink protect.
+    """
+    for panel in panels:
+        title = _panel_title_lower(panel)
+        if title in ("request rate", "rate") or title.endswith(" request rate"):
+            if _panel_has_expr(panel):
+                return True
     for expr in get_all_panel_exprs(panels):
-        if "rate(" in expr and "_count" in expr and "status" not in expr.lower():
+        e = expr.lower()
+        if "rate(" not in e:
+            continue
+        # Error-rate / failure-rate panels are the E leg, not R.
+        if any(tok in e for tok in ("error", "failure", "fail", "status_code")):
+            continue
+        if "status" in e:
+            continue
+        # Histograms expose *_count; Prometheus counters expose *_total.
+        if "_count" in e or "_total" in e:
             return True
     return False
 
 
 def has_error_panel(panels: List[Dict[str, Any]]) -> bool:
     """Check for an error rate panel (E in RED)."""
+    for panel in panels:
+        title = _panel_title_lower(panel)
+        if title in ("error rate", "errors", "error") or "error rate" in title:
+            if _panel_has_expr(panel):
+                return True
     for expr in get_all_panel_exprs(panels):
         e = expr.lower()
         if (
             "error" in e
+            or "failure" in e
+            or "fail" in e
             or "status_code" in e
             or "status_code!=" in e
             or 'status_code!="ok"' in e
@@ -1284,8 +1315,19 @@ def has_error_panel(panels: List[Dict[str, Any]]) -> bool:
 
 def has_duration_panel(panels: List[Dict[str, Any]]) -> bool:
     """Check for a latency/duration panel (D in RED)."""
+    for panel in panels:
+        title = _panel_title_lower(panel)
+        if title in ("duration", "latency") or "duration" in title or "latency" in title:
+            if _panel_has_expr(panel):
+                return True
     for expr in get_all_panel_exprs(panels):
-        if "histogram_quantile" in expr or "duration" in expr.lower():
+        e = expr.lower()
+        if (
+            "histogram_quantile" in e
+            or "duration" in e
+            or "latency" in e
+            or "delay_seconds" in e
+        ):
             return True
     return False
 
