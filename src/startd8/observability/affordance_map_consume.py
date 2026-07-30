@@ -38,6 +38,12 @@ logger = get_logger(__name__)
 EXIT_OK = 0
 EXIT_MALFORMED = 2
 EXIT_ALL_SKIPPED = 3
+# gap #4 / FR-4: deliberate, documented exit codes for a drain where every
+# live entry's needed legs refused (4) or where some entries applied/no-op
+# while others refused (5) — distinct from the ordinary EXIT_OK success path
+# so a refusal-heavy drain is never silently read as a clean run.
+EXIT_ALL_REFUSED = 4
+EXIT_PARTIAL_REFUSED = 5
 
 # ---- Known gen set (FR-AFF-1 snapshot; NR-G5 no rename) -----------------------
 
@@ -84,12 +90,24 @@ _ARTIFACT_TYPES: Dict[str, List[str]] = {
     GEN_SHRINK: ["dashboard_spec", "dashboard"],
 }
 
+# Single-sourced leg set for gen.complete_triplet (gap #4 FR-1 — Step 2).
+# Every completeness-deciding site (this module's `_triplet_legs_needed`,
+# `triplet_gate.py`) resolves the leg set from this symbol rather than
+# re-declaring its own copy.
+TRIPLET_LEGS: Tuple[str, ...] = tuple(_ARTIFACT_TYPES[GEN_COMPLETE_TRIPLET])
+
 
 class ActionOutcome(str, Enum):
     PLANNED = "planned"
     APPLIED = "applied"
     APPLIED_NO_CHANGE = "applied_no_change"
     SKIPPED = "skipped"
+    # gap #4 / FR-4: a needed leg's generator refused (e.g. "No alertable
+    # metrics found"). Distinct from APPLIED_NO_CHANGE (nothing was needed)
+    # and APPLIED (everything needed was written) — refusal must never be
+    # silently reported as either.
+    REFUSED = "refused"
+    PARTIALLY_APPLIED = "partially_applied"
 
 
 
@@ -185,6 +203,10 @@ class ActionPlanEntry:
     # artifact; None (default) means "not applicable" — distinguishes a
     # substantive refusal from render_unavailable (plan Step 3).
     render_available: Optional[bool] = None
+    # gap #4 / FR-4: leg -> verbatim generator error_message for every needed
+    # leg whose generator refused (status != "generated" or empty content).
+    # Populated only for GEN_COMPLETE_TRIPLET entries; None elsewhere.
+    leg_refusals: Optional[Dict[str, str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -768,6 +790,10 @@ def collect_source_provenance(load: LoadResult) -> List[str]:
 
 
 # Top-level keys required on every written affordance_actions.json (FR-B7).
+# schema_version 2 (gap #4 / FR-4): added the "refused" bucket + summary key
+# so a needed leg's generator refusal is a first-class, named record instead
+# of a discarded log line.
+SIDECAR_SCHEMA_VERSION = 2
 SIDECAR_REQUIRED_KEYS: frozenset = frozenset(
     {
         "schema_version",
@@ -780,6 +806,7 @@ SIDECAR_REQUIRED_KEYS: frozenset = frozenset(
         "planned",
         "applied",
         "applied_no_change",
+        "refused",
         "skipped",
         "written_paths",
     }
@@ -793,6 +820,7 @@ def build_affordance_actions_payload(
     applied: Sequence[ActionPlanEntry],
     applied_no_change: Sequence[ActionPlanEntry],
     skipped: Sequence[ActionPlanEntry],
+    refused: Sequence[ActionPlanEntry] = (),
     dry_run: bool = False,
     written_paths: Optional[Sequence[str]] = None,
     all_skipped: Optional[bool] = None,
@@ -804,9 +832,10 @@ def build_affordance_actions_payload(
             and not planned
             and not applied
             and not applied_no_change
+            and not refused
         )
     return {
-        "schema_version": 1,
+        "schema_version": SIDECAR_SCHEMA_VERSION,
         "dry_run": dry_run,
         "source_truncated": load.source_truncated,
         "source_shape": load.source_shape,
@@ -816,11 +845,13 @@ def build_affordance_actions_payload(
             "planned": len(planned),
             "applied": len(applied),
             "applied_no_change": len(applied_no_change),
+            "refused": len(refused),
             "skipped": len(skipped),
         },
         "planned": [e.to_dict() for e in planned],
         "applied": [e.to_dict() for e in applied],
         "applied_no_change": [e.to_dict() for e in applied_no_change],
+        "refused": [e.to_dict() for e in refused],
         "skipped": [e.to_dict() for e in skipped],
         "written_paths": list(written_paths or []),
     }
@@ -885,24 +916,48 @@ def merge_quality_services(
     return out
 
 
+# Artifact types that legitimately carry more than one manifest row per
+# service (gap #4 / P-B, R1-F2): the primary SLO (``slos/{svc}-slo.yaml``)
+# and the declared-base variant (``slos/{svc}-declared-base-slo.yaml``)
+# differ only by ``path``. A ``(type, service)`` upsert key silently collapses
+# them into one row, erasing the record that convention SLO was suppressed —
+# and is the mechanical route to substituting the declared-base variant for
+# the primary leg, which the requirements' Non-goals forbid. For every other
+# artifact type there is exactly one row per service, so ``(type, service)``
+# remains the identity — adding ``path`` there would let two rows survive
+# rename in place (a stale row followed by a renamed row) instead of one.
+_MULTI_PATH_ARTIFACT_TYPES: frozenset = frozenset({"slo_definition"})
+
+
+def _manifest_row_identity(
+    artifact_type: Any, service: Any, path: Any
+) -> Tuple[Any, ...]:
+    """Single-sourced upsert identity key (gap #4 FR-1/FR-7 — Step 2/6)."""
+    if artifact_type in _MULTI_PATH_ARTIFACT_TYPES:
+        return (artifact_type, service, path)
+    return (artifact_type, service)
+
+
 def merge_manifest_artifacts(
     prior: Mapping[str, Any],
     touched_artifacts: Sequence[Mapping[str, Any]],
     *,
     touched_service_ids: Iterable[str] = (),  # noqa: ARG001 — API compat only
 ) -> Dict[str, Any]:
-    """Upsert touched artifact rows by ``(type, service)``; keep siblings intact.
+    """Upsert touched artifact rows by identity key; keep siblings intact.
 
     Replacing *all* rows for a touched service (legacy behavior) wiped alert/SLO
     rows when only a dashboard was repaired — FR-B3a requires those to survive.
     ``touched_service_ids`` is retained for call-site compatibility but is not a
-    wipe key (upsert key is ``(type, service)``).
+    wipe key. The identity key is ``(type, service)`` for single-path artifact
+    types and ``(type, service, path)`` for :data:`_MULTI_PATH_ARTIFACT_TYPES`
+    (currently only ``slo_definition`` — see :func:`_manifest_row_identity`).
     """
     _ = touched_service_ids
     out: Dict[str, Any] = dict(prior)
     prior_arts = list(prior.get("artifacts") or [])
     replace_keys = {
-        (a.get("type"), a.get("service"))
+        _manifest_row_identity(a.get("type"), a.get("service"), a.get("path"))
         for a in touched_artifacts
         if isinstance(a, Mapping)
     }
@@ -911,7 +966,8 @@ def merge_manifest_artifacts(
         for a in prior_arts
         if not (
             isinstance(a, dict)
-            and (a.get("type"), a.get("service")) in replace_keys
+            and _manifest_row_identity(a.get("type"), a.get("service"), a.get("path"))
+            in replace_keys
         )
     ]
     out["artifacts"] = kept + [dict(a) for a in touched_artifacts]
@@ -1466,7 +1522,7 @@ def _triplet_legs_needed(
     service_id: str,
 ) -> Tuple[List[str], str]:
     """Return (legs_to_regen, reason). Absent quality → all three."""
-    all_legs = ["alert_rule", "dashboard_spec", "slo_definition"]
+    all_legs = list(TRIPLET_LEGS)
     quality = load_json_file(output_dir / "observability-quality.json")
     if quality is None:
         return list(all_legs), "leg_signal_unavailable"
@@ -2213,14 +2269,24 @@ def _apply_complete_triplet(
         ),
     }
     wrote_any = False
+    refused: Dict[str, str] = {}
     for leg in legs:
         art = gens[leg]()
         art = repair_and_validate(art, business, transport=service.transport)
-        if art.status == "generated" and art.content:
-            path = _write_one(output_dir, art)
-            if path:
-                result.written_paths.append(path)
-                wrote_any = True
+        path = (
+            _write_one(output_dir, art)
+            if art.status == "generated" and art.content
+            else None
+        )
+        if path:
+            result.written_paths.append(path)
+            wrote_any = True
+            # Quality/manifest rows must reflect only what actually landed on
+            # disk — recording them from `art` before confirming `path` would
+            # claim a leg "generated" while nothing was written (the same
+            # class of false-completeness this unit closes for generator
+            # refusals; `_confined_dest` can refuse a path independently of
+            # generator status).
             result.quality_touched.setdefault(service.service_id, {})[
                 leg
             ] = _artifact_quality_block(art)
@@ -2245,22 +2311,64 @@ def _apply_complete_triplet(
                         p = _write_one(output_dir, decl)
                         if p:
                             result.written_paths.append(p)
+                        # Record the declared-base row too (P-B / FR-7): it
+                        # carries a *different* path than the primary SLO row
+                        # and the manifest-merge identity key must keep both.
+                        result.manifest_touched.append(
+                            {
+                                "type": decl.artifact_type,
+                                "service": decl.service_id,
+                                "path": decl.output_path,
+                                "status": decl.status,
+                                "quality_score": (decl.quality or {}).get(
+                                    "score"
+                                ),
+                            }
+                        )
                 except Exception:  # noqa: BLE001
                     logger.exception(
                         "declared_base_slos failed for %s", service.service_id
                     )
         else:
+            # FR-4: route the verbatim refusal reason into the sidecar
+            # instead of discarding it into a log line. A refused needed leg
+            # must never be reported as applied_no_change (nothing needed)
+            # or applied (everything needed landed) — see outcome stamp below.
+            # Two distinct refusal sources land here: the generator itself
+            # refused (status != "generated" / empty content), or the
+            # generator produced content but `_write_one` refused the
+            # destination path (escape guard) — both are "nothing landed",
+            # neither may be silently folded into applied_no_change.
+            if art.status == "generated" and art.content:
+                reason = "write_refused:path_escape_or_confinement"
+            else:
+                reason = getattr(art, "error_message", None) or "generator_refused"
+            refused[leg] = reason
             logger.warning(
-                "triplet leg %s for %s not generated: %s",
+                "triplet leg %s for %s refused: %s",
                 leg,
                 service.service_id,
-                getattr(art, "error_message", None),
+                reason,
             )
+    if refused:
+        entry.leg_refusals = refused
     if wrote_any:
         result.touched_service_ids.append(service.service_id)
+    if refused and wrote_any:
+        entry.outcome = ActionOutcome.PARTIALLY_APPLIED
+    elif refused:
+        entry.outcome = ActionOutcome.REFUSED
+    elif wrote_any:
         entry.outcome = ActionOutcome.APPLIED
     else:
-        entry.outcome = ActionOutcome.APPLIED_NO_CHANGE
+        # Reachable only if `legs` were non-empty yet the loop recorded
+        # neither a write nor a refusal for any of them — defensive
+        # fallback; kept explicit rather than defaulting to the silent
+        # applied_no_change stamp this unit exists to remove.
+        entry.outcome = ActionOutcome.REFUSED
+        entry.leg_refusals = entry.leg_refusals or {
+            leg: "no_outcome_recorded" for leg in legs
+        }
     result.entries.append(entry)
 
 
@@ -2458,6 +2566,11 @@ def write_apply_actions_report(
     no_change = [
         e for e in apply.entries if e.outcome == ActionOutcome.APPLIED_NO_CHANGE
     ]
+    refused = [
+        e
+        for e in apply.entries
+        if e.outcome in (ActionOutcome.REFUSED, ActionOutcome.PARTIALLY_APPLIED)
+    ]
     skipped = [
         e for e in apply.entries if e.outcome == ActionOutcome.SKIPPED
     ]
@@ -2466,12 +2579,14 @@ def write_apply_actions_report(
         planned=planned,
         applied=applied,
         applied_no_change=no_change,
+        refused=refused,
         skipped=skipped,
         dry_run=False,
         written_paths=apply.written_paths,
         all_skipped=bool(apply.entries)
         and not applied
         and not no_change
+        and not refused
         and not planned,
     )
     dest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -2479,7 +2594,7 @@ def write_apply_actions_report(
 
 
 def exit_code_for_apply(load: LoadResult, apply: ApplyResult) -> int:
-    """Exit codes after apply (FR-B1)."""
+    """Exit codes after apply (FR-B1; FR-4 adds the refusal-aware codes)."""
     if load.error:
         return EXIT_MALFORMED
     if not load.entries:
@@ -2490,6 +2605,15 @@ def exit_code_for_apply(load: LoadResult, apply: ApplyResult) -> int:
         if e.outcome
         in (ActionOutcome.APPLIED, ActionOutcome.APPLIED_NO_CHANGE)
     ]
+    refused_like = [
+        e
+        for e in apply.entries
+        if e.outcome in (ActionOutcome.REFUSED, ActionOutcome.PARTIALLY_APPLIED)
+    ]
+    if refused_like and not applied_like:
+        return EXIT_ALL_REFUSED
+    if refused_like and applied_like:
+        return EXIT_PARTIAL_REFUSED
     if applied_like:
         return EXIT_OK
     # Only skips (or empty) after a non-empty map
@@ -2502,6 +2626,8 @@ __all__ = [
     "EXIT_OK",
     "EXIT_MALFORMED",
     "EXIT_ALL_SKIPPED",
+    "EXIT_ALL_REFUSED",
+    "EXIT_PARTIAL_REFUSED",
     "KNOWN_GEN_AFFORDANCES",
     "LIVE_GEN",
     "ADVISORY_GEN",
@@ -2511,6 +2637,7 @@ __all__ = [
     "GEN_COMPLETE_TRIPLET",
     "GEN_SHRINK",
     "GEN_ENRICH_RUNBOOK",
+    "TRIPLET_LEGS",
     "ActionOutcome",
     "AffordanceMapEntry",
     "ActionPlanEntry",
@@ -2532,6 +2659,7 @@ __all__ = [
     "content_hash",
     "collect_source_provenance",
     "SIDECAR_REQUIRED_KEYS",
+    "SIDECAR_SCHEMA_VERSION",
     "build_affordance_actions_payload",
     "write_affordance_actions_report",
     "write_apply_actions_report",

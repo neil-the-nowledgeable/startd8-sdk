@@ -1492,3 +1492,397 @@ class TestPickRedFamiliesDistinctness:
                 assert not dur.endswith("_timestamp_seconds"), f"{svc}: dur={dur}"
             picks = [x for x in (rate, err, dur) if x]
             assert len(picks) == len(set(picks)), f"{svc}: duplicate family across panels"
+
+
+# ---- gap #4 (triplet completeness): refused-leg sidecar honesty ------------
+# FR-4: a needed leg's generator refusal must land as a named sidecar record
+# (verbatim error_message), never a silent applied_no_change / applied.
+
+from startd8.observability.affordance_map_consume import (  # noqa: E402
+    EXIT_ALL_REFUSED,
+    EXIT_PARTIAL_REFUSED,
+    GEN_COMPLETE_TRIPLET,
+    SIDECAR_SCHEMA_VERSION,
+    TRIPLET_LEGS,
+    ActionPlanEntry,
+    ApplyResult,
+    LoadResult,
+    _apply_complete_triplet,
+    _manifest_row_identity,
+    build_affordance_actions_payload,
+)
+from startd8.observability.artifact_generator_models import ArtifactResult  # noqa: E402
+
+
+def _refusing_gen(artifact_type: str, path: str, message: str = "No alertable metrics found"):
+    def _gen(service, business, descriptor):  # noqa: ARG001
+        return ArtifactResult(
+            artifact_type=artifact_type,
+            service_id=service.service_id,
+            output_path=path,
+            status="skipped",
+            error_message=message,
+        )
+
+    return _gen
+
+
+def _writing_gen(artifact_type: str, path: str, content: str = "ok: true\n"):
+    def _gen(service, business, descriptor):  # noqa: ARG001
+        return ArtifactResult(
+            artifact_type=artifact_type,
+            service_id=service.service_id,
+            output_path=path,
+            status="generated",
+            content=content,
+            quality={"score": 1.0, "checks_passed": 1, "checks_total": 1},
+        )
+
+    return _gen
+
+
+def _identity_repair(art, business, transport=None):  # noqa: ARG001
+    return art
+
+
+def _new_entry(service_id: str = "store") -> ActionPlanEntry:
+    return ActionPlanEntry(
+        service_id=service_id,
+        affordance_id=GEN_COMPLETE_TRIPLET,
+        artifact_types=list(TRIPLET_LEGS),
+        reason="gap:triplet_incomplete",
+    )
+
+
+class TestApplyCompleteTripletRefusal:
+    def test_all_refused_never_applied_no_change_or_applied(self, tmp_path):
+        svc = _grpc_service("store")
+        biz = BusinessContext()
+        entry = _new_entry()
+        result = ApplyResult(entries=[])
+        _apply_complete_triplet(
+            entry,
+            service=svc,
+            business=biz,
+            descriptor=None,
+            output_dir=tmp_path,
+            result=result,
+            generate_alert_rules=_refusing_gen(
+                "alert_rule", "alerts/store-alerts.yaml"
+            ),
+            generate_dashboard_spec=_refusing_gen(
+                "dashboard_spec", "dashboards/store-dashboard-spec.yaml"
+            ),
+            generate_slo_definitions=_refusing_gen(
+                "slo_definition", "slos/store-slo.yaml", "no bound series"
+            ),
+            generate_declared_base_slos=_refusing_gen(
+                "slo_definition", "slos/store-declared-base-slo.yaml"
+            ),
+            repair_and_validate=_identity_repair,
+        )
+        assert entry.outcome not in (
+            ActionOutcome.APPLIED,
+            ActionOutcome.APPLIED_NO_CHANGE,
+        )
+        assert entry.outcome == ActionOutcome.REFUSED
+        assert entry.leg_refusals == {
+            "alert_rule": "No alertable metrics found",
+            "dashboard_spec": "No alertable metrics found",
+            "slo_definition": "no bound series",
+        }
+        assert not result.written_paths
+        assert not result.touched_service_ids
+
+    def test_path_escape_write_refusal_is_refused_not_applied_no_change(
+        self, tmp_path
+    ):
+        """PICR: a generator that 'succeeds' but whose output_path escapes
+        the confinement guard (_write_one -> None) must be treated as a
+        refusal too — recording quality/manifest for a file that was never
+        written would itself be a false-completeness claim."""
+        svc = _grpc_service("store")
+        biz = BusinessContext()
+        entry = _new_entry()
+        result = ApplyResult(entries=[])
+        _apply_complete_triplet(
+            entry,
+            service=svc,
+            business=biz,
+            descriptor=None,
+            output_dir=tmp_path,
+            result=result,
+            generate_alert_rules=_writing_gen(
+                "alert_rule", "../escape-alerts.yaml"
+            ),
+            generate_dashboard_spec=_writing_gen(
+                "dashboard_spec", "dashboards/store-dashboard-spec.yaml"
+            ),
+            generate_slo_definitions=_writing_gen(
+                "slo_definition", "slos/store-slo.yaml"
+            ),
+            generate_declared_base_slos=_writing_gen(
+                "slo_definition", "slos/store-declared-base-slo.yaml"
+            ),
+            repair_and_validate=_identity_repair,
+        )
+        assert entry.outcome == ActionOutcome.PARTIALLY_APPLIED
+        assert "alert_rule" in entry.leg_refusals
+        assert not any(
+            m["type"] == "alert_rule" for m in result.manifest_touched
+        )
+        assert "alert_rule" not in result.quality_touched.get("store", {})
+
+    def test_partial_refusal_is_neither_applied_nor_no_change(self, tmp_path):
+        svc = _grpc_service("store")
+        biz = BusinessContext()
+        entry = _new_entry()
+        result = ApplyResult(entries=[])
+        _apply_complete_triplet(
+            entry,
+            service=svc,
+            business=biz,
+            descriptor=None,
+            output_dir=tmp_path,
+            result=result,
+            generate_alert_rules=_refusing_gen(
+                "alert_rule", "alerts/store-alerts.yaml"
+            ),
+            generate_dashboard_spec=_writing_gen(
+                "dashboard_spec", "dashboards/store-dashboard-spec.yaml"
+            ),
+            generate_slo_definitions=_refusing_gen(
+                "slo_definition", "slos/store-slo.yaml"
+            ),
+            generate_declared_base_slos=_refusing_gen(
+                "slo_definition", "slos/store-declared-base-slo.yaml"
+            ),
+            repair_and_validate=_identity_repair,
+        )
+        assert entry.outcome == ActionOutcome.PARTIALLY_APPLIED
+        assert entry.leg_refusals == {
+            "alert_rule": "No alertable metrics found",
+            "slo_definition": "No alertable metrics found",
+        }
+        assert result.written_paths == ["dashboards/store-dashboard-spec.yaml"]
+
+    def test_fully_complete_still_applied_no_change_when_no_legs_needed(self, tmp_path):
+        """legs_already_complete path (no refusal) is unaffected by FR-4."""
+        quality = {
+            "services": {
+                "store": {
+                    leg: {"score": 1.0, "checks_passed": 1, "checks_total": 1}
+                    for leg in TRIPLET_LEGS
+                }
+            }
+        }
+        (tmp_path / "observability-quality.json").write_text(
+            json.dumps(quality), encoding="utf-8"
+        )
+        svc = _grpc_service("store")
+        biz = BusinessContext()
+        entry = _new_entry()
+        result = ApplyResult(entries=[])
+        _apply_complete_triplet(
+            entry,
+            service=svc,
+            business=biz,
+            descriptor=None,
+            output_dir=tmp_path,
+            result=result,
+            generate_alert_rules=_refusing_gen(
+                "alert_rule", "alerts/store-alerts.yaml"
+            ),
+            generate_dashboard_spec=_refusing_gen(
+                "dashboard_spec", "dashboards/store-dashboard-spec.yaml"
+            ),
+            generate_slo_definitions=_refusing_gen(
+                "slo_definition", "slos/store-slo.yaml"
+            ),
+            generate_declared_base_slos=_refusing_gen(
+                "slo_definition", "slos/store-declared-base-slo.yaml"
+            ),
+            repair_and_validate=_identity_repair,
+        )
+        assert entry.legs == []
+        assert entry.outcome == ActionOutcome.APPLIED_NO_CHANGE
+        assert entry.leg_refusals is None
+
+    def test_declared_base_slo_write_recorded_in_manifest_touched(self, tmp_path):
+        """Identity key (P-B/FR-7): the declared-base write must be recorded
+        so its manifest row is upserted by its own path, not silently
+        dropped from the authoritative manifest."""
+        svc = _grpc_service("store")
+        biz = BusinessContext()
+        entry = _new_entry()
+        result = ApplyResult(entries=[])
+        _apply_complete_triplet(
+            entry,
+            service=svc,
+            business=biz,
+            descriptor=None,
+            output_dir=tmp_path,
+            result=result,
+            generate_alert_rules=_writing_gen(
+                "alert_rule", "alerts/store-alerts.yaml"
+            ),
+            generate_dashboard_spec=_writing_gen(
+                "dashboard_spec", "dashboards/store-dashboard-spec.yaml"
+            ),
+            generate_slo_definitions=_writing_gen(
+                "slo_definition", "slos/store-slo.yaml"
+            ),
+            generate_declared_base_slos=_writing_gen(
+                "slo_definition", "slos/store-declared-base-slo.yaml"
+            ),
+            repair_and_validate=_identity_repair,
+        )
+        assert entry.outcome == ActionOutcome.APPLIED
+        paths = {m["path"] for m in result.manifest_touched}
+        assert "slos/store-slo.yaml" in paths
+        assert "slos/store-declared-base-slo.yaml" in paths
+
+
+class TestManifestRowIdentity:
+    def test_slo_rows_keyed_by_path_survive_together(self):
+        prior = {"artifacts": []}
+        touched = [
+            {
+                "type": "slo_definition",
+                "service": "store",
+                "path": "slos/store-slo.yaml",
+                "status": "generated",
+            },
+            {
+                "type": "slo_definition",
+                "service": "store",
+                "path": "slos/store-declared-base-slo.yaml",
+                "status": "generated",
+            },
+        ]
+        merged = merge_manifest_artifacts(prior, touched)
+        rows = [
+            a
+            for a in merged["artifacts"]
+            if a["service"] == "store" and a["type"] == "slo_definition"
+        ]
+        assert len(rows) == 2
+        assert {r["path"] for r in rows} == {
+            "slos/store-slo.yaml",
+            "slos/store-declared-base-slo.yaml",
+        }
+
+    def test_re_upsert_of_same_slo_path_replaces_only_that_row(self):
+        prior = {
+            "artifacts": [
+                {
+                    "type": "slo_definition",
+                    "service": "store",
+                    "path": "slos/store-slo.yaml",
+                    "status": "skipped",
+                },
+                {
+                    "type": "slo_definition",
+                    "service": "store",
+                    "path": "slos/store-declared-base-slo.yaml",
+                    "status": "generated",
+                },
+            ]
+        }
+        touched = [
+            {
+                "type": "slo_definition",
+                "service": "store",
+                "path": "slos/store-slo.yaml",
+                "status": "generated",
+            }
+        ]
+        merged = merge_manifest_artifacts(prior, touched)
+        rows = {
+            a["path"]: a["status"]
+            for a in merged["artifacts"]
+            if a["service"] == "store" and a["type"] == "slo_definition"
+        }
+        assert rows == {
+            "slos/store-slo.yaml": "generated",
+            "slos/store-declared-base-slo.yaml": "generated",
+        }
+
+    def test_single_path_type_key_unaffected(self):
+        assert _manifest_row_identity("dashboard_spec", "store", "x") == (
+            "dashboard_spec",
+            "store",
+        )
+        assert _manifest_row_identity("slo_definition", "store", "x") == (
+            "slo_definition",
+            "store",
+            "x",
+        )
+
+
+class TestSidecarRefusedBucket:
+    def test_schema_version_bumped_and_refused_key_present(self):
+        payload = build_affordance_actions_payload(
+            load=LoadResult(entries=[]),
+            planned=[],
+            applied=[],
+            applied_no_change=[],
+            skipped=[],
+            refused=[],
+        )
+        assert payload["schema_version"] == SIDECAR_SCHEMA_VERSION
+        assert SIDECAR_SCHEMA_VERSION >= 2
+        assert SIDECAR_REQUIRED_KEYS <= set(payload.keys())
+        assert payload["summary"]["refused"] == 0
+        assert payload["refused"] == []
+
+    def test_refused_entries_carry_leg_refusals_verbatim(self):
+        entry = _new_entry()
+        entry.leg_refusals = {"alert_rule": "No alertable metrics found"}
+        entry.outcome = ActionOutcome.REFUSED
+        payload = build_affordance_actions_payload(
+            load=LoadResult(entries=[]),
+            planned=[],
+            applied=[],
+            applied_no_change=[],
+            skipped=[],
+            refused=[entry],
+        )
+        assert payload["summary"]["refused"] == 1
+        assert payload["refused"][0]["leg_refusals"] == {
+            "alert_rule": "No alertable metrics found"
+        }
+        assert payload["all_skipped"] is False
+
+
+class TestExitCodesRefusal:
+    def _load(self) -> LoadResult:
+        return LoadResult(
+            entries=[
+                AffordanceMapEntry(
+                    element_id="store",
+                    gap_code="triplet_incomplete",
+                    affordance_ids=[GEN_COMPLETE_TRIPLET],
+                )
+            ]
+        )
+
+    def test_all_refused_exit_code(self):
+        entry = _new_entry()
+        entry.outcome = ActionOutcome.REFUSED
+        apply = ApplyResult(entries=[entry])
+        assert exit_code_for_apply(self._load(), apply) == EXIT_ALL_REFUSED
+
+    def test_partial_refused_exit_code(self):
+        applied_entry = _new_entry("query")
+        applied_entry.outcome = ActionOutcome.APPLIED
+        refused_entry = _new_entry("store")
+        refused_entry.outcome = ActionOutcome.REFUSED
+        apply = ApplyResult(entries=[applied_entry, refused_entry])
+        assert exit_code_for_apply(self._load(), apply) == EXIT_PARTIAL_REFUSED
+
+    def test_clean_apply_still_exit_ok(self):
+        entry = _new_entry()
+        entry.outcome = ActionOutcome.APPLIED
+        apply = ApplyResult(entries=[entry])
+        assert exit_code_for_apply(self._load(), apply) == EXIT_OK
