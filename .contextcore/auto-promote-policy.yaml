@@ -25,6 +25,7 @@ expires_at: "2026-12-31T23:59:59Z"
 allowed_path_globs:
   - "src/startd8/observability/**"
   - "src/startd8/verification/**"
+  - "scripts/**"
   - "tests/**"
   - "docs/**"
   - ".contextcore/**"
