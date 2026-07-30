@@ -367,6 +367,9 @@ class GenerationReport:
     # no kind/transport), `unfulfilled` (declared signal_kind, ungroundable ⇒ produced=0),
     # `emitted` (FR ids that produced an artifact). Empty when no functional[] (pre-#226).
     fr_coverage: Dict[str, Any] = field(default_factory=dict)
+    # product-gap metric-coverage evaluator union (Step 1): per-service expected-set
+    # provenance + AffordanceMap disposition (dry-run and non-dry share this shape).
+    metric_expected: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

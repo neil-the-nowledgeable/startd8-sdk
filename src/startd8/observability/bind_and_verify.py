@@ -155,7 +155,12 @@ def _default_export(manifest_path: Path, output_dir: Path, export_cmd: List[str]
 
 
 def _default_generate(onboarding: Path, artifacts_dir: Path, manifest_path: Path) -> Dict[str, Any]:
-    """Call the canonical generator and summarize its report."""
+    """Call the canonical generator and summarize its report.
+
+    Declared no-export caller (product-gap Step 1): does not thread an AffordanceMap
+    export into ``generate_observability_artifacts`` — expected-set widening uses
+    convention ∪ declared ∪ ``declared_emitted_series`` only.
+    """
     from .artifact_generator import generate_observability_artifacts
 
     report = generate_observability_artifacts(

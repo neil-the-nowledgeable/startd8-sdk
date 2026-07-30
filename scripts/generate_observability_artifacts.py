@@ -256,6 +256,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--affordance-map-export",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Optional AffordanceMap JSON used ONLY to widen the metric-coverage "
+            "expected set (product-gap Step 1 evaluator union). Does not enable "
+            "repair mode; may be combined with full-tree generate."
+        ),
+    )
+    parser.add_argument(
         "--needed-where",
         default=None,
         metavar="PATH",
@@ -305,6 +315,10 @@ def main() -> int:
     if args.check:
         return check_drift(onboarding, output, manifest)
 
+    affordance_export = (
+        Path(args.affordance_map_export) if args.affordance_map_export else None
+    )
+
     # Handle --portal-persona all: generate one run per persona
     if args.portal and args.portal_persona == "all":
         # Generate base artifacts once, then add each persona portal
@@ -316,6 +330,7 @@ def main() -> int:
             dry_run=args.dry_run,
             portal=False,  # We'll generate portals individually below
             dashboard_provision_url=args.provision,
+            affordance_map=affordance_export,
         )
         for persona in ("operator", "engineer", "manager"):
             from startd8.observability.artifact_generator import _generate_portal_artifact
@@ -350,6 +365,7 @@ def main() -> int:
             portal_persona=args.portal_persona,
             portal_provision_url=args.portal_provision,
             dashboard_provision_url=args.provision,
+            affordance_map=affordance_export,
         )
 
     # Print summary

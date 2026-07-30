@@ -848,6 +848,158 @@ class TestMetricCoverageInQualityReport:
         assert "avg_metric_coverage_alerted" in quality["aggregate"]
 
 
+class TestEvaluatorExpectedSetUnion:
+    """product-gap_0_metric_coverage_evaluator_union — Step 1 FR-1..FR-5."""
+
+    def test_build_unions_declared_emitted_series_excludes_span(self):
+        from startd8.observability.artifact_generator import build_service_metrics_expected
+        from startd8.observability.artifact_generator_models import (
+            ConventionMetric,
+            DeclaredEmittedSeries,
+            DeclaredSpanSignal,
+            ServiceHints,
+        )
+
+        svc = ServiceHints(
+            service_id="receive",
+            transport="grpc",
+            convention_metrics=[],
+            declared_metrics=[],
+            declared_emitted_series=[
+                DeclaredEmittedSeries(name="thanos_receive_write_timeseries", type="gauge"),
+            ],
+            declared_span_signals=[
+                DeclaredSpanSignal(name="Receive.Write", covers=["write"]),
+            ],
+        )
+        built = build_service_metrics_expected([svc])
+        assert built["service_metrics"]["receive"] == {"thanos_receive_write_timeseries"}
+        src = built["expected_sources"]["receive"]
+        assert src["emitted_series"] == 1
+        assert src["convention"] == 0
+        assert src["declared"] == 0
+        assert src["affordance_loci"] == 0
+        assert src["expected_raw_union"] == 1
+        assert built["export_disposition"] == "no_export"
+
+    def test_build_admits_source_backed_affordance_loci_exact_id(self):
+        from startd8.observability.artifact_generator import build_service_metrics_expected
+        from startd8.observability.artifact_generator_models import ServiceHints
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        svc = ServiceHints(service_id="store", transport="grpc")
+        entry = AffordanceMapEntry(
+            element_id="store",
+            locus_status="source_backed",
+            source_loci=[
+                {"family_or_signal": "thanos_objstore_bucket_operations_total", "signal_kind": "metric"},
+            ],
+        )
+        orphan = AffordanceMapEntry(
+            element_id="not-a-hint",
+            locus_status="source_backed",
+            source_loci=[{"family_or_signal": "orphan_metric", "signal_kind": "metric"}],
+        )
+        other = ServiceHints(service_id="compact", transport="grpc")
+        built = build_service_metrics_expected(
+            [svc, other], affordance_map=[entry, orphan]
+        )
+        assert "thanos_objstore_bucket_operations_total" in built["service_metrics"]["store"]
+        assert built["service_metrics"]["compact"] == set()  # multi-svc isolation
+        assert built["expected_sources"]["store"]["affordance_loci"] == 1
+        assert built["export_disposition"] == "fresh_export"
+        assert built["diagnostics"]["orphan_element_ids"] == ["not-a-hint"]
+        assert built["diagnostics"]["hint_only_services"] == ["compact"]
+
+    def test_build_malformed_export_fail_closed(self):
+        from startd8.observability.artifact_generator import build_service_metrics_expected
+        from startd8.observability.artifact_generator_models import ServiceHints
+
+        svc = ServiceHints(service_id="store", transport="grpc")
+        built = build_service_metrics_expected([svc], affordance_map={"nope": True})
+        assert built["export_disposition"] == "malformed_export"
+        assert built["service_metrics"]["store"] == set()
+
+    def test_emitted_series_raises_human_coverage_orientation(self, tmp_path, manifest_yaml):
+        """Orientation-aware: emitted series + dashboard panel → human > 0; system/bridge stay 0."""
+        meta = {
+            "project_id": "thanos-pilot",
+            "instrumentation_hints": {
+                "receive": {
+                    "service_id": "receive",
+                    "transport": "grpc",
+                    "language": "go",
+                    "metrics": {
+                        "convention_based": [],
+                        "manifest_declared": [],
+                        "declared_emitted_series": [
+                            {
+                                "name": "thanos_receive_write_timeseries",
+                                "type": "gauge",
+                                # FR-5: extractor needs name + `{`/`[`/`(` — bare max(name) misses.
+                                "labels": {"job": "receive"},
+                            }
+                        ],
+                    },
+                },
+            },
+        }
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(meta))
+        output = tmp_path / "observability"
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=output,
+            manifest_path=manifest_yaml,
+        )
+        assert "thanos_receive_write_timeseries" in (
+            report.metric_expected.get("service_metrics") or {}
+        ).get("receive", [])
+        quality = json.loads((output / "observability-quality.json").read_text())
+        svc = quality["services"]["receive"]
+        assert svc.get("expected_sources", {}).get("emitted_series") == 1
+        # Shared denominator across orientations.
+        assert "expected_count" in svc
+        # Human axis sees OBSERVE panel for the gauge; system/bridge typically empty.
+        assert svc["metric_coverage_human"] > 0.0
+        assert svc["metric_coverage_system"] == 0.0
+        assert svc["metric_coverage_bridge"] == 0.0
+        assert svc["metric_coverage_human"] == svc["metric_coverage_dashboarded"]
+
+    def test_dry_run_metric_expected_matches_shape(self, tmp_path, manifest_yaml):
+        meta = {
+            "project_id": "thanos-pilot",
+            "instrumentation_hints": {
+                "receive": {
+                    "service_id": "receive",
+                    "transport": "grpc",
+                    "metrics": {
+                        "declared_emitted_series": [
+                            {"name": "thanos_receive_write_timeseries", "type": "gauge"}
+                        ],
+                    },
+                },
+            },
+        }
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(meta))
+        dry = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "out-dry",
+            manifest_path=manifest_yaml,
+            dry_run=True,
+        )
+        wet = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "out-wet",
+            manifest_path=manifest_yaml,
+            dry_run=False,
+        )
+        assert dry.metric_expected["export_disposition"] == wet.metric_expected["export_disposition"]
+        assert dry.metric_expected["service_metrics"] == wet.metric_expected["service_metrics"]
+        assert dry.metric_expected["expected_sources"] == wet.metric_expected["expected_sources"]
+
+
 # ---------------------------------------------------------------------------
 # Increment 3: RED completeness (gridPos, runbook_url, DB latency)
 # ---------------------------------------------------------------------------

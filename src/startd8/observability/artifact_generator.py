@@ -530,6 +530,129 @@ def _generate_portal_artifact(
 # ---------------------------------------------------------------------------
 
 
+#: AffordanceMap export dispositions for the expected-set union (FR-2 / FR-4).
+_EXPORT_NO = "no_export"
+_EXPORT_FRESH_ZERO = "fresh_export_zero_metric_loci"
+_EXPORT_STALE = "stale_or_mismatched_export"
+_EXPORT_MALFORMED = "malformed_export"
+_EXPORT_OK = "fresh_export"
+
+
+def _admit_affordance_metric_families(
+    services: List[Any],
+    affordance_map: Any,
+) -> Tuple[Dict[str, Set[str]], str, Dict[str, Any]]:
+    """Admit AffordanceMap metric loci into per-service family sets (FR-2/FR-3).
+
+    Exact ``element_id == service_id`` join only (no prefix/stack-default). Entry-level
+    ``locus_status == "source_backed"`` then ``metric_loci``; fail-closed on load error
+    or history truncation. Returns ``(per_service_families, disposition, diagnostics)``.
+    """
+    empty: Dict[str, Set[str]] = {s.service_id: set() for s in services}
+    diag: Dict[str, Any] = {
+        "orphan_element_ids": [],
+        "hint_only_services": [],
+        "artifact_only_services": sorted(s.service_id for s in services),
+    }
+    if affordance_map is None:
+        return empty, _EXPORT_NO, diag
+
+    from .affordance_map_consume import (
+        AffordanceMapEntry,
+        LoadResult,
+        load_affordance_map,
+        metric_loci,
+    )
+
+    loaded: LoadResult
+    if isinstance(affordance_map, LoadResult):
+        loaded = affordance_map
+    elif isinstance(affordance_map, (tuple, list)) and affordance_map and all(
+        isinstance(x, AffordanceMapEntry) for x in affordance_map
+    ):
+        # Entry objects first — a bare list also matches load_affordance_map's JSON shape.
+        loaded = LoadResult(entries=list(affordance_map))
+    elif isinstance(affordance_map, (str, Path, dict, list)):
+        loaded = load_affordance_map(affordance_map)
+    else:
+        return empty, _EXPORT_MALFORMED, {**diag, "error": f"unsupported type {type(affordance_map)!r}"}
+
+    if loaded.error:
+        return empty, _EXPORT_MALFORMED, {**diag, "error": loaded.error}
+    if loaded.source_truncated:
+        return empty, _EXPORT_STALE, {**diag, "error": "source_truncated"}
+
+    known = {s.service_id for s in services}
+    per: Dict[str, Set[str]] = {sid: set() for sid in known}
+    orphans: List[str] = []
+    admitted = 0
+    for entry in loaded.entries:
+        eid = entry.element_id or ""
+        if eid not in known:
+            if eid:
+                orphans.append(eid)
+            continue
+        if entry.locus_status != "source_backed":
+            continue
+        for row in metric_loci(entry):
+            fam = str(row.get("family_or_signal") or "").strip()
+            if fam:
+                per[eid].add(fam)
+                admitted += 1
+
+    diag["orphan_element_ids"] = sorted(set(orphans))
+    map_touched = {sid for sid, fams in per.items() if fams}
+    # hint-only: ServiceHints present, no admitted map loci for that id.
+    # artifact-only: reserved for quality-report universe (unknown here) — empty.
+    diag["hint_only_services"] = sorted(known - map_touched)
+    diag["artifact_only_services"] = []
+    if admitted == 0:
+        return per, _EXPORT_FRESH_ZERO, diag
+    return per, _EXPORT_OK, diag
+
+
+def build_service_metrics_expected(
+    services: List[Any],
+    *,
+    affordance_map: Any = None,
+) -> Dict[str, Any]:
+    """Build per-service expected metric sets + ``expected_sources`` (FR-1..FR-4).
+
+    Union = convention ∪ declared ∪ ``declared_emitted_series`` ∪ admitted AffordanceMap
+    metric families. Never unions ``declared_span_signals``. Span/convention/declared counts
+    are pre-union source sizes (FR-4).
+    """
+    map_families, disposition, map_diag = _admit_affordance_metric_families(
+        services, affordance_map
+    )
+    service_metrics: Dict[str, Set[str]] = {}
+    expected_sources: Dict[str, Dict[str, Any]] = {}
+    for svc in services:
+        convention = {m.name for m in (svc.convention_metrics or ()) if getattr(m, "name", None)}
+        declared = {m.name for m in (svc.declared_metrics or ()) if getattr(m, "name", None)}
+        emitted = {
+            s.name
+            for s in (getattr(svc, "declared_emitted_series", None) or ())
+            if getattr(s, "name", None)
+        }
+        afford = set(map_families.get(svc.service_id) or ())
+        union = set(convention) | set(declared) | set(emitted) | set(afford)
+        service_metrics[svc.service_id] = union
+        expected_sources[svc.service_id] = {
+            "convention": len(convention),
+            "declared": len(declared),
+            "emitted_series": len(emitted),
+            "affordance_loci": len(afford),
+            "expected_raw_union": len(union),
+        }
+    return {
+        "service_metrics": service_metrics,
+        "expected_sources": expected_sources,
+        "export_disposition": disposition,
+        "diagnostics": map_diag,
+    }
+
+
 def generate_observability_artifacts(
     onboarding_metadata_path: Path,
     output_dir: Path,
@@ -541,6 +664,7 @@ def generate_observability_artifacts(
     dashboard_provision_url: Optional[str] = None,
     observability_yaml_path: Optional[Path] = None,
     portal_coverage: Optional[Dict[str, Any]] = None,
+    affordance_map: Any = None,
 ) -> GenerationReport:
     """Top-level orchestrator.
 
@@ -947,18 +1071,31 @@ def generate_observability_artifacts(
     # After scoring (quality exists) and stamping (axes exist), before the report write.
     _apply_orientation_scoring(report)
 
+    # Gap 3 / Closure 2 + product-gap evaluator union (Step 1): expected metric set
+    # per service drives semantic metric-coverage. Computed for dry_run too so
+    # report.metric_expected matches non-dry for the same inputs (FR-4).
+    expected_build = build_service_metrics_expected(
+        services, affordance_map=affordance_map
+    )
+    service_metrics: Dict[str, Set[str]] = expected_build["service_metrics"]
+    report.metric_expected = {
+        "expected_sources": expected_build["expected_sources"],
+        "export_disposition": expected_build["export_disposition"],
+        "diagnostics": expected_build["diagnostics"],
+        "service_metrics": {
+            sid: sorted(names) for sid, names in service_metrics.items()
+        },
+    }
+
     if not dry_run:
-        # Gap 3 / Closure 2: expected metric set per service (declared + convention)
-        # drives the semantic metric-coverage score in the quality report.
-        service_metrics: Dict[str, Set[str]] = {
-            s.service_id: {m.name for m in s.convention_metrics}
-            | {m.name for m in s.declared_metrics}
-            for s in services
-        }
         _write_artifacts(report.artifacts, output_dir)
         _write_index(report, business, onboarding_metadata_path, output_dir)
         _write_quality_report(
-            report.artifacts, output_dir, service_metrics=service_metrics
+            report.artifacts,
+            output_dir,
+            service_metrics=service_metrics,
+            expected_sources=expected_build["expected_sources"],
+            export_disposition=expected_build["export_disposition"],
         )
 
     return report
@@ -1545,6 +1682,8 @@ def _write_quality_report(
     artifacts: List[ArtifactResult],
     output_dir: Path,
     service_metrics: Optional[Dict[str, Set[str]]] = None,
+    expected_sources: Optional[Dict[str, Dict[str, Any]]] = None,
+    export_disposition: str = "",
 ) -> None:
     """Write standalone observability-quality.json (REQ-KZ-OBS-730b).
 
@@ -1619,25 +1758,37 @@ def _write_quality_report(
         ):
             expected = service_metrics[svc_id]
             # human: referenced by a live dashboard panel.
-            cov_human = compute_metric_coverage(
+            cov_human_r = compute_metric_coverage(
                 expected, svc_human_contents.get(svc_id, [])
-            ).score
-            # system: defined as a system artifact (SLO SLI / recording rule).
-            cov_system = compute_metric_coverage(
+            )
+            cov_system_r = compute_metric_coverage(
                 expected, svc_system_contents.get(svc_id, [])
-            ).score
-            # bridge: referenced by an active (non-commented) alert / notification.
-            # extract_referenced_metrics strips comment lines, so the domain-alert
-            # TODO stubs do NOT count here — only metrics with a live alert do.
-            cov_bridge = compute_metric_coverage(
+            )
+            cov_bridge_r = compute_metric_coverage(
                 expected, svc_bridge_contents.get(svc_id, [])
-            ).score
+            )
+            cov_human = cov_human_r.score
+            cov_system = cov_system_r.score
+            cov_bridge = cov_bridge_r.score
             svc_data["metric_coverage_human"] = cov_human
             svc_data["metric_coverage_system"] = cov_system
             svc_data["metric_coverage_bridge"] = cov_bridge
             # Continuity aliases (REQ-OAT-051): names retained for downstream readers.
             svc_data["metric_coverage_dashboarded"] = cov_human
             svc_data["metric_coverage_alerted"] = cov_bridge
+            # Shared denominator across orientations (CRP R1-S6).
+            svc_data["expected_count"] = len(cov_human_r.expected)
+            if expected_sources and svc_id in expected_sources:
+                src = dict(expected_sources[svc_id])
+                src["expected_normalized"] = len(cov_human_r.expected)
+                # sum(source counts) >= raw_union >= normalized
+                src["sources_sum"] = (
+                    int(src.get("convention", 0))
+                    + int(src.get("declared", 0))
+                    + int(src.get("emitted_series", 0))
+                    + int(src.get("affordance_loci", 0))
+                )
+                svc_data["expected_sources"] = src
 
         all_scores = svc_all_scores.get(svc_id, [])
         structural = sum(all_scores) / len(all_scores) if all_scores else 0.0
@@ -1703,6 +1854,8 @@ def _write_quality_report(
     )
     aggregate["total_issues"] = total_issues
     aggregate["total_repairs"] = total_repairs
+    if export_disposition:
+        aggregate["affordance_export_disposition"] = export_disposition
 
     report: Dict[str, Any] = {
         "schema_version": "1.0",
