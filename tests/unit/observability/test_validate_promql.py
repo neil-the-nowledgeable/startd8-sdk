@@ -598,6 +598,72 @@ def test_absent_axis_stays_fail_not_bound_no_data(tmp_path):
     assert v.mismatched_axes
 
 
+def test_qf_hist_basename_fail_is_expr_identity_not_http_server(tmp_path):
+    """PATHFIX_QF Class B: bare hist basename + live children must not report http.server axes."""
+    artifacts = tmp_path / "art"
+    _write_alerts(
+        artifacts,
+        "query-frontend",
+        {"OrientationRetries": "max(cortex_query_frontend_retries{}) >= 0"},
+    )
+    onboarding = _semconv_onboarding(tmp_path, service="query-frontend")
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=1.0,
+        auth=Auth(),
+        query_fn=lambda base, expr, **k: 0,
+        list_names_fn=lambda *a, **k: [
+            "cortex_query_frontend_retries_bucket",
+            "cortex_query_frontend_retries_count",
+            "cortex_query_frontend_retries_sum",
+            "thanos_frontend_split_queries_total",
+        ],
+        label_values_fn=lambda *a, **k: [],
+    )
+    v = report.verdicts[0]
+    assert v.verdict == "fail"
+    assert v.mismatched_axes == ["metric_name.expr_family"]
+    assert "http_server" not in (v.expected_metric or "")
+    assert "histogram" in (v.remediation or "").lower() or "bucket" in (v.remediation or "")
+
+
+def test_qf_hist_quantile_on_bucket_is_bound_no_data_when_empty(tmp_path):
+    """Fixed orientation expr referencing live *_bucket ⇒ bound_no_data, not Class B fail."""
+    artifacts = tmp_path / "art"
+    _write_alerts(
+        artifacts,
+        "query-frontend",
+        {
+            "OrientationRetries": (
+                "histogram_quantile(0.99, sum(rate("
+                "cortex_query_frontend_retries_bucket[5m])) by (le)) >= 0"
+            )
+        },
+    )
+    onboarding = _semconv_onboarding(tmp_path, service="query-frontend")
+
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=1.0,
+        auth=Auth(),
+        query_fn=lambda base, expr, **k: 0,
+        list_names_fn=lambda *a, **k: [
+            "cortex_query_frontend_retries_bucket",
+            "cortex_query_frontend_retries_count",
+            "cortex_query_frontend_retries_sum",
+        ],
+        label_values_fn=lambda *a, **k: [],
+    )
+    v = report.verdicts[0]
+    assert v.verdict == "bound_no_data", (v.verdict, v.mismatched_axes, v.remediation)
+    assert not v.mismatched_axes
+
+
 def test_binding_vs_data_coverage_math(tmp_path):
     """FR-2: data_coverage counts only pass; binding_coverage adds bound_no_data."""
     artifacts = tmp_path / "art"
