@@ -154,6 +154,15 @@ class Models:
     OPENROUTER_QWEN3_MAX = "openrouter:qwen/qwen3-max"
     OPENROUTER_QWEN_PLUS = "openrouter:qwen/qwen-plus"
     OPENROUTER_QWEN3_CODER_FLASH = "openrouter:qwen/qwen3-coder-flash"
+    OPENROUTER_KIMI_K3 = "openrouter:moonshotai/kimi-k3"
+    OPENROUTER_KIMI_K27_CODE = "openrouter:moonshotai/kimi-k2.7-code"
+    OPENROUTER_KIMI_K25 = "openrouter:moonshotai/kimi-k2.5"
+    OPENROUTER_GLM_52 = "openrouter:z-ai/glm-5.2"
+    OPENROUTER_GLM_51 = "openrouter:z-ai/glm-5.1"
+    OPENROUTER_GLM_47_FLASH = "openrouter:z-ai/glm-4.7-flash"
+    OPENROUTER_MINIMAX_M3 = "openrouter:minimax/minimax-m3"
+    OPENROUTER_MINIMAX_M27 = "openrouter:minimax/minimax-m2.7"
+    OPENROUTER_MINIMAX_M25 = "openrouter:minimax/minimax-m2.5"
 
     # ==========================================================================
     # Jetson Edge Cluster (self-hosted; opt-in, LAN; see docs/design/jetson-cluster-benchmark/)
@@ -443,6 +452,60 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     "qwen/qwen3-coder-flash": ModelInfo(
         provider="openrouter",
         model_id="qwen/qwen3-coder-flash",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "moonshotai/kimi-k3": ModelInfo(
+        provider="openrouter",
+        model_id="moonshotai/kimi-k3",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "moonshotai/kimi-k2.7-code": ModelInfo(
+        provider="openrouter",
+        model_id="moonshotai/kimi-k2.7-code",
+        tier="balanced",
+        capabilities={"text", "code"},
+    ),
+    "moonshotai/kimi-k2.5": ModelInfo(
+        provider="openrouter",
+        model_id="moonshotai/kimi-k2.5",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "z-ai/glm-5.2": ModelInfo(
+        provider="openrouter",
+        model_id="z-ai/glm-5.2",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "z-ai/glm-5.1": ModelInfo(
+        provider="openrouter",
+        model_id="z-ai/glm-5.1",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "z-ai/glm-4.7-flash": ModelInfo(
+        provider="openrouter",
+        model_id="z-ai/glm-4.7-flash",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "minimax/minimax-m3": ModelInfo(
+        provider="openrouter",
+        model_id="minimax/minimax-m3",
+        tier="flagship",
+        capabilities={"text", "code"},
+    ),
+    "minimax/minimax-m2.7": ModelInfo(
+        provider="openrouter",
+        model_id="minimax/minimax-m2.7",
+        tier="balanced",
+        capabilities={"text", "code"},
+    ),
+    "minimax/minimax-m2.5": ModelInfo(
+        provider="openrouter",
+        model_id="minimax/minimax-m2.5",
         tier="fast",
         capabilities={"text", "code"},
     ),

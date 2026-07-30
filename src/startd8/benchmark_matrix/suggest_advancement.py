@@ -35,6 +35,8 @@ class AdvancementSuggestion:
     metric_id: str = "mean_tier_quality_v1"
     main_n: int = 4
     notes: List[str] = field(default_factory=list)
+    # When true, operator intends all complete labs on Team next round (no cut).
+    carry_all_team_labs: bool = False
 
     def to_mapping(self) -> Dict[str, Any]:
         return asdict(self)
@@ -170,6 +172,7 @@ def build_suggestion(
     consolation: str = "rest",  # rest | all | none
     suggest_invites: Optional[str] = None,  # cut-mid-fast | top-k-individual[=N]
     team_lane: Optional[Sequence[str]] = None,
+    carry_all_team_labs: bool = False,
 ) -> AdvancementSuggestion:
     """Build an AdvancementSuggestion from a scored parent run dir."""
     run_dir = Path(run_dir)
@@ -182,23 +185,33 @@ def build_suggestion(
             consolation_suggested=[],
             notes=["no eligible Team rows — nothing to suggest"],
             main_n=main_n,
+            carry_all_team_labs=carry_all_team_labs,
         )
 
-    main, tied_cut, needs = _cut_respecting_ties(rows, main_n)
-    tie_groups = _quality_tie_groups(rows)
-    main_set = set(main)
     eligible = [r.lab for r in rows]
-
-    if consolation == "none":
+    if carry_all_team_labs:
+        main = list(eligible)
+        tied_cut, needs = False, False
+        tie_groups: List[List[str]] = []
         cons: List[str] = []
-    elif consolation == "all":
-        cons = list(eligible)
-    else:  # rest
-        cons = [lab for lab in eligible if lab not in main_set]
+        notes = [
+            "carry_all_team_labs=true — main_suggested = all eligible Team labs; no cut applied",
+        ]
+        main_set = set(main)
+    else:
+        main, tied_cut, needs = _cut_respecting_ties(rows, main_n)
+        tie_groups = _quality_tie_groups(rows)
+        main_set = set(main)
+        notes = []
+        if consolation == "none":
+            cons = []
+        elif consolation == "all":
+            cons = list(eligible)
+        else:  # rest
+            cons = [lab for lab in eligible if lab not in main_set]
 
     invites: List[Any] = []
-    notes: List[str] = []
-    if suggest_invites:
+    if suggest_invites and not carry_all_team_labs:
         mode, _, rest = suggest_invites.partition("=")
         if mode == "cut-mid-fast":
             invites = suggest_invites_cut_mid_fast(roster, main_labs=main)
@@ -236,6 +249,7 @@ def build_suggestion(
         tie_groups=tie_groups,
         main_n=main_n,
         notes=notes,
+        carry_all_team_labs=carry_all_team_labs,
     )
 
 
@@ -275,6 +289,7 @@ def adopt_suggestion(
         "main": list(raw.get("main_suggested") or []),
         "consolation": list(raw.get("consolation_suggested") or []),
         "individual_invite": list(raw.get("individual_invite_suggested") or []),
+        "carry_all_team_labs": bool(raw.get("carry_all_team_labs", False)),
     }
     dest = Path(dest)
     if dest.is_file() and not force:

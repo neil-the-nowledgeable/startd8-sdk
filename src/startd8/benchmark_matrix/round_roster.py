@@ -32,6 +32,8 @@ class RoundRoster:
     team_lane_labs: Optional[List[str]] = None
     individual_invite: List[Any] = field(default_factory=list)  # model ids or {lab, tier}
     parent_run: Optional[str] = None
+    # Operator override: enroll every complete-squad lab on Team (ignore cut lists).
+    carry_all_team_labs: bool = False
 
     def __post_init__(self) -> None:
         if self.lane not in VALID_LANES:
@@ -48,6 +50,7 @@ class ResolvedEnrollment:
     classification: Dict[str, str]  # model → team_lane | invite | both
     team_lane_labs: Tuple[str, ...]
     invite_models: Tuple[str, ...]
+    carry_all_team_labs: bool = False
 
 
 def round_roster_hash(rr: RoundRoster) -> str:
@@ -56,6 +59,7 @@ def round_roster_hash(rr: RoundRoster) -> str:
         "parent_run": rr.parent_run,
         "team_lane_labs": rr.team_lane_labs,
         "individual_invite": rr.individual_invite,
+        "carry_all_team_labs": bool(rr.carry_all_team_labs),
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:16]
@@ -95,6 +99,7 @@ def load_round_roster(path: Union[str, Path]) -> RoundRoster:
         team_lane_labs=labs,
         individual_invite=list(invite),
         parent_run=parent,
+        carry_all_team_labs=bool(raw.get("carry_all_team_labs", False)),
     )
 
 
@@ -106,6 +111,7 @@ def dump_round_roster(rr: RoundRoster, path: Union[str, Path]) -> None:
         "parent_run": rr.parent_run,
         "team_lane_labs": rr.team_lane_labs,
         "individual_invite": rr.individual_invite,
+        "carry_all_team_labs": bool(rr.carry_all_team_labs),
     }
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
@@ -127,6 +133,10 @@ def load_advancement(path: Union[str, Path]) -> Dict[str, Any]:
 
 def compile_advancement(adv: Dict[str, Any], lane: str) -> RoundRoster:
     """Compile AdvancementSpec → RoundRoster for ``lane`` in {main, consolation}.
+
+    When ``carry_all_team_labs`` is true, authored ``main``/``consolation`` cuts are
+    retained for provenance but enrollment expands to every complete-squad lab
+    (see ``resolve_enrollment``).
 
     Args:
         adv: Parsed advancement mapping (``parent_run`` required).
@@ -150,6 +160,7 @@ def compile_advancement(adv: Dict[str, Any], lane: str) -> RoundRoster:
         team_lane_labs=labs,
         individual_invite=invite,
         parent_run=str(parent),
+        carry_all_team_labs=bool(adv.get("carry_all_team_labs", False)),
     )
 
 
@@ -182,7 +193,10 @@ def resolve_enrollment(
     ``team_lane_labs == []`` → no team-lane labs (invite-only Individual deep is allowed).
     """
     known_labs = {m.lab for m in roster.values()}
-    if rr.team_lane_labs is None:
+    if rr.carry_all_team_labs:
+        # Operator flag: every complete-squad lab stays on Team through this round.
+        team_labs = labs_with_complete_tiers(roster, roster.keys())
+    elif rr.team_lane_labs is None:
         if rr.lane == "heats" and heats_default_complete_labs:
             team_labs = labs_with_complete_tiers(roster, roster.keys())
         else:
@@ -220,6 +234,7 @@ def resolve_enrollment(
         classification=classification,
         team_lane_labs=tuple(team_labs),
         invite_models=tuple(sorted(invite_set - team_set)),
+        carry_all_team_labs=bool(rr.carry_all_team_labs),
     )
 
 
