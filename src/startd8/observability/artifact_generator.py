@@ -653,6 +653,141 @@ def build_service_metrics_expected(
     }
 
 
+#: FR-2 coverage-bind panel group — distinct from every other panel group so a
+#: reader can see which panels exist ONLY to close AffordanceMap-sourced coverage.
+_COVERAGE_BIND_GROUP = "Coverage (AffordanceMap)"
+
+
+def _apply_affordance_coverage_bind_panels(
+    artifacts: List[Any],
+    services: List[Any],
+    affordance_map: Any = None,
+) -> Dict[str, Any]:
+    """Step 2/2a — land AffordanceMap ``source_backed`` metric families as real
+    dashboard panels on the IN-MEMORY ``dashboard_spec`` content, before
+    ``_write_artifacts`` / ``_write_quality_report`` run (FR-2, FR-2b).
+
+    This is generator input, not a post-hoc file append: because it mutates
+    ``ArtifactResult.content`` before ``_write_artifacts`` writes it, a normal
+    regen reproduces the panel AND ``_write_quality_report`` scores it in the
+    same in-memory pass whose ``expected`` set Step 1's evaluator union already
+    widens — so ``expected ∩ referenced`` (``compute_metric_coverage``) can
+    actually be non-empty for these families, instead of the panel being
+    destroyed by the next ``_write_artifacts`` (the R1-S1/R1-S2 write-collision
+    this step exists to avoid).
+
+    Reuses Step 1's identity join (``_admit_affordance_metric_families`` — exact
+    ``element_id == service_id``, fail-closed on unmatched/stale/malformed) — no
+    second matcher is implemented here (Mottainai). FR-5 locus-kind discipline is
+    inherited transitively: that admission already calls ``metric_loci(entry)``,
+    which excludes ``transport``-kind rows and unresolved synthetic components.
+
+    Uses an explicit ``max(<name>{})`` expression rather than
+    ``_declared_series_selector`` (which renders a *bare* ``max(name)`` for a
+    label-less series — invisible to ``_extract_metric_names``, per the sibling
+    evaluator-union unit's code-review finding) — so every admitted family is
+    structurally detectable by the extractor without fabricating labels the
+    AffordanceMap locus never asserted.
+
+    Returns FR-7 evidence: ``{"export_disposition": ..., "services": {svc_id:
+    {"families_admitted": n, "panels_added": n}}}``.
+    """
+    try:
+        from startd8.validators.observability_artifact_checks import (
+            _normalize_metric_name,
+            extract_referenced_metrics,
+        )
+    except ImportError:  # pragma: no cover
+        extract_referenced_metrics = None  # type: ignore[assignment]
+        _normalize_metric_name = None  # type: ignore[assignment]
+
+    map_families, disposition, _diag = _admit_affordance_metric_families(
+        services, affordance_map
+    )
+    evidence: Dict[str, Any] = {"export_disposition": disposition, "services": {}}
+    if disposition != _EXPORT_OK:
+        # no_export / fresh_export_zero_metric_loci / stale / malformed → nothing
+        # admitted; fail closed rather than bind against a phantom/absent export.
+        return evidence
+
+    by_service = {
+        a.service_id: a
+        for a in artifacts
+        if a.artifact_type == "dashboard_spec" and a.status == "generated"
+    }
+    for svc_id, families in map_families.items():
+        if not families:
+            continue
+        art = by_service.get(svc_id)
+        if art is None or not art.content:
+            continue
+        try:
+            data = yaml.safe_load(art.content) or {}
+        except Exception:
+            logger.warning(
+                "coverage-bind: could not parse dashboard_spec YAML for %s — skipping bind",
+                svc_id,
+            )
+            continue
+        panels = data.get("panels")
+        if not isinstance(panels, list):
+            continue
+        existing = {str(p.get("expr", "")) for p in panels if isinstance(p, dict)}
+        # PICR-fixed: dedup by REFERENCED metric name, not raw expr text — a family
+        # already panelled via _add_declared_gauge_observe_panels (a real selector,
+        # e.g. max(name{job="x"})) must not also get our bare max(name{}) rebind;
+        # both exprs reference the same name but would fail a raw-string dedup.
+        already_named = (
+            extract_referenced_metrics(existing) if extract_referenced_metrics else set()
+        )
+        added = 0
+        for fam in sorted(families):
+            if _normalize_metric_name and _normalize_metric_name(fam) in already_named:
+                continue
+            expr = f"max({fam}{{}})"
+            if expr in existing:
+                continue
+            panels.append(
+                {
+                    "type": "timeseries",
+                    "title": _panel_title(fam),
+                    "expr": expr,
+                    "unit": "short",
+                    "group": _COVERAGE_BIND_GROUP,
+                }
+            )
+            existing.add(expr)
+            added += 1
+        if added == 0:
+            continue
+        data["panels"] = panels
+        # Preserve the byte-identical leading comment header (every line of it
+        # starts with "#" — see _derivation_comment — followed by one blank
+        # line); re-dump only the YAML body so unrelated fields are untouched.
+        header_lines: List[str] = []
+        for line in art.content.splitlines(keepends=True):
+            if line.startswith("#") or not line.strip():
+                header_lines.append(line)
+                continue
+            break
+        art.content = "".join(header_lines) + yaml.dump(
+            data, default_flow_style=False, sort_keys=False
+        )
+        art.derivations.append(
+            DerivationTrace(
+                field="affordance_coverage_bind_panels",
+                source=f"affordance_map.source_backed.metric_locus.{svc_id}",
+                transformation=f"{added} AffordanceMap-derived coverage bind panel(s) added",
+                tier="affordance_map",
+            )
+        )
+        evidence["services"][svc_id] = {
+            "families_admitted": len(families),
+            "panels_added": added,
+        }
+    return evidence
+
+
 def generate_observability_artifacts(
     onboarding_metadata_path: Path,
     output_dir: Path,
@@ -1086,6 +1221,17 @@ def generate_observability_artifacts(
             sid: sorted(names) for sid, names in service_metrics.items()
         },
     }
+
+    # Step 2/2a (FR-2/FR-2b): land the AffordanceMap-derived coverage bind onto the
+    # IN-MEMORY dashboard_spec content — BEFORE _write_artifacts — so the bind is
+    # generator input (survives regen) and is scored by _write_quality_report below
+    # in the same pass, not destroyed by the next _write_artifacts (R1-S1/R1-S2).
+    # Computed unconditionally (dry_run included) so report.coverage_bind mirrors
+    # metric_expected's dry-run/non-dry parity contract (FR-4); only the disk write
+    # below is gated on dry_run.
+    report.coverage_bind = _apply_affordance_coverage_bind_panels(
+        report.artifacts, services, affordance_map=affordance_map
+    )
 
     if not dry_run:
         _write_artifacts(report.artifacts, output_dir)

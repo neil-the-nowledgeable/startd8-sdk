@@ -370,6 +370,9 @@ class GenerationReport:
     # product-gap metric-coverage evaluator union (Step 1): per-service expected-set
     # provenance + AffordanceMap disposition (dry-run and non-dry share this shape).
     metric_expected: Dict[str, Any] = field(default_factory=dict)
+    # product-gap metric-coverage coverage-bind (Step 2/2a, FR-2/FR-7): per-service
+    # AffordanceMap-derived panel-bind evidence (families admitted, panels added).
+    coverage_bind: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

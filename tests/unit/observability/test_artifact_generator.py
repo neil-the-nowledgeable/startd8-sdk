@@ -1000,6 +1000,232 @@ class TestEvaluatorExpectedSetUnion:
         assert dry.metric_expected["expected_sources"] == wet.metric_expected["expected_sources"]
 
 
+class TestCoverageBindPanels:
+    """product-gap_0_metric_coverage Step 2/2a — land the coverage-bind as generator
+    input (FR-2, FR-2b) so a normal regen both reproduces the panel AND
+    ``_write_quality_report`` scores it in-memory (AC-2's composed fix)."""
+
+    def _meta_no_declared(self):
+        return {
+            "project_id": "thanos-pilot",
+            "instrumentation_hints": {
+                "receive": {
+                    "service_id": "receive",
+                    "transport": "grpc",
+                    "language": "go",
+                    "metrics": {"convention_based": [], "manifest_declared": []},
+                },
+            },
+        }
+
+    def test_composed_fix_source_backed_locus_raises_human_coverage(
+        self, tmp_path, manifest_yaml
+    ):
+        """AC-2: Step 1 (expected-set union) + Step 2 (coverage-bind panel), composed,
+        yield covered >= 1 admitted source_backed locus — not merely `> 0.0`."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta_no_declared()))
+        output = tmp_path / "observability"
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            locus_status="source_backed",
+            source_loci=[
+                {
+                    "family_or_signal": "thanos_receive_write_timeseries",
+                    "signal_kind": "metric",
+                },
+                # FR-5: transport-kind row MUST be excluded from the bind.
+                {"family_or_signal": "receive_transport_hops", "signal_kind": "transport"},
+            ],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=output,
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+
+        # Evidence: exactly the one admitted metric-kind family, one panel added.
+        assert report.coverage_bind["export_disposition"] == "fresh_export"
+        svc_evidence = report.coverage_bind["services"]["receive"]
+        assert svc_evidence["families_admitted"] == 1
+        assert svc_evidence["panels_added"] == 1
+
+        dashboard = next(
+            a for a in report.artifacts
+            if a.artifact_type == "dashboard_spec" and a.service_id == "receive"
+        )
+        assert "thanos_receive_write_timeseries" in dashboard.content
+        assert "receive_transport_hops" not in dashboard.content
+
+        quality = json.loads((output / "observability-quality.json").read_text())
+        svc = quality["services"]["receive"]
+        expected = set(report.metric_expected["service_metrics"]["receive"])
+        assert expected == {"thanos_receive_write_timeseries"}
+        assert svc["metric_coverage_human"] == 1.0  # covered == expected (1/1)
+        assert svc["metric_coverage_human"] == svc["metric_coverage_dashboarded"]
+
+    def test_no_export_adds_no_panels(self, tmp_path, manifest_yaml):
+        """FR-2: with no AffordanceMap export, the bind is a no-op (fail closed,
+        never phantom-widens a dashboard with unbacked panels)."""
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta_no_declared()))
+        output = tmp_path / "observability"
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=output,
+            manifest_path=manifest_yaml,
+        )
+        assert report.coverage_bind["export_disposition"] == "no_export"
+        assert report.coverage_bind["services"] == {}
+
+    def test_stale_export_adds_no_panels(self, tmp_path, manifest_yaml):
+        """R3-S2/FR-1 freshness discipline extends to the bind: a truncated/stale
+        export must not land a panel either (fail closed, not fallback-bind)."""
+        from startd8.observability.affordance_map_consume import LoadResult, AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta_no_declared()))
+        output = tmp_path / "observability"
+        stale = LoadResult(
+            entries=[
+                AffordanceMapEntry(
+                    element_id="receive",
+                    locus_status="source_backed",
+                    source_loci=[
+                        {"family_or_signal": "thanos_receive_write_timeseries", "signal_kind": "metric"}
+                    ],
+                )
+            ],
+            source_truncated=True,
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=output,
+            manifest_path=manifest_yaml,
+            affordance_map=stale,
+        )
+        assert report.coverage_bind["export_disposition"] == "stale_or_mismatched_export"
+        assert report.coverage_bind["services"] == {}
+        dashboard = next(
+            (a for a in report.artifacts if a.artifact_type == "dashboard_spec" and a.service_id == "receive"),
+            None,
+        )
+        if dashboard is not None:
+            assert "thanos_receive_write_timeseries" not in dashboard.content
+
+    def test_bind_is_idempotent_no_duplicate_panel(self, tmp_path, manifest_yaml):
+        """Re-running generation with the same export never appends a second copy
+        of the same bind panel (dedup by expr, matching _add_declared_gauge_observe_panels)."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta_no_declared()))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            locus_status="source_backed",
+            source_loci=[
+                {"family_or_signal": "thanos_receive_write_timeseries", "signal_kind": "metric"}
+            ],
+        )
+        report1 = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "out1",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        report2 = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "out2",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        d1 = next(a for a in report1.artifacts if a.artifact_type == "dashboard_spec")
+        d2 = next(a for a in report2.artifacts if a.artifact_type == "dashboard_spec")
+        assert d1.content == d2.content
+        assert d1.content.count("thanos_receive_write_timeseries") == 1
+
+    def test_no_duplicate_panel_when_family_already_gauge_panelled(
+        self, tmp_path, manifest_yaml
+    ):
+        """PICR fix: a family already panelled by _add_declared_gauge_observe_panels
+        (a REAL selector, e.g. max(name{job="x"})) must not also get our bare
+        max(name{}) rebind — dedup is by referenced NAME, not raw expr text."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta = {
+            "project_id": "thanos-pilot",
+            "instrumentation_hints": {
+                "receive": {
+                    "service_id": "receive",
+                    "transport": "grpc",
+                    "language": "go",
+                    "metrics": {
+                        "convention_based": [],
+                        "manifest_declared": [],
+                        "declared_emitted_series": [
+                            {
+                                "name": "thanos_receive_write_timeseries",
+                                "type": "gauge",
+                                "labels": {"job": "receive"},
+                            }
+                        ],
+                    },
+                },
+            },
+        }
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(meta))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            locus_status="source_backed",
+            # Same family name the gauge already panels — must not double-panel.
+            source_loci=[
+                {"family_or_signal": "thanos_receive_write_timeseries", "signal_kind": "metric"}
+            ],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "out",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        assert report.coverage_bind["services"] == {}  # nothing NEW added
+        dashboard = next(a for a in report.artifacts if a.artifact_type == "dashboard_spec")
+        assert dashboard.content.count("thanos_receive_write_timeseries") == 1
+
+    def test_dry_run_coverage_bind_matches_shape(self, tmp_path, manifest_yaml):
+        """FR-4 dry-run/non-dry parity, mirrored for the Step 2 evidence shape."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta_no_declared()))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            locus_status="source_backed",
+            source_loci=[
+                {"family_or_signal": "thanos_receive_write_timeseries", "signal_kind": "metric"}
+            ],
+        )
+        dry = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "out-dry",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+            dry_run=True,
+        )
+        wet = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "out-wet",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+            dry_run=False,
+        )
+        assert dry.coverage_bind == wet.coverage_bind
+
+
 # ---------------------------------------------------------------------------
 # Increment 3: RED completeness (gridPos, runbook_url, DB latency)
 # ---------------------------------------------------------------------------
