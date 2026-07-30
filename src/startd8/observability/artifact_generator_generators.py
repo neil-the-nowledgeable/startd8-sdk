@@ -279,7 +279,24 @@ def _service_sli_kinds(service: ServiceHints, business: BusinessContext) -> "fro
     # so we never ALSO ship a (possibly-dead) convention SLI (precedence: declared > convention).
     # Absent declared series ⇒ no-op (byte-identical to pre-#286).
     resolved = resolved - _declared_covered_kinds(service)
+    # PATHFIX_QF / QUERY_FRONTEND_RESIDUAL: http transport + live thanos_* / thanos_query_*
+    # declared series → suppress remaining OTel http.server convention RED (dead axes:
+    # http_server_duration_*, service= label). Declared-base / AffordanceMap legs own honesty.
+    if (service.transport or "").lower() == "http" and _has_thanos_domain_declared_series(
+        service
+    ):
+        resolved = resolved - _TRIPLET_SIGNAL_KINDS
     return resolved
+
+
+def _has_thanos_domain_declared_series(service: "ServiceHints") -> bool:
+    """True when declared_emitted_series includes a Thanos/domain Prom family."""
+    series = getattr(service, "declared_emitted_series", None) or ()
+    for s in series:
+        name = (getattr(s, "name", None) or "").lower()
+        if name.startswith("thanos_") or name.startswith("thanos"):
+            return True
+    return False
 
 
 def _derivation_comment(derivations: List[DerivationTrace]) -> str:

@@ -883,6 +883,61 @@ def test_extracts_from_alerts_slos_and_dashboards(tmp_path, monkeypatch):
 # ───────────────────── #362 service-id attribution ─────────────────────
 
 
+def test_coverage_bind_filename_attributes_to_real_service(tmp_path):
+    """PATHFIX_QF: ``query-frontend-coverage-bind-slo.yaml`` → ``query-frontend``."""
+    from startd8.observability.validate_promql import extract_exprs
+
+    artifacts = tmp_path / "art"
+    (artifacts / "slos").mkdir(parents=True)
+    (artifacts / "alerts").mkdir(parents=True)
+    slo = {
+        "apiVersion": "openslo/v1",
+        "kind": "SLO",
+        "metadata": {
+            "name": "query-frontend-orientation-thanos-frontend-split-queries-total",
+            "labels": {"service": "query-frontend", "coverage_bind": "affordance_map_orientation"},
+        },
+        "spec": {
+            "indicator": {
+                "spec": {
+                    "thresholdMetric": {
+                        "metricSource": {
+                            "spec": {
+                                "query": "sum(rate(thanos_frontend_split_queries_total[5m]))"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    }
+    (artifacts / "slos" / "query-frontend-coverage-bind-slo.yaml").write_text(
+        yaml.dump(slo)
+    )
+    # Alert WITHOUT labels.service — must still fall back to stripped filename.
+    alert = {
+        "groups": [
+            {
+                "name": "query-frontend.coverage_bind",
+                "rules": [
+                    {
+                        "alert": "QueryfrontendOrientationSplit",
+                        "expr": "max(thanos_frontend_split_queries_total{}) >= 0",
+                        "labels": {"severity": "info"},
+                    }
+                ],
+            }
+        ]
+    }
+    (artifacts / "alerts" / "query-frontend-coverage-bind-alerts.yaml").write_text(
+        yaml.dump(alert)
+    )
+    exprs = extract_exprs(artifacts)
+    by_svc = {e.service for e in exprs}
+    assert "query-frontend" in by_svc
+    assert "query-frontend-coverage-bind" not in by_svc
+
+
 def test_service_from_openslo_metadata_not_declared_base_filename(tmp_path):
     """#362: ``compact-declared-base-slo.yaml`` must attribute to ``compact``, not the profile."""
     artifacts = tmp_path / "art"

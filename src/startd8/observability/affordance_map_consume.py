@@ -2312,7 +2312,10 @@ def _write_coverage_orientation_legs(
             "apiVersion": "openslo/v1",
             "kind": "SLO",
             "metadata": {
-                "name": f"{service_id}-coverage-bind-{safe}",
+                # Prefer ``{svc}-orientation-…`` over ``{svc}-coverage-bind-…`` so
+                # filename/last-resort attribution cannot invent a phantom service
+                # (PATHFIX_QF residual @ tip 1d951b03).
+                "name": f"{service_id}-orientation-{safe}",
                 "labels": {
                     "service": service_id,
                     "bound_series": family,
@@ -2327,7 +2330,7 @@ def _write_coverage_orientation_legs(
                 "target": "99%",
                 "timeWindow": {"duration": "30d", "isRolling": True},
                 "indicator": {
-                    "metadata": {"name": f"{service_id}-coverage-bind-{safe}-sli"},
+                    "metadata": {"name": f"{service_id}-orientation-{safe}-sli"},
                     "spec": {
                         "thresholdMetric": {
                             "metricSource": {
@@ -2381,10 +2384,14 @@ def _write_coverage_orientation_legs(
     alert_path = _confined_dest(output_dir, alert_rel)
     if alert_path is not None:
         rule = {
-            "alert": f"{service_id.replace('-', '').title()}CoverageBind{safe}"[:200],
+            "alert": f"{service_id.replace('-', '').title()}Orientation{safe}"[:200],
             "expr": f"{expr} >= 0",
             "for": "5m",
-            "labels": {"severity": "info", "coverage_bind": "improve_metric_coverage"},
+            "labels": {
+                "severity": "info",
+                "service": service_id,
+                "coverage_bind": "improve_metric_coverage",
+            },
             "annotations": {
                 "summary": f"gen.improve_metric_coverage bridge orientation for {family}",
             },

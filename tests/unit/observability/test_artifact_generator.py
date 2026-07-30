@@ -1315,6 +1315,11 @@ class TestOrientationBind:
         assert "thanos_receive_write_timeseries" in slo.content
         assert "receive_transport_hops" not in slo.content
         assert "thanos_receive_write_timeseries" in alert.content
+        # PATHFIX_QF: metadata.name must not invent ``{svc}-coverage-bind-…``;
+        # alert labels must carry ``service``.
+        assert "name: receive-orientation-" in slo.content
+        assert "name: receive-coverage-bind-" not in slo.content
+        assert "service: receive" in alert.content
 
         quality = json.loads(
             (tmp_path / "observability" / "observability-quality.json").read_text()

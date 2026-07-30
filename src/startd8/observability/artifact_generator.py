@@ -877,14 +877,19 @@ def _coverage_bind_preserve_header(content: str, body_yaml: str) -> str:
 
 
 def _orientation_slo_doc(svc_id: str, fam: str) -> Dict[str, Any]:
-    """One OpenSLO doc whose active ``query`` references ``fam`` (system axis)."""
+    """One OpenSLO doc whose active ``query`` references ``fam`` (system axis).
+
+    Name shape mirrors declared-base (``{svc}-{kind}-{slug}-declared``): never
+    ``{svc}-coverage-bind-…``, which filename/last-resort attribution turns into a
+    phantom service ``{svc}-coverage-bind`` (PATHFIX_QF residual @ 1d951b03).
+    """
     safe = fam.replace("_", "-")[:48]
     expr = _coverage_bind_panel_expr(fam)
     return {
         "apiVersion": "openslo/v1",
         "kind": "SLO",
         "metadata": {
-            "name": f"{svc_id}-coverage-bind-{safe}",
+            "name": f"{svc_id}-orientation-{safe}",
             "labels": {
                 "service": svc_id,
                 "bound_series": fam,
@@ -900,7 +905,7 @@ def _orientation_slo_doc(svc_id: str, fam: str) -> Dict[str, Any]:
             "target": "99%",
             "timeWindow": {"duration": "30d", "isRolling": True},
             "indicator": {
-                "metadata": {"name": f"{svc_id}-coverage-bind-{safe}-sli"},
+                "metadata": {"name": f"{svc_id}-orientation-{safe}-sli"},
                 "spec": {
                     "thresholdMetric": {
                         "metricSource": {
@@ -919,10 +924,16 @@ def _orientation_alert_rule(svc_id: str, fam: str) -> Dict[str, Any]:
     safe = "".join(p[:1].upper() + p[1:] for p in fam.replace("-", "_").split("_") if p)
     expr = _coverage_bind_panel_expr(fam)
     return {
-        "alert": f"{svc_id.replace('-', '').title()}CoverageBind{safe}"[:200],
+        "alert": f"{svc_id.replace('-', '').title()}Orientation{safe}"[:200],
         "expr": f"{expr} >= 0",
         "for": "5m",
-        "labels": {"severity": "info", "coverage_bind": "affordance_map_orientation"},
+        # ``service`` required — without it filename ``{svc}-coverage-bind-alerts``
+        # attributes to phantom ``{svc}-coverage-bind`` (PATHFIX_QF dead #1).
+        "labels": {
+            "severity": "info",
+            "service": svc_id,
+            "coverage_bind": "affordance_map_orientation",
+        },
         "annotations": {
             "summary": f"AffordanceMap coverage-bind bridge orientation for {fam}",
         },
