@@ -190,6 +190,51 @@ _COMPOSITE_COVERAGE_WEIGHT = 0.3
 # ---------------------------------------------------------------------------
 
 
+def _emit_time_sdk_sha() -> Dict[str, str]:
+    """Resolve the startd8 checkout sha used at quality-emit time (OBS-200a tip honesty).
+
+    Prefer ``git rev-parse HEAD`` from the import path of ``startd8`` so Thanos can
+    fail-closed when quality ``sdk_sha`` ≠ remasure READY tip. Installed wheels
+    without a ``.git`` directory yield ``source=absent`` (never invent a sha).
+    """
+    import subprocess
+
+    try:
+        import startd8
+
+        module_path = Path(startd8.__file__).resolve()
+    except Exception:  # pragma: no cover — import always present in-repo
+        return {"sdk_sha": "", "sdk_sha_source": "absent"}
+
+    # src/startd8/__init__.py → repo root; also try parents (editable / flat installs).
+    candidates = [module_path.parents[2], module_path.parents[1], module_path.parent]
+    for root in candidates:
+        if not (root / ".git").exists():
+            continue
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):  # pragma: no cover
+            continue
+        sha = (proc.stdout or "").strip()
+        if proc.returncode == 0 and len(sha) >= 7:
+            return {
+                "sdk_sha": sha,
+                "sdk_sha_source": "git_rev_parse",
+                "sdk_module_path": str(module_path),
+            }
+    return {
+        "sdk_sha": "",
+        "sdk_sha_source": "absent",
+        "sdk_module_path": str(module_path),
+    }
+
+
 def _utc_now_iso() -> str:
     """UTC timestamp for `generated_at` fields, honoring deterministic runs.
 
@@ -2569,11 +2614,23 @@ def _write_quality_report(
     if export_disposition:
         aggregate["affordance_export_disposition"] = export_disposition
 
+    # Tip honesty (CC OBS-200a / Sapper tip_sha_match): stamp emit-time sdk sha so
+    # remasure can fail-closed when quality was scored by a shadowed install.
+    emit_prov = _emit_time_sdk_sha()
+    if emit_prov.get("sdk_sha"):
+        aggregate["sdk_sha"] = emit_prov["sdk_sha"]
+    aggregate["sdk_sha_source"] = emit_prov.get("sdk_sha_source", "absent")
+
     report: Dict[str, Any] = {
         "schema_version": "1.0",
         "generated_at": _utc_now_iso(),
         "services": services,
         "aggregate": aggregate,
+        "provenance": {
+            "sdk_sha": emit_prov.get("sdk_sha", ""),
+            "sdk_sha_source": emit_prov.get("sdk_sha_source", "absent"),
+            "sdk_module_path": emit_prov.get("sdk_module_path", ""),
+        },
     }
 
     dest = output_dir / "observability-quality.json"
