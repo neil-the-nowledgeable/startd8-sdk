@@ -511,6 +511,54 @@ def test_apply_enrich_runbook_seven_services(tmp_path):
         )
         scores.append(q.score)
     assert sum(scores) / len(scores) >= 0.80
+    # FR-6: the sidecar is the whole evidence surface for a runbook-only map, so
+    # merge_and_write_reports must stay a proven no-op (no stale avg_runbook_score).
+    assert apply.quality_touched == {}
+    assert apply.manifest_touched == []
+
+    # Idempotence at apply level: second run is applied_no_change, files unchanged.
+    before = {s: (rb / f"{s}-runbook.md").read_bytes() for s in sids}
+    plan2 = plan_affordance_actions(load.entries, sids)
+    apply2 = apply_affordance_actions(
+        plan2, services=services, business=biz, output_dir=tmp_path
+    )
+    no_change = [
+        e for e in apply2.entries if e.outcome == ActionOutcome.APPLIED_NO_CHANGE
+    ]
+    assert len(no_change) == 7
+    assert all(
+        e.content_hash_after == e.content_hash_before for e in no_change
+    )
+    assert apply2.written_paths == []
+    assert all((rb / f"{s}-runbook.md").read_bytes() == before[s] for s in sids)
+
+
+def test_apply_enrich_runbook_missing_file_is_skipped(tmp_path):
+    """Retrofit-only: a missing runbook is no_runbook, never a synthesized file."""
+    from startd8.observability.affordance_map_consume import GEN_ENRICH_RUNBOOK
+
+    load = load_affordance_map(
+        [
+            {
+                "element_id": "store",
+                "gap_code": "runbook_skeletal",
+                "affordance_ids": [GEN_ENRICH_RUNBOOK],
+                "locus_status": "partial",
+            }
+        ]
+    )
+    plan = plan_affordance_actions(load.entries, ["store"])
+    apply = apply_affordance_actions(
+        plan,
+        services=[_grpc_service("store")],
+        business=BusinessContext(criticality="medium"),
+        output_dir=tmp_path,
+    )
+    assert [e.outcome for e in apply.entries] == [ActionOutcome.SKIPPED]
+    assert apply.entries[0].reason == "no_runbook"
+    assert apply.written_paths == []
+    assert not (tmp_path / "runbooks").exists()
+    assert apply.quality_touched == {} and apply.manifest_touched == []
 
 
 def test_apply_red_freshness_only_is_no_change(tmp_path):

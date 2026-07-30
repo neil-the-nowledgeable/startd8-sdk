@@ -1535,12 +1535,6 @@ _HEADING_RENAMES: Tuple[Tuple[re.Pattern, str], ...] = (
     (re.compile(r"^##\s+First response\s*$", re.MULTILINE), "## Procedures"),
 )
 
-_DEFAULT_RUNBOOK_CONTRACT: Dict[str, Any] = {
-    "completeness_markers": ["Overview", "Risks", "Escalation", "Procedures"],
-    "max_lines": 300,
-}
-
-
 def _risks_section_body(service: Any, business: Any) -> str:
     """Deterministic Risks bullets (same sources as FR-B5 ``generate_runbook``)."""
     avail = getattr(business, "availability", None) or "—"
@@ -1680,13 +1674,17 @@ def _apply_enrich_runbook(
     business: Any,
     output_dir: Path,
     result: ApplyResult,
-    contracts: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    """Live apply for ``gen.enrich_runbook`` — retrofit on-disk runbook markdown."""
-    from startd8.validators.observability_artifact_checks import (
-        validate_extended_artifact,
-    )
+    """Live apply for ``gen.enrich_runbook`` — retrofit on-disk runbook markdown.
 
+    Retrofit-only by contract: a missing runbook is ``no_runbook``, never a
+    synthesized file. Neither ``quality_touched`` nor ``manifest_touched`` is
+    populated — the runbook leg has no disk re-score path, so writing a leg score
+    would move ``avg_composite_score`` while leaving ``avg_runbook_score`` stale.
+    The ``affordance_actions.json`` sidecar is the whole evidence surface, which
+    keeps ``observability-quality.json`` / ``observability-manifest.yaml``
+    byte-identical for a runbook-only map.
+    """
     rel = f"runbooks/{service.service_id}-runbook.md"
     dest = _confined_dest(output_dir, rel)
     if dest is None:
@@ -1699,35 +1697,8 @@ def _apply_enrich_runbook(
     entry.content_hash_before = content_hash(before) if before else None
 
     if not before.strip():
-        # No prior file — emit a fresh FR-B5 runbook rather than inventing from empty
-        from startd8.observability.artifact_generator_generators import generate_runbook
-
-        art = generate_runbook(service, business)
-        after = art.content or ""
-        entry.content_hash_after = content_hash(after) if after else None
-        path = _write_one(output_dir, art)
-        if not path:
-            entry.outcome = ActionOutcome.SKIPPED
-            entry.reason = "runbook_not_generated"
-            result.entries.append(entry)
-            return
-        result.written_paths.append(path)
-        entry.outcome = ActionOutcome.APPLIED
-        entry.reason = "enrich_runbook_fresh"
-        result.touched_service_ids.append(service.service_id)
-        q = validate_extended_artifact(
-            after,
-            (contracts or {}).get("runbook") or _DEFAULT_RUNBOOK_CONTRACT,
-        ).to_quality()
-        result.quality_touched.setdefault(service.service_id, {})["runbook"] = q
-        result.manifest_touched.append(
-            {
-                "type": "runbook",
-                "service": service.service_id,
-                "path": rel,
-                "status": "generated",
-            }
-        )
+        entry.outcome = ActionOutcome.SKIPPED
+        entry.reason = "no_runbook"
         result.entries.append(entry)
         return
 
@@ -1746,19 +1717,6 @@ def _apply_enrich_runbook(
     entry.outcome = ActionOutcome.APPLIED
     entry.reason = "enrich_runbook"
     result.touched_service_ids.append(service.service_id)
-    q = validate_extended_artifact(
-        after,
-        (contracts or {}).get("runbook") or _DEFAULT_RUNBOOK_CONTRACT,
-    ).to_quality()
-    result.quality_touched.setdefault(service.service_id, {})["runbook"] = q
-    result.manifest_touched.append(
-        {
-            "type": "runbook",
-            "service": service.service_id,
-            "path": rel,
-            "status": "generated",
-        }
-    )
     result.entries.append(entry)
 
 
@@ -2425,7 +2383,6 @@ def apply_affordance_actions(
                 business=business,
                 output_dir=output_dir,
                 result=result,
-                contracts=contracts,
             )
             continue
 
