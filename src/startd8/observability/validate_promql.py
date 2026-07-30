@@ -1236,7 +1236,16 @@ def run_validation(
                     axis_detail = excl_axes
 
             if verdict == "fail" and descriptor is not None:
-                expected_metric = descriptor.throughput_metric
+                fams = metric_families_from_expr(e.expr) or []
+                # Honesty: declared-base / AffordanceMap PromQL identity is the
+                # expr family, not the convention descriptor (Class B scorecard
+                # noise when thanos_* binds but expected_metric still reads
+                # http_server_*). Verdict path unchanged — FR-4 still keeps
+                # empty-at-window + live-name as fail, not bound_no_data.
+                if fams:
+                    expected_metric = fams[0]
+                else:
+                    expected_metric = descriptor.throughput_metric
                 try:
                     live = _live_names()
                 except Exception as exc:
