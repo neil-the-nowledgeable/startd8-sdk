@@ -788,6 +788,214 @@ def _apply_affordance_coverage_bind_panels(
     return evidence
 
 
+#: FR-1 landed RED panel group — distinct from every other panel group so a
+#: reader can see which panels exist because of the locus-biased RED bind.
+_RED_BIND_GROUP_PREFIX = "RED (locus-grounded)"
+
+
+def _apply_affordance_red_bind_panels(
+    artifacts: List[Any],
+    services: List[Any],
+    affordance_map: Any = None,
+) -> Dict[str, Any]:
+    """pilot-gap_red_dashboards Step 2 — land the already-built locus-biased
+    ``gen.emit_red_panels`` output onto the IN-MEMORY ``dashboard_spec``
+    content, BEFORE ``_write_artifacts`` runs (FR-1, FR-2, FR-3, FR-7).
+
+    Generator input, not a post-hoc file append or full-file replace: mirrors
+    gap #2's Step 2/2a (``_apply_affordance_coverage_bind_panels``) write-
+    ordering exactly — one write-collision resolution for the shared
+    ``dashboards/{svc}-dashboard-spec.yaml`` file, not two (FR-7). Reuses the
+    already-dogfooded ``_locus_red_dashboard_yaml``/``_pick_red_families``
+    (FR-1, FR-1b) verbatim for family selection and panel-expr construction —
+    no second RED-panel-shape implementation.
+
+    Does **not** reuse gap #2's ``_admit_affordance_metric_families`` (that
+    matcher admits only ``locus_status == "source_backed"`` rows, which would
+    silently drop ``query-frontend`` — a ``partial`` row FR-1 explicitly
+    targets). Instead reuses ``plan_affordance_actions`` directly: it already
+    applies the correct ``gen.emit_red_panels`` filter (source_backed AND
+    partial; excludes ``_LOCUS_BLOCKING`` + transport-only via
+    ``transport_only_loci``), so no second locus-admission layer is added
+    (Accidental-Complexity anti-principle) and every skip (FR-5, e.g.
+    ``business-criticality``'s ``no_source_locus``) is captured verbatim from
+    the planner's own skip reasons for audit (R3-F2).
+
+    APPENDS the (at most 3) RED panels into the existing top-level ``panels``
+    list rather than replacing the whole document, so this bind composes with
+    the primary generator's own panels and with gap #2's coverage bind instead
+    of clobbering either. Dedup is by REFERENCED METRIC NAME (the same
+    extractor gap #2's PICR fix uses), so a family already panelled by any
+    other bind is not re-panelled.
+
+    Returns ``{"export_disposition": ..., "services": {svc_id: {"families_admitted":
+    n, "panels_added": n, "locus_families": [...]}}, "skipped": {svc_id: reason}}``.
+    """
+    from .affordance_map_consume import (
+        AffordanceMapEntry,
+        GEN_EMIT_RED,
+        LoadResult,
+        _LOCUS_BLOCKING,
+        _locus_red_dashboard_yaml,
+        load_affordance_map,
+        plan_affordance_actions,
+    )
+
+    try:
+        from startd8.validators.observability_artifact_checks import (
+            _normalize_metric_name,
+            extract_referenced_metrics,
+        )
+    except ImportError:  # pragma: no cover
+        extract_referenced_metrics = None  # type: ignore[assignment]
+        _normalize_metric_name = None  # type: ignore[assignment]
+
+    evidence: Dict[str, Any] = {
+        "export_disposition": _EXPORT_NO,
+        "services": {},
+        "skipped": {},
+    }
+    if affordance_map is None:
+        return evidence
+
+    if isinstance(affordance_map, LoadResult):
+        loaded = affordance_map
+    elif isinstance(affordance_map, (tuple, list)) and affordance_map and all(
+        isinstance(x, AffordanceMapEntry) for x in affordance_map
+    ):
+        loaded = LoadResult(entries=list(affordance_map))
+    elif isinstance(affordance_map, (str, Path, dict, list)):
+        loaded = load_affordance_map(affordance_map)
+    else:
+        return {**evidence, "export_disposition": _EXPORT_MALFORMED}
+
+    if loaded.error:
+        return {**evidence, "export_disposition": _EXPORT_MALFORMED}
+    if loaded.source_truncated:
+        return {**evidence, "export_disposition": _EXPORT_STALE}
+
+    known_ids = [s.service_id for s in services]
+    plan = plan_affordance_actions(loaded.entries, known_ids)
+    evidence["export_disposition"] = _EXPORT_OK
+
+    for sk in plan.skips:
+        if sk.affordance_id == GEN_EMIT_RED:
+            evidence["skipped"][sk.service_id] = sk.reason
+
+    by_service_artifact = {
+        a.service_id: a
+        for a in artifacts
+        if a.artifact_type == "dashboard_spec" and a.status == "generated"
+    }
+    for action in plan.actions:
+        if action.affordance_id != GEN_EMIT_RED:
+            continue
+        loci = list(action.loci_used or [])
+        red_yaml = _locus_red_dashboard_yaml(action.service_id, loci)
+        if not red_yaml:
+            evidence["skipped"][action.service_id] = "locus_families_unusable"
+            continue
+        red_doc = yaml.safe_load(red_yaml) or {}
+        red_spec = red_doc.get("spec") or {}
+        red_panels = red_spec.get("panels") or []
+        red_families = red_spec.get("locus_families") or []
+
+        art = by_service_artifact.get(action.service_id)
+        if art is None or not art.content:
+            evidence["skipped"][action.service_id] = "no_dashboard_artifact"
+            continue
+        try:
+            data = yaml.safe_load(art.content) or {}
+        except Exception:
+            logger.warning(
+                "red-bind: could not parse dashboard_spec YAML for %s — skipping bind",
+                action.service_id,
+            )
+            evidence["skipped"][action.service_id] = "unparseable_dashboard_spec"
+            continue
+        panels = data.get("panels")
+        if not isinstance(panels, list):
+            evidence["skipped"][action.service_id] = "no_panels_container"
+            continue
+
+        existing = {str(p.get("expr", "")) for p in panels if isinstance(p, dict)}
+        already_named = (
+            extract_referenced_metrics(existing) if extract_referenced_metrics else set()
+        )
+        added_panels: List[Dict[str, Any]] = []
+        used_families: List[str] = []
+        # red_panels[i] and red_families[i] are appended in lockstep by
+        # _locus_red_dashboard_yaml (rate, then error, then duration — only for
+        # populated slots), so a positional zip pairs each panel with its family
+        # without re-deriving the association from the expr text.
+        for panel, fam in zip(red_panels, red_families):
+            expr = str(panel.get("expr", ""))
+            if expr in existing:
+                continue
+            if _normalize_metric_name and _normalize_metric_name(fam) in already_named:
+                continue
+            added_panels.append({**panel, "group": _RED_BIND_GROUP_PREFIX})
+            existing.add(expr)
+            used_families.append(fam)
+
+        if not added_panels:
+            evidence["skipped"][action.service_id] = "red_already_complete_locus"
+            continue
+
+        panels[:0] = added_panels  # prepend — RED panels lead the dashboard
+        data["panels"] = panels
+        header_lines: List[str] = []
+        for line in art.content.splitlines(keepends=True):
+            if line.startswith("#") or not line.strip():
+                header_lines.append(line)
+                continue
+            break
+        art.content = "".join(header_lines) + yaml.dump(
+            data, default_flow_style=False, sort_keys=False
+        )
+        art.derivations.append(
+            DerivationTrace(
+                field="affordance_red_bind_panels",
+                source=f"affordance_map.{action.locus_status}.metric_locus.{action.service_id}",
+                transformation=(
+                    f"{len(added_panels)} locus-biased RED panel(s) added "
+                    "(rate/error/duration, distinct families)"
+                ),
+                tier="affordance_map",
+            )
+        )
+        evidence["services"][action.service_id] = {
+            "families_admitted": len(red_families),
+            "panels_added": len(added_panels),
+            "locus_families": sorted(set(used_families)) or sorted(set(red_families)),
+        }
+
+    # FR-5/R3-F2 audit completeness: an element outside `services` (e.g.
+    # `business-criticality`, a synthetic artifact this generator's own
+    # per-service loop never processes) fails `match_service_id` before
+    # `plan_affordance_actions` ever inspects its `affordance_ids`, so its skip
+    # is recorded with `affordance_id="(unresolved)"` — not `GEN_EMIT_RED` —
+    # and the `plan.skips` loop above misses it. Record every raw entry that
+    # DECLARES `gen.emit_red_panels` and never produced a bind (checked last,
+    # after every real plan action has already claimed its service_id), so
+    # "business-criticality produces no artifact" (FR-5) is explicit in
+    # evidence, not merely implicit in what's absent.
+    for entry in loaded.entries:
+        eid = entry.element_id or ""
+        if not eid or eid in evidence["services"] or eid in evidence["skipped"]:
+            continue
+        if GEN_EMIT_RED not in (entry.affordance_ids or []):
+            continue
+        reason = (
+            f"locus_blocked:{entry.locus_status}"
+            if entry.locus_status in _LOCUS_BLOCKING
+            else ("not_a_generator_service" if eid not in known_ids else "no_plan_action")
+        )
+        evidence["skipped"][eid] = reason
+
+    return evidence
+
+
 def generate_observability_artifacts(
     onboarding_metadata_path: Path,
     output_dir: Path,
@@ -1229,6 +1437,22 @@ def generate_observability_artifacts(
     # Computed unconditionally (dry_run included) so report.coverage_bind mirrors
     # metric_expected's dry-run/non-dry parity contract (FR-4); only the disk write
     # below is gated on dry_run.
+    # pilot-gap_red_dashboards Step 2 (FR-1/FR-2/FR-3/FR-7): land the locus-biased
+    # RED bind onto the in-memory dashboard_spec content BEFORE the coverage bind
+    # (and BEFORE _write_artifacts) — generator input, computed unconditionally
+    # (dry_run included) for the same dry-run/non-dry parity contract FR-2b
+    # established. MUST run first: the coverage bind below panels EVERY admitted
+    # family it sees not-yet-referenced, so if it ran first it would already claim
+    # the RED slots' families (source_backed services) and the RED bind's own
+    # dedup would then skip all three as "already covered" — silently landing zero
+    # RED-labeled panels. Running RED first lets it claim its (at most 3) families
+    # with Request/Error/Duration titles; the coverage bind's referenced-name dedup
+    # then fills in only the REMAINING admitted families, so the two binds compose
+    # on the shared file (FR-7) instead of one erasing the other.
+    report.red_bind = _apply_affordance_red_bind_panels(
+        report.artifacts, services, affordance_map=affordance_map
+    )
+
     report.coverage_bind = _apply_affordance_coverage_bind_panels(
         report.artifacts, services, affordance_map=affordance_map
     )

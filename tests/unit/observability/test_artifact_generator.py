@@ -1226,6 +1226,280 @@ class TestCoverageBindPanels:
         assert dry.coverage_bind == wet.coverage_bind
 
 
+class TestRedBindPanels:
+    """pilot-gap_red_dashboards Step 2 — land the already-built locus-biased
+    ``gen.emit_red_panels`` output as generator input (FR-1, FR-2, FR-3, FR-7),
+    reusing ``plan_affordance_actions``/``_locus_red_dashboard_yaml`` verbatim."""
+
+    def _meta(self, service_id="receive"):
+        return {
+            "project_id": "thanos-pilot",
+            "instrumentation_hints": {
+                service_id: {
+                    "service_id": service_id,
+                    "transport": "grpc",
+                    "language": "go",
+                    "metrics": {"convention_based": [], "manifest_declared": []},
+                },
+            },
+        }
+
+    def test_source_backed_locus_lands_distinct_rate_error_duration_panels(
+        self, tmp_path, manifest_yaml
+    ):
+        """FR-1/FR-1b: three distinct cited families land as Request Rate / Error
+        Rate / Duration panels; FR-4: no family beyond the cited set appears."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta()))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            gap_code="red_missing",
+            affordance_ids=["gen.emit_red_panels"],
+            locus_status="source_backed",
+            source_loci=[
+                {"family_or_signal": "thanos_receive_forward_requests_total", "signal_kind": "metric"},
+                {"family_or_signal": "thanos_receive_hashrings_file_errors_total", "signal_kind": "metric"},
+                {"family_or_signal": "thanos_receive_forward_delay_seconds", "signal_kind": "metric"},
+                # FR-1b: a timestamp gauge in the same locus set must never win the
+                # duration slot even though it matches the bare `_seconds$` shape.
+                {"family_or_signal": "thanos_receive_config_last_reload_success_timestamp_seconds", "signal_kind": "metric"},
+            ],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        assert report.red_bind["export_disposition"] == "fresh_export"
+        svc_evidence = report.red_bind["services"]["receive"]
+        assert svc_evidence["panels_added"] == 3
+        families = set(svc_evidence["locus_families"])
+        assert families == {
+            "thanos_receive_forward_requests_total",
+            "thanos_receive_hashrings_file_errors_total",
+            "thanos_receive_forward_delay_seconds",
+        }
+        assert len(families) == 3  # distinct-family invariant (FR-1b/R1-F1)
+
+        dashboard = next(
+            a for a in report.artifacts
+            if a.artifact_type == "dashboard_spec" and a.service_id == "receive"
+        )
+        assert "thanos_receive_forward_delay_seconds" in dashboard.content
+        assert "RED (locus-grounded)" in dashboard.content
+        # The timestamp gauge is a valid COVERAGE panel (gap #2 fills in the 4th
+        # admitted family) but MUST NOT be the RED bind's chosen duration family.
+        assert "thanos_receive_config_last_reload_success_timestamp_seconds" not in families
+        parsed = yaml.safe_load(dashboard.content)
+        red_panels = [p for p in parsed["panels"] if p.get("group") == "RED (locus-grounded)"]
+        assert len(red_panels) == 3
+        assert not any(
+            "thanos_receive_config_last_reload_success_timestamp_seconds" in p.get("expr", "")
+            for p in red_panels
+        )
+
+    def test_partial_locus_status_still_lands(self, tmp_path, manifest_yaml):
+        """FR-1: `partial` rows (e.g. query-frontend) MUST land too — unlike gap
+        #2's own source_backed-only matcher, this bind reuses `plan_affordance_actions`,
+        which admits source_backed AND partial (only excludes _LOCUS_BLOCKING)."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta("query-frontend")))
+        entry = AffordanceMapEntry(
+            element_id="query-frontend",
+            gap_code="red_missing",
+            affordance_ids=["gen.emit_red_panels"],
+            locus_status="partial",
+            source_loci=[
+                {"family_or_signal": "thanos_query_frontend_queries_total", "signal_kind": "metric"},
+            ],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        assert "query-frontend" in report.red_bind["services"]
+        assert report.red_bind["services"]["query-frontend"]["panels_added"] == 1
+
+    def test_no_source_locus_is_skipped_with_audit_reason(self, tmp_path, manifest_yaml):
+        """FR-5/R3-F2: `no_source_locus` rows (e.g. business-criticality) MUST NOT be
+        force-fed into gen.emit_red_panels; the skip MUST be explicit/auditable."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta("receive")))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            gap_code="red_missing",
+            affordance_ids=["gen.emit_red_panels"],
+            locus_status="no_source_locus",
+            source_loci=[],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        assert report.red_bind["services"] == {}
+        assert "locus_blocked:no_source_locus" in report.red_bind["skipped"]["receive"]
+
+    def test_transport_only_locus_is_skipped(self, tmp_path, manifest_yaml):
+        """FR-5: loci that exist but are all transport/component-kind (no metric
+        family) must not land a RED panel either (transport_only_loci)."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta("receive")))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            gap_code="red_missing",
+            affordance_ids=["gen.emit_red_panels"],
+            locus_status="source_backed",
+            source_loci=[{"family_or_signal": "transport:grpc", "signal_kind": "transport"}],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        assert report.red_bind["services"] == {}
+        assert report.red_bind["skipped"]["receive"] == "transport_only_loci"
+
+    def test_red_bind_and_coverage_bind_compose_without_clobbering(
+        self, tmp_path, manifest_yaml
+    ):
+        """FR-7: the RED bind and gap #2's coverage bind share the same
+        dashboards/{svc}-dashboard-spec.yaml file; RED's 3 families must land with
+        RED titles, and coverage-bind must still add the REMAINING admitted
+        families (not already referenced by the RED panels) — one write-ordering,
+        both binds' evidence present, no family silently dropped by either."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta()))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            gap_code="red_missing",
+            affordance_ids=["gen.emit_red_panels"],
+            locus_status="source_backed",
+            source_loci=[
+                {"family_or_signal": "thanos_receive_forward_requests_total", "signal_kind": "metric"},
+                {"family_or_signal": "thanos_receive_hashrings_file_errors_total", "signal_kind": "metric"},
+                {"family_or_signal": "thanos_receive_forward_delay_seconds", "signal_kind": "metric"},
+                # A 4th family with no RED-shaped name — must be picked up by the
+                # coverage bind (generic panel), not dropped by the RED bind.
+                {"family_or_signal": "thanos_receive_series_limiter_evictions", "signal_kind": "metric"},
+            ],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        assert report.red_bind["services"]["receive"]["panels_added"] == 3
+        assert report.coverage_bind["services"]["receive"]["panels_added"] == 1
+        dashboard = next(
+            a for a in report.artifacts
+            if a.artifact_type == "dashboard_spec" and a.service_id == "receive"
+        )
+        for fam in (
+            "thanos_receive_forward_requests_total",
+            "thanos_receive_hashrings_file_errors_total",
+            "thanos_receive_forward_delay_seconds",
+            "thanos_receive_series_limiter_evictions",
+        ):
+            assert dashboard.content.count(fam) == 1  # each family panelled exactly once
+
+    def test_element_outside_generator_services_is_recorded_as_skipped(
+        self, tmp_path, manifest_yaml
+    ):
+        """FR-5/R3-F2: an AffordanceMap row that declares `gen.emit_red_panels`
+        for an element the per-service loop never processes (e.g. the real
+        freeze export's `business-criticality`, a synthetic artifact outside
+        `services`) must be explicit in `skipped`, not silently absent."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta()))
+        entries = [
+            AffordanceMapEntry(
+                element_id="receive",
+                gap_code="red_missing",
+                affordance_ids=["gen.emit_red_panels"],
+                locus_status="source_backed",
+                source_loci=[
+                    {"family_or_signal": "thanos_receive_forward_requests_total", "signal_kind": "metric"},
+                ],
+            ),
+            AffordanceMapEntry(
+                element_id="business-criticality",
+                gap_code="red_missing",
+                affordance_ids=["gen.emit_red_panels"],
+                locus_status="no_source_locus",
+                source_loci=[],
+                locus_reason="no GroundTruth component/families for element",
+            ),
+        ]
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+            affordance_map=entries,
+        )
+        assert "business-criticality" not in report.red_bind["services"]
+        assert "business-criticality" in report.red_bind["skipped"]
+
+    def test_no_export_adds_no_panels(self, tmp_path, manifest_yaml):
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta()))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+        )
+        assert report.red_bind["export_disposition"] == "no_export"
+        assert report.red_bind["services"] == {}
+
+    def test_dry_run_red_bind_matches_shape(self, tmp_path, manifest_yaml):
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._meta()))
+        entry = AffordanceMapEntry(
+            element_id="receive",
+            gap_code="red_missing",
+            affordance_ids=["gen.emit_red_panels"],
+            locus_status="source_backed",
+            source_loci=[
+                {"family_or_signal": "thanos_receive_forward_requests_total", "signal_kind": "metric"},
+            ],
+        )
+        dry = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "out-dry",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+            dry_run=True,
+        )
+        wet = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "out-wet",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+            dry_run=False,
+        )
+        assert dry.red_bind == wet.red_bind
+
+
 # ---------------------------------------------------------------------------
 # Increment 3: RED completeness (gridPos, runbook_url, DB latency)
 # ---------------------------------------------------------------------------

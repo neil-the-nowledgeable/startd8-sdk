@@ -1289,3 +1289,158 @@ def test_shrink_refuse_does_not_mutate_returned_spec():
     assert {p["title"] for p in result.spec["panels"]} == {
         p["title"] for p in original["panels"]
     }
+
+
+class TestPickRedFamiliesDistinctness:
+    """pilot-gap_red_dashboards FR-1b (R1-F1/R1-F2) — distinct-family invariant +
+    duration-slot selection, replayed against the real
+    fde-freeze-2026-07-28-locked-0.5648 `red_missing` freeze rows."""
+
+    def _loci(self, *names):
+        return [{"family_or_signal": n, "signal_kind": "metric"} for n in names]
+
+    def test_compact_clean_triplet(self):
+        from startd8.observability.affordance_map_consume import _pick_red_families
+
+        rate, err, dur = _pick_red_families(self._loci(
+            "thanos_compact_group_compaction_runs_started_total",
+            "thanos_compact_garbage_collection_failures_total",
+            "thanos_compact_group_compactions_failures_total",
+            "thanos_compact_garbage_collection_duration_seconds",
+        ))
+        assert (rate, err, dur) == (
+            "thanos_compact_group_compaction_runs_started_total",
+            "thanos_compact_garbage_collection_failures_total",
+            "thanos_compact_garbage_collection_duration_seconds",
+        )
+
+    def test_query_rate_never_duplicates_error_family(self):
+        """R1-F1: `rate = names[0]` fallback must not silently duplicate the
+        family already claimed by `err` — omit the rate slot instead."""
+        from startd8.observability.affordance_map_consume import _pick_red_families
+
+        rate, err, dur = _pick_red_families(self._loci(
+            "thanos_query_store_apis_dns_failures_total",
+            "thanos_query_range_requested_timespan_duration_seconds",
+        ))
+        assert err == "thanos_query_store_apis_dns_failures_total"
+        assert dur == "thanos_query_range_requested_timespan_duration_seconds"
+        assert rate != err and rate != dur
+
+    def test_rule_and_sidecar_distinct_families(self):
+        from startd8.observability.affordance_map_consume import _pick_red_families
+
+        rate, err, dur = _pick_red_families(self._loci(
+            "thanos_alert_queue_alerts_dropped_total",
+            "thanos_alert_sender_errors_total",
+            "thanos_alert_sender_latency_seconds",
+        ))
+        picks = [x for x in (rate, err, dur) if x]
+        assert len(picks) == len(set(picks))
+        assert dur == "thanos_alert_sender_latency_seconds"
+
+        rate2, err2, dur2 = _pick_red_families(self._loci(
+            "thanos_shipper_dir_sync_failures_total",
+            "thanos_shipper_upload_failures_total",
+        ))
+        picks2 = [x for x in (rate2, err2, dur2) if x]
+        assert len(picks2) == len(set(picks2))
+
+    def test_receive_duration_prefers_delay_over_timestamp_gauge(self):
+        """R1-F2: `receive`'s real duration signal is `forward_delay_seconds`, not
+        the `_timestamp_seconds` gauge `_RED_DUR_RE` used to match first."""
+        from startd8.observability.affordance_map_consume import _pick_red_families
+
+        rate, err, dur = _pick_red_families(self._loci(
+            "thanos_receive_forward_requests_total",
+            "thanos_receive_head_series_limited_requests_total",
+            "thanos_receive_hashrings_file_errors_total",
+            "thanos_receive_metamonitoring_failed_queries_total",
+            "thanos_receive_config_last_reload_success_timestamp_seconds",
+            "thanos_receive_forward_delay_seconds",
+        ))
+        assert dur == "thanos_receive_forward_delay_seconds"
+        assert dur != "thanos_receive_config_last_reload_success_timestamp_seconds"
+
+    def test_store_duration_prefers_duration_over_timestamp_gauge(self):
+        from startd8.observability.affordance_map_consume import _pick_red_families
+
+        rate, err, dur = _pick_red_families(self._loci(
+            "thanos_store_index_cache_requests_total",
+            "thanos_store_bucket_cache_getrange_requested_bytes_total",
+            "thanos_bucket_store_block_load_failures_total",
+            "thanos_bucket_store_block_drops_total",
+            "thanos_bucket_store_blocks_last_loaded_timestamp_seconds",
+            "thanos_bucket_store_block_load_duration_seconds",
+        ))
+        assert dur == "thanos_bucket_store_block_load_duration_seconds"
+        assert dur != "thanos_bucket_store_blocks_last_loaded_timestamp_seconds"
+
+    def test_query_frontend_single_fallback_panel_no_regex_match(self):
+        """R1-F3: none of query-frontend's four families match any RED regex —
+        only the distinct-safe rate fallback fires, yielding exactly one panel."""
+        from startd8.observability.affordance_map_consume import _pick_red_families
+
+        rate, err, dur = _pick_red_families(self._loci(
+            "thanos_frontend_downsampled_extra_queries_total",
+            "thanos_query_frontend_queries_total",
+            "thanos_frontend_sharding_middleware_queries_total",
+            "thanos_frontend_split_queries_total",
+        ))
+        assert err is None and dur is None
+        assert rate is not None
+
+    def test_no_timestamp_seconds_family_ever_selected_as_duration(self):
+        """Sweeps all 7 freeze rows: a `_timestamp_seconds` family must never be
+        the chosen duration signal."""
+        from startd8.observability.affordance_map_consume import _pick_red_families
+
+        rows = {
+            "compact": [
+                "thanos_compact_group_compaction_runs_started_total",
+                "thanos_compact_garbage_collection_failures_total",
+                "thanos_compact_group_compactions_failures_total",
+                "thanos_compact_garbage_collection_duration_seconds",
+            ],
+            "query": [
+                "thanos_query_store_apis_dns_failures_total",
+                "thanos_query_range_requested_timespan_duration_seconds",
+            ],
+            "query-frontend": [
+                "thanos_frontend_downsampled_extra_queries_total",
+                "thanos_query_frontend_queries_total",
+                "thanos_frontend_sharding_middleware_queries_total",
+                "thanos_frontend_split_queries_total",
+            ],
+            "receive": [
+                "thanos_receive_forward_requests_total",
+                "thanos_receive_head_series_limited_requests_total",
+                "thanos_receive_hashrings_file_errors_total",
+                "thanos_receive_metamonitoring_failed_queries_total",
+                "thanos_receive_config_last_reload_success_timestamp_seconds",
+                "thanos_receive_forward_delay_seconds",
+            ],
+            "rule": [
+                "thanos_alert_queue_alerts_dropped_total",
+                "thanos_alert_sender_errors_total",
+                "thanos_alert_sender_latency_seconds",
+            ],
+            "sidecar": [
+                "thanos_shipper_dir_sync_failures_total",
+                "thanos_shipper_upload_failures_total",
+            ],
+            "store": [
+                "thanos_store_index_cache_requests_total",
+                "thanos_store_bucket_cache_getrange_requested_bytes_total",
+                "thanos_bucket_store_block_load_failures_total",
+                "thanos_bucket_store_block_drops_total",
+                "thanos_bucket_store_blocks_last_loaded_timestamp_seconds",
+                "thanos_bucket_store_block_load_duration_seconds",
+            ],
+        }
+        for svc, names in rows.items():
+            rate, err, dur = _pick_red_families(self._loci(*names))
+            if dur is not None:
+                assert not dur.endswith("_timestamp_seconds"), f"{svc}: dur={dur}"
+            picks = [x for x in (rate, err, dur) if x]
+            assert len(picks) == len(set(picks)), f"{svc}: duplicate family across panels"

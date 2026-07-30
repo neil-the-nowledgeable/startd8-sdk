@@ -300,7 +300,13 @@ _RED_RATE_RE = re.compile(
     re.I,
 )
 _RED_ERR_RE = re.compile(r"error|fail|drop|reject|5xx|failed", re.I)
-_RED_DUR_RE = re.compile(r"duration|latency|delay|_seconds$|_bucket$", re.I)
+# FR-1b: duration selection is two-tier — a STRONG signal (duration/latency/delay
+# in the name) MUST win over the WEAK bare-`_seconds$`/`_bucket$` shape, and a
+# `*_timestamp_seconds` gauge (a point-in-time marker, not a measured duration)
+# MUST never be picked as a duration family at either tier.
+_RED_DUR_STRONG_RE = re.compile(r"duration|latency|delay", re.I)
+_RED_DUR_WEAK_RE = re.compile(r"_seconds$|_bucket$", re.I)
+_RED_TIMESTAMP_RE = re.compile(r"_timestamp_seconds$", re.I)
 
 
 def metric_loci(entry: AffordanceMapEntry) -> List[Dict[str, Any]]:
@@ -377,30 +383,51 @@ def merge_needed_where_into_entries(
 
 
 def _pick_red_families(loci: Sequence[Mapping[str, Any]]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    rate = err = dur = None
-    for loc in loci:
-        n = str(loc.get("family_or_signal") or "")
-        if not n:
-            continue
-        if err is None and _RED_ERR_RE.search(n):
-            err = n
-        elif dur is None and _RED_DUR_RE.search(n):
-            dur = n
-        elif rate is None and _RED_RATE_RE.search(n):
-            rate = n
+    """Distinct-family RED family selection (FR-1b, R1-F1/R1-F2).
+
+    No two of the three returned families are ever the same name: each slot is
+    filled only from names not already claimed by an earlier slot, and a slot
+    with no distinct candidate is left ``None`` (omitted) rather than filled by
+    a duplicate fallback. Order of assignment is error → duration → rate, so
+    the duration slot's timestamp exclusion and strong/weak preference apply
+    before rate's catch-all fallback claims a family duration would have used.
+    """
     names = [str(l.get("family_or_signal")) for l in loci if l.get("family_or_signal")]
-    if rate is None and names:
-        rate = names[0]
-    if err is None:
-        for n in names:
-            if n != rate and _RED_ERR_RE.search(n):
-                err = n
-                break
+
+    err: Optional[str] = None
+    for n in names:
+        if _RED_ERR_RE.search(n):
+            err = n
+            break
+
+    dur: Optional[str] = None
+    for n in names:
+        if n == err or _RED_TIMESTAMP_RE.search(n):
+            continue
+        if _RED_DUR_STRONG_RE.search(n):
+            dur = n
+            break
     if dur is None:
         for n in names:
-            if n not in (rate, err) and _RED_DUR_RE.search(n):
+            if n == err or _RED_TIMESTAMP_RE.search(n):
+                continue
+            if _RED_DUR_WEAK_RE.search(n):
                 dur = n
                 break
+
+    rate: Optional[str] = None
+    for n in names:
+        if n in (err, dur):
+            continue
+        if _RED_RATE_RE.search(n):
+            rate = n
+            break
+    if rate is None:
+        for n in names:
+            if n not in (err, dur):
+                rate = n
+                break
+
     return rate, err, dur
 
 
