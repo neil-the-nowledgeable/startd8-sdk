@@ -395,6 +395,39 @@ def _team_board(agg: Optional[Dict], *, run_dir: Optional[Path] = None) -> _Team
     )
 
 
+def _speed_section(agg: Optional[Dict]) -> str:
+    """Section E (FR-SPEED-4): two time measures + harness overhead, ranked by pure-model throughput."""
+    head = "## Speed (generation time — reported, not scored)"
+    if not agg or not agg.get("by_model"):
+        return f"{head}\n\n" + _NOT_COMPUTED.format(why="no `cells.json` aggregate persisted")
+    rows = [
+        head, "",
+        "> `model` = pure model API time (Σ GenerateResult.time_ms); `pipeline wall` = whole subprocess; "
+        "`harness overhead` = (wall − model)/wall.", "",
+        "| Rank | Model | model time med (s) | model tok/s med | pipeline wall med (s) | "
+        "pipeline tok/s med | harness overhead |",
+        "|---:|---|---:|---:|---:|---:|---:|",
+    ]
+    ranked = sorted(
+        agg["by_model"],
+        key=lambda m: agg["by_model"][m].get("model_tokens_per_sec_median") or -1.0,
+        reverse=True,
+    )
+    for i, model in enumerate(ranked, 1):
+        s = agg["by_model"][model]
+        mt, wall = s.get("model_time_median_s"), s.get("latency_median_s")
+        overhead = (
+            f"{(wall - mt) / wall:.0%}"
+            if isinstance(mt, (int, float)) and isinstance(wall, (int, float)) and wall > 0
+            else "N/A"
+        )
+        rows.append(
+            f"| {i} | `{model}` | {_f(mt, 1)} | {_f(s.get('model_tokens_per_sec_median'), 1)} | "
+            f"{_f(wall, 1)} | {_f(s.get('tokens_per_sec_median'), 1)} | {overhead} |"
+        )
+    return "\n".join(rows)
+
+
 def _consistency_section(agg: Optional[Dict]) -> str:
     head = "## Consistency (most reliable first)"
     if not agg:
