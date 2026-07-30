@@ -1850,6 +1850,14 @@ def generate_observability_artifacts(
         report.artifacts, services, affordance_map=affordance_map
     )
 
+    # OBS-200a tip honesty (bus 576bf153 / tip 21398c57): AffordanceMap RED /
+    # coverage binds mutate dashboard_spec *content* after per-artifact
+    # ``_repair_and_validate`` cached ``a.quality``. Re-score so
+    # observability-quality.json matches the panels that land on disk (tip
+    # re-score already PASSed OBS-200a on the written specs while quality
+    # still listed RED 0%).
+    _rescore_dashboard_specs_after_binds(report.artifacts, services)
+
     if not dry_run:
         _write_artifacts(report.artifacts, output_dir)
         _write_index(report, business, onboarding_metadata_path, output_dir)
@@ -1862,6 +1870,62 @@ def generate_observability_artifacts(
         )
 
     return report
+
+
+def _rescore_dashboard_specs_after_binds(
+    artifacts: List[Any],
+    services: List[Any],
+) -> int:
+    """Refresh ``dashboard_spec.quality`` after AffordanceMap panel binds.
+
+    Returns the number of dashboard artifacts re-scored.
+    """
+    try:
+        from startd8.validators.observability_artifact_checks import validate_dashboard
+    except ImportError:  # pragma: no cover
+        return 0
+
+    transport_by_svc = {
+        getattr(s, "service_id", ""): getattr(s, "transport", None) or None
+        for s in services or ()
+    }
+    n = 0
+    for art in artifacts:
+        if art.artifact_type != "dashboard_spec" or art.status != "generated":
+            continue
+        if not art.content:
+            continue
+        # Only re-score when a quality dict was previously attached (Phase 4.5).
+        if not art.quality or "score" not in art.quality:
+            continue
+        transport = transport_by_svc.get(art.service_id)
+        try:
+            vr = validate_dashboard(
+                art.content,
+                art.output_path,
+                autofix=False,
+                service_id=art.service_id,
+                transport=transport,
+            )
+        except Exception:
+            logger.exception(
+                "post-bind dashboard re-score failed for %s", art.service_id
+            )
+            continue
+        art.quality = {
+            "score": round(vr.score, 4),
+            "checks_passed": vr.checks_passed,
+            "checks_total": vr.checks_total,
+            "issues": [
+                {"check": i.check, "severity": i.severity, "message": i.message}
+                for i in vr.issues
+            ],
+            "repairs_applied": list(art.quality.get("repairs_applied") or [])
+            + list(vr.repairs_applied or []),
+            "rescored_after_affordance_bind": True,
+        }
+        n += 1
+    return n
 
 
 def _declared_artifact_types(metadata: Dict[str, Any]) -> List[str]:

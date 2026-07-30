@@ -1580,6 +1580,13 @@ class TestRedBindPanels:
             "thanos_receive_series_limiter_evictions",
         ):
             assert dashboard.content.count(fam) == 1  # each family panelled exactly once
+        # OBS-200a tip honesty: quality must reflect post-bind panels (not pre-bind cache).
+        assert dashboard.quality is not None
+        assert dashboard.quality.get("rescored_after_affordance_bind") is True
+        obs200a = [
+            i for i in (dashboard.quality.get("issues") or []) if i.get("check") == "OBS-200a"
+        ]
+        assert not obs200a, obs200a
 
     def test_element_outside_generator_services_is_recorded_as_skipped(
         self, tmp_path, manifest_yaml
