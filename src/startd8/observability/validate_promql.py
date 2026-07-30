@@ -1242,7 +1242,7 @@ def run_validation(
                 fams = metric_families_from_expr(e.expr) or []
                 # Honesty: declared-base / AffordanceMap PromQL identity is the
                 # expr family, not the convention descriptor (Class B scorecard
-                # noise when thanos_* binds but expected_metric still reads
+                # noise when thanos_*/cortex_* binds but expected_metric still reads
                 # http_server_*). Verdict path unchanged — FR-4 still keeps
                 # empty-at-window + live-name as fail, not bound_no_data.
                 if fams:
@@ -1255,38 +1255,82 @@ def run_validation(
                     logger.warning("list_metric_names failed: %s", exc)
                     backend_unreachable = True
                     break
-                probe_budget = [0]
-                findings = diagnose_axes(
-                    descriptor,
-                    e.service,
-                    live_metric_names=live,
-                    label_values_fn=lambda lbl: label_vals(
-                        prometheus_url, lbl, auth=auth
-                    ),
-                    probe_budget=probe_budget,
+                live_set = set(live)
+                # PATHFIX_QF Class B: when the expr names a real domain family that
+                # has a live surface, diagnose against that identity — never the
+                # transport semconv descriptor (http_server_* axes while expr is
+                # cortex_/thanos_*).
+                domain_surface = bool(fams) and any(
+                    _family_present_in_live_names(f, live) for f in fams
                 )
-                mismatched_findings = [f for f in findings if f.mismatched]
-                mismatched = [f.axis for f in mismatched_findings]
-                # FR-1/FR-4: every descriptor axis present in the live backend ⇒ the
-                # query BINDS; the empty result is a data-availability artifact, not a
-                # fidelity failure. Any absent/mismatched axis ⇒ stays `fail` (never
-                # mask a real miss as "no data").
-                if not mismatched_findings:
-                    verdict = "bound_no_data"
-                else:
-                    remediation = _remediation_hint(
-                        mismatched_findings, live, descriptor.profile
+                if domain_surface:
+                    from .observability_fidelity_static import bare_metrics_from_expr
+
+                    scrubbed = re.sub(
+                        r"\b(?:by|without)\s*\([^)]*\)", " ", e.expr or ""
                     )
-                    suggested_profile = _suggested_profile(live, descriptor.profile)
-                axis_detail = [
-                    {
-                        "axis": f.axis,
-                        "expected": f.expected,
-                        "mismatched": f.mismatched,
-                        "detail": f.detail,
+                    exact = {
+                        n
+                        for n in (bare_metrics_from_expr(scrubbed) or ())
+                        if n in live_set
                     }
-                    for f in findings
-                ]
+                    if exact:
+                        # Exact __name__ referenced by expr is live; empty window ⇒ data.
+                        verdict = "bound_no_data"
+                        mismatched = []
+                        remediation = ""
+                        axis_detail = []
+                    else:
+                        # Basename surface live via children, but expr used an absent
+                        # bare name (native hist) — fail on expr identity, not http.server.
+                        mismatched = ["metric_name.expr_family"]
+                        remediation = (
+                            f"expr family {fams[0]!r} is absent as an exact __name__ but "
+                            "native-histogram children ({fam}_bucket/_count/_sum) are "
+                            "live — emit histogram_quantile/rate on the children "
+                            "(orientation/coverage-bind hist basename)"
+                        )
+                        axis_detail = [
+                            {
+                                "axis": "metric_name.expr_family",
+                                "expected": fams[0],
+                                "mismatched": True,
+                                "detail": remediation,
+                            }
+                        ]
+                else:
+                    probe_budget = [0]
+                    findings = diagnose_axes(
+                        descriptor,
+                        e.service,
+                        live_metric_names=live,
+                        label_values_fn=lambda lbl: label_vals(
+                            prometheus_url, lbl, auth=auth
+                        ),
+                        probe_budget=probe_budget,
+                    )
+                    mismatched_findings = [f for f in findings if f.mismatched]
+                    mismatched = [f.axis for f in mismatched_findings]
+                    # FR-1/FR-4: every descriptor axis present in the live backend ⇒ the
+                    # query BINDS; the empty result is a data-availability artifact, not a
+                    # fidelity failure. Any absent/mismatched axis ⇒ stays `fail` (never
+                    # mask a real miss as "no data").
+                    if not mismatched_findings:
+                        verdict = "bound_no_data"
+                    else:
+                        remediation = _remediation_hint(
+                            mismatched_findings, live, descriptor.profile
+                        )
+                        suggested_profile = _suggested_profile(live, descriptor.profile)
+                    axis_detail = [
+                        {
+                            "axis": f.axis,
+                            "expected": f.expected,
+                            "mismatched": f.mismatched,
+                            "detail": f.detail,
+                        }
+                        for f in findings
+                    ]
 
         verdicts.append(
             ExprVerdict(

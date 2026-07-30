@@ -2749,3 +2749,19 @@ def test_coverage_bind_panel_expr_hist_duration_uses_bucket():
     assert "histogram_quantile" in expr and "_bucket" in expr
     assert "max(" not in expr
     assert _coverage_bind_panel_expr("thanos_compact_halted") == "max(thanos_compact_halted{})"
+
+
+def test_coverage_bind_panel_expr_hist_retries_uses_bucket():
+    """PATHFIX_QF @ 21398c57: cortex_query_frontend_retries is a hist basename."""
+    from startd8.observability.artifact_generator import _coverage_bind_panel_expr
+    from startd8.observability.affordance_map_consume import _coverage_bind_expr
+
+    for fn in (_coverage_bind_panel_expr, _coverage_bind_expr):
+        expr = fn("cortex_query_frontend_retries")
+        assert "histogram_quantile" in expr
+        assert "cortex_query_frontend_retries_bucket" in expr
+        assert "max(" not in expr
+    # Counters stay max({})
+    assert _coverage_bind_panel_expr("thanos_frontend_split_queries_total") == (
+        "max(thanos_frontend_split_queries_total{})"
+    )

@@ -462,28 +462,47 @@ def _pick_red_families(loci: Sequence[Mapping[str, Any]]) -> Tuple[Optional[str]
     return rate, err, dur
 
 
-def _duration_panel_expr(dur: str) -> str:
-    """PromQL for a Duration panel from an AffordanceMap duration family.
+def _is_native_hist_basename(fam: str) -> bool:
+    """True when *fam* is a Prometheus histogram *basename* (not a child series).
 
-    Locus families are usually histogram *basenames* (``…_duration_seconds``),
-    not ``_bucket`` series. ``sum(rate(basename))`` is empty for native
-    histograms and surfaces as Class B http.server axis noise in live bind.
-    Prefer ``histogram_quantile`` on ``{fam}_bucket`` (same shape as declared-
-    base latency SLOs). Already-``_bucket`` names and non-hist durations keep
-    a plain ``rate()``.
+    Native histograms expose ``{fam}_bucket`` / ``_count`` / ``_sum`` — the bare
+    name is absent from ``__name__``. Orientation / coverage-bind used to emit
+    ``max({fam}{})`` for non-duration hists (e.g. ``cortex_query_frontend_retries``),
+    which dead-binds as Class B http.server axis noise (PATHFIX_QF @ 21398c57).
+    """
+    n = (fam or "").lower()
+    if not n:
+        return False
+    # Already a child series or an obvious counter/info — not a hist basename.
+    if n.endswith(("_bucket", "_count", "_sum", "_total", "_info", "_created")):
+        return False
+    if (
+        "_duration" in n
+        or "_latency" in n
+        or "_delay" in n
+        or "_retries" in n
+        or (n.endswith("_seconds") and "timestamp" not in n)
+    ):
+        return True
+    return False
+
+
+def _duration_panel_expr(dur: str) -> str:
+    """PromQL for a Duration/histogram panel from an AffordanceMap family.
+
+    Locus families are usually histogram *basenames* (``…_duration_seconds``,
+    ``…_retries``), not ``_bucket`` series. ``sum(rate(basename))`` /
+    ``max(basename{})`` is empty for native histograms and surfaces as Class B
+    http.server axis noise in live bind. Prefer ``histogram_quantile`` on
+    ``{fam}_bucket`` (same shape as declared-base latency SLOs). Already-
+    ``_bucket`` names keep quantile; non-hist families keep a plain ``rate()``.
     """
     fam = (dur or "").strip()
     if not fam:
         return ""
-    n = fam.lower()
     if fam.endswith("_bucket"):
         bucket = fam
-    elif (
-        "_duration" in n
-        or "_latency" in n
-        or "_delay" in n
-        or (n.endswith("_seconds") and "timestamp" not in n)
-    ):
+    elif _is_native_hist_basename(fam):
         bucket = f"{fam}_bucket"
     else:
         return f"sum(rate({fam}[$__rate_interval]))"
@@ -2267,14 +2286,8 @@ def _apply_emit_red(
 
 
 def _coverage_bind_expr(fam: str) -> str:
-    """PromQL shape for coverage binds — hist duration/delay uses ``*_bucket``."""
-    n = (fam or "").lower()
-    if (
-        "_duration" in n
-        or "_latency" in n
-        or "_delay" in n
-        or (n.endswith("_seconds") and "timestamp" not in n)
-    ):
+    """PromQL shape for coverage binds — native hist basenames use ``*_bucket``."""
+    if _is_native_hist_basename(fam):
         return _duration_panel_expr(fam)
     return f"max({fam}{{}})"
 

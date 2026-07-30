@@ -706,20 +706,15 @@ _COVERAGE_BIND_GROUP = "Coverage (AffordanceMap)"
 def _coverage_bind_panel_expr(fam: str) -> str:
     """PromQL for one AffordanceMap coverage-bind panel.
 
-    Gauges stay ``max(name{})`` (extractor-visible). Duration/delay histogram
-    basenames use ``histogram_quantile`` on ``*_bucket`` — same shape as
-    declared-base latency + AffordanceMap Duration panels — so live bind does
-    not fail Class B on missing basename gauges.
+    Gauges stay ``max(name{})`` (extractor-visible). Native histogram basenames
+    (duration/delay/retries/…_seconds) use ``histogram_quantile`` on ``*_bucket``
+    — same shape as declared-base latency + AffordanceMap Duration panels — so
+    live bind does not fail Class B on missing basename gauges (PATHFIX_QF:
+    ``cortex_query_frontend_retries`` @ tip 21398c57).
     """
-    from .affordance_map_consume import _duration_panel_expr
+    from .affordance_map_consume import _duration_panel_expr, _is_native_hist_basename
 
-    n = (fam or "").lower()
-    if (
-        "_duration" in n
-        or "_latency" in n
-        or "_delay" in n
-        or (n.endswith("_seconds") and "timestamp" not in n)
-    ):
+    if _is_native_hist_basename(fam):
         return _duration_panel_expr(fam)
     return f"max({fam}{{}})"
 
