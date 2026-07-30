@@ -20,6 +20,15 @@ ENROLLED = [
     "qwen/qwen3-max",
     "qwen/qwen-plus",
     "qwen/qwen3-coder-flash",
+    "moonshotai/kimi-k3",
+    "moonshotai/kimi-k2.7-code",
+    "moonshotai/kimi-k2.5",
+    "z-ai/glm-5.2",
+    "z-ai/glm-5.1",
+    "z-ai/glm-4.7-flash",
+    "minimax/minimax-m3",
+    "minimax/minimax-m2.7",
+    "minimax/minimax-m2.5",
 ]
 
 

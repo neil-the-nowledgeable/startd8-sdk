@@ -42,6 +42,16 @@ class OpenRouterProvider:
         "qwen/qwen3-max",                        # Qwen3 Max flagship
         "qwen/qwen-plus",                        # Qwen-Plus mid
         "qwen/qwen3-coder-flash",                # Qwen3 Coder Flash fast
+        # 8-lab heats expand (2026-07-30): Moonshot / Z.ai / MiniMax
+        "moonshotai/kimi-k3",                    # Moonshot Kimi K3 flagship
+        "moonshotai/kimi-k2.7-code",             # Moonshot Kimi K2.7 Code mid
+        "moonshotai/kimi-k2.5",                  # Moonshot Kimi K2.5 fast
+        "z-ai/glm-5.2",                          # Z.ai GLM-5.2 flagship
+        "z-ai/glm-5.1",                          # Z.ai GLM-5.1 mid
+        "z-ai/glm-4.7-flash",                    # Z.ai GLM-4.7 Flash fast
+        "minimax/minimax-m3",                    # MiniMax M3 flagship
+        "minimax/minimax-m2.7",                  # MiniMax M2.7 mid
+        "minimax/minimax-m2.5",                  # MiniMax M2.5 fast
     ]
 
     @property

@@ -184,3 +184,36 @@ def test_qtable_includes_lane_column():
     md = _qtable(agg, ["m:a"], classification={"m:a": "invite"})
     assert "| lane |" in md
     assert "`invite`" in md
+
+
+def test_carry_all_team_labs_overrides_cut(roster):
+    """Operator flag expands Team enrollment past authored main cut."""
+    from startd8.benchmark_matrix.round_roster import RoundRoster, resolve_enrollment
+
+    rr = RoundRoster(
+        lane="main",
+        team_lane_labs=["anthropic"],  # would be a cut
+        parent_run="results/heats",
+        carry_all_team_labs=True,
+    )
+    enr = resolve_enrollment(rr, roster)
+    # Fixture has anthropic + openai complete; deepseek complete; solo incomplete.
+    assert set(enr.team_lane_labs) >= {"anthropic", "openai", "deepseek"}
+    assert enr.carry_all_team_labs is True
+    assert "anthropic:opus" in enr.models
+    assert "openai:pro" in enr.models
+
+
+def test_suggest_carry_all_lists_every_eligible(roster, tmp_path):
+    from startd8.benchmark_matrix.suggest_advancement import build_suggestion
+
+    agg = _agg({
+        "anthropic:opus": 0.9, "anthropic:sonnet": 0.6, "anthropic:haiku": 0.3,
+        "openai:pro": 0.8, "openai:mini": 0.7, "openai:nano": 0.5,
+        "deepseek:pro": 0.5, "deepseek:mid": 0.4, "deepseek:fast": 0.3,
+    })
+    (tmp_path / "aggregate.json").write_text(json.dumps(agg), encoding="utf-8")
+    sug = build_suggestion(tmp_path, roster, main_n=1, carry_all_team_labs=True)
+    assert set(sug.main_suggested) == {"anthropic", "openai", "deepseek"}
+    assert sug.consolation_suggested == []
+    assert sug.carry_all_team_labs is True
