@@ -423,18 +423,43 @@ class PricingService:
         # "deepseek-chat" — they are different id strings. Confirm rates at openrouter.ai/models.
         "deepseek/deepseek-chat": ModelPricing(
             model="deepseek/deepseek-chat", provider="openrouter",
-            input_cost_per_million=0.30, output_cost_per_million=1.20,
-            estimated=True, notes="OpenRouter DeepSeek-V3; confirm at openrouter.ai/models.",
+            input_cost_per_million=0.257, output_cost_per_million=1.029,
+            estimated=True, notes="OpenRouter DeepSeek-V3; rates from /models 2026-07-30.",
         ),
         "deepseek/deepseek-r1": ModelPricing(
             model="deepseek/deepseek-r1", provider="openrouter",
-            input_cost_per_million=0.55, output_cost_per_million=2.19,
-            estimated=True, notes="OpenRouter DeepSeek-R1; confirm at openrouter.ai/models.",
+            input_cost_per_million=0.70, output_cost_per_million=2.50,
+            estimated=True, notes="OpenRouter DeepSeek-R1; rates from /models 2026-07-30.",
+        ),
+        "deepseek/deepseek-v4-pro": ModelPricing(
+            model="deepseek/deepseek-v4-pro", provider="openrouter",
+            input_cost_per_million=0.435, output_cost_per_million=0.870,
+            estimated=True, notes="OpenRouter DeepSeek-V4 Pro; rates from /models 2026-07-30.",
+        ),
+        "deepseek/deepseek-v4-flash": ModelPricing(
+            model="deepseek/deepseek-v4-flash", provider="openrouter",
+            input_cost_per_million=0.140, output_cost_per_million=0.280,
+            estimated=True, notes="OpenRouter DeepSeek-V4 Flash; rates from /models 2026-07-30.",
         ),
         "qwen/qwen-2.5-coder-32b-instruct": ModelPricing(
             model="qwen/qwen-2.5-coder-32b-instruct", provider="openrouter",
             input_cost_per_million=0.16, output_cost_per_million=0.16,
             estimated=True, notes="OpenRouter Qwen2.5-Coder-32B; confirm at openrouter.ai/models.",
+        ),
+        "qwen/qwen3-max": ModelPricing(
+            model="qwen/qwen3-max", provider="openrouter",
+            input_cost_per_million=0.780, output_cost_per_million=3.900,
+            estimated=True, notes="OpenRouter Qwen3 Max; rates from /models 2026-07-30.",
+        ),
+        "qwen/qwen-plus": ModelPricing(
+            model="qwen/qwen-plus", provider="openrouter",
+            input_cost_per_million=0.260, output_cost_per_million=0.780,
+            estimated=True, notes="OpenRouter Qwen-Plus; rates from /models 2026-07-30.",
+        ),
+        "qwen/qwen3-coder-flash": ModelPricing(
+            model="qwen/qwen3-coder-flash", provider="openrouter",
+            input_cost_per_million=0.195, output_cost_per_million=0.975,
+            estimated=True, notes="OpenRouter Qwen3 Coder Flash; rates from /models 2026-07-30.",
         ),
     }
 

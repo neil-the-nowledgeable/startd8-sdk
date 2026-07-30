@@ -144,11 +144,16 @@ class Models:
     # OpenRouter (US-billed OpenAI-compatible aggregator; see docs/design/openrouter-vendor/)
     # ==========================================================================
 
-    # DeepSeek's models via OpenRouter (no DeepSeek billing); canonical slash ids passed through
+    # DeepSeek / Qwen via OpenRouter (no vendor billing); canonical slash ids passed through
     OPENROUTER_DEEPSEEK_CHAT = "openrouter:deepseek/deepseek-chat"
     OPENROUTER_DEEPSEEK_R1 = "openrouter:deepseek/deepseek-r1"
+    OPENROUTER_DEEPSEEK_V4_PRO = "openrouter:deepseek/deepseek-v4-pro"
+    OPENROUTER_DEEPSEEK_V4_FLASH = "openrouter:deepseek/deepseek-v4-flash"
     # Hosted 2.5-family sibling of the local qwen2.5-coder:7b (scale-controlled contamination compare)
     OPENROUTER_QWEN_CODER_32B = "openrouter:qwen/qwen-2.5-coder-32b-instruct"
+    OPENROUTER_QWEN3_MAX = "openrouter:qwen/qwen3-max"
+    OPENROUTER_QWEN_PLUS = "openrouter:qwen/qwen-plus"
+    OPENROUTER_QWEN3_CODER_FLASH = "openrouter:qwen/qwen3-coder-flash"
 
     # ==========================================================================
     # Jetson Edge Cluster (self-hosted; opt-in, LAN; see docs/design/jetson-cluster-benchmark/)
@@ -408,6 +413,36 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     "qwen/qwen-2.5-coder-32b-instruct": ModelInfo(
         provider="openrouter",
         model_id="qwen/qwen-2.5-coder-32b-instruct",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "deepseek/deepseek-v4-pro": ModelInfo(
+        provider="openrouter",
+        model_id="deepseek/deepseek-v4-pro",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "deepseek/deepseek-v4-flash": ModelInfo(
+        provider="openrouter",
+        model_id="deepseek/deepseek-v4-flash",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "qwen/qwen3-max": ModelInfo(
+        provider="openrouter",
+        model_id="qwen/qwen3-max",
+        tier="flagship",
+        capabilities={"text", "code"},
+    ),
+    "qwen/qwen-plus": ModelInfo(
+        provider="openrouter",
+        model_id="qwen/qwen-plus",
+        tier="balanced",
+        capabilities={"text", "code"},
+    ),
+    "qwen/qwen3-coder-flash": ModelInfo(
+        provider="openrouter",
+        model_id="qwen/qwen3-coder-flash",
         tier="fast",
         capabilities={"text", "code"},
     ),

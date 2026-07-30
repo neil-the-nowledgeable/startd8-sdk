@@ -11,7 +11,16 @@ from startd8.costs.pricing import PricingService
 from startd8.model_catalog import get_model_info, Models
 from startd8.benchmark_matrix.runner import is_infra_error
 
-ENROLLED = ["deepseek/deepseek-chat", "deepseek/deepseek-r1", "qwen/qwen-2.5-coder-32b-instruct"]
+ENROLLED = [
+    "deepseek/deepseek-chat",
+    "deepseek/deepseek-r1",
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash",
+    "qwen/qwen-2.5-coder-32b-instruct",
+    "qwen/qwen3-max",
+    "qwen/qwen-plus",
+    "qwen/qwen3-coder-flash",
+]
 
 
 class TestProvider:
