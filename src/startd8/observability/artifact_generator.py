@@ -658,6 +658,27 @@ def build_service_metrics_expected(
 _COVERAGE_BIND_GROUP = "Coverage (AffordanceMap)"
 
 
+def _coverage_bind_panel_expr(fam: str) -> str:
+    """PromQL for one AffordanceMap coverage-bind panel.
+
+    Gauges stay ``max(name{})`` (extractor-visible). Duration/delay histogram
+    basenames use ``histogram_quantile`` on ``*_bucket`` — same shape as
+    declared-base latency + AffordanceMap Duration panels — so live bind does
+    not fail Class B on missing basename gauges.
+    """
+    from .affordance_map_consume import _duration_panel_expr
+
+    n = (fam or "").lower()
+    if (
+        "_duration" in n
+        or "_latency" in n
+        or "_delay" in n
+        or (n.endswith("_seconds") and "timestamp" not in n)
+    ):
+        return _duration_panel_expr(fam)
+    return f"max({fam}{{}})"
+
+
 def _apply_affordance_coverage_bind_panels(
     artifacts: List[Any],
     services: List[Any],
@@ -682,12 +703,9 @@ def _apply_affordance_coverage_bind_panels(
     inherited transitively: that admission already calls ``metric_loci(entry)``,
     which excludes ``transport``-kind rows and unresolved synthetic components.
 
-    Uses an explicit ``max(<name>{})`` expression rather than
-    ``_declared_series_selector`` (which renders a *bare* ``max(name)`` for a
-    label-less series — invisible to ``_extract_metric_names``, per the sibling
-    evaluator-union unit's code-review finding) — so every admitted family is
-    structurally detectable by the extractor without fabricating labels the
-    AffordanceMap locus never asserted.
+    Uses ``_coverage_bind_panel_expr``: ``max(<name>{})`` for gauges (extractor-
+    visible vs bare ``max(name)``), and histogram_quantile on ``*_bucket`` for
+    duration/delay families so native-histogram basenames bind live.
 
     Returns FR-7 evidence: ``{"export_disposition": ..., "services": {svc_id:
     {"families_admitted": n, "panels_added": n}}}``.
@@ -744,7 +762,12 @@ def _apply_affordance_coverage_bind_panels(
         for fam in sorted(families):
             if _normalize_metric_name and _normalize_metric_name(fam) in already_named:
                 continue
-            expr = f"max({fam}{{}})"
+            # Native Prometheus histograms expose *_bucket/_sum/_count — not a
+            # gauge at the basename. max(basename{}) is empty live and surfaces
+            # as Class B latency dead (compact/query/store/receive remasure).
+            # Reuse AffordanceMap Duration panel shape (histogram_quantile on
+            # _bucket) for duration/delay families; keep max({}) for gauges.
+            expr = _coverage_bind_panel_expr(fam)
             if expr in existing:
                 continue
             panels.append(
