@@ -159,6 +159,13 @@ validation. The Tier-B replay engine (`run_validation`) is reused unchanged.
   mechanism already built, adding no standup code. Full grounding + options: **`TRAFFIC_DRIVER_REUSE_MAP.md`** (this dir) and the
   cross-project catalog `~/Documents/tools/load-generators/README.md`.
 
+- **FR-9 (extension) — declarative domain-workload journey.** FR-8 warms the *ingress* (RED registration);
+  it does **not** trigger per-component metrics that register only after *domain operations* (Harbor's
+  `harbor_jobservice_task_*` after a GC/scan job, `registry_*` after an image push). Adds one reusable
+  `SHAPE_WORKLOAD` driver looping a **subject-supplied `WorkloadSpec`** (http + opt-in command steps),
+  reusing this file's bounded loop + two-part convergence — no new engine. Spec: **`REQ_WORKLOAD_TRAFFIC_JOURNEY.md`**
+  (this dir); origin + first consumer: Harbor pilot (`OSS/Harbor/analysis/compare-live/HARBOR_FULL_TOPOLOGY_WORKLOAD.md`).
+
 ## 3. Non-Requirements
 - **NR-A** Consuming the app's real `docker-compose.yml` verbatim (volumes/healthchecks/build) — a lean
   topology input only in v1; real-compose ingestion is a later increment.
