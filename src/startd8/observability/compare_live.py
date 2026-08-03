@@ -19,6 +19,7 @@ See ``docs/design/observability-compare/REQUIREMENTS.md``.
 
 from __future__ import annotations
 
+import time
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -215,6 +216,16 @@ def run_live_comparison(
     subject_compose: Optional[Path] = None,
     warm_up: Optional[str] = None,
     warm_up_metric: Optional[str] = None,
+    # FR-9 — declarative domain-workload journey (--warm-up workload). On the --prometheus path,
+    # drive it at `subject_url` before the replay so domain-gated metrics register.
+    workload_spec: Optional[Path] = None,
+    allow_workload_commands: bool = False,
+    subject_url: Optional[str] = None,
+    # bounded settle-poll for the workload's registers_metric (tolerate Prometheus scrape lag);
+    # sleep_fn injectable so the wait is unit-tested with zero real time.
+    workload_settle_attempts: int = 6,
+    workload_settle_interval: float = 5.0,
+    workload_sleep_fn: Callable[[float], None] = time.sleep,
     metrics_mode: str = "direct",
     metrics_path: str = "/metrics",
     prometheus: Optional[str] = None,
@@ -254,6 +265,43 @@ def run_live_comparison(
 
     # ── Path 1: existing backend (no standup) ──────────────────────────────
     if prometheus:
+        standup_detail: Dict[str, Any] = {"skipped": "used existing --prometheus backend", "prometheus_url": prometheus}
+        # FR-9: optionally drive a declarative domain workload at the subject ingress before the
+        # replay, so domain-gated metrics (jobservice/registry/…) register. Fail-loud on non-convergence.
+        if warm_up == live_compose.warmup_traffic.SHAPE_WORKLOAD:
+            wt = live_compose.warmup_traffic
+            if not workload_spec:
+                return build_live_comparison(comparison, None,
+                    {"mode": "prometheus", "reason": "--warm-up workload requires --workload-spec"},
+                    strict_tier_a=strict_tier_a)
+            if not subject_url:
+                return build_live_comparison(comparison, None,
+                    {"mode": "prometheus", "reason": "--warm-up workload requires --subject-url (the ingress to drive)"},
+                    strict_tier_a=strict_tier_a)
+            try:
+                spec = wt.load_workload_spec(str(workload_spec))
+            except Exception as e:  # noqa: BLE001 — a bad spec is unknown, not a crash
+                return build_live_comparison(comparison, None,
+                    {"mode": "prometheus", "reason": f"invalid --workload-spec: {e}"},
+                    strict_tier_a=strict_tier_a)
+            outcome = wt.run_workload_journey(spec, base_url=subject_url, allow_commands=allow_workload_commands)
+            standup_detail = {"mode": "prometheus", "prometheus_url": prometheus, "workload": outcome.to_dict()}
+            # Two-part convergence with a bounded settle-poll: the driver terminal-success is instant,
+            # but a just-registered series needs a scrape before samples_landed sees it (Prometheus
+            # scrape lag). Poll a few times before declaring unknown — never a silent green replay.
+            ready, reason = wt.evaluate_warmup(outcome, prometheus_url=prometheus, count_metric=[], auth=auth)
+            if ready:  # driver itself succeeded → now wait for the samples to land
+                metrics = list(outcome.registers_metrics)
+                for _attempt in range(workload_settle_attempts):
+                    ready, reason = wt.evaluate_warmup(outcome, prometheus_url=prometheus,
+                                                       count_metric=metrics, auth=auth)
+                    if ready or not metrics:
+                        break
+                    workload_sleep_fn(workload_settle_interval)
+            if not ready:
+                # a required step failed / a metric stayed zero after settle → unknown
+                standup_detail["reason"] = f"workload warm-up did not converge: {reason}"
+                return build_live_comparison(comparison, None, standup_detail, strict_tier_a=strict_tier_a)
         fidelity = _validate(
             artifacts_dir=artifacts_dir,
             onboarding_metadata=onboarding_metadata,
@@ -262,11 +310,7 @@ def run_live_comparison(
             allow_prod=allow_prod,
             auth=auth,
         )
-        return build_live_comparison(
-            comparison, fidelity,
-            {"skipped": "used existing --prometheus backend", "prometheus_url": prometheus},
-            strict_tier_a=strict_tier_a,
-        )
+        return build_live_comparison(comparison, fidelity, standup_detail, strict_tier_a=strict_tier_a)
 
     # ── Path 2: stand up a multi-container subject topology (Inc-1) ─────────
     if subject_compose:
