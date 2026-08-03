@@ -365,14 +365,12 @@ def run_workload_journey(
     results: list = []
     all_required_ok = True
     for step in spec.steps:
-        if step.registers_metric:
-            metrics.append(step.registers_metric)
         if step.kind == "command":
             if not allow_commands:
                 results.append((step.name, "skipped (commands not allowed)"))
                 if not step.optional:
                     all_required_ok = False
-                continue
+                continue  # a skipped optional step does NOT contribute its metric to the required union
             rc, detail = command_runner(step)
             ok = rc == 0
         else:
@@ -382,6 +380,10 @@ def run_workload_journey(
         results.append((step.name, "ok" if ok else f"FAIL: {detail}"))
         if ok:
             out.exercised = True
+            # Only a step that actually ran should require its metric to land — a
+            # skipped/failed step must not force its registers_metric into the gate.
+            if step.registers_metric:
+                metrics.append(step.registers_metric)
         elif not step.optional:
             all_required_ok = False
     out.terminal_success = out.exercised and all_required_ok
