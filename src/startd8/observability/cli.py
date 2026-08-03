@@ -467,8 +467,10 @@ def compare_live_cmd(
         None,
         "--warm-up",
         help="Drive bounded warm-up traffic at the subject ingress before the gate "
-        "(FR-8; --subject-compose only). One of: smoke (generic OpenAPI), ob-http, "
-        "ob-grpc. Needed for span-metrics / lazily-registered RED series.",
+        "(FR-8). One of: smoke (generic OpenAPI), ob-http, ob-grpc (--subject-compose only), "
+        "or workload (FR-9 — a declarative domain-workload journey via --workload-spec; works "
+        "on the --prometheus path with --subject-url). Needed for lazily-registered RED / "
+        "domain-gated series.",
     ),
     warm_up_metric: str = typer.Option(
         None,
@@ -476,6 +478,25 @@ def compare_live_cmd(
         help="Histogram _count metric the warm-up gate requires non-zero samples for "
         "(e.g. traces_spanmetrics_calls_total). With --warm-up; converges only when "
         "sum(increase(<metric>[1m]))>0 AND the driver reached terminal success.",
+    ),
+    workload_spec: Path = typer.Option(
+        None,
+        "--workload-spec",
+        help="FR-9 — path to a declarative WorkloadSpec (JSON/YAML) of domain operations "
+        "(http + opt-in command steps, each naming the metric it registers). Used with "
+        "--warm-up workload.",
+    ),
+    allow_workload_commands: bool = typer.Option(
+        False,
+        "--allow-workload-commands",
+        help="FR-9 — permit the WorkloadSpec's command steps (e.g. `docker push`) to run "
+        "host-side. Off by default (http steps only).",
+    ),
+    subject_url: str = typer.Option(
+        None,
+        "--subject-url",
+        help="FR-9 — the subject ingress the workload journey drives (e.g. "
+        "http://127.0.0.1:18080), required with --warm-up workload on the --prometheus path.",
     ),
     metrics_mode: str = typer.Option(
         "direct",
@@ -565,6 +586,9 @@ def compare_live_cmd(
         subject_compose=subject_compose,
         warm_up=warm_up,
         warm_up_metric=warm_up_metric,
+        workload_spec=workload_spec,
+        allow_workload_commands=allow_workload_commands,
+        subject_url=subject_url,
         metrics_mode=metrics_mode,
         metrics_path=metrics_path,
         prometheus=prometheus,

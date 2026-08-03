@@ -46,13 +46,19 @@ from .prometheus_query import Auth
 SHAPE_SMOKE = "smoke"
 SHAPE_OB_HTTP = "ob-http"
 SHAPE_OB_GRPC = "ob-grpc"
-VALID_SHAPES = (SHAPE_SMOKE, SHAPE_OB_HTTP, SHAPE_OB_GRPC)
+#: FR-9 — a subject-supplied declarative domain-workload journey (http + opt-in command
+#: steps). Generalizes ``smoke`` (auto-discovered CRUD) to an authored workflow so
+#: per-component, domain-gated metrics register. Driven by ``run_workload_journey`` (a
+#: single pass through the steps), NOT the ``drive_warmup`` iteration loop — most domain
+#: ops (create-project, push-image) are not idempotent.
+SHAPE_WORKLOAD = "workload"
+VALID_SHAPES = (SHAPE_SMOKE, SHAPE_OB_HTTP, SHAPE_OB_GRPC, SHAPE_WORKLOAD)
 
-#: The HTTP shapes a host-side driver loop can exercise (v1). ``ob-grpc`` needs an
-#: in-fleet driver (the subject's gRPC ports stay on the internal, host-unreachable
-#: fleet net), so the standup wiring defers it; the driver itself is still selectable
-#: here for the future in-compose sidecar.
-HOST_DRIVABLE_SHAPES = (SHAPE_SMOKE, SHAPE_OB_HTTP)
+#: The shapes a host-side driver loop can exercise (v1). ``ob-grpc`` needs an in-fleet
+#: driver (the subject's gRPC ports stay on the internal, host-unreachable fleet net), so
+#: the standup wiring defers it; the driver itself is still selectable here for the future
+#: in-compose sidecar. ``workload`` is host-drivable (http + host commands).
+HOST_DRIVABLE_SHAPES = (SHAPE_SMOKE, SHAPE_OB_HTTP, SHAPE_WORKLOAD)
 
 
 @dataclass
@@ -80,6 +86,12 @@ class WarmupOutcome:
     terminal_success: bool = False
     iterations: int = 0
     reason: str = ""
+    #: FR-9 — the union of the workload steps' ``registers_metric`` (the count metrics the
+    #: caller feeds to :func:`evaluate_warmup` for the non-zero-samples gate). Empty for the
+    #: non-workload shapes (they take a single ``--warm-up-metric``). Additive/back-compat.
+    registers_metrics: tuple = ()
+    #: FR-9 — per-step results, for a fail-loud report (name → detail). Empty for other shapes.
+    step_results: tuple = ()
 
     def to_dict(self) -> dict:
         return {
@@ -88,6 +100,8 @@ class WarmupOutcome:
             "terminal_success": self.terminal_success,
             "iterations": self.iterations,
             "reason": self.reason,
+            "registers_metrics": list(self.registers_metrics),
+            "step_results": list(self.step_results),
         }
 
 
@@ -169,6 +183,14 @@ def drive_warmup(
     """
     if spec.shape not in VALID_SHAPES:
         return WarmupOutcome(driver=spec.shape, reason=f"unknown warm-up shape {spec.shape!r}")
+    if spec.shape == SHAPE_WORKLOAD:
+        # FR-9: the workload shape drives a single pass through a subject-supplied WorkloadSpec
+        # (non-idempotent domain ops), not this iteration loop. The caller must use
+        # run_workload_journey(workload_spec, base_url=..., ...) directly.
+        return WarmupOutcome(
+            driver=SHAPE_WORKLOAD,
+            reason="workload shape uses run_workload_journey(spec, base_url=...), not drive_warmup",
+        )
     fns = _resolve_fns(driver_fns, spec.shape)
     outcome = WarmupOutcome(driver=spec.shape)
 
@@ -212,6 +234,168 @@ def drive_warmup(
     return outcome
 
 
+# ---------------------------------------------------------------------------
+# FR-9 — declarative domain-workload journey (SHAPE_WORKLOAD)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WorkloadStep:
+    """One authored domain operation in a WorkloadSpec (FR-9.1)."""
+
+    name: str
+    kind: str = "http"                       # "http" | "command"
+    # http
+    method: str = "GET"
+    path: str = ""
+    body: Optional[Any] = None
+    auth_ref: Optional[str] = None           # references the spec-level auth block
+    expect_status: str = "2xx"               # "2xx" | "any" | explicit like "200,201,409"
+    # command (opt-in; non-HTTP effects, e.g. `docker push`)
+    argv: Optional[list] = None
+    env: Optional[Dict[str, str]] = None
+    # convergence
+    registers_metric: str = ""               # count/total metric this step should make non-zero
+    optional: bool = False                   # a failing optional step does not sink terminal_success
+
+
+@dataclass
+class WorkloadSpec:
+    """A subject-supplied, subject-agnostic domain-workload journey (FR-9.1/9.4/9.6)."""
+
+    name: str
+    steps: list
+    #: {"kind": "basic"|"bearer"|"none", "user"?, "password_env"?, "token_env"?} — creds come
+    #: from the ENV only (password_env / token_env name the var), and are redacted in logs.
+    auth: Optional[Dict[str, str]] = None
+
+
+def load_workload_spec(path: str) -> WorkloadSpec:
+    """Load a WorkloadSpec from a JSON (or YAML if pyyaml is present) file. Fail-loud on shape."""
+    import json
+    from pathlib import Path as _P
+
+    text = _P(path).read_text()
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        import yaml  # optional; only needed for .yaml specs
+
+        raw = yaml.safe_load(text)
+    if not isinstance(raw, dict) or not isinstance(raw.get("steps"), list):
+        raise ValueError(f"{path}: WorkloadSpec must be an object with a 'steps' list")
+    steps = [WorkloadStep(**s) for s in raw["steps"]]
+    return WorkloadSpec(name=str(raw.get("name") or _P(path).stem), steps=steps, auth=raw.get("auth"))
+
+
+def _status_ok(code: int, expect: str) -> bool:
+    expect = (expect or "2xx").strip().lower()
+    if expect == "any":
+        return True
+    if expect == "2xx":
+        return 200 <= code < 300
+    return str(code) in {c.strip() for c in expect.split(",")}
+
+
+def _resolve_app_auth(spec: WorkloadSpec) -> tuple:
+    """App-level auth for the workload's HTTP steps → (basic_tuple|None, headers|None).
+
+    Distinct from the Prometheus :class:`Auth` (bearer for the metrics backend). Credentials
+    come from the ENV only (FR-9.4): ``password_env`` / ``token_env`` name the var, never a
+    literal in the spec.
+    """
+    import os
+
+    a = spec.auth or {}
+    kind = str(a.get("kind") or "none").lower()
+    if kind == "basic":
+        return (str(a.get("user") or ""), os.environ.get(str(a.get("password_env") or ""), "")), None
+    if kind == "bearer":
+        tok = os.environ.get(str(a.get("token_env") or ""), "")
+        return None, ({"Authorization": f"Bearer {tok}"} if tok else None)
+    return None, None
+
+
+def _default_http_runner(step: WorkloadStep, *, base_url: str, basic=None, headers=None) -> tuple[int, str]:
+    """Real HTTP step → (status_code, detail). Never raises (a hiccup is a non-success)."""
+    import httpx
+
+    kwargs: Dict[str, Any] = {"timeout": 15.0}
+    if basic:
+        kwargs["auth"] = basic
+    if headers:
+        kwargs["headers"] = headers
+    try:
+        r = httpx.request(step.method.upper(), base_url.rstrip("/") + step.path,
+                          json=step.body if step.body is not None else None, **kwargs)
+        return r.status_code, ""
+    except Exception as e:  # noqa: BLE001 — a transport hiccup is a non-success, not a crash
+        return 0, f"{type(e).__name__}: {e}"
+
+
+def _default_command_runner(step: WorkloadStep) -> tuple[int, str]:
+    import os
+    import subprocess
+
+    env = {**os.environ, **(step.env or {})}
+    try:
+        p = subprocess.run(step.argv or [], env=env, capture_output=True, text=True, timeout=120)
+        return p.returncode, (p.stderr or "")[:200]
+    except Exception as e:  # noqa: BLE001
+        return 1, f"{type(e).__name__}: {e}"
+
+
+def run_workload_journey(
+    spec: WorkloadSpec,
+    *,
+    base_url: str,
+    allow_commands: bool = False,
+    http_runner: Optional[Callable[..., tuple]] = None,
+    command_runner: Optional[Callable[..., tuple]] = None,
+) -> WarmupOutcome:
+    """FR-9.2 — one pass through the spec's steps → a WarmupOutcome (reuses the dataclass +
+    :func:`evaluate_warmup`). ``exercised`` = ≥1 step succeeded; ``terminal_success`` = every
+    non-``optional`` step reached its ``expect_status``. Command steps are no-ops unless
+    ``allow_commands`` (FR-9.1). Fully injectable (``http_runner``/``command_runner``) → tested
+    with zero network / zero docker. Never raises."""
+    http_runner = http_runner or _default_http_runner
+    command_runner = command_runner or _default_command_runner
+    basic, headers = _resolve_app_auth(spec)
+    out = WarmupOutcome(driver=SHAPE_WORKLOAD, iterations=1)
+    metrics: list = []
+    results: list = []
+    all_required_ok = True
+    for step in spec.steps:
+        if step.kind == "command":
+            if not allow_commands:
+                results.append((step.name, "skipped (commands not allowed)"))
+                if not step.optional:
+                    all_required_ok = False
+                continue  # a skipped optional step does NOT contribute its metric to the required union
+            rc, detail = command_runner(step)
+            ok = rc == 0
+        else:
+            code, detail = http_runner(step, base_url=base_url, basic=basic, headers=headers)
+            ok = code != 0 and _status_ok(code, step.expect_status)
+            detail = detail or f"status={code}"
+        results.append((step.name, "ok" if ok else f"FAIL: {detail}"))
+        if ok:
+            out.exercised = True
+            # Only a step that actually ran should require its metric to land — a
+            # skipped/failed step must not force its registers_metric into the gate.
+            if step.registers_metric:
+                metrics.append(step.registers_metric)
+        elif not step.optional:
+            all_required_ok = False
+    out.terminal_success = out.exercised and all_required_ok
+    out.registers_metrics = tuple(dict.fromkeys(metrics))  # dedup, preserve order
+    out.step_results = tuple(results)
+    if not out.exercised:
+        out.reason = f"workload '{spec.name}' exercised nothing: {results}"
+    elif not out.terminal_success:
+        out.reason = f"workload '{spec.name}' had a required step fail: {[r for r in results if 'FAIL' in r[1] or 'skipped' in r[1]]}"
+    return out
+
+
 def samples_landed(
     prometheus_url: str,
     count_metric: str,
@@ -251,12 +435,18 @@ def evaluate_warmup(
         return False, outcome.reason or f"warm-up driver '{outcome.driver}' could not exercise the subject"
     if not outcome.terminal_success:
         return False, outcome.reason or f"warm-up driver '{outcome.driver}' never reached terminal success"
-    if count_metric:
+    # count_metric may be a single name (smoke/ob shapes) or a list (FR-9 workload: the union of the
+    # steps' registers_metric). A list requires EVERY metric to land — a job that silently never ran
+    # leaves its metric at zero and must fail-loud, not green.
+    metrics = [count_metric] if isinstance(count_metric, str) else list(count_metric or [])
+    if metrics:
         if not prometheus_url:
             return False, "warm-up convergence needs a prometheus_url to check non-zero samples"
-        if not samples_landed(prometheus_url, count_metric, window=window, auth=auth, query_fn=query_fn):
+        empty = [m for m in metrics
+                 if not samples_landed(prometheus_url, m, window=window, auth=auth, query_fn=query_fn)]
+        if empty:
             return False, (
-                f"no non-zero samples for {count_metric} after warm-up "
+                f"no non-zero samples for {empty} after warm-up "
                 f"(driver '{outcome.driver}' succeeded, but the subject emits no such series)"
             )
     return True, ""
@@ -266,12 +456,17 @@ __all__ = [
     "SHAPE_SMOKE",
     "SHAPE_OB_HTTP",
     "SHAPE_OB_GRPC",
+    "SHAPE_WORKLOAD",
     "VALID_SHAPES",
     "HOST_DRIVABLE_SHAPES",
     "WarmupSpec",
     "WarmupOutcome",
     "DriverFns",
     "drive_warmup",
+    "WorkloadStep",
+    "WorkloadSpec",
+    "load_workload_spec",
+    "run_workload_journey",
     "samples_landed",
     "evaluate_warmup",
 ]
