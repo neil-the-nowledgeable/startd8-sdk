@@ -92,7 +92,18 @@ class MetricDescriptor:
 
     # ------------------------------------------------------------------ helpers
     def service_matcher(self, service_id: str) -> str:
-        """``service_name="checkoutservice"`` — the identity matcher only."""
+        """``service_name="checkoutservice"`` — the identity matcher only.
+
+        **Name-scoped identity:** an empty :attr:`service_label_key` yields an
+        empty matcher. Subjects that encode the component in the *metric name*
+        (``harbor_core_*`` / ``harbor_jobservice_*``, and Prometheus-classic
+        exporters generally) expose NO per-service label — the name already IS
+        the identity, so ANDing a ``service="core"`` matcher would select
+        nothing. Such a profile sets ``service_label_key=""`` and relies on its
+        component-scoped ``throughput_metric`` / ``latency_bucket_metric`` names.
+        """
+        if not self.service_label_key:
+            return ""
         value = self.service_label_value_tpl.format(service_id=service_id)
         return f'{self.service_label_key}="{value}"'
 
@@ -100,9 +111,13 @@ class MetricDescriptor:
         """A full ``{...}`` label selector for *service_id*.
 
         Includes the identity matcher, any :attr:`extra_selectors`, and — when
-        *error* is true — the :attr:`error_selector`.
+        *error* is true — the :attr:`error_selector`. Empty parts (e.g. a
+        name-scoped profile's absent identity matcher) are dropped so the
+        rendered selector never contains a stray leading/trailing comma.
         """
-        parts = [self.service_matcher(service_id), *self.extra_selectors]
+        parts = [
+            p for p in (self.service_matcher(service_id), *self.extra_selectors) if p
+        ]
         if error and self.error_selector:
             parts.append(self.error_selector)
         return "{" + ",".join(parts) + "}"
@@ -176,6 +191,45 @@ _PROFILES: Dict[str, MetricDescriptor] = {
         error_selector='error_type!=""',
         throughput_metric="messaging_process_duration_count",
         latency_bucket_metric="messaging_process_duration_bucket",
+        latency_unit="s",
+    ),
+    # ── Harbor (Prometheus-classic, name-scoped) — grounded from the full-topology
+    #    live run 2026-08-03 (goharbor/harbor v2.15.2). Harbor is the archetypal
+    #    "component-in-the-name, no service label" surface: each component owns its
+    #    metric name (`harbor_core_*`, `harbor_task_*`) and carries NO `service`
+    #    label, so `service_label_key=""` (name-scoped identity, see service_matcher).
+    #    This is the concrete counter-model to the OTel-semconv presets above and the
+    #    fix for the Harbor pilot's 0-bind result (OTel identity vs classic reality).
+    #
+    #    core RED — the request surface on core's own METRIC_PORT. GROUNDED:
+    #      throughput  harbor_core_http_request_total{code,method,operation}   (counter)
+    #      errors      label is `code` (NOT semconv `status`)  →  code=~"5.."
+    #      latency     harbor_core_http_request_duration_seconds  is a **summary**
+    #                  (quantile label, NO `_bucket`) — the histogram_quantile RED
+    #                  latency SLI cannot bind to it (EC-SUMMARY-TYPE). Left empty so
+    #                  latency is cleanly ABSENT rather than a dead `_bucket` query;
+    #                  a summary-latency descriptor mode is the follow-up (see
+    #                  analysis/compare-live/FINDINGS_full-topology-metric-identity).
+    "harbor-core-http": MetricDescriptor(
+        profile="harbor-core-http",
+        service_label_key="",                       # name-scoped: harbor_core_* IS the identity
+        error_selector='code=~"5.."',
+        throughput_metric="harbor_core_http_request_total",
+        latency_bucket_metric="",                   # summary, not histogram — no bucket to bind
+        latency_unit="s",
+    ),
+    #    jobservice/task surface — exporter-aggregated task processing. GROUNDED:
+    #      throughput  harbor_task_scheduled_total  (counter; the real name — NOT the
+    #                  generated `harbor_jobservice_task_total`)
+    #      no per-task error label and queue depth/latency are GAUGES
+    #      (harbor_task_queue_size / _queue_latency / _concurrency), so availability &
+    #      histogram-latency don't apply — throughput is the one bindable RED axis.
+    "harbor-jobservice-task": MetricDescriptor(
+        profile="harbor-jobservice-task",
+        service_label_key="",
+        error_selector="",                          # no error dimension on the task counter
+        throughput_metric="harbor_task_scheduled_total",
+        latency_bucket_metric="",
         latency_unit="s",
     ),
 }
