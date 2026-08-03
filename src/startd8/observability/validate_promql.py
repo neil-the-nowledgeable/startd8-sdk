@@ -607,6 +607,8 @@ def detect_target_drift(
         if d is None:
             continue
         key = d.service_label_key
+        if not key:
+            continue  # name-scoped identity — no service label to drift-check
         if key not in by_key:
             try:
                 by_key[key] = set(label_values_fn(key))
@@ -711,8 +713,11 @@ def diagnose_axes(
 
     # ── axis: service label key ──────────────────────────────────────────
     # The key is a cause when the backend has no values for it. One probe.
+    # Name-scoped profiles (empty service_label_key — the component is in the
+    # metric NAME, e.g. harbor_core_*) carry no service-label axis, so there is
+    # nothing to check: skip it rather than flag the (correctly) absent label.
     label_key = descriptor.service_label_key
-    if _budget_ok():
+    if label_key and _budget_ok():
         _spend()
         try:
             values = label_values_fn(label_key)

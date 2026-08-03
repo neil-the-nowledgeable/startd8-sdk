@@ -946,10 +946,12 @@ def _add_database_panels(
     service_matcher = descriptor.service_matcher(service.service_id)
     db_key = descriptor.db_system_label_key
     for db in service.detected_databases:
+        # Drop an empty identity matcher (name-scoped profile) so the selector never
+        # renders a stray leading comma: `{,db_system=...}` is a PromQL parse error.
+        _sel = ",".join(p for p in (service_matcher, f'{db_key}="{db}"') if p)
         expr = (
             "histogram_quantile(0.99, "
-            f'rate(db_client_operation_duration_bucket{{{service_matcher},'
-            f'{db_key}="{db}"}}[$__rate_interval]))'
+            f"rate(db_client_operation_duration_bucket{{{_sel}}}[$__rate_interval]))"
         )
         panels.append(
             {
