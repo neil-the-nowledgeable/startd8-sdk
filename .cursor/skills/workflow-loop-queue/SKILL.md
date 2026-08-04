@@ -86,6 +86,25 @@ Parent directories must exist. Follow-on CRP should be a separate job with
      (`vasi_version`, `job_id`, `surface_id`, `ok`, `round_number`,
      `suggestion_counts`, `paths_written`, `reviewer_model` = exact assigned
      slug). Do **not** use `schema_version` — that field fails closed.
+   - **`suggestion_counts` keys must be only `S` and `F`** (substantive /
+     fix). Do **not** use severity labels (`blocking` / `major` / `minor` /
+     `nit`) — those fail closed on consume. Minimal exemplar:
+
+     ```json
+     {
+       "vasi_version": "0.1.0",
+       "job_id": "<job-id>",
+       "surface_id": "cursor_task",
+       "ok": true,
+       "round_number": 1,
+       "suggestion_counts": { "S": 2, "F": 1 },
+       "paths_written": ["<absolute-req-or-plan-path>"],
+       "reviewer_model": "<assigned_reviewer.model slug>"
+     }
+     ```
+
+     Fail-closed extras: do not add `loop_id`, `status`, `requirements_path`,
+     `plan_path`, or other non-VASI fields — they invalidate the drain.
    - Current chat only orchestrates and runs the verify `run-next`.
    - **Scope the CRP reviewer:** primary inputs are the bundle, the focus file,
      and the source docs. **Targeted reads of named existing code** the docs claim

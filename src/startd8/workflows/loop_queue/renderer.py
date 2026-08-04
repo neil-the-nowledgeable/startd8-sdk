@@ -48,6 +48,10 @@ DEFAULT_RENDERER_SCRIPT = Path(
     "~/Documents/dev/cap-dev-pipe/new-cnvrg-rvw-prmpt.sh"
 ).expanduser()
 
+# Fail closed if the CRP prompt generator hangs (seen ~90s+ stalls on run-next).
+# Override with $STARTD8_CRP_RENDERER_TIMEOUT_SECONDS (positive int).
+DEFAULT_RENDERER_TIMEOUT_SECONDS = 120
+
 _SINGLE_BRACE_FIELD_RE = re.compile(r"(?<!\{)\{[a-zA-Z_][a-zA-Z0-9_]*\}(?!\})")
 
 # Packaged prompt filenames (see ``prompts/`` and ``prompt_loader.PROMPT_ENV``).
@@ -86,6 +90,24 @@ def resolve_renderer_script(configured: Optional[Path] = None) -> Path:
     if env:
         return Path(env).expanduser()
     return DEFAULT_RENDERER_SCRIPT
+
+
+def resolve_renderer_timeout_seconds() -> float:
+    """Seconds before the default CRP renderer subprocess is killed."""
+    raw = os.environ.get("STARTD8_CRP_RENDERER_TIMEOUT_SECONDS")
+    if raw is None or raw.strip() == "":
+        return float(DEFAULT_RENDERER_TIMEOUT_SECONDS)
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise LoopQueueValidationError(
+            f"STARTD8_CRP_RENDERER_TIMEOUT_SECONDS must be a number, got {raw!r}"
+        ) from exc
+    if value <= 0:
+        raise LoopQueueValidationError(
+            f"STARTD8_CRP_RENDERER_TIMEOUT_SECONDS must be > 0, got {value}"
+        )
+    return value
 
 
 def bundle_cache_key(
@@ -215,7 +237,20 @@ def render_bundle(
     if request.focus_file:
         cmd += ["--focus-file", request.focus_file]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    timeout_s = resolve_renderer_timeout_seconds()
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout_s
+        )
+    except subprocess.TimeoutExpired as exc:
+        stderr = (exc.stderr or b"" if isinstance(exc.stderr, bytes) else exc.stderr) or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        raise LoopQueueBlockedError(
+            f"bundle renderer timed out after {timeout_s}s: {script} "
+            f"(set STARTD8_CRP_RENDERER_TIMEOUT_SECONDS to raise). "
+            f"{(stderr or '').strip()}"
+        ) from exc
     if proc.returncode != 0 or not bundle_path.is_file():
         raise LoopQueueBlockedError(
             f"bundle renderer failed (rc={proc.returncode}): "
