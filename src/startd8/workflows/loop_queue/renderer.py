@@ -223,6 +223,10 @@ def render_bundle(
         )
     generated = bundle_path.read_text(encoding="utf-8")
     preamble = load_prompt_text("crp-memory-preamble.md")
+    try:
+        preamble_label = resolve_prompt_path("crp-memory-preamble.md")
+    except FileNotFoundError:
+        preamble_label = Path("crp-memory-preamble.md")
     memory = _render_slot_template(
         preamble,
         {
@@ -230,7 +234,7 @@ def render_bundle(
             "applied_ids": ", ".join(applied_ids) or "(none)",
             "rejected_ids": ", ".join(rejected_ids) or "(none)",
         },
-        resolve_prompt_path("crp-memory-preamble.md"),
+        preamble_label,
     )
     if not memory.endswith("\n"):
         memory += "\n"
@@ -257,9 +261,12 @@ def render_reflective_bundle(
         template_label = template_path
         template_text = template_bytes.decode("utf-8")
     else:
-        template_label = resolve_prompt_path(REFLECTIVE_PROMPT_NAME)
-        template_text = template_label.read_text(encoding="utf-8")
+        template_text = load_prompt_text(REFLECTIVE_PROMPT_NAME)
         template_bytes = template_text.encode("utf-8")
+        try:
+            template_label = resolve_prompt_path(REFLECTIVE_PROMPT_NAME)
+        except FileNotFoundError:
+            template_label = Path(REFLECTIVE_PROMPT_NAME)
 
     key = hashlib.sha256(
         request.content_hash().encode("ascii") + b":" + template_bytes
@@ -299,9 +306,12 @@ def render_research_bundle(
         template_label = template_path
         template_text = template_bytes.decode("utf-8")
     else:
-        template_label = resolve_prompt_path(RESEARCH_PROMPT_NAME)
-        template_text = template_label.read_text(encoding="utf-8")
+        template_text = load_prompt_text(RESEARCH_PROMPT_NAME)
         template_bytes = template_text.encode("utf-8")
+        try:
+            template_label = resolve_prompt_path(RESEARCH_PROMPT_NAME)
+        except FileNotFoundError:
+            template_label = Path(RESEARCH_PROMPT_NAME)
 
     key = hashlib.sha256(
         request.content_hash().encode("ascii") + b":" + template_bytes

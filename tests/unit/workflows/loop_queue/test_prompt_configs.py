@@ -46,11 +46,35 @@ def test_crp_memory_preamble_slots():
     assert "WLQ authoritative drain context" in text
 
 
+def test_prompt_basename_rejects_traversal():
+    from startd8.workflows.loop_queue.prompt_loader import assert_prompt_basename
+
+    assert_prompt_basename("reflective-requirements.md")
+    with pytest.raises(ValueError, match="basename"):
+        assert_prompt_basename("../etc/passwd")
+    with pytest.raises(ValueError, match="basename"):
+        assert_prompt_basename("nested/foo.md")
+    with pytest.raises(ValueError, match="basename"):
+        load_prompt_text("../evil.md")
+
+
 def test_reflective_default_mentions_phase_46():
     text = default_reflective_template_text()
     assert "Phase 4.5" in text
     assert "Phase 4.6" in text
     assert "{{requirements_path}}" in text
+    assert "**soft** — not consume-checked" in text
+    assert "vasi_version" in text
+    assert "job_id" in text
+    assert "surface_id" in text
+
+
+def test_reflective_recipe_completion_matches_gate_ceiling():
+    from startd8.workflows.loop_queue import list_recipes
+
+    refl = next(r for r in list_recipes() if r.loop_id == "reflective-requirements")
+    assert "not consume-checked" in refl.completion
+    assert "plan hardened through" not in refl.completion
 
 
 def test_research_default_has_slots():
