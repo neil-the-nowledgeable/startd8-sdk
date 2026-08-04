@@ -164,7 +164,7 @@ class EventTypeDescriptor:
 
     name: str
     # Instrument-grouping axis (agent, cost, pipeline, truncation, job,
-    # enhancement, storage, system) — NOT the 5-category observability taxonomy.
+    # enhancement, storage, system) — NOT the 6-category observability taxonomy.
     # Renamed from `category` to `event_group` (REQ-OBS-SHARED-001a) so `category`
     # means the taxonomy uniformly across descriptor classes.
     event_group: str

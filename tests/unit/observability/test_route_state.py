@@ -290,3 +290,25 @@ class TestRouteStateValuesEnum:
         assert ROUTE_STATE_VALUES == {
             "sdk_emitted", "contextcore_owned", "declared_unimplemented", "external_convention",
         }
+
+
+class TestCategoryValuesEnum:
+    """The 6-category taxonomy (what is observed). DELIVERY added for ContextCore's
+    Feature/Delivery Observability Phase 2 — see
+    docs/CATEGORY_DELIVERY_OBSERVABILITY_REQUEST_FROM_CONTEXTCORE_2026-08-04.md §5.
+    """
+
+    def test_six_categories(self):
+        assert CATEGORY_VALUES == {
+            "service_observability",
+            "business_observability",
+            "pipeline_innate",
+            "project_observability",
+            "ai_agent_observability",
+            "delivery_observability",
+        }
+
+    def test_delivery_member_is_valid_facet(self):
+        # ContextCore's acceptance check (request §5): the facet is now a valid member.
+        assert "delivery_observability" in {c.value for c in Category}
+        assert Category.DELIVERY.value == "delivery_observability"
