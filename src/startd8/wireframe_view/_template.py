@@ -271,7 +271,12 @@ __PLAN_DATA__
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
   function el(html){ var t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstChild; }
-  function badge(st){ return '<span class="badge b-'+esc(st)+'">'+esc(String(st).replace(/_/g," "))+'</span>'; }
+  // Domain profile (opt-in): a status's own label+color, else the app-build default.
+  function profStatus(st){ var P=(payload.profile&&payload.profile.statuses)||null;
+    if(P){ for(var i=0;i<P.length;i++){ if(P[i].key===st) return P[i]; } } return null; }
+  function badge(st){ var p=profStatus(st);
+    if(p) return '<span class="badge" style="background:'+esc(p.color)+'">'+esc(p.label)+'</span>';
+    return '<span class="badge b-'+esc(st)+'">'+esc(String(st).replace(/_/g," "))+'</span>'; }
 
   // ---------- EC-2: per-section sign-off (approve / flag), persisted client-side ----------
   // The preview's verb is *approve*: the owner marks each section "looks right" or flags it with a note.
@@ -336,8 +341,8 @@ __PLAN_DATA__
     if(EU){
       var steps=(s.steps||[]).map(function(t){ return '<li>'+esc(t)+'</li>'; }).join("");
       h.innerHTML=
-        '<div class="eyebrow">Your app <span class="dot">·</span> '+esc(data.app_name||"")+'</div>'+
-        '<h1 class="headline">'+esc(s.headline||"A first look at your app")+'</h1>'+
+        '<div class="eyebrow">'+esc((payload.profile&&payload.profile.eyebrow)||"Your app")+' <span class="dot">·</span> '+esc(data.app_name||"")+'</div>'+
+        '<h1 class="headline">'+esc(s.headline||(payload.profile&&payload.profile.headline)||"A first look at your app")+'</h1>'+
         (s.lead?'<p class="lead">'+esc(s.lead)+'</p>':'')+
         (steps?'<ol class="steps">'+steps+'</ol>':'');
     } else {
@@ -496,14 +501,17 @@ __PLAN_DATA__
     ["mast","warn","glance","todos","outline"].forEach(function(id){ document.getElementById(id).innerHTML=""; });
     var cl=document.getElementById("closing"); cl.innerHTML=""; cl.hidden=true;
     renderMast(); renderGlance(); renderTodos();
-    document.getElementById("seclead").textContent = EU?"What your app includes":"Per-section shape";
+    document.getElementById("seclead").textContent = (payload.profile&&payload.profile.section_lead) ? payload.profile.section_lead : (EU?"What your app includes":"Per-section shape");
     var m=document.getElementById("outline");
     (data.sections||[]).forEach(function(sec){ m.appendChild(renderSection(sec)); });
     renderClosing();
     // QW-5: status legend (plain meanings for the dots/badges)
-    document.getElementById("legend").innerHTML =
-      [["planned","ready to build"],["not_defined","not set up yet"],["placeholder","rough draft"],["invalid","needs fixing"]]
-      .map(function(a){ return '<span><i class="dot d-'+a[0]+'"></i>'+a[1]+'</span>'; }).join("");
+    document.getElementById("legend").innerHTML = (function(){
+      var P=(payload.profile&&payload.profile.statuses)||null;
+      if(P) return P.map(function(s){ return '<span><i class="dot" style="background:'+esc(s.color)+'"></i>'+esc(s.meaning)+'</span>'; }).join("");
+      return [["planned","ready to build"],["not_defined","not set up yet"],["placeholder","rough draft"],["invalid","needs fixing"]]
+        .map(function(a){ return '<span><i class="dot d-'+a[0]+'"></i>'+a[1]+'</span>'; }).join("");
+    })();
     renderSignbar();   // EC-2: sign-off progress + export
   }
 

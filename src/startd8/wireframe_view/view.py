@@ -14,6 +14,7 @@ from typing import Optional
 
 from ..wireframe.delivery_roles import KITS
 from ..wireframe.plan import WireframePlan
+from ..wireframe.profile import RenderProfile
 from ..wireframe.render import SCHEMA_VERSION, _inputs_fingerprint
 from ._template import WIREFRAME_VIEW_TEMPLATE
 from .compose import compose
@@ -67,6 +68,7 @@ def render_html(
     role: str = DEFAULT_HTML_ROLE,
     fluency: str = DEFAULT_HTML_FLUENCY,
     live_reload_secs: Optional[int] = None,
+    profile: Optional[RenderProfile] = None,
 ) -> str:
     """The standalone offline HTML preview for ``plan`` — deterministic, no external assets.
 
@@ -86,6 +88,10 @@ def render_html(
     # (fingerprint is deterministic — SHA-256 over inputs — so this preserves render-html determinism).
     payload = {"default": default, "variants": variants, "kits": kits,
                "inputs_fingerprint": _inputs_fingerprint(plan)}
+    # Opt-in domain vocabulary/chrome. Embedded ONLY when a profile is passed, so
+    # the app path's payload — and its bytes — are unchanged (byte-identity tests).
+    if profile is not None:
+        payload["profile"] = profile.to_dict()
     html = (
         WIREFRAME_VIEW_TEMPLATE
         .replace("__EXPECTED_SCHEMA__", str(EXPECTED_SCHEMA_VERSION))
@@ -115,6 +121,7 @@ def render_to_file(
     role: str = DEFAULT_HTML_ROLE,
     fluency: str = DEFAULT_HTML_FLUENCY,
     live_reload_secs: Optional[int] = None,
+    profile: Optional[RenderProfile] = None,
 ) -> Path:
     """Write the preview atomically (temp + rename); create the parent dir. Returns the path.
 
@@ -124,7 +131,8 @@ def render_to_file(
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(
-        render_html(plan, role=role, fluency=fluency, live_reload_secs=live_reload_secs),
+        render_html(plan, role=role, fluency=fluency,
+                    live_reload_secs=live_reload_secs, profile=profile),
         encoding="utf-8",
     )
     os.replace(tmp, path)
