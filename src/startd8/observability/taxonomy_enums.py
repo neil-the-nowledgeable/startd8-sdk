@@ -1,7 +1,7 @@
 """
 Single source of truth for the observability taxonomy axes.
 
-Defines the ``category`` (5-value) and ``orientation`` (3-value) enums that the
+Defines the ``category`` (6-value) and ``orientation`` (3-value) enums that the
 descriptor manifest (``observability/manifest.py``) and the artifact-dispatch
 taxonomy registry both consume. Per ``REQ-OBS-SHARED-001`` / ``REQ-OBS-SHARED-003``
 (R3-F7), these domains are defined ONCE here and imported by both validation
@@ -18,7 +18,7 @@ from typing import FrozenSet
 
 
 class Category(str, Enum):
-    """The 5-category observability taxonomy (what is observed).
+    """The 6-category observability taxonomy (what is observed).
 
     ``str``-valued so descriptor fields typed ``str`` can hold a member and
     serialize to its value transparently.
@@ -29,6 +29,10 @@ class Category(str, Enum):
     PIPELINE_INNATE = "pipeline_innate"
     PROJECT = "project_observability"
     AI_AGENT = "ai_agent_observability"
+    # Feature/product delivery beyond agents (milestone/epic pace, product-request
+    # queue, unified rollup). Requested by ContextCore for its Feature/Delivery
+    # Observability Phase 2 — see docs/CATEGORY_DELIVERY_OBSERVABILITY_REQUEST_FROM_CONTEXTCORE_2026-08-04.md
+    DELIVERY = "delivery_observability"
 
 
 class Orientation(str, Enum):

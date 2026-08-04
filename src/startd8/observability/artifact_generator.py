@@ -2420,13 +2420,14 @@ def _write_index(
                 inferred += 1
         summary["metric_route_state_counts"] = rs_counts
         summary["metric_classifications_inferred"] = inferred
-        # REQ-OAT-041: cat-4/5 (project / AI-agent) metrics have no generator yet;
-        # surface the count so the "awaiting a cat-4/5 home" gap is visible, not
-        # silently mixed into service observability.
+        # REQ-OAT-041: cat-4/5/6 (project / AI-agent / delivery) metrics have no
+        # generator yet; surface the count so the "awaiting a category home" gap is
+        # visible, not silently mixed into service observability.
         summary["metrics_awaiting_category_home"] = sum(
             1
             for r in report.route_states
-            if r.get("category") in (Category.PROJECT.value, Category.AI_AGENT.value)
+            if r.get("category")
+            in (Category.PROJECT.value, Category.AI_AGENT.value, Category.DELIVERY.value)
         )
 
     index: Dict[str, Any] = {
