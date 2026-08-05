@@ -42,7 +42,9 @@ __all__ = [
     "ExtendedArtifactValidationResult",
     "validate_extended_artifact",
     "has_rate_panel",
+    "has_explicit_rate_panel",
     "has_error_panel",
+    "has_explicit_error_panel",
     "has_duration_panel",
     "get_all_panel_exprs",
     "PortalValidationResult",
@@ -1291,6 +1293,75 @@ def has_rate_panel(panels: List[Dict[str, Any]]) -> bool:
     return False
 
 
+def has_explicit_rate_panel(
+    panels: List[Dict[str, Any]], throughput_metric: str = ""
+) -> bool:
+    """Narrow Rate-panel *presence* check for dashboard GENERATION backfill.
+
+    Answers a different question than :func:`has_rate_panel`: "does an explicit
+    request-*throughput* Rate panel already exist, so ``_ensure_red_coverage``
+    must not synthesize a duplicate?" — NOT the broad "is Rate *covered* by any
+    panel (incl. AffordanceMap ``rate(..._total)`` binds)?" that
+    :func:`has_rate_panel` answers for OBS-200a scoring.
+
+    The broad form intentionally matches *any* ``rate(..._total)`` counter so the
+    scorer credits AffordanceMap binds (commit ``5f6fe5f9``). But those same
+    ``_total`` counters also cover non-throughput auto-panels — e.g.
+    ``rate(rpc_server_request_size_total)`` / ``response_size_total`` — so using
+    the broad form as the generation gate wrongly concludes "Rate present" and
+    *suppresses* the synthesized Request Rate panel (the FR-13
+    ``test_request_service_still_gets_synthesized_red`` regression).
+
+    ``throughput_metric`` is the descriptor's real throughput series (FR-4). When
+    given, the check is PRECISE — "does a panel already ``rate()`` *that exact*
+    series?" — which is correct for BOTH ``_count`` (semconv histogram count) and
+    ``_total`` (span-metrics ``calls_total`` / Harbor ``harbor_*_total``)
+    throughput, and immune to non-throughput ``_total`` size counters. Without it
+    (standalone callers) fall back to the titled / semconv-``_count`` heuristic.
+    """
+    # Precise, descriptor-aware path: an existing panel already rates the real
+    # throughput series ⇒ Rate is present (no duplicate to synthesize). Covers a
+    # _total throughput counter (e.g. a "Calls" auto-panel rating calls_total)
+    # that the _count-only heuristic below would miss.
+    if throughput_metric:
+        needle = f"rate({throughput_metric.lower()}"
+        for expr in get_all_panel_exprs(panels):
+            if needle in expr.lower():
+                return True
+        for panel in panels:  # idempotency: a previously-synthesized titled panel
+            title = _panel_title_lower(panel)
+            if (
+                title in ("request rate", "rate") or title.endswith(" request rate")
+            ) and _panel_has_expr(panel):
+                return True
+        return False
+
+    for panel in panels:
+        title = _panel_title_lower(panel)
+        # Positive: an explicit throughput Rate panel identified by title.
+        if title in ("request rate", "rate") or title.endswith(" request rate"):
+            if _panel_has_expr(panel):
+                return True
+        # A panel titled as the Error or Duration leg is never the R leg, even
+        # if its expr contains rate(..._count) (e.g. an error-ratio numerator).
+        if any(tok in title for tok in ("error", "latency", "duration")):
+            continue
+        exprs = [str(panel.get("expr") or "")]
+        exprs += [
+            str(t.get("expr") or "")
+            for t in panel.get("targets", [])
+            if isinstance(t, dict)
+        ]
+        for e in exprs:
+            el = e.lower()
+            if "rate(" not in el or "_count" not in el:
+                continue
+            if any(tok in el for tok in ("error", "failure", "fail", "status")):
+                continue
+            return True
+    return False
+
+
 def has_error_panel(panels: List[Dict[str, Any]]) -> bool:
     """Check for an error rate panel (E in RED)."""
     for panel in panels:
@@ -1311,6 +1382,44 @@ def has_error_panel(panels: List[Dict[str, Any]]) -> bool:
         ):
             return True
     return False
+
+
+def has_explicit_error_panel(
+    panels: List[Dict[str, Any]], throughput_metric: str = "", error_selector: str = ""
+) -> bool:
+    """Narrow Error-panel *presence* check for dashboard GENERATION backfill.
+
+    The Error-leg mirror of :func:`has_explicit_rate_panel`: "does an explicit
+    Error-rate panel already exist, so ``_ensure_red_coverage`` must not synthesize
+    a duplicate?" — NOT the broad "does any panel mention error/status?" that
+    :func:`has_error_panel` answers for OBS-200a scoring. The broad form can
+    false-positive on a non-E panel (any expr containing ``status``/``error``
+    text) and wrongly *suppress* the synthesized Error Rate — the same
+    scorer-vs-generation conflation that produced the Rate regression.
+
+    Precise when given the descriptor's ``throughput_metric`` + ``error_selector``
+    (FR-4): the E leg is a panel that ``rate()``-s the throughput series over the
+    error subset (expr contains both). A service with no ``error_selector`` (e.g.
+    Harbor jobservice — no error dimension) has no identifiable E panel by expr, so
+    only an explicit Error-titled panel counts. Falls back to the broad
+    :func:`has_error_panel` when no descriptor is supplied (standalone callers).
+    """
+    for panel in panels:
+        title = _panel_title_lower(panel)
+        if title in ("error rate", "errors", "error") or "error rate" in title:
+            if _panel_has_expr(panel):
+                return True
+    if throughput_metric:
+        if error_selector:
+            tm = f"rate({throughput_metric.lower()}"
+            es = error_selector.lower()
+            for expr in get_all_panel_exprs(panels):
+                e = expr.lower()
+                if tm in e and es in e:
+                    return True
+        # descriptor path: no Error-titled panel and no error-subset expr ⇒ absent.
+        return False
+    return has_error_panel(panels)
 
 
 def has_duration_panel(panels: List[Dict[str, Any]]) -> bool:
