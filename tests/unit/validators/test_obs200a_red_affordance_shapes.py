@@ -17,6 +17,7 @@ from startd8.validators.observability_artifact_checks import (
     _compute_red_coverage,
     has_duration_panel,
     has_error_panel,
+    has_explicit_error_panel,
     has_explicit_rate_panel,
     has_rate_panel,
     validate_dashboard,
@@ -225,3 +226,33 @@ class TestTotalThroughputDoesNotDuplicate:
         # "Calls" is the throughput panel; a synthesized "Request Rate" would be a duplicate.
         assert "Calls" in titles
         assert "Request Rate" not in titles
+
+
+class TestExplicitErrorPanelIsNarrow:
+    """`has_explicit_error_panel` (GENERATION gate) must not false-positive on a
+    non-E panel the way the broad `has_error_panel` (SCORING) does — else it
+    suppresses the synthesized Error Rate (the E-leg twin of the Rate regression).
+    """
+
+    def test_broad_matches_stray_failure_counter_but_narrow_does_not(self):
+        # A per-metric auto-panel for a counter whose name contains "fail" — NOT the
+        # RED E leg, but the broad scorer detector matches it on the "fail" substring
+        # and would wrongly suppress the synthesized Error Rate.
+        stray = [{"title": "Cache Failures", "expr": "rate(cache_failures_total{service=\"x\"}[5m])"}]
+        assert has_error_panel(stray) is True                       # broad: "fail" substring
+        assert has_explicit_error_panel(stray, "rpc_server_duration_count", 'grpc_code=~"Internal"') is False
+
+    def test_narrow_matches_error_subset_of_throughput(self):
+        err = [{"title": "Error Ratio",
+                "expr": "sum(rate(rpc_server_duration_count{service=\"x\",grpc_code=~\"Internal\"}[5m]))"
+                        " / sum(rate(rpc_server_duration_count{service=\"x\"}[5m]))"}]
+        assert has_explicit_error_panel(err, "rpc_server_duration_count", 'grpc_code=~"Internal"') is True
+
+    def test_narrow_matches_error_titled_panel(self):
+        assert has_explicit_error_panel([{"title": "Error Rate", "expr": "q"}], "m", "sel") is True
+
+    def test_no_error_selector_service_only_titled_panels_count(self):
+        # Harbor jobservice: error_selector="" (no error dimension) — a stray expr
+        # must not be read as the E leg.
+        stray = [{"title": "Scheduled", "expr": "rate(harbor_task_scheduled_total[5m])"}]
+        assert has_explicit_error_panel(stray, "harbor_task_scheduled_total", "") is False

@@ -44,6 +44,7 @@ __all__ = [
     "has_rate_panel",
     "has_explicit_rate_panel",
     "has_error_panel",
+    "has_explicit_error_panel",
     "has_duration_panel",
     "get_all_panel_exprs",
     "PortalValidationResult",
@@ -1381,6 +1382,44 @@ def has_error_panel(panels: List[Dict[str, Any]]) -> bool:
         ):
             return True
     return False
+
+
+def has_explicit_error_panel(
+    panels: List[Dict[str, Any]], throughput_metric: str = "", error_selector: str = ""
+) -> bool:
+    """Narrow Error-panel *presence* check for dashboard GENERATION backfill.
+
+    The Error-leg mirror of :func:`has_explicit_rate_panel`: "does an explicit
+    Error-rate panel already exist, so ``_ensure_red_coverage`` must not synthesize
+    a duplicate?" — NOT the broad "does any panel mention error/status?" that
+    :func:`has_error_panel` answers for OBS-200a scoring. The broad form can
+    false-positive on a non-E panel (any expr containing ``status``/``error``
+    text) and wrongly *suppress* the synthesized Error Rate — the same
+    scorer-vs-generation conflation that produced the Rate regression.
+
+    Precise when given the descriptor's ``throughput_metric`` + ``error_selector``
+    (FR-4): the E leg is a panel that ``rate()``-s the throughput series over the
+    error subset (expr contains both). A service with no ``error_selector`` (e.g.
+    Harbor jobservice — no error dimension) has no identifiable E panel by expr, so
+    only an explicit Error-titled panel counts. Falls back to the broad
+    :func:`has_error_panel` when no descriptor is supplied (standalone callers).
+    """
+    for panel in panels:
+        title = _panel_title_lower(panel)
+        if title in ("error rate", "errors", "error") or "error rate" in title:
+            if _panel_has_expr(panel):
+                return True
+    if throughput_metric:
+        if error_selector:
+            tm = f"rate({throughput_metric.lower()}"
+            es = error_selector.lower()
+            for expr in get_all_panel_exprs(panels):
+                e = expr.lower()
+                if tm in e and es in e:
+                    return True
+        # descriptor path: no Error-titled panel and no error-subset expr ⇒ absent.
+        return False
+    return has_error_panel(panels)
 
 
 def has_duration_panel(panels: List[Dict[str, Any]]) -> bool:

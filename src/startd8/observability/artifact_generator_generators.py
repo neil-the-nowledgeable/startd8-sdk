@@ -1021,17 +1021,22 @@ def _ensure_red_coverage(
     # legit _total throughput panel. has_explicit_rate_panel keyed on the
     # descriptor's real throughput_metric is precise for both _count and _total.
     throughput_metric = descriptor.throughput_metric
+    error_selector = descriptor.error_selector
     try:
         from startd8.validators.observability_artifact_checks import (
-            has_explicit_rate_panel, has_error_panel,
+            has_explicit_rate_panel, has_explicit_error_panel,
         )
         has_rate = has_explicit_rate_panel(panels, throughput_metric)
-        has_error = has_error_panel(panels)
+        has_error = has_explicit_error_panel(panels, throughput_metric, error_selector)
     except ImportError:
-        # Fallback inline detection if validator not available
+        # Fallback inline detection if validator not available — precise on the
+        # descriptor's real throughput series + error subset (see the narrow
+        # has_explicit_* rationale above), not a broad substring sweep.
         exprs = [str(p.get("expr", "")).lower() for p in panels]
-        has_rate = any(f"rate({throughput_metric.lower()}" in e for e in exprs)
-        has_error = any("error" in e or "status_code" in e for e in exprs)
+        tm = f"rate({throughput_metric.lower()}"
+        es = error_selector.lower()
+        has_rate = any(tm in e for e in exprs)
+        has_error = bool(es) and any(tm in e and es in e for e in exprs)
 
     if has_rate and has_error:
         return  # Already have full RED coverage
