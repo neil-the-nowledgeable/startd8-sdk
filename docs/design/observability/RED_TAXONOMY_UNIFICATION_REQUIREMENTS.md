@@ -1,10 +1,52 @@
 # RED Panel Classification Unification — Requirements
 
 **Status:** Draft (spec only — no implementation)
+**Version:** 0.3.1 (post reflective-loop: planning + lessons + design-principle hardening)
 **Date:** 2026-08-04
 **Owner:** observability
 **Scope:** `src/startd8/observability/`, `src/startd8/validators/observability_artifact_checks.py`
 **Related:** OBS-200a RED scorer; AffordanceMap consume (WP-B2/FR-B4 shrink); `MetricDescriptor` (`REQ_TARGET_METRIC_BINDING.md`, #226 FR-12/FR-13)
+
+---
+
+## 0. Planning Insights (Self-Reflective Update)
+
+> Built an implementation plan against the real code (`observability_artifact_checks.py`,
+> `artifact_generator_generators.py`, `affordance_map_consume.py`, `metric_descriptor.py`).
+> The plan corrected the v0.1 draft in nine places; the load-bearing ones are D1 and D4.
+
+| # | v0.1 assumption | Planning discovery (evidence) | Impact |
+|---|-----------------|-------------------------------|--------|
+| **D1** | Fixing B3 (unify the DURATION rule) trades off against NG2/FR-5 byte-parity — R4/OQ-2 treat it as a live tension. | **No golden has a `histogram_quantile` panel lacking a `duration`/`latency` token** (`grep histogram_quantile tests/.../http_golden/*.yaml \| grep -vi 'duration\|latency'` → empty). The B3 divergence is **theoretical, absent from the corpus**. | **OQ-2 resolved → stricter rule**, at **zero** golden-coverage change. R4 downgraded from "intentionally not byte-preserving" to "no observed panel affected; guard still asserts it." |
+| **D2** | `_pick_red_families` can be re-expressed to return `Mapping[RedRole, str]` (FR-8). | It returns a **positional `Tuple[Optional[str], Optional[str], Optional[str]]`** (rate/err/dur), with other call sites. | FR-8 reframed: **wrap** with a tuple→`Mapping[RedRole,str]` adapter; do **not** change the function signature. |
+| **D3** | classify keys on "the panel expr". | Panels carry exprs in **both `panel["expr"]` and `panel["targets"][].expr`**; the existing helpers use targets-aware extraction (`_panel_has_expr`/`get_all_panel_exprs`, `:1240`/`:1250`). | classify_red_role **must** read the full expr set (reuse `get_all_panel_exprs`), else it mis-classifies target-based panels as NONE. |
+| **D4** | FR-13 grep-guard ("RED substring logic in exactly one file") coexists with NG4 (keep `_pick_red_families` regexes). | **Direct contradiction:** `_RED_RATE_RE`/`_RED_ERR_RE`/`_RED_DUR_*_RE` (`affordance_map_consume.py:329`–`:340`) **are** RED substring classification outside `red_taxonomy`. | **Resolved by unifying, not exempting:** move the `_RED_*_RE` name→role regexes **into** `red_taxonomy` as the descriptor-free *name* classifier; `_pick_red_families` becomes a thin consumer. NG4 rewritten; FR-8/FR-13 reconciled. |
+| **D5** | G2: deriving all three questions from one classifier means they "can no longer disagree." | The scorer/shrink use the **descriptor-free** tier; the generator uses the **descriptor-grounded** tier — **different tiers by design** (broad coverage vs precise presence). | G2 refined: the invariant is **per-tier** consistency (FR-7 within the descriptor-free scorer↔shrink tier). B1 is killed by **decoupling the shared function into tiers**, not by forcing global agreement. |
+| **D6** | `metric_identity` dedup key = `throughput_metric \| error_selector \| latency_bucket_metric`. | `error_selector` is a **selector string** (`status=~"5.."`), not a metric name; the error leg **rides `throughput_metric`** (`rate(tm{err})/rate(tm)`, `:1058`). | Dedup identity defined **per role**: RATE→`throughput_metric`, ERROR→`throughput_metric` (the E leg is the same series), DURATION→`latency_bucket_metric`. §3.4 + OQ-4 updated. |
+| **D7** | — | `_compute_red_coverage` is genuinely descriptor-free (`has_*_panel`, `:1335`); FR-5 parity is well-posed **and** (via D1) empirically clean. | FR-5 kept, strengthened with the D1 receipt. |
+| **D8** | FR-3 (ERROR vs RATE) needs a rule. | Confirmed: error expr = `descriptor.selector(id, error=True)` appends `error_selector` (`:1056`) → carries `throughput_metric` **and** `error_selector`; rate expr carries only `throughput_metric`. | FR-3 implementable exactly as specced (RATE = tm ∧ ¬error_selector; ERROR = tm ∧ error_selector). |
+| **D9** | Spec line numbers are exact. | All cited **symbols exist**, but line numbers run **~10 off** (`_panel_is_red_protected` at `:1435` not `:1426`; shrink helpers `:1459/:1483/:1502`). | Phantom-reference note added; **anchor tests/guards on symbol names, not line numbers.** |
+
+**Resolved open questions:**
+- **OQ-2 → stricter DURATION rule** (`histogram_quantile` **AND** duration/latency). D1 proves no existing golden loses coverage. This is the unified rule everywhere.
+- **OQ-1 → keep public shims** (default retained; honors the `__all__` rule). Unchanged, now explicit.
+- **OQ-4 → metric-name identity suffices** for the current single-service-per-spec dashboards (D6); the label selector is *not* part of the key. Re-open only if multi-service dashboards land.
+
+### 0.1 Lessons-Learned Hardening (v0.3)
+
+> Applied the SDK design-doc lessons before external review. Each changed the draft:
+
+- **Phantom-reference audit** — every cited symbol was grepped (D2, D8, D9): all exist, but line numbers drift ~10 and `_pick_red_families`'s return type was mis-stated → FR-8 corrected, D9 note added, guards re-anchored on symbols.
+- **Single-source vocabulary ownership** — this refactor *is* the lesson: `RedRole` + `classify_red_role` become the one owner; every other module cites/consumes it (FR-13). The D4 fix pulls the last stray owner (`_RED_*_RE`) into that home rather than exempting it.
+- **Overloaded-term co-location** — `RedRole` lands in a **new** `red_taxonomy.py`, not bolted onto the validator or the affordance module (no second meaning stacked on an existing owner).
+
+### 0.2 Design-Principle Hardening (v0.3.1)
+
+> Checked against `docs/design-princples/`. Each changed the draft:
+
+- **Genchi Genbutsu (go and see)** — the classifier binds to the descriptor's **real** `throughput_metric`/`error_selector`/`latency_bucket_metric`, not a `_count`/`_total` suffix proxy (the core of the spec). Reinforced R1: match the **full** metric name, never a suffix.
+- **Accidental-Complexity anti-principle** — the D4 resolution replaces an *exemption list* (FR-13 carve-out for `_pick_red_families`) with **one general rule** (all name→role logic lives in `red_taxonomy`). Deleting the special case beats documenting it. Also guarded the inverse: the **two-tier** classifier is justified by G4 (descriptor-free dashboards are real), not gratuitous abstraction.
+- **Mottainai (don't regenerate)** — the deduping synthesizer *forwards* an already-present RED role instead of re-emitting it; the dedup key is the anti-double-emit mechanism, not a rebuild-then-restore.
 
 ---
 
@@ -115,7 +157,12 @@ axis (A) on name substrings instead of the descriptor's real metric identities.
   `MetricDescriptor`'s **real** metric identities (`throughput_metric`, `error_selector`,
   `latency_bucket_metric`), not on `_count` / `_total` / `histogram_quantile` substring guessing.
 - **G2.** Derive all three questions (covered? / present? / protected?) from that one role
-  classification, so they can no longer disagree (kills B1, B3, B4 by construction).
+  classification. **Per-tier consistency is the guarantee** (D5): the scorer and shrink both run the
+  *descriptor-free* tier so they cannot disagree (FR-7 kills B3); the generator runs the
+  *descriptor-grounded* tier. B1 is killed by **decoupling the shared function into two tiers of one
+  classifier** — a scoring-tier change can no longer leak into the generation tier — not by forcing
+  the broad and precise tiers to agree (they intentionally differ: coverage is broad, presence is
+  precise).
 - **G3.** One synthesizer that both the descriptor path and the locus path call, deduping by
   `(RedRole, metric_identity)` — structurally preventing the double-emit (kills B2 and the
   two-writers risk in §1.1.5).
@@ -132,9 +179,11 @@ axis (A) on name substrings instead of the descriptor's real metric identities.
   fixtures must stay byte-identical where current behavior is correct.
 - **NG3.** No new RED roles, no new descriptor axes, no change to the `MetricDescriptor` profile
   table (`metric_descriptor.py:142`–`:235`).
-- **NG4.** Not a rewrite of the locus family picker's regex heuristics (`_pick_red_families`); those
-  remain the descriptor-free path but are re-expressed as producing a `RedRole` so they share the
-  vocabulary (see FR-8).
+- **NG4.** *(Revised per D4.)* Not a change to *which families* `_pick_red_families` selects for a
+  given locus set — its selection outcomes stay identical for existing fixtures (FR-8). But its
+  name→role regexes (`_RED_RATE_RE`/`_RED_ERR_RE`/`_RED_DUR_*_RE`) **do move into `red_taxonomy`** as
+  the canonical descriptor-free *name* classifier (so FR-13's "one file" guard holds without an
+  exemption); `_pick_red_families` becomes a thin consumer of that classifier.
 
 ---
 
@@ -183,13 +232,20 @@ descriptor's *real* identities rather than substrings:
 This tier is correct for all four `_total`-throughput profiles by construction, because it reads
 `throughput_metric` verbatim instead of guessing a suffix.
 
+Both tiers read the panel's **full** expr set — `panel["expr"]` **and** `panel["targets"][].expr` —
+via the existing `get_all_panel_exprs` semantics (D3); keying on `panel["expr"]` alone mis-classifies
+target-based panels as NONE.
+
 **Descriptor-free fallback tier (title/expr, for G4).** When `descriptor is None` (arbitrary
-on-disk dashboards), fall back to the *union* of the today-correct title/expr heuristics, so no
-currently-passing case regresses. This fallback is defined **once** here and reused by every caller,
-replacing the divergent copies at `observability_artifact_checks.py:1266/1294/1316`,
-`affordance_map_consume.py:1426`, and the inline block at `artifact_generator_generators.py:1023`.
-The fallback must resolve B3 by making DURATION require `histogram_quantile` **with** a
-duration/latency signal *consistently* across scorer and shrink (choose one rule, apply everywhere).
+on-disk dashboards), fall back to the *union* of the today-correct title/expr heuristics **plus** the
+migrated `_RED_*_RE` name rules (D4), so no currently-passing case regresses. This fallback is defined
+**once** here and reused by every caller, replacing the divergent copies at
+`observability_artifact_checks.py` (`has_*_panel`), `affordance_map_consume.py`
+(`_panel_is_red_protected`), and the inline block in `_ensure_red_coverage`. *(Symbol names, not line
+numbers — the draft's line refs run ~10 stale; see D9.)* The fallback resolves B3 with the **stricter**
+DURATION rule everywhere — `histogram_quantile` **AND** (`duration`|`latency`) — which **OQ-2 resolves
+and D1 proves costs zero golden coverage** (no golden carries a bare-`histogram_quantile` Duration
+panel).
 
 ### 3.3 The three derived questions
 
@@ -232,8 +288,10 @@ def is_red_protected(panel, descriptor=None) -> bool:
 @dataclass(frozen=True)
 class RedPanel:
     role: RedRole
-    metric_identity: str   # descriptor.throughput_metric | error_selector | latency_bucket_metric,
-                           # or the locus family name on the descriptor-free path
+    metric_identity: str   # per-role identity (D6): RATE→throughput_metric,
+                           # ERROR→throughput_metric (the E leg rides the SAME series,
+                           # discriminated by error_selector — the selector is NOT the identity),
+                           # DURATION→latency_bucket_metric; or the locus family name (descriptor-free).
     title: str
     expr: str
     unit: str
@@ -292,9 +350,11 @@ Each is independently testable.
 - **FR-7.** `is_red_protected(panel)` returns true for **exactly** the set of panels that
   `red_coverage` counts toward RED, i.e. `is_red_protected(p) == (classify_red_role(p) != NONE)`
   for all `p`. A property test asserts no panel is scored-but-unprotected. (Guards B3.)
-- **FR-8.** `_pick_red_families` is re-expressed to return a `Mapping[RedRole, str]` (or is wrapped
-  by an adapter that does), so the locus path speaks the same `RedRole` vocabulary; its selected
-  families are unchanged for existing fixtures. (Enforces NG4.)
+- **FR-8.** *(Revised per D2/D4.)* `_pick_red_families` keeps its `Tuple[Optional[str], ...]`
+  signature (other callers depend on it) but (a) sources its rate/error/duration **name** rules from
+  `red_taxonomy` (the migrated `_RED_*_RE`), and (b) gains a thin `tuple → Mapping[RedRole, str]`
+  adapter so the locus synthesizer speaks the `RedRole` vocabulary. Its selected families are
+  **byte-unchanged** for existing fixtures (parity test).
 - **FR-9.** `synthesize_red_panels` emits **at most one** panel per `RedRole` and **zero** for a
   role already present in `existing`.
 - **FR-10.** Calling `synthesize_red_panels` twice for the same service+descriptor (simulating the
@@ -308,9 +368,11 @@ Each is independently testable.
   `red_taxonomy`-backed shims (preserving `__all__` and external importers, per the SDK "don't
   modify `__all__` without updating tests" rule) **or** are removed with all call sites migrated —
   the choice is recorded in Open Questions OQ-1.
-- **FR-13.** No module outside `red_taxonomy.py` re-implements RED substring classification: a grep
-  guard asserts `_count`/`_total`/`histogram_quantile`-based RED role logic exists in exactly one
-  file after migration.
+- **FR-13.** *(Reconciled with NG4 per D4.)* No module outside `red_taxonomy.py` re-implements RED
+  role classification — substring **or regex** (`_count`/`_total`/`histogram_quantile` **and** the
+  `_RED_*_RE` name rules). A grep guard asserts this logic lives in exactly one file after migration;
+  because the `_RED_*_RE` regexes move into `red_taxonomy` (not exempted), the guard needs **no
+  carve-out** for `_pick_red_families`.
 
 ---
 
@@ -368,30 +430,35 @@ deleted).
   must be a true superset of each old copy's accept set, or a currently-passing OBS-200a golden
   flips. Mitigation: FR-5/FR-11 parity tests over the full golden corpus are the gate for steps 2–4;
   no old copy is deleted until its parity test is green.
-- **R4 — the two DURATION rules were genuinely different (B3), so "preserve behavior" is
-  ambiguous.** The scorer accepted bare `histogram_quantile`; shrink required a duration/latency
-  token. Unifying them **must change one of the two** — this is the one place the refactor is
-  intentionally *not* byte-preserving. OQ-2 records which rule wins and why; the change is scoped to
-  the disagreeing panels only.
+- **R4 — the two DURATION rules were genuinely different (B3).** *(Downgraded per D1.)* The scorer
+  accepted bare `histogram_quantile`; shrink required a duration/latency token. Unifying picks the
+  **stricter** rule (OQ-2). **D1 proves no existing golden carries a bare-`histogram_quantile`
+  Duration panel**, so this changes classification for **zero** panels in the corpus — the parity
+  guard (FR-5/FR-11) stays green without an exception. The FR-4 test still *asserts* the unified rule
+  so a future such panel is handled consistently, not silently.
 
 ---
 
 ## 7. Open questions
 
-- **OQ-1.** Keep `has_rate_panel`/`has_error_panel`/`has_duration_panel` as public
-  `red_taxonomy`-backed shims (external importers exist; they are in `__all__`), or remove and
-  migrate all callers? Default: **keep as shims** (lower blast radius, honors the `__all__` rule).
-- **OQ-2.** For the unified DURATION rule (R4/B3): adopt the **stricter** shrink rule
-  (`histogram_quantile` **AND** duration/latency) everywhere, or the **looser** scorer rule
-  (bare `histogram_quantile`)? Stricter is safer (a bare `histogram_quantile` on a non-latency
-  metric is not really Duration), but it may lower coverage on some existing dashboards — quantify
-  against the golden corpus before deciding.
-- **OQ-3.** Should `is_red_protected` accept a `descriptor` in the shrink path? Shrink currently runs
-  descriptor-free (`_panel_is_red_protected` takes only a panel). Threading the resolved descriptor
-  through shrink would make protection descriptor-grounded too (closing the last substring gap), but
-  requires plumbing the descriptor into `shrink_dashboard_lines`
-  (`affordance_map_consume.py:1493`). Defer unless a bug demands it.
-- **OQ-4.** Does the `RedPanel.metric_identity` dedup key need to include the label selector (two
-  Request-Rate panels for the same metric but different `{service=...}` selectors)? For single-service
-  dashboards the metric name suffices; for multi-service dashboards it may not. Confirm against how
-  `_apply_emit_red` (`affordance_map_consume.py:2154`) scopes per service.
+- **OQ-1 — RESOLVED (keep shims).** `has_rate_panel`/`has_error_panel`/`has_duration_panel` stay as
+  public `red_taxonomy`-backed shims (external importers exist; they are in `__all__`) — lower blast
+  radius, honors the `__all__` rule.
+- **OQ-2 — RESOLVED (stricter).** The unified DURATION rule is `histogram_quantile` **AND**
+  (`duration`|`latency`) everywhere. D1 quantified it against the golden corpus: **zero** panels
+  affected, so no coverage regression. (See R4.)
+- **OQ-3 — OPEN (defer).** Should `is_red_protected` accept a `descriptor` in the shrink path? Shrink
+  runs descriptor-free (`_panel_is_red_protected` takes only a panel). Threading the resolved
+  descriptor through `shrink_dashboard_lines` (`affordance_map_consume.py:~1502`) would make
+  protection descriptor-grounded, but FR-7's scored-⟺-protected invariant already holds *within* the
+  descriptor-free tier (D5), so this is not required for correctness. Defer unless a bug demands it.
+- **OQ-4 — RESOLVED (metric name suffices).** Per D6, `RedPanel.metric_identity` is the per-role
+  metric **name**, not the label selector; today's dashboards are single-service-per-spec
+  (`_apply_emit_red` scopes per service), so the name is a sufficient dedup key. Re-open only if
+  multi-service-per-dashboard specs land.
+
+---
+
+*v0.3.1 — Post reflective-loop hardening. Planning pass corrected 9 assumptions (2 load-bearing: D1
+theoretical-not-actual B3 tension; D4 FR-13⟺NG4 contradiction), resolved OQ-1/2/4, refined G2, and
+re-anchored guards on symbols not line numbers. 3 lessons + 3 principles applied. Ready for CRP review.*
