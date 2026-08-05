@@ -170,6 +170,68 @@ def test_fr9_at_most_one_per_role():
     assert len(out) == 3
 
 
+# --- FR-5a (R1-F2): adversarial parity — the inputs the golden corpus LACKS ---
+
+class TestAdversarialParity:
+    """The golden corpus is silent on the B3/B2/FR-4a divergence (D1), so a green
+    corpus-parity test proves nothing about them. Assert the intended behavior
+    directly, and — the belt-and-suspenders for step 4 — that the PRODUCTION scorer
+    and shrink now AGREE on the exact inputs that used to make them diverge (FR-7)."""
+
+    def _scored(self, panel, descriptor=None):
+        return red_roles_present([panel], descriptor) != frozenset()
+
+    def _agree(self, panel, descriptor=None):
+        scored = self._scored(panel, descriptor)
+        assert scored == is_red_protected(panel, descriptor), (scored, panel)
+        return scored
+
+    def test_b3_bare_histogram_quantile_over_size_bucket_is_not_duration(self):
+        # No duration/latency token → NOT Duration (unified stricter rule, B3).
+        p = _panel("Size p99", "histogram_quantile(0.99, rate(http_server_response_size_bucket[5m]))")
+        assert classify_red_role(p, None) is RedRole.NONE
+        assert self._agree(p, None) is False  # scorer & shrink both ignore it — they agree
+
+    def test_b3_histogram_quantile_over_latency_bucket_is_duration(self):
+        p = _panel("Latency p99", "histogram_quantile(0.99, rate(rpc_server_duration_bucket[5m]))")
+        assert classify_red_role(p, None) is RedRole.DURATION
+        assert self._agree(p, None) is True
+
+    def test_b2_non_throughput_size_total_under_descriptor_is_none(self):
+        d = _PROFILES["semconv-grpc"]  # tm = rpc_server_duration_count
+        p = _panel("Rpc Server Request Size", 'rate(rpc_server_request_size_total{service="x"}[5m])')
+        assert classify_red_role(p, d) is RedRole.NONE   # FR-2a
+        assert self._agree(p, d) is False
+
+    def test_status_but_not_error_total_scorer_and_shrink_agree(self):
+        # Pre-unification this DISAGREED (old shrink protected it as an 'error leg';
+        # the scorer did not count it). Unified: one classifier → they must match.
+        p = _panel("OK Requests", 'rate(foo_total{status="ok"}[5m])')
+        self._agree(p, None)  # verdict itself is fine either way; the point is they AGREE
+
+    def test_fr4a_empty_bucket_summary_scored_protected_agree(self):
+        d = _PROFILES["harbor-core-http"]  # empty latency_bucket_metric
+        rate_p = _panel("Request Rate", f"rate({d.throughput_metric}[5m])")
+        assert classify_red_role(rate_p, d) is RedRole.RATE
+        assert self._agree(rate_p, d) is True
+
+    def test_production_scorer_and_shrink_agree_on_bare_hq(self):
+        # The real boundary: has_duration_panel (scorer) and _panel_is_red_protected
+        # (shrink) — the two functions commit 5f6fe5f9 / B3 made diverge — now agree.
+        from startd8.validators.observability_artifact_checks import has_duration_panel
+        from startd8.observability.affordance_map_consume import _panel_is_red_protected
+
+        bare_hq = {"title": "Size p99",
+                   "expr": "histogram_quantile(0.99, rate(http_server_response_size_bucket[5m]))"}
+        assert has_duration_panel([bare_hq]) is False
+        assert _panel_is_red_protected(bare_hq) is False
+
+        real_dur = {"title": "Latency", "group": "latency",
+                    "expr": "histogram_quantile(0.99, rate(rpc_server_duration_bucket[5m]))"}
+        assert has_duration_panel([real_dur]) is True
+        assert _panel_is_red_protected(real_dur) is True
+
+
 # --- FR-13: RED-role classification lives in exactly one file ---
 
 def test_fr13_red_name_regexes_defined_once():
