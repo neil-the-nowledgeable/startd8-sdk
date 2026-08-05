@@ -326,18 +326,16 @@ _LOCUS_BLOCKING = frozenset(
     {"no_source_locus", "unverifiable", "locus_unavailable"}
 )
 _ARTIFACT_SHAPE_GEN = frozenset({GEN_ENRICH_RUNBOOK, GEN_SHRINK})
-_RED_RATE_RE = re.compile(
-    r"(request|handled|started|received|http|grpc).*(total|count)|_(requests|ops|operations)_total$",
-    re.I,
+# RED name→role regexes now live in red_taxonomy (D4/FR-13 — one home for all RED
+# classification). Imported under the local private names so `_pick_red_families`
+# reads unchanged.
+from startd8.observability.red_taxonomy import (  # noqa: E402
+    RED_DUR_STRONG_RE as _RED_DUR_STRONG_RE,
+    RED_DUR_WEAK_RE as _RED_DUR_WEAK_RE,
+    RED_ERR_RE as _RED_ERR_RE,
+    RED_RATE_RE as _RED_RATE_RE,
+    RED_TIMESTAMP_RE as _RED_TIMESTAMP_RE,
 )
-_RED_ERR_RE = re.compile(r"error|fail|drop|reject|5xx|failed", re.I)
-# FR-1b: duration selection is two-tier — a STRONG signal (duration/latency/delay
-# in the name) MUST win over the WEAK bare-`_seconds$`/`_bucket$` shape, and a
-# `*_timestamp_seconds` gauge (a point-in-time marker, not a measured duration)
-# MUST never be picked as a duration family at either tier.
-_RED_DUR_STRONG_RE = re.compile(r"duration|latency|delay", re.I)
-_RED_DUR_WEAK_RE = re.compile(r"_seconds$|_bucket$", re.I)
-_RED_TIMESTAMP_RE = re.compile(r"_timestamp_seconds$", re.I)
 
 
 def metric_loci(entry: AffordanceMapEntry) -> List[Dict[str, Any]]:
@@ -1433,27 +1431,20 @@ def try_render_grafana_json(spec_dict: Mapping[str, Any]) -> Optional[str]:
 
 
 def _panel_is_red_protected(panel: Mapping[str, Any]) -> bool:
-    """True if dropping this panel would risk OBS-200a Rate/Errors/Duration."""
-    title = str(panel.get("title") or "").lower()
+    """True if dropping this panel would risk OBS-200a Rate/Errors/Duration.
+
+    Now delegates to the single red_taxonomy classifier (``is_red_protected`` =
+    "this panel plays some RED role", descriptor-free tier — shrink runs without a
+    descriptor). The one shrink-specific signal red_taxonomy does not model is the
+    panel ``group`` label (``throughput``/``errors``/``latency``), kept here: a panel
+    grouped as a RED leg is protected even if its title/expr are ambiguous.
+    """
+    from startd8.observability.red_taxonomy import is_red_protected
+
     group = str(panel.get("group") or "").lower()
-    expr = str(panel.get("expr") or "").lower()
-    if group in ("throughput", "errors", "latency") or title in (
-        "request rate",
-        "error rate",
-    ):
+    if group in ("throughput", "errors", "latency"):
         return True
-    if "duration" in title or "latency" in title:
-        return True
-    if "rate(" in expr and ("_count" in expr or "_total" in expr):
-        if "status" not in expr and "error" not in expr:
-            return True  # Rate leg
-        if "error" in expr or "status" in expr:
-            return True  # Errors leg
-    if "histogram_quantile" in expr and (
-        "duration" in expr or "latency" in expr
-    ):
-        return True
-    return False
+    return is_red_protected(panel)
 
 
 def _red_coverage_ok(panels: Sequence[Mapping[str, Any]]) -> bool:
