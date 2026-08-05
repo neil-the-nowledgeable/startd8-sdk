@@ -31,12 +31,30 @@ class OpenRouterProvider:
 
     BASE_URL = "https://openrouter.ai/api/v1"
 
-    # v1 roster (FR-OR-9). Canonical OpenRouter ids, verified against the live /models catalog
-    # (2026-07-06). More vendors enroll by adding a catalog + pricing row only — no code (FR-OR-13).
+    # Canonical OpenRouter ids, verified against live GET /models (2026-07-30 M4 expand).
+    # Unlisted ids still pass through with a warning (FR-OR-2).
     MODELS = [
-        "deepseek/deepseek-chat",                 # DeepSeek-V3 — the immediate unblock (no DeepSeek billing)
-        "deepseek/deepseek-r1",                   # DeepSeek-R1 reasoner
-        "qwen/qwen-2.5-coder-32b-instruct",       # hosted sibling of the local qwen2.5-coder:7b
+        "deepseek/deepseek-chat",                 # DeepSeek-V3 mid (lab deepseek)
+        "deepseek/deepseek-r1",                   # DeepSeek-R1 reasoner (legacy pin)
+        "deepseek/deepseek-v4-pro",               # DeepSeek-V4 Pro flagship
+        "deepseek/deepseek-v4-flash",             # DeepSeek-V4 Flash fast
+        "qwen/qwen-2.5-coder-32b-instruct",       # hosted sibling of local qwen2.5-coder:7b
+        "qwen/qwen3-max",                        # Qwen3 Max flagship
+        "qwen/qwen-plus",                        # Qwen-Plus mid
+        "qwen/qwen3-coder-flash",                # Qwen3 Coder Flash fast
+        # 8-lab heats expand (2026-07-30): Moonshot / Z.ai / MiniMax
+        "moonshotai/kimi-k3",                    # Moonshot Kimi K3 flagship
+        "moonshotai/kimi-k2.7-code",             # Moonshot Kimi K2.7 Code mid
+        "moonshotai/kimi-k2.5",                  # Moonshot Kimi K2.5 fast
+        "z-ai/glm-5.2",                          # Z.ai GLM-5.2 flagship
+        "z-ai/glm-5.1",                          # Z.ai GLM-5.1 mid
+        "z-ai/glm-4.7-flash",                    # Z.ai GLM-4.7 Flash fast
+        "minimax/minimax-m3",                    # MiniMax M3 flagship
+        "minimax/minimax-m2.7",                  # MiniMax M2.7 mid
+        "minimax/minimax-m2.5",                  # MiniMax M2.5 fast
+        # Policy B Individual invites (not Team-lane)
+        "nvidia/nemotron-3-ultra-550b-a55b",     # NVIDIA Nemotron 3 Ultra
+        "mistralai/mistral-large-2512",          # Mistral Large
     ]
 
     @property

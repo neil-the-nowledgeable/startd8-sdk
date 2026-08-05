@@ -144,11 +144,27 @@ class Models:
     # OpenRouter (US-billed OpenAI-compatible aggregator; see docs/design/openrouter-vendor/)
     # ==========================================================================
 
-    # DeepSeek's models via OpenRouter (no DeepSeek billing); canonical slash ids passed through
+    # DeepSeek / Qwen via OpenRouter (no vendor billing); canonical slash ids passed through
     OPENROUTER_DEEPSEEK_CHAT = "openrouter:deepseek/deepseek-chat"
     OPENROUTER_DEEPSEEK_R1 = "openrouter:deepseek/deepseek-r1"
+    OPENROUTER_DEEPSEEK_V4_PRO = "openrouter:deepseek/deepseek-v4-pro"
+    OPENROUTER_DEEPSEEK_V4_FLASH = "openrouter:deepseek/deepseek-v4-flash"
     # Hosted 2.5-family sibling of the local qwen2.5-coder:7b (scale-controlled contamination compare)
     OPENROUTER_QWEN_CODER_32B = "openrouter:qwen/qwen-2.5-coder-32b-instruct"
+    OPENROUTER_QWEN3_MAX = "openrouter:qwen/qwen3-max"
+    OPENROUTER_QWEN_PLUS = "openrouter:qwen/qwen-plus"
+    OPENROUTER_QWEN3_CODER_FLASH = "openrouter:qwen/qwen3-coder-flash"
+    OPENROUTER_KIMI_K3 = "openrouter:moonshotai/kimi-k3"
+    OPENROUTER_KIMI_K27_CODE = "openrouter:moonshotai/kimi-k2.7-code"
+    OPENROUTER_KIMI_K25 = "openrouter:moonshotai/kimi-k2.5"
+    OPENROUTER_GLM_52 = "openrouter:z-ai/glm-5.2"
+    OPENROUTER_GLM_51 = "openrouter:z-ai/glm-5.1"
+    OPENROUTER_GLM_47_FLASH = "openrouter:z-ai/glm-4.7-flash"
+    OPENROUTER_MINIMAX_M3 = "openrouter:minimax/minimax-m3"
+    OPENROUTER_MINIMAX_M27 = "openrouter:minimax/minimax-m2.7"
+    OPENROUTER_MINIMAX_M25 = "openrouter:minimax/minimax-m2.5"
+    OPENROUTER_NEMOTRON_ULTRA = "openrouter:nvidia/nemotron-3-ultra-550b-a55b"
+    OPENROUTER_MISTRAL_LARGE = "openrouter:mistralai/mistral-large-2512"
 
     # ==========================================================================
     # Jetson Edge Cluster (self-hosted; opt-in, LAN; see docs/design/jetson-cluster-benchmark/)
@@ -409,6 +425,102 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         provider="openrouter",
         model_id="qwen/qwen-2.5-coder-32b-instruct",
         tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "deepseek/deepseek-v4-pro": ModelInfo(
+        provider="openrouter",
+        model_id="deepseek/deepseek-v4-pro",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "deepseek/deepseek-v4-flash": ModelInfo(
+        provider="openrouter",
+        model_id="deepseek/deepseek-v4-flash",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "qwen/qwen3-max": ModelInfo(
+        provider="openrouter",
+        model_id="qwen/qwen3-max",
+        tier="flagship",
+        capabilities={"text", "code"},
+    ),
+    "qwen/qwen-plus": ModelInfo(
+        provider="openrouter",
+        model_id="qwen/qwen-plus",
+        tier="balanced",
+        capabilities={"text", "code"},
+    ),
+    "qwen/qwen3-coder-flash": ModelInfo(
+        provider="openrouter",
+        model_id="qwen/qwen3-coder-flash",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "moonshotai/kimi-k3": ModelInfo(
+        provider="openrouter",
+        model_id="moonshotai/kimi-k3",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "moonshotai/kimi-k2.7-code": ModelInfo(
+        provider="openrouter",
+        model_id="moonshotai/kimi-k2.7-code",
+        tier="balanced",
+        capabilities={"text", "code"},
+    ),
+    "moonshotai/kimi-k2.5": ModelInfo(
+        provider="openrouter",
+        model_id="moonshotai/kimi-k2.5",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "z-ai/glm-5.2": ModelInfo(
+        provider="openrouter",
+        model_id="z-ai/glm-5.2",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "z-ai/glm-5.1": ModelInfo(
+        provider="openrouter",
+        model_id="z-ai/glm-5.1",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "z-ai/glm-4.7-flash": ModelInfo(
+        provider="openrouter",
+        model_id="z-ai/glm-4.7-flash",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "minimax/minimax-m3": ModelInfo(
+        provider="openrouter",
+        model_id="minimax/minimax-m3",
+        tier="flagship",
+        capabilities={"text", "code"},
+    ),
+    "minimax/minimax-m2.7": ModelInfo(
+        provider="openrouter",
+        model_id="minimax/minimax-m2.7",
+        tier="balanced",
+        capabilities={"text", "code"},
+    ),
+    "minimax/minimax-m2.5": ModelInfo(
+        provider="openrouter",
+        model_id="minimax/minimax-m2.5",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "nvidia/nemotron-3-ultra-550b-a55b": ModelInfo(
+        provider="openrouter",
+        model_id="nvidia/nemotron-3-ultra-550b-a55b",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "mistralai/mistral-large-2512": ModelInfo(
+        provider="openrouter",
+        model_id="mistralai/mistral-large-2512",
+        tier="flagship",
         capabilities={"text", "code"},
     ),
     # Jetson edge cluster (aliases; served on a self-hosted LAN endpoint)

@@ -423,18 +423,98 @@ class PricingService:
         # "deepseek-chat" — they are different id strings. Confirm rates at openrouter.ai/models.
         "deepseek/deepseek-chat": ModelPricing(
             model="deepseek/deepseek-chat", provider="openrouter",
-            input_cost_per_million=0.30, output_cost_per_million=1.20,
-            estimated=True, notes="OpenRouter DeepSeek-V3; confirm at openrouter.ai/models.",
+            input_cost_per_million=0.257, output_cost_per_million=1.029,
+            estimated=True, notes="OpenRouter DeepSeek-V3; rates from /models 2026-07-30.",
         ),
         "deepseek/deepseek-r1": ModelPricing(
             model="deepseek/deepseek-r1", provider="openrouter",
-            input_cost_per_million=0.55, output_cost_per_million=2.19,
-            estimated=True, notes="OpenRouter DeepSeek-R1; confirm at openrouter.ai/models.",
+            input_cost_per_million=0.70, output_cost_per_million=2.50,
+            estimated=True, notes="OpenRouter DeepSeek-R1; rates from /models 2026-07-30.",
+        ),
+        "deepseek/deepseek-v4-pro": ModelPricing(
+            model="deepseek/deepseek-v4-pro", provider="openrouter",
+            input_cost_per_million=0.435, output_cost_per_million=0.870,
+            estimated=True, notes="OpenRouter DeepSeek-V4 Pro; rates from /models 2026-07-30.",
+        ),
+        "deepseek/deepseek-v4-flash": ModelPricing(
+            model="deepseek/deepseek-v4-flash", provider="openrouter",
+            input_cost_per_million=0.140, output_cost_per_million=0.280,
+            estimated=True, notes="OpenRouter DeepSeek-V4 Flash; rates from /models 2026-07-30.",
         ),
         "qwen/qwen-2.5-coder-32b-instruct": ModelPricing(
             model="qwen/qwen-2.5-coder-32b-instruct", provider="openrouter",
             input_cost_per_million=0.16, output_cost_per_million=0.16,
             estimated=True, notes="OpenRouter Qwen2.5-Coder-32B; confirm at openrouter.ai/models.",
+        ),
+        "qwen/qwen3-max": ModelPricing(
+            model="qwen/qwen3-max", provider="openrouter",
+            input_cost_per_million=0.780, output_cost_per_million=3.900,
+            estimated=True, notes="OpenRouter Qwen3 Max; rates from /models 2026-07-30.",
+        ),
+        "qwen/qwen-plus": ModelPricing(
+            model="qwen/qwen-plus", provider="openrouter",
+            input_cost_per_million=0.260, output_cost_per_million=0.780,
+            estimated=True, notes="OpenRouter Qwen-Plus; rates from /models 2026-07-30.",
+        ),
+        "qwen/qwen3-coder-flash": ModelPricing(
+            model="qwen/qwen3-coder-flash", provider="openrouter",
+            input_cost_per_million=0.195, output_cost_per_million=0.975,
+            estimated=True, notes="OpenRouter Qwen3 Coder Flash; rates from /models 2026-07-30.",
+        ),
+        "moonshotai/kimi-k3": ModelPricing(
+            model="moonshotai/kimi-k3", provider="openrouter",
+            input_cost_per_million=3.00, output_cost_per_million=15.00,
+            estimated=True, notes="OpenRouter Kimi K3; rates from /models 2026-07-30.",
+        ),
+        "moonshotai/kimi-k2.7-code": ModelPricing(
+            model="moonshotai/kimi-k2.7-code", provider="openrouter",
+            input_cost_per_million=0.73, output_cost_per_million=3.50,
+            estimated=True, notes="OpenRouter Kimi K2.7 Code; rates from /models 2026-07-30.",
+        ),
+        "moonshotai/kimi-k2.5": ModelPricing(
+            model="moonshotai/kimi-k2.5", provider="openrouter",
+            input_cost_per_million=0.57, output_cost_per_million=2.85,
+            estimated=True, notes="OpenRouter Kimi K2.5; rates from /models 2026-07-30.",
+        ),
+        "z-ai/glm-5.2": ModelPricing(
+            model="z-ai/glm-5.2", provider="openrouter",
+            input_cost_per_million=0.966, output_cost_per_million=3.036,
+            estimated=True, notes="OpenRouter GLM-5.2; rates from /models 2026-07-30.",
+        ),
+        "z-ai/glm-5.1": ModelPricing(
+            model="z-ai/glm-5.1", provider="openrouter",
+            input_cost_per_million=0.966, output_cost_per_million=3.036,
+            estimated=True, notes="OpenRouter GLM-5.1; rates from /models 2026-07-30.",
+        ),
+        "z-ai/glm-4.7-flash": ModelPricing(
+            model="z-ai/glm-4.7-flash", provider="openrouter",
+            input_cost_per_million=0.06, output_cost_per_million=0.40,
+            estimated=True, notes="OpenRouter GLM-4.7 Flash; rates from /models 2026-07-30.",
+        ),
+        "minimax/minimax-m3": ModelPricing(
+            model="minimax/minimax-m3", provider="openrouter",
+            input_cost_per_million=0.30, output_cost_per_million=1.20,
+            estimated=True, notes="OpenRouter MiniMax M3; rates from /models 2026-07-30.",
+        ),
+        "minimax/minimax-m2.7": ModelPricing(
+            model="minimax/minimax-m2.7", provider="openrouter",
+            input_cost_per_million=0.25, output_cost_per_million=1.00,
+            estimated=True, notes="OpenRouter MiniMax M2.7; rates from /models 2026-07-30.",
+        ),
+        "minimax/minimax-m2.5": ModelPricing(
+            model="minimax/minimax-m2.5", provider="openrouter",
+            input_cost_per_million=0.15, output_cost_per_million=0.90,
+            estimated=True, notes="OpenRouter MiniMax M2.5; rates from /models 2026-07-30.",
+        ),
+        "nvidia/nemotron-3-ultra-550b-a55b": ModelPricing(
+            model="nvidia/nemotron-3-ultra-550b-a55b", provider="openrouter",
+            input_cost_per_million=0.60, output_cost_per_million=3.60,
+            estimated=True, notes="OpenRouter Nemotron 3 Ultra; rates from /models 2026-07-30.",
+        ),
+        "mistralai/mistral-large-2512": ModelPricing(
+            model="mistralai/mistral-large-2512", provider="openrouter",
+            input_cost_per_million=0.50, output_cost_per_million=1.50,
+            estimated=True, notes="OpenRouter Mistral Large 2512; rates from /models 2026-07-30.",
         ),
     }
 

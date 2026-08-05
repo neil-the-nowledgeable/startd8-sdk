@@ -11,7 +11,27 @@ from startd8.costs.pricing import PricingService
 from startd8.model_catalog import get_model_info, Models
 from startd8.benchmark_matrix.runner import is_infra_error
 
-ENROLLED = ["deepseek/deepseek-chat", "deepseek/deepseek-r1", "qwen/qwen-2.5-coder-32b-instruct"]
+ENROLLED = [
+    "deepseek/deepseek-chat",
+    "deepseek/deepseek-r1",
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash",
+    "qwen/qwen-2.5-coder-32b-instruct",
+    "qwen/qwen3-max",
+    "qwen/qwen-plus",
+    "qwen/qwen3-coder-flash",
+    "moonshotai/kimi-k3",
+    "moonshotai/kimi-k2.7-code",
+    "moonshotai/kimi-k2.5",
+    "z-ai/glm-5.2",
+    "z-ai/glm-5.1",
+    "z-ai/glm-4.7-flash",
+    "minimax/minimax-m3",
+    "minimax/minimax-m2.7",
+    "minimax/minimax-m2.5",
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "mistralai/mistral-large-2512",
+]
 
 
 class TestProvider:
