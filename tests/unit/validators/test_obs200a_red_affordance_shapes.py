@@ -109,9 +109,53 @@ def test_thanos_affordance_red_triplet_scores_full():
     assert failed_200a == []
 
 
+# The per-service OBS-200a coverage LEVELS the step5b integration test asserts (2/3 for a
+# Rate+Error bind; 1/3 for a Rate-only bind) — locked here as ALWAYS-RUN synthetic tests so
+# CI verifies the invariant even though the real regenerated thanos artifacts live off-repo
+# (the step5b test below is an integration extension, gated on those fixtures existing).
+
+def test_rate_plus_error_bind_scores_two_thirds():
+    """A thanos AffordanceMap bind that landed Rate + Error (no Duration family) — the
+    compact/receive/store/query/rule/sidecar shape — scores exactly 2/3 and clears OBS-200a."""
+    panels = _panels(
+        {"title": "Request Rate", "expr": "sum(rate(thanos_compact_group_compactions_total[$__rate_interval]))"},
+        {"title": "Error Rate", "expr": "sum(rate(thanos_compact_group_compactions_failures_total[$__rate_interval]))"},
+    )
+    assert _compute_red_coverage(panels) == pytest.approx(2.0 / 3.0)
+    result = validate_dashboard(
+        yaml.dump({"title": "compact", "uid": "obs-compact", "panels": panels}),
+        file_path="compact-dashboard-spec.yaml", service_id="compact",
+    )
+    assert result.red_coverage == pytest.approx(2.0 / 3.0)
+    assert [i for i in result.issues if i.check == "OBS-200a"] == []  # 2/3 meets the threshold
+
+
+def test_rate_only_bind_scores_one_third():
+    """query-frontend: the AffordanceMap bind landed ONLY Request Rate (no E/D families).
+    The scorer must still credit the Rate leg → exactly 1/3 (was 0% under the old _count-only
+    matcher — the regression this file guards); OBS-200a warns for the two missing legs."""
+    panels = _panels(
+        {"title": "Request Rate", "expr": "sum(rate(http_requests_total{handler=~\"query.*\"}[$__rate_interval]))"},
+    )
+    assert _compute_red_coverage(panels) == pytest.approx(1.0 / 3.0)
+    result = validate_dashboard(
+        yaml.dump({"title": "query-frontend", "uid": "obs-qf", "panels": panels}),
+        file_path="query-frontend-dashboard-spec.yaml", service_id="query-frontend",
+    )
+    assert result.red_coverage == pytest.approx(1.0 / 3.0)
+    obs = [i for i in result.issues if i.check == "OBS-200a"]
+    assert obs and "missing:" in obs[0].message  # Rate credited; Errors + Duration flagged
+
+
 @pytest.mark.skipif(
     not (_STEP5B_OUT / "dashboards" / "compact-dashboard-spec.yaml").is_file(),
-    reason="Step 5b recipe OUT not on disk",
+    reason=(
+        "INTEGRATION-ONLY over the real step5b thanos regen artifacts (off-repo /tmp; needs the "
+        "pilot's committed fixtures — remediation SA-STARTD8-OBS-obs200a-red-threshold-skipmask). "
+        "The coverage-LEVEL invariant (2/3 / 1/3) is now covered in CI by "
+        "test_rate_plus_error_bind_scores_two_thirds + test_rate_only_bind_scores_one_third above, "
+        "so this is a VISIBLE integration gap, not a silent green."
+    ),
 )
 @pytest.mark.parametrize(
     "service,min_red",
