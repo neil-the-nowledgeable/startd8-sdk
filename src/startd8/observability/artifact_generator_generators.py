@@ -1042,15 +1042,18 @@ def _ensure_red_coverage(
     total_selector = descriptor.selector(service.service_id)
     error_selector = descriptor.selector(service.service_id, error=True)
 
-    rate_expr = (
-        f'sum(rate({throughput_metric}'
-        f'{total_selector}[$__rate_interval]))'
-    )
-    error_expr = (
-        f'sum(rate({throughput_metric}'
-        f'{error_selector}[$__rate_interval]))\n'
-        f'/ sum(rate({throughput_metric}'
-        f'{total_selector}[$__rate_interval]))'
+    # Single-source the RED exprs from the canonical convention (ContextCore §4): the
+    # helper builds the SAME rate/error shape this generator used to inline — now one home
+    # so a consumer can import it instead of mirroring. Fall back to the inline shape only
+    # for a degenerate descriptor with no error_selector (want_error is False there anyway).
+    from startd8.observability.convention import canonical_red_exprs
+
+    _red = canonical_red_exprs(descriptor, service.service_id)
+    rate_expr = _red.get(RedRole.RATE, f"sum(rate({throughput_metric}{total_selector}[$__rate_interval]))")
+    error_expr = _red.get(
+        RedRole.ERROR,
+        f"sum(rate({throughput_metric}{error_selector}[$__rate_interval]))\n"
+        f"/ sum(rate({throughput_metric}{total_selector}[$__rate_interval]))",
     )
 
     if not has_rate and want_rate:

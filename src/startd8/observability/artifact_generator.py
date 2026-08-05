@@ -289,6 +289,7 @@ def _repair_and_validate(
     result: ArtifactResult,
     business: BusinessContext,
     transport: Optional[str] = None,
+    descriptor: Optional[MetricDescriptor] = None,
 ) -> ArtifactResult:
     """Apply autofix repairs, validate, compute score. Modifies result in-place.
 
@@ -324,6 +325,7 @@ def _repair_and_validate(
             autofix=True,
             service_id=result.service_id,
             transport=transport,
+            descriptor=descriptor,
         )
         # If gridPos was injected, update content with repaired YAML
         if vr.repairs_applied:
@@ -443,7 +445,9 @@ def _generate_one(
             result = gen_fn(service, business, descriptor)
         else:
             result = gen_fn(service, business)
-        result = _repair_and_validate(result, business, transport=service.transport)
+        result = _repair_and_validate(
+            result, business, transport=service.transport, descriptor=descriptor
+        )
         return _stamp_taxonomy(result)
     except Exception:
         logger.exception(

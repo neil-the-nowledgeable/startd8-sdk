@@ -239,11 +239,17 @@ def test_fr13_red_name_regexes_defined_once():
     no module re-implements the RED name classifier (D4/FR-13)."""
     import pathlib
 
-    root = pathlib.Path(__file__).resolve()
-    while root.name != "startd8-red-taxonomy" and root.parent != root:
-        root = root.parent
-    src = root / "src" / "startd8"
-    assert src.is_dir(), src
+    # Portable repo-root find: walk up to the dir that actually contains src/startd8
+    # (NOT a hardcoded worktree name — that only passes in the worktree it was written in;
+    # the #384 version hardcoded "startd8-red-taxonomy" and silently failed on main).
+    here = pathlib.Path(__file__).resolve()
+    src = None
+    for parent in here.parents:
+        cand = parent / "src" / "startd8"
+        if (cand / "observability" / "red_taxonomy.py").exists():
+            src = cand
+            break
+    assert src is not None and src.is_dir(), f"could not locate src/startd8 from {here}"
     definers = sorted(
         p.name
         for p in src.rglob("*.py")
