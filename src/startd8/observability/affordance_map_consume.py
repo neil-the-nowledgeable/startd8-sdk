@@ -326,18 +326,16 @@ _LOCUS_BLOCKING = frozenset(
     {"no_source_locus", "unverifiable", "locus_unavailable"}
 )
 _ARTIFACT_SHAPE_GEN = frozenset({GEN_ENRICH_RUNBOOK, GEN_SHRINK})
-_RED_RATE_RE = re.compile(
-    r"(request|handled|started|received|http|grpc).*(total|count)|_(requests|ops|operations)_total$",
-    re.I,
+# RED name→role regexes now live in red_taxonomy (D4/FR-13 — one home for all RED
+# classification). Imported under the local private names so `_pick_red_families`
+# reads unchanged.
+from startd8.observability.red_taxonomy import (  # noqa: E402
+    RED_DUR_STRONG_RE as _RED_DUR_STRONG_RE,
+    RED_DUR_WEAK_RE as _RED_DUR_WEAK_RE,
+    RED_ERR_RE as _RED_ERR_RE,
+    RED_RATE_RE as _RED_RATE_RE,
+    RED_TIMESTAMP_RE as _RED_TIMESTAMP_RE,
 )
-_RED_ERR_RE = re.compile(r"error|fail|drop|reject|5xx|failed", re.I)
-# FR-1b: duration selection is two-tier — a STRONG signal (duration/latency/delay
-# in the name) MUST win over the WEAK bare-`_seconds$`/`_bucket$` shape, and a
-# `*_timestamp_seconds` gauge (a point-in-time marker, not a measured duration)
-# MUST never be picked as a duration family at either tier.
-_RED_DUR_STRONG_RE = re.compile(r"duration|latency|delay", re.I)
-_RED_DUR_WEAK_RE = re.compile(r"_seconds$|_bucket$", re.I)
-_RED_TIMESTAMP_RE = re.compile(r"_timestamp_seconds$", re.I)
 
 
 def metric_loci(entry: AffordanceMapEntry) -> List[Dict[str, Any]]:

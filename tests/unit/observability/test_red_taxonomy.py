@@ -168,3 +168,23 @@ def test_fr9_at_most_one_per_role():
     )
     assert {c.role for c in out} == RED_ROLES
     assert len(out) == 3
+
+
+# --- FR-13: RED-role classification lives in exactly one file ---
+
+def test_fr13_red_name_regexes_defined_once():
+    """The name→role regexes (RED_*_RE) must be *defined* only in red_taxonomy.py —
+    no module re-implements the RED name classifier (D4/FR-13)."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve()
+    while root.name != "startd8-red-taxonomy" and root.parent != root:
+        root = root.parent
+    src = root / "src" / "startd8"
+    assert src.is_dir(), src
+    definers = sorted(
+        p.name
+        for p in src.rglob("*.py")
+        if "RED_RATE_RE = re.compile" in p.read_text(encoding="utf-8")
+    )
+    assert definers == ["red_taxonomy.py"], f"RED name regexes defined outside red_taxonomy: {definers}"

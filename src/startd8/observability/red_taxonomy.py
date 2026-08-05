@@ -24,9 +24,31 @@ The classifier has two tiers:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, List, Mapping, Optional, Sequence
+
+
+# ---------------------------------------------------------------------------
+# Name → RED-role regexes (the descriptor-free *name* classifier).
+# Moved here from affordance_map_consume per D4/FR-13 so ALL RED-role
+# classification — substring OR regex — lives in exactly one file. The locus
+# family picker (`_pick_red_families`) consumes these instead of owning them.
+# ---------------------------------------------------------------------------
+
+RED_RATE_RE = re.compile(
+    r"(request|handled|started|received|http|grpc).*(total|count)|_(requests|ops|operations)_total$",
+    re.I,
+)
+RED_ERR_RE = re.compile(r"error|fail|drop|reject|5xx|failed", re.I)
+# FR-1b: duration selection is two-tier — a STRONG signal (duration/latency/delay
+# in the name) MUST win over the WEAK bare-`_seconds$`/`_bucket$` shape, and a
+# `*_timestamp_seconds` gauge (a point-in-time marker, not a measured duration)
+# MUST never be picked as a duration family at either tier.
+RED_DUR_STRONG_RE = re.compile(r"duration|latency|delay", re.I)
+RED_DUR_WEAK_RE = re.compile(r"_seconds$|_bucket$", re.I)
+RED_TIMESTAMP_RE = re.compile(r"_timestamp_seconds$", re.I)
 
 
 class RedRole(str, Enum):
