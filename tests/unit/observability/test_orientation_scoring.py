@@ -18,6 +18,7 @@ from startd8.observability.artifact_generator import (
     _iter_rule_dicts,
     _produced_service_targets,
     _recording_subscore,
+    _score_extended_artifacts,
     generate_observability_artifacts,
 )
 from startd8.observability.taxonomy_enums import Orientation
@@ -244,3 +245,56 @@ class TestThreeWayCoverageIntegration:
         assert agg["avg_metric_coverage_dashboarded"] == agg["avg_metric_coverage_human"]
         # scored == generated invariant (REQ-OAT-050) is surfaced.
         assert agg["artifacts_scored"] == agg["artifacts_generated"]
+
+
+class TestSLOScoringFeedRegression:
+    """Regression for the Harbor metric-coverage false-zero (agent-bus 01968b33).
+
+    SLO generators pre-attach a binding-metadata quality dict
+    (``bound_declared_series``) that carries NO ``"score"``. The old
+    ``_score_extended_artifacts`` guard (``a.quality is not None``) let that
+    metadata shadow the scorer, so SLOs were generated-but-unscored — which both
+    violated the scored==generated invariant (REQ-OAT-050) and dropped SLO
+    content from the metric-coverage feed (``metric_coverage_system`` pinned to
+    0.0). The scorer must score a quality dict that lacks a score while
+    preserving the binding metadata.
+    """
+
+    _SLO = (
+        "apiVersion: openslo/v1\nkind: SLO\nmetadata:\n  name: core-availability\n"
+        "spec:\n  description: bound to harbor_core_http_request_total\n"
+        "  indicator:\n    spec:\n      thresholdMetric:\n"
+        "        metricSource:\n          spec:\n"
+        "            query: sum(rate(harbor_core_http_request_total[5m]))\n"
+    )
+    _CONTRACT = {"slo_definition": {
+        "max_lines": 1000, "max_tokens": 100000,
+        "completeness_markers": [], "red_flag": [], "fields": [],
+    }}
+
+    def _slo_artifact(self):
+        bound = [{"service": "core", "kind": "availability",
+                  "series": "harbor_core_http_request_total", "enabling_flag": ""}]
+        return ArtifactResult(
+            artifact_type="slo_definition", service_id="core",
+            output_path="slos/core-declared-base-slo.yaml", status="generated",
+            content=self._SLO,
+            quality={"bound_declared_series": bound, "deferred_declared_kinds": []},
+        )
+
+    def test_binding_metadata_no_longer_shadows_the_scorer(self):
+        art = self._slo_artifact()
+        report = GenerationReport(project_id="p", generated_at="t", artifacts=[art])
+        _score_extended_artifacts(report, self._CONTRACT)
+        # Now structurally scored (enters artifacts_scored + the coverage feed).
+        assert art.quality is not None and "score" in art.quality
+        # …without clobbering the binding metadata the generator attached.
+        assert art.quality["bound_declared_series"][0]["series"] == \
+            "harbor_core_http_request_total"
+
+    def test_already_scored_artifact_is_left_untouched(self):
+        art = self._slo_artifact()
+        art.quality = {"score": 0.5, "checks_passed": 1, "checks_total": 2}
+        report = GenerationReport(project_id="p", generated_at="t", artifacts=[art])
+        _score_extended_artifacts(report, self._CONTRACT)
+        assert art.quality["score"] == 0.5  # not re-scored

@@ -2008,12 +2008,32 @@ def _score_extended_artifacts(
     except ImportError:
         return
     for a in report.artifacts:
-        if a.status != "generated" or a.quality is not None or not a.content:
+        if a.status != "generated" or not a.content:
+            continue
+        # Score any generated artifact that lacks a structural *score* — not just
+        # those with no quality dict at all. The declared-base/functional/span/probe
+        # SLO generators pre-attach a binding-metadata quality dict
+        # (``bound_declared_series`` / ``deferred_declared_kinds``) that carries NO
+        # ``"score"``; the old ``a.quality is not None`` guard let that metadata
+        # shadow the scorer, so SLOs were generated-but-unscored. That both violated
+        # the scored==generated invariant (REQ-OAT-050) and dropped SLO content from
+        # the metric-coverage feed in ``_write_quality_report`` (which iterates only
+        # scored artifacts), pinning ``metric_coverage_system`` to 0.0 (the Harbor
+        # false-zero, bus 01968b33).
+        if a.quality is not None and "score" in a.quality:
             continue
         contract = contracts.get(a.artifact_type)
         if not contract:
             continue
-        a.quality = validate_extended_artifact(a.content, contract).to_quality()
+        scored_quality = validate_extended_artifact(a.content, contract).to_quality()
+        if a.quality:
+            # Layer the structural score on top; preserve the binding/orientation
+            # metadata the generator attached (bound_declared_series, etc.).
+            merged = dict(a.quality)
+            merged.update(scored_quality)
+            a.quality = merged
+        else:
+            a.quality = scored_quality
 
 
 # ---------------------------------------------------------------------------
