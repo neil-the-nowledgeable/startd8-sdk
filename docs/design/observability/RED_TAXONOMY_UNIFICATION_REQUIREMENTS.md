@@ -1,7 +1,7 @@
 # RED Panel Classification Unification — Requirements
 
 **Status:** Draft (spec only — no implementation)
-**Version:** 0.3.1 (post reflective-loop: planning + lessons + design-principle hardening)
+**Version:** 0.4 (post CRP round R1 — 10 suggestions triaged, all accepted)
 **Date:** 2026-08-04
 **Owner:** observability
 **Scope:** `src/startd8/observability/`, `src/startd8/validators/observability_artifact_checks.py`
@@ -25,7 +25,7 @@
 | **D6** | `metric_identity` dedup key = `throughput_metric \| error_selector \| latency_bucket_metric`. | `error_selector` is a **selector string** (`status=~"5.."`), not a metric name; the error leg **rides `throughput_metric`** (`rate(tm{err})/rate(tm)`, `:1058`). | Dedup identity defined **per role**: RATE→`throughput_metric`, ERROR→`throughput_metric` (the E leg is the same series), DURATION→`latency_bucket_metric`. §3.4 + OQ-4 updated. |
 | **D7** | — | `_compute_red_coverage` is genuinely descriptor-free (`has_*_panel`, `:1335`); FR-5 parity is well-posed **and** (via D1) empirically clean. | FR-5 kept, strengthened with the D1 receipt. |
 | **D8** | FR-3 (ERROR vs RATE) needs a rule. | Confirmed: error expr = `descriptor.selector(id, error=True)` appends `error_selector` (`:1056`) → carries `throughput_metric` **and** `error_selector`; rate expr carries only `throughput_metric`. | FR-3 implementable exactly as specced (RATE = tm ∧ ¬error_selector; ERROR = tm ∧ error_selector). |
-| **D9** | Spec line numbers are exact. | All cited **symbols exist**, but line numbers run **~10 off** (`_panel_is_red_protected` at `:1435` not `:1426`; shrink helpers `:1459/:1483/:1502`). | Phantom-reference note added; **anchor tests/guards on symbol names, not line numbers.** |
+| **D9** | Spec line numbers are exact. | All cited **symbols exist**, but line-number drift is **non-uniform** (R1-F8 correction): `_panel_is_red_protected` at `:1435` (≈ as stated), but scorer `has_duration_panel` is at `:1425` — **~110 off** the cited `:1316/:1326`. A stated "~10 off" offset lands a reader in the wrong function. | **Anchor every test/guard on the SYMBOL name, never a line number**; a grep-guard resolves each cited symbol. |
 
 **Resolved open questions:**
 - **OQ-2 → stricter DURATION rule** (`histogram_quantile` **AND** duration/latency). D1 proves no existing golden loses coverage. This is the unified rule everywhere.
@@ -108,6 +108,14 @@ throughput suffix: **four profiles use a `_total` throughput** — `span-metrics
 **structurally wrong for exactly those four profiles**.
 
 ### 1.2 The four bugs this drift caused (motivating evidence)
+
+> **Status note (R1-F6).** B1/B2/B4 were the *motivating* bugs; the **interim fix in PR #382** already
+> made the generator gate descriptor-aware (`has_explicit_rate_panel` / `has_explicit_error_panel`, a
+> symmetric descriptor-precise inline fallback) — so B4's `_count`-only-vs-broad asymmetry is **already
+> fixed and retained as the baseline this refactor generalizes**, not a live bug to re-fix. This
+> unification's job is to (a) collapse the *five* classifiers into one and (b) fix the still-live B3
+> (scorer↔shrink DURATION divergence). Implementers: treat §1.1.3 / B1 / B2 / B4 as *history*; diff
+> the cited symbols against current `artifact_generator_generators.py` before touching them.
 
 - **B1 — scorer widening silently broke generation.** Commit `5f6fe5f9` ("Credit Thanos
   AffordanceMap RED panels in OBS-200a scorer") widened the shared `has_rate_panel` to accept
@@ -218,19 +226,29 @@ def classify_red_role(
 ```
 
 **Descriptor-grounded tier (preferred).** When `descriptor` is provided, classify by the
-descriptor's *real* identities rather than substrings:
-- **RATE** iff the panel expr references `descriptor.throughput_metric` **and** is not an error
-  ratio (does not additionally carry `descriptor.error_selector`).
-- **ERROR** iff the panel expr references `descriptor.error_selector` (or `throughput_metric`
-  filtered by it — the error-ratio shape emitted at `artifact_generator_generators.py:1048`).
-- **DURATION** iff the panel expr references `descriptor.latency_bucket_metric` (the
+descriptor's *real* identities rather than substrings. **Empty-identity guard (FR-4a, R1-F3):** each
+rule below MUST first short-circuit to "no match" when the descriptor identity it keys on is the
+empty string — `"" in expr` is always `True` in Python, so an empty `throughput_metric` /
+`error_selector` / `latency_bucket_metric` would otherwise fabricate a role. The `not X` /
+"references X" phrasing below means *`X` is non-empty **and** a substring of the expr set*.
+- **RATE** iff `throughput_metric` is non-empty and the panel expr references it **and** is not an
+  error ratio (does not additionally carry a non-empty `descriptor.error_selector`). Additionally
+  (FR-2a, R1-F7): a panel that only `rate()`s a *sibling* `_total`/`_count` series that is **not**
+  `throughput_metric` (e.g. `rate(rpc_server_request_size_total)`) is **NONE**, not RATE — the exact
+  guard the shipped `has_explicit_rate_panel` already encodes.
+- **ERROR** iff `error_selector` is non-empty and the panel expr references it (or
+  `throughput_metric` filtered by it — the error-ratio shape emitted at
+  `artifact_generator_generators.py:~1058`).
+- **DURATION** iff `latency_bucket_metric` is non-empty and the panel expr references it (the
   `histogram_quantile(... _bucket ...)` shape). Descriptors whose `latency_bucket_metric` is empty
-  (summary-latency subjects — `harbor-core-http` `:218`) yield DURATION only via the fallback
+  (summary-latency subjects — `harbor-core-http` `:218`) yield DURATION **only** via the fallback
   title tier, never a false bucket match.
 - else **NONE**.
 
 This tier is correct for all four `_total`-throughput profiles by construction, because it reads
-`throughput_metric` verbatim instead of guessing a suffix.
+`throughput_metric` verbatim instead of guessing a suffix; and it is safe for the name-scoped Harbor
+profiles (`service_label_key=""`) because it keys on the metric **name**, never on a `{service=…}`
+selector (which is empty there).
 
 Both tiers read the panel's **full** expr set — `panel["expr"]` **and** `panel["targets"][].expr` —
 via the existing `get_all_panel_exprs` semantics (D3); keying on `panel["expr"]` alone mis-classifies
@@ -374,13 +392,53 @@ Each is independently testable.
   because the `_RED_*_RE` regexes move into `red_taxonomy` (not exempted), the guard needs **no
   carve-out** for `_pick_red_families`.
 
+### 4.1 FRs added in CRP round R1 triage
+
+- **FR-2a — non-throughput `_total` guard (R1-F7).** `classify_red_role` (descriptor tier) MUST NOT
+  return RATE for a panel that only `rate()`s a sibling `_total`/`_count` series that is not the
+  descriptor's `throughput_metric`. Verify: a panel rating `rpc_server_request_size_total` classifies
+  NONE under a descriptor whose `throughput_metric` is `calls_total`. (Preserves the shipped
+  `has_explicit_rate_panel` guard so the reimplementation can't re-open a B2 variant.)
+- **FR-4a — empty-identity short-circuit (R1-F3, critical).** The descriptor tier MUST treat an empty
+  `throughput_metric` / `error_selector` / `latency_bucket_metric` as "no match" **before** the
+  substring test. Verify: `classify_red_role(any_panel, harbor_core_http_descriptor)` never returns
+  DURATION or ERROR solely from an empty identity; it falls to the title tier.
+- **FR-5a — adversarial parity fixtures (R1-F2).** FR-5/FR-11 parity is corpus-parity **plus** a
+  synthetic fixture set carrying the inputs the golden corpus lacks: a bare `histogram_quantile` (B3),
+  a `rate(..._size_total)` non-throughput counter (B2), and an empty-`latency_bucket_metric` summary
+  subject (FR-4a). Rationale: D1 proves the corpus is silent on the B3 divergence, so corpus-parity
+  alone passes *vacuously* on the exact case the refactor exists to change.
+- **FR-7 precondition (R1-F1).** The scored-⟺-protected invariant (FR-7) holds **only when scorer and
+  shrink evaluate the same classifier tier** (both descriptor-free today). A mixed-tier call site
+  (e.g. a future OQ-3 descriptor-threaded shrink while the scorer stays descriptor-free) voids it and
+  re-opens B3 for the empty-`latency_bucket_metric` Harbor case. Verify: a property test fails if any
+  `is_red_protected` call passes a non-None descriptor while its paired `red_coverage` passes None.
+- **FR-10a — cross-source identity normalization (R1-F4).** Define one normalization mapping a locus
+  **family name** (`_pick_red_families` → `family_or_signal`, e.g. `calls`) to the descriptor
+  **metric name** used as `metric_identity` (e.g. `calls_total`), OR state that the two writers are
+  mutually exclusive per `dashboards/{svc}-dashboard-spec.yaml`. Without it a descriptor-path RATE
+  (`calls_total`) and a locus-path RATE (`calls`) carry different keys and escape the
+  `(RedRole, metric_identity)` dedup. Verify: both paths' RATE panels for one service dedup to one.
+- **FR-8 per-slot parity (R1-F9).** FR-8's "families byte-unchanged" parity test asserts **per-slot**
+  identity (rate/error/duration each unchanged), not just tuple equality — the weak-duration rule
+  (`_RED_DUR_WEAK_RE`) + distinct-family ordering make slot assignment order-sensitive, so a
+  reassignment could cancel out to a superficially-equal tuple.
+
 ---
 
 ## 5. Migration plan
 
 Each step is behavior-preserving and lands behind a **parity guard** (a test asserting the old and
-new predicates return identical results over the existing golden corpus before the old copy is
-deleted).
+new predicates return identical results over the existing golden corpus **plus the FR-5a adversarial
+fixtures** before the old copy is deleted).
+
+**Inter-step consistency guarantee (R1-F5).** The per-step parity guards assert *old-vs-new for that
+step* only — they do **not** cover *scorer-vs-generator cross-consistency* in the window between step 2
+(scorer → descriptor-free tier) and step 3 (generator → descriptor-grounded tier), during which the
+"covered?" and "present?" questions are answered by two unrelated implementations. Therefore steps 2
+and 3 **must land in a single atomic PR**, OR a cross-classifier consistency test (scorer-covered ⟺
+generator-present over shared inputs) must be green at every intermediate commit and **no release/tag
+may occur between them**.
 
 1. **Introduce the module.** Add `red_taxonomy.py` with `RedRole`, `classify_red_role` (both tiers),
    the three derived questions, and `synthesize_red_panels`. No call sites change yet. Ship its own
@@ -436,6 +494,11 @@ deleted).
   Duration panel**, so this changes classification for **zero** panels in the corpus — the parity
   guard (FR-5/FR-11) stays green without an exception. The FR-4 test still *asserts* the unified rule
   so a future such panel is handled consistently, not silently.
+- **R5 — untrusted on-disk dashboards in the descriptor-free tier (R1-F10).** G4 runs
+  `classify_red_role(panel, None)` (regex/substring) over *arbitrary user YAML* exprs — an
+  untrusted-input surface. Low risk today (the `_RED_*_RE` are simple alternations, no nested
+  quantifiers → linear time) and the classifier never `eval`/executes expr content, but this MUST be
+  recorded and guarded: assert the migrated regexes have no catastrophic-backtracking construct.
 
 ---
 
@@ -459,7 +522,7 @@ deleted).
 
 ---
 
-*v0.3.1 — Post reflective-loop hardening. Planning pass corrected 9 assumptions (2 load-bearing: D1
+*v0.4 — Post CRP round R1 (all 10 accepted: +FR-2a/4a/5a/10a, FR-7 precondition, FR-8 per-slot, §5 inter-step guarantee, §1.2 status note, D9 correction, R5). v0.3.1 — Post reflective-loop hardening. Planning pass corrected 9 assumptions (2 load-bearing: D1
 theoretical-not-actual B3 tension; D4 FR-13⟺NG4 contradiction), resolved OQ-1/2/4, refined G2, and
 re-anchored guards on symbols not line numbers. 3 lessons + 3 principles applied. Ready for CRP review.*
 
@@ -479,9 +542,21 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 ### Appendix A: Applied Suggestions
 
+> R1 triage (orchestrator): all 10 R1 suggestions ACCEPTED — the reviewer self-filtered to
+> code-anchored, actionable items with no noise. Applied v0.3.1 → **v0.4**.
+
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
-| (none yet) |  |  |  |  |
+| R1-F3 | Empty-identity short-circuit (critical: `"" in expr` fabricates roles) | R1 | §3.2 empty-identity guard + **FR-4a** added | 2026-08-05 |
+| R1-F7 | Non-throughput `_total` sibling ≠ RATE | R1 | §3.2 RATE rule + **FR-2a** added | 2026-08-05 |
+| R1-F2 | Corpus-parity is vacuous on B3 → adversarial fixtures | R1 | **FR-5a** added; §5 guard preamble updated | 2026-08-05 |
+| R1-F1 | FR-7 scored⟺protected is tier-local (precondition) | R1 | **FR-7 precondition** added (§4.1) | 2026-08-05 |
+| R1-F4 | Cross-source `metric_identity` (descriptor name vs locus family) | R1 | **FR-10a** normalization contract added | 2026-08-05 |
+| R1-F5 | Mixed-classifier window between migration steps 2→3 | R1 | §5 **inter-step consistency guarantee** added | 2026-08-05 |
+| R1-F6 | §1 Problem stale vs shipped PR #382 | R1 | §1.2 **status note** added (B4 fixed, retained baseline) | 2026-08-05 |
+| R1-F8 | Line-ref drift is non-uniform (~110, not ~10) — D9 self-wrong | R1 | §0 **D9 corrected**; anchor on symbols | 2026-08-05 |
+| R1-F9 | FR-8 parity must be per-slot, not tuple-equality | R1 | **FR-8 per-slot** clause added (§4.1) | 2026-08-05 |
+| R1-F10 | Untrusted on-disk dashboards in G4 fallback (ReDoS surface) | R1 | **R5** risk added (§6) | 2026-08-05 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
