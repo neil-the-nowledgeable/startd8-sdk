@@ -1433,27 +1433,20 @@ def try_render_grafana_json(spec_dict: Mapping[str, Any]) -> Optional[str]:
 
 
 def _panel_is_red_protected(panel: Mapping[str, Any]) -> bool:
-    """True if dropping this panel would risk OBS-200a Rate/Errors/Duration."""
-    title = str(panel.get("title") or "").lower()
+    """True if dropping this panel would risk OBS-200a Rate/Errors/Duration.
+
+    Now delegates to the single red_taxonomy classifier (``is_red_protected`` =
+    "this panel plays some RED role", descriptor-free tier — shrink runs without a
+    descriptor). The one shrink-specific signal red_taxonomy does not model is the
+    panel ``group`` label (``throughput``/``errors``/``latency``), kept here: a panel
+    grouped as a RED leg is protected even if its title/expr are ambiguous.
+    """
+    from startd8.observability.red_taxonomy import is_red_protected
+
     group = str(panel.get("group") or "").lower()
-    expr = str(panel.get("expr") or "").lower()
-    if group in ("throughput", "errors", "latency") or title in (
-        "request rate",
-        "error rate",
-    ):
+    if group in ("throughput", "errors", "latency"):
         return True
-    if "duration" in title or "latency" in title:
-        return True
-    if "rate(" in expr and ("_count" in expr or "_total" in expr):
-        if "status" not in expr and "error" not in expr:
-            return True  # Rate leg
-        if "error" in expr or "status" in expr:
-            return True  # Errors leg
-    if "histogram_quantile" in expr and (
-        "duration" in expr or "latency" in expr
-    ):
-        return True
-    return False
+    return is_red_protected(panel)
 
 
 def _red_coverage_ok(panels: Sequence[Mapping[str, Any]]) -> bool:
