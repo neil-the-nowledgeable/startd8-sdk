@@ -1011,12 +1011,18 @@ def _ensure_red_coverage(
     # FR-12: what SLI kinds is this service actually observed by? (Shared resolver —
     # same set the FR-12a alert/SLO gate uses.)
     sli_kinds = _service_sli_kinds(service, business)
-    # Shared RED detection — single source of truth with the validator
+    # RED detection shared with the validator — but the generation gate asks
+    # "does an explicit RED panel already exist (so I don't duplicate)?", which is
+    # NARROWER than the scorer's "is RED covered by any panel?". Use the explicit
+    # Rate presence check: the broad has_rate_panel credits rate(..._total) counters
+    # (AffordanceMap binds, per 5f6fe5f9) that also match non-throughput auto-panels
+    # (request_size_total/…), which would wrongly suppress the synthesized Request
+    # Rate panel (FR-13 test_request_service_still_gets_synthesized_red regression).
     try:
         from startd8.validators.observability_artifact_checks import (
-            has_rate_panel, has_error_panel,
+            has_explicit_rate_panel, has_error_panel,
         )
-        has_rate = has_rate_panel(panels)
+        has_rate = has_explicit_rate_panel(panels)
         has_error = has_error_panel(panels)
     except ImportError:
         # Fallback inline detection if validator not available

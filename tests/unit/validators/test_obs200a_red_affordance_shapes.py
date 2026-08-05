@@ -17,6 +17,7 @@ from startd8.validators.observability_artifact_checks import (
     _compute_red_coverage,
     has_duration_panel,
     has_error_panel,
+    has_explicit_rate_panel,
     has_rate_panel,
     validate_dashboard,
 )
@@ -137,3 +138,42 @@ def test_step5b_out_services_meet_obs200a_threshold(service: str, min_red: float
         f"rate={has_rate_panel(panels)} err={has_error_panel(panels)} "
         f"dur={has_duration_panel(panels)}"
     )
+
+
+class TestExplicitRatePanelIsNarrow:
+    """``has_explicit_rate_panel`` (GENERATION gate) must NOT match the broad
+    ``rate(..._total)`` counters ``has_rate_panel`` (SCORING) credits — otherwise
+    non-throughput auto-panels (request_size_total/…) suppress the synthesized
+    Request Rate panel (the FR-13 ``_still_gets_synthesized_red`` regression from
+    5f6fe5f9, where widening the shared detector for the scorer broke generation).
+    """
+
+    def test_broad_credits_total_but_narrow_does_not(self):
+        # A non-throughput size counter auto-panel — an OTel-convention _total series.
+        size_panel = [{
+            "title": "Rpc Server Request Size",
+            "expr": "rate(rpc_server_request_size_total{service=\"checkout-api\"}[$__rate_interval])",
+        }]
+        # Scorer (broad) credits it as Rate coverage — intended for AffordanceMap binds.
+        assert has_rate_panel(size_panel) is True
+        # Generation (narrow) must NOT treat it as an existing Request Rate panel.
+        assert has_explicit_rate_panel(size_panel) is False
+
+    def test_narrow_matches_semconv_count_expr(self):
+        count_panel = [{
+            "title": "Request Rate",
+            "expr": "sum(rate(rpc_server_duration_count{service=\"checkout-api\"}[$__rate_interval]))",
+        }]
+        assert has_explicit_rate_panel(count_panel) is True
+
+    def test_narrow_matches_titled_rate_panel(self):
+        titled = [{"title": "Request Rate", "expr": "some_rate_query"}]
+        assert has_explicit_rate_panel(titled) is True
+
+    def test_narrow_ignores_error_count_expr(self):
+        # An error-leg _count expr must not be mistaken for the R leg.
+        err = [{
+            "title": "Error Rate",
+            "expr": "sum(rate(rpc_server_duration_count{service=\"x\",grpc_code=~\"Internal\"}[5m]))",
+        }]
+        assert has_explicit_rate_panel(err) is False

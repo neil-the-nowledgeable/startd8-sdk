@@ -42,6 +42,7 @@ __all__ = [
     "ExtendedArtifactValidationResult",
     "validate_extended_artifact",
     "has_rate_panel",
+    "has_explicit_rate_panel",
     "has_error_panel",
     "has_duration_panel",
     "get_all_panel_exprs",
@@ -1287,6 +1288,51 @@ def has_rate_panel(panels: List[Dict[str, Any]]) -> bool:
             continue
         # Histograms expose *_count; Prometheus counters expose *_total.
         if "_count" in e or "_total" in e:
+            return True
+    return False
+
+
+def has_explicit_rate_panel(panels: List[Dict[str, Any]]) -> bool:
+    """Narrow Rate-panel *presence* check for dashboard GENERATION backfill.
+
+    Answers a different question than :func:`has_rate_panel`: "does an explicit
+    request-*throughput* Rate panel already exist, so ``_ensure_red_coverage``
+    must not synthesize a duplicate?" — NOT the broad "is Rate *covered* by any
+    panel (incl. AffordanceMap ``rate(..._total)`` binds)?" that
+    :func:`has_rate_panel` answers for OBS-200a scoring.
+
+    The broad form intentionally matches ``rate(..._total)`` counters so the
+    scorer credits AffordanceMap binds (commit ``5f6fe5f9``). But those same
+    ``_total`` counters cover non-throughput auto-panels — e.g.
+    ``rate(rpc_server_request_size_total)`` / ``response_size_total`` — so using
+    the broad form as the generation gate wrongly concludes "Rate present" and
+    *suppresses* the synthesized Request Rate panel (the FR-13
+    ``test_request_service_still_gets_synthesized_red`` regression). This form
+    matches only a titled Request-Rate panel or the semconv ``rate(..._count)``
+    request-count expr — the genuine throughput signal.
+    """
+    for panel in panels:
+        title = _panel_title_lower(panel)
+        # Positive: an explicit throughput Rate panel identified by title.
+        if title in ("request rate", "rate") or title.endswith(" request rate"):
+            if _panel_has_expr(panel):
+                return True
+        # A panel titled as the Error or Duration leg is never the R leg, even
+        # if its expr contains rate(..._count) (e.g. an error-ratio numerator).
+        if any(tok in title for tok in ("error", "latency", "duration")):
+            continue
+        exprs = [str(panel.get("expr") or "")]
+        exprs += [
+            str(t.get("expr") or "")
+            for t in panel.get("targets", [])
+            if isinstance(t, dict)
+        ]
+        for e in exprs:
+            el = e.lower()
+            if "rate(" not in el or "_count" not in el:
+                continue
+            if any(tok in el for tok in ("error", "failure", "fail", "status")):
+                continue
             return True
     return False
 
