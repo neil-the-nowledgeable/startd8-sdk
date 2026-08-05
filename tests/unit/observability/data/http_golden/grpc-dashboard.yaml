@@ -2,6 +2,9 @@
 # Service: checkout-api (transport: grpc, language: go)
 # Derivation:
 #   latency_p99: manifest.spec.requirements.latency_p99 (500ms) [manifest]
+#   request_rate_panel: descriptor.throughput_metric (rpc_server_duration_count) (synthesized RED Rate leg (throughput ∈ sli_kinds)) [descriptor]
+#   error_rate_panel: descriptor error-ratio (rpc_server_duration_count filtered by error_selector) (synthesized RED Errors leg (availability ∈ sli_kinds)) [descriptor]
+#   availability_gauge: descriptor good/total ratio (rpc_server_duration_count); business.availability (synthesized Availability(1h) gauge (availability ∈ sli_kinds)) [descriptor]
 #   database_panels: instrumentation_hints.checkout-api.detected_databases (1 databases → latency panels) [manifest]
 #   dashboard_placement: manifest.spec.observability.dashboardPlacement (standard) [manifest]
 

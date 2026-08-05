@@ -215,6 +215,24 @@ def _repair_bucket_suffix(expr: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _red_gap_reasons(missing: List[str], descriptor: Any) -> str:
+    """Grounded reason clause for absent RED legs the descriptor CANNOT provide (TF-1).
+
+    An empty descriptor identity means the leg is legitimately unbindable (a summary
+    latency, a metric with no error dimension), not an authoring gap to chase — so the
+    OBS-200a warning says *why*, turning a mystery into an actionable note. Additive only;
+    the coverage score/verdict are unchanged.
+    """
+    notes: List[str] = []
+    if "Duration" in missing and not (getattr(descriptor, "latency_bucket_metric", "") or ""):
+        notes.append("Duration: latency is a summary (no histogram bucket to bind)")
+    if "Errors" in missing and not (getattr(descriptor, "error_selector", "") or ""):
+        notes.append("Errors: metric has no error dimension")
+    if "Rate" in missing and not (getattr(descriptor, "throughput_metric", "") or ""):
+        notes.append("Rate: no throughput metric on this descriptor")
+    return f" — {'; '.join(notes)}" if notes else ""
+
+
 def validate_dashboard(
     content: str,
     file_path: str = "",
@@ -222,6 +240,7 @@ def validate_dashboard(
     autofix: bool = True,
     service_id: str = "",
     transport: Optional[str] = None,
+    descriptor: Optional[Any] = None,
 ) -> DashboardValidationResult:
     """Validate a dashboard spec YAML against the OBS-100 + OBS-200 checklists."""
     result = DashboardValidationResult(file_path=file_path)
@@ -318,11 +337,15 @@ def validate_dashboard(
         missing.append("Errors")
     if not has_duration_panel(panels):
         missing.append("Duration")
+    # Grounded "why" (TF-1): when the resolved descriptor explains an absent leg, say so —
+    # a missing leg the descriptor CANNOT provide is not an authoring gap to fix. Purely
+    # additive to the message; the score/verdict are unchanged (descriptor-free).
+    reasons = _red_gap_reasons(missing, descriptor) if descriptor is not None else ""
     result.check(
         "OBS-200a",
         "warning",
         red >= 2.0 / 3.0,
-        f"RED coverage {red:.0%} — missing: {', '.join(missing)}",
+        f"RED coverage {red:.0%} — missing: {', '.join(missing)}{reasons}",
     )
 
     # OBS-203: Metric name validity (aggregate)

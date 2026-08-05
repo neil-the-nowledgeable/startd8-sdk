@@ -1042,15 +1042,18 @@ def _ensure_red_coverage(
     total_selector = descriptor.selector(service.service_id)
     error_selector = descriptor.selector(service.service_id, error=True)
 
-    rate_expr = (
-        f'sum(rate({throughput_metric}'
-        f'{total_selector}[$__rate_interval]))'
-    )
-    error_expr = (
-        f'sum(rate({throughput_metric}'
-        f'{error_selector}[$__rate_interval]))\n'
-        f'/ sum(rate({throughput_metric}'
-        f'{total_selector}[$__rate_interval]))'
+    # Single-source the RED exprs from the canonical convention (ContextCore §4): the
+    # helper builds the SAME rate/error shape this generator used to inline — now one home
+    # so a consumer can import it instead of mirroring. Fall back to the inline shape only
+    # for a degenerate descriptor with no error_selector (want_error is False there anyway).
+    from startd8.observability.convention import canonical_red_exprs
+
+    _red = canonical_red_exprs(descriptor, service.service_id)
+    rate_expr = _red.get(RedRole.RATE, f"sum(rate({throughput_metric}{total_selector}[$__rate_interval]))")
+    error_expr = _red.get(
+        RedRole.ERROR,
+        f"sum(rate({throughput_metric}{error_selector}[$__rate_interval]))\n"
+        f"/ sum(rate({throughput_metric}{total_selector}[$__rate_interval]))",
     )
 
     if not has_rate and want_rate:
@@ -1061,6 +1064,12 @@ def _ensure_red_coverage(
             "unit": "reqps",
             "group": "Throughput",
         })
+        derivations.append(DerivationTrace(
+            field="request_rate_panel",
+            source=f"descriptor.throughput_metric ({throughput_metric})",
+            transformation="synthesized RED Rate leg (throughput ∈ sli_kinds)",
+            tier="descriptor",
+        ))
 
     if not has_error and want_error:
         error_panel: Dict[str, Any] = {
@@ -1082,6 +1091,12 @@ def _ensure_red_coverage(
             except (ValueError, TypeError):
                 pass
         panels.append(error_panel)
+        derivations.append(DerivationTrace(
+            field="error_rate_panel",
+            source=f"descriptor error-ratio ({throughput_metric} filtered by error_selector)",
+            transformation="synthesized RED Errors leg (availability ∈ sli_kinds)",
+            tier="descriptor",
+        ))
 
     # Availability gauge (FR-13a) — an availability-kind artifact, gated on
     # `availability` ∈ the resolved set (it fires on business.availability alone,
@@ -1114,6 +1129,12 @@ def _ensure_red_coverage(
                     {"value": avail_target, "color": "green"},
                 ],
             })
+            derivations.append(DerivationTrace(
+                field="availability_gauge",
+                source=f"descriptor good/total ratio ({throughput_metric}); business.availability",
+                transformation="synthesized Availability(1h) gauge (availability ∈ sli_kinds)",
+                tier="descriptor",
+            ))
         except (ValueError, TypeError):
             pass
 
