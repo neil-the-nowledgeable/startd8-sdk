@@ -1013,21 +1013,24 @@ def _ensure_red_coverage(
     sli_kinds = _service_sli_kinds(service, business)
     # RED detection shared with the validator — but the generation gate asks
     # "does an explicit RED panel already exist (so I don't duplicate)?", which is
-    # NARROWER than the scorer's "is RED covered by any panel?". Use the explicit
-    # Rate presence check: the broad has_rate_panel credits rate(..._total) counters
-    # (AffordanceMap binds, per 5f6fe5f9) that also match non-throughput auto-panels
-    # (request_size_total/…), which would wrongly suppress the synthesized Request
-    # Rate panel (FR-13 test_request_service_still_gets_synthesized_red regression).
+    # NARROWER than the scorer's "is RED covered by any panel?". The broad
+    # has_rate_panel credits any rate(..._total) counter (AffordanceMap binds, per
+    # 5f6fe5f9), which BOTH matches non-throughput auto-panels (request_size_total/…)
+    # — wrongly suppressing the synthesized Request Rate panel (the FR-13
+    # test_request_service_still_gets_synthesized_red regression) — and would miss a
+    # legit _total throughput panel. has_explicit_rate_panel keyed on the
+    # descriptor's real throughput_metric is precise for both _count and _total.
+    throughput_metric = descriptor.throughput_metric
     try:
         from startd8.validators.observability_artifact_checks import (
             has_explicit_rate_panel, has_error_panel,
         )
-        has_rate = has_explicit_rate_panel(panels)
+        has_rate = has_explicit_rate_panel(panels, throughput_metric)
         has_error = has_error_panel(panels)
     except ImportError:
         # Fallback inline detection if validator not available
         exprs = [str(p.get("expr", "")).lower() for p in panels]
-        has_rate = any("rate(" in e and "_count" in e and "status" not in e for e in exprs)
+        has_rate = any(f"rate({throughput_metric.lower()}" in e for e in exprs)
         has_error = any("error" in e or "status_code" in e for e in exprs)
 
     if has_rate and has_error:

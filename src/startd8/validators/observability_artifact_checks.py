@@ -1292,7 +1292,9 @@ def has_rate_panel(panels: List[Dict[str, Any]]) -> bool:
     return False
 
 
-def has_explicit_rate_panel(panels: List[Dict[str, Any]]) -> bool:
+def has_explicit_rate_panel(
+    panels: List[Dict[str, Any]], throughput_metric: str = ""
+) -> bool:
     """Narrow Rate-panel *presence* check for dashboard GENERATION backfill.
 
     Answers a different question than :func:`has_rate_panel`: "does an explicit
@@ -1301,16 +1303,38 @@ def has_explicit_rate_panel(panels: List[Dict[str, Any]]) -> bool:
     panel (incl. AffordanceMap ``rate(..._total)`` binds)?" that
     :func:`has_rate_panel` answers for OBS-200a scoring.
 
-    The broad form intentionally matches ``rate(..._total)`` counters so the
+    The broad form intentionally matches *any* ``rate(..._total)`` counter so the
     scorer credits AffordanceMap binds (commit ``5f6fe5f9``). But those same
-    ``_total`` counters cover non-throughput auto-panels — e.g.
+    ``_total`` counters also cover non-throughput auto-panels — e.g.
     ``rate(rpc_server_request_size_total)`` / ``response_size_total`` — so using
     the broad form as the generation gate wrongly concludes "Rate present" and
     *suppresses* the synthesized Request Rate panel (the FR-13
-    ``test_request_service_still_gets_synthesized_red`` regression). This form
-    matches only a titled Request-Rate panel or the semconv ``rate(..._count)``
-    request-count expr — the genuine throughput signal.
+    ``test_request_service_still_gets_synthesized_red`` regression).
+
+    ``throughput_metric`` is the descriptor's real throughput series (FR-4). When
+    given, the check is PRECISE — "does a panel already ``rate()`` *that exact*
+    series?" — which is correct for BOTH ``_count`` (semconv histogram count) and
+    ``_total`` (span-metrics ``calls_total`` / Harbor ``harbor_*_total``)
+    throughput, and immune to non-throughput ``_total`` size counters. Without it
+    (standalone callers) fall back to the titled / semconv-``_count`` heuristic.
     """
+    # Precise, descriptor-aware path: an existing panel already rates the real
+    # throughput series ⇒ Rate is present (no duplicate to synthesize). Covers a
+    # _total throughput counter (e.g. a "Calls" auto-panel rating calls_total)
+    # that the _count-only heuristic below would miss.
+    if throughput_metric:
+        needle = f"rate({throughput_metric.lower()}"
+        for expr in get_all_panel_exprs(panels):
+            if needle in expr.lower():
+                return True
+        for panel in panels:  # idempotency: a previously-synthesized titled panel
+            title = _panel_title_lower(panel)
+            if (
+                title in ("request rate", "rate") or title.endswith(" request rate")
+            ) and _panel_has_expr(panel):
+                return True
+        return False
+
     for panel in panels:
         title = _panel_title_lower(panel)
         # Positive: an explicit throughput Rate panel identified by title.

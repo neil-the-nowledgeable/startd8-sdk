@@ -177,3 +177,51 @@ class TestExplicitRatePanelIsNarrow:
             "expr": "sum(rate(rpc_server_duration_count{service=\"x\",grpc_code=~\"Internal\"}[5m]))",
         }]
         assert has_explicit_rate_panel(err) is False
+
+    # -- descriptor-aware path: precise on the real throughput series (_count OR _total) --
+
+    def test_descriptor_aware_detects_total_throughput_panel(self):
+        # A span-metrics "Calls" auto-panel rates the real throughput counter
+        # (calls_total). Keyed on the descriptor's throughput_metric, the gate
+        # must see it → no duplicate Request Rate synthesized (regression: the
+        # _count-only heuristic missed it and produced a 2nd panel).
+        calls = [{"title": "Calls", "expr": "rate(calls_total{service_name=\"cart\"}[$__rate_interval])"}]
+        assert has_explicit_rate_panel(calls, "calls_total") is True
+        assert has_explicit_rate_panel(calls) is False  # heuristic (no descriptor) misses _total
+
+    def test_descriptor_aware_ignores_nonthroughput_total_size_counter(self):
+        # request_size_total is NOT the throughput series → must not count as Rate.
+        size = [{"title": "Rpc Server Request Size",
+                 "expr": "rate(rpc_server_request_size_total{service=\"x\"}[$__rate_interval])"}]
+        assert has_explicit_rate_panel(size, "rpc_server_duration_count") is False
+
+    def test_descriptor_aware_detects_semconv_count_throughput(self):
+        rate = [{"title": "Request Rate",
+                 "expr": "sum(rate(rpc_server_duration_count{service=\"x\"}[$__rate_interval]))"}]
+        assert has_explicit_rate_panel(rate, "rpc_server_duration_count") is True
+
+
+class TestTotalThroughputDoesNotDuplicate:
+    """End-to-end: a _total-throughput profile (span-metrics `calls_total`) whose
+    throughput counter is already an auto-panel must NOT get a 2nd synthesized
+    Request Rate panel (the boundary the _count-only gate would have regressed).
+    """
+
+    def test_span_metrics_service_has_single_throughput_panel(self):
+        import re
+        from startd8.observability.metric_descriptor import _PROFILES
+        from startd8.observability.artifact_generator_generators import generate_dashboard_spec
+        from startd8.observability.artifact_generator_models import ServiceHints, ConventionMetric
+        from startd8.observability.artifact_generator_context import BusinessContext
+
+        svc = ServiceHints(
+            service_id="cartservice", transport="grpc", language="go", kinds=("request",),
+            convention_metrics=[ConventionMetric(name="calls", type="counter", source="spanmetrics")],
+        )
+        biz = BusinessContext(criticality="high", availability="99.9", latency_p99="500ms",
+                              throughput="100rps", project_id="ob")
+        res = generate_dashboard_spec(svc, biz, descriptor=_PROFILES["span-metrics-connector"])
+        titles = [t.strip().strip('"\'') for t in re.findall(r"title:\s*(.+)", res.content)]
+        # "Calls" is the throughput panel; a synthesized "Request Rate" would be a duplicate.
+        assert "Calls" in titles
+        assert "Request Rate" not in titles
