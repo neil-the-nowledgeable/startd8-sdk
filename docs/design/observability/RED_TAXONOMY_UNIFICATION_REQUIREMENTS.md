@@ -462,3 +462,93 @@ deleted).
 *v0.3.1 — Post reflective-loop hardening. Planning pass corrected 9 assumptions (2 load-bearing: D1
 theoretical-not-actual B3 tension; D4 FR-13⟺NG4 contradiction), resolved OQ-1/2/4, refined G2, and
 re-anchored guards on symbols not line numbers. 3 lessons + 3 principles applied. Ready for CRP review.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-08-05
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-08-05 00:00:00 UTC
+- **Scope**: Single-document requirements review (RED taxonomy unification). Grounded against real code in the review worktree: `validators/observability_artifact_checks.py`, `observability/artifact_generator_generators.py`, `observability/affordance_map_consume.py`, `observability/metric_descriptor.py`. Focus-file OPEN asks answered first, then F-suggestions, then adversarial pass.
+
+##### Focus-file OPEN asks (answered — orchestrator triages)
+
+**Ask 1 — OQ-3: thread descriptor into the shrink path, or is FR-7's per-tier invariant sufficient?**
+- **Summary answer:** Partial — FR-7's per-tier invariant is sufficient for *correctness today*, but the spec should state the one condition under which it silently breaks.
+- **Rationale:** FR-7 asserts `is_red_protected(p) == (classify_red_role(p) != NONE)` *within* the descriptor-free tier (§3.3, D5), so scored⟺protected holds when both scorer and shrink pass `descriptor=None`. That invariant is tier-local: it only holds because both callers omit the descriptor. If step 3 (generator) routes protection through the descriptor tier while shrink stays descriptor-free, a panel can be descriptor-DURATION but title-fallback-NONE (exactly the `harbor-core-http` empty-`latency_bucket_metric` summary case, verified `metric_descriptor.py:218`), reintroducing a scored/protected split — the very B3 class this refactor kills.
+- **Assumptions / conditions:** Holds iff *every* caller of both `red_coverage` and `is_red_protected` passes the **same** tier (both `None`, or both grounded). No mixed-tier call site exists.
+- **Suggested improvements:** Add an explicit invariant to FR-7: "scored⟺protected holds only when scorer and shrink evaluate the **same tier**; a mixed-tier call site voids it." Add a guard test (see R1-F1) that fails if any shrink call site passes a non-None descriptor while the scorer does not.
+
+**Ask 2 — FR-11 byte-parity guard adequacy given D1 says no golden exercises the B3 divergence.**
+- **Summary answer:** No — "old predicate == new classifier over the existing golden corpus" is **not** a strong enough gate by itself, precisely *because* D1 proves the corpus is silent on the divergence.
+- **Rationale:** D1's own receipt ("no golden has a bare-`histogram_quantile` panel") means the parity test cannot distinguish the strict rule from the loose rule — both pass, since the discriminating input is absent. A green parity test therefore does not prove the new classifier matches the *old* one on the case the refactor exists to change; it only proves they agree on inputs neither disputes. B3 is real in code (verified: scorer `has_duration_panel` `observability_artifact_checks.py:1435` returns true on bare `histogram_quantile` via an `or` chain; shrink `_panel_is_red_protected` `affordance_map_consume.py:1452` requires `histogram_quantile` AND duration/latency).
+- **Assumptions / conditions:** none.
+- **Suggested improvements:** Require FR-11/FR-5 to be **corpus parity + a synthetic adversarial fixture** carrying the exact divergence inputs (bare `histogram_quantile`; a `rate(..._size_total)` non-throughput counter; an empty-`latency_bucket_metric` summary subject). See R1-F2.
+
+**Ask 3 — R2 name-scoped Harbor: does `classify_red_role` key on metric NAME (not `{service=}`) and yield DURATION only via title fallback without a false bucket match?**
+- **Summary answer:** Yes as specced, but the spec under-specifies the DURATION-name-fallback for the descriptor tier and the code facts confirm the trap is live.
+- **Rationale:** Verified `harbor-core-http` sets `service_label_key=""` (`metric_descriptor.py:215`) so `descriptor.selector()` returns `""` (`:105`–`:108`) — keying on a `{service=}` matcher would classify NONE. §3.2 already says "key on `throughput_metric`/`latency_bucket_metric` names," which is correct. But `harbor-core-http.latency_bucket_metric=""` (`:218`): the descriptor tier's DURATION rule ("expr references `descriptor.latency_bucket_metric`") would match the **empty string** — `"" in expr` is always True in Python. The spec says "yield DURATION only via the fallback title tier" but never states the descriptor tier must **guard against an empty `latency_bucket_metric`** before the substring test.
+- **Assumptions / conditions:** Implementation must treat empty `throughput_metric`/`latency_bucket_metric`/`error_selector` as "no match," never as a vacuous substring hit.
+- **Suggested improvements:** Add FR-4a (R1-F3) requiring the descriptor tier to short-circuit on any empty descriptor identity so `"" in expr` can never fire a false RATE/ERROR/DURATION.
+
+**Ask 4 — Two-synthesizer merge: is `(RedRole, metric_identity)` dedup complete when descriptor and locus paths both fire, given ERROR rides `throughput_metric` (D6)?**
+- **Summary answer:** No — the key is under-specified across the two *sources* of `metric_identity`, so a descriptor-path RATE and a locus-path RATE for the same service can carry **different** identity strings and escape dedup.
+- **Rationale:** §3.4 defines `metric_identity` two ways: descriptor path → `throughput_metric`/`latency_bucket_metric` (a real Prometheus metric name, e.g. `calls_total`); locus path → "the locus family name" from `_pick_red_families` (verified `affordance_map_consume.py:426` reads `l.get("family_or_signal")` — a family basename like `calls` or `rpc_server_duration_seconds`, NOT necessarily `== throughput_metric`). Two panels with the same `RedRole` but `metric_identity="calls_total"` vs `"calls"` do **not** collapse. D6 correctly notes ERROR rides `throughput_metric`, but that only makes RATE and ERROR share a key *within one source*; it does not reconcile the descriptor-name vs family-name identities *across* sources.
+- **Assumptions / conditions:** Dedup completeness requires a single normalization mapping locus family → descriptor metric name (or an explicit statement that the two writers are never both active for one `dashboards/{svc}-dashboard-spec.yaml`).
+- **Suggested improvements:** Add FR-10a (R1-F4) fixing an identity-normalization contract, and state whether `_apply_emit_red` (`affordance_map_consume.py:2163`) can ever invoke both writers for the same service file.
+
+**Ask 5 — Migration ordering §5 steps 2→3→4: any step landing without a parity guard, or leaving a mixed-classifier window?**
+- **Summary answer:** Yes — a real window exists between step 2 and step 3.
+- **Rationale:** Step 2 migrates the scorer to the descriptor-free tier; step 3 migrates the generator to the descriptor-**grounded** tier. Between them, the scorer uses new-`red_taxonomy` descriptor-free classification while the generator still calls the *old* `has_explicit_rate_panel`/`has_explicit_error_panel` (which — verified `observability_artifact_checks.py:1296`,`:1387` — are the shipped interim fix, already descriptor-aware). So mid-migration the "present?" and "covered?" questions are answered by two unrelated implementations. §5 claims each step "lands behind a parity guard," but only asserts *old-vs-new-for-that-step* parity, not *scorer-vs-generator cross-consistency* during the window.
+- **Assumptions / conditions:** Acceptable only if no release/tag can occur between steps 2 and 3 (single-PR landing), or a cross-consistency guard runs.
+- **Suggested improvements:** Add R1-F5: state the inter-step consistency guarantee (single atomic PR, or a cross-classifier parity test that must be green at every intermediate commit).
+
+##### Numbered suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Risks | high | Add to FR-7 the explicit precondition that scored⟺protected holds **only when scorer and shrink evaluate the same classifier tier**; a mixed-tier call site voids the invariant. | The invariant is tier-local (D5) but the spec presents it as unconditional; a future descriptor-threaded shrink (OQ-3) silently breaks it and re-opens B3 for the empty-`latency_bucket_metric` Harbor case. | §4 FR-7 | Property test: assert no call site passes a non-None descriptor to `is_red_protected` while the paired `red_coverage` call passes None. |
+| R1-F2 | Validation | high | Strengthen FR-5/FR-11 to require, in addition to corpus parity, a **synthetic adversarial fixture set** exercising the inputs the golden corpus lacks: bare `histogram_quantile` (B3), a `rate(..._size_total)` non-throughput counter (B2 false-positive), and an empty-`latency_bucket_metric` summary subject. | D1 proves the corpus is silent on the B3 divergence, so a green corpus-parity test cannot distinguish the strict from the loose rule — the gate passes vacuously on exactly the case the refactor exists to change. | §4 FR-5, FR-11; §5 steps 2–4 guards | New pytest fixtures asserting strict-rule classification for each adversarial input; parity test must load them. |
+| R1-F3 | Data | critical | Add FR-4a: the descriptor tier MUST short-circuit to "no match" on any empty descriptor identity (`throughput_metric`/`error_selector`/`latency_bucket_metric == ""`) **before** the substring test, so `"" in expr` (always True) cannot fabricate a RATE/ERROR/DURATION. | Verified `harbor-core-http.latency_bucket_metric=""` and `error_selector` is `""` when `service_label_key=""` (`metric_descriptor.py:105`–`:108`,`:218`). §3.2's DURATION rule ("expr references `descriptor.latency_bucket_metric`") is a naive `in` test that false-matches empty; this is a latent critical mis-classification. | §3.2 (classifier tier), §4 new FR-4a | Unit test: `classify_red_role(any_panel, harbor_core_http_descriptor)` must not return DURATION solely from an empty bucket metric; must fall to title tier. |
+| R1-F4 | Interfaces | high | Add FR-10a: define a single normalization contract mapping a locus **family name** (`_pick_red_families` → `family_or_signal`) to the descriptor **metric name** used as `metric_identity`, OR state explicitly that the two writers are mutually exclusive per `{svc}-dashboard-spec.yaml`. | §3.4 defines `metric_identity` from two incompatible sources (descriptor `calls_total` vs locus family `calls`); verified `_pick_red_families` returns `family_or_signal` basenames (`affordance_map_consume.py:426`), so a cross-source RATE/RATE pair need not share a key — B2/two-writer dedup is incomplete as specced. | §3.4, §4 new FR-10a | Test: descriptor-path and locus-path RATE panels for the same service normalize to one `metric_identity` and dedup to a single panel. |
+| R1-F5 | Ops | high | §5 must state the **inter-step consistency guarantee**: steps 2 (scorer→descriptor-free) and 3 (generator→descriptor-grounded) land in a single atomic PR, or a cross-classifier parity test (scorer-covered⟺generator-present on shared inputs) is green at every intermediate commit. | Verified generator currently calls the interim-fix `has_explicit_*` (`artifact_generator_generators.py:1029`); between steps 2 and 3 the scorer runs new `red_taxonomy` while the generator runs the old helper — a mixed-classifier window the per-step parity guards do not cover. | §5 migration plan preamble | CI gate: assert no tagged release can occur with scorer migrated but generator not; or a cross-consistency test in the step-2 PR. |
+| R1-F6 | Architecture | medium | Update §1 (Problem) and §1.2 (B1/B2/B4) to reflect the **shipped interim fix (PR #382)**: the generator gate already uses descriptor-aware `has_explicit_rate_panel`/`has_explicit_error_panel` and a **symmetric, descriptor-precise** inline fallback (`artifact_generator_generators.py:1029`–`:1039`), not the raw `has_rate_panel`/asymmetric `_count`-only path §1.1.3/B4 describe. | The Problem section describes pre-fix code; verified B4's asymmetry (`_count`-only rate vs broad error) is already gone. Leaving §1 stale makes FR-6/FR-12 untestable against actual code and risks the implementer "fixing" an already-fixed bug or mis-scoping the delete list. | §1.1.3, §1.2 B1/B2/B4 | Diff the quoted line refs against current `artifact_generator_generators.py`; add a "status: fixed by PR #382, retained as baseline" note per bug. |
+| R1-F7 | Validation | medium | Add FR-2a: `classify_red_role` (descriptor tier) MUST NOT return RATE for a panel that only `rate()`s a **non-throughput** `_total`/`_count` series (e.g. `rate(rpc_server_request_size_total)`), matching the guard the interim `has_explicit_rate_panel` already documents (`observability_artifact_checks.py:1307`–`:1319`). | §3.2's RATE rule ("expr references `descriptor.throughput_metric`") is *narrower* and safe, but the spec never states the classifier must NOT fire on sibling `_total` counters — a regression the interim fix explicitly prevents. Without an FR, the reimplementation can lose that hard-won guard and re-open a B2 variant. | §3.2, §4 new FR-2a | Test: a panel rating `rpc_server_request_size_total` classifies NONE, not RATE, under a descriptor whose `throughput_metric` is `calls_total`. |
+| R1-F8 | Data | medium | Anchor every FR/guard on **symbol names**, and correct the residual line refs: verified drift is **not uniform ~10** as D9 claims — scorer `has_duration_panel` is at `:1425` (spec cites `:1316`/`:1326`, ~110 off) while affordance `_panel_is_red_protected` is at `:1435` (D9's number, correct). | D9 tells implementers "line numbers run ~10 off"; a reader trusting that offset lands in the wrong function in the scorer file. Uneven drift is worse than uniform drift because the stated correction is itself wrong. | §0 D9, throughout §1/§3/§5 | grep-based guard resolving each cited symbol; assert no test/guard references a bare line number. |
+
+##### Endorsements & Disagreements
+
+No prior untriaged rounds exist (this is R1); no endorsements or disagreements to record.
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F9 | Risks | medium | FR-8's "byte-unchanged families for existing fixtures" parity test can pass vacuously if `_pick_red_families`'s **distinct-family** ordering (error→duration→rate, verified `affordance_map_consume.py:428`–`:462`) interacts with the migrated `_RED_*_RE` such that a family reassignment cancels out. Require the FR-8 parity test to assert per-slot identity (rate/err/dur each unchanged), not just the returned tuple's equality. | The weak-duration rule (`_RED_DUR_WEAK_RE = _seconds$|_bucket$`, `:339`) and timestamp exclusion (`:340`) make slot assignment order-sensitive; moving the regexes into `red_taxonomy` could shift which name claims which slot while leaving the tuple superficially "equal" on some fixtures. | §4 FR-8 | Parametrized test over each golden locus set asserting `(rate, err, dur)` slot-by-slot identity pre/post migration. |
+| R1-F10 | Security | low | State an explicit out-of-scope line for **untrusted on-disk dashboards** in the descriptor-free tier (G4): `classify_red_role(panel, None)` runs regex/substring over arbitrary user YAML exprs — confirm no catastrophic-backtracking risk in the migrated `_RED_*_RE` (they are simple alternations today, `:329`–`:340`, so low risk) and record that the classifier does not `eval`/execute expr content. | G4 explicitly runs the fallback over "arbitrary on-disk dashboards, including ones the SDK did not generate" — an untrusted-input surface the Risks section never names. Cheap to close now. | §2 G4, §6 Risks | Assert migrated regexes have no nested quantifiers; fuzz `classify_red_role(large_adversarial_panel, None)` for linear-time behavior. |
