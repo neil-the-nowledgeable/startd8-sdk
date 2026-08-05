@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import yaml
 
 from startd8.logging_config import get_logger
+from startd8.observability.red_taxonomy import RedRole, red_coverage, red_roles_present
 
 logger = get_logger(__name__)
 
@@ -1273,24 +1274,8 @@ def has_rate_panel(panels: List[Dict[str, Any]]) -> bool:
     Aligns with ``affordance_map_consume._panel_is_red_protected`` (which already
     treated ``_total`` as Rate) so OBS-200a does not disagree with shrink protect.
     """
-    for panel in panels:
-        title = _panel_title_lower(panel)
-        if title in ("request rate", "rate") or title.endswith(" request rate"):
-            if _panel_has_expr(panel):
-                return True
-    for expr in get_all_panel_exprs(panels):
-        e = expr.lower()
-        if "rate(" not in e:
-            continue
-        # Error-rate / failure-rate panels are the E leg, not R.
-        if any(tok in e for tok in ("error", "failure", "fail", "status_code")):
-            continue
-        if "status" in e:
-            continue
-        # Histograms expose *_count; Prometheus counters expose *_total.
-        if "_count" in e or "_total" in e:
-            return True
-    return False
+    # Thin shim over the single red_taxonomy classifier (descriptor-free tier).
+    return RedRole.RATE in red_roles_present(panels)
 
 
 def has_explicit_rate_panel(
@@ -1364,24 +1349,8 @@ def has_explicit_rate_panel(
 
 def has_error_panel(panels: List[Dict[str, Any]]) -> bool:
     """Check for an error rate panel (E in RED)."""
-    for panel in panels:
-        title = _panel_title_lower(panel)
-        if title in ("error rate", "errors", "error") or "error rate" in title:
-            if _panel_has_expr(panel):
-                return True
-    for expr in get_all_panel_exprs(panels):
-        e = expr.lower()
-        if (
-            "error" in e
-            or "failure" in e
-            or "fail" in e
-            or "status_code" in e
-            or "status_code!=" in e
-            or 'status_code!="ok"' in e
-            or "status!=" in e
-        ):
-            return True
-    return False
+    # Thin shim over the single red_taxonomy classifier (descriptor-free tier).
+    return RedRole.ERROR in red_roles_present(panels)
 
 
 def has_explicit_error_panel(
@@ -1424,33 +1393,16 @@ def has_explicit_error_panel(
 
 def has_duration_panel(panels: List[Dict[str, Any]]) -> bool:
     """Check for a latency/duration panel (D in RED)."""
-    for panel in panels:
-        title = _panel_title_lower(panel)
-        if title in ("duration", "latency") or "duration" in title or "latency" in title:
-            if _panel_has_expr(panel):
-                return True
-    for expr in get_all_panel_exprs(panels):
-        e = expr.lower()
-        if (
-            "histogram_quantile" in e
-            or "duration" in e
-            or "latency" in e
-            or "delay_seconds" in e
-        ):
-            return True
-    return False
+    # Thin shim over the single red_taxonomy classifier (descriptor-free tier).
+    # NOTE: red_taxonomy unifies DURATION to the stricter rule (B3) — a bare
+    # histogram_quantile with no duration/latency signal is no longer DURATION.
+    return RedRole.DURATION in red_roles_present(panels)
 
 
 def _compute_red_coverage(panels: List[Dict[str, Any]]) -> float:
     """Compute RED method coverage as fraction (0.0–1.0)."""
-    signals = 0
-    if has_rate_panel(panels):
-        signals += 1
-    if has_error_panel(panels):
-        signals += 1
-    if has_duration_panel(panels):
-        signals += 1
-    return signals / 3.0
+    # Thin shim over the single red_taxonomy classifier (descriptor-free tier).
+    return red_coverage(panels)
 
 
 # ---------------------------------------------------------------------------
